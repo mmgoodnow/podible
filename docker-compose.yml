@@ -7,7 +7,7 @@ services:
     ports:
       - "80:80"
     volumes:
-      - /media/MediaStorage/Media/books:/books:ro
+      - ./books:/books:ro
     environment:
       - PORT=80
     command: ["bun", "run", "server.ts", "/books"]

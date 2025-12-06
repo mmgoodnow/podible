@@ -19,7 +19,7 @@ flowchart LR
 ## Run locally
 ```bash
 bun run server.ts /path/to/library
-# example: bun run server.ts /media/MediaStorage/Media/books
+# example: bun run server.ts /books
 ```
 Subscribe to `http://<host>/feed.xml`.
 
@@ -28,7 +28,7 @@ Subscribe to `http://<host>/feed.xml`.
 docker-compose up --build
 # or build manually:
 docker build -t podible .
-docker run -p 80:80 -v /media/MediaStorage/Media/books:/books:ro podible bun run server.ts /books
+docker run -p 80:80 -v ./books:/books:ro podible bun run server.ts /books
 ```
 
 ## Endpoints
