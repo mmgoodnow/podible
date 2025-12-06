@@ -5,9 +5,9 @@ Simple Bun server that exposes your audiobooks as a single podcast feed.
 ```mermaid
 flowchart LR
   Client[Podcast app] -->|GET /feed.xml| Server
-  Client -->|GET /stream/:bookId (Range)| Server
-  Client -->|GET /chapters/:bookId.json| Server
-  Client -->|GET /covers/:bookId.jpg| Server
+  Client -->|"GET /stream/:bookId (Range)"| Server
+  Client -->|"GET /chapters/:bookId.json"| Server
+  Client -->|"GET /covers/:bookId.jpg"| Server
   Server[Podible] -->|reads| Library[/Author/Book audio files/]
 ```
 
