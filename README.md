@@ -14,7 +14,7 @@ flowchart LR
 ## Requirements
 - Bun
 - Audio library laid out as `ROOT/<Author>/<Book>/*.{mp3,m4b,jpg}` (mp3 multi-file or single m4b)
-- ffprobe (optional; improves chapter timings)
+- ffprobe (required for chapter timings)
 
 ## Run locally
 ```bash

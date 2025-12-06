@@ -211,27 +211,31 @@ function streamSegments(segments: AudioSegment[]): ReadableStream<Uint8Array> {
   });
 }
 
-let ffprobeAvailable: boolean | null = null;
-
-function probeDurationSeconds(filePath: string): number | null {
-  if (ffprobeAvailable === false) return null;
-  const result = spawnSync("ffprobe", [
-    "-v",
-    "error",
-    "-show_entries",
-    "format=duration",
-    "-of",
-    "default=noprint_wrappers=1:nokey=1",
-    filePath,
-  ], { encoding: "utf8" });
+function probeDurationSeconds(filePath: string): number {
+  const result = spawnSync(
+    "ffprobe",
+    [
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "default=noprint_wrappers=1:nokey=1",
+      filePath,
+    ],
+    { encoding: "utf8" }
+  );
   if (result.error) {
-    ffprobeAvailable = false;
-    return null;
+    throw result.error;
   }
-  if (result.status !== 0) return null;
-  ffprobeAvailable = true;
+  if (result.status !== 0) {
+    throw new Error(`ffprobe failed for ${filePath}: ${result.stderr || result.status}`);
+  }
   const value = parseFloat(result.stdout.trim());
-  return Number.isFinite(value) ? value : null;
+  if (!Number.isFinite(value)) {
+    throw new Error(`ffprobe returned invalid duration for ${filePath}: ${result.stdout}`);
+  }
+  return value;
 }
 
 async function buildChapters(book: Book) {
@@ -244,11 +248,7 @@ async function buildChapters(book: Book) {
       title: path.basename(segment.name, path.extname(segment.name)),
     });
     const duration = probeDurationSeconds(segment.path);
-    if (duration !== null) {
-      cursor += duration;
-    } else {
-      cursor += 1;
-    }
+    cursor += duration;
   }
   return {
     version: "1.2.0",
@@ -291,12 +291,18 @@ ${items}
 </rss>`;
 }
 
+function requestOrigin(request: Request): string {
+  const url = new URL(request.url);
+  const forwardedProto = request.headers.get("x-forwarded-proto");
+  const proto = forwardedProto ? forwardedProto.split(",")[0].trim() : url.protocol.replace(":", "");
+  return `${proto}://${url.host}`;
+}
+
 async function handleFeed(request: Request): Promise<Response> {
   if (scanRoots.length === 0) {
     return new Response("No roots configured. Pass library directories via argv.", { status: 500 });
   }
-  const url = new URL(request.url);
-  const origin = `${url.protocol}//${url.host}`;
+  const origin = requestOrigin(request);
   const books = await scanBooks();
   const body = rssFeed(books, origin);
   return new Response(body, {
