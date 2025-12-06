@@ -40,4 +40,3 @@ docker run -p 80:80 -v ./books:/books:ro podible bun run server.ts /books
 ## Notes
 - Library is scanned on each request (no persistent index).
 - `bookId` is a slug of `author-title` from folder names.
-- Chapter times fall back to rough sequencing if ffprobe is absent.
