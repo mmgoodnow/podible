@@ -1,0 +1,13 @@
+version: "3.8"
+
+services:
+  podible:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - /media/MediaStorage/Media/books:/books:ro
+    environment:
+      - PORT=80
+    command: ["bun", "run", "server.ts", "/books"]
