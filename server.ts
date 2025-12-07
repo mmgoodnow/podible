@@ -265,14 +265,20 @@ function rssFeed(books: Book[], origin: string): string {
         book.kind === "multi"
           ? `<podcast:chapters url="${origin}/chapters/${book.id}.json" type="application/json+chapters" />`
           : "";
+      const chaptersDebugTag =
+        book.kind === "multi"
+          ? `<podcast:chaptersDebug url="${origin}/chapters-debug/${book.id}.json" type="application/json" />`
+          : "";
       return [
         "<item>",
         `<guid isPermaLink="false">${escapeXml(book.id)}</guid>`,
         `<title>${escapeXml(book.title)}</title>`,
         `<itunes:author>${escapeXml(book.author)}</itunes:author>`,
+        `<itunes:subtitle>${escapeXml(book.author)}</itunes:subtitle>`,
         `<enclosure url="${enclosureUrl}" length="${book.totalSize}" type="${book.mime}" />`,
         cover,
         chaptersTag,
+        chaptersDebugTag,
         "</item>",
       ]
         .filter(Boolean)
@@ -286,6 +292,7 @@ function rssFeed(books: Book[], origin: string): string {
 <title>Library Feed</title>
 <link>${origin}/feed.xml</link>
 <description>Podcast feed for audiobooks</description>
+<itunes:subtitle>Audiobook library</itunes:subtitle>
 ${items}
 </channel>
 </rss>`;
@@ -308,6 +315,21 @@ async function handleFeed(request: Request): Promise<Response> {
   return new Response(body, {
     headers: {
       "Content-Type": "application/rss+xml",
+    },
+  });
+}
+
+async function handleFeedDebug(request: Request): Promise<Response> {
+  if (scanRoots.length === 0) {
+    return new Response("No roots configured. Pass library directories via argv.", { status: 500 });
+  }
+  const origin = requestOrigin(request);
+  const books = await scanBooks();
+  const body = rssFeed(books, origin);
+  return new Response(body, {
+    headers: {
+      "Content-Type": "text/xml; charset=utf-8",
+      "Content-Disposition": "inline",
     },
   });
 }
@@ -360,6 +382,16 @@ async function handleChapters(bookIdValue: string): Promise<Response> {
   });
 }
 
+async function handleChaptersDebug(bookIdValue: string): Promise<Response> {
+  const book = await findBookById(bookIdValue);
+  if (!book || book.kind !== "multi") return new Response("Not found", { status: 404 });
+  const chapters = await buildChapters(book);
+  if (!chapters) return new Response("Not found", { status: 404 });
+  return new Response(JSON.stringify(chapters, null, 2), {
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+  });
+}
+
 async function handleCover(bookIdValue: string): Promise<Response> {
   const book = await findBookById(bookIdValue);
   if (!book || !book.coverPath) return new Response("Not found", { status: 404 });
@@ -376,6 +408,7 @@ Bun.serve({
     const url = new URL(request.url);
     const pathname = url.pathname;
     if (pathname === "/feed.xml") return handleFeed(request);
+    if (pathname === "/feed-debug.xml") return handleFeedDebug(request);
     if (pathname.startsWith("/stream/")) {
       const [, , id = ""] = pathname.split("/");
       return handleStream(request, id);
@@ -384,6 +417,11 @@ Bun.serve({
       const [, , idWithExt = ""] = pathname.split("/");
       const id = idWithExt.replace(/\.json$/, "");
       return handleChapters(id);
+    }
+    if (pathname.startsWith("/chapters-debug/")) {
+      const [, , idWithExt = ""] = pathname.split("/");
+      const id = idWithExt.replace(/\.json$/, "");
+      return handleChaptersDebug(id);
     }
     if (pathname.startsWith("/covers/")) {
       const [, , idWithExt = ""] = pathname.split("/");
@@ -394,4 +432,35 @@ Bun.serve({
   },
 });
 
+const localBase = `http://localhost${port === 80 ? "" : `:${port}`}`;
 console.log(`Listening on port ${port}. Roots: ${scanRoots.join(", ") || "none"}`);
+console.log(`Feed: ${localBase}/feed.xml`);
+console.log(`Feed (debug/plain): ${localBase}/feed-debug.xml`);
+
+async function logInitialScan() {
+  if (scanRoots.length === 0) return;
+  const books = await scanBooks();
+  const authors = new Set(books.map((b) => b.author));
+  const singles = books.filter((b) => b.kind === "single").length;
+  const multis = books.filter((b) => b.kind === "multi").length;
+  const covers = books.filter((b) => Boolean(b.coverPath)).length;
+  console.log(
+    `Initial scan: ${books.length} books (${singles} single m4b, ${multis} multi mp3) from ${authors.size} authors, covers: ${covers}`
+  );
+  if (books.length === 0) return;
+  const sample = books[0];
+  console.log(`Sample stream: ${localBase}/stream/${sample.id}`);
+  const multiWithChapters = books.find((b) => b.kind === "multi");
+  if (multiWithChapters) {
+    console.log(`Sample chapters: ${localBase}/chapters/${multiWithChapters.id}.json`);
+    console.log(`Sample chapters (debug): ${localBase}/chapters-debug/${multiWithChapters.id}.json`);
+  }
+  const withCover = books.find((b) => b.coverPath);
+  if (withCover) {
+    console.log(`Sample cover: ${localBase}/covers/${withCover.id}.jpg`);
+  }
+}
+
+logInitialScan().catch((err) => {
+  console.error("Initial scan failed:", err);
+});

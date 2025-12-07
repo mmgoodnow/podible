@@ -33,9 +33,11 @@ docker run -p 80:80 -v ./books:/books:ro podible bun run server.ts /books
 
 ## Endpoints
 - `GET /feed.xml` — RSS with one item per book (enclosure streams audio; chapters tag for mp3 sets).
+- `GET /feed-debug.xml` — Same feed with browser-friendly headers for viewing raw XML.
 - `GET /stream/:bookId` — Range-aware streaming; handles single m4b or stitched mp3 files.
 - `GET /chapters/:bookId.json` — Podcasting 2.0 chapters JSON for multi-mp3 books.
-- `GET /covers/:bookId.jpg` — First `.jpg` in the book folder, if present.
+- `GET /chapters-debug/:bookId.json` — Debug view of chapters with `application/json`.
+- `GET /covers/:bookId.jpg` — First `.jpg` in the book folder (exposed as a JPEG), if present.
 
 ## Notes
 - Library is scanned on each request (no persistent index).
