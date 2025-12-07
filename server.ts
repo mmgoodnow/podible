@@ -25,6 +25,13 @@ type Book = {
   coverPath?: string;
 };
 
+type ChapterTiming = {
+  id: string;
+  title: string;
+  startMs: number;
+  endMs: number;
+};
+
 const scanRoots = (() => {
   const roots = process.argv.slice(2).filter(Boolean);
   if (roots.length === 0) {
@@ -189,6 +196,110 @@ function segmentsForRange(files: AudioSegment[], start: number, end: number): Au
     .filter((f): f is AudioSegment => Boolean(f));
 }
 
+function concatBytes(chunks: Uint8Array[]): Uint8Array {
+  const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
+function synchsafeSize(size: number): Uint8Array {
+  const out = new Uint8Array(4);
+  out[0] = (size >> 21) & 0x7f;
+  out[1] = (size >> 14) & 0x7f;
+  out[2] = (size >> 7) & 0x7f;
+  out[3] = size & 0x7f;
+  return out;
+}
+
+function writeUint32BE(value: number): Uint8Array {
+  const out = new Uint8Array(4);
+  out[0] = (value >>> 24) & 0xff;
+  out[1] = (value >>> 16) & 0xff;
+  out[2] = (value >>> 8) & 0xff;
+  out[3] = value & 0xff;
+  return out;
+}
+
+const encoder = new TextEncoder();
+
+function id3Frame(id: string, payload: Uint8Array): Uint8Array {
+  const header = new Uint8Array(10);
+  header.set(encoder.encode(id).slice(0, 4));
+  header.set(synchsafeSize(payload.byteLength), 4);
+  // flags remain zeroed
+  return concatBytes([header, payload]);
+}
+
+function textFrame(id: string, text: string): Uint8Array {
+  const textBytes = encoder.encode(text);
+  const payload = new Uint8Array(1 + textBytes.length);
+  payload[0] = 0x03; // UTF-8
+  payload.set(textBytes, 1);
+  return id3Frame(id, payload);
+}
+
+function chapFrame(chapterId: string, title: string, startMs: number, endMs: number): Uint8Array {
+  const idBytes = encoder.encode(chapterId);
+  const titleFrame = textFrame("TIT2", title);
+  const payload = concatBytes([
+    idBytes,
+    new Uint8Array([0x00]), // terminator
+    writeUint32BE(startMs),
+    writeUint32BE(endMs),
+    writeUint32BE(0xffffffff), // start offset: unknown
+    writeUint32BE(0xffffffff), // end offset: unknown
+    titleFrame,
+  ]);
+  return id3Frame("CHAP", payload);
+}
+
+function ctocFrame(childIds: string[]): Uint8Array {
+  const elementId = encoder.encode("toc");
+  const childrenBytes = concatBytes(
+    childIds.map((id) => concatBytes([encoder.encode(id), new Uint8Array([0x00])]))
+  );
+  const titleFrame = textFrame("TIT2", "Chapters");
+  const payload = concatBytes([
+    elementId,
+    new Uint8Array([0x00]), // terminator
+    new Uint8Array([0x03]), // flags: top-level + ordered
+    new Uint8Array([childIds.length]),
+    childrenBytes,
+    titleFrame,
+  ]);
+  return id3Frame("CTOC", payload);
+}
+
+function buildId3ChaptersTag(timings: ChapterTiming[]): Uint8Array {
+  if (timings.length === 0) return new Uint8Array();
+  const childIds = timings.map((c) => c.id);
+  const frames = [ctocFrame(childIds), ...timings.map((chap) => chapFrame(chap.id, chap.title, chap.startMs, chap.endMs))];
+  const framesBytes = concatBytes(frames);
+  const header = new Uint8Array(10);
+  header.set(encoder.encode("ID3"));
+  header[3] = 0x04; // version 2.4.0
+  header[4] = 0x00;
+  header[5] = 0x00; // flags
+  header.set(synchsafeSize(framesBytes.byteLength), 6);
+  return concatBytes([header, framesBytes]);
+}
+
+function estimateId3TagLength(book: Book): number {
+  if (book.kind !== "multi" || !book.files) return 0;
+  const dummyTimings: ChapterTiming[] = book.files.map((segment, index) => ({
+    id: `ch${index}`,
+    title: path.basename(segment.name, path.extname(segment.name)),
+    startMs: 0,
+    endMs: 0,
+  }));
+  return buildId3ChaptersTag(dummyTimings).byteLength;
+}
+
 function streamSegments(segments: AudioSegment[]): ReadableStream<Uint8Array> {
   let index = 0;
   return new ReadableStream({
@@ -238,21 +349,35 @@ function probeDurationSeconds(filePath: string): number {
   return value;
 }
 
-async function buildChapters(book: Book) {
+async function buildChapterTimings(book: Book): Promise<ChapterTiming[] | null> {
   if (book.kind !== "multi" || !book.files) return null;
-  const chapters: { startTime: number; title: string }[] = [];
-  let cursor = 0;
-  for (const segment of book.files) {
-    chapters.push({
-      startTime: cursor,
+  const timings: ChapterTiming[] = [];
+  let cursorMs = 0;
+  book.files.forEach((segment, index) => {
+    const durationSec = probeDurationSeconds(segment.path);
+    const durationMs = Math.max(0, Math.round(durationSec * 1000));
+    const startMs = cursorMs;
+    const endMs = startMs + durationMs;
+    timings.push({
+      id: `ch${index}`,
       title: path.basename(segment.name, path.extname(segment.name)),
+      startMs,
+      endMs,
     });
-    const duration = probeDurationSeconds(segment.path);
-    cursor += duration;
-  }
+    cursorMs = endMs;
+  });
+  return timings;
+}
+
+async function buildChapters(book: Book) {
+  const timings = await buildChapterTimings(book);
+  if (!timings) return null;
   return {
     version: "1.2.0",
-    chapters,
+    chapters: timings.map((chap) => ({
+      startTime: chap.startMs / 1000,
+      title: chap.title,
+    })),
   };
 }
 
@@ -261,6 +386,8 @@ function rssFeed(books: Book[], origin: string): string {
     .map((book) => {
       const enclosureUrl = `${origin}/stream/${book.id}`;
       const cover = book.coverPath ? `<itunes:image href="${origin}/covers/${book.id}.jpg" />` : "";
+      const tagLength = estimateId3TagLength(book);
+      const enclosureLength = book.totalSize + tagLength;
       const chaptersTag =
         book.kind === "multi"
           ? `<podcast:chapters url="${origin}/chapters/${book.id}.json" type="application/json+chapters" />`
@@ -275,7 +402,7 @@ function rssFeed(books: Book[], origin: string): string {
         `<title>${escapeXml(book.title)}</title>`,
         `<itunes:author>${escapeXml(book.author)}</itunes:author>`,
         `<itunes:subtitle>${escapeXml(book.author)}</itunes:subtitle>`,
-        `<enclosure url="${enclosureUrl}" length="${book.totalSize}" type="${book.mime}" />`,
+        `<enclosure url="${enclosureUrl}" length="${enclosureLength}" type="${book.mime}" />`,
         cover,
         chaptersTag,
         chaptersDebugTag,
@@ -338,13 +465,13 @@ async function handleStream(request: Request, bookIdValue: string): Promise<Resp
   const book = await findBookById(bookIdValue);
   if (!book) return new Response("Not found", { status: 404 });
   const rangeHeader = request.headers.get("range");
-  const size = book.totalSize;
   const headers: Record<string, string> = {
     "Accept-Ranges": "bytes",
     "Content-Type": book.mime,
   };
 
   if (book.kind === "single" && book.primaryFile) {
+    const size = book.totalSize;
     const file = Bun.file(book.primaryFile);
     const range = parseRange(rangeHeader, size);
     if (!range) {
@@ -357,19 +484,63 @@ async function handleStream(request: Request, bookIdValue: string): Promise<Resp
   }
 
   const files = book.files ?? [];
-  const range = parseRange(rangeHeader, size) ?? { start: 0, end: size - 1 };
-  const slices = segmentsForRange(files, range.start, range.end);
-  if (slices.length === 0) {
-    headers["Content-Range"] = `bytes */${size}`;
+  const timings = await buildChapterTimings(book);
+  if (!timings) return new Response("Not found", { status: 404 });
+  const tag = buildId3ChaptersTag(timings);
+  const tagLength = tag.byteLength;
+  const audioSize = book.totalSize;
+  const totalSize = tagLength + audioSize;
+  const range = parseRange(rangeHeader, totalSize) ?? { start: 0, end: totalSize - 1 };
+  if (range.start >= totalSize) {
+    headers["Content-Range"] = `bytes */${totalSize}`;
     return new Response("Range Not Satisfiable", { status: 416, headers });
   }
 
+  const tagStart = range.start;
+  const tagEnd = Math.min(range.end, tagLength - 1);
+  const includeTag = tagStart < tagLength;
+  const audioRangeStart = Math.max(range.start, tagLength) - tagLength;
+  const audioRangeEnd = range.end - tagLength;
+  const includeAudio = range.end >= tagLength;
+
   headers["Content-Length"] = String(range.end - range.start + 1);
   if (rangeHeader) {
-    headers["Content-Range"] = `bytes ${range.start}-${range.end}/${size}`;
+    headers["Content-Range"] = `bytes ${range.start}-${range.end}/${totalSize}`;
   }
   const status = rangeHeader ? 206 : 200;
-  return new Response(streamSegments(slices), { status, headers });
+
+  if (includeTag && !includeAudio) {
+    return new Response(tag.slice(tagStart, tagEnd + 1), { status, headers });
+  }
+
+  const audioSlices = includeAudio ? segmentsForRange(files, audioRangeStart, audioRangeEnd) : [];
+  if (includeAudio && audioSlices.length === 0) {
+    headers["Content-Range"] = `bytes */${totalSize}`;
+    return new Response("Range Not Satisfiable", { status: 416, headers });
+  }
+
+  const tagSlice = includeTag ? tag.slice(tagStart, tagEnd + 1) : null;
+  const audioStream = includeAudio ? streamSegments(audioSlices) : null;
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      if (tagSlice) {
+        controller.enqueue(tagSlice);
+      }
+      if (!audioStream) {
+        controller.close();
+        return;
+      }
+      const reader = audioStream.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        controller.enqueue(value);
+      }
+      controller.close();
+    },
+  });
+
+  return new Response(body, { status, headers });
 }
 
 async function handleChapters(bookIdValue: string): Promise<Response> {

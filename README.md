@@ -42,3 +42,4 @@ docker run -p 80:80 -v ./books:/books:ro podible bun run server.ts /books
 ## Notes
 - Library is scanned on each request (no persistent index).
 - `bookId` is a slug of `author-title` from folder names.
+- Multi-MP3 streams are stitched with an in-memory ID3v2.4 chapters tag prepended for chapter-aware players.
