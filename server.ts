@@ -461,7 +461,7 @@ function rssFeed(books: Book[], origin: string): { body: string; lastModified: D
   const pubDate = lastModified.toUTCString();
   const items = books
     .map((book) => {
-      const ext = book.mime === "audio/mp4" ? "m4b" : "mp3";
+      const ext = book.mime === "audio/mp4" ? "m4a" : "mp3";
       const enclosureUrl = `${origin}/stream/${book.id}.${ext}`;
       const cover = book.coverPath ? `<itunes:image href="${origin}/covers/${book.id}.jpg" />` : "";
       const tagLength = estimateId3TagLength(book);
@@ -690,7 +690,7 @@ Bun.serve({
     if (pathname === "/feed-debug.xml") return handleFeedDebug(request);
     if (pathname.startsWith("/stream/")) {
       const idWithExt = pathname.replace("/stream/", "");
-      const id = idWithExt.replace(/\.(mp3|m4b|mp4)$/i, "");
+      const id = idWithExt.replace(/\.(mp3|m4a|m4b|mp4)$/i, "");
       return handleStream(request, id);
     }
     if (pathname.startsWith("/chapters/")) {
@@ -729,7 +729,7 @@ async function logInitialScan() {
   );
   if (books.length === 0) return;
   const sample = books[0];
-  const ext = sample.mime === "audio/mp4" ? "m4b" : "mp3";
+  const ext = sample.mime === "audio/mp4" ? "m4a" : "mp3";
   console.log(`Sample stream: ${localBase}/stream/${sample.id}.${ext}`);
   const multiWithChapters = books.find((b) => b.kind === "multi");
   if (multiWithChapters) {
