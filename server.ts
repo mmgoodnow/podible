@@ -11,6 +11,7 @@ type AudioSegment = {
   size: number;
   start: number;
   end: number;
+  durationMs: number;
 };
 
 type Book = {
@@ -23,7 +24,22 @@ type Book = {
   primaryFile?: string;
   files?: AudioSegment[];
   coverPath?: string;
+  durationSeconds?: number;
+  publishedAt?: Date;
 };
+
+const FEED_TITLE = process.env.POD_TITLE ?? "Podible Audiobooks";
+const FEED_DESCRIPTION = process.env.POD_DESCRIPTION ?? "Podcast feed for audiobooks";
+const FEED_LANGUAGE = process.env.POD_LANGUAGE ?? "en-us";
+const FEED_COPYRIGHT = process.env.POD_COPYRIGHT ?? "";
+const FEED_AUTHOR = process.env.POD_AUTHOR ?? "Unknown";
+const FEED_OWNER_NAME = process.env.POD_OWNER_NAME ?? "Owner";
+const FEED_OWNER_EMAIL = process.env.POD_OWNER_EMAIL ?? "owner@example.com";
+const rawExplicit = (process.env.POD_EXPLICIT ?? "no").toLowerCase();
+const FEED_EXPLICIT = ["yes", "no", "clean"].includes(rawExplicit) ? rawExplicit : "no";
+const FEED_CATEGORY = process.env.POD_CATEGORY ?? "Arts";
+const FEED_TYPE = process.env.POD_TYPE ?? "episodic";
+const FEED_IMAGE_URL = process.env.POD_IMAGE_URL;
 
 type ChapterTiming = {
   id: string;
@@ -86,6 +102,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
     const filePath = path.join(bookDir, m4bs[0]);
     const stat = await fs.stat(filePath).catch(() => null);
     if (!stat) return null;
+    const durationSeconds = probeDurationSeconds(filePath);
     return {
       id: bookId(author, title),
       title,
@@ -95,20 +112,30 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
       totalSize: stat.size,
       primaryFile: filePath,
       coverPath,
+      durationSeconds,
+      publishedAt: stat.mtime,
     };
   }
 
   if (mp3s.length > 0) {
     const segments: AudioSegment[] = [];
     let cursor = 0;
+    let cursorMs = 0;
+    let durationSeconds = 0;
+    let publishedAt: Date | undefined;
     for (const name of mp3s) {
       const filePath = path.join(bookDir, name);
       const stat = await fs.stat(filePath).catch(() => null);
       if (!stat) continue;
+      if (!publishedAt || stat.mtime < publishedAt) publishedAt = stat.mtime;
+      const duration = probeDurationSeconds(filePath);
+      const durationMs = Math.max(0, Math.round(duration * 1000));
+      durationSeconds += duration;
       const start = cursor;
       const end = cursor + stat.size - 1;
-      segments.push({ path: filePath, name, size: stat.size, start, end });
+      segments.push({ path: filePath, name, size: stat.size, start, end, durationMs });
       cursor += stat.size;
+      cursorMs += durationMs;
     }
     if (segments.length === 0) return null;
     return {
@@ -120,6 +147,8 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
       totalSize: segments[segments.length - 1].end + 1,
       files: segments,
       coverPath,
+      durationSeconds: durationSeconds,
+      publishedAt,
     };
   }
 
@@ -142,6 +171,11 @@ async function scanBooks(): Promise<Book[]> {
       }
     }
   }
+  books.sort((a, b) => {
+    const at = a.publishedAt ? a.publishedAt.getTime() : 0;
+    const bt = b.publishedAt ? b.publishedAt.getTime() : 0;
+    return bt - at;
+  });
   return books;
 }
 
@@ -241,6 +275,16 @@ function textFrame(id: string, text: string): Uint8Array {
   payload[0] = 0x03; // UTF-8
   payload.set(textBytes, 1);
   return id3Frame(id, payload);
+}
+
+function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  const total = Math.floor(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 function chapFrame(chapterId: string, title: string, startMs: number, endMs: number): Uint8Array {
@@ -354,8 +398,7 @@ async function buildChapterTimings(book: Book): Promise<ChapterTiming[] | null> 
   const timings: ChapterTiming[] = [];
   let cursorMs = 0;
   book.files.forEach((segment, index) => {
-    const durationSec = probeDurationSeconds(segment.path);
-    const durationMs = Math.max(0, Math.round(durationSec * 1000));
+    const durationMs = segment.durationMs;
     const startMs = cursorMs;
     const endMs = startMs + durationMs;
     timings.push({
@@ -381,13 +424,25 @@ async function buildChapters(book: Book) {
   };
 }
 
-function rssFeed(books: Book[], origin: string): string {
+function rssFeed(books: Book[], origin: string): { body: string; lastModified: Date } {
+  const firstCover = books.find((b) => b.coverPath);
+  const channelImage = FEED_IMAGE_URL || (firstCover ? `${origin}/covers/${firstCover.id}.jpg` : "");
+  const latestMtime = books
+    .map((b) => b.publishedAt?.getTime() ?? 0)
+    .filter((t) => t > 0);
+  const lastModifiedMs = latestMtime.length > 0 ? Math.max(...latestMtime) : Date.now();
+  const lastModified = new Date(lastModifiedMs);
+  const pubDate = lastModified.toUTCString();
   const items = books
     .map((book) => {
       const enclosureUrl = `${origin}/stream/${book.id}`;
       const cover = book.coverPath ? `<itunes:image href="${origin}/covers/${book.id}.jpg" />` : "";
       const tagLength = estimateId3TagLength(book);
       const enclosureLength = book.totalSize + tagLength;
+      const durationSeconds = book.durationSeconds ?? 0;
+      const duration = formatDuration(durationSeconds);
+      const itemPubDate = (book.publishedAt ?? lastModified).toUTCString();
+      const description = `${book.title} by ${book.author}`;
       const chaptersTag =
         book.kind === "multi"
           ? `<podcast:chapters url="${origin}/chapters/${book.id}.json" type="application/json+chapters" />`
@@ -403,6 +458,13 @@ function rssFeed(books: Book[], origin: string): string {
         `<itunes:author>${escapeXml(book.author)}</itunes:author>`,
         `<itunes:subtitle>${escapeXml(book.author)}</itunes:subtitle>`,
         `<enclosure url="${enclosureUrl}" length="${enclosureLength}" type="${book.mime}" />`,
+        `<link>${enclosureUrl}</link>`,
+        `<pubDate>${itemPubDate}</pubDate>`,
+        `<description>${escapeXml(description)}</description>`,
+        `<itunes:summary>${escapeXml(description)}</itunes:summary>`,
+        `<itunes:explicit>${FEED_EXPLICIT}</itunes:explicit>`,
+        duration ? `<itunes:duration>${duration}</itunes:duration>` : "",
+        `<itunes:episodeType>full</itunes:episodeType>`,
         cover,
         chaptersTag,
         chaptersDebugTag,
@@ -413,16 +475,28 @@ function rssFeed(books: Book[], origin: string): string {
     })
     .join("");
 
-  return `<?xml version="1.0" encoding="UTF-8"?>
+  const body = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:podcast="https://podcastindex.org/namespace/1.0">
 <channel>
-<title>Library Feed</title>
+<title>${escapeXml(FEED_TITLE)}</title>
 <link>${origin}/feed.xml</link>
-<description>Podcast feed for audiobooks</description>
-<itunes:subtitle>Audiobook library</itunes:subtitle>
+<description>${escapeXml(FEED_DESCRIPTION)}</description>
+<language>${FEED_LANGUAGE}</language>
+<copyright>${escapeXml(FEED_COPYRIGHT)}</copyright>
+<lastBuildDate>${pubDate}</lastBuildDate>
+<itunes:subtitle>${escapeXml(FEED_DESCRIPTION)}</itunes:subtitle>
+<itunes:author>${escapeXml(FEED_AUTHOR)}</itunes:author>
+<itunes:summary>${escapeXml(FEED_DESCRIPTION)}</itunes:summary>
+<itunes:explicit>${FEED_EXPLICIT}</itunes:explicit>
+<itunes:owner><itunes:name>${escapeXml(FEED_OWNER_NAME)}</itunes:name><itunes:email>${escapeXml(FEED_OWNER_EMAIL)}</itunes:email></itunes:owner>
+${channelImage ? `<itunes:image href="${channelImage}" />` : ""}
+<itunes:category text="${escapeXml(FEED_CATEGORY)}" />
+<itunes:type>${FEED_TYPE}</itunes:type>
 ${items}
 </channel>
 </rss>`;
+
+  return { body, lastModified };
 }
 
 function requestOrigin(request: Request): string {
@@ -438,10 +512,13 @@ async function handleFeed(request: Request): Promise<Response> {
   }
   const origin = requestOrigin(request);
   const books = await scanBooks();
-  const body = rssFeed(books, origin);
+  const { body, lastModified } = rssFeed(books, origin);
+  const etag = `W/"${lastModified.getTime()}"`;
   return new Response(body, {
     headers: {
       "Content-Type": "application/rss+xml",
+      "Last-Modified": lastModified.toUTCString(),
+      ETag: etag,
     },
   });
 }
@@ -452,11 +529,14 @@ async function handleFeedDebug(request: Request): Promise<Response> {
   }
   const origin = requestOrigin(request);
   const books = await scanBooks();
-  const body = rssFeed(books, origin);
+  const { body, lastModified } = rssFeed(books, origin);
+  const etag = `W/"${lastModified.getTime()}"`;
   return new Response(body, {
     headers: {
       "Content-Type": "text/xml; charset=utf-8",
       "Content-Disposition": "inline",
+      "Last-Modified": lastModified.toUTCString(),
+      ETag: etag,
     },
   });
 }

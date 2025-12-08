@@ -43,3 +43,19 @@ docker run -p 80:80 -v ./books:/books:ro podible bun run server.ts /books
 - Library is scanned on each request (no persistent index).
 - `bookId` is a slug of `author-title` from folder names.
 - Multi-MP3 streams are stitched with an in-memory ID3v2.4 chapters tag prepended for chapter-aware players.
+
+## Feed metadata (Apple-friendly)
+Environment variables (all optional, with defaults):
+- `POD_TITLE` (default: `Podible Audiobooks`)
+- `POD_DESCRIPTION` (default: `Podcast feed for audiobooks`)
+- `POD_LANGUAGE` (default: `en-us`)
+- `POD_COPYRIGHT`
+- `POD_AUTHOR` (default: `Unknown`)
+- `POD_OWNER_NAME` (default: `Owner`)
+- `POD_OWNER_EMAIL` (default: `owner@example.com`)
+- `POD_EXPLICIT` (`yes`|`no`|`clean`, default: `no`)
+- `POD_CATEGORY` (default: `Arts`)
+- `POD_TYPE` (`episodic`|`serial`, default: `episodic`)
+- `POD_IMAGE_URL` (optional; falls back to first cover URL if available)
+
+Items include link, pubDate, explicit flag, duration, and descriptions for validator compatibility. Enclosure lengths include the prepended ID3 chapters tag for multi-MP3 books.
