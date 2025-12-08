@@ -102,7 +102,13 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
     const filePath = path.join(bookDir, m4bs[0]);
     const stat = await fs.stat(filePath).catch(() => null);
     if (!stat) return null;
-    const durationSeconds = probeDurationSeconds(filePath);
+    let durationSeconds: number | undefined;
+    try {
+      durationSeconds = probeDurationSeconds(filePath);
+    } catch (err) {
+      console.warn(`Skipping duration for ${filePath}: ${(err as Error).message}`);
+      durationSeconds = undefined;
+    }
     return {
       id: bookId(author, title),
       title,
@@ -128,7 +134,13 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
       const stat = await fs.stat(filePath).catch(() => null);
       if (!stat) continue;
       if (!publishedAt || stat.mtime < publishedAt) publishedAt = stat.mtime;
-      const duration = probeDurationSeconds(filePath);
+      let duration = 0;
+      try {
+        duration = probeDurationSeconds(filePath);
+      } catch (err) {
+        console.warn(`Skipping duration for ${filePath}: ${(err as Error).message}`);
+        duration = 0;
+      }
       const durationMs = Math.max(0, Math.round(duration * 1000));
       durationSeconds += duration;
       const start = cursor;
