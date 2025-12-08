@@ -461,7 +461,8 @@ function rssFeed(books: Book[], origin: string): { body: string; lastModified: D
   const pubDate = lastModified.toUTCString();
   const items = books
     .map((book) => {
-      const enclosureUrl = `${origin}/stream/${book.id}`;
+      const ext = book.mime === "audio/mp4" ? "m4b" : "mp3";
+      const enclosureUrl = `${origin}/stream/${book.id}.${ext}`;
       const cover = book.coverPath ? `<itunes:image href="${origin}/covers/${book.id}.jpg" />` : "";
       const tagLength = estimateId3TagLength(book);
       const enclosureLength = book.totalSize + tagLength;
@@ -502,10 +503,11 @@ function rssFeed(books: Book[], origin: string): { body: string; lastModified: D
     .join("");
 
   const body = `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:podcast="https://podcastindex.org/namespace/1.0">
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:podcast="https://podcastindex.org/namespace/1.0" xmlns:atom="http://www.w3.org/2005/Atom">
 <channel>
 <title>${escapeXml(FEED_TITLE)}</title>
 <link>${origin}/feed.xml</link>
+<atom:link href="${origin}/feed.xml" rel="self" type="application/rss+xml" />
 <description>${escapeXml(FEED_DESCRIPTION)}</description>
 <language>${FEED_LANGUAGE}</language>
 <copyright>${escapeXml(FEED_COPYRIGHT)}</copyright>
@@ -687,7 +689,8 @@ Bun.serve({
     if (pathname === "/feed.xml") return handleFeed(request);
     if (pathname === "/feed-debug.xml") return handleFeedDebug(request);
     if (pathname.startsWith("/stream/")) {
-      const [, , id = ""] = pathname.split("/");
+      const idWithExt = pathname.replace("/stream/", "");
+      const id = idWithExt.replace(/\.(mp3|m4b|mp4)$/i, "");
       return handleStream(request, id);
     }
     if (pathname.startsWith("/chapters/")) {
@@ -726,7 +729,8 @@ async function logInitialScan() {
   );
   if (books.length === 0) return;
   const sample = books[0];
-  console.log(`Sample stream: ${localBase}/stream/${sample.id}`);
+  const ext = sample.mime === "audio/mp4" ? "m4b" : "mp3";
+  console.log(`Sample stream: ${localBase}/stream/${sample.id}.${ext}`);
   const multiWithChapters = books.find((b) => b.kind === "multi");
   if (multiWithChapters) {
     console.log(`Sample chapters: ${localBase}/chapters/${multiWithChapters.id}.json`);
