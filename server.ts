@@ -45,7 +45,8 @@ const durationCache = new Map<
   string,
   {
     mtimeMs: number;
-    duration: number;
+    duration?: number;
+    failed?: boolean;
   }
 >();
 
@@ -404,14 +405,16 @@ function probeDurationSeconds(filePath: string): number {
 function getDurationSeconds(filePath: string, mtimeMs: number): number | undefined {
   const cached = durationCache.get(filePath);
   if (cached && cached.mtimeMs === mtimeMs) {
+    if (cached.failed) return undefined;
     return cached.duration;
   }
   try {
     const duration = probeDurationSeconds(filePath);
-    durationCache.set(filePath, { mtimeMs, duration });
+    durationCache.set(filePath, { mtimeMs, duration, failed: false });
     return duration;
   } catch (err) {
     console.warn(`Skipping duration for ${filePath}: ${(err as Error).message}`);
+    durationCache.set(filePath, { mtimeMs, failed: true });
     return undefined;
   }
 }
