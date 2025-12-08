@@ -41,6 +41,14 @@ const FEED_CATEGORY = process.env.POD_CATEGORY ?? "Arts";
 const FEED_TYPE = process.env.POD_TYPE ?? "episodic";
 const FEED_IMAGE_URL = process.env.POD_IMAGE_URL;
 
+const durationCache = new Map<
+  string,
+  {
+    mtimeMs: number;
+    duration: number;
+  }
+>();
+
 type ChapterTiming = {
   id: string;
   title: string;
@@ -102,13 +110,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
     const filePath = path.join(bookDir, m4bs[0]);
     const stat = await fs.stat(filePath).catch(() => null);
     if (!stat) return null;
-    let durationSeconds: number | undefined;
-    try {
-      durationSeconds = probeDurationSeconds(filePath);
-    } catch (err) {
-      console.warn(`Skipping duration for ${filePath}: ${(err as Error).message}`);
-      durationSeconds = undefined;
-    }
+    const durationSeconds = getDurationSeconds(filePath, stat.mtimeMs);
     return {
       id: bookId(author, title),
       title,
@@ -134,13 +136,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
       const stat = await fs.stat(filePath).catch(() => null);
       if (!stat) continue;
       if (!publishedAt || stat.mtime < publishedAt) publishedAt = stat.mtime;
-      let duration = 0;
-      try {
-        duration = probeDurationSeconds(filePath);
-      } catch (err) {
-        console.warn(`Skipping duration for ${filePath}: ${(err as Error).message}`);
-        duration = 0;
-      }
+      const duration = getDurationSeconds(filePath, stat.mtimeMs) ?? 0;
       const durationMs = Math.max(0, Math.round(duration * 1000));
       durationSeconds += duration;
       const start = cursor;
@@ -403,6 +399,21 @@ function probeDurationSeconds(filePath: string): number {
     throw new Error(`ffprobe returned invalid duration for ${filePath}: ${result.stdout}`);
   }
   return value;
+}
+
+function getDurationSeconds(filePath: string, mtimeMs: number): number | undefined {
+  const cached = durationCache.get(filePath);
+  if (cached && cached.mtimeMs === mtimeMs) {
+    return cached.duration;
+  }
+  try {
+    const duration = probeDurationSeconds(filePath);
+    durationCache.set(filePath, { mtimeMs, duration });
+    return duration;
+  } catch (err) {
+    console.warn(`Skipping duration for ${filePath}: ${(err as Error).message}`);
+    return undefined;
+  }
 }
 
 async function buildChapterTimings(book: Book): Promise<ChapterTiming[] | null> {
