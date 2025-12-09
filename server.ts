@@ -194,6 +194,36 @@ function slugify(value: string): string {
     .replace(/--+/g, "-");
 }
 
+function normalizeAudioExt(ext: string): "mp3" | "m4a" {
+  const lower = ext.toLowerCase();
+  if (lower === ".mp3") return "mp3";
+  if (lower === ".m4a" || lower === ".m4b" || lower === ".mp4") return "m4a";
+  return "mp3";
+}
+
+function mimeFromExt(ext: string): string {
+  const normalized = normalizeAudioExt(ext);
+  return normalized === "m4a" ? "audio/mp4" : "audio/mpeg";
+}
+
+function bookExtension(book: Book): string {
+  const sourcePath =
+    book.kind === "single"
+      ? book.primaryFile
+      : book.files && book.files.length > 0
+        ? book.files[0].path || book.files[0].name
+        : undefined;
+  if (sourcePath) {
+    return normalizeAudioExt(path.extname(sourcePath));
+  }
+  return normalizeAudioExt(book.mime);
+}
+
+function bookMime(book: Book): string {
+  const ext = bookExtension(book);
+  return mimeFromExt(ext);
+}
+
 function bookId(author: string, title: string): string {
   return slugify(`${author}-${title}`);
 }
@@ -234,12 +264,13 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
     const targetStat = await fs.stat(transcoded).catch(() => null);
     if (!targetStat) return null;
     const durationSeconds = getDurationSeconds(transcoded, targetStat.mtimeMs);
+    const mime = mimeFromExt(path.extname(transcoded));
     return {
       id: bookId(author, title),
       title,
       author,
       kind: "single",
-      mime: "audio/mpeg",
+      mime,
       totalSize: targetStat.size,
       primaryFile: transcoded,
       coverPath,
@@ -269,12 +300,13 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
       cursorMs += durationMs;
     }
     if (segments.length === 0) return null;
+    const mime = mimeFromExt(path.extname(mp3s[0]));
     return {
       id: bookId(author, title),
       title,
       author,
       kind: "multi",
-      mime: "audio/mpeg",
+      mime,
       totalSize: segments[segments.length - 1].end + 1,
       files: segments,
       coverPath,
@@ -583,7 +615,8 @@ function rssFeed(books: Book[], origin: string): { body: string; lastModified: D
   const pubDate = lastModified.toUTCString();
   const items = books
     .map((book) => {
-      const ext = book.mime === "audio/mp4" ? "m4a" : "mp3";
+      const ext = bookExtension(book);
+      const mime = bookMime(book);
       const enclosureUrl = `${origin}/stream/${book.id}.${ext}`;
       const cover = book.coverPath ? `<itunes:image href="${origin}/covers/${book.id}.jpg" />` : "";
       const tagLength = estimateId3TagLength(book);
@@ -606,7 +639,7 @@ function rssFeed(books: Book[], origin: string): { body: string; lastModified: D
         `<title>${escapeXml(book.title)}</title>`,
         `<itunes:author>${escapeXml(book.author)}</itunes:author>`,
         `<itunes:subtitle>${escapeXml(book.author)}</itunes:subtitle>`,
-        `<enclosure url="${enclosureUrl}" length="${enclosureLength}" type="${book.mime}" />`,
+        `<enclosure url="${enclosureUrl}" length="${enclosureLength}" type="${mime}" />`,
         `<link>${enclosureUrl}</link>`,
         `<pubDate>${itemPubDate}</pubDate>`,
         `<description>${escapeXml(description)}</description>`,
@@ -695,9 +728,10 @@ async function handleStream(request: Request, bookIdValue: string): Promise<Resp
   const book = await findBookById(bookIdValue);
   if (!book) return new Response("Not found", { status: 404 });
   const rangeHeader = request.headers.get("range");
+  const mime = bookMime(book);
   const headers: Record<string, string> = {
     "Accept-Ranges": "bytes",
-    "Content-Type": book.mime,
+    "Content-Type": mime,
   };
 
   if (book.kind === "single" && book.primaryFile) {
@@ -855,7 +889,7 @@ async function logInitialScan() {
   );
   if (books.length === 0) return;
   const sample = books[0];
-  const ext = sample.mime === "audio/mp4" ? "m4a" : "mp3";
+  const ext = bookExtension(sample);
   console.log(`Sample stream: ${localBase}/stream/${sample.id}.${ext}`);
   const multiWithChapters = books.find((b) => b.kind === "multi");
   if (multiWithChapters) {
