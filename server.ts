@@ -26,6 +26,10 @@ type Book = {
   coverPath?: string;
   durationSeconds?: number;
   publishedAt?: Date;
+  description?: string;
+  language?: string;
+  isbn?: string;
+  identifiers?: Record<string, string>;
 };
 
 const FEED_TITLE = process.env.POD_TITLE ?? "Podible Audiobooks";
@@ -194,6 +198,109 @@ function slugify(value: string): string {
     .replace(/--+/g, "-");
 }
 
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+}
+
+function cleanMetaValue(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const lowered = trimmed.toLowerCase();
+  if (lowered === "unknown" || lowered === "no description") return undefined;
+  return trimmed;
+}
+
+function sanitizeOpfDescription(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const decoded = decodeXmlEntities(raw);
+  const withBreaks = decoded
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<\/li>/gi, "\n")
+    .replace(/<li>/gi, "- ");
+  const withoutTags = withBreaks.replace(/<[^>]+>/g, "");
+  const normalized = withoutTags
+    .replace(/\r/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+  if (!normalized) return undefined;
+  return normalized;
+}
+
+type OpfMetadata = {
+  title?: string;
+  author?: string;
+  description?: string;
+  language?: string;
+  publishedAt?: Date;
+  isbn?: string;
+  identifiers: Record<string, string>;
+};
+
+function parseOpfContent(content: string): OpfMetadata | null {
+  const getTag = (tag: string): string | undefined => {
+    const match = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i").exec(content);
+    if (!match) return undefined;
+    return decodeXmlEntities(match[1]).trim();
+  };
+
+  const identifiers: Record<string, string> = {};
+  const idRegex = /<dc:identifier([^>]*)>([\s\S]*?)<\/dc:identifier>/gi;
+  let idMatch: RegExpExecArray | null;
+  while ((idMatch = idRegex.exec(content))) {
+    const attrs = idMatch[1] || "";
+    const value = decodeXmlEntities(idMatch[2]).trim();
+    const schemeMatch = /opf:scheme\s*=\s*"([^"]+)"/i.exec(attrs);
+    const scheme = schemeMatch ? schemeMatch[1].toLowerCase() : undefined;
+    if (scheme) identifiers[scheme] = value;
+  }
+
+  const description = sanitizeOpfDescription(getTag("dc:description"));
+  const title = cleanMetaValue(getTag("dc:title"));
+  const author = cleanMetaValue(getTag("dc:creator"));
+  const language = cleanMetaValue(getTag("dc:language"));
+  const rawDate = getTag("dc:date");
+  const isbn = identifiers["isbn"];
+  let publishedAt: Date | undefined;
+  if (rawDate) {
+    const parsed = new Date(rawDate);
+    if (!Number.isNaN(parsed.getTime())) {
+      publishedAt = parsed;
+    }
+  }
+
+  return {
+    title,
+    author,
+    description,
+    language,
+    publishedAt,
+    isbn,
+    identifiers,
+  };
+}
+
+async function readOpfMetadata(bookDir: string, files: string[]): Promise<OpfMetadata | null> {
+  const opfFile = files.find((f) => f.toLowerCase().endsWith(".opf"));
+  if (!opfFile) return null;
+  const opfPath = path.join(bookDir, opfFile);
+  try {
+    const content = await fs.readFile(opfPath, "utf8");
+    return parseOpfContent(content);
+  } catch (err) {
+    console.warn(`Failed to read OPF for ${bookDir}: ${(err as Error).message}`);
+    return null;
+  }
+}
+
 function normalizeAudioExt(ext: string): "mp3" | "m4a" {
   const lower = ext.toLowerCase();
   if (lower === ".mp3") return "mp3";
@@ -237,6 +344,15 @@ function escapeXml(value: string): string {
     .replace(/'/g, "&apos;");
 }
 
+function truncate(value: string, max: number): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 3).trimEnd()}...`;
+}
+
+function firstLine(value: string): string {
+  return value.split(/\r?\n/).map((part) => part.trim()).find(Boolean) ?? "";
+}
+
 async function safeReadDir(dir: string) {
   try {
     return await fs.readdir(dir, { withFileTypes: true });
@@ -252,8 +368,15 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
   const m4bs = files.filter((f) => f.toLowerCase().endsWith(".m4b")).sort();
   const mp3s = files.filter((f) => f.toLowerCase().endsWith(".mp3")).sort();
   const covers = files.filter((f) => f.toLowerCase().endsWith(".jpg")).sort();
+  const opf = await readOpfMetadata(bookDir, files);
 
   const coverPath = covers.length > 0 ? path.join(bookDir, covers[0]) : undefined;
+  const displayTitle = opf?.title ?? title;
+  const displayAuthor = opf?.author ?? author;
+  const description = opf?.description;
+  const language = opf?.language;
+  const isbn = opf?.isbn;
+  const identifiers = opf?.identifiers;
 
   if (m4bs.length > 0) {
     const filePath = path.join(bookDir, m4bs[0]);
@@ -267,15 +390,19 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
     const mime = mimeFromExt(path.extname(transcoded));
     return {
       id: bookId(author, title),
-      title,
-      author,
+      title: displayTitle,
+      author: displayAuthor,
       kind: "single",
       mime,
       totalSize: targetStat.size,
       primaryFile: transcoded,
       coverPath,
       durationSeconds,
-      publishedAt: stat.mtime,
+      publishedAt: opf?.publishedAt ?? stat.mtime,
+      description,
+      language,
+      isbn,
+      identifiers,
     };
   }
 
@@ -284,12 +411,12 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
     let cursor = 0;
     let cursorMs = 0;
     let durationSeconds = 0;
-    let publishedAt: Date | undefined;
+    let publishedAt: Date | undefined = opf?.publishedAt;
     for (const name of mp3s) {
       const filePath = path.join(bookDir, name);
       const stat = await fs.stat(filePath).catch(() => null);
       if (!stat) continue;
-      if (!publishedAt || stat.mtime < publishedAt) publishedAt = stat.mtime;
+      if ((!publishedAt || !opf?.publishedAt) && (!publishedAt || stat.mtime < publishedAt)) publishedAt = stat.mtime;
       const duration = getDurationSeconds(filePath, stat.mtimeMs) ?? 0;
       const durationMs = Math.max(0, Math.round(duration * 1000));
       durationSeconds += duration;
@@ -303,8 +430,8 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
     const mime = mimeFromExt(path.extname(mp3s[0]));
     return {
       id: bookId(author, title),
-      title,
-      author,
+      title: displayTitle,
+      author: displayAuthor,
       kind: "multi",
       mime,
       totalSize: segments[segments.length - 1].end + 1,
@@ -312,6 +439,10 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
       coverPath,
       durationSeconds: durationSeconds,
       publishedAt,
+      description,
+      language,
+      isbn,
+      identifiers,
     };
   }
 
@@ -604,6 +735,58 @@ async function buildChapters(book: Book) {
   };
 }
 
+function formatDateIso(date: Date | undefined): string | undefined {
+  if (!date) return undefined;
+  const iso = date.toISOString();
+  return iso.slice(0, 10);
+}
+
+function bookIsbn(book: Book): string | undefined {
+  if (book.isbn) return book.isbn;
+  const identifiers = book.identifiers ?? {};
+  return identifiers["isbn"] ?? identifiers["ISBN"];
+}
+
+function cleanLanguage(language: string | undefined): string | undefined {
+  if (!language) return undefined;
+  const trimmed = language.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.toLowerCase() === "unknown") return undefined;
+  return trimmed;
+}
+
+function buildItemNotes(book: Book): { description: string; subtitle: string } {
+  const baseDescription = book.description?.trim();
+  const summaryParts: string[] = [];
+  if (baseDescription) {
+    summaryParts.push(baseDescription);
+  } else {
+    summaryParts.push(`${book.title} by ${book.author}`);
+  }
+
+  const detailBits: string[] = [];
+  const language = cleanLanguage(book.language);
+  const isbn = bookIsbn(book);
+  const published = formatDateIso(book.publishedAt);
+  if (language) detailBits.push(`Language: ${language}`);
+  if (isbn) detailBits.push(`ISBN: ${isbn}`);
+  if (published) detailBits.push(`Published: ${published}`);
+  if (book.kind === "multi" && book.files?.length) detailBits.push(`Parts: ${book.files.length}`);
+  if (book.durationSeconds) {
+    const mins = Math.round((book.durationSeconds / 60) * 10) / 10;
+    detailBits.push(`Length: ${mins} min`);
+  }
+
+  if (detailBits.length > 0) {
+    summaryParts.push(detailBits.join(" • "));
+  }
+
+  const description = summaryParts.join("\n\n");
+  const subtitleSource = baseDescription || book.author || book.title;
+  const subtitle = truncate(firstLine(subtitleSource), 200) || book.author;
+  return { description, subtitle };
+}
+
 function rssFeed(books: Book[], origin: string): { body: string; lastModified: Date } {
   const firstCover = books.find((b) => b.coverPath);
   const channelImage = FEED_IMAGE_URL || (firstCover ? `${origin}/covers/${firstCover.id}.jpg` : "");
@@ -633,12 +816,13 @@ function rssFeed(books: Book[], origin: string): { body: string; lastModified: D
         book.kind === "multi"
           ? `<podcast:chaptersDebug url="${origin}/chapters-debug/${book.id}.json" type="application/json" />`
           : "";
+      const { description, subtitle } = buildItemNotes(book);
       return [
         "<item>",
         `<guid isPermaLink="false">${escapeXml(book.id)}</guid>`,
         `<title>${escapeXml(book.title)}</title>`,
         `<itunes:author>${escapeXml(book.author)}</itunes:author>`,
-        `<itunes:subtitle>${escapeXml(book.author)}</itunes:subtitle>`,
+        `<itunes:subtitle>${escapeXml(subtitle)}</itunes:subtitle>`,
         `<enclosure url="${enclosureUrl}" length="${enclosureLength}" type="${mime}" />`,
         `<link>${enclosureUrl}</link>`,
         `<pubDate>${itemPubDate}</pubDate>`,

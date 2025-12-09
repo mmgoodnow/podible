@@ -43,6 +43,7 @@ docker run -p 80:80 -v ./books:/books:ro podible bun run server.ts /books
 - Library is scanned on each request (no persistent index).
 - `bookId` is a slug of `author-title` from folder names.
 - Multi-MP3 streams are stitched with an in-memory ID3v2.4 chapters tag prepended for chapter-aware players.
+- If a `.opf` file exists in a book folder, its metadata (title, author, description, language, ISBN, publication date) is used to enrich the feed item notes.
 
 ## Feed metadata (Apple-friendly)
 Environment variables (all optional, with defaults):
