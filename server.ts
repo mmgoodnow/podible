@@ -1,4 +1,4 @@
-import { promises as fs, createReadStream } from "node:fs";
+import { promises as fs, createReadStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { Readable } from "node:stream";
@@ -72,6 +72,21 @@ const probeCache = new Map<
     data: ProbeData | null;
   }
 >();
+let probeCacheLoaded = false;
+
+function persistProbeCache() {
+  try {
+    ensureTranscodeDirSync();
+    const payload = Array.from(probeCache.entries()).map(([file, value]) => ({
+      file,
+      mtimeMs: value.mtimeMs,
+      data: value.data,
+    }));
+    writeFileSync(probeCachePath, JSON.stringify(payload));
+  } catch (err) {
+    console.warn(`Failed to persist ffprobe cache: ${(err as Error).message}`);
+  }
+}
 
 type ChapterTiming = {
   id: string;
@@ -100,9 +115,18 @@ const transcodeDir = (() => {
 })();
 
 const transcodeManifestPath = path.join(transcodeDir, "manifest.json");
+const probeCachePath = path.join(transcodeDir, "probe-cache.json");
 
 async function ensureTranscodeDir() {
   await fs.mkdir(transcodeDir, { recursive: true });
+}
+
+function ensureTranscodeDirSync() {
+  try {
+    mkdirSync(transcodeDir, { recursive: true });
+  } catch {
+    // ignore sync mkdir errors; async ensureTranscodeDir also runs elsewhere
+  }
 }
 
 async function readTranscodeManifest(): Promise<TranscodeRecord[]> {
@@ -809,6 +833,23 @@ function streamSegments(segments: AudioSegment[]): ReadableStream<Uint8Array> {
 }
 
 function probeData(filePath: string, mtimeMs: number): ProbeData | null {
+  if (!probeCacheLoaded) {
+    try {
+      const content = readFileSync(probeCachePath, "utf8");
+      const parsed = JSON.parse(content);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((entry: any) => {
+          if (!entry || typeof entry !== "object") return;
+          if (typeof entry.file !== "string" || typeof entry.mtimeMs !== "number") return;
+          probeCache.set(entry.file, { mtimeMs: entry.mtimeMs, data: entry.data ?? null });
+        });
+      }
+    } catch {
+      // ignore cache read errors
+    }
+    probeCacheLoaded = true;
+  }
+
   const cached = probeCache.get(filePath);
   if (cached && cached.mtimeMs === mtimeMs) return cached.data;
   const result = spawnSync(
@@ -820,6 +861,7 @@ function probeData(filePath: string, mtimeMs: number): ProbeData | null {
     const message = result.error ? result.error.message : result.stderr || String(result.status);
     console.warn(`ffprobe failed for ${filePath}: ${message}`);
     probeCache.set(filePath, { mtimeMs, data: null });
+    persistProbeCache();
     return null;
   }
   try {
@@ -835,10 +877,12 @@ function probeData(filePath: string, mtimeMs: number): ProbeData | null {
       chapters,
     };
     probeCache.set(filePath, { mtimeMs, data });
+    persistProbeCache();
     return data;
   } catch (err) {
     console.warn(`Failed to parse ffprobe output for ${filePath}: ${(err as Error).message}`);
     probeCache.set(filePath, { mtimeMs, data: null });
+    persistProbeCache();
     return null;
   }
 }
