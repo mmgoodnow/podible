@@ -807,7 +807,7 @@ function rssFeed(books: Book[], origin: string): { body: string; lastModified: D
       const durationSeconds = book.durationSeconds ?? 0;
       const duration = formatDuration(durationSeconds);
       const itemPubDate = (book.publishedAt ?? lastModified).toUTCString();
-      const description = `${book.title} by ${book.author}`;
+      const fallbackDescription = `${book.title} by ${book.author}`;
       const chaptersTag =
         book.kind === "multi"
           ? `<podcast:chapters url="${origin}/chapters/${book.id}.json" type="application/json+chapters" />`
@@ -826,8 +826,8 @@ function rssFeed(books: Book[], origin: string): { body: string; lastModified: D
         `<enclosure url="${enclosureUrl}" length="${enclosureLength}" type="${mime}" />`,
         `<link>${enclosureUrl}</link>`,
         `<pubDate>${itemPubDate}</pubDate>`,
-        `<description>${escapeXml(description)}</description>`,
-        `<itunes:summary>${escapeXml(description)}</itunes:summary>`,
+        `<description>${escapeXml(description || fallbackDescription)}</description>`,
+        `<itunes:summary>${escapeXml(description || fallbackDescription)}</itunes:summary>`,
         `<itunes:explicit>${FEED_EXPLICIT}</itunes:explicit>`,
         duration ? `<itunes:duration>${duration}</itunes:duration>` : "",
         `<itunes:episodeType>full</itunes:episodeType>`,
