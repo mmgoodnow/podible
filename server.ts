@@ -12,6 +12,7 @@ type AudioSegment = {
   start: number;
   end: number;
   durationMs: number;
+  title?: string;
 };
 
 type Book = {
@@ -30,6 +31,7 @@ type Book = {
   language?: string;
   isbn?: string;
   identifiers?: Record<string, string>;
+  chapters?: ChapterTiming[];
 };
 
 const FEED_TITLE = process.env.POD_TITLE ?? "Podible Audiobooks";
@@ -245,6 +247,21 @@ type OpfMetadata = {
   identifiers: Record<string, string>;
 };
 
+type AudioTagMetadata = {
+  title?: string;
+  artist?: string;
+  albumArtist?: string;
+  description?: string;
+  language?: string;
+  date?: Date;
+};
+
+type FfprobeChapter = {
+  start_time?: string;
+  end_time?: string;
+  tags?: Record<string, string>;
+};
+
 function parseOpfContent(content: string): OpfMetadata | null {
   const getTag = (tag: string): string | undefined => {
     const match = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i").exec(content);
@@ -286,6 +303,103 @@ function parseOpfContent(content: string): OpfMetadata | null {
     isbn,
     identifiers,
   };
+}
+
+function parseAudioTagDate(raw: string | undefined): Date | undefined {
+  if (!raw) return undefined;
+  const cleaned = raw.trim();
+  if (!cleaned) return undefined;
+  const parsed = new Date(cleaned);
+  if (!Number.isNaN(parsed.getTime())) return parsed;
+  return undefined;
+}
+
+function preferLonger(first?: string, second?: string): string | undefined {
+  const a = first?.trim() ?? "";
+  const b = second?.trim() ?? "";
+  const aLen = a.length;
+  const bLen = b.length;
+  if (bLen > aLen) return b;
+  if (aLen > bLen) return a;
+  return bLen > 0 ? b : aLen > 0 ? a : undefined;
+}
+
+function readAudioMetadata(filePath: string): AudioTagMetadata | null {
+  const result = spawnSync(
+    "ffprobe",
+    ["-v", "error", "-print_format", "json", "-show_format", filePath],
+    { encoding: "utf8" }
+  );
+  if (result.error || result.status !== 0) {
+    if (result.error) {
+      console.warn(`ffprobe failed for metadata ${filePath}: ${result.error.message}`);
+    } else {
+      console.warn(`ffprobe failed for metadata ${filePath}: ${result.stderr || result.status}`);
+    }
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(result.stdout);
+    const tags = (parsed?.format?.tags ?? {}) as Record<string, string>;
+    const descriptionRaw = cleanMetaValue(tags.description || tags.DESCRIPTION || tags.comment || tags.COMMENT);
+    const language = cleanMetaValue(tags.language || tags.LANGUAGE);
+    const date = parseAudioTagDate(tags.date || tags.DATE);
+    const description = cleanMetaValue(tags.description || tags.DESCRIPTION || tags.comment || tags.COMMENT);
+    return {
+      title: cleanMetaValue(tags.title || tags.TITLE),
+      artist: cleanMetaValue(tags.artist || tags.ARTIST),
+      albumArtist: cleanMetaValue(tags.album_artist || tags.ALBUM_ARTIST),
+      description: sanitizeOpfDescription(description),
+      language,
+      date,
+    };
+  } catch (err) {
+    console.warn(`Failed to parse ffprobe metadata for ${filePath}: ${(err as Error).message}`);
+    return null;
+  }
+}
+
+function readFfprobeChapters(filePath: string): ChapterTiming[] | null {
+  const result = spawnSync(
+    "ffprobe",
+    ["-v", "error", "-print_format", "json", "-show_chapters", "-i", filePath],
+    { encoding: "utf8" }
+  );
+  if (result.error || result.status !== 0) {
+    if (result.error) {
+      console.warn(`ffprobe failed for chapters ${filePath}: ${result.error.message}`);
+    } else {
+      console.warn(`ffprobe failed for chapters ${filePath}: ${result.stderr || result.status}`);
+    }
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(result.stdout);
+    const chapters = (parsed?.chapters ?? []) as FfprobeChapter[];
+    if (!Array.isArray(chapters) || chapters.length === 0) return null;
+    const timings: ChapterTiming[] = [];
+    chapters.forEach((chap, index) => {
+      const start = Math.max(0, Math.round(Number.parseFloat(chap.start_time ?? "0") * 1000));
+      const end = Math.max(start, Math.round(Number.parseFloat(chap.end_time ?? "0") * 1000));
+      const tagTitle =
+        chap.tags?.title ||
+        chap.tags?.TITLE ||
+        chap.tags?.name ||
+        chap.tags?.NAME ||
+        `Chapter ${index + 1}`;
+      const title = cleanMetaValue(tagTitle) ?? `Chapter ${index + 1}`;
+      timings.push({
+        id: `ch${index}`,
+        title,
+        startMs: start,
+        endMs: end,
+      });
+    });
+    return timings;
+  } catch (err) {
+    console.warn(`Failed to parse ffprobe chapters for ${filePath}: ${(err as Error).message}`);
+    return null;
+  }
 }
 
 async function readOpfMetadata(bookDir: string, files: string[]): Promise<OpfMetadata | null> {
@@ -369,12 +483,16 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
   const mp3s = files.filter((f) => f.toLowerCase().endsWith(".mp3")).sort();
   const covers = files.filter((f) => f.toLowerCase().endsWith(".jpg")).sort();
   const opf = await readOpfMetadata(bookDir, files);
+  const audioMetaSource = m4bs[0] ? path.join(bookDir, m4bs[0]) : mp3s[0] ? path.join(bookDir, mp3s[0]) : null;
+  const audioMeta = audioMetaSource ? readAudioMetadata(audioMetaSource) : null;
+  const chapterMeta =
+    m4bs[0] && audioMetaSource ? readFfprobeChapters(audioMetaSource) ?? undefined : undefined;
 
   const coverPath = covers.length > 0 ? path.join(bookDir, covers[0]) : undefined;
-  const displayTitle = opf?.title ?? title;
-  const displayAuthor = opf?.author ?? author;
-  const description = opf?.description;
-  const language = opf?.language;
+  const displayTitle = audioMeta?.title ?? opf?.title ?? title;
+  const displayAuthor = audioMeta?.artist ?? audioMeta?.albumArtist ?? opf?.author ?? author;
+  const description = preferLonger(opf?.description, audioMeta?.description);
+  const language = audioMeta?.language ?? opf?.language;
   const isbn = opf?.isbn;
   const identifiers = opf?.identifiers;
 
@@ -398,11 +516,12 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
       primaryFile: transcoded,
       coverPath,
       durationSeconds,
-      publishedAt: opf?.publishedAt ?? stat.mtime,
+      publishedAt: opf?.publishedAt ?? audioMeta?.date ?? stat.mtime,
       description,
       language,
       isbn,
       identifiers,
+      chapters: chapterMeta,
     };
   }
 
@@ -411,18 +530,27 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
     let cursor = 0;
     let cursorMs = 0;
     let durationSeconds = 0;
-    let publishedAt: Date | undefined = opf?.publishedAt;
+    let publishedAt: Date | undefined = opf?.publishedAt ?? audioMeta?.date;
     for (const name of mp3s) {
       const filePath = path.join(bookDir, name);
       const stat = await fs.stat(filePath).catch(() => null);
       if (!stat) continue;
       if ((!publishedAt || !opf?.publishedAt) && (!publishedAt || stat.mtime < publishedAt)) publishedAt = stat.mtime;
+      const fileMeta = readAudioMetadata(filePath);
       const duration = getDurationSeconds(filePath, stat.mtimeMs) ?? 0;
       const durationMs = Math.max(0, Math.round(duration * 1000));
       durationSeconds += duration;
       const start = cursor;
       const end = cursor + stat.size - 1;
-      segments.push({ path: filePath, name, size: stat.size, start, end, durationMs });
+      segments.push({
+        path: filePath,
+        name,
+        size: stat.size,
+        start,
+        end,
+        durationMs,
+        title: fileMeta?.title,
+      });
       cursor += stat.size;
       cursorMs += durationMs;
     }
@@ -705,16 +833,24 @@ function getDurationSeconds(filePath: string, mtimeMs: number): number | undefin
 }
 
 async function buildChapterTimings(book: Book): Promise<ChapterTiming[] | null> {
-  if (book.kind !== "multi" || !book.files) return null;
+  if (book.kind === "single") {
+    if (book.chapters && book.chapters.length > 0) return book.chapters;
+    return null;
+  }
+  if (!book.files) return null;
   const timings: ChapterTiming[] = [];
   let cursorMs = 0;
   book.files.forEach((segment, index) => {
     const durationMs = segment.durationMs;
     const startMs = cursorMs;
     const endMs = startMs + durationMs;
+    const chapterTitle =
+      segment.title ||
+      path.basename(segment.name, path.extname(segment.name)) ||
+      `Part ${index + 1}`;
     timings.push({
       id: `ch${index}`,
-      title: path.basename(segment.name, path.extname(segment.name)),
+      title: chapterTitle,
       startMs,
       endMs,
     });
@@ -808,14 +944,13 @@ function rssFeed(books: Book[], origin: string): { body: string; lastModified: D
       const duration = formatDuration(durationSeconds);
       const itemPubDate = (book.publishedAt ?? lastModified).toUTCString();
       const fallbackDescription = `${book.title} by ${book.author}`;
-      const chaptersTag =
-        book.kind === "multi"
-          ? `<podcast:chapters url="${origin}/chapters/${book.id}.json" type="application/json+chapters" />`
-          : "";
-      const chaptersDebugTag =
-        book.kind === "multi"
-          ? `<podcast:chaptersDebug url="${origin}/chapters-debug/${book.id}.json" type="application/json" />`
-          : "";
+      const hasChapters = book.kind === "multi" || (book.chapters && book.chapters.length > 0);
+      const chaptersTag = hasChapters
+        ? `<podcast:chapters url="${origin}/chapters/${book.id}.json" type="application/json+chapters" />`
+        : "";
+      const chaptersDebugTag = hasChapters
+        ? `<podcast:chaptersDebug url="${origin}/chapters-debug/${book.id}.json" type="application/json" />`
+        : "";
       const { description, subtitle } = buildItemNotes(book);
       return [
         "<item>",
@@ -993,7 +1128,7 @@ async function handleStream(request: Request, bookIdValue: string): Promise<Resp
 
 async function handleChapters(bookIdValue: string): Promise<Response> {
   const book = await findBookById(bookIdValue);
-  if (!book || book.kind !== "multi") return new Response("Not found", { status: 404 });
+  if (!book) return new Response("Not found", { status: 404 });
   const chapters = await buildChapters(book);
   if (!chapters) return new Response("Not found", { status: 404 });
   return new Response(JSON.stringify(chapters, null, 2), {
@@ -1003,7 +1138,7 @@ async function handleChapters(bookIdValue: string): Promise<Response> {
 
 async function handleChaptersDebug(bookIdValue: string): Promise<Response> {
   const book = await findBookById(bookIdValue);
-  if (!book || book.kind !== "multi") return new Response("Not found", { status: 404 });
+  if (!book) return new Response("Not found", { status: 404 });
   const chapters = await buildChapters(book);
   if (!chapters) return new Response("Not found", { status: 404 });
   return new Response(JSON.stringify(chapters, null, 2), {

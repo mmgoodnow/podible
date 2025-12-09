@@ -35,14 +35,14 @@ docker run -p 80:80 -v ./books:/books:ro podible bun run server.ts /books
 - `GET /feed.xml` — RSS with one item per book (enclosure streams audio; chapters tag for mp3 sets).
 - `GET /feed-debug.xml` — Same feed with browser-friendly headers for viewing raw XML.
 - `GET /stream/:bookId` — Range-aware streaming; handles single m4b or stitched mp3 files.
-- `GET /chapters/:bookId.json` — Podcasting 2.0 chapters JSON for multi-mp3 books.
+- `GET /chapters/:bookId.json` — Podcasting 2.0 chapters JSON for multi-mp3 books and m4b files with embedded chapters.
 - `GET /chapters-debug/:bookId.json` — Debug view of chapters with `application/json`.
 - `GET /covers/:bookId.jpg` — First `.jpg` in the book folder (exposed as a JPEG), if present.
 
 ## Notes
 - Library is scanned on each request (no persistent index).
 - `bookId` is a slug of `author-title` from folder names.
-- Multi-MP3 streams are stitched with an in-memory ID3v2.4 chapters tag prepended for chapter-aware players.
+- Multi-MP3 streams are stitched with an in-memory ID3v2.4 chapters tag prepended for chapter-aware players; m4b embedded chapters are exposed via the chapters endpoint/feed tag.
 - If a `.opf` file exists in a book folder, its metadata (title, author, description, language, ISBN, publication date) is used to enrich the feed item notes.
 
 ## Feed metadata (Apple-friendly)
