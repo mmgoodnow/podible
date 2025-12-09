@@ -198,6 +198,15 @@ function bookId(author: string, title: string): string {
   return slugify(`${author}-${title}`);
 }
 
+function bookFormat(book: Book): { ext: string; mime: string } {
+  const primary = book.primaryFile ?? book.files?.[0]?.path;
+  const ext = primary ? path.extname(primary).replace(/^\./, "").toLowerCase() : "";
+  const mimeFromExt = ext === "mp3" ? "audio/mpeg" : ["m4a", "m4b", "mp4"].includes(ext) ? "audio/mp4" : "";
+  const mime = mimeFromExt || book.mime || "audio/mpeg";
+  const resolvedExt = ext || (mime === "audio/mp4" ? "m4a" : "mp3");
+  return { ext: resolvedExt, mime };
+}
+
 function escapeXml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -583,7 +592,7 @@ function rssFeed(books: Book[], origin: string): { body: string; lastModified: D
   const pubDate = lastModified.toUTCString();
   const items = books
     .map((book) => {
-      const ext = book.mime === "audio/mp4" ? "m4a" : "mp3";
+      const { ext, mime } = bookFormat(book);
       const enclosureUrl = `${origin}/stream/${book.id}.${ext}`;
       const cover = book.coverPath ? `<itunes:image href="${origin}/covers/${book.id}.jpg" />` : "";
       const tagLength = estimateId3TagLength(book);
@@ -606,7 +615,7 @@ function rssFeed(books: Book[], origin: string): { body: string; lastModified: D
         `<title>${escapeXml(book.title)}</title>`,
         `<itunes:author>${escapeXml(book.author)}</itunes:author>`,
         `<itunes:subtitle>${escapeXml(book.author)}</itunes:subtitle>`,
-        `<enclosure url="${enclosureUrl}" length="${enclosureLength}" type="${book.mime}" />`,
+        `<enclosure url="${enclosureUrl}" length="${enclosureLength}" type="${mime}" />`,
         `<link>${enclosureUrl}</link>`,
         `<pubDate>${itemPubDate}</pubDate>`,
         `<description>${escapeXml(description)}</description>`,
@@ -695,9 +704,10 @@ async function handleStream(request: Request, bookIdValue: string): Promise<Resp
   const book = await findBookById(bookIdValue);
   if (!book) return new Response("Not found", { status: 404 });
   const rangeHeader = request.headers.get("range");
+  const { mime } = bookFormat(book);
   const headers: Record<string, string> = {
     "Accept-Ranges": "bytes",
-    "Content-Type": book.mime,
+    "Content-Type": mime,
   };
 
   if (book.kind === "single" && book.primaryFile) {
@@ -855,7 +865,7 @@ async function logInitialScan() {
   );
   if (books.length === 0) return;
   const sample = books[0];
-  const ext = sample.mime === "audio/mp4" ? "m4a" : "mp3";
+  const { ext } = bookFormat(sample);
   console.log(`Sample stream: ${localBase}/stream/${sample.id}.${ext}`);
   const multiWithChapters = books.find((b) => b.kind === "multi");
   if (multiWithChapters) {
