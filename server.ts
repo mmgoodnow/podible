@@ -57,6 +57,12 @@ type ChapterTiming = {
   endMs: number;
 };
 
+type TranscodeRecord = {
+  source: string;
+  output: string;
+  mtimeMs: number;
+};
+
 const scanRoots = (() => {
   const roots = process.argv.slice(2).filter(Boolean);
   if (roots.length === 0) {
@@ -64,6 +70,118 @@ const scanRoots = (() => {
   }
   return roots;
 })();
+
+const transcodeDir = (() => {
+  const dir = process.env.TRANSCODE_DIR ?? path.join(process.env.TMPDIR ?? "/tmp", "podible-transcodes");
+  return dir;
+})();
+
+const transcodeManifestPath = path.join(transcodeDir, "manifest.json");
+
+async function ensureTranscodeDir() {
+  await fs.mkdir(transcodeDir, { recursive: true });
+}
+
+async function readTranscodeManifest(): Promise<TranscodeRecord[]> {
+  await ensureTranscodeDir();
+  try {
+    const content = await fs.readFile(transcodeManifestPath, "utf8");
+    const parsed = JSON.parse(content);
+    if (Array.isArray(parsed)) return parsed as TranscodeRecord[];
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.warn("Failed to read transcode manifest:", (err as Error).message);
+    }
+  }
+  return [];
+}
+
+async function writeTranscodeManifest(records: TranscodeRecord[]) {
+  await ensureTranscodeDir();
+  await fs.writeFile(transcodeManifestPath, JSON.stringify(records, null, 2), "utf8");
+}
+
+async function cleanupTranscodes() {
+  const manifest = await readTranscodeManifest();
+  const kept: TranscodeRecord[] = [];
+  for (const record of manifest) {
+    const sourceStat = await fs.stat(record.source).catch(() => null);
+    const outputStat = await fs.stat(record.output).catch(() => null);
+    const stale = !sourceStat || !outputStat || sourceStat.mtimeMs !== record.mtimeMs;
+    if (stale) {
+      if (outputStat) {
+        await fs.unlink(record.output).catch(() => {});
+      }
+      continue;
+    }
+    kept.push(record);
+  }
+  if (kept.length !== manifest.length) {
+    await writeTranscodeManifest(kept);
+  }
+}
+
+function transcodeOutputPath(source: string, sourceStat: Awaited<ReturnType<typeof fs.stat>>): string {
+  const extless = path.basename(source, path.extname(source));
+  const safeName = slugify(extless) || "book";
+  const hash = sourceStat.mtimeMs.toString(36);
+  return path.join(transcodeDir, `${safeName}-${hash}.mp3`);
+}
+
+function transcodeM4bToMp3(source: string, target: string): void {
+  const result = spawnSync(
+    "ffmpeg",
+    [
+      "-y",
+      "-i",
+      source,
+      "-map_metadata",
+      "0",
+      "-map_chapters",
+      "0",
+      "-write_id3v2",
+      "1",
+      "-id3v2_version",
+      "3",
+      "-codec:a",
+      "libmp3lame",
+      "-qscale:a",
+      "2",
+      target,
+    ],
+    { stdio: "ignore" }
+  );
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`ffmpeg failed with status ${result.status}`);
+  }
+}
+
+async function ensureTranscodedMp3(source: string, sourceStat: Awaited<ReturnType<typeof fs.stat>>): Promise<string | null> {
+  await ensureTranscodeDir();
+  const manifest = await readTranscodeManifest();
+  const existing = manifest.find((rec) => rec.source === source && rec.mtimeMs === sourceStat.mtimeMs);
+  if (existing) {
+    const exists = await fs.stat(existing.output).catch(() => null);
+    if (exists) return existing.output;
+  }
+
+  const target = transcodeOutputPath(source, sourceStat);
+  try {
+    transcodeM4bToMp3(source, target);
+    await fs.utimes(target, sourceStat.atime, sourceStat.mtime);
+  } catch (err) {
+    console.warn(`Failed to transcode ${source}:`, (err as Error).message);
+    return null;
+  }
+
+  const updatedManifest = manifest.filter((rec) => rec.source !== source);
+  updatedManifest.push({ source, output: target, mtimeMs: sourceStat.mtimeMs });
+  await writeTranscodeManifest(updatedManifest);
+  return target;
+}
 
 const port = Number(process.env.PORT ?? 80);
 
@@ -111,15 +229,19 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
     const filePath = path.join(bookDir, m4bs[0]);
     const stat = await fs.stat(filePath).catch(() => null);
     if (!stat) return null;
-    const durationSeconds = getDurationSeconds(filePath, stat.mtimeMs);
+    const transcoded = await ensureTranscodedMp3(filePath, stat);
+    if (!transcoded) return null;
+    const targetStat = await fs.stat(transcoded).catch(() => null);
+    if (!targetStat) return null;
+    const durationSeconds = getDurationSeconds(transcoded, targetStat.mtimeMs);
     return {
       id: bookId(author, title),
       title,
       author,
       kind: "single",
-      mime: "audio/mp4",
-      totalSize: stat.size,
-      primaryFile: filePath,
+      mime: "audio/mpeg",
+      totalSize: targetStat.size,
+      primaryFile: transcoded,
       coverPath,
       durationSeconds,
       publishedAt: stat.mtime,
@@ -716,6 +838,10 @@ const localBase = `http://localhost${port === 80 ? "" : `:${port}`}`;
 console.log(`Listening on port ${port}. Roots: ${scanRoots.join(", ") || "none"}`);
 console.log(`Feed: ${localBase}/feed.xml`);
 console.log(`Feed (debug/plain): ${localBase}/feed-debug.xml`);
+
+cleanupTranscodes().catch((err) => {
+  console.warn("Transcode cleanup failed:", err);
+});
 
 async function logInitialScan() {
   if (scanRoots.length === 0) return;
