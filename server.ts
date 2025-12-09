@@ -198,6 +198,13 @@ function bookId(author: string, title: string): string {
   return slugify(`${author}-${title}`);
 }
 
+function bookExtension(book: Book): string {
+  const primary = book.primaryFile ?? book.files?.[0]?.path;
+  const ext = primary ? path.extname(primary).replace(/^\./, "").toLowerCase() : "";
+  if (ext) return ext;
+  return book.mime === "audio/mp4" ? "m4a" : "mp3";
+}
+
 function escapeXml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -241,6 +248,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
       kind: "single",
       mime: "audio/mpeg",
       totalSize: targetStat.size,
+      // The primary file is the transcoded MP3 we serve in the feed
       primaryFile: transcoded,
       coverPath,
       durationSeconds,
@@ -583,7 +591,7 @@ function rssFeed(books: Book[], origin: string): { body: string; lastModified: D
   const pubDate = lastModified.toUTCString();
   const items = books
     .map((book) => {
-      const ext = book.mime === "audio/mp4" ? "m4a" : "mp3";
+      const ext = bookExtension(book);
       const enclosureUrl = `${origin}/stream/${book.id}.${ext}`;
       const cover = book.coverPath ? `<itunes:image href="${origin}/covers/${book.id}.jpg" />` : "";
       const tagLength = estimateId3TagLength(book);
@@ -855,7 +863,7 @@ async function logInitialScan() {
   );
   if (books.length === 0) return;
   const sample = books[0];
-  const ext = sample.mime === "audio/mp4" ? "m4a" : "mp3";
+  const ext = bookExtension(sample);
   console.log(`Sample stream: ${localBase}/stream/${sample.id}.${ext}`);
   const multiWithChapters = books.find((b) => b.kind === "multi");
   if (multiWithChapters) {
