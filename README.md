@@ -18,6 +18,7 @@ flowchart LR
 
 ## Run locally
 ```bash
+bun install
 bun run server.ts /path/to/library
 # example: bun run server.ts /books
 ```

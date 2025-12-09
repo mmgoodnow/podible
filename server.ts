@@ -2,6 +2,7 @@ import { promises as fs, createReadStream } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { Readable } from "node:stream";
+import { XMLParser } from "fast-xml-parser";
 
 type BookKind = "single" | "multi";
 
@@ -28,6 +29,7 @@ type Book = {
   durationSeconds?: number;
   publishedAt?: Date;
   description?: string;
+  descriptionHtml?: string;
   language?: string;
   isbn?: string;
   identifiers?: Record<string, string>;
@@ -46,6 +48,13 @@ const FEED_EXPLICIT = ["yes", "no", "clean"].includes(rawExplicit) ? rawExplicit
 const FEED_CATEGORY = process.env.POD_CATEGORY ?? "Arts";
 const FEED_TYPE = process.env.POD_TYPE ?? "episodic";
 const FEED_IMAGE_URL = process.env.POD_IMAGE_URL;
+const xmlParser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: "",
+  removeNSPrefix: true,
+  trimValues: false,
+  textNodeName: "#text",
+});
 
 const durationCache = new Map<
   string,
@@ -53,6 +62,14 @@ const durationCache = new Map<
     mtimeMs: number;
     duration?: number;
     failed?: boolean;
+  }
+>();
+
+const probeCache = new Map<
+  string,
+  {
+    mtimeMs: number;
+    data: ProbeData | null;
   }
 >();
 
@@ -218,10 +235,16 @@ function cleanMetaValue(value: string | undefined): string | undefined {
   return trimmed;
 }
 
-function sanitizeOpfDescription(raw: string | undefined): string | undefined {
-  if (!raw) return undefined;
-  const decoded = decodeXmlEntities(raw);
-  const withBreaks = decoded
+function normalizeDescriptionHtml(raw: string | undefined): string | undefined {
+  const decoded = raw ? decodeXmlEntities(raw) : undefined;
+  const cleaned = cleanMetaValue(decoded);
+  if (!cleaned) return undefined;
+  return cleaned;
+}
+
+function htmlToPlainText(html: string | undefined): string | undefined {
+  if (!html) return undefined;
+  const withBreaks = html
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/p>/gi, "\n\n")
     .replace(/<\/li>/gi, "\n")
@@ -233,14 +256,29 @@ function sanitizeOpfDescription(raw: string | undefined): string | undefined {
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]+/g, " ")
     .trim();
-  if (!normalized) return undefined;
-  return normalized;
+  return normalized || undefined;
+}
+
+function toArray<T>(value: T | T[] | undefined | null): T[] {
+  if (value === undefined || value === null) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function nodeText(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (typeof value === "object" && value && "#text" in (value as Record<string, unknown>)) {
+    const text = (value as Record<string, unknown>)["#text"];
+    if (typeof text === "string" || typeof text === "number") return String(text);
+  }
+  return undefined;
 }
 
 type OpfMetadata = {
   title?: string;
   author?: string;
   description?: string;
+  descriptionHtml?: string;
   language?: string;
   publishedAt?: Date;
   isbn?: string;
@@ -252,8 +290,15 @@ type AudioTagMetadata = {
   artist?: string;
   albumArtist?: string;
   description?: string;
+  descriptionHtml?: string;
   language?: string;
   date?: Date;
+};
+
+type ProbeData = {
+  duration?: number;
+  tags?: Record<string, string>;
+  chapters?: FfprobeChapter[];
 };
 
 type FfprobeChapter = {
@@ -263,34 +308,38 @@ type FfprobeChapter = {
 };
 
 function parseOpfContent(content: string): OpfMetadata | null {
-  const getTag = (tag: string): string | undefined => {
-    const match = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i").exec(content);
-    if (!match) return undefined;
-    return decodeXmlEntities(match[1]).trim();
-  };
+  let parsed: any;
+  try {
+    parsed = xmlParser.parse(content);
+  } catch (err) {
+    console.warn(`Failed to parse OPF XML: ${(err as Error).message}`);
+    return null;
+  }
+  const metadata = parsed?.package?.metadata;
+  if (!metadata) return null;
+
+  const title = cleanMetaValue(nodeText(metadata.title ?? metadata["dc:title"]));
+  const author = cleanMetaValue(nodeText(metadata.creator ?? metadata["dc:creator"]));
+  const rawDescription = normalizeDescriptionHtml(nodeText(metadata.description ?? metadata["dc:description"]));
+  const description = htmlToPlainText(rawDescription);
+  const language = cleanMetaValue(nodeText(metadata.language ?? metadata["dc:language"]));
+  const rawDate = nodeText(metadata.date ?? metadata["dc:date"]);
 
   const identifiers: Record<string, string> = {};
-  const idRegex = /<dc:identifier([^>]*)>([\s\S]*?)<\/dc:identifier>/gi;
-  let idMatch: RegExpExecArray | null;
-  while ((idMatch = idRegex.exec(content))) {
-    const attrs = idMatch[1] || "";
-    const value = decodeXmlEntities(idMatch[2]).trim();
-    const schemeMatch = /opf:scheme\s*=\s*"([^"]+)"/i.exec(attrs);
-    const scheme = schemeMatch ? schemeMatch[1].toLowerCase() : undefined;
-    if (scheme) identifiers[scheme] = value;
-  }
-
-  const description = sanitizeOpfDescription(getTag("dc:description"));
-  const title = cleanMetaValue(getTag("dc:title"));
-  const author = cleanMetaValue(getTag("dc:creator"));
-  const language = cleanMetaValue(getTag("dc:language"));
-  const rawDate = getTag("dc:date");
+  const identifierNodes = toArray(metadata.identifier ?? metadata["dc:identifier"]);
+  identifierNodes.forEach((idNode: any) => {
+    const value = cleanMetaValue(nodeText(idNode));
+    if (!value) return;
+    const scheme = typeof idNode === "object" ? idNode.scheme || idNode["opf:scheme"] : undefined;
+    if (scheme) identifiers[String(scheme).toLowerCase()] = value;
+  });
   const isbn = identifiers["isbn"];
+
   let publishedAt: Date | undefined;
   if (rawDate) {
-    const parsed = new Date(rawDate);
-    if (!Number.isNaN(parsed.getTime())) {
-      publishedAt = parsed;
+    const parsedDate = new Date(rawDate);
+    if (!Number.isNaN(parsedDate.getTime())) {
+      publishedAt = parsedDate;
     }
   }
 
@@ -298,6 +347,7 @@ function parseOpfContent(content: string): OpfMetadata | null {
     title,
     author,
     description,
+    descriptionHtml: rawDescription,
     language,
     publishedAt,
     isbn,
@@ -324,82 +374,48 @@ function preferLonger(first?: string, second?: string): string | undefined {
   return bLen > 0 ? b : aLen > 0 ? a : undefined;
 }
 
-function readAudioMetadata(filePath: string): AudioTagMetadata | null {
-  const result = spawnSync(
-    "ffprobe",
-    ["-v", "error", "-print_format", "json", "-show_format", filePath],
-    { encoding: "utf8" }
+function readAudioMetadata(filePath: string, mtimeMs: number): AudioTagMetadata | null {
+  const probed = probeData(filePath, mtimeMs);
+  if (!probed || !probed.tags) return null;
+  const tags = probed.tags;
+  const descriptionRaw = normalizeDescriptionHtml(
+    tags.description || tags.DESCRIPTION || tags.comment || tags.COMMENT
   );
-  if (result.error || result.status !== 0) {
-    if (result.error) {
-      console.warn(`ffprobe failed for metadata ${filePath}: ${result.error.message}`);
-    } else {
-      console.warn(`ffprobe failed for metadata ${filePath}: ${result.stderr || result.status}`);
-    }
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(result.stdout);
-    const tags = (parsed?.format?.tags ?? {}) as Record<string, string>;
-    const descriptionRaw = cleanMetaValue(tags.description || tags.DESCRIPTION || tags.comment || tags.COMMENT);
-    const language = cleanMetaValue(tags.language || tags.LANGUAGE);
-    const date = parseAudioTagDate(tags.date || tags.DATE);
-    const description = cleanMetaValue(tags.description || tags.DESCRIPTION || tags.comment || tags.COMMENT);
-    return {
-      title: cleanMetaValue(tags.title || tags.TITLE),
-      artist: cleanMetaValue(tags.artist || tags.ARTIST),
-      albumArtist: cleanMetaValue(tags.album_artist || tags.ALBUM_ARTIST),
-      description: sanitizeOpfDescription(description),
-      language,
-      date,
-    };
-  } catch (err) {
-    console.warn(`Failed to parse ffprobe metadata for ${filePath}: ${(err as Error).message}`);
-    return null;
-  }
+  const description = htmlToPlainText(descriptionRaw);
+  return {
+    title: cleanMetaValue(tags.title || tags.TITLE),
+    artist: cleanMetaValue(tags.artist || tags.ARTIST),
+    albumArtist: cleanMetaValue(tags.album_artist || tags.ALBUM_ARTIST),
+    description,
+    descriptionHtml: descriptionRaw,
+    language: cleanMetaValue(tags.language || tags.LANGUAGE),
+    date: parseAudioTagDate(tags.date || tags.DATE),
+  };
 }
 
-function readFfprobeChapters(filePath: string): ChapterTiming[] | null {
-  const result = spawnSync(
-    "ffprobe",
-    ["-v", "error", "-print_format", "json", "-show_chapters", "-i", filePath],
-    { encoding: "utf8" }
-  );
-  if (result.error || result.status !== 0) {
-    if (result.error) {
-      console.warn(`ffprobe failed for chapters ${filePath}: ${result.error.message}`);
-    } else {
-      console.warn(`ffprobe failed for chapters ${filePath}: ${result.stderr || result.status}`);
-    }
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(result.stdout);
-    const chapters = (parsed?.chapters ?? []) as FfprobeChapter[];
-    if (!Array.isArray(chapters) || chapters.length === 0) return null;
-    const timings: ChapterTiming[] = [];
-    chapters.forEach((chap, index) => {
-      const start = Math.max(0, Math.round(Number.parseFloat(chap.start_time ?? "0") * 1000));
-      const end = Math.max(start, Math.round(Number.parseFloat(chap.end_time ?? "0") * 1000));
-      const tagTitle =
-        chap.tags?.title ||
-        chap.tags?.TITLE ||
-        chap.tags?.name ||
-        chap.tags?.NAME ||
-        `Chapter ${index + 1}`;
-      const title = cleanMetaValue(tagTitle) ?? `Chapter ${index + 1}`;
-      timings.push({
-        id: `ch${index}`,
-        title,
-        startMs: start,
-        endMs: end,
-      });
+function readFfprobeChapters(filePath: string, mtimeMs: number): ChapterTiming[] | null {
+  const probed = probeData(filePath, mtimeMs);
+  const chapters = probed?.chapters;
+  if (!chapters || chapters.length === 0) return null;
+  const timings: ChapterTiming[] = [];
+  chapters.forEach((chap, index) => {
+    const start = Math.max(0, Math.round(Number.parseFloat(chap.start_time ?? "0") * 1000));
+    const end = Math.max(start, Math.round(Number.parseFloat(chap.end_time ?? "0") * 1000));
+    const tagTitle =
+      chap.tags?.title ||
+      chap.tags?.TITLE ||
+      chap.tags?.name ||
+      chap.tags?.NAME ||
+      `Chapter ${index + 1}`;
+    const title = cleanMetaValue(tagTitle) ?? `Chapter ${index + 1}`;
+    timings.push({
+      id: `ch${index}`,
+      title,
+      startMs: start,
+      endMs: end,
     });
-    return timings;
-  } catch (err) {
-    console.warn(`Failed to parse ffprobe chapters for ${filePath}: ${(err as Error).message}`);
-    return null;
-  }
+  });
+  return timings;
 }
 
 async function readOpfMetadata(bookDir: string, files: string[]): Promise<OpfMetadata | null> {
@@ -484,21 +500,23 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
   const covers = files.filter((f) => f.toLowerCase().endsWith(".jpg")).sort();
   const opf = await readOpfMetadata(bookDir, files);
   const audioMetaSource = m4bs[0] ? path.join(bookDir, m4bs[0]) : mp3s[0] ? path.join(bookDir, mp3s[0]) : null;
-  const audioMeta = audioMetaSource ? readAudioMetadata(audioMetaSource) : null;
+  const audioMetaStat = audioMetaSource ? await fs.stat(audioMetaSource).catch(() => null) : null;
+  const audioMeta = audioMetaStat ? readAudioMetadata(audioMetaSource!, audioMetaStat.mtimeMs) : null;
   const chapterMeta =
-    m4bs[0] && audioMetaSource ? readFfprobeChapters(audioMetaSource) ?? undefined : undefined;
+    m4bs[0] && audioMetaStat ? readFfprobeChapters(audioMetaSource!, audioMetaStat.mtimeMs) ?? undefined : undefined;
 
   const coverPath = covers.length > 0 ? path.join(bookDir, covers[0]) : undefined;
   const displayTitle = audioMeta?.title ?? opf?.title ?? title;
   const displayAuthor = audioMeta?.artist ?? audioMeta?.albumArtist ?? opf?.author ?? author;
   const description = preferLonger(opf?.description, audioMeta?.description);
+  const descriptionHtml = preferLonger(opf?.descriptionHtml, audioMeta?.descriptionHtml);
   const language = audioMeta?.language ?? opf?.language;
   const isbn = opf?.isbn;
   const identifiers = opf?.identifiers;
 
   if (m4bs.length > 0) {
     const filePath = path.join(bookDir, m4bs[0]);
-    const stat = await fs.stat(filePath).catch(() => null);
+    const stat = audioMetaStat ?? (await fs.stat(filePath).catch(() => null));
     if (!stat) return null;
     const transcoded = await ensureTranscodedMp3(filePath, stat);
     if (!transcoded) return null;
@@ -518,6 +536,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
       durationSeconds,
       publishedAt: opf?.publishedAt ?? audioMeta?.date ?? stat.mtime,
       description,
+      descriptionHtml,
       language,
       isbn,
       identifiers,
@@ -536,7 +555,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
       const stat = await fs.stat(filePath).catch(() => null);
       if (!stat) continue;
       if ((!publishedAt || !opf?.publishedAt) && (!publishedAt || stat.mtime < publishedAt)) publishedAt = stat.mtime;
-      const fileMeta = readAudioMetadata(filePath);
+      const fileMeta = readAudioMetadata(filePath, stat.mtimeMs);
       const duration = getDurationSeconds(filePath, stat.mtimeMs) ?? 0;
       const durationMs = Math.max(0, Math.round(duration * 1000));
       durationSeconds += duration;
@@ -568,6 +587,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
       durationSeconds: durationSeconds,
       publishedAt,
       description,
+      descriptionHtml,
       language,
       isbn,
       identifiers,
@@ -788,31 +808,39 @@ function streamSegments(segments: AudioSegment[]): ReadableStream<Uint8Array> {
   });
 }
 
-function probeDurationSeconds(filePath: string): number {
+function probeData(filePath: string, mtimeMs: number): ProbeData | null {
+  const cached = probeCache.get(filePath);
+  if (cached && cached.mtimeMs === mtimeMs) return cached.data;
   const result = spawnSync(
     "ffprobe",
-    [
-      "-v",
-      "error",
-      "-show_entries",
-      "format=duration",
-      "-of",
-      "default=noprint_wrappers=1:nokey=1",
-      filePath,
-    ],
+    ["-v", "error", "-print_format", "json", "-show_format", "-show_chapters", filePath],
     { encoding: "utf8" }
   );
-  if (result.error) {
-    throw result.error;
+  if (result.error || result.status !== 0) {
+    const message = result.error ? result.error.message : result.stderr || String(result.status);
+    console.warn(`ffprobe failed for ${filePath}: ${message}`);
+    probeCache.set(filePath, { mtimeMs, data: null });
+    return null;
   }
-  if (result.status !== 0) {
-    throw new Error(`ffprobe failed for ${filePath}: ${result.stderr || result.status}`);
+  try {
+    const parsed = JSON.parse(result.stdout);
+    const format = parsed?.format ?? {};
+    const durationStr: string | undefined = format.duration;
+    const duration = durationStr ? Number.parseFloat(durationStr) : undefined;
+    const tags = format.tags as Record<string, string> | undefined;
+    const chapters = (parsed?.chapters ?? []) as FfprobeChapter[];
+    const data: ProbeData = {
+      duration: Number.isFinite(duration) ? duration : undefined,
+      tags,
+      chapters,
+    };
+    probeCache.set(filePath, { mtimeMs, data });
+    return data;
+  } catch (err) {
+    console.warn(`Failed to parse ffprobe output for ${filePath}: ${(err as Error).message}`);
+    probeCache.set(filePath, { mtimeMs, data: null });
+    return null;
   }
-  const value = parseFloat(result.stdout.trim());
-  if (!Number.isFinite(value)) {
-    throw new Error(`ffprobe returned invalid duration for ${filePath}: ${result.stdout}`);
-  }
-  return value;
 }
 
 function getDurationSeconds(filePath: string, mtimeMs: number): number | undefined {
@@ -821,15 +849,13 @@ function getDurationSeconds(filePath: string, mtimeMs: number): number | undefin
     if (cached.failed) return undefined;
     return cached.duration;
   }
-  try {
-    const duration = probeDurationSeconds(filePath);
-    durationCache.set(filePath, { mtimeMs, duration, failed: false });
-    return duration;
-  } catch (err) {
-    console.warn(`Skipping duration for ${filePath}: ${(err as Error).message}`);
+  const probed = probeData(filePath, mtimeMs);
+  if (!probed || probed.duration === undefined) {
     durationCache.set(filePath, { mtimeMs, failed: true });
     return undefined;
   }
+  durationCache.set(filePath, { mtimeMs, duration: probed.duration, failed: false });
+  return probed.duration;
 }
 
 async function buildChapterTimings(book: Book): Promise<ChapterTiming[] | null> {
@@ -891,8 +917,8 @@ function cleanLanguage(language: string | undefined): string | undefined {
   return trimmed;
 }
 
-function buildItemNotes(book: Book): { description: string; subtitle: string } {
-  const baseDescription = book.description?.trim();
+function buildItemNotes(book: Book): { description: string; subtitle: string; descriptionHtml?: string } {
+  const baseDescription = book.description?.trim() ?? htmlToPlainText(book.descriptionHtml)?.trim();
   const summaryParts: string[] = [];
   if (baseDescription) {
     summaryParts.push(baseDescription);
@@ -920,7 +946,7 @@ function buildItemNotes(book: Book): { description: string; subtitle: string } {
   const description = summaryParts.join("\n\n");
   const subtitleSource = baseDescription || book.author || book.title;
   const subtitle = truncate(firstLine(subtitleSource), 200) || book.author;
-  return { description, subtitle };
+  return { description, subtitle, descriptionHtml: book.descriptionHtml };
 }
 
 function rssFeed(books: Book[], origin: string): { body: string; lastModified: Date } {
@@ -951,7 +977,10 @@ function rssFeed(books: Book[], origin: string): { body: string; lastModified: D
       const chaptersDebugTag = hasChapters
         ? `<podcast:chaptersDebug url="${origin}/chapters-debug/${book.id}.json" type="application/json" />`
         : "";
-      const { description, subtitle } = buildItemNotes(book);
+      const { description, subtitle, descriptionHtml } = buildItemNotes(book);
+      const descriptionForXml = descriptionHtml
+        ? `<![CDATA[${descriptionHtml.replace(/]]>/g, "]]]]><![CDATA[>")}]]>`
+        : escapeXml(description || fallbackDescription);
       return [
         "<item>",
         `<guid isPermaLink="false">${escapeXml(book.id)}</guid>`,
@@ -961,7 +990,7 @@ function rssFeed(books: Book[], origin: string): { body: string; lastModified: D
         `<enclosure url="${enclosureUrl}" length="${enclosureLength}" type="${mime}" />`,
         `<link>${enclosureUrl}</link>`,
         `<pubDate>${itemPubDate}</pubDate>`,
-        `<description>${escapeXml(description || fallbackDescription)}</description>`,
+        `<description>${descriptionForXml}</description>`,
         `<itunes:summary>${escapeXml(description || fallbackDescription)}</itunes:summary>`,
         `<itunes:explicit>${FEED_EXPLICIT}</itunes:explicit>`,
         duration ? `<itunes:duration>${duration}</itunes:duration>` : "",

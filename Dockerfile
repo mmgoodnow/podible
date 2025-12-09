@@ -6,6 +6,9 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ffmpeg \
   && rm -rf /var/lib/apt/lists/*
 
+COPY package.json bun.lock ./
+RUN bun install --production
+
 COPY server.ts ./
 
 EXPOSE 80
