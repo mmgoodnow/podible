@@ -226,9 +226,11 @@ async function ensureTranscodedMp3(source: string, sourceStat: Awaited<ReturnTyp
   }
 
   const target = transcodeOutputPath(source, sourceStat);
+  console.log(`[transcode] start source="${source}" -> target="${target}"`);
   try {
     transcodeM4bToMp3(source, target);
     await fs.utimes(target, sourceStat.atime, sourceStat.mtime);
+    console.log(`[transcode] done source="${source}" -> target="${target}" size=${(await fs.stat(target)).size}`);
   } catch (err) {
     console.warn(`Failed to transcode ${source}:`, (err as Error).message);
     return null;
@@ -528,6 +530,7 @@ async function safeReadDir(dir: string) {
 
 async function buildBook(author: string, bookDir: string, title: string): Promise<Book | null> {
   const t0 = Date.now();
+  console.log(`[scan] start book author="${author}" title="${title}" path="${bookDir}"`);
   const entries = await safeReadDir(bookDir);
   const files = entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
   const m4bs = files.filter((f) => f.toLowerCase().endsWith(".m4b")).sort();
@@ -1111,6 +1114,7 @@ async function handleFeed(request: Request): Promise<Response> {
   }
   const started = Date.now();
   const origin = requestOrigin(request);
+  console.log(`[feed] start /feed.xml roots=${scanRoots.join("|")}`);
   const books = await scanBooks();
   const scannedMs = Date.now() - started;
   const { body, lastModified } = rssFeed(books, origin);
@@ -1134,6 +1138,7 @@ async function handleFeedDebug(request: Request): Promise<Response> {
   }
   const started = Date.now();
   const origin = requestOrigin(request);
+  console.log(`[feed] start /feed-debug.xml roots=${scanRoots.join("|")}`);
   const books = await scanBooks();
   const scannedMs = Date.now() - started;
   const { body, lastModified } = rssFeed(books, origin);
