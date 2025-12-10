@@ -76,7 +76,7 @@ let probeCacheLoaded = false;
 
 function persistProbeCache() {
   try {
-    ensureTranscodeDirSync();
+    ensureDataDirSync();
     const payload = Array.from(probeCache.entries()).map(([file, value]) => ({
       file,
       mtimeMs: value.mtimeMs,
@@ -109,13 +109,13 @@ const scanRoots = (() => {
   return roots;
 })();
 
-const transcodeDir = (() => {
-  const dir = process.env.TRANSCODE_DIR ?? path.join(process.env.TMPDIR ?? "/tmp", "podible-transcodes");
+const dataDir = (() => {
+  const dir = process.env.DATA_DIR ?? path.join(process.env.TMPDIR ?? "/tmp", "podible-transcodes");
   return dir;
 })();
 
-const transcodeManifestPath = path.join(transcodeDir, "manifest.json");
-const probeCachePath = path.join(transcodeDir, "probe-cache.json");
+const transcodeManifestPath = path.join(dataDir, "manifest.json");
+const probeCachePath = path.join(dataDir, "probe-cache.json");
 const brandImagePath = path.join(process.cwd(), "podible.png");
 
 const brandImageExists = (() => {
@@ -127,20 +127,20 @@ const brandImageExists = (() => {
   }
 })();
 
-async function ensureTranscodeDir() {
-  await fs.mkdir(transcodeDir, { recursive: true });
+async function ensureDataDir() {
+  await fs.mkdir(dataDir, { recursive: true });
 }
 
-function ensureTranscodeDirSync() {
+function ensureDataDirSync() {
   try {
-    mkdirSync(transcodeDir, { recursive: true });
+    mkdirSync(dataDir, { recursive: true });
   } catch {
-    // ignore sync mkdir errors; async ensureTranscodeDir also runs elsewhere
+    // ignore sync mkdir errors; async ensureDataDir also runs elsewhere
   }
 }
 
 async function readTranscodeManifest(): Promise<TranscodeRecord[]> {
-  await ensureTranscodeDir();
+  await ensureDataDir();
   try {
     const content = await fs.readFile(transcodeManifestPath, "utf8");
     const parsed = JSON.parse(content);
@@ -154,7 +154,7 @@ async function readTranscodeManifest(): Promise<TranscodeRecord[]> {
 }
 
 async function writeTranscodeManifest(records: TranscodeRecord[]) {
-  await ensureTranscodeDir();
+  await ensureDataDir();
   await fs.writeFile(transcodeManifestPath, JSON.stringify(records, null, 2), "utf8");
 }
 
@@ -182,7 +182,7 @@ function transcodeOutputPath(source: string, sourceStat: Awaited<ReturnType<type
   const extless = path.basename(source, path.extname(source));
   const safeName = slugify(extless) || "book";
   const hash = sourceStat.mtimeMs.toString(36);
-  return path.join(transcodeDir, `${safeName}-${hash}.mp3`);
+  return path.join(dataDir, `${safeName}-${hash}.mp3`);
 }
 
 function transcodeM4bToMp3(source: string, target: string): void {
@@ -217,7 +217,7 @@ function transcodeM4bToMp3(source: string, target: string): void {
 }
 
 async function ensureTranscodedMp3(source: string, sourceStat: Awaited<ReturnType<typeof fs.stat>>): Promise<string | null> {
-  await ensureTranscodeDir();
+  await ensureDataDir();
   const manifest = await readTranscodeManifest();
   const existing = manifest.find((rec) => rec.source === source && rec.mtimeMs === sourceStat.mtimeMs);
   if (existing) {
