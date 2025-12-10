@@ -1,4 +1,4 @@
-import { promises as fs, createReadStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { promises as fs, createReadStream, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { Readable } from "node:stream";
@@ -116,6 +116,16 @@ const transcodeDir = (() => {
 
 const transcodeManifestPath = path.join(transcodeDir, "manifest.json");
 const probeCachePath = path.join(transcodeDir, "probe-cache.json");
+const brandImagePath = path.join(process.cwd(), "podible.png");
+
+const brandImageExists = (() => {
+  try {
+    const stat = statSync(brandImagePath);
+    return stat.isFile();
+  } catch {
+    return false;
+  }
+})();
 
 async function ensureTranscodeDir() {
   await fs.mkdir(transcodeDir, { recursive: true });
@@ -530,7 +540,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
     m4bs[0] && audioMetaStat ? readFfprobeChapters(audioMetaSource!, audioMetaStat.mtimeMs) ?? undefined : undefined;
 
   const coverPath = covers.length > 0 ? path.join(bookDir, covers[0]) : undefined;
-  const displayTitle = audioMeta?.title ?? opf?.title ?? title;
+  const displayTitle = opf?.title ?? title;
   const displayAuthor = audioMeta?.artist ?? audioMeta?.albumArtist ?? opf?.author ?? author;
   const description = preferLonger(opf?.description, audioMeta?.description);
   const descriptionHtml = preferLonger(opf?.descriptionHtml, audioMeta?.descriptionHtml);
@@ -995,7 +1005,8 @@ function buildItemNotes(book: Book): { description: string; subtitle: string; de
 
 function rssFeed(books: Book[], origin: string): { body: string; lastModified: Date } {
   const firstCover = books.find((b) => b.coverPath);
-  const channelImage = FEED_IMAGE_URL || (firstCover ? `${origin}/covers/${firstCover.id}.jpg` : "");
+  const channelImage =
+    FEED_IMAGE_URL || (brandImageExists ? `${origin}/podible.png` : firstCover ? `${origin}/covers/${firstCover.id}.jpg` : "");
   const latestMtime = books
     .map((b) => b.publishedAt?.getTime() ?? 0)
     .filter((t) => t > 0);
@@ -1251,13 +1262,17 @@ Bun.serve({
       const id = idWithExt.replace(/\.json$/, "");
       return handleChaptersDebug(id);
     }
-    if (pathname.startsWith("/covers/")) {
-      const [, , idWithExt = ""] = pathname.split("/");
-      const id = idWithExt.replace(/\.jpg$/, "");
-      return handleCover(id);
-    }
-    return new Response("Not found", { status: 404 });
-  },
+  if (pathname.startsWith("/covers/")) {
+    const [, , idWithExt = ""] = pathname.split("/");
+    const id = idWithExt.replace(/\.jpg$/, "");
+    return handleCover(id);
+  }
+  if (pathname === "/podible.png" && brandImageExists) {
+    const file = Bun.file(brandImagePath);
+    return new Response(file, { headers: { "Content-Type": "image/png" } });
+  }
+  return new Response("Not found", { status: 404 });
+},
 });
 
 const localBase = `http://localhost${port === 80 ? "" : `:${port}`}`;
