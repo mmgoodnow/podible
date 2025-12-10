@@ -527,6 +527,7 @@ async function safeReadDir(dir: string) {
 }
 
 async function buildBook(author: string, bookDir: string, title: string): Promise<Book | null> {
+  const t0 = Date.now();
   const entries = await safeReadDir(bookDir);
   const files = entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
   const m4bs = files.filter((f) => f.toLowerCase().endsWith(".m4b")).sort();
@@ -558,7 +559,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
     if (!targetStat) return null;
     const durationSeconds = getDurationSeconds(transcoded, targetStat.mtimeMs);
     const mime = mimeFromExt(path.extname(transcoded));
-    return {
+    const result: Book = {
       id: bookId(author, title),
       title: displayTitle,
       author: displayAuthor,
@@ -576,6 +577,10 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
       identifiers,
       chapters: chapterMeta,
     };
+    console.log(
+      `[scan] built m4b book author="${author}" title="${title}" size=${targetStat.size} duration=${Math.round(durationSeconds ?? 0)}s in ${Date.now() - t0}ms`
+    );
+    return result;
   }
 
   if (mp3s.length > 0) {
@@ -609,7 +614,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
     }
     if (segments.length === 0) return null;
     const mime = mimeFromExt(path.extname(mp3s[0]));
-    return {
+    const result: Book = {
       id: bookId(author, title),
       title: displayTitle,
       author: displayAuthor,
@@ -626,6 +631,10 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
       isbn,
       identifiers,
     };
+    console.log(
+      `[scan] built multi book author="${author}" title="${title}" files=${segments.length} duration=${Math.round(durationSeconds)}s in ${Date.now() - t0}ms`
+    );
+    return result;
   }
 
   return null;
@@ -633,6 +642,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
 
 async function scanBooks(): Promise<Book[]> {
   const books: Book[] = [];
+  const started = Date.now();
   for (const root of scanRoots) {
     const authors = await safeReadDir(root);
     for (const authorEntry of authors) {
@@ -647,6 +657,9 @@ async function scanBooks(): Promise<Book[]> {
       }
     }
   }
+  console.log(
+    `[scan] completed ${books.length} books in ${Date.now() - started}ms from roots=${scanRoots.join("|")}`
+  );
   books.sort((a, b) => {
     const at = a.publishedAt ? a.publishedAt.getTime() : 0;
     const bt = b.publishedAt ? b.publishedAt.getTime() : 0;
@@ -1096,9 +1109,15 @@ async function handleFeed(request: Request): Promise<Response> {
   if (scanRoots.length === 0) {
     return new Response("No roots configured. Pass library directories via argv.", { status: 500 });
   }
+  const started = Date.now();
   const origin = requestOrigin(request);
   const books = await scanBooks();
+  const scannedMs = Date.now() - started;
   const { body, lastModified } = rssFeed(books, origin);
+  const totalMs = Date.now() - started;
+  console.log(
+    `[feed] /feed.xml books=${books.length} scan=${scannedMs}ms total=${totalMs}ms roots=${scanRoots.join("|")}`
+  );
   const etag = `W/"${lastModified.getTime()}"`;
   return new Response(body, {
     headers: {
@@ -1113,9 +1132,15 @@ async function handleFeedDebug(request: Request): Promise<Response> {
   if (scanRoots.length === 0) {
     return new Response("No roots configured. Pass library directories via argv.", { status: 500 });
   }
+  const started = Date.now();
   const origin = requestOrigin(request);
   const books = await scanBooks();
+  const scannedMs = Date.now() - started;
   const { body, lastModified } = rssFeed(books, origin);
+  const totalMs = Date.now() - started;
+  console.log(
+    `[feed] /feed-debug.xml books=${books.length} scan=${scannedMs}ms total=${totalMs}ms roots=${scanRoots.join("|")}`
+  );
   const etag = `W/"${lastModified.getTime()}"`;
   return new Response(body, {
     headers: {
