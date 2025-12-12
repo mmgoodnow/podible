@@ -740,6 +740,20 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
     const filePath = path.join(bookDir, m4bs[0]);
     const stat = audioMetaStat ?? (await fs.stat(filePath).catch(() => null));
     if (!stat) return null;
+    const durationProbe = getDurationSeconds(filePath, stat.mtimeMs);
+    if (durationProbe === undefined) {
+      transcodeStatus.set(statusKey(filePath), {
+        source: filePath,
+        target: transcodeOutputPath(filePath, stat),
+        mtimeMs: stat.mtimeMs,
+        state: "failed",
+        error: "ffprobe duration missing",
+        durationMs: undefined,
+      });
+      await saveTranscodeStatus();
+      console.warn(`[scan] skipping m4b with missing duration author="${author}" title="${title}" path="${filePath}"`);
+      return null;
+    }
     const target = transcodeOutputPath(filePath, stat);
     const meta: PendingSingleMeta = {
       id: bookId(author, title),
@@ -826,10 +840,31 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
     for (const name of mp3s) {
       const filePath = path.join(bookDir, name);
       const stat = await fs.stat(filePath).catch(() => null);
-      if (!stat) continue;
+      if (!stat || stat.size <= 0) {
+        console.warn(`[scan] skipping zero-size mp3 author="${author}" title="${title}" file="${filePath}"`);
+        transcodeStatus.set(statusKey(filePath), {
+          source: filePath,
+          target: filePath,
+          mtimeMs: stat?.mtimeMs ?? Date.now(),
+          state: "failed",
+          error: "zero-size mp3",
+        });
+        return { sourcePath: filePath };
+      }
       if ((!publishedAt || !opf?.publishedAt) && (!publishedAt || stat.mtime < publishedAt)) publishedAt = stat.mtime;
       const fileMeta = readAudioMetadata(filePath, stat.mtimeMs);
-      const duration = getDurationSeconds(filePath, stat.mtimeMs) ?? 0;
+      const duration = getDurationSeconds(filePath, stat.mtimeMs);
+      if (duration === undefined) {
+        console.warn(`[scan] skipping mp3 with missing duration author="${author}" title="${title}" file="${filePath}"`);
+        transcodeStatus.set(statusKey(filePath), {
+          source: filePath,
+          target: filePath,
+          mtimeMs: stat.mtimeMs,
+          state: "failed",
+          error: "mp3 duration missing",
+        });
+        return { sourcePath: filePath };
+      }
       const durationMs = Math.max(0, Math.round(duration * 1000));
       durationSeconds += duration;
       const start = cursor;
@@ -1498,7 +1533,17 @@ async function homePage(request: Request): Promise<Response> {
   const done = statusValues.filter((s) => s.state === "done").length;
   const pending = statusValues.filter((s) => s.state === "pending").length;
   const working = statusValues.filter((s) => s.state === "working").length;
-  const failed = statusValues.filter((s) => s.state === "failed").length;
+  const isProbeFailure = (s: TranscodeStatus) =>
+    Boolean(
+      s.state === "failed" &&
+        s.error &&
+        (s.error.toLowerCase().includes("ffprobe") ||
+          s.error.toLowerCase().includes("duration") ||
+          s.error.toLowerCase().includes("zero-size"))
+    );
+  const failedProbes = statusValues.filter(isProbeFailure).length;
+  const failedTranscodesOnly = statusValues.filter((s) => s.state === "failed" && !isProbeFailure(s)).length;
+  const failedAll = statusValues.filter((s) => s.state === "failed").length;
   const active = statusValues.find((s) => s.state === "working");
   const activeProgress = (() => {
     if (!active || !active.durationMs) return null;
@@ -1507,13 +1552,13 @@ async function homePage(request: Request): Promise<Response> {
     const ratio = Math.min(1, clampedElapsed / active.durationMs);
     return { ratio, elapsed: clampedElapsed, durationMs: active.durationMs, speed: active.speed };
   })();
-  const totalSingles = statusValues.length;
-  const percent = totalSingles === 0 ? 100 : Math.min(100, Math.round((done / totalSingles) * 100));
+  const totalTranscodes = done + pending + working + failedTranscodesOnly;
+  const percent = totalTranscodes === 0 ? 100 : Math.min(100, Math.round((done / totalTranscodes) * 100));
   const barWidth =
-    totalSingles === 0
+    totalTranscodes === 0
       ? 100
       : activeProgress
-        ? Math.min(100, Math.round(((done + activeProgress.ratio) / totalSingles) * 100))
+        ? Math.min(100, Math.round(((done + activeProgress.ratio) / totalTranscodes) * 100))
         : percent;
   const durationMs = Date.now() - started;
   const sample = books[0];
@@ -1521,7 +1566,7 @@ async function homePage(request: Request): Promise<Response> {
   const multiWithChapters = books.find((b) => b.kind === "multi");
   const coverBook = books.find((b) => b.coverPath);
   console.log(
-    `[home] done books=${books.length} singles=${singles} transcodes done=${done} pending=${pending} working=${working} failed=${failed} queue=${queuedSources.size} in ${durationMs}ms`
+    `[home] done books=${books.length} singles=${singles} transcodes done=${done} pending=${pending} working=${working} failed=${failedAll} queue=${queuedSources.size} in ${durationMs}ms`
   );
   const body = `<!doctype html>
 <html>
@@ -1553,7 +1598,9 @@ async function homePage(request: Request): Promise<Response> {
     <div class="stat"><span class="label">Multi mp3 books</span><span class="value">${multis}</span></div>
     <div class="stat"><span class="label">Authors</span><span class="value">${authors.size}</span></div>
     <div class="stat"><span class="label">Covers</span><span class="value">${covers}</span></div>
-    <div class="stat"><span class="label">Transcode status</span><span class="value">done ${done} / ${totalSingles} (pending ${pending}, working ${working}, failed ${failed})</span></div>
+    <div class="stat"><span class="label">Failed transcodes</span><span class="value">${failedTranscodesOnly}</span></div>
+    <div class="stat"><span class="label">Failed probes</span><span class="value">${failedProbes}</span></div>
+    <div class="stat"><span class="label">Transcode status</span><span class="value">done ${done} / ${totalTranscodes} (pending ${pending}, working ${working}, failed ${failedTranscodesOnly})</span></div>
     <div class="stat"><span class="label">Active job</span><span class="value">${
       activeProgress
         ? `${formatDurationAllowZero(activeProgress.elapsed / 1000)} / ${formatDurationAllowZero(activeProgress.durationMs / 1000)} (${Math.round(activeProgress.ratio * 100)}%)${
