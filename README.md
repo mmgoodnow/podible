@@ -33,6 +33,7 @@ docker run -p 80:80 -v ./books:/books:ro podible bun run server.ts /books
 ```
 
 ## Endpoints
+- `GET /` — Minimal homepage showing scan/transcode progress.
 - `GET /feed.xml` — RSS with one item per book (enclosure streams audio; chapters tag for mp3 sets).
 - `GET /feed-debug.xml` — Same feed with browser-friendly headers for viewing raw XML.
 - `GET /stream/:bookId` — Range-aware streaming; handles single m4b or stitched mp3 files.
@@ -40,8 +41,13 @@ docker run -p 80:80 -v ./books:/books:ro podible bun run server.ts /books
 - `GET /chapters-debug/:bookId.json` — Debug view of chapters with `application/json`.
 - `GET /covers/:bookId.jpg` — First `.jpg` in the book folder (exposed as a JPEG), if present.
 
+## Authentication
+- On first launch Podible writes a random API key to the data directory (`$DATA_DIR` or `${TMPDIR:-/tmp}/podible-transcodes/api-key.txt`) and logs it to the console.
+- All endpoints require the key via `?key=<api-key>` (query param). Headers are also accepted for manual testing: `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+
 ## Notes
-- Library is scanned on each request (no persistent index).
+- Single-file m4b books transcode eagerly in the background. The feed only includes titles whose transcodes are finished; as jobs complete, they appear automatically.
+- Library is scanned in the background (with fs watch + debounce); feed requests do not trigger transcodes.
 - `bookId` is a slug of `author-title` from folder names.
 - Multi-MP3 streams are stitched with an in-memory ID3v2.4 chapters tag prepended for chapter-aware players; m4b embedded chapters are exposed via the chapters endpoint/feed tag.
 - If a `.opf` file exists in a book folder, its metadata (title, author, description, language, ISBN, publication date) is used to enrich the feed item notes.

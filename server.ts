@@ -1,8 +1,9 @@
-import { promises as fs, createReadStream, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
+import { promises as fs, createReadStream, mkdirSync, readFileSync, writeFileSync, statSync, watch } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { Readable } from "node:stream";
 import { XMLParser } from "fast-xml-parser";
+import { randomBytes } from "node:crypto";
 
 type BookKind = "single" | "multi";
 
@@ -95,14 +96,51 @@ type ChapterTiming = {
   endMs: number;
 };
 
-type TranscodeRecord = {
+type TranscodeState = "pending" | "working" | "done" | "failed";
+
+type TranscodeStatus = {
   source: string;
-  output: string;
+  target: string;
   mtimeMs: number;
+  state: TranscodeState;
+  error?: string;
+  outTimeMs?: number;
+  speed?: number;
+  durationMs?: number;
+};
+
+type PendingSingleMeta = {
+  id: string;
+  title: string;
+  author: string;
+  coverPath?: string;
+  durationSeconds?: number;
+  publishedAt?: Date;
+  description?: string;
+  descriptionHtml?: string;
+  language?: string;
+  isbn?: string;
+  identifiers?: Record<string, string>;
+  chapters?: ChapterTiming[];
+};
+
+type TranscodeJob = {
+  source: string;
+  target: string;
+  mtimeMs: number;
+  meta: PendingSingleMeta;
+};
+
+type BookBuildResult = {
+  ready?: Book;
+  pendingJob?: TranscodeJob;
+  sourcePath?: string;
 };
 
 const scanRoots = (() => {
-  const roots = process.argv.slice(2).filter(Boolean);
+  const roots = process.argv
+    .slice(2)
+    .filter((arg) => arg && !arg.startsWith("-"));
   if (roots.length === 0) {
     console.error("Pass one or more library roots via argv");
   }
@@ -114,9 +152,11 @@ const dataDir = (() => {
   return dir;
 })();
 
-const transcodeManifestPath = path.join(dataDir, "manifest.json");
+const transcodeStatusPath = path.join(dataDir, "transcode-status.json");
+const libraryIndexPath = path.join(dataDir, "library-index.json");
 const probeCachePath = path.join(dataDir, "probe-cache.json");
 const brandImagePath = path.join(process.cwd(), "podible.png");
+const apiKeyPath = path.join(dataDir, "api-key.txt");
 
 const brandImageExists = (() => {
   try {
@@ -126,6 +166,16 @@ const brandImageExists = (() => {
     return false;
   }
 })();
+
+const transcodeStatus = new Map<string, TranscodeStatus>();
+const readyBooks = new Map<string, Book>();
+const queuedSources = new Set<string>();
+let rescanTimer: ReturnType<typeof setTimeout> | null = null;
+let initialScanPromise: Promise<void> | null = null;
+
+function statusKey(source: string): string {
+  return source;
+}
 
 async function ensureDataDir() {
   await fs.mkdir(dataDir, { recursive: true });
@@ -139,44 +189,134 @@ function ensureDataDirSync() {
   }
 }
 
-async function readTranscodeManifest(): Promise<TranscodeRecord[]> {
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(filePath);
+    return stat.isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function loadTranscodeStatus() {
   await ensureDataDir();
   try {
-    const content = await fs.readFile(transcodeManifestPath, "utf8");
+    const content = await fs.readFile(transcodeStatusPath, "utf8");
     const parsed = JSON.parse(content);
-    if (Array.isArray(parsed)) return parsed as TranscodeRecord[];
+    if (Array.isArray(parsed)) {
+      parsed.forEach((entry: any) => {
+        if (!entry || typeof entry !== "object") return;
+        if (typeof entry.source !== "string" || typeof entry.target !== "string") return;
+        if (typeof entry.mtimeMs !== "number" || typeof entry.state !== "string") return;
+        const record: TranscodeStatus = {
+          source: entry.source,
+          target: entry.target,
+          mtimeMs: entry.mtimeMs,
+          state: entry.state as TranscodeState,
+          error: typeof entry.error === "string" ? entry.error : undefined,
+        };
+        transcodeStatus.set(statusKey(record.source), record);
+      });
+    }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      console.warn("Failed to read transcode manifest:", (err as Error).message);
+      console.warn("Failed to read transcode status:", (err as Error).message);
     }
   }
-  return [];
 }
 
-async function writeTranscodeManifest(records: TranscodeRecord[]) {
+async function saveTranscodeStatus() {
   await ensureDataDir();
-  await fs.writeFile(transcodeManifestPath, JSON.stringify(records, null, 2), "utf8");
+  await fs.writeFile(transcodeStatusPath, JSON.stringify(Array.from(transcodeStatus.values()), null, 2), "utf8");
 }
 
-async function cleanupTranscodes() {
-  const manifest = await readTranscodeManifest();
-  const kept: TranscodeRecord[] = [];
-  for (const record of manifest) {
-    const sourceStat = await fs.stat(record.source).catch(() => null);
-    const outputStat = await fs.stat(record.output).catch(() => null);
-    const stale = !sourceStat || !outputStat || sourceStat.mtimeMs !== record.mtimeMs;
-    if (stale) {
-      if (outputStat) {
-        await fs.unlink(record.output).catch(() => {});
-      }
-      continue;
+function reviveBook(book: any): Book | null {
+  if (!book || typeof book !== "object") return null;
+  if (typeof book.id !== "string" || typeof book.title !== "string" || typeof book.author !== "string") return null;
+  const revived: Book = {
+    ...book,
+    publishedAt: book.publishedAt ? new Date(book.publishedAt) : undefined,
+  };
+  return revived;
+}
+
+async function loadLibraryIndex() {
+  await ensureDataDir();
+  try {
+    const content = await fs.readFile(libraryIndexPath, "utf8");
+    const parsed = JSON.parse(content);
+    if (Array.isArray(parsed)) {
+      parsed.forEach((entry: any) => {
+        const book = reviveBook(entry);
+        if (book) readyBooks.set(book.id, book);
+      });
     }
-    kept.push(record);
-  }
-  if (kept.length !== manifest.length) {
-    await writeTranscodeManifest(kept);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.warn("Failed to read library index:", (err as Error).message);
+    }
   }
 }
+
+async function saveLibraryIndex() {
+  await ensureDataDir();
+  await fs.writeFile(libraryIndexPath, JSON.stringify(Array.from(readyBooks.values()), null, 2), "utf8");
+}
+
+async function loadOrCreateApiKey(): Promise<string> {
+  await ensureDataDir();
+  try {
+    const existing = await fs.readFile(apiKeyPath, "utf8");
+    const trimmed = existing.trim();
+    if (trimmed) {
+      console.log(`[auth] loaded API key from ${apiKeyPath}`);
+      console.log(`[auth] API key: ${trimmed}`);
+      return trimmed;
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.warn(`Failed to read API key: ${(err as Error).message}`);
+    }
+  }
+  const key = randomBytes(24).toString("hex");
+  await fs.writeFile(apiKeyPath, key, "utf8");
+  console.log(`[auth] generated new API key at ${apiKeyPath}`);
+  console.log(`[auth] API key: ${key}`);
+  return key;
+}
+
+const apiKeyPromise = loadOrCreateApiKey();
+
+type JobChannel<T> = {
+  push: (job: T) => void;
+  stream: () => AsyncGenerator<T, void, unknown>;
+};
+
+function createJobChannel<T>(): JobChannel<T> {
+  const queue: T[] = [];
+  let wake: (() => void) | null = null;
+  return {
+    push(job: T) {
+      queue.push(job);
+      if (wake) {
+        wake();
+        wake = null;
+      }
+    },
+    async *stream() {
+      for (;;) {
+        if (queue.length === 0) {
+          await new Promise<void>((resolve) => (wake = resolve));
+          continue;
+        }
+        const next = queue.shift();
+        if (next !== undefined) yield next;
+      }
+    },
+  };
+}
+
+const transcodeJobs = createJobChannel<TranscodeJob>();
 
 function transcodeOutputPath(source: string, sourceStat: Awaited<ReturnType<typeof fs.stat>>): string {
   const extless = path.basename(source, path.extname(source));
@@ -185,61 +325,105 @@ function transcodeOutputPath(source: string, sourceStat: Awaited<ReturnType<type
   return path.join(dataDir, `${safeName}-${hash}.mp3`);
 }
 
-function transcodeM4bToMp3(source: string, target: string): void {
-  const result = spawnSync(
-    "ffmpeg",
-    [
+async function transcodeM4bToMp3(
+  source: string,
+  target: string,
+  onProgress: (outTimeMs: number | undefined, speed: number | undefined) => void
+): Promise<void> {
+  await ensureDataDir();
+  const proc = Bun.spawn({
+    cmd: [
+      "ffmpeg",
       "-y",
+      "-nostdin",
       "-i",
       source,
+      "-vn",
       "-map_metadata",
       "0",
       "-map_chapters",
       "0",
       "-write_id3v2",
       "1",
-      "-id3v2_version",
-      "3",
-      "-codec:a",
-      "libmp3lame",
-      "-qscale:a",
-      "2",
+        "-id3v2_version",
+        "3",
+        "-codec:a",
+        "libmp3lame",
+        "-qscale:a",
+        "2",
+        "-threads",
+        "1",
+        "-progress",
+        "pipe:1",
+      "-stats_period",
+      "1",
+      "-loglevel",
+      "error",
       target,
     ],
-    { stdio: "ignore" }
-  );
-  if (result.error) {
-    throw result.error;
+    stdout: "pipe",
+    stderr: "inherit",
+    stdin: "ignore",
+  });
+
+  let buffer = "";
+  const reader = proc.stdout?.getReader();
+  if (reader) {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += Buffer.from(value).toString("utf8");
+      const parts = buffer.split(/\r?\n/);
+      buffer = parts.pop() ?? "";
+      let outTimeMs: number | undefined;
+      let speed: number | undefined;
+      parts
+        .filter(Boolean)
+        .forEach((line) => {
+          const [key, valueStr] = line.split("=");
+          if (key === "out_time_ms" || key === "out_time_us") {
+            const parsed = Number(valueStr);
+            if (Number.isFinite(parsed)) {
+              outTimeMs = parsed / 1000; // microseconds -> ms
+            }
+          } else if (key === "speed") {
+            const numeric = Number((valueStr || "").replace(/x$/, ""));
+            if (Number.isFinite(numeric)) speed = numeric;
+          }
+        });
+      if (outTimeMs !== undefined || speed !== undefined) {
+        onProgress(outTimeMs, speed);
+      }
+    }
   }
-  if (result.status !== 0) {
-    throw new Error(`ffmpeg failed with status ${result.status}`);
+
+  const exitCode = await proc.exited;
+  if (exitCode !== 0) {
+    throw new Error(`ffmpeg failed with status ${exitCode}`);
   }
 }
 
-async function ensureTranscodedMp3(source: string, sourceStat: Awaited<ReturnType<typeof fs.stat>>): Promise<string | null> {
-  await ensureDataDir();
-  const manifest = await readTranscodeManifest();
-  const existing = manifest.find((rec) => rec.source === source && rec.mtimeMs === sourceStat.mtimeMs);
-  if (existing) {
-    const exists = await fs.stat(existing.output).catch(() => null);
-    if (exists) return existing.output;
-  }
-
-  const target = transcodeOutputPath(source, sourceStat);
-  console.log(`[transcode] start source="${source}" -> target="${target}"`);
-  try {
-    transcodeM4bToMp3(source, target);
-    await fs.utimes(target, sourceStat.atime, sourceStat.mtime);
-    console.log(`[transcode] done source="${source}" -> target="${target}" size=${(await fs.stat(target)).size}`);
-  } catch (err) {
-    console.warn(`Failed to transcode ${source}:`, (err as Error).message);
-    return null;
-  }
-
-  const updatedManifest = manifest.filter((rec) => rec.source !== source);
-  updatedManifest.push({ source, output: target, mtimeMs: sourceStat.mtimeMs });
-  await writeTranscodeManifest(updatedManifest);
-  return target;
+function bookFromMeta(meta: PendingSingleMeta, outputPath: string, outputStat: Awaited<ReturnType<typeof fs.stat>>): Book {
+  const mime = mimeFromExt(path.extname(outputPath));
+  const durationSeconds = meta.durationSeconds ?? getDurationSeconds(outputPath, outputStat.mtimeMs);
+  return {
+    id: meta.id,
+    title: meta.title,
+    author: meta.author,
+    kind: "single",
+    mime,
+    totalSize: outputStat.size,
+    primaryFile: outputPath,
+    coverPath: meta.coverPath,
+    durationSeconds,
+    publishedAt: meta.publishedAt,
+    description: meta.description,
+    descriptionHtml: meta.descriptionHtml,
+    language: meta.language,
+    isbn: meta.isbn,
+    identifiers: meta.identifiers,
+    chapters: meta.chapters,
+  };
 }
 
 const port = Number(process.env.PORT ?? 80);
@@ -528,7 +712,7 @@ async function safeReadDir(dir: string) {
   }
 }
 
-async function buildBook(author: string, bookDir: string, title: string): Promise<Book | null> {
+async function buildBook(author: string, bookDir: string, title: string): Promise<BookBuildResult | null> {
   const t0 = Date.now();
   console.log(`[scan] start book author="${author}" title="${title}" path="${bookDir}"`);
   const entries = await safeReadDir(bookDir);
@@ -556,22 +740,13 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
     const filePath = path.join(bookDir, m4bs[0]);
     const stat = audioMetaStat ?? (await fs.stat(filePath).catch(() => null));
     if (!stat) return null;
-    const transcoded = await ensureTranscodedMp3(filePath, stat);
-    if (!transcoded) return null;
-    const targetStat = await fs.stat(transcoded).catch(() => null);
-    if (!targetStat) return null;
-    const durationSeconds = getDurationSeconds(transcoded, targetStat.mtimeMs);
-    const mime = mimeFromExt(path.extname(transcoded));
-    const result: Book = {
+    const target = transcodeOutputPath(filePath, stat);
+    const meta: PendingSingleMeta = {
       id: bookId(author, title),
       title: displayTitle,
       author: displayAuthor,
-      kind: "single",
-      mime,
-      totalSize: targetStat.size,
-      primaryFile: transcoded,
       coverPath,
-      durationSeconds,
+      durationSeconds: getDurationSeconds(filePath, stat.mtimeMs),
       publishedAt: opf?.publishedAt ?? audioMeta?.date ?? stat.mtime,
       description,
       descriptionHtml,
@@ -580,10 +755,66 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
       identifiers,
       chapters: chapterMeta,
     };
-    console.log(
-      `[scan] built m4b book author="${author}" title="${title}" size=${targetStat.size} duration=${Math.round(durationSeconds ?? 0)}s in ${Date.now() - t0}ms`
-    );
-    return result;
+
+    const existing = transcodeStatus.get(statusKey(filePath));
+    if (
+      existing &&
+      existing.state === "done" &&
+      existing.mtimeMs === stat.mtimeMs &&
+      existing.target &&
+      (await fileExists(existing.target))
+    ) {
+      const targetStat = await fs.stat(existing.target).catch(() => null);
+      if (targetStat) {
+        const durationSeconds = meta.durationSeconds ?? getDurationSeconds(existing.target, targetStat.mtimeMs);
+        const mime = mimeFromExt(path.extname(existing.target));
+        const ready: Book = {
+          id: meta.id,
+          title: meta.title,
+          author: meta.author,
+          kind: "single",
+          mime,
+          totalSize: targetStat.size,
+          primaryFile: existing.target,
+          coverPath: meta.coverPath,
+          durationSeconds,
+          publishedAt: meta.publishedAt,
+          description: meta.description,
+          descriptionHtml: meta.descriptionHtml,
+          language: meta.language,
+          isbn: meta.isbn,
+          identifiers: meta.identifiers,
+          chapters: meta.chapters,
+        };
+        console.log(
+          `[scan] found ready m4b author="${author}" title="${title}" size=${targetStat.size} in ${Date.now() - t0}ms`
+        );
+        return { ready, sourcePath: filePath };
+      }
+    }
+
+    const existingStatus = transcodeStatus.get(statusKey(filePath));
+    const needsReset = !existingStatus || existingStatus.mtimeMs !== stat.mtimeMs;
+    const pending: TranscodeStatus = {
+      source: filePath,
+      target,
+      mtimeMs: stat.mtimeMs,
+      state: "pending",
+      error: needsReset ? undefined : existingStatus?.error,
+      durationMs: meta.durationSeconds ? meta.durationSeconds * 1000 : existingStatus?.durationMs,
+    };
+    transcodeStatus.set(statusKey(filePath), pending);
+    if (!queuedSources.has(filePath) && pending.state !== "working") {
+      queuedSources.add(filePath);
+      transcodeJobs.push({
+        source: filePath,
+        target,
+        mtimeMs: stat.mtimeMs,
+        meta,
+      });
+      console.log(`[scan] queued transcode author="${author}" title="${title}" source="${filePath}"`);
+    }
+    return { pendingJob: { source: filePath, target, mtimeMs: stat.mtimeMs, meta }, sourcePath: filePath };
   }
 
   if (mp3s.length > 0) {
@@ -637,15 +868,16 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
     console.log(
       `[scan] built multi book author="${author}" title="${title}" files=${segments.length} duration=${Math.round(durationSeconds)}s in ${Date.now() - t0}ms`
     );
-    return result;
+    return { ready: result };
   }
 
   return null;
 }
 
-async function scanBooks(): Promise<Book[]> {
-  const books: Book[] = [];
+async function scanAndQueue(): Promise<void> {
   const started = Date.now();
+  const nextReady = new Map<string, Book>();
+  const seenSources = new Set<string>();
   for (const root of scanRoots) {
     const authors = await safeReadDir(root);
     for (const authorEntry of authors) {
@@ -655,38 +887,139 @@ async function scanBooks(): Promise<Book[]> {
       const bookDirs = await safeReadDir(authorPath);
       for (const bookEntry of bookDirs) {
         if (!bookEntry.isDirectory()) continue;
-        const book = await buildBook(author, path.join(authorPath, bookEntry.name), bookEntry.name);
-        if (book) books.push(book);
+        const bookDir = path.join(authorPath, bookEntry.name);
+        const built = await buildBook(author, bookDir, bookEntry.name);
+        if (!built) continue;
+        if (built.ready) {
+          nextReady.set(built.ready.id, built.ready);
+        }
+        if (built.pendingJob) {
+          seenSources.add(built.pendingJob.source);
+        }
+        if (built.sourcePath) {
+          seenSources.add(built.sourcePath);
+        }
       }
     }
   }
+  for (const key of Array.from(transcodeStatus.keys())) {
+    if (!seenSources.has(key)) {
+      transcodeStatus.delete(key);
+    }
+  }
+  readyBooks.clear();
+  for (const [id, book] of nextReady.entries()) {
+    readyBooks.set(id, book);
+  }
+  await saveTranscodeStatus();
+  await saveLibraryIndex();
   console.log(
-    `[scan] completed ${books.length} books in ${Date.now() - started}ms from roots=${scanRoots.join("|")}`
+    `[scan] completed ready=${readyBooks.size} queued=${queuedSources.size} in ${Date.now() - started}ms roots=${scanRoots.join("|")}`
   );
+}
+
+function scheduleRescan(delayMs = 500) {
+  if (rescanTimer) return;
+  rescanTimer = setTimeout(() => {
+    rescanTimer = null;
+    scanAndQueue().catch((err) => console.error("Rescan failed:", err));
+  }, delayMs);
+}
+
+function startWatchers() {
+  for (const root of scanRoots) {
+    try {
+      const watcher = watch(root, { recursive: true }, () => {
+        scheduleRescan(500);
+      });
+      watcher.on("error", (err) => console.warn(`Watcher error for ${root}:`, err?.message ?? err));
+    } catch (err) {
+      console.warn(`Failed to watch ${root}:`, (err as Error).message);
+    }
+  }
+}
+
+async function workerLoop() {
+  for await (const job of transcodeJobs.stream()) {
+    const status = transcodeStatus.get(statusKey(job.source));
+    if (!status || status.mtimeMs !== job.mtimeMs) {
+      queuedSources.delete(job.source);
+      continue;
+    }
+    status.state = "working";
+    status.error = undefined;
+    if (!status.durationMs && job.meta.durationSeconds) {
+      status.durationMs = job.meta.durationSeconds * 1000;
+    }
+    status.outTimeMs = status.outTimeMs ?? 0;
+    status.speed = undefined;
+    await saveTranscodeStatus();
+    console.log(`[transcode] start source="${job.source}" -> target="${job.target}"`);
+    try {
+      let lastProgressPersist = 0;
+      let lastProgressLogMs = 0;
+      let lastOutReported = 0;
+      await transcodeM4bToMp3(job.source, job.target, (outTimeMs, speed) => {
+        status.outTimeMs = outTimeMs;
+        status.speed = speed;
+        const now = Date.now();
+        if (outTimeMs && status.durationMs && outTimeMs > lastOutReported + 5000) {
+          lastOutReported = outTimeMs;
+          const ratio = Math.min(1, outTimeMs / status.durationMs);
+          const pct = Math.round(ratio * 100);
+          const elapsedText = formatDurationAllowZero(outTimeMs / 1000);
+          const totalText = formatDurationAllowZero(status.durationMs / 1000);
+          if (now - lastProgressLogMs > 1500) {
+            lastProgressLogMs = now;
+            console.log(
+              `[transcode] progress source="${job.source}" ${elapsedText} / ${totalText} (${pct}%)${speed ? ` speed=${speed.toFixed(1)}x` : ""}`
+            );
+          }
+        }
+        if (now - lastProgressPersist > 2000) {
+          lastProgressPersist = now;
+          saveTranscodeStatus().catch(() => {});
+        }
+      });
+      await fs.utimes(job.target, new Date(), new Date(job.mtimeMs));
+      const outStat = await fs.stat(job.target);
+      status.state = "done";
+      status.target = job.target;
+      status.outTimeMs = undefined;
+      status.speed = undefined;
+      await saveTranscodeStatus();
+      const book = bookFromMeta(job.meta, job.target, outStat);
+      readyBooks.set(book.id, book);
+      await saveLibraryIndex();
+      console.log(
+        `[transcode] done source="${job.source}" -> target="${job.target}" size=${outStat.size} duration=${Math.round(book.durationSeconds ?? 0)}s`
+      );
+    } catch (err) {
+      status.state = "failed";
+      status.error = (err as Error).message;
+      status.outTimeMs = undefined;
+      status.speed = undefined;
+      await saveTranscodeStatus();
+      console.warn(`Failed to transcode ${job.source}:`, (err as Error).message);
+    } finally {
+      queuedSources.delete(job.source);
+    }
+  }
+}
+
+async function findBookById(id: string): Promise<Book | null> {
+  const book = readyBooks.get(id);
+  return book ?? null;
+}
+
+function readyBooksSorted(): Book[] {
+  const books = Array.from(readyBooks.values());
   books.sort((a, b) => {
     const at = a.publishedAt ? a.publishedAt.getTime() : 0;
     const bt = b.publishedAt ? b.publishedAt.getTime() : 0;
     return bt - at;
   });
   return books;
-}
-
-async function findBookById(id: string): Promise<Book | null> {
-  for (const root of scanRoots) {
-    const authors = await safeReadDir(root);
-    for (const authorEntry of authors) {
-      if (!authorEntry.isDirectory()) continue;
-      const author = authorEntry.name;
-      const authorPath = path.join(root, author);
-      const bookDirs = await safeReadDir(authorPath);
-      for (const bookEntry of bookDirs) {
-        if (!bookEntry.isDirectory()) continue;
-        const candidate = await buildBook(author, path.join(authorPath, bookEntry.name), bookEntry.name);
-        if (candidate && candidate.id === id) return candidate;
-      }
-    }
-  }
-  return null;
 }
 
 function parseRange(rangeHeader: string | null, size: number): { start: number; end: number } | null {
@@ -771,6 +1104,16 @@ function textFrame(id: string, text: string): Uint8Array {
 
 function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  const total = Math.floor(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function formatDurationAllowZero(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
   const total = Math.floor(seconds);
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
@@ -1019,10 +1362,15 @@ function buildItemNotes(book: Book): { description: string; subtitle: string; de
   return { description, subtitle, descriptionHtml: book.descriptionHtml };
 }
 
-function rssFeed(books: Book[], origin: string): { body: string; lastModified: Date } {
+function rssFeed(books: Book[], origin: string, keySuffix = ""): { body: string; lastModified: Date } {
   const firstCover = books.find((b) => b.coverPath);
   const channelImage =
-    FEED_IMAGE_URL || (brandImageExists ? `${origin}/podible.png` : firstCover ? `${origin}/covers/${firstCover.id}.jpg` : "");
+    FEED_IMAGE_URL ||
+    (brandImageExists
+      ? `${origin}/podible.png${keySuffix}`
+      : firstCover
+        ? `${origin}/covers/${firstCover.id}.jpg${keySuffix}`
+        : "");
   const latestMtime = books
     .map((b) => b.publishedAt?.getTime() ?? 0)
     .filter((t) => t > 0);
@@ -1033,8 +1381,8 @@ function rssFeed(books: Book[], origin: string): { body: string; lastModified: D
     .map((book) => {
       const ext = bookExtension(book);
       const mime = bookMime(book);
-      const enclosureUrl = `${origin}/stream/${book.id}.${ext}`;
-      const cover = book.coverPath ? `<itunes:image href="${origin}/covers/${book.id}.jpg" />` : "";
+      const enclosureUrl = `${origin}/stream/${book.id}.${ext}${keySuffix}`;
+      const cover = book.coverPath ? `<itunes:image href="${origin}/covers/${book.id}.jpg${keySuffix}" />` : "";
       const tagLength = estimateId3TagLength(book);
       const enclosureLength = book.totalSize + tagLength;
       const durationSeconds = book.durationSeconds ?? 0;
@@ -1043,10 +1391,10 @@ function rssFeed(books: Book[], origin: string): { body: string; lastModified: D
       const fallbackDescription = `${book.title} by ${book.author}`;
       const hasChapters = book.kind === "multi" || (book.chapters && book.chapters.length > 0);
       const chaptersTag = hasChapters
-        ? `<podcast:chapters url="${origin}/chapters/${book.id}.json" type="application/json+chapters" />`
+        ? `<podcast:chapters url="${origin}/chapters/${book.id}.json${keySuffix}" type="application/json+chapters" />`
         : "";
       const chaptersDebugTag = hasChapters
-        ? `<podcast:chaptersDebug url="${origin}/chapters-debug/${book.id}.json" type="application/json" />`
+        ? `<podcast:chaptersDebug url="${origin}/chapters-debug/${book.id}.json${keySuffix}" type="application/json" />`
         : "";
       const { description, subtitle, descriptionHtml } = buildItemNotes(book);
       const descriptionForXml = descriptionHtml
@@ -1080,8 +1428,8 @@ function rssFeed(books: Book[], origin: string): { body: string; lastModified: D
 <rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:podcast="https://podcastindex.org/namespace/1.0" xmlns:atom="http://www.w3.org/2005/Atom">
 <channel>
 <title>${escapeXml(FEED_TITLE)}</title>
-<link>${origin}/feed.xml</link>
-<atom:link href="${origin}/feed.xml" rel="self" type="application/rss+xml" />
+<link>${origin}/feed.xml${keySuffix}</link>
+<atom:link href="${origin}/feed.xml${keySuffix}" rel="self" type="application/rss+xml" />
 <description>${escapeXml(FEED_DESCRIPTION)}</description>
 <language>${FEED_LANGUAGE}</language>
 <copyright>${escapeXml(FEED_COPYRIGHT)}</copyright>
@@ -1114,10 +1462,12 @@ async function handleFeed(request: Request): Promise<Response> {
   }
   const started = Date.now();
   const origin = requestOrigin(request);
+  const key = new URL(request.url).searchParams.get("key");
+  const keySuffix = key ? `?key=${encodeURIComponent(key)}` : "";
   console.log(`[feed] start /feed.xml roots=${scanRoots.join("|")}`);
-  const books = await scanBooks();
+  const books = readyBooksSorted();
   const scannedMs = Date.now() - started;
-  const { body, lastModified } = rssFeed(books, origin);
+  const { body, lastModified } = rssFeed(books, origin, keySuffix);
   const totalMs = Date.now() - started;
   console.log(
     `[feed] /feed.xml books=${books.length} scan=${scannedMs}ms total=${totalMs}ms roots=${scanRoots.join("|")}`
@@ -1132,16 +1482,130 @@ async function handleFeed(request: Request): Promise<Response> {
   });
 }
 
+async function homePage(request: Request): Promise<Response> {
+  const started = Date.now();
+  console.log("[home] start /");
+  const url = new URL(request.url);
+  const origin = requestOrigin(request);
+  const queryKey = url.searchParams.get("key");
+  const keySuffix = queryKey ? `?key=${encodeURIComponent(queryKey)}` : "";
+  const books = readyBooksSorted();
+  const authors = new Set(books.map((b) => b.author));
+  const singles = books.filter((b) => b.kind === "single").length;
+  const multis = books.filter((b) => b.kind === "multi").length;
+  const covers = books.filter((b) => Boolean(b.coverPath)).length;
+  const statusValues = Array.from(transcodeStatus.values());
+  const done = statusValues.filter((s) => s.state === "done").length;
+  const pending = statusValues.filter((s) => s.state === "pending").length;
+  const working = statusValues.filter((s) => s.state === "working").length;
+  const failed = statusValues.filter((s) => s.state === "failed").length;
+  const active = statusValues.find((s) => s.state === "working");
+  const activeProgress = (() => {
+    if (!active || !active.durationMs) return null;
+    const elapsed = active.outTimeMs ?? 0;
+    const clampedElapsed = Math.max(0, Math.min(elapsed, active.durationMs));
+    const ratio = Math.min(1, clampedElapsed / active.durationMs);
+    return { ratio, elapsed: clampedElapsed, durationMs: active.durationMs, speed: active.speed };
+  })();
+  const totalSingles = statusValues.length;
+  const percent = totalSingles === 0 ? 100 : Math.min(100, Math.round((done / totalSingles) * 100));
+  const barWidth =
+    totalSingles === 0
+      ? 100
+      : activeProgress
+        ? Math.min(100, Math.round(((done + activeProgress.ratio) / totalSingles) * 100))
+        : percent;
+  const durationMs = Date.now() - started;
+  const sample = books[0];
+  const sampleExt = sample ? bookExtension(sample) : undefined;
+  const multiWithChapters = books.find((b) => b.kind === "multi");
+  const coverBook = books.find((b) => b.coverPath);
+  console.log(
+    `[home] done books=${books.length} singles=${singles} transcodes done=${done} pending=${pending} working=${working} failed=${failed} queue=${queuedSources.size} in ${durationMs}ms`
+  );
+  const body = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Podible</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 640px; margin: 48px auto; padding: 0 16px; color: #0f172a; }
+    h1 { margin-bottom: 8px; }
+    p { margin: 0 0 12px 0; }
+    .card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06); }
+    .stat { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #e2e8f0; }
+    .stat:last-child { border-bottom: none; }
+    .label { color: #475569; }
+    .value { font-weight: 600; }
+    .progress { height: 10px; background: #e2e8f0; border-radius: 999px; overflow: hidden; margin-top: 8px; }
+    .bar { height: 100%; background: linear-gradient(90deg, #38bdf8, #0ea5e9); width: ${barWidth}%; transition: width 0.3s ease; }
+    code { background: #f8fafc; border: 1px solid #e2e8f0; padding: 2px 6px; border-radius: 6px; }
+    .links { list-style: none; padding: 0; margin: 0; }
+  </style>
+</head>
+<body>
+  <h1>Podible</h1>
+  ${brandImageExists ? `<p><img src="${origin}/podible.png${keySuffix}" alt="Podcast artwork" style="max-width: 160px; border-radius: 12px; border: 1px solid #e2e8f0;" /></p>` : ""}
+  <p>Transcode progress and library status.</p>
+  <div class="card">
+    <div class="stat"><span class="label">Total books</span><span class="value">${books.length}</span></div>
+    <div class="stat"><span class="label">Single m4b books</span><span class="value">${singles}</span></div>
+    <div class="stat"><span class="label">Multi mp3 books</span><span class="value">${multis}</span></div>
+    <div class="stat"><span class="label">Authors</span><span class="value">${authors.size}</span></div>
+    <div class="stat"><span class="label">Covers</span><span class="value">${covers}</span></div>
+    <div class="stat"><span class="label">Transcode status</span><span class="value">done ${done} / ${totalSingles} (pending ${pending}, working ${working}, failed ${failed})</span></div>
+    <div class="stat"><span class="label">Active job</span><span class="value">${
+      activeProgress
+        ? `${formatDurationAllowZero(activeProgress.elapsed / 1000)} / ${formatDurationAllowZero(activeProgress.durationMs / 1000)} (${Math.round(activeProgress.ratio * 100)}%)${
+            activeProgress.speed ? ` @ ${activeProgress.speed.toFixed(1)}x` : ""
+          }`
+        : active
+          ? "working (no progress yet)"
+          : "None"
+    }</span></div>
+    <div class="stat"><span class="label">Queue</span><span class="value">${queuedSources.size}</span></div>
+    <div class="progress"><div class="bar"></div></div>
+  </div>
+  <p style="margin-top:16px;">Scan time: ${durationMs} ms</p>
+  <p>Links:</p>
+  <ul class="links">
+    <li><a href="${origin}/feed.xml${keySuffix}">Feed</a></li>
+    <li><a href="${origin}/feed-debug.xml${keySuffix}">Feed Debug</a></li>
+    ${
+      sample && sampleExt
+        ? `<li><a href="${origin}/stream/${sample.id}.${sampleExt}${keySuffix}">Stream</a></li>`
+        : ""
+    }
+    ${
+      multiWithChapters
+        ? `<li><a href="${origin}/chapters/${multiWithChapters.id}.json${keySuffix}">Chapters</a></li>`
+        : ""
+    }
+    ${
+      coverBook
+        ? `<li><a href="${origin}/covers/${coverBook.id}.jpg${keySuffix}">Cover</a></li>`
+        : ""
+    }
+  </ul>
+</body>
+</html>`;
+  return new Response(body, {
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+  });
+}
+
 async function handleFeedDebug(request: Request): Promise<Response> {
   if (scanRoots.length === 0) {
     return new Response("No roots configured. Pass library directories via argv.", { status: 500 });
   }
   const started = Date.now();
   const origin = requestOrigin(request);
+  const key = new URL(request.url).searchParams.get("key");
+  const keySuffix = key ? `?key=${encodeURIComponent(key)}` : "";
   console.log(`[feed] start /feed-debug.xml roots=${scanRoots.join("|")}`);
-  const books = await scanBooks();
+  const books = readyBooksSorted();
   const scannedMs = Date.now() - started;
-  const { body, lastModified } = rssFeed(books, origin);
+  const { body, lastModified } = rssFeed(books, origin, keySuffix);
   const totalMs = Date.now() - started;
   console.log(
     `[feed] /feed-debug.xml books=${books.length} scan=${scannedMs}ms total=${totalMs}ms roots=${scanRoots.join("|")}`
@@ -1270,11 +1734,39 @@ async function handleCover(bookIdValue: string): Promise<Response> {
   });
 }
 
+function authorize(request: Request, key: string): boolean {
+  const url = new URL(request.url);
+  const queryKey = url.searchParams.get("key");
+  if (queryKey && queryKey.trim() === key) return true;
+  const header = request.headers.get("authorization");
+  if (header?.toLowerCase().startsWith("bearer ")) {
+    const token = header.slice("bearer ".length).trim();
+    if (token === key) return true;
+  }
+  const apiKeyHeader = request.headers.get("x-api-key");
+  if (apiKeyHeader && apiKeyHeader.trim() === key) return true;
+  return false;
+}
+
+await ensureDataDir();
+await Promise.all([loadTranscodeStatus(), loadLibraryIndex()]);
+initialScanPromise = scanAndQueue();
+void workerLoop();
+startWatchers();
+
 Bun.serve({
   port,
-  fetch: (request: Request) => {
+  fetch: async (request: Request) => {
+    const apiKey = await apiKeyPromise;
+    if (!authorize(request, apiKey)) {
+      return new Response("Unauthorized", {
+        status: 401,
+        headers: { "WWW-Authenticate": 'Bearer realm="podible"' },
+      });
+    }
     const url = new URL(request.url);
     const pathname = url.pathname;
+    if (pathname === "/") return homePage(request);
     if (pathname === "/feed.xml") return handleFeed(request);
     if (pathname === "/feed-debug.xml") return handleFeedDebug(request);
     if (pathname.startsWith("/stream/")) {
@@ -1292,17 +1784,17 @@ Bun.serve({
       const id = idWithExt.replace(/\.json$/, "");
       return handleChaptersDebug(id);
     }
-  if (pathname.startsWith("/covers/")) {
-    const [, , idWithExt = ""] = pathname.split("/");
-    const id = idWithExt.replace(/\.jpg$/, "");
-    return handleCover(id);
-  }
-  if (pathname === "/podible.png" && brandImageExists) {
-    const file = Bun.file(brandImagePath);
-    return new Response(file, { headers: { "Content-Type": "image/png" } });
-  }
-  return new Response("Not found", { status: 404 });
-},
+    if (pathname.startsWith("/covers/")) {
+      const [, , idWithExt = ""] = pathname.split("/");
+      const id = idWithExt.replace(/\.jpg$/, "");
+      return handleCover(id);
+    }
+    if (pathname === "/podible.png" && brandImageExists) {
+      const file = Bun.file(brandImagePath);
+      return new Response(file, { headers: { "Content-Type": "image/png" } });
+    }
+    return new Response("Not found", { status: 404 });
+  },
 });
 
 const localBase = `http://localhost${port === 80 ? "" : `:${port}`}`;
@@ -1310,13 +1802,9 @@ console.log(`Listening on port ${port}. Roots: ${scanRoots.join(", ") || "none"}
 console.log(`Feed: ${localBase}/feed.xml`);
 console.log(`Feed (debug/plain): ${localBase}/feed-debug.xml`);
 
-cleanupTranscodes().catch((err) => {
-  console.warn("Transcode cleanup failed:", err);
-});
-
 async function logInitialScan() {
   if (scanRoots.length === 0) return;
-  const books = await scanBooks();
+  const books = readyBooksSorted();
   const authors = new Set(books.map((b) => b.author));
   const singles = books.filter((b) => b.kind === "single").length;
   const multis = books.filter((b) => b.kind === "multi").length;
@@ -1339,6 +1827,8 @@ async function logInitialScan() {
   }
 }
 
-logInitialScan().catch((err) => {
-  console.error("Initial scan failed:", err);
-});
+initialScanPromise
+  ?.then(() => logInitialScan())
+  .catch((err) => {
+    console.error("Initial scan failed:", err);
+  });
