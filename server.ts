@@ -1,54 +1,61 @@
-import { promises as fs, createReadStream, mkdirSync, readFileSync, writeFileSync, statSync, watch } from "node:fs";
+import { promises as fs, createReadStream, readFileSync, writeFileSync, watch } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { Readable } from "node:stream";
 import { XMLParser } from "fast-xml-parser";
 import { randomBytes } from "node:crypto";
+import {
+  AudioSegment,
+  AudioTagMetadata,
+  Book,
+  BookBuildResult,
+  BookKind,
+  ChapterTiming,
+  FfprobeChapter,
+  JobChannel,
+  OpfMetadata,
+  PendingSingleMeta,
+  ProbeData,
+  TranscodeJob,
+  TranscodeState,
+  TranscodeStatus,
+} from "./src/types";
+import {
+  FEED_AUTHOR,
+  FEED_CATEGORY,
+  FEED_COPYRIGHT,
+  FEED_DESCRIPTION,
+  FEED_EXPLICIT,
+  FEED_IMAGE_URL,
+  FEED_LANGUAGE,
+  FEED_OWNER_EMAIL,
+  FEED_OWNER_NAME,
+  FEED_TITLE,
+  FEED_TYPE,
+  apiKeyPath,
+  brandImageExists,
+  brandImagePath,
+  dataDir,
+  ensureDataDir,
+  ensureDataDirSync,
+  libraryIndexPath,
+  port,
+  probeCachePath,
+  transcodeStatusPath,
+} from "./src/config";
+import {
+  cleanMetaValue,
+  decodeXmlEntities,
+  escapeXml,
+  firstLine,
+  htmlToPlainText,
+  nodeText,
+  normalizeDescriptionHtml,
+  slugify,
+  toArray,
+  truncate,
+} from "./src/utils/strings";
 
-type BookKind = "single" | "multi";
-
-type AudioSegment = {
-  path: string;
-  name: string;
-  size: number;
-  start: number;
-  end: number;
-  durationMs: number;
-  title?: string;
-};
-
-type Book = {
-  id: string;
-  title: string;
-  author: string;
-  kind: BookKind;
-  mime: string;
-  totalSize: number;
-  primaryFile?: string;
-  files?: AudioSegment[];
-  coverPath?: string;
-  durationSeconds?: number;
-  publishedAt?: Date;
-  description?: string;
-  descriptionHtml?: string;
-  language?: string;
-  isbn?: string;
-  identifiers?: Record<string, string>;
-  chapters?: ChapterTiming[];
-};
-
-const FEED_TITLE = process.env.POD_TITLE ?? "Podible Audiobooks";
-const FEED_DESCRIPTION = process.env.POD_DESCRIPTION ?? "Podcast feed for audiobooks";
-const FEED_LANGUAGE = process.env.POD_LANGUAGE ?? "en-us";
-const FEED_COPYRIGHT = process.env.POD_COPYRIGHT ?? "";
-const FEED_AUTHOR = process.env.POD_AUTHOR ?? "Unknown";
-const FEED_OWNER_NAME = process.env.POD_OWNER_NAME ?? "Owner";
-const FEED_OWNER_EMAIL = process.env.POD_OWNER_EMAIL ?? "owner@example.com";
-const rawExplicit = (process.env.POD_EXPLICIT ?? "clean").toLowerCase();
-const FEED_EXPLICIT = ["yes", "no", "clean"].includes(rawExplicit) ? rawExplicit : "clean";
-const FEED_CATEGORY = process.env.POD_CATEGORY ?? "Arts";
-const FEED_TYPE = process.env.POD_TYPE ?? "episodic";
-const FEED_IMAGE_URL = process.env.POD_IMAGE_URL;
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "",
@@ -89,54 +96,6 @@ function persistProbeCache() {
   }
 }
 
-type ChapterTiming = {
-  id: string;
-  title: string;
-  startMs: number;
-  endMs: number;
-};
-
-type TranscodeState = "pending" | "working" | "done" | "failed";
-
-type TranscodeStatus = {
-  source: string;
-  target: string;
-  mtimeMs: number;
-  state: TranscodeState;
-  error?: string;
-  outTimeMs?: number;
-  speed?: number;
-  durationMs?: number;
-};
-
-type PendingSingleMeta = {
-  id: string;
-  title: string;
-  author: string;
-  coverPath?: string;
-  durationSeconds?: number;
-  publishedAt?: Date;
-  description?: string;
-  descriptionHtml?: string;
-  language?: string;
-  isbn?: string;
-  identifiers?: Record<string, string>;
-  chapters?: ChapterTiming[];
-};
-
-type TranscodeJob = {
-  source: string;
-  target: string;
-  mtimeMs: number;
-  meta: PendingSingleMeta;
-};
-
-type BookBuildResult = {
-  ready?: Book;
-  pendingJob?: TranscodeJob;
-  sourcePath?: string;
-};
-
 const scanRoots = (() => {
   const roots = process.argv
     .slice(2)
@@ -147,26 +106,6 @@ const scanRoots = (() => {
   return roots;
 })();
 
-const dataDir = (() => {
-  const dir = process.env.DATA_DIR ?? path.join(process.env.TMPDIR ?? "/tmp", "podible-transcodes");
-  return dir;
-})();
-
-const transcodeStatusPath = path.join(dataDir, "transcode-status.json");
-const libraryIndexPath = path.join(dataDir, "library-index.json");
-const probeCachePath = path.join(dataDir, "probe-cache.json");
-const brandImagePath = path.join(process.cwd(), "podible.png");
-const apiKeyPath = path.join(dataDir, "api-key.txt");
-
-const brandImageExists = (() => {
-  try {
-    const stat = statSync(brandImagePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
-})();
-
 const transcodeStatus = new Map<string, TranscodeStatus>();
 const readyBooks = new Map<string, Book>();
 const queuedSources = new Set<string>();
@@ -175,18 +114,6 @@ let initialScanPromise: Promise<void> | null = null;
 
 function statusKey(source: string): string {
   return source;
-}
-
-async function ensureDataDir() {
-  await fs.mkdir(dataDir, { recursive: true });
-}
-
-function ensureDataDirSync() {
-  try {
-    mkdirSync(dataDir, { recursive: true });
-  } catch {
-    // ignore sync mkdir errors; async ensureDataDir also runs elsewhere
-  }
 }
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -286,11 +213,6 @@ async function loadOrCreateApiKey(): Promise<string> {
 }
 
 const apiKeyPromise = loadOrCreateApiKey();
-
-type JobChannel<T> = {
-  push: (job: T) => void;
-  stream: () => AsyncGenerator<T, void, unknown>;
-};
 
 function createJobChannel<T>(): JobChannel<T> {
   const queue: T[] = [];
@@ -425,107 +347,6 @@ function bookFromMeta(meta: PendingSingleMeta, outputPath: string, outputStat: A
     chapters: meta.chapters,
   };
 }
-
-const port = Number(process.env.PORT ?? 80);
-
-function slugify(value: string): string {
-  return value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .replace(/--+/g, "-");
-}
-
-function decodeXmlEntities(value: string): string {
-  return value
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'");
-}
-
-function cleanMetaValue(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  const lowered = trimmed.toLowerCase();
-  if (lowered === "unknown" || lowered === "no description") return undefined;
-  return trimmed;
-}
-
-function normalizeDescriptionHtml(raw: string | undefined): string | undefined {
-  const decoded = raw ? decodeXmlEntities(raw) : undefined;
-  const cleaned = cleanMetaValue(decoded);
-  if (!cleaned) return undefined;
-  return cleaned;
-}
-
-function htmlToPlainText(html: string | undefined): string | undefined {
-  if (!html) return undefined;
-  const withBreaks = html
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n\n")
-    .replace(/<\/li>/gi, "\n")
-    .replace(/<li>/gi, "- ");
-  const withoutTags = withBreaks.replace(/<[^>]+>/g, "");
-  const normalized = withoutTags
-    .replace(/\r/g, "")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/[ \t]+/g, " ")
-    .trim();
-  return normalized || undefined;
-}
-
-function toArray<T>(value: T | T[] | undefined | null): T[] {
-  if (value === undefined || value === null) return [];
-  return Array.isArray(value) ? value : [value];
-}
-
-function nodeText(value: unknown): string | undefined {
-  if (value === undefined || value === null) return undefined;
-  if (typeof value === "string" || typeof value === "number") return String(value);
-  if (typeof value === "object" && value && "#text" in (value as Record<string, unknown>)) {
-    const text = (value as Record<string, unknown>)["#text"];
-    if (typeof text === "string" || typeof text === "number") return String(text);
-  }
-  return undefined;
-}
-
-type OpfMetadata = {
-  title?: string;
-  author?: string;
-  description?: string;
-  descriptionHtml?: string;
-  language?: string;
-  publishedAt?: Date;
-  isbn?: string;
-  identifiers: Record<string, string>;
-};
-
-type AudioTagMetadata = {
-  title?: string;
-  artist?: string;
-  albumArtist?: string;
-  description?: string;
-  descriptionHtml?: string;
-  language?: string;
-  date?: Date;
-};
-
-type ProbeData = {
-  duration?: number;
-  tags?: Record<string, string>;
-  chapters?: FfprobeChapter[];
-};
-
-type FfprobeChapter = {
-  start_time?: string;
-  end_time?: string;
-  tags?: Record<string, string>;
-};
 
 function parseOpfContent(content: string): OpfMetadata | null {
   let parsed: any;
@@ -683,24 +504,6 @@ function bookMime(book: Book): string {
 
 function bookId(author: string, title: string): string {
   return slugify(`${author}-${title}`);
-}
-
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
-
-function truncate(value: string, max: number): string {
-  if (value.length <= max) return value;
-  return `${value.slice(0, max - 3).trimEnd()}...`;
-}
-
-function firstLine(value: string): string {
-  return value.split(/\r?\n/).map((part) => part.trim()).find(Boolean) ?? "";
 }
 
 async function safeReadDir(dir: string) {
