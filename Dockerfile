@@ -10,6 +10,7 @@ COPY package.json bun.lock ./
 RUN bun install --production
 
 COPY server.ts ./
+COPY src ./src
 COPY podible.png ./
 
 EXPOSE 80
