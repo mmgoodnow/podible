@@ -148,10 +148,33 @@ function bookId(author: string, title: string): string {
   return slugify(`${author}-${title}`);
 }
 
+function formatDateIso(date: Date | undefined): string | undefined {
+  if (!date) return undefined;
+  const iso = date.toISOString();
+  return iso.slice(0, 10);
+}
+
+function bookIsbn(book: Book): string | undefined {
+  if (book.isbn) return book.isbn;
+  const identifiers = book.identifiers ?? {};
+  return identifiers["isbn"] ?? identifiers["ISBN"];
+}
+
+function cleanLanguage(language: string | undefined): string | undefined {
+  if (!language) return undefined;
+  const trimmed = language.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.toLowerCase() === "unknown") return undefined;
+  return trimmed;
+}
+
 export {
   bookExtension,
   bookId,
+  bookIsbn,
   bookMime,
+  cleanLanguage,
+  formatDateIso,
   mimeFromExt,
   normalizeAudioExt,
   parseAudioTagDate,
