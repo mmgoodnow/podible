@@ -712,6 +712,118 @@ async function safeReadDir(dir: string) {
   }
 }
 
+function coverOutputPath(sourcePath: string, mtimeMs: number, ext: "jpg" | "png" = "jpg"): string {
+  const base = path.basename(sourcePath, path.extname(sourcePath));
+  const safeName = slugify(base) || "cover";
+  const hash = mtimeMs.toString(36);
+  return path.join(dataDir, `cover-${safeName}-${hash}.${ext}`);
+}
+
+async function extractEmbeddedCover(sourcePath: string, mtimeMs: number): Promise<string | undefined> {
+  await ensureDataDir();
+  const output = coverOutputPath(sourcePath, mtimeMs, "jpg");
+  const existing = await fs.stat(output).catch(() => null);
+  if (existing && existing.isFile() && existing.size > 0) return output;
+  const result = spawnSync(
+    "ffmpeg",
+    [
+      "-y",
+      "-nostdin",
+      "-loglevel",
+      "error",
+      "-i",
+      sourcePath,
+      "-map",
+      "0:v:0",
+      "-an",
+      "-c:v",
+      "mjpeg",
+      "-frames:v",
+      "1",
+      output,
+    ],
+    { stdio: "ignore" }
+  );
+  if (result.status === 0) {
+    const stat = await fs.stat(output).catch(() => null);
+    if (stat && stat.isFile() && stat.size > 0) return output;
+  }
+  await fs.rm(output, { force: true }).catch(() => {});
+  return undefined;
+}
+
+async function extractCoverFromEpub(epubPath: string, mtimeMs: number): Promise<string | undefined> {
+  const list = spawnSync("unzip", ["-Z1", epubPath], { encoding: "utf8" });
+  if (list.status !== 0) return undefined;
+  const entries = list.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const candidates = entries
+    .filter((name) => /\.(jpg|jpeg|png)$/i.test(name))
+    .sort((a, b) => {
+      const aCover = /cover/i.test(a) ? 0 : 1;
+      const bCover = /cover/i.test(b) ? 0 : 1;
+      return aCover - bCover;
+    });
+  for (const name of candidates) {
+    const lower = name.toLowerCase();
+    const ext: "jpg" | "png" = lower.endsWith(".png") ? "png" : "jpg";
+    const output = coverOutputPath(epubPath, mtimeMs, ext);
+    const existing = await fs.stat(output).catch(() => null);
+    if (existing && existing.isFile() && existing.size > 0) return output;
+    const extracted = spawnSync("unzip", ["-p", epubPath, name], { encoding: "buffer" });
+    if (extracted.status !== 0 || !extracted.stdout || (extracted.stdout as Buffer).length === 0) {
+      await fs.rm(output, { force: true }).catch(() => {});
+      continue;
+    }
+    try {
+      await ensureDataDir();
+      await fs.writeFile(output, extracted.stdout as Buffer);
+      const stat = await fs.stat(output).catch(() => null);
+      if (stat && stat.isFile() && stat.size > 0) return output;
+    } catch {
+      await fs.rm(output, { force: true }).catch(() => {});
+    }
+  }
+  return undefined;
+}
+
+async function resolveCoverPath(
+  bookDir: string,
+  m4bs: string[],
+  mp3s: string[],
+  epubs: string[],
+  pngs: string[],
+  jpgs: string[]
+): Promise<string | undefined> {
+  if (m4bs.length > 0) {
+    const filePath = path.join(bookDir, m4bs[0]);
+    const stat = await fs.stat(filePath).catch(() => null);
+    if (stat) {
+      const embedded = await extractEmbeddedCover(filePath, stat.mtimeMs);
+      if (embedded) return embedded;
+    }
+  }
+  for (const mp3 of mp3s) {
+    const filePath = path.join(bookDir, mp3);
+    const stat = await fs.stat(filePath).catch(() => null);
+    if (!stat) continue;
+    const embedded = await extractEmbeddedCover(filePath, stat.mtimeMs);
+    if (embedded) return embedded;
+  }
+  for (const epub of epubs) {
+    const epubPath = path.join(bookDir, epub);
+    const stat = await fs.stat(epubPath).catch(() => null);
+    if (!stat) continue;
+    const cover = await extractCoverFromEpub(epubPath, stat.mtimeMs);
+    if (cover) return cover;
+  }
+  if (pngs.length > 0) return path.join(bookDir, pngs[0]);
+  if (jpgs.length > 0) return path.join(bookDir, jpgs[0]);
+  return undefined;
+}
+
 async function buildBook(author: string, bookDir: string, title: string): Promise<BookBuildResult | null> {
   const t0 = Date.now();
   console.log(`[scan] start book author="${author}" title="${title}" path="${bookDir}"`);
@@ -719,7 +831,9 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
   const files = entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
   const m4bs = files.filter((f) => f.toLowerCase().endsWith(".m4b")).sort();
   const mp3s = files.filter((f) => f.toLowerCase().endsWith(".mp3")).sort();
-  const covers = files.filter((f) => f.toLowerCase().endsWith(".jpg")).sort();
+  const epubs = files.filter((f) => f.toLowerCase().endsWith(".epub")).sort();
+  const pngs = files.filter((f) => f.toLowerCase().endsWith(".png")).sort();
+  const jpgs = files.filter((f) => f.toLowerCase().endsWith(".jpg") || f.toLowerCase().endsWith(".jpeg")).sort();
   const opf = await readOpfMetadata(bookDir, files);
   const audioMetaSource = m4bs[0] ? path.join(bookDir, m4bs[0]) : mp3s[0] ? path.join(bookDir, mp3s[0]) : null;
   const audioMetaStat = audioMetaSource ? await fs.stat(audioMetaSource).catch(() => null) : null;
@@ -727,7 +841,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
   const chapterMeta =
     m4bs[0] && audioMetaStat ? readFfprobeChapters(audioMetaSource!, audioMetaStat.mtimeMs) ?? undefined : undefined;
 
-  const coverPath = covers.length > 0 ? path.join(bookDir, covers[0]) : undefined;
+  const coverPath = await resolveCoverPath(bookDir, m4bs, mp3s, epubs, pngs, jpgs);
   const displayTitle = opf?.title ?? title;
   const displayAuthor = audioMeta?.artist ?? audioMeta?.albumArtist ?? opf?.author ?? author;
   const description = preferLonger(opf?.description, audioMeta?.description);
@@ -1776,8 +1890,10 @@ async function handleCover(bookIdValue: string): Promise<Response> {
   if (!book || !book.coverPath) return new Response("Not found", { status: 404 });
   const file = Bun.file(book.coverPath);
   if (!(await file.exists())) return new Response("Not found", { status: 404 });
+  const ext = path.extname(book.coverPath).toLowerCase();
+  const mime = ext === ".png" ? "image/png" : "image/jpeg";
   return new Response(file, {
-    headers: { "Content-Type": "image/jpeg" },
+    headers: { "Content-Type": mime },
   });
 }
 
