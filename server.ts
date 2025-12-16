@@ -1679,6 +1679,7 @@ async function homePage(request: Request): Promise<Response> {
   const sampleExt = sample ? bookExtension(sample) : undefined;
   const multiWithChapters = books.find((b) => b.kind === "multi");
   const coverBook = books.find((b) => b.coverPath);
+  const previewItems = books.slice(0, Math.min(books.length, 12));
   console.log(
     `[home] done books=${books.length} singles=${singles} transcodes done=${done} pending=${pending} working=${working} failed=${failedAll} queue=${queuedSources.size} in ${durationMs}ms`
   );
@@ -1700,6 +1701,12 @@ async function homePage(request: Request): Promise<Response> {
     .bar { height: 100%; background: linear-gradient(90deg, #38bdf8, #0ea5e9); width: ${barWidth}%; transition: width 0.3s ease; }
     code { background: #f8fafc; border: 1px solid #e2e8f0; padding: 2px 6px; border-radius: 6px; }
     .links { list-style: none; padding: 0; margin: 0; }
+    .feed-preview { margin-top: 32px; display: flex; flex-direction: column; gap: 12px; }
+    .feed-item { display: grid; grid-template-columns: 64px 1fr; gap: 12px; padding: 12px; border: 1px solid #e2e8f0; border-radius: 12px; align-items: center; background: #fff; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05); }
+    .feed-cover { width: 64px; height: 64px; border-radius: 10px; overflow: hidden; background: linear-gradient(135deg, #c7d2fe, #e0f2fe); display: flex; align-items: center; justify-content: center; color: #0f172a; font-weight: 700; font-size: 18px; border: 1px solid #e2e8f0; }
+    .feed-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .feed-title { margin: 0 0 6px 0; font-size: 16px; line-height: 1.3; color: #0f172a; }
+    .feed-desc { margin: 0; color: #475569; font-size: 14px; line-height: 1.45; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   </style>
 </head>
 <body>
@@ -1748,6 +1755,34 @@ async function homePage(request: Request): Promise<Response> {
         : ""
     }
   </ul>
+  ${
+    previewItems.length > 0
+      ? `<div class="feed-preview">
+    <h2 style="margin:20px 0 8px 0;">Feed preview</h2>
+    ${previewItems
+      .map((book) => {
+        const coverUrl = book.coverPath ? `${origin}/covers/${book.id}.jpg${keySuffix}` : "";
+        const initials =
+          (book.title || "")
+            .split(/\s+/)
+            .map((p) => p[0])
+            .join("")
+            .slice(0, 2)
+            .toUpperCase() || "AB";
+        const { description } = buildItemNotes(book);
+        const desc = truncate(description || `${book.title} by ${book.author}`, 220);
+        return `<div class="feed-item">
+      <div class="feed-cover">${coverUrl ? `<img src="${coverUrl}" alt="${book.title} cover" />` : initials}</div>
+      <div>
+        <p class="feed-title">${escapeXml(book.title)} <span style="color:#94a3b8;">— ${escapeXml(book.author)}</span></p>
+        <p class="feed-desc">${escapeXml(desc)}</p>
+      </div>
+    </div>`;
+      })
+      .join("")}
+  </div>`
+      : ""
+  }
 </body>
 </html>`;
   return new Response(body, {
