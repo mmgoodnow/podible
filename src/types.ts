@@ -27,6 +27,7 @@ export type Book = {
   primaryFile?: string;
   files?: AudioSegment[];
   coverPath?: string;
+  epubPath?: string;
   durationSeconds?: number;
   publishedAt?: Date;
   description?: string;
@@ -55,6 +56,7 @@ export type PendingSingleMeta = {
   title: string;
   author: string;
   coverPath?: string;
+  epubPath?: string;
   durationSeconds?: number;
   publishedAt?: Date;
   description?: string;

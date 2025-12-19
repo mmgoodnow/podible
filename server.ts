@@ -17,6 +17,7 @@ import {
   handleChapters,
   handleChaptersDebug,
   handleCover,
+  handleEpub,
   handleFeed,
   handleFeedDebug,
   handleStream,
@@ -102,6 +103,11 @@ Bun.serve({
       const [, , idWithExt = ""] = pathname.split("/");
       const id = idWithExt.replace(/\.jpg$/, "");
       return handleCover(id);
+    }
+    if (pathname.startsWith("/epubs/")) {
+      const [, , idWithExt = ""] = pathname.split("/");
+      const id = idWithExt.replace(/\.epub$/i, "");
+      return handleEpub(request, id);
     }
     if (pathname === "/podible.png" && brandImageExists) {
       const file = Bun.file(brandImagePath);

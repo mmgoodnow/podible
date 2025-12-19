@@ -81,6 +81,7 @@ function bookFromMeta(meta: PendingSingleMeta, outputPath: string, outputStat: A
     totalSize: outputStat.size,
     primaryFile: outputPath,
     coverPath: meta.coverPath,
+    epubPath: meta.epubPath,
     durationSeconds,
     publishedAt: meta.publishedAt,
     description: meta.description,
@@ -110,6 +111,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
     m4bs[0] && audioMetaStat ? readFfprobeChapters(audioMetaSource!, audioMetaStat.mtimeMs) ?? undefined : undefined;
 
   const coverPath = await resolveCoverPath(bookDir, m4bs, mp3s, epubs, pngs, jpgs);
+  const epubPath = epubs[0] ? path.join(bookDir, epubs[0]) : undefined;
   const displayTitle = opf?.title ?? title;
   const displayAuthor = audioMeta?.artist ?? audioMeta?.albumArtist ?? opf?.author ?? author;
   const description = preferLonger(opf?.description, audioMeta?.description);
@@ -142,6 +144,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
       title: displayTitle,
       author: displayAuthor,
       coverPath,
+      epubPath,
       durationSeconds: getDurationSeconds(filePath, stat.mtimeMs),
       publishedAt: opf?.publishedAt ?? audioMeta?.date ?? stat.mtime,
       description,
@@ -172,6 +175,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
           totalSize: targetStat.size,
           primaryFile: existing.target,
           coverPath: meta.coverPath,
+          epubPath,
           durationSeconds,
           publishedAt: meta.publishedAt,
           description: meta.description,
@@ -273,6 +277,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
       totalSize: segments.reduce((sum, seg) => sum + seg.size, 0),
       files: segments,
       coverPath,
+      epubPath,
       durationSeconds,
       publishedAt,
       description,

@@ -71,6 +71,9 @@ function rssFeed(books: Book[], origin: string, keySuffix = ""): { body: string;
       const mime = bookMime(book);
       const enclosureUrl = `${origin}/stream/${book.id}.${ext}${keySuffix}`;
       const cover = book.coverPath ? `<itunes:image href="${origin}/covers/${book.id}.jpg${keySuffix}" />` : "";
+      const epubTag = book.epubPath
+        ? `<podible:epub url="${origin}/epubs/${book.id}.epub${keySuffix}" type="application/epub+zip" />`
+        : "";
       const tagLength = estimateId3TagLength(book);
       const enclosureLength = book.totalSize + tagLength;
       const durationSeconds = book.durationSeconds ?? 0;
@@ -105,6 +108,7 @@ function rssFeed(books: Book[], origin: string, keySuffix = ""): { body: string;
         cover,
         chaptersTag,
         chaptersDebugTag,
+        epubTag,
         "</item>",
       ]
         .filter(Boolean)
@@ -113,7 +117,7 @@ function rssFeed(books: Book[], origin: string, keySuffix = ""): { body: string;
     .join("");
 
   const body = `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:podcast="https://podcastindex.org/namespace/1.0" xmlns:atom="http://www.w3.org/2005/Atom">
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:podcast="https://podcastindex.org/namespace/1.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:podible="https://podible.invalid/xmlns">
 <channel>
 <title>${escapeXml(FEED_TITLE)}</title>
 <link>${origin}/feed.xml${keySuffix}</link>
