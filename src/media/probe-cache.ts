@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 
 import { ensureDataDirSync, probeCachePath } from "../config";
-import { ChapterTiming, FfprobeChapter, ProbeData } from "../types";
+import { ChapterTiming, FfprobeChapter, ProbeData, ProbeFailure } from "../types";
 import { cleanMetaValue } from "../utils/strings";
 
 const durationCache = new Map<
@@ -19,10 +19,33 @@ const probeCache = new Map<
   {
     mtimeMs: number;
     data: ProbeData | null;
+    error?: string;
   }
 >();
 
 let probeCacheLoaded = false;
+
+function ensureProbeCacheLoaded() {
+  if (probeCacheLoaded) return;
+  try {
+    const content = readFileSync(probeCachePath, "utf8");
+    const parsed = JSON.parse(content);
+    if (Array.isArray(parsed)) {
+      parsed.forEach((entry: any) => {
+        if (!entry || typeof entry !== "object") return;
+        if (typeof entry.file !== "string" || typeof entry.mtimeMs !== "number") return;
+        probeCache.set(entry.file, {
+          mtimeMs: entry.mtimeMs,
+          data: entry.data ?? null,
+          error: typeof entry.error === "string" ? entry.error : undefined,
+        });
+      });
+    }
+  } catch {
+    // ignore cache read errors
+  }
+  probeCacheLoaded = true;
+}
 
 function persistProbeCache() {
   try {
@@ -31,6 +54,7 @@ function persistProbeCache() {
       file,
       mtimeMs: value.mtimeMs,
       data: value.data,
+      error: value.error,
     }));
     writeFileSync(probeCachePath, JSON.stringify(payload));
   } catch (err) {
@@ -39,22 +63,7 @@ function persistProbeCache() {
 }
 
 function probeData(filePath: string, mtimeMs: number): ProbeData | null {
-  if (!probeCacheLoaded) {
-    try {
-      const content = readFileSync(probeCachePath, "utf8");
-      const parsed = JSON.parse(content);
-      if (Array.isArray(parsed)) {
-        parsed.forEach((entry: any) => {
-          if (!entry || typeof entry !== "object") return;
-          if (typeof entry.file !== "string" || typeof entry.mtimeMs !== "number") return;
-          probeCache.set(entry.file, { mtimeMs: entry.mtimeMs, data: entry.data ?? null });
-        });
-      }
-    } catch {
-      // ignore cache read errors
-    }
-    probeCacheLoaded = true;
-  }
+  ensureProbeCacheLoaded();
 
   const cached = probeCache.get(filePath);
   if (cached && cached.mtimeMs === mtimeMs) return cached.data;
@@ -66,7 +75,7 @@ function probeData(filePath: string, mtimeMs: number): ProbeData | null {
   if (result.error || result.status !== 0) {
     const message = result.error ? result.error.message : result.stderr || String(result.status);
     console.warn(`ffprobe failed for ${filePath}: ${message}`);
-    probeCache.set(filePath, { mtimeMs, data: null });
+    probeCache.set(filePath, { mtimeMs, data: null, error: message });
     persistProbeCache();
     return null;
   }
@@ -82,12 +91,13 @@ function probeData(filePath: string, mtimeMs: number): ProbeData | null {
       tags,
       chapters,
     };
-    probeCache.set(filePath, { mtimeMs, data });
+    probeCache.set(filePath, { mtimeMs, data, error: undefined });
     persistProbeCache();
     return data;
   } catch (err) {
-    console.warn(`Failed to parse ffprobe output for ${filePath}: ${(err as Error).message}`);
-    probeCache.set(filePath, { mtimeMs, data: null });
+    const message = (err as Error).message;
+    console.warn(`Failed to parse ffprobe output for ${filePath}: ${message}`);
+    probeCache.set(filePath, { mtimeMs, data: null, error: message });
     persistProbeCache();
     return null;
   }
@@ -133,4 +143,15 @@ function readFfprobeChapters(filePath: string, mtimeMs: number): ChapterTiming[]
   return timings;
 }
 
-export { getDurationSeconds, probeData, readFfprobeChapters };
+function getProbeFailures(): ProbeFailure[] {
+  ensureProbeCacheLoaded();
+  return Array.from(probeCache.entries())
+    .filter(([, value]) => value.data === null && typeof value.error === "string" && value.error.length > 0)
+    .map(([file, value]) => ({
+      file,
+      mtimeMs: value.mtimeMs,
+      error: value.error as string,
+    }));
+}
+
+export { getDurationSeconds, getProbeFailures, probeData, readFfprobeChapters };

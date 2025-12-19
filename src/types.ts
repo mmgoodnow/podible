@@ -112,6 +112,12 @@ export type ProbeData = {
   chapters?: FfprobeChapter[];
 };
 
+export type ProbeFailure = {
+  file: string;
+  mtimeMs: number;
+  error: string;
+};
+
 export type FfprobeChapter = {
   start_time?: string;
   end_time?: string;

@@ -29,6 +29,18 @@ import { authorize } from "./src/http/auth";
 import { loadTranscodeStatus, queuedSources, saveTranscodeStatus, statusKey, transcodeOutputPath, transcodeStatus } from "./src/transcode";
 import { workerLoop } from "./src/transcode/worker";
 
+function restartServer() {
+  const bun = process.argv[0] ?? "bun";
+  const args = process.argv.slice(1);
+  Bun.spawn({
+    cmd: [bun, ...args],
+    stdout: "inherit",
+    stderr: "inherit",
+    stdin: "ignore",
+  });
+  setTimeout(() => process.exit(0), 150);
+}
+
 const scanRoots = (() => {
   const roots = process.argv
     .slice(2)
@@ -88,6 +100,10 @@ Bun.serve({
     if (pathname === "/feed-debug.xml") return handleFeedDebug(request, scanRoots);
     if (pathname === "/feed.json") return handleJsonFeed(request, scanRoots);
     if (pathname === "/feed-debug.json") return handleJsonFeedDebug(request, scanRoots);
+    if (pathname === "/restart" && request.method === "POST") {
+      setTimeout(() => restartServer(), 50);
+      return new Response("Restarting", { status: 202 });
+    }
     if (pathname.startsWith("/stream/")) {
       const idWithExt = pathname.replace("/stream/", "");
       const id = idWithExt.replace(/\.(mp3|m4a|m4b|mp4)$/i, "");

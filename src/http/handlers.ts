@@ -6,6 +6,7 @@ import { buildItemNotes, rssFeed } from "../feed/rss";
 import { buildChapters, buildChapterTimings } from "../library/chapters";
 import { findBookById, readyBooksSorted } from "../library";
 import { bookExtension, bookMime } from "../media/metadata";
+import { getProbeFailures } from "../media/probe-cache";
 import { buildId3ChaptersTag } from "../streaming/id3";
 import { parseRange, segmentsForRange, streamSegments } from "../streaming/range";
 import { transcodeStatus, queuedSources } from "../transcode";
@@ -114,6 +115,7 @@ async function homePage(request: Request): Promise<Response> {
   const done = statusValues.filter((s) => s.state === "done").length;
   const pending = statusValues.filter((s) => s.state === "pending").length;
   const working = statusValues.filter((s) => s.state === "working").length;
+  const probeFailures = getProbeFailures().sort((a, b) => b.mtimeMs - a.mtimeMs);
   const isProbeFailure = (s: TranscodeStatus) =>
     Boolean(
       s.state === "failed" &&
@@ -174,6 +176,15 @@ async function homePage(request: Request): Promise<Response> {
     .feed-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .feed-title { margin: 0 0 6px 0; font-size: 16px; line-height: 1.3; color: #0f172a; }
     .feed-desc { margin: 0; color: #475569; font-size: 14px; line-height: 1.45; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    .probe-errors { margin-top: 16px; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px; background: #f8fafc; }
+    .probe-errors summary { cursor: pointer; font-weight: 600; color: #0f172a; }
+    .probe-errors ul { list-style: none; padding: 0; margin: 12px 0 0 0; display: grid; gap: 10px; }
+    .probe-errors li { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; }
+    .probe-errors .file { font-weight: 600; font-size: 13px; color: #0f172a; margin-bottom: 6px; word-break: break-all; }
+    .probe-errors .error { font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: #b91c1c; white-space: pre-wrap; }
+    .actions { margin: 16px 0 0 0; }
+    .restart { border: 1px solid #ef4444; background: #fee2e2; color: #991b1b; padding: 8px 12px; border-radius: 10px; font-weight: 600; cursor: pointer; }
+    .restart:hover { background: #fecaca; }
   </style>
 </head>
 <body>
@@ -201,6 +212,26 @@ async function homePage(request: Request): Promise<Response> {
     <div class="stat"><span class="label">Queue</span><span class="value">${queuedSources.size}</span></div>
     <div class="progress"><div class="bar"></div></div>
   </div>
+  ${
+    probeFailures.length > 0
+      ? `<details class="probe-errors">
+    <summary>Failed probe details (${probeFailures.length})</summary>
+    <ul>
+      ${probeFailures
+        .map(
+          (failure) =>
+            `<li><div class="file">${escapeXml(failure.file)}</div><div class="error">${escapeXml(
+              failure.error
+            )}</div></li>`
+        )
+        .join("")}
+    </ul>
+  </details>`
+      : ""
+  }
+  <form class="actions" method="post" action="${origin}/restart${keySuffix}">
+    <button class="restart" type="submit">Restart server</button>
+  </form>
   <p style="margin-top:16px;">Scan time: ${durationMs} ms</p>
   <p>Links:</p>
   <ul class="links">
