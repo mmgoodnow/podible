@@ -4,7 +4,7 @@ import { brandImageExists } from "../config";
 import { jsonFeed } from "../feed/json";
 import { buildItemNotes, rssFeed } from "../feed/rss";
 import { buildChapters, buildChapterTimings } from "../library/chapters";
-import { findBookById, readyBooksSorted } from "../library";
+import { feedBooksSorted, findBookById, readyBooksSorted } from "../library";
 import { bookExtension, bookMime } from "../media/metadata";
 import { getProbeFailures } from "../media/probe-cache";
 import { buildId3ChaptersTag } from "../streaming/id3";
@@ -30,7 +30,7 @@ async function handleFeed(request: Request, scanRoots: string[]): Promise<Respon
   const key = new URL(request.url).searchParams.get("key");
   const keySuffix = key ? `?key=${encodeURIComponent(key)}` : "";
   console.log(`[feed] start /feed.xml roots=${scanRoots.join("|")}`);
-  const books = readyBooksSorted();
+  const books = feedBooksSorted();
   const scannedMs = Date.now() - started;
   const { body, lastModified } = rssFeed(books, origin, keySuffix);
   const totalMs = Date.now() - started;
@@ -56,7 +56,7 @@ async function handleJsonFeed(request: Request, scanRoots: string[]): Promise<Re
   const key = new URL(request.url).searchParams.get("key");
   const keySuffix = key ? `?key=${encodeURIComponent(key)}` : "";
   console.log(`[feed] start /feed.json roots=${scanRoots.join("|")}`);
-  const books = readyBooksSorted();
+  const books = feedBooksSorted();
   const scannedMs = Date.now() - started;
   const { body, lastModified } = jsonFeed(books, origin, keySuffix);
   const totalMs = Date.now() - started;
@@ -82,7 +82,7 @@ async function handleJsonFeedDebug(request: Request, scanRoots: string[]): Promi
   const key = new URL(request.url).searchParams.get("key");
   const keySuffix = key ? `?key=${encodeURIComponent(key)}` : "";
   console.log(`[feed] start /feed-debug.json roots=${scanRoots.join("|")}`);
-  const books = readyBooksSorted();
+  const books = feedBooksSorted();
   const scannedMs = Date.now() - started;
   const { body, lastModified } = jsonFeed(books, origin, keySuffix);
   const totalMs = Date.now() - started;
@@ -106,7 +106,7 @@ async function homePage(request: Request): Promise<Response> {
   const origin = requestOrigin(request);
   const queryKey = url.searchParams.get("key");
   const keySuffix = queryKey ? `?key=${encodeURIComponent(queryKey)}` : "";
-  const books = readyBooksSorted();
+  const books = feedBooksSorted();
   const authors = new Set(books.map((b) => b.author));
   const singles = books.filter((b) => b.kind === "single").length;
   const multis = books.filter((b) => b.kind === "multi").length;

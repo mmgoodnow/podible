@@ -70,6 +70,9 @@ function rssFeed(books: Book[], origin: string, keySuffix = ""): { body: string;
       const ext = bookExtension(book);
       const mime = bookMime(book);
       const enclosureUrl = `${origin}/stream/${book.id}.${ext}${keySuffix}`;
+      const streamable =
+        (book.kind === "single" && Boolean(book.primaryFile)) ||
+        (book.kind === "multi" && Boolean(book.files && book.files.length > 0));
       const cover = book.coverPath ? `<itunes:image href="${origin}/covers/${book.id}.jpg${keySuffix}" />` : "";
       const epubTag = book.epubPath
         ? `<podible:epub url="${origin}/epubs/${book.id}.epub${keySuffix}" type="application/epub+zip" />`
@@ -80,7 +83,8 @@ function rssFeed(books: Book[], origin: string, keySuffix = ""): { body: string;
       const duration = formatDuration(durationSeconds);
       const itemPubDate = (book.publishedAt ?? lastModified).toUTCString();
       const fallbackDescription = `${book.title} by ${book.author}`;
-      const hasChapters = book.kind === "multi" || (book.chapters && book.chapters.length > 0);
+      const hasChapters =
+        streamable && (book.kind === "multi" || (book.chapters && book.chapters.length > 0));
       const chaptersTag = hasChapters
         ? `<podcast:chapters url="${origin}/chapters/${book.id}.json${keySuffix}" type="application/json+chapters" />`
         : "";
@@ -97,13 +101,13 @@ function rssFeed(books: Book[], origin: string, keySuffix = ""): { body: string;
         `<title>${escapeXml(book.title)}</title>`,
         `<itunes:author>${escapeXml(book.author)}</itunes:author>`,
         `<itunes:subtitle>${escapeXml(subtitle)}</itunes:subtitle>`,
-        `<enclosure url="${enclosureUrl}" length="${enclosureLength}" type="${mime}" />`,
-        `<link>${enclosureUrl}</link>`,
+        streamable ? `<enclosure url="${enclosureUrl}" length="${enclosureLength}" type="${mime}" />` : "",
+        streamable ? `<link>${enclosureUrl}</link>` : "",
         `<pubDate>${itemPubDate}</pubDate>`,
         `<description>${descriptionForXml}</description>`,
         `<itunes:summary>${escapeXml(description || fallbackDescription)}</itunes:summary>`,
         `<itunes:explicit>${FEED_EXPLICIT}</itunes:explicit>`,
-        duration ? `<itunes:duration>${duration}</itunes:duration>` : "",
+        streamable && duration ? `<itunes:duration>${duration}</itunes:duration>` : "",
         `<itunes:episodeType>full</itunes:episodeType>`,
         cover,
         chaptersTag,

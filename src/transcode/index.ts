@@ -53,6 +53,7 @@ async function loadTranscodeStatus() {
           mtimeMs: entry.mtimeMs,
           state: entry.state as TranscodeState,
           error: typeof entry.error === "string" ? entry.error : undefined,
+          meta: entry.meta && typeof entry.meta === "object" ? (entry.meta as TranscodeStatus["meta"]) : undefined,
         };
         transcodeStatus.set(statusKey(record.source), record);
       });

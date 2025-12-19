@@ -49,6 +49,7 @@ export type TranscodeStatus = {
   outTimeMs?: number;
   speed?: number;
   durationMs?: number;
+  meta?: PendingSingleMeta;
 };
 
 export type PendingSingleMeta = {

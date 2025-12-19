@@ -201,6 +201,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
       state: "pending",
       error: needsReset ? undefined : existingStatus?.error,
       durationMs: meta.durationSeconds ? meta.durationSeconds * 1000 : existingStatus?.durationMs,
+      meta,
     };
     transcodeStatus.set(statusKey(filePath), pending);
     if (!queuedSources.has(filePath) && pending.state !== "working") {
@@ -363,10 +364,46 @@ function readyBooksSorted(): Book[] {
   return books;
 }
 
+function feedBooksSorted(): Book[] {
+  const combined = new Map<string, Book>();
+  Array.from(readyBooks.values()).forEach((book) => combined.set(book.id, book));
+  Array.from(transcodeStatus.values()).forEach((status) => {
+    if (status.state === "done" || !status.meta) return;
+    if (combined.has(status.meta.id)) return;
+    const meta = status.meta;
+    combined.set(meta.id, {
+      id: meta.id,
+      title: meta.title,
+      author: meta.author,
+      kind: "single",
+      mime: mimeFromExt(".mp3"),
+      totalSize: 0,
+      coverPath: meta.coverPath,
+      epubPath: meta.epubPath,
+      durationSeconds: meta.durationSeconds,
+      publishedAt: meta.publishedAt,
+      description: meta.description,
+      descriptionHtml: meta.descriptionHtml,
+      language: meta.language,
+      isbn: meta.isbn,
+      identifiers: meta.identifiers,
+      chapters: meta.chapters,
+    });
+  });
+  const books = Array.from(combined.values());
+  books.sort((a, b) => {
+    const at = a.publishedAt ? a.publishedAt.getTime() : 0;
+    const bt = b.publishedAt ? b.publishedAt.getTime() : 0;
+    return bt - at;
+  });
+  return books;
+}
+
 export {
   bookFromMeta,
   fileExists,
   findBookById,
+  feedBooksSorted,
   loadLibraryIndex,
   readyBooks,
   readyBooksSorted,

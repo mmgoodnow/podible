@@ -29,16 +29,24 @@ import { authorize } from "./src/http/auth";
 import { loadTranscodeStatus, queuedSources, saveTranscodeStatus, statusKey, transcodeOutputPath, transcodeStatus } from "./src/transcode";
 import { workerLoop } from "./src/transcode/worker";
 
+let server: ReturnType<typeof Bun.serve> | null = null;
+let restarting = false;
+
 function restartServer() {
+  if (restarting) return;
+  restarting = true;
+  if (server) server.stop();
   const bun = process.argv[0] ?? "bun";
   const args = process.argv.slice(1);
-  Bun.spawn({
-    cmd: [bun, ...args],
-    stdout: "inherit",
-    stderr: "inherit",
-    stdin: "ignore",
-  });
-  setTimeout(() => process.exit(0), 150);
+  setTimeout(() => {
+    Bun.spawn({
+      cmd: [bun, ...args],
+      stdout: "inherit",
+      stderr: "inherit",
+      stdin: "ignore",
+    });
+    setTimeout(() => process.exit(0), 150);
+  }, 200);
 }
 
 const scanRoots = (() => {
@@ -83,7 +91,7 @@ initialScanPromise = scanAndQueue(scanRoots);
 void workerLoop();
 startWatchers(scanRoots);
 
-Bun.serve({
+server = Bun.serve({
   port,
   fetch: async (request: Request) => {
     const apiKey = await apiKeyPromise;
@@ -101,6 +109,7 @@ Bun.serve({
     if (pathname === "/feed.json") return handleJsonFeed(request, scanRoots);
     if (pathname === "/feed-debug.json") return handleJsonFeedDebug(request, scanRoots);
     if (pathname === "/restart" && request.method === "POST") {
+      if (restarting) return new Response("Restarting", { status: 409 });
       setTimeout(() => restartServer(), 50);
       return new Response("Restarting", { status: 202 });
     }

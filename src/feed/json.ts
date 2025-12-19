@@ -72,24 +72,31 @@ function jsonFeed(books: Book[], origin: string, keySuffix = ""): { body: string
     const ext = bookExtension(book);
     const mime = bookMime(book);
     const streamUrl = `${origin}/stream/${book.id}.${ext}${keySuffix}`;
+    const streamable =
+      (book.kind === "single" && Boolean(book.primaryFile)) ||
+      (book.kind === "multi" && Boolean(book.files && book.files.length > 0));
     const coverUrl = book.coverPath ? `${origin}/covers/${book.id}.jpg${keySuffix}` : undefined;
     const epubUrl = book.epubPath ? `${origin}/epubs/${book.id}.epub${keySuffix}` : undefined;
     const { description, descriptionHtml } = buildItemNotes(book);
     const authors: JsonFeedAuthor[] = book.author ? [{ name: book.author }] : [];
     const attachments: JsonFeedAttachment[] = [
-      {
-        url: streamUrl,
-        mime_type: mime,
-        title: `${book.title}${ext ? `.${ext}` : ""}`,
-        size_in_bytes: book.totalSize || undefined,
-        duration_in_seconds: book.durationSeconds || undefined,
-      },
+      ...(streamable
+        ? [
+            {
+              url: streamUrl,
+              mime_type: mime,
+              title: `${book.title}${ext ? `.${ext}` : ""}`,
+              size_in_bytes: book.totalSize || undefined,
+              duration_in_seconds: book.durationSeconds || undefined,
+            },
+          ]
+        : []),
       ...(epubUrl ? [{ url: epubUrl, mime_type: "application/epub+zip", title: `${book.title}.epub` }] : []),
     ];
 
     return {
       id: book.id,
-      url: streamUrl,
+      ...(streamable ? { url: streamUrl } : {}),
       title: book.title,
       content_text: description || `${book.title} by ${book.author}`,
       ...(descriptionHtml ? { content_html: descriptionHtml } : {}),
