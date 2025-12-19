@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { brandImageExists } from "../config";
+import { jsonFeed } from "../feed/json";
 import { buildItemNotes, rssFeed } from "../feed/rss";
 import { buildChapters, buildChapterTimings } from "../library/chapters";
 import { findBookById, readyBooksSorted } from "../library";
@@ -39,6 +40,58 @@ async function handleFeed(request: Request, scanRoots: string[]): Promise<Respon
   return new Response(body, {
     headers: {
       "Content-Type": "application/rss+xml",
+      "Last-Modified": lastModified.toUTCString(),
+      ETag: etag,
+    },
+  });
+}
+
+async function handleJsonFeed(request: Request, scanRoots: string[]): Promise<Response> {
+  if (scanRoots.length === 0) {
+    return new Response("No roots configured. Pass library directories via argv.", { status: 500 });
+  }
+  const started = Date.now();
+  const origin = requestOrigin(request);
+  const key = new URL(request.url).searchParams.get("key");
+  const keySuffix = key ? `?key=${encodeURIComponent(key)}` : "";
+  console.log(`[feed] start /feed.json roots=${scanRoots.join("|")}`);
+  const books = readyBooksSorted();
+  const scannedMs = Date.now() - started;
+  const { body, lastModified } = jsonFeed(books, origin, keySuffix);
+  const totalMs = Date.now() - started;
+  console.log(
+    `[feed] /feed.json books=${books.length} scan=${scannedMs}ms total=${totalMs}ms roots=${scanRoots.join("|")}`
+  );
+  const etag = `W/"${lastModified.getTime()}"`;
+  return new Response(body, {
+    headers: {
+      "Content-Type": "application/feed+json; charset=utf-8",
+      "Last-Modified": lastModified.toUTCString(),
+      ETag: etag,
+    },
+  });
+}
+
+async function handleJsonFeedDebug(request: Request, scanRoots: string[]): Promise<Response> {
+  if (scanRoots.length === 0) {
+    return new Response("No roots configured. Pass library directories via argv.", { status: 500 });
+  }
+  const started = Date.now();
+  const origin = requestOrigin(request);
+  const key = new URL(request.url).searchParams.get("key");
+  const keySuffix = key ? `?key=${encodeURIComponent(key)}` : "";
+  console.log(`[feed] start /feed-debug.json roots=${scanRoots.join("|")}`);
+  const books = readyBooksSorted();
+  const scannedMs = Date.now() - started;
+  const { body, lastModified } = jsonFeed(books, origin, keySuffix);
+  const totalMs = Date.now() - started;
+  console.log(
+    `[feed] /feed-debug.json books=${books.length} scan=${scannedMs}ms total=${totalMs}ms roots=${scanRoots.join("|")}`
+  );
+  const etag = `W/"${lastModified.getTime()}"`;
+  return new Response(JSON.stringify(JSON.parse(body), null, 2), {
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
       "Last-Modified": lastModified.toUTCString(),
       ETag: etag,
     },
@@ -153,6 +206,8 @@ async function homePage(request: Request): Promise<Response> {
   <ul class="links">
     <li><a href="${origin}/feed.xml${keySuffix}">Feed</a></li>
     <li><a href="${origin}/feed-debug.xml${keySuffix}">Feed Debug</a></li>
+    <li><a href="${origin}/feed.json${keySuffix}">JSON Feed</a></li>
+    <li><a href="${origin}/feed-debug.json${keySuffix}">JSON Feed Debug</a></li>
     ${
       sample && sampleExt
         ? `<li><a href="${origin}/stream/${sample.id}.${sampleExt}${keySuffix}">Stream</a></li>`
@@ -377,6 +432,8 @@ export {
   handleEpub,
   handleFeed,
   handleFeedDebug,
+  handleJsonFeed,
+  handleJsonFeedDebug,
   handleStream,
   homePage,
   requestOrigin,

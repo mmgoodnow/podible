@@ -23,6 +23,7 @@ bun run server.ts /path/to/library
 # example: bun run server.ts /books
 ```
 Subscribe to `http://<host>/feed.xml`.
+Or subscribe to JSON Feed at `http://<host>/feed.json`.
 
 ## Docker
 ```bash
@@ -36,6 +37,8 @@ docker run -p 80:80 -v ./books:/books:ro podible bun run server.ts /books
 - `GET /` — Minimal homepage showing scan/transcode progress.
 - `GET /feed.xml` — RSS with one item per book (enclosure streams audio; chapters tag for mp3 sets).
 - `GET /feed-debug.xml` — Same feed with browser-friendly headers for viewing raw XML.
+- `GET /feed.json` — JSON Feed 1.1 with one item per book (attachments include audio; optional epub).
+- `GET /feed-debug.json` — Same JSON Feed with `application/json` for easy viewing.
 - `GET /epubs/:id.epub` — Serves the first `.epub` found in the book folder (also exposed in the feed via a private `<podible:epub />` tag).
 - `GET /stream/:bookId` — Range-aware streaming; handles single m4b or stitched mp3 files.
 - `GET /chapters/:bookId.json` — Podcasting 2.0 chapters JSON for multi-mp3 books and m4b files with embedded chapters.

@@ -20,6 +20,8 @@ import {
   handleEpub,
   handleFeed,
   handleFeedDebug,
+  handleJsonFeed,
+  handleJsonFeedDebug,
   handleStream,
   homePage,
 } from "./src/http/handlers";
@@ -84,6 +86,8 @@ Bun.serve({
     if (pathname === "/") return homePage(request);
     if (pathname === "/feed.xml") return handleFeed(request, scanRoots);
     if (pathname === "/feed-debug.xml") return handleFeedDebug(request, scanRoots);
+    if (pathname === "/feed.json") return handleJsonFeed(request, scanRoots);
+    if (pathname === "/feed-debug.json") return handleJsonFeedDebug(request, scanRoots);
     if (pathname.startsWith("/stream/")) {
       const idWithExt = pathname.replace("/stream/", "");
       const id = idWithExt.replace(/\.(mp3|m4a|m4b|mp4)$/i, "");
@@ -121,6 +125,8 @@ const localBase = `http://localhost${port === 80 ? "" : `:${port}`}`;
 console.log(`Listening on port ${port}. Roots: ${scanRoots.join(", ") || "none"}`);
 console.log(`Feed: ${localBase}/feed.xml`);
 console.log(`Feed (debug/plain): ${localBase}/feed-debug.xml`);
+console.log(`JSON Feed: ${localBase}/feed.json`);
+console.log(`JSON Feed (debug/plain): ${localBase}/feed-debug.json`);
 
 async function logInitialScan() {
   if (scanRoots.length === 0) return;
