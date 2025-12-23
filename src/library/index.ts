@@ -339,7 +339,9 @@ function scheduleRescan(scanRoots: string[], delayMs = 500) {
 function startWatchers(scanRoots: string[]) {
   for (const root of scanRoots) {
     try {
-      const watcher = watch(root, { recursive: true }, () => {
+      const watcher = watch(root, { recursive: true }, (eventType, filename) => {
+        const fileLabel = filename ? ` file="${filename}"` : "";
+        console.log(`[watch] root="${root}" event=${eventType}${fileLabel}`);
         scheduleRescan(scanRoots, 500);
       });
       watcher.on("error", (err) => console.warn(`Watcher error for ${root}:`, err?.message ?? err));
