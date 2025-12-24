@@ -171,6 +171,8 @@ async function homePage(request: Request): Promise<Response> {
     code { background: #f8fafc; border: 1px solid #e2e8f0; padding: 2px 6px; border-radius: 6px; }
     .links { list-style: none; padding: 0; margin: 0; }
     .feed-preview { margin-top: 32px; display: flex; flex-direction: column; gap: 12px; }
+    .brand-artwork { width: 160px; height: 160px; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; }
+    .brand-artwork img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .feed-item { display: grid; grid-template-columns: 64px 1fr; gap: 12px; padding: 12px; border: 1px solid #e2e8f0; border-radius: 12px; align-items: center; background: #fff; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05); }
     .feed-cover { width: 64px; height: 64px; border-radius: 10px; overflow: hidden; background: linear-gradient(135deg, #c7d2fe, #e0f2fe); display: flex; align-items: center; justify-content: center; color: #0f172a; font-weight: 700; font-size: 18px; border: 1px solid #e2e8f0; }
     .feed-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -189,7 +191,11 @@ async function homePage(request: Request): Promise<Response> {
 </head>
 <body>
   <h1>Podible</h1>
-  ${brandImageExists ? `<p><img src="${origin}/podible.png${keySuffix}" alt="Podcast artwork" style="max-width: 160px; border-radius: 12px; border: 1px solid #e2e8f0;" /></p>` : ""}
+  ${
+    brandImageExists
+      ? `<p><span class="brand-artwork"><img src="${origin}/podible.png${keySuffix}" alt="Podcast artwork" width="160" height="160" /></span></p>`
+      : ""
+  }
   <p>Transcode progress and library status.</p>
   <div class="card">
     <div class="stat"><span class="label">Total books</span><span class="value">${books.length}</span></div>
@@ -272,7 +278,7 @@ async function homePage(request: Request): Promise<Response> {
         const { description } = buildItemNotes(book);
         const desc = truncate(description || `${book.title} by ${book.author}`, 220);
         return `<div class="feed-item">
-      <div class="feed-cover">${coverUrl ? `<img src="${coverUrl}" alt="${book.title} cover" />` : initials}</div>
+      <div class="feed-cover">${coverUrl ? `<img src="${coverUrl}" alt="${book.title} cover" width="64" height="64" />` : initials}</div>
       <div>
         <p class="feed-title">${escapeXml(book.title)} <span style="color:#94a3b8;">— ${escapeXml(book.author)}</span></p>
         <p class="feed-desc">${escapeXml(desc)}</p>
