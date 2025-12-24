@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { dataDir, ensureDataDir, transcodeStatusPath } from "../config";
 import { slugify } from "../utils/strings";
-import { JobChannel, TranscodeJob, TranscodeState, TranscodeStatus } from "../types";
+import { JobChannel, PendingSingleMeta, TranscodeJob, TranscodeState, TranscodeStatus } from "../types";
 
 function statusKey(source: string): string {
   return source;
@@ -47,13 +47,14 @@ async function loadTranscodeStatus() {
         if (!entry || typeof entry !== "object") return;
         if (typeof entry.source !== "string" || typeof entry.target !== "string") return;
         if (typeof entry.mtimeMs !== "number" || typeof entry.state !== "string") return;
+        const revivedMeta = revivePendingMeta(entry.meta);
         const record: TranscodeStatus = {
           source: entry.source,
           target: entry.target,
           mtimeMs: entry.mtimeMs,
           state: entry.state as TranscodeState,
           error: typeof entry.error === "string" ? entry.error : undefined,
-          meta: entry.meta && typeof entry.meta === "object" ? (entry.meta as TranscodeStatus["meta"]) : undefined,
+          meta: revivedMeta,
         };
         transcodeStatus.set(statusKey(record.source), record);
       });
@@ -68,6 +69,16 @@ async function loadTranscodeStatus() {
 async function saveTranscodeStatus() {
   await ensureDataDir();
   await fs.writeFile(transcodeStatusPath, JSON.stringify(Array.from(transcodeStatus.values()), null, 2), "utf8");
+}
+
+function revivePendingMeta(meta: unknown): PendingSingleMeta | undefined {
+  if (!meta || typeof meta !== "object") return undefined;
+  const publishedAt = (meta as PendingSingleMeta).publishedAt;
+  const revived: PendingSingleMeta = {
+    ...(meta as PendingSingleMeta),
+    publishedAt: publishedAt ? new Date(publishedAt) : undefined,
+  };
+  return revived;
 }
 
 function transcodeOutputPath(source: string, sourceStat: Awaited<ReturnType<typeof fs.stat>>): string {
