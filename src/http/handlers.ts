@@ -171,7 +171,7 @@ async function homePage(request: Request): Promise<Response> {
     code { background: #f8fafc; border: 1px solid #e2e8f0; padding: 2px 6px; border-radius: 6px; }
     .links { list-style: none; padding: 0; margin: 0; }
     .feed-preview { margin-top: 32px; display: flex; flex-direction: column; gap: 12px; }
-    .brand-artwork { width: 160px; height: 160px; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; }
+    .brand-artwork { width: 160px; height: 160px; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; display: inline-block; margin-bottom: 12px; }
     .brand-artwork img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .feed-item { display: grid; grid-template-columns: 64px 1fr; gap: 12px; padding: 12px; border: 1px solid #e2e8f0; border-radius: 12px; align-items: center; background: #fff; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05); }
     .feed-cover { width: 64px; height: 64px; border-radius: 10px; overflow: hidden; background: linear-gradient(135deg, #c7d2fe, #e0f2fe); display: flex; align-items: center; justify-content: center; color: #0f172a; font-weight: 700; font-size: 18px; border: 1px solid #e2e8f0; }
@@ -193,7 +193,7 @@ async function homePage(request: Request): Promise<Response> {
   <h1>Podible</h1>
   ${
     brandImageExists
-      ? `<p><span class="brand-artwork"><img src="${origin}/podible.png${keySuffix}" alt="Podcast artwork" width="160" height="160" /></span></p>`
+      ? `<span class="brand-artwork"><img src="${origin}/podible.png${keySuffix}" alt="Podcast artwork" width="160" height="160" /></span>`
       : ""
   }
   <p>Transcode progress and library status.</p>
