@@ -10,5 +10,5 @@ permissions:
 
 jobs:
   docker:
-    uses: mmgoodnow/cd/.github/workflows/docker.yml@main
+    uses: mmgoodnow/cd/.github/workflows/docker-amd64.yml@main
     secrets: inherit
