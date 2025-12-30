@@ -60,7 +60,7 @@ function rssFeed(books: Book[], origin: string, keySuffix = ""): { body: string;
         ? `${origin}/covers/${firstCover.id}.jpg${keySuffix}`
         : "");
   const latestMtime = books
-    .map((b) => b.publishedAt?.getTime() ?? 0)
+    .map((b) => (b.addedAt ?? b.publishedAt)?.getTime() ?? 0)
     .filter((t) => t > 0);
   const lastModifiedMs = latestMtime.length > 0 ? Math.max(...latestMtime) : Date.now();
   const lastModified = new Date(lastModifiedMs);
@@ -81,7 +81,7 @@ function rssFeed(books: Book[], origin: string, keySuffix = ""): { body: string;
       const enclosureLength = book.totalSize + tagLength;
       const durationSeconds = book.durationSeconds ?? 0;
       const duration = formatDuration(durationSeconds);
-      const itemPubDate = (book.publishedAt ?? lastModified).toUTCString();
+      const itemPubDate = (book.addedAt ?? book.publishedAt ?? lastModified).toUTCString();
       const fallbackDescription = `${book.title} by ${book.author}`;
       const hasChapters =
         streamable && (book.kind === "multi" || (book.chapters && book.chapters.length > 0));

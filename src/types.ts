@@ -30,6 +30,7 @@ export type Book = {
   epubPath?: string;
   durationSeconds?: number;
   publishedAt?: Date;
+  addedAt?: Date;
   description?: string;
   descriptionHtml?: string;
   language?: string;
@@ -60,6 +61,7 @@ export type PendingSingleMeta = {
   epubPath?: string;
   durationSeconds?: number;
   publishedAt?: Date;
+  addedAt?: Date;
   description?: string;
   descriptionHtml?: string;
   language?: string;

@@ -52,7 +52,7 @@ type JsonFeed = {
 
 function jsonFeed(books: Book[], origin: string, keySuffix = ""): { body: string; lastModified: Date } {
   const latestMtime = books
-    .map((b) => b.publishedAt?.getTime() ?? 0)
+    .map((b) => (b.addedAt ?? b.publishedAt)?.getTime() ?? 0)
     .filter((t) => t > 0);
   const lastModifiedMs = latestMtime.length > 0 ? Math.max(...latestMtime) : Date.now();
   const lastModified = new Date(lastModifiedMs);
@@ -77,6 +77,7 @@ function jsonFeed(books: Book[], origin: string, keySuffix = ""): { body: string
       (book.kind === "multi" && Boolean(book.files && book.files.length > 0));
     const coverUrl = book.coverPath ? `${origin}/covers/${book.id}.jpg${keySuffix}` : undefined;
     const epubUrl = book.epubPath ? `${origin}/epubs/${book.id}.epub${keySuffix}` : undefined;
+    const feedDate = book.addedAt ?? book.publishedAt;
     const { description, descriptionHtml } = buildItemNotes(book);
     const authors: JsonFeedAuthor[] = book.author ? [{ name: book.author }] : [];
     const attachments: JsonFeedAttachment[] = [
@@ -100,8 +101,8 @@ function jsonFeed(books: Book[], origin: string, keySuffix = ""): { body: string
       title: book.title,
       content_text: description || `${book.title} by ${book.author}`,
       ...(descriptionHtml ? { content_html: descriptionHtml } : {}),
-      ...(book.publishedAt ? { date_published: book.publishedAt.toISOString() } : {}),
-      ...(book.publishedAt ? { date_modified: book.publishedAt.toISOString() } : {}),
+      ...(feedDate ? { date_published: feedDate.toISOString() } : {}),
+      ...(feedDate ? { date_modified: feedDate.toISOString() } : {}),
       ...(authors.length ? { authors } : {}),
       ...(coverUrl ? { image: coverUrl } : {}),
       ...(attachments.length ? { attachments } : {}),

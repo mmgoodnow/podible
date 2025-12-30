@@ -39,9 +39,11 @@ async function safeReadDir(dir: string) {
 function reviveBook(book: any): Book | null {
   if (!book || typeof book !== "object") return null;
   if (typeof book.id !== "string" || typeof book.title !== "string" || typeof book.author !== "string") return null;
+  const publishedAt = book.publishedAt ? new Date(book.publishedAt) : undefined;
+  const { addedAt: _addedAt, ...rest } = book;
   const revived: Book = {
-    ...book,
-    publishedAt: book.publishedAt ? new Date(book.publishedAt) : undefined,
+    ...rest,
+    publishedAt,
   };
   return revived;
 }
@@ -66,7 +68,12 @@ async function loadLibraryIndex() {
 
 async function saveLibraryIndex() {
   await ensureDataDir();
-  await fs.writeFile(libraryIndexPath, JSON.stringify(Array.from(readyBooks.values()), null, 2), "utf8");
+  const payload = Array.from(readyBooks.values()).map((book) => {
+    if (!book.addedAt) return book;
+    const { addedAt, ...rest } = book;
+    return rest;
+  });
+  await fs.writeFile(libraryIndexPath, JSON.stringify(payload, null, 2), "utf8");
 }
 
 function bookFromMeta(meta: PendingSingleMeta, outputPath: string, outputStat: Awaited<ReturnType<typeof fs.stat>>): Book {
@@ -84,6 +91,7 @@ function bookFromMeta(meta: PendingSingleMeta, outputPath: string, outputStat: A
     epubPath: meta.epubPath,
     durationSeconds,
     publishedAt: meta.publishedAt,
+    addedAt: meta.addedAt,
     description: meta.description,
     descriptionHtml: meta.descriptionHtml,
     language: meta.language,
@@ -91,6 +99,15 @@ function bookFromMeta(meta: PendingSingleMeta, outputPath: string, outputStat: A
     identifiers: meta.identifiers,
     chapters: meta.chapters,
   };
+}
+
+function addedAtFromStat(stat: Awaited<ReturnType<typeof fs.stat>> | null): Date {
+  if (!stat) return new Date();
+  const birth = stat.birthtimeMs;
+  if (Number.isFinite(birth) && birth > 0) return new Date(birth);
+  const mtime = stat.mtimeMs;
+  if (Number.isFinite(mtime) && mtime > 0) return new Date(mtime);
+  return new Date();
 }
 
 async function buildBook(author: string, bookDir: string, title: string): Promise<BookBuildResult | null> {
@@ -103,6 +120,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
   const epubs = files.filter((f) => f.toLowerCase().endsWith(".epub")).sort();
   const pngs = files.filter((f) => f.toLowerCase().endsWith(".png")).sort();
   const jpgs = files.filter((f) => f.toLowerCase().endsWith(".jpg") || f.toLowerCase().endsWith(".jpeg")).sort();
+  const bookDirStat = await fs.stat(bookDir).catch(() => null);
   const opf = await readOpfMetadata(bookDir, files);
   const audioMetaSource = m4bs[0] ? path.join(bookDir, m4bs[0]) : mp3s[0] ? path.join(bookDir, mp3s[0]) : null;
   const audioMetaStat = audioMetaSource ? await fs.stat(audioMetaSource).catch(() => null) : null;
@@ -114,11 +132,13 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
   const epubPath = epubs[0] ? path.join(bookDir, epubs[0]) : undefined;
   const displayTitle = opf?.title ?? title;
   const displayAuthor = audioMeta?.artist ?? audioMeta?.albumArtist ?? opf?.author ?? author;
+  const id = bookId(author, title);
   const description = preferLonger(opf?.description, audioMeta?.description);
   const descriptionHtml = preferLonger(opf?.descriptionHtml, audioMeta?.descriptionHtml);
   const language = audioMeta?.language ?? opf?.language;
   const isbn = opf?.isbn;
   const identifiers = opf?.identifiers;
+  const addedAt = addedAtFromStat(bookDirStat ?? audioMetaStat);
 
   if (m4bs.length > 0) {
     const filePath = path.join(bookDir, m4bs[0]);
@@ -140,13 +160,14 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
     }
     const target = transcodeOutputPath(filePath, stat);
     const meta: PendingSingleMeta = {
-      id: bookId(author, title),
+      id,
       title: displayTitle,
       author: displayAuthor,
       coverPath,
       epubPath,
       durationSeconds: getDurationSeconds(filePath, stat.mtimeMs),
       publishedAt: opf?.publishedAt ?? audioMeta?.date ?? stat.mtime,
+      addedAt,
       description,
       descriptionHtml,
       language,
@@ -178,6 +199,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
           epubPath,
           durationSeconds,
           publishedAt: meta.publishedAt,
+          addedAt: meta.addedAt,
           description: meta.description,
           descriptionHtml: meta.descriptionHtml,
           language: meta.language,
@@ -270,7 +292,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
     if (segments.length === 0) return null;
     const mime = mimeFromExt(path.extname(mp3s[0]));
     const result: Book = {
-      id: bookId(author, title),
+      id,
       title: displayTitle,
       author: displayAuthor,
       kind: "multi",
@@ -281,6 +303,7 @@ async function buildBook(author: string, bookDir: string, title: string): Promis
       epubPath,
       durationSeconds,
       publishedAt,
+      addedAt,
       description,
       descriptionHtml,
       language,
@@ -359,8 +382,8 @@ async function findBookById(id: string): Promise<Book | null> {
 function readyBooksSorted(): Book[] {
   const books = Array.from(readyBooks.values());
   books.sort((a, b) => {
-    const at = a.publishedAt ? a.publishedAt.getTime() : 0;
-    const bt = b.publishedAt ? b.publishedAt.getTime() : 0;
+    const at = (a.addedAt ?? a.publishedAt)?.getTime() ?? 0;
+    const bt = (b.addedAt ?? b.publishedAt)?.getTime() ?? 0;
     return bt - at;
   });
   return books;
@@ -384,6 +407,7 @@ function feedBooksSorted(): Book[] {
       epubPath: meta.epubPath,
       durationSeconds: meta.durationSeconds,
       publishedAt: meta.publishedAt,
+      addedAt: meta.addedAt,
       description: meta.description,
       descriptionHtml: meta.descriptionHtml,
       language: meta.language,
@@ -394,8 +418,8 @@ function feedBooksSorted(): Book[] {
   });
   const books = Array.from(combined.values());
   books.sort((a, b) => {
-    const at = a.publishedAt ? a.publishedAt.getTime() : 0;
-    const bt = b.publishedAt ? b.publishedAt.getTime() : 0;
+    const at = (a.addedAt ?? a.publishedAt)?.getTime() ?? 0;
+    const bt = (b.addedAt ?? b.publishedAt)?.getTime() ?? 0;
     return bt - at;
   });
   return books;

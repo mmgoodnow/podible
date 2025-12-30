@@ -68,14 +68,20 @@ async function loadTranscodeStatus() {
 
 async function saveTranscodeStatus() {
   await ensureDataDir();
-  await fs.writeFile(transcodeStatusPath, JSON.stringify(Array.from(transcodeStatus.values()), null, 2), "utf8");
+  const payload = Array.from(transcodeStatus.values()).map((status) => {
+    if (!status.meta || !status.meta.addedAt) return status;
+    const { addedAt, ...restMeta } = status.meta;
+    return { ...status, meta: restMeta };
+  });
+  await fs.writeFile(transcodeStatusPath, JSON.stringify(payload, null, 2), "utf8");
 }
 
 function revivePendingMeta(meta: unknown): PendingSingleMeta | undefined {
   if (!meta || typeof meta !== "object") return undefined;
   const publishedAt = (meta as PendingSingleMeta).publishedAt;
+  const { addedAt: _addedAt, ...rest } = meta as PendingSingleMeta;
   const revived: PendingSingleMeta = {
-    ...(meta as PendingSingleMeta),
+    ...rest,
     publishedAt: publishedAt ? new Date(publishedAt) : undefined,
   };
   return revived;
