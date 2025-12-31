@@ -447,13 +447,56 @@ async function handleFeedDebug(request: Request, scanRoots: string[]): Promise<R
 
 async function handleStream(request: Request, bookIdValue: string): Promise<Response> {
   const book = await findBookById(bookIdValue);
-  if (!book) return new Response("Not found", { status: 404 });
   const rangeHeader = request.headers.get("range");
-  const mime = bookMime(book);
+  const mime = book ? bookMime(book) : "audio/mpeg";
   const headers: Record<string, string> = {
     "Accept-Ranges": "bytes",
     "Content-Type": mime,
   };
+
+  if (!book) {
+    const inProgress = Array.from(transcodeStatus.values()).find((status) => status.meta?.id === bookIdValue);
+    if (!inProgress) return new Response("Not found", { status: 404 });
+    if (rangeHeader) return new Response("Range Not Satisfiable", { status: 416, headers });
+    const target = inProgress.target;
+    if (!target || inProgress.state !== "working") return new Response("Not ready", { status: 503 });
+    const fileHandle = await fs.open(target, "r").catch(() => null);
+    if (!fileHandle) return new Response("Not ready", { status: 503 });
+    delete headers["Content-Length"]; // enforce chunked transfer
+    headers["Transfer-Encoding"] = "chunked";
+    headers["Accept-Ranges"] = "none";
+    headers["Cache-Control"] = "no-store";
+    const body = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        let position = 0;
+        const chunkSize = 64 * 1024;
+        const buffer = Buffer.allocUnsafe(chunkSize);
+        try {
+          for (;;) {
+            const stat = await fs.stat(target).catch(() => null);
+            const size = stat?.size ?? 0;
+            if (position < size) {
+              const length = Math.min(chunkSize, size - position);
+              const { bytesRead } = await fileHandle.read(buffer, 0, length, position);
+              if (bytesRead > 0) {
+                position += bytesRead;
+                controller.enqueue(buffer.subarray(0, bytesRead));
+                continue;
+              }
+            }
+            if (inProgress.state !== "working") break;
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
+        } catch (err) {
+          controller.error(err);
+        } finally {
+          await fileHandle.close().catch(() => {});
+          controller.close();
+        }
+      },
+    });
+    return new Response(body, { status: 200, headers });
+  }
 
   if (book.kind === "single" && book.primaryFile) {
     const size = book.totalSize;
