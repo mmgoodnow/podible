@@ -373,6 +373,54 @@ async function handleFeedDebug(request: Request, scanRoots: string[]): Promise<R
   });
 }
 
+function handleCometTest(): Response {
+  let counter = 0;
+  const encoder = new TextEncoder();
+  let interval: ReturnType<typeof setInterval> | null = null;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const header = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Comet Test</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 48px; }
+    .label { color: #64748b; font-size: 14px; }
+    .counter { font-size: 32px; font-weight: 700; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="label">Comet test counter (updates every second)</div>
+  <div id="counter" class="counter">0</div>
+  <script>
+    function updateCounter(value) {
+      const el = document.getElementById("counter");
+      if (el) el.textContent = String(value);
+    }
+  </script>
+`;
+      controller.enqueue(encoder.encode(header));
+      interval = setInterval(() => {
+        counter += 1;
+        const chunk = `<script>updateCounter(${counter})</script>\n`;
+        controller.enqueue(encoder.encode(chunk));
+      }, 1000);
+    },
+    cancel() {
+      if (interval) clearInterval(interval);
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
+}
+
 async function handleStream(request: Request, bookIdValue: string): Promise<Response> {
   const book = await findBookById(bookIdValue);
   if (!book) return new Response("Not found", { status: 404 });
@@ -523,6 +571,7 @@ export {
   handleChapters,
   handleChaptersDebug,
   handleCover,
+  handleCometTest,
   handleEpub,
   handleFeed,
   handleFeedDebug,
