@@ -218,6 +218,11 @@ async function homePage(request: Request): Promise<Response> {
 <head>
   <meta charset="utf-8" />
   <title>Podible</title>
+  ${
+    brandImageExists
+      ? `<link rel="icon" href="${origin}/podible.png${keySuffix}" type="image/png" />`
+      : ""
+  }
   <style>
     :root {
       color-scheme: light dark;
