@@ -151,6 +151,8 @@ async function homePage(request: Request): Promise<Response> {
         ? Math.min(100, Math.round(((done + activeProgress.ratio) / totalTranscodes) * 100))
         : percent;
   const durationMs = Date.now() - started;
+  const uptimeSeconds = Math.floor(process.uptime());
+  const uptimeText = formatDurationAllowZero(uptimeSeconds);
   const sample = books[0];
   const sampleExt = sample ? bookExtension(sample) : undefined;
   const multiWithChapters = books.find((b) => b.kind === "multi");
@@ -258,6 +260,7 @@ async function homePage(request: Request): Promise<Response> {
           : "None"
     }</span></div>
     <div class="stat"><span class="label">Queue</span><span class="value">${queuedSources.size}</span></div>
+    <div class="stat"><span class="label">Uptime</span><span class="value">${uptimeText}</span></div>
     <div class="progress"><div class="bar"></div></div>
   </div>
   ${
