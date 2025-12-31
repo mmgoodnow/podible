@@ -107,14 +107,16 @@ function buildStatusSnapshot() {
     return { ratio, elapsed: clampedElapsed, durationMs: active.durationMs, speed: active.speed };
   })();
   const totalTranscodes = done + pending + working + failedTranscodesOnly;
-  const percent = totalTranscodes === 0 ? 100 : Math.min(100, Math.round((done / totalTranscodes) * 100));
+  const percent = totalTranscodes === 0 ? 100 : Math.min(100, (done / totalTranscodes) * 100);
   const barWidth =
     totalTranscodes === 0
       ? 100
       : activeProgress
-        ? Math.min(100, Math.round(((done + activeProgress.ratio) / totalTranscodes) * 100))
+        ? Math.min(100, ((done + activeProgress.ratio) / totalTranscodes) * 100)
         : percent;
-  const activeRatio = activeProgress ? Math.round(activeProgress.ratio * 100) : 0;
+  const activeRatio = activeProgress ? activeProgress.ratio * 100 : 0;
+  const barWidthRounded = Number(barWidth.toFixed(2));
+  const activeRatioRounded = Number(activeRatio.toFixed(2));
   const uptimeText = formatDurationAllowZero(Math.floor(process.uptime()));
   return {
     done,
@@ -125,8 +127,8 @@ function buildStatusSnapshot() {
     failedAll,
     totalTranscodes,
     queueSize: queuedSources.size,
-    barWidth,
-    activeRatio,
+    barWidth: barWidthRounded,
+    activeRatio: activeRatioRounded,
     activeProgress,
     uptimeText,
   };
