@@ -80,6 +80,58 @@ async function handleJsonFeed(request: Request, scanRoots: string[]): Promise<Re
   });
 }
 
+function isProbeFailure(status: TranscodeStatus): boolean {
+  return Boolean(
+    status.state === "failed" &&
+      status.error &&
+      (status.error.toLowerCase().includes("ffprobe") ||
+        status.error.toLowerCase().includes("duration") ||
+        status.error.toLowerCase().includes("zero-size"))
+  );
+}
+
+function buildStatusSnapshot() {
+  const statusValues = Array.from(transcodeStatus.values());
+  const done = statusValues.filter((s) => s.state === "done").length;
+  const pending = statusValues.filter((s) => s.state === "pending").length;
+  const working = statusValues.filter((s) => s.state === "working").length;
+  const failedProbes = statusValues.filter(isProbeFailure).length;
+  const failedTranscodesOnly = statusValues.filter((s) => s.state === "failed" && !isProbeFailure(s)).length;
+  const failedAll = statusValues.filter((s) => s.state === "failed").length;
+  const active = statusValues.find((s) => s.state === "working");
+  const activeProgress = (() => {
+    if (!active || !active.durationMs) return null;
+    const elapsed = active.outTimeMs ?? 0;
+    const clampedElapsed = Math.max(0, Math.min(elapsed, active.durationMs));
+    const ratio = Math.min(1, clampedElapsed / active.durationMs);
+    return { ratio, elapsed: clampedElapsed, durationMs: active.durationMs, speed: active.speed };
+  })();
+  const totalTranscodes = done + pending + working + failedTranscodesOnly;
+  const percent = totalTranscodes === 0 ? 100 : Math.min(100, Math.round((done / totalTranscodes) * 100));
+  const barWidth =
+    totalTranscodes === 0
+      ? 100
+      : activeProgress
+        ? Math.min(100, Math.round(((done + activeProgress.ratio) / totalTranscodes) * 100))
+        : percent;
+  const activeRatio = activeProgress ? Math.round(activeProgress.ratio * 100) : 0;
+  const uptimeText = formatDurationAllowZero(Math.floor(process.uptime()));
+  return {
+    done,
+    pending,
+    working,
+    failedProbes,
+    failedTranscodesOnly,
+    failedAll,
+    totalTranscodes,
+    queueSize: queuedSources.size,
+    barWidth,
+    activeRatio,
+    activeProgress,
+    uptimeText,
+  };
+}
+
 async function handleJsonFeedDebug(request: Request, scanRoots: string[]): Promise<Response> {
   if (scanRoots.length === 0) {
     return new Response("No roots configured. Pass library directories via argv.", { status: 500 });
@@ -106,6 +158,27 @@ async function handleJsonFeedDebug(request: Request, scanRoots: string[]): Promi
   });
 }
 
+function handleStatus(): Response {
+  const snapshot = buildStatusSnapshot();
+  return new Response(
+    JSON.stringify(
+      {
+        barWidth: snapshot.barWidth,
+        activeRatio: snapshot.activeRatio,
+        uptimeText: snapshot.uptimeText,
+      },
+      null,
+      2
+    ),
+    {
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+      },
+    }
+  );
+}
+
 async function homePage(request: Request): Promise<Response> {
   const started = Date.now();
   console.log("[home] start /");
@@ -118,48 +191,16 @@ async function homePage(request: Request): Promise<Response> {
   const singles = books.filter((b) => b.kind === "single").length;
   const multis = books.filter((b) => b.kind === "multi").length;
   const covers = books.filter((b) => Boolean(b.coverPath)).length;
-  const statusValues = Array.from(transcodeStatus.values());
-  const done = statusValues.filter((s) => s.state === "done").length;
-  const pending = statusValues.filter((s) => s.state === "pending").length;
-  const working = statusValues.filter((s) => s.state === "working").length;
+  const snapshot = buildStatusSnapshot();
   const probeFailures = getProbeFailures().sort((a, b) => b.mtimeMs - a.mtimeMs);
-  const isProbeFailure = (s: TranscodeStatus) =>
-    Boolean(
-      s.state === "failed" &&
-        s.error &&
-        (s.error.toLowerCase().includes("ffprobe") ||
-          s.error.toLowerCase().includes("duration") ||
-          s.error.toLowerCase().includes("zero-size"))
-    );
-  const failedProbes = statusValues.filter(isProbeFailure).length;
-  const failedTranscodesOnly = statusValues.filter((s) => s.state === "failed" && !isProbeFailure(s)).length;
-  const failedAll = statusValues.filter((s) => s.state === "failed").length;
-  const active = statusValues.find((s) => s.state === "working");
-  const activeProgress = (() => {
-    if (!active || !active.durationMs) return null;
-    const elapsed = active.outTimeMs ?? 0;
-    const clampedElapsed = Math.max(0, Math.min(elapsed, active.durationMs));
-    const ratio = Math.min(1, clampedElapsed / active.durationMs);
-    return { ratio, elapsed: clampedElapsed, durationMs: active.durationMs, speed: active.speed };
-  })();
-  const totalTranscodes = done + pending + working + failedTranscodesOnly;
-  const percent = totalTranscodes === 0 ? 100 : Math.min(100, Math.round((done / totalTranscodes) * 100));
-  const barWidth =
-    totalTranscodes === 0
-      ? 100
-      : activeProgress
-        ? Math.min(100, Math.round(((done + activeProgress.ratio) / totalTranscodes) * 100))
-        : percent;
   const durationMs = Date.now() - started;
-  const uptimeSeconds = Math.floor(process.uptime());
-  const uptimeText = formatDurationAllowZero(uptimeSeconds);
   const sample = books[0];
   const sampleExt = sample ? bookExtension(sample) : undefined;
   const multiWithChapters = books.find((b) => b.kind === "multi");
   const coverBook = books.find((b) => b.coverPath);
   const previewItems = books.slice(0, Math.min(books.length, 12));
   console.log(
-    `[home] done books=${books.length} singles=${singles} transcodes done=${done} pending=${pending} working=${working} failed=${failedAll} queue=${queuedSources.size} in ${durationMs}ms`
+    `[home] done books=${books.length} singles=${singles} transcodes done=${snapshot.done} pending=${snapshot.pending} working=${snapshot.working} failed=${snapshot.failedAll} queue=${snapshot.queueSize} in ${durationMs}ms`
   );
   const body = `<!doctype html>
 <html>
@@ -212,10 +253,8 @@ async function homePage(request: Request): Promise<Response> {
     .value { font-weight: 600; }
     .progress { height: 10px; background: var(--border); border-radius: 999px; overflow: hidden; margin-top: 8px; }
     .progress.secondary { height: 6px; margin-top: 6px; }
-    .bar { height: 100%; background: var(--bar); width: ${barWidth}%; transition: width 0.3s ease; }
-    .bar.secondary { background: linear-gradient(90deg, #34d399, #22c55e); width: ${
-      activeProgress ? Math.round(activeProgress.ratio * 100) : 0
-    }%; }
+    .bar { height: 100%; background: var(--bar); transition: width 0.3s ease; }
+    .bar.secondary { background: linear-gradient(90deg, #34d399, #22c55e); }
     code { background: var(--code-bg); border: 1px solid var(--border); padding: 2px 6px; border-radius: 6px; }
     .links { list-style: none; padding: 0; margin: 0; }
     .feed-preview { margin-top: 32px; display: flex; flex-direction: column; gap: 12px; }
@@ -251,22 +290,22 @@ async function homePage(request: Request): Promise<Response> {
     <div class="stat"><span class="label">Multi mp3 books</span><span class="value">${multis}</span></div>
     <div class="stat"><span class="label">Authors</span><span class="value">${authors.size}</span></div>
     <div class="stat"><span class="label">Covers</span><span class="value">${covers}</span></div>
-    <div class="stat"><span class="label">Failed transcodes</span><span class="value">${failedTranscodesOnly}</span></div>
-    <div class="stat"><span class="label">Failed probes</span><span class="value">${failedProbes}</span></div>
-    <div class="stat"><span class="label">Transcode status</span><span class="value">done ${done} / ${totalTranscodes} (pending ${pending}, working ${working}, failed ${failedTranscodesOnly})</span></div>
+    <div class="stat"><span class="label">Failed transcodes</span><span class="value">${snapshot.failedTranscodesOnly}</span></div>
+    <div class="stat"><span class="label">Failed probes</span><span class="value">${snapshot.failedProbes}</span></div>
+    <div class="stat"><span class="label">Transcode status</span><span class="value">done ${snapshot.done} / ${snapshot.totalTranscodes} (pending ${snapshot.pending}, working ${snapshot.working}, failed ${snapshot.failedTranscodesOnly})</span></div>
     <div class="stat"><span class="label">Active job</span><span class="value">${
-      activeProgress
-        ? `${formatDurationAllowZero(activeProgress.elapsed / 1000)} / ${formatDurationAllowZero(activeProgress.durationMs / 1000)} (${Math.round(activeProgress.ratio * 100)}%)${
-            activeProgress.speed ? ` @ ${activeProgress.speed.toFixed(1)}x` : ""
+      snapshot.activeProgress
+        ? `${formatDurationAllowZero(snapshot.activeProgress.elapsed / 1000)} / ${formatDurationAllowZero(snapshot.activeProgress.durationMs / 1000)} (${Math.round(snapshot.activeProgress.ratio * 100)}%)${
+            snapshot.activeProgress.speed ? ` @ ${snapshot.activeProgress.speed.toFixed(1)}x` : ""
           }`
-        : active
+        : snapshot.working > 0
           ? "working (no progress yet)"
           : "None"
     }</span></div>
-    <div class="stat"><span class="label">Queue</span><span class="value">${queuedSources.size}</span></div>
-    <div class="stat"><span class="label">Uptime</span><span class="value">${uptimeText}</span></div>
-    <div class="progress"><div class="bar"></div></div>
-    <div class="progress secondary"><div class="bar secondary"></div></div>
+    <div class="stat"><span class="label">Queue</span><span class="value">${snapshot.queueSize}</span></div>
+    <div class="stat"><span class="label">Uptime</span><span class="value" id="uptime-value">${snapshot.uptimeText}</span></div>
+    <div class="progress"><div class="bar" id="overall-bar" style="width: ${snapshot.barWidth}%"></div></div>
+    <div class="progress secondary"><div class="bar secondary" id="active-bar" style="width: ${snapshot.activeRatio}%"></div></div>
   </div>
   ${
     probeFailures.length > 0
@@ -289,6 +328,26 @@ async function homePage(request: Request): Promise<Response> {
     <button class="restart" type="submit">Restart server</button>
   </form>
   <p style="margin-top:16px;">Scan time: ${durationMs} ms</p>
+  <script>
+    const statusUrl = "${origin}/status.json${keySuffix}";
+    async function refreshStatus() {
+      try {
+        const res = await fetch(statusUrl, { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        const overall = document.getElementById("overall-bar");
+        if (overall && typeof data.barWidth === "number") overall.style.width = data.barWidth + "%";
+        const active = document.getElementById("active-bar");
+        if (active && typeof data.activeRatio === "number") active.style.width = data.activeRatio + "%";
+        const uptime = document.getElementById("uptime-value");
+        if (uptime && typeof data.uptimeText === "string") uptime.textContent = data.uptimeText;
+      } catch {
+        // ignore polling errors
+      }
+    }
+    refreshStatus();
+    setInterval(refreshStatus, 1000);
+  </script>
   <p>Links:</p>
   <ul class="links">
     <li><a href="${origin}/feed.xml${keySuffix}">Feed</a></li>
@@ -369,54 +428,6 @@ async function handleFeedDebug(request: Request, scanRoots: string[]): Promise<R
       "Content-Disposition": "inline",
       "Last-Modified": lastModified.toUTCString(),
       ETag: etag,
-    },
-  });
-}
-
-function handleCometTest(): Response {
-  let counter = 0;
-  const encoder = new TextEncoder();
-  let interval: ReturnType<typeof setInterval> | null = null;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      const header = `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Comet Test</title>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 48px; }
-    .label { color: #64748b; font-size: 14px; }
-    .counter { font-size: 32px; font-weight: 700; margin-top: 8px; }
-  </style>
-</head>
-<body>
-  <div class="label">Comet test counter (updates every second)</div>
-  <div id="counter" class="counter">0</div>
-  <script>
-    function updateCounter(value) {
-      const el = document.getElementById("counter");
-      if (el) el.textContent = String(value);
-    }
-  </script>
-`;
-      controller.enqueue(encoder.encode(header));
-      interval = setInterval(() => {
-        counter += 1;
-        const chunk = `<script>updateCounter(${counter})</script>\n`;
-        controller.enqueue(encoder.encode(chunk));
-      }, 1000);
-    },
-    cancel() {
-      if (interval) clearInterval(interval);
-    },
-  });
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
     },
   });
 }
@@ -571,12 +582,12 @@ export {
   handleChapters,
   handleChaptersDebug,
   handleCover,
-  handleCometTest,
   handleEpub,
   handleFeed,
   handleFeedDebug,
   handleJsonFeed,
   handleJsonFeedDebug,
+  handleStatus,
   handleStream,
   homePage,
   requestOrigin,

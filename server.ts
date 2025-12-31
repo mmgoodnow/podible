@@ -16,13 +16,13 @@ import {
 import {
   handleChapters,
   handleChaptersDebug,
-  handleCometTest,
   handleCover,
   handleEpub,
   handleFeed,
   handleFeedDebug,
   handleJsonFeed,
   handleJsonFeedDebug,
+  handleStatus,
   handleStream,
   homePage,
 } from "./src/http/handlers";
@@ -105,7 +105,7 @@ server = Bun.serve({
     const url = new URL(request.url);
     const pathname = url.pathname;
     if (pathname === "/") return homePage(request);
-    if (pathname === "/comet-test") return handleCometTest();
+    if (pathname === "/status.json") return handleStatus();
     if (pathname === "/feed.xml") return handleFeed(request, scanRoots);
     if (pathname === "/feed-debug.xml") return handleFeedDebug(request, scanRoots);
     if (pathname === "/feed.json") return handleJsonFeed(request, scanRoots);
