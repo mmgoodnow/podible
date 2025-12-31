@@ -1,6 +1,12 @@
+import { statSync } from "node:fs";
 import path from "node:path";
 
 import { AudioSegment, Book, ChapterTiming } from "../types";
+
+type CoverArt = {
+  mime: string;
+  data: Uint8Array;
+};
 
 function concatBytes(chunks: Uint8Array[]): Uint8Array {
   const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
@@ -49,6 +55,19 @@ function textFrame(id: string, text: string): Uint8Array {
   return id3Frame(id, payload);
 }
 
+function apicFrame(cover: CoverArt): Uint8Array {
+  const mimeBytes = encoder.encode(cover.mime);
+  const payload = concatBytes([
+    new Uint8Array([0x03]), // UTF-8
+    mimeBytes,
+    new Uint8Array([0x00]), // MIME terminator
+    new Uint8Array([0x03]), // picture type: front cover
+    new Uint8Array([0x00]), // empty description terminator
+    cover.data,
+  ]);
+  return id3Frame("APIC", payload);
+}
+
 function chapFrame(chapterId: string, title: string, startMs: number, endMs: number): Uint8Array {
   const idBytes = encoder.encode(chapterId);
   const titleFrame = textFrame("TIT2", title);
@@ -81,10 +100,15 @@ function ctocFrame(childIds: string[]): Uint8Array {
   return id3Frame("CTOC", payload);
 }
 
-function buildId3ChaptersTag(timings: ChapterTiming[]): Uint8Array {
-  if (timings.length === 0) return new Uint8Array();
-  const childIds = timings.map((c) => c.id);
-  const frames = [ctocFrame(childIds), ...timings.map((chap) => chapFrame(chap.id, chap.title, chap.startMs, chap.endMs))];
+function buildId3ChaptersTag(timings: ChapterTiming[], cover?: CoverArt): Uint8Array {
+  if (timings.length === 0 && !cover) return new Uint8Array();
+  const frames: Uint8Array[] = [];
+  if (cover) frames.push(apicFrame(cover));
+  if (timings.length > 0) {
+    const childIds = timings.map((c) => c.id);
+    frames.push(ctocFrame(childIds));
+    frames.push(...timings.map((chap) => chapFrame(chap.id, chap.title, chap.startMs, chap.endMs)));
+  }
   const framesBytes = concatBytes(frames);
   const header = new Uint8Array(10);
   header.set(encoder.encode("ID3"));
@@ -95,6 +119,25 @@ function buildId3ChaptersTag(timings: ChapterTiming[]): Uint8Array {
   return concatBytes([header, framesBytes]);
 }
 
+function coverMimeFromPath(coverPath: string): string {
+  const ext = path.extname(coverPath).toLowerCase();
+  if (ext === ".png") return "image/png";
+  return "image/jpeg";
+}
+
+function estimateCoverFrameLength(coverPath: string | undefined): number {
+  if (!coverPath) return 0;
+  try {
+    const stat = statSync(coverPath);
+    if (!stat.isFile() || stat.size <= 0) return 0;
+    const mimeLen = encoder.encode(coverMimeFromPath(coverPath)).byteLength;
+    const payloadLen = 1 + mimeLen + 1 + 1 + 1 + stat.size;
+    return 10 + payloadLen;
+  } catch {
+    return 0;
+  }
+}
+
 function estimateId3TagLength(book: Book): number {
   if (book.kind !== "multi" || !book.files) return 0;
   const dummyTimings: ChapterTiming[] = book.files.map((segment: AudioSegment, index) => ({
@@ -103,7 +146,8 @@ function estimateId3TagLength(book: Book): number {
     startMs: 0,
     endMs: 0,
   }));
-  return buildId3ChaptersTag(dummyTimings).byteLength;
+  const base = buildId3ChaptersTag(dummyTimings).byteLength;
+  return base + estimateCoverFrameLength(book.coverPath);
 }
 
 export { buildId3ChaptersTag, estimateId3TagLength };

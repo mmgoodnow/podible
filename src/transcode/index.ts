@@ -97,9 +97,20 @@ function transcodeOutputPath(source: string, sourceStat: Awaited<ReturnType<type
 async function transcodeM4bToMp3(
   source: string,
   target: string,
+  coverPath: string | undefined,
   onProgress: (outTimeMs: number | undefined, speed: number | undefined) => void
 ): Promise<void> {
   await ensureDataDir();
+  let coverCodec: "mjpeg" | "png" | null = null;
+  let coverInput: string | null = null;
+  if (coverPath) {
+    const stat = await fs.stat(coverPath).catch(() => null);
+    if (stat && stat.isFile() && stat.size > 0) {
+      const ext = path.extname(coverPath).toLowerCase();
+      coverCodec = ext === ".png" ? "png" : "mjpeg";
+      coverInput = coverPath;
+    }
+  }
   const proc = Bun.spawn({
     cmd: [
       "ffmpeg",
@@ -107,15 +118,31 @@ async function transcodeM4bToMp3(
       "-nostdin",
       "-i",
       source,
-      "-vn",
+      ...(coverInput ? ["-i", coverInput] : []),
       "-map_metadata",
       "0",
       "-map_chapters",
       "0",
       "-write_id3v2",
       "1",
-        "-id3v2_version",
-        "3",
+      "-id3v2_version",
+      "3",
+      ...(coverInput
+        ? [
+            "-map",
+            "0:a",
+            "-map",
+            "1:v:0",
+            "-c:v",
+            coverCodec ?? "mjpeg",
+            "-disposition:v:0",
+            "attached_pic",
+            "-metadata:s:v",
+            "title=Album cover",
+            "-metadata:s:v",
+            "comment=Cover (front)",
+          ]
+        : ["-vn"]),
         "-codec:a",
         "libmp3lame",
         "-qscale:a",

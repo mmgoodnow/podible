@@ -1,3 +1,4 @@
+import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import { brandImageExists } from "../config";
@@ -13,6 +14,12 @@ import { transcodeStatus, queuedSources } from "../transcode";
 import { TranscodeStatus } from "../types";
 import { escapeXml, truncate } from "../utils/strings";
 import { formatDurationAllowZero } from "../utils/time";
+
+function coverMimeFromPath(coverPath: string): string {
+  const ext = path.extname(coverPath).toLowerCase();
+  if (ext === ".png") return "image/png";
+  return "image/jpeg";
+}
 
 function requestOrigin(request: Request): string {
   const url = new URL(request.url);
@@ -349,7 +356,14 @@ async function handleStream(request: Request, bookIdValue: string): Promise<Resp
   const files = book.files ?? [];
   const timings = await buildChapterTimings(book);
   if (!timings) return new Response("Not found", { status: 404 });
-  const tag = buildId3ChaptersTag(timings);
+  let coverArt: { mime: string; data: Uint8Array } | undefined;
+  if (book.coverPath) {
+    const bytes = await fs.readFile(book.coverPath).catch(() => null);
+    if (bytes && bytes.length > 0) {
+      coverArt = { mime: coverMimeFromPath(book.coverPath), data: bytes };
+    }
+  }
+  const tag = buildId3ChaptersTag(timings, coverArt);
   const tagLength = tag.byteLength;
   const audioSize = book.totalSize;
   const totalSize = tagLength + audioSize;

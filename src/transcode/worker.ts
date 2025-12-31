@@ -31,7 +31,7 @@ async function workerLoop() {
       let lastProgressPersist = 0;
       let lastProgressLogMs = 0;
       let lastOutReported = 0;
-      await transcodeM4bToMp3(job.source, job.target, (outTimeMs, speed) => {
+      await transcodeM4bToMp3(job.source, job.target, job.meta.coverPath, (outTimeMs, speed) => {
         status.outTimeMs = outTimeMs;
         status.speed = speed;
         const now = Date.now();
