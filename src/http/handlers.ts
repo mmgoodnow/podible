@@ -567,35 +567,10 @@ async function handleCover(bookIdValue: string): Promise<Response> {
   });
 }
 
-async function handleEpub(request: Request, bookIdValue: string): Promise<Response> {
-  const book = await findBookById(bookIdValue);
-  if (!book || !book.epubPath) return new Response("Not found", { status: 404 });
-  const file = Bun.file(book.epubPath);
-  if (!(await file.exists())) return new Response("Not found", { status: 404 });
-  const stat = await file.stat().catch(() => null);
-  if (!stat || stat.size <= 0) return new Response("Not found", { status: 404 });
-
-  const rangeHeader = request.headers.get("range");
-  const headers: Record<string, string> = {
-    "Accept-Ranges": "bytes",
-    "Content-Type": "application/epub+zip",
-    "Content-Disposition": `inline; filename="${book.id}.epub"`,
-  };
-  const range = parseRange(rangeHeader, stat.size);
-  if (!range) {
-    headers["Content-Length"] = String(stat.size);
-    return new Response(file, { status: 200, headers });
-  }
-  headers["Content-Length"] = String(range.end - range.start + 1);
-  headers["Content-Range"] = `bytes ${range.start}-${range.end}/${stat.size}`;
-  return new Response(file.slice(range.start, range.end + 1), { status: 206, headers });
-}
-
 export {
   handleChapters,
   handleChaptersDebug,
   handleCover,
-  handleEpub,
   handleFeed,
   handleFeedDebug,
   handleJsonFeed,
