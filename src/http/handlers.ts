@@ -165,35 +165,70 @@ async function homePage(request: Request): Promise<Response> {
   <meta charset="utf-8" />
   <title>Podible</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 640px; margin: 48px auto; padding: 0 16px; color: #0f172a; }
+    :root {
+      color-scheme: light dark;
+      --bg: #ffffff;
+      --text: #0f172a;
+      --muted: #475569;
+      --border: #e2e8f0;
+      --card: #ffffff;
+      --code-bg: #f8fafc;
+      --shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+      --cover-bg: linear-gradient(135deg, #c7d2fe, #e0f2fe);
+      --bar: linear-gradient(90deg, #38bdf8, #0ea5e9);
+      --probe-bg: #f8fafc;
+      --restart-bg: #fee2e2;
+      --restart-border: #ef4444;
+      --restart-text: #991b1b;
+      --restart-hover: #fecaca;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0b1220;
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --border: #1f2937;
+        --card: #0f172a;
+        --code-bg: #0b1b2d;
+        --shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+        --cover-bg: linear-gradient(135deg, #1e293b, #0b1220);
+        --bar: linear-gradient(90deg, #38bdf8, #0ea5e9);
+        --probe-bg: #0b1b2d;
+        --restart-bg: #3f1d1d;
+        --restart-border: #b91c1c;
+        --restart-text: #fecaca;
+        --restart-hover: #4c1d1d;
+      }
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 640px; margin: 48px auto; padding: 0 16px; color: var(--text); background: var(--bg); }
     h1 { margin-bottom: 8px; }
     p { margin: 0 0 12px 0; }
-    .card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06); }
-    .stat { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #e2e8f0; }
+    .card { border: 1px solid var(--border); border-radius: 12px; padding: 16px; background: var(--card); box-shadow: var(--shadow); }
+    .stat { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); }
     .stat:last-child { border-bottom: none; }
-    .label { color: #475569; }
+    .label { color: var(--muted); }
     .value { font-weight: 600; }
-    .progress { height: 10px; background: #e2e8f0; border-radius: 999px; overflow: hidden; margin-top: 8px; }
-    .bar { height: 100%; background: linear-gradient(90deg, #38bdf8, #0ea5e9); width: ${barWidth}%; transition: width 0.3s ease; }
-    code { background: #f8fafc; border: 1px solid #e2e8f0; padding: 2px 6px; border-radius: 6px; }
+    .progress { height: 10px; background: var(--border); border-radius: 999px; overflow: hidden; margin-top: 8px; }
+    .bar { height: 100%; background: var(--bar); width: ${barWidth}%; transition: width 0.3s ease; }
+    code { background: var(--code-bg); border: 1px solid var(--border); padding: 2px 6px; border-radius: 6px; }
     .links { list-style: none; padding: 0; margin: 0; }
     .feed-preview { margin-top: 32px; display: flex; flex-direction: column; gap: 12px; }
-    .brand-artwork { width: 160px; height: 160px; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; display: inline-block; margin-bottom: 12px; }
+    .brand-artwork { width: 160px; height: 160px; border-radius: 12px; border: 1px solid var(--border); overflow: hidden; display: inline-block; margin-bottom: 12px; }
     .brand-artwork img { width: 100%; height: 100%; object-fit: cover; display: block; }
-    .feed-item { display: grid; grid-template-columns: 64px 1fr; gap: 12px; padding: 12px; border: 1px solid #e2e8f0; border-radius: 12px; align-items: center; background: #fff; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05); }
-    .feed-cover { width: 64px; height: 64px; border-radius: 10px; overflow: hidden; background: linear-gradient(135deg, #c7d2fe, #e0f2fe); display: flex; align-items: center; justify-content: center; color: #0f172a; font-weight: 700; font-size: 18px; border: 1px solid #e2e8f0; }
+    .feed-item { display: grid; grid-template-columns: 64px 1fr; gap: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; align-items: center; background: var(--card); box-shadow: var(--shadow); }
+    .feed-cover { width: 64px; height: 64px; border-radius: 10px; overflow: hidden; background: var(--cover-bg); display: flex; align-items: center; justify-content: center; color: var(--text); font-weight: 700; font-size: 18px; border: 1px solid var(--border); }
     .feed-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
-    .feed-title { margin: 0 0 6px 0; font-size: 16px; line-height: 1.3; color: #0f172a; }
-    .feed-desc { margin: 0; color: #475569; font-size: 14px; line-height: 1.45; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-    .probe-errors { margin-top: 16px; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px; background: #f8fafc; }
-    .probe-errors summary { cursor: pointer; font-weight: 600; color: #0f172a; }
+    .feed-title { margin: 0 0 6px 0; font-size: 16px; line-height: 1.3; color: var(--text); }
+    .feed-desc { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.45; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    .probe-errors { margin-top: 16px; border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--probe-bg); }
+    .probe-errors summary { cursor: pointer; font-weight: 600; color: var(--text); }
     .probe-errors ul { list-style: none; padding: 0; margin: 12px 0 0 0; display: grid; gap: 10px; }
-    .probe-errors li { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; }
-    .probe-errors .file { font-weight: 600; font-size: 13px; color: #0f172a; margin-bottom: 6px; word-break: break-all; }
-    .probe-errors .error { font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: #b91c1c; white-space: pre-wrap; }
+    .probe-errors li { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+    .probe-errors .file { font-weight: 600; font-size: 13px; color: var(--text); margin-bottom: 6px; word-break: break-all; }
+    .probe-errors .error { font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: #f87171; white-space: pre-wrap; }
     .actions { margin: 16px 0 0 0; }
-    .restart { border: 1px solid #ef4444; background: #fee2e2; color: #991b1b; padding: 8px 12px; border-radius: 10px; font-weight: 600; cursor: pointer; }
-    .restart:hover { background: #fecaca; }
+    .restart { border: 1px solid var(--restart-border); background: var(--restart-bg); color: var(--restart-text); padding: 8px 12px; border-radius: 10px; font-weight: 600; cursor: pointer; }
+    .restart:hover { background: var(--restart-hover); }
   </style>
 </head>
 <body>
