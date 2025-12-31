@@ -211,7 +211,11 @@ async function homePage(request: Request): Promise<Response> {
     .label { color: var(--muted); }
     .value { font-weight: 600; }
     .progress { height: 10px; background: var(--border); border-radius: 999px; overflow: hidden; margin-top: 8px; }
+    .progress.secondary { height: 6px; margin-top: 6px; }
     .bar { height: 100%; background: var(--bar); width: ${barWidth}%; transition: width 0.3s ease; }
+    .bar.secondary { background: linear-gradient(90deg, #34d399, #22c55e); width: ${
+      activeProgress ? Math.round(activeProgress.ratio * 100) : 0
+    }%; }
     code { background: var(--code-bg); border: 1px solid var(--border); padding: 2px 6px; border-radius: 6px; }
     .links { list-style: none; padding: 0; margin: 0; }
     .feed-preview { margin-top: 32px; display: flex; flex-direction: column; gap: 12px; }
@@ -262,6 +266,7 @@ async function homePage(request: Request): Promise<Response> {
     <div class="stat"><span class="label">Queue</span><span class="value">${queuedSources.size}</span></div>
     <div class="stat"><span class="label">Uptime</span><span class="value">${uptimeText}</span></div>
     <div class="progress"><div class="bar"></div></div>
+    <div class="progress secondary"><div class="bar secondary"></div></div>
   </div>
   ${
     probeFailures.length > 0
