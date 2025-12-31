@@ -1,4 +1,4 @@
-import { promises as fs, watch } from "node:fs";
+import { promises as fs, statSync, watch } from "node:fs";
 import path from "node:path";
 
 import { ensureDataDir, libraryIndexPath } from "../config";
@@ -390,13 +390,24 @@ function feedBooksSorted(): Book[] {
     if (status.state === "done" || !status.meta) return;
     if (combined.has(status.meta.id)) return;
     const meta = status.meta;
+    const workingFile = status.state === "working" && status.target ? status.target : undefined;
+    const workingSize = workingFile
+      ? (() => {
+          try {
+            return statSync(workingFile).size;
+          } catch {
+            return 0;
+          }
+        })()
+      : 0;
     combined.set(meta.id, {
       id: meta.id,
       title: meta.title,
       author: meta.author,
       kind: "single",
       mime: mimeFromExt(".mp3"),
-      totalSize: 0,
+      totalSize: workingSize,
+      primaryFile: workingFile,
       coverPath: meta.coverPath,
       durationSeconds: meta.durationSeconds,
       publishedAt: meta.publishedAt,
