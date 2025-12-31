@@ -146,7 +146,7 @@ async function transcodeM4bToMp3(
         "-codec:a",
         "libmp3lame",
         "-qscale:a",
-        "5",
+        "6",
         "-ac",
         "1",
         "-threads",
