@@ -118,6 +118,13 @@ function buildStatusSnapshot() {
   const barWidthRounded = Number(barWidth.toFixed(2));
   const activeRatioRounded = Number(activeRatio.toFixed(2));
   const uptimeText = formatDurationAllowZero(Math.floor(process.uptime()));
+  const activeText = activeProgress
+    ? `${formatDurationAllowZero(activeProgress.elapsed / 1000)} / ${formatDurationAllowZero(activeProgress.durationMs / 1000)} (${Math.round(activeProgress.ratio * 100)}%)${
+        activeProgress.speed ? ` @ ${activeProgress.speed.toFixed(1)}x` : ""
+      }`
+    : working > 0
+      ? "working (no progress yet)"
+      : "None";
   return {
     done,
     pending,
@@ -130,6 +137,7 @@ function buildStatusSnapshot() {
     barWidth: barWidthRounded,
     activeRatio: activeRatioRounded,
     activeProgress,
+    activeText,
     uptimeText,
   };
 }
@@ -167,6 +175,7 @@ function handleStatus(): Response {
       {
         barWidth: snapshot.barWidth,
         activeRatio: snapshot.activeRatio,
+        activeText: snapshot.activeText,
         uptimeText: snapshot.uptimeText,
       },
       null,
@@ -295,7 +304,7 @@ async function homePage(request: Request): Promise<Response> {
     <div class="stat"><span class="label">Failed transcodes</span><span class="value">${snapshot.failedTranscodesOnly}</span></div>
     <div class="stat"><span class="label">Failed probes</span><span class="value">${snapshot.failedProbes}</span></div>
     <div class="stat"><span class="label">Transcode status</span><span class="value">done ${snapshot.done} / ${snapshot.totalTranscodes} (pending ${snapshot.pending}, working ${snapshot.working}, failed ${snapshot.failedTranscodesOnly})</span></div>
-    <div class="stat"><span class="label">Active job</span><span class="value">${
+    <div class="stat"><span class="label">Active job</span><span class="value" id="active-text">${
       snapshot.activeProgress
         ? `${formatDurationAllowZero(snapshot.activeProgress.elapsed / 1000)} / ${formatDurationAllowZero(snapshot.activeProgress.durationMs / 1000)} (${Math.round(snapshot.activeProgress.ratio * 100)}%)${
             snapshot.activeProgress.speed ? ` @ ${snapshot.activeProgress.speed.toFixed(1)}x` : ""
@@ -342,10 +351,12 @@ async function homePage(request: Request): Promise<Response> {
         const active = document.getElementById("active-bar");
         if (active && typeof data.activeRatio === "number") active.style.width = data.activeRatio + "%";
         const uptime = document.getElementById("uptime-value");
-        if (uptime && typeof data.uptimeText === "string") uptime.textContent = data.uptimeText;
-      } catch {
-        // ignore polling errors
-      }
+      if (uptime && typeof data.uptimeText === "string") uptime.textContent = data.uptimeText;
+      const activeText = document.getElementById("active-text");
+      if (activeText && typeof data.activeText === "string") activeText.textContent = data.activeText;
+    } catch {
+      // ignore polling errors
+    }
     }
     refreshStatus();
     setInterval(refreshStatus, 1000);
