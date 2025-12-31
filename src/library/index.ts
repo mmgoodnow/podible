@@ -390,6 +390,7 @@ function feedBooksSorted(): Book[] {
     if (status.state === "done" || !status.meta) return;
     if (combined.has(status.meta.id)) return;
     const meta = status.meta;
+    const primaryFile = status.state === "working" && status.target ? status.target : undefined;
     combined.set(meta.id, {
       id: meta.id,
       title: meta.title,
@@ -397,6 +398,7 @@ function feedBooksSorted(): Book[] {
       kind: "single",
       mime: mimeFromExt(".mp3"),
       totalSize: 0,
+      ...(primaryFile ? { primaryFile } : {}),
       coverPath: meta.coverPath,
       durationSeconds: meta.durationSeconds,
       publishedAt: meta.publishedAt,
