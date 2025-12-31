@@ -74,9 +74,6 @@ function rssFeed(books: Book[], origin: string, keySuffix = ""): { body: string;
         (book.kind === "single" && Boolean(book.primaryFile)) ||
         (book.kind === "multi" && Boolean(book.files && book.files.length > 0));
       const cover = book.coverPath ? `<itunes:image href="${origin}/covers/${book.id}.jpg${keySuffix}" />` : "";
-      const epubTag = book.epubPath
-        ? `<podible:epub url="${origin}/epubs/${book.id}.epub${keySuffix}" type="application/epub+zip" />`
-        : "";
       const tagLength = estimateId3TagLength(book);
       const enclosureLength = book.totalSize + tagLength;
       const durationSeconds = book.durationSeconds ?? 0;
@@ -112,7 +109,6 @@ function rssFeed(books: Book[], origin: string, keySuffix = ""): { body: string;
         cover,
         chaptersTag,
         chaptersDebugTag,
-        epubTag,
         "</item>",
       ]
         .filter(Boolean)

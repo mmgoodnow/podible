@@ -76,7 +76,6 @@ function jsonFeed(books: Book[], origin: string, keySuffix = ""): { body: string
       (book.kind === "single" && Boolean(book.primaryFile)) ||
       (book.kind === "multi" && Boolean(book.files && book.files.length > 0));
     const coverUrl = book.coverPath ? `${origin}/covers/${book.id}.jpg${keySuffix}` : undefined;
-    const epubUrl = book.epubPath ? `${origin}/epubs/${book.id}.epub${keySuffix}` : undefined;
     const feedDate = book.addedAt ?? book.publishedAt;
     const { description, descriptionHtml } = buildItemNotes(book);
     const authors: JsonFeedAuthor[] = book.author ? [{ name: book.author }] : [];
@@ -92,7 +91,6 @@ function jsonFeed(books: Book[], origin: string, keySuffix = ""): { body: string
             },
           ]
         : []),
-      ...(epubUrl ? [{ url: epubUrl, mime_type: "application/epub+zip", title: `${book.title}.epub` }] : []),
     ];
 
     return {
