@@ -40,10 +40,12 @@ function reviveBook(book: any): Book | null {
   if (!book || typeof book !== "object") return null;
   if (typeof book.id !== "string" || typeof book.title !== "string" || typeof book.author !== "string") return null;
   const publishedAt = book.publishedAt ? new Date(book.publishedAt) : undefined;
+  const addedAt = book.addedAt ? new Date(book.addedAt) : undefined;
   const { addedAt: _addedAt, ...rest } = book;
   const revived: Book = {
     ...rest,
     publishedAt,
+    addedAt,
   };
   return revived;
 }
@@ -68,11 +70,7 @@ async function loadLibraryIndex() {
 
 async function saveLibraryIndex() {
   await ensureDataDir();
-  const payload = Array.from(readyBooks.values()).map((book) => {
-    if (!book.addedAt) return book;
-    const { addedAt, ...rest } = book;
-    return rest;
-  });
+  const payload = Array.from(readyBooks.values());
   await fs.writeFile(libraryIndexPath, JSON.stringify(payload, null, 2), "utf8");
 }
 
