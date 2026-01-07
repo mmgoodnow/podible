@@ -69,13 +69,14 @@ function sampleRateHz(version: number, sampleIndex: number): number | null {
 }
 
 function parseFrameHeader(header: number) {
-  if ((header & 0xffe00000) !== 0xffe00000) return null;
-  const versionBits = (header >> 19) & 0x3;
-  const layerBits = (header >> 17) & 0x3;
-  const bitrateIndex = (header >> 12) & 0xf;
-  const sampleIndex = (header >> 10) & 0x3;
-  const padding = (header >> 9) & 0x1;
-  const channelMode = (header >> 6) & 0x3;
+  const headerU = header >>> 0;
+  if ((headerU & 0xffe00000) !== 0xffe00000) return null;
+  const versionBits = (headerU >>> 19) & 0x3;
+  const layerBits = (headerU >>> 17) & 0x3;
+  const bitrateIndex = (headerU >>> 12) & 0xf;
+  const sampleIndex = (headerU >>> 10) & 0x3;
+  const padding = (headerU >>> 9) & 0x1;
+  const channelMode = (headerU >>> 6) & 0x3;
   const version = versionBits === 0x3 ? 1 : versionBits === 0x2 ? 2 : versionBits === 0x0 ? 2.5 : 0;
   if (version === 0) return null;
   if (layerBits !== 0x1) return null; // Layer III only
