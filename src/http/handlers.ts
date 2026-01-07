@@ -543,15 +543,9 @@ async function handleStream(request: Request, bookIdValue: string): Promise<Resp
   const audioRangeEnd = range.end - tagLength;
   const includeAudio = range.end >= tagLength;
 
-  if (rangeHeader) {
-    headers["Content-Length"] = String(range.end - range.start + 1);
-  } else {
-    headers["Content-Length"] = String(totalSize);
-  }
-  if (rangeHeader) {
-    headers["Content-Range"] = `bytes ${range.start}-${range.end}/${totalSize}`;
-  }
-  const status = rangeHeader ? 206 : 200;
+  headers["Content-Length"] = String(range.end - range.start + 1);
+  headers["Content-Range"] = `bytes ${range.start}-${range.end}/${totalSize}`;
+  const status = 206;
 
   if (includeTag && !includeAudio) {
     return new Response(tag.slice(tagStart, tagEnd + 1), { status, headers });
