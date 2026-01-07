@@ -9,7 +9,7 @@ import { feedBooksSorted, findBookById, readyBooksSorted } from "../library";
 import { bookExtension, bookMime } from "../media/metadata";
 import { getProbeFailures } from "../media/probe-cache";
 import { buildId3ChaptersTag } from "../streaming/id3";
-import { parseRange, segmentsForRange, streamSegments } from "../streaming/range";
+import { parseRange, segmentsForRange, streamSegmentsWithXingPatch } from "../streaming/range";
 import { transcodeStatus, queuedSources } from "../transcode";
 import { TranscodeStatus } from "../types";
 import { escapeXml, truncate } from "../utils/strings";
@@ -562,7 +562,12 @@ async function handleStream(request: Request, bookIdValue: string): Promise<Resp
   }
 
   const tagSlice = includeTag ? tag.slice(tagStart, tagEnd + 1) : null;
-  const audioStream = includeAudio ? streamSegments(audioSlices) : null;
+  const audioStream = includeAudio
+    ? await streamSegmentsWithXingPatch(audioSlices, {
+        durationSeconds: book.durationSeconds,
+        audioSize,
+      })
+    : null;
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
       if (tagSlice) {
