@@ -38,6 +38,7 @@ function writeUint32BE(value: number): Uint8Array {
 }
 
 const MAX_UINT32 = 0xffffffff;
+const ID3_VERSION = 3;
 
 function normalizeOffset(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return MAX_UINT32;
@@ -47,19 +48,26 @@ function normalizeOffset(value: number | undefined): number {
 
 const encoder = new TextEncoder();
 
+function frameSizeBytes(size: number): Uint8Array {
+  if (ID3_VERSION === 4) return synchsafeSize(size);
+  return writeUint32BE(size);
+}
+
 function id3Frame(id: string, payload: Uint8Array): Uint8Array {
   const header = new Uint8Array(10);
   header.set(encoder.encode(id).slice(0, 4));
-  header.set(synchsafeSize(payload.byteLength), 4);
+  header.set(frameSizeBytes(payload.byteLength), 4);
   // flags remain zeroed
   return concatBytes([header, payload]);
 }
 
 function textFrame(id: string, text: string): Uint8Array {
-  const textBytes = encoder.encode(text);
-  const payload = new Uint8Array(1 + textBytes.length);
-  payload[0] = 0x03; // UTF-8
-  payload.set(textBytes, 1);
+  const textBytes = Buffer.from(text, "utf16le");
+  const payload = new Uint8Array(1 + 2 + textBytes.length);
+  payload[0] = 0x01; // UTF-16 with BOM
+  payload[1] = 0xff;
+  payload[2] = 0xfe;
+  payload.set(textBytes, 3);
   return id3Frame(id, payload);
 }
 
@@ -120,6 +128,10 @@ function buildId3ChaptersTag(timings: ChapterTiming[], cover?: CoverArt, offsetB
   const frames: Uint8Array[] = [];
   if (cover) frames.push(apicFrame(cover));
   if (timings.length > 0) {
+    const totalMs = Math.max(...timings.map((chap) => chap.endMs));
+    if (Number.isFinite(totalMs) && totalMs > 0) {
+      frames.push(textFrame("TLEN", String(Math.round(totalMs))));
+    }
     const childIds = timings.map((c) => c.id);
     frames.push(ctocFrame(childIds));
     frames.push(
@@ -138,7 +150,7 @@ function buildId3ChaptersTag(timings: ChapterTiming[], cover?: CoverArt, offsetB
   const framesBytes = concatBytes(frames);
   const header = new Uint8Array(10);
   header.set(encoder.encode("ID3"));
-  header[3] = 0x04; // version 2.4.0
+  header[3] = ID3_VERSION;
   header[4] = 0x00;
   header[5] = 0x00; // flags
   header.set(synchsafeSize(framesBytes.byteLength), 6);
@@ -166,12 +178,18 @@ function estimateCoverFrameLength(coverPath: string | undefined): number {
 
 function estimateId3TagLength(book: Book): number {
   if (book.kind !== "multi" || !book.files) return 0;
-  const dummyTimings: ChapterTiming[] = book.files.map((segment: AudioSegment, index) => ({
-    id: `ch${index}`,
-    title: path.basename(segment.name, path.extname(segment.name)),
-    startMs: 0,
-    endMs: 0,
-  }));
+  let cursorMs = 0;
+  const dummyTimings: ChapterTiming[] = book.files.map((segment: AudioSegment, index) => {
+    const startMs = cursorMs;
+    const endMs = startMs + segment.durationMs;
+    cursorMs = endMs;
+    return {
+      id: `ch${index}`,
+      title: path.basename(segment.name, path.extname(segment.name)),
+      startMs,
+      endMs,
+    };
+  });
   const base = buildId3ChaptersTag(dummyTimings).byteLength;
   return base + estimateCoverFrameLength(book.coverPath);
 }
