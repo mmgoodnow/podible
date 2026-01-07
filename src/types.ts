@@ -15,6 +15,8 @@ export type ChapterTiming = {
   title: string;
   startMs: number;
   endMs: number;
+  startOffset?: number;
+  endOffset?: number;
 };
 
 export type Book = {

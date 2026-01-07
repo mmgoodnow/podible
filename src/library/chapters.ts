@@ -14,6 +14,8 @@ async function buildChapterTimings(book: Book): Promise<ChapterTiming[] | null> 
     const durationMs = segment.durationMs;
     const startMs = cursorMs;
     const endMs = startMs + durationMs;
+    const startOffset = segment.start;
+    const endOffset = segment.end;
     const chapterTitle =
       segment.title ||
       path.basename(segment.name, path.extname(segment.name)) ||
@@ -23,6 +25,8 @@ async function buildChapterTimings(book: Book): Promise<ChapterTiming[] | null> 
       title: chapterTitle,
       startMs,
       endMs,
+      startOffset,
+      endOffset,
     });
     cursorMs = endMs;
   });

@@ -37,6 +37,14 @@ function writeUint32BE(value: number): Uint8Array {
   return out;
 }
 
+const MAX_UINT32 = 0xffffffff;
+
+function normalizeOffset(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return MAX_UINT32;
+  if (value < 0 || value > MAX_UINT32) return MAX_UINT32;
+  return Math.floor(value);
+}
+
 const encoder = new TextEncoder();
 
 function id3Frame(id: string, payload: Uint8Array): Uint8Array {
@@ -68,7 +76,14 @@ function apicFrame(cover: CoverArt): Uint8Array {
   return id3Frame("APIC", payload);
 }
 
-function chapFrame(chapterId: string, title: string, startMs: number, endMs: number): Uint8Array {
+function chapFrame(
+  chapterId: string,
+  title: string,
+  startMs: number,
+  endMs: number,
+  startOffset?: number,
+  endOffset?: number
+): Uint8Array {
   const idBytes = encoder.encode(chapterId);
   const titleFrame = textFrame("TIT2", title);
   const payload = concatBytes([
@@ -76,8 +91,8 @@ function chapFrame(chapterId: string, title: string, startMs: number, endMs: num
     new Uint8Array([0x00]), // terminator
     writeUint32BE(startMs),
     writeUint32BE(endMs),
-    writeUint32BE(0xffffffff), // start offset: unknown
-    writeUint32BE(0xffffffff), // end offset: unknown
+    writeUint32BE(normalizeOffset(startOffset)), // start offset: byte index or unknown
+    writeUint32BE(normalizeOffset(endOffset)), // end offset: byte index or unknown
     titleFrame,
   ]);
   return id3Frame("CHAP", payload);
@@ -100,14 +115,25 @@ function ctocFrame(childIds: string[]): Uint8Array {
   return id3Frame("CTOC", payload);
 }
 
-function buildId3ChaptersTag(timings: ChapterTiming[], cover?: CoverArt): Uint8Array {
+function buildId3ChaptersTag(timings: ChapterTiming[], cover?: CoverArt, offsetBase = 0): Uint8Array {
   if (timings.length === 0 && !cover) return new Uint8Array();
   const frames: Uint8Array[] = [];
   if (cover) frames.push(apicFrame(cover));
   if (timings.length > 0) {
     const childIds = timings.map((c) => c.id);
     frames.push(ctocFrame(childIds));
-    frames.push(...timings.map((chap) => chapFrame(chap.id, chap.title, chap.startMs, chap.endMs)));
+    frames.push(
+      ...timings.map((chap) =>
+        chapFrame(
+          chap.id,
+          chap.title,
+          chap.startMs,
+          chap.endMs,
+          chap.startOffset !== undefined ? chap.startOffset + offsetBase : undefined,
+          chap.endOffset !== undefined ? chap.endOffset + offsetBase : undefined
+        )
+      )
+    );
   }
   const framesBytes = concatBytes(frames);
   const header = new Uint8Array(10);

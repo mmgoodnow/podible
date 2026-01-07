@@ -526,8 +526,12 @@ async function handleStream(request: Request, bookIdValue: string): Promise<Resp
       coverArt = { mime: coverMimeFromPath(book.coverPath), data: bytes };
     }
   }
-  const tag = buildId3ChaptersTag(timings, coverArt);
-  const tagLength = tag.byteLength;
+  let tag = buildId3ChaptersTag(timings, coverArt);
+  let tagLength = tag.byteLength;
+  if (timings.some((chap) => chap.startOffset !== undefined || chap.endOffset !== undefined)) {
+    tag = buildId3ChaptersTag(timings, coverArt, tagLength);
+    tagLength = tag.byteLength;
+  }
   const audioSize = book.totalSize;
   const totalSize = tagLength + audioSize;
   const range = parseRange(rangeHeader, totalSize) ?? { start: 0, end: totalSize - 1 };
