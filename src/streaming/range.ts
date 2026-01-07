@@ -90,25 +90,71 @@ function parseFrameHeader(header: number) {
   return { version, bitrate, sampleRate, samplesPerFrame, frameLength, sideInfoSize };
 }
 
+type XingPatchResult = {
+  prefix: Uint8Array;
+  frame: Uint8Array;
+  frameOffset: number;
+  frameLength: number;
+};
+
+function id3TagLength(buffer: Buffer): number | null {
+  if (buffer.length < 10) return null;
+  if (buffer[0] !== 0x49 || buffer[1] !== 0x44 || buffer[2] !== 0x33) return null;
+  let size = 0;
+  for (let i = 6; i < 10; i += 1) {
+    size = (size << 7) | (buffer[i] & 0x7f);
+  }
+  let length = size + 10;
+  const flags = buffer[5] ?? 0;
+  if (flags & 0x10) length += 10; // footer present
+  return length;
+}
+
 async function patchXingHeader(
   segment: AudioSegment,
   options: XingPatchOptions
-): Promise<{ frame: Uint8Array; frameLength: number } | null> {
+): Promise<XingPatchResult | null> {
   if (!options.durationSeconds || !options.audioSize) return null;
   if (segment.start !== 0 || segment.end <= 0) return null;
   const handle = await fs.open(segment.path, "r").catch(() => null);
   if (!handle) return null;
   try {
-    const probe = Buffer.allocUnsafe(4096);
+    const probeSize = Math.min(256 * 1024, segment.size);
+    const probe = Buffer.allocUnsafe(probeSize);
     const { bytesRead } = await handle.read(probe, 0, probe.length, 0);
     if (bytesRead < 4) return null;
-    const header = probe.readUInt32BE(0);
-    const parsed = parseFrameHeader(header);
-    if (!parsed) return null;
+    const prefixLength = id3TagLength(probe) ?? 0;
+    let scanBuffer = probe;
+    let scanOffsetBase = 0;
+    let scanStart = prefixLength;
+    let scanLength = bytesRead;
+    if (prefixLength >= bytesRead - 4) {
+      if (prefixLength >= segment.size) return null;
+      const scanSize = Math.min(32 * 1024, segment.size - prefixLength);
+      if (scanSize < 4) return null;
+      scanBuffer = Buffer.allocUnsafe(scanSize);
+      const scanRead = await handle.read(scanBuffer, 0, scanBuffer.length, prefixLength);
+      if (scanRead.bytesRead < 4) return null;
+      scanOffsetBase = prefixLength;
+      scanStart = 0;
+      scanLength = scanRead.bytesRead;
+    }
+    let frameOffset = -1;
+    let parsed: ReturnType<typeof parseFrameHeader> | null = null;
+    for (let i = scanStart; i < scanLength - 4; i += 1) {
+      if (scanBuffer[i] !== 0xff || (scanBuffer[i + 1] & 0xe0) !== 0xe0) continue;
+      const header = scanBuffer.readUInt32BE(i);
+      const candidate = parseFrameHeader(header);
+      if (!candidate) continue;
+      frameOffset = scanOffsetBase + i;
+      parsed = candidate;
+      break;
+    }
+    if (frameOffset < 0 || !parsed) return null;
     const frameLength = parsed.frameLength;
-    if (frameLength <= 0 || frameLength > segment.size) return null;
+    if (frameLength <= 0 || frameOffset + frameLength > segment.size) return null;
     const frameBuf = Buffer.allocUnsafe(frameLength);
-    const readFrame = await handle.read(frameBuf, 0, frameLength, 0);
+    const readFrame = await handle.read(frameBuf, 0, frameLength, frameOffset);
     if (readFrame.bytesRead < frameLength) return null;
     const xingOffset = 4 + parsed.sideInfoSize;
     if (xingOffset + 8 > frameLength) return null;
@@ -127,7 +173,14 @@ async function patchXingHeader(
     if (flags & 0x2) {
       frameBuf.writeUInt32BE(options.audioSize >>> 0, cursor);
     }
-    return { frame: new Uint8Array(frameBuf), frameLength };
+    let prefix = probe.subarray(0, frameOffset);
+    if (frameOffset > bytesRead) {
+      const prefixBuf = Buffer.allocUnsafe(frameOffset);
+      const readPrefix = await handle.read(prefixBuf, 0, frameOffset, 0);
+      if (readPrefix.bytesRead < frameOffset) return null;
+      prefix = prefixBuf;
+    }
+    return { prefix: new Uint8Array(prefix), frame: new Uint8Array(frameBuf), frameOffset, frameLength };
   } finally {
     await handle.close().catch(() => {});
   }
@@ -172,8 +225,11 @@ async function streamSegmentsWithXingPatch(
       }
       if (!patchedFirst && index === 0) {
         const segment = segments[0];
+        if (patched.prefix.length > 0) {
+          controller.enqueue(patched.prefix);
+        }
         controller.enqueue(patched.frame);
-        const restStart = segment.start + patched.frameLength;
+        const restStart = patched.frameOffset + patched.frameLength;
         if (restStart <= segment.end) {
           const reader = Readable.toWeb(
             createReadStream(segment.path, { start: restStart, end: segment.end })
