@@ -70,7 +70,7 @@ function sampleRateHz(version: number, sampleIndex: number): number | null {
 
 function parseFrameHeader(header: number) {
   const headerU = header >>> 0;
-  if ((headerU & 0xffe00000) !== 0xffe00000) return null;
+  if (((headerU & 0xffe00000) >>> 0) !== 0xffe00000) return null;
   const versionBits = (headerU >>> 19) & 0x3;
   const layerBits = (headerU >>> 17) & 0x3;
   const bitrateIndex = (headerU >>> 12) & 0xf;
