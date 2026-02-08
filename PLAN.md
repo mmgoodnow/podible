@@ -110,6 +110,18 @@ Represents individual files that make up an asset, including byte offsets for st
 - title TEXT NULL (chapter title or file-derived title)
 - FOREIGN KEY(asset_id) REFERENCES assets(id)
 
+### playback_positions
+Represents a last-known playback position for a specific asset and device.
+
+- id TEXT PRIMARY KEY (stable internal ID)
+- book_id TEXT NOT NULL
+- asset_id TEXT NOT NULL
+- device_id TEXT NOT NULL (default "local")
+- position_ms INTEGER NOT NULL
+- duration_ms INTEGER NULL
+- rate REAL NULL
+- updated_at TEXT NOT NULL
+
 ### jobs
 Represents background work. Jobs provide visibility and retries for scan, snatch, download, import, transcode, and reconcile flows.
 
@@ -133,6 +145,54 @@ Represents idempotency locks for external-triggered actions to prevent duplicate
 - updated_at TEXT NOT NULL
 
 Idempotency keys should be derived as `book_id + info_hash + action` where possible, or include a stable provider URL.
+
+## ID Format
+
+- Use ULID strings for all IDs.
+- Reasoning: sortable by time, readable, easy to generate in JS/Bun.
+
+## Status Derivation (books.status)
+
+`books.status` is stored but derived from releases/assets and kept in sync by import/reconcile jobs.
+
+Precedence (highest wins):
+
+1. `downloading` if any release is `downloading` or job `download` is running
+2. `snatched` if any release is `snatched` and none are downloading
+3. `imported` if any asset exists and an active asset is set
+4. `downloaded` if at least one release is `downloaded` but no assets exist yet
+5. `error` if all releases failed and no assets exist
+6. `open` otherwise
+
+This avoids regressing from `imported` to `snatched` on transient errors.
+
+## Job Execution Semantics
+
+- Jobs have leases: `status=running` includes `started_at` and must heartbeat `updated_at`.
+- A watchdog requeues stale running jobs after a timeout.
+- Retries use exponential backoff with a max attempt count.
+- Import/snatch/download transitions are wrapped in DB transactions.
+
+## Dedup Fingerprints
+
+When infohash is missing (common for direct URLs/ebooks), compute a release fingerprint:
+
+- `provider + url + size_bytes + normalized_title`
+- Store it on the release and enforce uniqueness per book.
+
+## Indexes (required)
+
+- `books(status, added_at)`
+- `releases(book_id, status)`
+- `releases(info_hash)`
+- `releases(url)`
+- `assets(book_id, active)`
+- `asset_files(asset_id, start)`
+- `jobs(status, type, updated_at)`
+- `operations(key)`
+- `playback_positions(book_id, device_id)`
+
+Enforce only one active asset per book with a partial unique index on `(book_id) WHERE active = 1`.
 
 ## State Machine
 
@@ -204,6 +264,23 @@ Idempotency:
 - `GET /settings`
 - `PUT /settings`
 
+Settings shape (stored in SQLite as a single JSON row):
+
+```
+{
+  "torznab": [
+    { "name": "prowlarr", "baseUrl": "...", "apiKey": "...", "categories": { "audio": "audio", "ebook": "book" } }
+  ],
+  "rtorrent": { "transport": "http-xmlrpc", "url": "...", "username": "...", "password": "..." },
+  "libraryRoots": ["/media/audiobooks", "/media/ebooks"],
+  "polling": { "rtorrentMs": 5000, "scanMs": 30000 },
+  "transcode": { "enabled": true, "format": "mp3", "bitrateKbps": 64 },
+  "linkStrategy": { "order": ["hardlink", "reflink", "symlink"] },
+  "feed": { "title": "Kindling", "author": "...", "sort": "added_at" },
+  "auth": { "mode": "apikey", "key": "..." }
+}
+```
+
 ## Upstream Integrations
 
 ### Torznab
@@ -220,6 +297,9 @@ Use XML-RPC or `rpc` interface. Needed calls:
 - `load.start` (or equivalent) with magnet/url
 - `d.name`, `d.hash`, `d.complete`, `d.get_base_path`
 - `d.get_bytes_done`, `d.get_size_bytes`
+
+Default transport: HTTP XML-RPC (simpler to implement and test).
+Support SCGI as optional config for deployments that require it.
 
 ### Open Library
 
@@ -245,6 +325,25 @@ Maintain existing podible behaviors:
 - Xing header patching for concatenated streams
 - JSON feed + RSS feed with cover/chapters
 Ebooks are not part of the podcast feed. They are exposed via direct download.
+
+## Auth + Security
+
+- Default to API key auth in `Authorization: Bearer` or `X-API-Key`.
+- Allow `auth.mode=local` to disable auth for localhost-only development.
+- Validate and sanitize all file/path inputs for stream/download endpoints.
+
+## Open Defaults (Explicit)
+
+- `POST /snatch` will create a new book if no `bookId` is provided, using the best parsed title/author from the search result.
+- Link fallback order is configurable; default is `hardlink -> reflink -> symlink`.
+- Feeds include only active audio assets; default sort is `added_at` (can configure `published_at`).
+- Playback positions are per device; default `device_id` is `local` if omitted.
+- Migration is clean-start only (no LL/podible import). Add migration tooling later if needed.
+
+## Observability
+
+- Structured logs with `request_id`, `job_id`, `book_id`, `release_id` fields.
+- Basic metrics in `/health` or `/status`: counts by job state, release state, queue size.
 
 ## Testing Plan
 
@@ -283,6 +382,14 @@ Use local mock services:
 - rTorrent timeout should not corrupt state
 - Reconcile should recover downloaded-but-not-imported
 - Ebook search -> snatch -> download -> import -> direct download works
+
+### Additional Edge Tests
+
+- Restart in the middle of a running job (lease recovery)
+- Concurrent snatch requests for the same release
+- SQLite busy/lock contention under parallel jobs
+- Malformed or unsatisfiable Range requests
+- Very large multi-file audio (stream stitching correctness)
 
 ### Test Runner
 
