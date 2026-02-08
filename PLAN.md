@@ -5,6 +5,7 @@ This document is a build plan for a new Kindling backend implemented inside the 
 ## Goals
 
 - Provide a reliable, deterministic backend for Kindling (macOS + iOS).
+- Support both ebooks and audiobooks end-to-end.
 - Keep search, snatch, download, import, streaming, and feed generation in one service.
 - Make the system resilient to duplicate events, partial failures, and provider quirks.
 - Provide a realistic test harness with mocked Torznab and rTorrent so regressions are caught early.
@@ -27,11 +28,12 @@ Process layout:
 
 Key subsystems:
 
-- Search: Torznab query + normalize results
+- Search: Torznab query + normalize results (audio + ebook categories)
 - Snatch: create Release + enqueue download job
 - Download: rTorrent integration + status polling
 - Import: detect files, compute assets, link into library, update book
-- Streaming + feed: reuse podible range streaming, chapters, feeds
+- Streaming + feed: reuse podible range streaming, chapters, feeds (audio only)
+- Ebooks: store file assets, expose download URLs (no streaming semantics needed)
 
 ## Tech Constraints
 
@@ -51,6 +53,7 @@ Tables:
 - title TEXT NOT NULL
 - author TEXT NOT NULL
 - status TEXT NOT NULL (open|snatched|downloading|downloaded|imported|error)
+- media_type TEXT NOT NULL (audio|ebook|mixed)
 - primary_asset_id TEXT NULL
 - cover_path TEXT NULL
 - duration_ms INTEGER NULL
@@ -68,6 +71,7 @@ Tables:
 - book_id TEXT NOT NULL
 - provider TEXT NOT NULL
 - title TEXT NOT NULL
+- media_type TEXT NOT NULL (audio|ebook)
 - info_hash TEXT NULL
 - size_bytes INTEGER NULL
 - url TEXT NOT NULL
@@ -80,7 +84,7 @@ Tables:
 
 - id TEXT PRIMARY KEY
 - book_id TEXT NOT NULL
-- kind TEXT NOT NULL (single|multi)
+- kind TEXT NOT NULL (single|multi|ebook)
 - mime TEXT NOT NULL
 - total_size INTEGER NOT NULL
 - duration_ms INTEGER NULL
@@ -126,7 +130,7 @@ Idempotency keys should be derived as `book_id + info_hash + action` where possi
 
 ## State Machine
 
-Books transition through:
+Books transition through (both media types):
 
 `open -> snatched -> downloading -> downloaded -> imported`
 
@@ -162,7 +166,7 @@ Idempotency:
 
 ### Search + Snatch
 
-- `POST /search` -> returns normalized Torznab results
+- `POST /search` -> returns normalized Torznab results (include `media_type`)
 - `POST /snatch` -> creates release and download job
 - `GET /releases?bookId=`
 
@@ -182,11 +186,12 @@ Idempotency:
 
 ### Streaming + Feeds
 
-- `GET /stream/{assetId}.{ext}` (range supported)
-- `GET /chapters/{assetId}.json`
+- `GET /stream/{assetId}.{ext}` (range supported, audio only)
+- `GET /chapters/{assetId}.json` (audio only)
 - `GET /covers/{bookId}.jpg`
-- `GET /feed.xml`
-- `GET /feed.json`
+- `GET /feed.xml` (audio feed)
+- `GET /feed.json` (audio feed)
+- `GET /ebook/{assetId}` (direct download, ebook only)
 
 ### Settings
 
@@ -200,6 +205,7 @@ Idempotency:
 - Endpoint: `GET /api?t=search&q=...` or `t=search&cat=...`
 - Parse RSS/Atom results
 - Normalize fields: title, size, download url, provider, seed/leech
+- Use `cat=audio` for audiobooks, `cat=book` for ebooks (when supported)
 
 ### rTorrent
 
@@ -221,6 +227,7 @@ Use XML-RPC or `rpc` interface. Needed calls:
 - Create hardlink when same filesystem, reflink when supported, else symlink
 - Compute asset(s) as first-class objects
 - Replace means swapping active asset, not deleting history
+- Ebook import stores the file as a single asset with `kind=ebook`
 
 ## Streaming + Feed Parity (Podible)
 
@@ -231,6 +238,7 @@ Maintain existing podible behaviors:
 - ID3 chapter tag injection for multi assets
 - Xing header patching for concatenated streams
 - JSON feed + RSS feed with cover/chapters
+Ebooks are not part of the podcast feed. They are exposed via direct download.
 
 ## Testing Plan
 
@@ -239,6 +247,7 @@ Maintain existing podible behaviors:
 - State machine transitions
 - Idempotency key behavior
 - Asset construction from file layout
+- Ebook asset creation and download endpoint behavior
 
 ### Integration Tests
 
@@ -258,6 +267,7 @@ Use local mock services:
 3. File fixtures
    - Single m4b
    - Multi mp3 book
+   - Ebook (epub + pdf)
    - Mismatched metadata
 
 ### End-to-End Tests
@@ -266,6 +276,7 @@ Use local mock services:
 - Duplicate snatch attempt should be idempotent
 - rTorrent timeout should not corrupt state
 - Reconcile should recover downloaded-but-not-imported
+- Ebook search -> snatch -> download -> import -> direct download works
 
 ### Test Runner
 
