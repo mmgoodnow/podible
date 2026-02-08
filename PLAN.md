@@ -22,7 +22,7 @@ Process layout:
 
 1. HTTP API server (Bun.serve + existing `server.ts`)
 2. Background worker loop (jobs)
-3. SQLite storage (node:sqlite)
+3. SQLite storage (Bun.sqlite)
 4. Optional file watcher (library root scan)
 5. Streaming + feeds endpoints (existing podible behavior preserved)
 
@@ -39,7 +39,7 @@ Key subsystems:
 
 - Bun runtime (TypeScript supported by Bun)
 - HTTP server built into `server.ts` using `Bun.serve`
-- node:sqlite for storage
+- Bun.sqlite for storage
 - node:child_process for rTorrent/ffmpeg/ffprobe
 - No version prefix in URLs
 
