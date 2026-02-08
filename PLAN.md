@@ -49,79 +49,79 @@ Tables:
 
 ### books
 
-- id TEXT PRIMARY KEY
-- title TEXT NOT NULL
-- author TEXT NOT NULL
-- status TEXT NOT NULL (open|snatched|downloading|downloaded|imported|error)
-- media_type TEXT NOT NULL (audio|ebook|mixed)
-- primary_asset_id TEXT NULL
-- cover_path TEXT NULL
-- duration_ms INTEGER NULL
-- added_at TEXT NOT NULL
-- published_at TEXT NULL
-- description TEXT NULL
-- description_html TEXT NULL
-- language TEXT NULL
-- isbn TEXT NULL
-- identifiers_json TEXT NULL
+- id TEXT PRIMARY KEY (stable internal ID)
+- title TEXT NOT NULL (display title)
+- author TEXT NOT NULL (display author)
+- status TEXT NOT NULL (open|snatched|downloading|downloaded|imported|error, monotonic)
+- media_type TEXT NOT NULL (audio|ebook|mixed; derived from assets/releases)
+- primary_asset_id TEXT NULL (current active asset for playback/feed)
+- cover_path TEXT NULL (resolved cover file path; cacheable)
+- duration_ms INTEGER NULL (for audio; sum of active asset)
+- added_at TEXT NOT NULL (when first seen/imported)
+- published_at TEXT NULL (best-effort from metadata)
+- description TEXT NULL (plain text)
+- description_html TEXT NULL (rich text if available)
+- language TEXT NULL (BCP-47 if known)
+- isbn TEXT NULL (best-effort)
+- identifiers_json TEXT NULL (JSON map of provider IDs)
 
 ### releases
 
-- id TEXT PRIMARY KEY
-- book_id TEXT NOT NULL
-- provider TEXT NOT NULL
-- title TEXT NOT NULL
+- id TEXT PRIMARY KEY (stable internal ID)
+- book_id TEXT NOT NULL (foreign key to book)
+- provider TEXT NOT NULL (torznab source/provider name)
+- title TEXT NOT NULL (release title as returned by provider)
 - media_type TEXT NOT NULL (audio|ebook)
-- info_hash TEXT NULL
-- size_bytes INTEGER NULL
-- url TEXT NOT NULL
-- snatched_at TEXT NOT NULL
+- info_hash TEXT NULL (if available from downloader)
+- size_bytes INTEGER NULL (raw size from provider)
+- url TEXT NOT NULL (download/magnet URL)
+- snatched_at TEXT NOT NULL (when acquisition requested)
 - status TEXT NOT NULL (snatched|downloading|downloaded|imported|failed)
-- error TEXT NULL
+- error TEXT NULL (last failure reason)
 - FOREIGN KEY(book_id) REFERENCES books(id)
 
 ### assets
 
-- id TEXT PRIMARY KEY
-- book_id TEXT NOT NULL
+- id TEXT PRIMARY KEY (stable internal ID)
+- book_id TEXT NOT NULL (foreign key to book)
 - kind TEXT NOT NULL (single|multi|ebook)
-- mime TEXT NOT NULL
-- total_size INTEGER NOT NULL
-- duration_ms INTEGER NULL
-- active INTEGER NOT NULL DEFAULT 0
-- source_release_id TEXT NULL
-- created_at TEXT NOT NULL
+- mime TEXT NOT NULL (audio/mpeg, audio/mp4, application/epub+zip, application/pdf)
+- total_size INTEGER NOT NULL (bytes)
+- duration_ms INTEGER NULL (audio only)
+- active INTEGER NOT NULL DEFAULT 0 (1 = active for playback/feed)
+- source_release_id TEXT NULL (release that produced this asset)
+- created_at TEXT NOT NULL (when asset was created)
 - FOREIGN KEY(book_id) REFERENCES books(id)
 - FOREIGN KEY(source_release_id) REFERENCES releases(id)
 
 ### asset_files
 
-- id TEXT PRIMARY KEY
-- asset_id TEXT NOT NULL
-- path TEXT NOT NULL
-- size INTEGER NOT NULL
-- start INTEGER NOT NULL
-- end INTEGER NOT NULL
-- duration_ms INTEGER NOT NULL
-- title TEXT NULL
+- id TEXT PRIMARY KEY (stable internal ID)
+- asset_id TEXT NOT NULL (foreign key to asset)
+- path TEXT NOT NULL (absolute or library-relative path)
+- size INTEGER NOT NULL (bytes)
+- start INTEGER NOT NULL (byte offset in stitched stream)
+- end INTEGER NOT NULL (byte offset in stitched stream)
+- duration_ms INTEGER NOT NULL (per-file duration for audio)
+- title TEXT NULL (chapter title or file-derived title)
 - FOREIGN KEY(asset_id) REFERENCES assets(id)
 
 ### jobs
 
-- id TEXT PRIMARY KEY
+- id TEXT PRIMARY KEY (stable internal ID)
 - type TEXT NOT NULL (scan|search|snatch|download|import|transcode|reconcile)
 - status TEXT NOT NULL (queued|running|succeeded|failed|cancelled)
-- book_id TEXT NULL
-- release_id TEXT NULL
-- payload_json TEXT NULL
-- error TEXT NULL
+- book_id TEXT NULL (optional target book)
+- release_id TEXT NULL (optional target release)
+- payload_json TEXT NULL (job-specific params)
+- error TEXT NULL (last failure reason)
 - created_at TEXT NOT NULL
 - updated_at TEXT NOT NULL
 
 ### operations
 
-- id TEXT PRIMARY KEY
-- key TEXT NOT NULL UNIQUE
+- id TEXT PRIMARY KEY (stable internal ID)
+- key TEXT NOT NULL UNIQUE (idempotency key)
 - status TEXT NOT NULL (started|succeeded|failed)
 - created_at TEXT NOT NULL
 - updated_at TEXT NOT NULL
