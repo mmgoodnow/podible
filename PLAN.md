@@ -48,6 +48,7 @@ Key subsystems:
 Tables:
 
 ### books
+Represents the canonical logical book record in Kindling (title/author + metadata). A book can have multiple assets over time (multiple releases or formats), with one asset marked active for playback/feed.
 
 - id TEXT PRIMARY KEY (stable internal ID)
 - title TEXT NOT NULL (display title)
@@ -66,6 +67,7 @@ Tables:
 - identifiers_json TEXT NULL (JSON map of provider IDs)
 
 ### releases
+Represents a specific acquisition attempt (a chosen search result). Releases track downloader state and connect a provider result to the eventual asset(s).
 
 - id TEXT PRIMARY KEY (stable internal ID)
 - book_id TEXT NOT NULL (foreign key to book)
@@ -81,6 +83,7 @@ Tables:
 - FOREIGN KEY(book_id) REFERENCES books(id)
 
 ### assets
+Represents a concrete file set that can be played or downloaded (single audio file, multi-part audio, or a single ebook file). Assets are immutable; switching “current” uses `active`.
 
 - id TEXT PRIMARY KEY (stable internal ID)
 - book_id TEXT NOT NULL (foreign key to book)
@@ -95,6 +98,7 @@ Tables:
 - FOREIGN KEY(source_release_id) REFERENCES releases(id)
 
 ### asset_files
+Represents individual files that make up an asset, including byte offsets for stitched audio streaming and per-file duration for chapter mapping.
 
 - id TEXT PRIMARY KEY (stable internal ID)
 - asset_id TEXT NOT NULL (foreign key to asset)
@@ -107,6 +111,7 @@ Tables:
 - FOREIGN KEY(asset_id) REFERENCES assets(id)
 
 ### jobs
+Represents background work. Jobs provide visibility and retries for scan, snatch, download, import, transcode, and reconcile flows.
 
 - id TEXT PRIMARY KEY (stable internal ID)
 - type TEXT NOT NULL (scan|search|snatch|download|import|transcode|reconcile)
@@ -119,6 +124,7 @@ Tables:
 - updated_at TEXT NOT NULL
 
 ### operations
+Represents idempotency locks for external-triggered actions to prevent duplicate effects (snatch/download/import).
 
 - id TEXT PRIMARY KEY (stable internal ID)
 - key TEXT NOT NULL UNIQUE (idempotency key)
