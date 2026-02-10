@@ -90,6 +90,7 @@ Represents the canonical logical book record in Kindling (title/author + metadat
 - cover_path TEXT NULL (resolved cover file path; cacheable)
 - duration_ms INTEGER NULL (for audio; derived from preferred audio asset)
 - added_at TEXT NOT NULL (when first seen/imported)
+- updated_at TEXT NOT NULL
 - published_at TEXT NULL (best-effort from metadata)
 - description TEXT NULL (plain text)
 - description_html TEXT NULL (rich text if available)
@@ -101,28 +102,31 @@ Represents the canonical logical book record in Kindling (title/author + metadat
 Represents a specific acquisition attempt (a chosen search result). Releases track downloader state and connect a provider result to the eventual asset(s).
 
 - id INTEGER PRIMARY KEY AUTOINCREMENT
-- book_id TEXT NOT NULL (foreign key to book)
+- book_id INTEGER NOT NULL (foreign key to book)
 - provider TEXT NOT NULL (torznab source/provider name)
 - title TEXT NOT NULL (release title as returned by provider)
+- media_type TEXT NOT NULL (audio|ebook)
 - info_hash TEXT NOT NULL
 - size_bytes INTEGER NULL (raw size from provider)
 - url TEXT NOT NULL (download/magnet URL)
 - snatched_at TEXT NOT NULL (when acquisition requested)
 - status TEXT NOT NULL (snatched|downloading|downloaded|imported|failed)
 - error TEXT NULL (last failure reason)
+- updated_at TEXT NOT NULL
 - FOREIGN KEY(book_id) REFERENCES books(id)
 
 ### assets
 Represents a concrete file set that can be played or downloaded (single audio file, multi-part audio, or a single ebook file). Assets are immutable.
 
 - id INTEGER PRIMARY KEY AUTOINCREMENT
-- book_id TEXT NOT NULL (foreign key to book)
+- book_id INTEGER NOT NULL (foreign key to book)
 - kind TEXT NOT NULL (single|multi|ebook)
 - mime TEXT NOT NULL (audio/mpeg, audio/mp4, application/epub+zip, application/pdf)
 - total_size INTEGER NOT NULL (bytes)
 - duration_ms INTEGER NULL (audio only)
-- source_release_id TEXT NULL (release that produced this asset)
+- source_release_id INTEGER NULL (release that produced this asset)
 - created_at TEXT NOT NULL (when asset was created)
+- updated_at TEXT NOT NULL
 - FOREIGN KEY(book_id) REFERENCES books(id)
 - FOREIGN KEY(source_release_id) REFERENCES releases(id)
 
@@ -130,13 +134,14 @@ Represents a concrete file set that can be played or downloaded (single audio fi
 Represents individual files that make up an asset, including byte offsets for stitched audio streaming and per-file duration for chapter mapping.
 
 - id INTEGER PRIMARY KEY AUTOINCREMENT
-- asset_id TEXT NOT NULL (foreign key to asset)
+- asset_id INTEGER NOT NULL (foreign key to asset)
 - path TEXT NOT NULL (absolute or library-relative path)
 - size INTEGER NOT NULL (bytes)
 - start INTEGER NOT NULL (byte offset in stitched stream)
 - end INTEGER NOT NULL (byte offset in stitched stream)
 - duration_ms INTEGER NOT NULL (per-file duration for audio)
 - title TEXT NULL (chapter title or file-derived title)
+- updated_at TEXT NOT NULL
 - FOREIGN KEY(asset_id) REFERENCES assets(id)
 
 ### jobs
@@ -145,12 +150,24 @@ Represents background work. Jobs provide visibility and retries for scan, snatch
 - id INTEGER PRIMARY KEY AUTOINCREMENT
 - type TEXT NOT NULL (scan|search|snatch|download|import|transcode|reconcile)
 - status TEXT NOT NULL (queued|running|succeeded|failed|cancelled)
-- book_id TEXT NULL (optional target book)
-- release_id TEXT NULL (optional target release)
+- book_id INTEGER NULL (optional target book)
+- release_id INTEGER NULL (optional target release)
 - payload_json TEXT NULL (job-specific params)
 - error TEXT NULL (last failure reason)
+- attempt_count INTEGER NOT NULL DEFAULT 0
+- max_attempts INTEGER NOT NULL DEFAULT 5
+- next_run_at TEXT NULL
 - created_at TEXT NOT NULL
 - updated_at TEXT NOT NULL
+
+### changes
+Represents a durable change log for `/library/changes` incremental sync.
+
+- id INTEGER PRIMARY KEY AUTOINCREMENT
+- entity_type TEXT NOT NULL (book|asset|release)
+- entity_id INTEGER NOT NULL
+- action TEXT NOT NULL (created|updated|deleted)
+- created_at TEXT NOT NULL
 
 ## ID Format
 
@@ -163,10 +180,10 @@ Do not persist `books.status`. Derive it on read from releases/assets:
 
 Precedence (highest wins):
 
-1. `downloading` if any release is `downloading` or job `download` is running
-2. `snatched` if any release is `snatched` and none are downloading
-3. `imported` if any asset exists
-4. `downloaded` if at least one release is `downloaded` but no assets exist yet
+1. `imported` if any asset exists
+2. `downloading` if any release is `downloading` or job `download` is running
+3. `downloaded` if at least one release is `downloaded` but no assets exist yet
+4. `snatched` if any release is `snatched` and none are downloading
 5. `error` if all releases failed and no assets exist
 6. `open` otherwise
 
@@ -199,7 +216,7 @@ This keeps correctness without heavy orchestration.
 - Use jobs only for long-running tasks: download, import, transcode, scan.
 - Snatch should attempt the rTorrent add inline and fail fast if the add fails.
 - Jobs are best-effort and can be retried.
-- Retries use exponential backoff with a max attempt count.
+- Retries use exponential backoff based on `attempt_count` and `next_run_at`.
 - Import/snatch/download transitions are wrapped in DB transactions.
 - Search and snatch are synchronous when possible; long-running work is async.
 
@@ -207,11 +224,13 @@ This keeps correctness without heavy orchestration.
 
 - `books(added_at)`
 - `releases(book_id, status)`
+- `releases(book_id, media_type)`
 - `releases(info_hash)`
 - `releases(url)`
 - `assets(book_id, created_at)`
 - `asset_files(asset_id, start)`
 - `jobs(status, type, updated_at)`
+- `changes(created_at)`
 
 ## State Machine
 
@@ -248,7 +267,7 @@ Idempotency:
 - `GET /library/{bookId}`
 - `POST /library` -> create a book (title, author) and trigger acquisition loop
 - `POST /library/refresh`
-- `GET /library/changes?since=`
+- `GET /library/changes?since=` (driven by `changes` table)
 
 ### Search + Snatch
 
@@ -259,8 +278,9 @@ Idempotency:
 ### Downloads + Import
 
 - `GET /downloads` -> mapped from jobs/releases
-- `GET /downloads/{id}`
+- `GET /downloads/{jobId}` (download job id)
 - `POST /downloads/{id}/retry`
+- `/downloads` responses include both `job_id` and `release_id`
 - `POST /import/reconcile`
 - `GET /assets?bookId=`
 
