@@ -43,20 +43,33 @@ Key subsystems:
 - node:child_process for rTorrent/ffmpeg/ffprobe
 - No version prefix in URLs
 
+## Persistence Migration (Podible JSON -> SQLite)
+
+Current podible persistence relies on JSON files in `dataDir`:
+
+- `library-index.json`
+- `transcode-status.json`
+- `probe-cache.json`
+- `api-key.txt`
+
+Move all persistence to SQLite. During transition, it is acceptable to:
+
+- Read existing JSON files once to seed SQLite (optional)
+- Stop writing JSON files after SQLite is introduced
+- Delete JSON files in test/dev environments
+
 ## Data Model (SQLite)
 
 Tables:
 
 ### books
-Represents the canonical logical book record in Kindling (title/author + metadata). A book can have multiple assets over time (multiple releases or formats), with one asset marked active for playback/feed.
+Represents the canonical logical book record in Kindling (title/author + metadata). A book can have multiple assets over time (multiple releases or formats).
 
 - id INTEGER PRIMARY KEY AUTOINCREMENT
 - title TEXT NOT NULL (display title)
 - author TEXT NOT NULL (display author)
-- media_type TEXT NOT NULL (audio|ebook|mixed; derived from assets/releases)
-- primary_asset_id TEXT NULL (current active asset for playback/feed)
 - cover_path TEXT NULL (resolved cover file path; cacheable)
-- duration_ms INTEGER NULL (for audio; sum of active asset)
+- duration_ms INTEGER NULL (for audio; derived from preferred audio asset)
 - added_at TEXT NOT NULL (when first seen/imported)
 - published_at TEXT NULL (best-effort from metadata)
 - description TEXT NULL (plain text)
@@ -82,7 +95,7 @@ Represents a specific acquisition attempt (a chosen search result). Releases tra
 - FOREIGN KEY(book_id) REFERENCES books(id)
 
 ### assets
-Represents a concrete file set that can be played or downloaded (single audio file, multi-part audio, or a single ebook file). Assets are immutable; switching “current” uses `active`.
+Represents a concrete file set that can be played or downloaded (single audio file, multi-part audio, or a single ebook file). Assets are immutable.
 
 - id INTEGER PRIMARY KEY AUTOINCREMENT
 - book_id TEXT NOT NULL (foreign key to book)
@@ -90,7 +103,6 @@ Represents a concrete file set that can be played or downloaded (single audio fi
 - mime TEXT NOT NULL (audio/mpeg, audio/mp4, application/epub+zip, application/pdf)
 - total_size INTEGER NOT NULL (bytes)
 - duration_ms INTEGER NULL (audio only)
-- active INTEGER NOT NULL DEFAULT 0 (1 = active for playback/feed)
 - source_release_id TEXT NULL (release that produced this asset)
 - created_at TEXT NOT NULL (when asset was created)
 - FOREIGN KEY(book_id) REFERENCES books(id)
@@ -109,18 +121,6 @@ Represents individual files that make up an asset, including byte offsets for st
 - title TEXT NULL (chapter title or file-derived title)
 - FOREIGN KEY(asset_id) REFERENCES assets(id)
 
-### playback_positions
-Represents a last-known playback position for a specific asset and device.
-
-- id INTEGER PRIMARY KEY AUTOINCREMENT
-- book_id TEXT NOT NULL
-- asset_id TEXT NOT NULL
-- device_id TEXT NOT NULL (default "local")
-- position_ms INTEGER NOT NULL
-- duration_ms INTEGER NULL
-- rate REAL NULL
-- updated_at TEXT NOT NULL
-
 ### jobs
 Represents background work. Jobs provide visibility and retries for scan, snatch, download, import, transcode, and reconcile flows.
 
@@ -133,17 +133,6 @@ Represents background work. Jobs provide visibility and retries for scan, snatch
 - error TEXT NULL (last failure reason)
 - created_at TEXT NOT NULL
 - updated_at TEXT NOT NULL
-
-### operations
-Represents idempotency locks for external-triggered actions to prevent duplicate effects (snatch/download/import).
-
-- id INTEGER PRIMARY KEY AUTOINCREMENT
-- key TEXT NOT NULL UNIQUE (idempotency key)
-- status TEXT NOT NULL (started|succeeded|failed)
-- created_at TEXT NOT NULL
-- updated_at TEXT NOT NULL
-
-Idempotency keys should be derived as `book_id + info_hash + action` where possible, or include a stable provider URL.
 
 ## ID Format
 
@@ -158,18 +147,30 @@ Precedence (highest wins):
 
 1. `downloading` if any release is `downloading` or job `download` is running
 2. `snatched` if any release is `snatched` and none are downloading
-3. `imported` if any asset exists and an active asset is set
+3. `imported` if any asset exists
 4. `downloaded` if at least one release is `downloaded` but no assets exist yet
 5. `error` if all releases failed and no assets exist
 6. `open` otherwise
 
 This avoids regressing from `imported` to `snatched` on transient errors.
 
+## Asset Selection Heuristics
+
+When a book has multiple assets, select one for playback/feed using deterministic heuristics:
+
+1. Prefer audio assets over ebooks for feeds/streaming.
+2. Prefer the most recently imported asset.
+3. For audio, prefer longer duration if timestamps tie.
+
+No persisted “favorite” or active flag.
+
 ## Job Execution Semantics
 
 - Jobs are best-effort and can be retried.
 - Retries use exponential backoff with a max attempt count.
 - Import/snatch/download transitions are wrapped in DB transactions.
+- Search and snatch should be synchronous when possible; long-running work (download/import/transcode/scan) is async.
+- Snatch should attempt the rTorrent add inline and fail fast if the add fails.
 
 ## Indexes (required)
 
@@ -177,13 +178,9 @@ This avoids regressing from `imported` to `snatched` on transient errors.
 - `releases(book_id, status)`
 - `releases(info_hash)`
 - `releases(url)`
-- `assets(book_id, active)`
+- `assets(book_id, created_at)`
 - `asset_files(asset_id, start)`
 - `jobs(status, type, updated_at)`
-- `operations(key)`
-- `playback_positions(book_id, device_id)`
-
-Enforce only one active asset per book with a partial unique index on `(book_id) WHERE active = 1`.
 
 ## State Machine
 
@@ -195,7 +192,7 @@ Rules:
 
 - Transitions are monotonic. No backward transition unless explicit user action.
 - Failures do not erase last known good state. Store `error` on release/job.
-- Multiple assets per book are allowed. `active` asset is for playback and feeds.
+- Multiple assets per book are allowed. Playback/feed selection is derived by heuristic.
 
 Release transition mirrors book but can fail independently:
 
@@ -204,7 +201,7 @@ Release transition mirrors book but can fail independently:
 Idempotency:
 
 - All external-triggered actions (snatch/download/import) must be idempotent.
-- Use operations table to block duplicate work.
+- Use unique constraints on `releases.info_hash` to prevent duplicate snatches.
 - Deduplicate by infohash before contacting rTorrent.
 
 ## API Surface (Versionless)
@@ -224,7 +221,7 @@ Idempotency:
 ### Search + Snatch
 
 - `POST /search` -> returns normalized Torznab results (include `media_type`)
-- `POST /snatch` -> creates release and download job
+- `POST /snatch` -> requires `bookId`, creates release and download job
 - `GET /releases?bookId=`
 
 ### Downloads + Import
@@ -234,12 +231,6 @@ Idempotency:
 - `POST /downloads/{id}/retry`
 - `POST /import/reconcile`
 - `GET /assets?bookId=`
-- `POST /assets/{assetId}/activate`
-
-### Playback
-
-- `PUT /playback/position`
-- `GET /playback/positions?since=`
 
 ### Streaming + Feeds
 
@@ -249,6 +240,8 @@ Idempotency:
 - `GET /feed.xml` (audio feed)
 - `GET /feed.json` (audio feed)
 - `GET /ebook/{assetId}` (direct download, ebook only)
+
+Feeds are sorted by `added_at` (fixed).
 
 ### Settings
 
@@ -266,8 +259,7 @@ Settings shape (stored in SQLite as a single JSON row):
   "libraryRoots": ["/media/audiobooks", "/media/ebooks"],
   "polling": { "rtorrentMs": 5000, "scanMs": 30000 },
   "transcode": { "enabled": true, "format": "mp3", "bitrateKbps": 64 },
-  "linkStrategy": { "order": ["hardlink", "reflink", "symlink"] },
-  "feed": { "title": "Kindling", "author": "...", "sort": "added_at" },
+  "feed": { "title": "Kindling", "author": "..." },
   "auth": { "mode": "apikey", "key": "..." }
 }
 ```
@@ -285,12 +277,11 @@ Settings shape (stored in SQLite as a single JSON row):
 
 Use XML-RPC or `rpc` interface. Needed calls:
 
-- `load.start` (or equivalent) with magnet/url
+- `load.raw_start` with torrent bytes (no filesystem path dependence)
 - `d.name`, `d.hash`, `d.complete`, `d.get_base_path`
 - `d.get_bytes_done`, `d.get_size_bytes`
 
-Default transport: HTTP XML-RPC (simpler to implement and test).
-Support SCGI as optional config for deployments that require it.
+Default transport: HTTP XML-RPC only. Do not support SCGI.
 
 ### Open Library
 
@@ -298,12 +289,18 @@ Support SCGI as optional config for deployments that require it.
 - Fetch metadata and cover
 - Must be optional: import should not fail on missing metadata
 
+## Metadata Strategy
+
+- Open Library is the primary metadata source.
+- Store raw provider payloads for reproducibility.
+- Manual overrides in Kindling should take precedence.
+
 ## Import & Linking Strategy
 
 - Do not delete or move source torrents
-- Create hardlink when same filesystem, reflink when supported, else symlink
+- Use hardlinks only; if hardlink fails (EXDEV), surface a clear error
 - Compute asset(s) as first-class objects
-- Replace means swapping active asset, not deleting history
+- Replace means swapping the preferred asset by heuristic, not deleting history
 - Ebook import stores the file as a single asset with `kind=ebook`
 
 ## Streaming + Feed Parity (Podible)
@@ -315,6 +312,7 @@ Maintain existing podible behaviors:
 - ID3 chapter tag injection for multi assets
 - Xing header patching for concatenated streams
 - JSON feed + RSS feed with cover/chapters
+Feed uses the asset selection heuristic (audio only).
 Ebooks are not part of the podcast feed. They are exposed via direct download.
 
 ## Auth + Security
@@ -325,18 +323,26 @@ Ebooks are not part of the podcast feed. They are exposed via direct download.
 
 ## Open Defaults (Explicit)
 
-- `POST /snatch` will create a new book if no `bookId` is provided, using the best parsed title/author from the search result.
-- Link fallback order is configurable; default is `hardlink -> reflink -> symlink`.
-- Feeds include only active audio assets; default sort is `added_at` (can configure `published_at`).
-- Playback positions are per device; default `device_id` is `local` if omitted.
-- Migration is clean-start only (no LL/podible import). Add migration tooling later if needed.
+- `POST /snatch` requires a `bookId`.
+- Hardlinks only; no configurable fallback.
+- Feeds include only audio assets; sort is fixed to `added_at`.
+- Use a migration system, but during early development it is acceptable to drop test databases and update the initial migration.
+- Migration from LL/podible data is out of scope for v1.
 
 ## Observability
 
 - Structured logs with `request_id`, `job_id`, `book_id`, `release_id` fields.
 - Basic metrics in `/health` or `/status`: counts by job state, release state, queue size.
 
+## Admin UI
+
+- Use server-rendered HTML (old school).
+- Keep client-side JS minimal.
+- Use medium CSS and rely on browser defaults where possible.
+
 ## Testing Plan
+
+Tests must be added alongside each implementation step. Do not defer testing to the end.
 
 ### Unit Tests
 
@@ -368,7 +374,7 @@ Use local mock services:
 
 ### End-to-End Tests
 
-- Search -> snatch -> download -> import -> asset active -> stream
+- Search -> snatch -> download -> import -> asset selected -> stream
 - Duplicate snatch attempt should be idempotent
 - rTorrent timeout should not corrupt state
 - Reconcile should recover downloaded-but-not-imported
@@ -390,12 +396,13 @@ Use local mock services:
 
 ## Implementation Order
 
-1. Storage + migrations + schema
-2. Search + Torznab normalization
-3. Snatch + rTorrent integration
-4. Import pipeline + asset creation
-5. Streaming + feeds
-6. Mock services + tests
+1. Open Library integration + book persistence, with tests (mocked or live)
+2. Torznab search normalization, with mocked Torznab tests
+3. Snatch flow (requires bookId), with mocked Torznab tests
+4. Downloading via rTorrent, with mocked rTorrent or Docker-backed rTorrent tests
+5. Import pipeline + asset creation, with mocked rTorrent or Docker-backed tests
+6. Streaming + feeds, with range/chapters/feed tests
+7. Harden mock services and add regression tests
 
 ## Deliverables
 
