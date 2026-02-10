@@ -6,6 +6,7 @@ This document is a build plan for a new Kindling backend implemented inside the 
 
 - Provide a reliable, deterministic backend for Kindling (macOS + iOS).
 - Support both ebooks and audiobooks end-to-end.
+- Automatically attempt to acquire both ebook and audiobook for every book by default.
 - Keep search, snatch, download, import, streaming, and feed generation in one service.
 - Make the system resilient to duplicate events, partial failures, and provider quirks.
 - Provide a realistic test harness with mocked Torznab and rTorrent so regressions are caught early.
@@ -34,6 +35,7 @@ Key subsystems:
 - Import: detect files, compute assets, link into library, update book
 - Streaming + feed: reuse podible range streaming, chapters, feeds (audio only)
 - Ebooks: store file assets, expose download URLs (no streaming semantics needed)
+- Acquisition loop: auto search/snatch/download/import for audio + ebook per book
 
 ## Tech Constraints
 
@@ -181,6 +183,17 @@ When a book has multiple assets, select one for playback/feed using deterministi
 
 No persisted “favorite” or active flag.
 
+## Acquisition Loop (Auto)
+
+When a book is added, the system should automatically attempt to acquire both media types:
+
+1. Search audio results, rank, snatch, download, import.
+2. Search ebook results, rank, snatch, download, import.
+
+If import fails due to mismatch or bad content, mark the release as failed and try the next result. Stop after N attempts (configurable) and surface a “needs manual selection” state.
+
+This keeps correctness without heavy orchestration.
+
 ## Job Execution Semantics
 
 - Use jobs only for long-running tasks: download, import, transcode, scan.
@@ -233,12 +246,13 @@ Idempotency:
 
 - `GET /library?limit=&cursor=&q=`
 - `GET /library/{bookId}`
+- `POST /library` -> create a book (title, author) and trigger acquisition loop
 - `POST /library/refresh`
 - `GET /library/changes?since=`
 
 ### Search + Snatch
 
-- `POST /search` -> returns normalized Torznab results
+- `POST /search` -> `{ query, media: audio|ebook }`, returns normalized Torznab results
 - `POST /snatch` -> requires `bookId`, creates release and download job
 - `GET /releases?bookId=`
 
@@ -312,6 +326,16 @@ Default transport: HTTP XML-RPC only. Do not support SCGI.
 - Open Library is the primary metadata source.
 - Store raw provider payloads for reproducibility.
 - Manual overrides in Kindling should take precedence.
+
+## Search Result Ranking (including box sets)
+
+Default behavior favors single-book matches:
+
+1. Require strong title + author match for the specific book title.
+2. Penalize results containing set markers: "box set", "collection", "complete", "omnibus", "books 1-7", "1-3", "series".
+3. Prefer exact title match and smaller total size/duration.
+
+If only box sets are returned, mark as ambiguous and stop after N attempts. This can later be resolved by an AI-assisted selection step.
 
 ## Import & Linking Strategy
 
