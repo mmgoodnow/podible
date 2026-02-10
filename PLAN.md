@@ -42,6 +42,8 @@ Key subsystems:
 - Bun.sqlite for storage
 - node:child_process for rTorrent/ffmpeg/ffprobe
 - No version prefix in URLs
+- Raw SQL + thin repository layer (no ORM)
+- Typechecking required for all TS (`tsc --noEmit`)
 
 ## Persistence Migration (Podible JSON -> SQLite)
 
@@ -57,6 +59,21 @@ Move all persistence to SQLite. During transition, it is acceptable to:
 - Read existing JSON files once to seed SQLite (optional)
 - Stop writing JSON files after SQLite is introduced
 - Delete JSON files in test/dev environments
+
+## Library Layout (Filesystem)
+
+Single configurable library root. Organize as:
+
+`/LibraryRoot/Author/Book Title/`
+
+Assets live under the book directory:
+
+- `Book Title.m4b` (preferred audio)
+- `Book Title.epub` or `Book Title.pdf` (ebook)
+- `Book Title.jpg` (cover)
+- `Book Title/` (folder of mp3s only if no m4b)
+
+SQLite is the source of truth. The filesystem only stores assets referenced by the database.
 
 ## Data Model (SQLite)
 
@@ -85,7 +102,6 @@ Represents a specific acquisition attempt (a chosen search result). Releases tra
 - book_id TEXT NOT NULL (foreign key to book)
 - provider TEXT NOT NULL (torznab source/provider name)
 - title TEXT NOT NULL (release title as returned by provider)
-- media_type TEXT NOT NULL (audio|ebook)
 - info_hash TEXT NOT NULL
 - size_bytes INTEGER NULL (raw size from provider)
 - url TEXT NOT NULL (download/magnet URL)
@@ -159,18 +175,20 @@ This avoids regressing from `imported` to `snatched` on transient errors.
 When a book has multiple assets, select one for playback/feed using deterministic heuristics:
 
 1. Prefer audio assets over ebooks for feeds/streaming.
-2. Prefer the most recently imported asset.
-3. For audio, prefer longer duration if timestamps tie.
+2. Prefer m4b single-file audio over multi-mp3.
+3. Prefer the most recently imported asset.
+4. For audio, prefer longer duration if timestamps tie.
 
 No persisted “favorite” or active flag.
 
 ## Job Execution Semantics
 
+- Use jobs only for long-running tasks: download, import, transcode, scan.
+- Snatch should attempt the rTorrent add inline and fail fast if the add fails.
 - Jobs are best-effort and can be retried.
 - Retries use exponential backoff with a max attempt count.
 - Import/snatch/download transitions are wrapped in DB transactions.
-- Search and snatch should be synchronous when possible; long-running work (download/import/transcode/scan) is async.
-- Snatch should attempt the rTorrent add inline and fail fast if the add fails.
+- Search and snatch are synchronous when possible; long-running work is async.
 
 ## Indexes (required)
 
@@ -220,7 +238,7 @@ Idempotency:
 
 ### Search + Snatch
 
-- `POST /search` -> returns normalized Torznab results (include `media_type`)
+- `POST /search` -> returns normalized Torznab results
 - `POST /snatch` -> requires `bookId`, creates release and download job
 - `GET /releases?bookId=`
 
@@ -256,7 +274,7 @@ Settings shape (stored in SQLite as a single JSON row):
     { "name": "prowlarr", "baseUrl": "...", "apiKey": "...", "categories": { "audio": "audio", "ebook": "book" } }
   ],
   "rtorrent": { "transport": "http-xmlrpc", "url": "...", "username": "...", "password": "..." },
-  "libraryRoots": ["/media/audiobooks", "/media/ebooks"],
+  "libraryRoot": "/media/library",
   "polling": { "rtorrentMs": 5000, "scanMs": 30000 },
   "transcode": { "enabled": true, "format": "mp3", "bitrateKbps": 64 },
   "feed": { "title": "Kindling", "author": "..." },
