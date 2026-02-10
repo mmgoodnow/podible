@@ -50,10 +50,9 @@ Tables:
 ### books
 Represents the canonical logical book record in Kindling (title/author + metadata). A book can have multiple assets over time (multiple releases or formats), with one asset marked active for playback/feed.
 
-- id TEXT PRIMARY KEY (stable internal ID)
+- id INTEGER PRIMARY KEY AUTOINCREMENT
 - title TEXT NOT NULL (display title)
 - author TEXT NOT NULL (display author)
-- status TEXT NOT NULL (open|snatched|downloading|downloaded|imported|error, monotonic)
 - media_type TEXT NOT NULL (audio|ebook|mixed; derived from assets/releases)
 - primary_asset_id TEXT NULL (current active asset for playback/feed)
 - cover_path TEXT NULL (resolved cover file path; cacheable)
@@ -69,12 +68,12 @@ Represents the canonical logical book record in Kindling (title/author + metadat
 ### releases
 Represents a specific acquisition attempt (a chosen search result). Releases track downloader state and connect a provider result to the eventual asset(s).
 
-- id TEXT PRIMARY KEY (stable internal ID)
+- id INTEGER PRIMARY KEY AUTOINCREMENT
 - book_id TEXT NOT NULL (foreign key to book)
 - provider TEXT NOT NULL (torznab source/provider name)
 - title TEXT NOT NULL (release title as returned by provider)
 - media_type TEXT NOT NULL (audio|ebook)
-- info_hash TEXT NULL (if available from downloader)
+- info_hash TEXT NOT NULL
 - size_bytes INTEGER NULL (raw size from provider)
 - url TEXT NOT NULL (download/magnet URL)
 - snatched_at TEXT NOT NULL (when acquisition requested)
@@ -85,7 +84,7 @@ Represents a specific acquisition attempt (a chosen search result). Releases tra
 ### assets
 Represents a concrete file set that can be played or downloaded (single audio file, multi-part audio, or a single ebook file). Assets are immutable; switching “current” uses `active`.
 
-- id TEXT PRIMARY KEY (stable internal ID)
+- id INTEGER PRIMARY KEY AUTOINCREMENT
 - book_id TEXT NOT NULL (foreign key to book)
 - kind TEXT NOT NULL (single|multi|ebook)
 - mime TEXT NOT NULL (audio/mpeg, audio/mp4, application/epub+zip, application/pdf)
@@ -100,7 +99,7 @@ Represents a concrete file set that can be played or downloaded (single audio fi
 ### asset_files
 Represents individual files that make up an asset, including byte offsets for stitched audio streaming and per-file duration for chapter mapping.
 
-- id TEXT PRIMARY KEY (stable internal ID)
+- id INTEGER PRIMARY KEY AUTOINCREMENT
 - asset_id TEXT NOT NULL (foreign key to asset)
 - path TEXT NOT NULL (absolute or library-relative path)
 - size INTEGER NOT NULL (bytes)
@@ -113,7 +112,7 @@ Represents individual files that make up an asset, including byte offsets for st
 ### playback_positions
 Represents a last-known playback position for a specific asset and device.
 
-- id TEXT PRIMARY KEY (stable internal ID)
+- id INTEGER PRIMARY KEY AUTOINCREMENT
 - book_id TEXT NOT NULL
 - asset_id TEXT NOT NULL
 - device_id TEXT NOT NULL (default "local")
@@ -125,7 +124,7 @@ Represents a last-known playback position for a specific asset and device.
 ### jobs
 Represents background work. Jobs provide visibility and retries for scan, snatch, download, import, transcode, and reconcile flows.
 
-- id TEXT PRIMARY KEY (stable internal ID)
+- id INTEGER PRIMARY KEY AUTOINCREMENT
 - type TEXT NOT NULL (scan|search|snatch|download|import|transcode|reconcile)
 - status TEXT NOT NULL (queued|running|succeeded|failed|cancelled)
 - book_id TEXT NULL (optional target book)
@@ -138,7 +137,7 @@ Represents background work. Jobs provide visibility and retries for scan, snatch
 ### operations
 Represents idempotency locks for external-triggered actions to prevent duplicate effects (snatch/download/import).
 
-- id TEXT PRIMARY KEY (stable internal ID)
+- id INTEGER PRIMARY KEY AUTOINCREMENT
 - key TEXT NOT NULL UNIQUE (idempotency key)
 - status TEXT NOT NULL (started|succeeded|failed)
 - created_at TEXT NOT NULL
@@ -148,12 +147,12 @@ Idempotency keys should be derived as `book_id + info_hash + action` where possi
 
 ## ID Format
 
-- Use ULID strings for all IDs.
-- Reasoning: sortable by time, readable, easy to generate in JS/Bun.
+- Use SQLite `INTEGER PRIMARY KEY AUTOINCREMENT` for all IDs.
+- Expose IDs as numbers in the API.
 
 ## Status Derivation (books.status)
 
-`books.status` is stored but derived from releases/assets and kept in sync by import/reconcile jobs.
+Do not persist `books.status`. Derive it on read from releases/assets:
 
 Precedence (highest wins):
 
@@ -168,21 +167,13 @@ This avoids regressing from `imported` to `snatched` on transient errors.
 
 ## Job Execution Semantics
 
-- Jobs have leases: `status=running` includes `started_at` and must heartbeat `updated_at`.
-- A watchdog requeues stale running jobs after a timeout.
+- Jobs are best-effort and can be retried.
 - Retries use exponential backoff with a max attempt count.
 - Import/snatch/download transitions are wrapped in DB transactions.
 
-## Dedup Fingerprints
-
-When infohash is missing (common for direct URLs/ebooks), compute a release fingerprint:
-
-- `provider + url + size_bytes + normalized_title`
-- Store it on the release and enforce uniqueness per book.
-
 ## Indexes (required)
 
-- `books(status, added_at)`
+- `books(added_at)`
 - `releases(book_id, status)`
 - `releases(info_hash)`
 - `releases(url)`
@@ -214,7 +205,7 @@ Idempotency:
 
 - All external-triggered actions (snatch/download/import) must be idempotent.
 - Use operations table to block duplicate work.
-- Deduplicate by infohash or url before contacting rTorrent.
+- Deduplicate by infohash before contacting rTorrent.
 
 ## API Surface (Versionless)
 
