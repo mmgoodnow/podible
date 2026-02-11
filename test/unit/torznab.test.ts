@@ -6,10 +6,11 @@ const SAMPLE = `<?xml version="1.0"?>
 <rss><channel>
   <item>
     <title>Dune Audiobook</title>
+    <size>12345</size>
     <link>magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567</link>
     <enclosure url="magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567" length="12345" />
     <torznab:attr name="seeders" value="10" />
-    <torznab:attr name="peers" value="2" />
+    <torznab:attr name="leechers" value="2" />
   </item>
   <item>
     <title>Dune eBook</title>
@@ -28,6 +29,7 @@ describe("torznab parser", () => {
     expect(results[0]?.infoHash).toBe("0123456789abcdef0123456789abcdef01234567");
     expect(results[0]?.seeders).toBe(10);
     expect(results[0]?.leechers).toBe(2);
+    expect(results[0]?.sizeBytes).toBe(12345);
 
     expect(results[1]?.infoHash).toBe("89abcdef0123456789abcdef0123456789abcdef");
     expect(results[1]?.sizeBytes).toBe(200);

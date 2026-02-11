@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { buildMethodCall, parseResponseValue } from "../../src/kindling/rtorrent";
+import { buildMethodCall, parseResponseValue, RtorrentClient } from "../../src/kindling/rtorrent";
 
 describe("rtorrent xmlrpc helpers", () => {
   test("builds method call payload", () => {
@@ -26,5 +26,61 @@ describe("rtorrent xmlrpc helpers", () => {
         '<?xml version="1.0"?><methodResponse><fault><value><string>bad</string></value></fault></methodResponse>'
       )
     ).toThrow();
+  });
+
+  test("falls back to directory and byte methods when get_* methods are unavailable", async () => {
+    const originalFetch = globalThis.fetch;
+    const calls: string[] = [];
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      const body = String(init?.body ?? "");
+      const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
+      calls.push(method);
+
+      if (
+        method === "d.get_base_path" ||
+        method === "d.base_path" ||
+        method === "d.get_bytes_done" ||
+        method === "d.get_size_bytes"
+      ) {
+        return new Response("not found", { status: 500 });
+      }
+
+      const responseXml = (() => {
+        switch (method) {
+          case "d.name":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string>Name</string></value></param></params></methodResponse>';
+          case "d.hash":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string>ABCDEF</string></value></param></params></methodResponse>';
+          case "d.complete":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><int>1</int></value></param></params></methodResponse>';
+          case "d.directory":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string>/downloads/book</string></value></param></params></methodResponse>';
+          case "d.bytes_done":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><int>50</int></value></param></params></methodResponse>';
+          case "d.size_bytes":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><int>100</int></value></param></params></methodResponse>';
+          default:
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string></string></value></param></params></methodResponse>';
+        }
+      })();
+      return new Response(responseXml, { status: 200, headers: { "Content-Type": "text/xml" } });
+    }) as unknown as typeof fetch;
+
+    try {
+      const client = new RtorrentClient({
+        transport: "http-xmlrpc",
+        url: "http://mock.local/RPC2",
+        username: "",
+        password: "",
+      });
+      const state = await client.getDownloadState("0123456789abcdef0123456789abcdef01234567");
+      expect(state.basePath).toBe("/downloads/book");
+      expect(state.bytesDone).toBe(50);
+      expect(state.sizeBytes).toBe(100);
+      expect(calls.includes("d.get_base_path")).toBe(true);
+      expect(calls.includes("d.directory")).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

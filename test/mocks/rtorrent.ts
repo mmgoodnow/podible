@@ -134,13 +134,21 @@ export function startMockRtorrent(options: MockRtorrentOptions): MockRtorrent {
       if (method === "d.hash") {
         return new Response(xmlResponseString(state.infoHash.toUpperCase()), { headers: { "Content-Type": "text/xml" } });
       }
-      if (method === "d.get_base_path") {
+      if (method === "d.get_base_path" || method === "d.base_path" || method === "d.directory") {
         return new Response(xmlResponseString(state.basePath), { headers: { "Content-Type": "text/xml" } });
       }
-      if (method === "d.get_bytes_done") {
+      if (method === "d.get_bytes_done" || method === "d.bytes_done") {
         return new Response(xmlResponseInt(state.bytesDone), { headers: { "Content-Type": "text/xml" } });
       }
+      if (method === "d.left_bytes") {
+        return new Response(xmlResponseInt(Math.max(0, state.sizeBytes - state.bytesDone)), {
+          headers: { "Content-Type": "text/xml" },
+        });
+      }
       if (method === "d.get_size_bytes") {
+        return new Response(xmlResponseInt(state.sizeBytes), { headers: { "Content-Type": "text/xml" } });
+      }
+      if (method === "d.size_bytes") {
         return new Response(xmlResponseInt(state.sizeBytes), { headers: { "Content-Type": "text/xml" } });
       }
 

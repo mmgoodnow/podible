@@ -104,11 +104,15 @@ export function parseTorznabSearch(xml: string, provider: string, mediaType: Med
         title,
         provider,
         mediaType,
-        sizeBytes: parseIntOrNull(attrMap.size ?? (item.enclosure as Record<string, unknown> | undefined)?.length),
+        sizeBytes: parseIntOrNull(
+          attrMap.size ??
+            item.size ??
+            (item.enclosure as Record<string, unknown> | undefined)?.length
+        ),
         url,
         infoHash,
         seeders: parseIntOrNull(attrMap.seeders),
-        leechers: parseIntOrNull(attrMap.peers),
+        leechers: parseIntOrNull(attrMap.leechers ?? attrMap.peers),
         raw: {
           ...item,
           provider,
