@@ -239,7 +239,7 @@ Worker claim/recovery rule:
 - `releases(url)`
 - `assets(book_id, created_at)`
 - `asset_files(asset_id, start)`
-- `jobs(status, type, updated_at)`
+- `jobs(status, next_run_at, created_at)`
 
 Uniqueness:
 
