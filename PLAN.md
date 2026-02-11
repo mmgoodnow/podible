@@ -160,6 +160,12 @@ Represents background work. Jobs provide visibility and retries for scan, snatch
 - created_at TEXT NOT NULL
 - updated_at TEXT NOT NULL
 
+### settings
+Single-row settings storage.
+
+- id INTEGER PRIMARY KEY (always 1)
+- value_json TEXT NOT NULL
+
 
 ## ID Format
 
@@ -168,16 +174,22 @@ Represents background work. Jobs provide visibility and retries for scan, snatch
 
 ## Status Derivation (books.status)
 
-Do not persist `books.status`. Derive it on read from releases/assets:
+Do not persist `books.status`. Derive it on read, and expose per-media states.
 
-Precedence (highest wins):
+Per-media status (audio, ebook):
 
-1. `imported` if any asset exists
-2. `downloading` if any release is `downloading` or job `download` is running
-3. `downloaded` if at least one release is `downloaded` but no assets exist yet
-4. `snatched` if any release is `snatched` and none are downloading
-5. `error` if all releases failed and no assets exist
+1. `imported` if an asset of that media exists
+2. `downloading` if any release of that media is `downloading`
+3. `downloaded` if at least one release of that media is `downloaded` but no asset exists
+4. `snatched` if any release of that media is `snatched`
+5. `error` if all releases of that media failed and no asset exists
 6. `open` otherwise
+
+Overall `books.status`:
+
+- `imported` only if both audio and ebook are imported
+- `partial` if exactly one media is imported
+- otherwise the “highest” non-imported state across both media
 
 This avoids regressing from `imported` to `snatched` on transient errors.
 
@@ -269,7 +281,7 @@ Idempotency:
 
 - `GET /downloads` -> mapped from jobs/releases
 - `GET /downloads/{jobId}` (download job id)
-- `POST /downloads/{id}/retry`
+- `POST /downloads/{jobId}/retry`
 - `/downloads` responses include both `job_id` and `release_id`
 - `POST /import/reconcile`
 - `GET /assets?bookId=`
@@ -324,6 +336,8 @@ Use XML-RPC or `rpc` interface. Needed calls:
 - `d.get_bytes_done`, `d.get_size_bytes`
 
 Default transport: HTTP XML-RPC only. Do not support SCGI.
+
+If a search result does not include `info_hash`, fetch the `.torrent` file first and compute the hash before snatch.
 
 ### Open Library
 
@@ -434,7 +448,7 @@ Use local mock services:
 
 ### Additional Edge Tests
 
-- Restart in the middle of a running job (lease recovery)
+- Restart in the middle of a running job (ensure job can be retried cleanly)
 - Concurrent snatch requests for the same release
 - SQLite busy/lock contention under parallel jobs
 - Malformed or unsatisfiable Range requests
