@@ -1,6 +1,6 @@
 import { KindlingRepo } from "./repo";
 import { RtorrentClient } from "./rtorrent";
-import { infoHashFromTorrentBytes, normalizeInfoHash } from "./torrent";
+import { normalizeInfoHash } from "./torrent";
 import { searchTorznab } from "./torznab";
 import type { AppSettings, MediaType, ReleaseRow } from "./types";
 
@@ -15,8 +15,8 @@ type SnatchRequest = {
   title: string;
   mediaType: MediaType;
   url: string;
+  infoHash: string;
   sizeBytes?: number | null;
-  infoHash?: string | null;
 };
 
 function isMagnet(url: string): boolean {
@@ -31,13 +31,8 @@ async function fetchTorrentBytes(url: string): Promise<Uint8Array> {
   return new Uint8Array(await response.arrayBuffer());
 }
 
-async function resolveInfoHash(url: string, explicitHash?: string | null): Promise<{ hash: string; torrentBytes?: Uint8Array }> {
-  if (explicitHash) {
-    return { hash: normalizeInfoHash(explicitHash) };
-  }
-
-  const torrentBytes = await fetchTorrentBytes(url);
-  return { hash: infoHashFromTorrentBytes(torrentBytes), torrentBytes };
+function resolveInfoHash(explicitHash: string): string {
+  return normalizeInfoHash(explicitHash);
 }
 
 export async function runSearch(settings: AppSettings, request: SearchRequest) {
@@ -78,8 +73,8 @@ export async function runSnatch(repo: KindlingRepo, settings: AppSettings, reque
     throw new Error("Magnet URLs are not supported for snatch; provide a .torrent URL");
   }
 
-  const resolved = await resolveInfoHash(request.url, request.infoHash);
-  const existing = repo.findReleaseByInfoHash(resolved.hash);
+  const resolvedHash = resolveInfoHash(request.infoHash);
+  const existing = repo.findReleaseByInfoHash(resolvedHash);
   if (existing) {
     if (existing.book_id !== request.bookId) {
       throw new Error(`Infohash already linked to book ${existing.book_id}`);
@@ -95,10 +90,7 @@ export async function runSnatch(repo: KindlingRepo, settings: AppSettings, reque
   }
 
   const client = new RtorrentClient(settings.rtorrent);
-  let torrentBytes = resolved.torrentBytes;
-  if (!torrentBytes) {
-    torrentBytes = await fetchTorrentBytes(request.url);
-  }
+  const torrentBytes = await fetchTorrentBytes(request.url);
   await client.loadRawStart(torrentBytes);
 
   const release = repo.createRelease({
@@ -106,7 +98,7 @@ export async function runSnatch(repo: KindlingRepo, settings: AppSettings, reque
     provider: request.provider,
     title: request.title,
     mediaType: request.mediaType,
-    infoHash: resolved.hash,
+    infoHash: resolvedHash,
     sizeBytes: request.sizeBytes ?? null,
     url: request.url,
     status: "snatched",

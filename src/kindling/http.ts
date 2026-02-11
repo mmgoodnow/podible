@@ -41,7 +41,7 @@ function parseLimit(value: string | null): number {
   return Math.min(parsed, 200);
 }
 
-export function createKindlingFetchHandler(repo: KindlingRepo, startTime: number): (request: Request) => Promise<Response> {
+export function createPodibleFetchHandler(repo: KindlingRepo, startTime: number): (request: Request) => Promise<Response> {
   return async (request: Request): Promise<Response> => {
     const settings = repo.getSettings();
     const url = new URL(request.url);
@@ -50,7 +50,7 @@ export function createKindlingFetchHandler(repo: KindlingRepo, startTime: number
     if (!authorizeRequest(request, settings)) {
       return new Response("Unauthorized", {
         status: 401,
-        headers: { "WWW-Authenticate": 'Bearer realm="kindling"' },
+        headers: { "WWW-Authenticate": 'Bearer realm="podible"' },
       });
     }
 
@@ -64,7 +64,7 @@ export function createKindlingFetchHandler(repo: KindlingRepo, startTime: number
 
       if (pathname === "/server" && request.method === "GET") {
         return json({
-          name: "kindling-backend",
+          name: "podible-backend",
           runtime: "bun",
           uptimeMs: Date.now() - startTime,
           now: new Date().toISOString(),
@@ -152,9 +152,12 @@ export function createKindlingFetchHandler(repo: KindlingRepo, startTime: number
           title: string;
           mediaType: MediaType;
           url: string;
+          infoHash: string;
           sizeBytes?: number | null;
-          infoHash?: string | null;
         }>(request);
+        if (!payload.infoHash?.trim()) {
+          return json({ error: "infoHash is required" }, 400);
+        }
         const outcome = await runSnatch(repo, settings, payload);
         return json(outcome, outcome.idempotent ? 200 : 201);
       }

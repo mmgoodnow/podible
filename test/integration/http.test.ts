@@ -2,10 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { runMigrations } from "../../src/kindling/db";
-import { createKindlingFetchHandler } from "../../src/kindling/http";
+import { createPodibleFetchHandler } from "../../src/kindling/http";
 import { KindlingRepo } from "../../src/kindling/repo";
 
-describe("kindling http", () => {
+describe("podible http", () => {
   test("serves health and creates library book", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown) => {
@@ -30,7 +30,7 @@ describe("kindling http", () => {
         torznab: [],
       });
 
-      const fetchHandler = createKindlingFetchHandler(repo, Date.now());
+      const fetchHandler = createPodibleFetchHandler(repo, Date.now());
 
       const health = await fetchHandler(new Request("http://localhost/health"));
       expect(health.status).toBe(200);

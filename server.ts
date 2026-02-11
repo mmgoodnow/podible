@@ -1,6 +1,6 @@
 import { ensureDataDir, kindlingDbPath, port } from "./src/config";
 import { openDatabase } from "./src/kindling/db";
-import { createKindlingFetchHandler } from "./src/kindling/http";
+import { createPodibleFetchHandler } from "./src/kindling/http";
 import { KindlingRepo } from "./src/kindling/repo";
 import { runWorker } from "./src/kindling/worker";
 
@@ -27,13 +27,13 @@ void runWorker({
 
 const server = Bun.serve({
   port,
-  fetch: createKindlingFetchHandler(repo, startTime),
+  fetch: createPodibleFetchHandler(repo, startTime),
 });
 
 const localBase = `http://localhost${port === 80 ? "" : `:${port}`}`;
 const current = repo.getSettings();
 
-console.log(`Kindling backend listening on ${localBase}`);
+console.log(`Podible backend listening on ${localBase}`);
 console.log(`Library root: ${current.libraryRoot}`);
 console.log(`Health: ${localBase}/health`);
 if (current.auth.mode === "apikey") {

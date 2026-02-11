@@ -153,21 +153,20 @@ async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> 
   for (const media of mediaList) {
     const query = `${book.title} ${book.author}`.trim();
     const results = await runSearch(settings, { query, media });
-    for (const result of results.slice(0, 3)) {
-      try {
-        await runSnatch(ctx.repo, settings, {
-          bookId: book.id,
-          provider: result.provider,
-          title: result.title,
-          mediaType: media,
-          url: result.url,
-          sizeBytes: result.sizeBytes,
-          infoHash: result.infoHash,
-        });
-      } catch {
-        continue;
-      }
-      break;
+    const result = results[0];
+    if (!result) continue;
+    try {
+      await runSnatch(ctx.repo, settings, {
+        bookId: book.id,
+        provider: result.provider,
+        title: result.title,
+        mediaType: media,
+        url: result.url,
+        sizeBytes: result.sizeBytes,
+        infoHash: result.infoHash,
+      });
+    } catch {
+      continue;
     }
   }
 

@@ -9,7 +9,7 @@ type TorznabResult = {
   mediaType: MediaType;
   sizeBytes: number | null;
   url: string;
-  infoHash: string | null;
+  infoHash: string;
   seeders: number | null;
   leechers: number | null;
   raw: Record<string, unknown>;
@@ -77,12 +77,11 @@ function parseAttrMap(item: Record<string, unknown>): Record<string, string> {
   return out;
 }
 
-function inferInfoHash(item: Record<string, unknown>, attrMap: Record<string, string>): string | null {
+function inferInfoHash(attrMap: Record<string, string>): string | null {
   const candidate =
     attrMap.infohash ??
     attrMap["torrenthash"] ??
-    attrMap["btih"] ??
-    (typeof item.guid === "string" ? item.guid : null);
+    attrMap["btih"];
   if (candidate) {
     try {
       return normalizeInfoHash(candidate);
@@ -105,10 +104,10 @@ export function parseTorznabSearch(xml: string, provider: string, mediaType: Med
       const title = textValue(item.title);
       const attrMap = parseAttrMap(item);
       const url = chooseDownloadUrl(item);
-      if (!title || !url || !isSupportedTorrentUrl(url)) {
+      const infoHash = inferInfoHash(attrMap);
+      if (!title || !url || !isSupportedTorrentUrl(url) || !infoHash) {
         continue;
       }
-      const infoHash = inferInfoHash(item, attrMap);
       out.push({
         title,
         provider,

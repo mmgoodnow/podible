@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { infoHashFromTorrentBytes, normalizeInfoHash } from "../../src/kindling/torrent";
+import { normalizeInfoHash } from "../../src/kindling/torrent";
 
 type DownloadConfig = {
   name: string;
@@ -67,6 +67,15 @@ export function startMockRtorrent(options: MockRtorrentOptions): MockRtorrent {
       completePolls: config.completeAfterPolls,
     });
   }
+  for (const [hash, config] of Object.entries(byHash)) {
+    if (states.has(hash)) continue;
+    states.set(hash, {
+      ...config,
+      infoHash: hash,
+      bytesDone: 0,
+      completePolls: 0,
+    });
+  }
 
   const server = Bun.serve({
     port: 0,
@@ -77,16 +86,6 @@ export function startMockRtorrent(options: MockRtorrentOptions): MockRtorrent {
       if (method === "load.raw_start") {
         const bytes = parseBase64Param(body);
         if (!bytes) return new Response(xmlResponseInt(0));
-        const hash = normalizeInfoHash(infoHashFromTorrentBytes(bytes));
-        const config = byHash[hash];
-        if (config) {
-          states.set(hash, {
-            ...config,
-            infoHash: hash,
-            bytesDone: 0,
-            completePolls: 0,
-          });
-        }
         return new Response(xmlResponseInt(0), { headers: { "Content-Type": "text/xml" } });
       }
 
@@ -114,19 +113,11 @@ export function startMockRtorrent(options: MockRtorrentOptions): MockRtorrent {
       if (method === "d.hash") {
         return new Response(xmlResponseString(state.infoHash.toUpperCase()), { headers: { "Content-Type": "text/xml" } });
       }
-      if (method === "d.get_base_path" || method === "d.base_path" || method === "d.directory") {
+      if (method === "d.base_path") {
         return new Response(xmlResponseString(state.basePath), { headers: { "Content-Type": "text/xml" } });
       }
-      if (method === "d.get_bytes_done" || method === "d.bytes_done") {
+      if (method === "d.bytes_done") {
         return new Response(xmlResponseInt(state.bytesDone), { headers: { "Content-Type": "text/xml" } });
-      }
-      if (method === "d.left_bytes") {
-        return new Response(xmlResponseInt(Math.max(0, state.sizeBytes - state.bytesDone)), {
-          headers: { "Content-Type": "text/xml" },
-        });
-      }
-      if (method === "d.get_size_bytes") {
-        return new Response(xmlResponseInt(state.sizeBytes), { headers: { "Content-Type": "text/xml" } });
       }
       if (method === "d.size_bytes") {
         return new Response(xmlResponseInt(state.sizeBytes), { headers: { "Content-Type": "text/xml" } });

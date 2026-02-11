@@ -7,10 +7,9 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { runMigrations } from "../../src/kindling/db";
-import { createKindlingFetchHandler } from "../../src/kindling/http";
+import { createPodibleFetchHandler } from "../../src/kindling/http";
 import { KindlingRepo } from "../../src/kindling/repo";
 import { defaultSettings } from "../../src/kindling/settings";
-import { infoHashFromTorrentBytes } from "../../src/kindling/torrent";
 import { runWorker } from "../../src/kindling/worker";
 import { startMockRtorrent } from "../mocks/rtorrent";
 import { startMockTorznab } from "../mocks/torznab";
@@ -57,9 +56,9 @@ describe("kindling e2e", () => {
     const ebookTorrent = makeTorrentBytes("ebook-book");
     const reconcileTorrent = makeTorrentBytes("ebook-reconcile");
 
-    const audioHash = infoHashFromTorrentBytes(audioTorrent);
-    const ebookHash = infoHashFromTorrentBytes(ebookTorrent);
-    const reconcileHash = infoHashFromTorrentBytes(reconcileTorrent);
+    const audioHash = "0123456789abcdef0123456789abcdef01234567";
+    const ebookHash = "89abcdef0123456789abcdef0123456789abcdef";
+    const reconcileHash = "1111111111111111111111111111111111111111";
 
     const torznab = startMockTorznab({
       results: [
@@ -120,7 +119,7 @@ describe("kindling e2e", () => {
       })
     );
 
-    const fetchHandler = createKindlingFetchHandler(repo, Date.now());
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now());
 
     let stopWorker = false;
     const worker = runWorker({
