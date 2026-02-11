@@ -13,6 +13,7 @@ export type WorkerContext = {
   repo: KindlingRepo;
   getSettings: () => AppSettings;
   onLog?: (message: string) => void;
+  shouldStop?: () => boolean;
 };
 
 function log(ctx: WorkerContext, message: string): void {
@@ -185,6 +186,9 @@ export async function runWorker(ctx: WorkerContext): Promise<void> {
   }
 
   for (;;) {
+    if (ctx.shouldStop?.()) {
+      return;
+    }
     const job = ctx.repo.claimNextRunnableJob(nowIso());
     if (!job) {
       await sleep(300);

@@ -9,7 +9,7 @@
 - [x] Snatch + rTorrent integration
 - [x] Download/import worker loop
 - [x] Asset streaming/feed parity
-- [ ] Mock services and e2e tests
+- [x] Mock services and e2e tests
 - [ ] README refresh
 
 ## Open Questions / Decisions
@@ -20,7 +20,7 @@
 
 - API surface replaced in `server.ts` and `/src/kindling/http.ts`.
 - Worker handles `download`, `import`, `scan`, and `reconcile` with retry/backoff.
-- Next: add mock Torznab/rTorrent services + e2e chain tests and refresh README.
+- Next: refresh README to match Kindling backend endpoints and setup.
 
 ## Assumptions
 
