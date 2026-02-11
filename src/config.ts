@@ -15,9 +15,6 @@ const FEED_TYPE = process.env.POD_TYPE ?? "episodic";
 const FEED_IMAGE_URL = process.env.POD_IMAGE_URL;
 
 const dataDir = process.env.DATA_DIR ?? path.join(process.env.TMPDIR ?? "/tmp", "podible-transcodes");
-const transcodeStatusPath = path.join(dataDir, "transcode-status.json");
-const libraryIndexPath = path.join(dataDir, "library-index.json");
-const probeCachePath = path.join(dataDir, "probe-cache.json");
 const kindlingDbPath = path.join(dataDir, "kindling.sqlite");
 const brandImagePath = path.join(process.cwd(), "podible.png");
 const apiKeyPath = path.join(dataDir, "api-key.txt");
@@ -57,9 +54,6 @@ export {
   FEED_TYPE,
   FEED_IMAGE_URL,
   dataDir,
-  transcodeStatusPath,
-  libraryIndexPath,
-  probeCachePath,
   kindlingDbPath,
   brandImagePath,
   apiKeyPath,

@@ -1,10 +1,10 @@
 import { promises as fs, statSync, watch } from "node:fs";
 import path from "node:path";
 
-import { ensureDataDir, libraryIndexPath } from "../config";
 import { resolveCoverPath } from "../media/covers";
 import { bookId, mimeFromExt, preferLonger, readAudioMetadata, readOpfMetadata } from "../media/metadata";
 import { getDurationSeconds, readFfprobeChapters } from "../media/probe-cache";
+import { loadJsonState, saveJsonState } from "../state/store";
 import { AudioSegment, Book, BookBuildResult, ChapterTiming, PendingSingleMeta, TranscodeStatus } from "../types";
 import {
   queuedSources,
@@ -17,6 +17,7 @@ import {
 
 const readyBooks = new Map<string, Book>();
 let rescanTimer: ReturnType<typeof setTimeout> | null = null;
+const LIBRARY_INDEX_STATE_KEY = "library_index_v1";
 
 function numeric(value: number | bigint): number {
   return typeof value === "bigint" ? Number(value) : value;
@@ -55,10 +56,8 @@ function reviveBook(book: any): Book | null {
 }
 
 async function loadLibraryIndex() {
-  await ensureDataDir();
   try {
-    const content = await fs.readFile(libraryIndexPath, "utf8");
-    const parsed = JSON.parse(content);
+    const parsed = loadJsonState<unknown[]>(LIBRARY_INDEX_STATE_KEY);
     if (Array.isArray(parsed)) {
       parsed.forEach((entry: any) => {
         const book = reviveBook(entry);
@@ -73,9 +72,8 @@ async function loadLibraryIndex() {
 }
 
 async function saveLibraryIndex() {
-  await ensureDataDir();
   const payload = Array.from(readyBooks.values());
-  await fs.writeFile(libraryIndexPath, JSON.stringify(payload, null, 2), "utf8");
+  saveJsonState(LIBRARY_INDEX_STATE_KEY, payload);
 }
 
 function bookFromMeta(meta: PendingSingleMeta, outputPath: string, outputStat: Awaited<ReturnType<typeof fs.stat>>): Book {

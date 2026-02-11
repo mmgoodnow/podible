@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
 
-import { ensureDataDirSync, probeCachePath } from "../config";
+import { loadJsonState, saveJsonState } from "../state/store";
 import { ChapterTiming, FfprobeChapter, ProbeData, ProbeFailure } from "../types";
 import { cleanMetaValue } from "../utils/strings";
 
@@ -24,14 +23,16 @@ const probeCache = new Map<
 >();
 
 let probeCacheLoaded = false;
+const PROBE_CACHE_STATE_KEY = "probe_cache_v1";
 
 function ensureProbeCacheLoaded() {
   if (probeCacheLoaded) return;
   try {
-    const content = readFileSync(probeCachePath, "utf8");
-    const parsed = JSON.parse(content);
+    const parsed = loadJsonState<Array<{ file: string; mtimeMs: number; data: ProbeData | null; error?: string }>>(
+      PROBE_CACHE_STATE_KEY
+    );
     if (Array.isArray(parsed)) {
-      parsed.forEach((entry: any) => {
+      parsed.forEach((entry) => {
         if (!entry || typeof entry !== "object") return;
         if (typeof entry.file !== "string" || typeof entry.mtimeMs !== "number") return;
         probeCache.set(entry.file, {
@@ -49,14 +50,13 @@ function ensureProbeCacheLoaded() {
 
 function persistProbeCache() {
   try {
-    ensureDataDirSync();
     const payload = Array.from(probeCache.entries()).map(([file, value]) => ({
       file,
       mtimeMs: value.mtimeMs,
       data: value.data,
       error: value.error,
     }));
-    writeFileSync(probeCachePath, JSON.stringify(payload));
+    saveJsonState(PROBE_CACHE_STATE_KEY, payload);
   } catch (err) {
     console.warn(`Failed to persist ffprobe cache: ${(err as Error).message}`);
   }
