@@ -1,72 +1,130 @@
-# Podible (Bun audiobook feed)
+# Kindling Backend (Podible/Bun)
 
-Simple Bun server that exposes your audiobooks as a single podcast feed.
+Bun-based backend for Kindling, implemented in the `podible` codebase.
 
-```mermaid
-flowchart LR
-  Client[Podcast app] -->|GET /feed.xml| Server
-  Client -->|"GET /stream/:bookId (Range)"| Server
-  Client -->|"GET /chapters/:bookId.json"| Server
-  Client -->|"GET /covers/:bookId.jpg"| Server
-  Server[Podible] -->|reads| Library[/Author/Book audio files/]
-```
+The service provides:
+
+- SQLite-backed library, releases, assets, jobs, and settings.
+- Torznab search.
+- rTorrent snatch/download polling.
+- Import pipeline with hardlinking into the Kindling library root.
+- Audio streaming, chapters, RSS/JSON feeds.
+- Ebook direct download endpoint.
+- Mock Torznab/rTorrent and end-to-end tests.
 
 ## Requirements
-- Bun
-- Audio library laid out as `ROOT/<Author>/<Book>/*.{mp3,m4b,jpg}` (mp3 multi-file or single m4b)
-- ffprobe (required for chapter timings)
 
-## Run locally
+- Bun `1.3+`
+- `ffprobe` (used for audio duration/chapters)
+- `ffmpeg` (used by existing podible media behaviors)
+
+## Install
+
 ```bash
 bun install
-bun run server.ts /path/to/library
-# example: bun run server.ts /books
 ```
-Subscribe to `http://<host>/feed.xml`.
-Or subscribe to JSON Feed at `http://<host>/feed.json`.
 
-## Docker
+## Run
+
 ```bash
-docker-compose up --build
-# or build manually:
-docker build -t podible .
-docker run -p 80:80 -v ./books:/books:ro podible bun run server.ts /books
+bun run server.ts
 ```
 
-## Endpoints
-- `GET /` — Minimal homepage showing scan/transcode progress.
-- `GET /feed.xml` — RSS with one item per book (enclosure streams audio; chapters tag for mp3 sets).
-- `GET /feed-debug.xml` — Same feed with browser-friendly headers for viewing raw XML.
-- `GET /feed.json` — JSON Feed 1.1 with one item per book (attachments include audio).
-- `GET /feed-debug.json` — Same JSON Feed with `application/json` for easy viewing.
-- `GET /stream/:bookId` — Range-aware streaming; handles single m4b or stitched mp3 files.
-- `GET /chapters/:bookId.json` — Podcasting 2.0 chapters JSON for multi-mp3 books and m4b files with embedded chapters.
-- `GET /chapters-debug/:bookId.json` — Debug view of chapters with `application/json`.
-- `GET /covers/:bookId.jpg` — First `.jpg` in the book folder (exposed as a JPEG), if present.
+Optional: pass a library root override as the first arg.
 
-## Authentication
-- On first launch Podible writes a random API key to the data directory (`$DATA_DIR` or `${TMPDIR:-/tmp}/podible-transcodes/api-key.txt`) and logs it to the console.
-- All endpoints require the key via `?key=<api-key>` (query param). Headers are also accepted for manual testing: `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+```bash
+bun run server.ts /path/to/library
+```
+
+Runtime state is stored in `DATA_DIR` (default `${TMPDIR:-/tmp}/podible-transcodes`) and includes:
+
+- `kindling.sqlite`
+- migrated/legacy podible cache artifacts if present
+
+## Auth
+
+Settings default to API key auth (`Authorization: Bearer <key>` or `X-API-Key`).
+
+On boot, the server logs the active API key from settings.
+
+For localhost development, set settings `auth.mode` to `local` via `PUT /settings`.
+
+## Key Endpoints
+
+- `GET /health`
+- `GET /server`
+- `GET /settings`
+- `PUT /settings`
+- `GET /library?limit=&cursor=&q=`
+- `POST /library`
+- `GET /library/{bookId}`
+- `POST /library/refresh`
+- `POST /search`
+- `POST /snatch`
+- `GET /releases?bookId=`
+- `GET /downloads`
+- `GET /downloads/{jobId}`
+- `POST /downloads/{jobId}/retry`
+- `POST /import/reconcile`
+- `GET /assets?bookId=`
+- `GET /stream/{assetId}.{ext}`
+- `GET /chapters/{assetId}.json`
+- `GET /covers/{bookId}.jpg`
+- `GET /feed.xml`
+- `GET /feed.json`
+- `GET /ebook/{assetId}`
+
+## Settings Shape
+
+`GET /settings` / `PUT /settings` use:
+
+```json
+{
+  "torznab": [
+    {
+      "name": "prowlarr",
+      "baseUrl": "http://localhost:9696",
+      "apiKey": "...",
+      "categories": { "audio": "audio", "ebook": "book" }
+    }
+  ],
+  "rtorrent": {
+    "transport": "http-xmlrpc",
+    "url": "http://127.0.0.1/RPC2",
+    "username": "",
+    "password": ""
+  },
+  "libraryRoot": "/media/library",
+  "polling": { "rtorrentMs": 5000, "scanMs": 30000 },
+  "transcode": { "enabled": true, "format": "mp3", "bitrateKbps": 64 },
+  "feed": { "title": "Kindling", "author": "Unknown" },
+  "auth": { "mode": "apikey", "key": "..." }
+}
+```
+
+## Testing
+
+Run all tests:
+
+```bash
+bun test
+```
+
+Typecheck:
+
+```bash
+bun run typecheck
+```
+
+Current suites include:
+
+- unit tests (schema, repo, status, auth, torznab, rtorrent, media)
+- integration HTTP tests
+- end-to-end flow tests with mocks in `test/mocks`
 
 ## Notes
-- Single-file m4b books transcode eagerly in the background. The feed only includes titles whose transcodes are finished; as jobs complete, they appear automatically.
-- Library is scanned in the background (with fs watch + debounce); feed requests do not trigger transcodes.
-- `bookId` is a slug of `author-title` from folder names.
-- Multi-MP3 streams are stitched with an in-memory ID3v2.4 chapters tag prepended for chapter-aware players; m4b embedded chapters are exposed via the chapters endpoint/feed tag.
-- If a `.opf` file exists in a book folder, its metadata (title, author, description, language, ISBN, publication date) is used to enrich the feed item notes.
 
-## Feed metadata (Apple-friendly)
-Environment variables (all optional, with defaults):
-- `POD_TITLE` (default: `Podible Audiobooks`)
-- `POD_DESCRIPTION` (default: `Podcast feed for audiobooks`)
-- `POD_LANGUAGE` (default: `en-us`)
-- `POD_COPYRIGHT`
-- `POD_AUTHOR` (default: `Unknown`)
-- `POD_OWNER_NAME` (default: `Owner`)
-- `POD_OWNER_EMAIL` (default: `owner@example.com`)
-- `POD_EXPLICIT` (`yes`|`no`|`clean`, default: `no`)
-- `POD_CATEGORY` (default: `Arts`)
-- `POD_TYPE` (`episodic`|`serial`, default: `episodic`)
-- `POD_IMAGE_URL` (optional; falls back to first cover URL if available)
-
-Items include link, pubDate, explicit flag, duration, and descriptions for validator compatibility. Enclosure lengths include the prepended ID3 chapters tag for multi-MP3 books.
+- Idempotency is enforced by globally unique `releases.info_hash`.
+- Job worker uses queue claim/requeue semantics with retry backoff.
+- Import strategy uses hardlinks only; cross-device `EXDEV` is surfaced as an error.
+- Playback position APIs are intentionally out of scope for this phase.
