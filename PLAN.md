@@ -224,6 +224,12 @@ This keeps correctness without heavy orchestration.
 - Import/snatch/download transitions are wrapped in DB transactions.
 - Search and snatch are synchronous when possible; long-running work is async.
 
+Worker claim/recovery rule:
+
+- A worker claims the next runnable job with `status='queued' AND (next_run_at IS NULL OR next_run_at <= now)`, ordered by `created_at ASC`.
+- Claim is an atomic DB transition to `status='running'` plus `updated_at=now`.
+- On process startup, any leftover `running` jobs are moved back to `queued` with `next_run_at=now` so they can be retried.
+
 ## Indexes (required)
 
 - `books(added_at)`
@@ -234,6 +240,11 @@ This keeps correctness without heavy orchestration.
 - `assets(book_id, created_at)`
 - `asset_files(asset_id, start)`
 - `jobs(status, type, updated_at)`
+
+Uniqueness:
+
+- `releases.info_hash` is globally unique across all books/media.
+- If an incoming snatch references an existing hash linked to a different book, treat it as a conflict and require manual resolution.
 
 ## State Machine
 
@@ -292,6 +303,8 @@ Idempotency:
 - `/downloads` responses include both `job_id` and `release_id`
 - `POST /import/reconcile`
 - `GET /assets?bookId=`
+
+Playback position APIs are intentionally out of scope for this phase.
 
 ### Streaming + Feeds
 
