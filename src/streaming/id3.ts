@@ -38,7 +38,7 @@ function writeUint32BE(value: number): Uint8Array {
 }
 
 const MAX_UINT32 = 0xffffffff;
-const ID3_VERSION = 3;
+const ID3_VERSION: 3 | 4 = 3;
 
 function normalizeOffset(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return MAX_UINT32;

@@ -18,6 +18,10 @@ import {
 const readyBooks = new Map<string, Book>();
 let rescanTimer: ReturnType<typeof setTimeout> | null = null;
 
+function numeric(value: number | bigint): number {
+  return typeof value === "bigint" ? Number(value) : value;
+}
+
 async function fileExists(filePath: string): Promise<boolean> {
   try {
     const stat = await fs.stat(filePath);
@@ -76,14 +80,14 @@ async function saveLibraryIndex() {
 
 function bookFromMeta(meta: PendingSingleMeta, outputPath: string, outputStat: Awaited<ReturnType<typeof fs.stat>>): Book {
   const mime = mimeFromExt(path.extname(outputPath));
-  const durationSeconds = meta.durationSeconds ?? getDurationSeconds(outputPath, outputStat.mtimeMs);
+  const durationSeconds = meta.durationSeconds ?? getDurationSeconds(outputPath, numeric(outputStat.mtimeMs));
   return {
     id: meta.id,
     title: meta.title,
     author: meta.author,
     kind: "single",
     mime,
-    totalSize: outputStat.size,
+    totalSize: numeric(outputStat.size),
     primaryFile: outputPath,
     coverPath: meta.coverPath,
     durationSeconds,
@@ -100,9 +104,9 @@ function bookFromMeta(meta: PendingSingleMeta, outputPath: string, outputStat: A
 
 function addedAtFromStat(stat: Awaited<ReturnType<typeof fs.stat>> | null): Date {
   if (!stat) return new Date();
-  const birth = stat.birthtimeMs;
+  const birth = numeric(stat.birthtimeMs);
   if (Number.isFinite(birth) && birth > 0) return new Date(birth);
-  const mtime = stat.mtimeMs;
+  const mtime = numeric(stat.mtimeMs);
   if (Number.isFinite(mtime) && mtime > 0) return new Date(mtime);
   return new Date();
 }
