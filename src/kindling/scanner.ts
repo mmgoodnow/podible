@@ -3,7 +3,9 @@ import path from "node:path";
 
 import { getDurationSeconds } from "../media/probe-cache";
 
+import { fetchOpenLibraryMetadata } from "./openlibrary";
 import type { KindlingRepo } from "./repo";
+import type { BookRow } from "./types";
 
 /**
  * Filesystem-first scanner for existing libraries.
@@ -24,6 +26,43 @@ type FileInfo = {
   size: number;
   mtimeMs: number;
 };
+
+function parseIdentifiers(value: string | null): Record<string, string> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value) as Record<string, string>;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function needsMetadataHydration(book: BookRow): boolean {
+  return !book.isbn || !book.language || !book.published_at || !book.identifiers_json;
+}
+
+async function hydrateBookMetadata(repo: KindlingRepo, book: BookRow): Promise<void> {
+  if (!needsMetadataHydration(book)) {
+    return;
+  }
+
+  const metadata = await fetchOpenLibraryMetadata(book).catch(() => null);
+  if (!metadata) {
+    return;
+  }
+
+  const identifiers = {
+    ...parseIdentifiers(book.identifiers_json),
+    ...(metadata.identifiers ?? {}),
+  };
+
+  repo.updateBookMetadata(book.id, {
+    publishedAt: metadata.publishedAt ?? null,
+    language: metadata.language ?? null,
+    isbn: metadata.isbn ?? null,
+    identifiers,
+  });
+}
 
 async function safeReadDir(dir: string) {
   try {
@@ -75,6 +114,7 @@ export async function scanLibraryRoot(repo: KindlingRepo, libraryRoot: string): 
         book = repo.createBook({ title, author });
         booksCreated += 1;
       }
+      await hydrateBookMetadata(repo, book);
 
       const hasCover = files.find((file) => [".jpg", ".jpeg", ".png"].includes(file.ext));
       if (hasCover) {
