@@ -5,6 +5,13 @@ import { getDurationSeconds } from "../media/probe-cache";
 
 import type { KindlingRepo } from "./repo";
 
+/**
+ * Filesystem-first scanner for existing libraries.
+ *
+ * It walks `libraryRoot/Author/Title`, creates missing book rows, and creates
+ * assets for detected audio/ebook files when those file paths are not already
+ * tracked in `asset_files`.
+ */
 type ScanResult = {
   booksCreated: number;
   assetsCreated: number;
@@ -45,6 +52,10 @@ async function listFiles(dir: string): Promise<FileInfo[]> {
   return out;
 }
 
+/**
+ * Import loose files that already exist under the library root into the
+ * database model. This does not call rTorrent or perform search/snatch.
+ */
 export async function scanLibraryRoot(repo: KindlingRepo, libraryRoot: string): Promise<ScanResult> {
   let booksCreated = 0;
   let assetsCreated = 0;

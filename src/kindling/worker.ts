@@ -8,6 +8,13 @@ import { scanLibraryRoot } from "./scanner";
 import { runSearch, runSnatch } from "./service";
 import type { AppSettings, JobRow, MediaType } from "./types";
 
+/**
+ * Background worker for Kindling jobs.
+ *
+ * The loop claims one runnable job at a time from SQLite, executes the job
+ * handler, and records terminal state or retry scheduling in the same
+ * database so work is durable across process restarts.
+ */
 export type WorkerContext = {
   repo: KindlingRepo;
   getSettings: () => AppSettings;
@@ -28,6 +35,10 @@ function backoffMs(attempt: number): number {
   return Math.min(5 * 60_000, 1_000 * 2 ** safeAttempt);
 }
 
+/**
+ * Download job: poll rTorrent by info hash until torrent completion, then
+ * enqueue an import job for the resolved base path.
+ */
 async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promise<"done" | "rescheduled"> {
   if (!job.release_id) {
     throw new Error("Download job missing release_id");
@@ -62,6 +73,10 @@ async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promise<"don
   return "done";
 }
 
+/**
+ * Import job: wait for a resolved base path, then link imported files into the
+ * library and create immutable asset rows for playback/download.
+ */
 async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done" | "rescheduled"> {
   if (!job.release_id) {
     throw new Error("Import job missing release_id");
@@ -88,6 +103,10 @@ async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done"
   return "done";
 }
 
+/**
+ * Reconcile job: find releases marked downloaded but missing assets, and make
+ * sure each has exactly one queued/running import job.
+ */
 async function processReconcileJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
   const releases = ctx.repo.findReleasesDownloadedWithoutAssets();
   for (const release of releases) {
@@ -106,6 +125,10 @@ async function processReconcileJob(ctx: WorkerContext, job: JobRow): Promise<"do
   return "done";
 }
 
+/**
+ * Scan job: either run a full filesystem scan or targeted auto-search/snatch
+ * for a single book, depending on payload flags.
+ */
 async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
   const payload = job.payload_json
     ? (JSON.parse(job.payload_json) as { bookId?: number; media?: MediaType[]; fullRefresh?: boolean })
@@ -152,6 +175,10 @@ async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> 
   return "done";
 }
 
+/**
+ * Job type dispatch. Unknown types are treated as no-op and marked succeeded
+ * so a stale queue entry cannot block worker progress.
+ */
 async function processJob(ctx: WorkerContext, job: JobRow): Promise<"done" | "rescheduled"> {
   if (job.type === "download") {
     return processDownloadJob(ctx, job);
@@ -169,6 +196,10 @@ async function processJob(ctx: WorkerContext, job: JobRow): Promise<"done" | "re
   return "done";
 }
 
+/**
+ * Main worker loop: recover abandoned running jobs, then repeatedly claim and
+ * execute runnable jobs until shutdown is requested.
+ */
 export async function runWorker(ctx: WorkerContext): Promise<void> {
   const requeued = ctx.repo.requeueRunningJobs();
   if (requeued > 0) {

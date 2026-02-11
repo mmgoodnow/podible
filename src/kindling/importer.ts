@@ -7,6 +7,13 @@ import { normalizeAudioExt } from "../media/metadata";
 import type { KindlingRepo } from "./repo";
 import type { AssetKind, MediaType, ReleaseRow } from "./types";
 
+/**
+ * Release importer that materializes downloader output as library assets.
+ *
+ * Given an rTorrent base path, it discovers files, selects media candidates by
+ * release type, hardlinks into `libraryRoot/Author/Title`, and writes
+ * immutable asset + asset_file rows.
+ */
 type ImportResult = {
   assetId: number;
   linkedFiles: string[];
@@ -136,6 +143,10 @@ function chooseFilesForMedia(mediaType: MediaType, files: FileInfo[]): { kind: A
   return picked;
 }
 
+/**
+ * Build one asset from downloader output and attach it to the release's book.
+ * Existing files are never moved; imported files are hardlinked into library.
+ */
 export async function importReleaseFromPath(
   repo: KindlingRepo,
   release: ReleaseRow,
