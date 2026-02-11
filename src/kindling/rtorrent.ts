@@ -125,6 +125,10 @@ export class RtorrentClient {
     await this.call("load.raw_start", [xmlParamString(""), xmlParamBase64(torrentBytes)]);
   }
 
+  async loadStart(target: string): Promise<void> {
+    await this.call("load.start", [xmlParamString(""), xmlParamString(target)]);
+  }
+
   async getDownloadState(infoHash: string): Promise<RtorrentDownloadState> {
     const hash = infoHash.toUpperCase();
     const [name, returnedHash, complete, basePath, bytesDone, sizeBytes] = await Promise.all([

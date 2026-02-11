@@ -119,6 +119,62 @@ export class KindlingRepo {
     return row;
   }
 
+  findBookByTitleAuthor(title: string, author: string): BookRow | null {
+    return (this.db
+      .query("SELECT * FROM books WHERE title = ? AND author = ? ORDER BY id DESC LIMIT 1")
+      .get(title, author) as BookRow | null) ?? null;
+  }
+
+  updateBookMetadata(
+    bookId: number,
+    patch: Partial<{
+      coverPath: string | null;
+      durationMs: number | null;
+      publishedAt: string | null;
+      description: string | null;
+      descriptionHtml: string | null;
+      language: string | null;
+      isbn: string | null;
+      identifiers: Record<string, string>;
+    }>
+  ): BookRow {
+    assertPositiveInt(bookId);
+    const now = nowIso();
+    const current = this.getBookRow(bookId);
+    if (!current) {
+      throw new Error(`Book ${bookId} not found`);
+    }
+
+    const row = this.db
+      .query(
+        `UPDATE books
+         SET cover_path = ?,
+             duration_ms = ?,
+             published_at = ?,
+             description = ?,
+             description_html = ?,
+             language = ?,
+             isbn = ?,
+             identifiers_json = ?,
+             updated_at = ?
+         WHERE id = ?
+         RETURNING *`
+      )
+      .get(
+        patch.coverPath ?? current.cover_path,
+        patch.durationMs ?? current.duration_ms,
+        patch.publishedAt ?? current.published_at,
+        patch.description ?? current.description,
+        patch.descriptionHtml ?? current.description_html,
+        patch.language ?? current.language,
+        patch.isbn ?? current.isbn,
+        patch.identifiers ? JSON.stringify(patch.identifiers) : current.identifiers_json,
+        now,
+        bookId
+      ) as BookRow;
+    return row;
+  }
+
   getBookRow(bookId: number): BookRow | null {
     assertPositiveInt(bookId);
     return (this.db.query("SELECT * FROM books WHERE id = ?").get(bookId) as BookRow | null) ?? null;
@@ -153,6 +209,11 @@ export class KindlingRepo {
     const items = rows.map((row) => this.toLibraryBook(row));
     const nextCursor = rows.length === safeLimit ? rows[rows.length - 1]?.id : undefined;
     return { items, nextCursor };
+  }
+
+  listAllBooks(): LibraryBook[] {
+    const rows = this.db.query("SELECT * FROM books ORDER BY added_at DESC, id DESC").all() as BookRow[];
+    return rows.map((row) => this.toLibraryBook(row));
   }
 
   createRelease(input: CreateReleaseInput): ReleaseRow {
@@ -203,6 +264,22 @@ export class KindlingRepo {
       .query("UPDATE releases SET status = ?, error = ?, updated_at = ? WHERE id = ? RETURNING *")
       .get(status, error ?? null, now, releaseId) as ReleaseRow;
     return row;
+  }
+
+  findReleaseById(releaseId: number): ReleaseRow | null {
+    return this.getRelease(releaseId);
+  }
+
+  findReleasesDownloadedWithoutAssets(): ReleaseRow[] {
+    return this.db
+      .query(
+        `SELECT r.*
+         FROM releases r
+         LEFT JOIN assets a ON a.source_release_id = r.id
+         WHERE r.status = 'downloaded' AND a.id IS NULL
+         ORDER BY r.id ASC`
+      )
+      .all() as ReleaseRow[];
   }
 
   addAsset(input: AddAssetInput): AssetRow {
@@ -259,6 +336,25 @@ export class KindlingRepo {
     return (this.db.query("SELECT * FROM assets WHERE id = ?").get(assetId) as AssetRow | null) ?? null;
   }
 
+  getAssetWithFiles(assetId: number): { asset: AssetRow; files: AssetFileRow[] } | null {
+    const asset = this.getAsset(assetId);
+    if (!asset) return null;
+    const files = this.getAssetFiles(assetId);
+    return { asset, files };
+  }
+
+  getBookByAsset(assetId: number): BookRow | null {
+    assertPositiveInt(assetId);
+    return (this.db
+      .query(
+        `SELECT b.*
+         FROM books b
+         INNER JOIN assets a ON a.book_id = b.id
+         WHERE a.id = ?`
+      )
+      .get(assetId) as BookRow | null) ?? null;
+  }
+
   listAssetsByBook(bookId: number): AssetRow[] {
     assertPositiveInt(bookId);
     return this.db
@@ -271,6 +367,13 @@ export class KindlingRepo {
     return this.db
       .query("SELECT * FROM asset_files WHERE asset_id = ? ORDER BY start ASC, id ASC")
       .all(assetId) as AssetFileRow[];
+  }
+
+  hasAssetFilePath(filePath: string): boolean {
+    const row = this.db
+      .query("SELECT id FROM asset_files WHERE path = ? LIMIT 1")
+      .get(filePath) as { id: number } | null;
+    return Boolean(row);
   }
 
   createJob(input: CreateJobInput): JobRow {
@@ -336,6 +439,16 @@ export class KindlingRepo {
         "UPDATE jobs SET status = 'queued', next_run_at = ?, error = NULL, updated_at = ? WHERE id = ? RETURNING *"
       )
       .get(now, now, jobId) as JobRow;
+  }
+
+  rescheduleJob(jobId: number, nextRunAt: string): JobRow {
+    assertPositiveInt(jobId);
+    const now = nowIso();
+    return this.db
+      .query(
+        "UPDATE jobs SET status = 'queued', next_run_at = ?, updated_at = ? WHERE id = ? RETURNING *"
+      )
+      .get(nextRunAt, now, jobId) as JobRow;
   }
 
   requeueRunningJobs(): number {
@@ -413,6 +526,29 @@ export class KindlingRepo {
          WHERE j.type = 'download' AND j.id = ?`
       )
       .get(jobId) as DownloadView | null) ?? null;
+  }
+
+  getHealthSummary(): {
+    jobs: Record<string, number>;
+    releases: Record<string, number>;
+    queueSize: number;
+  } {
+    const jobsRows = this.db
+      .query("SELECT status, COUNT(*) AS c FROM jobs GROUP BY status")
+      .all() as Array<{ status: string; c: number }>;
+    const releaseRows = this.db
+      .query("SELECT status, COUNT(*) AS c FROM releases GROUP BY status")
+      .all() as Array<{ status: string; c: number }>;
+    const queueRow = this.db
+      .query("SELECT COUNT(*) AS c FROM jobs WHERE status = 'queued'")
+      .get() as { c: number };
+    const jobs = Object.fromEntries(jobsRows.map((row) => [row.status, row.c]));
+    const releases = Object.fromEntries(releaseRows.map((row) => [row.status, row.c]));
+    return {
+      jobs,
+      releases,
+      queueSize: queueRow?.c ?? 0,
+    };
   }
 
   private toLibraryBook(row: BookRow): LibraryBook {

@@ -18,6 +18,7 @@ const dataDir = process.env.DATA_DIR ?? path.join(process.env.TMPDIR ?? "/tmp", 
 const transcodeStatusPath = path.join(dataDir, "transcode-status.json");
 const libraryIndexPath = path.join(dataDir, "library-index.json");
 const probeCachePath = path.join(dataDir, "probe-cache.json");
+const kindlingDbPath = path.join(dataDir, "kindling.sqlite");
 const brandImagePath = path.join(process.cwd(), "podible.png");
 const apiKeyPath = path.join(dataDir, "api-key.txt");
 const port = Number(process.env.PORT ?? 80);
@@ -59,6 +60,7 @@ export {
   transcodeStatusPath,
   libraryIndexPath,
   probeCachePath,
+  kindlingDbPath,
   brandImagePath,
   apiKeyPath,
   brandImageExists,

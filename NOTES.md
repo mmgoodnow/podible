@@ -3,18 +3,24 @@
 ## Progress
 
 - [x] Branch created: `feat/kindling-backend`
-- [ ] SQLite schema + migration system
-- [ ] Settings + auth migration off JSON files
-- [ ] Torznab search and normalization
-- [ ] Snatch + rTorrent integration
-- [ ] Download/import worker loop
-- [ ] Asset streaming/feed parity
+- [x] SQLite schema + migration system
+- [x] Settings + auth migration off JSON files
+- [x] Torznab search and normalization
+- [x] Snatch + rTorrent integration
+- [x] Download/import worker loop
+- [x] Asset streaming/feed parity
 - [ ] Mock services and e2e tests
 - [ ] README refresh
 
 ## Open Questions / Decisions
 
 - None currently. Any blockers encountered during implementation will be recorded here with context and fallback action.
+
+## Current Focus
+
+- API surface replaced in `server.ts` and `/src/kindling/http.ts`.
+- Worker handles `download`, `import`, `scan`, and `reconcile` with retry/backoff.
+- Next: add mock Torznab/rTorrent services + e2e chain tests and refresh README.
 
 ## Assumptions
 
