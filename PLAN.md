@@ -160,14 +160,6 @@ Represents background work. Jobs provide visibility and retries for scan, snatch
 - created_at TEXT NOT NULL
 - updated_at TEXT NOT NULL
 
-### changes
-Represents a durable change log for `/library/changes` incremental sync.
-
-- id INTEGER PRIMARY KEY AUTOINCREMENT
-- entity_type TEXT NOT NULL (book|asset|release)
-- entity_id INTEGER NOT NULL
-- action TEXT NOT NULL (created|updated|deleted)
-- created_at TEXT NOT NULL
 
 ## ID Format
 
@@ -230,7 +222,6 @@ This keeps correctness without heavy orchestration.
 - `assets(book_id, created_at)`
 - `asset_files(asset_id, start)`
 - `jobs(status, type, updated_at)`
-- `changes(created_at)`
 
 ## State Machine
 
@@ -267,7 +258,6 @@ Idempotency:
 - `GET /library/{bookId}`
 - `POST /library` -> create a book (title, author) and trigger acquisition loop
 - `POST /library/refresh`
-- `GET /library/changes?since=` (driven by `changes` table)
 
 ### Search + Snatch
 
