@@ -50,10 +50,27 @@ async function resolveInfoHash(url: string, explicitHash?: string | null): Promi
 
 export async function runSearch(settings: AppSettings, request: SearchRequest) {
   const results = await searchTorznab(settings.torznab, request.query, request.media);
+
+  const needle = request.query.trim().toLowerCase();
+  const words = needle.split(/\s+/).filter(Boolean);
+  const setMarkers = ["box set", "collection", "complete", "omnibus", "books 1-7", "1-3", "series"];
+
+  function score(title: string, seeders: number | null, sizeBytes: number | null): number {
+    const lower = title.toLowerCase();
+    let value = 0;
+    if (needle && lower.includes(needle)) value += 80;
+    if (words.length > 0 && words.every((word) => lower.includes(word))) value += 35;
+    if (setMarkers.some((marker) => lower.includes(marker))) value -= 120;
+    value += Math.min(60, seeders ?? 0);
+    if (typeof sizeBytes === "number" && Number.isFinite(sizeBytes)) {
+      value -= Math.min(50, Math.round(sizeBytes / (1024 * 1024 * 200)));
+    }
+    return value;
+  }
+
   return results.sort((a, b) => {
-    const aSeed = a.seeders ?? 0;
-    const bSeed = b.seeders ?? 0;
-    if (bSeed !== aSeed) return bSeed - aSeed;
+    const scoreDiff = score(b.title, b.seeders, b.sizeBytes) - score(a.title, a.seeders, a.sizeBytes);
+    if (scoreDiff !== 0) return scoreDiff;
     const aSize = a.sizeBytes ?? Number.MAX_SAFE_INTEGER;
     const bSize = b.sizeBytes ?? Number.MAX_SAFE_INTEGER;
     return aSize - bSize;

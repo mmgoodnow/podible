@@ -5,8 +5,7 @@ import { importReleaseFromPath } from "./importer";
 import { RtorrentClient } from "./rtorrent";
 import { KindlingRepo } from "./repo";
 import { scanLibraryRoot } from "./scanner";
-import { runSnatch } from "./service";
-import { searchTorznab } from "./torznab";
+import { runSearch, runSnatch } from "./service";
 import type { AppSettings, JobRow, MediaType } from "./types";
 
 export type WorkerContext = {
@@ -107,14 +106,6 @@ async function processReconcileJob(ctx: WorkerContext, job: JobRow): Promise<"do
   return "done";
 }
 
-function rankSearchResults<T extends { sizeBytes: number | null }>(results: T[]): T[] {
-  return [...results].sort((a, b) => {
-    const aScore = a.sizeBytes ?? Number.MAX_SAFE_INTEGER;
-    const bScore = b.sizeBytes ?? Number.MAX_SAFE_INTEGER;
-    return aScore - bScore;
-  });
-}
-
 async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
   const payload = job.payload_json
     ? (JSON.parse(job.payload_json) as { bookId?: number; media?: MediaType[]; fullRefresh?: boolean })
@@ -138,9 +129,8 @@ async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> 
 
   for (const media of mediaList) {
     const query = `${book.title} ${book.author}`.trim();
-    const results = await searchTorznab(settings.torznab, query, media);
-    const ranked = rankSearchResults(results).slice(0, 3);
-    for (const result of ranked) {
+    const results = await runSearch(settings, { query, media });
+    for (const result of results.slice(0, 3)) {
       try {
         await runSnatch(ctx.repo, settings, {
           bookId: book.id,
