@@ -145,10 +145,10 @@ Represents individual files that make up an asset, including byte offsets for st
 - FOREIGN KEY(asset_id) REFERENCES assets(id)
 
 ### jobs
-Represents background work. Jobs provide visibility and retries for scan, snatch, download, import, transcode, and reconcile flows.
+Represents background work. Jobs provide visibility and retries for scan, download, import, transcode, and reconcile flows.
 
 - id INTEGER PRIMARY KEY AUTOINCREMENT
-- type TEXT NOT NULL (scan|search|snatch|download|import|transcode|reconcile)
+- type TEXT NOT NULL (scan|download|import|transcode|reconcile)
 - status TEXT NOT NULL (queued|running|succeeded|failed|cancelled)
 - book_id INTEGER NULL (optional target book)
 - release_id INTEGER NULL (optional target release)
@@ -237,13 +237,20 @@ This keeps correctness without heavy orchestration.
 
 ## State Machine
 
-Books transition through (both media types):
+Per-media state machine:
 
 `open -> snatched -> downloading -> downloaded -> imported`
 
+Overall book state:
+
+- Derived from `audio_status` and `ebook_status`.
+- `imported` only when both media are imported.
+- `partial` when exactly one media is imported.
+- Otherwise derived from the highest non-imported state across media.
+
 Rules:
 
-- Transitions are monotonic. No backward transition unless explicit user action.
+- Per-media transitions are monotonic unless explicit user action.
 - Failures do not erase last known good state. Store `error` on release/job.
 - Multiple assets per book are allowed. Playback/feed selection is derived by heuristic.
 
@@ -413,7 +420,7 @@ Tests must be added alongside each implementation step. Do not defer testing to 
 ### Unit Tests
 
 - State machine transitions
-- Idempotency key behavior
+- Infohash dedup behavior
 - Asset construction from file layout
 - Ebook asset creation and download endpoint behavior
 
