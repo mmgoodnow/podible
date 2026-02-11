@@ -90,26 +90,6 @@ export function startMockRtorrent(options: MockRtorrentOptions): MockRtorrent {
         return new Response(xmlResponseInt(0), { headers: { "Content-Type": "text/xml" } });
       }
 
-      if (method === "load.start") {
-        const [_, target] = parseStringParams(body);
-        if (target) {
-          const magnetHash = /xt=urn:btih:([^&]+)/i.exec(target)?.[1];
-          if (magnetHash) {
-            const hash = normalizeInfoHash(decodeURIComponent(magnetHash));
-            const config = byHash[hash];
-            if (config) {
-              states.set(hash, {
-                ...config,
-                infoHash: hash,
-                bytesDone: 0,
-                completePolls: 0,
-              });
-            }
-          }
-        }
-        return new Response(xmlResponseInt(0), { headers: { "Content-Type": "text/xml" } });
-      }
-
       const [arg0] = parseStringParams(body);
       const hash = normalizeInfoHash(arg0 || "");
       const state = states.get(hash);

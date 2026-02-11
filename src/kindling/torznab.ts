@@ -1,7 +1,7 @@
 import { XMLParser } from "fast-xml-parser";
 
 import type { MediaType, TorznabSource } from "./types";
-import { infoHashFromMagnet, normalizeInfoHash } from "./torrent";
+import { normalizeInfoHash } from "./torrent";
 
 type TorznabResult = {
   title: string;
@@ -55,6 +55,15 @@ function chooseDownloadUrl(item: Record<string, unknown>): string {
   return "";
 }
 
+function isSupportedTorrentUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 function parseAttrMap(item: Record<string, unknown>): Record<string, string> {
   const attrs = toArray(item.attr as Record<string, unknown> | Record<string, unknown>[] | undefined);
   const out: Record<string, string> = {};
@@ -68,7 +77,7 @@ function parseAttrMap(item: Record<string, unknown>): Record<string, string> {
   return out;
 }
 
-function inferInfoHash(item: Record<string, unknown>, attrMap: Record<string, string>, url: string): string | null {
+function inferInfoHash(item: Record<string, unknown>, attrMap: Record<string, string>): string | null {
   const candidate =
     attrMap.infohash ??
     attrMap["torrenthash"] ??
@@ -81,7 +90,7 @@ function inferInfoHash(item: Record<string, unknown>, attrMap: Record<string, st
       // fall through
     }
   }
-  return infoHashFromMagnet(url);
+  return null;
 }
 
 export function parseTorznabSearch(xml: string, provider: string, mediaType: MediaType): TorznabResult[] {
@@ -96,10 +105,10 @@ export function parseTorznabSearch(xml: string, provider: string, mediaType: Med
       const title = textValue(item.title);
       const attrMap = parseAttrMap(item);
       const url = chooseDownloadUrl(item);
-      if (!title || !url) {
+      if (!title || !url || !isSupportedTorrentUrl(url)) {
         continue;
       }
-      const infoHash = inferInfoHash(item, attrMap, url);
+      const infoHash = inferInfoHash(item, attrMap);
       out.push({
         title,
         provider,

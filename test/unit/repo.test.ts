@@ -70,7 +70,7 @@ describe("kindling repo", () => {
       title: "Dune audio",
       mediaType: "audio",
       infoHash: "aaa111",
-      url: "magnet:?xt=urn:btih:aaa111",
+      url: "https://example.com/dune-audio.torrent",
       status: "downloaded",
     });
     repo.addAsset({

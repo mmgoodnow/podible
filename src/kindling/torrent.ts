@@ -45,24 +45,6 @@ export function normalizeInfoHash(value: string): string {
   throw new Error("Unsupported info hash format");
 }
 
-export function infoHashFromMagnet(url: string): string | null {
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "magnet:") return null;
-    const xtValues = parsed.searchParams.getAll("xt");
-    for (const xt of xtValues) {
-      const lower = xt.toLowerCase();
-      const prefix = "urn:btih:";
-      if (!lower.startsWith(prefix)) continue;
-      const raw = xt.slice(prefix.length);
-      return normalizeInfoHash(raw);
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 type ParseCursor = { index: number };
 
 function parseLength(source: Uint8Array, cursor: ParseCursor, delimiter: number): number {
@@ -136,19 +118,6 @@ export function infoHashFromTorrentBytes(bytes: Uint8Array): string {
   skipValue(bytes, cursor);
   const infoSlice = bytes.slice(start, cursor.index);
   return createHash("sha1").update(infoSlice).digest("hex");
-}
-
-export function decodeTorrentInfoHash(value: string, torrentBytes?: Uint8Array): string {
-  const fromMagnet = infoHashFromMagnet(value);
-  if (fromMagnet) return fromMagnet;
-  try {
-    return normalizeInfoHash(value);
-  } catch {
-    if (!torrentBytes) {
-      throw new Error("Cannot resolve info hash");
-    }
-    return infoHashFromTorrentBytes(torrentBytes);
-  }
 }
 
 export function torrentBytesFromHex(hex: string): Uint8Array {

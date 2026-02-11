@@ -36,14 +36,6 @@ async function resolveInfoHash(url: string, explicitHash?: string | null): Promi
     return { hash: normalizeInfoHash(explicitHash) };
   }
 
-  if (isMagnet(url)) {
-    const match = /(?:\?|&)xt=urn:btih:([^&]+)/i.exec(url);
-    if (!match) {
-      throw new Error("Magnet URL missing btih infohash");
-    }
-    return { hash: normalizeInfoHash(decodeURIComponent(match[1] ?? "")) };
-  }
-
   const torrentBytes = await fetchTorrentBytes(url);
   return { hash: infoHashFromTorrentBytes(torrentBytes), torrentBytes };
 }
@@ -82,6 +74,9 @@ export async function runSnatch(repo: KindlingRepo, settings: AppSettings, reque
   if (!book) {
     throw new Error(`Book ${request.bookId} not found`);
   }
+  if (isMagnet(request.url)) {
+    throw new Error("Magnet URLs are not supported for snatch; provide a .torrent URL");
+  }
 
   const resolved = await resolveInfoHash(request.url, request.infoHash);
   const existing = repo.findReleaseByInfoHash(resolved.hash);
@@ -100,14 +95,11 @@ export async function runSnatch(repo: KindlingRepo, settings: AppSettings, reque
   }
 
   const client = new RtorrentClient(settings.rtorrent);
-  if (resolved.torrentBytes) {
-    await client.loadRawStart(resolved.torrentBytes);
-  } else if (isMagnet(request.url)) {
-    await client.loadStart(request.url);
-  } else {
-    const bytes = await fetchTorrentBytes(request.url);
-    await client.loadRawStart(bytes);
+  let torrentBytes = resolved.torrentBytes;
+  if (!torrentBytes) {
+    torrentBytes = await fetchTorrentBytes(request.url);
   }
+  await client.loadRawStart(torrentBytes);
 
   const release = repo.createRelease({
     bookId: request.bookId,

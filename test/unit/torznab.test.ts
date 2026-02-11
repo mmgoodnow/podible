@@ -7,8 +7,9 @@ const SAMPLE = `<?xml version="1.0"?>
   <item>
     <title>Dune Audiobook</title>
     <size>12345</size>
-    <link>magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567</link>
-    <enclosure url="magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567" length="12345" />
+    <link>https://example.com/audio.torrent</link>
+    <enclosure url="https://example.com/audio.torrent" length="12345" />
+    <torznab:attr name="infohash" value="0123456789abcdef0123456789abcdef01234567" />
     <torznab:attr name="seeders" value="10" />
     <torznab:attr name="leechers" value="2" />
   </item>
@@ -16,6 +17,11 @@ const SAMPLE = `<?xml version="1.0"?>
     <title>Dune eBook</title>
     <enclosure url="https://example.com/download.torrent" length="200" />
     <torznab:attr name="infohash" value="89abcdef0123456789abcdef0123456789abcdef" />
+  </item>
+  <item>
+    <title>Dune Magnet</title>
+    <enclosure url="magnet:?xt=urn:btih:1111111111111111111111111111111111111111" length="999" />
+    <torznab:attr name="infohash" value="1111111111111111111111111111111111111111" />
   </item>
 </channel></rss>`;
 

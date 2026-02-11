@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { infoHashFromMagnet, infoHashFromTorrentBytes, normalizeInfoHash } from "../../src/kindling/torrent";
+import { infoHashFromTorrentBytes, normalizeInfoHash } from "../../src/kindling/torrent";
 
 describe("torrent infohash utilities", () => {
   test("normalizes hex and base32 hashes", () => {
@@ -11,13 +11,6 @@ describe("torrent infohash utilities", () => {
     expect(normalizeInfoHash("AERUKZ4JVPG66AJDIVTYTK6N54ASGRLH")).toBe(
       "0123456789abcdef0123456789abcdef01234567"
     );
-  });
-
-  test("extracts hash from magnet", () => {
-    expect(infoHashFromMagnet("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567")).toBe(
-      "0123456789abcdef0123456789abcdef01234567"
-    );
-    expect(infoHashFromMagnet("https://example.com")).toBeNull();
   });
 
   test("computes info hash from torrent bytes", () => {
