@@ -10,6 +10,8 @@
 - [x] Download/import worker loop
 - [x] Asset streaming/feed parity
 - [x] Mock services and e2e tests
+- [x] Review feedback pass (rTorrent methods, infohash handling, snatch behavior)
+- [x] Legacy JSON cache state moved into SQLite (`app_state`)
 - [ ] README refresh
 
 ## Open Questions / Decisions
@@ -20,7 +22,7 @@
 
 - API surface replaced in `server.ts` and `/src/kindling/http.ts`.
 - Worker handles `download`, `import`, `scan`, and `reconcile` with retry/backoff.
-- Next: refresh README to match Kindling backend endpoints and setup.
+- Next: add Open Library book-discovery endpoint (`findBook` equivalent), then refresh README.
 
 ## Assumptions
 
