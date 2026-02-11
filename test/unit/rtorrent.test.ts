@@ -28,22 +28,13 @@ describe("rtorrent xmlrpc helpers", () => {
     ).toThrow();
   });
 
-  test("falls back to directory and byte methods when get_* methods are unavailable", async () => {
+  test("uses direct d.base_path/d.bytes_done/d.size_bytes methods", async () => {
     const originalFetch = globalThis.fetch;
     const calls: string[] = [];
     globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
       const body = String(init?.body ?? "");
       const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
       calls.push(method);
-
-      if (
-        method === "d.get_base_path" ||
-        method === "d.base_path" ||
-        method === "d.get_bytes_done" ||
-        method === "d.get_size_bytes"
-      ) {
-        return new Response("not found", { status: 500 });
-      }
 
       const responseXml = (() => {
         switch (method) {
@@ -53,7 +44,7 @@ describe("rtorrent xmlrpc helpers", () => {
             return '<?xml version="1.0"?><methodResponse><params><param><value><string>ABCDEF</string></value></param></params></methodResponse>';
           case "d.complete":
             return '<?xml version="1.0"?><methodResponse><params><param><value><int>1</int></value></param></params></methodResponse>';
-          case "d.directory":
+          case "d.base_path":
             return '<?xml version="1.0"?><methodResponse><params><param><value><string>/downloads/book</string></value></param></params></methodResponse>';
           case "d.bytes_done":
             return '<?xml version="1.0"?><methodResponse><params><param><value><int>50</int></value></param></params></methodResponse>';
@@ -77,8 +68,10 @@ describe("rtorrent xmlrpc helpers", () => {
       expect(state.basePath).toBe("/downloads/book");
       expect(state.bytesDone).toBe(50);
       expect(state.sizeBytes).toBe(100);
-      expect(calls.includes("d.get_base_path")).toBe(true);
-      expect(calls.includes("d.directory")).toBe(true);
+      expect(calls.includes("d.base_path")).toBe(true);
+      expect(calls.includes("d.bytes_done")).toBe(true);
+      expect(calls.includes("d.size_bytes")).toBe(true);
+      expect(calls.includes("d.get_size_bytes")).toBe(false);
     } finally {
       globalThis.fetch = originalFetch;
     }

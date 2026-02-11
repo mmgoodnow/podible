@@ -121,20 +121,8 @@ export class RtorrentClient {
     return parseResponseValue(xml);
   }
 
-  private async callWithFallback(methods: string[], params: string[]): Promise<unknown> {
-    let lastError: Error | null = null;
-    for (const method of methods) {
-      try {
-        return await this.call(method, params);
-      } catch (error) {
-        lastError = error as Error;
-      }
-    }
-    throw lastError ?? new Error(`rTorrent RPC failed for methods: ${methods.join(", ")}`);
-  }
-
   async loadRawStart(torrentBytes: Uint8Array, commands: string[] = []): Promise<void> {
-    await this.callWithFallback(["load.raw_start", "load.raw"], [
+    await this.call("load.raw_start", [
       xmlParamString(""),
       xmlParamBase64(torrentBytes),
       ...commands.map((command) => xmlParamString(command)),
@@ -142,7 +130,7 @@ export class RtorrentClient {
   }
 
   async loadStart(target: string, commands: string[] = []): Promise<void> {
-    await this.callWithFallback(["load.start", "load.normal"], [
+    await this.call("load.start", [
       xmlParamString(""),
       xmlParamString(target),
       ...commands.map((command) => xmlParamString(command)),
@@ -152,33 +140,21 @@ export class RtorrentClient {
   async getDownloadState(infoHash: string): Promise<RtorrentDownloadState> {
     const hash = infoHash.toUpperCase();
     const [name, returnedHash, complete, basePath, bytesDone, sizeBytes] = await Promise.all([
-      this.callWithFallback(["d.name"], [xmlParamString(hash)]),
-      this.callWithFallback(["d.hash"], [xmlParamString(hash)]),
-      this.callWithFallback(["d.complete"], [xmlParamString(hash)]),
-      this.callWithFallback(["d.get_base_path", "d.base_path", "d.directory"], [xmlParamString(hash)]),
-      this.callWithFallback(["d.get_bytes_done", "d.bytes_done", "d.left_bytes"], [xmlParamString(hash)]),
-      this.callWithFallback(["d.get_size_bytes", "d.size_bytes"], [xmlParamString(hash)]),
+      this.call("d.name", [xmlParamString(hash)]),
+      this.call("d.hash", [xmlParamString(hash)]),
+      this.call("d.complete", [xmlParamString(hash)]),
+      this.call("d.base_path", [xmlParamString(hash)]),
+      this.call("d.bytes_done", [xmlParamString(hash)]),
+      this.call("d.size_bytes", [xmlParamString(hash)]),
     ]);
-
-    const done = toNumber(bytesDone);
-    const size = toNumber(sizeBytes);
-    const basePathText = maybeText(basePath);
-    const bytesDoneValue = (() => {
-      if (done === null) return null;
-      if (size !== null && done > size) {
-        // Some RPC variants return left bytes; convert to done bytes when size is known.
-        return Math.max(0, size - done);
-      }
-      return done;
-    })();
 
     return {
       name: maybeText(name),
       hash: maybeText(returnedHash),
       complete: toBool(complete),
-      basePath: basePathText,
-      bytesDone: bytesDoneValue,
-      sizeBytes: size,
+      basePath: maybeText(basePath),
+      bytesDone: toNumber(bytesDone),
+      sizeBytes: toNumber(sizeBytes),
     };
   }
 }
