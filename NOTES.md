@@ -13,7 +13,7 @@
 - [x] Review feedback pass (rTorrent methods, infohash handling, snatch behavior)
 - [x] Legacy JSON cache state moved into SQLite (`app_state`)
 - [x] Open Library search endpoint + add-to-library by OL key/ISBN
-- [ ] README refresh
+- [x] README refresh
 
 ## Open Questions / Decisions
 
@@ -23,7 +23,7 @@
 
 - API surface replaced in `server.ts` and `/src/kindling/http.ts`.
 - Worker handles `download`, `import`, `scan`, and `reconcile` with retry/backoff.
-- Next: refresh README to cover Open Library search/add flow and identifier-based library creation.
+- Next: continue API/tests hardening and close any follow-up review comments.
 
 ## Assumptions
 

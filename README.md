@@ -1,13 +1,14 @@
-# Kindling Backend (Podible/Bun)
+# Podible Backend (Bun)
 
-Bun-based backend for Kindling, implemented in the `podible` codebase.
+Bun-based backend implemented in the `podible` codebase.
 
 The service provides:
 
 - SQLite-backed library, releases, assets, jobs, and settings.
 - Torznab search.
 - rTorrent snatch/download polling.
-- Import pipeline with hardlinking into the Kindling library root.
+- Import pipeline with hardlinking into the configured library root.
+- Open Library search + identifier-based library creation.
 - Audio streaming, chapters, RSS/JSON feeds.
 - Ebook direct download endpoint.
 - Mock Torznab/rTorrent and end-to-end tests.
@@ -38,8 +39,7 @@ bun run server.ts /path/to/library
 
 Runtime state is stored in `DATA_DIR` (default `${TMPDIR:-/tmp}/podible-transcodes`) and includes:
 
-- `kindling.sqlite`
-- migrated/legacy podible cache artifacts if present
+- `kindling.sqlite` (main app DB + `app_state` cache state)
 
 ## Auth
 
@@ -55,12 +55,13 @@ For localhost development, set settings `auth.mode` to `local` via `PUT /setting
 - `GET /server`
 - `GET /settings`
 - `PUT /settings`
+- `GET /openlibrary/search?q=&limit=`
 - `GET /library?limit=&cursor=&q=`
-- `POST /library`
+- `POST /library` (title/author OR `openLibraryKey` OR `isbn`)
 - `GET /library/{bookId}`
 - `POST /library/refresh`
 - `POST /search`
-- `POST /snatch`
+- `POST /snatch` (`infoHash` required)
 - `GET /releases?bookId=`
 - `GET /downloads`
 - `GET /downloads/{jobId}`
@@ -102,6 +103,30 @@ For localhost development, set settings `auth.mode` to `local` via `PUT /setting
 }
 ```
 
+## Open Library Flows
+
+Search across Open Library:
+
+```bash
+curl "http://localhost/openlibrary/search?q=Hyperion%20Dan%20Simmons&limit=10"
+```
+
+Add directly by Open Library key:
+
+```bash
+curl -X POST http://localhost/library \
+  -H "Content-Type: application/json" \
+  -d '{"openLibraryKey":"/works/OL45804W"}'
+```
+
+Add directly by ISBN:
+
+```bash
+curl -X POST http://localhost/library \
+  -H "Content-Type: application/json" \
+  -d '{"isbn":"9780553283686"}'
+```
+
 ## Testing
 
 Run all tests:
@@ -126,5 +151,7 @@ Current suites include:
 
 - Idempotency is enforced by globally unique `releases.info_hash`.
 - Job worker uses queue claim/requeue semantics with retry backoff.
+- Scanner hydrates missing metadata from Open Library on discovered books.
 - Import strategy uses hardlinks only; cross-device `EXDEV` is surfaced as an error.
+- Snatch requires `.torrent` URLs and explicit `infoHash`; magnet links are out of scope.
 - Playback position APIs are intentionally out of scope for this phase.
