@@ -10,6 +10,11 @@ export function authorizeRequest(request: Request, settings: AppSettings): boole
     return true;
   }
 
+  const queryApiKey = url.searchParams.get("api_key")?.trim();
+  if (queryApiKey && queryApiKey === settings.auth.key) {
+    return true;
+  }
+
   const bearer = request.headers.get("authorization");
   if (bearer?.toLowerCase().startsWith("bearer ")) {
     const token = bearer.slice("bearer ".length).trim();

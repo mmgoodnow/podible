@@ -4,9 +4,10 @@ import { authorizeRequest } from "../../src/kindling/auth";
 import { defaultSettings } from "../../src/kindling/settings";
 
 describe("auth", () => {
-  test("accepts bearer and x-api-key tokens", () => {
+  test("accepts query, bearer, and x-api-key tokens", () => {
     const settings = defaultSettings({ auth: { mode: "apikey", key: "abc123" } });
 
+    const queryReq = new Request("http://localhost/health?api_key=abc123");
     const bearerReq = new Request("http://localhost/health", {
       headers: { Authorization: "Bearer abc123" },
     });
@@ -14,6 +15,7 @@ describe("auth", () => {
       headers: { "X-API-Key": "abc123" },
     });
 
+    expect(authorizeRequest(queryReq, settings)).toBe(true);
     expect(authorizeRequest(bearerReq, settings)).toBe(true);
     expect(authorizeRequest(headerReq, settings)).toBe(true);
   });

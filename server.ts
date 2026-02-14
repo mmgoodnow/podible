@@ -38,6 +38,8 @@ console.log(`Library root: ${current.libraryRoot}`);
 console.log(`Health: ${localBase}/health`);
 if (current.auth.mode === "apikey") {
   console.log(`API key: ${current.auth.key}`);
+  const authorizedHealth = `${localBase}/health?api_key=${encodeURIComponent(current.auth.key)}`;
+  console.log(`Authorized health: ${authorizedHealth}`);
 }
 
 process.on("SIGINT", () => {
