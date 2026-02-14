@@ -162,4 +162,69 @@ describe("podible http", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("supports add-by-isbn flow", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown) => {
+      const url = new URL(String(input));
+      if (url.origin !== "https://openlibrary.org" || url.pathname !== "/search.json") {
+        throw new Error(`Unexpected external fetch in test: ${url.toString()}`);
+      }
+
+      if (url.searchParams.get("isbn") === "9780061120084") {
+        return new Response(
+          JSON.stringify({
+            docs: [
+              {
+                key: "/works/OL82563W",
+                title: "To Kill a Mockingbird",
+                author_name: ["Harper Lee"],
+                first_publish_year: 1960,
+                language: ["eng"],
+                isbn: ["9780061120084"],
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      return new Response(JSON.stringify({ docs: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      const db = new Database(":memory:");
+      runMigrations(db);
+      const repo = new KindlingRepo(db);
+      const settings = repo.ensureSettings();
+      repo.updateSettings({
+        ...settings,
+        auth: { ...settings.auth, mode: "local" },
+        torznab: [],
+      });
+
+      const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+
+      const created = await fetchHandler(
+        new Request("http://localhost/library", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ isbn: "9780061120084" }),
+        })
+      );
+
+      expect(created.status).toBe(201);
+      const createdJson = (await created.json()) as any;
+      expect(createdJson.book.title).toBe("To Kill a Mockingbird");
+      expect(createdJson.book.author).toBe("Harper Lee");
+      expect(createdJson.book.isbn).toBe("9780061120084");
+      expect(createdJson.book.identifiers.openlibrary).toBe("/works/OL82563W");
+      db.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
