@@ -59,6 +59,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
   const health = repo.getHealthSummary();
   const books = repo.listBooks(30).items;
   const apiKey = settings.auth.mode === "apikey" ? settings.auth.key : null;
+  const settingsJson = escapeHtml(JSON.stringify(settings, null, 2));
   const links = [
     "/health",
     "/server",
@@ -140,7 +141,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
         <button id="settings-save-btn" type="button">Save Settings</button>
       </div>
       <p id="settings-status" class="muted"></p>
-      <textarea id="settings-editor" spellcheck="false" placeholder='{"auth":{"mode":"local","key":"..."}}'></textarea>
+      <textarea id="settings-editor" spellcheck="false">${settingsJson}</textarea>
     </div>
     <h2>Recent Library</h2>
     <table>
