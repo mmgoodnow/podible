@@ -218,7 +218,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
                   return;
                 }
                 var created = await createRes.json();
-                text("ol-status", "Added \"" + created.book.title + "\" (id " + created.book.id + "). Refresh to see it below.");
+                text("ol-status", 'Added "' + created.book.title + '" (id ' + created.book.id + '). Refresh to see it below.');
               });
               li.appendChild(label);
               li.appendChild(btn);
@@ -248,7 +248,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
               return;
             }
             var created = await res.json();
-            text("isbn-status", "Added \"" + created.book.title + "\" (id " + created.book.id + ").");
+            text("isbn-status", 'Added "' + created.book.title + '" (id ' + created.book.id + ').');
           });
         }
 
