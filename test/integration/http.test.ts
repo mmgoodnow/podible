@@ -24,6 +24,9 @@ describe("podible http", () => {
     const body = await home.text();
     expect(body.includes("Podible Backend")).toBe(true);
     expect(body.includes("/health")).toBe(true);
+    expect(body.includes("Open Library Search")).toBe(true);
+    expect(body.includes("Settings JSON")).toBe(true);
+    expect(body.includes("settings-editor")).toBe(true);
 
     db.close();
   });

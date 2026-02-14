@@ -98,6 +98,12 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
       h1, h2 { margin: 0 0 12px; }
       .muted { color: #555; }
       ul { margin-top: 8px; }
+      .panel { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin: 12px 0 18px; }
+      .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+      input, button, textarea { font: inherit; }
+      input { padding: 6px 8px; min-width: 220px; }
+      button { padding: 6px 10px; cursor: pointer; }
+      textarea { width: 100%; min-height: 200px; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
       table { border-collapse: collapse; width: 100%; margin-top: 8px; }
       th, td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 14px; }
       th { background: #f6f6f6; }
@@ -111,6 +117,32 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
     <p>Queue: <strong>${health.queueSize}</strong> | Jobs: <code>${escapeHtml(JSON.stringify(health.jobs))}</code> | Releases: <code>${escapeHtml(JSON.stringify(health.releases))}</code></p>
     <h2>Quick Links</h2>
     <ul>${linkItems}</ul>
+    <h2>Open Library Search</h2>
+    <div class="panel">
+      <div class="row">
+        <input id="ol-query" type="text" placeholder="Title Author (e.g. Hyperion Dan Simmons)" />
+        <button id="ol-search-btn" type="button">Search</button>
+      </div>
+      <p id="ol-status" class="muted"></p>
+      <ul id="ol-results"></ul>
+    </div>
+    <h2>Add By ISBN</h2>
+    <div class="panel">
+      <div class="row">
+        <input id="isbn-input" type="text" placeholder="9780553283686" />
+        <button id="isbn-add-btn" type="button">Add Book</button>
+      </div>
+      <p id="isbn-status" class="muted"></p>
+    </div>
+    <h2>Settings JSON</h2>
+    <div class="panel">
+      <div class="row">
+        <button id="settings-load-btn" type="button">Load Settings</button>
+        <button id="settings-save-btn" type="button">Save Settings</button>
+      </div>
+      <p id="settings-status" class="muted"></p>
+      <textarea id="settings-editor" spellcheck="false" placeholder='{"auth":{"mode":"local","key":"..."}}'></textarea>
+    </div>
     <h2>Recent Library</h2>
     <table>
       <thead>
@@ -125,6 +157,146 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
       </thead>
       <tbody>${rows || '<tr><td colspan="6">No books yet.</td></tr>'}</tbody>
     </table>
+    <script>
+      (function () {
+        var queryApiKey = new URLSearchParams(window.location.search).get("api_key");
+        function withAuth(path) {
+          var url = new URL(path, window.location.origin);
+          if (queryApiKey && !url.searchParams.get("api_key")) {
+            url.searchParams.set("api_key", queryApiKey);
+          }
+          return url.pathname + url.search;
+        }
+        async function api(path, init) {
+          return fetch(withAuth(path), init || {});
+        }
+        function text(id, value) {
+          var el = document.getElementById(id);
+          if (el) el.textContent = value;
+        }
+
+        var queryInput = document.getElementById("ol-query");
+        var searchBtn = document.getElementById("ol-search-btn");
+        var resultList = document.getElementById("ol-results");
+        if (searchBtn && queryInput && resultList) {
+          searchBtn.addEventListener("click", async function () {
+            var q = (queryInput.value || "").trim();
+            if (!q) {
+              text("ol-status", "Enter a search query.");
+              resultList.innerHTML = "";
+              return;
+            }
+            text("ol-status", "Searching...");
+            var res = await api("/openlibrary/search?q=" + encodeURIComponent(q) + "&limit=10");
+            if (!res.ok) {
+              text("ol-status", "Search failed: " + res.status);
+              resultList.innerHTML = "";
+              return;
+            }
+            var payload = await res.json();
+            var items = Array.isArray(payload.results) ? payload.results : [];
+            resultList.innerHTML = "";
+            text("ol-status", "Found " + items.length + " result(s).");
+            items.forEach(function (item) {
+              var li = document.createElement("li");
+              var label = document.createElement("span");
+              label.textContent = item.title + " — " + item.author + " (" + item.openLibraryKey + ")";
+              var btn = document.createElement("button");
+              btn.type = "button";
+              btn.style.marginLeft = "8px";
+              btn.textContent = "Add";
+              btn.addEventListener("click", async function () {
+                text("ol-status", "Adding " + item.title + "...");
+                var createRes = await api("/library", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ openLibraryKey: item.openLibraryKey }),
+                });
+                if (!createRes.ok) {
+                  var err = await createRes.text();
+                  text("ol-status", "Add failed: " + createRes.status + " " + err);
+                  return;
+                }
+                var created = await createRes.json();
+                text("ol-status", "Added \"" + created.book.title + "\" (id " + created.book.id + "). Refresh to see it below.");
+              });
+              li.appendChild(label);
+              li.appendChild(btn);
+              resultList.appendChild(li);
+            });
+          });
+        }
+
+        var isbnInput = document.getElementById("isbn-input");
+        var isbnAddBtn = document.getElementById("isbn-add-btn");
+        if (isbnInput && isbnAddBtn) {
+          isbnAddBtn.addEventListener("click", async function () {
+            var isbn = (isbnInput.value || "").trim();
+            if (!isbn) {
+              text("isbn-status", "Enter an ISBN.");
+              return;
+            }
+            text("isbn-status", "Adding ISBN " + isbn + "...");
+            var res = await api("/library", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ isbn: isbn }),
+            });
+            if (!res.ok) {
+              var errText = await res.text();
+              text("isbn-status", "Add failed: " + res.status + " " + errText);
+              return;
+            }
+            var created = await res.json();
+            text("isbn-status", "Added \"" + created.book.title + "\" (id " + created.book.id + ").");
+          });
+        }
+
+        var settingsEditor = document.getElementById("settings-editor");
+        var settingsLoadBtn = document.getElementById("settings-load-btn");
+        var settingsSaveBtn = document.getElementById("settings-save-btn");
+        async function loadSettings() {
+          text("settings-status", "Loading...");
+          var res = await api("/settings");
+          if (!res.ok) {
+            text("settings-status", "Load failed: " + res.status);
+            return;
+          }
+          var payload = await res.json();
+          settingsEditor.value = JSON.stringify(payload, null, 2);
+          text("settings-status", "Loaded.");
+        }
+        if (settingsEditor && settingsLoadBtn && settingsSaveBtn) {
+          settingsLoadBtn.addEventListener("click", loadSettings);
+          settingsSaveBtn.addEventListener("click", async function () {
+            text("settings-status", "Saving...");
+            var parsed;
+            try {
+              parsed = JSON.parse(settingsEditor.value || "{}");
+            } catch (err) {
+              text("settings-status", "Invalid JSON: " + (err && err.message ? err.message : "parse error"));
+              return;
+            }
+            var res = await api("/settings", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(parsed),
+            });
+            if (!res.ok) {
+              var errText = await res.text();
+              text("settings-status", "Save failed: " + res.status + " " + errText);
+              return;
+            }
+            var payload = await res.json();
+            settingsEditor.value = JSON.stringify(payload, null, 2);
+            text("settings-status", "Saved.");
+          });
+          loadSettings().catch(function () {
+            text("settings-status", "Could not auto-load settings.");
+          });
+        }
+      })();
+    </script>
   </body>
 </html>`;
 
