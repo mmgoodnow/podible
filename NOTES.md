@@ -12,6 +12,7 @@
 - [x] Mock services and e2e tests
 - [x] Review feedback pass (rTorrent methods, infohash handling, snatch behavior)
 - [x] Legacy JSON cache state moved into SQLite (`app_state`)
+- [x] Open Library search endpoint + add-to-library by OL key/ISBN
 - [ ] README refresh
 
 ## Open Questions / Decisions
@@ -22,7 +23,7 @@
 
 - API surface replaced in `server.ts` and `/src/kindling/http.ts`.
 - Worker handles `download`, `import`, `scan`, and `reconcile` with retry/backoff.
-- Next: add Open Library book-discovery endpoint (`findBook` equivalent), then refresh README.
+- Next: refresh README to cover Open Library search/add flow and identifier-based library creation.
 
 ## Assumptions
 

@@ -4,7 +4,7 @@ import { buildJsonFeed, buildRssFeed } from "./feed";
 import { authorizeRequest } from "./auth";
 import { buildChapters, preferredAudioForBooks, streamAudioAsset, streamExtension } from "./media";
 import { KindlingRepo } from "./repo";
-import { fetchOpenLibraryMetadata } from "./openlibrary";
+import { fetchOpenLibraryMetadata, resolveOpenLibraryCandidate, searchOpenLibrary } from "./openlibrary";
 import { runSearch, runSnatch, triggerAutoAcquire } from "./service";
 import type { AppSettings, MediaType } from "./types";
 
@@ -89,16 +89,71 @@ export function createPodibleFetchHandler(repo: KindlingRepo, startTime: number)
         return json(result);
       }
 
-      if (pathname === "/library" && request.method === "POST") {
-        const payload = await readJson<{ title: string; author: string }>(request);
-        if (!payload.title?.trim() || !payload.author?.trim()) {
-          return json({ error: "title and author are required" }, 400);
+      if (pathname === "/openlibrary/search" && request.method === "GET") {
+        const q = (url.searchParams.get("q") ?? "").trim();
+        if (!q) {
+          return json({ error: "q is required" }, 400);
         }
+        const limit = parseLimit(url.searchParams.get("limit"));
+        const results = await searchOpenLibrary(q, Math.min(limit, 50));
+        return json({ results });
+      }
+
+      if (pathname === "/library" && request.method === "POST") {
+        const payload = await readJson<{
+          title?: string;
+          author?: string;
+          openLibraryKey?: string;
+          isbn?: string;
+        }>(request);
+
+        const hasIdentifier = Boolean(payload.openLibraryKey?.trim() || payload.isbn?.trim());
+        const resolved = hasIdentifier
+          ? await resolveOpenLibraryCandidate({
+              openLibraryKey: payload.openLibraryKey,
+              isbn: payload.isbn,
+              title: payload.title,
+              author: payload.author,
+            })
+          : null;
+
+        let title = payload.title?.trim() ?? "";
+        let author = payload.author?.trim() ?? "";
+
+        if (resolved) {
+          title = resolved.title;
+          author = resolved.author;
+        }
+
+        if (!title || !author) {
+          return json({ error: "title and author are required (or provide openLibraryKey/isbn)" }, 400);
+        }
+
+        if (hasIdentifier && !resolved) {
+          return json({ error: "Open Library match not found" }, 404);
+        }
+
         const book = repo.createBook({
-          title: payload.title.trim(),
-          author: payload.author.trim(),
+          title,
+          author,
         });
-        const metadata = await fetchOpenLibraryMetadata(book).catch(() => null);
+
+        const metadata = resolved
+          ? {
+              publishedAt: resolved.publishedAt ?? null,
+              language: resolved.language ?? null,
+              isbn: (payload.isbn?.trim() || resolved.isbn) ?? null,
+              identifiers: {
+                ...resolved.identifiers,
+                ...(payload.isbn?.trim() ? { isbn: payload.isbn.trim() } : {}),
+              },
+            }
+          : await fetchOpenLibraryMetadata({
+              title: book.title,
+              author: book.author,
+              isbn: payload.isbn ?? null,
+              openLibraryKey: payload.openLibraryKey ?? null,
+            }).catch(() => null);
         if (metadata) {
           repo.updateBookMetadata(book.id, {
             publishedAt: metadata.publishedAt ?? null,
