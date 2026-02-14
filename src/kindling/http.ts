@@ -137,7 +137,6 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
     <h2>Settings JSON</h2>
     <div class="panel">
       <div class="row">
-        <button id="settings-load-btn" type="button">Load Settings</button>
         <button id="settings-save-btn" type="button">Save Settings</button>
       </div>
       <p id="settings-status" class="muted"></p>
@@ -253,21 +252,23 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
         }
 
         var settingsEditor = document.getElementById("settings-editor");
-        var settingsLoadBtn = document.getElementById("settings-load-btn");
         var settingsSaveBtn = document.getElementById("settings-save-btn");
         async function loadSettings() {
-          text("settings-status", "Loading...");
-          var res = await api("/settings");
-          if (!res.ok) {
-            text("settings-status", "Load failed: " + res.status);
-            return;
+          try {
+            text("settings-status", "Loading...");
+            var res = await api("/settings");
+            if (!res.ok) {
+              text("settings-status", "Load failed: " + res.status);
+              return;
+            }
+            var payload = await res.json();
+            settingsEditor.value = JSON.stringify(payload, null, 2);
+            text("settings-status", "Loaded.");
+          } catch (err) {
+            text("settings-status", "Load failed: " + (err && err.message ? err.message : "request error"));
           }
-          var payload = await res.json();
-          settingsEditor.value = JSON.stringify(payload, null, 2);
-          text("settings-status", "Loaded.");
         }
-        if (settingsEditor && settingsLoadBtn && settingsSaveBtn) {
-          settingsLoadBtn.addEventListener("click", loadSettings);
+        if (settingsEditor && settingsSaveBtn) {
           settingsSaveBtn.addEventListener("click", async function () {
             text("settings-status", "Saving...");
             var parsed;
@@ -291,9 +292,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
             settingsEditor.value = JSON.stringify(payload, null, 2);
             text("settings-status", "Saved.");
           });
-          loadSettings().catch(function () {
-            text("settings-status", "Could not auto-load settings.");
-          });
+          loadSettings();
         }
       })();
     </script>
