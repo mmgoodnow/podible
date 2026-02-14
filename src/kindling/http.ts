@@ -41,6 +41,101 @@ function parseLimit(value: string | null): number {
   return Math.min(parsed, 200);
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function addApiKey(path: string, apiKey: string | null): string {
+  if (!apiKey) return path;
+  return path.includes("?") ? `${path}&api_key=${encodeURIComponent(apiKey)}` : `${path}?api_key=${encodeURIComponent(apiKey)}`;
+}
+
+function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
+  const health = repo.getHealthSummary();
+  const books = repo.listBooks(30).items;
+  const apiKey = settings.auth.mode === "apikey" ? settings.auth.key : null;
+  const links = [
+    "/health",
+    "/server",
+    "/settings",
+    "/library",
+    "/downloads",
+    "/feed.xml",
+    "/feed.json",
+  ];
+
+  const linkItems = links
+    .map((path) => `<li><a href="${escapeHtml(addApiKey(path, apiKey))}">${escapeHtml(path)}</a></li>`)
+    .join("");
+
+  const rows = books
+    .map((book) => {
+      const detailPath = addApiKey(`/library/${book.id}`, apiKey);
+      return `<tr>
+  <td><a href="${escapeHtml(detailPath)}">${book.id}</a></td>
+  <td>${escapeHtml(book.title)}</td>
+  <td>${escapeHtml(book.author)}</td>
+  <td>${escapeHtml(book.status)}</td>
+  <td>${escapeHtml(book.audioStatus)}</td>
+  <td>${escapeHtml(book.ebookStatus)}</td>
+</tr>`;
+    })
+    .join("");
+
+  const body = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Podible</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; margin: 24px; }
+      h1, h2 { margin: 0 0 12px; }
+      .muted { color: #555; }
+      ul { margin-top: 8px; }
+      table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+      th, td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 14px; }
+      th { background: #f6f6f6; }
+      code { background: #f4f4f4; padding: 2px 4px; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <h1>Podible Backend</h1>
+    <p class="muted">Auth mode: <strong>${escapeHtml(settings.auth.mode)}</strong>${apiKey ? ` | Authorized links include <code>api_key</code>` : ""}</p>
+    <h2>Health</h2>
+    <p>Queue: <strong>${health.queueSize}</strong> | Jobs: <code>${escapeHtml(JSON.stringify(health.jobs))}</code> | Releases: <code>${escapeHtml(JSON.stringify(health.releases))}</code></p>
+    <h2>Quick Links</h2>
+    <ul>${linkItems}</ul>
+    <h2>Recent Library</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Title</th>
+          <th>Author</th>
+          <th>Status</th>
+          <th>Audio</th>
+          <th>Ebook</th>
+        </tr>
+      </thead>
+      <tbody>${rows || '<tr><td colspan="6">No books yet.</td></tr>'}</tbody>
+    </table>
+  </body>
+</html>`;
+
+  return new Response(body, {
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
 export function createPodibleFetchHandler(repo: KindlingRepo, startTime: number): (request: Request) => Promise<Response> {
   return async (request: Request): Promise<Response> => {
     const settings = repo.getSettings();
@@ -55,6 +150,10 @@ export function createPodibleFetchHandler(repo: KindlingRepo, startTime: number)
     }
 
     try {
+      if (pathname === "/" && request.method === "GET") {
+        return renderHomePage(repo, settings);
+      }
+
       if (pathname === "/health" && request.method === "GET") {
         return json({
           ok: true,

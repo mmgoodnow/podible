@@ -6,6 +6,28 @@ import { createPodibleFetchHandler } from "../../src/kindling/http";
 import { KindlingRepo } from "../../src/kindling/repo";
 
 describe("podible http", () => {
+  test("serves root html home page", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new KindlingRepo(db);
+    const settings = repo.ensureSettings();
+    repo.updateSettings({
+      ...settings,
+      auth: { ...settings.auth, mode: "local" },
+      torznab: [],
+    });
+
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+    const home = await fetchHandler(new Request("http://localhost/"));
+    expect(home.status).toBe(200);
+    expect(home.headers.get("content-type")).toContain("text/html");
+    const body = await home.text();
+    expect(body.includes("Podible Backend")).toBe(true);
+    expect(body.includes("/health")).toBe(true);
+
+    db.close();
+  });
+
   test("serves health and creates library book from title/author", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown) => {
