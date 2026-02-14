@@ -70,6 +70,10 @@ function parseIdentifiers(value: string | null): Record<string, string> {
   }
 }
 
+function stringifySettings(value: AppSettings): string {
+  return JSON.stringify(value, null, 2);
+}
+
 function normalizeHash(hash: string): string {
   return hash.trim().toLowerCase();
 }
@@ -94,7 +98,7 @@ export class KindlingRepo {
     const defaults = defaultSettings();
     this.db
       .query("INSERT INTO settings (id, value_json) VALUES (1, ?)")
-      .run(JSON.stringify(defaults));
+      .run(stringifySettings(defaults));
     return defaults;
   }
 
@@ -105,7 +109,7 @@ export class KindlingRepo {
   updateSettings(next: AppSettings): AppSettings {
     this.db
       .query("INSERT INTO settings (id, value_json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET value_json = excluded.value_json")
-      .run(JSON.stringify(next));
+      .run(stringifySettings(next));
     return next;
   }
 
