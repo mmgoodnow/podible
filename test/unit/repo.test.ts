@@ -60,6 +60,20 @@ describe("kindling repo", () => {
     db.close();
   });
 
+  test("rescheduleJob clears stale error", () => {
+    const { db, repo } = setupRepo();
+
+    const job = repo.createJob({ type: "download", status: "queued" });
+    const failed = repo.markJobFailed(job.id, "temporary socket error", new Date(Date.now() + 1000).toISOString());
+    expect(failed.error).toContain("socket");
+
+    const rescheduled = repo.rescheduleJob(job.id, new Date(Date.now() + 5000).toISOString());
+    expect(rescheduled.status).toBe("queued");
+    expect(rescheduled.error).toBeNull();
+
+    db.close();
+  });
+
   test("derives partial status across media", () => {
     const { db, repo } = setupRepo();
 

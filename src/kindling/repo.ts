@@ -455,7 +455,7 @@ export class KindlingRepo {
     const now = nowIso();
     return this.db
       .query(
-        "UPDATE jobs SET status = 'queued', next_run_at = ?, updated_at = ? WHERE id = ? RETURNING *"
+        "UPDATE jobs SET status = 'queued', next_run_at = ?, error = NULL, updated_at = ? WHERE id = ? RETURNING *"
       )
       .get(nextRunAt, now, jobId) as JobRow;
   }
