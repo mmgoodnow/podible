@@ -80,6 +80,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
   <td>${escapeHtml(book.status)}</td>
   <td>${escapeHtml(book.audioStatus)}</td>
   <td>${escapeHtml(book.ebookStatus)}</td>
+  <td>${escapeHtml(String(book.fullPseudoProgress))}%</td>
   <td><button type="button" class="delete-book-btn" data-book-id="${book.id}" data-book-title="${escapeHtml(book.title)}">Delete</button></td>
 </tr>`;
     })
@@ -137,11 +138,33 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
           <th>Status</th>
           <th>Audio</th>
           <th>Ebook</th>
+          <th>Progress</th>
           <th>Actions</th>
         </tr>
       </thead>
-      <tbody id="library-table-body">${rows || '<tr><td colspan="7">No books yet.</td></tr>'}</tbody>
+      <tbody id="library-table-body">${rows || '<tr><td colspan="8">No books yet.</td></tr>'}</tbody>
     </table>
+    <h2>Recent Downloads</h2>
+    <div class="panel">
+      <div class="row">
+        <button id="downloads-refresh-btn" type="button">Refresh Downloads</button>
+      </div>
+      <p id="downloads-status" class="muted"></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Job</th>
+            <th>Release</th>
+            <th>Media</th>
+            <th>Status</th>
+            <th>Progress</th>
+            <th>Transfer</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody id="downloads-table-body"><tr><td colspan="7">Loading...</td></tr></tbody>
+      </table>
+    </div>
     <h2>Settings JSON</h2>
     <div class="panel">
       <div class="row">
@@ -281,6 +304,8 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
         var jobsRefreshBtn = document.getElementById("jobs-refresh-btn");
         var jobsLimitInput = document.getElementById("jobs-limit");
         var jobsTypeInput = document.getElementById("jobs-type");
+        var downloadsTableBody = document.getElementById("downloads-table-body");
+        var downloadsRefreshBtn = document.getElementById("downloads-refresh-btn");
         async function loadSettings() {
           try {
             text("settings-status", "Loading...");
@@ -313,6 +338,96 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
           });
           loadSettings();
         }
+
+        function formatBytes(value) {
+          if (!Number.isFinite(value) || value < 0) return "";
+          var units = ["B", "KB", "MB", "GB", "TB"];
+          var n = value;
+          var i = 0;
+          while (n >= 1024 && i < units.length - 1) {
+            n = n / 1024;
+            i += 1;
+          }
+          var rounded = i === 0 ? String(Math.round(n)) : n.toFixed(1);
+          return rounded + " " + units[i];
+        }
+
+        function downloadsCell(row, value) {
+          var td = document.createElement("td");
+          td.textContent = value;
+          row.appendChild(td);
+          return td;
+        }
+
+        function renderDownloads(items) {
+          if (!downloadsTableBody) return;
+          downloadsTableBody.innerHTML = "";
+          if (!Array.isArray(items) || items.length === 0) {
+            var emptyRow = document.createElement("tr");
+            var emptyCell = document.createElement("td");
+            emptyCell.colSpan = 7;
+            emptyCell.textContent = "No downloads found.";
+            emptyRow.appendChild(emptyCell);
+            downloadsTableBody.appendChild(emptyRow);
+            return;
+          }
+
+          items.forEach(function (download) {
+            var row = document.createElement("tr");
+            var jobCell = document.createElement("td");
+            var link = document.createElement("a");
+            link.href = withAuth("/rpc/downloads/get?jobId=" + String(download.job_id));
+            link.textContent = String(download.job_id);
+            jobCell.appendChild(link);
+            row.appendChild(jobCell);
+
+            downloadsCell(row, download.release_id == null ? "" : String(download.release_id));
+            downloadsCell(row, String(download.media_type || ""));
+            downloadsCell(row, String(download.release_status || download.job_status || ""));
+            downloadsCell(row, String(download.fullPseudoProgress ?? 0) + "%");
+
+            var transfer = "";
+            if (download.release_status === "downloading" && download.downloadProgress) {
+              var progress = download.downloadProgress;
+              var bytesDone = formatBytes(progress.bytesDone);
+              var sizeBytes = formatBytes(progress.sizeBytes);
+              var downRate = formatBytes(progress.downRate);
+              var percent = Number.isFinite(progress.percent) ? String(progress.percent) + "%" : "";
+              if (bytesDone || sizeBytes) {
+                transfer = bytesDone + (sizeBytes ? " / " + sizeBytes : "");
+              }
+              if (downRate) {
+                transfer += (transfer ? " @ " : "") + downRate + "/s";
+              }
+              if (percent) {
+                transfer += transfer ? " (" + percent + ")" : percent;
+              }
+            }
+            downloadsCell(row, transfer);
+            downloadsCell(row, String(download.job_error || ""));
+            downloadsTableBody.appendChild(row);
+          });
+        }
+
+        async function loadDownloads() {
+          text("downloads-status", "Loading...");
+          try {
+            var payload = await rpc("downloads.list", {});
+            var items = payload && Array.isArray(payload.downloads) ? payload.downloads : [];
+            renderDownloads(items);
+            text("downloads-status", "Loaded " + items.length + " download(s).");
+          } catch (err) {
+            text("downloads-status", "Load failed: " + (err && err.message ? err.message : "request error"));
+            renderDownloads([]);
+          }
+        }
+
+        if (downloadsRefreshBtn) {
+          downloadsRefreshBtn.addEventListener("click", function () {
+            loadDownloads();
+          });
+        }
+        loadDownloads();
 
         function jobsCell(row, value) {
           var td = document.createElement("td");
@@ -389,7 +504,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
           if (libraryTableBody.children.length > 0) return;
           var row = document.createElement("tr");
           var cell = document.createElement("td");
-          cell.colSpan = 7;
+          cell.colSpan = 8;
           cell.textContent = "No books yet.";
           row.appendChild(cell);
           libraryTableBody.appendChild(row);
