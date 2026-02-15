@@ -1,6 +1,6 @@
 services:
   rutorrent:
-    image: k44sh/rutorrent:latest
+    image: k44sh/rutorrent:v5.1
     container_name: rutorrent
     restart: unless-stopped
     environment:
