@@ -133,7 +133,7 @@ export type LibraryBook = {
   id: number;
   title: string;
   author: string;
-  coverPath: string | null;
+  coverUrl: string | null;
   durationMs: number | null;
   addedAt: string;
   updatedAt: string;

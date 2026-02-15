@@ -45,7 +45,7 @@ ${items
     const enclosure = `${origin}/stream/${asset.id}.${ext}`;
     const chapters = `${origin}/chapters/${asset.id}.json`;
     const pubDate = new Date(book.addedAt).toUTCString();
-    const coverTag = book.coverPath ? `<itunes:image href="${origin}/covers/${book.id}.jpg" />` : "";
+    const coverTag = book.coverUrl ? `<itunes:image href="${origin}${book.coverUrl}" />` : "";
     return `<item>
 <guid isPermaLink="false">book-${book.id}-asset-${asset.id}</guid>
 <title>${escapeXml(book.title)}</title>
@@ -88,7 +88,7 @@ export function buildJsonFeed(request: Request, repo: KindlingRepo, feedTitle: s
       date_published: new Date(book.addedAt).toISOString(),
       date_modified: new Date(book.updatedAt).toISOString(),
       authors: [{ name: book.author }],
-      ...(book.coverPath ? { image: `${origin}/covers/${book.id}.jpg` } : {}),
+      ...(book.coverUrl ? { image: `${origin}${book.coverUrl}` } : {}),
       attachments: [
         {
           url: streamUrl,

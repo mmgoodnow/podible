@@ -581,7 +581,7 @@ export class KindlingRepo {
       id: row.id,
       title: row.title,
       author: row.author,
-      coverPath: row.cover_path,
+      coverUrl: row.cover_path ? `/covers/${row.id}.jpg` : null,
       durationMs: row.duration_ms,
       addedAt: row.added_at,
       updatedAt: row.updated_at,

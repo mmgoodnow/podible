@@ -48,7 +48,8 @@ export async function hydrateBookFromOpenLibrary(repo: KindlingRepo, book: Libra
     ...(metadata.identifiers ?? {}),
   };
 
-  let coverPath = book.coverPath;
+  const currentRow = repo.getBookRow(book.id);
+  let coverPath = currentRow?.cover_path ?? null;
   if (!coverPath && metadata.coverUrl) {
     const downloaded = await downloadCover(book.id, metadata.coverUrl);
     if (downloaded) {

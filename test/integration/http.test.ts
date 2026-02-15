@@ -341,9 +341,10 @@ describe("podible http", () => {
       expect(fetched?.identifiers.openlibrary).toBe("/works/OL45754W");
       expect(fetched?.description).toBe("A seminal cyberpunk novel.");
       expect(fetched?.descriptionHtml).toContain("<p>");
-      expect(fetched?.coverPath).toBeTruthy();
-      if (fetched?.coverPath) {
-        expect(await Bun.file(fetched.coverPath).exists()).toBe(true);
+      expect(fetched?.coverUrl).toBe(`/covers/${book.id}.jpg`);
+      if (fetched?.coverUrl) {
+        const coverRes = await fetchHandler(new Request(`http://localhost${fetched.coverUrl}`));
+        expect(coverRes.status).toBe(200);
       }
 
       db.close();
