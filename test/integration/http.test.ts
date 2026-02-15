@@ -359,4 +359,29 @@ describe("podible http", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("supports rpc library.acquire for existing books", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new KindlingRepo(db);
+    const settings = repo.ensureSettings();
+    repo.updateSettings({
+      ...settings,
+      auth: { ...settings.auth, mode: "local" },
+      torznab: [],
+    });
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+
+    const acquire = await rpc(fetchHandler, "library.acquire", { bookId: book.id, media: ["ebook"] }, 1);
+    expect(acquire.result.jobId).toBeGreaterThan(0);
+    expect(acquire.result.media).toEqual(["ebook"]);
+
+    const job = repo.getJob(acquire.result.jobId);
+    expect(job?.type).toBe("scan");
+    expect(job?.book_id).toBe(book.id);
+    expect(JSON.parse(job?.payload_json ?? "{}").media).toEqual(["ebook"]);
+
+    db.close();
+  });
 });

@@ -39,6 +39,20 @@ describe("json-rpc handler", () => {
     });
     expect(Array.isArray(listed.result.items)).toBe(true);
 
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const acquire = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 22,
+      method: "library.acquire",
+      params: { bookId: book.id, media: ["audio"] },
+    });
+    expect(acquire.result.jobId).toBeGreaterThan(0);
+    expect(acquire.result.media).toEqual(["audio"]);
+    const acquireJob = repo.getJob(acquire.result.jobId);
+    expect(acquireJob?.type).toBe("scan");
+    expect(acquireJob?.book_id).toBe(book.id);
+    expect(JSON.parse(acquireJob?.payload_json ?? "{}").media).toEqual(["audio"]);
+
     const queued = repo.createJob({ type: "scan", payload: { fullRefresh: true } });
     const jobs = await callRpc(repo, {
       jsonrpc: "2.0",
@@ -106,6 +120,31 @@ describe("json-rpc handler", () => {
       params: { query: "Dune", media: "video" },
     });
     expect(result.error.code).toBe(-32602);
+    db.close();
+  });
+
+  test("requires valid params for library.acquire", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new KindlingRepo(db);
+
+    const missingBook = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "library.acquire",
+      params: { bookId: 999 },
+    });
+    expect(missingBook.error.code).toBe(-32000);
+
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const invalidMedia = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "library.acquire",
+      params: { bookId: book.id, media: "video" },
+    });
+    expect(invalidMedia.error.code).toBe(-32602);
+
     db.close();
   });
 

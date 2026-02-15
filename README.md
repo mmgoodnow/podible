@@ -82,6 +82,7 @@ Removed REST control routes now return `404`:
 - `library.get`
 - `library.create`
 - `library.refresh`
+- `library.acquire`
 - `library.rehydrate`
 - `search.run`
 - `snatch.create`
@@ -162,6 +163,22 @@ Add by Open Library work key:
 curl -X POST http://localhost/rpc \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":2,"method":"library.create","params":{"openLibraryKey":"/works/OL45804W"}}'
+```
+
+Re-trigger auto-acquire for an existing book:
+
+```bash
+curl -X POST http://localhost/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":21,"method":"library.acquire","params":{"bookId":123}}'
+```
+
+Target only one media type:
+
+```bash
+curl -X POST http://localhost/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":22,"method":"library.acquire","params":{"bookId":123,"media":["ebook"]}}'
 ```
 
 Rehydrate metadata for existing books (all or one):

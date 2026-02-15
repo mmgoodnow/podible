@@ -126,6 +126,19 @@ function parseMedia(value: unknown): MediaType {
   throw new RpcError(-32602, "media must be audio or ebook");
 }
 
+function parseMediaSelection(value: unknown): MediaType[] {
+  if (value === undefined || value === null) {
+    return ["audio", "ebook"];
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      throw new RpcError(-32602, "media must include at least one value");
+    }
+    return Array.from(new Set(value.map((item) => parseMedia(item))));
+  }
+  return [parseMedia(value)];
+}
+
 function parseJobType(value: unknown): JobType {
   if (value === "scan" || value === "download" || value === "import" || value === "transcode" || value === "reconcile") {
     return value;
@@ -251,6 +264,17 @@ const handlers: Record<string, RpcMethodHandler> = {
       payload: { fullRefresh: true },
     });
     return { jobId: job.id };
+  },
+
+  async "library.acquire"(ctx, params) {
+    const bookId = asPositiveInt(params.bookId, "bookId");
+    const book = ctx.repo.getBookRow(bookId);
+    if (!book) {
+      throw new RpcError(-32000, "Book not found", { error: "not_found", bookId });
+    }
+    const media = parseMediaSelection(params.media);
+    const jobId = await triggerAutoAcquire(ctx.repo, bookId, media);
+    return { jobId, media };
   },
 
   async "library.rehydrate"(ctx, params) {

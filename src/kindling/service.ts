@@ -155,13 +155,14 @@ export async function runSnatch(
   };
 }
 
-export async function triggerAutoAcquire(repo: KindlingRepo, bookId: number): Promise<number> {
+export async function triggerAutoAcquire(repo: KindlingRepo, bookId: number, media: MediaType[] = ["audio", "ebook"]): Promise<number> {
+  const mediaList = media.length > 0 ? Array.from(new Set(media)) : ["audio", "ebook"];
   const scanJob = repo.createJob({
     type: "scan",
     bookId,
     payload: {
       bookId,
-      media: ["audio", "ebook"],
+      media: mediaList,
     },
   });
   return scanJob.id;
