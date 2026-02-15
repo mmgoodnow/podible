@@ -6,6 +6,7 @@ import { RtorrentClient } from "./rtorrent";
 import { KindlingRepo } from "./repo";
 import { scanLibraryRoot } from "./scanner";
 import { runSearch, runSnatch } from "./service";
+import type { RtorrentDownloadState } from "./rtorrent";
 import type { AppSettings, JobRow, MediaType } from "./types";
 
 /**
@@ -35,6 +36,47 @@ function backoffMs(attempt: number): number {
   return Math.min(5 * 60_000, 1_000 * 2 ** safeAttempt);
 }
 
+const FAST_POLL_MS = 500;
+const MID_POLL_MS = 2_000;
+const ETA_FAST_WINDOW_SECONDS = 30;
+const ETA_MID_WINDOW_SECONDS = 120;
+
+function derivedLeftBytes(state: RtorrentDownloadState): number | null {
+  if (typeof state.leftBytes === "number" && Number.isFinite(state.leftBytes)) {
+    return Math.max(0, state.leftBytes);
+  }
+  if (typeof state.sizeBytes === "number" && typeof state.bytesDone === "number") {
+    return Math.max(0, state.sizeBytes - state.bytesDone);
+  }
+  return null;
+}
+
+/**
+ * Hybrid ETA scheduler:
+ * - keep using settings.polling.rtorrentMs as max/default
+ * - poll faster as ETA approaches completion
+ */
+export function selectDownloadPollMs(state: RtorrentDownloadState, configuredPollMs: number): number {
+  const maxPollMs = Math.max(FAST_POLL_MS, Math.trunc(configuredPollMs || 5000));
+  const leftBytes = derivedLeftBytes(state);
+  const downRate = typeof state.downRate === "number" && Number.isFinite(state.downRate) ? state.downRate : null;
+  if (leftBytes === null || downRate === null || downRate <= 0) {
+    return maxPollMs;
+  }
+
+  const etaSeconds = leftBytes / downRate;
+  if (!Number.isFinite(etaSeconds) || etaSeconds < 0) {
+    return maxPollMs;
+  }
+  if (etaSeconds <= ETA_FAST_WINDOW_SECONDS) {
+    return FAST_POLL_MS;
+  }
+  if (etaSeconds <= ETA_MID_WINDOW_SECONDS) {
+    return Math.min(maxPollMs, MID_POLL_MS);
+  }
+  return maxPollMs;
+}
+
 /**
  * Download job: poll rTorrent by info hash until torrent completion, then
  * enqueue an import job for the resolved base path.
@@ -54,7 +96,8 @@ async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promise<"don
   const state = await client.getDownloadState(release.info_hash);
   if (!state.complete) {
     ctx.repo.setReleaseStatus(release.id, "downloading", null);
-    const nextRun = new Date(Date.now() + Math.max(1000, settings.polling.rtorrentMs || 5000)).toISOString();
+    const pollMs = selectDownloadPollMs(state, settings.polling.rtorrentMs || 5000);
+    const nextRun = new Date(Date.now() + pollMs).toISOString();
     ctx.repo.rescheduleJob(job.id, nextRun);
     return "rescheduled";
   }

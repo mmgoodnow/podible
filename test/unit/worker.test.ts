@@ -6,7 +6,7 @@ import { Database } from "bun:sqlite";
 import { runMigrations } from "../../src/kindling/db";
 import { KindlingRepo } from "../../src/kindling/repo";
 import { defaultSettings } from "../../src/kindling/settings";
-import { runWorker } from "../../src/kindling/worker";
+import { runWorker, selectDownloadPollMs } from "../../src/kindling/worker";
 import { startMockTorznab } from "../mocks/torznab";
 
 function makeTorrentBytes(name: string): Uint8Array {
@@ -78,5 +78,75 @@ describe("worker scan auto-acquire retries", () => {
       torznab.stop();
       db.close();
     }
+  });
+});
+
+describe("download ETA polling", () => {
+  test("uses fast poll near completion", () => {
+    const pollMs = selectDownloadPollMs(
+      {
+        name: null,
+        hash: null,
+        complete: false,
+        basePath: null,
+        bytesDone: 90,
+        sizeBytes: 100,
+        leftBytes: 10,
+        downRate: 1,
+      },
+      5000
+    );
+    expect(pollMs).toBe(500);
+  });
+
+  test("uses medium poll for mid ETA window", () => {
+    const pollMs = selectDownloadPollMs(
+      {
+        name: null,
+        hash: null,
+        complete: false,
+        basePath: null,
+        bytesDone: 0,
+        sizeBytes: 500,
+        leftBytes: 500,
+        downRate: 5,
+      },
+      5000
+    );
+    expect(pollMs).toBe(2000);
+  });
+
+  test("falls back to configured poll when rate is unavailable", () => {
+    const pollMs = selectDownloadPollMs(
+      {
+        name: null,
+        hash: null,
+        complete: false,
+        basePath: null,
+        bytesDone: 50,
+        sizeBytes: 100,
+        leftBytes: 50,
+        downRate: 0,
+      },
+      5000
+    );
+    expect(pollMs).toBe(5000);
+  });
+
+  test("derives left bytes when not provided", () => {
+    const pollMs = selectDownloadPollMs(
+      {
+        name: null,
+        hash: null,
+        complete: false,
+        basePath: null,
+        bytesDone: 960,
+        sizeBytes: 1000,
+        leftBytes: null,
+        downRate: 2,
+      },
+      5000
+    );
+    expect(pollMs).toBe(500);
   });
 });

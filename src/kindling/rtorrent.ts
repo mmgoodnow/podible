@@ -11,6 +11,8 @@ type RtorrentDownloadState = {
   basePath: string | null;
   bytesDone: number | null;
   sizeBytes: number | null;
+  leftBytes: number | null;
+  downRate: number | null;
 };
 
 const parser = new XMLParser({
@@ -133,13 +135,15 @@ export class RtorrentClient {
 
   async getDownloadState(infoHash: string): Promise<RtorrentDownloadState> {
     const hash = infoHash.toUpperCase();
-    const [name, returnedHash, complete, basePath, bytesDone, sizeBytes] = await Promise.all([
+    const [name, returnedHash, complete, basePath, bytesDone, sizeBytes, leftBytes, downRate] = await Promise.all([
       this.call("d.name", [xmlParamString(hash)]),
       this.call("d.hash", [xmlParamString(hash)]),
       this.call("d.complete", [xmlParamString(hash)]),
       this.call("d.base_path", [xmlParamString(hash)]),
       this.call("d.bytes_done", [xmlParamString(hash)]),
       this.call("d.size_bytes", [xmlParamString(hash)]),
+      this.call("d.left_bytes", [xmlParamString(hash)]),
+      this.call("d.down.rate", [xmlParamString(hash)]),
     ]);
 
     return {
@@ -149,6 +153,8 @@ export class RtorrentClient {
       basePath: maybeText(basePath),
       bytesDone: toNumber(bytesDone),
       sizeBytes: toNumber(sizeBytes),
+      leftBytes: toNumber(leftBytes),
+      downRate: toNumber(downRate),
     };
   }
 }

@@ -32,7 +32,7 @@ describe("rtorrent xmlrpc helpers", () => {
     ).toThrow();
   });
 
-  test("uses direct d.base_path/d.bytes_done/d.size_bytes methods", async () => {
+  test("uses direct d.* methods for state snapshot", async () => {
     const originalFetch = globalThis.fetch;
     const calls: string[] = [];
     globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
@@ -54,6 +54,10 @@ describe("rtorrent xmlrpc helpers", () => {
             return '<?xml version="1.0"?><methodResponse><params><param><value><i8>50</i8></value></param></params></methodResponse>';
           case "d.size_bytes":
             return '<?xml version="1.0"?><methodResponse><params><param><value><i8>100</i8></value></param></params></methodResponse>';
+          case "d.left_bytes":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>50</i8></value></param></params></methodResponse>';
+          case "d.down.rate":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>10</i8></value></param></params></methodResponse>';
           default:
             return '<?xml version="1.0"?><methodResponse><params><param><value><string></string></value></param></params></methodResponse>';
         }
@@ -72,9 +76,13 @@ describe("rtorrent xmlrpc helpers", () => {
       expect(state.basePath).toBe("/downloads/book");
       expect(state.bytesDone).toBe(50);
       expect(state.sizeBytes).toBe(100);
+      expect(state.leftBytes).toBe(50);
+      expect(state.downRate).toBe(10);
       expect(calls.includes("d.base_path")).toBe(true);
       expect(calls.includes("d.bytes_done")).toBe(true);
       expect(calls.includes("d.size_bytes")).toBe(true);
+      expect(calls.includes("d.left_bytes")).toBe(true);
+      expect(calls.includes("d.down.rate")).toBe(true);
       expect(calls.includes("d.get_size_bytes")).toBe(false);
     } finally {
       globalThis.fetch = originalFetch;
