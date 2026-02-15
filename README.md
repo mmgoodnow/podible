@@ -47,26 +47,11 @@ Settings default to API key auth (`Authorization: Bearer <key>` or `X-API-Key`).
 
 On boot, the server logs the active API key from settings.
 
-For localhost development, set settings `auth.mode` to `local` via `PUT /settings`.
+For localhost development, set settings `auth.mode` to `local` via `settings.update` RPC.
 
 ## Key Endpoints
 
-- `GET /health`
-- `GET /server`
-- `GET /settings`
-- `PUT /settings`
-- `GET /openlibrary/search?q=&limit=`
-- `GET /library?limit=&cursor=&q=`
-- `POST /library` (title/author OR `openLibraryKey` OR `isbn`)
-- `GET /library/{bookId}`
-- `POST /library/refresh`
-- `POST /search`
-- `POST /snatch` (`infoHash` required)
-- `GET /releases?bookId=`
-- `GET /downloads`
-- `GET /downloads/{jobId}`
-- `POST /downloads/{jobId}/retry`
-- `POST /import/reconcile`
+- `POST /rpc` (control/data APIs via JSON-RPC 2.0)
 - `GET /assets?bookId=`
 - `GET /stream/{assetId}.{ext}`
 - `GET /chapters/{assetId}.json`
@@ -75,9 +60,49 @@ For localhost development, set settings `auth.mode` to `local` via `PUT /setting
 - `GET /feed.json`
 - `GET /ebook/{assetId}`
 
+Removed REST control routes now return `404`:
+
+- `/health`, `/server`
+- `/settings`
+- `/openlibrary/search`
+- `/library`, `/library/{bookId}`, `/library/refresh`
+- `/search`, `/snatch`
+- `/releases`, `/downloads`, `/downloads/{id}`, `/downloads/{id}/retry`
+- `/import/reconcile`
+
+## JSON-RPC Methods (v1)
+
+- `system.health`
+- `system.server`
+- `settings.get`
+- `settings.update`
+- `openlibrary.search`
+- `library.list`
+- `library.get`
+- `library.create`
+- `library.refresh`
+- `search.run`
+- `snatch.create`
+- `releases.list`
+- `downloads.list`
+- `downloads.get`
+- `downloads.retry`
+- `import.reconcile`
+
+RPC request shape:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "settings.get",
+  "params": {}
+}
+```
+
 ## Settings Shape
 
-`GET /settings` / `PUT /settings` use:
+`settings.get` / `settings.update` use:
 
 ```json
 {
@@ -108,23 +133,25 @@ For localhost development, set settings `auth.mode` to `local` via `PUT /setting
 Search across Open Library:
 
 ```bash
-curl "http://localhost/openlibrary/search?q=Hyperion%20Dan%20Simmons&limit=10"
+curl -X POST http://localhost/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"openlibrary.search","params":{"q":"Hyperion Dan Simmons","limit":10}}'
 ```
 
 Add directly by Open Library key:
 
 ```bash
-curl -X POST http://localhost/library \
+curl -X POST http://localhost/rpc \
   -H "Content-Type: application/json" \
-  -d '{"openLibraryKey":"/works/OL45804W"}'
+  -d '{"jsonrpc":"2.0","id":2,"method":"library.create","params":{"openLibraryKey":"/works/OL45804W"}}'
 ```
 
 Add directly by ISBN:
 
 ```bash
-curl -X POST http://localhost/library \
+curl -X POST http://localhost/rpc \
   -H "Content-Type: application/json" \
-  -d '{"isbn":"9780553283686"}'
+  -d '{"jsonrpc":"2.0","id":3,"method":"library.create","params":{"isbn":"9780553283686"}}'
 ```
 
 ## Testing
@@ -154,4 +181,5 @@ Current suites include:
 - Scanner hydrates missing metadata from Open Library on discovered books.
 - Import strategy uses hardlinks only; cross-device `EXDEV` is surfaced as an error.
 - Snatch requires `.torrent` URLs and explicit `infoHash`; magnet links are out of scope.
+- JSON-RPC batch requests are intentionally unsupported in v1.
 - Playback position APIs are intentionally out of scope for this phase.
