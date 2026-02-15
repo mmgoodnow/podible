@@ -13,6 +13,13 @@ type OpenLibraryResponse = {
   docs?: OpenLibraryDoc[];
 };
 
+type OpenLibraryEditionsResponse = {
+  entries?: Array<{
+    isbn_13?: string[];
+    isbn_10?: string[];
+  }>;
+};
+
 export type OpenLibraryMetadata = {
   publishedAt?: string;
   language?: string;
@@ -36,6 +43,14 @@ type ResolveOptions = {
   title?: string | null;
   author?: string | null;
 };
+
+function normalizeIsbn(value: string): string | null {
+  const stripped = value.replace(/[\s-]+/g, "").trim().toUpperCase();
+  if (!stripped) return null;
+  if (/^\d{13}$/.test(stripped)) return stripped;
+  if (/^\d{9}[\dX]$/.test(stripped)) return stripped;
+  return null;
+}
 
 function normalizeOpenLibraryKey(value: string): string | null {
   const trimmed = value.trim();
@@ -64,6 +79,22 @@ async function fetchSearchDocs(params: Record<string, string>): Promise<OpenLibr
   return payload.docs ?? [];
 }
 
+async function fetchEditionIsbn(openLibraryKey: string): Promise<string | undefined> {
+  const url = new URL(`https://openlibrary.org${openLibraryKey}/editions.json`);
+  url.searchParams.set("limit", "20");
+  const response = await fetch(url, { method: "GET" });
+  if (!response.ok) return undefined;
+  const payload = (await response.json()) as OpenLibraryEditionsResponse;
+  for (const entry of payload.entries ?? []) {
+    const values = [...(entry.isbn_13 ?? []), ...(entry.isbn_10 ?? [])];
+    for (const raw of values) {
+      const normalized = normalizeIsbn(raw);
+      if (normalized) return normalized;
+    }
+  }
+  return undefined;
+}
+
 function docToCandidate(doc: OpenLibraryDoc, fallbackTitle?: string, fallbackAuthor?: string): OpenLibraryCandidate | null {
   const key = typeof doc.key === "string" ? normalizeOpenLibraryKey(doc.key) : null;
   const title = (doc.title ?? fallbackTitle ?? "").trim();
@@ -86,6 +117,20 @@ function docToCandidate(doc: OpenLibraryDoc, fallbackTitle?: string, fallbackAut
     language,
     isbn,
     identifiers,
+  };
+}
+
+async function enrichCandidate(candidate: OpenLibraryCandidate): Promise<OpenLibraryCandidate> {
+  if (candidate.isbn) return candidate;
+  const fallbackIsbn = await fetchEditionIsbn(candidate.openLibraryKey).catch(() => undefined);
+  if (!fallbackIsbn) return candidate;
+  return {
+    ...candidate,
+    isbn: fallbackIsbn,
+    identifiers: {
+      ...candidate.identifiers,
+      isbn: fallbackIsbn,
+    },
   };
 }
 
@@ -135,11 +180,11 @@ export async function resolveOpenLibraryCandidate(options: ResolveOptions): Prom
     }
     const keyed = await searchOpenLibrary(`key:${normalized}`, 5);
     const exactKey = pickCandidateByKey(keyed, normalized);
-    if (exactKey) return exactKey;
+    if (exactKey) return enrichCandidate(exactKey);
 
     const fallback = await searchOpenLibrary(normalized, 5);
     const fallbackExact = pickCandidateByKey(fallback, normalized);
-    if (fallbackExact) return fallbackExact;
+    if (fallbackExact) return enrichCandidate(fallbackExact);
   }
 
   const isbn = options.isbn?.trim() ?? "";
@@ -151,7 +196,7 @@ export async function resolveOpenLibraryCandidate(options: ResolveOptions): Prom
     const candidate = docs
       .map((doc) => docToCandidate(doc, options.title ?? undefined, options.author ?? undefined))
       .find((value): value is OpenLibraryCandidate => value !== null);
-    if (candidate) return candidate;
+    if (candidate) return enrichCandidate(candidate);
   }
 
   const title = options.title?.trim() ?? "";
@@ -165,7 +210,8 @@ export async function resolveOpenLibraryCandidate(options: ResolveOptions): Prom
   const candidate = docs
     .map((doc) => docToCandidate(doc, title, author))
     .find((value): value is OpenLibraryCandidate => value !== null);
-  return candidate ?? null;
+  if (!candidate) return null;
+  return enrichCandidate(candidate);
 }
 
 export async function fetchOpenLibraryMetadata(

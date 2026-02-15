@@ -304,11 +304,10 @@ describe("podible http", () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown) => {
       const url = new URL(String(input));
-      if (url.origin !== "https://openlibrary.org" || url.pathname !== "/search.json") {
+      if (url.origin !== "https://openlibrary.org") {
         throw new Error(`Unexpected external fetch in test: ${url.toString()}`);
       }
-      const query = url.searchParams.get("q") ?? "";
-      if (query === "Neuromancer William Gibson") {
+      if (url.pathname === "/search.json" && (url.searchParams.get("q") ?? "") === "Neuromancer William Gibson") {
         return new Response(
           JSON.stringify({
             docs: [
@@ -318,9 +317,16 @@ describe("podible http", () => {
                 author_name: ["William Gibson"],
                 first_publish_year: 1984,
                 language: ["eng"],
-                isbn: ["9780441569595"],
               },
             ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url.pathname === "/works/OL45754W/editions.json") {
+        return new Response(
+          JSON.stringify({
+            entries: [{ isbn_13: ["9780441569595"] }],
           }),
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
