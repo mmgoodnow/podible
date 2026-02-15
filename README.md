@@ -89,6 +89,8 @@ Removed REST control routes now return `404`:
 - `downloads.list`
 - `downloads.get`
 - `downloads.retry`
+- `jobs.list`
+- `jobs.get`
 - `import.reconcile`
 
 RPC request shape:
@@ -174,6 +176,20 @@ curl -X POST http://localhost/rpc \
 curl -X POST http://localhost/rpc \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":4,"method":"library.rehydrate","params":{"bookId":123}}'
+```
+
+Inspect background jobs and scan outcomes:
+
+```bash
+curl -X POST http://localhost/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":5,"method":"jobs.list","params":{"limit":20}}'
+```
+
+```bash
+curl -X POST http://localhost/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":6,"method":"jobs.get","params":{"jobId":42}}'
 ```
 
 ## Testing

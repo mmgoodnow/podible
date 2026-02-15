@@ -2,7 +2,7 @@ import { hydrateBookFromOpenLibrary } from "./hydration";
 import { resolveOpenLibraryCandidate, searchOpenLibrary } from "./openlibrary";
 import { KindlingRepo } from "./repo";
 import { runSearch, runSnatch, triggerAutoAcquire } from "./service";
-import type { AppSettings, LibraryBook, MediaType } from "./types";
+import type { AppSettings, JobType, LibraryBook, MediaType } from "./types";
 
 // JSON-RPC v1 transport for Kindling control/data APIs.
 // Single-call requests only; batch mode is intentionally rejected.
@@ -124,6 +124,13 @@ function parseMedia(value: unknown): MediaType {
     return value;
   }
   throw new RpcError(-32602, "media must be audio or ebook");
+}
+
+function parseJobType(value: unknown): JobType {
+  if (value === "scan" || value === "download" || value === "import" || value === "transcode" || value === "reconcile") {
+    return value;
+  }
+  throw new RpcError(-32602, "type must be one of scan|download|import|transcode|reconcile");
 }
 
 function parseRequest(raw: unknown): RpcRequest {
@@ -325,6 +332,30 @@ const handlers: Record<string, RpcMethodHandler> = {
     return { job: ctx.repo.retryJob(jobId) };
   },
 
+  async "jobs.list"(ctx, params) {
+    const limit = parseLimit(params.limit);
+    const type = params.type === undefined ? undefined : parseJobType(params.type);
+    const jobs = type
+      ? ctx.repo.listJobsByType(type)
+      : (["scan", "download", "import", "transcode", "reconcile"] as JobType[]).flatMap((jobType) =>
+          ctx.repo.listJobsByType(jobType)
+        );
+    return {
+      jobs: jobs
+        .sort((a, b) => b.id - a.id)
+        .slice(0, limit),
+    };
+  },
+
+  async "jobs.get"(ctx, params) {
+    const jobId = asPositiveInt(params.jobId, "jobId");
+    const job = ctx.repo.getJob(jobId);
+    if (!job) {
+      throw new RpcError(-32000, "Job not found", { error: "not_found", jobId });
+    }
+    return { job };
+  },
+
   async "import.reconcile"(ctx) {
     const job = ctx.repo.createJob({ type: "reconcile" });
     return { jobId: job.id };
@@ -342,6 +373,8 @@ const readOnlyMethods = new Set<string>([
   "releases.list",
   "downloads.list",
   "downloads.get",
+  "jobs.list",
+  "jobs.get",
 ]);
 
 async function dispatchRpcMethod(

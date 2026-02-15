@@ -153,10 +153,14 @@ async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> 
   for (const media of mediaList) {
     const query = `${book.title} ${book.author}`.trim();
     const results = await runSearch(settings, { query, media });
+    log(ctx, `[scan] job=${job.id} book=${book.id} media=${media} query=${JSON.stringify(query)} results=${results.length}`);
     const result = results[0];
-    if (!result) continue;
+    if (!result) {
+      log(ctx, `[scan] job=${job.id} book=${book.id} media=${media} no_result`);
+      continue;
+    }
     try {
-      await runSnatch(ctx.repo, settings, {
+      const snatch = await runSnatch(ctx.repo, settings, {
         bookId: book.id,
         provider: result.provider,
         title: result.title,
@@ -165,7 +169,13 @@ async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> 
         sizeBytes: result.sizeBytes,
         infoHash: result.infoHash,
       });
-    } catch {
+      log(
+        ctx,
+        `[scan] job=${job.id} book=${book.id} media=${media} snatch_release=${snatch.release.id} download_job=${snatch.jobId} idempotent=${snatch.idempotent}`
+      );
+    } catch (error) {
+      const message = (error as Error).message;
+      log(ctx, `[scan] job=${job.id} book=${book.id} media=${media} snatch_error=${JSON.stringify(message)}`);
       continue;
     }
   }

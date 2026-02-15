@@ -39,6 +39,16 @@ describe("json-rpc handler", () => {
     });
     expect(Array.isArray(listed.result.items)).toBe(true);
 
+    const queued = repo.createJob({ type: "scan", payload: { fullRefresh: true } });
+    const jobs = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "jobs.list",
+      params: { limit: 5 },
+    });
+    expect(Array.isArray(jobs.result.jobs)).toBe(true);
+    expect(jobs.result.jobs[0].id).toBe(queued.id);
+
     db.close();
   });
 

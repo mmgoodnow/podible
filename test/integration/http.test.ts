@@ -93,6 +93,11 @@ describe("podible http", () => {
       const createdRpc = await rpc(fetchHandler, "library.create", { openLibraryKey: "/works/OL123W" }, 2);
       expect(createdRpc.result.book.title).toBe("Dune");
       expect(createdRpc.result.book.identifiers.openlibrary).toBe("/works/OL123W");
+      expect(createdRpc.result.acquisition_job_id).toBeGreaterThan(0);
+
+      const jobRpc = await rpc(fetchHandler, "jobs.get", { jobId: createdRpc.result.acquisition_job_id }, 21);
+      expect(jobRpc.result.job.id).toBe(createdRpc.result.acquisition_job_id);
+      expect(jobRpc.result.job.type).toBe("scan");
 
       const listRpc = await rpc(fetchHandler, "library.list", { limit: 10 }, 3);
       expect(Array.isArray(listRpc.result.items)).toBe(true);
