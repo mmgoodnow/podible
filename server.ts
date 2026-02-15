@@ -35,11 +35,12 @@ const current = repo.getSettings();
 
 console.log(`Podible backend listening on ${localBase}`);
 console.log(`Library root: ${current.libraryRoot}`);
-console.log(`Health: ${localBase}/health`);
+console.log(`RPC endpoint: ${localBase}/rpc`);
+console.log(`Home: ${localBase}/`);
 if (current.auth.mode === "apikey") {
   console.log(`API key: ${current.auth.key}`);
-  const authorizedHealth = `${localBase}/health?api_key=${encodeURIComponent(current.auth.key)}`;
-  console.log(`Authorized health: ${authorizedHealth}`);
+  const authorizedHome = `${localBase}/?api_key=${encodeURIComponent(current.auth.key)}`;
+  console.log(`Authorized home: ${authorizedHome}`);
 }
 
 process.on("SIGINT", () => {

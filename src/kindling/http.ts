@@ -4,9 +4,8 @@ import { buildJsonFeed, buildRssFeed } from "./feed";
 import { authorizeRequest } from "./auth";
 import { buildChapters, preferredAudioForBooks, streamAudioAsset, streamExtension } from "./media";
 import { KindlingRepo } from "./repo";
-import { fetchOpenLibraryMetadata, resolveOpenLibraryCandidate, searchOpenLibrary } from "./openlibrary";
-import { runSearch, runSnatch, triggerAutoAcquire } from "./service";
-import type { AppSettings, MediaType } from "./types";
+import { handleRpcRequest } from "./rpc";
+import type { AppSettings } from "./types";
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value, null, 2), {
@@ -18,27 +17,12 @@ function json(value: unknown, status = 200): Response {
   });
 }
 
-async function readJson<T>(request: Request): Promise<T> {
-  const body = await request.text();
-  if (!body.trim()) {
-    throw new Error("JSON body is required");
-  }
-  return JSON.parse(body) as T;
-}
-
 function parseId(value: string): number {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error("Invalid id");
   }
   return parsed;
-}
-
-function parseLimit(value: string | null): number {
-  if (!value) return 50;
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isInteger(parsed) || parsed <= 0) return 50;
-  return Math.min(parsed, 200);
 }
 
 function escapeHtml(value: string): string {
@@ -60,12 +44,21 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
   const books = repo.listBooks(30).items;
   const apiKey = settings.auth.mode === "apikey" ? settings.auth.key : null;
   const settingsJson = escapeHtml(JSON.stringify(settings, null, 2));
+  const rpcExample = escapeHtml(
+    JSON.stringify(
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "settings.get",
+        params: {},
+      },
+      null,
+      2
+    )
+  );
   const links = [
-    "/health",
-    "/server",
-    "/settings",
-    "/library",
-    "/downloads",
+    "/",
+    "/assets?bookId=1",
     "/feed.xml",
     "/feed.json",
   ];
@@ -76,7 +69,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
 
   const rows = books
     .map((book) => {
-      const detailPath = addApiKey(`/library/${book.id}`, apiKey);
+      const detailPath = addApiKey(`/assets?bookId=${book.id}`, apiKey);
       return `<tr>
   <td><a href="${escapeHtml(detailPath)}">${book.id}</a></td>
   <td>${escapeHtml(book.title)}</td>
@@ -118,6 +111,8 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
     <p>Queue: <strong>${health.queueSize}</strong> | Jobs: <code>${escapeHtml(JSON.stringify(health.jobs))}</code> | Releases: <code>${escapeHtml(JSON.stringify(health.releases))}</code></p>
     <h2>Quick Links</h2>
     <ul>${linkItems}</ul>
+    <p class="muted">Control/data API is JSON-RPC only via <code>POST /rpc</code>.</p>
+    <pre><code>${rpcExample}</code></pre>
     <h2>Open Library Search</h2>
     <div class="panel">
       <div class="row">
@@ -170,6 +165,31 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
         async function api(path, init) {
           return fetch(withAuth(path), init || {});
         }
+        var rpcId = 1;
+        async function rpc(method, params) {
+          var res = await api("/rpc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: rpcId++,
+              method: method,
+              params: params || {},
+            }),
+          });
+          if (!res.ok) {
+            throw new Error("HTTP " + res.status);
+          }
+          var payload = await res.json();
+          if (!payload || payload.jsonrpc !== "2.0") {
+            throw new Error("Invalid RPC response");
+          }
+          if (payload.error) {
+            var details = payload.error.data && payload.error.data.message ? " " + payload.error.data.message : "";
+            throw new Error(payload.error.message + details);
+          }
+          return payload.result;
+        }
         function text(id, value) {
           var el = document.getElementById(id);
           if (el) el.textContent = value;
@@ -187,13 +207,14 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
               return;
             }
             text("ol-status", "Searching...");
-            var res = await api("/openlibrary/search?q=" + encodeURIComponent(q) + "&limit=10");
-            if (!res.ok) {
-              text("ol-status", "Search failed: " + res.status);
+            var payload;
+            try {
+              payload = await rpc("openlibrary.search", { q: q, limit: 10 });
+            } catch (err) {
+              text("ol-status", "Search failed: " + (err && err.message ? err.message : "request error"));
               resultList.innerHTML = "";
               return;
             }
-            var payload = await res.json();
             var items = Array.isArray(payload.results) ? payload.results : [];
             resultList.innerHTML = "";
             text("ol-status", "Found " + items.length + " result(s).");
@@ -207,17 +228,13 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
               btn.textContent = "Add";
               btn.addEventListener("click", async function () {
                 text("ol-status", "Adding " + item.title + "...");
-                var createRes = await api("/library", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ openLibraryKey: item.openLibraryKey }),
-                });
-                if (!createRes.ok) {
-                  var err = await createRes.text();
-                  text("ol-status", "Add failed: " + createRes.status + " " + err);
+                var created;
+                try {
+                  created = await rpc("library.create", { openLibraryKey: item.openLibraryKey });
+                } catch (err) {
+                  text("ol-status", "Add failed: " + (err && err.message ? err.message : "request error"));
                   return;
                 }
-                var created = await createRes.json();
                 text("ol-status", 'Added "' + created.book.title + '" (id ' + created.book.id + '). Refresh to see it below.');
               });
               li.appendChild(label);
@@ -237,17 +254,13 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
               return;
             }
             text("isbn-status", "Adding ISBN " + isbn + "...");
-            var res = await api("/library", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ isbn: isbn }),
-            });
-            if (!res.ok) {
-              var errText = await res.text();
-              text("isbn-status", "Add failed: " + res.status + " " + errText);
+            var created;
+            try {
+              created = await rpc("library.create", { isbn: isbn });
+            } catch (err) {
+              text("isbn-status", "Add failed: " + (err && err.message ? err.message : "request error"));
               return;
             }
-            var created = await res.json();
             text("isbn-status", 'Added "' + created.book.title + '" (id ' + created.book.id + ').');
           });
         }
@@ -257,12 +270,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
         async function loadSettings() {
           try {
             text("settings-status", "Loading...");
-            var res = await api("/settings");
-            if (!res.ok) {
-              text("settings-status", "Load failed: " + res.status);
-              return;
-            }
-            var payload = await res.json();
+            var payload = await rpc("settings.get", {});
             settingsEditor.value = JSON.stringify(payload, null, 2);
             text("settings-status", "Loaded.");
           } catch (err) {
@@ -279,17 +287,13 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
               text("settings-status", "Invalid JSON: " + (err && err.message ? err.message : "parse error"));
               return;
             }
-            var res = await api("/settings", {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(parsed),
-            });
-            if (!res.ok) {
-              var errText = await res.text();
-              text("settings-status", "Save failed: " + res.status + " " + errText);
+            var payload;
+            try {
+              payload = await rpc("settings.update", parsed);
+            } catch (err) {
+              text("settings-status", "Save failed: " + (err && err.message ? err.message : "request error"));
               return;
             }
-            var payload = await res.json();
             settingsEditor.value = JSON.stringify(payload, null, 2);
             text("settings-status", "Saved.");
           });
@@ -326,194 +330,8 @@ export function createPodibleFetchHandler(repo: KindlingRepo, startTime: number)
         return renderHomePage(repo, settings);
       }
 
-      if (pathname === "/health" && request.method === "GET") {
-        return json({
-          ok: true,
-          ...repo.getHealthSummary(),
-        });
-      }
-
-      if (pathname === "/server" && request.method === "GET") {
-        return json({
-          name: "podible-backend",
-          runtime: "bun",
-          uptimeMs: Date.now() - startTime,
-          now: new Date().toISOString(),
-        });
-      }
-
-      if (pathname === "/settings" && request.method === "GET") {
-        return json(repo.getSettings());
-      }
-
-      if (pathname === "/settings" && request.method === "PUT") {
-        const payload = await readJson<AppSettings>(request);
-        return json(repo.updateSettings(payload));
-      }
-
-      if (pathname === "/library" && request.method === "GET") {
-        const limit = parseLimit(url.searchParams.get("limit"));
-        const cursorParam = url.searchParams.get("cursor");
-        const cursor = cursorParam ? parseId(cursorParam) : undefined;
-        const q = url.searchParams.get("q") ?? undefined;
-        const result = repo.listBooks(limit, cursor, q);
-        return json(result);
-      }
-
-      if (pathname === "/openlibrary/search" && request.method === "GET") {
-        const q = (url.searchParams.get("q") ?? "").trim();
-        if (!q) {
-          return json({ error: "q is required" }, 400);
-        }
-        const limit = parseLimit(url.searchParams.get("limit"));
-        const results = await searchOpenLibrary(q, Math.min(limit, 50));
-        return json({ results });
-      }
-
-      if (pathname === "/library" && request.method === "POST") {
-        const payload = await readJson<{
-          title?: string;
-          author?: string;
-          openLibraryKey?: string;
-          isbn?: string;
-        }>(request);
-
-        const hasIdentifier = Boolean(payload.openLibraryKey?.trim() || payload.isbn?.trim());
-        const resolved = hasIdentifier
-          ? await resolveOpenLibraryCandidate({
-              openLibraryKey: payload.openLibraryKey,
-              isbn: payload.isbn,
-              title: payload.title,
-              author: payload.author,
-            })
-          : null;
-
-        let title = payload.title?.trim() ?? "";
-        let author = payload.author?.trim() ?? "";
-
-        if (resolved) {
-          title = resolved.title;
-          author = resolved.author;
-        }
-
-        if (!title || !author) {
-          return json({ error: "title and author are required (or provide openLibraryKey/isbn)" }, 400);
-        }
-
-        if (hasIdentifier && !resolved) {
-          return json({ error: "Open Library match not found" }, 404);
-        }
-
-        const book = repo.createBook({
-          title,
-          author,
-        });
-
-        const metadata = resolved
-          ? {
-              publishedAt: resolved.publishedAt ?? null,
-              language: resolved.language ?? null,
-              isbn: (payload.isbn?.trim() || resolved.isbn) ?? null,
-              identifiers: {
-                ...resolved.identifiers,
-                ...(payload.isbn?.trim() ? { isbn: payload.isbn.trim() } : {}),
-              },
-            }
-          : await fetchOpenLibraryMetadata({
-              title: book.title,
-              author: book.author,
-              isbn: payload.isbn ?? null,
-              openLibraryKey: payload.openLibraryKey ?? null,
-            }).catch(() => null);
-        if (metadata) {
-          repo.updateBookMetadata(book.id, {
-            publishedAt: metadata.publishedAt ?? null,
-            language: metadata.language ?? null,
-            isbn: metadata.isbn ?? null,
-            identifiers: metadata.identifiers,
-          });
-        }
-        const jobId = await triggerAutoAcquire(repo, book.id);
-        return json({
-          book: repo.getBook(book.id),
-          acquisition_job_id: jobId,
-        }, 201);
-      }
-
-      if (pathname === "/library/refresh" && request.method === "POST") {
-        const job = repo.createJob({
-          type: "scan",
-          payload: { fullRefresh: true },
-        });
-        return json({ jobId: job.id }, 202);
-      }
-
-      if (pathname.startsWith("/library/") && request.method === "GET") {
-        const id = parseId(pathname.split("/")[2] ?? "");
-        const book = repo.getBook(id);
-        if (!book) return json({ error: "not_found" }, 404);
-        return json({
-          book,
-          releases: repo.listReleasesByBook(id),
-          assets: repo.listAssetsByBook(id),
-        });
-      }
-
-      if (pathname === "/search" && request.method === "POST") {
-        const payload = await readJson<{ query: string; media: MediaType }>(request);
-        if (!payload.query?.trim() || (payload.media !== "audio" && payload.media !== "ebook")) {
-          return json({ error: "query and media are required" }, 400);
-        }
-        const results = await runSearch(settings, {
-          query: payload.query.trim(),
-          media: payload.media,
-        });
-        return json({ results });
-      }
-
-      if (pathname === "/snatch" && request.method === "POST") {
-        const payload = await readJson<{
-          bookId: number;
-          provider: string;
-          title: string;
-          mediaType: MediaType;
-          url: string;
-          infoHash: string;
-          sizeBytes?: number | null;
-        }>(request);
-        if (!payload.infoHash?.trim()) {
-          return json({ error: "infoHash is required" }, 400);
-        }
-        const outcome = await runSnatch(repo, settings, payload);
-        return json(outcome, outcome.idempotent ? 200 : 201);
-      }
-
-      if (pathname === "/releases" && request.method === "GET") {
-        const id = parseId(url.searchParams.get("bookId") ?? "");
-        return json({ releases: repo.listReleasesByBook(id) });
-      }
-
-      if (pathname === "/downloads" && request.method === "GET") {
-        return json({ downloads: repo.listDownloads() });
-      }
-
-      if (pathname.startsWith("/downloads/") && pathname.endsWith("/retry") && request.method === "POST") {
-        const parts = pathname.split("/");
-        const jobId = parseId(parts[2] ?? "");
-        const retried = repo.retryJob(jobId);
-        return json({ job: retried }, 202);
-      }
-
-      if (pathname.startsWith("/downloads/") && request.method === "GET") {
-        const jobId = parseId(pathname.split("/")[2] ?? "");
-        const download = repo.getDownload(jobId);
-        if (!download) return json({ error: "not_found" }, 404);
-        return json(download);
-      }
-
-      if (pathname === "/import/reconcile" && request.method === "POST") {
-        const job = repo.createJob({ type: "reconcile" });
-        return json({ jobId: job.id }, 202);
+      if (pathname === "/rpc" && request.method === "POST") {
+        return handleRpcRequest(request, { repo, startTime });
       }
 
       if (pathname === "/assets" && request.method === "GET") {
