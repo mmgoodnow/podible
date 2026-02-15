@@ -99,6 +99,21 @@ describe("json-rpc handler", () => {
     db.close();
   });
 
+  test("requires isbn for library.create", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new KindlingRepo(db);
+
+    const result = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "library.create",
+      params: { title: "Dune", author: "Frank Herbert" },
+    });
+    expect(result.error.code).toBe(-32602);
+    db.close();
+  });
+
   test("maps domain errors to -32000", async () => {
     const db = new Database(":memory:");
     runMigrations(db);

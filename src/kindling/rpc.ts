@@ -1,4 +1,4 @@
-import { fetchOpenLibraryMetadata, resolveOpenLibraryCandidate, searchOpenLibrary } from "./openlibrary";
+import { resolveOpenLibraryCandidate, searchOpenLibrary } from "./openlibrary";
 import { KindlingRepo } from "./repo";
 import { runSearch, runSnatch, triggerAutoAcquire } from "./service";
 import type { AppSettings, MediaType } from "./types";
@@ -209,65 +209,26 @@ const handlers: Record<string, RpcMethodHandler> = {
   },
 
   async "library.create"(ctx, params) {
-    const title = asOptionalString(params.title);
-    const author = asOptionalString(params.author);
-    const openLibraryKey = asOptionalString(params.openLibraryKey);
-    const isbn = asOptionalString(params.isbn);
-
-    const hasIdentifier = Boolean(openLibraryKey?.trim() || isbn?.trim());
-    const resolved = hasIdentifier
-      ? await resolveOpenLibraryCandidate({
-          openLibraryKey,
-          isbn,
-          title,
-          author,
-        })
-      : null;
-
-    let finalTitle = title?.trim() ?? "";
-    let finalAuthor = author?.trim() ?? "";
-    if (resolved) {
-      finalTitle = resolved.title;
-      finalAuthor = resolved.author;
-    }
-
-    if (!finalTitle || !finalAuthor) {
-      throw new RpcError(-32602, "title and author are required (or provide openLibraryKey/isbn)");
-    }
-    if (hasIdentifier && !resolved) {
+    const isbn = asString(params.isbn, "isbn").trim();
+    const resolved = await resolveOpenLibraryCandidate({ isbn });
+    if (!resolved) {
       throw new RpcError(-32000, "Open Library match not found", { error: "not_found" });
     }
 
     const book = ctx.repo.createBook({
-      title: finalTitle,
-      author: finalAuthor,
+      title: resolved.title,
+      author: resolved.author,
     });
 
-    const metadata = resolved
-      ? {
-          publishedAt: resolved.publishedAt ?? null,
-          language: resolved.language ?? null,
-          isbn: (isbn?.trim() || resolved.isbn) ?? null,
-          identifiers: {
-            ...resolved.identifiers,
-            ...(isbn?.trim() ? { isbn: isbn.trim() } : {}),
-          },
-        }
-      : await fetchOpenLibraryMetadata({
-          title: book.title,
-          author: book.author,
-          isbn: isbn ?? null,
-          openLibraryKey: openLibraryKey ?? null,
-        }).catch(() => null);
-
-    if (metadata) {
-      ctx.repo.updateBookMetadata(book.id, {
-        publishedAt: metadata.publishedAt ?? null,
-        language: metadata.language ?? null,
-        isbn: metadata.isbn ?? null,
-        identifiers: metadata.identifiers,
-      });
-    }
+    ctx.repo.updateBookMetadata(book.id, {
+      publishedAt: resolved.publishedAt ?? null,
+      language: resolved.language ?? null,
+      isbn,
+      identifiers: {
+        ...resolved.identifiers,
+        isbn,
+      },
+    });
 
     const jobId = await triggerAutoAcquire(ctx.repo, book.id);
     return {

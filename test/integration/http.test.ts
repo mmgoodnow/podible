@@ -91,7 +91,7 @@ describe("podible http", () => {
       const healthRpc = await rpc(fetchHandler, "system.health", {}, 1);
       expect(healthRpc.result.ok).toBe(true);
 
-      const createdRpc = await rpc(fetchHandler, "library.create", { title: "Dune", author: "Frank Herbert" }, 2);
+      const createdRpc = await rpc(fetchHandler, "library.create", { isbn: "9780441172719" }, 2);
       expect(createdRpc.result.book.title).toBe("Dune");
       expect(createdRpc.result.book.isbn).toBe("9780441172719");
       expect(createdRpc.result.book.identifiers.openlibrary).toBe("/works/OL123W");
@@ -132,7 +132,7 @@ describe("podible http", () => {
     }
   });
 
-  test("supports rpc openlibrary.search and add-by-key flow", async () => {
+  test("supports rpc openlibrary.search and add-by-isbn-from-search flow", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown) => {
       const url = new URL(String(input));
@@ -141,7 +141,7 @@ describe("podible http", () => {
       }
 
       const query = url.searchParams.get("q") ?? "";
-      if (query.startsWith("key:/works/OL45804W")) {
+      if (query === "Hyperion Dan Simmons") {
         return new Response(
           JSON.stringify({
             docs: [
@@ -158,8 +158,7 @@ describe("podible http", () => {
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
       }
-
-      if (query === "Hyperion Dan Simmons") {
+      if (url.searchParams.get("isbn") === "9780553283686") {
         return new Response(
           JSON.stringify({
             docs: [
@@ -199,8 +198,9 @@ describe("podible http", () => {
       const found = await rpc(fetchHandler, "openlibrary.search", { q: "Hyperion Dan Simmons", limit: 5 }, 1);
       expect(found.result.results.length).toBe(1);
       expect(found.result.results[0].openLibraryKey).toBe("/works/OL45804W");
+      expect(found.result.results[0].isbn).toBe("9780553283686");
 
-      const created = await rpc(fetchHandler, "library.create", { openLibraryKey: "/works/OL45804W" }, 2);
+      const created = await rpc(fetchHandler, "library.create", { isbn: "9780553283686" }, 2);
       expect(created.result.book.title).toBe("Hyperion");
       expect(created.result.book.author).toBe("Dan Simmons");
       expect(created.result.book.identifiers.openlibrary).toBe("/works/OL45804W");

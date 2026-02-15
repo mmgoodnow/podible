@@ -223,16 +223,20 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
             items.forEach(function (item) {
               var li = document.createElement("li");
               var label = document.createElement("span");
-              label.textContent = item.title + " — " + item.author + " (" + item.openLibraryKey + ")";
+              var isbn = item.isbn ? String(item.isbn) : "";
+              label.textContent =
+                item.title + " — " + item.author + " (" + item.openLibraryKey + ")" + (isbn ? " [ISBN " + isbn + "]" : " [no ISBN]");
               var btn = document.createElement("button");
               btn.type = "button";
               btn.style.marginLeft = "8px";
-              btn.textContent = "Add";
+              btn.textContent = isbn ? "Add by ISBN" : "No ISBN";
+              if (!isbn) btn.disabled = true;
               btn.addEventListener("click", async function () {
+                if (!isbn) return;
                 text("ol-status", "Adding " + item.title + "...");
                 var created;
                 try {
-                  created = await rpc("library.create", { openLibraryKey: item.openLibraryKey });
+                  created = await rpc("library.create", { isbn: isbn });
                 } catch (err) {
                   text("ol-status", "Add failed: " + (err && err.message ? err.message : "request error"));
                   return;

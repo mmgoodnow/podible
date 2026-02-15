@@ -153,20 +153,12 @@ curl -X POST http://localhost/rpc \
   -d '{"jsonrpc":"2.0","id":1,"method":"openlibrary.search","params":{"q":"Hyperion Dan Simmons","limit":10}}'
 ```
 
-Add directly by Open Library key:
+Add by ISBN:
 
 ```bash
 curl -X POST http://localhost/rpc \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"library.create","params":{"openLibraryKey":"/works/OL45804W"}}'
-```
-
-Add directly by ISBN:
-
-```bash
-curl -X POST http://localhost/rpc \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":3,"method":"library.create","params":{"isbn":"9780553283686"}}'
+  -d '{"jsonrpc":"2.0","id":2,"method":"library.create","params":{"isbn":"9780553283686"}}'
 ```
 
 ## Testing
