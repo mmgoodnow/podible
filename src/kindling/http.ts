@@ -126,6 +126,22 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
       <p id="ol-status" class="muted"></p>
       <ul id="ol-results"></ul>
     </div>
+    <h2>Recent Library</h2>
+    <p id="library-status" class="muted"></p>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Title</th>
+          <th>Author</th>
+          <th>Status</th>
+          <th>Audio</th>
+          <th>Ebook</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="library-table-body">${rows || '<tr><td colspan="7">No books yet.</td></tr>'}</tbody>
+    </table>
     <h2>Settings JSON</h2>
     <div class="panel">
       <div class="row">
@@ -167,22 +183,6 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
         <tbody id="jobs-table-body"><tr><td colspan="8">Loading...</td></tr></tbody>
       </table>
     </div>
-    <h2>Recent Library</h2>
-    <p id="library-status" class="muted"></p>
-    <table>
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>Title</th>
-          <th>Author</th>
-          <th>Status</th>
-          <th>Audio</th>
-          <th>Ebook</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody id="library-table-body">${rows || '<tr><td colspan="7">No books yet.</td></tr>'}</tbody>
-    </table>
     <script>
       (function () {
         var queryApiKey = new URLSearchParams(window.location.search).get("api_key");
