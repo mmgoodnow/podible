@@ -41,6 +41,21 @@ const MID_POLL_MS = 2_000;
 const ETA_FAST_WINDOW_SECONDS = 30;
 const ETA_MID_WINDOW_SECONDS = 120;
 
+type PollDecision = {
+  pollMs: number;
+  reason:
+    | "fallback_no_left_bytes"
+    | "fallback_no_down_rate"
+    | "fallback_nonpositive_rate"
+    | "fallback_invalid_eta"
+    | "eta_fast"
+    | "eta_mid"
+    | "eta_slow";
+  leftBytes: number | null;
+  downRate: number | null;
+  etaSeconds: number | null;
+};
+
 function derivedLeftBytes(state: RtorrentDownloadState): number | null {
   if (typeof state.leftBytes === "number" && Number.isFinite(state.leftBytes)) {
     return Math.max(0, state.leftBytes);
@@ -56,25 +71,77 @@ function derivedLeftBytes(state: RtorrentDownloadState): number | null {
  * - keep using settings.polling.rtorrentMs as max/default
  * - poll faster as ETA approaches completion
  */
-export function selectDownloadPollMs(state: RtorrentDownloadState, configuredPollMs: number): number {
+function selectDownloadPollDecision(state: RtorrentDownloadState, configuredPollMs: number): PollDecision {
   const maxPollMs = Math.max(FAST_POLL_MS, Math.trunc(configuredPollMs || 5000));
   const leftBytes = derivedLeftBytes(state);
   const downRate = typeof state.downRate === "number" && Number.isFinite(state.downRate) ? state.downRate : null;
-  if (leftBytes === null || downRate === null || downRate <= 0) {
-    return maxPollMs;
+  if (leftBytes === null) {
+    return {
+      pollMs: maxPollMs,
+      reason: "fallback_no_left_bytes",
+      leftBytes,
+      downRate,
+      etaSeconds: null,
+    };
+  }
+  if (downRate === null) {
+    return {
+      pollMs: maxPollMs,
+      reason: "fallback_no_down_rate",
+      leftBytes,
+      downRate,
+      etaSeconds: null,
+    };
+  }
+  if (downRate <= 0) {
+    return {
+      pollMs: maxPollMs,
+      reason: "fallback_nonpositive_rate",
+      leftBytes,
+      downRate,
+      etaSeconds: null,
+    };
   }
 
   const etaSeconds = leftBytes / downRate;
   if (!Number.isFinite(etaSeconds) || etaSeconds < 0) {
-    return maxPollMs;
+    return {
+      pollMs: maxPollMs,
+      reason: "fallback_invalid_eta",
+      leftBytes,
+      downRate,
+      etaSeconds: null,
+    };
   }
   if (etaSeconds <= ETA_FAST_WINDOW_SECONDS) {
-    return FAST_POLL_MS;
+    return {
+      pollMs: FAST_POLL_MS,
+      reason: "eta_fast",
+      leftBytes,
+      downRate,
+      etaSeconds,
+    };
   }
   if (etaSeconds <= ETA_MID_WINDOW_SECONDS) {
-    return Math.min(maxPollMs, MID_POLL_MS);
+    return {
+      pollMs: Math.min(maxPollMs, MID_POLL_MS),
+      reason: "eta_mid",
+      leftBytes,
+      downRate,
+      etaSeconds,
+    };
   }
-  return maxPollMs;
+  return {
+    pollMs: maxPollMs,
+    reason: "eta_slow",
+    leftBytes,
+    downRate,
+    etaSeconds,
+  };
+}
+
+export function selectDownloadPollMs(state: RtorrentDownloadState, configuredPollMs: number): number {
+  return selectDownloadPollDecision(state, configuredPollMs).pollMs;
 }
 
 /**
@@ -96,12 +163,23 @@ async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promise<"don
   const state = await client.getDownloadState(release.info_hash);
   if (!state.complete) {
     ctx.repo.setReleaseStatus(release.id, "downloading", null);
-    const pollMs = selectDownloadPollMs(state, settings.polling.rtorrentMs || 5000);
+    const decision = selectDownloadPollDecision(state, settings.polling.rtorrentMs || 5000);
+    const etaText =
+      decision.etaSeconds === null ? "null" : (Math.round(decision.etaSeconds * 100) / 100).toFixed(2);
+    log(
+      ctx,
+      `[download] job=${job.id} release=${release.id} hash=${release.info_hash} complete=0 left_bytes=${decision.leftBytes ?? "null"} down_rate=${decision.downRate ?? "null"} eta_s=${etaText} poll_ms=${decision.pollMs} reason=${decision.reason}`
+    );
+    const pollMs = decision.pollMs;
     const nextRun = new Date(Date.now() + pollMs).toISOString();
     ctx.repo.rescheduleJob(job.id, nextRun);
     return "rescheduled";
   }
 
+  log(
+    ctx,
+    `[download] job=${job.id} release=${release.id} hash=${release.info_hash} complete=1 bytes_done=${state.bytesDone ?? "null"} size_bytes=${state.sizeBytes ?? "null"} base_path=${JSON.stringify(state.basePath)}`
+  );
   ctx.repo.setReleaseStatus(release.id, "downloaded", null);
   ctx.repo.createJob({
     type: "import",
