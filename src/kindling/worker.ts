@@ -149,6 +149,8 @@ async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> 
     return "done";
   }
   const mediaList: MediaType[] = payload.media && payload.media.length > 0 ? payload.media : ["audio", "ebook"];
+  const snatchErrors: string[] = [];
+  let snatchSucceeded = false;
 
   for (const media of mediaList) {
     const query = `${book.title} ${book.author}`.trim();
@@ -174,11 +176,17 @@ async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> 
         ctx,
         `[scan] job=${job.id} book=${book.id} media=${media} snatch_release=${snatch.release.id} download_job=${snatch.jobId} idempotent=${snatch.idempotent}`
       );
+      snatchSucceeded = true;
     } catch (error) {
       const message = (error as Error).message;
       log(ctx, `[scan] job=${job.id} book=${book.id} media=${media} snatch_error=${JSON.stringify(message)}`);
+      snatchErrors.push(`${media}: ${message}`);
       continue;
     }
+  }
+
+  if (!snatchSucceeded && snatchErrors.length > 0) {
+    throw new Error(`Auto-acquire failed for book ${book.id}; ${snatchErrors.join(" | ")}`);
   }
 
   ctx.repo.markJobSucceeded(job.id);
