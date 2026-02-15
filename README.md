@@ -82,6 +82,7 @@ Removed REST control routes now return `404`:
 - `library.get`
 - `library.create`
 - `library.refresh`
+- `library.rehydrate`
 - `search.run`
 - `snatch.create`
 - `releases.list`
@@ -159,6 +160,20 @@ Add by ISBN:
 curl -X POST http://localhost/rpc \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":2,"method":"library.create","params":{"isbn":"9780553283686"}}'
+```
+
+Rehydrate metadata for existing books (all or one):
+
+```bash
+curl -X POST http://localhost/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"library.rehydrate","params":{}}'
+```
+
+```bash
+curl -X POST http://localhost/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":4,"method":"library.rehydrate","params":{"bookId":123}}'
 ```
 
 ## Testing

@@ -1,7 +1,7 @@
-import { resolveOpenLibraryCandidate, searchOpenLibrary } from "./openlibrary";
+import { fetchOpenLibraryMetadata, resolveOpenLibraryCandidate, searchOpenLibrary } from "./openlibrary";
 import { KindlingRepo } from "./repo";
 import { runSearch, runSnatch, triggerAutoAcquire } from "./service";
-import type { AppSettings, MediaType } from "./types";
+import type { AppSettings, LibraryBook, MediaType } from "./types";
 
 // JSON-RPC v1 transport for Kindling control/data APIs.
 // Single-call requests only; batch mode is intentionally rejected.
@@ -125,6 +125,29 @@ function parseMedia(value: unknown): MediaType {
   throw new RpcError(-32602, "media must be audio or ebook");
 }
 
+async function hydrateBookMetadata(ctx: RpcContext, book: LibraryBook): Promise<boolean> {
+  const metadata = await fetchOpenLibraryMetadata({
+    title: book.title,
+    author: book.author,
+    isbn: book.isbn,
+    openLibraryKey: book.identifiers.openlibrary ?? null,
+  }).catch(() => null);
+  if (!metadata) return false;
+
+  const mergedIdentifiers = {
+    ...book.identifiers,
+    ...(metadata.identifiers ?? {}),
+  };
+
+  ctx.repo.updateBookMetadata(book.id, {
+    publishedAt: metadata.publishedAt ?? book.publishedAt ?? null,
+    language: metadata.language ?? book.language ?? null,
+    isbn: metadata.isbn ?? book.isbn ?? null,
+    identifiers: mergedIdentifiers,
+  });
+  return true;
+}
+
 function parseRequest(raw: unknown): RpcRequest {
   if (Array.isArray(raw)) {
     throw new RpcError(-32600, "Batch requests are not supported");
@@ -243,6 +266,27 @@ const handlers: Record<string, RpcMethodHandler> = {
       payload: { fullRefresh: true },
     });
     return { jobId: job.id };
+  },
+
+  async "library.rehydrate"(ctx, params) {
+    const targetBookId = params.bookId === undefined ? null : asPositiveInt(params.bookId, "bookId");
+    const books = targetBookId === null ? ctx.repo.listAllBooks() : [ctx.repo.getBook(targetBookId)];
+    const resolved = books.filter((book): book is LibraryBook => Boolean(book));
+    if (targetBookId !== null && resolved.length === 0) {
+      throw new RpcError(-32000, "Book not found", { error: "not_found", bookId: targetBookId });
+    }
+
+    const updatedBookIds: number[] = [];
+    for (const book of resolved) {
+      if (await hydrateBookMetadata(ctx, book)) {
+        updatedBookIds.push(book.id);
+      }
+    }
+
+    return {
+      attempted: resolved.length,
+      updatedBookIds,
+    };
   },
 
   async "search.run"(ctx, params) {
