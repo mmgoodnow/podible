@@ -60,6 +60,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
     "/",
     "/rpc/system/health",
     "/rpc/settings/get",
+    "/rpc/jobs/list?limit=20",
     "/assets?bookId=1",
     "/feed.xml",
     "/feed.json",
@@ -96,7 +97,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
       ul { margin-top: 8px; }
       .panel { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin: 12px 0 18px; }
       .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-      input, button, textarea { font: inherit; }
+      input, button, textarea, select { font: inherit; }
       input { padding: 6px 8px; min-width: 220px; }
       button { padding: 6px 10px; cursor: pointer; }
       textarea { width: 100%; min-height: 200px; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
@@ -131,6 +132,39 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
       </div>
       <p id="settings-status" class="muted"></p>
       <textarea id="settings-editor" spellcheck="false">${settingsJson}</textarea>
+    </div>
+    <h2>Recent Jobs</h2>
+    <div class="panel">
+      <div class="row">
+        <label for="jobs-limit">Limit</label>
+        <input id="jobs-limit" type="number" min="1" max="200" value="25" style="min-width: 90px;" />
+        <label for="jobs-type">Type</label>
+        <select id="jobs-type">
+          <option value="">all</option>
+          <option value="scan">scan</option>
+          <option value="download">download</option>
+          <option value="import">import</option>
+          <option value="transcode">transcode</option>
+          <option value="reconcile">reconcile</option>
+        </select>
+        <button id="jobs-refresh-btn" type="button">Refresh Jobs</button>
+      </div>
+      <p id="jobs-status" class="muted"></p>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Book</th>
+            <th>Release</th>
+            <th>Attempts</th>
+            <th>Updated</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody id="jobs-table-body"><tr><td colspan="8">Loading...</td></tr></tbody>
+      </table>
     </div>
     <h2>Recent Library</h2>
     <table>
@@ -240,6 +274,10 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
 
         var settingsEditor = document.getElementById("settings-editor");
         var settingsSaveBtn = document.getElementById("settings-save-btn");
+        var jobsTableBody = document.getElementById("jobs-table-body");
+        var jobsRefreshBtn = document.getElementById("jobs-refresh-btn");
+        var jobsLimitInput = document.getElementById("jobs-limit");
+        var jobsTypeInput = document.getElementById("jobs-type");
         async function loadSettings() {
           try {
             text("settings-status", "Loading...");
@@ -272,6 +310,75 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
           });
           loadSettings();
         }
+
+        function jobsCell(row, value) {
+          var td = document.createElement("td");
+          td.textContent = value;
+          row.appendChild(td);
+          return td;
+        }
+
+        function renderJobs(items) {
+          if (!jobsTableBody) return;
+          jobsTableBody.innerHTML = "";
+          if (!Array.isArray(items) || items.length === 0) {
+            var emptyRow = document.createElement("tr");
+            var emptyCell = document.createElement("td");
+            emptyCell.colSpan = 8;
+            emptyCell.textContent = "No jobs found.";
+            emptyRow.appendChild(emptyCell);
+            jobsTableBody.appendChild(emptyRow);
+            return;
+          }
+          items.forEach(function (job) {
+            var row = document.createElement("tr");
+            var idCell = document.createElement("td");
+            var link = document.createElement("a");
+            link.href = withAuth("/rpc/jobs/get?jobId=" + String(job.id));
+            link.textContent = String(job.id);
+            idCell.appendChild(link);
+            row.appendChild(idCell);
+            jobsCell(row, String(job.type || ""));
+            jobsCell(row, String(job.status || ""));
+            jobsCell(row, job.book_id == null ? "" : String(job.book_id));
+            jobsCell(row, job.release_id == null ? "" : String(job.release_id));
+            jobsCell(row, String(job.attempt_count || 0) + "/" + String(job.max_attempts || 0));
+            jobsCell(row, String(job.updated_at || ""));
+            jobsCell(row, String(job.error || ""));
+            jobsTableBody.appendChild(row);
+          });
+        }
+
+        async function loadJobs() {
+          var limit = 25;
+          if (jobsLimitInput) {
+            var parsed = parseInt(jobsLimitInput.value || "25", 10);
+            if (Number.isFinite(parsed) && parsed > 0) {
+              limit = Math.min(parsed, 200);
+            }
+          }
+          var params = { limit: limit };
+          if (jobsTypeInput && jobsTypeInput.value) {
+            params.type = jobsTypeInput.value;
+          }
+          text("jobs-status", "Loading...");
+          try {
+            var payload = await rpc("jobs.list", params);
+            var items = payload && Array.isArray(payload.jobs) ? payload.jobs : [];
+            renderJobs(items);
+            text("jobs-status", "Loaded " + items.length + " job(s).");
+          } catch (err) {
+            text("jobs-status", "Load failed: " + (err && err.message ? err.message : "request error"));
+            renderJobs([]);
+          }
+        }
+
+        if (jobsRefreshBtn) {
+          jobsRefreshBtn.addEventListener("click", function () {
+            loadJobs();
+          });
+        }
+        loadJobs();
       })();
     </script>
   </body>
