@@ -39,6 +39,11 @@ type RpcContext = {
   startTime: number;
 };
 
+type RpcDispatchOptions = {
+  id?: RpcId;
+  readOnly?: boolean;
+};
+
 class RpcError extends Error {
   constructor(
     readonly code: number,
@@ -343,6 +348,42 @@ const handlers: Record<string, RpcMethodHandler> = {
   },
 };
 
+const readOnlyMethods = new Set<string>([
+  "system.health",
+  "system.server",
+  "settings.get",
+  "openlibrary.search",
+  "library.list",
+  "library.get",
+  "search.run",
+  "releases.list",
+  "downloads.list",
+  "downloads.get",
+]);
+
+async function dispatchRpcMethod(
+  methodName: string,
+  params: Record<string, unknown>,
+  ctx: RpcContext,
+  options: RpcDispatchOptions = {}
+): Promise<Response> {
+  const id = options.id ?? null;
+  try {
+    const method = handlers[methodName];
+    if (!method || (options.readOnly && !readOnlyMethods.has(methodName))) {
+      throw new RpcError(-32601, "Method not found");
+    }
+    const result = await method(ctx, params);
+    return success(id, result);
+  } catch (error) {
+    if (error instanceof RpcError) {
+      return failure(id, error.code, error.message, error.data);
+    }
+    const message = (error as Error).message;
+    return failure(id, -32000, message || "Application error", { message });
+  }
+}
+
 export async function handleRpcRequest(request: Request, ctx: RpcContext): Promise<Response> {
   let parsed: RpcRequest | null = null;
   try {
@@ -359,20 +400,22 @@ export async function handleRpcRequest(request: Request, ctx: RpcContext): Promi
     return failure(null, -32603, "Internal error");
   }
 
-  try {
-    const method = handlers[parsed.method];
-    if (!method) {
-      throw new RpcError(-32601, "Method not found");
-    }
-    const result = await method(ctx, parsed.params ?? {});
-    return success(parsed.id, result);
-  } catch (error) {
-    if (error instanceof RpcError) {
-      return failure(parsed.id, error.code, error.message, error.data);
-    }
-    const message = (error as Error).message;
-    return failure(parsed.id, -32000, message || "Application error", { message });
+  return dispatchRpcMethod(parsed.method, parsed.params ?? {}, ctx, { id: parsed.id });
+}
+
+export async function handleRpcMethod(
+  methodName: string,
+  params: Record<string, unknown>,
+  ctx: RpcContext,
+  options: RpcDispatchOptions = {}
+): Promise<Response> {
+  if (typeof methodName !== "string" || !methodName.trim()) {
+    return failure(options.id ?? null, -32600, "Invalid Request");
   }
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return failure(options.id ?? null, -32600, "params must be an object");
+  }
+  return dispatchRpcMethod(methodName, params, ctx, options);
 }
 
 export { RpcError };

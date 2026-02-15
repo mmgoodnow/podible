@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { runMigrations } from "../../src/kindling/db";
-import { handleRpcRequest } from "../../src/kindling/rpc";
+import { handleRpcMethod, handleRpcRequest } from "../../src/kindling/rpc";
 import { KindlingRepo } from "../../src/kindling/repo";
 
 async function callRpc(repo: KindlingRepo, body: string | object) {
@@ -111,6 +111,19 @@ describe("json-rpc handler", () => {
       params: { bookId: 999 },
     });
     expect(result.error.code).toBe(-32000);
+    db.close();
+  });
+
+  test("blocks write methods in read-only rpc dispatch", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new KindlingRepo(db);
+    repo.ensureSettings();
+
+    const response = await handleRpcMethod("settings.update", {}, { repo, startTime: Date.now() - 1000 }, { readOnly: true });
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as any;
+    expect(payload.error.code).toBe(-32601);
     db.close();
   });
 });

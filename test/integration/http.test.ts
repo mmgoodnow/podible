@@ -268,4 +268,35 @@ describe("podible http", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("supports read-only GET rpc bridge and blocks mutating methods", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new KindlingRepo(db);
+    const settings = repo.ensureSettings();
+    repo.updateSettings({
+      ...settings,
+      auth: { ...settings.auth, mode: "local" },
+      torznab: [],
+    });
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+
+    const readRes = await fetchHandler(new Request(`http://localhost/rpc/library/get?bookId=${book.id}`));
+    expect(readRes.status).toBe(200);
+    const readJson = (await readRes.json()) as any;
+    expect(readJson.jsonrpc).toBe("2.0");
+    expect(readJson.id).toBeNull();
+    expect(readJson.result.book.id).toBe(book.id);
+
+    const writeRes = await fetchHandler(
+      new Request("http://localhost/rpc/settings/update?auth.mode=local&auth.key=test")
+    );
+    expect(writeRes.status).toBe(200);
+    const writeJson = (await writeRes.json()) as any;
+    expect(writeJson.error.code).toBe(-32601);
+
+    db.close();
+  });
 });

@@ -52,6 +52,7 @@ For localhost development, set settings `auth.mode` to `local` via `settings.upd
 ## Key Endpoints
 
 - `POST /rpc` (control/data APIs via JSON-RPC 2.0)
+- `GET /rpc/{namespace}/{method}` (read-only convenience bridge, query params -> RPC params)
 - `GET /assets?bookId=`
 - `GET /stream/{assetId}.{ext}`
 - `GET /chapters/{assetId}.json`
@@ -99,6 +100,20 @@ RPC request shape:
   "params": {}
 }
 ```
+
+Read-only bridge examples:
+
+```bash
+curl "http://localhost/rpc/system/health"
+curl "http://localhost/rpc/library/list?limit=20&q=dune"
+curl "http://localhost/rpc/library/get?bookId=1"
+```
+
+Bridge constraints:
+
+- Read-only methods only (`settings.update`, `library.create`, `snatch.create`, etc. are blocked).
+- Responses still use JSON-RPC envelopes with `id: null`.
+- Canonical control/data write path remains `POST /rpc`.
 
 ## Settings Shape
 

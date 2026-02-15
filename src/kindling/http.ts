@@ -4,7 +4,7 @@ import { buildJsonFeed, buildRssFeed } from "./feed";
 import { authorizeRequest } from "./auth";
 import { buildChapters, preferredAudioForBooks, streamAudioAsset, streamExtension } from "./media";
 import { KindlingRepo } from "./repo";
-import { handleRpcRequest } from "./rpc";
+import { handleRpcMethod, handleRpcRequest } from "./rpc";
 import type { AppSettings } from "./types";
 
 function json(value: unknown, status = 200): Response {
@@ -58,6 +58,8 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
   );
   const links = [
     "/",
+    "/rpc/system/health",
+    "/rpc/settings/get",
     "/assets?bookId=1",
     "/feed.xml",
     "/feed.json",
@@ -111,7 +113,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
     <p>Queue: <strong>${health.queueSize}</strong> | Jobs: <code>${escapeHtml(JSON.stringify(health.jobs))}</code> | Releases: <code>${escapeHtml(JSON.stringify(health.releases))}</code></p>
     <h2>Quick Links</h2>
     <ul>${linkItems}</ul>
-    <p class="muted">Control/data API is JSON-RPC only via <code>POST /rpc</code>.</p>
+    <p class="muted">Control/data API uses <code>POST /rpc</code>; read-only convenience links are available at <code>GET /rpc/&lt;ns&gt;/&lt;method&gt;</code>.</p>
     <pre><code>${rpcExample}</code></pre>
     <h2>Open Library Search</h2>
     <div class="panel">
@@ -332,6 +334,31 @@ export function createPodibleFetchHandler(repo: KindlingRepo, startTime: number)
 
       if (pathname === "/rpc" && request.method === "POST") {
         return handleRpcRequest(request, { repo, startTime });
+      }
+
+      if (pathname.startsWith("/rpc/") && request.method === "GET") {
+        const parts = pathname
+          .slice("/rpc/".length)
+          .split("/")
+          .filter(Boolean);
+        if (parts.length !== 2) {
+          return new Response("Not found", { status: 404 });
+        }
+        const params: Record<string, unknown> = {};
+        for (const [key, value] of url.searchParams.entries()) {
+          if (key === "api_key") continue;
+          const existing = params[key];
+          if (existing === undefined) {
+            params[key] = value;
+            continue;
+          }
+          if (Array.isArray(existing)) {
+            existing.push(value);
+          } else {
+            params[key] = [existing, value];
+          }
+        }
+        return handleRpcMethod(parts.join("."), params, { repo, startTime }, { id: null, readOnly: true });
       }
 
       if (pathname === "/assets" && request.method === "GET") {
