@@ -4,6 +4,7 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 
 const SCHEMA_MIGRATION_ID = 1;
+const GUID_MIGRATION_ID = 2;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS releases (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   book_id INTEGER NOT NULL,
   provider TEXT NOT NULL,
+  provider_guid TEXT NULL,
   title TEXT NOT NULL,
   media_type TEXT NOT NULL CHECK (media_type IN ('audio', 'ebook')),
   info_hash TEXT NOT NULL,
@@ -97,12 +99,29 @@ CREATE INDEX IF NOT EXISTS idx_books_added_at ON books(added_at);
 CREATE INDEX IF NOT EXISTS idx_releases_book_status ON releases(book_id, status);
 CREATE INDEX IF NOT EXISTS idx_releases_book_media ON releases(book_id, media_type);
 CREATE INDEX IF NOT EXISTS idx_releases_info_hash ON releases(info_hash);
+CREATE INDEX IF NOT EXISTS idx_releases_provider_guid ON releases(provider, provider_guid);
 CREATE INDEX IF NOT EXISTS idx_releases_url ON releases(url);
 CREATE INDEX IF NOT EXISTS idx_assets_book_created ON assets(book_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_asset_files_asset_start ON asset_files(asset_id, start);
 CREATE INDEX IF NOT EXISTS idx_jobs_status_next_created ON jobs(status, next_run_at, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_releases_info_hash ON releases(info_hash);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_releases_provider_guid ON releases(provider, provider_guid) WHERE provider_guid IS NOT NULL;
 `;
+
+function hasColumn(db: Database, table: string, column: string): boolean {
+  const rows = db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return rows.some((row) => row.name === column);
+}
+
+function applyGuidMigration(db: Database): void {
+  if (!hasColumn(db, "releases", "provider_guid")) {
+    db.exec("ALTER TABLE releases ADD COLUMN provider_guid TEXT NULL");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_releases_provider_guid ON releases(provider, provider_guid)");
+  db.exec(
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_releases_provider_guid ON releases(provider, provider_guid) WHERE provider_guid IS NOT NULL"
+  );
+}
 
 export function nowIso(): string {
   return new Date().toISOString();
@@ -119,16 +138,21 @@ export function openDatabase(dbPath: string): Database {
 
 export function runMigrations(db: Database): void {
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (id INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)");
-  const existing = db
-    .query("SELECT id FROM schema_migrations WHERE id = ?")
-    .get(SCHEMA_MIGRATION_ID) as { id: number } | null;
-  if (existing) {
-    return;
-  }
 
-  db.transaction(() => {
+  const apply = (id: number, fn: () => void) => {
+    const existing = db.query("SELECT id FROM schema_migrations WHERE id = ?").get(id) as { id: number } | null;
+    if (existing) return;
+    db.transaction(() => {
+      fn();
+      db.query("INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)").run(id, nowIso());
+    })();
+  };
+
+  apply(SCHEMA_MIGRATION_ID, () => {
     db.exec(BASE_SCHEMA_SQL);
-    db.query("INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)")
-      .run(SCHEMA_MIGRATION_ID, nowIso());
-  })();
+  });
+
+  apply(GUID_MIGRATION_ID, () => {
+    applyGuidMigration(db);
+  });
 }

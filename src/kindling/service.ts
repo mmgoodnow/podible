@@ -1,6 +1,6 @@
 import { KindlingRepo } from "./repo";
 import { RtorrentClient } from "./rtorrent";
-import { normalizeInfoHash } from "./torrent";
+import { infoHashFromTorrentBytes, normalizeInfoHash } from "./torrent";
 import { searchTorznab } from "./torznab";
 import type { AppSettings, MediaType, ReleaseRow } from "./types";
 
@@ -12,10 +12,11 @@ type SearchRequest = {
 type SnatchRequest = {
   bookId: number;
   provider: string;
+  providerGuid?: string | null;
   title: string;
   mediaType: MediaType;
   url: string;
-  infoHash: string;
+  infoHash?: string | null;
   sizeBytes?: number | null;
 };
 
@@ -31,8 +32,20 @@ async function fetchTorrentBytes(url: string): Promise<Uint8Array> {
   return new Uint8Array(await response.arrayBuffer());
 }
 
-function resolveInfoHash(explicitHash: string): string {
+function resolveInfoHash(explicitHash?: string | null): string | null {
+  if (!explicitHash) return null;
   return normalizeInfoHash(explicitHash);
+}
+
+function idempotentResult(repo: KindlingRepo, existing: ReleaseRow): { release: ReleaseRow; jobId: number; idempotent: boolean } {
+  const existingJob = repo
+    .listJobsByType("download")
+    .find((job) => job.release_id === existing.id && (job.status === "queued" || job.status === "running"));
+  return {
+    release: existing,
+    jobId: existingJob?.id ?? -1,
+    idempotent: true,
+  };
 }
 
 export async function runSearch(settings: AppSettings, request: SearchRequest) {
@@ -64,7 +77,11 @@ export async function runSearch(settings: AppSettings, request: SearchRequest) {
   });
 }
 
-export async function runSnatch(repo: KindlingRepo, settings: AppSettings, request: SnatchRequest): Promise<{ release: ReleaseRow; jobId: number; idempotent: boolean }> {
+export async function runSnatch(
+  repo: KindlingRepo,
+  settings: AppSettings,
+  request: SnatchRequest
+): Promise<{ release: ReleaseRow; jobId: number; idempotent: boolean }> {
   const book = repo.getBookRow(request.bookId);
   if (!book) {
     throw new Error(`Book ${request.bookId} not found`);
@@ -73,32 +90,50 @@ export async function runSnatch(repo: KindlingRepo, settings: AppSettings, reque
     throw new Error("Magnet URLs are not supported for snatch; provide a .torrent URL");
   }
 
-  const resolvedHash = resolveInfoHash(request.infoHash);
-  const existing = repo.findReleaseByInfoHash(resolvedHash);
-  if (existing) {
-    if (existing.book_id !== request.bookId) {
-      throw new Error(`Infohash already linked to book ${existing.book_id}`);
+  const providerGuid = request.providerGuid?.trim() || null;
+  const explicitHash = resolveInfoHash(request.infoHash);
+
+  if (explicitHash) {
+    const existingByHash = repo.findReleaseByInfoHash(explicitHash);
+    if (existingByHash) {
+      if (existingByHash.book_id !== request.bookId) {
+        throw new Error(`Infohash already linked to book ${existingByHash.book_id}`);
+      }
+      return idempotentResult(repo, existingByHash);
     }
-    const existingJob = repo
-      .listJobsByType("download")
-      .find((job) => job.release_id === existing.id && (job.status === "queued" || job.status === "running"));
-    return {
-      release: existing,
-      jobId: existingJob?.id ?? -1,
-      idempotent: true,
-    };
+  }
+
+  if (providerGuid) {
+    const existingByGuid = repo.findReleaseByProviderGuid(request.provider, providerGuid);
+    if (existingByGuid) {
+      if (existingByGuid.book_id !== request.bookId) {
+        throw new Error(`Provider guid already linked to book ${existingByGuid.book_id}`);
+      }
+      return idempotentResult(repo, existingByGuid);
+    }
+  }
+
+  const torrentBytes = await fetchTorrentBytes(request.url);
+  const derivedHash = infoHashFromTorrentBytes(torrentBytes);
+
+  const existingByDerived = repo.findReleaseByInfoHash(derivedHash);
+  if (existingByDerived) {
+    if (existingByDerived.book_id !== request.bookId) {
+      throw new Error(`Infohash already linked to book ${existingByDerived.book_id}`);
+    }
+    return idempotentResult(repo, existingByDerived);
   }
 
   const client = new RtorrentClient(settings.rtorrent);
-  const torrentBytes = await fetchTorrentBytes(request.url);
   await client.loadRawStart(torrentBytes);
 
   const release = repo.createRelease({
     bookId: request.bookId,
     provider: request.provider,
+    providerGuid,
     title: request.title,
     mediaType: request.mediaType,
-    infoHash: resolvedHash,
+    infoHash: derivedHash,
     sizeBytes: request.sizeBytes ?? null,
     url: request.url,
     status: "snatched",

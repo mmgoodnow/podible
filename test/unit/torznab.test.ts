@@ -15,8 +15,8 @@ const SAMPLE = `<?xml version="1.0"?>
   </item>
   <item>
     <title>Dune eBook</title>
+    <guid>https://tracker.example/torrent/2</guid>
     <enclosure url="https://example.com/download.torrent" length="200" />
-    <torznab:attr name="infohash" value="89abcdef0123456789abcdef0123456789abcdef" />
   </item>
   <item>
     <title>Dune Magnet</title>
@@ -37,7 +37,8 @@ describe("torznab parser", () => {
     expect(results[0]?.leechers).toBe(2);
     expect(results[0]?.sizeBytes).toBe(12345);
 
-    expect(results[1]?.infoHash).toBe("89abcdef0123456789abcdef0123456789abcdef");
     expect(results[1]?.sizeBytes).toBe(200);
+    expect(results[1]?.infoHash).toBeNull();
+    expect(results[1]?.guid).toBe("https://tracker.example/torrent/2");
   });
 });

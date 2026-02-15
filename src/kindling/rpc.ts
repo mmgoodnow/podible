@@ -290,7 +290,8 @@ const handlers: Record<string, RpcMethodHandler> = {
     const title = asString(params.title, "title");
     const mediaType = parseMedia(params.mediaType);
     const url = asString(params.url, "url");
-    const infoHash = asString(params.infoHash, "infoHash");
+    const infoHash = asOptionalString(params.infoHash);
+    const guid = asOptionalString(params.guid);
     const sizeBytes =
       params.sizeBytes === undefined || params.sizeBytes === null
         ? null
@@ -301,6 +302,7 @@ const handlers: Record<string, RpcMethodHandler> = {
     return runSnatch(ctx.repo, ctx.repo.getSettings(), {
       bookId,
       provider,
+      providerGuid: guid,
       title,
       mediaType,
       url,

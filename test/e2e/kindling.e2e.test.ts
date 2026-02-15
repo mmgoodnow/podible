@@ -10,13 +10,14 @@ import { runMigrations } from "../../src/kindling/db";
 import { createPodibleFetchHandler } from "../../src/kindling/http";
 import { KindlingRepo } from "../../src/kindling/repo";
 import { defaultSettings } from "../../src/kindling/settings";
+import { infoHashFromTorrentBytes } from "../../src/kindling/torrent";
 import { runWorker } from "../../src/kindling/worker";
 import { startMockRtorrent } from "../mocks/rtorrent";
 import { startMockTorznab } from "../mocks/torznab";
 
 function makeTorrentBytes(name: string): Uint8Array {
   const nameLen = Buffer.byteLength(name);
-  const content = `d8:announce13:http://tracker/4:infod4:name${nameLen}:${name}12:piece lengthi16384e6:lengthi10e6:pieces20:12345678901234567890ee`;
+  const content = `d8:announce15:http://tracker/4:infod4:name${nameLen}:${name}12:piece lengthi16384e6:lengthi10e6:pieces20:12345678901234567890ee`;
   return new Uint8Array(Buffer.from(content, "ascii"));
 }
 
@@ -73,9 +74,9 @@ describe("kindling e2e", () => {
     const ebookTorrent = makeTorrentBytes("ebook-book");
     const reconcileTorrent = makeTorrentBytes("ebook-reconcile");
 
-    const audioHash = "0123456789abcdef0123456789abcdef01234567";
-    const ebookHash = "89abcdef0123456789abcdef0123456789abcdef";
-    const reconcileHash = "1111111111111111111111111111111111111111";
+    const audioHash = infoHashFromTorrentBytes(audioTorrent);
+    const ebookHash = infoHashFromTorrentBytes(ebookTorrent);
+    const reconcileHash = infoHashFromTorrentBytes(reconcileTorrent);
 
     const torznab = startMockTorznab({
       results: [

@@ -218,6 +218,7 @@ Current suites include:
 - Job worker uses queue claim/requeue semantics with retry backoff.
 - Scanner and `library.rehydrate` hydrate missing metadata from Open Library (work id/language/publish date/description/cover where available).
 - Import strategy uses hardlinks only; cross-device `EXDEV` is surfaced as an error.
-- Snatch requires `.torrent` URLs and explicit `infoHash`; magnet links are out of scope.
+- Snatch requires `.torrent` URLs (magnet links are out of scope).
+- Snatch computes canonical infohash from downloaded `.torrent` bytes; Torznab `infohash` attrs are optional.
 - JSON-RPC batch requests are intentionally unsupported in v1.
 - Playback position APIs are intentionally out of scope for this phase.

@@ -67,6 +67,7 @@ export type ReleaseRow = {
   id: number;
   book_id: number;
   provider: string;
+  provider_guid: string | null;
   title: string;
   media_type: MediaType;
   info_hash: string;

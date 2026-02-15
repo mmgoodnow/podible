@@ -9,7 +9,8 @@ type TorznabResult = {
   mediaType: MediaType;
   sizeBytes: number | null;
   url: string;
-  infoHash: string;
+  guid: string | null;
+  infoHash: string | null;
   seeders: number | null;
   leechers: number | null;
   raw: Record<string, unknown>;
@@ -55,6 +56,11 @@ function chooseDownloadUrl(item: Record<string, unknown>): string {
   return "";
 }
 
+function parseGuid(item: Record<string, unknown>): string | null {
+  const value = textValue(item.guid);
+  return value.trim() ? value.trim() : null;
+}
+
 function isSupportedTorrentUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
@@ -78,10 +84,7 @@ function parseAttrMap(item: Record<string, unknown>): Record<string, string> {
 }
 
 function inferInfoHash(attrMap: Record<string, string>): string | null {
-  const candidate =
-    attrMap.infohash ??
-    attrMap["torrenthash"] ??
-    attrMap["btih"];
+  const candidate = attrMap.infohash ?? attrMap["torrenthash"] ?? attrMap["btih"];
   if (candidate) {
     try {
       return normalizeInfoHash(candidate);
@@ -94,38 +97,32 @@ function inferInfoHash(attrMap: Record<string, string>): string | null {
 
 export function parseTorznabSearch(xml: string, provider: string, mediaType: MediaType): TorznabResult[] {
   const doc = parser.parse(xml) as Record<string, unknown>;
-  const channel = (doc.rss as Record<string, unknown> | undefined)?.channel as
-    | Record<string, unknown>
-    | undefined;
+  const channel = (doc.rss as Record<string, unknown> | undefined)?.channel as Record<string, unknown> | undefined;
   const items = toArray((channel?.item as Record<string, unknown> | Record<string, unknown>[] | undefined) ?? []);
 
   const out: TorznabResult[] = [];
   for (const item of items) {
-      const title = textValue(item.title);
-      const attrMap = parseAttrMap(item);
-      const url = chooseDownloadUrl(item);
-      const infoHash = inferInfoHash(attrMap);
-      if (!title || !url || !isSupportedTorrentUrl(url) || !infoHash) {
-        continue;
-      }
-      out.push({
-        title,
+    const title = textValue(item.title);
+    const attrMap = parseAttrMap(item);
+    const url = chooseDownloadUrl(item);
+    if (!title || !url || !isSupportedTorrentUrl(url)) {
+      continue;
+    }
+    out.push({
+      title,
+      provider,
+      mediaType,
+      sizeBytes: parseIntOrNull(attrMap.size ?? item.size ?? (item.enclosure as Record<string, unknown> | undefined)?.length),
+      url,
+      guid: parseGuid(item),
+      infoHash: inferInfoHash(attrMap),
+      seeders: parseIntOrNull(attrMap.seeders),
+      leechers: parseIntOrNull(attrMap.leechers ?? attrMap.peers),
+      raw: {
+        ...item,
         provider,
-        mediaType,
-        sizeBytes: parseIntOrNull(
-          attrMap.size ??
-            item.size ??
-            (item.enclosure as Record<string, unknown> | undefined)?.length
-        ),
-        url,
-        infoHash,
-        seeders: parseIntOrNull(attrMap.seeders),
-        leechers: parseIntOrNull(attrMap.leechers ?? attrMap.peers),
-        raw: {
-          ...item,
-          provider,
-        },
-      });
+      },
+    });
   }
   return out;
 }
@@ -149,11 +146,7 @@ function buildSearchUrl(source: TorznabSource, query: string, mediaType: MediaTy
   return url;
 }
 
-export async function searchTorznab(
-  sources: TorznabSource[],
-  query: string,
-  mediaType: MediaType
-): Promise<TorznabResult[]> {
+export async function searchTorznab(sources: TorznabSource[], query: string, mediaType: MediaType): Promise<TorznabResult[]> {
   const results: TorznabResult[] = [];
   for (const source of sources) {
     const url = buildSearchUrl(source, query, mediaType);

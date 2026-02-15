@@ -163,11 +163,12 @@ async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> 
       const snatch = await runSnatch(ctx.repo, settings, {
         bookId: book.id,
         provider: result.provider,
+        providerGuid: result.guid ?? null,
         title: result.title,
         mediaType: media,
         url: result.url,
         sizeBytes: result.sizeBytes,
-        infoHash: result.infoHash,
+        infoHash: result.infoHash ?? null,
       });
       log(
         ctx,

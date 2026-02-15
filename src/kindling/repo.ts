@@ -25,6 +25,7 @@ type CreateBookInput = {
 type CreateReleaseInput = {
   bookId: number;
   provider: string;
+  providerGuid?: string | null;
   title: string;
   mediaType: MediaType;
   infoHash: string;
@@ -222,13 +223,14 @@ export class KindlingRepo {
     const hash = normalizeHash(input.infoHash);
     const row = this.db
       .query(
-        `INSERT INTO releases (book_id, provider, title, media_type, info_hash, size_bytes, url, snatched_at, status, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO releases (book_id, provider, provider_guid, title, media_type, info_hash, size_bytes, url, snatched_at, status, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING *`
       )
       .get(
         input.bookId,
         input.provider,
+        input.providerGuid ?? null,
         input.title,
         input.mediaType,
         hash,
@@ -244,6 +246,12 @@ export class KindlingRepo {
   findReleaseByInfoHash(infoHash: string): ReleaseRow | null {
     const hash = normalizeHash(infoHash);
     return (this.db.query("SELECT * FROM releases WHERE info_hash = ?").get(hash) as ReleaseRow | null) ?? null;
+  }
+
+  findReleaseByProviderGuid(provider: string, providerGuid: string): ReleaseRow | null {
+    return (this.db
+      .query("SELECT * FROM releases WHERE provider = ? AND provider_guid = ?")
+      .get(provider, providerGuid) as ReleaseRow | null) ?? null;
   }
 
   getRelease(releaseId: number): ReleaseRow | null {

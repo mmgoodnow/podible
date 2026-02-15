@@ -29,6 +29,7 @@ describe("schema migrations", () => {
     expect(indexExists(db, "idx_releases_book_status")).toBe(true);
     expect(indexExists(db, "idx_releases_book_media")).toBe(true);
     expect(indexExists(db, "idx_releases_info_hash")).toBe(true);
+    expect(indexExists(db, "idx_releases_provider_guid")).toBe(true);
     expect(indexExists(db, "idx_releases_url")).toBe(true);
     expect(indexExists(db, "idx_assets_book_created")).toBe(true);
     expect(indexExists(db, "idx_asset_files_asset_start")).toBe(true);

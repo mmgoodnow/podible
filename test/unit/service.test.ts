@@ -5,6 +5,7 @@ import { runMigrations } from "../../src/kindling/db";
 import { KindlingRepo } from "../../src/kindling/repo";
 import { defaultSettings } from "../../src/kindling/settings";
 import { runSearch, runSnatch } from "../../src/kindling/service";
+import { infoHashFromTorrentBytes } from "../../src/kindling/torrent";
 
 describe("search ranking", () => {
   test("penalizes box-set style matches", async () => {
@@ -45,7 +46,7 @@ describe("search ranking", () => {
 
 function makeTorrentBytes(name: string): Uint8Array {
   const nameLen = Buffer.byteLength(name);
-  const content = `d8:announce13:http://tracker/4:infod4:name${nameLen}:${name}12:piece lengthi16384e6:lengthi10e6:pieces20:12345678901234567890ee`;
+  const content = `d8:announce15:http://tracker/4:infod4:name${nameLen}:${name}12:piece lengthi16384e6:lengthi10e6:pieces20:12345678901234567890ee`;
   return new Uint8Array(Buffer.from(content, "ascii"));
 }
 
@@ -93,7 +94,7 @@ describe("snatch transport", () => {
 
     const torrentUrl = "https://example.com/dune.torrent";
     const torrentBytes = makeTorrentBytes("dune-audio");
-    const expectedHash = "0123456789abcdef0123456789abcdef01234567";
+    const expectedHash = infoHashFromTorrentBytes(torrentBytes);
     const rpcUrl = "https://rtorrent.example/RPC2";
     const settings = defaultSettings({
       rtorrent: {
@@ -131,7 +132,6 @@ describe("snatch transport", () => {
         title: "Dune Audio",
         mediaType: "audio",
         url: torrentUrl,
-        infoHash: expectedHash,
       });
       expect(result.idempotent).toBe(false);
       expect(result.release.info_hash).toBe(expectedHash);
