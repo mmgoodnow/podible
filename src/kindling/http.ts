@@ -71,7 +71,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
 
   const rows = books
     .map((book) => {
-      const detailPath = addApiKey(`/assets?bookId=${book.id}`, apiKey);
+      const detailPath = addApiKey(`/rpc/library/get?bookId=${book.id}`, apiKey);
       return `<tr>
   <td><a href="${escapeHtml(detailPath)}">${book.id}</a></td>
   <td>${escapeHtml(book.title)}</td>
