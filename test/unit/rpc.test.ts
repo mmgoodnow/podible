@@ -1,3 +1,7 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
@@ -175,6 +179,64 @@ describe("json-rpc handler", () => {
       params: { bookId: 999 },
     });
     expect(result.error.code).toBe(-32000);
+    db.close();
+  });
+
+  test("library.delete cascades DB rows and removes asset+cover files", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new KindlingRepo(db);
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "kindling-delete-"));
+    const assetPath = path.join(root, "book.mp3");
+    const coverPath = path.join(root, "cover.jpg");
+    await writeFile(assetPath, Buffer.from("test-audio"));
+    await writeFile(coverPath, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    repo.updateBookMetadata(book.id, { coverPath });
+    const release = repo.createRelease({
+      bookId: book.id,
+      provider: "test",
+      title: "Dune audio",
+      mediaType: "audio",
+      infoHash: "abc123",
+      url: "https://example.com/dune-audio.torrent",
+      status: "downloaded",
+    });
+    repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mpeg",
+      totalSize: 10,
+      sourceReleaseId: release.id,
+      files: [
+        {
+          path: assetPath,
+          size: 10,
+          start: 0,
+          end: 9,
+          durationMs: 1000,
+          title: null,
+        },
+      ],
+    });
+
+    const result = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "library.delete",
+      params: { bookId: book.id },
+    });
+    expect(result.result.deletedBookId).toBe(book.id);
+    expect(result.result.deletedAssetFileCount).toBe(1);
+    expect(repo.getBook(book.id)).toBeNull();
+    expect(repo.listReleasesByBook(book.id)).toEqual([]);
+    expect(repo.listAssetsByBook(book.id)).toEqual([]);
+
+    expect(await Bun.file(assetPath).exists()).toBe(false);
+    expect(await Bun.file(coverPath).exists()).toBe(false);
+
     db.close();
   });
 

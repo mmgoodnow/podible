@@ -80,6 +80,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
   <td>${escapeHtml(book.status)}</td>
   <td>${escapeHtml(book.audioStatus)}</td>
   <td>${escapeHtml(book.ebookStatus)}</td>
+  <td><button type="button" class="delete-book-btn" data-book-id="${book.id}" data-book-title="${escapeHtml(book.title)}">Delete</button></td>
 </tr>`;
     })
     .join("");
@@ -167,6 +168,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
       </table>
     </div>
     <h2>Recent Library</h2>
+    <p id="library-status" class="muted"></p>
     <table>
       <thead>
         <tr>
@@ -176,9 +178,10 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
           <th>Status</th>
           <th>Audio</th>
           <th>Ebook</th>
+          <th>Actions</th>
         </tr>
       </thead>
-      <tbody>${rows || '<tr><td colspan="6">No books yet.</td></tr>'}</tbody>
+      <tbody id="library-table-body">${rows || '<tr><td colspan="7">No books yet.</td></tr>'}</tbody>
     </table>
     <script>
       (function () {
@@ -379,6 +382,52 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
           });
         }
         loadJobs();
+
+        var libraryTableBody = document.getElementById("library-table-body");
+        function ensureLibraryEmptyRow() {
+          if (!libraryTableBody) return;
+          if (libraryTableBody.children.length > 0) return;
+          var row = document.createElement("tr");
+          var cell = document.createElement("td");
+          cell.colSpan = 7;
+          cell.textContent = "No books yet.";
+          row.appendChild(cell);
+          libraryTableBody.appendChild(row);
+        }
+
+        var deleteButtons = Array.prototype.slice.call(document.querySelectorAll(".delete-book-btn"));
+        deleteButtons.forEach(function (button) {
+          button.addEventListener("click", async function () {
+            var rawId = button.getAttribute("data-book-id") || "";
+            var bookId = parseInt(rawId, 10);
+            if (!Number.isFinite(bookId) || bookId <= 0) {
+              text("library-status", "Delete failed: invalid book id.");
+              return;
+            }
+            var bookTitle = button.getAttribute("data-book-title") || ("Book " + String(bookId));
+            if (!window.confirm('Delete "' + bookTitle + '" and imported files?')) {
+              return;
+            }
+            button.disabled = true;
+            text("library-status", "Deleting...");
+            try {
+              var result = await rpc("library.delete", { bookId: bookId });
+              var row = button.closest("tr");
+              if (row && row.parentNode) {
+                row.parentNode.removeChild(row);
+              }
+              ensureLibraryEmptyRow();
+              text(
+                "library-status",
+                'Deleted "' + bookTitle + '" (book ' + String(result.deletedBookId) + ', files ' + String(result.deletedAssetFileCount || 0) + ")."
+              );
+            } catch (err) {
+              text("library-status", "Delete failed: " + (err && err.message ? err.message : "request error"));
+            } finally {
+              button.disabled = false;
+            }
+          });
+        });
       })();
     </script>
   </body>

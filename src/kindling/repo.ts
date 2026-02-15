@@ -86,7 +86,10 @@ function assertPositiveInt(value: number): void {
 }
 
 export class KindlingRepo {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: Database) {
+    // Foreign-key cascades are part of normal behavior; enforce per connection.
+    this.db.exec("PRAGMA foreign_keys = ON;");
+  }
 
   ensureSettings(): AppSettings {
     const existing = this.db.query("SELECT value_json FROM settings WHERE id = 1").get() as
@@ -216,6 +219,51 @@ export class KindlingRepo {
   listAllBooks(): LibraryBook[] {
     const rows = this.db.query("SELECT * FROM books ORDER BY added_at DESC, id DESC").all() as BookRow[];
     return rows.map((row) => this.toLibraryBook(row));
+  }
+
+  /**
+   * Returns filesystem artifacts owned exclusively by a single book so callers
+   * can safely delete files after DB cascade delete.
+   */
+  getBookDeleteArtifacts(bookId: number): { assetPaths: string[]; coverPath: string | null } {
+    assertPositiveInt(bookId);
+    const assetPaths = this.db
+      .query(
+        `SELECT DISTINCT af.path AS path
+         FROM asset_files af
+         INNER JOIN assets a ON a.id = af.asset_id
+         WHERE a.book_id = ?
+           AND NOT EXISTS (
+             SELECT 1
+             FROM asset_files af2
+             INNER JOIN assets a2 ON a2.id = af2.asset_id
+             WHERE af2.path = af.path
+               AND a2.book_id <> ?
+           )`
+      )
+      .all(bookId, bookId) as Array<{ path: string }>;
+
+    const book = this.getBookRow(bookId);
+    let coverPath: string | null = null;
+    if (book?.cover_path) {
+      const shared = this.db
+        .query("SELECT id FROM books WHERE id <> ? AND cover_path = ? LIMIT 1")
+        .get(bookId, book.cover_path) as { id: number } | null;
+      if (!shared) {
+        coverPath = book.cover_path;
+      }
+    }
+
+    return {
+      assetPaths: assetPaths.map((row) => row.path),
+      coverPath,
+    };
+  }
+
+  deleteBook(bookId: number): boolean {
+    assertPositiveInt(bookId);
+    const result = this.db.query("DELETE FROM books WHERE id = ?").run(bookId);
+    return Number(result.changes) > 0;
   }
 
   createRelease(input: CreateReleaseInput): ReleaseRow {

@@ -1,3 +1,5 @@
+import { rm } from "node:fs/promises";
+
 import { hydrateBookFromOpenLibrary } from "./hydration";
 import { resolveOpenLibraryCandidate, searchOpenLibrary } from "./openlibrary";
 import { KindlingRepo } from "./repo";
@@ -53,6 +55,15 @@ class RpcError extends Error {
   ) {
     super(message);
     this.name = "RpcError";
+  }
+}
+
+async function removeFileIfPresent(filePath: string): Promise<boolean> {
+  try {
+    await rm(filePath, { force: true });
+    return true;
+  } catch (error) {
+    throw new Error(`Failed to remove file ${filePath}: ${(error as Error).message}`);
   }
 }
 
@@ -295,6 +306,36 @@ const handlers: Record<string, RpcMethodHandler> = {
     return {
       attempted: resolved.length,
       updatedBookIds,
+    };
+  },
+
+  async "library.delete"(ctx, params) {
+    const bookId = asPositiveInt(params.bookId, "bookId");
+    const book = ctx.repo.getBookRow(bookId);
+    if (!book) {
+      throw new RpcError(-32000, "Book not found", { error: "not_found", bookId });
+    }
+
+    const artifacts = ctx.repo.getBookDeleteArtifacts(bookId);
+    const deleted = ctx.repo.deleteBook(bookId);
+    if (!deleted) {
+      throw new RpcError(-32000, "Book not found", { error: "not_found", bookId });
+    }
+
+    const deletedAssetPaths: string[] = [];
+    for (const filePath of artifacts.assetPaths) {
+      if (await removeFileIfPresent(filePath)) {
+        deletedAssetPaths.push(filePath);
+      }
+    }
+
+    const deletedCoverPath = artifacts.coverPath ? ((await removeFileIfPresent(artifacts.coverPath)) ? artifacts.coverPath : null) : null;
+
+    return {
+      deletedBookId: bookId,
+      deletedAssetFileCount: deletedAssetPaths.length,
+      deletedAssetPaths,
+      deletedCoverPath,
     };
   },
 

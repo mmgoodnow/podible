@@ -81,6 +81,7 @@ Removed REST control routes now return `404`:
 - `library.list`
 - `library.get`
 - `library.create`
+- `library.delete`
 - `library.refresh`
 - `library.acquire`
 - `library.rehydrate`
