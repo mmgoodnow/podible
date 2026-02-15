@@ -93,7 +93,7 @@ describe("kindling repo", () => {
 
     const hydrated = repo.getBook(book.id);
     expect(hydrated?.audioStatus).toBe("imported");
-    expect(hydrated?.ebookStatus).toBe("open");
+    expect(hydrated?.ebookStatus).toBe("wanted");
     expect(hydrated?.status).toBe("partial");
 
     db.close();

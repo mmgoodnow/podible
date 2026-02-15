@@ -2,7 +2,7 @@ export type MediaType = "audio" | "ebook";
 
 export type ReleaseStatus = "snatched" | "downloading" | "downloaded" | "imported" | "failed";
 
-export type MediaStatus = "open" | "snatched" | "downloading" | "downloaded" | "imported" | "error";
+export type MediaStatus = "wanted" | "snatched" | "downloading" | "downloaded" | "imported" | "error";
 
 export type BookStatus = MediaStatus | "partial";
 
@@ -13,7 +13,7 @@ export type BookStatusInput = {
 };
 
 const NON_IMPORTED_PRIORITY: Record<Exclude<MediaStatus, "imported">, number> = {
-  open: 0,
+  wanted: 0,
   error: 1,
   snatched: 2,
   downloaded: 3,
@@ -43,7 +43,7 @@ export function deriveMediaStatus(input: BookStatusInput): MediaStatus {
     return "error";
   }
 
-  return "open";
+  return "wanted";
 }
 
 export function deriveBookStatus(audio: MediaStatus, ebook: MediaStatus): BookStatus {
@@ -56,5 +56,5 @@ export function deriveBookStatus(audio: MediaStatus, ebook: MediaStatus): BookSt
   }
 
   const values: Exclude<MediaStatus, "imported">[] = [audio, ebook] as Exclude<MediaStatus, "imported">[];
-  return values.sort((a, b) => NON_IMPORTED_PRIORITY[b] - NON_IMPORTED_PRIORITY[a])[0] ?? "open";
+  return values.sort((a, b) => NON_IMPORTED_PRIORITY[b] - NON_IMPORTED_PRIORITY[a])[0] ?? "wanted";
 }

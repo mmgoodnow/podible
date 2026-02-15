@@ -12,19 +12,19 @@ describe("status derivation", () => {
       deriveMediaStatus({ mediaType: "audio", releases: ["snatched", "downloading"], hasAsset: false })
     ).toBe("downloading");
     expect(deriveMediaStatus({ mediaType: "ebook", releases: ["failed", "failed"], hasAsset: false })).toBe("error");
-    expect(deriveMediaStatus({ mediaType: "ebook", releases: [], hasAsset: false })).toBe("open");
+    expect(deriveMediaStatus({ mediaType: "ebook", releases: [], hasAsset: false })).toBe("wanted");
     expect(deriveMediaStatus({ mediaType: "audio", releases: ["failed"], hasAsset: true })).toBe("imported");
   });
 
   test("overall book status emits partial when one media imported", () => {
-    expect(deriveBookStatus("imported", "open")).toBe("partial");
-    expect(deriveBookStatus("open", "imported")).toBe("partial");
+    expect(deriveBookStatus("imported", "wanted")).toBe("partial");
+    expect(deriveBookStatus("wanted", "imported")).toBe("partial");
     expect(deriveBookStatus("imported", "imported")).toBe("imported");
   });
 
   test("overall status picks highest non-imported state", () => {
     const cases: Array<[MediaStatus, MediaStatus, MediaStatus]> = [
-      ["open", "snatched", "snatched"],
+      ["wanted", "snatched", "snatched"],
       ["error", "snatched", "snatched"],
       ["downloaded", "snatched", "downloaded"],
       ["downloaded", "downloading", "downloading"],

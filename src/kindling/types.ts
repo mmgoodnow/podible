@@ -144,7 +144,7 @@ export type LibraryBook = {
   language: string | null;
   isbn: string | null;
   identifiers: Record<string, string>;
-  audioStatus: "open" | "snatched" | "downloading" | "downloaded" | "imported" | "error";
-  ebookStatus: "open" | "snatched" | "downloading" | "downloaded" | "imported" | "error";
-  status: "open" | "snatched" | "downloading" | "downloaded" | "imported" | "error" | "partial";
+  audioStatus: "wanted" | "snatched" | "downloading" | "downloaded" | "imported" | "error";
+  ebookStatus: "wanted" | "snatched" | "downloading" | "downloaded" | "imported" | "error";
+  status: "wanted" | "snatched" | "downloading" | "downloaded" | "imported" | "error" | "partial";
 };
