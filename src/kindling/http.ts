@@ -80,7 +80,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
   <td>${escapeHtml(book.status)}</td>
   <td>${escapeHtml(book.audioStatus)}</td>
   <td>${escapeHtml(book.ebookStatus)}</td>
-  <td>${escapeHtml(String(book.fullPseudoProgress))}%</td>
+  <td class="book-progress" data-book-id="${book.id}" data-audio-status="${escapeHtml(book.audioStatus)}" data-ebook-status="${escapeHtml(book.ebookStatus)}">${escapeHtml(String(book.fullPseudoProgress))}%</td>
   <td><button type="button" class="delete-book-btn" data-book-id="${book.id}" data-book-title="${escapeHtml(book.title)}">Delete</button></td>
 </tr>`;
     })
@@ -360,6 +360,58 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
           return rounded + " " + units[i];
         }
 
+        function mediaStatusPseudo(status) {
+          if (status === "imported") return 100;
+          if (status === "downloaded") return 90;
+          if (status === "downloading") return 20;
+          if (status === "snatched") return 10;
+          return 0;
+        }
+
+        function updateLibraryProgressFromDownloads(items) {
+          var cells = Array.prototype.slice.call(document.querySelectorAll("td.book-progress"));
+          if (cells.length === 0) return;
+
+          var mediaProgressByBook = {};
+          if (Array.isArray(items)) {
+            items.forEach(function (download) {
+              var bookId = Number(download.book_id);
+              var media = String(download.media_type || "");
+              var progress = Number(download.fullPseudoProgress);
+              if (!Number.isFinite(bookId) || bookId <= 0) return;
+              if (media !== "audio" && media !== "ebook") return;
+              if (!Number.isFinite(progress)) return;
+              var key = String(bookId);
+              if (!mediaProgressByBook[key]) {
+                mediaProgressByBook[key] = {};
+              }
+              var current = mediaProgressByBook[key][media];
+              if (!Number.isFinite(current) || progress > current) {
+                mediaProgressByBook[key][media] = progress;
+              }
+            });
+          }
+
+          cells.forEach(function (cell) {
+            var bookId = Number(cell.getAttribute("data-book-id") || "");
+            if (!Number.isFinite(bookId) || bookId <= 0) return;
+            var key = String(bookId);
+            var audioStatus = String(cell.getAttribute("data-audio-status") || "wanted");
+            var ebookStatus = String(cell.getAttribute("data-ebook-status") || "wanted");
+            var audioProgress = mediaStatusPseudo(audioStatus);
+            var ebookProgress = mediaStatusPseudo(ebookStatus);
+            var bookMedia = mediaProgressByBook[key] || {};
+            if (Number.isFinite(bookMedia.audio)) {
+              audioProgress = Math.max(audioProgress, Number(bookMedia.audio));
+            }
+            if (Number.isFinite(bookMedia.ebook)) {
+              ebookProgress = Math.max(ebookProgress, Number(bookMedia.ebook));
+            }
+            var combined = Math.round((audioProgress + ebookProgress) / 2);
+            cell.textContent = String(combined) + "%";
+          });
+        }
+
         function downloadsCell(row, value) {
           var td = document.createElement("td");
           td.textContent = value;
@@ -423,10 +475,12 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
             var payload = await rpc("downloads.list", {});
             var items = payload && Array.isArray(payload.downloads) ? payload.downloads : [];
             renderDownloads(items);
+            updateLibraryProgressFromDownloads(items);
             text("downloads-status", "Loaded " + items.length + " download(s).");
           } catch (err) {
             text("downloads-status", "Load failed: " + (err && err.message ? err.message : "request error"));
             renderDownloads([]);
+            updateLibraryProgressFromDownloads([]);
           }
         }
 
