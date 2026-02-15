@@ -6,7 +6,7 @@ import { Database } from "bun:sqlite";
 import { runMigrations } from "../../src/kindling/db";
 import { KindlingRepo } from "../../src/kindling/repo";
 import { defaultSettings } from "../../src/kindling/settings";
-import { runWorker, selectDownloadPollMs } from "../../src/kindling/worker";
+import { pollMsForMedia, runWorker, selectDownloadPollMs } from "../../src/kindling/worker";
 import { startMockTorznab } from "../mocks/torznab";
 
 function makeTorrentBytes(name: string): Uint8Array {
@@ -82,6 +82,12 @@ describe("worker scan auto-acquire retries", () => {
 });
 
 describe("download ETA polling", () => {
+  test("caps ebook max poll interval at 1 second", () => {
+    expect(pollMsForMedia("ebook", 5000)).toBe(1000);
+    expect(pollMsForMedia("ebook", 800)).toBe(800);
+    expect(pollMsForMedia("audio", 5000)).toBe(5000);
+  });
+
   test("uses fast poll near completion", () => {
     const pollMs = selectDownloadPollMs(
       {

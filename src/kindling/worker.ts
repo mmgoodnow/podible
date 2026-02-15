@@ -38,6 +38,7 @@ function backoffMs(attempt: number): number {
 
 const FAST_POLL_MS = 500;
 const MID_POLL_MS = 2_000;
+const EBOOK_MAX_POLL_MS = 1_000;
 const ETA_FAST_WINDOW_SECONDS = 30;
 const ETA_MID_WINDOW_SECONDS = 120;
 
@@ -145,6 +146,17 @@ export function selectDownloadPollMs(state: RtorrentDownloadState, configuredPol
 }
 
 /**
+ * Ebooks are often short-lived downloads, so use a tighter max polling window.
+ */
+export function pollMsForMedia(mediaType: MediaType, configuredPollMs: number): number {
+  const normalized = Math.max(FAST_POLL_MS, Math.trunc(configuredPollMs || 5000));
+  if (mediaType === "ebook") {
+    return Math.min(normalized, EBOOK_MAX_POLL_MS);
+  }
+  return normalized;
+}
+
+/**
  * Download job: poll rTorrent by info hash until torrent completion, then
  * enqueue an import job for the resolved base path.
  */
@@ -163,12 +175,13 @@ async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promise<"don
   const state = await client.getDownloadState(release.info_hash);
   if (!state.complete) {
     ctx.repo.setReleaseStatus(release.id, "downloading", null);
-    const decision = selectDownloadPollDecision(state, settings.polling.rtorrentMs || 5000);
+    const mediaPollMs = pollMsForMedia(release.media_type, settings.polling.rtorrentMs || 5000);
+    const decision = selectDownloadPollDecision(state, mediaPollMs);
     const etaText =
       decision.etaSeconds === null ? "null" : (Math.round(decision.etaSeconds * 100) / 100).toFixed(2);
     log(
       ctx,
-      `[download] job=${job.id} release=${release.id} hash=${release.info_hash} complete=0 left_bytes=${decision.leftBytes ?? "null"} down_rate=${decision.downRate ?? "null"} eta_s=${etaText} poll_ms=${decision.pollMs} reason=${decision.reason}`
+      `[download] job=${job.id} release=${release.id} media=${release.media_type} hash=${release.info_hash} complete=0 left_bytes=${decision.leftBytes ?? "null"} down_rate=${decision.downRate ?? "null"} eta_s=${etaText} poll_ms=${decision.pollMs} reason=${decision.reason}`
     );
     const pollMs = decision.pollMs;
     const nextRun = new Date(Date.now() + pollMs).toISOString();
