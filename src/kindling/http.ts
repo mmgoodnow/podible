@@ -124,14 +124,6 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
       <p id="ol-status" class="muted"></p>
       <ul id="ol-results"></ul>
     </div>
-    <h2>Add By ISBN</h2>
-    <div class="panel">
-      <div class="row">
-        <input id="isbn-input" type="text" placeholder="9780553283686" />
-        <button id="isbn-add-btn" type="button">Add Book</button>
-      </div>
-      <p id="isbn-status" class="muted"></p>
-    </div>
     <h2>Settings JSON</h2>
     <div class="panel">
       <div class="row">
@@ -223,20 +215,16 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
             items.forEach(function (item) {
               var li = document.createElement("li");
               var label = document.createElement("span");
-              var isbn = item.isbn ? String(item.isbn) : "";
-              label.textContent =
-                item.title + " — " + item.author + " (" + item.openLibraryKey + ")" + (isbn ? " [ISBN " + isbn + "]" : " [no ISBN]");
+              label.textContent = item.title + " — " + item.author + " (" + item.openLibraryKey + ")";
               var btn = document.createElement("button");
               btn.type = "button";
               btn.style.marginLeft = "8px";
-              btn.textContent = isbn ? "Add by ISBN" : "No ISBN";
-              if (!isbn) btn.disabled = true;
+              btn.textContent = "Add";
               btn.addEventListener("click", async function () {
-                if (!isbn) return;
                 text("ol-status", "Adding " + item.title + "...");
                 var created;
                 try {
-                  created = await rpc("library.create", { isbn: isbn });
+                  created = await rpc("library.create", { openLibraryKey: item.openLibraryKey });
                 } catch (err) {
                   text("ol-status", "Add failed: " + (err && err.message ? err.message : "request error"));
                   return;
@@ -247,27 +235,6 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
               li.appendChild(btn);
               resultList.appendChild(li);
             });
-          });
-        }
-
-        var isbnInput = document.getElementById("isbn-input");
-        var isbnAddBtn = document.getElementById("isbn-add-btn");
-        if (isbnInput && isbnAddBtn) {
-          isbnAddBtn.addEventListener("click", async function () {
-            var isbn = (isbnInput.value || "").trim();
-            if (!isbn) {
-              text("isbn-status", "Enter an ISBN.");
-              return;
-            }
-            text("isbn-status", "Adding ISBN " + isbn + "...");
-            var created;
-            try {
-              created = await rpc("library.create", { isbn: isbn });
-            } catch (err) {
-              text("isbn-status", "Add failed: " + (err && err.message ? err.message : "request error"));
-              return;
-            }
-            text("isbn-status", 'Added "' + created.book.title + '" (id ' + created.book.id + ').');
           });
         }
 

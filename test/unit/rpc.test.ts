@@ -99,7 +99,7 @@ describe("json-rpc handler", () => {
     db.close();
   });
 
-  test("requires isbn for library.create", async () => {
+  test("requires openLibraryKey for library.create", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new KindlingRepo(db);
@@ -108,7 +108,7 @@ describe("json-rpc handler", () => {
       jsonrpc: "2.0",
       id: 1,
       method: "library.create",
-      params: { title: "Dune", author: "Frank Herbert" },
+      params: { title: "Dune" },
     });
     expect(result.error.code).toBe(-32602);
     db.close();

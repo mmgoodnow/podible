@@ -210,8 +210,8 @@ const handlers: Record<string, RpcMethodHandler> = {
   },
 
   async "library.create"(ctx, params) {
-    const isbn = asString(params.isbn, "isbn").trim();
-    const resolved = await resolveOpenLibraryCandidate({ isbn });
+    const openLibraryKey = asString(params.openLibraryKey, "openLibraryKey").trim();
+    const resolved = await resolveOpenLibraryCandidate({ openLibraryKey });
     if (!resolved) {
       throw new RpcError(-32000, "Open Library match not found", { error: "not_found" });
     }
@@ -224,11 +224,7 @@ const handlers: Record<string, RpcMethodHandler> = {
     ctx.repo.updateBookMetadata(book.id, {
       publishedAt: resolved.publishedAt ?? null,
       language: resolved.language ?? null,
-      isbn,
-      identifiers: {
-        ...resolved.identifiers,
-        isbn,
-      },
+      identifiers: resolved.identifiers,
     });
     const hydrated = ctx.repo.getBook(book.id);
     if (hydrated) {

@@ -10,7 +10,7 @@ import { KindlingRepo } from "../../src/kindling/repo";
 import { scanLibraryRoot } from "../../src/kindling/scanner";
 
 describe("library scanner metadata hydration", () => {
-  test("hydrates isbn and identifiers from Open Library for discovered books", async () => {
+  test("hydrates work identifiers from Open Library for discovered books", async () => {
     const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "kindling-scan-"));
     const author = "Frank Herbert";
     const title = "Dune";
@@ -27,14 +27,13 @@ describe("library scanner metadata hydration", () => {
       return new Response(
         JSON.stringify({
           docs: [
-            {
-              key: "/works/OL123W",
-              first_publish_year: 1965,
-              language: ["eng"],
-              isbn: ["9780441172719"],
-            },
-          ],
-        }),
+              {
+                key: "/works/OL123W",
+                first_publish_year: 1965,
+                language: ["eng"],
+              },
+            ],
+          }),
         { status: 200, headers: { "Content-Type": "application/json" } }
       );
     }) as unknown as typeof fetch;
@@ -50,12 +49,10 @@ describe("library scanner metadata hydration", () => {
 
       const scanned = repo.findBookByTitleAuthor(title, author);
       expect(scanned).toBeTruthy();
-      expect(scanned?.isbn).toBe("9780441172719");
       expect(scanned?.language).toBe("eng");
       expect(scanned?.published_at).toBe("1965-01-01T00:00:00.000Z");
       expect(JSON.parse(scanned?.identifiers_json ?? "{}")).toEqual({
         openlibrary: "/works/OL123W",
-        isbn: "9780441172719",
       });
     } finally {
       globalThis.fetch = originalFetch;

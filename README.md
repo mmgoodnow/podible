@@ -154,12 +154,12 @@ curl -X POST http://localhost/rpc \
   -d '{"jsonrpc":"2.0","id":1,"method":"openlibrary.search","params":{"q":"Hyperion Dan Simmons","limit":10}}'
 ```
 
-Add by ISBN:
+Add by Open Library work key:
 
 ```bash
 curl -X POST http://localhost/rpc \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"library.create","params":{"isbn":"9780553283686"}}'
+  -d '{"jsonrpc":"2.0","id":2,"method":"library.create","params":{"openLibraryKey":"/works/OL45804W"}}'
 ```
 
 Rehydrate metadata for existing books (all or one):
@@ -200,7 +200,7 @@ Current suites include:
 
 - Idempotency is enforced by globally unique `releases.info_hash`.
 - Job worker uses queue claim/requeue semantics with retry backoff.
-- Scanner and `library.rehydrate` hydrate missing metadata from Open Library (ISBN/language/publish date/description/cover where available).
+- Scanner and `library.rehydrate` hydrate missing metadata from Open Library (work id/language/publish date/description/cover where available).
 - Import strategy uses hardlinks only; cross-device `EXDEV` is surfaced as an error.
 - Snatch requires `.torrent` URLs and explicit `infoHash`; magnet links are out of scope.
 - JSON-RPC batch requests are intentionally unsupported in v1.

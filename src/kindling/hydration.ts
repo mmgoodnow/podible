@@ -39,7 +39,6 @@ export async function hydrateBookFromOpenLibrary(repo: KindlingRepo, book: Libra
   const metadata = await fetchOpenLibraryMetadata({
     title: book.title,
     author: book.author,
-    isbn: book.isbn,
     openLibraryKey: book.identifiers.openlibrary ?? null,
   }).catch(() => null);
   if (!metadata) return false;
@@ -63,7 +62,6 @@ export async function hydrateBookFromOpenLibrary(repo: KindlingRepo, book: Libra
     description: metadata.description ?? book.description ?? null,
     descriptionHtml: metadata.descriptionHtml ?? book.descriptionHtml ?? null,
     language: metadata.language ?? book.language ?? null,
-    isbn: metadata.isbn ?? book.isbn ?? null,
     identifiers: mergedIdentifiers,
   });
 

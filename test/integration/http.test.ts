@@ -62,7 +62,6 @@ describe("podible http", () => {
                 author_name: ["Frank Herbert"],
                 first_publish_year: 1965,
                 language: ["eng"],
-                isbn: ["9780441172719"],
               },
             ],
           }),
@@ -91,9 +90,8 @@ describe("podible http", () => {
       const healthRpc = await rpc(fetchHandler, "system.health", {}, 1);
       expect(healthRpc.result.ok).toBe(true);
 
-      const createdRpc = await rpc(fetchHandler, "library.create", { isbn: "9780441172719" }, 2);
+      const createdRpc = await rpc(fetchHandler, "library.create", { openLibraryKey: "/works/OL123W" }, 2);
       expect(createdRpc.result.book.title).toBe("Dune");
-      expect(createdRpc.result.book.isbn).toBe("9780441172719");
       expect(createdRpc.result.book.identifiers.openlibrary).toBe("/works/OL123W");
 
       const listRpc = await rpc(fetchHandler, "library.list", { limit: 10 }, 3);
@@ -132,7 +130,7 @@ describe("podible http", () => {
     }
   });
 
-  test("supports rpc openlibrary.search and add-by-isbn-from-search flow", async () => {
+  test("supports rpc openlibrary.search and add-by-key-from-search flow", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown) => {
       const url = new URL(String(input));
@@ -141,7 +139,7 @@ describe("podible http", () => {
       }
 
       const query = url.searchParams.get("q") ?? "";
-      if (query === "Hyperion Dan Simmons") {
+      if (query === "Hyperion Dan Simmons" || query.includes("OL45804W")) {
         return new Response(
           JSON.stringify({
             docs: [
@@ -151,24 +149,6 @@ describe("podible http", () => {
                 author_name: ["Dan Simmons"],
                 first_publish_year: 1989,
                 language: ["eng"],
-                isbn: ["9780553283686"],
-              },
-            ],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        );
-      }
-      if (url.searchParams.get("isbn") === "9780553283686") {
-        return new Response(
-          JSON.stringify({
-            docs: [
-              {
-                key: "/works/OL45804W",
-                title: "Hyperion",
-                author_name: ["Dan Simmons"],
-                first_publish_year: 1989,
-                language: ["eng"],
-                isbn: ["9780553283686"],
               },
             ],
           }),
@@ -198,13 +178,11 @@ describe("podible http", () => {
       const found = await rpc(fetchHandler, "openlibrary.search", { q: "Hyperion Dan Simmons", limit: 5 }, 1);
       expect(found.result.results.length).toBe(1);
       expect(found.result.results[0].openLibraryKey).toBe("/works/OL45804W");
-      expect(found.result.results[0].isbn).toBe("9780553283686");
 
-      const created = await rpc(fetchHandler, "library.create", { isbn: "9780553283686" }, 2);
+      const created = await rpc(fetchHandler, "library.create", { openLibraryKey: "/works/OL45804W" }, 2);
       expect(created.result.book.title).toBe("Hyperion");
       expect(created.result.book.author).toBe("Dan Simmons");
       expect(created.result.book.identifiers.openlibrary).toBe("/works/OL45804W");
-      expect(created.result.book.isbn).toBe("9780553283686");
 
       db.close();
     } finally {
@@ -212,7 +190,7 @@ describe("podible http", () => {
     }
   });
 
-  test("supports rpc add-by-isbn flow", async () => {
+  test("supports rpc add-by-key flow", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown) => {
       const url = new URL(String(input));
@@ -220,7 +198,7 @@ describe("podible http", () => {
         throw new Error(`Unexpected external fetch in test: ${url.toString()}`);
       }
 
-      if (url.searchParams.get("isbn") === "9780061120084") {
+      if ((url.searchParams.get("q") ?? "").includes("OL82563W")) {
         return new Response(
           JSON.stringify({
             docs: [
@@ -230,7 +208,6 @@ describe("podible http", () => {
                 author_name: ["Harper Lee"],
                 first_publish_year: 1960,
                 language: ["eng"],
-                isbn: ["9780061120084"],
               },
             ],
           }),
@@ -256,11 +233,10 @@ describe("podible http", () => {
       });
 
       const fetchHandler = createPodibleFetchHandler(repo, Date.now());
-      const created = await rpc(fetchHandler, "library.create", { isbn: "9780061120084" }, 1);
+      const created = await rpc(fetchHandler, "library.create", { openLibraryKey: "/works/OL82563W" }, 1);
 
       expect(created.result.book.title).toBe("To Kill a Mockingbird");
       expect(created.result.book.author).toBe("Harper Lee");
-      expect(created.result.book.isbn).toBe("9780061120084");
       expect(created.result.book.identifiers.openlibrary).toBe("/works/OL82563W");
 
       db.close();
@@ -332,14 +308,6 @@ describe("podible http", () => {
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
       }
-      if (url.pathname === "/works/OL45754W/editions.json") {
-        return new Response(
-          JSON.stringify({
-            entries: [{ isbn_13: ["9780441569595"] }],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        );
-      }
       if (url.origin === "https://covers.openlibrary.org") {
         return new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
           status: 200,
@@ -370,7 +338,6 @@ describe("podible http", () => {
       expect(hydrated.result.updatedBookIds).toEqual([book.id]);
 
       const fetched = repo.getBook(book.id);
-      expect(fetched?.isbn).toBe("9780441569595");
       expect(fetched?.identifiers.openlibrary).toBe("/works/OL45754W");
       expect(fetched?.description).toBe("A seminal cyberpunk novel.");
       expect(fetched?.descriptionHtml).toContain("<p>");
