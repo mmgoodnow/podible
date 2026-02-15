@@ -146,4 +146,5 @@ export type LibraryBook = {
   audioStatus: "wanted" | "snatched" | "downloading" | "downloaded" | "imported" | "error";
   ebookStatus: "wanted" | "snatched" | "downloading" | "downloaded" | "imported" | "error";
   status: "wanted" | "snatched" | "downloading" | "downloaded" | "imported" | "error" | "partial";
+  fullPseudoProgress: number;
 };

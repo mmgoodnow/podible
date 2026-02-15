@@ -8,6 +8,7 @@ import { Database } from "bun:sqlite";
 import { runMigrations } from "../../src/kindling/db";
 import { handleRpcMethod, handleRpcRequest } from "../../src/kindling/rpc";
 import { KindlingRepo } from "../../src/kindling/repo";
+import { defaultSettings } from "../../src/kindling/settings";
 
 async function callRpc(repo: KindlingRepo, body: string | object) {
   const request = new Request("http://localhost/rpc", {
@@ -238,6 +239,83 @@ describe("json-rpc handler", () => {
     expect(await Bun.file(coverPath).exists()).toBe(false);
 
     db.close();
+  });
+
+  test("downloads.get returns live progress while downloading", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      const body = String(init?.body ?? "");
+      const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
+      const xml = (() => {
+        switch (method) {
+          case "d.name":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string>Dune</string></value></param></params></methodResponse>';
+          case "d.hash":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string>ABC</string></value></param></params></methodResponse>';
+          case "d.complete":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>0</i8></value></param></params></methodResponse>';
+          case "d.base_path":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string>/downloads/dune</string></value></param></params></methodResponse>';
+          case "d.bytes_done":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>500</i8></value></param></params></methodResponse>';
+          case "d.size_bytes":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>1000</i8></value></param></params></methodResponse>';
+          case "d.left_bytes":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>500</i8></value></param></params></methodResponse>';
+          case "d.down.rate":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>100</i8></value></param></params></methodResponse>';
+          default:
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string></string></value></param></params></methodResponse>';
+        }
+      })();
+      return new Response(xml, { status: 200, headers: { "Content-Type": "text/xml" } });
+    }) as unknown as typeof fetch;
+
+    try {
+      const db = new Database(":memory:");
+      runMigrations(db);
+      const repo = new KindlingRepo(db);
+      repo.updateSettings(
+        defaultSettings({
+          auth: { mode: "local", key: "test" },
+          rtorrent: {
+            transport: "http-xmlrpc",
+            url: "http://mock.local/RPC2",
+            username: "",
+            password: "",
+          },
+        })
+      );
+
+      const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+      const release = repo.createRelease({
+        bookId: book.id,
+        provider: "test",
+        title: "Dune Audio",
+        mediaType: "audio",
+        infoHash: "abc123",
+        url: "https://example.com/dune.torrent",
+        status: "downloading",
+      });
+      const job = repo.createJob({ type: "download", releaseId: release.id, bookId: book.id });
+
+      const result = await callRpc(repo, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "downloads.get",
+        params: { jobId: job.id },
+      });
+      expect(result.result.release_status).toBe("downloading");
+      expect(result.result.downloadProgress.bytesDone).toBe(500);
+      expect(result.result.downloadProgress.sizeBytes).toBe(1000);
+      expect(result.result.downloadProgress.fraction).toBe(0.5);
+      expect(result.result.downloadProgress.percent).toBe(50);
+      expect(result.result.fullPseudoProgress).toBe(55);
+
+      db.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("blocks write methods in read-only rpc dispatch", async () => {

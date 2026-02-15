@@ -2,7 +2,9 @@ import { rm } from "node:fs/promises";
 
 import { hydrateBookFromOpenLibrary } from "./hydration";
 import { resolveOpenLibraryCandidate, searchOpenLibrary } from "./openlibrary";
+import { computeDownloadFraction, pseudoProgressForRelease } from "./progress";
 import { KindlingRepo } from "./repo";
+import { RtorrentClient } from "./rtorrent";
 import { runSearch, runSnatch, triggerAutoAcquire } from "./service";
 import type { AppSettings, JobType, LibraryBook, MediaType } from "./types";
 
@@ -58,12 +60,65 @@ class RpcError extends Error {
   }
 }
 
+type DownloadProgress = {
+  bytesDone: number | null;
+  sizeBytes: number | null;
+  leftBytes: number | null;
+  downRate: number | null;
+  fraction: number | null;
+  percent: number | null;
+};
+
+type DownloadRpcView = ReturnType<KindlingRepo["listDownloads"]>[number] & {
+  fullPseudoProgress: number;
+  downloadProgress?: DownloadProgress;
+};
+
 async function removeFileIfPresent(filePath: string): Promise<boolean> {
   try {
     await rm(filePath, { force: true });
     return true;
   } catch (error) {
     throw new Error(`Failed to remove file ${filePath}: ${(error as Error).message}`);
+  }
+}
+
+async function enrichDownload(
+  download: ReturnType<KindlingRepo["listDownloads"]>[number],
+  client: RtorrentClient | null
+): Promise<DownloadRpcView> {
+  if (download.release_status !== "downloading" || !download.info_hash || !client) {
+    return {
+      ...download,
+      fullPseudoProgress: pseudoProgressForRelease(download.release_status),
+    };
+  }
+
+  try {
+    const state = await client.getDownloadState(download.info_hash);
+    const fraction = computeDownloadFraction({
+      bytesDone: state.bytesDone,
+      sizeBytes: state.sizeBytes,
+      leftBytes: state.leftBytes,
+    });
+    return {
+      ...download,
+      fullPseudoProgress: pseudoProgressForRelease(download.release_status, fraction),
+      downloadProgress: {
+        bytesDone: state.bytesDone,
+        sizeBytes: state.sizeBytes,
+        leftBytes: state.leftBytes,
+        downRate: state.downRate,
+        fraction,
+        percent: fraction === null ? null : Math.round(fraction * 100),
+      },
+    };
+  } catch {
+    // Don't fail list/get when downloader telemetry is transiently unavailable.
+    return {
+      ...download,
+      fullPseudoProgress: pseudoProgressForRelease(download.release_status),
+    };
   }
 }
 
@@ -382,7 +437,11 @@ const handlers: Record<string, RpcMethodHandler> = {
   },
 
   async "downloads.list"(ctx) {
-    return { downloads: ctx.repo.listDownloads() };
+    const downloads = ctx.repo.listDownloads();
+    const hasDownloading = downloads.some((download) => download.release_status === "downloading" && download.info_hash);
+    const client = hasDownloading ? new RtorrentClient(ctx.repo.getSettings().rtorrent) : null;
+    const enriched = await Promise.all(downloads.map((download) => enrichDownload(download, client)));
+    return { downloads: enriched };
   },
 
   async "downloads.get"(ctx, params) {
@@ -391,7 +450,11 @@ const handlers: Record<string, RpcMethodHandler> = {
     if (!download) {
       throw new RpcError(-32000, "Download not found", { error: "not_found", jobId });
     }
-    return download;
+    const client =
+      download.release_status === "downloading" && download.info_hash
+        ? new RtorrentClient(ctx.repo.getSettings().rtorrent)
+        : null;
+    return enrichDownload(download, client);
   },
 
   async "downloads.retry"(ctx, params) {

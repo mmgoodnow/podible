@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 
 import { nowIso } from "./db";
+import { pseudoProgressForBook } from "./progress";
 import { deriveBookStatus, deriveMediaStatus, MediaStatus, ReleaseStatus } from "./status";
 import { defaultSettings, parseSettings } from "./settings";
 import type {
@@ -649,6 +650,7 @@ export class KindlingRepo {
       audioStatus,
       ebookStatus,
       status: deriveBookStatus(audioStatus as MediaStatus, ebookStatus as MediaStatus),
+      fullPseudoProgress: pseudoProgressForBook(audioStatus as MediaStatus, ebookStatus as MediaStatus),
     };
   }
 }
