@@ -16,8 +16,12 @@ describe("rtorrent xmlrpc helpers", () => {
     const num = parseResponseValue(
       '<?xml version="1.0"?><methodResponse><params><param><value><int>1</int></value></param></params></methodResponse>'
     );
+    const i8 = parseResponseValue(
+      '<?xml version="1.0"?><methodResponse><params><param><value><i8>2</i8></value></param></params></methodResponse>'
+    );
     expect(str).toBe("abc");
     expect(num).toBe(1);
+    expect(i8).toBe(2);
   });
 
   test("throws on fault payload", () => {
@@ -43,13 +47,13 @@ describe("rtorrent xmlrpc helpers", () => {
           case "d.hash":
             return '<?xml version="1.0"?><methodResponse><params><param><value><string>ABCDEF</string></value></param></params></methodResponse>';
           case "d.complete":
-            return '<?xml version="1.0"?><methodResponse><params><param><value><int>1</int></value></param></params></methodResponse>';
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>1</i8></value></param></params></methodResponse>';
           case "d.base_path":
             return '<?xml version="1.0"?><methodResponse><params><param><value><string>/downloads/book</string></value></param></params></methodResponse>';
           case "d.bytes_done":
-            return '<?xml version="1.0"?><methodResponse><params><param><value><int>50</int></value></param></params></methodResponse>';
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>50</i8></value></param></params></methodResponse>';
           case "d.size_bytes":
-            return '<?xml version="1.0"?><methodResponse><params><param><value><int>100</int></value></param></params></methodResponse>';
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>100</i8></value></param></params></methodResponse>';
           default:
             return '<?xml version="1.0"?><methodResponse><params><param><value><string></string></value></param></params></methodResponse>';
         }

@@ -71,7 +71,9 @@ function parseResponseValue(xml: string): unknown {
     const record = value as Record<string, unknown>;
     if ("string" in record) return record.string;
     if ("i4" in record) return record.i4;
+    if ("i8" in record) return record.i8;
     if ("int" in record) return record.int;
+    if ("long" in record) return record.long;
     if ("boolean" in record) return record.boolean;
     if ("double" in record) return record.double;
     return record["#text"] ?? record;
