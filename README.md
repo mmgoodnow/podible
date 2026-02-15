@@ -200,7 +200,7 @@ Current suites include:
 
 - Idempotency is enforced by globally unique `releases.info_hash`.
 - Job worker uses queue claim/requeue semantics with retry backoff.
-- Scanner hydrates missing metadata from Open Library on discovered books.
+- Scanner and `library.rehydrate` hydrate missing metadata from Open Library (ISBN/language/publish date/description/cover where available).
 - Import strategy uses hardlinks only; cross-device `EXDEV` is surfaced as an error.
 - Snatch requires `.torrent` URLs and explicit `infoHash`; magnet links are out of scope.
 - JSON-RPC batch requests are intentionally unsupported in v1.

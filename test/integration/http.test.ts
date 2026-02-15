@@ -304,7 +304,7 @@ describe("podible http", () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown) => {
       const url = new URL(String(input));
-      if (url.origin !== "https://openlibrary.org") {
+      if (url.origin !== "https://openlibrary.org" && url.origin !== "https://covers.openlibrary.org") {
         throw new Error(`Unexpected external fetch in test: ${url.toString()}`);
       }
       if (url.pathname === "/search.json" && (url.searchParams.get("q") ?? "") === "Neuromancer William Gibson") {
@@ -323,6 +323,15 @@ describe("podible http", () => {
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
       }
+      if (url.pathname === "/works/OL45754W.json") {
+        return new Response(
+          JSON.stringify({
+            description: "A seminal cyberpunk novel.",
+            covers: [12345],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
       if (url.pathname === "/works/OL45754W/editions.json") {
         return new Response(
           JSON.stringify({
@@ -330,6 +339,12 @@ describe("podible http", () => {
           }),
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
+      }
+      if (url.origin === "https://covers.openlibrary.org") {
+        return new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
+          status: 200,
+          headers: { "Content-Type": "image/jpeg" },
+        });
       }
       return new Response(JSON.stringify({ docs: [] }), {
         status: 200,
@@ -357,6 +372,12 @@ describe("podible http", () => {
       const fetched = repo.getBook(book.id);
       expect(fetched?.isbn).toBe("9780441569595");
       expect(fetched?.identifiers.openlibrary).toBe("/works/OL45754W");
+      expect(fetched?.description).toBe("A seminal cyberpunk novel.");
+      expect(fetched?.descriptionHtml).toContain("<p>");
+      expect(fetched?.coverPath).toBeTruthy();
+      if (fetched?.coverPath) {
+        expect(await Bun.file(fetched.coverPath).exists()).toBe(true);
+      }
 
       db.close();
     } finally {

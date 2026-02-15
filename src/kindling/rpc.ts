@@ -1,4 +1,5 @@
-import { fetchOpenLibraryMetadata, resolveOpenLibraryCandidate, searchOpenLibrary } from "./openlibrary";
+import { hydrateBookFromOpenLibrary } from "./hydration";
+import { resolveOpenLibraryCandidate, searchOpenLibrary } from "./openlibrary";
 import { KindlingRepo } from "./repo";
 import { runSearch, runSnatch, triggerAutoAcquire } from "./service";
 import type { AppSettings, LibraryBook, MediaType } from "./types";
@@ -125,29 +126,6 @@ function parseMedia(value: unknown): MediaType {
   throw new RpcError(-32602, "media must be audio or ebook");
 }
 
-async function hydrateBookMetadata(ctx: RpcContext, book: LibraryBook): Promise<boolean> {
-  const metadata = await fetchOpenLibraryMetadata({
-    title: book.title,
-    author: book.author,
-    isbn: book.isbn,
-    openLibraryKey: book.identifiers.openlibrary ?? null,
-  }).catch(() => null);
-  if (!metadata) return false;
-
-  const mergedIdentifiers = {
-    ...book.identifiers,
-    ...(metadata.identifiers ?? {}),
-  };
-
-  ctx.repo.updateBookMetadata(book.id, {
-    publishedAt: metadata.publishedAt ?? book.publishedAt ?? null,
-    language: metadata.language ?? book.language ?? null,
-    isbn: metadata.isbn ?? book.isbn ?? null,
-    identifiers: mergedIdentifiers,
-  });
-  return true;
-}
-
 function parseRequest(raw: unknown): RpcRequest {
   if (Array.isArray(raw)) {
     throw new RpcError(-32600, "Batch requests are not supported");
@@ -252,6 +230,10 @@ const handlers: Record<string, RpcMethodHandler> = {
         isbn,
       },
     });
+    const hydrated = ctx.repo.getBook(book.id);
+    if (hydrated) {
+      await hydrateBookFromOpenLibrary(ctx.repo, hydrated);
+    }
 
     const jobId = await triggerAutoAcquire(ctx.repo, book.id);
     return {
@@ -278,7 +260,7 @@ const handlers: Record<string, RpcMethodHandler> = {
 
     const updatedBookIds: number[] = [];
     for (const book of resolved) {
-      if (await hydrateBookMetadata(ctx, book)) {
+      if (await hydrateBookFromOpenLibrary(ctx.repo, book)) {
         updatedBookIds.push(book.id);
       }
     }
