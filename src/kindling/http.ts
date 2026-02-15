@@ -252,49 +252,57 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
         var queryInput = document.getElementById("ol-query");
         var searchBtn = document.getElementById("ol-search-btn");
         var resultList = document.getElementById("ol-results");
+        async function runOpenLibrarySearch() {
+          var q = (queryInput.value || "").trim();
+          if (!q) {
+            text("ol-status", "Enter a search query.");
+            resultList.innerHTML = "";
+            return;
+          }
+          text("ol-status", "Searching...");
+          var payload;
+          try {
+            payload = await rpc("openlibrary.search", { q: q, limit: 10 });
+          } catch (err) {
+            text("ol-status", "Search failed: " + (err && err.message ? err.message : "request error"));
+            resultList.innerHTML = "";
+            return;
+          }
+          var items = Array.isArray(payload.results) ? payload.results : [];
+          resultList.innerHTML = "";
+          text("ol-status", "Found " + items.length + " result(s).");
+          items.forEach(function (item) {
+            var li = document.createElement("li");
+            var label = document.createElement("span");
+            label.textContent = item.title + " — " + item.author + " (" + item.openLibraryKey + ")";
+            var btn = document.createElement("button");
+            btn.type = "button";
+            btn.style.marginLeft = "8px";
+            btn.textContent = "Add";
+            btn.addEventListener("click", async function () {
+              text("ol-status", "Adding " + item.title + "...");
+              var created;
+              try {
+                created = await rpc("library.create", { openLibraryKey: item.openLibraryKey });
+              } catch (err) {
+                text("ol-status", "Add failed: " + (err && err.message ? err.message : "request error"));
+                return;
+              }
+              text("ol-status", 'Added "' + created.book.title + '" (id ' + created.book.id + '). Refresh to see it below.');
+            });
+            li.appendChild(label);
+            li.appendChild(btn);
+            resultList.appendChild(li);
+          });
+        }
         if (searchBtn && queryInput && resultList) {
           searchBtn.addEventListener("click", async function () {
-            var q = (queryInput.value || "").trim();
-            if (!q) {
-              text("ol-status", "Enter a search query.");
-              resultList.innerHTML = "";
-              return;
-            }
-            text("ol-status", "Searching...");
-            var payload;
-            try {
-              payload = await rpc("openlibrary.search", { q: q, limit: 10 });
-            } catch (err) {
-              text("ol-status", "Search failed: " + (err && err.message ? err.message : "request error"));
-              resultList.innerHTML = "";
-              return;
-            }
-            var items = Array.isArray(payload.results) ? payload.results : [];
-            resultList.innerHTML = "";
-            text("ol-status", "Found " + items.length + " result(s).");
-            items.forEach(function (item) {
-              var li = document.createElement("li");
-              var label = document.createElement("span");
-              label.textContent = item.title + " — " + item.author + " (" + item.openLibraryKey + ")";
-              var btn = document.createElement("button");
-              btn.type = "button";
-              btn.style.marginLeft = "8px";
-              btn.textContent = "Add";
-              btn.addEventListener("click", async function () {
-                text("ol-status", "Adding " + item.title + "...");
-                var created;
-                try {
-                  created = await rpc("library.create", { openLibraryKey: item.openLibraryKey });
-                } catch (err) {
-                  text("ol-status", "Add failed: " + (err && err.message ? err.message : "request error"));
-                  return;
-                }
-                text("ol-status", 'Added "' + created.book.title + '" (id ' + created.book.id + '). Refresh to see it below.');
-              });
-              li.appendChild(label);
-              li.appendChild(btn);
-              resultList.appendChild(li);
-            });
+            await runOpenLibrarySearch();
+          });
+          queryInput.addEventListener("keydown", async function (event) {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            await runOpenLibrarySearch();
           });
         }
 
