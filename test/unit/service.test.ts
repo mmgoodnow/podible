@@ -15,13 +15,13 @@ describe("search ranking", () => {
         `<?xml version="1.0"?>
 <rss xmlns:torznab="http://torznab.com/schemas/2015/feed"><channel>
   <item>
-    <title>Dune</title>
+    <title>Dune [ENG / M4B]</title>
     <enclosure url="https://example.com/dune.torrent" length="100" />
     <torznab:attr name="infohash" value="0123456789abcdef0123456789abcdef01234567" />
     <torznab:attr name="seeders" value="5" />
   </item>
   <item>
-    <title>Dune Complete Box Set</title>
+    <title>Dune Complete Box Set [ENG / MP3]</title>
     <enclosure url="https://example.com/box.torrent" length="50" />
     <torznab:attr name="infohash" value="89abcdef0123456789abcdef0123456789abcdef" />
     <torznab:attr name="seeders" value="80" />
@@ -36,14 +36,14 @@ describe("search ranking", () => {
       });
       const ranked = await runSearch(settings, { query: "Dune", media: "audio" });
       expect(ranked).toHaveLength(2);
-      expect(ranked[0]?.title).toBe("Dune");
+      expect(ranked[0]?.title).toBe("Dune [ENG / M4B]");
       expect(ranked[1]?.title).toContain("Box Set");
     } finally {
       globalThis.fetch = originalFetch;
     }
   });
 
-  test("prefers format markers that match requested media", async () => {
+  test("only returns results that match requested media format", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = ((async () =>
       new Response(
@@ -71,11 +71,11 @@ describe("search ranking", () => {
       });
 
       const audio = await runSearch(settings, { query: "Great Big Beautiful Life Emily Henry", media: "audio" });
-      expect(audio).toHaveLength(2);
+      expect(audio).toHaveLength(1);
       expect(audio[0]?.title).toContain("/ M4B");
 
       const ebook = await runSearch(settings, { query: "Great Big Beautiful Life Emily Henry", media: "ebook" });
-      expect(ebook).toHaveLength(2);
+      expect(ebook).toHaveLength(1);
       expect(ebook[0]?.title).toContain("/ EPUB");
     } finally {
       globalThis.fetch = originalFetch;

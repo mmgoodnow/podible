@@ -149,9 +149,10 @@ describe("kindling e2e", () => {
     try {
       const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
 
-      const searchJson = await rpc(fetchHandler, "search.run", { query: "Dune Frank Herbert", media: "audio" }, 1);
-      const audioResult = searchJson.result.results.find((row: any) => row.title === "Dune Audio");
-      const ebookResult = searchJson.result.results.find((row: any) => row.title === "Dune Ebook");
+      const audioSearch = await rpc(fetchHandler, "search.run", { query: "Dune Frank Herbert", media: "audio" }, 1);
+      const ebookSearch = await rpc(fetchHandler, "search.run", { query: "Dune Frank Herbert", media: "ebook" }, 11);
+      const audioResult = audioSearch.result.results.find((row: any) => row.title === "Dune Audio");
+      const ebookResult = ebookSearch.result.results.find((row: any) => row.title === "Dune Ebook");
       expect(audioResult).toBeTruthy();
       expect(ebookResult).toBeTruthy();
 
