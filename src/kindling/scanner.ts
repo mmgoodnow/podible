@@ -26,6 +26,13 @@ type FileInfo = {
   mtimeMs: number;
 };
 
+function isHiddenOrBundleDir(name: string): boolean {
+  const lower = name.toLowerCase();
+  if (lower.startsWith(".")) return true;
+  if (lower.endsWith(".app")) return true;
+  return false;
+}
+
 async function safeReadDir(dir: string) {
   try {
     return await fs.readdir(dir, { withFileTypes: true });
@@ -61,16 +68,25 @@ export async function scanLibraryRoot(repo: KindlingRepo, libraryRoot: string): 
   let booksCreated = 0;
   let assetsCreated = 0;
 
-  const authorDirs = (await safeReadDir(libraryRoot)).filter((entry) => entry.isDirectory());
+  const authorDirs = (await safeReadDir(libraryRoot)).filter(
+    (entry) => entry.isDirectory() && !isHiddenOrBundleDir(entry.name)
+  );
   for (const authorDir of authorDirs) {
     const author = authorDir.name;
     const authorPath = path.join(libraryRoot, author);
-    const bookDirs = (await safeReadDir(authorPath)).filter((entry) => entry.isDirectory());
+    const bookDirs = (await safeReadDir(authorPath)).filter(
+      (entry) => entry.isDirectory() && !isHiddenOrBundleDir(entry.name)
+    );
 
     for (const bookDir of bookDirs) {
       const title = bookDir.name;
       const bookPath = path.join(authorPath, title);
       const files = await listFiles(bookPath);
+      const hasAudio = files.some((file) => [".m4b", ".m4a", ".mp4", ".mp3"].includes(file.ext));
+      const hasEbook = files.some((file) => file.ext === ".epub" || file.ext === ".pdf");
+      if (!hasAudio && !hasEbook) {
+        continue;
+      }
       let book = repo.findBookByTitleAuthor(title, author);
       if (!book) {
         book = repo.createBook({ title, author });
