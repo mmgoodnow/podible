@@ -138,7 +138,6 @@ export class KindlingRepo {
       description: string | null;
       descriptionHtml: string | null;
       language: string | null;
-      isbn: string | null;
       identifiers: Record<string, string>;
     }>
   ): BookRow {
@@ -158,7 +157,6 @@ export class KindlingRepo {
              description = ?,
              description_html = ?,
              language = ?,
-             isbn = ?,
              identifiers_json = ?,
              updated_at = ?
          WHERE id = ?
@@ -171,7 +169,6 @@ export class KindlingRepo {
         patch.description ?? current.description,
         patch.descriptionHtml ?? current.description_html,
         patch.language ?? current.language,
-        patch.isbn ?? current.isbn,
         patch.identifiers ? JSON.stringify(patch.identifiers) : current.identifiers_json,
         now,
         bookId
@@ -592,7 +589,6 @@ export class KindlingRepo {
       description: row.description,
       descriptionHtml: row.description_html,
       language: row.language,
-      isbn: row.isbn,
       identifiers: parseIdentifiers(row.identifiers_json),
       audioStatus,
       ebookStatus,

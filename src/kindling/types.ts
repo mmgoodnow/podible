@@ -60,7 +60,6 @@ export type BookRow = {
   description: string | null;
   description_html: string | null;
   language: string | null;
-  isbn: string | null;
   identifiers_json: string | null;
 };
 
@@ -142,7 +141,6 @@ export type LibraryBook = {
   description: string | null;
   descriptionHtml: string | null;
   language: string | null;
-  isbn: string | null;
   identifiers: Record<string, string>;
   audioStatus: "wanted" | "snatched" | "downloading" | "downloaded" | "imported" | "error";
   ebookStatus: "wanted" | "snatched" | "downloading" | "downloaded" | "imported" | "error";

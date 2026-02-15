@@ -20,7 +20,6 @@ CREATE TABLE IF NOT EXISTS books (
   description TEXT NULL,
   description_html TEXT NULL,
   language TEXT NULL,
-  isbn TEXT NULL,
   identifiers_json TEXT NULL
 );
 
