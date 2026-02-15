@@ -5,6 +5,23 @@ import { runMigrations } from "../../src/kindling/db";
 import { createPodibleFetchHandler } from "../../src/kindling/http";
 import { KindlingRepo } from "../../src/kindling/repo";
 
+async function rpc(fetchHandler: (request: Request) => Promise<Response>, method: string, params: unknown, id = 1) {
+  const response = await fetchHandler(
+    new Request("http://localhost/rpc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        method,
+        params,
+      }),
+    })
+  );
+  expect(response.status).toBe(200);
+  return (await response.json()) as any;
+}
+
 describe("podible http", () => {
   test("serves root html home page", async () => {
     const db = new Database(":memory:");
@@ -23,7 +40,7 @@ describe("podible http", () => {
     expect(home.headers.get("content-type")).toContain("text/html");
     const body = await home.text();
     expect(body.includes("Podible Backend")).toBe(true);
-    expect(body.includes("/health")).toBe(true);
+    expect(body.includes("POST /rpc")).toBe(true);
     expect(body.includes("Open Library Search")).toBe(true);
     expect(body.includes("Settings JSON")).toBe(true);
     expect(body.includes("settings-editor")).toBe(true);
@@ -31,26 +48,29 @@ describe("podible http", () => {
     db.close();
   });
 
-  test("serves health and creates library book from title/author", async () => {
+  test("supports rpc health/settings/library and removed rest routes 404", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown) => {
       const url = String(input);
       if (url.startsWith("https://openlibrary.org/")) {
-        return new Response(JSON.stringify({
-          docs: [
-            {
-              key: "/works/OL123W",
-              title: "Dune",
-              author_name: ["Frank Herbert"],
-              first_publish_year: 1965,
-              language: ["eng"],
-              isbn: ["9780441172719"],
-            },
-          ],
-        }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({
+            docs: [
+              {
+                key: "/works/OL123W",
+                title: "Dune",
+                author_name: ["Frank Herbert"],
+                first_publish_year: 1965,
+                language: ["eng"],
+                isbn: ["9780441172719"],
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
       }
       throw new Error(`Unexpected external fetch in test: ${url}`);
     }) as typeof fetch;
@@ -68,29 +88,43 @@ describe("podible http", () => {
 
       const fetchHandler = createPodibleFetchHandler(repo, Date.now());
 
-      const health = await fetchHandler(new Request("http://localhost/health"));
-      expect(health.status).toBe(200);
-      const healthJson = (await health.json()) as any;
-      expect(healthJson.ok).toBe(true);
+      const healthRpc = await rpc(fetchHandler, "system.health", {}, 1);
+      expect(healthRpc.result.ok).toBe(true);
 
-      const created = await fetchHandler(
-        new Request("http://localhost/library", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: "Dune", author: "Frank Herbert" }),
-        })
-      );
-      expect(created.status).toBe(201);
-      const createdJson = (await created.json()) as any;
-      expect(createdJson.book.title).toBe("Dune");
-      expect(createdJson.book.isbn).toBe("9780441172719");
-      expect(createdJson.book.identifiers.openlibrary).toBe("/works/OL123W");
+      const createdRpc = await rpc(fetchHandler, "library.create", { title: "Dune", author: "Frank Herbert" }, 2);
+      expect(createdRpc.result.book.title).toBe("Dune");
+      expect(createdRpc.result.book.isbn).toBe("9780441172719");
+      expect(createdRpc.result.book.identifiers.openlibrary).toBe("/works/OL123W");
 
-      const list = await fetchHandler(new Request("http://localhost/library?limit=10"));
-      expect(list.status).toBe(200);
-      const listJson = (await list.json()) as any;
-      expect(Array.isArray(listJson.items)).toBe(true);
-      expect(listJson.items.length).toBe(1);
+      const listRpc = await rpc(fetchHandler, "library.list", { limit: 10 }, 3);
+      expect(Array.isArray(listRpc.result.items)).toBe(true);
+      expect(listRpc.result.items.length).toBe(1);
+
+      const settingsRpc = await rpc(fetchHandler, "settings.get", {}, 4);
+      expect(settingsRpc.result.auth.mode).toBe("local");
+
+      const removed = [
+        new Request("http://localhost/health", { method: "GET" }),
+        new Request("http://localhost/server", { method: "GET" }),
+        new Request("http://localhost/settings", { method: "GET" }),
+        new Request("http://localhost/settings", { method: "PUT", body: "{}" }),
+        new Request("http://localhost/openlibrary/search?q=dune", { method: "GET" }),
+        new Request("http://localhost/library?limit=10", { method: "GET" }),
+        new Request("http://localhost/library", { method: "POST", body: "{}" }),
+        new Request("http://localhost/library/refresh", { method: "POST" }),
+        new Request("http://localhost/library/1", { method: "GET" }),
+        new Request("http://localhost/search", { method: "POST", body: "{}" }),
+        new Request("http://localhost/snatch", { method: "POST", body: "{}" }),
+        new Request("http://localhost/releases?bookId=1", { method: "GET" }),
+        new Request("http://localhost/downloads", { method: "GET" }),
+        new Request("http://localhost/downloads/1", { method: "GET" }),
+        new Request("http://localhost/downloads/1/retry", { method: "POST" }),
+        new Request("http://localhost/import/reconcile", { method: "POST" }),
+      ];
+      for (const request of removed) {
+        const response = await fetchHandler(request);
+        expect(response.status).toBe(404);
+      }
 
       db.close();
     } finally {
@@ -98,7 +132,7 @@ describe("podible http", () => {
     }
   });
 
-  test("supports openlibrary search and add-by-key flow", async () => {
+  test("supports rpc openlibrary.search and add-by-key flow", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown) => {
       const url = new URL(String(input));
@@ -162,25 +196,15 @@ describe("podible http", () => {
 
       const fetchHandler = createPodibleFetchHandler(repo, Date.now());
 
-      const found = await fetchHandler(new Request("http://localhost/openlibrary/search?q=Hyperion%20Dan%20Simmons&limit=5"));
-      expect(found.status).toBe(200);
-      const foundJson = (await found.json()) as any;
-      expect(foundJson.results.length).toBe(1);
-      expect(foundJson.results[0].openLibraryKey).toBe("/works/OL45804W");
+      const found = await rpc(fetchHandler, "openlibrary.search", { q: "Hyperion Dan Simmons", limit: 5 }, 1);
+      expect(found.result.results.length).toBe(1);
+      expect(found.result.results[0].openLibraryKey).toBe("/works/OL45804W");
 
-      const created = await fetchHandler(
-        new Request("http://localhost/library", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ openLibraryKey: "/works/OL45804W" }),
-        })
-      );
-      expect(created.status).toBe(201);
-      const createdJson = (await created.json()) as any;
-      expect(createdJson.book.title).toBe("Hyperion");
-      expect(createdJson.book.author).toBe("Dan Simmons");
-      expect(createdJson.book.identifiers.openlibrary).toBe("/works/OL45804W");
-      expect(createdJson.book.isbn).toBe("9780553283686");
+      const created = await rpc(fetchHandler, "library.create", { openLibraryKey: "/works/OL45804W" }, 2);
+      expect(created.result.book.title).toBe("Hyperion");
+      expect(created.result.book.author).toBe("Dan Simmons");
+      expect(created.result.book.identifiers.openlibrary).toBe("/works/OL45804W");
+      expect(created.result.book.isbn).toBe("9780553283686");
 
       db.close();
     } finally {
@@ -188,7 +212,7 @@ describe("podible http", () => {
     }
   });
 
-  test("supports add-by-isbn flow", async () => {
+  test("supports rpc add-by-isbn flow", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown) => {
       const url = new URL(String(input));
@@ -232,21 +256,13 @@ describe("podible http", () => {
       });
 
       const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+      const created = await rpc(fetchHandler, "library.create", { isbn: "9780061120084" }, 1);
 
-      const created = await fetchHandler(
-        new Request("http://localhost/library", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ isbn: "9780061120084" }),
-        })
-      );
+      expect(created.result.book.title).toBe("To Kill a Mockingbird");
+      expect(created.result.book.author).toBe("Harper Lee");
+      expect(created.result.book.isbn).toBe("9780061120084");
+      expect(created.result.book.identifiers.openlibrary).toBe("/works/OL82563W");
 
-      expect(created.status).toBe(201);
-      const createdJson = (await created.json()) as any;
-      expect(createdJson.book.title).toBe("To Kill a Mockingbird");
-      expect(createdJson.book.author).toBe("Harper Lee");
-      expect(createdJson.book.isbn).toBe("9780061120084");
-      expect(createdJson.book.identifiers.openlibrary).toBe("/works/OL82563W");
       db.close();
     } finally {
       globalThis.fetch = originalFetch;

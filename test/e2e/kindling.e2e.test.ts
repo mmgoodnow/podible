@@ -32,6 +32,23 @@ async function eventually<T>(fn: () => T | Promise<T>, predicate: (value: T) => 
   }
 }
 
+async function rpc(fetchHandler: (request: Request) => Promise<Response>, method: string, params: unknown, id = 1) {
+  const response = await fetchHandler(
+    new Request("http://localhost/rpc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        method,
+        params,
+      }),
+    })
+  );
+  expect(response.status).toBe(200);
+  return (await response.json()) as any;
+}
+
 describe("kindling e2e", () => {
   test("audio and ebook flows including reconcile", async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "kindling-e2e-"));
@@ -131,72 +148,44 @@ describe("kindling e2e", () => {
     try {
       const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
 
-      const searchRes = await fetchHandler(
-        new Request("http://localhost/search", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query: "Dune Frank Herbert", media: "audio" }),
-        })
-      );
-      expect(searchRes.status).toBe(200);
-      const searchJson = (await searchRes.json()) as any;
-      const audioResult = searchJson.results.find((row: any) => row.title === "Dune Audio");
-      const ebookResult = searchJson.results.find((row: any) => row.title === "Dune Ebook");
+      const searchJson = await rpc(fetchHandler, "search.run", { query: "Dune Frank Herbert", media: "audio" }, 1);
+      const audioResult = searchJson.result.results.find((row: any) => row.title === "Dune Audio");
+      const ebookResult = searchJson.result.results.find((row: any) => row.title === "Dune Ebook");
       expect(audioResult).toBeTruthy();
       expect(ebookResult).toBeTruthy();
 
-      const snatchAudio = await fetchHandler(
-        new Request("http://localhost/snatch", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            bookId: book.id,
-            provider: audioResult.provider,
-            title: audioResult.title,
-            mediaType: "audio",
-            url: audioResult.url,
-            infoHash: audioResult.infoHash,
-            sizeBytes: audioResult.sizeBytes,
-          }),
-        })
-      );
-      expect(snatchAudio.status).toBe(201);
+      const snatchAudio = await rpc(fetchHandler, "snatch.create", {
+        bookId: book.id,
+        provider: audioResult.provider,
+        title: audioResult.title,
+        mediaType: "audio",
+        url: audioResult.url,
+        infoHash: audioResult.infoHash,
+        sizeBytes: audioResult.sizeBytes,
+      }, 2);
+      expect(snatchAudio.result.idempotent).toBe(false);
 
-      const snatchAudioAgain = await fetchHandler(
-        new Request("http://localhost/snatch", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            bookId: book.id,
-            provider: audioResult.provider,
-            title: audioResult.title,
-            mediaType: "audio",
-            url: audioResult.url,
-            infoHash: audioResult.infoHash,
-            sizeBytes: audioResult.sizeBytes,
-          }),
-        })
-      );
-      expect(snatchAudioAgain.status).toBe(200);
-      const snatchAgainJson = (await snatchAudioAgain.json()) as any;
-      expect(snatchAgainJson.idempotent).toBe(true);
+      const snatchAgainJson = await rpc(fetchHandler, "snatch.create", {
+        bookId: book.id,
+        provider: audioResult.provider,
+        title: audioResult.title,
+        mediaType: "audio",
+        url: audioResult.url,
+        infoHash: audioResult.infoHash,
+        sizeBytes: audioResult.sizeBytes,
+      }, 3);
+      expect(snatchAgainJson.result.idempotent).toBe(true);
 
-      const snatchEbook = await fetchHandler(
-        new Request("http://localhost/snatch", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            bookId: book.id,
-            provider: ebookResult.provider,
-            title: ebookResult.title,
-            mediaType: "ebook",
-            url: ebookResult.url,
-            infoHash: ebookResult.infoHash,
-            sizeBytes: ebookResult.sizeBytes,
-          }),
-        })
-      );
-      expect(snatchEbook.status).toBe(201);
+      const snatchEbook = await rpc(fetchHandler, "snatch.create", {
+        bookId: book.id,
+        provider: ebookResult.provider,
+        title: ebookResult.title,
+        mediaType: "ebook",
+        url: ebookResult.url,
+        infoHash: ebookResult.infoHash,
+        sizeBytes: ebookResult.sizeBytes,
+      }, 4);
+      expect(snatchEbook.result.idempotent).toBe(false);
 
       await eventually(
         () => repo.listAssetsByBook(book.id),
@@ -239,8 +228,8 @@ describe("kindling e2e", () => {
         status: "downloaded",
       });
 
-      const reconcileRes = await fetchHandler(new Request("http://localhost/import/reconcile", { method: "POST" }));
-      expect(reconcileRes.status).toBe(202);
+      const reconcileRes = await rpc(fetchHandler, "import.reconcile", {}, 5);
+      expect(reconcileRes.result.jobId).toBeGreaterThan(0);
 
       await eventually(
         () => repo.listAssetsByBook(book2.id),
