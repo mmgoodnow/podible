@@ -42,6 +42,45 @@ describe("search ranking", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("prefers format markers that match requested media", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = ((async () =>
+      new Response(
+        `<?xml version="1.0"?>
+<rss xmlns:torznab="http://torznab.com/schemas/2015/feed"><channel>
+  <item>
+    <title>Great Big Beautiful Life by Emily Henry [ENG / EPUB]</title>
+    <enclosure url="https://example.com/epub.torrent" length="100" />
+    <torznab:attr name="infohash" value="0123456789abcdef0123456789abcdef01234567" />
+    <torznab:attr name="seeders" value="900" />
+  </item>
+  <item>
+    <title>Great Big Beautiful Life by Emily Henry [ENG / M4B]</title>
+    <enclosure url="https://example.com/m4b.torrent" length="100" />
+    <torznab:attr name="infohash" value="89abcdef0123456789abcdef0123456789abcdef" />
+    <torznab:attr name="seeders" value="1" />
+  </item>
+</channel></rss>`,
+        { headers: { "Content-Type": "application/rss+xml" } }
+      )) as unknown) as typeof fetch;
+
+    try {
+      const settings = defaultSettings({
+        torznab: [{ name: "mock", baseUrl: "http://mock.local" }],
+      });
+
+      const audio = await runSearch(settings, { query: "Great Big Beautiful Life Emily Henry", media: "audio" });
+      expect(audio).toHaveLength(2);
+      expect(audio[0]?.title).toContain("/ M4B");
+
+      const ebook = await runSearch(settings, { query: "Great Big Beautiful Life Emily Henry", media: "ebook" });
+      expect(ebook).toHaveLength(2);
+      expect(ebook[0]?.title).toContain("/ EPUB");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 function makeTorrentBytes(name: string): Uint8Array {

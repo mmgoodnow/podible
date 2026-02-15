@@ -54,13 +54,24 @@ export async function runSearch(settings: AppSettings, request: SearchRequest) {
   const needle = request.query.trim().toLowerCase();
   const words = needle.split(/\s+/).filter(Boolean);
   const setMarkers = ["box set", "collection", "complete", "omnibus", "books 1-7", "1-3", "series"];
+  const audioMarkers = ["m4b", "mp3", "aac", "flac", "opus", "audiobook", "audio book"];
+  const ebookMarkers = ["epub", "pdf", "mobi", "azw", "ebook", "e-book", "djvu", "cbz", "cbr"];
 
-  function score(title: string, seeders: number | null, sizeBytes: number | null): number {
+  function score(media: MediaType, title: string, seeders: number | null, sizeBytes: number | null): number {
     const lower = title.toLowerCase();
     let value = 0;
     if (needle && lower.includes(needle)) value += 80;
     if (words.length > 0 && words.every((word) => lower.includes(word))) value += 35;
     if (setMarkers.some((marker) => lower.includes(marker))) value -= 120;
+    const hasAudioMarker = audioMarkers.some((marker) => lower.includes(marker));
+    const hasEbookMarker = ebookMarkers.some((marker) => lower.includes(marker));
+    if (media === "audio") {
+      if (hasAudioMarker) value += 160;
+      if (hasEbookMarker) value -= 220;
+    } else {
+      if (hasEbookMarker) value += 160;
+      if (hasAudioMarker) value -= 220;
+    }
     value += Math.min(60, seeders ?? 0);
     if (typeof sizeBytes === "number" && Number.isFinite(sizeBytes)) {
       value -= Math.min(50, Math.round(sizeBytes / (1024 * 1024 * 200)));
@@ -69,7 +80,8 @@ export async function runSearch(settings: AppSettings, request: SearchRequest) {
   }
 
   return results.sort((a, b) => {
-    const scoreDiff = score(b.title, b.seeders, b.sizeBytes) - score(a.title, a.seeders, a.sizeBytes);
+    const scoreDiff =
+      score(request.media, b.title, b.seeders, b.sizeBytes) - score(request.media, a.title, a.seeders, a.sizeBytes);
     if (scoreDiff !== 0) return scoreDiff;
     const aSize = a.sizeBytes ?? Number.MAX_SAFE_INTEGER;
     const bSize = b.sizeBytes ?? Number.MAX_SAFE_INTEGER;
