@@ -26,6 +26,20 @@ type FileInfo = {
   mtimeMs: number;
 };
 
+export type ImportInspectionFile = {
+  sourcePath: string;
+  relativePath: string;
+  ext: string;
+  size: number;
+  mtimeMs: number;
+  supportedAudio: boolean;
+  supportedEbook: boolean;
+};
+
+type ImportReleaseOptions = {
+  selectedPaths?: string[];
+};
+
 function sanitizePathSegment(value: string): string {
   return value.replace(/[\\/:*?"<>|]/g, " ").replace(/\s+/g, " ").trim();
 }
@@ -63,6 +77,40 @@ async function collectFiles(basePath: string): Promise<FileInfo[]> {
     });
   }
   return out;
+}
+
+function supportsAudio(ext: string): boolean {
+  return ext === ".mp3" || ext === ".m4b" || ext === ".m4a" || ext === ".mp4";
+}
+
+function supportsEbook(ext: string): boolean {
+  return ext === ".epub" || ext === ".pdf";
+}
+
+function selectDiscoveredFiles(files: FileInfo[], selectedPaths: string[] | undefined, selectionRoot: string): FileInfo[] {
+  if (!selectedPaths || selectedPaths.length === 0) {
+    return files;
+  }
+
+  const discovered = new Map(files.map((file) => [path.resolve(file.sourcePath), file]));
+  const chosen: FileInfo[] = [];
+  const seen = new Set<string>();
+
+  for (const selected of selectedPaths) {
+    const resolved = path.isAbsolute(selected) ? path.resolve(selected) : path.resolve(selectionRoot, selected);
+    if (seen.has(resolved)) continue;
+    const file = discovered.get(resolved);
+    if (!file) {
+      throw new Error(`Selected path not found in source set: ${selected}`);
+    }
+    chosen.push(file);
+    seen.add(resolved);
+  }
+
+  if (chosen.length === 0) {
+    throw new Error("No selected files to import");
+  }
+  return chosen;
 }
 
 async function ensureHardlink(sourcePath: string, destinationPath: string): Promise<void> {
@@ -151,15 +199,19 @@ export async function importReleaseFromPath(
   repo: KindlingRepo,
   release: ReleaseRow,
   basePath: string,
-  libraryRoot: string
+  libraryRoot: string,
+  options: ImportReleaseOptions = {}
 ): Promise<ImportResult> {
   const book = repo.getBookRow(release.book_id);
   if (!book) {
     throw new Error(`Book ${release.book_id} not found`);
   }
 
+  const baseStat = await fs.stat(basePath);
   const discovered = await collectFiles(basePath);
-  const selected = chooseFilesForMedia(release.media_type, discovered);
+  const selectionRoot = baseStat.isFile() ? path.dirname(basePath) : basePath;
+  const candidateFiles = selectDiscoveredFiles(discovered, options.selectedPaths, selectionRoot);
+  const selected = chooseFilesForMedia(release.media_type, candidateFiles);
 
   const authorDir = sanitizePathSegment(book.author || "Unknown");
   const titleDir = sanitizePathSegment(book.title || `book-${book.id}`);
@@ -245,4 +297,22 @@ export async function importReleaseFromPath(
 
 export async function ensurePathReadable(value: string): Promise<void> {
   await fs.access(value, constants.R_OK);
+}
+
+export async function inspectImportPath(basePath: string): Promise<ImportInspectionFile[]> {
+  await ensurePathReadable(basePath);
+  const stat = await fs.stat(basePath);
+  const root = stat.isFile() ? path.dirname(basePath) : basePath;
+  const discovered = await collectFiles(basePath);
+  return discovered
+    .sort((a, b) => a.sourcePath.localeCompare(b.sourcePath))
+    .map((file) => ({
+      sourcePath: file.sourcePath,
+      relativePath: path.relative(root, file.sourcePath) || path.basename(file.sourcePath),
+      ext: file.ext,
+      size: file.size,
+      mtimeMs: file.mtimeMs,
+      supportedAudio: supportsAudio(file.ext),
+      supportedEbook: supportsEbook(file.ext),
+    }));
 }

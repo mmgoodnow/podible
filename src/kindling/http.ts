@@ -161,9 +161,21 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
           <option value="ebook">ebook</option>
         </select>
         <input id="manual-import-path" type="text" placeholder="Absolute path to file or folder" />
+        <button id="manual-import-inspect-btn" type="button">Inspect</button>
         <button id="manual-import-btn" type="button">Import</button>
       </div>
       <p id="manual-import-status" class="muted"></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Use</th>
+            <th>Path</th>
+            <th>Type</th>
+            <th>Size</th>
+          </tr>
+        </thead>
+        <tbody id="manual-import-files-body"><tr><td colspan="4">No inspection yet.</td></tr></tbody>
+      </table>
     </div>
     <h2>Recent Library</h2>
     <p id="library-status" class="muted"></p>
@@ -460,7 +472,107 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
         var manualImportBookInput = document.getElementById("manual-import-book-id");
         var manualImportMediaInput = document.getElementById("manual-import-media");
         var manualImportPathInput = document.getElementById("manual-import-path");
+        var manualImportInspectBtn = document.getElementById("manual-import-inspect-btn");
         var manualImportBtn = document.getElementById("manual-import-btn");
+        var manualImportFilesBody = document.getElementById("manual-import-files-body");
+        var manualImportFiles = [];
+        var manualImportInspectedPath = "";
+
+        function manualImportSupportsMedia(file, mediaType) {
+          if (!file || typeof file !== "object") return false;
+          if (mediaType === "ebook") return Boolean(file.supportedEbook);
+          return Boolean(file.supportedAudio);
+        }
+
+        function renderManualImportFiles() {
+          if (!manualImportFilesBody) return;
+          var mediaType = manualImportMediaInput && manualImportMediaInput.value === "ebook" ? "ebook" : "audio";
+          manualImportFilesBody.innerHTML = "";
+          if (!Array.isArray(manualImportFiles) || manualImportFiles.length === 0) {
+            manualImportFilesBody.innerHTML = '<tr><td colspan="4">No inspection yet.</td></tr>';
+            return;
+          }
+          manualImportFiles.forEach(function (file) {
+            var row = document.createElement("tr");
+            var selectCell = document.createElement("td");
+            var use = manualImportSupportsMedia(file, mediaType);
+            var checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.setAttribute("data-source-path", String(file.sourcePath || ""));
+            checkbox.checked = use;
+            checkbox.disabled = !use;
+            selectCell.appendChild(checkbox);
+
+            var pathCell = document.createElement("td");
+            pathCell.textContent = String(file.relativePath || file.sourcePath || "");
+
+            var typeCell = document.createElement("td");
+            if (Boolean(file.supportedAudio) && Boolean(file.supportedEbook)) {
+              typeCell.textContent = "audio+ebook";
+            } else if (Boolean(file.supportedAudio)) {
+              typeCell.textContent = "audio";
+            } else if (Boolean(file.supportedEbook)) {
+              typeCell.textContent = "ebook";
+            } else {
+              typeCell.textContent = "other";
+            }
+
+            var sizeCell = document.createElement("td");
+            sizeCell.textContent = formatBytes(Number(file.size));
+
+            row.appendChild(selectCell);
+            row.appendChild(pathCell);
+            row.appendChild(typeCell);
+            row.appendChild(sizeCell);
+            manualImportFilesBody.appendChild(row);
+          });
+        }
+
+        if (manualImportMediaInput) {
+          manualImportMediaInput.addEventListener("change", function () {
+            renderManualImportFiles();
+          });
+        }
+
+        if (manualImportInspectBtn) {
+          manualImportInspectBtn.addEventListener("click", async function () {
+            var sourcePath = (manualImportPathInput && manualImportPathInput.value ? manualImportPathInput.value : "").trim();
+            if (!sourcePath) {
+              text("manual-import-status", "Enter a source path.");
+              return;
+            }
+            manualImportInspectBtn.disabled = true;
+            text("manual-import-status", "Inspecting...");
+            try {
+              var inspected = await rpc("import.inspect", { path: sourcePath });
+              manualImportFiles = inspected && Array.isArray(inspected.files) ? inspected.files : [];
+              manualImportInspectedPath = sourcePath;
+              renderManualImportFiles();
+              var mediaType = manualImportMediaInput && manualImportMediaInput.value === "ebook" ? "ebook" : "audio";
+              var supportedCount = manualImportFiles.filter(function (file) {
+                return manualImportSupportsMedia(file, mediaType);
+              }).length;
+              text(
+                "manual-import-status",
+                "Inspected " +
+                  String(manualImportFiles.length) +
+                  " file(s); " +
+                  String(supportedCount) +
+                  " match " +
+                  mediaType +
+                  "."
+              );
+            } catch (err) {
+              manualImportFiles = [];
+              manualImportInspectedPath = "";
+              renderManualImportFiles();
+              text("manual-import-status", "Inspect failed: " + (err && err.message ? err.message : "request error"));
+            } finally {
+              manualImportInspectBtn.disabled = false;
+            }
+          });
+        }
+
         if (manualImportBtn) {
           manualImportBtn.addEventListener("click", async function () {
             var rawBookId = manualImportBookInput ? manualImportBookInput.value : "";
@@ -475,14 +587,38 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
               text("manual-import-status", "Enter a source path.");
               return;
             }
+            if (manualImportFiles.length > 0 && manualImportInspectedPath !== sourcePath) {
+              text("manual-import-status", "Path changed since inspect. Inspect again before importing.");
+              return;
+            }
+            var selectedPaths = null;
+            if (manualImportFiles.length > 0 && manualImportFilesBody) {
+              selectedPaths = [];
+              var selected = manualImportFilesBody.querySelectorAll("input[data-source-path]");
+              selected.forEach(function (node) {
+                if (!(node instanceof HTMLInputElement) || !node.checked || node.disabled) return;
+                var value = node.getAttribute("data-source-path");
+                if (value) {
+                  selectedPaths.push(value);
+                }
+              });
+              if (selectedPaths.length === 0) {
+                text("manual-import-status", "Select at least one supported file to import.");
+                return;
+              }
+            }
             manualImportBtn.disabled = true;
             text("manual-import-status", "Importing...");
             try {
-              var imported = await rpc("import.manual", {
+              var params = {
                 bookId: bookId,
                 mediaType: mediaType,
                 path: sourcePath,
-              });
+              };
+              if (selectedPaths) {
+                params.selectedPaths = selectedPaths;
+              }
+              var imported = await rpc("import.manual", params);
               text(
                 "manual-import-status",
                 "Imported release " + String(imported.release.id) + " to asset " + String(imported.assetId) + "."

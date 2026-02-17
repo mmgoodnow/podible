@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises";
 import path from "node:path";
 
 import { hydrateBookFromOpenLibrary } from "./hydration";
-import { importReleaseFromPath } from "./importer";
+import { importReleaseFromPath, inspectImportPath } from "./importer";
 import { resolveOpenLibraryCandidate, searchOpenLibrary } from "./openlibrary";
 import { computeDownloadFraction, pseudoProgressForRelease } from "./progress";
 import { KindlingRepo } from "./repo";
@@ -171,6 +171,21 @@ function asOptionalString(value: unknown): string | undefined {
     throw new RpcError(-32602, "Invalid string value");
   }
   return value;
+}
+
+function asOptionalStringArray(value: unknown, name: string): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) {
+    throw new RpcError(-32602, `${name} must be an array of strings`);
+  }
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string" || !item.trim()) {
+      throw new RpcError(-32602, `${name} must contain non-empty strings`);
+    }
+    out.push(item.trim());
+  }
+  return out;
 }
 
 function asPositiveInt(value: unknown, name: string): number {
@@ -500,10 +515,19 @@ const handlers: Record<string, RpcMethodHandler> = {
     return { jobId: job.id };
   },
 
+  async "import.inspect"(_ctx, params) {
+    const sourcePath = asString(params.path, "path").trim();
+    return {
+      path: sourcePath,
+      files: await inspectImportPath(sourcePath),
+    };
+  },
+
   async "import.manual"(ctx, params) {
     const bookId = asPositiveInt(params.bookId, "bookId");
     const mediaType = parseMedia(params.mediaType);
     const sourcePath = asString(params.path, "path").trim();
+    const selectedPaths = asOptionalStringArray(params.selectedPaths, "selectedPaths");
     const title = asOptionalString(params.title)?.trim() || path.basename(sourcePath);
 
     const book = ctx.repo.getBookRow(bookId);
@@ -524,7 +548,9 @@ const handlers: Record<string, RpcMethodHandler> = {
     });
 
     try {
-      const imported = await importReleaseFromPath(ctx.repo, release, sourcePath, ctx.repo.getSettings().libraryRoot);
+      const imported = await importReleaseFromPath(ctx.repo, release, sourcePath, ctx.repo.getSettings().libraryRoot, {
+        selectedPaths,
+      });
       const finalRelease = ctx.repo.setReleaseStatus(release.id, "imported", null);
       return {
         release: finalRelease,
@@ -552,6 +578,7 @@ const readOnlyMethods = new Set<string>([
   "downloads.get",
   "jobs.list",
   "jobs.get",
+  "import.inspect",
 ]);
 
 async function dispatchRpcMethod(

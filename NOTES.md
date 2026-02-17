@@ -14,6 +14,7 @@
 - [x] Legacy JSON cache state moved into SQLite (`app_state`)
 - [x] Open Library search endpoint + add-to-library by OL key/ISBN
 - [x] README refresh
+- [x] Manual import controls for box sets (`import.inspect` + file selection)
 
 ## Open Questions / Decisions
 

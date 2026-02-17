@@ -94,6 +94,7 @@ Removed REST control routes now return `404`:
 - `jobs.list`
 - `jobs.get`
 - `import.reconcile`
+- `import.inspect`
 - `import.manual`
 
 RPC request shape:
@@ -209,6 +210,22 @@ curl -X POST http://localhost/rpc \
 curl -X POST http://localhost/rpc \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":6,"method":"jobs.get","params":{"jobId":42}}'
+```
+
+Inspect a local download path before manual import:
+
+```bash
+curl -X POST http://localhost/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":7,"method":"import.inspect","params":{"path":"/data/downloads/box-set"}}'
+```
+
+Manual import with explicit file selection (useful for box sets):
+
+```bash
+curl -X POST http://localhost/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":8,"method":"import.manual","params":{"bookId":123,"mediaType":"audio","path":"/data/downloads/box-set","selectedPaths":["/data/downloads/box-set/Disc 1/01.mp3","/data/downloads/box-set/Disc 1/02.mp3"]}}'
 ```
 
 ## Testing

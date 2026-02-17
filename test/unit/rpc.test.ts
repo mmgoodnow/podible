@@ -363,6 +363,67 @@ describe("json-rpc handler", () => {
     db.close();
   });
 
+  test("import.inspect lists files and import.manual supports selectedPaths", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new KindlingRepo(db);
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "kindling-manual-select-"));
+    const sourceDir = path.join(root, "source");
+    const libraryRoot = path.join(root, "library");
+    await mkdir(sourceDir, { recursive: true });
+    await mkdir(libraryRoot, { recursive: true });
+
+    const part1 = path.join(sourceDir, "01-intro.epub");
+    const part2 = path.join(sourceDir, "02-main.pdf");
+    const notes = path.join(sourceDir, "notes.txt");
+    await writeFile(part1, Buffer.from("epub-part-1"));
+    await writeFile(part2, Buffer.from("pdf-part-2"));
+    await writeFile(notes, Buffer.from("ignore-me"));
+
+    repo.updateSettings(
+      defaultSettings({
+        auth: { mode: "local", key: "test" },
+        libraryRoot,
+      })
+    );
+
+    const inspect = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "import.inspect",
+      params: { path: sourceDir },
+    });
+    expect(inspect.result.path).toBe(sourceDir);
+    expect(Array.isArray(inspect.result.files)).toBe(true);
+    expect(inspect.result.files.length).toBe(3);
+    const ebookFiles = inspect.result.files.filter((file: any) => file.supportedEbook);
+    expect(ebookFiles.length).toBe(2);
+
+    const book = repo.createBook({ title: "Box Set", author: "Example Author" });
+    const imported = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "import.manual",
+      params: {
+        bookId: book.id,
+        mediaType: "ebook",
+        path: sourceDir,
+        selectedPaths: [part2],
+      },
+    });
+
+    expect(imported.result.release.status).toBe("imported");
+    const assets = repo.listAssetsByBook(book.id);
+    expect(assets.length).toBe(1);
+    expect(assets[0].kind).toBe("ebook");
+    const files = repo.getAssetFiles(assets[0].id);
+    expect(files.length).toBe(1);
+    expect(path.basename(files[0].path)).toContain("Box Set.pdf");
+
+    db.close();
+  });
+
   test("blocks write methods in read-only rpc dispatch", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
