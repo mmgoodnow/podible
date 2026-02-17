@@ -266,7 +266,14 @@ async function processReconcileJob(ctx: WorkerContext, job: JobRow): Promise<"do
  */
 async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
   const payload = job.payload_json
-    ? (JSON.parse(job.payload_json) as { bookId?: number; media?: MediaType[]; fullRefresh?: boolean })
+    ? (JSON.parse(job.payload_json) as {
+        bookId?: number;
+        media?: MediaType[];
+        fullRefresh?: boolean;
+        forceAgent?: boolean;
+        priorFailure?: boolean;
+        rejectedUrls?: string[];
+      })
     : {};
   const settings = ctx.getSettings();
   if (payload.fullRefresh) {
@@ -295,6 +302,9 @@ async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> 
       query,
       media,
       results,
+      forceAgent: payload.forceAgent === true,
+      priorFailure: payload.priorFailure === true,
+      rejectedUrls: Array.isArray(payload.rejectedUrls) ? payload.rejectedUrls : [],
       book: { id: book.id, title: book.title, author: book.author },
     });
     if (!decision.candidate) {
@@ -324,51 +334,9 @@ async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> 
       );
       snatchSucceeded = true;
     } catch (error) {
-      const firstError = (error as Error).message;
-      log(ctx, `[scan] job=${job.id} book=${book.id} media=${media} snatch_error=${JSON.stringify(firstError)}`);
-
-      const fallbackDecision = await selectSearchCandidate(settings, {
-        query,
-        media,
-        results,
-        rejectedUrls: [decision.candidate.url],
-        priorFailure: true,
-        book: { id: book.id, title: book.title, author: book.author },
-      });
-      if (!fallbackDecision.candidate) {
-        snatchErrors.push(`${media}: ${firstError}`);
-        continue;
-      }
-      log(
-        ctx,
-        `[scan] job=${job.id} book=${book.id} media=${media} fallback_mode=${fallbackDecision.mode} confidence=${fallbackDecision.confidence.toFixed(
-          2
-        )} reason=${JSON.stringify(fallbackDecision.reason)}`
-      );
-      try {
-        const retrySnatch = await runSnatch(ctx.repo, settings, {
-          bookId: book.id,
-          provider: fallbackDecision.candidate.provider,
-          providerGuid: fallbackDecision.candidate.guid ?? null,
-          title: fallbackDecision.candidate.title,
-          mediaType: media,
-          url: fallbackDecision.candidate.url,
-          sizeBytes: fallbackDecision.candidate.sizeBytes,
-          infoHash: fallbackDecision.candidate.infoHash ?? null,
-        });
-        log(
-          ctx,
-          `[scan] job=${job.id} book=${book.id} media=${media} fallback_snatch_release=${retrySnatch.release.id} download_job=${retrySnatch.jobId} idempotent=${retrySnatch.idempotent}`
-        );
-        snatchSucceeded = true;
-      } catch (retryError) {
-        const retryMessage = (retryError as Error).message;
-        log(
-          ctx,
-          `[scan] job=${job.id} book=${book.id} media=${media} fallback_snatch_error=${JSON.stringify(retryMessage)}`
-        );
-        snatchErrors.push(`${media}: ${firstError} | fallback: ${retryMessage}`);
-      }
+      const message = (error as Error).message;
+      log(ctx, `[scan] job=${job.id} book=${book.id} media=${media} snatch_error=${JSON.stringify(message)}`);
+      snatchErrors.push(`${media}: ${message}`);
       continue;
     }
   }
