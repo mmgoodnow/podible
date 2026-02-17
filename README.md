@@ -201,6 +201,14 @@ curl -X POST http://localhost/rpc \
   -d '{"jsonrpc":"2.0","id":22,"method":"library.acquire","params":{"bookId":123,"media":["ebook"]}}'
 ```
 
+Force agent-powered reacquire (user-triggered recovery):
+
+```bash
+curl -X POST http://localhost/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":23,"method":"library.acquire","params":{"bookId":123,"media":["audio"],"forceAgent":true,"priorFailure":true}}'
+```
+
 Rehydrate metadata for existing books (all or one):
 
 ```bash

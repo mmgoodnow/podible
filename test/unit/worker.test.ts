@@ -1,3 +1,6 @@
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { describe, expect, test } from "bun:test";
@@ -6,6 +9,7 @@ import { Database } from "bun:sqlite";
 import { runMigrations } from "../../src/kindling/db";
 import { KindlingRepo } from "../../src/kindling/repo";
 import { defaultSettings } from "../../src/kindling/settings";
+import { infoHashFromTorrentBytes } from "../../src/kindling/torrent";
 import { pollMsForMedia, runWorker, selectDownloadPollMs } from "../../src/kindling/worker";
 import { startMockTorznab } from "../mocks/torznab";
 
@@ -76,6 +80,127 @@ describe("worker scan auto-acquire retries", () => {
       stopWorker = true;
       await Promise.race([worker, sleep(1000)]);
       torznab.stop();
+      db.close();
+    }
+  });
+});
+
+describe("worker import recovery", () => {
+  test("queues forced agent scan when deterministic import cannot map files", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new KindlingRepo(db);
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "kindling-import-recovery-"));
+    const downloadDir = path.join(root, "download");
+    const libraryRoot = path.join(root, "library");
+    await mkdir(downloadDir, { recursive: true });
+    await mkdir(libraryRoot, { recursive: true });
+    await writeFile(path.join(downloadDir, "unrelated.txt"), Buffer.from("not-a-book"));
+
+    const infoHash = infoHashFromTorrentBytes(makeTorrentBytes("import-recovery"));
+    const rtorrentUrl = "http://rtorrent.mock/RPC2";
+
+    repo.updateSettings(
+      defaultSettings({
+        auth: { mode: "local", key: "test" },
+        libraryRoot,
+        rtorrent: {
+          transport: "http-xmlrpc",
+          url: rtorrentUrl,
+          username: "",
+          password: "",
+        },
+        agents: {
+          ...defaultSettings().agents,
+          enabled: false,
+        },
+      })
+    );
+
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const release = repo.createRelease({
+      bookId: book.id,
+      provider: "mock",
+      providerGuid: "guid-1",
+      title: "Dune Wrong Payload",
+      mediaType: "audio",
+      infoHash,
+      url: "https://example.com/wrong.torrent",
+      status: "downloaded",
+    });
+    const importJob = repo.createJob({
+      type: "import",
+      bookId: book.id,
+      releaseId: release.id,
+      payload: { reason: "test-import-recovery" },
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url !== rtorrentUrl) {
+        throw new Error(`Unexpected fetch url: ${url}`);
+      }
+      const body = String(init?.body ?? "");
+      const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
+      const xmlValue = (() => {
+        if (method === "d.name") return "<string>Dune Wrong Payload</string>";
+        if (method === "d.hash") return `<string>${infoHash.toUpperCase()}</string>`;
+        if (method === "d.complete") return "<i8>1</i8>";
+        if (method === "d.base_path") return `<string>${downloadDir}</string>`;
+        if (method === "d.bytes_done") return "<i8>100</i8>";
+        if (method === "d.size_bytes") return "<i8>100</i8>";
+        if (method === "d.left_bytes") return "<i8>0</i8>";
+        if (method === "d.down.rate") return "<i8>0</i8>";
+        throw new Error(`Unexpected rTorrent method in test: ${method}`);
+      })();
+      return new Response(`<?xml version="1.0"?><methodResponse><params><param><value>${xmlValue}</value></param></params></methodResponse>`, {
+        status: 200,
+        headers: { "Content-Type": "text/xml" },
+      });
+    }) as unknown as typeof fetch;
+
+    let stopWorker = false;
+    const logs: string[] = [];
+    const worker = runWorker({
+      repo,
+      getSettings: () => repo.getSettings(),
+      shouldStop: () => stopWorker,
+      onLog: (line) => logs.push(line),
+    });
+
+    try {
+      const started = Date.now();
+      for (;;) {
+        const current = repo.getJob(importJob.id);
+        if (current?.status === "succeeded") break;
+        if (Date.now() - started > 4000) {
+          throw new Error("Timed out waiting for import recovery flow");
+        }
+        await sleep(50);
+      }
+
+      const failedRelease = repo.getRelease(release.id);
+      expect(failedRelease?.status).toBe("failed");
+      expect(String(failedRelease?.error || "")).toContain("deterministic+agent");
+
+      const scanJobs = repo
+        .listJobsByType("scan")
+        .filter((job) => job.book_id === book.id && job.id !== importJob.id);
+      expect(scanJobs.length).toBeGreaterThan(0);
+      const recoveryScan = scanJobs[scanJobs.length - 1];
+      const payload = JSON.parse(recoveryScan.payload_json ?? "{}");
+      expect(payload.bookId).toBe(book.id);
+      expect(payload.media).toEqual(["audio"]);
+      expect(payload.forceAgent).toBe(true);
+      expect(payload.priorFailure).toBe(true);
+      expect(payload.rejectedUrls).toEqual([release.url]);
+      expect(logs.some((line) => line.includes("queued_scan_forced_agent=1"))).toBe(true);
+    } finally {
+      stopWorker = true;
+      await Promise.race([worker, sleep(1000)]);
+      globalThis.fetch = originalFetch;
       db.close();
     }
   });

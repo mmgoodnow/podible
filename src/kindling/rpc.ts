@@ -379,8 +379,15 @@ const handlers: Record<string, RpcMethodHandler> = {
       throw new RpcError(-32000, "Book not found", { error: "not_found", bookId });
     }
     const media = parseMediaSelection(params.media);
-    const jobId = await triggerAutoAcquire(ctx.repo, bookId, media);
-    return { jobId, media };
+    const forceAgent = asOptionalBoolean(params.forceAgent, "forceAgent") ?? false;
+    const priorFailure = asOptionalBoolean(params.priorFailure, "priorFailure") ?? false;
+    const rejectedUrls = asOptionalStringArray(params.rejectedUrls, "rejectedUrls") ?? [];
+    const jobId = await triggerAutoAcquire(ctx.repo, bookId, media, {
+      forceAgent,
+      priorFailure,
+      rejectedUrls,
+    });
+    return { jobId, media, forceAgent, priorFailure, rejectedUrls };
   },
 
   async "library.rehydrate"(ctx, params) {

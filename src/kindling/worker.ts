@@ -1,8 +1,8 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { selectSearchCandidate } from "./agents";
+import { selectManualImportPaths, selectSearchCandidate } from "./agents";
 import { nowIso } from "./db";
-import { importReleaseFromPath } from "./importer";
+import { importReleaseFromPath, inspectImportPath } from "./importer";
 import { RtorrentClient } from "./rtorrent";
 import { KindlingRepo } from "./repo";
 import { scanLibraryRoot } from "./scanner";
@@ -232,10 +232,74 @@ async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done"
     return "rescheduled";
   }
 
-  await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot);
-  ctx.repo.setReleaseStatus(release.id, "imported", null);
-  ctx.repo.markJobSucceeded(job.id);
-  return "done";
+  try {
+    await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot);
+    ctx.repo.setReleaseStatus(release.id, "imported", null);
+    ctx.repo.markJobSucceeded(job.id);
+    return "done";
+  } catch (firstError) {
+    const deterministicMessage = (firstError as Error).message || "deterministic import failed";
+    log(
+      ctx,
+      `[import] job=${job.id} release=${release.id} deterministic_error=${JSON.stringify(deterministicMessage)}`
+    );
+
+    let agentDecisionReason = "not_attempted";
+    let agentDecisionError: string | null = null;
+    try {
+      const files = await inspectImportPath(basePath);
+      const book = ctx.repo.getBookRow(release.book_id);
+      const decision = await selectManualImportPaths(settings, {
+        mediaType: release.media_type,
+        files,
+        forceAgent: true,
+        priorFailure: true,
+        book: book ? { id: book.id, title: book.title, author: book.author } : null,
+      });
+      agentDecisionReason = `${decision.mode}:${decision.reason}`;
+      agentDecisionError = decision.error;
+
+      if (decision.selectedPaths.length > 0) {
+        await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, {
+          selectedPaths: decision.selectedPaths,
+        });
+        ctx.repo.setReleaseStatus(release.id, "imported", null);
+        ctx.repo.markJobSucceeded(job.id);
+        log(
+          ctx,
+          `[import] job=${job.id} release=${release.id} agent_recovery=success selected=${decision.selectedPaths.length}`
+        );
+        return "done";
+      }
+    } catch (agentImportError) {
+      agentDecisionError = (agentImportError as Error).message || "agent import failed";
+      agentDecisionReason = "agent_import_exception";
+      log(
+        ctx,
+        `[import] job=${job.id} release=${release.id} agent_error=${JSON.stringify(agentDecisionError)}`
+      );
+    }
+
+    const terminalError = `Import failed after deterministic+agent attempts. deterministic=${deterministicMessage}; decision=${agentDecisionReason}; agentError=${agentDecisionError ?? "none"}`;
+    ctx.repo.setReleaseStatus(release.id, "failed", terminalError);
+    ctx.repo.createJob({
+      type: "scan",
+      bookId: release.book_id,
+      payload: {
+        bookId: release.book_id,
+        media: [release.media_type],
+        priorFailure: true,
+        forceAgent: true,
+        rejectedUrls: [release.url],
+      },
+    });
+    ctx.repo.markJobSucceeded(job.id);
+    log(
+      ctx,
+      `[import] job=${job.id} release=${release.id} agent_recovery=none queued_scan_forced_agent=1`
+    );
+    return "done";
+  }
 }
 
 /**

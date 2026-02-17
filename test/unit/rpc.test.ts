@@ -49,14 +49,26 @@ describe("json-rpc handler", () => {
       jsonrpc: "2.0",
       id: 22,
       method: "library.acquire",
-      params: { bookId: book.id, media: ["audio"] },
+      params: {
+        bookId: book.id,
+        media: ["audio"],
+        forceAgent: true,
+        priorFailure: true,
+        rejectedUrls: ["https://example.com/bad.torrent"],
+      },
     });
     expect(acquire.result.jobId).toBeGreaterThan(0);
     expect(acquire.result.media).toEqual(["audio"]);
+    expect(acquire.result.forceAgent).toBe(true);
+    expect(acquire.result.priorFailure).toBe(true);
+    expect(acquire.result.rejectedUrls).toEqual(["https://example.com/bad.torrent"]);
     const acquireJob = repo.getJob(acquire.result.jobId);
     expect(acquireJob?.type).toBe("scan");
     expect(acquireJob?.book_id).toBe(book.id);
     expect(JSON.parse(acquireJob?.payload_json ?? "{}").media).toEqual(["audio"]);
+    expect(JSON.parse(acquireJob?.payload_json ?? "{}").forceAgent).toBe(true);
+    expect(JSON.parse(acquireJob?.payload_json ?? "{}").priorFailure).toBe(true);
+    expect(JSON.parse(acquireJob?.payload_json ?? "{}").rejectedUrls).toEqual(["https://example.com/bad.torrent"]);
 
     const queued = repo.createJob({ type: "scan", payload: { fullRefresh: true } });
     const jobs = await callRpc(repo, {

@@ -21,6 +21,12 @@ type SnatchRequest = {
   sizeBytes?: number | null;
 };
 
+type AutoAcquireOptions = {
+  forceAgent?: boolean;
+  priorFailure?: boolean;
+  rejectedUrls?: string[];
+};
+
 type RankedSearchResult = {
   result: TorznabResult;
   score: number;
@@ -198,7 +204,12 @@ export async function runSnatch(
   };
 }
 
-export async function triggerAutoAcquire(repo: KindlingRepo, bookId: number, media: MediaType[] = ["audio", "ebook"]): Promise<number> {
+export async function triggerAutoAcquire(
+  repo: KindlingRepo,
+  bookId: number,
+  media: MediaType[] = ["audio", "ebook"],
+  options: AutoAcquireOptions = {}
+): Promise<number> {
   const mediaList = media.length > 0 ? Array.from(new Set(media)) : ["audio", "ebook"];
   const scanJob = repo.createJob({
     type: "scan",
@@ -206,6 +217,9 @@ export async function triggerAutoAcquire(repo: KindlingRepo, bookId: number, med
     payload: {
       bookId,
       media: mediaList,
+      forceAgent: options.forceAgent === true,
+      priorFailure: options.priorFailure === true,
+      rejectedUrls: options.rejectedUrls ?? [],
     },
   });
   return scanJob.id;
