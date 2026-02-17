@@ -127,6 +127,44 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
       <p id="ol-status" class="muted"></p>
       <ul id="ol-results"></ul>
     </div>
+    <h2>Manual Search + Snatch</h2>
+    <div class="panel">
+      <div class="row">
+        <input id="manual-book-id" type="number" min="1" placeholder="Book ID" style="min-width: 110px;" />
+        <select id="manual-media">
+          <option value="audio">audio</option>
+          <option value="ebook">ebook</option>
+        </select>
+        <input id="manual-query" type="text" placeholder="Search query (e.g. Twilight Stephenie Meyer)" />
+        <button id="manual-search-btn" type="button">Search</button>
+      </div>
+      <p id="manual-search-status" class="muted"></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Title</th>
+            <th>Provider</th>
+            <th>Seeders</th>
+            <th>Size</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="manual-search-body"><tr><td colspan="5">No search yet.</td></tr></tbody>
+      </table>
+    </div>
+    <h2>Manual Import</h2>
+    <div class="panel">
+      <div class="row">
+        <input id="manual-import-book-id" type="number" min="1" placeholder="Book ID" style="min-width: 110px;" />
+        <select id="manual-import-media">
+          <option value="audio">audio</option>
+          <option value="ebook">ebook</option>
+        </select>
+        <input id="manual-import-path" type="text" placeholder="Absolute path to file or folder" />
+        <button id="manual-import-btn" type="button">Import</button>
+      </div>
+      <p id="manual-import-status" class="muted"></p>
+    </div>
     <h2>Recent Library</h2>
     <p id="library-status" class="muted"></p>
     <table>
@@ -303,6 +341,163 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
             if (event.key !== "Enter") return;
             event.preventDefault();
             await runOpenLibrarySearch();
+          });
+        }
+
+        var manualBookInput = document.getElementById("manual-book-id");
+        var manualMediaInput = document.getElementById("manual-media");
+        var manualQueryInput = document.getElementById("manual-query");
+        var manualSearchBtn = document.getElementById("manual-search-btn");
+        var manualSearchBody = document.getElementById("manual-search-body");
+
+        function manualSearchCell(row, value) {
+          var td = document.createElement("td");
+          td.textContent = value;
+          row.appendChild(td);
+          return td;
+        }
+
+        function renderManualSearchResults(items, bookId, media) {
+          if (!manualSearchBody) return;
+          manualSearchBody.innerHTML = "";
+          if (!Array.isArray(items) || items.length === 0) {
+            var emptyRow = document.createElement("tr");
+            var emptyCell = document.createElement("td");
+            emptyCell.colSpan = 5;
+            emptyCell.textContent = "No results.";
+            emptyRow.appendChild(emptyCell);
+            manualSearchBody.appendChild(emptyRow);
+            return;
+          }
+          items.forEach(function (item) {
+            var row = document.createElement("tr");
+            manualSearchCell(row, String(item.title || ""));
+            manualSearchCell(row, String(item.provider || ""));
+            manualSearchCell(row, item.seeders == null ? "" : String(item.seeders));
+            manualSearchCell(row, item.sizeBytes == null ? "" : formatBytes(Number(item.sizeBytes)));
+
+            var action = document.createElement("td");
+            var btn = document.createElement("button");
+            btn.type = "button";
+            btn.textContent = "Snatch";
+            btn.addEventListener("click", async function () {
+              btn.disabled = true;
+              text("manual-search-status", "Snatching...");
+              try {
+                var snatched = await rpc("snatch.create", {
+                  bookId: bookId,
+                  provider: item.provider,
+                  title: item.title,
+                  mediaType: media,
+                  url: item.url,
+                  infoHash: item.infoHash || null,
+                  guid: item.guid || null,
+                  sizeBytes: item.sizeBytes == null ? null : Number(item.sizeBytes),
+                });
+                text("manual-search-status", "Snatched release " + String(snatched.release.id) + ", download job " + String(snatched.jobId) + ".");
+                if (typeof loadDownloads === "function") {
+                  loadDownloads();
+                }
+                if (typeof loadJobs === "function") {
+                  loadJobs();
+                }
+              } catch (err) {
+                text("manual-search-status", "Snatch failed: " + (err && err.message ? err.message : "request error"));
+              } finally {
+                btn.disabled = false;
+              }
+            });
+            action.appendChild(btn);
+            row.appendChild(action);
+            manualSearchBody.appendChild(row);
+          });
+        }
+
+        async function runManualSearch() {
+          var rawBookId = manualBookInput ? manualBookInput.value : "";
+          var bookId = parseInt(rawBookId || "", 10);
+          if (!Number.isFinite(bookId) || bookId <= 0) {
+            text("manual-search-status", "Enter a valid Book ID.");
+            if (manualSearchBody) {
+              manualSearchBody.innerHTML = '<tr><td colspan="5">No results.</td></tr>';
+            }
+            return;
+          }
+          var media = manualMediaInput && manualMediaInput.value === "ebook" ? "ebook" : "audio";
+          var query = (manualQueryInput && manualQueryInput.value ? manualQueryInput.value : "").trim();
+          if (!query) {
+            text("manual-search-status", "Enter a search query.");
+            if (manualSearchBody) {
+              manualSearchBody.innerHTML = '<tr><td colspan="5">No results.</td></tr>';
+            }
+            return;
+          }
+          text("manual-search-status", "Searching...");
+          try {
+            var payload = await rpc("search.run", { query: query, media: media });
+            var items = payload && Array.isArray(payload.results) ? payload.results : [];
+            renderManualSearchResults(items, bookId, media);
+            text("manual-search-status", "Found " + items.length + " result(s).");
+          } catch (err) {
+            text("manual-search-status", "Search failed: " + (err && err.message ? err.message : "request error"));
+            renderManualSearchResults([], bookId, media);
+          }
+        }
+
+        if (manualSearchBtn) {
+          manualSearchBtn.addEventListener("click", async function () {
+            await runManualSearch();
+          });
+        }
+        if (manualQueryInput) {
+          manualQueryInput.addEventListener("keydown", async function (event) {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            await runManualSearch();
+          });
+        }
+
+        var manualImportBookInput = document.getElementById("manual-import-book-id");
+        var manualImportMediaInput = document.getElementById("manual-import-media");
+        var manualImportPathInput = document.getElementById("manual-import-path");
+        var manualImportBtn = document.getElementById("manual-import-btn");
+        if (manualImportBtn) {
+          manualImportBtn.addEventListener("click", async function () {
+            var rawBookId = manualImportBookInput ? manualImportBookInput.value : "";
+            var bookId = parseInt(rawBookId || "", 10);
+            if (!Number.isFinite(bookId) || bookId <= 0) {
+              text("manual-import-status", "Enter a valid Book ID.");
+              return;
+            }
+            var mediaType = manualImportMediaInput && manualImportMediaInput.value === "ebook" ? "ebook" : "audio";
+            var sourcePath = (manualImportPathInput && manualImportPathInput.value ? manualImportPathInput.value : "").trim();
+            if (!sourcePath) {
+              text("manual-import-status", "Enter a source path.");
+              return;
+            }
+            manualImportBtn.disabled = true;
+            text("manual-import-status", "Importing...");
+            try {
+              var imported = await rpc("import.manual", {
+                bookId: bookId,
+                mediaType: mediaType,
+                path: sourcePath,
+              });
+              text(
+                "manual-import-status",
+                "Imported release " + String(imported.release.id) + " to asset " + String(imported.assetId) + "."
+              );
+              if (typeof loadDownloads === "function") {
+                loadDownloads();
+              }
+              if (typeof loadJobs === "function") {
+                loadJobs();
+              }
+            } catch (err) {
+              text("manual-import-status", "Import failed: " + (err && err.message ? err.message : "request error"));
+            } finally {
+              manualImportBtn.disabled = false;
+            }
           });
         }
 

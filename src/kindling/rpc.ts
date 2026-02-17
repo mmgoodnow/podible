@@ -1,6 +1,9 @@
+import { createHash } from "node:crypto";
 import { rm } from "node:fs/promises";
+import path from "node:path";
 
 import { hydrateBookFromOpenLibrary } from "./hydration";
+import { importReleaseFromPath } from "./importer";
 import { resolveOpenLibraryCandidate, searchOpenLibrary } from "./openlibrary";
 import { computeDownloadFraction, pseudoProgressForRelease } from "./progress";
 import { KindlingRepo } from "./repo";
@@ -210,6 +213,12 @@ function parseJobType(value: unknown): JobType {
     return value;
   }
   throw new RpcError(-32602, "type must be one of scan|download|import|transcode|reconcile");
+}
+
+function uniqueManualInfoHash(bookId: number, mediaType: MediaType, sourcePath: string): string {
+  return createHash("sha1")
+    .update(`manual:${bookId}:${mediaType}:${sourcePath}:${Date.now()}:${Math.random()}`)
+    .digest("hex");
 }
 
 function parseRequest(raw: unknown): RpcRequest {
@@ -489,6 +498,44 @@ const handlers: Record<string, RpcMethodHandler> = {
   async "import.reconcile"(ctx) {
     const job = ctx.repo.createJob({ type: "reconcile" });
     return { jobId: job.id };
+  },
+
+  async "import.manual"(ctx, params) {
+    const bookId = asPositiveInt(params.bookId, "bookId");
+    const mediaType = parseMedia(params.mediaType);
+    const sourcePath = asString(params.path, "path").trim();
+    const title = asOptionalString(params.title)?.trim() || path.basename(sourcePath);
+
+    const book = ctx.repo.getBookRow(bookId);
+    if (!book) {
+      throw new RpcError(-32000, "Book not found", { error: "not_found", bookId });
+    }
+
+    const release = ctx.repo.createRelease({
+      bookId,
+      provider: "manual",
+      providerGuid: null,
+      title,
+      mediaType,
+      infoHash: uniqueManualInfoHash(bookId, mediaType, sourcePath),
+      sizeBytes: null,
+      url: sourcePath,
+      status: "downloaded",
+    });
+
+    try {
+      const imported = await importReleaseFromPath(ctx.repo, release, sourcePath, ctx.repo.getSettings().libraryRoot);
+      const finalRelease = ctx.repo.setReleaseStatus(release.id, "imported", null);
+      return {
+        release: finalRelease,
+        assetId: imported.assetId,
+        linkedFiles: imported.linkedFiles,
+      };
+    } catch (error) {
+      const message = (error as Error).message || "Manual import failed";
+      ctx.repo.setReleaseStatus(release.id, "failed", message);
+      throw new RpcError(-32000, "Manual import failed", { message, sourcePath, mediaType });
+    }
   },
 };
 

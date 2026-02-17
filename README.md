@@ -94,6 +94,7 @@ Removed REST control routes now return `404`:
 - `jobs.list`
 - `jobs.get`
 - `import.reconcile`
+- `import.manual`
 
 RPC request shape:
 

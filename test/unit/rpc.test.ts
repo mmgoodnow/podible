@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -316,6 +316,51 @@ describe("json-rpc handler", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test("import.manual creates a release and imports local file", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new KindlingRepo(db);
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "kindling-manual-import-"));
+    const sourceDir = path.join(root, "source");
+    const libraryRoot = path.join(root, "library");
+    await mkdir(sourceDir, { recursive: true });
+    await mkdir(libraryRoot, { recursive: true });
+    const sourceFile = path.join(sourceDir, "twilight.epub");
+    await writeFile(sourceFile, Buffer.from("epub-bytes"));
+
+    repo.updateSettings(
+      defaultSettings({
+        auth: { mode: "local", key: "test" },
+        libraryRoot,
+      })
+    );
+
+    const book = repo.createBook({ title: "Twilight", author: "Stephenie Meyer" });
+    const result = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "import.manual",
+      params: {
+        bookId: book.id,
+        mediaType: "ebook",
+        path: sourceFile,
+      },
+    });
+
+    expect(result.result.release.book_id).toBe(book.id);
+    expect(result.result.release.status).toBe("imported");
+    expect(result.result.assetId).toBeGreaterThan(0);
+
+    const assets = repo.listAssetsByBook(book.id);
+    expect(assets.length).toBe(1);
+    const files = repo.getAssetFiles(assets[0].id);
+    expect(files.length).toBe(1);
+    expect(await Bun.file(files[0].path).exists()).toBe(true);
+
+    db.close();
   });
 
   test("blocks write methods in read-only rpc dispatch", async () => {
