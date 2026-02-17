@@ -17,6 +17,7 @@
 - [x] Manual import controls for box sets (`import.inspect` + file selection)
 - [x] Optional Responses-API decision scaffolding (`agent.search.plan`, `agent.import.plan`) with deterministic fallback
 - [x] Import failure recovery path: deterministic import -> forced agent import -> forced agent reacquire scan; user can trigger via `library.acquire`
+- [x] User-reported semantic import issue path via `library.reportImportIssue` (forced agent import attempt -> forced agent reacquire)
 
 ## Open Questions / Decisions
 

@@ -84,6 +84,7 @@ Removed REST control routes now return `404`:
 - `library.delete`
 - `library.refresh`
 - `library.acquire`
+- `library.reportImportIssue`
 - `library.rehydrate`
 - `search.run`
 - `agent.search.plan`
@@ -207,6 +208,14 @@ Force agent-powered reacquire (user-triggered recovery):
 curl -X POST http://localhost/rpc \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":23,"method":"library.acquire","params":{"bookId":123,"media":["audio"],"forceAgent":true,"priorFailure":true}}'
+```
+
+Report an imported file as wrong (attempt forced agent re-import first, then queue forced agent reacquire if needed):
+
+```bash
+curl -X POST http://localhost/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":24,"method":"library.reportImportIssue","params":{"bookId":123,"mediaType":"audio"}}'
 ```
 
 Rehydrate metadata for existing books (all or one):

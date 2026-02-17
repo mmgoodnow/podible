@@ -82,6 +82,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
   <td>${escapeHtml(book.ebookStatus)}</td>
   <td class="book-progress" data-book-id="${book.id}" data-audio-status="${escapeHtml(book.audioStatus)}" data-ebook-status="${escapeHtml(book.ebookStatus)}">${escapeHtml(String(book.fullPseudoProgress))}%</td>
   <td>
+    <button type="button" class="report-import-issue-btn" data-book-id="${book.id}" data-book-title="${escapeHtml(book.title)}" data-audio-status="${escapeHtml(book.audioStatus)}" data-ebook-status="${escapeHtml(book.ebookStatus)}">Wrong File</button>
     <button type="button" class="agent-acquire-btn" data-book-id="${book.id}" data-book-title="${escapeHtml(book.title)}">Agent Acquire</button>
     <button type="button" class="delete-book-btn" data-book-id="${book.id}" data-book-title="${escapeHtml(book.title)}">Delete</button>
   </td>
@@ -905,6 +906,52 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
           row.appendChild(cell);
           libraryTableBody.appendChild(row);
         }
+
+        var reportImportIssueButtons = Array.prototype.slice.call(document.querySelectorAll(".report-import-issue-btn"));
+        reportImportIssueButtons.forEach(function (button) {
+          button.addEventListener("click", async function () {
+            var rawId = button.getAttribute("data-book-id") || "";
+            var bookId = parseInt(rawId, 10);
+            if (!Number.isFinite(bookId) || bookId <= 0) {
+              text("library-status", "Wrong file report failed: invalid book id.");
+              return;
+            }
+            var bookTitle = button.getAttribute("data-book-title") || ("Book " + String(bookId));
+            var audioStatus = String(button.getAttribute("data-audio-status") || "wanted");
+            var ebookStatus = String(button.getAttribute("data-ebook-status") || "wanted");
+            var suggested = audioStatus === "imported" && ebookStatus !== "imported" ? "audio" : ebookStatus === "imported" && audioStatus !== "imported" ? "ebook" : "audio";
+            var response = window.prompt('Which media is wrong? Enter "audio" or "ebook".', suggested);
+            if (!response) return;
+            var mediaType = response.trim().toLowerCase();
+            if (mediaType !== "audio" && mediaType !== "ebook") {
+              text("library-status", "Wrong file report failed: media must be audio or ebook.");
+              return;
+            }
+            button.disabled = true;
+            text("library-status", 'Reporting wrong ' + mediaType + ' file for "' + bookTitle + '"...');
+            try {
+              var result = await rpc("library.reportImportIssue", {
+                bookId: bookId,
+                mediaType: mediaType,
+              });
+              if (result && result.action === "agent_imported") {
+                text("library-status", 'Agent imported replacement ' + mediaType + ' file for "' + bookTitle + '".');
+              } else {
+                text("library-status", 'Queued agent reacquire for "' + bookTitle + '" (job ' + String(result.jobId) + ").");
+              }
+              if (typeof loadJobs === "function") {
+                loadJobs();
+              }
+              if (typeof loadDownloads === "function") {
+                loadDownloads();
+              }
+            } catch (err) {
+              text("library-status", "Wrong file report failed: " + (err && err.message ? err.message : "request error"));
+            } finally {
+              button.disabled = false;
+            }
+          });
+        });
 
         var agentAcquireButtons = Array.prototype.slice.call(document.querySelectorAll(".agent-acquire-btn"));
         agentAcquireButtons.forEach(function (button) {

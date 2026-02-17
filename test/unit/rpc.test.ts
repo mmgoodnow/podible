@@ -83,6 +83,110 @@ describe("json-rpc handler", () => {
     db.close();
   });
 
+  test("library.reportImportIssue queues forced agent reacquire when no importable files", async () => {
+    const originalFetch = globalThis.fetch;
+    try {
+      const db = new Database(":memory:");
+      runMigrations(db);
+      const repo = new KindlingRepo(db);
+
+      const root = await mkdtemp(path.join(os.tmpdir(), "kindling-report-issue-"));
+      const badPath = path.join(root, "download");
+      await mkdir(badPath, { recursive: true });
+      await writeFile(path.join(badPath, "readme.txt"), Buffer.from("wrong payload"));
+      repo.updateSettings(
+        defaultSettings({
+          auth: { mode: "local", key: "test" },
+          libraryRoot: path.join(root, "library"),
+          rtorrent: {
+            transport: "http-xmlrpc",
+            url: "http://mock.local/RPC2",
+            username: "",
+            password: "",
+          },
+          agents: {
+            ...defaultSettings().agents,
+            enabled: false,
+          },
+        })
+      );
+
+      const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+      const release = repo.createRelease({
+        bookId: book.id,
+        provider: "mock",
+        providerGuid: "guid-1",
+        title: "Dune Wrong",
+        mediaType: "audio",
+        infoHash: "abc123",
+        url: "https://example.com/wrong-audio.torrent",
+        status: "imported",
+      });
+
+      // Force base_path to our temp folder.
+      globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+        const body = String(init?.body ?? "");
+        const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
+        const xml = (() => {
+          switch (method) {
+            case "d.name":
+              return '<?xml version="1.0"?><methodResponse><params><param><value><string>Dune</string></value></param></params></methodResponse>';
+            case "d.hash":
+              return '<?xml version="1.0"?><methodResponse><params><param><value><string>ABC123</string></value></param></params></methodResponse>';
+            case "d.complete":
+              return '<?xml version="1.0"?><methodResponse><params><param><value><i8>1</i8></value></param></params></methodResponse>';
+            case "d.base_path":
+              return `<?xml version="1.0"?><methodResponse><params><param><value><string>${badPath}</string></value></param></params></methodResponse>`;
+            case "d.bytes_done":
+              return '<?xml version="1.0"?><methodResponse><params><param><value><i8>100</i8></value></param></params></methodResponse>';
+            case "d.size_bytes":
+              return '<?xml version="1.0"?><methodResponse><params><param><value><i8>100</i8></value></param></params></methodResponse>';
+            case "d.left_bytes":
+              return '<?xml version="1.0"?><methodResponse><params><param><value><i8>0</i8></value></param></params></methodResponse>';
+            case "d.down.rate":
+              return '<?xml version="1.0"?><methodResponse><params><param><value><i8>0</i8></value></param></params></methodResponse>';
+            default:
+              return '<?xml version="1.0"?><methodResponse><params><param><value><string></string></value></param></params></methodResponse>';
+          }
+        })();
+        return new Response(xml, { status: 200, headers: { "Content-Type": "text/xml" } });
+      }) as unknown as typeof fetch;
+
+      const result = await callRpc(repo, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "library.reportImportIssue",
+        params: {
+          bookId: book.id,
+          mediaType: "audio",
+        },
+      });
+
+      expect(result.result.action).toBe("reacquire_queued");
+      expect(result.result.releaseId).toBe(release.id);
+      expect(result.result.mediaType).toBe("audio");
+      expect(result.result.rejectedUrls).toEqual([release.url]);
+      expect(result.result.jobId).toBeGreaterThan(0);
+
+      const failedRelease = repo.getRelease(release.id);
+      expect(failedRelease?.status).toBe("failed");
+      expect(String(failedRelease?.error || "")).toContain("User-reported import issue");
+
+      const scanJob = repo.getJob(result.result.jobId);
+      expect(scanJob?.type).toBe("scan");
+      const payload = JSON.parse(scanJob?.payload_json ?? "{}");
+      expect(payload.bookId).toBe(book.id);
+      expect(payload.media).toEqual(["audio"]);
+      expect(payload.forceAgent).toBe(true);
+      expect(payload.priorFailure).toBe(true);
+      expect(payload.rejectedUrls).toEqual([release.url]);
+
+      db.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("returns parse error for malformed json", async () => {
     const db = new Database(":memory:");
     runMigrations(db);

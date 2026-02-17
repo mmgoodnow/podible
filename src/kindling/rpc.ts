@@ -390,6 +390,80 @@ const handlers: Record<string, RpcMethodHandler> = {
     return { jobId, media, forceAgent, priorFailure, rejectedUrls };
   },
 
+  async "library.reportImportIssue"(ctx, params) {
+    const bookId = asPositiveInt(params.bookId, "bookId");
+    const mediaType = parseMedia(params.mediaType);
+    const releaseId = asOptionalPositiveInt(params.releaseId, "releaseId");
+    const book = ctx.repo.getBookRow(bookId);
+    if (!book) {
+      throw new RpcError(-32000, "Book not found", { error: "not_found", bookId });
+    }
+
+    const releases = ctx.repo.listReleasesByBook(bookId).filter((release) => release.media_type === mediaType);
+    const release = (() => {
+      if (releaseId !== undefined) {
+        return releases.find((candidate) => candidate.id === releaseId) ?? null;
+      }
+      return releases[0] ?? null;
+    })();
+    if (!release) {
+      throw new RpcError(-32000, "Release not found for media", { error: "not_found", bookId, mediaType, releaseId });
+    }
+
+    let agentDecision: Awaited<ReturnType<typeof selectManualImportPaths>> | null = null;
+    let agentImportError: string | null = null;
+
+    try {
+      const client = new RtorrentClient(ctx.repo.getSettings().rtorrent);
+      const state = await client.getDownloadState(release.info_hash);
+      if (state.basePath) {
+        const files = await inspectImportPath(state.basePath);
+        agentDecision = await selectManualImportPaths(ctx.repo.getSettings(), {
+          mediaType,
+          files,
+          forceAgent: true,
+          priorFailure: true,
+          book: { id: book.id, title: book.title, author: book.author },
+        });
+
+        if (agentDecision.selectedPaths.length > 0) {
+          const imported = await importReleaseFromPath(ctx.repo, release, state.basePath, ctx.repo.getSettings().libraryRoot, {
+            selectedPaths: agentDecision.selectedPaths,
+          });
+          const updated = ctx.repo.setReleaseStatus(release.id, "imported", null);
+          return {
+            action: "agent_imported",
+            release: updated,
+            assetId: imported.assetId,
+            linkedFiles: imported.linkedFiles,
+            decision: agentDecision,
+          };
+        }
+      } else {
+        agentImportError = "Download base path not available from rTorrent";
+      }
+    } catch (error) {
+      agentImportError = (error as Error).message || "Agent import attempt failed";
+    }
+
+    const failedMessage = `User-reported import issue for ${mediaType}. decision=${agentDecision?.reason ?? "none"} error=${agentImportError ?? agentDecision?.error ?? "none"}`;
+    ctx.repo.setReleaseStatus(release.id, "failed", failedMessage);
+    const jobId = await triggerAutoAcquire(ctx.repo, bookId, [mediaType], {
+      forceAgent: true,
+      priorFailure: true,
+      rejectedUrls: [release.url],
+    });
+    return {
+      action: "reacquire_queued",
+      jobId,
+      releaseId: release.id,
+      mediaType,
+      rejectedUrls: [release.url],
+      decision: agentDecision,
+      error: agentImportError,
+    };
+  },
+
   async "library.rehydrate"(ctx, params) {
     const targetBookId = params.bookId === undefined ? null : asPositiveInt(params.bookId, "bookId");
     const books = targetBookId === null ? ctx.repo.listAllBooks() : [ctx.repo.getBook(targetBookId)];
