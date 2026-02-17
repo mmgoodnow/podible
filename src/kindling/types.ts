@@ -46,6 +46,21 @@ export type AppSettings = {
     mode: AuthMode;
     key: string;
   };
+  agents: {
+    enabled: boolean;
+    provider: "openai-responses";
+    model: string;
+    lowConfidenceThreshold: number;
+    timeoutMs: number;
+    search: {
+      enableOnFailure: boolean;
+      enableOnLowConfidence: boolean;
+    };
+    manualImport: {
+      enableOnFailure: boolean;
+      enableOnLowConfidence: boolean;
+    };
+  };
 };
 
 export type BookRow = {

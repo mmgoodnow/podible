@@ -15,6 +15,7 @@
 - [x] Open Library search endpoint + add-to-library by OL key/ISBN
 - [x] README refresh
 - [x] Manual import controls for box sets (`import.inspect` + file selection)
+- [x] Optional Responses-API decision scaffolding (`agent.search.plan`, `agent.import.plan`) with deterministic fallback
 
 ## Open Questions / Decisions
 

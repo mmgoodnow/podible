@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
+import { selectSearchCandidate } from "./agents";
 import { nowIso } from "./db";
 import { importReleaseFromPath } from "./importer";
 import { RtorrentClient } from "./rtorrent";
@@ -290,21 +291,32 @@ async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> 
     const query = `${book.title} ${book.author}`.trim();
     const results = await runSearch(settings, { query, media });
     log(ctx, `[scan] job=${job.id} book=${book.id} media=${media} query=${JSON.stringify(query)} results=${results.length}`);
-    const result = results[0];
-    if (!result) {
+    const decision = await selectSearchCandidate(settings, {
+      query,
+      media,
+      results,
+      book: { id: book.id, title: book.title, author: book.author },
+    });
+    if (!decision.candidate) {
       log(ctx, `[scan] job=${job.id} book=${book.id} media=${media} no_result`);
       continue;
     }
+    log(
+      ctx,
+      `[scan] job=${job.id} book=${book.id} media=${media} candidate_mode=${decision.mode} confidence=${decision.confidence.toFixed(
+        2
+      )} reason=${JSON.stringify(decision.reason)}`
+    );
     try {
       const snatch = await runSnatch(ctx.repo, settings, {
         bookId: book.id,
-        provider: result.provider,
-        providerGuid: result.guid ?? null,
-        title: result.title,
+        provider: decision.candidate.provider,
+        providerGuid: decision.candidate.guid ?? null,
+        title: decision.candidate.title,
         mediaType: media,
-        url: result.url,
-        sizeBytes: result.sizeBytes,
-        infoHash: result.infoHash ?? null,
+        url: decision.candidate.url,
+        sizeBytes: decision.candidate.sizeBytes,
+        infoHash: decision.candidate.infoHash ?? null,
       });
       log(
         ctx,
@@ -312,9 +324,51 @@ async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> 
       );
       snatchSucceeded = true;
     } catch (error) {
-      const message = (error as Error).message;
-      log(ctx, `[scan] job=${job.id} book=${book.id} media=${media} snatch_error=${JSON.stringify(message)}`);
-      snatchErrors.push(`${media}: ${message}`);
+      const firstError = (error as Error).message;
+      log(ctx, `[scan] job=${job.id} book=${book.id} media=${media} snatch_error=${JSON.stringify(firstError)}`);
+
+      const fallbackDecision = await selectSearchCandidate(settings, {
+        query,
+        media,
+        results,
+        rejectedUrls: [decision.candidate.url],
+        priorFailure: true,
+        book: { id: book.id, title: book.title, author: book.author },
+      });
+      if (!fallbackDecision.candidate) {
+        snatchErrors.push(`${media}: ${firstError}`);
+        continue;
+      }
+      log(
+        ctx,
+        `[scan] job=${job.id} book=${book.id} media=${media} fallback_mode=${fallbackDecision.mode} confidence=${fallbackDecision.confidence.toFixed(
+          2
+        )} reason=${JSON.stringify(fallbackDecision.reason)}`
+      );
+      try {
+        const retrySnatch = await runSnatch(ctx.repo, settings, {
+          bookId: book.id,
+          provider: fallbackDecision.candidate.provider,
+          providerGuid: fallbackDecision.candidate.guid ?? null,
+          title: fallbackDecision.candidate.title,
+          mediaType: media,
+          url: fallbackDecision.candidate.url,
+          sizeBytes: fallbackDecision.candidate.sizeBytes,
+          infoHash: fallbackDecision.candidate.infoHash ?? null,
+        });
+        log(
+          ctx,
+          `[scan] job=${job.id} book=${book.id} media=${media} fallback_snatch_release=${retrySnatch.release.id} download_job=${retrySnatch.jobId} idempotent=${retrySnatch.idempotent}`
+        );
+        snatchSucceeded = true;
+      } catch (retryError) {
+        const retryMessage = (retryError as Error).message;
+        log(
+          ctx,
+          `[scan] job=${job.id} book=${book.id} media=${media} fallback_snatch_error=${JSON.stringify(retryMessage)}`
+        );
+        snatchErrors.push(`${media}: ${firstError} | fallback: ${retryMessage}`);
+      }
       continue;
     }
   }

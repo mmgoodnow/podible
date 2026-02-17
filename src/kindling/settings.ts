@@ -29,6 +29,21 @@ export function defaultSettings(overrides?: Partial<AppSettings>): AppSettings {
       mode: "apikey",
       key: randomBytes(24).toString("hex"),
     },
+    agents: {
+      enabled: false,
+      provider: "openai-responses",
+      model: "gpt-5-mini",
+      lowConfidenceThreshold: 0.45,
+      timeoutMs: 8000,
+      search: {
+        enableOnFailure: true,
+        enableOnLowConfidence: true,
+      },
+      manualImport: {
+        enableOnFailure: true,
+        enableOnLowConfidence: true,
+      },
+    },
     ...overrides,
   };
 }

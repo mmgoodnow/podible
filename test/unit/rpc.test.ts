@@ -363,6 +363,34 @@ describe("json-rpc handler", () => {
     db.close();
   });
 
+  test("agent.search.plan returns deterministic planning payload", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new KindlingRepo(db);
+    repo.updateSettings(
+      defaultSettings({
+        auth: { mode: "local", key: "test" },
+        torznab: [],
+      })
+    );
+
+    const result = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "agent.search.plan",
+      params: {
+        query: "Dune Frank Herbert",
+        media: "audio",
+      },
+    });
+
+    expect(result.result.resultCount).toBe(0);
+    expect(result.result.decision.mode).toBe("deterministic");
+    expect(result.result.decision.candidate).toBeNull();
+
+    db.close();
+  });
+
   test("import.inspect lists files and import.manual supports selectedPaths", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
@@ -420,6 +448,34 @@ describe("json-rpc handler", () => {
     const files = repo.getAssetFiles(assets[0].id);
     expect(files.length).toBe(1);
     expect(path.basename(files[0].path)).toContain("Box Set.pdf");
+
+    db.close();
+  });
+
+  test("agent.import.plan returns deterministic selected paths", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new KindlingRepo(db);
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "kindling-agent-import-plan-"));
+    const sourceDir = path.join(root, "source");
+    await mkdir(sourceDir, { recursive: true });
+    const sourceFile = path.join(sourceDir, "book.epub");
+    await writeFile(sourceFile, Buffer.from("epub-bytes"));
+
+    const result = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "agent.import.plan",
+      params: {
+        path: sourceDir,
+        mediaType: "ebook",
+      },
+    });
+
+    expect(result.result.fileCount).toBe(1);
+    expect(result.result.decision.mode).toBe("deterministic");
+    expect(result.result.decision.selectedPaths).toEqual([sourceFile]);
 
     db.close();
   });

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 
+import { selectManualImportPaths, selectSearchCandidate } from "./agents";
 import { hydrateBookFromOpenLibrary } from "./hydration";
 import { importReleaseFromPath, inspectImportPath } from "./importer";
 import { resolveOpenLibraryCandidate, searchOpenLibrary } from "./openlibrary";
@@ -186,6 +187,21 @@ function asOptionalStringArray(value: unknown, name: string): string[] | undefin
     out.push(item.trim());
   }
   return out;
+}
+
+function asOptionalBoolean(value: unknown, name: string): boolean | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    if (value === "true") return true;
+    if (value === "false") return false;
+  }
+  throw new RpcError(-32602, `${name} must be a boolean`);
+}
+
+function asOptionalPositiveInt(value: unknown, name: string): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  return asPositiveInt(value, name);
 }
 
 function asPositiveInt(value: unknown, name: string): number {
@@ -428,6 +444,39 @@ const handlers: Record<string, RpcMethodHandler> = {
     return { results };
   },
 
+  async "agent.search.plan"(ctx, params) {
+    const query = asString(params.query, "query").trim();
+    const media = parseMedia(params.media);
+    const bookId = asOptionalPositiveInt(params.bookId, "bookId");
+    const forceAgent = asOptionalBoolean(params.forceAgent, "forceAgent") ?? false;
+    const priorFailure = asOptionalBoolean(params.priorFailure, "priorFailure") ?? false;
+    const rejectedUrls = asOptionalStringArray(params.rejectedUrls, "rejectedUrls") ?? [];
+    const book =
+      bookId === undefined
+        ? null
+        : (() => {
+            const row = ctx.repo.getBookRow(bookId);
+            if (!row) {
+              throw new RpcError(-32000, "Book not found", { error: "not_found", bookId });
+            }
+            return { id: row.id, title: row.title, author: row.author };
+          })();
+    const results = await runSearch(ctx.repo.getSettings(), { query, media });
+    const decision = await selectSearchCandidate(ctx.repo.getSettings(), {
+      query,
+      media,
+      results,
+      rejectedUrls,
+      forceAgent,
+      priorFailure,
+      book,
+    });
+    return {
+      resultCount: results.length,
+      decision,
+    };
+  },
+
   async "snatch.create"(ctx, params) {
     const bookId = asPositiveInt(params.bookId, "bookId");
     const provider = asString(params.provider, "provider");
@@ -523,6 +572,38 @@ const handlers: Record<string, RpcMethodHandler> = {
     };
   },
 
+  async "agent.import.plan"(ctx, params) {
+    const sourcePath = asString(params.path, "path").trim();
+    const mediaType = parseMedia(params.mediaType);
+    const bookId = asOptionalPositiveInt(params.bookId, "bookId");
+    const forceAgent = asOptionalBoolean(params.forceAgent, "forceAgent") ?? false;
+    const priorFailure = asOptionalBoolean(params.priorFailure, "priorFailure") ?? false;
+    const book =
+      bookId === undefined
+        ? null
+        : (() => {
+            const row = ctx.repo.getBookRow(bookId);
+            if (!row) {
+              throw new RpcError(-32000, "Book not found", { error: "not_found", bookId });
+            }
+            return { id: row.id, title: row.title, author: row.author };
+          })();
+    const files = await inspectImportPath(sourcePath);
+    const decision = await selectManualImportPaths(ctx.repo.getSettings(), {
+      mediaType,
+      files,
+      forceAgent,
+      priorFailure,
+      book,
+    });
+    return {
+      path: sourcePath,
+      fileCount: files.length,
+      files,
+      decision,
+    };
+  },
+
   async "import.manual"(ctx, params) {
     const bookId = asPositiveInt(params.bookId, "bookId");
     const mediaType = parseMedia(params.mediaType);
@@ -573,11 +654,13 @@ const readOnlyMethods = new Set<string>([
   "library.list",
   "library.get",
   "search.run",
+  "agent.search.plan",
   "releases.list",
   "downloads.list",
   "downloads.get",
   "jobs.list",
   "jobs.get",
+  "agent.import.plan",
   "import.inspect",
 ]);
 

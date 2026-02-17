@@ -2,6 +2,7 @@ import { KindlingRepo } from "./repo";
 import { RtorrentClient } from "./rtorrent";
 import { infoHashFromTorrentBytes, normalizeInfoHash } from "./torrent";
 import { searchTorznab } from "./torznab";
+import type { TorznabResult } from "./torznab";
 import type { AppSettings, MediaType, ReleaseRow } from "./types";
 
 type SearchRequest = {
@@ -18,6 +19,11 @@ type SnatchRequest = {
   url: string;
   infoHash?: string | null;
   sizeBytes?: number | null;
+};
+
+type RankedSearchResult = {
+  result: TorznabResult;
+  score: number;
 };
 
 function isMagnet(url: string): boolean {
@@ -48,57 +54,70 @@ function idempotentResult(repo: KindlingRepo, existing: ReleaseRow): { release: 
   };
 }
 
-export async function runSearch(settings: AppSettings, request: SearchRequest) {
-  const results = await searchTorznab(settings.torznab, request.query, request.media);
+const setMarkers = ["box set", "collection", "complete", "omnibus", "books 1-7", "1-3", "series"];
+const audioMarkers = ["m4b", "m4a", "mp3", "aac", "flac", "opus", "ogg", "wav", "audiobook", "audio book", "audio"];
+const ebookMarkers = ["epub", "pdf", "mobi", "azw", "ebook", "e-book", "djvu", "cbz", "cbr"];
 
-  const needle = request.query.trim().toLowerCase();
+function hasAudioMarker(title: string): boolean {
+  return audioMarkers.some((marker) => title.includes(marker));
+}
+
+function hasEbookMarker(title: string): boolean {
+  return ebookMarkers.some((marker) => title.includes(marker));
+}
+
+function scoreSearchResult(media: MediaType, query: string, row: TorznabResult): number {
+  const needle = query.trim().toLowerCase();
   const words = needle.split(/\s+/).filter(Boolean);
-  const setMarkers = ["box set", "collection", "complete", "omnibus", "books 1-7", "1-3", "series"];
-  const audioMarkers = ["m4b", "m4a", "mp3", "aac", "flac", "opus", "ogg", "wav", "audiobook", "audio book", "audio"];
-  const ebookMarkers = ["epub", "pdf", "mobi", "azw", "ebook", "e-book", "djvu", "cbz", "cbr"];
-  const hasAudioMarker = (title: string): boolean => audioMarkers.some((marker) => title.includes(marker));
-  const hasEbookMarker = (title: string): boolean => ebookMarkers.some((marker) => title.includes(marker));
+  const lower = row.title.toLowerCase();
+  let value = 0;
+  if (needle && lower.includes(needle)) value += 80;
+  if (words.length > 0 && words.every((word) => lower.includes(word))) value += 35;
+  if (setMarkers.some((marker) => lower.includes(marker))) value -= 120;
+  const hasAudio = hasAudioMarker(lower);
+  const hasEbook = hasEbookMarker(lower);
+  if (media === "audio") {
+    if (hasAudio) value += 160;
+    if (hasEbook) value -= 220;
+  } else {
+    if (hasEbook) value += 160;
+    if (hasAudio) value -= 220;
+  }
+  value += Math.min(60, row.seeders ?? 0);
+  if (typeof row.sizeBytes === "number" && Number.isFinite(row.sizeBytes)) {
+    value -= Math.min(50, Math.round(row.sizeBytes / (1024 * 1024 * 200)));
+  }
+  return value;
+}
 
+export function rankSearchResults(query: string, media: MediaType, results: TorznabResult[]): RankedSearchResult[] {
   const filtered = results.filter((row) => {
     const lower = row.title.toLowerCase();
     const audio = hasAudioMarker(lower);
     const ebook = hasEbookMarker(lower);
-    if (request.media === "audio") {
+    if (media === "audio") {
       return audio && !ebook;
     }
     return ebook && !audio;
   });
 
-  function score(media: MediaType, title: string, seeders: number | null, sizeBytes: number | null): number {
-    const lower = title.toLowerCase();
-    let value = 0;
-    if (needle && lower.includes(needle)) value += 80;
-    if (words.length > 0 && words.every((word) => lower.includes(word))) value += 35;
-    if (setMarkers.some((marker) => lower.includes(marker))) value -= 120;
-    const hasAudio = hasAudioMarker(lower);
-    const hasEbook = hasEbookMarker(lower);
-    if (media === "audio") {
-      if (hasAudio) value += 160;
-      if (hasEbook) value -= 220;
-    } else {
-      if (hasEbook) value += 160;
-      if (hasAudio) value -= 220;
-    }
-    value += Math.min(60, seeders ?? 0);
-    if (typeof sizeBytes === "number" && Number.isFinite(sizeBytes)) {
-      value -= Math.min(50, Math.round(sizeBytes / (1024 * 1024 * 200)));
-    }
-    return value;
-  }
+  return filtered
+    .map((result) => ({
+      result,
+      score: scoreSearchResult(media, query, result),
+    }))
+    .sort((a, b) => {
+      const scoreDiff = b.score - a.score;
+      if (scoreDiff !== 0) return scoreDiff;
+      const aSize = a.result.sizeBytes ?? Number.MAX_SAFE_INTEGER;
+      const bSize = b.result.sizeBytes ?? Number.MAX_SAFE_INTEGER;
+      return aSize - bSize;
+    });
+}
 
-  return filtered.sort((a, b) => {
-    const scoreDiff =
-      score(request.media, b.title, b.seeders, b.sizeBytes) - score(request.media, a.title, a.seeders, a.sizeBytes);
-    if (scoreDiff !== 0) return scoreDiff;
-    const aSize = a.sizeBytes ?? Number.MAX_SAFE_INTEGER;
-    const bSize = b.sizeBytes ?? Number.MAX_SAFE_INTEGER;
-    return aSize - bSize;
-  });
+export async function runSearch(settings: AppSettings, request: SearchRequest) {
+  const results = await searchTorznab(settings.torznab, request.query, request.media);
+  return rankSearchResults(request.query, request.media, results).map((entry) => entry.result);
 }
 
 export async function runSnatch(

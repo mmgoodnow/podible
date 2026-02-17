@@ -86,6 +86,7 @@ Removed REST control routes now return `404`:
 - `library.acquire`
 - `library.rehydrate`
 - `search.run`
+- `agent.search.plan`
 - `snatch.create`
 - `releases.list`
 - `downloads.list`
@@ -93,6 +94,7 @@ Removed REST control routes now return `404`:
 - `downloads.retry`
 - `jobs.list`
 - `jobs.get`
+- `agent.import.plan`
 - `import.reconcile`
 - `import.inspect`
 - `import.manual`
@@ -146,9 +148,24 @@ Bridge constraints:
   "polling": { "rtorrentMs": 5000, "scanMs": 30000 },
   "transcode": { "enabled": true, "format": "mp3", "bitrateKbps": 64 },
   "feed": { "title": "Kindling", "author": "Unknown" },
-  "auth": { "mode": "apikey", "key": "..." }
+  "auth": { "mode": "apikey", "key": "..." },
+  "agents": {
+    "enabled": false,
+    "provider": "openai-responses",
+    "model": "gpt-5-mini",
+    "lowConfidenceThreshold": 0.45,
+    "timeoutMs": 8000,
+    "search": { "enableOnFailure": true, "enableOnLowConfidence": true },
+    "manualImport": { "enableOnFailure": true, "enableOnLowConfidence": true }
+  }
 }
 ```
+
+Agent behavior:
+
+- Deterministic ranking/selection remains the default behavior.
+- Responses API is used only when `agents.enabled=true` and a trigger condition is met (`forceAgent`, prior failure, or low confidence).
+- Missing/failed agent calls fall back to deterministic selection.
 
 ## Open Library Flows
 
@@ -226,6 +243,22 @@ Manual import with explicit file selection (useful for box sets):
 curl -X POST http://localhost/rpc \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":8,"method":"import.manual","params":{"bookId":123,"mediaType":"audio","path":"/data/downloads/box-set","selectedPaths":["/data/downloads/box-set/Disc 1/01.mp3","/data/downloads/box-set/Disc 1/02.mp3"]}}'
+```
+
+Plan search candidate selection (no side effects):
+
+```bash
+curl -X POST http://localhost/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":9,"method":"agent.search.plan","params":{"query":"Dune Frank Herbert","media":"audio","bookId":123}}'
+```
+
+Plan manual import file selection (no side effects):
+
+```bash
+curl -X POST http://localhost/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":10,"method":"agent.import.plan","params":{"path":"/data/downloads/box-set","mediaType":"audio","bookId":123}}'
 ```
 
 ## Testing
