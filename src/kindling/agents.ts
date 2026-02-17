@@ -1,3 +1,5 @@
+import OpenAI from "openai";
+
 import type { ImportInspectionFile } from "./importer";
 import { rankSearchResults } from "./service";
 import type { TorznabResult } from "./torznab";
@@ -100,28 +102,11 @@ function determineTrigger(
   return "none";
 }
 
-function extractResponseText(payload: unknown): string {
-  if (!payload || typeof payload !== "object") return "";
-  const object = payload as Record<string, unknown>;
-  if (typeof object.output_text === "string") {
-    return object.output_text;
-  }
-  const output = Array.isArray(object.output) ? object.output : [];
-  const textChunks: string[] = [];
-  for (const item of output) {
-    if (!item || typeof item !== "object") continue;
-    const content = Array.isArray((item as Record<string, unknown>).content)
-      ? ((item as Record<string, unknown>).content as unknown[])
-      : [];
-    for (const chunk of content) {
-      if (!chunk || typeof chunk !== "object") continue;
-      const text = (chunk as Record<string, unknown>).text;
-      if (typeof text === "string") {
-        textChunks.push(text);
-      }
-    }
-  }
-  return textChunks.join("\n").trim();
+function openAiClient(apiKey: string, timeoutMs: number): OpenAI {
+  return new OpenAI({
+    apiKey,
+    timeout: timeoutMs,
+  });
 }
 
 async function callResponsesJson<T>(settings: AppSettings, system: string, user: string): Promise<T> {
@@ -129,44 +114,31 @@ async function callResponsesJson<T>(settings: AppSettings, system: string, user:
   if (!agent) {
     throw new Error("OpenAI agent not configured");
   }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), agent.timeoutMs);
-  try {
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${agent.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: agent.model,
-        temperature: 0,
-        input: [
-          {
-            role: "system",
-            content: [{ type: "input_text", text: system }],
-          },
-          {
-            role: "user",
-            content: [{ type: "input_text", text: user }],
-          },
-        ],
-      }),
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`OpenAI responses error: ${response.status}`);
+  const client = openAiClient(agent.apiKey, agent.timeoutMs);
+  const response = await client.responses.create(
+    {
+      model: agent.model,
+      temperature: 0,
+      input: [
+        {
+          role: "system",
+          content: [{ type: "input_text", text: system }],
+        },
+        {
+          role: "user",
+          content: [{ type: "input_text", text: user }],
+        },
+      ],
+    },
+    {
+      timeout: agent.timeoutMs,
     }
-    const payload = (await response.json()) as unknown;
-    const text = extractResponseText(payload);
-    if (!text) {
-      throw new Error("OpenAI response text was empty");
-    }
-    return JSON.parse(text) as T;
-  } finally {
-    clearTimeout(timeout);
+  );
+  const text = (response.output_text ?? "").trim();
+  if (!text) {
+    throw new Error("OpenAI response text was empty");
   }
+  return JSON.parse(text) as T;
 }
 
 function deterministicSearchSelection(input: SearchSelectionInput): SearchSelectionResult {

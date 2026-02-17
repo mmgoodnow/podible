@@ -53,7 +53,14 @@ describe("agent decisions", () => {
     const originalApiKey = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = "test-key";
     globalThis.fetch = (async (input: unknown) => {
-      const url = String(input);
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input instanceof Request
+              ? input.url
+              : String(input);
       if (url !== "https://api.openai.com/v1/responses") {
         throw new Error(`Unexpected url: ${url}`);
       }
@@ -172,7 +179,7 @@ describe("agent decisions", () => {
 
       expect(decision.mode).toBe("deterministic");
       expect(decision.candidate?.url).toBe("https://example.com/one.torrent");
-      expect(decision.error).toContain("OpenAI responses error");
+      expect(decision.error).toContain("500");
     } finally {
       globalThis.fetch = originalFetch;
       if (originalApiKey === undefined) {
