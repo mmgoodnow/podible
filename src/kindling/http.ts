@@ -82,6 +82,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
   <td>${escapeHtml(book.ebookStatus)}</td>
   <td class="book-progress" data-book-id="${book.id}" data-audio-status="${escapeHtml(book.audioStatus)}" data-ebook-status="${escapeHtml(book.ebookStatus)}">${escapeHtml(String(book.fullPseudoProgress))}%</td>
   <td>
+    <button type="button" class="view-files-btn" data-book-id="${book.id}" data-book-title="${escapeHtml(book.title)}">Files</button>
     <button type="button" class="report-import-issue-btn" data-book-id="${book.id}" data-book-title="${escapeHtml(book.title)}" data-audio-status="${escapeHtml(book.audioStatus)}" data-ebook-status="${escapeHtml(book.ebookStatus)}">Wrong File</button>
     <button type="button" class="agent-acquire-btn" data-book-id="${book.id}" data-book-title="${escapeHtml(book.title)}">Agent Acquire</button>
     <button type="button" class="delete-book-btn" data-book-id="${book.id}" data-book-title="${escapeHtml(book.title)}">Delete</button>
@@ -111,6 +112,8 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
       th, td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 14px; }
       th { background: #f6f6f6; }
       code { background: #f4f4f4; padding: 2px 4px; border-radius: 4px; }
+      #library-files-panel { display: none; }
+      .path-cell { word-break: break-all; }
     </style>
   </head>
   <body>
@@ -198,6 +201,25 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
       </thead>
       <tbody id="library-table-body">${rows || '<tr><td colspan="8">No books yet.</td></tr>'}</tbody>
     </table>
+    <div id="library-files-panel" class="panel">
+      <div class="row">
+        <strong id="library-files-title">Imported Files</strong>
+        <button id="library-files-close-btn" type="button">Close</button>
+      </div>
+      <p id="library-files-status" class="muted"></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Asset</th>
+            <th>Kind</th>
+            <th>Path</th>
+            <th>Size</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="library-files-body"><tr><td colspan="5">Select a book to view imported files.</td></tr></tbody>
+      </table>
+    </div>
     <h2>Recent Downloads</h2>
     <div class="panel">
       <div class="row">
@@ -896,6 +918,11 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
         loadJobs();
 
         var libraryTableBody = document.getElementById("library-table-body");
+        var libraryFilesPanel = document.getElementById("library-files-panel");
+        var libraryFilesTitle = document.getElementById("library-files-title");
+        var libraryFilesStatus = document.getElementById("library-files-status");
+        var libraryFilesBody = document.getElementById("library-files-body");
+        var libraryFilesCloseBtn = document.getElementById("library-files-close-btn");
         function ensureLibraryEmptyRow() {
           if (!libraryTableBody) return;
           if (libraryTableBody.children.length > 0) return;
@@ -906,6 +933,99 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
           row.appendChild(cell);
           libraryTableBody.appendChild(row);
         }
+
+        function renderLibraryFiles(assets) {
+          if (!libraryFilesBody) return;
+          libraryFilesBody.innerHTML = "";
+          if (!Array.isArray(assets) || assets.length === 0) {
+            libraryFilesBody.innerHTML = '<tr><td colspan="5">No imported assets for this book.</td></tr>';
+            return;
+          }
+          var rowCount = 0;
+          assets.forEach(function (asset) {
+            var files = Array.isArray(asset.files) ? asset.files : [];
+            files.forEach(function (file) {
+              rowCount += 1;
+              var row = document.createElement("tr");
+              var assetCell = document.createElement("td");
+              assetCell.textContent = String(asset.id || "");
+              row.appendChild(assetCell);
+
+              var kindCell = document.createElement("td");
+              kindCell.textContent = String(asset.kind || "");
+              row.appendChild(kindCell);
+
+              var pathCell = document.createElement("td");
+              pathCell.className = "path-cell";
+              pathCell.textContent = String(file.path || "");
+              row.appendChild(pathCell);
+
+              var sizeCell = document.createElement("td");
+              sizeCell.textContent = formatBytes(Number(file.size));
+              row.appendChild(sizeCell);
+
+              var actionCell = document.createElement("td");
+              var link = document.createElement("a");
+              if (asset.kind === "ebook") {
+                link.href = withAuth("/ebook/" + String(asset.id));
+                link.textContent = "Download";
+              } else {
+                var ext = String(asset.stream_ext || "mp3");
+                link.href = withAuth("/stream/" + String(asset.id) + "." + ext);
+                link.textContent = "Stream";
+              }
+              actionCell.appendChild(link);
+              row.appendChild(actionCell);
+
+              libraryFilesBody.appendChild(row);
+            });
+          });
+          if (rowCount === 0) {
+            libraryFilesBody.innerHTML = '<tr><td colspan="5">No imported files for this book.</td></tr>';
+          }
+        }
+
+        async function loadLibraryFiles(bookId, bookTitle) {
+          if (!libraryFilesPanel) return;
+          libraryFilesPanel.style.display = "block";
+          if (libraryFilesTitle) {
+            libraryFilesTitle.textContent = 'Imported Files - "' + bookTitle + '"';
+          }
+          text("library-files-status", "Loading...");
+          try {
+            var response = await api("/assets?bookId=" + encodeURIComponent(String(bookId)));
+            if (!response.ok) {
+              throw new Error("HTTP " + response.status);
+            }
+            var payload = await response.json();
+            var assets = payload && Array.isArray(payload.assets) ? payload.assets : [];
+            renderLibraryFiles(assets);
+            text("library-files-status", "Loaded " + assets.length + " asset(s).");
+          } catch (err) {
+            renderLibraryFiles([]);
+            text("library-files-status", "Load failed: " + (err && err.message ? err.message : "request error"));
+          }
+        }
+
+        if (libraryFilesCloseBtn && libraryFilesPanel) {
+          libraryFilesCloseBtn.addEventListener("click", function () {
+            libraryFilesPanel.style.display = "none";
+          });
+        }
+
+        var viewFilesButtons = Array.prototype.slice.call(document.querySelectorAll(".view-files-btn"));
+        viewFilesButtons.forEach(function (button) {
+          button.addEventListener("click", async function () {
+            var rawId = button.getAttribute("data-book-id") || "";
+            var bookId = parseInt(rawId, 10);
+            if (!Number.isFinite(bookId) || bookId <= 0) {
+              text("library-status", "View files failed: invalid book id.");
+              return;
+            }
+            var bookTitle = button.getAttribute("data-book-title") || ("Book " + String(bookId));
+            await loadLibraryFiles(bookId, bookTitle);
+          });
+        });
 
         var reportImportIssueButtons = Array.prototype.slice.call(document.querySelectorAll(".report-import-issue-btn"));
         reportImportIssueButtons.forEach(function (button) {

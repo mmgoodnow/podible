@@ -46,6 +46,8 @@ describe("podible http", () => {
     expect(body.includes("manual-import-btn")).toBe(true);
     expect(body.includes("manual-import-inspect-btn")).toBe(true);
     expect(body.includes("manual-import-files-body")).toBe(true);
+    expect(body.includes("view-files-btn")).toBe(true);
+    expect(body.includes("library-files-body")).toBe(true);
     expect(body.includes("Settings JSON")).toBe(true);
     expect(body.includes("Recent Jobs")).toBe(true);
     expect(body.includes("jobs-table-body")).toBe(true);
