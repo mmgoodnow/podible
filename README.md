@@ -232,7 +232,7 @@ curl -X POST http://localhost/rpc \
   -d '{"jsonrpc":"2.0","id":4,"method":"library.rehydrate","params":{"bookId":123}}'
 ```
 
-Inspect background jobs and scan outcomes:
+Inspect background jobs and acquire outcomes:
 
 ```bash
 curl -X POST http://localhost/rpc \
@@ -302,6 +302,7 @@ Current suites include:
 
 - Idempotency is enforced by globally unique `releases.info_hash`.
 - Job worker uses queue claim/requeue semantics with retry backoff.
+- Job type split: `acquire` is targeted auto-search/snatch for one book, while `scan` is full library filesystem refresh.
 - Scanner and `library.rehydrate` hydrate missing metadata from Open Library (work id/language/publish date/description/cover where available).
 - Import strategy uses hardlinks only; cross-device `EXDEV` is surfaced as an error.
 - Snatch requires `.torrent` URLs (magnet links are out of scope).

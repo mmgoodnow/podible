@@ -211,8 +211,8 @@ export async function triggerAutoAcquire(
   options: AutoAcquireOptions = {}
 ): Promise<number> {
   const mediaList = media.length > 0 ? Array.from(new Set(media)) : ["audio", "ebook"];
-  const scanJob = repo.createJob({
-    type: "scan",
+  const acquireJob = repo.createJob({
+    type: "acquire",
     bookId,
     payload: {
       bookId,
@@ -222,5 +222,5 @@ export async function triggerAutoAcquire(
       rejectedUrls: options.rejectedUrls ?? [],
     },
   });
-  return scanJob.id;
+  return acquireJob.id;
 }

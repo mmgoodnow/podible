@@ -63,7 +63,7 @@ describe("json-rpc handler", () => {
     expect(acquire.result.priorFailure).toBe(true);
     expect(acquire.result.rejectedUrls).toEqual(["https://example.com/bad.torrent"]);
     const acquireJob = repo.getJob(acquire.result.jobId);
-    expect(acquireJob?.type).toBe("scan");
+    expect(acquireJob?.type).toBe("acquire");
     expect(acquireJob?.book_id).toBe(book.id);
     expect(JSON.parse(acquireJob?.payload_json ?? "{}").media).toEqual(["audio"]);
     expect(JSON.parse(acquireJob?.payload_json ?? "{}").forceAgent).toBe(true);
@@ -172,9 +172,9 @@ describe("json-rpc handler", () => {
       expect(failedRelease?.status).toBe("failed");
       expect(String(failedRelease?.error || "")).toContain("User-reported import issue");
 
-      const scanJob = repo.getJob(result.result.jobId);
-      expect(scanJob?.type).toBe("scan");
-      const payload = JSON.parse(scanJob?.payload_json ?? "{}");
+      const acquireJob = repo.getJob(result.result.jobId);
+      expect(acquireJob?.type).toBe("acquire");
+      const payload = JSON.parse(acquireJob?.payload_json ?? "{}");
       expect(payload.bookId).toBe(book.id);
       expect(payload.media).toEqual(["audio"]);
       expect(payload.forceAgent).toBe(true);

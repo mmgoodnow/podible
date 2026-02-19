@@ -283,7 +283,7 @@ async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done"
     const terminalError = `Import failed after deterministic+agent attempts. deterministic=${deterministicMessage}; decision=${agentDecisionReason}; agentError=${agentDecisionError ?? "none"}`;
     ctx.repo.setReleaseStatus(release.id, "failed", terminalError);
     ctx.repo.createJob({
-      type: "scan",
+      type: "acquire",
       bookId: release.book_id,
       payload: {
         bookId: release.book_id,
@@ -296,7 +296,7 @@ async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done"
     ctx.repo.markJobSucceeded(job.id);
     log(
       ctx,
-      `[import] job=${job.id} release=${release.id} agent_recovery=none queued_scan_forced_agent=1`
+      `[import] job=${job.id} release=${release.id} agent_recovery=none queued_acquire_forced_agent=1`
     );
     return "done";
   }
@@ -324,27 +324,31 @@ async function processReconcileJob(ctx: WorkerContext, job: JobRow): Promise<"do
   return "done";
 }
 
+type AcquirePayload = {
+  bookId?: number;
+  media?: MediaType[];
+  fullRefresh?: boolean;
+  forceAgent?: boolean;
+  priorFailure?: boolean;
+  rejectedUrls?: string[];
+};
+
 /**
- * Scan job: either run a full filesystem scan or targeted auto-search/snatch
- * for a single book, depending on payload flags.
+ * Scan job: run a full filesystem scan and import local library content.
  */
 async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
-  const payload = job.payload_json
-    ? (JSON.parse(job.payload_json) as {
-        bookId?: number;
-        media?: MediaType[];
-        fullRefresh?: boolean;
-        forceAgent?: boolean;
-        priorFailure?: boolean;
-        rejectedUrls?: string[];
-      })
-    : {};
   const settings = ctx.getSettings();
-  if (payload.fullRefresh) {
-    await scanLibraryRoot(ctx.repo, settings.libraryRoot);
-    ctx.repo.markJobSucceeded(job.id);
-    return "done";
-  }
+  await scanLibraryRoot(ctx.repo, settings.libraryRoot);
+  ctx.repo.markJobSucceeded(job.id);
+  return "done";
+}
+
+/**
+ * Acquire job: targeted auto-search/snatch for a specific book and media set.
+ */
+async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
+  const settings = ctx.getSettings();
+  const payload = job.payload_json ? (JSON.parse(job.payload_json) as AcquirePayload) : {};
   if (!payload.bookId) {
     ctx.repo.markJobSucceeded(job.id);
     return "done";
@@ -361,7 +365,10 @@ async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> 
   for (const media of mediaList) {
     const query = `${book.title} ${book.author}`.trim();
     const results = await runSearch(settings, { query, media });
-    log(ctx, `[scan] job=${job.id} book=${book.id} media=${media} query=${JSON.stringify(query)} results=${results.length}`);
+    log(
+      ctx,
+      `[acquire] job=${job.id} book=${book.id} media=${media} query=${JSON.stringify(query)} results=${results.length}`
+    );
     const decision = await selectSearchCandidate(settings, {
       query,
       media,
@@ -372,12 +379,12 @@ async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> 
       book: { id: book.id, title: book.title, author: book.author },
     });
     if (!decision.candidate) {
-      log(ctx, `[scan] job=${job.id} book=${book.id} media=${media} no_result`);
+      log(ctx, `[acquire] job=${job.id} book=${book.id} media=${media} no_result`);
       continue;
     }
     log(
       ctx,
-      `[scan] job=${job.id} book=${book.id} media=${media} candidate_mode=${decision.mode} confidence=${decision.confidence.toFixed(
+      `[acquire] job=${job.id} book=${book.id} media=${media} candidate_mode=${decision.mode} confidence=${decision.confidence.toFixed(
         2
       )} reason=${JSON.stringify(decision.reason)}`
     );
@@ -394,12 +401,12 @@ async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> 
       });
       log(
         ctx,
-        `[scan] job=${job.id} book=${book.id} media=${media} snatch_release=${snatch.release.id} download_job=${snatch.jobId} idempotent=${snatch.idempotent}`
+        `[acquire] job=${job.id} book=${book.id} media=${media} snatch_release=${snatch.release.id} download_job=${snatch.jobId} idempotent=${snatch.idempotent}`
       );
       snatchSucceeded = true;
     } catch (error) {
       const message = (error as Error).message;
-      log(ctx, `[scan] job=${job.id} book=${book.id} media=${media} snatch_error=${JSON.stringify(message)}`);
+      log(ctx, `[acquire] job=${job.id} book=${book.id} media=${media} snatch_error=${JSON.stringify(message)}`);
       snatchErrors.push(`${media}: ${message}`);
       continue;
     }
@@ -428,7 +435,21 @@ async function processJob(ctx: WorkerContext, job: JobRow): Promise<"done" | "re
     return processReconcileJob(ctx, job);
   }
   if (job.type === "scan") {
-    return processScanJob(ctx, job);
+    const payload = job.payload_json ? (JSON.parse(job.payload_json) as AcquirePayload) : {};
+    if (payload.fullRefresh) {
+      return processScanJob(ctx, job);
+    }
+    // Backward compatibility for already-enqueued pre-rename auto-acquire jobs.
+    return processAcquireJob(ctx, job);
+  }
+  if (job.type === "acquire") {
+    if (job.payload_json) {
+      const payload = JSON.parse(job.payload_json) as AcquirePayload;
+      if (payload.fullRefresh) {
+        return processScanJob(ctx, job);
+      }
+    }
+    return processAcquireJob(ctx, job);
   }
   ctx.repo.markJobSucceeded(job.id);
   return "done";

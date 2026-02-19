@@ -258,6 +258,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
         <select id="jobs-type">
           <option value="">all</option>
           <option value="scan">scan</option>
+          <option value="acquire">acquire</option>
           <option value="download">download</option>
           <option value="import">import</option>
           <option value="transcode">transcode</option>

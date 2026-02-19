@@ -19,8 +19,8 @@ function makeTorrentBytes(name: string): Uint8Array {
   return new Uint8Array(Buffer.from(content, "ascii"));
 }
 
-describe("worker scan auto-acquire retries", () => {
-  test("marks scan job for retry when snatch fails", async () => {
+describe("worker acquire auto-acquire retries", () => {
+  test("marks acquire job for retry when snatch fails", async () => {
     const torznab = startMockTorznab({
       results: [{ title: "Dune Audio", torrentId: "audio", size: 1234 }],
       torrents: { audio: makeTorrentBytes("dune-audio") },
@@ -44,8 +44,8 @@ describe("worker scan auto-acquire retries", () => {
     );
 
     const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
-    const scanJob = repo.createJob({
-      type: "scan",
+    const acquireJob = repo.createJob({
+      type: "acquire",
       bookId: book.id,
       payload: { bookId: book.id, media: ["audio"] },
     });
@@ -62,14 +62,14 @@ describe("worker scan auto-acquire retries", () => {
     try {
       const started = Date.now();
       for (;;) {
-        const current = repo.getJob(scanJob.id);
+        const current = repo.getJob(acquireJob.id);
         if (current && current.attempt_count >= 1) break;
         if (Date.now() - started > 4_000) {
-          throw new Error("Timed out waiting for scan job retry");
+          throw new Error("Timed out waiting for acquire job retry");
         }
         await sleep(50);
       }
-      const current = repo.getJob(scanJob.id);
+      const current = repo.getJob(acquireJob.id);
       expect(current).toBeTruthy();
       expect(current?.status).toBe("queued");
       expect(current?.attempt_count).toBe(1);
@@ -86,7 +86,7 @@ describe("worker scan auto-acquire retries", () => {
 });
 
 describe("worker import recovery", () => {
-  test("queues forced agent scan when deterministic import cannot map files", async () => {
+  test("queues forced agent acquire when deterministic import cannot map files", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new KindlingRepo(db);
@@ -185,18 +185,18 @@ describe("worker import recovery", () => {
       expect(failedRelease?.status).toBe("failed");
       expect(String(failedRelease?.error || "")).toContain("deterministic+agent");
 
-      const scanJobs = repo
-        .listJobsByType("scan")
+      const acquireJobs = repo
+        .listJobsByType("acquire")
         .filter((job) => job.book_id === book.id && job.id !== importJob.id);
-      expect(scanJobs.length).toBeGreaterThan(0);
-      const recoveryScan = scanJobs[scanJobs.length - 1];
-      const payload = JSON.parse(recoveryScan.payload_json ?? "{}");
+      expect(acquireJobs.length).toBeGreaterThan(0);
+      const recoveryAcquire = acquireJobs[acquireJobs.length - 1];
+      const payload = JSON.parse(recoveryAcquire.payload_json ?? "{}");
       expect(payload.bookId).toBe(book.id);
       expect(payload.media).toEqual(["audio"]);
       expect(payload.forceAgent).toBe(true);
       expect(payload.priorFailure).toBe(true);
       expect(payload.rejectedUrls).toEqual([release.url]);
-      expect(logs.some((line) => line.includes("queued_scan_forced_agent=1"))).toBe(true);
+      expect(logs.some((line) => line.includes("queued_acquire_forced_agent=1"))).toBe(true);
     } finally {
       stopWorker = true;
       await Promise.race([worker, sleep(1000)]);

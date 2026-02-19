@@ -240,10 +240,17 @@ function parseMediaSelection(value: unknown): MediaType[] {
 }
 
 function parseJobType(value: unknown): JobType {
-  if (value === "scan" || value === "download" || value === "import" || value === "transcode" || value === "reconcile") {
+  if (
+    value === "scan" ||
+    value === "acquire" ||
+    value === "download" ||
+    value === "import" ||
+    value === "transcode" ||
+    value === "reconcile"
+  ) {
     return value;
   }
-  throw new RpcError(-32602, "type must be one of scan|download|import|transcode|reconcile");
+  throw new RpcError(-32602, "type must be one of scan|acquire|download|import|transcode|reconcile");
 }
 
 function uniqueManualInfoHash(bookId: number, mediaType: MediaType, sourcePath: string): string {
@@ -621,7 +628,7 @@ const handlers: Record<string, RpcMethodHandler> = {
     const type = params.type === undefined ? undefined : parseJobType(params.type);
     const jobs = type
       ? ctx.repo.listJobsByType(type)
-      : (["scan", "download", "import", "transcode", "reconcile"] as JobType[]).flatMap((jobType) =>
+      : (["scan", "acquire", "download", "import", "transcode", "reconcile"] as JobType[]).flatMap((jobType) =>
           ctx.repo.listJobsByType(jobType)
         );
     return {

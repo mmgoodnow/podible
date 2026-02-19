@@ -109,7 +109,7 @@ describe("podible http", () => {
 
       const jobRpc = await rpc(fetchHandler, "jobs.get", { jobId: createdRpc.result.acquisition_job_id }, 21);
       expect(jobRpc.result.job.id).toBe(createdRpc.result.acquisition_job_id);
-      expect(jobRpc.result.job.type).toBe("scan");
+      expect(jobRpc.result.job.type).toBe("acquire");
 
       const listRpc = await rpc(fetchHandler, "library.list", { limit: 10 }, 3);
       expect(Array.isArray(listRpc.result.items)).toBe(true);
@@ -388,7 +388,7 @@ describe("podible http", () => {
     expect(acquire.result.media).toEqual(["ebook"]);
 
     const job = repo.getJob(acquire.result.jobId);
-    expect(job?.type).toBe("scan");
+    expect(job?.type).toBe("acquire");
     expect(job?.book_id).toBe(book.id);
     expect(JSON.parse(job?.payload_json ?? "{}").media).toEqual(["ebook"]);
 
