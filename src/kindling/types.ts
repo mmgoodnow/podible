@@ -2,7 +2,13 @@ export type MediaType = "audio" | "ebook";
 
 export type ReleaseStatus = "snatched" | "downloading" | "downloaded" | "imported" | "failed";
 
-export type JobType = "scan" | "acquire" | "download" | "import" | "transcode" | "reconcile";
+export type JobType =
+  | "full_library_refresh"
+  | "acquire"
+  | "download"
+  | "import"
+  | "transcode"
+  | "reconcile";
 
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 

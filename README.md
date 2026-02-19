@@ -302,7 +302,7 @@ Current suites include:
 
 - Idempotency is enforced by globally unique `releases.info_hash`.
 - Job worker uses queue claim/requeue semantics with retry backoff.
-- Job type split: `acquire` is targeted auto-search/snatch for one book, while `scan` is full library filesystem refresh.
+- Job type split: `acquire` is targeted auto-search/snatch for one book, while `full_library_refresh` scans and imports existing filesystem content.
 - Scanner and `library.rehydrate` hydrate missing metadata from Open Library (work id/language/publish date/description/cover where available).
 - Import strategy uses hardlinks only; cross-device `EXDEV` is surfaced as an error.
 - Snatch requires `.torrent` URLs (magnet links are out of scope).

@@ -327,16 +327,16 @@ async function processReconcileJob(ctx: WorkerContext, job: JobRow): Promise<"do
 type AcquirePayload = {
   bookId?: number;
   media?: MediaType[];
-  fullRefresh?: boolean;
   forceAgent?: boolean;
   priorFailure?: boolean;
   rejectedUrls?: string[];
 };
 
 /**
- * Scan job: run a full filesystem scan and import local library content.
+ * Full-library-refresh job: run a full filesystem scan and import local
+ * library content.
  */
-async function processScanJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
+async function processFullLibraryRefreshJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
   const settings = ctx.getSettings();
   await scanLibraryRoot(ctx.repo, settings.libraryRoot);
   ctx.repo.markJobSucceeded(job.id);
@@ -434,21 +434,10 @@ async function processJob(ctx: WorkerContext, job: JobRow): Promise<"done" | "re
   if (job.type === "reconcile") {
     return processReconcileJob(ctx, job);
   }
-  if (job.type === "scan") {
-    const payload = job.payload_json ? (JSON.parse(job.payload_json) as AcquirePayload) : {};
-    if (payload.fullRefresh) {
-      return processScanJob(ctx, job);
-    }
-    // Backward compatibility for already-enqueued pre-rename auto-acquire jobs.
-    return processAcquireJob(ctx, job);
+  if (job.type === "full_library_refresh") {
+    return processFullLibraryRefreshJob(ctx, job);
   }
   if (job.type === "acquire") {
-    if (job.payload_json) {
-      const payload = JSON.parse(job.payload_json) as AcquirePayload;
-      if (payload.fullRefresh) {
-        return processScanJob(ctx, job);
-      }
-    }
     return processAcquireJob(ctx, job);
   }
   ctx.repo.markJobSucceeded(job.id);

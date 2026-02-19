@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS asset_files (
 
 CREATE TABLE IF NOT EXISTS jobs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  type TEXT NOT NULL CHECK (type IN ('scan', 'acquire', 'download', 'import', 'transcode', 'reconcile')),
+  type TEXT NOT NULL CHECK (type IN ('full_library_refresh', 'acquire', 'download', 'import', 'transcode', 'reconcile')),
   status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
   book_id INTEGER NULL,
   release_id INTEGER NULL,
@@ -128,7 +128,7 @@ function applyJobTypeMigration(db: Database): void {
   db.exec(`
 CREATE TABLE jobs_new (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  type TEXT NOT NULL CHECK (type IN ('scan', 'acquire', 'download', 'import', 'transcode', 'reconcile')),
+  type TEXT NOT NULL CHECK (type IN ('full_library_refresh', 'acquire', 'download', 'import', 'transcode', 'reconcile')),
   status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
   book_id INTEGER NULL,
   release_id INTEGER NULL,

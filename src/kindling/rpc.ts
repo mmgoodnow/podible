@@ -241,7 +241,7 @@ function parseMediaSelection(value: unknown): MediaType[] {
 
 function parseJobType(value: unknown): JobType {
   if (
-    value === "scan" ||
+    value === "full_library_refresh" ||
     value === "acquire" ||
     value === "download" ||
     value === "import" ||
@@ -250,7 +250,7 @@ function parseJobType(value: unknown): JobType {
   ) {
     return value;
   }
-  throw new RpcError(-32602, "type must be one of scan|acquire|download|import|transcode|reconcile");
+  throw new RpcError(-32602, "type must be one of full_library_refresh|acquire|download|import|transcode|reconcile");
 }
 
 function uniqueManualInfoHash(bookId: number, mediaType: MediaType, sourcePath: string): string {
@@ -373,8 +373,7 @@ const handlers: Record<string, RpcMethodHandler> = {
 
   async "library.refresh"(ctx) {
     const job = ctx.repo.createJob({
-      type: "scan",
-      payload: { fullRefresh: true },
+      type: "full_library_refresh",
     });
     return { jobId: job.id };
   },
@@ -628,7 +627,7 @@ const handlers: Record<string, RpcMethodHandler> = {
     const type = params.type === undefined ? undefined : parseJobType(params.type);
     const jobs = type
       ? ctx.repo.listJobsByType(type)
-      : (["scan", "acquire", "download", "import", "transcode", "reconcile"] as JobType[]).flatMap((jobType) =>
+      : (["full_library_refresh", "acquire", "download", "import", "transcode", "reconcile"] as JobType[]).flatMap((jobType) =>
           ctx.repo.listJobsByType(jobType)
         );
     return {

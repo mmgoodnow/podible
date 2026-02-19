@@ -70,7 +70,7 @@ describe("json-rpc handler", () => {
     expect(JSON.parse(acquireJob?.payload_json ?? "{}").priorFailure).toBe(true);
     expect(JSON.parse(acquireJob?.payload_json ?? "{}").rejectedUrls).toEqual(["https://example.com/bad.torrent"]);
 
-    const queued = repo.createJob({ type: "scan", payload: { fullRefresh: true } });
+    const queued = repo.createJob({ type: "full_library_refresh" });
     const jobs = await callRpc(repo, {
       jsonrpc: "2.0",
       id: 3,
