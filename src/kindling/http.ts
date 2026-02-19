@@ -1029,6 +1029,33 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
         });
 
         var reportImportIssueButtons = Array.prototype.slice.call(document.querySelectorAll(".report-import-issue-btn"));
+        function pickReleaseForImportIssue(details, mediaType) {
+          var releases = details && Array.isArray(details.releases) ? details.releases : [];
+          var assets = details && Array.isArray(details.assets) ? details.assets : [];
+          var mediaReleases = releases.filter(function (release) {
+            return String(release.media_type || "") === mediaType;
+          });
+          if (mediaReleases.length === 0) return null;
+
+          var mediaAsset = assets.find(function (asset) {
+            var kind = String(asset.kind || "");
+            if (mediaType === "ebook") return kind === "ebook";
+            return kind !== "ebook";
+          });
+          if (mediaAsset && Number.isFinite(Number(mediaAsset.source_release_id))) {
+            var sourceReleaseId = Number(mediaAsset.source_release_id);
+            var fromAsset = mediaReleases.find(function (release) {
+              return Number(release.id) === sourceReleaseId;
+            });
+            if (fromAsset) return Number(fromAsset.id);
+          }
+
+          var imported = mediaReleases.find(function (release) {
+            return String(release.status || "") === "imported";
+          });
+          if (imported) return Number(imported.id);
+          return Number(mediaReleases[0].id);
+        }
         reportImportIssueButtons.forEach(function (button) {
           button.addEventListener("click", async function () {
             var rawId = button.getAttribute("data-book-id") || "";
@@ -1051,9 +1078,15 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
             button.disabled = true;
             text("library-status", 'Reporting wrong ' + mediaType + ' file for "' + bookTitle + '"...');
             try {
+              var details = await rpc("library.get", { bookId: bookId });
+              var releaseId = pickReleaseForImportIssue(details, mediaType);
+              if (!Number.isFinite(releaseId) || releaseId <= 0) {
+                throw new Error("No matching release found for selected media");
+              }
               var result = await rpc("library.reportImportIssue", {
                 bookId: bookId,
                 mediaType: mediaType,
+                releaseId: releaseId,
               });
               if (result && result.action === "agent_imported") {
                 text("library-status", 'Agent imported replacement ' + mediaType + ' file for "' + bookTitle + '".');
@@ -1153,24 +1186,50 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
 
 export function createPodibleFetchHandler(repo: KindlingRepo, startTime: number): (request: Request) => Promise<Response> {
   return async (request: Request): Promise<Response> => {
+    const startedAt = Date.now();
     const settings = repo.getSettings();
     const url = new URL(request.url);
+    const method = request.method;
     const pathname = url.pathname;
+    let logSuffix = "";
+
+    const logRequest = (status: number): void => {
+      const elapsedMs = Date.now() - startedAt;
+      const suffix = logSuffix ? ` ${logSuffix}` : "";
+      console.log(`[http] ${method} ${pathname} status=${status} ms=${elapsedMs}${suffix}`);
+    };
+
+    let response: Response;
 
     if (!authorizeRequest(request, settings)) {
-      return new Response("Unauthorized", {
+      response = new Response("Unauthorized", {
         status: 401,
         headers: { "WWW-Authenticate": 'Bearer realm="podible"' },
       });
+      logRequest(response.status);
+      return response;
     }
 
     try {
       if (pathname === "/" && request.method === "GET") {
-        return renderHomePage(repo, settings);
+        response = renderHomePage(repo, settings);
+        logRequest(response.status);
+        return response;
       }
 
       if (pathname === "/rpc" && request.method === "POST") {
-        return handleRpcRequest(request, { repo, startTime });
+        try {
+          const cloned = await request.clone().text();
+          const payload = JSON.parse(cloned) as { method?: unknown };
+          if (typeof payload.method === "string" && payload.method.trim()) {
+            logSuffix = `rpc=${payload.method.trim()}`;
+          }
+        } catch {
+          // ignore parse errors in logging path; handler will return JSON-RPC parse errors.
+        }
+        response = await handleRpcRequest(request, { repo, startTime });
+        logRequest(response.status);
+        return response;
       }
 
       if (pathname.startsWith("/rpc/") && request.method === "GET") {
@@ -1178,8 +1237,13 @@ export function createPodibleFetchHandler(repo: KindlingRepo, startTime: number)
           .slice("/rpc/".length)
           .split("/")
           .filter(Boolean);
+        if (parts.length > 0) {
+          logSuffix = `rpc=${parts.join(".")}`;
+        }
         if (parts.length !== 2) {
-          return new Response("Not found", { status: 404 });
+          response = new Response("Not found", { status: 404 });
+          logRequest(response.status);
+          return response;
         }
         const params: Record<string, unknown> = {};
         for (const [key, value] of url.searchParams.entries()) {
@@ -1195,7 +1259,9 @@ export function createPodibleFetchHandler(repo: KindlingRepo, startTime: number)
             params[key] = [existing, value];
           }
         }
-        return handleRpcMethod(parts.join("."), params, { repo, startTime }, { id: null, readOnly: true });
+        response = await handleRpcMethod(parts.join("."), params, { repo, startTime }, { id: null, readOnly: true });
+        logRequest(response.status);
+        return response;
       }
 
       if (pathname === "/assets" && request.method === "GET") {
@@ -1205,71 +1271,121 @@ export function createPodibleFetchHandler(repo: KindlingRepo, startTime: number)
           files: repo.getAssetFiles(asset.id),
           stream_ext: streamExtension(asset),
         }));
-        return json({ assets });
+        response = json({ assets });
+        logRequest(response.status);
+        return response;
       }
 
       if (pathname.startsWith("/stream/") && request.method === "GET") {
         const idPart = pathname.split("/")[2] ?? "";
         const assetId = parseId(idPart.split(".")[0] ?? "");
         const target = repo.getAssetWithFiles(assetId);
-        if (!target) return new Response("Not found", { status: 404 });
+        if (!target) {
+          response = new Response("Not found", { status: 404 });
+          logRequest(response.status);
+          return response;
+        }
         const book = repo.getBookByAsset(assetId);
-        return streamAudioAsset(request, target.asset, target.files, book?.cover_path);
+        response = await streamAudioAsset(request, target.asset, target.files, book?.cover_path);
+        logRequest(response.status);
+        return response;
       }
 
       if (pathname.startsWith("/chapters/") && request.method === "GET") {
         const idPart = pathname.split("/")[2] ?? "";
         const assetId = parseId(idPart.replace(/\.json$/i, ""));
         const target = repo.getAssetWithFiles(assetId);
-        if (!target) return json({ error: "not_found" }, 404);
+        if (!target) {
+          response = json({ error: "not_found" }, 404);
+          logRequest(response.status);
+          return response;
+        }
         const chapters = await buildChapters(target.asset, target.files);
-        if (!chapters) return json({ error: "not_found" }, 404);
-        return new Response(JSON.stringify(chapters, null, 2), {
+        if (!chapters) {
+          response = json({ error: "not_found" }, 404);
+          logRequest(response.status);
+          return response;
+        }
+        response = new Response(JSON.stringify(chapters, null, 2), {
           headers: { "Content-Type": "application/json+chapters" },
         });
+        logRequest(response.status);
+        return response;
       }
 
       if (pathname.startsWith("/covers/") && request.method === "GET") {
         const idPart = pathname.split("/")[2] ?? "";
         const bookId = parseId(idPart.replace(/\.jpg$/i, ""));
         const book = repo.getBookRow(bookId);
-        if (!book?.cover_path) return new Response("Not found", { status: 404 });
+        if (!book?.cover_path) {
+          response = new Response("Not found", { status: 404 });
+          logRequest(response.status);
+          return response;
+        }
         const file = Bun.file(book.cover_path);
-        if (!(await file.exists())) return new Response("Not found", { status: 404 });
-        return new Response(file, {
+        if (!(await file.exists())) {
+          response = new Response("Not found", { status: 404 });
+          logRequest(response.status);
+          return response;
+        }
+        response = new Response(file, {
           headers: {
             "Content-Type": book.cover_path.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg",
           },
         });
+        logRequest(response.status);
+        return response;
       }
 
       if (pathname === "/feed.xml" && request.method === "GET") {
-        return buildRssFeed(request, repo, settings.feed.title, settings.feed.author);
+        response = buildRssFeed(request, repo, settings.feed.title, settings.feed.author);
+        logRequest(response.status);
+        return response;
       }
 
       if (pathname === "/feed.json" && request.method === "GET") {
-        return buildJsonFeed(request, repo, settings.feed.title, settings.feed.author);
+        response = buildJsonFeed(request, repo, settings.feed.title, settings.feed.author);
+        logRequest(response.status);
+        return response;
       }
 
       if (pathname.startsWith("/ebook/") && request.method === "GET") {
         const assetId = parseId(pathname.split("/")[2] ?? "");
         const target = repo.getAssetWithFiles(assetId);
-        if (!target || target.asset.kind !== "ebook") return new Response("Not found", { status: 404 });
+        if (!target || target.asset.kind !== "ebook") {
+          response = new Response("Not found", { status: 404 });
+          logRequest(response.status);
+          return response;
+        }
         const first = target.files[0];
-        if (!first) return new Response("Not found", { status: 404 });
+        if (!first) {
+          response = new Response("Not found", { status: 404 });
+          logRequest(response.status);
+          return response;
+        }
         const file = Bun.file(first.path);
-        if (!(await file.exists())) return new Response("Not found", { status: 404 });
-        return new Response(file, {
+        if (!(await file.exists())) {
+          response = new Response("Not found", { status: 404 });
+          logRequest(response.status);
+          return response;
+        }
+        response = new Response(file, {
           headers: {
             "Content-Type": target.asset.mime,
             "Content-Disposition": `attachment; filename="${first.path.split("/").pop() ?? `book-${assetId}`}"`,
           },
         });
+        logRequest(response.status);
+        return response;
       }
 
-      return new Response("Not found", { status: 404 });
+      response = new Response("Not found", { status: 404 });
+      logRequest(response.status);
+      return response;
     } catch (error) {
-      return json({ error: (error as Error).message }, 400);
+      response = json({ error: (error as Error).message }, 400);
+      logRequest(response.status);
+      return response;
     }
   };
 }

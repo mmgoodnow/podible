@@ -187,6 +187,85 @@ describe("json-rpc handler", () => {
     }
   });
 
+  test("library.reportImportIssue targets imported release when releaseId is omitted", async () => {
+    const originalFetch = globalThis.fetch;
+    try {
+      const db = new Database(":memory:");
+      runMigrations(db);
+      const repo = new KindlingRepo(db);
+      repo.updateSettings(
+        defaultSettings({
+          auth: { mode: "local", key: "test" },
+          rtorrent: {
+            transport: "http-xmlrpc",
+            url: "http://mock.local/RPC2",
+            username: "",
+            password: "",
+          },
+          agents: {
+            ...defaultSettings().agents,
+            enabled: false,
+          },
+        })
+      );
+
+      const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+      const importedRelease = repo.createRelease({
+        bookId: book.id,
+        provider: "mock",
+        providerGuid: "guid-imported",
+        title: "Dune Imported",
+        mediaType: "audio",
+        infoHash: "1111111111111111111111111111111111111111",
+        url: "https://example.com/imported-audio.torrent",
+        status: "imported",
+      });
+      const newerRelease = repo.createRelease({
+        bookId: book.id,
+        provider: "mock",
+        providerGuid: "guid-newer",
+        title: "Dune Newer Attempt",
+        mediaType: "audio",
+        infoHash: "2222222222222222222222222222222222222222",
+        url: "https://example.com/newer-audio.torrent",
+        status: "snatched",
+      });
+
+      globalThis.fetch = (async () => {
+        throw new Error("rTorrent unavailable");
+      }) as unknown as typeof fetch;
+
+      const result = await callRpc(repo, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "library.reportImportIssue",
+        params: {
+          bookId: book.id,
+          mediaType: "audio",
+        },
+      });
+
+      expect(result.result.action).toBe("reacquire_queued");
+      expect(result.result.releaseId).toBe(importedRelease.id);
+      expect(result.result.rejectedUrls).toEqual([importedRelease.url]);
+      expect(result.result.releaseId).not.toBe(newerRelease.id);
+
+      const failedImported = repo.getRelease(importedRelease.id);
+      expect(failedImported?.status).toBe("failed");
+      const untouchedNewer = repo.getRelease(newerRelease.id);
+      expect(untouchedNewer?.status).toBe("snatched");
+
+      const acquireJob = repo.getJob(result.result.jobId);
+      expect(acquireJob?.type).toBe("acquire");
+      const payload = JSON.parse(acquireJob?.payload_json ?? "{}");
+      expect(payload.rejectedUrls).toEqual([importedRelease.url]);
+
+      db.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("returns parse error for malformed json", async () => {
     const db = new Database(":memory:");
     runMigrations(db);

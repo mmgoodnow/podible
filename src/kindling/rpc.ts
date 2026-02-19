@@ -406,10 +406,24 @@ const handlers: Record<string, RpcMethodHandler> = {
     }
 
     const releases = ctx.repo.listReleasesByBook(bookId).filter((release) => release.media_type === mediaType);
+    const assets = ctx.repo.listAssetsByBook(bookId);
     const release = (() => {
       if (releaseId !== undefined) {
         return releases.find((candidate) => candidate.id === releaseId) ?? null;
       }
+
+      const mediaAsset = assets.find((asset) => {
+        if (mediaType === "ebook") return asset.kind === "ebook";
+        return asset.kind !== "ebook";
+      });
+      if (mediaAsset?.source_release_id) {
+        const fromAsset = releases.find((candidate) => candidate.id === mediaAsset.source_release_id);
+        if (fromAsset) return fromAsset;
+      }
+
+      const imported = releases.find((candidate) => candidate.status === "imported");
+      if (imported) return imported;
+
       return releases[0] ?? null;
     })();
     if (!release) {
