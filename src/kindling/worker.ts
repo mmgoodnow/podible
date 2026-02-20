@@ -291,6 +291,8 @@ async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done"
         priorFailure: true,
         forceAgent: true,
         rejectedUrls: [release.url],
+        rejectedGuids: release.provider_guid ? [release.provider_guid] : [],
+        rejectedInfoHashes: release.info_hash ? [release.info_hash] : [],
       },
     });
     ctx.repo.markJobSucceeded(job.id);
@@ -330,6 +332,8 @@ type AcquirePayload = {
   forceAgent?: boolean;
   priorFailure?: boolean;
   rejectedUrls?: string[];
+  rejectedGuids?: string[];
+  rejectedInfoHashes?: string[];
 };
 
 /**
@@ -376,6 +380,8 @@ async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promise<"done
       forceAgent: payload.forceAgent === true,
       priorFailure: payload.priorFailure === true,
       rejectedUrls: Array.isArray(payload.rejectedUrls) ? payload.rejectedUrls : [],
+      rejectedGuids: Array.isArray(payload.rejectedGuids) ? payload.rejectedGuids : [],
+      rejectedInfoHashes: Array.isArray(payload.rejectedInfoHashes) ? payload.rejectedInfoHashes : [],
       book: { id: book.id, title: book.title, author: book.author },
     });
     if (!decision.candidate) {

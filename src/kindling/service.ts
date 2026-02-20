@@ -25,6 +25,8 @@ type AutoAcquireOptions = {
   forceAgent?: boolean;
   priorFailure?: boolean;
   rejectedUrls?: string[];
+  rejectedGuids?: string[];
+  rejectedInfoHashes?: string[];
 };
 
 type RankedSearchResult = {
@@ -220,6 +222,8 @@ export async function triggerAutoAcquire(
       forceAgent: options.forceAgent === true,
       priorFailure: options.priorFailure === true,
       rejectedUrls: options.rejectedUrls ?? [],
+      rejectedGuids: options.rejectedGuids ?? [],
+      rejectedInfoHashes: options.rejectedInfoHashes ?? [],
     },
   });
   return acquireJob.id;

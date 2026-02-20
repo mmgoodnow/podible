@@ -190,6 +190,51 @@ describe("agent decisions", () => {
     }
   });
 
+  test("search selection excludes rejected guid and infohash", async () => {
+    const settings = defaultSettings({
+      agents: {
+        ...defaultSettings().agents,
+        enabled: false,
+      },
+    });
+
+    const decision = await selectSearchCandidate(settings, {
+      query: "Dune Frank Herbert",
+      media: "audio",
+      rejectedGuids: ["g1"],
+      rejectedInfoHashes: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      results: [
+        {
+          title: "Dune Frank Herbert [ENG / M4B]",
+          provider: "mock",
+          mediaType: "audio",
+          sizeBytes: 1000,
+          url: "https://example.com/one.torrent",
+          guid: "g1",
+          infoHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          seeders: 3,
+          leechers: 0,
+          raw: {},
+        },
+        {
+          title: "Dune Frank Herbert [ENG / MP3]",
+          provider: "mock",
+          mediaType: "audio",
+          sizeBytes: 1200,
+          url: "https://example.com/two.torrent",
+          guid: "g2",
+          infoHash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          seeders: 2,
+          leechers: 0,
+          raw: {},
+        },
+      ],
+    });
+
+    expect(decision.mode).toBe("deterministic");
+    expect(decision.candidate?.url).toBe("https://example.com/two.torrent");
+  });
+
   test("manual import selection is deterministic by default", async () => {
     const settings = defaultSettings({
       agents: {

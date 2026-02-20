@@ -62,6 +62,8 @@ describe("json-rpc handler", () => {
     expect(acquire.result.forceAgent).toBe(true);
     expect(acquire.result.priorFailure).toBe(true);
     expect(acquire.result.rejectedUrls).toEqual(["https://example.com/bad.torrent"]);
+    expect(acquire.result.rejectedGuids).toEqual([]);
+    expect(acquire.result.rejectedInfoHashes).toEqual([]);
     const acquireJob = repo.getJob(acquire.result.jobId);
     expect(acquireJob?.type).toBe("acquire");
     expect(acquireJob?.book_id).toBe(book.id);
@@ -69,6 +71,8 @@ describe("json-rpc handler", () => {
     expect(JSON.parse(acquireJob?.payload_json ?? "{}").forceAgent).toBe(true);
     expect(JSON.parse(acquireJob?.payload_json ?? "{}").priorFailure).toBe(true);
     expect(JSON.parse(acquireJob?.payload_json ?? "{}").rejectedUrls).toEqual(["https://example.com/bad.torrent"]);
+    expect(JSON.parse(acquireJob?.payload_json ?? "{}").rejectedGuids).toEqual([]);
+    expect(JSON.parse(acquireJob?.payload_json ?? "{}").rejectedInfoHashes).toEqual([]);
 
     const queued = repo.createJob({ type: "full_library_refresh" });
     const jobs = await callRpc(repo, {
@@ -166,6 +170,8 @@ describe("json-rpc handler", () => {
       expect(result.result.releaseId).toBe(release.id);
       expect(result.result.mediaType).toBe("audio");
       expect(result.result.rejectedUrls).toEqual([release.url]);
+      expect(result.result.rejectedGuids).toEqual(["guid-1"]);
+      expect(result.result.rejectedInfoHashes).toEqual(["abc123"]);
       expect(result.result.jobId).toBeGreaterThan(0);
 
       const failedRelease = repo.getRelease(release.id);
@@ -180,6 +186,8 @@ describe("json-rpc handler", () => {
       expect(payload.forceAgent).toBe(true);
       expect(payload.priorFailure).toBe(true);
       expect(payload.rejectedUrls).toEqual([release.url]);
+      expect(payload.rejectedGuids).toEqual(["guid-1"]);
+      expect(payload.rejectedInfoHashes).toEqual(["abc123"]);
 
       db.close();
     } finally {
@@ -248,6 +256,8 @@ describe("json-rpc handler", () => {
       expect(result.result.action).toBe("reacquire_queued");
       expect(result.result.releaseId).toBe(importedRelease.id);
       expect(result.result.rejectedUrls).toEqual([importedRelease.url]);
+      expect(result.result.rejectedGuids).toEqual(["guid-imported"]);
+      expect(result.result.rejectedInfoHashes).toEqual([importedRelease.info_hash]);
       expect(result.result.releaseId).not.toBe(newerRelease.id);
 
       const failedImported = repo.getRelease(importedRelease.id);
@@ -259,6 +269,8 @@ describe("json-rpc handler", () => {
       expect(acquireJob?.type).toBe("acquire");
       const payload = JSON.parse(acquireJob?.payload_json ?? "{}");
       expect(payload.rejectedUrls).toEqual([importedRelease.url]);
+      expect(payload.rejectedGuids).toEqual(["guid-imported"]);
+      expect(payload.rejectedInfoHashes).toEqual([importedRelease.info_hash]);
 
       db.close();
     } finally {

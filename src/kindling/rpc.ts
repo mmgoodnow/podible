@@ -388,12 +388,16 @@ const handlers: Record<string, RpcMethodHandler> = {
     const forceAgent = asOptionalBoolean(params.forceAgent, "forceAgent") ?? false;
     const priorFailure = asOptionalBoolean(params.priorFailure, "priorFailure") ?? false;
     const rejectedUrls = asOptionalStringArray(params.rejectedUrls, "rejectedUrls") ?? [];
+    const rejectedGuids = asOptionalStringArray(params.rejectedGuids, "rejectedGuids") ?? [];
+    const rejectedInfoHashes = asOptionalStringArray(params.rejectedInfoHashes, "rejectedInfoHashes") ?? [];
     const jobId = await triggerAutoAcquire(ctx.repo, bookId, media, {
       forceAgent,
       priorFailure,
       rejectedUrls,
+      rejectedGuids,
+      rejectedInfoHashes,
     });
-    return { jobId, media, forceAgent, priorFailure, rejectedUrls };
+    return { jobId, media, forceAgent, priorFailure, rejectedUrls, rejectedGuids, rejectedInfoHashes };
   },
 
   async "library.reportImportIssue"(ctx, params) {
@@ -472,6 +476,8 @@ const handlers: Record<string, RpcMethodHandler> = {
       forceAgent: true,
       priorFailure: true,
       rejectedUrls: [release.url],
+      rejectedGuids: release.provider_guid ? [release.provider_guid] : [],
+      rejectedInfoHashes: release.info_hash ? [release.info_hash] : [],
     });
     return {
       action: "reacquire_queued",
@@ -479,6 +485,8 @@ const handlers: Record<string, RpcMethodHandler> = {
       releaseId: release.id,
       mediaType,
       rejectedUrls: [release.url],
+      rejectedGuids: release.provider_guid ? [release.provider_guid] : [],
+      rejectedInfoHashes: release.info_hash ? [release.info_hash] : [],
       decision: agentDecision,
       error: agentImportError,
     };

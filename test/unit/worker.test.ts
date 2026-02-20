@@ -196,6 +196,8 @@ describe("worker import recovery", () => {
       expect(payload.forceAgent).toBe(true);
       expect(payload.priorFailure).toBe(true);
       expect(payload.rejectedUrls).toEqual([release.url]);
+      expect(payload.rejectedGuids).toEqual(["guid-1"]);
+      expect(payload.rejectedInfoHashes).toEqual([release.info_hash]);
       expect(logs.some((line) => line.includes("queued_acquire_forced_agent=1"))).toBe(true);
     } finally {
       stopWorker = true;

@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import type { ImportInspectionFile } from "./importer";
 import { rankSearchResults } from "./service";
 import type { TorznabResult } from "./torznab";
+import { normalizeInfoHash } from "./torrent";
 import type { AppSettings, MediaType } from "./types";
 
 /**
@@ -38,6 +39,8 @@ type SearchSelectionInput = {
   media: MediaType;
   results: TorznabResult[];
   rejectedUrls?: string[];
+  rejectedGuids?: string[];
+  rejectedInfoHashes?: string[];
   forceAgent?: boolean;
   priorFailure?: boolean;
   book?: {
@@ -141,9 +144,53 @@ async function callResponsesJson<T>(settings: AppSettings, system: string, user:
   return JSON.parse(text) as T;
 }
 
+function normalizeRejectedUrl(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  try {
+    const parsed = new URL(trimmed);
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return trimmed;
+  }
+}
+
+function isRejectedCandidate(
+  candidate: TorznabResult,
+  rejectedUrls: Set<string>,
+  rejectedGuids: Set<string>,
+  rejectedInfoHashes: Set<string>
+): boolean {
+  if (rejectedUrls.size > 0) {
+    const normalizedUrl = normalizeRejectedUrl(candidate.url);
+    if (normalizedUrl && rejectedUrls.has(normalizedUrl)) {
+      return true;
+    }
+  }
+  if (rejectedGuids.size > 0 && candidate.guid && rejectedGuids.has(candidate.guid.trim())) {
+    return true;
+  }
+  if (rejectedInfoHashes.size > 0 && candidate.infoHash) {
+    const normalized = normalizeInfoHash(candidate.infoHash);
+    if (normalized && rejectedInfoHashes.has(normalized)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function deterministicSearchSelection(input: SearchSelectionInput): SearchSelectionResult {
-  const rejected = new Set((input.rejectedUrls ?? []).map((item) => item.trim()).filter(Boolean));
-  const ranked = rankSearchResults(input.query, input.media, input.results).filter((item) => !rejected.has(item.result.url));
+  const rejectedUrls = new Set((input.rejectedUrls ?? []).map((item) => normalizeRejectedUrl(item)).filter(Boolean));
+  const rejectedGuids = new Set((input.rejectedGuids ?? []).map((item) => item.trim()).filter(Boolean));
+  const rejectedInfoHashes = new Set(
+    (input.rejectedInfoHashes ?? [])
+      .map((item) => normalizeInfoHash(item))
+      .filter((item): item is string => Boolean(item))
+  );
+  const ranked = rankSearchResults(input.query, input.media, input.results).filter(
+    (item) => !isRejectedCandidate(item.result, rejectedUrls, rejectedGuids, rejectedInfoHashes)
+  );
   if (ranked.length === 0) {
     return {
       candidate: null,
@@ -259,8 +306,15 @@ export async function selectSearchCandidate(settings: AppSettings, input: Search
   }
 
   try {
+    const rejectedUrls = new Set((input.rejectedUrls ?? []).map((item) => normalizeRejectedUrl(item)).filter(Boolean));
+    const rejectedGuids = new Set((input.rejectedGuids ?? []).map((item) => item.trim()).filter(Boolean));
+    const rejectedInfoHashes = new Set(
+      (input.rejectedInfoHashes ?? [])
+        .map((item) => normalizeInfoHash(item))
+        .filter((item): item is string => Boolean(item))
+    );
     const ranked = rankSearchResults(input.query, input.media, input.results)
-      .filter((item) => !(input.rejectedUrls ?? []).includes(item.result.url))
+      .filter((item) => !isRejectedCandidate(item.result, rejectedUrls, rejectedGuids, rejectedInfoHashes))
       .slice(0, 12);
     const system = [
       "You select the best torrent candidate for a single book acquisition.",
