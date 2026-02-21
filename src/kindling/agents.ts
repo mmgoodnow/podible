@@ -121,7 +121,6 @@ async function callResponsesJson<T>(settings: AppSettings, system: string, user:
   const response = await client.responses.create(
     {
       model: agent.model,
-      temperature: 0,
       input: [
         {
           role: "system",
