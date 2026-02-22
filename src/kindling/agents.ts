@@ -332,12 +332,8 @@ export async function selectSearchCandidate(settings: AppSettings, input: Search
         candidates: ranked.map((item, index) => ({
           index,
           title: item.result.title,
-          provider: item.result.provider,
           sizeBytes: item.result.sizeBytes,
           seeders: item.result.seeders,
-          guid: item.result.guid,
-          url: item.result.url,
-          score: item.score,
         })),
       },
       null,
