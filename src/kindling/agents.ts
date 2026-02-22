@@ -81,6 +81,18 @@ function clamp01(value: number): number {
   return value;
 }
 
+function humanSize(value: number | null | undefined): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let n = value;
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i += 1;
+  }
+  return `${i === 0 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
+}
+
 function configuredAgent(settings: AppSettings) {
   if (!settings.agents?.enabled) return null;
   const apiKey = process.env.OPENAI_API_KEY?.trim();
@@ -332,7 +344,7 @@ export async function selectSearchCandidate(settings: AppSettings, input: Search
         candidates: ranked.map((item, index) => ({
           index,
           title: item.result.title,
-          sizeBytes: item.result.sizeBytes,
+          size: humanSize(item.result.sizeBytes),
           seeders: item.result.seeders,
         })),
       },
