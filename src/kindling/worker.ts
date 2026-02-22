@@ -384,15 +384,26 @@ async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promise<"done
       rejectedInfoHashes: Array.isArray(payload.rejectedInfoHashes) ? payload.rejectedInfoHashes : [],
       book: { id: book.id, title: book.title, author: book.author },
     });
+    if (decision.error) {
+      log(
+        ctx,
+        `[acquire] job=${job.id} book=${book.id} media=${media} decision_error=${JSON.stringify(decision.error)} trigger=${decision.trigger}`
+      );
+    }
     if (!decision.candidate) {
-      log(ctx, `[acquire] job=${job.id} book=${book.id} media=${media} no_result`);
+      log(
+        ctx,
+        `[acquire] job=${job.id} book=${book.id} media=${media} no_result mode=${decision.mode} trigger=${decision.trigger} reason=${JSON.stringify(decision.reason)}`
+      );
       continue;
     }
     log(
       ctx,
       `[acquire] job=${job.id} book=${book.id} media=${media} candidate_mode=${decision.mode} confidence=${decision.confidence.toFixed(
         2
-      )} reason=${JSON.stringify(decision.reason)}`
+      )} trigger=${decision.trigger} reason=${JSON.stringify(decision.reason)} candidate_title=${JSON.stringify(
+        decision.candidate.title
+      )} candidate_guid=${JSON.stringify(decision.candidate.guid ?? null)}`
     );
     try {
       const snatch = await runSnatch(ctx.repo, settings, {
