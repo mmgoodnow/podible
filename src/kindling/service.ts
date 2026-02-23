@@ -29,6 +29,10 @@ type AutoAcquireOptions = {
   rejectedInfoHashes?: string[];
 };
 
+type SnatchRuntimeOptions = {
+  onLog?: (message: string) => void;
+};
+
 type RankedSearchResult = {
   result: TorznabResult;
   score: number;
@@ -131,8 +135,14 @@ export async function runSearch(settings: AppSettings, request: SearchRequest) {
 export async function runSnatch(
   repo: KindlingRepo,
   settings: AppSettings,
-  request: SnatchRequest
+  request: SnatchRequest,
+  runtime: SnatchRuntimeOptions = {}
 ): Promise<{ release: ReleaseRow; jobId: number; idempotent: boolean }> {
+  const snatchLog = (message: string): void => {
+    if (runtime.onLog) {
+      runtime.onLog(message);
+    }
+  };
   const book = repo.getBookRow(request.bookId);
   if (!book) {
     throw new Error(`Book ${request.bookId} not found`);
@@ -143,6 +153,9 @@ export async function runSnatch(
 
   const providerGuid = request.providerGuid?.trim() || null;
   const explicitHash = resolveInfoHash(request.infoHash);
+  snatchLog(
+    `[snatch] start book=${request.bookId} media=${request.mediaType} provider=${JSON.stringify(request.provider)} title=${JSON.stringify(request.title)} guid=${JSON.stringify(providerGuid)} explicit_hash=${JSON.stringify(explicitHash)}`
+  );
 
   if (explicitHash) {
     const existingByHash = repo.findReleaseByInfoHash(explicitHash);
@@ -150,6 +163,9 @@ export async function runSnatch(
       if (existingByHash.book_id !== request.bookId) {
         throw new Error(`Infohash already linked to book ${existingByHash.book_id}`);
       }
+      snatchLog(
+        `[snatch] dedupe reason=explicit_hash release=${existingByHash.id} info_hash=${existingByHash.info_hash} provider_guid=${JSON.stringify(existingByHash.provider_guid)}`
+      );
       return idempotentResult(repo, existingByHash);
     }
   }
@@ -160,23 +176,39 @@ export async function runSnatch(
       if (existingByGuid.book_id !== request.bookId) {
         throw new Error(`Provider guid already linked to book ${existingByGuid.book_id}`);
       }
+      snatchLog(
+        `[snatch] dedupe reason=provider_guid release=${existingByGuid.id} info_hash=${existingByGuid.info_hash} provider_guid=${JSON.stringify(existingByGuid.provider_guid)}`
+      );
       return idempotentResult(repo, existingByGuid);
     }
   }
 
+  snatchLog(`[snatch] fetch_torrent start`);
   const torrentBytes = await fetchTorrentBytes(request.url);
+  snatchLog(`[snatch] fetch_torrent ok bytes=${torrentBytes.byteLength}`);
   const derivedHash = infoHashFromTorrentBytes(torrentBytes);
+  snatchLog(`[snatch] derived_hash=${derivedHash}`);
 
   const existingByDerived = repo.findReleaseByInfoHash(derivedHash);
   if (existingByDerived) {
     if (existingByDerived.book_id !== request.bookId) {
       throw new Error(`Infohash already linked to book ${existingByDerived.book_id}`);
     }
+    snatchLog(
+      `[snatch] dedupe reason=derived_hash release=${existingByDerived.id} info_hash=${existingByDerived.info_hash} provider_guid=${JSON.stringify(existingByDerived.provider_guid)}`
+    );
     return idempotentResult(repo, existingByDerived);
   }
 
   const client = new RtorrentClient(settings.rtorrent);
-  await client.loadRawStart(torrentBytes);
+  snatchLog(`[snatch] rtorrent load.raw_start begin`);
+  try {
+    await client.loadRawStart(torrentBytes);
+    snatchLog(`[snatch] rtorrent load.raw_start ok`);
+  } catch (error) {
+    snatchLog(`[snatch] rtorrent load.raw_start error=${JSON.stringify((error as Error).message)}`);
+    throw error;
+  }
 
   const release = repo.createRelease({
     bookId: request.bookId,
@@ -198,6 +230,7 @@ export async function runSnatch(
       infoHash: release.info_hash,
     },
   });
+  snatchLog(`[snatch] created release=${release.id} download_job=${job.id} info_hash=${release.info_hash}`);
 
   return {
     release,

@@ -415,6 +415,8 @@ async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promise<"done
         url: decision.candidate.url,
         sizeBytes: decision.candidate.sizeBytes,
         infoHash: decision.candidate.infoHash ?? null,
+      }, {
+        onLog: (line) => log(ctx, `[acquire] job=${job.id} book=${book.id} media=${media} ${line}`),
       });
       log(
         ctx,
