@@ -1,14 +1,12 @@
-import { dataDir, ensureDataDir, kindlingDbPath, port } from "./src/config";
+import { ensureDataDir, kindlingDbPath, port } from "./src/config";
 import { openDatabase } from "./src/kindling/db";
 import { createPodibleFetchHandler } from "./src/kindling/http";
 import { KindlingRepo } from "./src/kindling/repo";
 import { runWorker } from "./src/kindling/worker";
-import { installProcessLogTee } from "./src/logging";
 
 const startTime = Date.now();
 
 await ensureDataDir();
-const logFiles = await installProcessLogTee(dataDir);
 const db = openDatabase(kindlingDbPath);
 const repo = new KindlingRepo(db);
 const settings = repo.ensureSettings();
@@ -39,7 +37,6 @@ console.log(`Podible backend listening on ${localBase}`);
 console.log(`Library root: ${current.libraryRoot}`);
 console.log(`RPC endpoint: ${localBase}/rpc`);
 console.log(`Home: ${localBase}/`);
-console.log(`Log files: stdout=${logFiles.stdoutPath} stderr=${logFiles.stderrPath}`);
 if (current.auth.mode === "apikey") {
   console.log(`API key: ${current.auth.key}`);
   const authorizedHome = `${localBase}/?api_key=${encodeURIComponent(current.auth.key)}`;
