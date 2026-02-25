@@ -181,7 +181,7 @@ describe("json-rpc handler", () => {
     db.close();
   });
 
-  test("library.reportImportIssue queues forced agent reacquire when no importable files", async () => {
+  test("library.reportImportIssue queues async wrong-file review import job", async () => {
     const originalFetch = globalThis.fetch;
     try {
       const db = new Database(":memory:");
@@ -260,28 +260,22 @@ describe("json-rpc handler", () => {
         },
       });
 
-      expect(result.result.action).toBe("reacquire_queued");
+      expect(result.result.action).toBe("wrong_file_review_queued");
       expect(result.result.releaseId).toBe(release.id);
       expect(result.result.mediaType).toBe("audio");
-      expect(result.result.rejectedUrls).toEqual([release.url]);
-      expect(result.result.rejectedGuids).toEqual(["guid-1"]);
-      expect(result.result.rejectedInfoHashes).toEqual(["abc123"]);
       expect(result.result.jobId).toBeGreaterThan(0);
+      expect(result.result.rejectedSourcePathsCount).toBe(0);
 
       const failedRelease = repo.getRelease(release.id);
-      expect(failedRelease?.status).toBe("failed");
-      expect(String(failedRelease?.error || "")).toContain("User-reported import issue");
+      expect(failedRelease?.status).toBe("imported");
 
-      const acquireJob = repo.getJob(result.result.jobId);
-      expect(acquireJob?.type).toBe("acquire");
-      const payload = JSON.parse(acquireJob?.payload_json ?? "{}");
-      expect(payload.bookId).toBe(book.id);
-      expect(payload.media).toEqual(["audio"]);
-      expect(payload.forceAgent).toBe(true);
-      expect(payload.priorFailure).toBe(true);
-      expect(payload.rejectedUrls).toEqual([release.url]);
-      expect(payload.rejectedGuids).toEqual(["guid-1"]);
-      expect(payload.rejectedInfoHashes).toEqual(["abc123"]);
+      const reviewJob = repo.getJob(result.result.jobId);
+      expect(reviewJob?.type).toBe("import");
+      expect(reviewJob?.release_id).toBe(release.id);
+      const payload = JSON.parse(reviewJob?.payload_json ?? "{}");
+      expect(payload.reason).toBe("user_reported_wrong_file");
+      expect(payload.userReportedIssue).toBe(true);
+      expect(payload.rejectedSourcePaths).toEqual([]);
 
       db.close();
     } finally {
@@ -347,24 +341,18 @@ describe("json-rpc handler", () => {
         },
       });
 
-      expect(result.result.action).toBe("reacquire_queued");
+      expect(result.result.action).toBe("wrong_file_review_queued");
       expect(result.result.releaseId).toBe(importedRelease.id);
-      expect(result.result.rejectedUrls).toEqual([importedRelease.url]);
-      expect(result.result.rejectedGuids).toEqual(["guid-imported"]);
-      expect(result.result.rejectedInfoHashes).toEqual([importedRelease.info_hash]);
       expect(result.result.releaseId).not.toBe(newerRelease.id);
 
       const failedImported = repo.getRelease(importedRelease.id);
-      expect(failedImported?.status).toBe("failed");
+      expect(failedImported?.status).toBe("imported");
       const untouchedNewer = repo.getRelease(newerRelease.id);
       expect(untouchedNewer?.status).toBe("snatched");
 
-      const acquireJob = repo.getJob(result.result.jobId);
-      expect(acquireJob?.type).toBe("acquire");
-      const payload = JSON.parse(acquireJob?.payload_json ?? "{}");
-      expect(payload.rejectedUrls).toEqual([importedRelease.url]);
-      expect(payload.rejectedGuids).toEqual(["guid-imported"]);
-      expect(payload.rejectedInfoHashes).toEqual([importedRelease.info_hash]);
+      const reviewJob = repo.getJob(result.result.jobId);
+      expect(reviewJob?.type).toBe("import");
+      expect(reviewJob?.release_id).toBe(importedRelease.id);
 
       db.close();
     } finally {

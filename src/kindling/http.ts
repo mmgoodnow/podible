@@ -1293,6 +1293,8 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
               });
               if (result && result.action === "agent_imported") {
                 text("library-status", 'Agent imported replacement ' + mediaType + ' file for "' + bookTitle + '".');
+              } else if (result && result.action === "wrong_file_review_queued") {
+                text("library-status", 'Queued wrong-file review for "' + bookTitle + '" (job ' + String(result.jobId) + ").");
               } else {
                 text("library-status", 'Queued agent reacquire for "' + bookTitle + '" (job ' + String(result.jobId) + ").");
               }

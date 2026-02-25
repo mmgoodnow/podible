@@ -442,62 +442,22 @@ const handlers: Record<string, RpcMethodHandler> = {
       .filter((asset) => (mediaType === "ebook" ? asset.kind === "ebook" : asset.kind !== "ebook"))
       .flatMap((asset) => ctx.repo.getAssetFiles(asset.id).map((file) => file.path));
 
-    let agentDecision: Awaited<ReturnType<typeof selectManualImportPaths>> | null = null;
-    let agentImportError: string | null = null;
-
-    try {
-      const client = new RtorrentClient(ctx.repo.getSettings().rtorrent);
-      const state = await client.getDownloadState(release.info_hash);
-      if (state.basePath) {
-        const files = await inspectImportPath(state.basePath);
-        agentDecision = await selectManualImportPaths(ctx.repo.getSettings(), {
-          mediaType,
-          files,
-          rejectedSourcePaths,
-          forceAgent: true,
-          priorFailure: true,
-          book: { id: book.id, title: book.title, author: book.author },
-        });
-
-        if (agentDecision.selectedPaths.length > 0) {
-          const imported = await importReleaseFromPath(ctx.repo, release, state.basePath, ctx.repo.getSettings().libraryRoot, {
-            selectedPaths: agentDecision.selectedPaths,
-          });
-          const updated = ctx.repo.setReleaseStatus(release.id, "imported", null);
-          return {
-            action: "agent_imported",
-            release: updated,
-            assetId: imported.assetId,
-            linkedFiles: imported.linkedFiles,
-            decision: agentDecision,
-          };
-        }
-      } else {
-        agentImportError = "Download base path not available from rTorrent";
-      }
-    } catch (error) {
-      agentImportError = (error as Error).message || "Agent import attempt failed";
-    }
-
-    const failedMessage = `User-reported import issue for ${mediaType}. decision=${agentDecision?.reason ?? "none"} error=${agentImportError ?? agentDecision?.error ?? "none"}`;
-    ctx.repo.setReleaseStatus(release.id, "failed", failedMessage);
-    const jobId = await triggerAutoAcquire(ctx.repo, bookId, [mediaType], {
-      forceAgent: true,
-      priorFailure: true,
-      rejectedUrls: [release.url],
-      rejectedGuids: release.provider_guid ? [release.provider_guid] : [],
-      rejectedInfoHashes: release.info_hash ? [release.info_hash] : [],
+    const importJob = ctx.repo.createJob({
+      type: "import",
+      bookId: book.id,
+      releaseId: release.id,
+      payload: {
+        reason: "user_reported_wrong_file",
+        userReportedIssue: true,
+        rejectedSourcePaths,
+      },
     });
     return {
-      action: "reacquire_queued",
-      jobId,
+      action: "wrong_file_review_queued",
+      jobId: importJob.id,
       releaseId: release.id,
       mediaType,
-      rejectedUrls: [release.url],
-      rejectedGuids: release.provider_guid ? [release.provider_guid] : [],
-      rejectedInfoHashes: release.info_hash ? [release.info_hash] : [],
-      decision: agentDecision,
-      error: agentImportError,
+      rejectedSourcePathsCount: rejectedSourcePaths.length,
     };
   },
 
