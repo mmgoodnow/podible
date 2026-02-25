@@ -85,6 +85,70 @@ describe("worker acquire auto-acquire retries", () => {
   });
 });
 
+describe("worker robustness", () => {
+  test("does not crash when failed job row was deleted before markJobFailed", async () => {
+    let claimed = false;
+    const logs: string[] = [];
+    let stopWorker = false;
+
+    const fakeRepo = {
+      requeueRunningJobs: () => 0,
+      claimNextRunnableJob: () => {
+        if (claimed) return null;
+        claimed = true;
+        return {
+          id: 123,
+          type: "acquire",
+          status: "running",
+          book_id: 1,
+          release_id: null,
+          payload_json: JSON.stringify({ bookId: 1, media: ["audio"] }),
+          error: null,
+          attempt_count: 0,
+          max_attempts: 5,
+          next_run_at: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+      },
+      getBookRow: () => ({ id: 1, title: "Twilight", author: "Stephenie Meyer" }),
+      markJobFailed: () => null,
+    } as unknown as KindlingRepo;
+
+    const worker = runWorker({
+      repo: fakeRepo,
+      getSettings: () =>
+        defaultSettings({
+          auth: { mode: "local", key: "test" },
+          torznab: [],
+        }),
+      shouldStop: () => stopWorker,
+      onLog: (line) => {
+        logs.push(line);
+        if (line.includes("failed but row missing")) {
+          stopWorker = true;
+        }
+      },
+    });
+
+    try {
+      const started = Date.now();
+      for (;;) {
+        if (logs.some((line) => line.includes("failed but row missing"))) break;
+        if (Date.now() - started > 3000) {
+          throw new Error("Timed out waiting for missing-row failure log");
+        }
+        await sleep(25);
+      }
+      await Promise.race([worker, sleep(1000)]);
+      expect(logs.some((line) => line.includes("failed but row missing"))).toBe(true);
+    } finally {
+      stopWorker = true;
+      await Promise.race([worker, sleep(1000)]);
+    }
+  });
+});
+
 describe("worker import recovery", () => {
   test("queues forced agent acquire when deterministic import cannot map files", async () => {
     const db = new Database(":memory:");

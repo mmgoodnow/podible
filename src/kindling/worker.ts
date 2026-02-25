@@ -491,7 +491,11 @@ export async function runWorker(ctx: WorkerContext): Promise<void> {
     } catch (error) {
       const message = (error as Error).message;
       const next = new Date(Date.now() + backoffMs(job.attempt_count)).toISOString();
-      const failed = ctx.repo.markJobFailed(job.id, message, next);
+      const failed = ctx.repo.markJobFailed(job.id, message, next) as { status: string } | null;
+      if (!failed) {
+        log(ctx, `[worker] job=${job.id} type=${job.type} failed but row missing (likely deleted) error=${message}`);
+        continue;
+      }
       log(ctx, `[worker] job=${job.id} type=${job.type} failed status=${failed.status} error=${message}`);
     }
   }
