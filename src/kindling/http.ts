@@ -88,27 +88,27 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
       body {
         font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
         margin: 0;
-        padding: 20px;
+        padding: 14px;
         background: radial-gradient(circle at top, #fbfdff 0%, var(--bg) 55%);
         color: var(--text);
       }
-      h1, h2 { margin: 0 0 12px; }
+      h1, h2 { margin: 0 0 8px; }
       h2 { font-size: 18px; }
-      p { margin: 0 0 10px; }
+      p { margin: 0 0 8px; }
       .muted { color: var(--muted); }
-      ul { margin-top: 8px; margin-bottom: 0; padding-left: 18px; }
+      ul { margin-top: 6px; margin-bottom: 0; padding-left: 18px; }
       .page { max-width: 1600px; margin: 0 auto; }
       .dashboard-grid {
         display: grid;
         grid-template-columns: repeat(12, minmax(0, 1fr));
-        gap: 16px;
+        gap: 12px;
         align-items: start;
       }
       .card {
         background: var(--card);
         border: 1px solid var(--line);
-        border-radius: 14px;
-        padding: 14px;
+        border-radius: 12px;
+        padding: 10px;
         box-shadow: 0 1px 2px rgba(22, 34, 51, 0.04);
         min-width: 0;
       }
@@ -124,7 +124,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
       .header-grid {
         display: grid;
         grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
-        gap: 14px;
+        gap: 10px;
       }
       .header-grid > div { min-width: 0; }
       .panel {
@@ -134,37 +134,37 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
         margin: 0;
         background: transparent;
       }
-      .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+      .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
       input, button, textarea, select { font: inherit; }
       input, select {
-        padding: 7px 9px;
+        padding: 6px 8px;
         min-width: 220px;
         border: 1px solid var(--line);
-        border-radius: 8px;
+        border-radius: 7px;
         background: #fff;
       }
       button {
-        padding: 7px 11px;
+        padding: 6px 10px;
         cursor: pointer;
         border: 1px solid var(--line);
-        border-radius: 8px;
+        border-radius: 7px;
         background: #f8fbff;
       }
       button:hover { background: #f1f6ff; }
       textarea {
         width: 100%;
-        min-height: 260px;
-        padding: 10px;
+        min-height: 220px;
+        padding: 8px;
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         font-size: 13px;
         border: 1px solid var(--line);
-        border-radius: 10px;
+        border-radius: 8px;
         background: #fbfdff;
       }
       .table-wrap {
         overflow: auto;
         border: 1px solid var(--line-soft);
-        border-radius: 10px;
+        border-radius: 8px;
         background: #fff;
       }
       table {
@@ -173,14 +173,14 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
         margin-top: 0;
         min-width: 640px;
       }
-      th, td { border: 1px solid var(--line-soft); padding: 8px; text-align: left; font-size: 14px; vertical-align: top; }
+      th, td { border: 1px solid var(--line-soft); padding: 6px 7px; text-align: left; font-size: 13px; vertical-align: top; }
       th { background: #f7faff; }
       code { background: var(--code-bg); padding: 2px 4px; border-radius: 4px; }
       pre {
         margin: 0;
-        padding: 10px;
+        padding: 8px;
         border: 1px solid var(--line-soft);
-        border-radius: 10px;
+        border-radius: 8px;
         background: #fbfdff;
         overflow: auto;
       }
@@ -194,8 +194,8 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
         .header-grid { grid-template-columns: 1fr; }
       }
       @media (max-width: 900px) {
-        body { padding: 12px; }
-        .dashboard-grid { gap: 12px; }
+        body { padding: 10px; }
+        .dashboard-grid { gap: 10px; }
         .card-narrow, .card-mid, .card-wide { grid-column: span 12; }
         input, select { min-width: 150px; }
         table { min-width: 560px; }
