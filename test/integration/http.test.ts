@@ -5,6 +5,9 @@ import { runMigrations } from "../../src/kindling/db";
 import { createPodibleFetchHandler } from "../../src/kindling/http";
 import { KindlingRepo } from "../../src/kindling/repo";
 
+const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+XGfQAAAAASUVORK5CYII=";
+
 async function rpc(fetchHandler: (request: Request) => Promise<Response>, method: string, params: unknown, id = 1) {
   const response = await fetchHandler(
     new Request("http://localhost/rpc", {
@@ -327,9 +330,9 @@ describe("podible http", () => {
         );
       }
       if (url.origin === "https://covers.openlibrary.org") {
-        return new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
+        return new Response(Buffer.from(TINY_PNG_BASE64, "base64"), {
           status: 200,
-          headers: { "Content-Type": "image/jpeg" },
+          headers: { "Content-Type": "image/png" },
         });
       }
       return new Response(JSON.stringify({ docs: [] }), {
@@ -363,6 +366,7 @@ describe("podible http", () => {
       if (fetched?.coverUrl) {
         const coverRes = await fetchHandler(new Request(`http://localhost${fetched.coverUrl}`));
         expect(coverRes.status).toBe(200);
+        expect((await coverRes.arrayBuffer()).byteLength).toBeGreaterThan(16);
       }
 
       db.close();
