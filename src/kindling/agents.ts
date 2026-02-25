@@ -104,6 +104,16 @@ function humanSize(value: number | null | undefined): string | null {
   return `${i === 0 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
 }
 
+function mdInline(value: unknown): string {
+  const text = String(value ?? "");
+  return text.replace(/`/g, "\\`");
+}
+
+function mdTableCell(value: unknown): string {
+  const text = String(value ?? "");
+  return text.replace(/\|/g, "\\|").replace(/\n/g, " ");
+}
+
 function configuredAgent(settings: AppSettings) {
   if (!settings.agents?.enabled) return null;
   const apiKey = process.env.OPENAI_API_KEY?.trim();
@@ -326,6 +336,76 @@ function deterministicManualImportSelection(input: ManualImportSelectionInput): 
   };
 }
 
+function buildSearchAgentPrompt(trigger: DecisionTrigger, input: SearchSelectionInput, ranked: ReturnType<typeof rankSearchResults>): string {
+  const lines: string[] = [];
+  lines.push("# Task");
+  lines.push("Pick the best torrent candidate for a single-book acquisition.");
+  lines.push("");
+  lines.push("# Context");
+  lines.push(`- Trigger: \`${mdInline(trigger)}\``);
+  lines.push(`- Query: \`${mdInline(input.query)}\``);
+  lines.push(`- Media: \`${mdInline(input.media)}\``);
+  if (input.book) {
+    lines.push(`- Book: **${mdTableCell(input.book.title)}** by **${mdTableCell(input.book.author)}** (id: \`${input.book.id}\`)`);
+  } else {
+    lines.push("- Book: unknown");
+  }
+  lines.push("");
+  lines.push("# Candidates");
+  lines.push("| index | title | size | seeders |");
+  lines.push("| ---: | --- | --- | ---: |");
+  for (let index = 0; index < ranked.length; index += 1) {
+    const item = ranked[index];
+    lines.push(
+      `| ${index} | ${mdTableCell(item.result.title)} | ${mdTableCell(humanSize(item.result.sizeBytes) ?? "?")} | ${item.result.seeders ?? 0} |`
+    );
+  }
+  lines.push("");
+  lines.push("# Output");
+  lines.push("Return strict JSON only with keys `selectedIndex`, `confidence`, `reason`.");
+  return lines.join("\n");
+}
+
+function buildManualImportAgentPrompt(trigger: DecisionTrigger, input: ManualImportSelectionInput): string {
+  const lines: string[] = [];
+  lines.push("# Task");
+  lines.push("Pick the exact subset of files to import for one book.");
+  lines.push("");
+  lines.push("# Context");
+  lines.push(`- Trigger: \`${mdInline(trigger)}\``);
+  lines.push(`- Media Type: \`${mdInline(input.mediaType)}\``);
+  if (input.book) {
+    lines.push(`- Book: **${mdTableCell(input.book.title)}** by **${mdTableCell(input.book.author)}** (id: \`${input.book.id}\`)`);
+  } else {
+    lines.push("- Book: unknown");
+  }
+  const rejected = Array.isArray(input.rejectedSourcePaths) ? input.rejectedSourcePaths.filter(Boolean) : [];
+  lines.push("- Previously reported wrong source paths:");
+  if (rejected.length === 0) {
+    lines.push("  - none");
+  } else {
+    for (const p of rejected) {
+      lines.push(`  - \`${mdInline(p)}\``);
+    }
+  }
+  lines.push("");
+  lines.push("# Files");
+  lines.push("| index | relativePath | sourcePath | ext | size | supportedAudio | supportedEbook |");
+  lines.push("| ---: | --- | --- | --- | --- | --- | --- |");
+  for (let index = 0; index < input.files.length; index += 1) {
+    const file = input.files[index];
+    lines.push(
+      `| ${index} | ${mdTableCell(file.relativePath)} | ${mdTableCell(file.sourcePath)} | ${mdTableCell(file.ext)} | ${mdTableCell(
+        humanSize(file.size) ?? file.size
+      )} | ${file.supportedAudio ? "yes" : "no"} | ${file.supportedEbook ? "yes" : "no"} |`
+    );
+  }
+  lines.push("");
+  lines.push("# Output");
+  lines.push("Return strict JSON only with keys `selectedIndices`, `confidence`, `reason`.");
+  return lines.join("\n");
+}
+
 export async function selectSearchCandidate(settings: AppSettings, input: SearchSelectionInput): Promise<SearchSelectionResult> {
   const deterministic = deterministicSearchSelection(input);
   const trigger = determineTrigger(settings, "search", deterministic.confidence, {
@@ -354,23 +434,7 @@ export async function selectSearchCandidate(settings: AppSettings, input: Search
       "selectedIndex must be an integer index into the candidate list or null.",
       "confidence must be a number from 0 to 1.",
     ].join(" ");
-    const user = JSON.stringify(
-      {
-        task: "pick_best_candidate",
-        trigger,
-        query: input.query,
-        media: input.media,
-        book: input.book ?? null,
-        candidates: ranked.map((item, index) => ({
-          index,
-          title: item.result.title,
-          size: humanSize(item.result.sizeBytes),
-          seeders: item.result.seeders,
-        })),
-      },
-      null,
-      2
-    );
+    const user = buildSearchAgentPrompt(trigger, input, ranked);
     const output = await callResponsesJson<SearchAgentOutput>(settings, system, user);
     if (output.selectedIndex === null) {
       return {
@@ -422,27 +486,7 @@ export async function selectManualImportPaths(
       "Do not select the same file set as any previously reported wrong file set when one is provided.",
       "confidence must be a number from 0 to 1.",
     ].join(" ");
-    const user = JSON.stringify(
-      {
-        task: "pick_import_files",
-        trigger,
-        mediaType: input.mediaType,
-        book: input.book ?? null,
-        previouslyReportedWrongSourcePaths:
-          Array.isArray(input.rejectedSourcePaths) && input.rejectedSourcePaths.length > 0 ? input.rejectedSourcePaths : [],
-        files: input.files.map((file, index) => ({
-          index,
-          relativePath: file.relativePath,
-          sourcePath: file.sourcePath,
-          ext: file.ext,
-          size: humanSize(file.size) ?? file.size,
-          supportedAudio: file.supportedAudio,
-          supportedEbook: file.supportedEbook,
-        })),
-      },
-      null,
-      2
-    );
+    const user = buildManualImportAgentPrompt(trigger, input);
     const output = await callResponsesJson<ManualImportAgentOutput>(settings, system, user);
     if (!Array.isArray(output.selectedIndices)) {
       throw new Error("Agent returned invalid selectedIndices");
