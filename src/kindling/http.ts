@@ -145,7 +145,6 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
         background:
           radial-gradient(circle at 90% 10%, rgba(95, 143, 255, 0.08), transparent 45%),
           linear-gradient(180deg, #ffffff, #fbfdff);
-        margin-bottom: 16px;
       }
       .header-grid {
         display: grid;
@@ -222,7 +221,6 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
       @media (max-width: 900px) {
         body { padding: 12px; }
         .dashboard-grid { gap: 12px; }
-        .page-header { margin-bottom: 12px; }
         .card-narrow, .card-mid, .card-wide { grid-column: span 12; }
         input, select { min-width: 150px; }
         table { min-width: 560px; }
@@ -231,23 +229,23 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
   </head>
   <body>
     <div class="page">
-      <section class="card card-full page-header">
-        <h1>Podible Backend</h1>
-        <p class="muted">Auth mode: <strong>${escapeHtml(settings.auth.mode)}</strong>${apiKey ? ` | Authorized links include <code>api_key</code>` : ""}</p>
-        <p>Queue: <strong>${health.queueSize}</strong> | Jobs: <code>${escapeHtml(JSON.stringify(health.jobs))}</code> | Releases: <code>${escapeHtml(JSON.stringify(health.releases))}</code></p>
-        <div class="header-grid">
-          <div>
-            <h2>Quick Links</h2>
-            <ul>${linkItems}</ul>
-          </div>
-          <div>
-            <p class="muted">Control/data API uses <code>POST /rpc</code>; read-only convenience links are available at <code>GET /rpc/&lt;ns&gt;/&lt;method&gt;</code>.</p>
-            <pre><code>${rpcExample}</code></pre>
-          </div>
-        </div>
-      </section>
-
       <div class="dashboard-grid">
+        <section class="card card-full page-header">
+          <h1>Podible Backend</h1>
+          <p class="muted">Auth mode: <strong>${escapeHtml(settings.auth.mode)}</strong>${apiKey ? ` | Authorized links include <code>api_key</code>` : ""}</p>
+          <p>Queue: <strong>${health.queueSize}</strong> | Jobs: <code>${escapeHtml(JSON.stringify(health.jobs))}</code> | Releases: <code>${escapeHtml(JSON.stringify(health.releases))}</code></p>
+          <div class="header-grid">
+            <div>
+              <h2>Quick Links</h2>
+              <ul>${linkItems}</ul>
+            </div>
+            <div>
+              <p class="muted">Control/data API uses <code>POST /rpc</code>; read-only convenience links are available at <code>GET /rpc/&lt;ns&gt;/&lt;method&gt;</code>.</p>
+              <pre><code>${rpcExample}</code></pre>
+            </div>
+          </div>
+        </section>
+
         <section class="card card-narrow">
           <h2>Open Library Search</h2>
           <div class="panel">
