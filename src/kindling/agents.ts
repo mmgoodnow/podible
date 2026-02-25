@@ -444,7 +444,10 @@ export async function selectSearchCandidate(settings: AppSettings, input: Search
       .slice(0, 12);
     const system = [
       "You select the best torrent candidate for a single book acquisition.",
-      "Be conservative and avoid box sets/collections unless clearly exact.",
+      "Prefer the requested prose book itself, not related works, guides, excerpts, or adaptations.",
+      "For ebook selection, avoid comic/graphic-novel formats and comic releases (for example CBR/CBZ or titles mentioning graphic novel) unless the user explicitly asked for that.",
+      "If no good single-book candidate exists, it is better to choose a plausible box set/collection containing the target book than to choose the wrong work.",
+      "If the list is too poor or ambiguous to choose safely, return no candidate.",
       "Return strict JSON only with keys: selectedIndex, confidence, reason.",
       "selectedIndex must be an integer index into the candidate list or null.",
       "confidence must be a number from 0 to 1.",
