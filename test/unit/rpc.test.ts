@@ -316,6 +316,24 @@ describe("json-rpc handler", () => {
         url: "https://example.com/imported-audio.torrent",
         status: "imported",
       });
+      repo.addAsset({
+        bookId: book.id,
+        kind: "single",
+        mime: "audio/mpeg",
+        totalSize: 1234,
+        sourceReleaseId: importedRelease.id,
+        files: [
+          {
+            path: "/library/clean/Dune.mp3",
+            sourcePath: "/downloads/raw/Dune/Dune - Part 01.mp3",
+            size: 1234,
+            start: 0,
+            end: 1233,
+            durationMs: 1000,
+            title: "Part 1",
+          },
+        ],
+      });
       const newerRelease = repo.createRelease({
         bookId: book.id,
         provider: "mock",
@@ -353,6 +371,8 @@ describe("json-rpc handler", () => {
       const reviewJob = repo.getJob(result.result.jobId);
       expect(reviewJob?.type).toBe("import");
       expect(reviewJob?.release_id).toBe(importedRelease.id);
+      const payload = JSON.parse(reviewJob?.payload_json ?? "{}");
+      expect(payload.rejectedSourcePaths).toEqual(["/downloads/raw/Dune/Dune - Part 01.mp3"]);
 
       db.close();
     } finally {

@@ -54,6 +54,7 @@ type AddAssetInput = {
   sourceReleaseId?: number | null;
   files: Array<{
     path: string;
+    sourcePath?: string | null;
     size: number;
     start: number;
     end: number;
@@ -405,13 +406,14 @@ export class KindlingRepo {
         ) as AssetRow;
 
       const insertFile = this.db.query(
-        `INSERT INTO asset_files (asset_id, path, size, start, end, duration_ms, title, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO asset_files (asset_id, path, source_path, size, start, end, duration_ms, title, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
       for (const file of input.files) {
         insertFile.run(
           asset.id,
           file.path,
+          file.sourcePath ?? null,
           file.size,
           file.start,
           file.end,

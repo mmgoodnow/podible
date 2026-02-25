@@ -223,6 +223,7 @@ export async function importReleaseFromPath(
 
   const assetFiles: Array<{
     path: string;
+    sourcePath: string;
     size: number;
     start: number;
     end: number;
@@ -255,6 +256,7 @@ export async function importReleaseFromPath(
 
     assetFiles.push({
       path: targetPath,
+      sourcePath: file.sourcePath,
       size: file.size,
       start,
       end,

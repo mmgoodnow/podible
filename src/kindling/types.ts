@@ -116,6 +116,7 @@ export type AssetFileRow = {
   id: number;
   asset_id: number;
   path: string;
+  source_path: string | null;
   size: number;
   start: number;
   end: number;

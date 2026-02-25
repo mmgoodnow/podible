@@ -6,6 +6,7 @@ import { Database } from "bun:sqlite";
 const SCHEMA_MIGRATION_ID = 1;
 const GUID_MIGRATION_ID = 2;
 const JOB_TYPE_MIGRATION_ID = 3;
+const ASSET_FILE_SOURCE_PATH_MIGRATION_ID = 4;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -60,6 +61,7 @@ CREATE TABLE IF NOT EXISTS asset_files (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   asset_id INTEGER NOT NULL,
   path TEXT NOT NULL,
+  source_path TEXT NULL,
   size INTEGER NOT NULL,
   start INTEGER NOT NULL,
   end INTEGER NOT NULL,
@@ -159,6 +161,12 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status_next_created ON jobs(status, next_run
 `);
 }
 
+function applyAssetFileSourcePathMigration(db: Database): void {
+  if (!hasColumn(db, "asset_files", "source_path")) {
+    db.exec("ALTER TABLE asset_files ADD COLUMN source_path TEXT NULL");
+  }
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
@@ -194,5 +202,9 @@ export function runMigrations(db: Database): void {
 
   apply(JOB_TYPE_MIGRATION_ID, () => {
     applyJobTypeMigration(db);
+  });
+
+  apply(ASSET_FILE_SOURCE_PATH_MIGRATION_ID, () => {
+    applyAssetFileSourcePathMigration(db);
   });
 }

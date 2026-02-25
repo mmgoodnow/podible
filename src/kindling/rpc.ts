@@ -440,7 +440,7 @@ const handlers: Record<string, RpcMethodHandler> = {
     const rejectedSourcePaths = assets
       .filter((asset) => asset.source_release_id === release.id)
       .filter((asset) => (mediaType === "ebook" ? asset.kind === "ebook" : asset.kind !== "ebook"))
-      .flatMap((asset) => ctx.repo.getAssetFiles(asset.id).map((file) => file.path));
+      .flatMap((asset) => ctx.repo.getAssetFiles(asset.id).map((file) => file.source_path ?? file.path));
 
     const importJob = ctx.repo.createJob({
       type: "import",
