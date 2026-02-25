@@ -318,6 +318,18 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
           </div>
         </section>
 
+        <section class="card card-narrow">
+          <h2>Settings JSON</h2>
+          <div class="panel">
+            <div class="row">
+              <button id="settings-save-btn" type="button">Save Settings</button>
+              <button id="wipe-db-btn" type="button" style="margin-left: auto; background: var(--danger); color: #fff; border: 1px solid var(--danger-border);">Wipe Entire Database</button>
+            </div>
+            <p id="settings-status" class="muted"></p>
+            <textarea id="settings-editor" spellcheck="false">${settingsJson}</textarea>
+          </div>
+        </section>
+
         <section class="card card-full">
           <h2>Recent Library</h2>
           <p id="library-status" class="muted"></p>
@@ -362,7 +374,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
           </div>
         </section>
 
-        <section class="card card-wide">
+        <section class="card card-mid">
           <h2>Recent Downloads</h2>
           <div class="panel">
             <div class="row">
@@ -388,19 +400,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
           </div>
         </section>
 
-        <section class="card card-narrow">
-          <h2>Settings JSON</h2>
-          <div class="panel">
-            <div class="row">
-              <button id="settings-save-btn" type="button">Save Settings</button>
-              <button id="wipe-db-btn" type="button" style="margin-left: auto; background: var(--danger); color: #fff; border: 1px solid var(--danger-border);">Wipe Entire Database</button>
-            </div>
-            <p id="settings-status" class="muted"></p>
-            <textarea id="settings-editor" spellcheck="false">${settingsJson}</textarea>
-          </div>
-        </section>
-
-        <section class="card card-wide">
+        <section class="card card-mid">
           <h2>Recent Jobs</h2>
           <div class="panel">
             <div class="row">
