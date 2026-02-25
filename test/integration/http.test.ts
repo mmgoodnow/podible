@@ -1,9 +1,15 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
-import { runMigrations } from "../../src/kindling/db";
-import { createPodibleFetchHandler } from "../../src/kindling/http";
-import { KindlingRepo } from "../../src/kindling/repo";
+const isolatedDataDir = await mkdtemp(path.join(os.tmpdir(), "podible-http-test-data-"));
+process.env.DATA_DIR = isolatedDataDir;
+
+const { runMigrations } = await import("../../src/kindling/db");
+const { createPodibleFetchHandler } = await import("../../src/kindling/http");
+const { KindlingRepo } = await import("../../src/kindling/repo");
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+XGfQAAAAASUVORK5CYII=";
@@ -24,6 +30,10 @@ async function rpc(fetchHandler: (request: Request) => Promise<Response>, method
   expect(response.status).toBe(200);
   return (await response.json()) as any;
 }
+
+afterAll(async () => {
+  await rm(isolatedDataDir, { recursive: true, force: true });
+});
 
 describe("podible http", () => {
   test("serves root html home page", async () => {
