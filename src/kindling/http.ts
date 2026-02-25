@@ -288,7 +288,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
           </div>
         </section>
 
-        <section class="card card-full">
+        <section class="card card-wide">
           <h2>Manual Import</h2>
           <div class="panel">
             <div class="row">
@@ -362,7 +362,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
           </div>
         </section>
 
-        <section class="card card-full">
+        <section class="card card-wide">
           <h2>Recent Downloads</h2>
           <div class="panel">
             <div class="row">
