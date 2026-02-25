@@ -97,7 +97,15 @@ describe("json-rpc handler", () => {
       feed: { ...baselineSettings.feed, title: "Kindling Test Feed" },
     });
 
+    const root = await mkdtemp(path.join(os.tmpdir(), "kindling-wipe-"));
+    const assetPath = path.join(root, "library", "Dune.epub");
+    const coverPath = path.join(root, "library", "Dune.jpg");
+    await mkdir(path.dirname(assetPath), { recursive: true });
+    await writeFile(assetPath, Buffer.from("epub"));
+    await writeFile(coverPath, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+
     const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    repo.updateBookMetadata(book.id, { coverPath });
     const release = repo.createRelease({
       bookId: book.id,
       provider: "manual",
@@ -116,7 +124,7 @@ describe("json-rpc handler", () => {
       sourceReleaseId: release.id,
       files: [
         {
-          path: "/tmp/library/Dune.epub",
+          path: assetPath,
           size: 123,
           start: 0,
           end: 122,
@@ -140,11 +148,17 @@ describe("json-rpc handler", () => {
     expect(wiped.result.deleted.assets).toBe(1);
     expect(wiped.result.deleted.assetFiles).toBe(1);
     expect(wiped.result.deleted.jobs).toBe(1);
+    expect(wiped.result.deletedAssetFileCount).toBe(1);
+    expect(wiped.result.deletedAssetPaths).toEqual([assetPath]);
+    expect(wiped.result.deletedCoverFileCount).toBe(1);
+    expect(wiped.result.deletedCoverPaths).toEqual([coverPath]);
     expect(repo.listBooks(10).items).toHaveLength(0);
     expect(repo.listReleasesByBook(book.id)).toHaveLength(0);
     expect(repo.listJobsByType("acquire")).toHaveLength(0);
     expect(repo.getHealthSummary().queueSize).toBe(0);
     expect(repo.getSettings().feed.title).toBe("Kindling Test Feed");
+    expect(await Bun.file(assetPath).exists()).toBe(false);
+    expect(await Bun.file(coverPath).exists()).toBe(false);
 
     const nextBook = repo.createBook({ title: "Hyperion", author: "Dan Simmons" });
     expect(nextBook.id).toBe(1);

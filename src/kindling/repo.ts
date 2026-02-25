@@ -308,6 +308,23 @@ export class KindlingRepo {
   }
 
   /**
+   * Returns all on-disk artifacts referenced by the current DB so callers can
+   * perform a full local-dev wipe including imported files/covers.
+   */
+  getWipeArtifacts(): { assetPaths: string[]; coverPaths: string[] } {
+    const assetPaths = this.db
+      .query("SELECT DISTINCT path FROM asset_files WHERE path IS NOT NULL AND path <> ''")
+      .all() as Array<{ path: string }>;
+    const coverPaths = this.db
+      .query("SELECT DISTINCT cover_path FROM books WHERE cover_path IS NOT NULL AND cover_path <> ''")
+      .all() as Array<{ cover_path: string }>;
+    return {
+      assetPaths: assetPaths.map((row) => row.path),
+      coverPaths: coverPaths.map((row) => row.cover_path),
+    };
+  }
+
+  /**
    * Clears all mutable Kindling data while preserving settings and schema
    * migration state for local-dev reset workflows.
    */
