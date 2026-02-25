@@ -306,4 +306,115 @@ describe("agent decisions", () => {
     expect(decision.selectedPaths).toEqual(["/tmp/b.epub"]);
     expect(decision.error).toBeNull();
   });
+
+  test("manual import agent may return no alternative files", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    globalThis.fetch = (async (input: unknown) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input instanceof Request
+              ? input.url
+              : String(input);
+      if (url !== "https://api.openai.com/v1/responses") {
+        throw new Error(`Unexpected url: ${url}`);
+      }
+      return new Response(
+        JSON.stringify({
+          output_text: JSON.stringify({
+            selectedIndices: [],
+            confidence: 0.9,
+            reason: "Only previously rejected file is present; no alternative importable files.",
+          }),
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as typeof fetch;
+
+    try {
+      const settings = defaultSettings({
+        agents: {
+          ...defaultSettings().agents,
+          enabled: true,
+        },
+      });
+      const decision = await selectManualImportPaths(settings, {
+        mediaType: "ebook",
+        forceAgent: true,
+        files: [
+          {
+            sourcePath: "/tmp/twilight.epub",
+            relativePath: "twilight.epub",
+            ext: ".epub",
+            size: 1234,
+            mtimeMs: 1,
+            supportedAudio: false,
+            supportedEbook: true,
+          },
+        ],
+        rejectedSourcePaths: ["/tmp/twilight.epub"],
+      });
+
+      expect(decision.mode).toBe("agent");
+      expect(decision.selectedPaths).toEqual([]);
+      expect(decision.reason).toContain("no alternative");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
+
+  test("manual import agent selecting previously rejected exact file set is treated as no alternative", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          output_text: JSON.stringify({
+            selectedIndices: [0],
+            confidence: 0.6,
+            reason: "Select the EPUB file.",
+          }),
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )) as unknown as typeof fetch;
+
+    try {
+      const settings = defaultSettings({
+        agents: {
+          ...defaultSettings().agents,
+          enabled: true,
+        },
+      });
+      const decision = await selectManualImportPaths(settings, {
+        mediaType: "ebook",
+        forceAgent: true,
+        files: [
+          {
+            sourcePath: "/tmp/twilight.epub",
+            relativePath: "twilight.epub",
+            ext: ".epub",
+            size: 1234,
+            mtimeMs: 1,
+            supportedAudio: false,
+            supportedEbook: true,
+          },
+        ],
+        rejectedSourcePaths: ["/tmp/twilight.epub"],
+      });
+
+      expect(decision.mode).toBe("agent");
+      expect(decision.selectedPaths).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
 });

@@ -53,6 +53,7 @@ type SearchSelectionInput = {
 type ManualImportSelectionInput = {
   mediaType: MediaType;
   files: ImportInspectionFile[];
+  rejectedSourcePaths?: string[];
   forceAgent?: boolean;
   priorFailure?: boolean;
   book?: {
@@ -73,6 +74,16 @@ type ManualImportAgentOutput = {
   confidence: number;
   reason: string;
 };
+
+function samePathSet(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const aSet = new Set(a);
+  if (aSet.size !== b.length) return false;
+  for (const item of b) {
+    if (!aSet.has(item)) return false;
+  }
+  return true;
+}
 
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -406,7 +417,9 @@ export async function selectManualImportPaths(
       "You choose the exact subset of files to import for one book.",
       "Return strict JSON only with keys: selectedIndices, confidence, reason.",
       "selectedIndices must be an array of integer indices into the files array.",
+      "If there is no valid alternative importable file set, return an empty selectedIndices array.",
       "Never include unsupported media files.",
+      "Do not select the same file set as any previously reported wrong file set when one is provided.",
       "confidence must be a number from 0 to 1.",
     ].join(" ");
     const user = JSON.stringify(
@@ -415,12 +428,14 @@ export async function selectManualImportPaths(
         trigger,
         mediaType: input.mediaType,
         book: input.book ?? null,
+        previouslyReportedWrongSourcePaths:
+          Array.isArray(input.rejectedSourcePaths) && input.rejectedSourcePaths.length > 0 ? input.rejectedSourcePaths : [],
         files: input.files.map((file, index) => ({
           index,
           relativePath: file.relativePath,
           sourcePath: file.sourcePath,
           ext: file.ext,
-          size: file.size,
+          size: humanSize(file.size) ?? file.size,
           supportedAudio: file.supportedAudio,
           supportedEbook: file.supportedEbook,
         })),
@@ -429,8 +444,18 @@ export async function selectManualImportPaths(
       2
     );
     const output = await callResponsesJson<ManualImportAgentOutput>(settings, system, user);
-    if (!Array.isArray(output.selectedIndices) || output.selectedIndices.length === 0) {
-      throw new Error("Agent returned empty selectedIndices");
+    if (!Array.isArray(output.selectedIndices)) {
+      throw new Error("Agent returned invalid selectedIndices");
+    }
+    if (output.selectedIndices.length === 0) {
+      return {
+        selectedPaths: [],
+        confidence: clamp01(output.confidence),
+        mode: "agent",
+        trigger,
+        reason: output.reason || "Agent found no alternative importable files",
+        error: null,
+      };
     }
     const selectedPaths: string[] = [];
     for (const index of output.selectedIndices) {
@@ -447,6 +472,20 @@ export async function selectManualImportPaths(
       selectedPaths.push(selected.sourcePath);
     }
     const uniquePaths = Array.from(new Set(selectedPaths));
+    const rejectedPaths = Array.isArray(input.rejectedSourcePaths)
+      ? Array.from(new Set(input.rejectedSourcePaths.filter(Boolean)))
+      : [];
+    if (rejectedPaths.length > 0 && samePathSet(uniquePaths, rejectedPaths)) {
+      return {
+        selectedPaths: [],
+        confidence: clamp01(output.confidence),
+        mode: "agent",
+        trigger,
+        reason:
+          output.reason || "Agent selected the previously reported wrong file set; treating as no alternative importable files",
+        error: null,
+      };
+    }
     return {
       selectedPaths: uniquePaths,
       confidence: clamp01(output.confidence),

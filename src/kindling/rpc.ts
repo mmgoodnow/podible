@@ -437,6 +437,10 @@ const handlers: Record<string, RpcMethodHandler> = {
     if (!release) {
       throw new RpcError(-32000, "Release not found for media", { error: "not_found", bookId, mediaType, releaseId });
     }
+    const rejectedSourcePaths = assets
+      .filter((asset) => asset.source_release_id === release.id)
+      .filter((asset) => (mediaType === "ebook" ? asset.kind === "ebook" : asset.kind !== "ebook"))
+      .flatMap((asset) => ctx.repo.getAssetFiles(asset.id).map((file) => file.path));
 
     let agentDecision: Awaited<ReturnType<typeof selectManualImportPaths>> | null = null;
     let agentImportError: string | null = null;
@@ -449,6 +453,7 @@ const handlers: Record<string, RpcMethodHandler> = {
         agentDecision = await selectManualImportPaths(ctx.repo.getSettings(), {
           mediaType,
           files,
+          rejectedSourcePaths,
           forceAgent: true,
           priorFailure: true,
           book: { id: book.id, title: book.title, author: book.author },
