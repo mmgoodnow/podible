@@ -340,6 +340,10 @@ function deterministicManualImportSelection(input: ManualImportSelectionInput): 
   };
 }
 
+function hasImportableFilesForMedia(input: ManualImportSelectionInput): boolean {
+  return input.files.some((file) => (input.mediaType === "audio" ? file.supportedAudio : file.supportedEbook));
+}
+
 function buildSearchAgentPrompt(trigger: DecisionTrigger, input: SearchSelectionInput, ranked: ReturnType<typeof rankSearchResults>): string {
   const lines: string[] = [];
   lines.push("# Task");
@@ -494,7 +498,7 @@ export async function selectManualImportPaths(
     forceAgent: input.forceAgent,
     priorFailure: input.priorFailure,
   });
-  if (trigger === "none" || input.files.length === 0) {
+  if (trigger === "none" || input.files.length === 0 || !hasImportableFilesForMedia(input)) {
     return deterministic;
   }
 

@@ -307,6 +307,47 @@ describe("agent decisions", () => {
     expect(decision.error).toBeNull();
   });
 
+  test("manual import does not call agent when no importable files exist", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    globalThis.fetch = (async () => {
+      throw new Error("should not call OpenAI");
+    }) as unknown as typeof fetch;
+
+    try {
+      const settings = defaultSettings({
+        agents: {
+          ...defaultSettings().agents,
+          enabled: true,
+        },
+      });
+      const decision = await selectManualImportPaths(settings, {
+        mediaType: "ebook",
+        forceAgent: true,
+        files: [
+          {
+            sourcePath: "/tmp/a.azw3",
+            relativePath: "a.azw3",
+            ext: ".azw3",
+            size: 10,
+            mtimeMs: 1,
+            supportedAudio: false,
+            supportedEbook: false,
+          },
+        ],
+      });
+
+      expect(decision.mode).toBe("deterministic");
+      expect(decision.selectedPaths).toEqual([]);
+      expect(decision.reason).toBe("No supported files for media type");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
+
   test("manual import agent may return no alternative files", async () => {
     const originalFetch = globalThis.fetch;
     const originalApiKey = process.env.OPENAI_API_KEY;

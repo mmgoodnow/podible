@@ -47,6 +47,12 @@ type ImportJobPayload = {
   reason?: string;
   userReportedIssue?: boolean;
   rejectedSourcePaths?: string[];
+  preferAgentFirst?: boolean;
+};
+
+type DownloadJobPayload = {
+  infoHash?: string;
+  preferAgentImport?: boolean;
 };
 
 type PollDecision = {
@@ -177,6 +183,7 @@ async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promise<"don
   }
 
   const settings = ctx.getSettings();
+  const payload = job.payload_json ? (JSON.parse(job.payload_json) as DownloadJobPayload) : {};
   const client = new RtorrentClient(settings.rtorrent);
 
   const state = await client.getDownloadState(release.info_hash);
@@ -208,6 +215,7 @@ async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promise<"don
     payload: {
       basePath: state.basePath,
       infoHash: release.info_hash,
+      preferAgentFirst: payload.preferAgentImport === true,
     },
   });
   ctx.repo.markJobSucceeded(job.id);
@@ -295,6 +303,40 @@ async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done"
     ctx.repo.markJobCancelled(job.id, `${terminalError}; recoveryQueued=true`);
     log(ctx, `[import] job=${job.id} release=${release.id} wrong_file_agent_reimport=none queued_acquire_forced_agent=1`);
     return "done";
+  }
+
+  if (payload.preferAgentFirst === true) {
+    let agentFirstError: string | null = null;
+    try {
+      const files = await inspectImportPath(basePath);
+      const book = ctx.repo.getBookRow(release.book_id);
+      const decision = await selectManualImportPaths(settings, {
+        mediaType: release.media_type,
+        files,
+        forceAgent: true,
+        priorFailure: false,
+        book: book ? { id: book.id, title: book.title, author: book.author } : null,
+      });
+      if (decision.selectedPaths.length > 0) {
+        await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, {
+          selectedPaths: decision.selectedPaths,
+        });
+        ctx.repo.setReleaseStatus(release.id, "imported", null);
+        ctx.repo.markJobSucceeded(job.id);
+        log(
+          ctx,
+          `[import] job=${job.id} release=${release.id} agent_first=success mode=${decision.mode} selected=${decision.selectedPaths.length}`
+        );
+        return "done";
+      }
+      log(
+        ctx,
+        `[import] job=${job.id} release=${release.id} agent_first=no_selection mode=${decision.mode} reason=${JSON.stringify(decision.reason)}`
+      );
+    } catch (error) {
+      agentFirstError = (error as Error).message || "agent-first import failed";
+      log(ctx, `[import] job=${job.id} release=${release.id} agent_first_error=${JSON.stringify(agentFirstError)}`);
+    }
   }
 
   try {
@@ -482,6 +524,7 @@ async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promise<"done
         infoHash: decision.candidate.infoHash ?? null,
       }, {
         onLog: (line) => log(ctx, `[acquire] job=${job.id} book=${book.id} media=${media} ${line}`),
+        preferAgentImport: decision.mode === "agent",
       });
       log(
         ctx,

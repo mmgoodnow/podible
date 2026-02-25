@@ -31,6 +31,7 @@ type AutoAcquireOptions = {
 
 type SnatchRuntimeOptions = {
   onLog?: (message: string) => void;
+  preferAgentImport?: boolean;
 };
 
 type RankedSearchResult = {
@@ -228,6 +229,7 @@ export async function runSnatch(
     bookId: release.book_id,
     payload: {
       infoHash: release.info_hash,
+      preferAgentImport: runtime.preferAgentImport === true,
     },
   });
   snatchLog(`[snatch] created release=${release.id} download_job=${job.id} info_hash=${release.info_hash}`);
