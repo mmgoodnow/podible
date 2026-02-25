@@ -114,6 +114,10 @@ function mdTableCell(value: unknown): string {
   return text.replace(/\|/g, "\\|").replace(/\n/g, " ");
 }
 
+function formatTargetMedia(media: MediaType): string {
+  return media === "ebook" ? "ebook (not audio)" : "audio (not ebook)";
+}
+
 function configuredAgent(settings: AppSettings) {
   if (!settings.agents?.enabled) return null;
   const apiKey = process.env.OPENAI_API_KEY?.trim();
@@ -342,13 +346,15 @@ function buildSearchAgentPrompt(trigger: DecisionTrigger, input: SearchSelection
   lines.push("Pick the best torrent candidate for a single-book acquisition.");
   lines.push("");
   lines.push("# Context");
-  lines.push(`- Trigger: \`${mdInline(trigger)}\``);
   lines.push(`- Query: \`${mdInline(input.query)}\``);
-  lines.push(`- Media: \`${mdInline(input.media)}\``);
+  lines.push(`- Target media: **${formatTargetMedia(input.media)}**`);
   if (input.book) {
-    lines.push(`- Book: **${mdTableCell(input.book.title)}** by **${mdTableCell(input.book.author)}** (id: \`${input.book.id}\`)`);
+    lines.push(`- Book: **${mdTableCell(input.book.title)}** by **${mdTableCell(input.book.author)}**`);
   } else {
     lines.push("- Book: unknown");
+  }
+  if (trigger !== "none" && trigger !== "forced") {
+    lines.push(`- Context: ${trigger === "prior_failure" ? "this follows a prior failure" : "deterministic confidence was low"}`);
   }
   lines.push("");
   lines.push("# Candidates");
@@ -368,38 +374,47 @@ function buildSearchAgentPrompt(trigger: DecisionTrigger, input: SearchSelection
 
 function buildManualImportAgentPrompt(trigger: DecisionTrigger, input: ManualImportSelectionInput): string {
   const lines: string[] = [];
+  const importableFiles = input.files
+    .map((file, index) => ({ file, index }))
+    .filter(({ file }) => (input.mediaType === "audio" ? file.supportedAudio : file.supportedEbook));
   lines.push("# Task");
   lines.push("Pick the exact subset of files to import for one book.");
   lines.push("");
   lines.push("# Context");
-  lines.push(`- Trigger: \`${mdInline(trigger)}\``);
-  lines.push(`- Media Type: \`${mdInline(input.mediaType)}\``);
+  lines.push(`- Target media: **${formatTargetMedia(input.mediaType)}**`);
   if (input.book) {
-    lines.push(`- Book: **${mdTableCell(input.book.title)}** by **${mdTableCell(input.book.author)}** (id: \`${input.book.id}\`)`);
+    lines.push(`- Book: **${mdTableCell(input.book.title)}** by **${mdTableCell(input.book.author)}**`);
   } else {
     lines.push("- Book: unknown");
   }
+  if (trigger !== "none" && trigger !== "forced") {
+    lines.push(`- Context: ${trigger === "prior_failure" ? "this follows a prior import failure" : "deterministic confidence was low"}`);
+  }
   const rejected = Array.isArray(input.rejectedSourcePaths) ? input.rejectedSourcePaths.filter(Boolean) : [];
-  lines.push("- Previously reported wrong source paths:");
-  if (rejected.length === 0) {
-    lines.push("  - none");
-  } else {
+  if (rejected.length > 0) {
+    lines.push("- Previously reported wrong source paths (do not select the same file set):");
     for (const p of rejected) {
       lines.push(`  - \`${mdInline(p)}\``);
     }
   }
-  lines.push("");
-  lines.push("# Files");
-  lines.push("| index | relativePath | sourcePath | ext | size | supportedAudio | supportedEbook |");
-  lines.push("| ---: | --- | --- | --- | --- | --- | --- |");
-  for (let index = 0; index < input.files.length; index += 1) {
-    const file = input.files[index];
-    lines.push(
-      `| ${index} | ${mdTableCell(file.relativePath)} | ${mdTableCell(file.sourcePath)} | ${mdTableCell(file.ext)} | ${mdTableCell(
-        humanSize(file.size) ?? file.size
-      )} | ${file.supportedAudio ? "yes" : "no"} | ${file.supportedEbook ? "yes" : "no"} |`
-    );
+  if (importableFiles.length !== input.files.length) {
+    lines.push(`- Only importable ${input.mediaType} files are listed below (${importableFiles.length} of ${input.files.length} total files).`);
   }
+  lines.push("");
+  lines.push("# Importable Files (JSON Array)");
+  lines.push("```json");
+  lines.push(
+    JSON.stringify(
+      importableFiles.map(({ file, index }) => ({
+        index,
+        path: file.relativePath,
+        size: humanSize(file.size) ?? file.size,
+      })),
+      null,
+      2
+    )
+  );
+  lines.push("```");
   lines.push("");
   lines.push("# Output");
   lines.push("Return strict JSON only with keys `selectedIndices`, `confidence`, `reason`.");
