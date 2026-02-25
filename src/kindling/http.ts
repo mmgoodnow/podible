@@ -88,11 +88,14 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
           .slice(0, 2)
           .toUpperCase() || "BK";
       return `<article class="feed-preview-item">
-  <div class="feed-preview-cover">${
-    coverPath
-      ? `<img src="${escapeHtml(coverPath)}" alt="${escapeHtml(book.title)} cover" loading="lazy" />`
-      : `<span>${escapeHtml(initials)}</span>`
-  }</div>
+  <div class="feed-preview-cover">
+    <span class="feed-preview-fallback">${escapeHtml(initials)}</span>
+    ${
+      coverPath
+        ? `<img src="${escapeHtml(coverPath)}" alt="${escapeHtml(book.title)} cover" loading="lazy" onerror="this.remove()" />`
+        : ""
+    }
+  </div>
   <div class="feed-preview-body">
     <div class="feed-preview-title-row">
       <strong>${escapeHtml(book.title)}</strong>
@@ -247,19 +250,26 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
         padding: 8px;
       }
       .feed-preview-cover {
+        position: relative;
         width: 64px;
         height: 64px;
         border-radius: 8px;
         border: 1px solid var(--line-soft);
         background: linear-gradient(135deg, #e6efff, #f3f7ff);
-        display: flex;
-        align-items: center;
-        justify-content: center;
         color: var(--muted);
         font-weight: 700;
         overflow: hidden;
       }
+      .feed-preview-fallback {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
       .feed-preview-cover img {
+        position: absolute;
+        inset: 0;
         width: 100%;
         height: 100%;
         object-fit: cover;
