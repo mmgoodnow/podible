@@ -113,20 +113,45 @@ function selectDiscoveredFiles(files: FileInfo[], selectedPaths: string[] | unde
   return chosen;
 }
 
-async function ensureHardlink(sourcePath: string, destinationPath: string): Promise<void> {
-  await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+async function isSameFile(sourcePath: string, destinationPath: string): Promise<boolean> {
   try {
-    await fs.link(sourcePath, destinationPath);
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code === "EEXIST") {
-      return;
-    }
-    if (err.code === "EXDEV") {
-      throw new Error(`Hardlink failed with EXDEV: ${sourcePath} -> ${destinationPath}`);
-    }
-    throw err;
+    const [sourceStat, destStat] = await Promise.all([fs.stat(sourcePath), fs.stat(destinationPath)]);
+    return sourceStat.dev === destStat.dev && sourceStat.ino === destStat.ino;
+  } catch {
+    return false;
   }
+}
+
+function withCollisionSuffix(filePath: string, suffix: string): string {
+  const ext = path.extname(filePath);
+  const stem = ext ? filePath.slice(0, -ext.length) : filePath;
+  return `${stem} ${suffix}${ext}`;
+}
+
+async function ensureHardlink(sourcePath: string, destinationPath: string): Promise<string> {
+  await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+  let attempt = 0;
+  while (attempt < 100) {
+    const candidate = attempt === 0 ? destinationPath : withCollisionSuffix(destinationPath, `(${attempt + 1})`);
+    try {
+      await fs.link(sourcePath, candidate);
+      return candidate;
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === "EEXIST") {
+        if (await isSameFile(sourcePath, candidate)) {
+          return candidate;
+        }
+        attempt += 1;
+        continue;
+      }
+      if (err.code === "EXDEV") {
+        throw new Error(`Hardlink failed with EXDEV: ${sourcePath} -> ${candidate}`);
+      }
+      throw err;
+    }
+  }
+  throw new Error(`Could not allocate unique import path for ${destinationPath}`);
 }
 
 function pickAudioCandidates(files: FileInfo[]): { kind: AssetKind; files: FileInfo[]; mime: string } | null {
@@ -241,12 +266,12 @@ export async function importReleaseFromPath(
       return path.join(root, `${titleDir}${ext}`);
     })();
 
-    await ensureHardlink(file.sourcePath, targetPath);
-    linkedFiles.push(targetPath);
+    const linkedPath = await ensureHardlink(file.sourcePath, targetPath);
+    linkedFiles.push(linkedPath);
 
     const durationSeconds =
       release.media_type === "audio"
-        ? getDurationSeconds(targetPath, file.mtimeMs) ?? 0
+        ? getDurationSeconds(linkedPath, file.mtimeMs) ?? 0
         : 0;
     const durationMs = Math.max(0, Math.round(durationSeconds * 1000));
     const start = cursor;
@@ -255,7 +280,7 @@ export async function importReleaseFromPath(
     durationMsTotal += durationMs;
 
     assetFiles.push({
-      path: targetPath,
+      path: linkedPath,
       sourcePath: file.sourcePath,
       size: file.size,
       start,
