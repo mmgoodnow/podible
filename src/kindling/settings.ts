@@ -49,9 +49,57 @@ export function defaultSettings(overrides?: Partial<AppSettings>): AppSettings {
 }
 
 export function parseSettings(value: string): AppSettings {
-  const parsed = JSON.parse(value) as AppSettings;
-  if (!parsed || typeof parsed !== "object") {
+  const parsed = JSON.parse(value) as Partial<AppSettings>;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("Invalid settings payload");
   }
-  return parsed;
+
+  const defaults = defaultSettings();
+  const parsedAgents = (parsed.agents && typeof parsed.agents === "object" ? parsed.agents : {}) as Partial<AppSettings["agents"]>;
+  const parsedSearch =
+    parsedAgents.search && typeof parsedAgents.search === "object"
+      ? (parsedAgents.search as Partial<AppSettings["agents"]["search"]>)
+      : {};
+  const parsedManualImport =
+    parsedAgents.manualImport && typeof parsedAgents.manualImport === "object"
+      ? (parsedAgents.manualImport as Partial<AppSettings["agents"]["manualImport"]>)
+      : {};
+
+  return {
+    ...defaults,
+    ...parsed,
+    torznab: Array.isArray(parsed.torznab) ? parsed.torznab : defaults.torznab,
+    rtorrent: {
+      ...defaults.rtorrent,
+      ...(parsed.rtorrent && typeof parsed.rtorrent === "object" ? parsed.rtorrent : {}),
+    },
+    polling: {
+      ...defaults.polling,
+      ...(parsed.polling && typeof parsed.polling === "object" ? parsed.polling : {}),
+    },
+    transcode: {
+      ...defaults.transcode,
+      ...(parsed.transcode && typeof parsed.transcode === "object" ? parsed.transcode : {}),
+    },
+    feed: {
+      ...defaults.feed,
+      ...(parsed.feed && typeof parsed.feed === "object" ? parsed.feed : {}),
+    },
+    auth: {
+      ...defaults.auth,
+      ...(parsed.auth && typeof parsed.auth === "object" ? parsed.auth : {}),
+    },
+    agents: {
+      ...defaults.agents,
+      ...parsedAgents,
+      search: {
+        ...defaults.agents.search,
+        ...parsedSearch,
+      },
+      manualImport: {
+        ...defaults.agents.manualImport,
+        ...parsedManualImport,
+      },
+    },
+  };
 }

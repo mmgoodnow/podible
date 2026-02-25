@@ -11,7 +11,7 @@ import type { AppSettings, MediaType } from "./types";
  *
  * Deterministic ranking/selection stays the default path. Responses API is
  * consulted only when configured and triggered (forced, prior failure, or low
- * confidence), and all agent failures fall back to deterministic output.
+ * confidence). Agent invocation failures surface as errors to the caller.
  */
 type DecisionMode = "deterministic" | "agent";
 type DecisionTrigger = "none" | "forced" | "prior_failure" | "low_confidence";
@@ -111,9 +111,18 @@ function determineTrigger(
   options: { forceAgent?: boolean; priorFailure?: boolean }
 ): DecisionTrigger {
   if (options.forceAgent) return "forced";
-  const cfg = domain === "search" ? settings.agents.search : settings.agents.manualImport;
-  if (options.priorFailure && cfg.enableOnFailure) return "prior_failure";
-  if (cfg.enableOnLowConfidence && confidence < settings.agents.lowConfidenceThreshold) return "low_confidence";
+  const agentsCfg = settings.agents as
+    | (AppSettings["agents"] & {
+        search?: Partial<AppSettings["agents"]["search"]>;
+        manualImport?: Partial<AppSettings["agents"]["manualImport"]>;
+      })
+    | undefined;
+  const cfg: Partial<AppSettings["agents"]["search"]> | Partial<AppSettings["agents"]["manualImport"]> =
+    (domain === "search" ? agentsCfg?.search : agentsCfg?.manualImport) ?? {};
+  const lowConfidenceThreshold =
+    typeof agentsCfg?.lowConfidenceThreshold === "number" ? agentsCfg.lowConfidenceThreshold : 0.45;
+  if (options.priorFailure && cfg.enableOnFailure === true) return "prior_failure";
+  if (cfg.enableOnLowConfidence === true && confidence < lowConfidenceThreshold) return "low_confidence";
   return "none";
 }
 
@@ -374,12 +383,8 @@ export async function selectSearchCandidate(settings: AppSettings, input: Search
       error: null,
     };
   } catch (error) {
-    return {
-      ...deterministic,
-      trigger,
-      reason: `${deterministic.reason}; agent fallback to deterministic`,
-      error: (error as Error).message,
-    };
+    const message = (error as Error).message || "unknown agent error";
+    throw new Error(`Agent search selection failed (trigger=${trigger}): ${message}`);
   }
 }
 
@@ -451,12 +456,8 @@ export async function selectManualImportPaths(
       error: null,
     };
   } catch (error) {
-    return {
-      ...deterministic,
-      trigger,
-      reason: `${deterministic.reason}; agent fallback to deterministic`,
-      error: (error as Error).message,
-    };
+    const message = (error as Error).message || "unknown agent error";
+    throw new Error(`Agent manual-import selection failed (trigger=${trigger}): ${message}`);
   }
 }
 

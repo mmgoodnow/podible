@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { selectManualImportPaths, selectSearchCandidate } from "../../src/kindling/agents";
-import { defaultSettings } from "../../src/kindling/settings";
+import { defaultSettings, parseSettings } from "../../src/kindling/settings";
 
 describe("agent decisions", () => {
   test("search selection is deterministic by default", async () => {
@@ -131,7 +131,7 @@ describe("agent decisions", () => {
     }
   });
 
-  test("search falls back to deterministic when agent call fails", async () => {
+  test("search throws when agent call fails", async () => {
     const originalFetch = globalThis.fetch;
     const originalApiKey = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = "test-key";
@@ -145,41 +145,39 @@ describe("agent decisions", () => {
           lowConfidenceThreshold: 0.99,
         },
       });
-      const decision = await selectSearchCandidate(settings, {
-        query: "Dune Frank Herbert",
-        media: "audio",
-        forceAgent: true,
-        results: [
-          {
-            title: "Dune Frank Herbert [ENG / M4B]",
-            provider: "mock",
-            mediaType: "audio",
-            sizeBytes: 1000,
-            url: "https://example.com/one.torrent",
-            guid: "g1",
-            infoHash: null,
-            seeders: 3,
-            leechers: 0,
-            raw: {},
-          },
-          {
-            title: "Dune Complete Box Set [ENG / MP3]",
-            provider: "mock",
-            mediaType: "audio",
-            sizeBytes: 1000,
-            url: "https://example.com/two.torrent",
-            guid: "g2",
-            infoHash: null,
-            seeders: 100,
-            leechers: 0,
-            raw: {},
-          },
-        ],
-      });
-
-      expect(decision.mode).toBe("deterministic");
-      expect(decision.candidate?.url).toBe("https://example.com/one.torrent");
-      expect(decision.error).toContain("500");
+      await expect(
+        selectSearchCandidate(settings, {
+          query: "Dune Frank Herbert",
+          media: "audio",
+          forceAgent: true,
+          results: [
+            {
+              title: "Dune Frank Herbert [ENG / M4B]",
+              provider: "mock",
+              mediaType: "audio",
+              sizeBytes: 1000,
+              url: "https://example.com/one.torrent",
+              guid: "g1",
+              infoHash: null,
+              seeders: 3,
+              leechers: 0,
+              raw: {},
+            },
+            {
+              title: "Dune Complete Box Set [ENG / MP3]",
+              provider: "mock",
+              mediaType: "audio",
+              sizeBytes: 1000,
+              url: "https://example.com/two.torrent",
+              guid: "g2",
+              infoHash: null,
+              seeders: 100,
+              leechers: 0,
+              raw: {},
+            },
+          ],
+        })
+      ).rejects.toThrow("500");
     } finally {
       globalThis.fetch = originalFetch;
       if (originalApiKey === undefined) {
@@ -188,6 +186,43 @@ describe("agent decisions", () => {
         process.env.OPENAI_API_KEY = originalApiKey;
       }
     }
+  });
+
+  test("legacy settings without nested agent domain config do not crash search selection", async () => {
+    const legacySettings = parseSettings(
+      JSON.stringify({
+        ...defaultSettings(),
+        agents: {
+          enabled: true,
+          provider: "openai-responses",
+          model: "gpt-5-mini",
+          lowConfidenceThreshold: 0.45,
+          timeoutMs: 8000,
+        },
+      })
+    );
+
+    const decision = await selectSearchCandidate(legacySettings, {
+      query: "Dune Frank Herbert",
+      media: "audio",
+      results: [
+        {
+          title: "Dune Frank Herbert [ENG / M4B]",
+          provider: "mock",
+          mediaType: "audio",
+          sizeBytes: 1000,
+          url: "https://example.com/one.torrent",
+          guid: "g1",
+          infoHash: null,
+          seeders: 3,
+          leechers: 0,
+          raw: {},
+        },
+      ],
+    });
+
+    expect(decision.mode).toBe("deterministic");
+    expect(decision.candidate?.url).toBe("https://example.com/one.torrent");
   });
 
   test("search selection excludes rejected guid and infohash", async () => {
