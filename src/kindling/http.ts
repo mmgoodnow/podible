@@ -145,6 +145,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
         background:
           radial-gradient(circle at 90% 10%, rgba(95, 143, 255, 0.08), transparent 45%),
           linear-gradient(180deg, #ffffff, #fbfdff);
+        margin-bottom: 16px;
       }
       .header-grid {
         display: grid;
@@ -221,6 +222,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
       @media (max-width: 900px) {
         body { padding: 12px; }
         .dashboard-grid { gap: 12px; }
+        .page-header { margin-bottom: 12px; }
         .card-narrow, .card-mid, .card-wide { grid-column: span 12; }
         input, select { min-width: 150px; }
         table { min-width: 560px; }
