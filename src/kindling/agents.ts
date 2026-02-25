@@ -392,7 +392,10 @@ function buildManualImportAgentPrompt(trigger: DecisionTrigger, input: ManualImp
   }
   const rejected = Array.isArray(input.rejectedSourcePaths) ? input.rejectedSourcePaths.filter(Boolean) : [];
   if (rejected.length > 0) {
-    lines.push("- Previously reported wrong source paths (do not select the same file set):");
+    lines.push("- Previously imported source paths from the rejected import:");
+    lines.push("  - These paths are not individually banned.");
+    lines.push("  - Do not return the exact same full set again.");
+    lines.push("  - A strict subset is allowed and may be the correct answer when the prior import included extra books/files.");
     for (const p of rejected) {
       lines.push(`  - \`${mdInline(p)}\``);
     }
@@ -501,7 +504,9 @@ export async function selectManualImportPaths(
       "selectedIndices must be an array of integer indices into the files array.",
       "If there is no valid alternative importable file set, return an empty selectedIndices array.",
       "Never include unsupported media files.",
-      "Do not select the same file set as any previously reported wrong file set when one is provided.",
+      "If previously imported paths are provided, do NOT treat each listed path as individually forbidden.",
+      "Those paths represent a previously rejected import set that may include valid files mixed with extra files.",
+      "Avoid returning the exact same full set again, but selecting a strict subset is allowed and often desirable.",
       "confidence must be a number from 0 to 1.",
     ].join(" ");
     const user = buildManualImportAgentPrompt(trigger, input);
