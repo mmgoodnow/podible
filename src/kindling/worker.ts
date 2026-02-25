@@ -246,6 +246,10 @@ async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done"
     ctx.repo.rescheduleJob(job.id, nextRun);
     return "rescheduled";
   }
+  log(
+    ctx,
+    `[import] job=${job.id} release=${release.id} start base_path=${JSON.stringify(basePath)} prefer_agent_first=${payload.preferAgentFirst === true} user_reported_issue=${payload.userReportedIssue === true}`
+  );
 
   if (payload.userReportedIssue === true) {
     let agentDecisionReason = "not_attempted";
