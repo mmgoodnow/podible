@@ -7,7 +7,7 @@ services:
       TZ: ${TZ:-UTC}
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
-      DOWNLOAD_PATH: /data/downloads
+      DOWNLOAD_PATH: ${RUTORRENT_DOWNLOAD_PATH:-/Users/mmgoodnow/Downloads}
       RUTORRENT_PORT: 8080
       XMLRPC_PORT: 8000
       WEBDAV_PORT: 9000
@@ -23,6 +23,7 @@ services:
       - "${TMPDIR:-/tmp}/rutorrent-config:/config"
       - "${TMPDIR:-/tmp}/rutorrent-data:/data"
       - "${TMPDIR:-/tmp}/rutorrent-passwd:/passwd"
+      - "${RUTORRENT_DOWNLOAD_PATH:-/Users/mmgoodnow/Downloads}:${RUTORRENT_DOWNLOAD_PATH:-/Users/mmgoodnow/Downloads}"
     ulimits:
       nproc: 65535
       nofile:

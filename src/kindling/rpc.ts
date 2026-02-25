@@ -6,7 +6,6 @@ import { selectManualImportPaths, selectSearchCandidate } from "./agents";
 import { hydrateBookFromOpenLibrary } from "./hydration";
 import { importReleaseFromPath, inspectImportPath } from "./importer";
 import { resolveOpenLibraryCandidate, searchOpenLibrary } from "./openlibrary";
-import { resolveImportSourcePath } from "./paths";
 import { computeDownloadFraction, pseudoProgressForRelease } from "./progress";
 import { KindlingRepo } from "./repo";
 import { RtorrentClient } from "./rtorrent";
@@ -446,8 +445,7 @@ const handlers: Record<string, RpcMethodHandler> = {
       const client = new RtorrentClient(ctx.repo.getSettings().rtorrent);
       const state = await client.getDownloadState(release.info_hash);
       if (state.basePath) {
-        const resolvedSource = await resolveImportSourcePath(state.basePath, ctx.repo.getSettings().libraryRoot);
-        const files = await inspectImportPath(resolvedSource.resolvedPath);
+        const files = await inspectImportPath(state.basePath);
         agentDecision = await selectManualImportPaths(ctx.repo.getSettings(), {
           mediaType,
           files,
@@ -457,13 +455,9 @@ const handlers: Record<string, RpcMethodHandler> = {
         });
 
         if (agentDecision.selectedPaths.length > 0) {
-          const imported = await importReleaseFromPath(
-            ctx.repo,
-            release,
-            resolvedSource.resolvedPath,
-            ctx.repo.getSettings().libraryRoot,
-            { selectedPaths: agentDecision.selectedPaths }
-          );
+          const imported = await importReleaseFromPath(ctx.repo, release, state.basePath, ctx.repo.getSettings().libraryRoot, {
+            selectedPaths: agentDecision.selectedPaths,
+          });
           const updated = ctx.repo.setReleaseStatus(release.id, "imported", null);
           return {
             action: "agent_imported",
