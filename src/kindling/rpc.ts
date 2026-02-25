@@ -672,6 +672,22 @@ const handlers: Record<string, RpcMethodHandler> = {
     return { job };
   },
 
+  async "jobs.retry"(ctx, params) {
+    const jobId = asPositiveInt(params.jobId, "jobId");
+    const job = ctx.repo.getJob(jobId);
+    if (!job) {
+      throw new RpcError(-32000, "Job not found", { error: "not_found", jobId });
+    }
+    if (job.status !== "failed" && job.status !== "cancelled") {
+      throw new RpcError(-32000, "Job is not retryable", {
+        error: "not_retryable",
+        jobId,
+        status: job.status,
+      });
+    }
+    return { job: ctx.repo.retryJob(jobId) };
+  },
+
   async "import.reconcile"(ctx) {
     const job = ctx.repo.createJob({ type: "reconcile" });
     return { jobId: job.id };

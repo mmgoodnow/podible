@@ -152,6 +152,35 @@ describe("json-rpc handler", () => {
     db.close();
   });
 
+  test("jobs.retry requeues failed jobs and rejects non-retryable jobs", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new KindlingRepo(db);
+    repo.ensureSettings();
+
+    const failed = repo.createJob({ type: "acquire", status: "failed" });
+    const retried = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "jobs.retry",
+      params: { jobId: failed.id },
+    });
+    expect(retried.result.job.id).toBe(failed.id);
+    expect(retried.result.job.status).toBe("queued");
+
+    const queued = repo.createJob({ type: "acquire", status: "queued" });
+    const notRetryable = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "jobs.retry",
+      params: { jobId: queued.id },
+    });
+    expect(notRetryable.error.code).toBe(-32000);
+    expect(notRetryable.error.data.error).toBe("not_retryable");
+
+    db.close();
+  });
+
   test("library.reportImportIssue queues forced agent reacquire when no importable files", async () => {
     const originalFetch = globalThis.fetch;
     try {

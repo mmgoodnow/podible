@@ -398,10 +398,11 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
                     <th>Release</th>
                     <th>Attempts</th>
                     <th>Updated</th>
+                    <th>Action</th>
                     <th>Error</th>
                   </tr>
                 </thead>
-                <tbody id="jobs-table-body"><tr><td colspan="8">Loading...</td></tr></tbody>
+                <tbody id="jobs-table-body"><tr><td colspan="9">Loading...</td></tr></tbody>
               </table>
             </div>
           </div>
@@ -1028,7 +1029,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
           if (!Array.isArray(items) || items.length === 0) {
             var emptyRow = document.createElement("tr");
             var emptyCell = document.createElement("td");
-            emptyCell.colSpan = 8;
+            emptyCell.colSpan = 9;
             emptyCell.textContent = "No jobs found.";
             emptyRow.appendChild(emptyCell);
             jobsTableBody.appendChild(emptyRow);
@@ -1048,6 +1049,30 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
             jobsCell(row, job.release_id == null ? "" : String(job.release_id));
             jobsCell(row, String(job.attempt_count || 0) + "/" + String(job.max_attempts || 0));
             jobsCell(row, String(job.updated_at || ""));
+            var actionCell = document.createElement("td");
+            var status = String(job.status || "");
+            if (status === "failed" || status === "cancelled") {
+              var retryBtn = document.createElement("button");
+              retryBtn.type = "button";
+              retryBtn.textContent = "Retry";
+              retryBtn.addEventListener("click", async function () {
+                retryBtn.disabled = true;
+                text("jobs-status", "Retrying job " + String(job.id) + "...");
+                try {
+                  await rpc("jobs.retry", { jobId: Number(job.id) });
+                  text("jobs-status", "Retried job " + String(job.id) + ".");
+                  loadJobs();
+                  if (typeof loadDownloads === "function") {
+                    loadDownloads();
+                  }
+                } catch (err) {
+                  text("jobs-status", "Retry failed: " + (err && err.message ? err.message : "request error"));
+                  retryBtn.disabled = false;
+                }
+              });
+              actionCell.appendChild(retryBtn);
+            }
+            row.appendChild(actionCell);
             jobsCell(row, String(job.error || ""));
             jobsTableBody.appendChild(row);
           });
