@@ -448,6 +448,7 @@ export async function selectSearchCandidate(settings: AppSettings, input: Search
     const system = [
       "You select the best torrent candidate for a single book acquisition.",
       "Prefer the requested prose book itself, not related works, guides, excerpts, or adaptations.",
+      "For ebook selection, this app can import EPUB and PDF only. Prefer EPUB/PDF candidates over unsupported ebook formats (such as AZW3/MOBI/LIT), even if the unsupported candidate looks like a better title match.",
       "For ebook selection, avoid comic/graphic-novel formats and comic releases (for example CBR/CBZ or titles mentioning graphic novel) unless the user explicitly asked for that.",
       "If no good single-book candidate exists, it is better to choose a plausible box set/collection containing the target book than to choose the wrong work.",
       "If the list is too poor or ambiguous to choose safely, return no candidate.",
