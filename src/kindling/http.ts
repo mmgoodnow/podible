@@ -44,31 +44,6 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
   const books = repo.listBooks(30).items;
   const apiKey = settings.auth.mode === "apikey" ? settings.auth.key : null;
   const settingsJson = escapeHtml(JSON.stringify(settings, null, 2));
-  const rpcExample = escapeHtml(
-    JSON.stringify(
-      {
-        jsonrpc: "2.0",
-        id: 1,
-        method: "settings.get",
-        params: {},
-      },
-      null,
-      2
-    )
-  );
-  const links = [
-    "/",
-    "/rpc/system/health",
-    "/rpc/settings/get",
-    "/rpc/jobs/list?limit=20",
-    "/assets?bookId=1",
-    "/feed.xml",
-    "/feed.json",
-  ];
-
-  const linkItems = links
-    .map((path) => `<li><a href="${escapeHtml(addApiKey(path, apiKey))}">${escapeHtml(path)}</a></li>`)
-    .join("");
 
   const rows = books
     .map((book) => {
@@ -231,34 +206,27 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
     <div class="page">
       <div class="dashboard-grid">
         <section class="card card-full page-header">
-          <h1>Podible Backend</h1>
-          <p class="muted">Auth mode: <strong>${escapeHtml(settings.auth.mode)}</strong>${apiKey ? ` | Authorized links include <code>api_key</code>` : ""}</p>
-          <p>Queue: <strong>${health.queueSize}</strong> | Jobs: <code>${escapeHtml(JSON.stringify(health.jobs))}</code> | Releases: <code>${escapeHtml(JSON.stringify(health.releases))}</code></p>
           <div class="header-grid">
             <div>
-              <h2>Quick Links</h2>
-              <ul>${linkItems}</ul>
+              <h1>Podible Backend</h1>
+              <p class="muted">Auth mode: <strong>${escapeHtml(settings.auth.mode)}</strong>${apiKey ? ` | Authorized links include <code>api_key</code>` : ""}</p>
+              <p>Queue: <strong>${health.queueSize}</strong> | Jobs: <code>${escapeHtml(JSON.stringify(health.jobs))}</code> | Releases: <code>${escapeHtml(JSON.stringify(health.releases))}</code></p>
             </div>
             <div>
-              <p class="muted">Control/data API uses <code>POST /rpc</code>; read-only convenience links are available at <code>GET /rpc/&lt;ns&gt;/&lt;method&gt;</code>.</p>
-              <pre><code>${rpcExample}</code></pre>
+              <h2>Settings JSON</h2>
+              <div class="panel">
+                <div class="row">
+                  <button id="settings-save-btn" type="button">Save Settings</button>
+                  <button id="wipe-db-btn" type="button" style="margin-left: auto; background: var(--danger); color: #fff; border: 1px solid var(--danger-border);">Wipe Entire Database</button>
+                </div>
+                <p id="settings-status" class="muted"></p>
+                <textarea id="settings-editor" spellcheck="false">${settingsJson}</textarea>
+              </div>
             </div>
           </div>
         </section>
 
-        <section class="card card-narrow">
-          <h2>Open Library Search</h2>
-          <div class="panel">
-            <div class="row">
-              <input id="ol-query" type="text" placeholder="Title Author (e.g. Hyperion Dan Simmons)" />
-              <button id="ol-search-btn" type="button">Search</button>
-            </div>
-            <p id="ol-status" class="muted"></p>
-            <ul id="ol-results"></ul>
-          </div>
-        </section>
-
-        <section class="card card-wide">
+        <section class="card card-full">
           <h2>Manual Search + Snatch</h2>
           <div class="panel">
             <div class="row">
@@ -288,7 +256,19 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
           </div>
         </section>
 
-        <section class="card card-wide">
+        <section class="card card-mid">
+          <h2>Open Library Search</h2>
+          <div class="panel">
+            <div class="row">
+              <input id="ol-query" type="text" placeholder="Title Author (e.g. Hyperion Dan Simmons)" />
+              <button id="ol-search-btn" type="button">Search</button>
+            </div>
+            <p id="ol-status" class="muted"></p>
+            <ul id="ol-results"></ul>
+          </div>
+        </section>
+
+        <section class="card card-mid">
           <h2>Manual Import</h2>
           <div class="panel">
             <div class="row">
@@ -315,18 +295,6 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
                 <tbody id="manual-import-files-body"><tr><td colspan="4">No inspection yet.</td></tr></tbody>
               </table>
             </div>
-          </div>
-        </section>
-
-        <section class="card card-narrow">
-          <h2>Settings JSON</h2>
-          <div class="panel">
-            <div class="row">
-              <button id="settings-save-btn" type="button">Save Settings</button>
-              <button id="wipe-db-btn" type="button" style="margin-left: auto; background: var(--danger); color: #fff; border: 1px solid var(--danger-border);">Wipe Entire Database</button>
-            </div>
-            <p id="settings-status" class="muted"></p>
-            <textarea id="settings-editor" spellcheck="false">${settingsJson}</textarea>
           </div>
         </section>
 

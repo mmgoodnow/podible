@@ -40,7 +40,6 @@ describe("podible http", () => {
     expect(home.headers.get("content-type")).toContain("text/html");
     const body = await home.text();
     expect(body.includes("Podible Backend")).toBe(true);
-    expect(body.includes("POST /rpc")).toBe(true);
     expect(body.includes("Open Library Search")).toBe(true);
     expect(body.includes("Manual Search + Snatch")).toBe(true);
     expect(body.includes("manual-import-btn")).toBe(true);
