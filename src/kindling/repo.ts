@@ -514,6 +514,14 @@ export class KindlingRepo {
       .get(now, jobId) as JobRow;
   }
 
+  markJobCancelled(jobId: number, error?: string | null): JobRow {
+    assertPositiveInt(jobId);
+    const now = nowIso();
+    return this.db
+      .query("UPDATE jobs SET status = 'cancelled', error = ?, updated_at = ? WHERE id = ? RETURNING *")
+      .get(error ?? null, now, jobId) as JobRow;
+  }
+
   markJobFailed(jobId: number, error: string, nextRunAt?: string | null): JobRow {
     const now = nowIso();
     return this.db
@@ -594,6 +602,7 @@ export class KindlingRepo {
           j.error AS job_error,
           r.id AS release_id,
           r.status AS release_status,
+          r.error AS release_error,
           r.media_type AS media_type,
           r.info_hash AS info_hash,
           r.book_id AS book_id
@@ -616,6 +625,7 @@ export class KindlingRepo {
           j.error AS job_error,
           r.id AS release_id,
           r.status AS release_status,
+          r.error AS release_error,
           r.media_type AS media_type,
           r.info_hash AS info_hash,
           r.book_id AS book_id

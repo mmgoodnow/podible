@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { selectManualImportPaths, selectSearchCandidate } from "./agents";
 import { nowIso } from "./db";
 import { importReleaseFromPath, inspectImportPath } from "./importer";
+import { resolveImportSourcePath } from "./paths";
 import { RtorrentClient } from "./rtorrent";
 import { KindlingRepo } from "./repo";
 import { scanLibraryRoot } from "./scanner";
@@ -232,8 +233,17 @@ async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done"
     return "rescheduled";
   }
 
+  const resolvedImportPath = await resolveImportSourcePath(basePath, settings.libraryRoot);
+  const importPath = resolvedImportPath.resolvedPath;
+  if (resolvedImportPath.remapped) {
+    log(
+      ctx,
+      `[import] job=${job.id} release=${release.id} remap_base_path strategy=${resolvedImportPath.strategy} from=${JSON.stringify(resolvedImportPath.originalPath)} to=${JSON.stringify(importPath)}`
+    );
+  }
+
   try {
-    await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot);
+    await importReleaseFromPath(ctx.repo, release, importPath, settings.libraryRoot);
     ctx.repo.setReleaseStatus(release.id, "imported", null);
     ctx.repo.markJobSucceeded(job.id);
     return "done";
@@ -247,7 +257,7 @@ async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done"
     let agentDecisionReason = "not_attempted";
     let agentDecisionError: string | null = null;
     try {
-      const files = await inspectImportPath(basePath);
+      const files = await inspectImportPath(importPath);
       const book = ctx.repo.getBookRow(release.book_id);
       const decision = await selectManualImportPaths(settings, {
         mediaType: release.media_type,
@@ -260,7 +270,7 @@ async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done"
       agentDecisionError = decision.error;
 
       if (decision.selectedPaths.length > 0) {
-        await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, {
+        await importReleaseFromPath(ctx.repo, release, importPath, settings.libraryRoot, {
           selectedPaths: decision.selectedPaths,
         });
         ctx.repo.setReleaseStatus(release.id, "imported", null);
@@ -295,7 +305,7 @@ async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done"
         rejectedInfoHashes: release.info_hash ? [release.info_hash] : [],
       },
     });
-    ctx.repo.markJobSucceeded(job.id);
+    ctx.repo.markJobCancelled(job.id, `${terminalError}; recoveryQueued=true`);
     log(
       ctx,
       `[import] job=${job.id} release=${release.id} agent_recovery=none queued_acquire_forced_agent=1`

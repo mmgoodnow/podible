@@ -146,6 +146,7 @@ export type DownloadView = {
   job_error: string | null;
   release_id: number | null;
   release_status: ReleaseStatus | null;
+  release_error: string | null;
   media_type: MediaType | null;
   info_hash: string | null;
   book_id: number | null;

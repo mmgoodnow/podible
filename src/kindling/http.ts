@@ -966,10 +966,22 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
             jobCell.appendChild(link);
             row.appendChild(jobCell);
 
+            var jobStatus = String(download.job_status || "");
+            var releaseStatus = String(download.release_status || "");
             downloadsCell(row, download.release_id == null ? "" : String(download.release_id));
             downloadsCell(row, String(download.media_type || ""));
-            downloadsCell(row, String(download.release_status || download.job_status || ""));
-            downloadsCell(row, String(download.fullPseudoProgress ?? 0) + "%");
+            downloadsCell(
+              row,
+              (jobStatus ? "download:" + jobStatus : "") + (releaseStatus ? (jobStatus ? " / " : "") + "release:" + releaseStatus : "")
+            );
+
+            var progressLabel = String(download.fullPseudoProgress ?? 0) + "%";
+            if (jobStatus === "succeeded" && releaseStatus === "failed") {
+              progressLabel = "done (import failed)";
+            } else if (jobStatus === "failed" && !releaseStatus) {
+              progressLabel = "download failed";
+            }
+            downloadsCell(row, progressLabel);
 
             var transfer = "";
             if (download.release_status === "downloading" && download.downloadProgress) {
@@ -989,7 +1001,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
               }
             }
             downloadsCell(row, transfer);
-            downloadsCell(row, String(download.job_error || ""));
+            downloadsCell(row, String(download.job_error || download.release_error || ""));
             downloadsTableBody.appendChild(row);
           });
         }

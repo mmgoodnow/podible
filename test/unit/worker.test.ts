@@ -174,12 +174,16 @@ describe("worker import recovery", () => {
       const started = Date.now();
       for (;;) {
         const current = repo.getJob(importJob.id);
-        if (current?.status === "succeeded") break;
+        if (current?.status === "cancelled" || current?.status === "succeeded") break;
         if (Date.now() - started > 4000) {
           throw new Error("Timed out waiting for import recovery flow");
         }
         await sleep(50);
       }
+
+      const finalImportJob = repo.getJob(importJob.id);
+      expect(finalImportJob?.status).toBe("cancelled");
+      expect(String(finalImportJob?.error || "")).toContain("recoveryQueued=true");
 
       const failedRelease = repo.getRelease(release.id);
       expect(failedRelease?.status).toBe("failed");
