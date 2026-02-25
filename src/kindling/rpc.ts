@@ -315,6 +315,10 @@ const handlers: Record<string, RpcMethodHandler> = {
     return ctx.repo.updateSettings(params as unknown as AppSettings);
   },
 
+  async "admin.wipeDatabase"(ctx) {
+    return ctx.repo.wipeDatabase();
+  },
+
   async "openlibrary.search"(_ctx, params) {
     const query = asString(params.q, "q").trim();
     const limit = Math.min(parseLimit(params.limit), 50);

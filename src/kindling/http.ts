@@ -245,6 +245,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
     <div class="panel">
       <div class="row">
         <button id="settings-save-btn" type="button">Save Settings</button>
+        <button id="wipe-db-btn" type="button" style="margin-left: auto; background: #8b0000; color: #fff; border: 1px solid #6f0000;">Wipe Entire Database</button>
       </div>
       <p id="settings-status" class="muted"></p>
       <textarea id="settings-editor" spellcheck="false">${settingsJson}</textarea>
@@ -666,6 +667,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
 
         var settingsEditor = document.getElementById("settings-editor");
         var settingsSaveBtn = document.getElementById("settings-save-btn");
+        var wipeDbBtn = document.getElementById("wipe-db-btn");
         var jobsTableBody = document.getElementById("jobs-table-body");
         var jobsRefreshBtn = document.getElementById("jobs-refresh-btn");
         var jobsLimitInput = document.getElementById("jobs-limit");
@@ -703,6 +705,46 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
             text("settings-status", "Saved.");
           });
           loadSettings();
+        }
+        if (wipeDbBtn) {
+          wipeDbBtn.addEventListener("click", async function () {
+            var confirmed = window.confirm(
+              "Wipe the entire Kindling database? This deletes books, releases, assets, and jobs, but keeps settings."
+            );
+            if (!confirmed) {
+              return;
+            }
+            var typed = window.prompt("Type WIPE to confirm:");
+            if (typed !== "WIPE") {
+              text("settings-status", "Database wipe cancelled.");
+              return;
+            }
+            wipeDbBtn.disabled = true;
+            text("settings-status", "Wiping database...");
+            try {
+              var result = await rpc("admin.wipeDatabase", {});
+              text(
+                "settings-status",
+                "Database wiped. Deleted books=" +
+                  String(result.deleted && result.deleted.books || 0) +
+                  ", releases=" +
+                  String(result.deleted && result.deleted.releases || 0) +
+                  ", assets=" +
+                  String(result.deleted && result.deleted.assets || 0) +
+                  ", files=" +
+                  String(result.deleted && result.deleted.assetFiles || 0) +
+                  ", jobs=" +
+                  String(result.deleted && result.deleted.jobs || 0) +
+                  ". Reloading..."
+              );
+              window.setTimeout(function () {
+                window.location.reload();
+              }, 300);
+            } catch (err) {
+              text("settings-status", "Wipe failed: " + (err && err.message ? err.message : "request error"));
+              wipeDbBtn.disabled = false;
+            }
+          });
         }
 
         function formatBytes(value) {

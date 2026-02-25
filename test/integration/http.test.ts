@@ -52,6 +52,8 @@ describe("podible http", () => {
     expect(body.includes("Recent Jobs")).toBe(true);
     expect(body.includes("jobs-table-body")).toBe(true);
     expect(body.includes("settings-editor")).toBe(true);
+    expect(body.includes("wipe-db-btn")).toBe(true);
+    expect(body.includes("admin.wipeDatabase")).toBe(true);
     expect(body.includes("library.delete")).toBe(true);
     expect(body.includes("agent-acquire-btn")).toBe(true);
     expect(body.includes("report-import-issue-btn")).toBe(true);

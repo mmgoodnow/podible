@@ -267,6 +267,46 @@ export class KindlingRepo {
     return Number(result.changes) > 0;
   }
 
+  /**
+   * Clears all mutable Kindling data while preserving settings and schema
+   * migration state for local-dev reset workflows.
+   */
+  wipeDatabase(): {
+    deleted: {
+      books: number;
+      releases: number;
+      assets: number;
+      assetFiles: number;
+      jobs: number;
+    };
+    settingsPreserved: boolean;
+  } {
+    return this.db.transaction(() => {
+      const countRow = (table: "books" | "releases" | "assets" | "asset_files" | "jobs") =>
+        ((this.db.query(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number } | null)?.count ?? 0);
+      const deleted = {
+        books: countRow("books"),
+        releases: countRow("releases"),
+        assets: countRow("assets"),
+        assetFiles: countRow("asset_files"),
+        jobs: countRow("jobs"),
+      };
+
+      this.db.query("DELETE FROM jobs").run();
+      this.db.query("DELETE FROM asset_files").run();
+      this.db.query("DELETE FROM assets").run();
+      this.db.query("DELETE FROM releases").run();
+      this.db.query("DELETE FROM books").run();
+      this.db
+        .query("DELETE FROM sqlite_sequence WHERE name IN ('books', 'releases', 'assets', 'asset_files', 'jobs')")
+        .run();
+
+      const settingsPreserved =
+        ((this.db.query("SELECT id FROM settings WHERE id = 1").get() as { id: number } | null)?.id ?? null) === 1;
+      return { deleted, settingsPreserved };
+    })();
+  }
+
   createRelease(input: CreateReleaseInput): ReleaseRow {
     const now = nowIso();
     const hash = normalizeHash(input.infoHash);

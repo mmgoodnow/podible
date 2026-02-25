@@ -87,6 +87,71 @@ describe("json-rpc handler", () => {
     db.close();
   });
 
+  test("admin.wipeDatabase clears mutable tables and preserves settings", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new KindlingRepo(db);
+    const baselineSettings = repo.ensureSettings();
+    repo.updateSettings({
+      ...baselineSettings,
+      feed: { ...baselineSettings.feed, title: "Kindling Test Feed" },
+    });
+
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const release = repo.createRelease({
+      bookId: book.id,
+      provider: "manual",
+      providerGuid: null,
+      title: "Dune.epub",
+      mediaType: "ebook",
+      infoHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      url: "/tmp/Dune.epub",
+      status: "imported",
+    });
+    repo.addAsset({
+      bookId: book.id,
+      kind: "ebook",
+      mime: "application/epub+zip",
+      totalSize: 123,
+      sourceReleaseId: release.id,
+      files: [
+        {
+          path: "/tmp/library/Dune.epub",
+          size: 123,
+          start: 0,
+          end: 122,
+          durationMs: 0,
+          title: "Dune",
+        },
+      ],
+    });
+    repo.createJob({ type: "acquire", bookId: book.id });
+
+    const wiped = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 99,
+      method: "admin.wipeDatabase",
+      params: {},
+    });
+
+    expect(wiped.result.settingsPreserved).toBe(true);
+    expect(wiped.result.deleted.books).toBe(1);
+    expect(wiped.result.deleted.releases).toBe(1);
+    expect(wiped.result.deleted.assets).toBe(1);
+    expect(wiped.result.deleted.assetFiles).toBe(1);
+    expect(wiped.result.deleted.jobs).toBe(1);
+    expect(repo.listBooks(10).items).toHaveLength(0);
+    expect(repo.listReleasesByBook(book.id)).toHaveLength(0);
+    expect(repo.listJobsByType("acquire")).toHaveLength(0);
+    expect(repo.getHealthSummary().queueSize).toBe(0);
+    expect(repo.getSettings().feed.title).toBe("Kindling Test Feed");
+
+    const nextBook = repo.createBook({ title: "Hyperion", author: "Dan Simmons" });
+    expect(nextBook.id).toBe(1);
+
+    db.close();
+  });
+
   test("library.reportImportIssue queues forced agent reacquire when no importable files", async () => {
     const originalFetch = globalThis.fetch;
     try {
