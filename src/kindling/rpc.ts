@@ -437,10 +437,29 @@ const handlers: Record<string, RpcMethodHandler> = {
     if (!release) {
       throw new RpcError(-32000, "Release not found for media", { error: "not_found", bookId, mediaType, releaseId });
     }
-    const rejectedSourcePaths = assets
-      .filter((asset) => asset.source_release_id === release.id)
-      .filter((asset) => (mediaType === "ebook" ? asset.kind === "ebook" : asset.kind !== "ebook"))
-      .flatMap((asset) => ctx.repo.getAssetFiles(asset.id).map((file) => file.source_path ?? file.path));
+    const wrongAssets = assets.filter((asset) => asset.source_release_id === release.id).filter((asset) =>
+      mediaType === "ebook" ? asset.kind === "ebook" : asset.kind !== "ebook"
+    );
+    const wrongAssetFiles = wrongAssets.flatMap((asset) => ctx.repo.getAssetFiles(asset.id));
+    const rejectedSourcePaths = wrongAssetFiles.map((file) => file.source_path ?? file.path);
+
+    const candidateDeletePaths = Array.from(new Set(wrongAssetFiles.map((file) => file.path).filter(Boolean)));
+    for (const asset of wrongAssets) {
+      ctx.repo.deleteAsset(asset.id);
+    }
+    const deletedAssetPaths: string[] = [];
+    for (const filePath of candidateDeletePaths) {
+      if (ctx.repo.hasAssetFilePath(filePath)) {
+        continue;
+      }
+      if (await removeFileIfPresent(filePath)) {
+        deletedAssetPaths.push(filePath);
+      }
+    }
+
+    if (wrongAssets.length > 0 && release.status === "imported") {
+      ctx.repo.setReleaseStatus(release.id, "downloaded", null);
+    }
 
     const importJob = ctx.repo.createJob({
       type: "import",
@@ -458,6 +477,9 @@ const handlers: Record<string, RpcMethodHandler> = {
       releaseId: release.id,
       mediaType,
       rejectedSourcePathsCount: rejectedSourcePaths.length,
+      deletedAssetCount: wrongAssets.length,
+      deletedAssetFileCount: deletedAssetPaths.length,
+      deletedAssetPaths,
     };
   },
 

@@ -478,6 +478,12 @@ export class KindlingRepo {
     return (this.db.query("SELECT * FROM assets WHERE id = ?").get(assetId) as AssetRow | null) ?? null;
   }
 
+  deleteAsset(assetId: number): boolean {
+    assertPositiveInt(assetId);
+    const result = this.db.query("DELETE FROM assets WHERE id = ?").run(assetId);
+    return Number(result.changes) > 0;
+  }
+
   getAssetWithFiles(assetId: number): { asset: AssetRow; files: AssetFileRow[] } | null {
     const asset = this.getAsset(assetId);
     if (!asset) return null;

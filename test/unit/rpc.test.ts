@@ -190,12 +190,16 @@ describe("json-rpc handler", () => {
 
       const root = await mkdtemp(path.join(os.tmpdir(), "kindling-report-issue-"));
       const badPath = path.join(root, "download");
+      const libraryPath = path.join(root, "library");
       await mkdir(badPath, { recursive: true });
       await writeFile(path.join(badPath, "readme.txt"), Buffer.from("wrong payload"));
+      await mkdir(libraryPath, { recursive: true });
+      const importedPath = path.join(libraryPath, "wrong.mp3");
+      await writeFile(importedPath, Buffer.from("wrong import link target"));
       repo.updateSettings(
         defaultSettings({
           auth: { mode: "local", key: "test" },
-          libraryRoot: path.join(root, "library"),
+          libraryRoot: libraryPath,
           rtorrent: {
             transport: "http-xmlrpc",
             url: "http://mock.local/RPC2",
@@ -219,6 +223,24 @@ describe("json-rpc handler", () => {
         infoHash: "abc123",
         url: "https://example.com/wrong-audio.torrent",
         status: "imported",
+      });
+      const asset = repo.addAsset({
+        bookId: book.id,
+        kind: "single",
+        mime: "audio/mpeg",
+        totalSize: 12,
+        sourceReleaseId: release.id,
+        files: [
+          {
+            path: importedPath,
+            sourcePath: path.join(badPath, "Dune - Part 01.mp3"),
+            size: 12,
+            start: 0,
+            end: 11,
+            durationMs: 1000,
+            title: "Part 1",
+          },
+        ],
       });
 
       // Force base_path to our temp folder.
@@ -264,10 +286,15 @@ describe("json-rpc handler", () => {
       expect(result.result.releaseId).toBe(release.id);
       expect(result.result.mediaType).toBe("audio");
       expect(result.result.jobId).toBeGreaterThan(0);
-      expect(result.result.rejectedSourcePathsCount).toBe(0);
+      expect(result.result.rejectedSourcePathsCount).toBe(1);
+      expect(result.result.deletedAssetCount).toBe(1);
+      expect(result.result.deletedAssetFileCount).toBe(1);
+      expect(result.result.deletedAssetPaths).toEqual([importedPath]);
 
       const failedRelease = repo.getRelease(release.id);
-      expect(failedRelease?.status).toBe("imported");
+      expect(failedRelease?.status).toBe("downloaded");
+      expect(repo.getAsset(asset.id)).toBeNull();
+      expect(await Bun.file(importedPath).exists()).toBe(false);
 
       const reviewJob = repo.getJob(result.result.jobId);
       expect(reviewJob?.type).toBe("import");
@@ -275,7 +302,7 @@ describe("json-rpc handler", () => {
       const payload = JSON.parse(reviewJob?.payload_json ?? "{}");
       expect(payload.reason).toBe("user_reported_wrong_file");
       expect(payload.userReportedIssue).toBe(true);
-      expect(payload.rejectedSourcePaths).toEqual([]);
+      expect(payload.rejectedSourcePaths).toEqual([path.join(badPath, "Dune - Part 01.mp3")]);
 
       db.close();
     } finally {
@@ -316,6 +343,9 @@ describe("json-rpc handler", () => {
         url: "https://example.com/imported-audio.torrent",
         status: "imported",
       });
+      const root = await mkdtemp(path.join(os.tmpdir(), "kindling-report-issue-target-"));
+      const importedPath = path.join(root, "Dune.mp3");
+      await writeFile(importedPath, Buffer.from("wrong import"));
       repo.addAsset({
         bookId: book.id,
         kind: "single",
@@ -324,7 +354,7 @@ describe("json-rpc handler", () => {
         sourceReleaseId: importedRelease.id,
         files: [
           {
-            path: "/library/clean/Dune.mp3",
+            path: importedPath,
             sourcePath: "/downloads/raw/Dune/Dune - Part 01.mp3",
             size: 1234,
             start: 0,
@@ -362,11 +392,14 @@ describe("json-rpc handler", () => {
       expect(result.result.action).toBe("wrong_file_review_queued");
       expect(result.result.releaseId).toBe(importedRelease.id);
       expect(result.result.releaseId).not.toBe(newerRelease.id);
+      expect(result.result.deletedAssetCount).toBe(1);
 
       const failedImported = repo.getRelease(importedRelease.id);
-      expect(failedImported?.status).toBe("imported");
+      expect(failedImported?.status).toBe("downloaded");
       const untouchedNewer = repo.getRelease(newerRelease.id);
       expect(untouchedNewer?.status).toBe("snatched");
+      expect(repo.listAssetsByBook(book.id)).toHaveLength(0);
+      expect(await Bun.file(importedPath).exists()).toBe(false);
 
       const reviewJob = repo.getJob(result.result.jobId);
       expect(reviewJob?.type).toBe("import");
