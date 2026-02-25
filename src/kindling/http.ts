@@ -839,11 +839,6 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
             if (!confirmed) {
               return;
             }
-            var typed = window.prompt("Type WIPE to confirm:");
-            if (typed !== "WIPE") {
-              text("settings-status", "Database wipe cancelled.");
-              return;
-            }
             wipeDbBtn.disabled = true;
             text("settings-status", "Wiping database...");
             try {
