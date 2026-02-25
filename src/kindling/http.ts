@@ -39,9 +39,15 @@ function addApiKey(path: string, apiKey: string | null): string {
   return path.includes("?") ? `${path}&api_key=${encodeURIComponent(apiKey)}` : `${path}?api_key=${encodeURIComponent(apiKey)}`;
 }
 
+function truncateText(value: string, max: number): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
 function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
   const health = repo.getHealthSummary();
   const books = repo.listBooks(30).items;
+  const previewBooks = preferredAudioForBooks(repo).slice(0, 12);
   const apiKey = settings.auth.mode === "apikey" ? settings.auth.key : null;
   const settingsJson = escapeHtml(JSON.stringify(settings, null, 2));
 
@@ -63,6 +69,44 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
     <button type="button" class="delete-book-btn" data-book-id="${book.id}" data-book-title="${escapeHtml(book.title)}">Delete</button>
   </td>
 </tr>`;
+    })
+    .join("");
+
+  const previewCards = previewBooks
+    .map(({ book, asset }) => {
+      const streamPath = addApiKey(`/stream/${asset.id}.${streamExtension(asset)}`, apiKey);
+      const chaptersPath = addApiKey(`/chapters/${asset.id}.json`, apiKey);
+      const detailPath = addApiKey(`/rpc/library/get?bookId=${book.id}`, apiKey);
+      const coverPath = book.coverUrl ? addApiKey(book.coverUrl, apiKey) : null;
+      const description = (book.description || "").trim() || `${book.title} by ${book.author}`;
+      const preview = truncateText(description.replace(/\s+/g, " "), 220);
+      const initials =
+        (book.title || "")
+          .split(/\s+/)
+          .map((part) => part[0] || "")
+          .join("")
+          .slice(0, 2)
+          .toUpperCase() || "BK";
+      return `<article class="feed-preview-item">
+  <div class="feed-preview-cover">${
+    coverPath
+      ? `<img src="${escapeHtml(coverPath)}" alt="${escapeHtml(book.title)} cover" loading="lazy" />`
+      : `<span>${escapeHtml(initials)}</span>`
+  }</div>
+  <div class="feed-preview-body">
+    <div class="feed-preview-title-row">
+      <strong>${escapeHtml(book.title)}</strong>
+      <span class="muted">#${book.id}</span>
+    </div>
+    <p class="feed-preview-author">${escapeHtml(book.author)}</p>
+    <p class="feed-preview-desc">${escapeHtml(preview)}</p>
+    <div class="feed-preview-links">
+      <a href="${escapeHtml(streamPath)}">Stream</a>
+      <a href="${escapeHtml(chaptersPath)}">Chapters</a>
+      <a href="${escapeHtml(detailPath)}">JSON</a>
+    </div>
+  </div>
+</article>`;
     })
     .join("");
 
@@ -188,10 +232,79 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
       .card h2 + .panel, .card h2 + .table-wrap, .card h2 + p { margin-top: 0; }
       #library-files-panel { display: none; }
       .path-cell { word-break: break-all; }
+      .feed-preview-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .feed-preview-item {
+        display: grid;
+        grid-template-columns: 64px minmax(0, 1fr);
+        gap: 10px;
+        border: 1px solid var(--line-soft);
+        border-radius: 10px;
+        background: #fff;
+        padding: 8px;
+      }
+      .feed-preview-cover {
+        width: 64px;
+        height: 64px;
+        border-radius: 8px;
+        border: 1px solid var(--line-soft);
+        background: linear-gradient(135deg, #e6efff, #f3f7ff);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--muted);
+        font-weight: 700;
+        overflow: hidden;
+      }
+      .feed-preview-cover img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+      .feed-preview-body { min-width: 0; }
+      .feed-preview-title-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        align-items: baseline;
+      }
+      .feed-preview-title-row strong {
+        display: block;
+        min-width: 0;
+        line-height: 1.2;
+      }
+      .feed-preview-author {
+        margin: 2px 0 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .feed-preview-desc {
+        margin: 0;
+        color: var(--text);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+      .feed-preview-links {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 6px;
+        font-size: 12px;
+      }
+      .feed-preview-links a {
+        color: #1d4ed8;
+        text-decoration: none;
+      }
+      .feed-preview-links a:hover { text-decoration: underline; }
       @media (max-width: 1200px) {
         .card-wide, .card-mid { grid-column: span 12; }
         .card-narrow { grid-column: span 6; }
         .header-grid { grid-template-columns: 1fr; }
+        .feed-preview-grid { grid-template-columns: 1fr; }
       }
       @media (max-width: 900px) {
         body { padding: 10px; }
@@ -199,6 +312,8 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
         .card-narrow, .card-mid, .card-wide { grid-column: span 12; }
         input, select { min-width: 150px; }
         table { min-width: 560px; }
+        .feed-preview-item { grid-template-columns: 56px minmax(0, 1fr); }
+        .feed-preview-cover { width: 56px; height: 56px; }
       }
     </style>
   </head>
@@ -255,6 +370,18 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
             </div>
           </div>
         </section>
+
+        ${
+          previewCards
+            ? `<section class="card card-full">
+          <h2>Feed Preview</h2>
+          <p class="muted">First 12 audio books with preferred stream assets. Stream links use each asset's native extension (no forced mp3 transcode).</p>
+          <div class="feed-preview-grid">
+            ${previewCards}
+          </div>
+        </section>`
+            : ""
+        }
 
         <section class="card card-mid">
           <h2>Open Library Search</h2>
