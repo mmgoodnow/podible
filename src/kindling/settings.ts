@@ -34,7 +34,7 @@ export function defaultSettings(overrides?: Partial<AppSettings>): AppSettings {
       provider: "openai-responses",
       model: "gpt-5-mini",
       lowConfidenceThreshold: 0.45,
-      timeoutMs: 8000,
+      timeoutMs: 30000,
       search: {
         enableOnFailure: true,
         enableOnLowConfidence: true,

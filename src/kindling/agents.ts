@@ -125,7 +125,7 @@ function configuredAgent(settings: AppSettings) {
   return {
     apiKey,
     model: settings.agents.model || "gpt-5-mini",
-    timeoutMs: Math.max(1000, Math.trunc(settings.agents.timeoutMs || 8000)),
+    timeoutMs: Math.max(1000, Math.trunc(settings.agents.timeoutMs || 30000)),
   };
 }
 
