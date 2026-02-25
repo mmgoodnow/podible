@@ -1,8 +1,10 @@
 import OpenAI from "openai";
 
 import type { ImportInspectionFile } from "./importer";
+import type { KindlingRepo } from "./repo";
 import { rankSearchResults } from "./service";
 import type { TorznabResult } from "./torznab";
+import { getOrFetchCachedTorrentBytes, inspectTorrentFiles } from "./torrent-cache";
 import { normalizeInfoHash } from "./torrent";
 import type { AppSettings, MediaType } from "./types";
 
@@ -67,6 +69,10 @@ type SearchAgentOutput = {
   selectedIndex: number | null;
   confidence: number;
   reason: string;
+};
+
+type SearchSelectionRuntime = {
+  repo?: KindlingRepo;
 };
 
 type ManualImportAgentOutput = {
@@ -187,6 +193,135 @@ async function callResponsesJson<T>(settings: AppSettings, system: string, user:
     throw new Error("OpenAI response text was empty");
   }
   return JSON.parse(text) as T;
+}
+
+function parseJsonObject(text: string): Record<string, unknown> {
+  const parsed = JSON.parse(text) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Expected JSON object");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+async function callSearchResponsesWithInspectTool(
+  settings: AppSettings,
+  system: string,
+  user: string,
+  ranked: ReturnType<typeof rankSearchResults>,
+  repo: KindlingRepo
+): Promise<SearchAgentOutput> {
+  const agent = configuredAgent(settings);
+  if (!agent) {
+    throw new Error("OpenAI agent not configured");
+  }
+  const client = openAiClient(agent.apiKey, agent.timeoutMs);
+  const tool = {
+    type: "function" as const,
+    name: "inspect",
+    description:
+      "Download and inspect the .torrent file for a candidate by index. Returns the torrent file list so you can confirm whether it contains the target book.",
+    strict: true,
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        index: { type: "integer", minimum: 0 },
+      },
+      required: ["index"],
+    },
+  };
+
+  let response = await client.responses.create(
+    {
+      model: agent.model,
+      tools: [tool],
+      input: [
+        { role: "system", content: [{ type: "input_text", text: system }] },
+        { role: "user", content: [{ type: "input_text", text: user }] },
+      ],
+    },
+    { timeout: agent.timeoutMs }
+  );
+
+  for (let step = 0; step < 4; step += 1) {
+    const outputItems = Array.isArray((response as any).output) ? ((response as any).output as any[]) : [];
+    const functionCalls = outputItems.filter((item) => item?.type === "function_call" && item?.name === "inspect");
+    if (functionCalls.length === 0) {
+      const text = String((response as any).output_text ?? "").trim();
+      if (!text) throw new Error("OpenAI response text was empty");
+      return JSON.parse(text) as SearchAgentOutput;
+    }
+
+    const toolOutputs: Array<{ type: "function_call_output"; call_id: string; output: string }> = [];
+    for (const call of functionCalls) {
+      const callId = String(call.call_id ?? "");
+      const args = parseJsonObject(String(call.arguments ?? "{}"));
+      const index = Number(args.index);
+      if (!Number.isInteger(index) || index < 0 || index >= ranked.length) {
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify({ ok: false, error: `Invalid index ${args.index}` }),
+        });
+        continue;
+      }
+      const candidate = ranked[index]?.result;
+      if (!candidate) {
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify({ ok: false, error: `Candidate ${index} not found` }),
+        });
+        continue;
+      }
+
+      try {
+        const { bytes, cacheHit } = await getOrFetchCachedTorrentBytes(repo, {
+          provider: candidate.provider,
+          providerGuid: candidate.guid ?? null,
+          url: candidate.url,
+          infoHash: candidate.infoHash ?? null,
+        });
+        const files = inspectTorrentFiles(bytes).map((file) => ({
+          path: file.path,
+          size: humanSize(file.size) ?? file.size,
+        }));
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify({
+            ok: true,
+            index,
+            cacheHit,
+            fileCount: files.length,
+            files,
+          }),
+        });
+      } catch (error) {
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify({
+            ok: false,
+            index,
+            error: (error as Error).message || "inspect failed",
+          }),
+        });
+      }
+    }
+
+    response = await client.responses.create(
+      {
+        model: agent.model,
+        tools: [tool],
+        previous_response_id: (response as any).id ?? null,
+        input: toolOutputs,
+      },
+      { timeout: agent.timeoutMs }
+    );
+  }
+
+  throw new Error("Agent exceeded inspect tool call limit");
 }
 
 function normalizeRejectedUrl(value: string): string {
@@ -428,7 +563,11 @@ function buildManualImportAgentPrompt(trigger: DecisionTrigger, input: ManualImp
   return lines.join("\n");
 }
 
-export async function selectSearchCandidate(settings: AppSettings, input: SearchSelectionInput): Promise<SearchSelectionResult> {
+export async function selectSearchCandidate(
+  settings: AppSettings,
+  input: SearchSelectionInput,
+  runtime: SearchSelectionRuntime = {}
+): Promise<SearchSelectionResult> {
   const deterministic = deterministicSearchSelection(input);
   const trigger = determineTrigger(settings, "search", deterministic.confidence, {
     forceAgent: input.forceAgent,
@@ -451,6 +590,8 @@ export async function selectSearchCandidate(settings: AppSettings, input: Search
       .slice(0, 12);
     const system = [
       "You select the best torrent candidate for a single book acquisition.",
+      "You may call inspect(index) to inspect a candidate's torrent file list before deciding.",
+      "Use inspect(index) when titles are ambiguous, when a collection/box set may be the best fallback, or when you need to confirm the torrent contains the target work.",
       "Prefer the requested prose book itself, not related works, guides, excerpts, or adaptations.",
       "For ebook selection, this app can import EPUB and PDF only. Prefer EPUB/PDF candidates over unsupported ebook formats (such as AZW3/MOBI/LIT), even if the unsupported candidate looks like a better title match.",
       "For ebook selection, avoid comic/graphic-novel formats and comic releases (for example CBR/CBZ or titles mentioning graphic novel) unless the user explicitly asked for that.",
@@ -461,7 +602,9 @@ export async function selectSearchCandidate(settings: AppSettings, input: Search
       "confidence must be a number from 0 to 1.",
     ].join(" ");
     const user = buildSearchAgentPrompt(trigger, input, ranked);
-    const output = await callResponsesJson<SearchAgentOutput>(settings, system, user);
+    const output = runtime.repo
+      ? await callSearchResponsesWithInspectTool(settings, system, user, ranked, runtime.repo)
+      : await callResponsesJson<SearchAgentOutput>(settings, system, user);
     if (output.selectedIndex === null) {
       return {
         candidate: null,

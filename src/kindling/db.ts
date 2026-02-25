@@ -7,6 +7,7 @@ const SCHEMA_MIGRATION_ID = 1;
 const GUID_MIGRATION_ID = 2;
 const JOB_TYPE_MIGRATION_ID = 3;
 const ASSET_FILE_SOURCE_PATH_MIGRATION_ID = 4;
+const TORRENT_CACHE_MIGRATION_ID = 5;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -93,6 +94,17 @@ CREATE TABLE IF NOT EXISTS settings (
   value_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS torrent_cache (
+  key TEXT PRIMARY KEY,
+  provider TEXT NULL,
+  provider_guid TEXT NULL,
+  url TEXT NOT NULL,
+  info_hash TEXT NULL,
+  torrent_bytes BLOB NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
   id INTEGER PRIMARY KEY,
   applied_at TEXT NOT NULL
@@ -107,6 +119,8 @@ CREATE INDEX IF NOT EXISTS idx_releases_url ON releases(url);
 CREATE INDEX IF NOT EXISTS idx_assets_book_created ON assets(book_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_asset_files_asset_start ON asset_files(asset_id, start);
 CREATE INDEX IF NOT EXISTS idx_jobs_status_next_created ON jobs(status, next_run_at, created_at);
+CREATE INDEX IF NOT EXISTS idx_torrent_cache_provider_guid ON torrent_cache(provider, provider_guid);
+CREATE INDEX IF NOT EXISTS idx_torrent_cache_url ON torrent_cache(url);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_releases_info_hash ON releases(info_hash);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_releases_provider_guid ON releases(provider, provider_guid) WHERE provider_guid IS NOT NULL;
 `;
@@ -167,6 +181,23 @@ function applyAssetFileSourcePathMigration(db: Database): void {
   }
 }
 
+function applyTorrentCacheMigration(db: Database): void {
+  db.exec(`
+CREATE TABLE IF NOT EXISTS torrent_cache (
+  key TEXT PRIMARY KEY,
+  provider TEXT NULL,
+  provider_guid TEXT NULL,
+  url TEXT NOT NULL,
+  info_hash TEXT NULL,
+  torrent_bytes BLOB NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_torrent_cache_provider_guid ON torrent_cache(provider, provider_guid);
+CREATE INDEX IF NOT EXISTS idx_torrent_cache_url ON torrent_cache(url);
+`);
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
@@ -206,5 +237,9 @@ export function runMigrations(db: Database): void {
 
   apply(ASSET_FILE_SOURCE_PATH_MIGRATION_ID, () => {
     applyAssetFileSourcePathMigration(db);
+  });
+
+  apply(TORRENT_CACHE_MIGRATION_ID, () => {
+    applyTorrentCacheMigration(db);
   });
 }

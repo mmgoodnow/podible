@@ -16,6 +16,7 @@ import type {
   LibraryBook,
   MediaType,
   ReleaseRow,
+  TorrentCacheRow,
 } from "./types";
 
 type CreateBookInput = {
@@ -117,6 +118,44 @@ export class KindlingRepo {
       .query("INSERT INTO settings (id, value_json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET value_json = excluded.value_json")
       .run(stringifySettings(next));
     return next;
+  }
+
+  getTorrentCache(key: string): TorrentCacheRow | null {
+    return (this.db.query("SELECT * FROM torrent_cache WHERE key = ?").get(key) as TorrentCacheRow | null) ?? null;
+  }
+
+  putTorrentCache(input: {
+    key: string;
+    provider?: string | null;
+    providerGuid?: string | null;
+    url: string;
+    infoHash?: string | null;
+    torrentBytes: Uint8Array;
+  }): TorrentCacheRow {
+    const now = nowIso();
+    return this.db
+      .query(
+        `INSERT INTO torrent_cache (key, provider, provider_guid, url, info_hash, torrent_bytes, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET
+           provider = excluded.provider,
+           provider_guid = excluded.provider_guid,
+           url = excluded.url,
+           info_hash = excluded.info_hash,
+           torrent_bytes = excluded.torrent_bytes,
+           updated_at = excluded.updated_at
+         RETURNING *`
+      )
+      .get(
+        input.key,
+        input.provider ?? null,
+        input.providerGuid ?? null,
+        input.url,
+        input.infoHash ?? null,
+        input.torrentBytes,
+        now,
+        now
+      ) as TorrentCacheRow;
   }
 
   createBook(input: CreateBookInput): BookRow {
@@ -279,11 +318,12 @@ export class KindlingRepo {
       assets: number;
       assetFiles: number;
       jobs: number;
+      torrentCache: number;
     };
     settingsPreserved: boolean;
   } {
     return this.db.transaction(() => {
-      const countRow = (table: "books" | "releases" | "assets" | "asset_files" | "jobs") =>
+      const countRow = (table: "books" | "releases" | "assets" | "asset_files" | "jobs" | "torrent_cache") =>
         ((this.db.query(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number } | null)?.count ?? 0);
       const deleted = {
         books: countRow("books"),
@@ -291,8 +331,10 @@ export class KindlingRepo {
         assets: countRow("assets"),
         assetFiles: countRow("asset_files"),
         jobs: countRow("jobs"),
+        torrentCache: countRow("torrent_cache"),
       };
 
+      this.db.query("DELETE FROM torrent_cache").run();
       this.db.query("DELETE FROM jobs").run();
       this.db.query("DELETE FROM asset_files").run();
       this.db.query("DELETE FROM assets").run();

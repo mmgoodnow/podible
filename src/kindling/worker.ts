@@ -494,6 +494,8 @@ async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promise<"done
       rejectedGuids: Array.isArray(payload.rejectedGuids) ? payload.rejectedGuids : [],
       rejectedInfoHashes: Array.isArray(payload.rejectedInfoHashes) ? payload.rejectedInfoHashes : [],
       book: { id: book.id, title: book.title, author: book.author },
+    }, {
+      repo: ctx.repo,
     });
     if (decision.error) {
       log(

@@ -548,6 +548,8 @@ const handlers: Record<string, RpcMethodHandler> = {
       forceAgent,
       priorFailure,
       book,
+    }, {
+      repo: ctx.repo,
     });
     return {
       resultCount: results.length,

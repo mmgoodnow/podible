@@ -24,6 +24,7 @@ describe("schema migrations", () => {
     expect(tableExists(db, "asset_files")).toBe(true);
     expect(tableExists(db, "jobs")).toBe(true);
     expect(tableExists(db, "settings")).toBe(true);
+    expect(tableExists(db, "torrent_cache")).toBe(true);
 
     expect(indexExists(db, "idx_books_added_at")).toBe(true);
     expect(indexExists(db, "idx_releases_book_status")).toBe(true);
@@ -34,6 +35,8 @@ describe("schema migrations", () => {
     expect(indexExists(db, "idx_assets_book_created")).toBe(true);
     expect(indexExists(db, "idx_asset_files_asset_start")).toBe(true);
     expect(indexExists(db, "idx_jobs_status_next_created")).toBe(true);
+    expect(indexExists(db, "idx_torrent_cache_provider_guid")).toBe(true);
+    expect(indexExists(db, "idx_torrent_cache_url")).toBe(true);
 
     db.close();
   });

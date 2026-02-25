@@ -1,5 +1,6 @@
 import { KindlingRepo } from "./repo";
 import { RtorrentClient } from "./rtorrent";
+import { getOrFetchCachedTorrentBytes, torrentCacheKeyFor } from "./torrent-cache";
 import { infoHashFromTorrentBytes, normalizeInfoHash } from "./torrent";
 import { searchTorznab } from "./torznab";
 import type { TorznabResult } from "./torznab";
@@ -41,14 +42,6 @@ type RankedSearchResult = {
 
 function isMagnet(url: string): boolean {
   return url.trim().toLowerCase().startsWith("magnet:?");
-}
-
-async function fetchTorrentBytes(url: string): Promise<Uint8Array> {
-  const response = await fetch(url, { method: "GET" });
-  if (!response.ok) {
-    throw new Error(`Failed to download torrent: ${response.status}`);
-  }
-  return new Uint8Array(await response.arrayBuffer());
 }
 
 function resolveInfoHash(explicitHash?: string | null): string | null {
@@ -185,10 +178,31 @@ export async function runSnatch(
   }
 
   snatchLog(`[snatch] fetch_torrent start`);
-  const torrentBytes = await fetchTorrentBytes(request.url);
-  snatchLog(`[snatch] fetch_torrent ok bytes=${torrentBytes.byteLength}`);
+  const { bytes: torrentBytes, cacheHit } = await getOrFetchCachedTorrentBytes(
+    repo,
+    {
+      provider: request.provider,
+      providerGuid,
+      url: request.url,
+      infoHash: explicitHash,
+    },
+    { onLog: (line) => snatchLog(line) }
+  );
+  snatchLog(`[snatch] fetch_torrent ok bytes=${torrentBytes.byteLength} cache_hit=${cacheHit}`);
   const derivedHash = infoHashFromTorrentBytes(torrentBytes);
   snatchLog(`[snatch] derived_hash=${derivedHash}`);
+  repo.putTorrentCache({
+    key: torrentCacheKeyFor({
+      provider: request.provider,
+      providerGuid,
+      url: request.url,
+    }),
+    provider: request.provider,
+    providerGuid,
+    url: request.url,
+    infoHash: derivedHash,
+    torrentBytes,
+  });
 
   const existingByDerived = repo.findReleaseByInfoHash(derivedHash);
   if (existingByDerived) {

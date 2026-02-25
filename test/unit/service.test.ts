@@ -5,6 +5,7 @@ import { runMigrations } from "../../src/kindling/db";
 import { KindlingRepo } from "../../src/kindling/repo";
 import { defaultSettings } from "../../src/kindling/settings";
 import { runSearch, runSnatch } from "../../src/kindling/service";
+import { torrentCacheKeyFor } from "../../src/kindling/torrent-cache";
 import { infoHashFromTorrentBytes } from "../../src/kindling/torrent";
 
 describe("search ranking", () => {
@@ -176,6 +177,72 @@ describe("snatch transport", () => {
       expect(result.release.info_hash).toBe(expectedHash);
       expect(methods).toContain("load.raw_start");
       expect(methods).not.toContain("load.start");
+    } finally {
+      globalThis.fetch = originalFetch;
+      db.close();
+    }
+  });
+
+  test("reuses cached torrent bytes and skips torrent fetch", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new KindlingRepo(db);
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+
+    const torrentUrl = "https://example.com/dune-cached.torrent";
+    const provider = "mock";
+    const providerGuid = "g-cache";
+    const torrentBytes = makeTorrentBytes("dune-audio-cached");
+    const expectedHash = infoHashFromTorrentBytes(torrentBytes);
+    repo.putTorrentCache({
+      key: torrentCacheKeyFor({ provider, providerGuid, url: torrentUrl }),
+      provider,
+      providerGuid,
+      url: torrentUrl,
+      torrentBytes,
+    });
+
+    const rpcUrl = "https://rtorrent.example/RPC2";
+    const settings = defaultSettings({
+      rtorrent: {
+        transport: "http-xmlrpc",
+        url: rpcUrl,
+      },
+    });
+
+    const fetches: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      fetches.push(url);
+      if (url === torrentUrl) {
+        throw new Error("torrent url should not be fetched when cache is populated");
+      }
+      if (url === rpcUrl) {
+        const body = String(init?.body ?? "");
+        const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
+        expect(method).toBe("load.raw_start");
+        return new Response(
+          '<?xml version="1.0"?><methodResponse><params><param><value><int>0</int></value></param></params></methodResponse>',
+          { status: 200, headers: { "Content-Type": "text/xml" } }
+        );
+      }
+      throw new Error(`Unexpected fetch url: ${url}`);
+    }) as unknown as typeof fetch;
+
+    try {
+      const result = await runSnatch(repo, settings, {
+        bookId: book.id,
+        provider,
+        providerGuid,
+        title: "Dune Audio",
+        mediaType: "audio",
+        url: torrentUrl,
+      });
+      expect(result.idempotent).toBe(false);
+      expect(result.release.info_hash).toBe(expectedHash);
+      expect(fetches).not.toContain(torrentUrl);
+      expect(fetches).toContain(rpcUrl);
     } finally {
       globalThis.fetch = originalFetch;
       db.close();

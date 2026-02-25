@@ -1,7 +1,26 @@
 import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import bencode from "bencode";
 
 import { selectManualImportPaths, selectSearchCandidate } from "../../src/kindling/agents";
+import { runMigrations } from "../../src/kindling/db";
+import { KindlingRepo } from "../../src/kindling/repo";
 import { defaultSettings, parseSettings } from "../../src/kindling/settings";
+
+function makeMultiFileTorrentBytes(rootName: string, files: Array<{ path: string[]; length: number }>): Uint8Array {
+  return bencode.encode({
+    announce: new TextEncoder().encode("http://tracker/announce"),
+    info: {
+      name: new TextEncoder().encode(rootName),
+      "piece length": 16384,
+      pieces: new Uint8Array(20),
+      files: files.map((file) => ({
+        length: file.length,
+        path: file.path.map((part) => new TextEncoder().encode(part)),
+      })),
+    },
+  });
+}
 
 describe("agent decisions", () => {
   test("search selection is deterministic by default", async () => {
@@ -128,6 +147,139 @@ describe("agent decisions", () => {
       } else {
         process.env.OPENAI_API_KEY = originalApiKey;
       }
+    }
+  });
+
+  test("search agent inspect tool can inspect torrent file list before selecting", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new KindlingRepo(db);
+
+    const originalFetch = globalThis.fetch;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+
+    const torrentUrl = "https://example.com/twilight-saga.torrent";
+    const torrentBytes = makeMultiFileTorrentBytes("Twilight Saga", [
+      { path: ["Twilight", "Twilight-01.mp3"], length: 1234 },
+      { path: ["Twilight", "Twilight-02.mp3"], length: 2345 },
+      { path: ["New Moon", "NewMoon-01.mp3"], length: 3456 },
+    ]);
+    const openAiBodies: any[] = [];
+    let torrentFetchCount = 0;
+
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input instanceof Request
+              ? input.url
+              : String(input);
+      if (url === "https://api.openai.com/v1/responses") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        openAiBodies.push(body);
+        if (!body.previous_response_id) {
+          return new Response(
+            JSON.stringify({
+              id: "resp_1",
+              output: [
+                {
+                  type: "function_call",
+                  id: "fc_1",
+                  call_id: "call_1",
+                  name: "inspect",
+                  arguments: JSON.stringify({ index: 1 }),
+                  status: "completed",
+                },
+              ],
+              output_text: "",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            id: "resp_2",
+            output_text: JSON.stringify({
+              selectedIndex: 1,
+              confidence: 0.71,
+              reason: "Inspected candidate 1 and verified the torrent contains Twilight files.",
+            }),
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url === torrentUrl) {
+        torrentFetchCount += 1;
+        return new Response(torrentBytes, {
+          status: 200,
+          headers: { "Content-Type": "application/x-bittorrent" },
+        });
+      }
+      throw new Error(`Unexpected url: ${url}`);
+    }) as typeof fetch;
+
+    try {
+      const settings = defaultSettings({
+        agents: {
+          ...defaultSettings().agents,
+          enabled: true,
+        },
+      });
+      const decision = await selectSearchCandidate(
+        settings,
+        {
+          query: "Twilight Stephenie Meyer",
+          media: "audio",
+          forceAgent: true,
+          results: [
+            {
+              title: "Midnight Sun by Stephenie Meyer [ENG / MP3]",
+              provider: "mock",
+              mediaType: "audio",
+              sizeBytes: 1000,
+              url: "https://example.com/midnight-sun.torrent",
+              guid: "g0",
+              infoHash: null,
+              seeders: 50,
+              leechers: 0,
+              raw: {},
+            },
+            {
+              title: "Twilight Saga by Stephenie Meyer [ENG / MP3]",
+              provider: "mock",
+              mediaType: "audio",
+              sizeBytes: 1000,
+              url: torrentUrl,
+              guid: "g1",
+              infoHash: null,
+              seeders: 10,
+              leechers: 0,
+              raw: {},
+            },
+          ],
+          book: { id: 1, title: "Twilight", author: "Stephenie Meyer" },
+        },
+        { repo }
+      );
+
+      expect(decision.mode).toBe("agent");
+      expect(decision.candidate?.url).toBe(torrentUrl);
+      expect(torrentFetchCount).toBe(1);
+      expect(openAiBodies).toHaveLength(2);
+      expect(openAiBodies[0]?.tools?.[0]?.name).toBe("inspect");
+      expect(JSON.stringify(openAiBodies[1])).toContain("function_call_output");
+      expect(JSON.stringify(openAiBodies[1])).toContain("Twilight/Twilight-01.mp3");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      db.close();
     }
   });
 

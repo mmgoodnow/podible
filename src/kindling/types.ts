@@ -153,6 +153,17 @@ export type DownloadView = {
   book_id: number | null;
 };
 
+export type TorrentCacheRow = {
+  key: string;
+  provider: string | null;
+  provider_guid: string | null;
+  url: string;
+  info_hash: string | null;
+  torrent_bytes: Uint8Array;
+  created_at: string;
+  updated_at: string;
+};
+
 export type LibraryBook = {
   id: number;
   title: string;
