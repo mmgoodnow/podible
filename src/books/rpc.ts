@@ -832,7 +832,7 @@ const methodSummaries: Record<string, string> = {
   "openlibrary.search": "Search Open Library for works to add.",
   "library.list": "List books in the library.",
   "library.get": "Get one book with releases and assets.",
-  "library.inProgress": "List non-terminal book-level progress rows (optionally filtered by bookIds).",
+  "library.inProgress": "List non-terminal LibraryBook rows (optionally filtered by bookIds).",
   "library.create": "Create a book from an Open Library work key and queue auto-acquire.",
   "library.refresh": "Queue full library filesystem refresh scan.",
   "library.acquire": "Queue targeted acquire job for a book/media set.",

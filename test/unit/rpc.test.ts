@@ -87,7 +87,7 @@ describe("json-rpc handler", () => {
     db.close();
   });
 
-  test("library.inProgress returns book-level progress rows and filters terminal books", async () => {
+  test("library.inProgress returns LibraryBook-shaped rows and filters terminal books", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -206,15 +206,18 @@ describe("json-rpc handler", () => {
 
     expect(Array.isArray(result.result.items)).toBe(true);
     const rows = result.result.items as Array<any>;
-    const ids = rows.map((row) => row.bookId).sort((a, b) => a - b);
+    const ids = rows.map((row) => row.id).sort((a, b) => a - b);
     expect(ids).toEqual([wanted.id, partial.id]);
 
-    const partialRow = rows.find((row) => row.bookId === partial.id);
+    const partialRow = rows.find((row) => row.id === partial.id);
     expect(partialRow.status).toBe("partial");
     expect(partialRow.audioStatus).toBe("imported");
     expect(partialRow.ebookStatus).toBe("wanted");
     expect(typeof partialRow.fullPseudoProgress).toBe("number");
     expect(typeof partialRow.updatedAt).toBe("string");
+    expect(partialRow.title).toBe("Partial Book");
+    expect(partialRow.author).toBe("Author");
+    expect(typeof partialRow.identifiers).toBe("object");
 
     const filtered = await callRpc(repo, {
       jsonrpc: "2.0",
@@ -222,7 +225,7 @@ describe("json-rpc handler", () => {
       method: "library.inProgress",
       params: { bookIds: [imported.id, partial.id] },
     });
-    expect(filtered.result.items.map((row: any) => row.bookId)).toEqual([partial.id]);
+    expect(filtered.result.items.map((row: any) => row.id)).toEqual([partial.id]);
 
     db.close();
   });

@@ -14,7 +14,6 @@ import type {
   JobStatus,
   JobType,
   LibraryBook,
-  LibraryInProgressRow,
   MediaType,
   ReleaseRow,
   TorrentCacheRow,
@@ -263,28 +262,13 @@ export class BooksRepo {
     return rows.map((row) => this.toLibraryBook(row));
   }
 
-  listInProgressBooks(bookIds?: number[]): LibraryInProgressRow[] {
+  listInProgressBooks(bookIds?: number[]): LibraryBook[] {
     const candidates = Array.isArray(bookIds) && bookIds.length > 0
       ? Array.from(new Set(bookIds))
           .map((bookId) => this.getBook(bookId))
           .filter((book): book is LibraryBook => Boolean(book))
       : this.listAllBooks();
-
-    const rows: LibraryInProgressRow[] = [];
-    for (const book of candidates) {
-      if (book.status === "imported" || book.status === "error") {
-        continue;
-      }
-      rows.push({
-        bookId: book.id,
-        status: book.status,
-        audioStatus: book.audioStatus,
-        ebookStatus: book.ebookStatus,
-        fullPseudoProgress: book.fullPseudoProgress,
-        updatedAt: book.updatedAt,
-      });
-    }
-    return rows;
+    return candidates.filter((book) => book.status !== "imported" && book.status !== "error");
   }
 
   /**
