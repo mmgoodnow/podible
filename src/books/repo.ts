@@ -268,7 +268,26 @@ export class BooksRepo {
           .map((bookId) => this.getBook(bookId))
           .filter((book): book is LibraryBook => Boolean(book))
       : this.listAllBooks();
-    return candidates.filter((book) => book.status !== "imported" && book.status !== "error");
+    return candidates.filter((book) => {
+      if (book.status === "imported") return false;
+      if (book.status !== "error") return true;
+      return this.hasActiveBookWork(book.id);
+    });
+  }
+
+  hasActiveBookWork(bookId: number): boolean {
+    assertPositiveInt(bookId);
+    const row = this.db
+      .query(
+        `SELECT id
+         FROM jobs
+         WHERE book_id = ?
+           AND status IN ('queued', 'running')
+           AND type IN ('acquire', 'download', 'import', 'reconcile')
+         LIMIT 1`
+      )
+      .get(bookId) as { id: number } | null;
+    return Boolean(row);
   }
 
   /**

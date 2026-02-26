@@ -230,6 +230,71 @@ describe("json-rpc handler", () => {
     db.close();
   });
 
+  test("library.inProgress includes error books when active recovery jobs exist", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    repo.ensureSettings();
+
+    const book = repo.createBook({ title: "Twilight", author: "Stephenie Meyer" });
+    repo.createRelease({
+      bookId: book.id,
+      provider: "test",
+      title: "Twilight audio failed",
+      mediaType: "audio",
+      infoHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      url: "https://example.com/twilight-audio.torrent",
+      status: "failed",
+    });
+    repo.createRelease({
+      bookId: book.id,
+      provider: "test",
+      title: "Twilight ebook failed",
+      mediaType: "ebook",
+      infoHash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      url: "https://example.com/twilight-ebook.torrent",
+      status: "failed",
+    });
+
+    const errored = repo.getBook(book.id);
+    expect(errored?.status).toBe("error");
+
+    let result = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "library.inProgress",
+      params: { bookIds: [book.id] },
+    });
+    expect(result.result.items).toEqual([]);
+
+    const recoveryJob = repo.createJob({
+      type: "acquire",
+      bookId: book.id,
+      payload: { bookId: book.id, media: ["audio"] },
+    });
+
+    result = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "library.inProgress",
+      params: { bookIds: [book.id] },
+    });
+    expect(result.result.items.length).toBe(1);
+    expect(result.result.items[0].id).toBe(book.id);
+    expect(result.result.items[0].status).toBe("error");
+
+    repo.markJobSucceeded(recoveryJob.id);
+    result = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "library.inProgress",
+      params: { bookIds: [book.id] },
+    });
+    expect(result.result.items).toEqual([]);
+
+    db.close();
+  });
+
   test("admin.wipeDatabase clears mutable tables and preserves settings", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
