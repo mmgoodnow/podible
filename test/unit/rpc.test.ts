@@ -840,6 +840,122 @@ describe("json-rpc handler", () => {
     }
   });
 
+  test("library.get and library.inProgress use live download fraction for book fullPseudoProgress", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      const body = String(init?.body ?? "");
+      const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
+      const xml = (() => {
+        switch (method) {
+          case "d.name":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string>Twilight Audio</string></value></param></params></methodResponse>';
+          case "d.hash":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string>ABC123ABC123ABC123ABC123ABC123ABC123ABCD</string></value></param></params></methodResponse>';
+          case "d.complete":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>0</i8></value></param></params></methodResponse>';
+          case "d.base_path":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string>/downloads/twilight-audio</string></value></param></params></methodResponse>';
+          case "d.bytes_done":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>500</i8></value></param></params></methodResponse>';
+          case "d.size_bytes":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>1000</i8></value></param></params></methodResponse>';
+          case "d.left_bytes":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>500</i8></value></param></params></methodResponse>';
+          case "d.down.rate":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>100</i8></value></param></params></methodResponse>';
+          default:
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string></string></value></param></params></methodResponse>';
+        }
+      })();
+      return new Response(xml, { status: 200, headers: { "Content-Type": "text/xml" } });
+    }) as unknown as typeof fetch;
+
+    try {
+      const db = new Database(":memory:");
+      runMigrations(db);
+      const repo = new BooksRepo(db);
+      repo.updateSettings(
+        defaultSettings({
+          auth: { mode: "local", key: "test" },
+          rtorrent: {
+            transport: "http-xmlrpc",
+            url: "http://mock.local/RPC2",
+            username: "",
+            password: "",
+          },
+        })
+      );
+
+      const book = repo.createBook({ title: "Twilight", author: "Stephenie Meyer" });
+      repo.createRelease({
+        bookId: book.id,
+        provider: "test",
+        title: "Twilight Audio",
+        mediaType: "audio",
+        infoHash: "abc123abc123abc123abc123abc123abc123abcd",
+        url: "https://example.com/twilight-audio.torrent",
+        status: "downloading",
+      });
+      const ebookRelease = repo.createRelease({
+        bookId: book.id,
+        provider: "test",
+        title: "Twilight Ebook",
+        mediaType: "ebook",
+        infoHash: "def123def123def123def123def123def123def1",
+        url: "https://example.com/twilight-ebook.torrent",
+        status: "imported",
+      });
+      repo.addAsset({
+        bookId: book.id,
+        kind: "ebook",
+        mime: "application/epub+zip",
+        totalSize: 123,
+        sourceReleaseId: ebookRelease.id,
+        files: [
+          {
+            path: "/tmp/twilight.epub",
+            size: 123,
+            start: 0,
+            end: 122,
+            durationMs: 0,
+            title: null,
+          },
+        ],
+      });
+
+      const baseline = repo.getBook(book.id);
+      expect(baseline?.status).toBe("partial");
+      expect(baseline?.audioStatus).toBe("downloading");
+      expect(baseline?.ebookStatus).toBe("imported");
+      expect(baseline?.fullPseudoProgress).toBe(60);
+
+      const getResult = await callRpc(repo, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "library.get",
+        params: { bookId: book.id },
+      });
+      expect(getResult.result.book.status).toBe("partial");
+      expect(getResult.result.book.audioStatus).toBe("downloading");
+      expect(getResult.result.book.ebookStatus).toBe("imported");
+      expect(getResult.result.book.fullPseudoProgress).toBe(78);
+
+      const inProgressResult = await callRpc(repo, {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "library.inProgress",
+        params: { bookIds: [book.id] },
+      });
+      expect(inProgressResult.result.items.length).toBe(1);
+      expect(inProgressResult.result.items[0].id).toBe(book.id);
+      expect(inProgressResult.result.items[0].fullPseudoProgress).toBe(78);
+
+      db.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("import.manual creates a release and imports local file", async () => {
     const db = new Database(":memory:");
     runMigrations(db);

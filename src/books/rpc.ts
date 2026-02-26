@@ -6,11 +6,11 @@ import { selectManualImportPaths, selectSearchCandidate } from "./agents";
 import { hydrateBookFromOpenLibrary } from "./hydration";
 import { importReleaseFromPath, inspectImportPath } from "./importer";
 import { resolveOpenLibraryCandidate, searchOpenLibrary } from "./openlibrary";
-import { computeDownloadFraction, pseudoProgressForRelease } from "./progress";
+import { computeDownloadFraction, pseudoProgressForMediaStatus, pseudoProgressForRelease } from "./progress";
 import { BooksRepo } from "./repo";
 import { RtorrentClient } from "./rtorrent";
 import { runSearch, runSnatch, triggerAutoAcquire } from "./service";
-import type { AppSettings, JobType, LibraryBook, MediaType } from "./types";
+import type { AppSettings, JobType, LibraryBook, MediaType, ReleaseRow } from "./types";
 
 // JSON-RPC v1 transport for Kindling control/data APIs.
 // Single-call requests only; batch mode is intentionally rejected.
@@ -124,6 +124,71 @@ async function enrichDownload(
       fullPseudoProgress: pseudoProgressForRelease(download.release_status),
     };
   }
+}
+
+function mediaPseudoProgress(status: LibraryBook["audioStatus"] | LibraryBook["ebookStatus"], fraction?: number | null): number {
+  if (status === "downloading") {
+    return pseudoProgressForRelease("downloading", fraction);
+  }
+  return pseudoProgressForMediaStatus(status);
+}
+
+async function liveFractionForMedia(
+  releases: ReleaseRow[],
+  mediaType: MediaType,
+  client: RtorrentClient | null
+): Promise<number | null> {
+  if (!client) return null;
+  const downloading = releases.filter(
+    (release) => release.media_type === mediaType && release.status === "downloading" && Boolean(release.info_hash)
+  );
+  if (downloading.length === 0) return null;
+
+  let best: number | null = null;
+  for (const release of downloading) {
+    try {
+      const state = await client.getDownloadState(release.info_hash);
+      const fraction = computeDownloadFraction({
+        bytesDone: state.bytesDone,
+        sizeBytes: state.sizeBytes,
+        leftBytes: state.leftBytes,
+      });
+      if (fraction !== null) {
+        best = best === null ? fraction : Math.max(best, fraction);
+      }
+    } catch {
+      // Ignore transient downloader telemetry errors and keep persisted progress.
+    }
+  }
+  return best;
+}
+
+async function enrichLibraryBookProgress(
+  repo: BooksRepo,
+  book: LibraryBook,
+  client: RtorrentClient | null
+): Promise<LibraryBook> {
+  if (book.audioStatus !== "downloading" && book.ebookStatus !== "downloading") {
+    return book;
+  }
+
+  const releases = repo.listReleasesByBook(book.id);
+  const [audioFraction, ebookFraction] = await Promise.all([
+    liveFractionForMedia(releases, "audio", client),
+    liveFractionForMedia(releases, "ebook", client),
+  ]);
+
+  const liveBookProgress = Math.round(
+    (mediaPseudoProgress(book.audioStatus, audioFraction) + mediaPseudoProgress(book.ebookStatus, ebookFraction)) / 2
+  );
+
+  if (liveBookProgress === book.fullPseudoProgress) {
+    return book;
+  }
+  return {
+    ...book,
+    fullPseudoProgress: liveBookProgress,
+  };
 }
 
 function response(payload: RpcSuccess | RpcFailure): Response {
@@ -390,8 +455,13 @@ const handlers: Record<string, RpcMethodHandler> = {
     if (!book) {
       throw new RpcError(-32000, "Book not found", { error: "not_found", bookId });
     }
+    const bookClient =
+      book.audioStatus === "downloading" || book.ebookStatus === "downloading"
+        ? new RtorrentClient(ctx.repo.getSettings().rtorrent)
+        : null;
+    const enrichedBook = await enrichLibraryBookProgress(ctx.repo, book, bookClient);
     return {
-      book,
+      book: enrichedBook,
       releases: ctx.repo.listReleasesByBook(bookId),
       assets: ctx.repo.listAssetsByBook(bookId),
     };
@@ -399,8 +469,11 @@ const handlers: Record<string, RpcMethodHandler> = {
 
   async "library.inProgress"(ctx, params) {
     const bookIds = asOptionalPositiveIntArray(params.bookIds, "bookIds");
+    const items = ctx.repo.listInProgressBooks(bookIds);
+    const hasDownloading = items.some((book) => book.audioStatus === "downloading" || book.ebookStatus === "downloading");
+    const client = hasDownloading ? new RtorrentClient(ctx.repo.getSettings().rtorrent) : null;
     return {
-      items: ctx.repo.listInProgressBooks(bookIds),
+      items: await Promise.all(items.map((book) => enrichLibraryBookProgress(ctx.repo, book, client))),
     };
   },
 
