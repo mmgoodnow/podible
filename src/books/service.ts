@@ -1,4 +1,4 @@
-import { KindlingRepo } from "./repo";
+import { BooksRepo } from "./repo";
 import { RtorrentClient } from "./rtorrent";
 import { getOrFetchCachedTorrentBytes, torrentCacheKeyFor } from "./torrent-cache";
 import { infoHashFromTorrentBytes, normalizeInfoHash } from "./torrent";
@@ -49,7 +49,7 @@ function resolveInfoHash(explicitHash?: string | null): string | null {
   return normalizeInfoHash(explicitHash);
 }
 
-function idempotentResult(repo: KindlingRepo, existing: ReleaseRow): { release: ReleaseRow; jobId: number; idempotent: boolean } {
+function idempotentResult(repo: BooksRepo, existing: ReleaseRow): { release: ReleaseRow; jobId: number; idempotent: boolean } {
   const existingJob = repo
     .listJobsByType("download")
     .find((job) => job.release_id === existing.id && (job.status === "queued" || job.status === "running"));
@@ -127,7 +127,7 @@ export async function runSearch(settings: AppSettings, request: SearchRequest) {
 }
 
 export async function runSnatch(
-  repo: KindlingRepo,
+  repo: BooksRepo,
   settings: AppSettings,
   request: SnatchRequest,
   runtime: SnatchRuntimeOptions = {}
@@ -256,7 +256,7 @@ export async function runSnatch(
 }
 
 export async function triggerAutoAcquire(
-  repo: KindlingRepo,
+  repo: BooksRepo,
   bookId: number,
   media: MediaType[] = ["audio", "ebook"],
   options: AutoAcquireOptions = {}

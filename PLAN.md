@@ -1,10 +1,10 @@
-# Kindling Backend Plan (Podible/Bun)
+# Books Backend Plan (Podible/Bun)
 
-This document is a build plan for a new Kindling backend implemented inside the `podible` codebase using Bun. It replaces LL. It is written so an agent can implement the entire system end-to-end with realistic tests.
+This document is a build plan for a new Books backend implemented inside the `podible` codebase using Bun. It replaces LL. It is written so an agent can implement the entire system end-to-end with realistic tests.
 
 ## Goals
 
-- Provide a reliable, deterministic backend for Kindling (macOS + iOS).
+- Provide a reliable, deterministic backend for Books (macOS + iOS).
 - Support both ebooks and audiobooks end-to-end.
 - Automatically attempt to acquire both ebook and audiobook for every book by default.
 - Keep search, snatch, download, import, streaming, and feed generation in one service.
@@ -82,7 +82,7 @@ SQLite is the source of truth. The filesystem only stores assets referenced by t
 Tables:
 
 ### books
-Represents the canonical logical book record in Kindling (title/author + metadata). A book can have multiple assets over time (multiple releases or formats).
+Represents the canonical logical book record in Books (title/author + metadata). A book can have multiple assets over time (multiple releases or formats).
 
 - id INTEGER PRIMARY KEY AUTOINCREMENT
 - title TEXT NOT NULL (display title)
@@ -333,7 +333,7 @@ Settings shape (stored in SQLite as a single JSON row):
   "libraryRoot": "/media/library",
   "polling": { "rtorrentMs": 5000, "scanMs": 30000 },
   "transcode": { "enabled": true, "format": "mp3", "bitrateKbps": 64 },
-  "feed": { "title": "Kindling", "author": "..." },
+  "feed": { "title": "Books", "author": "..." },
   "auth": { "mode": "apikey", "key": "..." }
 }
 ```
@@ -369,7 +369,7 @@ If a search result does not include `info_hash`, fetch the `.torrent` file first
 
 - Open Library is the primary metadata source.
 - Store raw provider payloads for reproducibility.
-- Manual overrides in Kindling should take precedence.
+- Manual overrides in Books should take precedence.
 
 ## Search Result Ranking (including box sets)
 

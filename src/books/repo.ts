@@ -88,7 +88,7 @@ function assertPositiveInt(value: number): void {
   }
 }
 
-export class KindlingRepo {
+export class BooksRepo {
   constructor(private readonly db: Database) {
     // Foreign-key cascades are part of normal behavior; enforce per connection.
     this.db.exec("PRAGMA foreign_keys = ON;");

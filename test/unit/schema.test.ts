@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
-import { runMigrations } from "../../src/kindling/db";
+import { runMigrations } from "../../src/books/db";
 
 function tableExists(db: Database, name: string): boolean {
   const row = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);

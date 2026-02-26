@@ -2,10 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import bencode from "bencode";
 
-import { selectManualImportPaths, selectSearchCandidate } from "../../src/kindling/agents";
-import { runMigrations } from "../../src/kindling/db";
-import { KindlingRepo } from "../../src/kindling/repo";
-import { defaultSettings, parseSettings } from "../../src/kindling/settings";
+import { selectManualImportPaths, selectSearchCandidate } from "../../src/books/agents";
+import { runMigrations } from "../../src/books/db";
+import { BooksRepo } from "../../src/books/repo";
+import { defaultSettings, parseSettings } from "../../src/books/settings";
 
 function makeMultiFileTorrentBytes(rootName: string, files: Array<{ path: string[]; length: number }>): Uint8Array {
   return bencode.encode({
@@ -153,7 +153,7 @@ describe("agent decisions", () => {
   test("search agent inspect tool can inspect torrent file list before selecting", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
 
     const originalFetch = globalThis.fetch;
     const originalApiKey = process.env.OPENAI_API_KEY;

@@ -1,14 +1,14 @@
-import { ensureDataDir, kindlingDbPath, port } from "./src/config";
-import { openDatabase } from "./src/kindling/db";
-import { createPodibleFetchHandler } from "./src/kindling/http";
-import { KindlingRepo } from "./src/kindling/repo";
-import { runWorker } from "./src/kindling/worker";
+import { ensureDataDir, booksDbPath, port } from "./src/config";
+import { openDatabase } from "./src/books/db";
+import { createPodibleFetchHandler } from "./src/books/http";
+import { BooksRepo } from "./src/books/repo";
+import { runWorker } from "./src/books/worker";
 
 const startTime = Date.now();
 
 await ensureDataDir();
-const db = openDatabase(kindlingDbPath);
-const repo = new KindlingRepo(db);
+const db = openDatabase(booksDbPath);
+const repo = new BooksRepo(db);
 const settings = repo.ensureSettings();
 
 const rootArg = process.argv.slice(2).find((arg) => arg && !arg.startsWith("-"));

@@ -39,7 +39,7 @@ bun run server.ts /path/to/library
 
 Runtime state is stored in `DATA_DIR` (default `${TMPDIR:-/tmp}/podible-transcodes`) and includes:
 
-- `kindling.sqlite` (main app DB + `app_state` cache state)
+- `books.sqlite` (main app DB + `app_state` cache state)
 
 ## Auth
 
@@ -148,7 +148,7 @@ Bridge constraints:
   "libraryRoot": "/media/library",
   "polling": { "rtorrentMs": 5000, "scanMs": 30000 },
   "transcode": { "enabled": true, "format": "mp3", "bitrateKbps": 64 },
-  "feed": { "title": "Kindling", "author": "Unknown" },
+  "feed": { "title": "Books", "author": "Unknown" },
   "auth": { "mode": "apikey", "key": "..." },
   "agents": {
     "enabled": false,

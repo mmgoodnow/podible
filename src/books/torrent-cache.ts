@@ -1,6 +1,6 @@
 import bencode from "bencode";
 
-import type { KindlingRepo } from "./repo";
+import type { BooksRepo } from "./repo";
 
 type TorrentCacheIdentity = {
   provider?: string | null;
@@ -96,7 +96,7 @@ export function inspectTorrentFiles(bytes: Uint8Array): TorrentFileEntry[] {
 }
 
 export async function getOrFetchCachedTorrentBytes(
-  repo: KindlingRepo,
+  repo: BooksRepo,
   identity: TorrentCacheIdentity,
   options: { onLog?: (message: string) => void } = {}
 ): Promise<{ bytes: Uint8Array; cacheKey: string; cacheHit: boolean }> {

@@ -1,8 +1,8 @@
-# Kindling Backend Notes
+# Books Backend Notes
 
 ## Progress
 
-- [x] Branch created: `feat/kindling-backend`
+- [x] Branch created: `feat/books-backend`
 - [x] SQLite schema + migration system
 - [x] Settings + auth migration off JSON files
 - [x] Torznab search and normalization
@@ -25,7 +25,7 @@
 
 ## Current Focus
 
-- API surface replaced in `server.ts` and `/src/kindling/http.ts`.
+- API surface replaced in `server.ts` and `/src/books/http.ts`.
 - Worker handles `download`, `import`, `scan`, and `reconcile` with retry/backoff.
 - Next: continue API/tests hardening and close any follow-up review comments.
 

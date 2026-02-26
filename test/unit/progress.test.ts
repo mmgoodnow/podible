@@ -5,7 +5,7 @@ import {
   pseudoProgressForBook,
   pseudoProgressForMediaStatus,
   pseudoProgressForRelease,
-} from "../../src/kindling/progress";
+} from "../../src/books/progress";
 
 describe("progress helpers", () => {
   test("maps media states to pseudo progress", () => {

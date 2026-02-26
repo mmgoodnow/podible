@@ -6,11 +6,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
-import { runMigrations } from "../../src/kindling/db";
-import { KindlingRepo } from "../../src/kindling/repo";
-import { defaultSettings } from "../../src/kindling/settings";
-import { infoHashFromTorrentBytes } from "../../src/kindling/torrent";
-import { pollMsForMedia, runWorker, selectDownloadPollMs } from "../../src/kindling/worker";
+import { runMigrations } from "../../src/books/db";
+import { BooksRepo } from "../../src/books/repo";
+import { defaultSettings } from "../../src/books/settings";
+import { infoHashFromTorrentBytes } from "../../src/books/torrent";
+import { pollMsForMedia, runWorker, selectDownloadPollMs } from "../../src/books/worker";
 import { startMockTorznab } from "../mocks/torznab";
 
 function makeTorrentBytes(name: string): Uint8Array {
@@ -28,7 +28,7 @@ describe("worker acquire auto-acquire retries", () => {
 
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
     repo.updateSettings(
       defaultSettings({
         auth: { mode: "local", key: "test" },
@@ -113,7 +113,7 @@ describe("worker robustness", () => {
       },
       getBookRow: () => ({ id: 1, title: "Twilight", author: "Stephenie Meyer" }),
       markJobFailed: () => null,
-    } as unknown as KindlingRepo;
+    } as unknown as BooksRepo;
 
     const worker = runWorker({
       repo: fakeRepo,
@@ -153,9 +153,9 @@ describe("worker import recovery", () => {
   test("queues forced agent acquire when deterministic import cannot map files", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
 
-    const root = await mkdtemp(path.join(os.tmpdir(), "kindling-import-recovery-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "books-import-recovery-"));
     const downloadDir = path.join(root, "download");
     const libraryRoot = path.join(root, "library");
     await mkdir(downloadDir, { recursive: true });

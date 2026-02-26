@@ -5,12 +5,12 @@ import path from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
-import { runMigrations } from "../../src/kindling/db";
-import { handleRpcMethod, handleRpcRequest } from "../../src/kindling/rpc";
-import { KindlingRepo } from "../../src/kindling/repo";
-import { defaultSettings } from "../../src/kindling/settings";
+import { runMigrations } from "../../src/books/db";
+import { handleRpcMethod, handleRpcRequest } from "../../src/books/rpc";
+import { BooksRepo } from "../../src/books/repo";
+import { defaultSettings } from "../../src/books/settings";
 
-async function callRpc(repo: KindlingRepo, body: string | object) {
+async function callRpc(repo: BooksRepo, body: string | object) {
   const request = new Request("http://localhost/rpc", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -25,7 +25,7 @@ describe("json-rpc handler", () => {
   test("dispatches representative methods", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
     repo.ensureSettings();
 
     const settings = await callRpc(repo, {
@@ -90,14 +90,14 @@ describe("json-rpc handler", () => {
   test("admin.wipeDatabase clears mutable tables and preserves settings", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
     const baselineSettings = repo.ensureSettings();
     repo.updateSettings({
       ...baselineSettings,
-      feed: { ...baselineSettings.feed, title: "Kindling Test Feed" },
+      feed: { ...baselineSettings.feed, title: "Books Test Feed" },
     });
 
-    const root = await mkdtemp(path.join(os.tmpdir(), "kindling-wipe-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "books-wipe-"));
     const assetPath = path.join(root, "library", "Dune.epub");
     const coverPath = path.join(root, "library", "Dune.jpg");
     await mkdir(path.dirname(assetPath), { recursive: true });
@@ -156,7 +156,7 @@ describe("json-rpc handler", () => {
     expect(repo.listReleasesByBook(book.id)).toHaveLength(0);
     expect(repo.listJobsByType("acquire")).toHaveLength(0);
     expect(repo.getHealthSummary().queueSize).toBe(0);
-    expect(repo.getSettings().feed.title).toBe("Kindling Test Feed");
+    expect(repo.getSettings().feed.title).toBe("Books Test Feed");
     expect(await Bun.file(assetPath).exists()).toBe(false);
     expect(await Bun.file(coverPath).exists()).toBe(false);
 
@@ -169,7 +169,7 @@ describe("json-rpc handler", () => {
   test("jobs.retry requeues failed jobs and rejects non-retryable jobs", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
     repo.ensureSettings();
 
     const failed = repo.createJob({ type: "acquire", status: "failed" });
@@ -198,7 +198,7 @@ describe("json-rpc handler", () => {
   test("help lists rpc methods with readOnly flags", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
     repo.ensureSettings();
 
     const result = await callRpc(repo, {
@@ -223,9 +223,9 @@ describe("json-rpc handler", () => {
     try {
       const db = new Database(":memory:");
       runMigrations(db);
-      const repo = new KindlingRepo(db);
+      const repo = new BooksRepo(db);
 
-      const root = await mkdtemp(path.join(os.tmpdir(), "kindling-report-issue-"));
+      const root = await mkdtemp(path.join(os.tmpdir(), "books-report-issue-"));
       const badPath = path.join(root, "download");
       const libraryPath = path.join(root, "library");
       await mkdir(badPath, { recursive: true });
@@ -352,7 +352,7 @@ describe("json-rpc handler", () => {
     try {
       const db = new Database(":memory:");
       runMigrations(db);
-      const repo = new KindlingRepo(db);
+      const repo = new BooksRepo(db);
       repo.updateSettings(
         defaultSettings({
           auth: { mode: "local", key: "test" },
@@ -380,7 +380,7 @@ describe("json-rpc handler", () => {
         url: "https://example.com/imported-audio.torrent",
         status: "imported",
       });
-      const root = await mkdtemp(path.join(os.tmpdir(), "kindling-report-issue-target-"));
+      const root = await mkdtemp(path.join(os.tmpdir(), "books-report-issue-target-"));
       const importedPath = path.join(root, "Dune.mp3");
       await writeFile(importedPath, Buffer.from("wrong import"));
       repo.addAsset({
@@ -453,7 +453,7 @@ describe("json-rpc handler", () => {
   test("returns parse error for malformed json", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
 
     const result = await callRpc(repo, "{");
     expect(result.error.code).toBe(-32700);
@@ -463,7 +463,7 @@ describe("json-rpc handler", () => {
   test("rejects batch requests", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
 
     const result = await callRpc(repo, [
       {
@@ -480,7 +480,7 @@ describe("json-rpc handler", () => {
   test("returns method not found", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
 
     const result = await callRpc(repo, {
       jsonrpc: "2.0",
@@ -495,7 +495,7 @@ describe("json-rpc handler", () => {
   test("returns invalid params", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
 
     const result = await callRpc(repo, {
       jsonrpc: "2.0",
@@ -510,7 +510,7 @@ describe("json-rpc handler", () => {
   test("requires valid params for library.acquire", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
 
     const missingBook = await callRpc(repo, {
       jsonrpc: "2.0",
@@ -535,7 +535,7 @@ describe("json-rpc handler", () => {
   test("requires openLibraryKey for library.create", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
 
     const result = await callRpc(repo, {
       jsonrpc: "2.0",
@@ -550,7 +550,7 @@ describe("json-rpc handler", () => {
   test("maps domain errors to -32000", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
 
     const result = await callRpc(repo, {
       jsonrpc: "2.0",
@@ -565,9 +565,9 @@ describe("json-rpc handler", () => {
   test("library.delete cascades DB rows and removes asset+cover files", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
 
-    const root = await mkdtemp(path.join(os.tmpdir(), "kindling-delete-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "books-delete-"));
     const assetPath = path.join(root, "book.mp3");
     const coverPath = path.join(root, "cover.jpg");
     await writeFile(assetPath, Buffer.from("test-audio"));
@@ -653,7 +653,7 @@ describe("json-rpc handler", () => {
     try {
       const db = new Database(":memory:");
       runMigrations(db);
-      const repo = new KindlingRepo(db);
+      const repo = new BooksRepo(db);
       repo.updateSettings(
         defaultSettings({
           auth: { mode: "local", key: "test" },
@@ -700,9 +700,9 @@ describe("json-rpc handler", () => {
   test("import.manual creates a release and imports local file", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
 
-    const root = await mkdtemp(path.join(os.tmpdir(), "kindling-manual-import-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "books-manual-import-"));
     const sourceDir = path.join(root, "source");
     const libraryRoot = path.join(root, "library");
     await mkdir(sourceDir, { recursive: true });
@@ -745,7 +745,7 @@ describe("json-rpc handler", () => {
   test("agent.search.plan returns deterministic planning payload", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
     repo.updateSettings(
       defaultSettings({
         auth: { mode: "local", key: "test" },
@@ -773,9 +773,9 @@ describe("json-rpc handler", () => {
   test("import.inspect lists files and import.manual supports selectedPaths", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
 
-    const root = await mkdtemp(path.join(os.tmpdir(), "kindling-manual-select-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "books-manual-select-"));
     const sourceDir = path.join(root, "source");
     const libraryRoot = path.join(root, "library");
     await mkdir(sourceDir, { recursive: true });
@@ -834,9 +834,9 @@ describe("json-rpc handler", () => {
   test("agent.import.plan returns deterministic selected paths", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
 
-    const root = await mkdtemp(path.join(os.tmpdir(), "kindling-agent-import-plan-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "books-agent-import-plan-"));
     const sourceDir = path.join(root, "source");
     await mkdir(sourceDir, { recursive: true });
     const sourceFile = path.join(sourceDir, "book.epub");
@@ -862,7 +862,7 @@ describe("json-rpc handler", () => {
   test("blocks write methods in read-only rpc dispatch", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
     repo.ensureSettings();
 
     const response = await handleRpcMethod("settings.update", {}, { repo, startTime: Date.now() - 1000 }, { readOnly: true });

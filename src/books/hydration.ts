@@ -4,7 +4,7 @@ import path from "node:path";
 import { dataDir } from "../config";
 
 import { fetchOpenLibraryMetadata } from "./openlibrary";
-import type { KindlingRepo } from "./repo";
+import type { BooksRepo } from "./repo";
 import type { LibraryBook } from "./types";
 
 const coverCacheDir = path.join(dataDir, "kindling-covers");
@@ -35,7 +35,7 @@ async function downloadCover(bookId: number, coverUrl: string): Promise<string |
   }
 }
 
-export async function hydrateBookFromOpenLibrary(repo: KindlingRepo, book: LibraryBook): Promise<boolean> {
+export async function hydrateBookFromOpenLibrary(repo: BooksRepo, book: LibraryBook): Promise<boolean> {
   const metadata = await fetchOpenLibraryMetadata({
     title: book.title,
     author: book.author,

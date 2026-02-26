@@ -7,9 +7,9 @@ import path from "node:path";
 const isolatedDataDir = await mkdtemp(path.join(os.tmpdir(), "podible-http-test-data-"));
 process.env.DATA_DIR = isolatedDataDir;
 
-const { runMigrations } = await import("../../src/kindling/db");
-const { createPodibleFetchHandler } = await import("../../src/kindling/http");
-const { KindlingRepo } = await import("../../src/kindling/repo");
+const { runMigrations } = await import("../../src/books/db");
+const { createPodibleFetchHandler } = await import("../../src/books/http");
+const { BooksRepo } = await import("../../src/books/repo");
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+XGfQAAAAASUVORK5CYII=";
@@ -39,7 +39,7 @@ describe("podible http", () => {
   test("serves root html home page", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
     const settings = repo.ensureSettings();
     repo.updateSettings({
       ...settings,
@@ -103,7 +103,7 @@ describe("podible http", () => {
     try {
       const db = new Database(":memory:");
       runMigrations(db);
-      const repo = new KindlingRepo(db);
+      const repo = new BooksRepo(db);
       const settings = repo.ensureSettings();
       repo.updateSettings({
         ...settings,
@@ -196,7 +196,7 @@ describe("podible http", () => {
     try {
       const db = new Database(":memory:");
       runMigrations(db);
-      const repo = new KindlingRepo(db);
+      const repo = new BooksRepo(db);
       const settings = repo.ensureSettings();
       repo.updateSettings({
         ...settings,
@@ -255,7 +255,7 @@ describe("podible http", () => {
     try {
       const db = new Database(":memory:");
       runMigrations(db);
-      const repo = new KindlingRepo(db);
+      const repo = new BooksRepo(db);
       const settings = repo.ensureSettings();
       repo.updateSettings({
         ...settings,
@@ -279,7 +279,7 @@ describe("podible http", () => {
   test("supports read-only GET rpc bridge and blocks mutating methods", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
     const settings = repo.ensureSettings();
     repo.updateSettings({
       ...settings,
@@ -354,7 +354,7 @@ describe("podible http", () => {
     try {
       const db = new Database(":memory:");
       runMigrations(db);
-      const repo = new KindlingRepo(db);
+      const repo = new BooksRepo(db);
       const settings = repo.ensureSettings();
       repo.updateSettings({
         ...settings,
@@ -388,7 +388,7 @@ describe("podible http", () => {
   test("supports rpc library.acquire for existing books", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
     const settings = repo.ensureSettings();
     repo.updateSettings({
       ...settings,

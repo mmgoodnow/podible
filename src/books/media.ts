@@ -5,7 +5,7 @@ import { parseRange, segmentsForRange, streamSegmentsWithXingPatch } from "../st
 import { buildId3ChaptersTag } from "../streaming/id3";
 import { readFfprobeChapters } from "../media/probe-cache";
 
-import type { KindlingRepo } from "./repo";
+import type { BooksRepo } from "./repo";
 import type { AssetFileRow, AssetRow, BookRow, LibraryBook } from "./types";
 
 export type PreferredAudio = {
@@ -215,7 +215,7 @@ export async function streamAudioAsset(request: Request, asset: AssetRow, files:
   });
 }
 
-export function preferredAudioForBooks(repo: KindlingRepo): PreferredAudio[] {
+export function preferredAudioForBooks(repo: BooksRepo): PreferredAudio[] {
   const books = repo.listAllBooks();
   const out: PreferredAudio[] = [];
 

@@ -4,7 +4,7 @@ import path from "node:path";
 import { getDurationSeconds } from "../media/probe-cache";
 import { normalizeAudioExt } from "../media/metadata";
 
-import type { KindlingRepo } from "./repo";
+import type { BooksRepo } from "./repo";
 import type { AssetKind, MediaType, ReleaseRow } from "./types";
 
 /**
@@ -221,7 +221,7 @@ function chooseFilesForMedia(mediaType: MediaType, files: FileInfo[]): { kind: A
  * Existing files are never moved; imported files are hardlinked into library.
  */
 export async function importReleaseFromPath(
-  repo: KindlingRepo,
+  repo: BooksRepo,
   release: ReleaseRow,
   basePath: string,
   libraryRoot: string,

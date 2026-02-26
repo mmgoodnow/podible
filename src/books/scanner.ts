@@ -4,7 +4,7 @@ import path from "node:path";
 import { getDurationSeconds } from "../media/probe-cache";
 
 import { hydrateBookFromOpenLibrary } from "./hydration";
-import type { KindlingRepo } from "./repo";
+import type { BooksRepo } from "./repo";
 
 /**
  * Filesystem-first scanner for existing libraries.
@@ -64,7 +64,7 @@ async function listFiles(dir: string): Promise<FileInfo[]> {
  * Import loose files that already exist under the library root into the
  * database model. This does not call rTorrent or perform search/snatch.
  */
-export async function scanLibraryRoot(repo: KindlingRepo, libraryRoot: string): Promise<ScanResult> {
+export async function scanLibraryRoot(repo: BooksRepo, libraryRoot: string): Promise<ScanResult> {
   let booksCreated = 0;
   let assetsCreated = 0;
 

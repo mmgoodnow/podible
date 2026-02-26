@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { Database } from "bun:sqlite";
 
-import { kindlingDbPath } from "../config";
+import { booksDbPath } from "../config";
 
 type StateRow = {
   value_json: string;
@@ -17,8 +17,8 @@ function nowIso(): string {
 
 function stateDb(): Database {
   if (db) return db;
-  mkdirSync(path.dirname(kindlingDbPath), { recursive: true });
-  const next = new Database(kindlingDbPath, { create: true });
+  mkdirSync(path.dirname(booksDbPath), { recursive: true });
+  const next = new Database(booksDbPath, { create: true });
   next.exec(`
     PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS app_state (

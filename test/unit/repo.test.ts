@@ -1,17 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
-import { runMigrations } from "../../src/kindling/db";
-import { KindlingRepo } from "../../src/kindling/repo";
+import { runMigrations } from "../../src/books/db";
+import { BooksRepo } from "../../src/books/repo";
 
-function setupRepo(): { db: Database; repo: KindlingRepo } {
+function setupRepo(): { db: Database; repo: BooksRepo } {
   const db = new Database(":memory:");
   runMigrations(db);
-  const repo = new KindlingRepo(db);
+  const repo = new BooksRepo(db);
   return { db, repo };
 }
 
-describe("kindling repo", () => {
+describe("books repo", () => {
   test("creates and updates settings", () => {
     const { db, repo } = setupRepo();
 

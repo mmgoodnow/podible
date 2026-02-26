@@ -2,7 +2,7 @@ import { escapeXml, firstLine, htmlToPlainText, truncate } from "../utils/string
 import { formatDuration } from "../utils/time";
 
 import { preferredAudioForBooks, streamExtension } from "./media";
-import type { KindlingRepo } from "./repo";
+import type { BooksRepo } from "./repo";
 
 function requestOrigin(request: Request): string {
   const url = new URL(request.url);
@@ -25,7 +25,7 @@ function itemDescription(description: string | null, descriptionHtml: string | n
   };
 }
 
-export function buildRssFeed(request: Request, repo: KindlingRepo, feedTitle: string, feedAuthor: string): Response {
+export function buildRssFeed(request: Request, repo: BooksRepo, feedTitle: string, feedAuthor: string): Response {
   const origin = requestOrigin(request);
   const items = preferredAudioForBooks(repo);
   const lastModified = items[0]?.book.addedAt ?? new Date().toISOString();
@@ -74,7 +74,7 @@ ${coverTag}
   });
 }
 
-export function buildJsonFeed(request: Request, repo: KindlingRepo, feedTitle: string, feedAuthor: string): Response {
+export function buildJsonFeed(request: Request, repo: BooksRepo, feedTitle: string, feedAuthor: string): Response {
   const origin = requestOrigin(request);
   const items = preferredAudioForBooks(repo).map(({ book, asset }) => {
     const description = itemDescription(book.description, book.descriptionHtml, book.title, book.author);

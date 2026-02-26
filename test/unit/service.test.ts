@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
-import { runMigrations } from "../../src/kindling/db";
-import { KindlingRepo } from "../../src/kindling/repo";
-import { defaultSettings } from "../../src/kindling/settings";
-import { runSearch, runSnatch } from "../../src/kindling/service";
-import { torrentCacheKeyFor } from "../../src/kindling/torrent-cache";
-import { infoHashFromTorrentBytes } from "../../src/kindling/torrent";
+import { runMigrations } from "../../src/books/db";
+import { BooksRepo } from "../../src/books/repo";
+import { defaultSettings } from "../../src/books/settings";
+import { runSearch, runSnatch } from "../../src/books/service";
+import { torrentCacheKeyFor } from "../../src/books/torrent-cache";
+import { infoHashFromTorrentBytes } from "../../src/books/torrent";
 
 describe("search ranking", () => {
   test("penalizes box-set style matches", async () => {
@@ -94,7 +94,7 @@ describe("snatch transport", () => {
   test("rejects magnet urls to enforce load.raw_start usage", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
     const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
 
     const settings = defaultSettings({
@@ -129,7 +129,7 @@ describe("snatch transport", () => {
   test("uses load.raw_start for torrent urls", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
     const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
 
     const torrentUrl = "https://example.com/dune.torrent";
@@ -186,7 +186,7 @@ describe("snatch transport", () => {
   test("reuses cached torrent bytes and skips torrent fetch", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
     const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
 
     const torrentUrl = "https://example.com/dune-cached.torrent";

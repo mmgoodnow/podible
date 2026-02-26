@@ -5,13 +5,13 @@ import path from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
-import { runMigrations } from "../../src/kindling/db";
-import { KindlingRepo } from "../../src/kindling/repo";
-import { scanLibraryRoot } from "../../src/kindling/scanner";
+import { runMigrations } from "../../src/books/db";
+import { BooksRepo } from "../../src/books/repo";
+import { scanLibraryRoot } from "../../src/books/scanner";
 
 describe("library scanner metadata hydration", () => {
   test("hydrates work identifiers from Open Library for discovered books", async () => {
-    const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "kindling-scan-"));
+    const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "books-scan-"));
     const author = "Frank Herbert";
     const title = "Dune";
     const bookDir = path.join(tmpRoot, author, title);
@@ -40,7 +40,7 @@ describe("library scanner metadata hydration", () => {
 
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
 
     try {
       const result = await scanLibraryRoot(repo, tmpRoot);
@@ -62,7 +62,7 @@ describe("library scanner metadata hydration", () => {
   });
 
   test("ignores hidden and app-bundle directories while scanning", async () => {
-    const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "kindling-scan-ignore-"));
+    const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "books-scan-ignore-"));
     const validBookDir = path.join(tmpRoot, "Frank Herbert", "Dune");
     await mkdir(validBookDir, { recursive: true });
     await writeFile(path.join(validBookDir, "Dune.epub"), Buffer.from("epub-bytes"));
@@ -97,7 +97,7 @@ describe("library scanner metadata hydration", () => {
 
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
 
     try {
       const result = await scanLibraryRoot(repo, tmpRoot);

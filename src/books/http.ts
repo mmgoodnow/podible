@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { buildJsonFeed, buildRssFeed } from "./feed";
 import { authorizeRequest } from "./auth";
 import { buildChapters, preferredAudioForBooks, streamAudioAsset, streamExtension } from "./media";
-import { KindlingRepo } from "./repo";
+import { BooksRepo } from "./repo";
 import { handleRpcMethod, handleRpcRequest } from "./rpc";
 import type { AppSettings } from "./types";
 
@@ -44,7 +44,7 @@ function truncateText(value: string, max: number): string {
   return `${value.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
 }
 
-function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
+function renderHomePage(repo: BooksRepo, settings: AppSettings): Response {
   const health = repo.getHealthSummary();
   const books = repo.listBooks(30).items;
   const previewBooks = preferredAudioForBooks(repo).slice(0, 12);
@@ -1521,7 +1521,7 @@ function renderHomePage(repo: KindlingRepo, settings: AppSettings): Response {
   });
 }
 
-export function createPodibleFetchHandler(repo: KindlingRepo, startTime: number): (request: Request) => Promise<Response> {
+export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (request: Request) => Promise<Response> {
   return async (request: Request): Promise<Response> => {
     const startedAt = Date.now();
     const settings = repo.getSettings();

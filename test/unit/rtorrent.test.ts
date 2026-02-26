@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { buildMethodCall, parseResponseValue, RtorrentClient } from "../../src/kindling/rtorrent";
+import { buildMethodCall, parseResponseValue, RtorrentClient } from "../../src/books/rtorrent";
 
 describe("rtorrent xmlrpc helpers", () => {
   test("builds method call payload", () => {

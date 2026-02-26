@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { authorizeRequest } from "../../src/kindling/auth";
-import { defaultSettings } from "../../src/kindling/settings";
+import { authorizeRequest } from "../../src/books/auth";
+import { defaultSettings } from "../../src/books/settings";
 
 describe("auth", () => {
   test("accepts query, bearer, and x-api-key tokens", () => {

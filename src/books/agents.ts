@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 
 import type { ImportInspectionFile } from "./importer";
-import type { KindlingRepo } from "./repo";
+import type { BooksRepo } from "./repo";
 import { rankSearchResults } from "./service";
 import type { TorznabResult } from "./torznab";
 import { getOrFetchCachedTorrentBytes, inspectTorrentFiles } from "./torrent-cache";
@@ -72,7 +72,7 @@ type SearchAgentOutput = {
 };
 
 type SearchSelectionRuntime = {
-  repo?: KindlingRepo;
+  repo?: BooksRepo;
 };
 
 type ManualImportAgentOutput = {
@@ -208,7 +208,7 @@ async function callSearchResponsesWithInspectTool(
   system: string,
   user: string,
   ranked: ReturnType<typeof rankSearchResults>,
-  repo: KindlingRepo
+  repo: BooksRepo
 ): Promise<SearchAgentOutput> {
   const agent = configuredAgent(settings);
   if (!agent) {

@@ -4,7 +4,7 @@ import { selectManualImportPaths, selectSearchCandidate } from "./agents";
 import { nowIso } from "./db";
 import { importReleaseFromPath, inspectImportPath } from "./importer";
 import { RtorrentClient } from "./rtorrent";
-import { KindlingRepo } from "./repo";
+import { BooksRepo } from "./repo";
 import { scanLibraryRoot } from "./scanner";
 import { runSearch, runSnatch } from "./service";
 import type { RtorrentDownloadState } from "./rtorrent";
@@ -18,7 +18,7 @@ import type { AppSettings, JobRow, MediaType } from "./types";
  * database so work is durable across process restarts.
  */
 export type WorkerContext = {
-  repo: KindlingRepo;
+  repo: BooksRepo;
   getSettings: () => AppSettings;
   onLog?: (message: string) => void;
   shouldStop?: () => boolean;

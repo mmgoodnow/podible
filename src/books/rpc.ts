@@ -7,7 +7,7 @@ import { hydrateBookFromOpenLibrary } from "./hydration";
 import { importReleaseFromPath, inspectImportPath } from "./importer";
 import { resolveOpenLibraryCandidate, searchOpenLibrary } from "./openlibrary";
 import { computeDownloadFraction, pseudoProgressForRelease } from "./progress";
-import { KindlingRepo } from "./repo";
+import { BooksRepo } from "./repo";
 import { RtorrentClient } from "./rtorrent";
 import { runSearch, runSnatch, triggerAutoAcquire } from "./service";
 import type { AppSettings, JobType, LibraryBook, MediaType } from "./types";
@@ -44,7 +44,7 @@ type RpcFailure = {
 type RpcMethodHandler = (ctx: RpcContext, params: Record<string, unknown>) => Promise<unknown>;
 
 type RpcContext = {
-  repo: KindlingRepo;
+  repo: BooksRepo;
   startTime: number;
 };
 
@@ -73,7 +73,7 @@ type DownloadProgress = {
   percent: number | null;
 };
 
-type DownloadRpcView = ReturnType<KindlingRepo["listDownloads"]>[number] & {
+type DownloadRpcView = ReturnType<BooksRepo["listDownloads"]>[number] & {
   fullPseudoProgress: number;
   downloadProgress?: DownloadProgress;
 };
@@ -88,7 +88,7 @@ async function removeFileIfPresent(filePath: string): Promise<boolean> {
 }
 
 async function enrichDownload(
-  download: ReturnType<KindlingRepo["listDownloads"]>[number],
+  download: ReturnType<BooksRepo["listDownloads"]>[number],
   client: RtorrentClient | null
 ): Promise<DownloadRpcView> {
   if (download.release_status !== "downloading" || !download.info_hash || !client) {

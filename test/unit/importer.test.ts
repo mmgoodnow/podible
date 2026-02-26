@@ -4,9 +4,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { runMigrations } from "../../src/kindling/db";
-import { importReleaseFromPath } from "../../src/kindling/importer";
-import { KindlingRepo } from "../../src/kindling/repo";
+import { runMigrations } from "../../src/books/db";
+import { importReleaseFromPath } from "../../src/books/importer";
+import { BooksRepo } from "../../src/books/repo";
 
 const tempDirs: string[] = [];
 
@@ -24,18 +24,18 @@ function tempDir(prefix: string): string {
   return dir;
 }
 
-function setupRepo(): { db: Database; repo: KindlingRepo } {
+function setupRepo(): { db: Database; repo: BooksRepo } {
   const db = new Database(":memory:");
   runMigrations(db);
-  return { db, repo: new KindlingRepo(db) };
+  return { db, repo: new BooksRepo(db) };
 }
 
 describe("importer path collisions", () => {
   test("allocates a unique library path when a different source collides with an existing import path", async () => {
     const { db, repo } = setupRepo();
-    const libraryRoot = tempDir("kindling-lib-");
-    const srcA = tempDir("kindling-src-a-");
-    const srcB = tempDir("kindling-src-b-");
+    const libraryRoot = tempDir("books-lib-");
+    const srcA = tempDir("books-src-a-");
+    const srcB = tempDir("books-src-b-");
 
     const sourceA = path.join(srcA, "book.epub");
     const sourceB = path.join(srcB, "book.epub");

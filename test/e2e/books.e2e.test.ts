@@ -6,12 +6,12 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
-import { runMigrations } from "../../src/kindling/db";
-import { createPodibleFetchHandler } from "../../src/kindling/http";
-import { KindlingRepo } from "../../src/kindling/repo";
-import { defaultSettings } from "../../src/kindling/settings";
-import { infoHashFromTorrentBytes } from "../../src/kindling/torrent";
-import { runWorker } from "../../src/kindling/worker";
+import { runMigrations } from "../../src/books/db";
+import { createPodibleFetchHandler } from "../../src/books/http";
+import { BooksRepo } from "../../src/books/repo";
+import { defaultSettings } from "../../src/books/settings";
+import { infoHashFromTorrentBytes } from "../../src/books/torrent";
+import { runWorker } from "../../src/books/worker";
 import { startMockRtorrent } from "../mocks/rtorrent";
 import { startMockTorznab } from "../mocks/torznab";
 
@@ -50,9 +50,9 @@ async function rpc(fetchHandler: (request: Request) => Promise<Response>, method
   return (await response.json()) as any;
 }
 
-describe("kindling e2e", () => {
+describe("books e2e", () => {
   test("audio and ebook flows including reconcile", async () => {
-    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "kindling-e2e-"));
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "books-e2e-"));
     const downloadAudio = path.join(tempRoot, "downloads-audio");
     const downloadEbook = path.join(tempRoot, "downloads-ebook");
     const downloadRecon = path.join(tempRoot, "downloads-reconcile");
@@ -115,7 +115,7 @@ describe("kindling e2e", () => {
 
     const db = new Database(":memory:");
     runMigrations(db);
-    const repo = new KindlingRepo(db);
+    const repo = new BooksRepo(db);
     repo.updateSettings(
       defaultSettings({
         auth: { mode: "local", key: "test" },

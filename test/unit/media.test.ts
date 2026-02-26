@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { selectPreferredAudioAsset } from "../../src/kindling/media";
-import type { AssetRow } from "../../src/kindling/types";
+import { selectPreferredAudioAsset } from "../../src/books/media";
+import type { AssetRow } from "../../src/books/types";
 
 function asset(overrides: Partial<AssetRow>): AssetRow {
   return {
