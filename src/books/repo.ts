@@ -275,7 +275,6 @@ export class BooksRepo {
       if (book.status === "imported" || book.status === "error") {
         continue;
       }
-      const assets = this.listAssetsByBook(book.id);
       rows.push({
         bookId: book.id,
         status: book.status,
@@ -283,8 +282,6 @@ export class BooksRepo {
         ebookStatus: book.ebookStatus,
         fullPseudoProgress: book.fullPseudoProgress,
         updatedAt: book.updatedAt,
-        hasAudioAsset: assets.some((asset) => asset.kind === "single" || asset.kind === "multi"),
-        hasEbookAsset: assets.some((asset) => asset.kind === "ebook"),
       });
     }
     return rows;

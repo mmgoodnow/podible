@@ -182,6 +182,4 @@ export type LibraryInProgressRow = {
   ebookStatus: LibraryBook["ebookStatus"];
   fullPseudoProgress: number;
   updatedAt: string;
-  hasAudioAsset: boolean;
-  hasEbookAsset: boolean;
 };

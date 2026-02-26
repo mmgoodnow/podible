@@ -87,7 +87,7 @@ describe("json-rpc handler", () => {
     db.close();
   });
 
-  test("library.inProgress returns book-level progress rows with asset readiness and filters terminal books", async () => {
+  test("library.inProgress returns book-level progress rows and filters terminal books", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -213,8 +213,6 @@ describe("json-rpc handler", () => {
     expect(partialRow.status).toBe("partial");
     expect(partialRow.audioStatus).toBe("imported");
     expect(partialRow.ebookStatus).toBe("wanted");
-    expect(partialRow.hasAudioAsset).toBe(true);
-    expect(partialRow.hasEbookAsset).toBe(false);
     expect(typeof partialRow.fullPseudoProgress).toBe("number");
     expect(typeof partialRow.updatedAt).toBe("string");
 
