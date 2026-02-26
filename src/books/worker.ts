@@ -545,8 +545,9 @@ async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promise<"done
     }
   }
 
-  if (!snatchSucceeded && snatchErrors.length > 0) {
-    throw new Error(`Auto-acquire failed for book ${book.id}; ${snatchErrors.join(" | ")}`);
+  if (snatchErrors.length > 0) {
+    const prefix = snatchSucceeded ? "Auto-acquire partially failed" : "Auto-acquire failed";
+    throw new Error(`${prefix} for book ${book.id}; ${snatchErrors.join(" | ")}`);
   }
 
   ctx.repo.markJobSucceeded(job.id);

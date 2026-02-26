@@ -83,6 +83,107 @@ describe("worker acquire auto-acquire retries", () => {
       db.close();
     }
   });
+
+  test("retries acquire when one media snatch fails after another media succeeds", async () => {
+    const audioTorrent = makeTorrentBytes("eclipse-audio");
+    const ebookTorrent = makeTorrentBytes("eclipse-ebook");
+    const torznab = startMockTorznab({
+      results: [
+        { title: "Eclipse by Stephenie Meyer [ENG / M4B]", torrentId: "audio", size: 1111 },
+        { title: "Eclipse by Stephenie Meyer [ENG / EPUB]", torrentId: "ebook", size: 2222 },
+      ],
+      torrents: { audio: audioTorrent, ebook: ebookTorrent },
+    });
+
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    repo.updateSettings(
+      defaultSettings({
+        auth: { mode: "local", key: "test" },
+        torznab: [{ name: "mock", baseUrl: torznab.baseUrl }],
+        rtorrent: {
+          transport: "http-xmlrpc",
+          url: "http://rtorrent.mock/RPC2",
+          username: "",
+          password: "",
+        },
+      })
+    );
+
+    const book = repo.createBook({ title: "Eclipse", author: "Stephenie Meyer" });
+    const acquireJob = repo.createJob({
+      type: "acquire",
+      bookId: book.id,
+      payload: { bookId: book.id, media: ["audio", "ebook"] },
+    });
+
+    const originalFetch = globalThis.fetch;
+    let loadCallCount = 0;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "http://rtorrent.mock/RPC2") {
+        const body = String(init?.body ?? "");
+        const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
+        if (method === "load.raw_start") {
+          loadCallCount += 1;
+          if (loadCallCount === 1) {
+            return new Response("boom", { status: 500 });
+          }
+          return new Response(
+            `<?xml version="1.0"?><methodResponse><params><param><value><int>0</int></value></param></params></methodResponse>`,
+            {
+              status: 200,
+              headers: { "Content-Type": "text/xml" },
+            }
+          );
+        }
+        throw new Error(`Unexpected rTorrent method in test: ${method}`);
+      }
+      return (originalFetch as typeof fetch)(input as any, init);
+    }) as typeof fetch;
+
+    let stopWorker = false;
+    const logs: string[] = [];
+    const worker = runWorker({
+      repo,
+      getSettings: () => repo.getSettings(),
+      shouldStop: () => stopWorker,
+      onLog: (line) => logs.push(line),
+    });
+
+    try {
+      const started = Date.now();
+      for (;;) {
+        const current = repo.getJob(acquireJob.id);
+        if (current && current.attempt_count >= 1) break;
+        if (Date.now() - started > 4_000) {
+          throw new Error("Timed out waiting for partial acquire retry");
+        }
+        await sleep(50);
+      }
+
+      const current = repo.getJob(acquireJob.id);
+      expect(current?.status).toBe("queued");
+      expect(current?.attempt_count).toBe(1);
+      expect(String(current?.error || "")).toContain("partially failed");
+      expect(String(current?.error || "")).toContain("audio:");
+
+      const releases = repo.listReleasesByBook(book.id);
+      expect(releases.length).toBe(1);
+      expect(releases[0]?.media_type).toBe("ebook");
+      expect(repo.listJobsByType("download").length).toBe(1);
+
+      expect(logs.some((line) => line.includes("media=audio") && line.includes("snatch_error="))).toBe(true);
+      expect(logs.some((line) => line.includes("media=ebook") && line.includes("download_job="))).toBe(true);
+    } finally {
+      stopWorker = true;
+      globalThis.fetch = originalFetch;
+      await Promise.race([worker, sleep(1000)]);
+      torznab.stop();
+      db.close();
+    }
+  });
 });
 
 describe("worker robustness", () => {
