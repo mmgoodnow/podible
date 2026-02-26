@@ -155,9 +155,7 @@ Bridge constraints:
     "provider": "openai-responses",
     "model": "gpt-5-mini",
     "lowConfidenceThreshold": 0.45,
-    "timeoutMs": 8000,
-    "search": { "enableOnFailure": true, "enableOnLowConfidence": true },
-    "manualImport": { "enableOnFailure": true, "enableOnLowConfidence": true }
+    "timeoutMs": 30000
   }
 }
 ```

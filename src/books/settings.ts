@@ -35,14 +35,6 @@ export function defaultSettings(overrides?: Partial<AppSettings>): AppSettings {
       model: "gpt-5-mini",
       lowConfidenceThreshold: 0.45,
       timeoutMs: 30000,
-      search: {
-        enableOnFailure: true,
-        enableOnLowConfidence: true,
-      },
-      manualImport: {
-        enableOnFailure: true,
-        enableOnLowConfidence: true,
-      },
     },
     ...overrides,
   };
@@ -56,14 +48,6 @@ export function parseSettings(value: string): AppSettings {
 
   const defaults = defaultSettings();
   const parsedAgents = (parsed.agents && typeof parsed.agents === "object" ? parsed.agents : {}) as Partial<AppSettings["agents"]>;
-  const parsedSearch =
-    parsedAgents.search && typeof parsedAgents.search === "object"
-      ? (parsedAgents.search as Partial<AppSettings["agents"]["search"]>)
-      : {};
-  const parsedManualImport =
-    parsedAgents.manualImport && typeof parsedAgents.manualImport === "object"
-      ? (parsedAgents.manualImport as Partial<AppSettings["agents"]["manualImport"]>)
-      : {};
 
   return {
     ...defaults,
@@ -90,16 +74,17 @@ export function parseSettings(value: string): AppSettings {
       ...(parsed.auth && typeof parsed.auth === "object" ? parsed.auth : {}),
     },
     agents: {
-      ...defaults.agents,
-      ...parsedAgents,
-      search: {
-        ...defaults.agents.search,
-        ...parsedSearch,
-      },
-      manualImport: {
-        ...defaults.agents.manualImport,
-        ...parsedManualImport,
-      },
+      enabled: typeof parsedAgents.enabled === "boolean" ? parsedAgents.enabled : defaults.agents.enabled,
+      provider: parsedAgents.provider === "openai-responses" ? parsedAgents.provider : defaults.agents.provider,
+      model: typeof parsedAgents.model === "string" && parsedAgents.model.trim() ? parsedAgents.model : defaults.agents.model,
+      lowConfidenceThreshold:
+        typeof parsedAgents.lowConfidenceThreshold === "number" && Number.isFinite(parsedAgents.lowConfidenceThreshold)
+          ? parsedAgents.lowConfidenceThreshold
+          : defaults.agents.lowConfidenceThreshold,
+      timeoutMs:
+        typeof parsedAgents.timeoutMs === "number" && Number.isFinite(parsedAgents.timeoutMs)
+          ? Math.max(1000, Math.trunc(parsedAgents.timeoutMs))
+          : defaults.agents.timeoutMs,
     },
   };
 }

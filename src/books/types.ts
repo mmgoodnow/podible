@@ -58,14 +58,6 @@ export type AppSettings = {
     model: string;
     lowConfidenceThreshold: number;
     timeoutMs: number;
-    search: {
-      enableOnFailure: boolean;
-      enableOnLowConfidence: boolean;
-    };
-    manualImport: {
-      enableOnFailure: boolean;
-      enableOnLowConfidence: boolean;
-    };
   };
 };
 

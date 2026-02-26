@@ -137,23 +137,15 @@ function configuredAgent(settings: AppSettings) {
 
 function determineTrigger(
   settings: AppSettings,
-  domain: "search" | "manualImport",
+  _domain: "search" | "manualImport",
   confidence: number,
   options: { forceAgent?: boolean; priorFailure?: boolean }
 ): DecisionTrigger {
   if (options.forceAgent) return "forced";
-  const agentsCfg = settings.agents as
-    | (AppSettings["agents"] & {
-        search?: Partial<AppSettings["agents"]["search"]>;
-        manualImport?: Partial<AppSettings["agents"]["manualImport"]>;
-      })
-    | undefined;
-  const cfg: Partial<AppSettings["agents"]["search"]> | Partial<AppSettings["agents"]["manualImport"]> =
-    (domain === "search" ? agentsCfg?.search : agentsCfg?.manualImport) ?? {};
   const lowConfidenceThreshold =
-    typeof agentsCfg?.lowConfidenceThreshold === "number" ? agentsCfg.lowConfidenceThreshold : 0.45;
-  if (options.priorFailure && cfg.enableOnFailure === true) return "prior_failure";
-  if (cfg.enableOnLowConfidence === true && confidence < lowConfidenceThreshold) return "low_confidence";
+    typeof settings.agents?.lowConfidenceThreshold === "number" ? settings.agents.lowConfidenceThreshold : 0.45;
+  if (options.priorFailure) return "prior_failure";
+  if (confidence < lowConfidenceThreshold) return "low_confidence";
   return "none";
 }
 
