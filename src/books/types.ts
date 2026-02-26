@@ -174,3 +174,14 @@ export type LibraryBook = {
   status: "wanted" | "snatched" | "downloading" | "downloaded" | "imported" | "error" | "partial";
   fullPseudoProgress: number;
 };
+
+export type LibraryInProgressRow = {
+  bookId: number;
+  status: LibraryBook["status"];
+  audioStatus: LibraryBook["audioStatus"];
+  ebookStatus: LibraryBook["ebookStatus"];
+  fullPseudoProgress: number;
+  updatedAt: string;
+  hasAudioAsset: boolean;
+  hasEbookAsset: boolean;
+};

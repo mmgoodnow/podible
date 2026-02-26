@@ -87,6 +87,148 @@ describe("json-rpc handler", () => {
     db.close();
   });
 
+  test("library.inProgress returns book-level progress rows with asset readiness and filters terminal books", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    repo.ensureSettings();
+
+    const wanted = repo.createBook({ title: "Wanted Book", author: "Author" });
+
+    const partial = repo.createBook({ title: "Partial Book", author: "Author" });
+    const partialAudio = repo.createRelease({
+      bookId: partial.id,
+      provider: "test",
+      title: "Partial audio",
+      mediaType: "audio",
+      infoHash: "1111111111111111111111111111111111111111",
+      url: "https://example.com/partial-audio.torrent",
+      status: "imported",
+    });
+    repo.addAsset({
+      bookId: partial.id,
+      kind: "single",
+      mime: "audio/mpeg",
+      totalSize: 100,
+      sourceReleaseId: partialAudio.id,
+      files: [
+        {
+          path: "/tmp/partial-audio.mp3",
+          size: 100,
+          start: 0,
+          end: 99,
+          durationMs: 1000,
+          title: null,
+        },
+      ],
+    });
+
+    const imported = repo.createBook({ title: "Imported Book", author: "Author" });
+    const importedAudio = repo.createRelease({
+      bookId: imported.id,
+      provider: "test",
+      title: "Imported audio",
+      mediaType: "audio",
+      infoHash: "2222222222222222222222222222222222222222",
+      url: "https://example.com/imported-audio.torrent",
+      status: "imported",
+    });
+    repo.addAsset({
+      bookId: imported.id,
+      kind: "single",
+      mime: "audio/mpeg",
+      totalSize: 100,
+      sourceReleaseId: importedAudio.id,
+      files: [
+        {
+          path: "/tmp/imported-audio.mp3",
+          size: 100,
+          start: 0,
+          end: 99,
+          durationMs: 1000,
+          title: null,
+        },
+      ],
+    });
+    const importedEbook = repo.createRelease({
+      bookId: imported.id,
+      provider: "test",
+      title: "Imported ebook",
+      mediaType: "ebook",
+      infoHash: "3333333333333333333333333333333333333333",
+      url: "https://example.com/imported-ebook.torrent",
+      status: "imported",
+    });
+    repo.addAsset({
+      bookId: imported.id,
+      kind: "ebook",
+      mime: "application/epub+zip",
+      totalSize: 100,
+      sourceReleaseId: importedEbook.id,
+      files: [
+        {
+          path: "/tmp/imported-ebook.epub",
+          size: 100,
+          start: 0,
+          end: 99,
+          durationMs: 0,
+          title: null,
+        },
+      ],
+    });
+
+    const errored = repo.createBook({ title: "Errored Book", author: "Author" });
+    repo.createRelease({
+      bookId: errored.id,
+      provider: "test",
+      title: "Errored audio",
+      mediaType: "audio",
+      infoHash: "4444444444444444444444444444444444444444",
+      url: "https://example.com/errored-audio.torrent",
+      status: "failed",
+    });
+    repo.createRelease({
+      bookId: errored.id,
+      provider: "test",
+      title: "Errored ebook",
+      mediaType: "ebook",
+      infoHash: "5555555555555555555555555555555555555555",
+      url: "https://example.com/errored-ebook.torrent",
+      status: "failed",
+    });
+
+    const result = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "library.inProgress",
+      params: {},
+    });
+
+    expect(Array.isArray(result.result.items)).toBe(true);
+    const rows = result.result.items as Array<any>;
+    const ids = rows.map((row) => row.bookId).sort((a, b) => a - b);
+    expect(ids).toEqual([wanted.id, partial.id]);
+
+    const partialRow = rows.find((row) => row.bookId === partial.id);
+    expect(partialRow.status).toBe("partial");
+    expect(partialRow.audioStatus).toBe("imported");
+    expect(partialRow.ebookStatus).toBe("wanted");
+    expect(partialRow.hasAudioAsset).toBe(true);
+    expect(partialRow.hasEbookAsset).toBe(false);
+    expect(typeof partialRow.fullPseudoProgress).toBe("number");
+    expect(typeof partialRow.updatedAt).toBe("string");
+
+    const filtered = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "library.inProgress",
+      params: { bookIds: [imported.id, partial.id] },
+    });
+    expect(filtered.result.items.map((row: any) => row.bookId)).toEqual([partial.id]);
+
+    db.close();
+  });
+
   test("admin.wipeDatabase clears mutable tables and preserves settings", async () => {
     const db = new Database(":memory:");
     runMigrations(db);

@@ -189,6 +189,18 @@ function asOptionalStringArray(value: unknown, name: string): string[] | undefin
   return out;
 }
 
+function asOptionalPositiveIntArray(value: unknown, name: string): number[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) {
+    throw new RpcError(-32602, `${name} must be an array of positive integers`);
+  }
+  const out: number[] = [];
+  for (const item of value) {
+    out.push(asPositiveInt(item, `${name}[]`));
+  }
+  return out;
+}
+
 function asOptionalBoolean(value: unknown, name: string): boolean | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value === "boolean") return value;
@@ -382,6 +394,13 @@ const handlers: Record<string, RpcMethodHandler> = {
       book,
       releases: ctx.repo.listReleasesByBook(bookId),
       assets: ctx.repo.listAssetsByBook(bookId),
+    };
+  },
+
+  async "library.inProgress"(ctx, params) {
+    const bookIds = asOptionalPositiveIntArray(params.bookIds, "bookIds");
+    return {
+      items: ctx.repo.listInProgressBooks(bookIds),
     };
   },
 
@@ -813,6 +832,7 @@ const methodSummaries: Record<string, string> = {
   "openlibrary.search": "Search Open Library for works to add.",
   "library.list": "List books in the library.",
   "library.get": "Get one book with releases and assets.",
+  "library.inProgress": "List non-terminal book-level progress rows (optionally filtered by bookIds).",
   "library.create": "Create a book from an Open Library work key and queue auto-acquire.",
   "library.refresh": "Queue full library filesystem refresh scan.",
   "library.acquire": "Queue targeted acquire job for a book/media set.",
@@ -843,6 +863,7 @@ const readOnlyMethods = new Set<string>([
   "openlibrary.search",
   "library.list",
   "library.get",
+  "library.inProgress",
   "search.run",
   "agent.search.plan",
   "releases.list",

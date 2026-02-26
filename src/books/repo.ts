@@ -14,6 +14,7 @@ import type {
   JobStatus,
   JobType,
   LibraryBook,
+  LibraryInProgressRow,
   MediaType,
   ReleaseRow,
   TorrentCacheRow,
@@ -260,6 +261,33 @@ export class BooksRepo {
   listAllBooks(): LibraryBook[] {
     const rows = this.db.query("SELECT * FROM books ORDER BY added_at DESC, id DESC").all() as BookRow[];
     return rows.map((row) => this.toLibraryBook(row));
+  }
+
+  listInProgressBooks(bookIds?: number[]): LibraryInProgressRow[] {
+    const candidates = Array.isArray(bookIds) && bookIds.length > 0
+      ? Array.from(new Set(bookIds))
+          .map((bookId) => this.getBook(bookId))
+          .filter((book): book is LibraryBook => Boolean(book))
+      : this.listAllBooks();
+
+    const rows: LibraryInProgressRow[] = [];
+    for (const book of candidates) {
+      if (book.status === "imported" || book.status === "error") {
+        continue;
+      }
+      const assets = this.listAssetsByBook(book.id);
+      rows.push({
+        bookId: book.id,
+        status: book.status,
+        audioStatus: book.audioStatus,
+        ebookStatus: book.ebookStatus,
+        fullPseudoProgress: book.fullPseudoProgress,
+        updatedAt: book.updatedAt,
+        hasAudioAsset: assets.some((asset) => asset.kind === "single" || asset.kind === "multi"),
+        hasEbookAsset: assets.some((asset) => asset.kind === "ebook"),
+      });
+    }
+    return rows;
   }
 
   /**
