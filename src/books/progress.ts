@@ -19,7 +19,7 @@ export function pseudoProgressForMediaStatus(status: MediaStatus): number {
 export function pseudoProgressForBook(audio: MediaStatus, ebook: MediaStatus): number {
   const audioProgress = pseudoProgressForMediaStatus(audio);
   const ebookProgress = pseudoProgressForMediaStatus(ebook);
-  return Math.round((audioProgress + ebookProgress) / 2);
+  return (audioProgress + ebookProgress) / 2;
 }
 
 export function pseudoProgressForRelease(
@@ -30,7 +30,7 @@ export function pseudoProgressForRelease(
   if (status === "downloaded") return 90;
   if (status === "downloading") {
     const fraction = clamp01(downloadingFraction ?? 0);
-    return Math.round(20 + fraction * 70);
+    return 20 + fraction * 70;
   }
   if (status === "snatched") return 10;
   if (status === "failed") return 0;

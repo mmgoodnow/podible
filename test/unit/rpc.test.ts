@@ -938,7 +938,7 @@ describe("json-rpc handler", () => {
       expect(getResult.result.book.status).toBe("partial");
       expect(getResult.result.book.audioStatus).toBe("downloading");
       expect(getResult.result.book.ebookStatus).toBe("imported");
-      expect(getResult.result.book.fullPseudoProgress).toBe(78);
+      expect(getResult.result.book.fullPseudoProgress).toBe(77.5);
 
       const inProgressResult = await callRpc(repo, {
         jsonrpc: "2.0",
@@ -948,7 +948,7 @@ describe("json-rpc handler", () => {
       });
       expect(inProgressResult.result.items.length).toBe(1);
       expect(inProgressResult.result.items[0].id).toBe(book.id);
-      expect(inProgressResult.result.items[0].fullPseudoProgress).toBe(78);
+      expect(inProgressResult.result.items[0].fullPseudoProgress).toBe(77.5);
 
       db.close();
     } finally {

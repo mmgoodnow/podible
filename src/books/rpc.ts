@@ -178,9 +178,8 @@ async function enrichLibraryBookProgress(
     liveFractionForMedia(releases, "ebook", client),
   ]);
 
-  const liveBookProgress = Math.round(
-    (mediaPseudoProgress(book.audioStatus, audioFraction) + mediaPseudoProgress(book.ebookStatus, ebookFraction)) / 2
-  );
+  const liveBookProgress =
+    (mediaPseudoProgress(book.audioStatus, audioFraction) + mediaPseudoProgress(book.ebookStatus, ebookFraction)) / 2;
 
   if (liveBookProgress === book.fullPseudoProgress) {
     return book;
