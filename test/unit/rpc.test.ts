@@ -195,6 +195,29 @@ describe("json-rpc handler", () => {
     db.close();
   });
 
+  test("help lists rpc methods with readOnly flags", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new KindlingRepo(db);
+    repo.ensureSettings();
+
+    const result = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "help",
+      params: {},
+    });
+
+    expect(result.result.name).toBe("podible-rpc");
+    expect(result.result.version).toBe("v1");
+    expect(Array.isArray(result.result.methods)).toBe(true);
+    expect(result.result.methods.some((m: any) => m.name === "help" && m.readOnly === true)).toBe(true);
+    expect(result.result.methods.some((m: any) => m.name === "library.create" && m.readOnly === false)).toBe(true);
+    expect(result.result.methods.some((m: any) => m.name === "system.health")).toBe(true);
+
+    db.close();
+  });
+
   test("library.reportImportIssue queues async wrong-file review import job", async () => {
     const originalFetch = globalThis.fetch;
     try {

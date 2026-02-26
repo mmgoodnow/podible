@@ -291,6 +291,22 @@ function parseRequest(raw: unknown): RpcRequest {
 }
 
 const handlers: Record<string, RpcMethodHandler> = {
+  async help() {
+    const methods = Object.keys(handlers)
+      .sort()
+      .map((name) => ({
+        name,
+        readOnly: readOnlyMethods.has(name),
+        description: methodSummaries[name] ?? null,
+      }));
+    return {
+      name: "podible-rpc",
+      version: "v1",
+      methodCount: methods.length,
+      methods,
+    };
+  },
+
   async "system.health"(ctx) {
     return {
       ok: true,
@@ -787,7 +803,40 @@ const handlers: Record<string, RpcMethodHandler> = {
   },
 };
 
+const methodSummaries: Record<string, string> = {
+  help: "List available RPC methods with read-only flags and short descriptions.",
+  "system.health": "Service health summary (job/release counts and queue size).",
+  "system.server": "Server runtime metadata (name, runtime, uptime, time).",
+  "settings.get": "Read current application settings.",
+  "settings.update": "Replace application settings.",
+  "admin.wipeDatabase": "Delete all mutable DB data and imported files/covers (local dev reset).",
+  "openlibrary.search": "Search Open Library for works to add.",
+  "library.list": "List books in the library.",
+  "library.get": "Get one book with releases and assets.",
+  "library.create": "Create a book from an Open Library work key and queue auto-acquire.",
+  "library.refresh": "Queue full library filesystem refresh scan.",
+  "library.acquire": "Queue targeted acquire job for a book/media set.",
+  "library.reportImportIssue": "Report wrong imported file(s), delete imported asset(s), and queue async review/reacquire.",
+  "library.rehydrate": "Re-run Open Library metadata hydration for one/all books.",
+  "library.delete": "Delete a book, cascading DB rows and imported files/covers.",
+  "search.run": "Run Torznab search and return normalized results.",
+  "agent.search.plan": "Run search selection planning (deterministic/agent) without snatching.",
+  "snatch.create": "Create release + download job for a chosen search result.",
+  "releases.list": "List releases for a book.",
+  "downloads.list": "List download jobs with release status/progress.",
+  "downloads.get": "Get one download job with live progress if active.",
+  "downloads.retry": "Requeue a download job.",
+  "jobs.list": "List recent jobs (optionally filtered by type).",
+  "jobs.get": "Get one job row.",
+  "jobs.retry": "Retry a failed/cancelled job.",
+  "import.reconcile": "Queue reconcile job for downloaded releases missing assets.",
+  "import.inspect": "Inspect a local path and list candidate import files.",
+  "agent.import.plan": "Run import-file selection planning (deterministic/agent) without importing.",
+  "import.manual": "Create a manual release and import from a local path.",
+};
+
 const readOnlyMethods = new Set<string>([
+  "help",
   "system.health",
   "system.server",
   "settings.get",
