@@ -1,0 +1,245 @@
+import { mkdirSync } from "node:fs";
+import path from "node:path";
+
+import { Database } from "bun:sqlite";
+
+const SCHEMA_MIGRATION_ID = 1;
+const GUID_MIGRATION_ID = 2;
+const JOB_TYPE_MIGRATION_ID = 3;
+const ASSET_FILE_SOURCE_PATH_MIGRATION_ID = 4;
+const TORRENT_CACHE_MIGRATION_ID = 5;
+
+const BASE_SCHEMA_SQL = `
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS books (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  author TEXT NOT NULL,
+  cover_path TEXT NULL,
+  duration_ms INTEGER NULL,
+  added_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  published_at TEXT NULL,
+  description TEXT NULL,
+  description_html TEXT NULL,
+  language TEXT NULL,
+  identifiers_json TEXT NULL
+);
+
+CREATE TABLE IF NOT EXISTS releases (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  book_id INTEGER NOT NULL,
+  provider TEXT NOT NULL,
+  provider_guid TEXT NULL,
+  title TEXT NOT NULL,
+  media_type TEXT NOT NULL CHECK (media_type IN ('audio', 'ebook')),
+  info_hash TEXT NOT NULL,
+  size_bytes INTEGER NULL,
+  url TEXT NOT NULL,
+  snatched_at TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('snatched', 'downloading', 'downloaded', 'imported', 'failed')),
+  error TEXT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS assets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  book_id INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('single', 'multi', 'ebook')),
+  mime TEXT NOT NULL,
+  total_size INTEGER NOT NULL,
+  duration_ms INTEGER NULL,
+  source_release_id INTEGER NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+  FOREIGN KEY (source_release_id) REFERENCES releases(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS asset_files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  asset_id INTEGER NOT NULL,
+  path TEXT NOT NULL,
+  source_path TEXT NULL,
+  size INTEGER NOT NULL,
+  start INTEGER NOT NULL,
+  end INTEGER NOT NULL,
+  duration_ms INTEGER NOT NULL,
+  title TEXT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL CHECK (type IN ('full_library_refresh', 'acquire', 'download', 'import', 'transcode', 'reconcile')),
+  status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+  book_id INTEGER NULL,
+  release_id INTEGER NULL,
+  payload_json TEXT NULL,
+  error TEXT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 5,
+  next_run_at TEXT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+  FOREIGN KEY (release_id) REFERENCES releases(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  value_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS torrent_cache (
+  key TEXT PRIMARY KEY,
+  provider TEXT NULL,
+  provider_guid TEXT NULL,
+  url TEXT NOT NULL,
+  info_hash TEXT NULL,
+  torrent_bytes BLOB NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  id INTEGER PRIMARY KEY,
+  applied_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_books_added_at ON books(added_at);
+CREATE INDEX IF NOT EXISTS idx_releases_book_status ON releases(book_id, status);
+CREATE INDEX IF NOT EXISTS idx_releases_book_media ON releases(book_id, media_type);
+CREATE INDEX IF NOT EXISTS idx_releases_info_hash ON releases(info_hash);
+CREATE INDEX IF NOT EXISTS idx_releases_provider_guid ON releases(provider, provider_guid);
+CREATE INDEX IF NOT EXISTS idx_releases_url ON releases(url);
+CREATE INDEX IF NOT EXISTS idx_assets_book_created ON assets(book_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_asset_files_asset_start ON asset_files(asset_id, start);
+CREATE INDEX IF NOT EXISTS idx_jobs_status_next_created ON jobs(status, next_run_at, created_at);
+CREATE INDEX IF NOT EXISTS idx_torrent_cache_provider_guid ON torrent_cache(provider, provider_guid);
+CREATE INDEX IF NOT EXISTS idx_torrent_cache_url ON torrent_cache(url);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_releases_info_hash ON releases(info_hash);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_releases_provider_guid ON releases(provider, provider_guid) WHERE provider_guid IS NOT NULL;
+`;
+
+function hasColumn(db: Database, table: string, column: string): boolean {
+  const rows = db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return rows.some((row) => row.name === column);
+}
+
+function applyGuidMigration(db: Database): void {
+  if (!hasColumn(db, "releases", "provider_guid")) {
+    db.exec("ALTER TABLE releases ADD COLUMN provider_guid TEXT NULL");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_releases_provider_guid ON releases(provider, provider_guid)");
+  db.exec(
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_releases_provider_guid ON releases(provider, provider_guid) WHERE provider_guid IS NOT NULL"
+  );
+}
+
+function applyJobTypeMigration(db: Database): void {
+  db.exec(`
+CREATE TABLE jobs_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL CHECK (type IN ('full_library_refresh', 'acquire', 'download', 'import', 'transcode', 'reconcile')),
+  status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+  book_id INTEGER NULL,
+  release_id INTEGER NULL,
+  payload_json TEXT NULL,
+  error TEXT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 5,
+  next_run_at TEXT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+  FOREIGN KEY (release_id) REFERENCES releases(id) ON DELETE CASCADE
+);
+
+INSERT INTO jobs_new (
+  id, type, status, book_id, release_id, payload_json, error,
+  attempt_count, max_attempts, next_run_at, created_at, updated_at
+)
+SELECT
+  id, type, status, book_id, release_id, payload_json, error,
+  attempt_count, max_attempts, next_run_at, created_at, updated_at
+FROM jobs;
+
+DROP TABLE jobs;
+ALTER TABLE jobs_new RENAME TO jobs;
+
+CREATE INDEX IF NOT EXISTS idx_jobs_status_next_created ON jobs(status, next_run_at, created_at);
+`);
+}
+
+function applyAssetFileSourcePathMigration(db: Database): void {
+  if (!hasColumn(db, "asset_files", "source_path")) {
+    db.exec("ALTER TABLE asset_files ADD COLUMN source_path TEXT NULL");
+  }
+}
+
+function applyTorrentCacheMigration(db: Database): void {
+  db.exec(`
+CREATE TABLE IF NOT EXISTS torrent_cache (
+  key TEXT PRIMARY KEY,
+  provider TEXT NULL,
+  provider_guid TEXT NULL,
+  url TEXT NOT NULL,
+  info_hash TEXT NULL,
+  torrent_bytes BLOB NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_torrent_cache_provider_guid ON torrent_cache(provider, provider_guid);
+CREATE INDEX IF NOT EXISTS idx_torrent_cache_url ON torrent_cache(url);
+`);
+}
+
+export function nowIso(): string {
+  return new Date().toISOString();
+}
+
+export function openDatabase(dbPath: string): Database {
+  mkdirSync(path.dirname(dbPath), { recursive: true });
+  const db = new Database(dbPath, { create: true });
+  db.exec("PRAGMA journal_mode = WAL;");
+  db.exec("PRAGMA foreign_keys = ON;");
+  runMigrations(db);
+  return db;
+}
+
+export function runMigrations(db: Database): void {
+  db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (id INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)");
+
+  const apply = (id: number, fn: () => void) => {
+    const existing = db.query("SELECT id FROM schema_migrations WHERE id = ?").get(id) as { id: number } | null;
+    if (existing) return;
+    db.transaction(() => {
+      fn();
+      db.query("INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)").run(id, nowIso());
+    })();
+  };
+
+  apply(SCHEMA_MIGRATION_ID, () => {
+    db.exec(BASE_SCHEMA_SQL);
+  });
+
+  apply(GUID_MIGRATION_ID, () => {
+    applyGuidMigration(db);
+  });
+
+  apply(JOB_TYPE_MIGRATION_ID, () => {
+    applyJobTypeMigration(db);
+  });
+
+  apply(ASSET_FILE_SOURCE_PATH_MIGRATION_ID, () => {
+    applyAssetFileSourcePathMigration(db);
+  });
+
+  apply(TORRENT_CACHE_MIGRATION_ID, () => {
+    applyTorrentCacheMigration(db);
+  });
+}

@@ -1,7 +1,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { dataDir, ensureDataDir, transcodeStatusPath } from "../config";
+import { dataDir, ensureDataDir } from "../config";
+import { loadJsonState, saveJsonState } from "../state/store";
 import { slugify } from "../utils/strings";
 import { JobChannel, PendingSingleMeta, TranscodeJob, TranscodeState, TranscodeStatus } from "../types";
 
@@ -36,12 +37,12 @@ function createJobChannel<T>(): JobChannel<T> {
 const transcodeJobs = createJobChannel<TranscodeJob>();
 const transcodeStatus = new Map<string, TranscodeStatus>();
 const queuedSources = new Set<string>();
+const TRANSCODE_STATUS_STATE_KEY = "transcode_status_v1";
 
 async function loadTranscodeStatus() {
   await ensureDataDir();
   try {
-    const content = await fs.readFile(transcodeStatusPath, "utf8");
-    const parsed = JSON.parse(content);
+    const parsed = loadJsonState<unknown[]>(TRANSCODE_STATUS_STATE_KEY);
     if (Array.isArray(parsed)) {
       parsed.forEach((entry: any) => {
         if (!entry || typeof entry !== "object") return;
@@ -73,7 +74,7 @@ async function saveTranscodeStatus() {
     const { addedAt, ...restMeta } = status.meta;
     return { ...status, meta: restMeta };
   });
-  await fs.writeFile(transcodeStatusPath, JSON.stringify(payload, null, 2), "utf8");
+  saveJsonState(TRANSCODE_STATUS_STATE_KEY, payload);
 }
 
 function revivePendingMeta(meta: unknown): PendingSingleMeta | undefined {

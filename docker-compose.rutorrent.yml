@@ -1,0 +1,31 @@
+services:
+  rutorrent:
+    image: k44sh/rutorrent:v5.1
+    container_name: rutorrent
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      DOWNLOAD_PATH: ${RUTORRENT_DOWNLOAD_PATH:-/Users/mmgoodnow/Downloads}
+      RUTORRENT_PORT: 8080
+      XMLRPC_PORT: 8000
+      WEBDAV_PORT: 9000
+      RT_DHT_PORT: 6881
+      RT_INC_PORT: 50000
+    ports:
+      - "8080:8080"
+      - "8000:8000"
+      - "9000:9000"
+      - "6881:6881/udp"
+      - "50000:50000"
+    volumes:
+      - "${TMPDIR:-/tmp}/rutorrent-config:/config"
+      - "${TMPDIR:-/tmp}/rutorrent-data:/data"
+      - "${TMPDIR:-/tmp}/rutorrent-passwd:/passwd"
+      - "${RUTORRENT_DOWNLOAD_PATH:-/Users/mmgoodnow/Downloads}:${RUTORRENT_DOWNLOAD_PATH:-/Users/mmgoodnow/Downloads}"
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 32000
+        hard: 40000

@@ -1,2 +1,4 @@
 books/
 node_modules/
+.env
+data/

@@ -8,7 +8,7 @@ import {
   brandImageExists,
 } from "../config";
 import { bookExtension, bookMime, cleanLanguage } from "../media/metadata";
-import { buildItemNotes } from "./rss.ts";
+import { buildItemNotes } from "./rss";
 
 type JsonFeedAuthor = {
   name?: string;
