@@ -60,6 +60,10 @@ function idempotentResult(repo: BooksRepo, existing: ReleaseRow): { release: Rel
   };
 }
 
+function rtorrentStringLiteral(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 const setMarkers = ["box set", "collection", "complete", "omnibus", "books 1-7", "1-3", "series"];
 const audioMarkers = ["m4b", "m4a", "mp3", "aac", "flac", "opus", "ogg", "wav", "audiobook", "audio book", "audio"];
 const ebookMarkers = ["epub", "pdf", "mobi", "azw", "ebook", "e-book", "djvu", "cbz", "cbr"];
@@ -216,9 +220,13 @@ export async function runSnatch(
   }
 
   const client = new RtorrentClient(settings.rtorrent);
+  const downloadPath = settings.rtorrent.downloadPath?.trim() ?? "";
+  const commands = downloadPath
+    ? [`d.directory_base.set="${rtorrentStringLiteral(downloadPath)}"`]
+    : [];
   snatchLog(`[snatch] rtorrent load.raw_start begin`);
   try {
-    await client.loadRawStart(torrentBytes);
+    await client.loadRawStart(torrentBytes, commands);
     snatchLog(`[snatch] rtorrent load.raw_start ok`);
   } catch (error) {
     snatchLog(`[snatch] rtorrent load.raw_start error=${JSON.stringify((error as Error).message)}`);

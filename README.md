@@ -141,7 +141,8 @@ Bridge constraints:
     "transport": "http-xmlrpc",
     "url": "http://127.0.0.1/RPC2",
     "username": "",
-    "password": ""
+    "password": "",
+    "downloadPath": ""
   },
   "libraryRoot": "/media/library",
   "polling": { "rtorrentMs": 5000, "scanMs": 30000 },

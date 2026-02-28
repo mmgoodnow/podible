@@ -32,6 +32,7 @@ export type AppSettings = {
     url: string;
     username?: string;
     password?: string;
+    downloadPath?: string;
   };
   libraryRoot: string;
   polling: {

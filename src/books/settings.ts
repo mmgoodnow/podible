@@ -10,6 +10,7 @@ export function defaultSettings(overrides?: Partial<AppSettings>): AppSettings {
       url: "http://127.0.0.1/RPC2",
       username: "",
       password: "",
+      downloadPath: "",
     },
     libraryRoot: "/media/library",
     polling: {
@@ -52,6 +53,12 @@ export function parseSettings(value: string): AppSettings {
     rtorrent: {
       ...defaults.rtorrent,
       ...(parsed.rtorrent && typeof parsed.rtorrent === "object" ? parsed.rtorrent : {}),
+      downloadPath:
+        parsed.rtorrent &&
+        typeof parsed.rtorrent === "object" &&
+        typeof (parsed.rtorrent as Partial<AppSettings["rtorrent"]>).downloadPath === "string"
+          ? (parsed.rtorrent as Partial<AppSettings["rtorrent"]>).downloadPath ?? defaults.rtorrent.downloadPath
+          : defaults.rtorrent.downloadPath,
     },
     polling: {
       ...defaults.polling,

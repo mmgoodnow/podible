@@ -140,10 +140,12 @@ describe("snatch transport", () => {
       rtorrent: {
         transport: "http-xmlrpc",
         url: rpcUrl,
+        downloadPath: "/downloads/books",
       },
     });
 
     const methods: string[] = [];
+    const rpcBodies: string[] = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
       const url = String(input);
@@ -155,6 +157,7 @@ describe("snatch transport", () => {
       }
       if (url === rpcUrl) {
         const body = String(init?.body ?? "");
+        rpcBodies.push(body);
         const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
         methods.push(method);
         return new Response(
@@ -177,6 +180,7 @@ describe("snatch transport", () => {
       expect(result.release.info_hash).toBe(expectedHash);
       expect(methods).toContain("load.raw_start");
       expect(methods).not.toContain("load.start");
+      expect(rpcBodies.some((body) => body.includes("d.directory_base.set=&quot;/downloads/books&quot;"))).toBe(true);
     } finally {
       globalThis.fetch = originalFetch;
       db.close();
@@ -207,6 +211,7 @@ describe("snatch transport", () => {
       rtorrent: {
         transport: "http-xmlrpc",
         url: rpcUrl,
+        downloadPath: "",
       },
     });
 
