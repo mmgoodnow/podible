@@ -13,6 +13,8 @@ COPY server.ts ./
 COPY src ./src
 COPY podible.png ./
 
+ENV CONFIG_DIR=/config
+
 EXPOSE 80
 
 CMD ["bun", "run", "server.ts", "/books"]
