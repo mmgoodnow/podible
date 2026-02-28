@@ -19,7 +19,6 @@ const dataDir = process.env.DATA_DIR ?? path.join(tmpRoot, "podible-data");
 const configDir = process.env.CONFIG_DIR ?? path.join(tmpRoot, "podible-config");
 const booksDbPath = path.join(configDir, "podible.sqlite");
 const brandImagePath = path.join(process.cwd(), "podible.png");
-const apiKeyPath = path.join(configDir, "api-key.txt");
 const port = Number(process.env.PORT ?? 80);
 
 const brandImageExists = (() => {
@@ -61,7 +60,6 @@ export {
   configDir,
   booksDbPath,
   brandImagePath,
-  apiKeyPath,
   brandImageExists,
   port,
   ensureDataDir,
