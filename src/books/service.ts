@@ -221,9 +221,11 @@ export async function runSnatch(
 
   const client = new RtorrentClient(settings.rtorrent);
   const downloadPath = settings.rtorrent.downloadPath?.trim() ?? "";
-  const commands = downloadPath
-    ? [`d.directory_base.set="${rtorrentStringLiteral(downloadPath)}"`]
-    : [];
+  const commands = [
+    ...(downloadPath ? [`d.directory_base.set="${rtorrentStringLiteral(downloadPath)}"`] : []),
+    'd.custom1.set="Podible"',
+    `d.custom.set=addtime,${Math.round(Date.now() / 1000)}`,
+  ];
   snatchLog(`[snatch] rtorrent load.raw_start begin`);
   try {
     await client.loadRawStart(torrentBytes, commands);

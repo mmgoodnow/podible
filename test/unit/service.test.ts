@@ -181,6 +181,8 @@ describe("snatch transport", () => {
       expect(methods).toContain("load.raw_start");
       expect(methods).not.toContain("load.start");
       expect(rpcBodies.some((body) => body.includes("d.directory_base.set=&quot;/downloads/books&quot;"))).toBe(true);
+      expect(rpcBodies.some((body) => body.includes("d.custom1.set=&quot;Podible&quot;"))).toBe(true);
+      expect(rpcBodies.some((body) => /d\.custom\.set=addtime,\d{10}/.test(body))).toBe(true);
     } finally {
       globalThis.fetch = originalFetch;
       db.close();
@@ -216,6 +218,7 @@ describe("snatch transport", () => {
     });
 
     const fetches: string[] = [];
+    const rpcBodies: string[] = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
       const url = String(input);
@@ -225,6 +228,7 @@ describe("snatch transport", () => {
       }
       if (url === rpcUrl) {
         const body = String(init?.body ?? "");
+        rpcBodies.push(body);
         const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
         expect(method).toBe("load.raw_start");
         return new Response(
@@ -248,6 +252,9 @@ describe("snatch transport", () => {
       expect(result.release.info_hash).toBe(expectedHash);
       expect(fetches).not.toContain(torrentUrl);
       expect(fetches).toContain(rpcUrl);
+      expect(rpcBodies.some((body) => body.includes("d.custom1.set=&quot;Podible&quot;"))).toBe(true);
+      expect(rpcBodies.some((body) => /d\.custom\.set=addtime,\d{10}/.test(body))).toBe(true);
+      expect(rpcBodies.some((body) => body.includes("d.directory_base.set="))).toBe(false);
     } finally {
       globalThis.fetch = originalFetch;
       db.close();
