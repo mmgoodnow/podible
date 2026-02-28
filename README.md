@@ -39,7 +39,11 @@ bun run server.ts /path/to/library
 
 Runtime state is stored in `DATA_DIR` (default `${TMPDIR:-/tmp}/podible-transcodes`) and includes:
 
-- `books.sqlite` (main app DB + `app_state` cache state)
+- `db/podible.sqlite` (main app DB + `app_state` cache state)
+- `covers/` (cached Open Library cover files)
+- `config/api-key.txt`
+
+Optionally override the DB location directly with `DB_PATH`.
 
 ## Auth
 

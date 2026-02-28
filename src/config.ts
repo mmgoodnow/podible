@@ -15,9 +15,9 @@ const FEED_TYPE = process.env.POD_TYPE ?? "episodic";
 const FEED_IMAGE_URL = process.env.POD_IMAGE_URL;
 
 const dataDir = process.env.DATA_DIR ?? path.join(process.env.TMPDIR ?? "/tmp", "podible-transcodes");
-const booksDbPath = path.join(dataDir, "books.sqlite");
+const booksDbPath = process.env.DB_PATH ?? path.join(dataDir, "db", "podible.sqlite");
 const brandImagePath = path.join(process.cwd(), "podible.png");
-const apiKeyPath = path.join(dataDir, "api-key.txt");
+const apiKeyPath = path.join(dataDir, "config", "api-key.txt");
 const port = Number(process.env.PORT ?? 80);
 
 const brandImageExists = (() => {
@@ -31,11 +31,15 @@ const brandImageExists = (() => {
 
 async function ensureDataDir() {
   await fs.mkdir(dataDir, { recursive: true });
+  await fs.mkdir(path.dirname(booksDbPath), { recursive: true });
+  await fs.mkdir(path.dirname(apiKeyPath), { recursive: true });
 }
 
 function ensureDataDirSync() {
   try {
     mkdirSync(dataDir, { recursive: true });
+    mkdirSync(path.dirname(booksDbPath), { recursive: true });
+    mkdirSync(path.dirname(apiKeyPath), { recursive: true });
   } catch {
     // ignore sync mkdir errors; async ensureDataDir also runs elsewhere
   }
