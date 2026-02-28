@@ -7,7 +7,7 @@ import { fetchOpenLibraryMetadata } from "./openlibrary";
 import type { BooksRepo } from "./repo";
 import type { LibraryBook } from "./types";
 
-const coverCacheDir = path.join(dataDir, "kindling-covers");
+const coverCacheDir = path.join(dataDir, "covers");
 
 async function downloadCover(bookId: number, coverUrl: string): Promise<string | null> {
   try {
