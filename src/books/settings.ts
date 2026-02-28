@@ -16,11 +16,6 @@ export function defaultSettings(overrides?: Partial<AppSettings>): AppSettings {
       rtorrentMs: 5000,
       scanMs: 30000,
     },
-    transcode: {
-      enabled: true,
-      format: "mp3",
-      bitrateKbps: 64,
-    },
     feed: {
       title: "Kindling",
       author: "Unknown",
@@ -33,6 +28,7 @@ export function defaultSettings(overrides?: Partial<AppSettings>): AppSettings {
       enabled: false,
       provider: "openai-responses",
       model: "gpt-5-mini",
+      apiKey: "",
       lowConfidenceThreshold: 0.45,
       timeoutMs: 30000,
     },
@@ -61,10 +57,6 @@ export function parseSettings(value: string): AppSettings {
       ...defaults.polling,
       ...(parsed.polling && typeof parsed.polling === "object" ? parsed.polling : {}),
     },
-    transcode: {
-      ...defaults.transcode,
-      ...(parsed.transcode && typeof parsed.transcode === "object" ? parsed.transcode : {}),
-    },
     feed: {
       ...defaults.feed,
       ...(parsed.feed && typeof parsed.feed === "object" ? parsed.feed : {}),
@@ -77,6 +69,7 @@ export function parseSettings(value: string): AppSettings {
       enabled: typeof parsedAgents.enabled === "boolean" ? parsedAgents.enabled : defaults.agents.enabled,
       provider: parsedAgents.provider === "openai-responses" ? parsedAgents.provider : defaults.agents.provider,
       model: typeof parsedAgents.model === "string" && parsedAgents.model.trim() ? parsedAgents.model : defaults.agents.model,
+      apiKey: typeof parsedAgents.apiKey === "string" ? parsedAgents.apiKey : defaults.agents.apiKey,
       lowConfidenceThreshold:
         typeof parsedAgents.lowConfidenceThreshold === "number" && Number.isFinite(parsedAgents.lowConfidenceThreshold)
           ? parsedAgents.lowConfidenceThreshold

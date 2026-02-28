@@ -31,16 +31,11 @@ bun install
 bun run server.ts
 ```
 
-Optional: pass a library root override as the first arg.
+Runtime bootstrap uses one directory:
 
-```bash
-bun run server.ts /path/to/library
-```
-
-Runtime files are split across two directories:
-
-- `DATA_DIR` (default `${TMPDIR:-/tmp}/podible-data`) for backend-managed runtime content
 - `CONFIG_DIR` (default `${TMPDIR:-/tmp}/podible-config`) for `podible.sqlite`
+
+`libraryRoot` is stored in application settings (`settings.get` / `settings.update`).
 
 Open Library covers are stored alongside each imported book inside `libraryRoot`.
 
@@ -150,13 +145,13 @@ Bridge constraints:
   },
   "libraryRoot": "/media/library",
   "polling": { "rtorrentMs": 5000, "scanMs": 30000 },
-  "transcode": { "enabled": true, "format": "mp3", "bitrateKbps": 64 },
   "feed": { "title": "Books", "author": "Unknown" },
   "auth": { "mode": "apikey", "key": "..." },
   "agents": {
     "enabled": false,
     "provider": "openai-responses",
     "model": "gpt-5-mini",
+    "apiKey": "",
     "lowConfidenceThreshold": 0.45,
     "timeoutMs": 30000
   }

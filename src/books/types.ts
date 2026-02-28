@@ -7,7 +7,6 @@ export type JobType =
   | "acquire"
   | "download"
   | "import"
-  | "transcode"
   | "reconcile";
 
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
@@ -39,11 +38,6 @@ export type AppSettings = {
     rtorrentMs: number;
     scanMs: number;
   };
-  transcode: {
-    enabled: boolean;
-    format: "mp3";
-    bitrateKbps: number;
-  };
   feed: {
     title: string;
     author: string;
@@ -56,6 +50,7 @@ export type AppSettings = {
     enabled: boolean;
     provider: "openai-responses";
     model: string;
+    apiKey: string;
     lowConfidenceThreshold: number;
     timeoutMs: number;
   };

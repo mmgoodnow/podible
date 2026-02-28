@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 
 const isolatedDataDir = await mkdtemp(path.join(os.tmpdir(), "podible-http-test-data-"));
-process.env.DATA_DIR = isolatedDataDir;
 
 const { runMigrations } = await import("../../src/books/db");
 const { createPodibleFetchHandler } = await import("../../src/books/http");

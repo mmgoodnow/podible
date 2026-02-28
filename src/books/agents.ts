@@ -126,7 +126,7 @@ function formatTargetMedia(media: MediaType): string {
 
 function configuredAgent(settings: AppSettings) {
   if (!settings.agents?.enabled) return null;
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  const apiKey = settings.agents.apiKey?.trim();
   if (!apiKey) return null;
   return {
     apiKey,

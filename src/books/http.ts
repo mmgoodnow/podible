@@ -518,7 +518,6 @@ function renderHomePage(repo: BooksRepo, settings: AppSettings): Response {
                 <option value="acquire">acquire</option>
                 <option value="download">download</option>
                 <option value="import">import</option>
-                <option value="transcode">transcode</option>
                 <option value="reconcile">reconcile</option>
               </select>
               <button id="jobs-refresh-btn" type="button">Refresh Jobs</button>

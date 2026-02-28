@@ -22,6 +22,15 @@ function makeMultiFileTorrentBytes(rootName: string, files: Array<{ path: string
   });
 }
 
+function agentSettings(overrides?: Partial<ReturnType<typeof defaultSettings>["agents"]>) {
+  return {
+    ...defaultSettings().agents,
+    enabled: true,
+    apiKey: "test-key",
+    ...overrides,
+  };
+}
+
 describe("agent decisions", () => {
   test("search selection is deterministic by default", async () => {
     const settings = defaultSettings({
@@ -69,8 +78,6 @@ describe("agent decisions", () => {
 
   test("search selection can use responses api when forced", async () => {
     const originalFetch = globalThis.fetch;
-    const originalApiKey = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "test-key";
     globalThis.fetch = (async (input: unknown) => {
       const url =
         typeof input === "string"
@@ -97,11 +104,7 @@ describe("agent decisions", () => {
 
     try {
       const settings = defaultSettings({
-        agents: {
-          ...defaultSettings().agents,
-          enabled: true,
-          lowConfidenceThreshold: 0.99,
-        },
+        agents: agentSettings({ lowConfidenceThreshold: 0.99 }),
       });
       const decision = await selectSearchCandidate(settings, {
         query: "Dune Frank Herbert",
@@ -142,11 +145,6 @@ describe("agent decisions", () => {
       expect(decision.error).toBeNull();
     } finally {
       globalThis.fetch = originalFetch;
-      if (originalApiKey === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = originalApiKey;
-      }
     }
   });
 
@@ -156,8 +154,6 @@ describe("agent decisions", () => {
     const repo = new BooksRepo(db);
 
     const originalFetch = globalThis.fetch;
-    const originalApiKey = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "test-key";
 
     const torrentUrl = "https://example.com/twilight-saga.torrent";
     const torrentBytes = makeMultiFileTorrentBytes("Twilight Saga", [
@@ -223,10 +219,7 @@ describe("agent decisions", () => {
 
     try {
       const settings = defaultSettings({
-        agents: {
-          ...defaultSettings().agents,
-          enabled: true,
-        },
+        agents: agentSettings(),
       });
       const decision = await selectSearchCandidate(
         settings,
@@ -274,28 +267,17 @@ describe("agent decisions", () => {
       expect(JSON.stringify(openAiBodies[1])).toContain("Twilight/Twilight-01.mp3");
     } finally {
       globalThis.fetch = originalFetch;
-      if (originalApiKey === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = originalApiKey;
-      }
       db.close();
     }
   });
 
   test("search throws when agent call fails", async () => {
     const originalFetch = globalThis.fetch;
-    const originalApiKey = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "test-key";
     globalThis.fetch = (async () => new Response("bad", { status: 500 })) as unknown as typeof fetch;
 
     try {
       const settings = defaultSettings({
-        agents: {
-          ...defaultSettings().agents,
-          enabled: true,
-          lowConfidenceThreshold: 0.99,
-        },
+        agents: agentSettings({ lowConfidenceThreshold: 0.99 }),
       });
       await expect(
         selectSearchCandidate(settings, {
@@ -332,11 +314,6 @@ describe("agent decisions", () => {
       ).rejects.toThrow("500");
     } finally {
       globalThis.fetch = originalFetch;
-      if (originalApiKey === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = originalApiKey;
-      }
     }
   });
 
@@ -461,18 +438,13 @@ describe("agent decisions", () => {
 
   test("manual import does not call agent when no importable files exist", async () => {
     const originalFetch = globalThis.fetch;
-    const originalApiKey = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "test-key";
     globalThis.fetch = (async () => {
       throw new Error("should not call OpenAI");
     }) as unknown as typeof fetch;
 
     try {
       const settings = defaultSettings({
-        agents: {
-          ...defaultSettings().agents,
-          enabled: true,
-        },
+        agents: agentSettings(),
       });
       const decision = await selectManualImportPaths(settings, {
         mediaType: "ebook",
@@ -495,15 +467,11 @@ describe("agent decisions", () => {
       expect(decision.reason).toBe("No supported files for media type");
     } finally {
       globalThis.fetch = originalFetch;
-      if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
-      else process.env.OPENAI_API_KEY = originalApiKey;
     }
   });
 
   test("manual import agent may return no alternative files", async () => {
     const originalFetch = globalThis.fetch;
-    const originalApiKey = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "test-key";
     globalThis.fetch = (async (input: unknown) => {
       const url =
         typeof input === "string"
@@ -530,10 +498,7 @@ describe("agent decisions", () => {
 
     try {
       const settings = defaultSettings({
-        agents: {
-          ...defaultSettings().agents,
-          enabled: true,
-        },
+        agents: agentSettings(),
       });
       const decision = await selectManualImportPaths(settings, {
         mediaType: "ebook",
@@ -557,15 +522,11 @@ describe("agent decisions", () => {
       expect(decision.reason).toContain("no alternative");
     } finally {
       globalThis.fetch = originalFetch;
-      if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
-      else process.env.OPENAI_API_KEY = originalApiKey;
     }
   });
 
   test("manual import agent selecting previously rejected exact file set is treated as no alternative", async () => {
     const originalFetch = globalThis.fetch;
-    const originalApiKey = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "test-key";
     globalThis.fetch = (async () =>
       new Response(
         JSON.stringify({
@@ -580,10 +541,7 @@ describe("agent decisions", () => {
 
     try {
       const settings = defaultSettings({
-        agents: {
-          ...defaultSettings().agents,
-          enabled: true,
-        },
+        agents: agentSettings(),
       });
       const decision = await selectManualImportPaths(settings, {
         mediaType: "ebook",
@@ -606,8 +564,6 @@ describe("agent decisions", () => {
       expect(decision.selectedPaths).toEqual([]);
     } finally {
       globalThis.fetch = originalFetch;
-      if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
-      else process.env.OPENAI_API_KEY = originalApiKey;
     }
   });
 });

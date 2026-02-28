@@ -15,7 +15,6 @@ const FEED_TYPE = process.env.POD_TYPE ?? "episodic";
 const FEED_IMAGE_URL = process.env.POD_IMAGE_URL;
 
 const tmpRoot = process.env.TMPDIR ?? "/tmp";
-const dataDir = process.env.DATA_DIR ?? path.join(tmpRoot, "podible-data");
 const configDir = process.env.CONFIG_DIR ?? path.join(tmpRoot, "podible-config");
 const booksDbPath = path.join(configDir, "podible.sqlite");
 const brandImagePath = path.join(process.cwd(), "podible.png");
@@ -30,17 +29,15 @@ const brandImageExists = (() => {
   }
 })();
 
-async function ensureDataDir() {
-  await fs.mkdir(dataDir, { recursive: true });
+async function ensureConfigDir() {
   await fs.mkdir(configDir, { recursive: true });
 }
 
-function ensureDataDirSync() {
+function ensureConfigDirSync() {
   try {
-    mkdirSync(dataDir, { recursive: true });
     mkdirSync(configDir, { recursive: true });
   } catch {
-    // ignore sync mkdir errors; async ensureDataDir also runs elsewhere
+    // ignore sync mkdir errors; async ensureConfigDir also runs elsewhere
   }
 }
 
@@ -56,12 +53,11 @@ export {
   FEED_CATEGORY,
   FEED_TYPE,
   FEED_IMAGE_URL,
-  dataDir,
   configDir,
   booksDbPath,
   brandImagePath,
   brandImageExists,
   port,
-  ensureDataDir,
-  ensureDataDirSync,
+  ensureConfigDir,
+  ensureConfigDirSync,
 };

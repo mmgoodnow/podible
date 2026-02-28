@@ -1,4 +1,4 @@
-import { ensureDataDir, booksDbPath, port } from "./src/config";
+import { ensureConfigDir, booksDbPath, port } from "./src/config";
 import { openDatabase } from "./src/books/db";
 import { createPodibleFetchHandler } from "./src/books/http";
 import { BooksRepo } from "./src/books/repo";
@@ -6,18 +6,10 @@ import { runWorker } from "./src/books/worker";
 
 const startTime = Date.now();
 
-await ensureDataDir();
+await ensureConfigDir();
 const db = openDatabase(booksDbPath);
 const repo = new BooksRepo(db);
-const settings = repo.ensureSettings();
-
-const rootArg = process.argv.slice(2).find((arg) => arg && !arg.startsWith("-"));
-if (rootArg && rootArg !== settings.libraryRoot) {
-  repo.updateSettings({
-    ...settings,
-    libraryRoot: rootArg,
-  });
-}
+repo.ensureSettings();
 
 void runWorker({
   repo,
