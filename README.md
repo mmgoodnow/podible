@@ -39,8 +39,10 @@ bun run server.ts /path/to/library
 
 Runtime files are split across two directories:
 
-- `DATA_DIR` (default `${TMPDIR:-/tmp}/podible-data`) for content/runtime files like `covers/`
+- `DATA_DIR` (default `${TMPDIR:-/tmp}/podible-data`) for backend-managed runtime content
 - `CONFIG_DIR` (default `${TMPDIR:-/tmp}/podible-config`) for `podible.sqlite`
+
+Open Library covers are stored alongside each imported book inside `libraryRoot`.
 
 ## Auth
 

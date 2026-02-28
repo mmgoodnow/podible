@@ -356,10 +356,12 @@ describe("podible http", () => {
       runMigrations(db);
       const repo = new BooksRepo(db);
       const settings = repo.ensureSettings();
+      const libraryRoot = path.join(isolatedDataDir, "library-rehydrate");
       repo.updateSettings({
         ...settings,
         auth: { ...settings.auth, mode: "local" },
         torznab: [],
+        libraryRoot,
       });
       const book = repo.createBook({ title: "Neuromancer", author: "William Gibson" });
       const fetchHandler = createPodibleFetchHandler(repo, Date.now());

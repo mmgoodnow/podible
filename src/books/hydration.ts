@@ -1,22 +1,25 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { dataDir } from "../config";
-
 import { fetchOpenLibraryMetadata } from "./openlibrary";
 import type { BooksRepo } from "./repo";
 import type { LibraryBook } from "./types";
 
-const coverCacheDir = path.join(dataDir, "covers");
+function sanitizePathSegment(value: string): string {
+  const trimmed = value.trim();
+  const sanitized = trimmed
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return sanitized || "Unknown";
+}
 
-async function downloadCover(bookId: number, coverUrl: string): Promise<string | null> {
+async function downloadCover(repo: BooksRepo, book: LibraryBook, coverUrl: string): Promise<string | null> {
   try {
     const response = await fetch(coverUrl, { method: "GET" });
     if (!response.ok) return null;
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (bytes.length === 0) return null;
-
-    await mkdir(coverCacheDir, { recursive: true });
 
     let ext = ".jpg";
     try {
@@ -27,7 +30,15 @@ async function downloadCover(bookId: number, coverUrl: string): Promise<string |
       // keep default extension
     }
 
-    const coverPath = path.join(coverCacheDir, `book-${bookId}${ext}`);
+    const settings = repo.getSettings();
+    const bookDir = path.join(
+      settings.libraryRoot,
+      sanitizePathSegment(book.author || "Unknown"),
+      sanitizePathSegment(book.title || `book-${book.id}`)
+    );
+    await mkdir(bookDir, { recursive: true });
+
+    const coverPath = path.join(bookDir, `cover${ext}`);
     await writeFile(coverPath, bytes);
     return coverPath;
   } catch {
@@ -51,7 +62,7 @@ export async function hydrateBookFromOpenLibrary(repo: BooksRepo, book: LibraryB
   const currentRow = repo.getBookRow(book.id);
   let coverPath = currentRow?.cover_path ?? null;
   if (!coverPath && metadata.coverUrl) {
-    const downloaded = await downloadCover(book.id, metadata.coverUrl);
+    const downloaded = await downloadCover(repo, book, metadata.coverUrl);
     if (downloaded) {
       coverPath = downloaded;
     }
