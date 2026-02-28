@@ -1188,7 +1188,11 @@ function renderHomePage(repo: BooksRepo, settings: AppSettings): Response {
             row.appendChild(idCell);
             jobsCell(row, String(job.type || ""));
             jobsCell(row, String(job.status || ""));
-            jobsCell(row, job.book_id == null ? "" : String(job.book_id));
+            var bookLabel = "";
+            if (job.book_id != null) {
+              bookLabel = job.book_title ? String(job.book_title) + " (#" + String(job.book_id) + ")" : String(job.book_id);
+            }
+            jobsCell(row, bookLabel);
             jobsCell(row, job.release_id == null ? "" : String(job.release_id));
             jobsCell(row, String(job.attempt_count || 0) + "/" + String(job.max_attempts || 0));
             jobsCell(row, String(job.updated_at || ""));

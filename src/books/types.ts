@@ -118,6 +118,7 @@ export type JobRow = {
   type: JobType;
   status: JobStatus;
   book_id: number | null;
+  book_title?: string | null;
   release_id: number | null;
   payload_json: string | null;
   error: string | null;

@@ -10,7 +10,7 @@ import { computeDownloadFraction, pseudoProgressForMediaStatus, pseudoProgressFo
 import { BooksRepo } from "./repo";
 import { RtorrentClient } from "./rtorrent";
 import { runSearch, runSnatch, triggerAutoAcquire } from "./service";
-import type { AppSettings, JobType, LibraryBook, MediaType, ReleaseRow } from "./types";
+import type { AppSettings, JobRow, JobType, LibraryBook, MediaType, ReleaseRow } from "./types";
 
 // JSON-RPC v1 transport for Kindling control/data APIs.
 // Single-call requests only; batch mode is intentionally rejected.
@@ -124,6 +124,15 @@ async function enrichDownload(
       fullPseudoProgress: pseudoProgressForRelease(download.release_status),
     };
   }
+}
+
+function enrichJob(ctx: RpcContext, job: JobRow): JobRow {
+  if (job.book_id == null) return job;
+  const book = ctx.repo.getBookRow(job.book_id);
+  return {
+    ...job,
+    book_title: book?.title ?? null,
+  };
 }
 
 function mediaPseudoProgress(status: LibraryBook["audioStatus"] | LibraryBook["ebookStatus"], fraction?: number | null): number {
@@ -777,7 +786,8 @@ const handlers: Record<string, RpcMethodHandler> = {
     return {
       jobs: jobs
         .sort((a, b) => b.id - a.id)
-        .slice(0, limit),
+        .slice(0, limit)
+        .map((job) => enrichJob(ctx, job)),
     };
   },
 
@@ -787,7 +797,7 @@ const handlers: Record<string, RpcMethodHandler> = {
     if (!job) {
       throw new RpcError(-32000, "Job not found", { error: "not_found", jobId });
     }
-    return { job };
+    return { job: enrichJob(ctx, job) };
   },
 
   async "jobs.retry"(ctx, params) {
