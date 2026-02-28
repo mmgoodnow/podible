@@ -1190,7 +1190,7 @@ function renderHomePage(repo: BooksRepo, settings: AppSettings): Response {
             jobsCell(row, String(job.status || ""));
             var bookLabel = "";
             if (job.book_id != null) {
-              bookLabel = job.book_title ? String(job.book_title) + " (#" + String(job.book_id) + ")" : String(job.book_id);
+              bookLabel = job.book_title ? String(job.book_id) + " " + String(job.book_title) : String(job.book_id);
             }
             jobsCell(row, bookLabel);
             jobsCell(row, job.release_id == null ? "" : String(job.release_id));
