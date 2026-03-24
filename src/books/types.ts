@@ -7,9 +7,12 @@ export type JobType =
   | "acquire"
   | "download"
   | "import"
-  | "reconcile";
+  | "reconcile"
+  | "chapter_analysis";
 
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export type ChapterAnalysisStatus = "pending" | "succeeded" | "failed";
 
 export type AssetKind = "single" | "multi" | "ebook";
 
@@ -136,6 +139,20 @@ export type JobRow = {
   max_attempts: number;
   next_run_at: string | null;
   created_at: string;
+  updated_at: string;
+};
+
+export type ChapterAnalysisRow = {
+  asset_id: number;
+  status: ChapterAnalysisStatus;
+  source: string;
+  algorithm_version: string;
+  fingerprint: string;
+  chapters_json: string | null;
+  debug_json: string | null;
+  resolved_boundary_count: number;
+  total_boundary_count: number;
+  error: string | null;
   updated_at: string;
 };
 

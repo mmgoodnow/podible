@@ -9,6 +9,8 @@ import type {
   AssetFileRow,
   AssetRow,
   BookRow,
+  ChapterAnalysisRow,
+  ChapterAnalysisStatus,
   DownloadView,
   JobRow,
   JobStatus,
@@ -44,6 +46,19 @@ type CreateJobInput = {
   payload?: unknown;
   maxAttempts?: number;
   nextRunAt?: string | null;
+};
+
+type UpsertChapterAnalysisInput = {
+  assetId: number;
+  status: ChapterAnalysisStatus;
+  source: string;
+  algorithmVersion: string;
+  fingerprint: string;
+  chaptersJson?: string | null;
+  debugJson?: string | null;
+  resolvedBoundaryCount?: number;
+  totalBoundaryCount?: number;
+  error?: string | null;
 };
 
 type AddAssetInput = {
@@ -364,11 +379,14 @@ export class BooksRepo {
       assetFiles: number;
       jobs: number;
       torrentCache: number;
+      chapterAnalysis: number;
     };
     settingsPreserved: boolean;
   } {
     return this.db.transaction(() => {
-      const countRow = (table: "books" | "releases" | "assets" | "asset_files" | "jobs" | "torrent_cache") =>
+      const countRow = (
+        table: "books" | "releases" | "assets" | "asset_files" | "jobs" | "torrent_cache" | "chapter_analysis"
+      ) =>
         ((this.db.query(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number } | null)?.count ?? 0);
       const deleted = {
         books: countRow("books"),
@@ -377,8 +395,10 @@ export class BooksRepo {
         assetFiles: countRow("asset_files"),
         jobs: countRow("jobs"),
         torrentCache: countRow("torrent_cache"),
+        chapterAnalysis: countRow("chapter_analysis"),
       };
 
+      this.db.query("DELETE FROM chapter_analysis").run();
       this.db.query("DELETE FROM torrent_cache").run();
       this.db.query("DELETE FROM jobs").run();
       this.db.query("DELETE FROM asset_files").run();
@@ -386,7 +406,9 @@ export class BooksRepo {
       this.db.query("DELETE FROM releases").run();
       this.db.query("DELETE FROM books").run();
       this.db
-        .query("DELETE FROM sqlite_sequence WHERE name IN ('books', 'releases', 'assets', 'asset_files', 'jobs')")
+        .query(
+          "DELETE FROM sqlite_sequence WHERE name IN ('books', 'releases', 'assets', 'asset_files', 'jobs', 'chapter_analysis')"
+        )
         .run();
 
       const settingsPreserved =
@@ -591,6 +613,19 @@ export class BooksRepo {
     return row;
   }
 
+  findQueuedOrRunningJobByAsset(type: JobType, assetId: number): JobRow | null {
+    const rows = this.listJobsByType(type).filter((job) => job.status === "queued" || job.status === "running");
+    for (const row of rows) {
+      try {
+        const payload = row.payload_json ? (JSON.parse(row.payload_json) as Record<string, unknown>) : {};
+        if (Number(payload.assetId) === assetId) return row;
+      } catch {
+        // ignore malformed payloads
+      }
+    }
+    return null;
+  }
+
   getJob(jobId: number): JobRow | null {
     assertPositiveInt(jobId);
     return (this.db.query("SELECT * FROM jobs WHERE id = ?").get(jobId) as JobRow | null) ?? null;
@@ -752,6 +787,49 @@ export class BooksRepo {
       releases,
       queueSize: queueRow?.c ?? 0,
     };
+  }
+
+  getChapterAnalysis(assetId: number): ChapterAnalysisRow | null {
+    assertPositiveInt(assetId);
+    return (this.db.query("SELECT * FROM chapter_analysis WHERE asset_id = ?").get(assetId) as ChapterAnalysisRow | null) ?? null;
+  }
+
+  upsertChapterAnalysis(input: UpsertChapterAnalysisInput): ChapterAnalysisRow {
+    assertPositiveInt(input.assetId);
+    const now = nowIso();
+    return this.db
+      .query(
+        `INSERT INTO chapter_analysis (
+           asset_id, status, source, algorithm_version, fingerprint,
+           chapters_json, debug_json, resolved_boundary_count, total_boundary_count, error, updated_at
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(asset_id) DO UPDATE SET
+           status = excluded.status,
+           source = excluded.source,
+           algorithm_version = excluded.algorithm_version,
+           fingerprint = excluded.fingerprint,
+           chapters_json = excluded.chapters_json,
+           debug_json = excluded.debug_json,
+           resolved_boundary_count = excluded.resolved_boundary_count,
+           total_boundary_count = excluded.total_boundary_count,
+           error = excluded.error,
+           updated_at = excluded.updated_at
+         RETURNING *`
+      )
+      .get(
+        input.assetId,
+        input.status,
+        input.source,
+        input.algorithmVersion,
+        input.fingerprint,
+        input.chaptersJson ?? null,
+        input.debugJson ?? null,
+        input.resolvedBoundaryCount ?? 0,
+        input.totalBoundaryCount ?? 0,
+        input.error ?? null,
+        now
+      ) as ChapterAnalysisRow;
   }
 
   private toLibraryBook(row: BookRow): LibraryBook {

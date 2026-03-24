@@ -3,7 +3,7 @@ FROM oven/bun:latest
 WORKDIR /app
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg unzip \
+  && apt-get install -y --no-install-recommends ffmpeg unzip wamerican \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json bun.lock ./

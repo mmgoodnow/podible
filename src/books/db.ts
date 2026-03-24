@@ -9,6 +9,7 @@ const JOB_TYPE_MIGRATION_ID = 3;
 const ASSET_FILE_SOURCE_PATH_MIGRATION_ID = 4;
 const TORRENT_CACHE_MIGRATION_ID = 5;
 const REMOVE_TRANSCODE_JOB_TYPE_MIGRATION_ID = 6;
+const CHAPTER_ANALYSIS_MIGRATION_ID = 7;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -75,7 +76,7 @@ CREATE TABLE IF NOT EXISTS asset_files (
 
 CREATE TABLE IF NOT EXISTS jobs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  type TEXT NOT NULL CHECK (type IN ('full_library_refresh', 'acquire', 'download', 'import', 'reconcile')),
+  type TEXT NOT NULL CHECK (type IN ('full_library_refresh', 'acquire', 'download', 'import', 'reconcile', 'chapter_analysis')),
   status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
   book_id INTEGER NULL,
   release_id INTEGER NULL,
@@ -88,6 +89,21 @@ CREATE TABLE IF NOT EXISTS jobs (
   updated_at TEXT NOT NULL,
   FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
   FOREIGN KEY (release_id) REFERENCES releases(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS chapter_analysis (
+  asset_id INTEGER PRIMARY KEY,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'succeeded', 'failed')),
+  source TEXT NOT NULL,
+  algorithm_version TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  chapters_json TEXT NULL,
+  debug_json TEXT NULL,
+  resolved_boundary_count INTEGER NOT NULL DEFAULT 0,
+  total_boundary_count INTEGER NOT NULL DEFAULT 0,
+  error TEXT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -235,6 +251,56 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status_next_created ON jobs(status, next_run
 `);
 }
 
+function applyChapterAnalysisMigration(db: Database): void {
+  db.exec(`
+CREATE TABLE jobs_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL CHECK (type IN ('full_library_refresh', 'acquire', 'download', 'import', 'reconcile', 'chapter_analysis')),
+  status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+  book_id INTEGER NULL,
+  release_id INTEGER NULL,
+  payload_json TEXT NULL,
+  error TEXT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 5,
+  next_run_at TEXT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+  FOREIGN KEY (release_id) REFERENCES releases(id) ON DELETE CASCADE
+);
+
+INSERT INTO jobs_new (
+  id, type, status, book_id, release_id, payload_json, error,
+  attempt_count, max_attempts, next_run_at, created_at, updated_at
+)
+SELECT
+  id, type, status, book_id, release_id, payload_json, error,
+  attempt_count, max_attempts, next_run_at, created_at, updated_at
+FROM jobs;
+
+DROP TABLE jobs;
+ALTER TABLE jobs_new RENAME TO jobs;
+
+CREATE INDEX IF NOT EXISTS idx_jobs_status_next_created ON jobs(status, next_run_at, created_at);
+
+CREATE TABLE IF NOT EXISTS chapter_analysis (
+  asset_id INTEGER PRIMARY KEY,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'succeeded', 'failed')),
+  source TEXT NOT NULL,
+  algorithm_version TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  chapters_json TEXT NULL,
+  debug_json TEXT NULL,
+  resolved_boundary_count INTEGER NOT NULL DEFAULT 0,
+  total_boundary_count INTEGER NOT NULL DEFAULT 0,
+  error TEXT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
+);
+`);
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
@@ -282,5 +348,8 @@ export function runMigrations(db: Database): void {
 
   apply(REMOVE_TRANSCODE_JOB_TYPE_MIGRATION_ID, () => {
     applyRemoveTranscodeJobTypeMigration(db);
+  });
+  apply(CHAPTER_ANALYSIS_MIGRATION_ID, () => {
+    applyChapterAnalysisMigration(db);
   });
 }

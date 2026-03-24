@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { getDurationSeconds } from "../media/probe-cache";
 import { normalizeAudioExt } from "../media/metadata";
+import { queueChapterAnalysisForBook } from "./chapter-analysis";
 
 import type { BooksRepo } from "./repo";
 import type { AssetKind, MediaType, ReleaseRow } from "./types";
@@ -315,6 +316,8 @@ export async function importReleaseFromPath(
       durationMs: release.media_type === "audio" ? durationMsTotal : book.duration_ms,
     });
   }
+
+  await queueChapterAnalysisForBook(repo, book.id);
 
   return {
     assetId: asset.id,
