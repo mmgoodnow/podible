@@ -1,4 +1,6 @@
 books/
+!src/books/
+!src/books/**
 node_modules/
 .env
 data/

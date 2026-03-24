@@ -1626,7 +1626,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
           return response;
         }
         const book = repo.getBookByAsset(assetId);
-        response = await streamAudioAsset(request, target.asset, target.files, book?.cover_path);
+        response = await streamAudioAsset(request, repo, target.asset, target.files, book?.cover_path);
         logRequest(response.status);
         return response;
       }
@@ -1640,7 +1640,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
           logRequest(response.status);
           return response;
         }
-        const chapters = await buildChapters(target.asset, target.files);
+        const chapters = await buildChapters(repo, target.asset, target.files);
         if (!chapters) {
           response = json({ error: "not_found" }, 404);
           logRequest(response.status);

@@ -341,6 +341,36 @@ describe("json-rpc handler", () => {
         },
       ],
     });
+    const audioAsset = repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mpeg",
+      totalSize: 456,
+      durationMs: 1000,
+      files: [
+        {
+          path: path.join(root, "library", "Dune.mp3"),
+          size: 456,
+          start: 0,
+          end: 455,
+          durationMs: 1000,
+          title: "Dune Audio",
+        },
+      ],
+    });
+    repo.upsertChapterAnalysis({
+      assetId: audioAsset.id,
+      status: "succeeded",
+      source: "epub_ai",
+      algorithmVersion: "test",
+      fingerprint: "fp",
+      chaptersJson: JSON.stringify({
+        version: "1.2.0",
+        chapters: [{ id: "ch0", title: "Chapter 1", startMs: 0, endMs: 1000 }],
+      }),
+      resolvedBoundaryCount: 1,
+      totalBoundaryCount: 1,
+    });
     repo.createJob({ type: "acquire", bookId: book.id });
 
     const wiped = await callRpc(repo, {
@@ -353,11 +383,12 @@ describe("json-rpc handler", () => {
     expect(wiped.result.settingsPreserved).toBe(true);
     expect(wiped.result.deleted.books).toBe(1);
     expect(wiped.result.deleted.releases).toBe(1);
-    expect(wiped.result.deleted.assets).toBe(1);
-    expect(wiped.result.deleted.assetFiles).toBe(1);
+    expect(wiped.result.deleted.assets).toBe(2);
+    expect(wiped.result.deleted.assetFiles).toBe(2);
     expect(wiped.result.deleted.jobs).toBe(1);
-    expect(wiped.result.deletedAssetFileCount).toBe(1);
-    expect(wiped.result.deletedAssetPaths).toEqual([assetPath]);
+    expect(wiped.result.deleted.chapterAnalysis).toBe(1);
+    expect(wiped.result.deletedAssetFileCount).toBe(2);
+    expect(wiped.result.deletedAssetPaths).toEqual([assetPath, path.join(root, "library", "Dune.mp3")]);
     expect(wiped.result.deletedCoverFileCount).toBe(1);
     expect(wiped.result.deletedCoverPaths).toEqual([coverPath]);
     expect(repo.listBooks(10).items).toHaveLength(0);

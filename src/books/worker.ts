@@ -1,6 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { selectManualImportPaths, selectSearchCandidate } from "./agents";
+import { processChapterAnalysisJob } from "./chapter-analysis";
 import { nowIso } from "./db";
 import { importReleaseFromPath, inspectImportPath } from "./importer";
 import { RtorrentClient } from "./rtorrent";
@@ -573,6 +574,9 @@ async function processJob(ctx: WorkerContext, job: JobRow): Promise<"done" | "re
   }
   if (job.type === "acquire") {
     return processAcquireJob(ctx, job);
+  }
+  if (job.type === "chapter_analysis") {
+    return processChapterAnalysisJob(ctx, job);
   }
   ctx.repo.markJobSucceeded(job.id);
   return "done";

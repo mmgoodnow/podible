@@ -4,6 +4,7 @@ import path from "node:path";
 import { parseRange, segmentsForRange, streamSegmentsWithXingPatch } from "../streaming/range";
 import { buildId3ChaptersTag } from "../streaming/id3";
 import { readFfprobeChapters } from "../media/probe-cache";
+import { loadStoredChapterTimings } from "./chapter-analysis";
 
 import type { BooksRepo } from "./repo";
 import type { AssetFileRow, AssetRow, BookRow, LibraryBook } from "./types";
@@ -60,7 +61,7 @@ export function streamExtension(asset: AssetRow): string {
   return extensionForMime(asset.mime);
 }
 
-async function buildChapterTimings(asset: AssetRow, files: AssetFileRow[]): Promise<ChapterTiming[] | null> {
+async function buildFallbackChapterTimings(asset: AssetRow, files: AssetFileRow[]): Promise<ChapterTiming[] | null> {
   if (asset.kind === "ebook") return null;
   if (asset.kind === "single") {
     const file = files[0];
@@ -92,8 +93,20 @@ async function buildChapterTimings(asset: AssetRow, files: AssetFileRow[]): Prom
   return out;
 }
 
-export async function buildChapters(asset: AssetRow, files: AssetFileRow[]): Promise<{ version: string; chapters: Array<{ startTime: number; title: string }> } | null> {
-  const timings = await buildChapterTimings(asset, files);
+async function buildChapterTimings(repo: BooksRepo, asset: AssetRow, files: AssetFileRow[]): Promise<ChapterTiming[] | null> {
+  const stored = await loadStoredChapterTimings(repo, asset, files);
+  if (stored && stored.length > 0) {
+    return stored;
+  }
+  return buildFallbackChapterTimings(asset, files);
+}
+
+export async function buildChapters(
+  repo: BooksRepo,
+  asset: AssetRow,
+  files: AssetFileRow[]
+): Promise<{ version: string; chapters: Array<{ startTime: number; title: string }> } | null> {
+  const timings = await buildChapterTimings(repo, asset, files);
   if (!timings || timings.length === 0) return null;
   return {
     version: "1.2.0",
@@ -110,7 +123,13 @@ function coverMimeFromPath(coverPath: string): string {
   return "image/jpeg";
 }
 
-export async function streamAudioAsset(request: Request, asset: AssetRow, files: AssetFileRow[], coverPath?: string | null): Promise<Response> {
+export async function streamAudioAsset(
+  request: Request,
+  repo: BooksRepo,
+  asset: AssetRow,
+  files: AssetFileRow[],
+  coverPath?: string | null
+): Promise<Response> {
   if (asset.kind === "ebook") {
     return new Response("Not found", { status: 404 });
   }
@@ -135,7 +154,7 @@ export async function streamAudioAsset(request: Request, asset: AssetRow, files:
     return new Response(payload.slice(range.start, range.end + 1), { status: 206, headers });
   }
 
-  const timings = await buildChapterTimings(asset, files);
+  const timings = await buildChapterTimings(repo, asset, files);
   let tag: Uint8Array<ArrayBufferLike> = new Uint8Array();
   if (timings && timings.length > 0) {
     let coverArt: { mime: string; data: Uint8Array<ArrayBufferLike> } | undefined;
