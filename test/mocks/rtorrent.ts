@@ -113,6 +113,9 @@ export function startMockRtorrent(options: MockRtorrentOptions): MockRtorrent {
       if (method === "d.hash") {
         return new Response(xmlResponseString(state.infoHash.toUpperCase()), { headers: { "Content-Type": "text/xml" } });
       }
+      if (method === "d.is_active") {
+        return new Response(xmlResponseInt(1), { headers: { "Content-Type": "text/xml" } });
+      }
       if (method === "d.base_path") {
         return new Response(xmlResponseString(state.basePath), { headers: { "Content-Type": "text/xml" } });
       }
@@ -121,6 +124,19 @@ export function startMockRtorrent(options: MockRtorrentOptions): MockRtorrent {
       }
       if (method === "d.size_bytes") {
         return new Response(xmlResponseInt(state.sizeBytes), { headers: { "Content-Type": "text/xml" } });
+      }
+      if (method === "d.left_bytes") {
+        return new Response(xmlResponseInt(Math.max(0, state.sizeBytes - state.bytesDone)), {
+          headers: { "Content-Type": "text/xml" },
+        });
+      }
+      if (method === "d.down.rate") {
+        return new Response(xmlResponseInt(state.bytesDone >= state.sizeBytes ? 0 : 10), {
+          headers: { "Content-Type": "text/xml" },
+        });
+      }
+      if (method === "d.message") {
+        return new Response(xmlResponseString(""), { headers: { "Content-Type": "text/xml" } });
       }
 
       return new Response(xmlResponseString(`unknown method ${method} ${id}`), {

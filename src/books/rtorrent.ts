@@ -8,11 +8,13 @@ type RtorrentDownloadState = {
   name: string | null;
   hash: string | null;
   complete: boolean;
+  isActive: boolean;
   basePath: string | null;
   bytesDone: number | null;
   sizeBytes: number | null;
   leftBytes: number | null;
   downRate: number | null;
+  message: string | null;
 };
 
 const parser = new XMLParser({
@@ -135,26 +137,31 @@ export class RtorrentClient {
 
   async getDownloadState(infoHash: string): Promise<RtorrentDownloadState> {
     const hash = infoHash.toUpperCase();
-    const [name, returnedHash, complete, basePath, bytesDone, sizeBytes, leftBytes, downRate] = await Promise.all([
-      this.call("d.name", [xmlParamString(hash)]),
-      this.call("d.hash", [xmlParamString(hash)]),
-      this.call("d.complete", [xmlParamString(hash)]),
-      this.call("d.base_path", [xmlParamString(hash)]),
-      this.call("d.bytes_done", [xmlParamString(hash)]),
-      this.call("d.size_bytes", [xmlParamString(hash)]),
-      this.call("d.left_bytes", [xmlParamString(hash)]),
-      this.call("d.down.rate", [xmlParamString(hash)]),
-    ]);
+    const [name, returnedHash, complete, isActive, basePath, bytesDone, sizeBytes, leftBytes, downRate, message] =
+      await Promise.all([
+        this.call("d.name", [xmlParamString(hash)]),
+        this.call("d.hash", [xmlParamString(hash)]),
+        this.call("d.complete", [xmlParamString(hash)]),
+        this.call("d.is_active", [xmlParamString(hash)]),
+        this.call("d.base_path", [xmlParamString(hash)]),
+        this.call("d.bytes_done", [xmlParamString(hash)]),
+        this.call("d.size_bytes", [xmlParamString(hash)]),
+        this.call("d.left_bytes", [xmlParamString(hash)]),
+        this.call("d.down.rate", [xmlParamString(hash)]),
+        this.call("d.message", [xmlParamString(hash)]),
+      ]);
 
     return {
       name: maybeText(name),
       hash: maybeText(returnedHash),
       complete: toBool(complete),
+      isActive: toBool(isActive),
       basePath: maybeText(basePath),
       bytesDone: toNumber(bytesDone),
       sizeBytes: toNumber(sizeBytes),
       leftBytes: toNumber(leftBytes),
       downRate: toNumber(downRate),
+      message: maybeText(message),
     };
   }
 }

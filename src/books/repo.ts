@@ -642,14 +642,14 @@ export class BooksRepo {
       .get(now, now, jobId) as JobRow;
   }
 
-  rescheduleJob(jobId: number, nextRunAt: string): JobRow {
+  rescheduleJob(jobId: number, nextRunAt: string, payload?: unknown): JobRow {
     assertPositiveInt(jobId);
     const now = nowIso();
     return this.db
       .query(
-        "UPDATE jobs SET status = 'queued', next_run_at = ?, error = NULL, updated_at = ? WHERE id = ? RETURNING *"
+        "UPDATE jobs SET status = 'queued', next_run_at = ?, payload_json = ?, error = NULL, updated_at = ? WHERE id = ? RETURNING *"
       )
-      .get(nextRunAt, now, jobId) as JobRow;
+      .get(nextRunAt, payload === undefined ? this.getJob(jobId)?.payload_json ?? null : JSON.stringify(payload), now, jobId) as JobRow;
   }
 
   requeueRunningJobs(): number {

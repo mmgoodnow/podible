@@ -146,6 +146,7 @@ Bridge constraints:
   },
   "libraryRoot": "/media/library",
   "polling": { "rtorrentMs": 5000, "scanMs": 30000 },
+  "recovery": { "stalledTorrentMinutes": 10 },
   "feed": { "title": "Books", "author": "Unknown" },
   "auth": { "mode": "apikey", "key": "..." },
   "agents": {
@@ -155,6 +156,13 @@ Bridge constraints:
     "apiKey": "",
     "lowConfidenceThreshold": 0.45,
     "timeoutMs": 30000
+  },
+  "notifications": {
+    "pushover": {
+      "enabled": false,
+      "apiToken": "",
+      "userKey": ""
+    }
   }
 }
 ```
@@ -164,6 +172,14 @@ Agent behavior:
 - Deterministic ranking/selection remains the default behavior.
 - Responses API is used only when `agents.enabled=true` and a trigger condition is met (`forceAgent`, prior failure, or low confidence).
 - Missing/failed agent calls fall back to deterministic selection.
+
+Download recovery behavior:
+
+- Download jobs continuously watch rTorrent state; this is the stalled-torrent watcher.
+- If rTorrent reports any error on an incomplete torrent, Podible cancels that download job and queues a forced agent reacquire for the same media while rejecting the failed torrent URL/guid/infohash.
+- If the forced reacquire job later exhausts retries or produces no usable candidate, Podible sends a notification.
+- `recovery.stalledTorrentMinutes` controls how long an incomplete torrent can sit with no progress before Podible treats it as stalled and auto-reacquires.
+- Pushover delivery is best-effort and requires `notifications.pushover.enabled=true` plus `apiToken` and `userKey`.
 
 ## Open Library Flows
 

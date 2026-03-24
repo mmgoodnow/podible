@@ -313,11 +313,13 @@ describe("worker import recovery", () => {
         if (method === "d.name") return "<string>Dune Wrong Payload</string>";
         if (method === "d.hash") return `<string>${infoHash.toUpperCase()}</string>`;
         if (method === "d.complete") return "<i8>1</i8>";
+        if (method === "d.is_active") return "<i8>0</i8>";
         if (method === "d.base_path") return `<string>${downloadDir}</string>`;
         if (method === "d.bytes_done") return "<i8>100</i8>";
         if (method === "d.size_bytes") return "<i8>100</i8>";
         if (method === "d.left_bytes") return "<i8>0</i8>";
         if (method === "d.down.rate") return "<i8>0</i8>";
+        if (method === "d.message") return "<string></string>";
         throw new Error(`Unexpected rTorrent method in test: ${method}`);
       })();
       return new Response(`<?xml version="1.0"?><methodResponse><params><param><value>${xmlValue}</value></param></params></methodResponse>`, {
@@ -377,6 +379,303 @@ describe("worker import recovery", () => {
   });
 });
 
+describe("worker stalled torrent recovery", () => {
+  test("queues forced agent reacquire when rTorrent reports a recoverable download error", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const infoHash = infoHashFromTorrentBytes(makeTorrentBytes("stalled-download"));
+    const rtorrentUrl = "http://rtorrent.mock/RPC2";
+
+    repo.updateSettings(
+      defaultSettings({
+        auth: { mode: "local", key: "test" },
+        rtorrent: {
+          transport: "http-xmlrpc",
+          url: rtorrentUrl,
+          username: "",
+          password: "",
+        },
+      })
+    );
+
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const release = repo.createRelease({
+      bookId: book.id,
+      provider: "mock",
+      providerGuid: "guid-stalled",
+      title: "Dune Audio",
+      mediaType: "audio",
+      infoHash,
+      url: "https://example.com/dune-audio.torrent",
+      status: "downloading",
+    });
+    const downloadJob = repo.createJob({
+      type: "download",
+      bookId: book.id,
+      releaseId: release.id,
+      payload: { infoHash },
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url !== rtorrentUrl) {
+        throw new Error(`Unexpected fetch url: ${url}`);
+      }
+      const body = String(init?.body ?? "");
+      const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
+      const xmlValue = (() => {
+        if (method === "d.name") return "<string>Dune Audio</string>";
+        if (method === "d.hash") return `<string>${infoHash.toUpperCase()}</string>`;
+        if (method === "d.complete") return "<i8>0</i8>";
+        if (method === "d.is_active") return "<i8>0</i8>";
+        if (method === "d.base_path") return "<string>/downloads/dune</string>";
+        if (method === "d.bytes_done") return "<i8>10</i8>";
+        if (method === "d.size_bytes") return "<i8>100</i8>";
+        if (method === "d.left_bytes") return "<i8>90</i8>";
+        if (method === "d.down.rate") return "<i8>0</i8>";
+        if (method === "d.message") return "<string>tracker status: torrent no longer registered</string>";
+        throw new Error(`Unexpected rTorrent method in test: ${method}`);
+      })();
+      return new Response(
+        `<?xml version="1.0"?><methodResponse><params><param><value>${xmlValue}</value></param></params></methodResponse>`,
+        {
+          status: 200,
+          headers: { "Content-Type": "text/xml" },
+        }
+      );
+    }) as unknown as typeof fetch;
+
+    let stopWorker = false;
+    const logs: string[] = [];
+    const worker = runWorker({
+      repo,
+      getSettings: () => repo.getSettings(),
+      shouldStop: () => stopWorker,
+      onLog: (line) => logs.push(line),
+    });
+
+    try {
+      const started = Date.now();
+      for (;;) {
+        const current = repo.getJob(downloadJob.id);
+        if (current?.status === "cancelled") break;
+        if (Date.now() - started > 4000) {
+          throw new Error("Timed out waiting for stalled download recovery");
+        }
+        await sleep(50);
+      }
+
+      const finalDownloadJob = repo.getJob(downloadJob.id);
+      expect(finalDownloadJob?.status).toBe("cancelled");
+      expect(String(finalDownloadJob?.error || "")).toContain("recoveryAcquireJob=");
+
+      const failedRelease = repo.getRelease(release.id);
+      expect(failedRelease?.status).toBe("failed");
+      expect(String(failedRelease?.error || "")).toContain("queuing forced reacquire");
+
+      const acquireJobs = repo.listJobsByType("acquire").filter((job) => job.book_id === book.id);
+      expect(acquireJobs.length).toBe(1);
+      const payload = JSON.parse(acquireJobs[0]?.payload_json ?? "{}");
+      expect(payload.media).toEqual(["audio"]);
+      expect(payload.forceAgent).toBe(true);
+      expect(payload.priorFailure).toBe(true);
+      expect(payload.requireResult).toBe(true);
+      expect(payload.notifyOnFailure).toBe(true);
+      expect(payload.rejectedUrls).toEqual([release.url]);
+      expect(payload.rejectedGuids).toEqual(["guid-stalled"]);
+      expect(payload.rejectedInfoHashes).toEqual([release.info_hash]);
+      expect(logs.some((line) => line.includes("action=recover"))).toBe(true);
+    } finally {
+      stopWorker = true;
+      await Promise.race([worker, sleep(1000)]);
+      globalThis.fetch = originalFetch;
+      db.close();
+    }
+  });
+
+  test("reacquires instead of notifying when the tracker error message suggests manual action", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const infoHash = infoHashFromTorrentBytes(makeTorrentBytes("manual-attention"));
+    const rtorrentUrl = "http://rtorrent.mock/RPC2";
+
+    repo.updateSettings(
+      defaultSettings({
+        auth: { mode: "local", key: "test" },
+        rtorrent: {
+          transport: "http-xmlrpc",
+          url: rtorrentUrl,
+          username: "",
+          password: "",
+        },
+      })
+    );
+
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const release = repo.createRelease({
+      bookId: book.id,
+      provider: "mock",
+      providerGuid: "guid-manual",
+      title: "Dune Audio",
+      mediaType: "audio",
+      infoHash,
+      url: "https://example.com/dune-audio.torrent",
+      status: "downloading",
+    });
+    const downloadJob = repo.createJob({
+      type: "download",
+      bookId: book.id,
+      releaseId: release.id,
+      payload: { infoHash },
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url === rtorrentUrl) {
+        const body = String(init?.body ?? "");
+        const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
+        const xmlValue = (() => {
+          if (method === "d.name") return "<string>Dune Audio</string>";
+          if (method === "d.hash") return `<string>${infoHash.toUpperCase()}</string>`;
+          if (method === "d.complete") return "<i8>0</i8>";
+          if (method === "d.is_active") return "<i8>0</i8>";
+          if (method === "d.base_path") return "<string>/downloads/dune</string>";
+          if (method === "d.bytes_done") return "<i8>10</i8>";
+          if (method === "d.size_bytes") return "<i8>100</i8>";
+          if (method === "d.left_bytes") return "<i8>90</i8>";
+          if (method === "d.down.rate") return "<i8>0</i8>";
+          if (method === "d.message") return "<string>tracker requires bonus credits before download</string>";
+          throw new Error(`Unexpected rTorrent method in test: ${method}`);
+        })();
+        return new Response(
+          `<?xml version="1.0"?><methodResponse><params><param><value>${xmlValue}</value></param></params></methodResponse>`,
+          {
+            status: 200,
+            headers: { "Content-Type": "text/xml" },
+          }
+        );
+      }
+      throw new Error(`Unexpected fetch url: ${url}`);
+    }) as unknown as typeof fetch;
+
+    let stopWorker = false;
+    const worker = runWorker({
+      repo,
+      getSettings: () => repo.getSettings(),
+      shouldStop: () => stopWorker,
+    });
+
+    try {
+      const started = Date.now();
+      for (;;) {
+        const current = repo.getJob(downloadJob.id);
+        if (current?.status === "cancelled") break;
+        if (Date.now() - started > 4000) {
+          throw new Error("Timed out waiting for manual-attention reacquire");
+        }
+        await sleep(50);
+      }
+
+      const acquireJobs = repo.listJobsByType("acquire").filter((job) => job.book_id === book.id);
+      expect(acquireJobs).toHaveLength(1);
+      const payload = JSON.parse(acquireJobs[0]?.payload_json ?? "{}");
+      expect(payload.media).toEqual(["audio"]);
+      expect(payload.requireResult).toBe(true);
+      expect(payload.notifyOnFailure).toBe(true);
+      expect(repo.getRelease(release.id)?.status).toBe("failed");
+      expect(String(repo.getJob(downloadJob.id)?.error || "")).toContain("recoveryAcquireJob=");
+    } finally {
+      stopWorker = true;
+      await Promise.race([worker, sleep(1000)]);
+      globalThis.fetch = originalFetch;
+      db.close();
+    }
+  });
+
+  test("notifies when an auto-reacquire job exhausts its retries", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const pushoverBodies: string[] = [];
+
+    repo.updateSettings(
+      defaultSettings({
+        auth: { mode: "local", key: "test" },
+        torznab: [],
+        notifications: {
+          pushover: {
+            enabled: true,
+            apiToken: "token",
+            userKey: "user",
+          },
+        },
+      })
+    );
+
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const acquireJob = repo.createJob({
+      type: "acquire",
+      bookId: book.id,
+      maxAttempts: 1,
+      payload: {
+        bookId: book.id,
+        media: ["audio"],
+        forceAgent: true,
+        priorFailure: true,
+        requireResult: true,
+        notifyOnFailure: true,
+        failureContext: "Auto-reacquire after stalled torrent for release 12",
+      },
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://api.pushover.net/1/messages.json") {
+        pushoverBodies.push(String(init?.body ?? ""));
+        return new Response('{"status":1}', {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected fetch url: ${url}`);
+    }) as unknown as typeof fetch;
+
+    let stopWorker = false;
+    const worker = runWorker({
+      repo,
+      getSettings: () => repo.getSettings(),
+      shouldStop: () => stopWorker,
+    });
+
+    try {
+      const started = Date.now();
+      for (;;) {
+        const current = repo.getJob(acquireJob.id);
+        if (current?.status === "failed") break;
+        if (Date.now() - started > 4000) {
+          throw new Error("Timed out waiting for acquire failure notification");
+        }
+        await sleep(50);
+      }
+
+      expect(repo.getJob(acquireJob.id)?.status).toBe("failed");
+      expect(pushoverBodies).toHaveLength(1);
+      expect(pushoverBodies[0]).toContain("Auto-reacquire+after+stalled+torrent+for+release+12");
+      expect(pushoverBodies[0]).toContain("Auto-acquire+found+no+usable+release");
+    } finally {
+      stopWorker = true;
+      await Promise.race([worker, sleep(1000)]);
+      globalThis.fetch = originalFetch;
+      db.close();
+    }
+  });
+});
+
 describe("download ETA polling", () => {
   test("caps ebook max poll interval at 1 second", () => {
     expect(pollMsForMedia("ebook", 5000)).toBe(1000);
@@ -390,11 +689,13 @@ describe("download ETA polling", () => {
         name: null,
         hash: null,
         complete: false,
+        isActive: true,
         basePath: null,
         bytesDone: 90,
         sizeBytes: 100,
         leftBytes: 10,
         downRate: 1,
+        message: null,
       },
       5000
     );
@@ -407,11 +708,13 @@ describe("download ETA polling", () => {
         name: null,
         hash: null,
         complete: false,
+        isActive: true,
         basePath: null,
         bytesDone: 0,
         sizeBytes: 500,
         leftBytes: 500,
         downRate: 5,
+        message: null,
       },
       5000
     );
@@ -424,11 +727,13 @@ describe("download ETA polling", () => {
         name: null,
         hash: null,
         complete: false,
+        isActive: true,
         basePath: null,
         bytesDone: 50,
         sizeBytes: 100,
         leftBytes: 50,
         downRate: 0,
+        message: null,
       },
       5000
     );
@@ -441,11 +746,13 @@ describe("download ETA polling", () => {
         name: null,
         hash: null,
         complete: false,
+        isActive: true,
         basePath: null,
         bytesDone: 960,
         sizeBytes: 1000,
         leftBytes: null,
         downRate: 2,
+        message: null,
       },
       5000
     );

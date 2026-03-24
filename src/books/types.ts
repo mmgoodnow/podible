@@ -39,6 +39,9 @@ export type AppSettings = {
     rtorrentMs: number;
     scanMs: number;
   };
+  recovery: {
+    stalledTorrentMinutes: number;
+  };
   feed: {
     title: string;
     author: string;
@@ -54,6 +57,13 @@ export type AppSettings = {
     apiKey: string;
     lowConfidenceThreshold: number;
     timeoutMs: number;
+  };
+  notifications: {
+    pushover: {
+      enabled: boolean;
+      apiToken: string;
+      userKey: string;
+    };
   };
 };
 

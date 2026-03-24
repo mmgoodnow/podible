@@ -17,6 +17,9 @@ export function defaultSettings(overrides?: Partial<AppSettings>): AppSettings {
       rtorrentMs: 5000,
       scanMs: 30000,
     },
+    recovery: {
+      stalledTorrentMinutes: 10,
+    },
     feed: {
       title: "Kindling",
       author: "Unknown",
@@ -33,6 +36,13 @@ export function defaultSettings(overrides?: Partial<AppSettings>): AppSettings {
       lowConfidenceThreshold: 0.45,
       timeoutMs: 30000,
     },
+    notifications: {
+      pushover: {
+        enabled: false,
+        apiToken: "",
+        userKey: "",
+      },
+    },
     ...overrides,
   };
 }
@@ -45,7 +55,20 @@ export function parseSettings(value: string): AppSettings {
 
   const defaults = defaultSettings();
   const parsedAgents = (parsed.agents && typeof parsed.agents === "object" ? parsed.agents : {}) as Partial<AppSettings["agents"]>;
-
+  const parsedRecovery =
+    parsed.recovery && typeof parsed.recovery === "object" ? (parsed.recovery as Partial<AppSettings["recovery"]>) : {};
+  const parsedNotifications =
+    parsed.notifications && typeof parsed.notifications === "object"
+      ? (parsed.notifications as Partial<AppSettings["notifications"]>)
+      : {};
+  const parsedPushover =
+    parsedNotifications.pushover && typeof parsedNotifications.pushover === "object"
+      ? (parsedNotifications.pushover as Partial<AppSettings["notifications"]["pushover"]>)
+      : {};
+  const stalledTorrentMinutes =
+    typeof parsedRecovery.stalledTorrentMinutes === "number" && Number.isFinite(parsedRecovery.stalledTorrentMinutes)
+      ? Math.max(0, Math.trunc(parsedRecovery.stalledTorrentMinutes))
+      : defaults.recovery.stalledTorrentMinutes;
   return {
     ...defaults,
     ...parsed,
@@ -63,6 +86,9 @@ export function parseSettings(value: string): AppSettings {
     polling: {
       ...defaults.polling,
       ...(parsed.polling && typeof parsed.polling === "object" ? parsed.polling : {}),
+    },
+    recovery: {
+      stalledTorrentMinutes,
     },
     feed: {
       ...defaults.feed,
@@ -85,6 +111,13 @@ export function parseSettings(value: string): AppSettings {
         typeof parsedAgents.timeoutMs === "number" && Number.isFinite(parsedAgents.timeoutMs)
           ? Math.max(1000, Math.trunc(parsedAgents.timeoutMs))
           : defaults.agents.timeoutMs,
+    },
+    notifications: {
+      pushover: {
+        enabled: typeof parsedPushover.enabled === "boolean" ? parsedPushover.enabled : defaults.notifications.pushover.enabled,
+        apiToken: typeof parsedPushover.apiToken === "string" ? parsedPushover.apiToken : defaults.notifications.pushover.apiToken,
+        userKey: typeof parsedPushover.userKey === "string" ? parsedPushover.userKey : defaults.notifications.pushover.userKey,
+      },
     },
   };
 }

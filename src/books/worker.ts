@@ -3,10 +3,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { selectManualImportPaths, selectSearchCandidate } from "./agents";
 import { nowIso } from "./db";
 import { importReleaseFromPath, inspectImportPath } from "./importer";
+import { sendPushoverNotification } from "./notify";
 import { RtorrentClient } from "./rtorrent";
 import { BooksRepo } from "./repo";
 import { scanLibraryRoot } from "./scanner";
-import { runSearch, runSnatch } from "./service";
+import { runSearch, runSnatch, triggerAutoAcquire } from "./service";
 import type { RtorrentDownloadState } from "./rtorrent";
 import type { AppSettings, JobRow, MediaType } from "./types";
 
@@ -53,6 +54,10 @@ type ImportJobPayload = {
 type DownloadJobPayload = {
   infoHash?: string;
   preferAgentImport?: boolean;
+  telemetry?: {
+    lastBytesDone?: number | null;
+    stagnantSince?: string | null;
+  };
 };
 
 type PollDecision = {
@@ -70,6 +75,17 @@ type PollDecision = {
   etaSeconds: number | null;
 };
 
+type DownloadIssueDecision =
+  | {
+      action: "continue";
+      nextPayload: DownloadJobPayload;
+    }
+  | {
+      action: "recover";
+      nextPayload: DownloadJobPayload;
+      error: string;
+    };
+
 function derivedLeftBytes(state: RtorrentDownloadState): number | null {
   if (typeof state.leftBytes === "number" && Number.isFinite(state.leftBytes)) {
     return Math.max(0, state.leftBytes);
@@ -78,6 +94,108 @@ function derivedLeftBytes(state: RtorrentDownloadState): number | null {
     return Math.max(0, state.sizeBytes - state.bytesDone);
   }
   return null;
+}
+
+function trimMessage(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function describeDownloadIssue(prefix: string, state: RtorrentDownloadState, detail?: string | null): string {
+  const leftBytes = derivedLeftBytes(state);
+  const parts = [
+    prefix,
+    `active=${state.isActive ? 1 : 0}`,
+    `leftBytes=${leftBytes ?? "null"}`,
+    `downRate=${state.downRate ?? "null"}`,
+  ];
+  const message = trimMessage(detail ?? state.message);
+  if (message) {
+    parts.push(`message=${JSON.stringify(message)}`);
+  }
+  return parts.join("; ");
+}
+
+function analyzeDownloadIssue(
+  state: RtorrentDownloadState,
+  payload: DownloadJobPayload,
+  settings: AppSettings
+): DownloadIssueDecision {
+  const nextPayload: DownloadJobPayload = { ...payload };
+  const leftBytes = derivedLeftBytes(state);
+  const lastBytesDone = payload.telemetry?.lastBytesDone ?? null;
+  const currentBytesDone = state.bytesDone ?? null;
+  const progressed =
+    typeof currentBytesDone === "number" && typeof lastBytesDone === "number" ? currentBytesDone > lastBytesDone : false;
+  const activeTransfer = (typeof state.downRate === "number" && state.downRate > 0) || progressed;
+  const incomplete = leftBytes === null || leftBytes > 0;
+  let stagnantSince = payload.telemetry?.stagnantSince ?? null;
+
+  if (!incomplete || activeTransfer) {
+    stagnantSince = null;
+  } else if (!stagnantSince) {
+    stagnantSince = nowIso();
+  }
+
+  nextPayload.telemetry = {
+    lastBytesDone: currentBytesDone,
+    stagnantSince,
+  };
+
+  const message = trimMessage(state.message);
+  if (message) {
+    return {
+      action: "recover",
+      nextPayload,
+      error: describeDownloadIssue("Torrent errored in rTorrent; queuing forced reacquire", state, message),
+    };
+  }
+
+  if (!stagnantSince || !incomplete) {
+    return {
+      action: "continue",
+      nextPayload,
+    };
+  }
+
+  const stallMs = Math.max(0, settings.recovery.stalledTorrentMinutes) * 60_000;
+  if (stallMs === 0) {
+    return {
+      action: "recover",
+      nextPayload,
+      error: describeDownloadIssue("Torrent stalled with no progress; queuing forced reacquire", state),
+    };
+  }
+
+  const stagnantForMs = Date.now() - Date.parse(stagnantSince);
+  if (Number.isFinite(stagnantForMs) && stagnantForMs >= stallMs) {
+    return {
+      action: "recover",
+      nextPayload,
+      error: describeDownloadIssue("Torrent stalled past recovery threshold; queuing forced reacquire", state),
+    };
+  }
+
+  return {
+    action: "continue",
+    nextPayload,
+  };
+}
+
+async function notifyBestEffort(ctx: WorkerContext, title: string, message: string): Promise<boolean> {
+  try {
+    const result = await sendPushoverNotification(ctx.getSettings(), { title, message });
+    if (!result.delivered) {
+      log(ctx, `[notify] skipped reason=${result.reason ?? "disabled"} title=${JSON.stringify(title)}`);
+      return false;
+    }
+    log(ctx, `[notify] delivered title=${JSON.stringify(title)}`);
+    return true;
+  } catch (error) {
+    log(ctx, `[notify] failed title=${JSON.stringify(title)} error=${JSON.stringify((error as Error).message)}`);
+    return false;
+  }
 }
 
 /**
@@ -188,6 +306,23 @@ async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promise<"don
 
   const state = await client.getDownloadState(release.info_hash);
   if (!state.complete) {
+    const issue = analyzeDownloadIssue(state, payload, settings);
+    if (issue.action === "recover") {
+      ctx.repo.setReleaseStatus(release.id, "failed", issue.error);
+      const acquireJobId = await triggerAutoAcquire(ctx.repo, release.book_id, [release.media_type], {
+        forceAgent: true,
+        priorFailure: true,
+        requireResult: true,
+        notifyOnFailure: true,
+        failureContext: `Auto-reacquire after stalled torrent for release ${release.id}`,
+        rejectedUrls: [release.url],
+        rejectedGuids: release.provider_guid ? [release.provider_guid] : [],
+        rejectedInfoHashes: release.info_hash ? [release.info_hash] : [],
+      });
+      ctx.repo.markJobCancelled(job.id, `${issue.error}; recoveryAcquireJob=${acquireJobId}`);
+      log(ctx, `[download] job=${job.id} release=${release.id} action=recover acquire_job=${acquireJobId}`);
+      return "done";
+    }
     ctx.repo.setReleaseStatus(release.id, "downloading", null);
     const mediaPollMs = pollMsForMedia(release.media_type, settings.polling.rtorrentMs || 5000);
     const decision = selectDownloadPollDecision(state, mediaPollMs);
@@ -199,7 +334,7 @@ async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promise<"don
     );
     const pollMs = decision.pollMs;
     const nextRun = new Date(Date.now() + pollMs).toISOString();
-    ctx.repo.rescheduleJob(job.id, nextRun);
+    ctx.repo.rescheduleJob(job.id, nextRun, issue.nextPayload);
     return "rescheduled";
   }
 
@@ -442,6 +577,9 @@ type AcquirePayload = {
   media?: MediaType[];
   forceAgent?: boolean;
   priorFailure?: boolean;
+  requireResult?: boolean;
+  notifyOnFailure?: boolean;
+  failureContext?: string | null;
   rejectedUrls?: string[];
   rejectedGuids?: string[];
   rejectedInfoHashes?: string[];
@@ -475,6 +613,7 @@ async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promise<"done
   }
   const mediaList: MediaType[] = payload.media && payload.media.length > 0 ? payload.media : ["audio", "ebook"];
   const snatchErrors: string[] = [];
+  const noResultReasons: string[] = [];
   let snatchSucceeded = false;
 
   for (const media of mediaList) {
@@ -508,6 +647,7 @@ async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promise<"done
         ctx,
         `[acquire] job=${job.id} book=${book.id} media=${media} no_result mode=${decision.mode} trigger=${decision.trigger} reason=${JSON.stringify(decision.reason)}`
       );
+      noResultReasons.push(`${media}: ${decision.reason ?? "no candidate selected"}`);
       continue;
     }
     log(
@@ -548,6 +688,11 @@ async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promise<"done
   if (snatchErrors.length > 0) {
     const prefix = snatchSucceeded ? "Auto-acquire partially failed" : "Auto-acquire failed";
     throw new Error(`${prefix} for book ${book.id}; ${snatchErrors.join(" | ")}`);
+  }
+
+  if (!snatchSucceeded && payload.requireResult === true) {
+    const detail = noResultReasons.length > 0 ? noResultReasons.join(" | ") : "no candidate selected";
+    throw new Error(`Auto-acquire found no usable release for book ${book.id}; ${detail}`);
   }
 
   ctx.repo.markJobSucceeded(job.id);
@@ -610,6 +755,21 @@ export async function runWorker(ctx: WorkerContext): Promise<void> {
       if (!failed) {
         log(ctx, `[worker] job=${job.id} type=${job.type} failed but row missing (likely deleted) error=${message}`);
         continue;
+      }
+      if (failed.status === "failed" && job.type === "acquire") {
+        const payload = job.payload_json ? (JSON.parse(job.payload_json) as AcquirePayload) : {};
+        if (payload.notifyOnFailure === true) {
+          const media = payload.media && payload.media.length > 0 ? payload.media.join(",") : "audio,ebook";
+          const book = job.book_id ? ctx.repo.getBookRow(job.book_id) : null;
+          const title = "Podible recovery failed";
+          const body = [
+            `Book: ${book ? `${book.title} by ${book.author}` : `book ${job.book_id ?? "unknown"}`}`,
+            `Media: ${media}`,
+            `Context: ${payload.failureContext ?? "auto-recovery"}`,
+            `Reason: ${message}`,
+          ].join("\n");
+          await notifyBestEffort(ctx, title, body);
+        }
       }
       log(ctx, `[worker] job=${job.id} type=${job.type} failed status=${failed.status} error=${message}`);
     }

@@ -48,6 +48,8 @@ describe("rtorrent xmlrpc helpers", () => {
             return '<?xml version="1.0"?><methodResponse><params><param><value><string>ABCDEF</string></value></param></params></methodResponse>';
           case "d.complete":
             return '<?xml version="1.0"?><methodResponse><params><param><value><i8>1</i8></value></param></params></methodResponse>';
+          case "d.is_active":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>0</i8></value></param></params></methodResponse>';
           case "d.base_path":
             return '<?xml version="1.0"?><methodResponse><params><param><value><string>/downloads/book</string></value></param></params></methodResponse>';
           case "d.bytes_done":
@@ -58,6 +60,8 @@ describe("rtorrent xmlrpc helpers", () => {
             return '<?xml version="1.0"?><methodResponse><params><param><value><i8>50</i8></value></param></params></methodResponse>';
           case "d.down.rate":
             return '<?xml version="1.0"?><methodResponse><params><param><value><i8>10</i8></value></param></params></methodResponse>';
+          case "d.message":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string>tracker needs credits</string></value></param></params></methodResponse>';
           default:
             return '<?xml version="1.0"?><methodResponse><params><param><value><string></string></value></param></params></methodResponse>';
         }
@@ -74,15 +78,19 @@ describe("rtorrent xmlrpc helpers", () => {
       });
       const state = await client.getDownloadState("0123456789abcdef0123456789abcdef01234567");
       expect(state.basePath).toBe("/downloads/book");
+      expect(state.isActive).toBe(false);
       expect(state.bytesDone).toBe(50);
       expect(state.sizeBytes).toBe(100);
       expect(state.leftBytes).toBe(50);
       expect(state.downRate).toBe(10);
+      expect(state.message).toBe("tracker needs credits");
+      expect(calls.includes("d.is_active")).toBe(true);
       expect(calls.includes("d.base_path")).toBe(true);
       expect(calls.includes("d.bytes_done")).toBe(true);
       expect(calls.includes("d.size_bytes")).toBe(true);
       expect(calls.includes("d.left_bytes")).toBe(true);
       expect(calls.includes("d.down.rate")).toBe(true);
+      expect(calls.includes("d.message")).toBe(true);
       expect(calls.includes("d.get_size_bytes")).toBe(false);
     } finally {
       globalThis.fetch = originalFetch;

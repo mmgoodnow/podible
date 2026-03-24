@@ -25,6 +25,9 @@ type SnatchRequest = {
 type AutoAcquireOptions = {
   forceAgent?: boolean;
   priorFailure?: boolean;
+  requireResult?: boolean;
+  notifyOnFailure?: boolean;
+  failureContext?: string;
   rejectedUrls?: string[];
   rejectedGuids?: string[];
   rejectedInfoHashes?: string[];
@@ -280,6 +283,9 @@ export async function triggerAutoAcquire(
       media: mediaList,
       forceAgent: options.forceAgent === true,
       priorFailure: options.priorFailure === true,
+      requireResult: options.requireResult === true,
+      notifyOnFailure: options.notifyOnFailure === true,
+      failureContext: options.failureContext ?? null,
       rejectedUrls: options.rejectedUrls ?? [],
       rejectedGuids: options.rejectedGuids ?? [],
       rejectedInfoHashes: options.rejectedInfoHashes ?? [],

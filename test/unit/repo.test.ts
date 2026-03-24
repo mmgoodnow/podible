@@ -18,19 +18,33 @@ describe("books repo", () => {
     const initial = repo.ensureSettings();
     expect(initial.auth.mode).toBe("apikey");
     expect(initial.auth.key.length).toBeGreaterThan(20);
+    expect(initial.recovery.stalledTorrentMinutes).toBe(10);
+    expect(initial.notifications.pushover.enabled).toBe(false);
 
     const next = {
       ...initial,
       libraryRoot: "/tmp/library",
       auth: { ...initial.auth, mode: "local" as const },
+      recovery: { stalledTorrentMinutes: 15 },
+      notifications: {
+        pushover: {
+          enabled: true,
+          apiToken: "token",
+          userKey: "user",
+        },
+      },
     };
     const saved = repo.updateSettings(next);
     expect(saved.libraryRoot).toBe("/tmp/library");
     expect(saved.auth.mode).toBe("local");
+    expect(saved.recovery.stalledTorrentMinutes).toBe(15);
+    expect(saved.notifications.pushover.enabled).toBe(true);
 
     const fetched = repo.getSettings();
     expect(fetched.libraryRoot).toBe("/tmp/library");
     expect(fetched.auth.mode).toBe("local");
+    expect(fetched.recovery.stalledTorrentMinutes).toBe(15);
+    expect(fetched.notifications.pushover.userKey).toBe("user");
 
     db.close();
   });
@@ -63,13 +77,19 @@ describe("books repo", () => {
   test("rescheduleJob clears stale error", () => {
     const { db, repo } = setupRepo();
 
-    const job = repo.createJob({ type: "download", status: "queued" });
+    const job = repo.createJob({ type: "download", status: "queued", payload: { infoHash: "abc123" } });
     const failed = repo.markJobFailed(job.id, "temporary socket error", new Date(Date.now() + 1000).toISOString());
     expect(failed.error).toContain("socket");
 
-    const rescheduled = repo.rescheduleJob(job.id, new Date(Date.now() + 5000).toISOString());
+    const rescheduled = repo.rescheduleJob(job.id, new Date(Date.now() + 5000).toISOString(), {
+      infoHash: "abc123",
+      telemetry: {
+        lastBytesDone: 42,
+      },
+    });
     expect(rescheduled.status).toBe("queued");
     expect(rescheduled.error).toBeNull();
+    expect(JSON.parse(rescheduled.payload_json ?? "{}").telemetry.lastBytesDone).toBe(42);
 
     db.close();
   });
