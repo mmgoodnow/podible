@@ -10,6 +10,7 @@ const ASSET_FILE_SOURCE_PATH_MIGRATION_ID = 4;
 const TORRENT_CACHE_MIGRATION_ID = 5;
 const REMOVE_TRANSCODE_JOB_TYPE_MIGRATION_ID = 6;
 const CHAPTER_ANALYSIS_MIGRATION_ID = 7;
+const ASSET_TRANSCRIPTS_MIGRATION_ID = 8;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -97,10 +98,23 @@ CREATE TABLE IF NOT EXISTS chapter_analysis (
   source TEXT NOT NULL,
   algorithm_version TEXT NOT NULL,
   fingerprint TEXT NOT NULL,
+  transcript_fingerprint TEXT NULL,
   chapters_json TEXT NULL,
   debug_json TEXT NULL,
   resolved_boundary_count INTEGER NOT NULL DEFAULT 0,
   total_boundary_count INTEGER NOT NULL DEFAULT 0,
+  error TEXT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS asset_transcripts (
+  asset_id INTEGER PRIMARY KEY,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'succeeded', 'failed')),
+  source TEXT NOT NULL,
+  algorithm_version TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  transcript_json TEXT NULL,
   error TEXT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
@@ -290,10 +304,30 @@ CREATE TABLE IF NOT EXISTS chapter_analysis (
   source TEXT NOT NULL,
   algorithm_version TEXT NOT NULL,
   fingerprint TEXT NOT NULL,
+  transcript_fingerprint TEXT NULL,
   chapters_json TEXT NULL,
   debug_json TEXT NULL,
   resolved_boundary_count INTEGER NOT NULL DEFAULT 0,
   total_boundary_count INTEGER NOT NULL DEFAULT 0,
+  error TEXT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
+);
+`);
+}
+
+function applyAssetTranscriptsMigration(db: Database): void {
+  if (!hasColumn(db, "chapter_analysis", "transcript_fingerprint")) {
+    db.exec("ALTER TABLE chapter_analysis ADD COLUMN transcript_fingerprint TEXT NULL");
+  }
+  db.exec(`
+CREATE TABLE IF NOT EXISTS asset_transcripts (
+  asset_id INTEGER PRIMARY KEY,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'succeeded', 'failed')),
+  source TEXT NOT NULL,
+  algorithm_version TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  transcript_json TEXT NULL,
   error TEXT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
@@ -351,5 +385,8 @@ export function runMigrations(db: Database): void {
   });
   apply(CHAPTER_ANALYSIS_MIGRATION_ID, () => {
     applyChapterAnalysisMigration(db);
+  });
+  apply(ASSET_TRANSCRIPTS_MIGRATION_ID, () => {
+    applyAssetTranscriptsMigration(db);
   });
 }

@@ -113,4 +113,54 @@ describe("library scanner metadata hydration", () => {
       await rm(tmpRoot, { recursive: true, force: true });
     }
   });
+
+  test("ignores hidden files inside book directories", async () => {
+    const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "books-scan-hidden-files-"));
+    const bookDir = path.join(tmpRoot, "Sally Rooney", "Normal People");
+    await mkdir(bookDir, { recursive: true });
+    await writeFile(path.join(bookDir, "Normal People.epub"), Buffer.from("epub-bytes"));
+    await writeFile(path.join(bookDir, "._Normal People.epub"), Buffer.from("sidecar"));
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown) => {
+      const url = String(input);
+      if (!url.startsWith("https://openlibrary.org/search.json")) {
+        throw new Error(`Unexpected fetch url: ${url}`);
+      }
+      return new Response(
+        JSON.stringify({
+          docs: [
+            {
+              key: "/works/OL123W",
+              first_publish_year: 2018,
+              language: ["eng"],
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as unknown as typeof fetch;
+
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+
+    try {
+      const result = await scanLibraryRoot(repo, tmpRoot);
+      expect(result.booksCreated).toBe(1);
+      expect(result.assetsCreated).toBe(1);
+
+      const book = repo.findBookByTitleAuthor("Normal People", "Sally Rooney");
+      expect(book).toBeTruthy();
+      const assets = book ? repo.listAssetsByBook(book.id) : [];
+      expect(assets.length).toBe(1);
+      const assetFiles = assets[0] ? repo.getAssetFiles(assets[0].id) : [];
+      expect(assetFiles.length).toBe(1);
+      expect(assetFiles[0]?.path).toBe(path.join(bookDir, "Normal People.epub"));
+    } finally {
+      globalThis.fetch = originalFetch;
+      db.close();
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
 });

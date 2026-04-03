@@ -410,4 +410,125 @@ describe("podible http", () => {
 
     db.close();
   });
+
+  test("serves stored transcript json for audio assets", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const settings = repo.ensureSettings();
+    repo.updateSettings({
+      ...settings,
+      auth: { ...settings.auth, mode: "local" },
+      torznab: [],
+    });
+
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const audio = repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mpeg",
+      totalSize: 123,
+      durationMs: 1_000,
+      files: [
+        {
+          path: path.join(isolatedDataDir, "transcript-route.mp3"),
+          size: 123,
+          start: 0,
+          end: 122,
+          durationMs: 1_000,
+          title: "Dune",
+        },
+      ],
+    });
+    repo.upsertAssetTranscript({
+      assetId: audio.id,
+      status: "succeeded",
+      source: "full_transcript_epub",
+      algorithmVersion: "test",
+      fingerprint: "fp",
+      transcriptJson: JSON.stringify({
+        version: "1.2.0",
+        text: "fear is the mind killer",
+        words: [
+          { startMs: 0, endMs: 300, text: "fear", token: "fear" },
+          { startMs: 301, endMs: 500, text: "is", token: "is" },
+        ],
+      }),
+    });
+
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+    const response = await fetchHandler(new Request(`http://localhost/transcripts/${audio.id}.json`));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    const payload = (await response.json()) as any;
+    expect(payload.text).toBe("fear is the mind killer");
+    expect(payload.words[0].text).toBe("fear");
+
+    const missing = await fetchHandler(new Request("http://localhost/transcripts/999.json"));
+    expect(missing.status).toBe(404);
+
+    db.close();
+  });
+
+  test("serves brotli-compressed transcript json when requested", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const settings = repo.ensureSettings();
+    repo.updateSettings({
+      ...settings,
+      auth: { ...settings.auth, mode: "local" },
+      torznab: [],
+    });
+
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const audio = repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mpeg",
+      totalSize: 123,
+      durationMs: 1_000,
+      files: [
+        {
+          path: path.join(isolatedDataDir, "transcript-route-br.mp3"),
+          size: 123,
+          start: 0,
+          end: 122,
+          durationMs: 1_000,
+          title: "Dune",
+        },
+      ],
+    });
+    repo.upsertAssetTranscript({
+      assetId: audio.id,
+      status: "succeeded",
+      source: "full_transcript_epub",
+      algorithmVersion: "test",
+      fingerprint: "fp-br",
+      transcriptJson: JSON.stringify({
+        version: "1.2.0",
+        text: "fear is the mind killer",
+        words: [
+          { startMs: 0, endMs: 300, text: "fear", token: "fear" },
+          { startMs: 301, endMs: 500, text: "is", token: "is" },
+        ],
+      }),
+    });
+
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+    const response = await fetchHandler(
+      new Request(`http://localhost/transcripts/${audio.id}.json`, {
+        headers: { "Accept-Encoding": "br" },
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-encoding")).toBe("br");
+    expect(response.headers.get("vary")).toContain("Accept-Encoding");
+
+    const decompressed = new Response(response.body?.pipeThrough(new DecompressionStream("brotli")));
+    const payload = (await decompressed.json()) as any;
+    expect(payload.text).toBe("fear is the mind killer");
+
+    db.close();
+  });
 });

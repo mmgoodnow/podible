@@ -7,6 +7,8 @@ import { defaultSettings, parseSettings } from "./settings";
 import type {
   AppSettings,
   AssetFileRow,
+  AssetTranscriptRow,
+  AssetTranscriptStatus,
   AssetRow,
   BookRow,
   ChapterAnalysisRow,
@@ -54,10 +56,21 @@ type UpsertChapterAnalysisInput = {
   source: string;
   algorithmVersion: string;
   fingerprint: string;
+  transcriptFingerprint?: string | null;
   chaptersJson?: string | null;
   debugJson?: string | null;
   resolvedBoundaryCount?: number;
   totalBoundaryCount?: number;
+  error?: string | null;
+};
+
+type UpsertAssetTranscriptInput = {
+  assetId: number;
+  status: AssetTranscriptStatus;
+  source: string;
+  algorithmVersion: string;
+  fingerprint: string;
+  transcriptJson?: string | null;
   error?: string | null;
 };
 
@@ -380,12 +393,13 @@ export class BooksRepo {
       jobs: number;
       torrentCache: number;
       chapterAnalysis: number;
+      assetTranscripts: number;
     };
     settingsPreserved: boolean;
   } {
     return this.db.transaction(() => {
       const countRow = (
-        table: "books" | "releases" | "assets" | "asset_files" | "jobs" | "torrent_cache" | "chapter_analysis"
+        table: "books" | "releases" | "assets" | "asset_files" | "jobs" | "torrent_cache" | "chapter_analysis" | "asset_transcripts"
       ) =>
         ((this.db.query(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number } | null)?.count ?? 0);
       const deleted = {
@@ -396,8 +410,10 @@ export class BooksRepo {
         jobs: countRow("jobs"),
         torrentCache: countRow("torrent_cache"),
         chapterAnalysis: countRow("chapter_analysis"),
+        assetTranscripts: countRow("asset_transcripts"),
       };
 
+      this.db.query("DELETE FROM asset_transcripts").run();
       this.db.query("DELETE FROM chapter_analysis").run();
       this.db.query("DELETE FROM torrent_cache").run();
       this.db.query("DELETE FROM jobs").run();
@@ -407,7 +423,7 @@ export class BooksRepo {
       this.db.query("DELETE FROM books").run();
       this.db
         .query(
-          "DELETE FROM sqlite_sequence WHERE name IN ('books', 'releases', 'assets', 'asset_files', 'jobs', 'chapter_analysis')"
+          "DELETE FROM sqlite_sequence WHERE name IN ('books', 'releases', 'assets', 'asset_files', 'jobs', 'chapter_analysis', 'asset_transcripts')"
         )
         .run();
 
@@ -794,6 +810,43 @@ export class BooksRepo {
     return (this.db.query("SELECT * FROM chapter_analysis WHERE asset_id = ?").get(assetId) as ChapterAnalysisRow | null) ?? null;
   }
 
+  getAssetTranscript(assetId: number): AssetTranscriptRow | null {
+    assertPositiveInt(assetId);
+    return (this.db.query("SELECT * FROM asset_transcripts WHERE asset_id = ?").get(assetId) as AssetTranscriptRow | null) ?? null;
+  }
+
+  upsertAssetTranscript(input: UpsertAssetTranscriptInput): AssetTranscriptRow {
+    assertPositiveInt(input.assetId);
+    const now = nowIso();
+    return this.db
+      .query(
+        `INSERT INTO asset_transcripts (
+           asset_id, status, source, algorithm_version, fingerprint,
+           transcript_json, error, updated_at
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(asset_id) DO UPDATE SET
+           status = excluded.status,
+           source = excluded.source,
+           algorithm_version = excluded.algorithm_version,
+           fingerprint = excluded.fingerprint,
+           transcript_json = excluded.transcript_json,
+           error = excluded.error,
+           updated_at = excluded.updated_at
+         RETURNING *`
+      )
+      .get(
+        input.assetId,
+        input.status,
+        input.source,
+        input.algorithmVersion,
+        input.fingerprint,
+        input.transcriptJson ?? null,
+        input.error ?? null,
+        now
+      ) as AssetTranscriptRow;
+  }
+
   upsertChapterAnalysis(input: UpsertChapterAnalysisInput): ChapterAnalysisRow {
     assertPositiveInt(input.assetId);
     const now = nowIso();
@@ -801,14 +854,15 @@ export class BooksRepo {
       .query(
         `INSERT INTO chapter_analysis (
            asset_id, status, source, algorithm_version, fingerprint,
-           chapters_json, debug_json, resolved_boundary_count, total_boundary_count, error, updated_at
+           transcript_fingerprint, chapters_json, debug_json, resolved_boundary_count, total_boundary_count, error, updated_at
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(asset_id) DO UPDATE SET
            status = excluded.status,
            source = excluded.source,
            algorithm_version = excluded.algorithm_version,
            fingerprint = excluded.fingerprint,
+           transcript_fingerprint = excluded.transcript_fingerprint,
            chapters_json = excluded.chapters_json,
            debug_json = excluded.debug_json,
            resolved_boundary_count = excluded.resolved_boundary_count,
@@ -823,6 +877,7 @@ export class BooksRepo {
         input.source,
         input.algorithmVersion,
         input.fingerprint,
+        input.transcriptFingerprint ?? null,
         input.chaptersJson ?? null,
         input.debugJson ?? null,
         input.resolvedBoundaryCount ?? 0,

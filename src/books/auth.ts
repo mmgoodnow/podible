@@ -6,6 +6,9 @@ function isLocalhost(hostname: string): boolean {
 
 export function authorizeRequest(request: Request, settings: AppSettings): boolean {
   const url = new URL(request.url);
+  if (process.env.NODE_ENV !== "production" && isLocalhost(url.hostname)) {
+    return true;
+  }
   if (settings.auth.mode === "local" && isLocalhost(url.hostname)) {
     return true;
   }

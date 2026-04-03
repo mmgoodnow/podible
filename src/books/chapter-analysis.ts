@@ -10,14 +10,15 @@ import OpenAI from "openai";
 import type { TranscriptionVerbose } from "openai/resources/audio/transcriptions";
 
 import type { BooksRepo } from "./repo";
-import type { AppSettings, AssetFileRow, AssetRow, BookRow, ChapterAnalysisRow, JobRow } from "./types";
+import type { AppSettings, AssetFileRow, AssetRow, AssetTranscriptRow, BookRow, ChapterAnalysisRow, JobRow } from "./types";
 
 const CHAPTER_ANALYSIS_SOURCE = "full_transcript_epub";
-const CHAPTER_ANALYSIS_ALGORITHM_VERSION = "2026-03-24-v2";
+const CHAPTER_ANALYSIS_ALGORITHM_VERSION = "2026-04-02-v3";
 const CHAPTERS_API_VERSION = "1.2.0";
 const TRANSCRIPTION_MODEL = "whisper-1";
-const CHUNK_MS = 60 * 60_000;
+const CHUNK_MS = 30 * 60_000;
 const CHUNK_OVERLAP_MS = 30_000;
+const TRANSCRIPTION_TIMEOUT_MS = 5 * 60_000;
 const PROBE_WORDS = 24;
 const MIN_SHINGLE = 6;
 const MAX_DRIFT_MS = 150_000;
@@ -151,6 +152,20 @@ const GLOSSARY_ARTIFACT_WORDS = new Set([
   "xhtml",
 ]);
 
+const ISO_639_2_TO_1 = new Map<string, string>([
+  ["deu", "de"],
+  ["eng", "en"],
+  ["fra", "fr"],
+  ["fre", "fr"],
+  ["ger", "de"],
+  ["ita", "it"],
+  ["jpn", "ja"],
+  ["por", "pt"],
+  ["spa", "es"],
+  ["zho", "zh"],
+  ["chi", "zh"],
+]);
+
 type StoredChapterTiming = {
   id: string;
   title: string;
@@ -163,6 +178,19 @@ type StoredChapterTiming = {
 type StoredChapterPayload = {
   version: string;
   chapters: StoredChapterTiming[];
+};
+
+type StoredTranscriptWord = {
+  startMs: number;
+  endMs: number;
+  text: string;
+  token: string;
+};
+
+type StoredTranscriptPayload = {
+  version: string;
+  text: string;
+  words: StoredTranscriptWord[];
 };
 
 type EpubChapterEntry = {
@@ -227,6 +255,7 @@ type TranscriptChunk = TranscriptChunkPlan & {
 };
 
 type AnalysisResult = {
+  transcriptWords: TranscriptWord[];
   chapters: StoredChapterTiming[];
   resolvedBoundaryCount: number;
   totalBoundaryCount: number;
@@ -297,6 +326,16 @@ export function selectPreferredEpubAsset(assets: AssetRow[]): AssetRow | null {
 
 function normalizeToken(value: string): string {
   return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+export function normalizeTranscriptionLanguage(value: string | null | undefined): string | null {
+  const trimmed = value?.trim().toLowerCase() ?? "";
+  if (!trimmed) return null;
+  if (/^[a-z]{2}$/u.test(trimmed)) return trimmed;
+  const localeMatch = trimmed.match(/^([a-z]{2})[-_][a-z0-9]+$/u);
+  if (localeMatch?.[1]) return localeMatch[1];
+  if (/^[a-z]{3}$/u.test(trimmed)) return ISO_639_2_TO_1.get(trimmed) ?? null;
+  return null;
 }
 
 function tokenize(value: string): string[] {
@@ -565,7 +604,30 @@ export function timingsFromChapterStarts(entries: EpubChapterEntry[], startTimes
   return chapters;
 }
 
-async function computeFingerprint(asset: AssetRow, files: AssetFileRow[], epubPath: string): Promise<string> {
+async function computeTranscriptFingerprint(asset: AssetRow, files: AssetFileRow[]): Promise<string> {
+  const fileStats = await Promise.all(
+    files.map(async (file) => {
+      const stat = await Bun.file(file.path).stat();
+      return {
+        path: file.path,
+        size: file.size,
+        mtimeMs: stat.mtimeMs,
+      };
+    })
+  );
+  const hash = createHash("sha256");
+  hash.update(
+    JSON.stringify({
+      version: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
+      kind: "transcript",
+      assetId: asset.id,
+      files: fileStats,
+    })
+  );
+  return hash.digest("hex");
+}
+
+async function computeChapterFingerprint(asset: AssetRow, files: AssetFileRow[], epubPath: string): Promise<string> {
   const fileStats = await Promise.all(
     files.map(async (file) => {
       const stat = await Bun.file(file.path).stat();
@@ -581,6 +643,7 @@ async function computeFingerprint(asset: AssetRow, files: AssetFileRow[], epubPa
   hash.update(
     JSON.stringify({
       version: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
+      kind: "chapters",
       assetId: asset.id,
       files: fileStats,
       epub: {
@@ -641,6 +704,34 @@ export async function loadStoredChapterTimings(
   } catch {
     return null;
   }
+}
+
+function storedTranscriptPayload(words: TranscriptWord[]): StoredTranscriptPayload {
+  return {
+    version: CHAPTERS_API_VERSION,
+    text: words.map((word) => word.raw).filter(Boolean).join(" ").trim(),
+    words: words.map((word) => ({
+      startMs: word.startMs,
+      endMs: word.endMs,
+      text: word.raw,
+      token: word.token,
+    })),
+  };
+}
+
+export async function readStoredTranscriptPayload(row: AssetTranscriptRow | null): Promise<StoredTranscriptPayload | null> {
+  if (!row || row.status !== "succeeded" || !row.transcript_json) return null;
+  try {
+    const parsed = JSON.parse(row.transcript_json) as StoredTranscriptPayload;
+    if (!parsed || !Array.isArray(parsed.words)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export async function loadStoredTranscriptPayload(repo: BooksRepo, assetId: number): Promise<StoredTranscriptPayload | null> {
+  return readStoredTranscriptPayload(repo.getAssetTranscript(assetId));
 }
 
 function loadOrdinaryWords(): Set<string> | null {
@@ -940,8 +1031,9 @@ export async function extractChunkClip(args: ExtractChunkArgs): Promise<string> 
 
 function promptForChunk(book: BookRow, glossary: string[]): string {
   const promptParts = [`${book.title} by ${book.author}.`];
-  if (book.language) {
-    promptParts.push(`Language: ${book.language}.`);
+  const transcriptionLanguage = normalizeTranscriptionLanguage(book.language);
+  if (transcriptionLanguage) {
+    promptParts.push(`Language: ${transcriptionLanguage}.`);
   }
   if (glossary.length > 0) {
     promptParts.push(`Important names and terms may include: ${glossary.join(", ")}.`);
@@ -958,21 +1050,23 @@ export async function transcribeChunk(
 ): Promise<TranscriptWord[]> {
   const apiKey = settings.agents.apiKey.trim();
   if (!apiKey) throw new Error("OpenAI API key not configured");
+  const requestTimeoutMs = Math.max(TRANSCRIPTION_TIMEOUT_MS, Math.trunc(settings.agents.timeoutMs || 30_000));
   const client = new OpenAI({
     apiKey,
-    timeout: Math.max(1_000, Math.trunc(settings.agents.timeoutMs || 30_000)),
+    timeout: requestTimeoutMs,
   });
+  const transcriptionLanguage = normalizeTranscriptionLanguage(book.language);
   const response = (await client.audio.transcriptions.create(
     {
       file: createReadStream(clipPath),
       model: TRANSCRIPTION_MODEL,
       response_format: "verbose_json",
       timestamp_granularities: ["word"],
-      ...(book.language ? { language: book.language } : {}),
+      ...(transcriptionLanguage ? { language: transcriptionLanguage } : {}),
       prompt,
     },
     {
-      timeout: Math.max(1_000, Math.trunc(settings.agents.timeoutMs || 30_000)),
+      timeout: requestTimeoutMs,
     }
   )) as TranscriptionVerbose;
   const words = Array.isArray(response.words) ? response.words : [];
@@ -1020,25 +1114,31 @@ function mergeTranscriptChunks(chunks: TranscriptChunk[]): TranscriptWord[] {
   return dedupeTranscriptWords(merged);
 }
 
-async function analyzeWithDeps(
+function transcriptWordsFromStoredPayload(payload: StoredTranscriptPayload): TranscriptWord[] {
+  return payload.words
+    .map((word) => ({
+      startMs: Math.max(0, Math.round(Number(word.startMs) || 0)),
+      endMs: Math.max(0, Math.round(Number(word.endMs) || 0)),
+      raw: typeof word.text === "string" ? word.text.trim() : "",
+      token: typeof word.token === "string" && word.token.trim() ? word.token.trim() : normalizeToken(String(word.text ?? "")),
+    }))
+    .filter((word) => Boolean(word.token));
+}
+
+async function transcribeAssetWithDeps(
+  ctx: ChapterAnalysisContext,
   asset: AssetRow,
   files: AssetFileRow[],
-  epubPath: string,
   book: BookRow,
   settings: AppSettings,
   deps: ChapterAnalysisDeps,
-  job: JobRow
-): Promise<AnalysisResult> {
-  const entries = await deps.loadEpubEntries(epubPath);
-  if (entries.length < 2) {
-    throw new Error("EPUB parser did not yield enough usable chapters");
-  }
+  job: JobRow,
+  glossary: string[]
+): Promise<{ transcriptWords: TranscriptWord[]; plans: TranscriptChunkPlan[] }> {
   const durationMs = asset.duration_ms ?? 0;
   if (durationMs <= 0) {
-    throw new Error("Audio asset duration is required for chapter analysis");
+    throw new Error("Audio asset duration is required for transcription");
   }
-
-  const glossary = extractGlossaryTerms(entries);
   const prompt = promptForChunk(book, glossary);
   const plans = buildChunkPlan(durationMs);
   if (plans.length === 0) {
@@ -1048,36 +1148,59 @@ async function analyzeWithDeps(
   const tempDir = path.join(os.tmpdir(), "podible-chapter-analysis");
   await mkdir(tempDir, { recursive: true });
 
-  const transcriptChunks: TranscriptChunk[] = [];
-  for (const plan of plans) {
-    const clipName = `asset-${asset.id}-chunk-${plan.index}-attempt-${job.attempt_count}`;
-    let clipPath: string | null = null;
-    try {
-      clipPath = await deps.extractChunkClip({
-        asset,
-        files,
-        startMs: plan.startMs,
-        durationMs: plan.durationMs,
-        tempDir,
-        clipName,
-      });
-      const words = await deps.transcribeChunk(settings, clipPath, prompt, book);
-      transcriptChunks.push({
-        ...plan,
-        words,
-      });
-    } finally {
-      if (clipPath) {
-        await rm(clipPath, { force: true }).catch(() => undefined);
+  const transcriptChunks = await Promise.all(
+    plans.map(async (plan) => {
+      const clipName = `asset-${asset.id}-chunk-${plan.index}-attempt-${job.attempt_count}`;
+      let clipPath: string | null = null;
+      try {
+        log(
+          ctx,
+          `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=extract start_ms=${plan.startMs} duration_ms=${plan.durationMs}`
+        );
+        clipPath = await deps.extractChunkClip({
+          asset,
+          files,
+          startMs: plan.startMs,
+          durationMs: plan.durationMs,
+          tempDir,
+          clipName,
+        });
+        log(
+          ctx,
+          `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=transcribe clip=${JSON.stringify(clipPath)}`
+        );
+        const words = await deps.transcribeChunk(settings, clipPath, prompt, book);
+        log(
+          ctx,
+          `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=done words=${words.length}`
+        );
+        return {
+          ...plan,
+          words,
+        };
+      } finally {
+        if (clipPath) {
+          await rm(clipPath, { force: true }).catch(() => undefined);
+        }
       }
-    }
-  }
+    })
+  );
 
   const transcriptWords = mergeTranscriptChunks(transcriptChunks);
   if (transcriptWords.length === 0) {
     throw new Error("Whole-book transcription did not produce usable word timestamps");
   }
+  return { transcriptWords, plans };
+}
 
+function analyzeTranscript(
+  entries: EpubChapterEntry[],
+  durationMs: number,
+  transcriptWords: TranscriptWord[],
+  glossary: string[],
+  plans: TranscriptChunkPlan[],
+  transcriptSource: "new" | "cached"
+): AnalysisResult {
   const probes = boundaryProbes(entries, durationMs);
   const matches: BoundaryMatch[] = probes.map((probe) => {
     const previousMatchMs = findProbeTimestamp(transcriptWords, probe.previousProbe, "end", probe.estimateMs);
@@ -1123,10 +1246,12 @@ async function analyzeWithDeps(
   }
 
   return {
+    transcriptWords,
     chapters,
     resolvedBoundaryCount,
     totalBoundaryCount,
     debug: {
+      transcriptSource,
       chunkCount: plans.length,
       glossary,
       chunks: plans.map((plan) => ({
@@ -1207,25 +1332,52 @@ export async function processChapterAnalysisJob(
     return "done";
   }
 
-  const settings = ctx.getSettings();
-  if (!settings.agents.apiKey.trim()) {
+  const chapterFingerprint = await computeChapterFingerprint(target.asset, target.files, ebookFile.path);
+  const transcriptFingerprint = await computeTranscriptFingerprint(target.asset, target.files);
+  const existing = ctx.repo.getChapterAnalysis(target.asset.id);
+  if (
+    existing &&
+    existing.status === "succeeded" &&
+    existing.fingerprint === chapterFingerprint &&
+    existing.transcript_fingerprint === transcriptFingerprint
+  ) {
     ctx.repo.markJobSucceeded(job.id);
     return "done";
   }
 
-  const fingerprint = await computeFingerprint(target.asset, target.files, ebookFile.path);
-  const existing = ctx.repo.getChapterAnalysis(target.asset.id);
-  if (existing && existing.status === "succeeded" && existing.fingerprint === fingerprint) {
+  const settings = ctx.getSettings();
+  const existingTranscriptRow = ctx.repo.getAssetTranscript(target.asset.id);
+  const existingTranscriptPayload = await readStoredTranscriptPayload(existingTranscriptRow);
+  const hasCachedTranscript =
+    Boolean(existingTranscriptPayload) &&
+    existingTranscriptRow?.status === "succeeded" &&
+    existingTranscriptRow?.fingerprint === transcriptFingerprint;
+  if (!hasCachedTranscript && !settings.agents.apiKey.trim()) {
     ctx.repo.markJobSucceeded(job.id);
     return "done";
   }
+
+  const entries = await deps.loadEpubEntries(ebookFile.path);
+  if (entries.length < 2) {
+    ctx.repo.markJobSucceeded(job.id);
+    return "done";
+  }
+
+  const durationMs = target.asset.duration_ms ?? 0;
+  if (durationMs <= 0) {
+    ctx.repo.markJobSucceeded(job.id);
+    return "done";
+  }
+
+  const glossary = extractGlossaryTerms(entries);
 
   ctx.repo.upsertChapterAnalysis({
     assetId: target.asset.id,
     status: "pending",
     source: CHAPTER_ANALYSIS_SOURCE,
     algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
-    fingerprint,
+    fingerprint: chapterFingerprint,
+    transcriptFingerprint,
     chaptersJson: null,
     debugJson: null,
     resolvedBoundaryCount: 0,
@@ -1234,13 +1386,47 @@ export async function processChapterAnalysisJob(
   });
 
   try {
-    const result = await analyzeWithDeps(target.asset, target.files, ebookFile.path, book, settings, deps, job);
+    let transcriptWords: TranscriptWord[];
+    let plans: TranscriptChunkPlan[];
+    let transcriptSource: "new" | "cached";
+
+    if (hasCachedTranscript && existingTranscriptPayload) {
+      transcriptWords = transcriptWordsFromStoredPayload(existingTranscriptPayload);
+      plans = [];
+      transcriptSource = "cached";
+    } else {
+      ctx.repo.upsertAssetTranscript({
+        assetId: target.asset.id,
+        status: "pending",
+        source: CHAPTER_ANALYSIS_SOURCE,
+        algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
+        fingerprint: transcriptFingerprint,
+        transcriptJson: null,
+        error: null,
+      });
+      const transcript = await transcribeAssetWithDeps(ctx, target.asset, target.files, book, settings, deps, job, glossary);
+      transcriptWords = transcript.transcriptWords;
+      plans = transcript.plans;
+      transcriptSource = "new";
+      ctx.repo.upsertAssetTranscript({
+        assetId: target.asset.id,
+        status: "succeeded",
+        source: CHAPTER_ANALYSIS_SOURCE,
+        algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
+        fingerprint: transcriptFingerprint,
+        transcriptJson: JSON.stringify(storedTranscriptPayload(transcriptWords)),
+        error: null,
+      });
+    }
+
+    const result = analyzeTranscript(entries, durationMs, transcriptWords, glossary, plans, transcriptSource);
     ctx.repo.upsertChapterAnalysis({
       assetId: target.asset.id,
       status: "succeeded",
       source: CHAPTER_ANALYSIS_SOURCE,
       algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
-      fingerprint,
+      fingerprint: chapterFingerprint,
+      transcriptFingerprint,
       chaptersJson: JSON.stringify(storedPayload(result.chapters)),
       debugJson: JSON.stringify(result.debug),
       resolvedBoundaryCount: result.resolvedBoundaryCount,
@@ -1255,12 +1441,25 @@ export async function processChapterAnalysisJob(
     return "done";
   } catch (error) {
     const message = (error as Error).message;
+    const transcript = ctx.repo.getAssetTranscript(target.asset.id);
+    if (!transcript || transcript.fingerprint !== transcriptFingerprint || transcript.status !== "succeeded") {
+      ctx.repo.upsertAssetTranscript({
+        assetId: target.asset.id,
+        status: "failed",
+        source: CHAPTER_ANALYSIS_SOURCE,
+        algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
+        fingerprint: transcriptFingerprint,
+        transcriptJson: transcript?.transcript_json ?? null,
+        error: message,
+      });
+    }
     ctx.repo.upsertChapterAnalysis({
       assetId: target.asset.id,
       status: "failed",
       source: CHAPTER_ANALYSIS_SOURCE,
       algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
-      fingerprint,
+      fingerprint: chapterFingerprint,
+      transcriptFingerprint,
       chaptersJson: null,
       debugJson: JSON.stringify({ error: message }),
       resolvedBoundaryCount: 0,

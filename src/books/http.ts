@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 
 import { buildJsonFeed, buildRssFeed } from "./feed";
 import { authorizeRequest } from "./auth";
+import { loadStoredTranscriptPayload } from "./chapter-analysis";
 import { buildChapters, preferredAudioForBooks, streamAudioAsset, streamExtension } from "./media";
 import { BooksRepo } from "./repo";
 import { handleRpcMethod, handleRpcRequest } from "./rpc";
@@ -15,6 +16,45 @@ function json(value: unknown, status = 200): Response {
       "Cache-Control": "no-store",
     },
   });
+}
+
+function acceptsBrotli(request: Request): boolean {
+  return (request.headers.get("accept-encoding")?.toLowerCase() ?? "").includes("br");
+}
+
+async function maybeCompressBrotli(request: Request, response: Response): Promise<Response> {
+  if (!acceptsBrotli(request) || !response.body || response.headers.has("Content-Encoding")) {
+    return response;
+  }
+
+  const headers = new Headers(response.headers);
+  headers.set("Content-Encoding", "br");
+  headers.append("Vary", "Accept-Encoding");
+  headers.delete("Content-Length");
+
+  return new Response(response.body.pipeThrough(new CompressionStream("brotli")), {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+async function jsonResponse(
+  request: Request,
+  value: unknown,
+  status = 200,
+  contentType = "application/json; charset=utf-8"
+): Promise<Response> {
+  return maybeCompressBrotli(
+    request,
+    new Response(JSON.stringify(value, null, 2), {
+      status,
+      headers: {
+        "Content-Type": contentType,
+        "Cache-Control": "no-store",
+      },
+    })
+  );
 }
 
 function parseId(value: string): number {
@@ -1646,9 +1686,27 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
           logRequest(response.status);
           return response;
         }
-        response = new Response(JSON.stringify(chapters, null, 2), {
-          headers: { "Content-Type": "application/json+chapters" },
-        });
+        response = await jsonResponse(request, chapters, 200, "application/json+chapters");
+        logRequest(response.status);
+        return response;
+      }
+
+      if (pathname.startsWith("/transcripts/") && request.method === "GET") {
+        const idPart = pathname.split("/")[2] ?? "";
+        const assetId = parseId(idPart.replace(/\.json$/i, ""));
+        const asset = repo.getAsset(assetId);
+        if (!asset || asset.kind === "ebook") {
+          response = json({ error: "not_found" }, 404);
+          logRequest(response.status);
+          return response;
+        }
+        const transcript = await loadStoredTranscriptPayload(repo, assetId);
+        if (!transcript) {
+          response = json({ error: "not_found" }, 404);
+          logRequest(response.status);
+          return response;
+        }
+        response = await jsonResponse(request, transcript);
         logRequest(response.status);
         return response;
       }

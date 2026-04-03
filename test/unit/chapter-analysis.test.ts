@@ -12,6 +12,8 @@ import {
   extractGlossaryTerms,
   loadEpubEntries,
   loadStoredChapterTimings,
+  loadStoredTranscriptPayload,
+  normalizeTranscriptionLanguage,
   processChapterAnalysisJob,
   queueChapterAnalysisForBook,
 } from "../../src/books/chapter-analysis";
@@ -310,11 +312,22 @@ describe("chapter analysis", () => {
 
   test("builds chunk plan with overlap trims", () => {
     const chunks = buildChunkPlan(70 * 60_000);
-    expect(chunks.length).toBe(2);
+    expect(chunks.length).toBe(3);
     expect(chunks[0]?.trimStartMs).toBe(0);
     expect(chunks[0]?.trimEndMs).toBeGreaterThan(0);
     expect(chunks[1]?.trimStartMs).toBeGreaterThan(0);
-    expect(chunks[1]?.trimEndMs).toBe(0);
+    expect(chunks[1]?.trimEndMs).toBeGreaterThan(0);
+    expect(chunks[2]?.trimStartMs).toBeGreaterThan(0);
+    expect(chunks[2]?.trimEndMs).toBe(0);
+  });
+
+  test("normalizes book languages for transcription requests", () => {
+    expect(normalizeTranscriptionLanguage("eng")).toBe("en");
+    expect(normalizeTranscriptionLanguage("en-US")).toBe("en");
+    expect(normalizeTranscriptionLanguage("EN_gb")).toBe("en");
+    expect(normalizeTranscriptionLanguage("fr")).toBe("fr");
+    expect(normalizeTranscriptionLanguage("zzz")).toBeNull();
+    expect(normalizeTranscriptionLanguage(null)).toBeNull();
   });
 
   test("stores derived timings and chapters endpoint prefers cached analysis", async () => {
@@ -443,8 +456,11 @@ describe("chapter analysis", () => {
       );
 
       const stored = await loadStoredChapterTimings(repo, audio, repo.getAssetFiles(audio.id));
+      const transcript = await loadStoredTranscriptPayload(repo, audio.id);
       expect(stored?.length).toBe(3);
       expect(stored?.[1]?.title).toBe("Two");
+      expect(transcript?.words.length).toBeGreaterThan(0);
+      expect(transcript?.text).toContain("one0");
 
       const chapters = await buildChapters(repo, audio, repo.getAssetFiles(audio.id));
       expect(chapters?.chapters.length).toBe(3);

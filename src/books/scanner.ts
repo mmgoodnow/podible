@@ -47,6 +47,7 @@ async function listFiles(dir: string): Promise<FileInfo[]> {
   const out: FileInfo[] = [];
   for (const entry of entries) {
     if (!entry.isFile()) continue;
+    if (isHiddenOrBundleDir(entry.name)) continue;
     const fullPath = path.join(dir, entry.name);
     const stat = await fs.stat(fullPath).catch(() => null);
     if (!stat || !stat.isFile()) continue;

@@ -364,12 +364,25 @@ describe("json-rpc handler", () => {
       source: "epub_ai",
       algorithmVersion: "test",
       fingerprint: "fp",
+      transcriptFingerprint: "tfp",
       chaptersJson: JSON.stringify({
         version: "1.2.0",
         chapters: [{ id: "ch0", title: "Chapter 1", startMs: 0, endMs: 1000 }],
       }),
       resolvedBoundaryCount: 1,
       totalBoundaryCount: 1,
+    });
+    repo.upsertAssetTranscript({
+      assetId: audioAsset.id,
+      status: "succeeded",
+      source: "whisper",
+      algorithmVersion: "test",
+      fingerprint: "tfp",
+      transcriptJson: JSON.stringify({
+        version: "1.2.0",
+        text: "hello world",
+        words: [{ startMs: 0, endMs: 500, text: "hello", token: "hello" }],
+      }),
     });
     repo.createJob({ type: "acquire", bookId: book.id });
 
@@ -387,6 +400,7 @@ describe("json-rpc handler", () => {
     expect(wiped.result.deleted.assetFiles).toBe(2);
     expect(wiped.result.deleted.jobs).toBe(1);
     expect(wiped.result.deleted.chapterAnalysis).toBe(1);
+    expect(wiped.result.deleted.assetTranscripts).toBe(1);
     expect(wiped.result.deletedAssetFileCount).toBe(2);
     expect(wiped.result.deletedAssetPaths).toEqual([assetPath, path.join(root, "library", "Dune.mp3")]);
     expect(wiped.result.deletedCoverFileCount).toBe(1);

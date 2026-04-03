@@ -13,6 +13,7 @@ COPY server.ts ./
 COPY src ./src
 COPY podible.png ./
 
+ENV NODE_ENV=production
 ENV CONFIG_DIR=/config
 
 EXPOSE 80

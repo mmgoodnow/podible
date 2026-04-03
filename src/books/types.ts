@@ -13,6 +13,7 @@ export type JobType =
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
 export type ChapterAnalysisStatus = "pending" | "succeeded" | "failed";
+export type AssetTranscriptStatus = "pending" | "succeeded" | "failed";
 
 export type AssetKind = "single" | "multi" | "ebook";
 
@@ -148,10 +149,22 @@ export type ChapterAnalysisRow = {
   source: string;
   algorithm_version: string;
   fingerprint: string;
+  transcript_fingerprint: string | null;
   chapters_json: string | null;
   debug_json: string | null;
   resolved_boundary_count: number;
   total_boundary_count: number;
+  error: string | null;
+  updated_at: string;
+};
+
+export type AssetTranscriptRow = {
+  asset_id: number;
+  status: AssetTranscriptStatus;
+  source: string;
+  algorithm_version: string;
+  fingerprint: string;
+  transcript_json: string | null;
   error: string | null;
   updated_at: string;
 };
