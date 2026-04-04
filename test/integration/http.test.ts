@@ -68,6 +68,8 @@ describe("podible http", () => {
     expect(adminBody.includes("Manual Search + Snatch")).toBe(true);
     expect(adminBody.includes("manual-import-btn")).toBe(true);
     expect(adminBody.includes("settings-editor")).toBe(true);
+    expect(adminBody.includes("Refresh Library")).toBe(true);
+    expect(adminBody.includes("Rotate API Key")).toBe(true);
     expect(adminBody.includes("wipe-db-btn")).toBe(true);
 
     db.close();
@@ -327,6 +329,78 @@ describe("podible http", () => {
     expect(refreshed.status).toBe(303);
     expect(refreshed.headers.get("location")).toContain("/activity?notice=");
     expect(repo.listJobsByType("full_library_refresh").length).toBe(1);
+
+    db.close();
+  });
+
+  test("queues a refresh job from the admin page", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const settings = repo.ensureSettings();
+    repo.updateSettings({
+      ...settings,
+      auth: { ...settings.auth, mode: "local" },
+      torznab: [],
+    });
+
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+    const refreshed = await fetchHandler(
+      new Request("http://localhost/admin/refresh", {
+        method: "POST",
+      })
+    );
+    expect(refreshed.status).toBe(303);
+    expect(refreshed.headers.get("location")).toContain("/admin?notice=");
+    expect(repo.listJobsByType("full_library_refresh").length).toBe(1);
+
+    db.close();
+  });
+
+  test("does not leak the stored api key into unauthenticated login page links", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const settings = repo.ensureSettings();
+    repo.updateSettings({
+      ...settings,
+      auth: { ...settings.auth, mode: "apikey", key: "super-secret-admin-key" },
+      torznab: [],
+    });
+
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+    const login = await fetchHandler(new Request("http://localhost/login"));
+    expect(login.status).toBe(200);
+    const body = await login.text();
+    expect(body.includes("super-secret-admin-key")).toBe(false);
+    expect(body.includes("api_key=super-secret-admin-key")).toBe(false);
+
+    db.close();
+  });
+
+  test("rotates the api key from the admin page", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const settings = repo.ensureSettings();
+    repo.updateSettings({
+      ...settings,
+      auth: { ...settings.auth, mode: "apikey", key: "old-admin-key" },
+      torznab: [],
+    });
+
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+    const rotated = await fetchHandler(
+      new Request("http://localhost/admin/rotate-api-key?api_key=old-admin-key", {
+        method: "POST",
+      })
+    );
+    expect(rotated.status).toBe(303);
+    const location = rotated.headers.get("location") ?? "";
+    expect(location).toContain("/admin?notice=Rotated%20API%20key.");
+    expect(location).toContain("api_key=");
+    expect(location).not.toContain("old-admin-key");
+    expect(repo.getSettings().auth.key).not.toBe("old-admin-key");
 
     db.close();
   });
@@ -949,6 +1023,7 @@ describe("podible http", () => {
       torznab: [],
     });
     const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    repo.updateBookMetadata(book.id, { wordCount: 188_000 });
 
     const fetchHandler = createPodibleFetchHandler(repo, Date.now());
 
@@ -958,6 +1033,7 @@ describe("podible http", () => {
     expect(readJson.jsonrpc).toBe("2.0");
     expect(readJson.id).toBeNull();
     expect(readJson.result.book.id).toBe(book.id);
+    expect(readJson.result.book.wordCount).toBe(188000);
 
     const writeRes = await fetchHandler(
       new Request("http://localhost/rpc/settings/update?auth.mode=local&auth.key=test")

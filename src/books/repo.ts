@@ -350,6 +350,7 @@ export class BooksRepo {
     patch: Partial<{
       coverPath: string | null;
       durationMs: number | null;
+      wordCount: number | null;
       publishedAt: string | null;
       description: string | null;
       descriptionHtml: string | null;
@@ -369,6 +370,7 @@ export class BooksRepo {
         `UPDATE books
          SET cover_path = ?,
              duration_ms = ?,
+             word_count = ?,
              published_at = ?,
              description = ?,
              description_html = ?,
@@ -381,6 +383,7 @@ export class BooksRepo {
       .get(
         patch.coverPath ?? current.cover_path,
         patch.durationMs ?? current.duration_ms,
+        patch.wordCount ?? current.word_count,
         patch.publishedAt ?? current.published_at,
         patch.description ?? current.description,
         patch.descriptionHtml ?? current.description_html,
@@ -1081,6 +1084,7 @@ export class BooksRepo {
       author: row.author,
       coverUrl: row.cover_path ? `/covers/${row.id}.jpg` : null,
       durationMs: row.duration_ms,
+      wordCount: row.word_count,
       addedAt: row.added_at,
       updatedAt: row.updated_at,
       publishedAt: row.published_at,

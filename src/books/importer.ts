@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { getDurationSeconds } from "../media/probe-cache";
 import { normalizeAudioExt } from "../media/metadata";
-import { queueChapterAnalysisForBook } from "./chapter-analysis";
+import { computeEpubWordCount, queueChapterAnalysisForBook } from "./chapter-analysis";
 
 import type { BooksRepo } from "./repo";
 import type { AssetKind, MediaType, ReleaseRow } from "./types";
@@ -315,6 +315,13 @@ export async function importReleaseFromPath(
       coverPath: path.join(root, existingCover.name),
       durationMs: release.media_type === "audio" ? durationMsTotal : book.duration_ms,
     });
+  }
+
+  if (selected.mime === "application/epub+zip" && linkedFiles[0]) {
+    const wordCount = await computeEpubWordCount(linkedFiles[0]).catch(() => null);
+    if (wordCount !== null) {
+      repo.updateBookMetadata(book.id, { wordCount });
+    }
   }
 
   await queueChapterAnalysisForBook(repo, book.id);

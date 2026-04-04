@@ -532,6 +532,12 @@ export async function loadEpubEntries(epubPath: string): Promise<EpubChapterEntr
   }
 }
 
+export async function computeEpubWordCount(epubPath: string): Promise<number | null> {
+  const entries = await loadEpubEntries(epubPath);
+  if (entries.length === 0) return null;
+  return entries.reduce((sum, entry) => sum + entry.wordCount, 0);
+}
+
 function chapterStartRatios(entries: EpubChapterEntry[]): number[] {
   const totalWords = entries[entries.length - 1]?.cumulativeWords ?? 0;
   const ratios = [0];

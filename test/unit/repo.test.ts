@@ -93,6 +93,15 @@ describe("books repo", () => {
     db.close();
   });
 
+  test("stores word count on books", () => {
+    const { db, repo } = setupRepo();
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    repo.updateBookMetadata(book.id, { wordCount: 188_000 });
+    const hydrated = repo.getBook(book.id);
+    expect(hydrated?.wordCount).toBe(188_000);
+    db.close();
+  });
+
   test("rescheduleJob clears stale error", () => {
     const { db, repo } = setupRepo();
 

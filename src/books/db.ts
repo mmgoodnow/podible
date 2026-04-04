@@ -14,6 +14,7 @@ const ASSET_TRANSCRIPTS_MIGRATION_ID = 8;
 const USERS_AND_SESSIONS_MIGRATION_ID = 9;
 const LOCAL_USERS_PROVIDER_MIGRATION_ID = 10;
 const PLEX_LOGIN_ATTEMPTS_MIGRATION_ID = 11;
+const BOOK_WORD_COUNT_MIGRATION_ID = 12;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS books (
   author TEXT NOT NULL,
   cover_path TEXT NULL,
   duration_ms INTEGER NULL,
+  word_count INTEGER NULL,
   added_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   published_at TEXT NULL,
@@ -447,6 +449,12 @@ CREATE INDEX IF NOT EXISTS idx_plex_login_attempts_created_at ON plex_login_atte
 `);
 }
 
+function applyBookWordCountMigration(db: Database): void {
+  if (!hasColumn(db, "books", "word_count")) {
+    db.exec("ALTER TABLE books ADD COLUMN word_count INTEGER NULL");
+  }
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
@@ -509,5 +517,8 @@ export function runMigrations(db: Database): void {
   });
   apply(PLEX_LOGIN_ATTEMPTS_MIGRATION_ID, () => {
     applyPlexLoginAttemptsMigration(db);
+  });
+  apply(BOOK_WORD_COUNT_MIGRATION_ID, () => {
+    applyBookWordCountMigration(db);
   });
 }
