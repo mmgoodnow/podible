@@ -52,7 +52,8 @@ describe("podible http", () => {
     expect(home.status).toBe(200);
     expect(home.headers.get("content-type")).toContain("text/html");
     const body = await home.text();
-    expect(body.includes("Your audiobook shelf")).toBe(true);
+    expect(body.includes("Podible")).toBe(true);
+    expect(body.includes("Your audiobook shelf, with eBooks when you want the source text.")).toBe(true);
     expect(body.includes("Ready now")).toBe(true);
     expect(body.includes("Still working")).toBe(true);
     expect(body.includes("Needs attention")).toBe(true);
@@ -207,7 +208,7 @@ describe("podible http", () => {
     const detailBody = await detail.text();
     expect(detailBody.includes("Play audio")).toBe(true);
     expect(detailBody.includes("What you can do now")).toBe(true);
-    expect(detailBody.includes("Files and exports")).toBe(true);
+    expect(detailBody.includes("Available now")).toBe(true);
     expect(detailBody.includes("Find audio")).toBe(true);
     expect(detailBody.includes("Release history")).toBe(true);
 

@@ -378,11 +378,11 @@ function renderLandingPage(
   const needsAttention = repo.listAllBooks().filter((book) => book.status === "error").slice(0, 6);
   const body = `
     <section class="hero">
-      <h1>Your audiobook shelf</h1>
-      <p>Find something ready to play, check what Podible is still working on, and fix anything that needs attention without dropping into the admin console.</p>
+      <h1>Podible</h1>
+      <p>Your audiobook shelf, with eBooks when you want the source text.</p>
       <div class="stats">
         <span class="pill">${featured.length} ready to play</span>
-        <span class="pill">${inProgress.length} active imports</span>
+        <span class="pill">${inProgress.length} in progress</span>
         <span class="pill">${needsAttention.length} need attention</span>
       </div>
       <div class="actions" style="margin-top: 14px;">
@@ -561,7 +561,7 @@ function renderAddPage(
   const body = `
     <section class="hero">
       <h1>Add a book</h1>
-      <p>Search for a book, pick the right match, and Podible will create it and queue acquisition.</p>
+      <p>Search for a book, pick the right match, and Podible will add it to your library and start finding files.</p>
     </section>
     <div class="grid">
       <section class="card span-12">
@@ -1090,8 +1090,8 @@ async function renderBookPage(
       <section class="card span-6">
         <h2>What you can do now</h2>
         <div class="section-list">
-          <div><strong>Audio:</strong> ${audio ? "Ready to play" : "Not attached yet"}</div>
-          <div><strong>eBook:</strong> ${ebook ? "Ready to export" : "Not attached yet"}</div>
+          <div><strong>Audio:</strong> ${audio ? "Ready to play" : "Still looking"}</div>
+          <div><strong>eBook:</strong> ${ebook ? "Ready to download" : "Still looking"}</div>
           <div><strong>Duration:</strong> ${formatMinutes(book.durationMs)}</div>
         </div>
         <div class="actions" style="margin-top: 12px;">
@@ -1112,12 +1112,12 @@ async function renderBookPage(
         </div>
       </section>
       <section class="card span-6">
-        <h2>Files and exports</h2>
+        <h2>Available now</h2>
         <div class="section-list">
-          <div><strong>Audio:</strong> ${audio ? `ready (#${audio.id}, ${escapeHtml(audio.kind)})` : "not attached"}</div>
-          <div><strong>eBook:</strong> ${ebook ? `ready (#${ebook.id})` : "not attached"}</div>
-          <div><strong>Transcript:</strong> ${transcriptUrl ? "available" : "not available yet"}</div>
-          <div><strong>Chapters:</strong> ${chaptersUrl ? "available" : "not available yet"}</div>
+          <div><strong>Audio:</strong> ${audio ? "Available" : "Not ready yet"}</div>
+          <div><strong>eBook:</strong> ${ebook ? "Available" : "Not ready yet"}</div>
+          <div><strong>Transcript:</strong> ${transcriptUrl ? "Available" : "Not ready yet"}</div>
+          <div><strong>Chapters:</strong> ${chaptersUrl ? "Available" : "Not ready yet"}</div>
         </div>
         <div class="actions" style="margin-top: 12px;">
           ${chaptersUrl ? `<a class="button-link" href="${escapeHtml(chaptersUrl)}">Chapters JSON</a>` : ""}
