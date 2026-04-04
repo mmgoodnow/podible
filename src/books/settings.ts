@@ -2,8 +2,22 @@ import { randomBytes } from "node:crypto";
 
 import type { AppSettings } from "./types";
 
-export function defaultSettings(overrides?: Partial<AppSettings>): AppSettings {
-  return {
+type SettingsOverrides = Partial<Omit<AppSettings, "rtorrent" | "polling" | "recovery" | "feed" | "auth" | "agents" | "notifications">> & {
+  rtorrent?: Partial<AppSettings["rtorrent"]>;
+  polling?: Partial<AppSettings["polling"]>;
+  recovery?: Partial<AppSettings["recovery"]>;
+  feed?: Partial<AppSettings["feed"]>;
+  auth?: Partial<Omit<AppSettings["auth"], "plex">> & {
+    plex?: Partial<AppSettings["auth"]["plex"]>;
+  };
+  agents?: Partial<AppSettings["agents"]>;
+  notifications?: {
+    pushover?: Partial<AppSettings["notifications"]["pushover"]>;
+  };
+};
+
+export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
+  const defaults: AppSettings = {
     torznab: [],
     rtorrent: {
       transport: "http-xmlrpc",
@@ -27,6 +41,13 @@ export function defaultSettings(overrides?: Partial<AppSettings>): AppSettings {
     auth: {
       mode: "apikey",
       key: randomBytes(24).toString("hex"),
+      plex: {
+        productName: "Podible",
+        ownerToken: "",
+        machineId: "",
+        machineName: "",
+        allowedUsernames: [],
+      },
     },
     agents: {
       enabled: false,
@@ -43,7 +64,45 @@ export function defaultSettings(overrides?: Partial<AppSettings>): AppSettings {
         userKey: "",
       },
     },
+  };
+
+  return {
+    ...defaults,
     ...overrides,
+    rtorrent: {
+      ...defaults.rtorrent,
+      ...(overrides?.rtorrent ?? {}),
+    },
+    polling: {
+      ...defaults.polling,
+      ...(overrides?.polling ?? {}),
+    },
+    recovery: {
+      ...defaults.recovery,
+      ...(overrides?.recovery ?? {}),
+    },
+    feed: {
+      ...defaults.feed,
+      ...(overrides?.feed ?? {}),
+    },
+    auth: {
+      ...defaults.auth,
+      ...(overrides?.auth ?? {}),
+      plex: {
+        ...defaults.auth.plex,
+        ...(overrides?.auth?.plex ?? {}),
+      },
+    },
+    agents: {
+      ...defaults.agents,
+      ...(overrides?.agents ?? {}),
+    },
+    notifications: {
+      pushover: {
+        ...defaults.notifications.pushover,
+        ...(overrides?.notifications?.pushover ?? {}),
+      },
+    },
   };
 }
 
@@ -54,6 +113,9 @@ export function parseSettings(value: string): AppSettings {
   }
 
   const defaults = defaultSettings();
+  const parsedAuth = (parsed.auth && typeof parsed.auth === "object" ? parsed.auth : {}) as Partial<AppSettings["auth"]>;
+  const parsedAuthPlex =
+    parsedAuth.plex && typeof parsedAuth.plex === "object" ? (parsedAuth.plex as Partial<AppSettings["auth"]["plex"]>) : {};
   const parsedAgents = (parsed.agents && typeof parsed.agents === "object" ? parsed.agents : {}) as Partial<AppSettings["agents"]>;
   const parsedRecovery =
     parsed.recovery && typeof parsed.recovery === "object" ? (parsed.recovery as Partial<AppSettings["recovery"]>) : {};
@@ -95,8 +157,29 @@ export function parseSettings(value: string): AppSettings {
       ...(parsed.feed && typeof parsed.feed === "object" ? parsed.feed : {}),
     },
     auth: {
-      ...defaults.auth,
-      ...(parsed.auth && typeof parsed.auth === "object" ? parsed.auth : {}),
+      mode: parsedAuth.mode === "apikey" || parsedAuth.mode === "local" || parsedAuth.mode === "plex" ? parsedAuth.mode : defaults.auth.mode,
+      key: typeof parsedAuth.key === "string" ? parsedAuth.key : defaults.auth.key,
+      plex: {
+        productName:
+          typeof parsedAuthPlex.productName === "string" && parsedAuthPlex.productName.trim()
+            ? parsedAuthPlex.productName
+            : defaults.auth.plex.productName,
+        ownerToken:
+          typeof parsedAuthPlex.ownerToken === "string"
+            ? parsedAuthPlex.ownerToken
+            : defaults.auth.plex.ownerToken,
+        machineId:
+          typeof parsedAuthPlex.machineId === "string"
+            ? parsedAuthPlex.machineId
+            : defaults.auth.plex.machineId,
+        machineName:
+          typeof parsedAuthPlex.machineName === "string"
+            ? parsedAuthPlex.machineName
+            : defaults.auth.plex.machineName,
+        allowedUsernames: Array.isArray(parsedAuthPlex.allowedUsernames)
+          ? parsedAuthPlex.allowedUsernames.filter((value): value is string => typeof value === "string")
+          : defaults.auth.plex.allowedUsernames,
+      },
     },
     agents: {
       enabled: typeof parsedAgents.enabled === "boolean" ? parsedAgents.enabled : defaults.agents.enabled,

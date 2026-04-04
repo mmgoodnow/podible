@@ -17,7 +17,17 @@ export type AssetTranscriptStatus = "pending" | "succeeded" | "failed";
 
 export type AssetKind = "single" | "multi" | "ebook";
 
-export type AuthMode = "apikey" | "local";
+export type AuthMode = "apikey" | "local" | "plex";
+export type AuthProvider = "plex" | "local";
+
+export type PlexJwk = {
+  kty: "OKP";
+  crv: "Ed25519";
+  x: string;
+  kid: string;
+  alg: "EdDSA";
+  use?: "sig";
+};
 
 export type TorznabSource = {
   name: string;
@@ -53,6 +63,13 @@ export type AppSettings = {
   auth: {
     mode: AuthMode;
     key: string;
+    plex: {
+      productName: string;
+      ownerToken: string;
+      machineId: string;
+      machineName: string;
+      allowedUsernames: string[];
+    };
   };
   agents: {
     enabled: boolean;
@@ -167,6 +184,44 @@ export type AssetTranscriptRow = {
   transcript_json: string | null;
   error: string | null;
   updated_at: string;
+};
+
+export type UserRow = {
+  id: number;
+  provider: AuthProvider;
+  provider_user_id: string;
+  username: string;
+  display_name: string | null;
+  thumb_url: string | null;
+  is_admin: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SessionRow = {
+  id: number;
+  user_id: number;
+  token_hash: string;
+  expires_at: string;
+  created_at: string;
+  last_seen_at: string;
+};
+
+export type SessionWithUserRow = SessionRow & {
+  provider: AuthProvider;
+  provider_user_id: string;
+  username: string;
+  display_name: string | null;
+  thumb_url: string | null;
+  is_admin: number;
+};
+
+export type PlexLoginAttemptRow = {
+  pin_id: number;
+  client_identifier: string;
+  public_jwk_json: string;
+  private_key_pkcs8: string;
+  created_at: string;
 };
 
 export type DownloadView = {

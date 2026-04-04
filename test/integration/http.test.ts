@@ -9,6 +9,7 @@ const isolatedDataDir = await mkdtemp(path.join(os.tmpdir(), "podible-http-test-
 const { runMigrations } = await import("../../src/books/db");
 const { createPodibleFetchHandler } = await import("../../src/books/http");
 const { BooksRepo } = await import("../../src/books/repo");
+const { hashSessionToken } = await import("../../src/books/auth");
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+XGfQAAAAASUVORK5CYII=";
@@ -35,7 +36,7 @@ afterAll(async () => {
 });
 
 describe("podible http", () => {
-  test("serves root html home page", async () => {
+  test("serves root html user landing page", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -51,24 +52,23 @@ describe("podible http", () => {
     expect(home.status).toBe(200);
     expect(home.headers.get("content-type")).toContain("text/html");
     const body = await home.text();
-    expect(body.includes("Podible Backend")).toBe(true);
-    expect(body.includes("Open Library Search")).toBe(true);
-    expect(body.includes("Manual Search + Snatch")).toBe(true);
-    expect(body.includes("manual-import-btn")).toBe(true);
-    expect(body.includes("manual-import-inspect-btn")).toBe(true);
-    expect(body.includes("manual-import-files-body")).toBe(true);
-    expect(body.includes("view-files-btn")).toBe(true);
-    expect(body.includes("library-files-body")).toBe(true);
-    expect(body.includes("Settings JSON")).toBe(true);
-    expect(body.includes("Recent Jobs")).toBe(true);
-    expect(body.includes("jobs-table-body")).toBe(true);
-    expect(body.includes("settings-editor")).toBe(true);
-    expect(body.includes("wipe-db-btn")).toBe(true);
-    expect(body.includes("admin.wipeDatabase")).toBe(true);
-    expect(body.includes("library.delete")).toBe(true);
-    expect(body.includes("agent-acquire-btn")).toBe(true);
-    expect(body.includes("report-import-issue-btn")).toBe(true);
-    expect(body.includes("library-status")).toBe(true);
+    expect(body.includes("Your audiobook shelf")).toBe(true);
+    expect(body.includes("Ready now")).toBe(true);
+    expect(body.includes("Still working")).toBe(true);
+    expect(body.includes("Needs attention")).toBe(true);
+    expect(body.includes("/library")).toBe(true);
+    expect(body.includes("/add")).toBe(true);
+    expect(body.includes("/admin")).toBe(true);
+
+    const admin = await fetchHandler(new Request("http://localhost/admin"));
+    expect(admin.status).toBe(200);
+    const adminBody = await admin.text();
+    expect(adminBody.includes("Podible Backend")).toBe(true);
+    expect(adminBody.includes("Open Library Search")).toBe(true);
+    expect(adminBody.includes("Manual Search + Snatch")).toBe(true);
+    expect(adminBody.includes("manual-import-btn")).toBe(true);
+    expect(adminBody.includes("settings-editor")).toBe(true);
+    expect(adminBody.includes("wipe-db-btn")).toBe(true);
 
     db.close();
   });
@@ -137,7 +137,6 @@ describe("podible http", () => {
         new Request("http://localhost/settings", { method: "GET" }),
         new Request("http://localhost/settings", { method: "PUT", body: "{}" }),
         new Request("http://localhost/openlibrary/search?q=dune", { method: "GET" }),
-        new Request("http://localhost/library?limit=10", { method: "GET" }),
         new Request("http://localhost/library", { method: "POST", body: "{}" }),
         new Request("http://localhost/library/refresh", { method: "POST" }),
         new Request("http://localhost/library/1", { method: "GET" }),
@@ -158,6 +157,670 @@ describe("podible http", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test("serves library and book detail pages", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const settings = repo.ensureSettings();
+    repo.updateSettings({
+      ...settings,
+      auth: { ...settings.auth, mode: "local" },
+      torznab: [],
+    });
+
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mpeg",
+      totalSize: 123,
+      durationMs: 1_000,
+      files: [
+        {
+          path: path.join(isolatedDataDir, "dune.mp3"),
+          size: 123,
+          start: 0,
+          end: 122,
+          durationMs: 1_000,
+          title: "Dune",
+        },
+      ],
+    });
+
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+    const library = await fetchHandler(new Request("http://localhost/library"));
+    expect(library.status).toBe(200);
+    const libraryBody = await library.text();
+    expect(libraryBody.includes("Library")).toBe(true);
+    expect(libraryBody.includes("Dune")).toBe(true);
+    expect(libraryBody.includes("Search by title or author")).toBe(true);
+
+    const detail = await fetchHandler(new Request(`http://localhost/book/${book.id}`));
+    expect(detail.status).toBe(200);
+    const detailBody = await detail.text();
+    expect(detailBody.includes("Play audio")).toBe(true);
+    expect(detailBody.includes("What you can do now")).toBe(true);
+    expect(detailBody.includes("Files and exports")).toBe(true);
+    expect(detailBody.includes("Find audio")).toBe(true);
+    expect(detailBody.includes("Release history")).toBe(true);
+
+    db.close();
+  });
+
+  test("supports library search query in SSR", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const settings = repo.ensureSettings();
+    repo.updateSettings({
+      ...settings,
+      auth: { ...settings.auth, mode: "local" },
+      torznab: [],
+    });
+
+    repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    repo.createBook({ title: "Hyperion", author: "Dan Simmons" });
+
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+    const library = await fetchHandler(new Request("http://localhost/library?q=Hyperion"));
+    expect(library.status).toBe(200);
+    const libraryBody = await library.text();
+    expect(libraryBody.includes("matching “Hyperion”")).toBe(true);
+    expect(libraryBody.includes("Hyperion")).toBe(true);
+    expect(libraryBody.includes("Dune")).toBe(false);
+
+    db.close();
+  });
+
+  test("queues acquire from the book detail page", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const settings = repo.ensureSettings();
+    repo.updateSettings({
+      ...settings,
+      auth: { ...settings.auth, mode: "local" },
+      torznab: [],
+    });
+
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+
+    const queued = await fetchHandler(
+      new Request(`http://localhost/book/${book.id}/acquire`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "media=audio",
+      })
+    );
+    expect(queued.status).toBe(303);
+    const location = queued.headers.get("location");
+    expect(location).toContain(`/book/${book.id}?notice=`);
+
+    const jobs = repo.listJobsByType("acquire");
+    expect(jobs.length).toBe(1);
+    expect(jobs[0]?.book_id).toBe(book.id);
+
+    db.close();
+  });
+
+  test("serves activity page and queues a refresh job", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const settings = repo.ensureSettings();
+    repo.updateSettings({
+      ...settings,
+      auth: { ...settings.auth, mode: "local" },
+      torznab: [],
+    });
+
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mpeg",
+      totalSize: 123,
+      durationMs: 1_000,
+      files: [
+        {
+          path: path.join(isolatedDataDir, "activity-dune.mp3"),
+          size: 123,
+          start: 0,
+          end: 122,
+          durationMs: 1_000,
+          title: "Dune",
+        },
+      ],
+    });
+    const failed = repo.createBook({ title: "Broken Book", author: "Someone" });
+    const failedRelease = repo.createRelease({
+      bookId: failed.id,
+      provider: "test",
+      title: "Broken Book",
+      mediaType: "audio",
+      infoHash: "abcdef1234567890abcdef1234567890abcdef12",
+      url: "https://example.com/broken.torrent",
+      status: "failed",
+    });
+    repo.setReleaseStatus(failedRelease.id, "failed", "boom");
+    repo.createJob({ type: "acquire", bookId: book.id, status: "running" });
+
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+
+    const activity = await fetchHandler(new Request("http://localhost/activity"));
+    expect(activity.status).toBe(200);
+    const activityBody = await activity.text();
+    expect(activityBody.includes("Books in progress")).toBe(true);
+    expect(activityBody.includes("Recently ready")).toBe(true);
+    expect(activityBody.includes("Needs attention")).toBe(true);
+    expect(activityBody.includes("Refresh library")).toBe(true);
+    expect(activityBody.includes("Broken Book")).toBe(true);
+
+    const refreshed = await fetchHandler(
+      new Request("http://localhost/activity/refresh", {
+        method: "POST",
+      })
+    );
+    expect(refreshed.status).toBe(303);
+    expect(refreshed.headers.get("location")).toContain("/activity?notice=");
+    expect(repo.listJobsByType("full_library_refresh").length).toBe(1);
+
+    db.close();
+  });
+
+  test("serves add page search and add flow", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown) => {
+      const url = new URL(String(input));
+      if (url.origin !== "https://openlibrary.org") {
+        throw new Error(`Unexpected external fetch in test: ${url.toString()}`);
+      }
+
+      if (url.pathname === "/search.json") {
+        return new Response(
+          JSON.stringify({
+            docs: [
+              {
+                key: "/works/OL45804W",
+                title: "Hyperion",
+                author_name: ["Dan Simmons"],
+                first_publish_year: 1989,
+                language: ["eng"],
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      if (url.pathname === "/works/OL45804W.json") {
+        return new Response(
+          JSON.stringify({
+            description: "On the world called Hyperion, beyond the law of the Hegemony of Man, there waits the creature called the Shrike.",
+            covers: [12345],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      throw new Error(`Unexpected external fetch in test: ${url.toString()}`);
+    }) as typeof fetch;
+
+    try {
+      const db = new Database(":memory:");
+      runMigrations(db);
+      const repo = new BooksRepo(db);
+      const settings = repo.ensureSettings();
+      repo.updateSettings({
+        ...settings,
+        auth: { ...settings.auth, mode: "local" },
+        torznab: [],
+      });
+
+      const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+
+      const add = await fetchHandler(new Request("http://localhost/add?q=Hyperion%20Dan%20Simmons"));
+      expect(add.status).toBe(200);
+      const addBody = await add.text();
+      expect(addBody.includes("Add a book")).toBe(true);
+      expect(addBody.includes("Hyperion")).toBe(true);
+      expect(addBody.includes("/works/OL45804W")).toBe(true);
+
+      const created = await fetchHandler(
+        new Request("http://localhost/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "openLibraryKey=%2Fworks%2FOL45804W",
+        })
+      );
+      expect(created.status).toBe(303);
+      const location = created.headers.get("location");
+      expect(location).toBe("/book/1");
+
+      const detail = await fetchHandler(new Request(`http://localhost${location}`));
+      expect(detail.status).toBe(200);
+      const detailBody = await detail.text();
+      expect(detailBody.includes("Hyperion")).toBe(true);
+      expect(detailBody.includes("Dan Simmons")).toBe(true);
+
+      db.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("supports local user login and session-based browser access", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const settings = repo.ensureSettings();
+    repo.updateSettings({
+      ...settings,
+      auth: { ...settings.auth, mode: "local" },
+      torznab: [],
+    });
+
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mpeg",
+      totalSize: 123,
+      durationMs: 1_000,
+      files: [
+        {
+          path: path.join(isolatedDataDir, "login-dune.mp3"),
+          size: 123,
+          start: 0,
+          end: 122,
+          durationMs: 1_000,
+          title: "Dune",
+        },
+      ],
+    });
+
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+
+    const unauthorized = await fetchHandler(new Request("http://app.test/library"));
+    expect(unauthorized.status).toBe(401);
+
+    const loginPage = await fetchHandler(new Request("http://app.test/login"));
+    expect(loginPage.status).toBe(200);
+    const loginBody = await loginPage.text();
+    expect(loginBody.includes("Create a user")).toBe(true);
+
+    const login = await fetchHandler(
+      new Request("http://app.test/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "username=alice&displayName=Alice",
+      })
+    );
+    expect(login.status).toBe(303);
+    const setCookie = login.headers.get("set-cookie") ?? "";
+    expect(setCookie.includes("podible_session=")).toBe(true);
+
+    const cookieHeader = setCookie.split(";")[0] ?? "";
+    const authed = await fetchHandler(
+      new Request("http://app.test/library", {
+        headers: { cookie: cookieHeader },
+      })
+    );
+    expect(authed.status).toBe(200);
+    const authedBody = await authed.text();
+    expect(authedBody.includes("Signed in as Alice")).toBe(true);
+    expect(authedBody.includes("Dune")).toBe(true);
+
+    const logout = await fetchHandler(
+      new Request("http://app.test/logout", {
+        method: "POST",
+        headers: { cookie: cookieHeader },
+      })
+    );
+    expect(logout.status).toBe(303);
+    expect(logout.headers.get("set-cookie")).toContain("Max-Age=0");
+
+    db.close();
+  });
+
+  test("supports Plex browser login and creates a local session", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.origin === "https://plex.tv" && url.pathname === "/api/v2/pins" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body ?? "{}"));
+        expect(body.strong).toBe(true);
+        expect(typeof body.jwk?.x).toBe("string");
+        expect(typeof body.jwk?.kid).toBe("string");
+        return new Response(JSON.stringify({ id: 123, code: "PINCODE123" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.origin === "https://plex.tv" && url.pathname === "/api/v2/pins/123") {
+        expect(url.searchParams.get("deviceJWT")?.split(".").length).toBe(3);
+        return new Response(JSON.stringify({ id: 123, code: "PINCODE123", authToken: "plex-jwt-token" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.origin === "https://plex.tv" && url.pathname === "/api/v2/user") {
+        expect(new Headers(init?.headers).get("X-Plex-Token")).toBe("plex-jwt-token");
+        return new Response(
+          JSON.stringify({
+            id: "plex-user-1",
+            username: "alice",
+            title: "Alice",
+            thumb: "https://example.com/alice.jpg",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+      throw new Error(`Unexpected external fetch in test: ${url.toString()}`);
+    }) as typeof fetch;
+
+    try {
+      const db = new Database(":memory:");
+      runMigrations(db);
+      const repo = new BooksRepo(db);
+      const settings = repo.ensureSettings();
+      repo.updateSettings({
+        ...settings,
+        auth: { ...settings.auth, mode: "plex" },
+      });
+
+      const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+      repo.addAsset({
+        bookId: book.id,
+        kind: "single",
+        mime: "audio/mpeg",
+        totalSize: 123,
+        durationMs: 1_000,
+        files: [
+          {
+            path: path.join(isolatedDataDir, "plex-dune.mp3"),
+            size: 123,
+            start: 0,
+            end: 122,
+            durationMs: 1_000,
+            title: "Dune",
+          },
+        ],
+      });
+
+      const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+
+      const loginPage = await fetchHandler(new Request("http://app.test/login"));
+      expect(loginPage.status).toBe(200);
+      expect((await loginPage.text()).includes("Sign in with Plex")).toBe(true);
+
+      const start = await fetchHandler(
+        new Request("http://app.test/login/plex/start", {
+          method: "POST",
+        })
+      );
+      expect(start.status).toBe(200);
+      const startPayload = (await start.json()) as { authUrl: string; pinId: number };
+      expect(startPayload.pinId).toBe(123);
+      expect(startPayload.authUrl).toContain("https://app.plex.tv/auth#?");
+      expect(startPayload.authUrl).toContain("PINCODE123");
+      expect(startPayload.authUrl).toContain(encodeURIComponent("http://app.test/login/plex/complete?pinId=123"));
+
+      const complete = await fetchHandler(new Request("http://app.test/login/plex/complete?pinId=123"));
+      expect(complete.status).toBe(200);
+      const completeBody = await complete.text();
+      expect(completeBody.includes("/login/plex/status?pinId=123")).toBe(true);
+
+      const status = await fetchHandler(new Request("http://app.test/login/plex/status?pinId=123"));
+      expect(status.status).toBe(200);
+      const setCookie = status.headers.get("set-cookie") ?? "";
+      expect(setCookie.includes("podible_session=")).toBe(true);
+
+      const cookieHeader = setCookie.split(";")[0] ?? "";
+      const authed = await fetchHandler(
+        new Request("http://app.test/library", {
+          headers: { cookie: cookieHeader },
+        })
+      );
+      expect(authed.status).toBe(200);
+      const authedBody = await authed.text();
+      expect(authedBody.includes("Signed in as Alice")).toBe(true);
+      expect(authedBody.includes("Dune")).toBe(true);
+      expect(repo.listUsers("plex")[0]?.is_admin).toBe(1);
+      expect(repo.getSettings().auth.plex.ownerToken).toBe("plex-jwt-token");
+      expect(repo.getPlexLoginAttempt(123)).toBeNull();
+
+      db.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("allows admin to select which Plex server controls access", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.origin === "https://plex.tv" && url.pathname === "/api/resources") {
+        expect(new Headers(init?.headers).get("X-Plex-Token")).toBe("owner-token");
+        return new Response(
+          `<?xml version="1.0"?>
+          <MediaContainer>
+            <Device name="Family Server" product="Plex Media Server" clientIdentifier="family-server" owned="1" provides="server"/>
+            <Device name="Friends Server" product="Plex Media Server" clientIdentifier="friends-server" owned="1" provides="server"/>
+          </MediaContainer>`,
+          { status: 200, headers: { "Content-Type": "application/xml" } }
+        );
+      }
+      throw new Error(`Unexpected external fetch in test: ${url.toString()}`);
+    }) as typeof fetch;
+
+    try {
+      const db = new Database(":memory:");
+      runMigrations(db);
+      const repo = new BooksRepo(db);
+      const settings = repo.ensureSettings();
+      repo.updateSettings({
+        ...settings,
+        auth: {
+          ...settings.auth,
+          mode: "plex",
+          plex: {
+            ...settings.auth.plex,
+            ownerToken: "owner-token",
+          },
+        },
+      });
+      const adminUser = repo.upsertUser({
+        provider: "plex",
+        providerUserId: "owner",
+        username: "owner",
+        displayName: "Owner",
+        isAdmin: true,
+      });
+      repo.createSession(adminUser.id, hashSessionToken("admin-session"), new Date(Date.now() + 60_000).toISOString());
+
+      const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+      const adminCookie = "podible_session=admin-session";
+
+      const page = await fetchHandler(
+        new Request("http://app.test/admin", {
+          headers: { cookie: adminCookie },
+        })
+      );
+      expect(page.status).toBe(200);
+      const pageBody = await page.text();
+      expect(pageBody.includes("Plex Access Control")).toBe(true);
+      expect(pageBody.includes("Family Server")).toBe(true);
+      expect(pageBody.includes("Friends Server")).toBe(true);
+
+      const selected = await fetchHandler(
+        new Request("http://app.test/admin/plex/select", {
+          method: "POST",
+          headers: {
+            cookie: adminCookie,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: "machineId=family-server&machineName=Family%20Server",
+        })
+      );
+      expect(selected.status).toBe(303);
+      expect(repo.getSettings().auth.plex.machineId).toBe("family-server");
+      expect(repo.getSettings().auth.plex.machineName).toBe("Family Server");
+
+      db.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("gates new Plex sign-ins by access to the selected Plex server", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.origin === "https://plex.tv" && url.pathname === "/api/v2/pins" && init?.method === "POST") {
+        return new Response(JSON.stringify({ id: 123, code: "PINCODE123" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.origin === "https://plex.tv" && url.pathname === "/api/v2/pins/123") {
+        return new Response(JSON.stringify({ id: 123, code: "PINCODE123", authToken: "candidate-token" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.origin === "https://plex.tv" && url.pathname === "/api/v2/user") {
+        expect(new Headers(init?.headers).get("X-Plex-Token")).toBe("candidate-token");
+        return new Response(
+          JSON.stringify({
+            id: "friend-user",
+            username: "friend",
+            title: "Friend",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url.origin === "https://plex.tv" && url.pathname === "/api/users") {
+        expect(new Headers(init?.headers).get("X-Plex-Token")).toBe("owner-token");
+        return new Response(
+          `<?xml version="1.0"?>
+          <MediaContainer>
+            <User id="friend-user" title="Friend">
+              <Server machineIdentifier="other-server" />
+            </User>
+          </MediaContainer>`,
+          { status: 200, headers: { "Content-Type": "application/xml" } }
+        );
+      }
+      throw new Error(`Unexpected external fetch in test: ${url.toString()}`);
+    }) as typeof fetch;
+
+    try {
+      const db = new Database(":memory:");
+      runMigrations(db);
+      const repo = new BooksRepo(db);
+      const settings = repo.ensureSettings();
+      repo.updateSettings({
+        ...settings,
+        auth: {
+          ...settings.auth,
+          mode: "plex",
+          plex: {
+            ...settings.auth.plex,
+            ownerToken: "owner-token",
+            machineId: "family-server",
+            machineName: "Family Server",
+          },
+        },
+      });
+      repo.upsertUser({
+        provider: "plex",
+        providerUserId: "owner-user",
+        username: "owner",
+        displayName: "Owner",
+        isAdmin: true,
+      });
+
+      const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+      const start = await fetchHandler(new Request("http://app.test/login/plex/start", { method: "POST" }));
+      expect(start.status).toBe(200);
+
+      const complete = await fetchHandler(new Request("http://app.test/login/plex/complete?pinId=123"));
+      expect(complete.status).toBe(200);
+
+      const status = await fetchHandler(new Request("http://app.test/login/plex/status?pinId=123"));
+      expect(status.status).toBe(400);
+      expect(status.headers.get("set-cookie")).toBeNull();
+      const body = await status.text();
+      expect(body.includes("This Plex user is not allowed on this Podible instance.")).toBe(true);
+      expect(repo.listUsers("plex")).toHaveLength(1);
+
+      db.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("does not grant admin or rpc access to non-admin browser sessions", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const settings = repo.ensureSettings();
+    repo.updateSettings({
+      ...settings,
+      auth: { ...settings.auth, mode: "plex" },
+    });
+
+    const user = repo.upsertUser({
+      provider: "plex",
+      providerUserId: "plex-user-2",
+      username: "bob",
+      displayName: "Bob",
+      isAdmin: false,
+    });
+    repo.createSession(user.id, hashSessionToken("session-token"), new Date(Date.now() + 60_000).toISOString());
+
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+    const cookieHeader = "podible_session=session-token";
+
+    const library = await fetchHandler(
+      new Request("http://app.test/library", {
+        headers: { cookie: cookieHeader },
+      })
+    );
+    expect(library.status).toBe(200);
+
+    const admin = await fetchHandler(
+      new Request("http://app.test/admin", {
+        headers: { cookie: cookieHeader },
+      })
+    );
+    expect(admin.status).toBe(403);
+
+    const rpcResponse = await fetchHandler(
+      new Request("http://app.test/rpc", {
+        method: "POST",
+        headers: {
+          cookie: cookieHeader,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "settings.get",
+          params: {},
+        }),
+      })
+    );
+    expect(rpcResponse.status).toBe(403);
+
+    db.close();
   });
 
   test("supports rpc openlibrary.search and add-by-key-from-search flow", async () => {

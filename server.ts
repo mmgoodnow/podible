@@ -19,6 +19,7 @@ void runWorker({
 
 const server = Bun.serve({
   port,
+  idleTimeout: 60,
   fetch: createPodibleFetchHandler(repo, startTime),
 });
 

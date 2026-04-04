@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { authorizeRequest } from "../../src/books/auth";
+import { authorizeRequest, hashSessionToken, SESSION_COOKIE_NAME } from "../../src/books/auth";
 import { defaultSettings } from "../../src/books/settings";
 
 describe("auth", () => {
@@ -59,6 +59,40 @@ describe("auth", () => {
     try {
       expect(authorizeRequest(localReq, settings)).toBe(true);
       expect(authorizeRequest(remoteReq, settings)).toBe(false);
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+  });
+
+  test("accepts a valid session cookie", () => {
+    const settings = defaultSettings({ auth: { mode: "apikey", key: "abc123" } });
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      const token = "session-token";
+      const req = new Request("http://example.com/library", {
+        headers: { Cookie: `${SESSION_COOKIE_NAME}=${token}` },
+      });
+      expect(
+        authorizeRequest(req, settings, (tokenHash) =>
+          tokenHash === hashSessionToken(token)
+            ? ({
+                id: 1,
+                user_id: 1,
+                token_hash: tokenHash,
+                expires_at: new Date(Date.now() + 60_000).toISOString(),
+                created_at: new Date().toISOString(),
+                last_seen_at: new Date().toISOString(),
+                provider: "plex",
+                provider_user_id: "u1",
+                username: "user",
+                display_name: "User",
+                thumb_url: null,
+                is_admin: 1,
+              } as const)
+            : null
+        )
+      ).toBe(true);
     } finally {
       process.env.NODE_ENV = previousNodeEnv;
     }

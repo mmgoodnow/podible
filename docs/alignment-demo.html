@@ -1,0 +1,1134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fuzzy Transcript Alignment Demo</title>
+    <style>
+      :root {
+        --bg: #f2ede3;
+        --panel: rgba(255, 251, 245, 0.92);
+        --ink: #1c1814;
+        --muted: #6f665c;
+        --line: rgba(81, 63, 42, 0.18);
+        --accent: #b04e2b;
+        --accent-soft: rgba(176, 78, 43, 0.12);
+        --good: #1f7a55;
+        --warn: #b26b00;
+        --bad: #a43232;
+        --shadow: 0 20px 60px rgba(86, 64, 35, 0.14);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(176, 78, 43, 0.18), transparent 24%),
+          radial-gradient(circle at top right, rgba(40, 104, 88, 0.14), transparent 20%),
+          linear-gradient(180deg, #f8f3eb 0%, var(--bg) 100%);
+      }
+
+      .page {
+        max-width: 1500px;
+        margin: 0 auto;
+        padding: 32px 20px 48px;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 18px;
+        align-items: stretch;
+        margin-bottom: 22px;
+      }
+
+      .hero-card,
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(10px);
+      }
+
+      .hero-card {
+        height: 100%;
+        padding: 28px 28px 24px;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: clamp(2rem, 5vw, 4rem);
+        line-height: 0.95;
+        letter-spacing: -0.04em;
+      }
+
+      .hero p,
+      .muted {
+        color: var(--muted);
+      }
+
+      .hero p {
+        max-width: 64ch;
+        font-size: 1.02rem;
+        line-height: 1.5;
+        margin: 0;
+      }
+
+      .legend {
+        display: grid;
+        gap: 10px;
+        padding: 20px;
+      }
+
+      .legend h2,
+      .panel h2 {
+        margin: 0 0 8px;
+        font-size: 1rem;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+      }
+
+      .legend-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .chip {
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.55);
+      }
+
+      .chip strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 0.95rem;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 1.05fr 0.95fr;
+        gap: 18px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 18px;
+      }
+
+      .panel {
+        padding: 18px;
+      }
+
+      .inputs {
+        display: grid;
+        gap: 14px;
+      }
+
+      .input-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+      }
+
+      label {
+        display: grid;
+        gap: 8px;
+        font-size: 0.92rem;
+      }
+
+      textarea,
+      input,
+      button,
+      select {
+        font: inherit;
+      }
+
+      textarea,
+      input {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 12px 14px;
+        background: rgba(255, 255, 255, 0.72);
+        color: var(--ink);
+      }
+
+      textarea {
+        min-height: 180px;
+        resize: vertical;
+        line-height: 1.45;
+      }
+
+      .controls {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .controls label {
+        font-size: 0.84rem;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      button {
+        border: 0;
+        border-radius: 999px;
+        padding: 11px 16px;
+        background: var(--accent);
+        color: white;
+        cursor: pointer;
+        box-shadow: 0 10px 24px rgba(176, 78, 43, 0.3);
+      }
+
+      button.secondary {
+        background: rgba(28, 24, 20, 0.08);
+        color: var(--ink);
+        box-shadow: none;
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .stat {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 14px;
+        background: rgba(255, 255, 255, 0.62);
+      }
+
+      .stat .k {
+        color: var(--muted);
+        font-size: 0.82rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+
+      .stat .v {
+        margin-top: 6px;
+        font-size: 1.5rem;
+        font-weight: 700;
+      }
+
+      .token-flow,
+      .alignment-list,
+      .projection {
+        display: grid;
+        gap: 10px;
+      }
+
+      .token-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .token {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.66);
+        font-size: 0.9rem;
+      }
+
+      .token small {
+        color: var(--muted);
+      }
+
+      .token.match {
+        border-color: rgba(31, 122, 85, 0.3);
+        background: rgba(31, 122, 85, 0.12);
+      }
+
+      .token.fuzzy {
+        border-color: rgba(178, 107, 0, 0.3);
+        background: rgba(178, 107, 0, 0.13);
+      }
+
+      .token.gap {
+        border-color: rgba(164, 50, 50, 0.22);
+        background: rgba(164, 50, 50, 0.12);
+      }
+
+      .alignment-list {
+        max-height: 440px;
+        overflow: auto;
+      }
+
+      .pair {
+        display: grid;
+        grid-template-columns: 1fr 110px 1fr;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 12px;
+        border-radius: 14px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.56);
+        font-size: 0.92rem;
+      }
+
+      .pair .middle {
+        text-align: center;
+        color: var(--muted);
+      }
+
+      .pair.match {
+        background: rgba(31, 122, 85, 0.08);
+      }
+
+      .pair.fuzzy {
+        background: rgba(178, 107, 0, 0.09);
+      }
+
+      .pair.gap {
+        background: rgba(164, 50, 50, 0.07);
+      }
+
+      .matrix-shell {
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.62);
+        max-height: 520px;
+      }
+
+      table {
+        width: max-content;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        border: 1px solid rgba(81, 63, 42, 0.08);
+        min-width: 42px;
+        height: 42px;
+        text-align: center;
+        padding: 4px;
+        font-size: 0.75rem;
+      }
+
+      th.sticky,
+      td.sticky {
+        position: sticky;
+        left: 0;
+        background: #f7f0e6;
+        z-index: 2;
+      }
+
+      tr:first-child th {
+        position: sticky;
+        top: 0;
+        background: #f7f0e6;
+        z-index: 3;
+      }
+
+      td.band-off {
+        background: rgba(28, 24, 20, 0.04);
+        color: rgba(28, 24, 20, 0.26);
+      }
+
+      td.path {
+        outline: 2px solid var(--accent);
+        outline-offset: -2px;
+      }
+
+      td.match-cell {
+        background: rgba(31, 122, 85, 0.12);
+      }
+
+      td.fuzzy-cell {
+        background: rgba(178, 107, 0, 0.13);
+      }
+
+      td.active-band {
+        background: rgba(176, 78, 43, 0.08);
+      }
+
+      td.active-cell {
+        background: rgba(176, 78, 43, 0.22);
+        outline: 2px solid rgba(176, 78, 43, 0.7);
+        outline-offset: -2px;
+        font-weight: 700;
+      }
+
+      td.backtrack-cell {
+        background: rgba(31, 122, 85, 0.22);
+      }
+
+      .matrix-controls {
+        display: grid;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      .matrix-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+
+      .matrix-scrub {
+        display: grid;
+        gap: 8px;
+      }
+
+      .matrix-scrub input[type="range"] {
+        padding: 0;
+      }
+
+      .step-caption {
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.64);
+        color: var(--muted);
+        min-height: 48px;
+      }
+
+      .matrix-notes {
+        display: grid;
+        gap: 8px;
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid var(--line);
+        background: rgba(176, 78, 43, 0.06);
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      .matrix-notes strong {
+        color: var(--ink);
+      }
+
+      .projection-row {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr 1fr;
+        gap: 10px;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.56);
+      }
+
+      code {
+        font-family: "SF Mono", "Menlo", "Monaco", monospace;
+      }
+
+      @media (max-width: 1100px) {
+        .hero,
+        .layout,
+        .input-grid,
+        .controls,
+        .stats {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <article class="hero-card">
+          <h1>Fuzzy Dynamic Programming Alignment</h1>
+          <p>
+            This demo shows how a noisy audiobook transcript can be aligned to cleaner EPUB text.
+            The transcript provides timestamps. The book text provides canonical wording and paragraph
+            structure. A banded dynamic-programming pass decides whether each token is a match,
+            fuzzy substitution, insertion, or deletion, then projects timing back onto the book text.
+          </p>
+        </article>
+        <aside class="hero-card legend">
+          <h2>Reading The Output</h2>
+          <div class="legend-grid">
+            <div class="chip">
+              <strong>Match</strong>
+              Exact normalized token match.
+            </div>
+            <div class="chip">
+              <strong>Fuzzy</strong>
+              Small edit-distance or morphological match.
+            </div>
+            <div class="chip">
+              <strong>Gap</strong>
+              Word exists only on one side.
+            </div>
+            <div class="chip">
+              <strong>Projection</strong>
+              EPUB tokens inherit transcript timing.
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="layout">
+        <div class="stack">
+          <section class="panel inputs">
+            <h2>Inputs</h2>
+            <div class="input-grid">
+              <label>
+                Transcript Tokens With Timestamps
+                <textarea id="transcriptInput"></textarea>
+              </label>
+              <label>
+                Canonical EPUB Text
+                <textarea id="epubInput"></textarea>
+              </label>
+            </div>
+            <div class="controls">
+              <label>
+                Match Score
+                <input id="matchScore" type="number" value="3" step="0.5" />
+              </label>
+              <label>
+                Fuzzy Score
+                <input id="fuzzyScore" type="number" value="1.5" step="0.5" />
+              </label>
+              <label>
+                Mismatch Penalty
+                <input id="mismatchPenalty" type="number" value="-2" step="0.5" />
+              </label>
+              <label>
+                Gap Penalty
+                <input id="gapPenalty" type="number" value="-1" step="0.5" />
+              </label>
+            </div>
+            <div class="controls">
+              <label>
+                Diagonal Band Width
+                <input id="bandWidth" type="number" value="6" min="1" max="40" step="1" />
+              </label>
+              <label>
+                Max Matrix Tokens
+                <input id="matrixLimit" type="number" value="20" min="6" max="40" step="1" />
+              </label>
+              <label>
+                Fuzzy Rule
+                <input id="fuzzyHint" type="text" value="edit distance <= 1, stems, apostrophes, plurals" disabled />
+              </label>
+              <label>
+                Time Interpolation
+                <input id="interpolationHint" type="text" value="nearest aligned neighbors" disabled />
+              </label>
+            </div>
+            <div class="actions">
+              <button id="runButton" type="button">Align Tokens</button>
+              <button id="sampleButton" class="secondary" type="button">Load Sample</button>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>Alignment Summary</h2>
+            <div class="stats" id="stats"></div>
+          </section>
+
+          <section class="panel">
+            <h2>Aligned Token Pairs</h2>
+            <p class="muted">
+              Left is canonical EPUB text. Right is the Whisper transcript token with timestamp.
+            </p>
+            <div class="alignment-list" id="alignmentList"></div>
+          </section>
+
+          <section class="panel">
+            <h2>Projected EPUB Timing</h2>
+            <p class="muted">
+              These are canonical EPUB tokens after timing has been projected from aligned transcript words.
+            </p>
+            <div class="projection" id="projection"></div>
+          </section>
+        </div>
+
+        <div class="stack">
+          <section class="panel">
+            <h2>Normalized Tokens</h2>
+            <div class="token-flow">
+              <div>
+                <p class="muted">EPUB side</p>
+                <div id="epubTokens" class="token-row"></div>
+              </div>
+              <div>
+                <p class="muted">Transcript side</p>
+                <div id="transcriptTokens" class="token-row"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>Banded DP Matrix</h2>
+            <p class="muted">
+              Rows are EPUB tokens. Columns are transcript tokens. Play the animation to watch the diagonal band sweep
+              across the matrix, score cells, and then backtrack through the chosen path.
+            </p>
+            <div class="matrix-controls">
+              <div class="matrix-actions">
+                <button id="playMatrixButton" type="button">Play Matrix</button>
+                <button id="pauseMatrixButton" class="secondary" type="button">Pause</button>
+                <button id="resetMatrixButton" class="secondary" type="button">Reset</button>
+              </div>
+              <div class="matrix-scrub">
+                <label>
+                  Matrix Step
+                  <input id="matrixStep" type="range" min="0" max="0" value="0" />
+                </label>
+                <div class="step-caption" id="matrixCaption"></div>
+                <div class="matrix-notes">
+                  <div><strong>What the band means:</strong> we do not score the whole table. For each EPUB row, we only examine transcript columns near the expected diagonal so the algorithm stays fast.</div>
+                  <div><strong>What each fill step compares:</strong> diagonal = align these two tokens, up = skip the EPUB token, left = skip the transcript token.</div>
+                  <div><strong>How the score works:</strong> every cell compares three candidate totals: <code>diag = previous diagonal + match score</code>, <code>up = previous row + gap penalty</code>, and <code>left = previous column + gap penalty</code>. Exact matches add the most, fuzzy matches add less, and gaps or hard mismatches subtract from the running total.</div>
+                  <div><strong>What happens when ASR is wrong:</strong> if one word is misheard, a fuzzy diagonal match can still win. If several words are wrong in a row, the path will usually take a few gap steps, then reconnect once the texts start matching again.</div>
+                  <div><strong>What backtracking does:</strong> once the best final score is found, the algorithm walks backward through the chosen moves to recover the final alignment path.</div>
+                </div>
+              </div>
+            </div>
+            <div class="matrix-shell">
+              <table id="matrix"></table>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const sampleTranscript = [
+        "[0-320] This",
+        "[321-510] is",
+        "[511-980] Audible",
+        "[1800-2300] Arrakis",
+        "[2301-2550] is",
+        "[2551-3100] dry",
+        "[3101-3600] and",
+        "[3601-4180] dangerous",
+        "[4181-4700] Muadib",
+        "[4701-5100] waits",
+        "[5101-5480] there",
+        "[6200-6580] The",
+        "[6581-7240] Bunny",
+        "[7241-7920] Desert",
+        "[7921-8460] order",
+        "[8461-8820] quietly",
+        "[8821-9300] watched",
+        "[9301-9780] stood",
+        "[9781-10300] beside",
+        "[10301-10780] the",
+        "[10781-11420] doorway",
+      ].join("\n");
+
+      const sampleEpub =
+        "Arrakis is dry and dangerous. Muad'Dib waits there. The Bene Gesserit sister stood silently beside the doorway.";
+
+      const transcriptInput = document.querySelector("#transcriptInput");
+      const epubInput = document.querySelector("#epubInput");
+      const runButton = document.querySelector("#runButton");
+      const sampleButton = document.querySelector("#sampleButton");
+      const alignmentList = document.querySelector("#alignmentList");
+      const projection = document.querySelector("#projection");
+      const matrix = document.querySelector("#matrix");
+      const matrixCaption = document.querySelector("#matrixCaption");
+      const matrixStep = document.querySelector("#matrixStep");
+      const playMatrixButton = document.querySelector("#playMatrixButton");
+      const pauseMatrixButton = document.querySelector("#pauseMatrixButton");
+      const resetMatrixButton = document.querySelector("#resetMatrixButton");
+      const stats = document.querySelector("#stats");
+      const epubTokensEl = document.querySelector("#epubTokens");
+      const transcriptTokensEl = document.querySelector("#transcriptTokens");
+
+      const scoreInputs = {
+        match: document.querySelector("#matchScore"),
+        fuzzy: document.querySelector("#fuzzyScore"),
+        mismatch: document.querySelector("#mismatchPenalty"),
+        gap: document.querySelector("#gapPenalty"),
+        bandWidth: document.querySelector("#bandWidth"),
+        matrixLimit: document.querySelector("#matrixLimit"),
+      };
+
+      let animationTimer = null;
+      let currentAnimation = null;
+
+      function normalizeToken(value) {
+        return value
+          .toLowerCase()
+          .replace(/['’](?:s)?$/u, "")
+          .replace(/[^\p{L}\p{N}]+/gu, "");
+      }
+
+      function simpleStem(value) {
+        if (value.endsWith("ies") && value.length > 4) return value.slice(0, -3) + "y";
+        if (value.endsWith("ing") && value.length > 5) return value.slice(0, -3);
+        if (value.endsWith("ed") && value.length > 4) return value.slice(0, -2);
+        if (value.endsWith("es") && value.length > 4) return value.slice(0, -2);
+        if (value.endsWith("s") && value.length > 3) return value.slice(0, -1);
+        return value;
+      }
+
+      function editDistance(a, b) {
+        const dp = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+        for (let i = 0; i <= a.length; i += 1) dp[i][0] = i;
+        for (let j = 0; j <= b.length; j += 1) dp[0][j] = j;
+        for (let i = 1; i <= a.length; i += 1) {
+          for (let j = 1; j <= b.length; j += 1) {
+            const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+            dp[i][j] = Math.min(
+              dp[i - 1][j] + 1,
+              dp[i][j - 1] + 1,
+              dp[i - 1][j - 1] + cost
+            );
+          }
+        }
+        return dp[a.length][b.length];
+      }
+
+      function tokenSimilarity(left, right, scores) {
+        if (!left || !right) return { type: "mismatch", score: scores.mismatch };
+        if (left === right) return { type: "match", score: scores.match };
+        if (simpleStem(left) === simpleStem(right)) return { type: "fuzzy", score: scores.fuzzy };
+        if (left.startsWith(right) || right.startsWith(left)) return { type: "fuzzy", score: scores.fuzzy };
+        if (editDistance(left, right) <= 1) return { type: "fuzzy", score: scores.fuzzy };
+        return { type: "mismatch", score: scores.mismatch };
+      }
+
+      function parseTranscript(text) {
+        return text
+          .split(/\n+/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line, index) => {
+            const match = line.match(/^\[(\d+)-(\d+)\]\s+(.+)$/);
+            if (match) {
+              const raw = match[3].trim();
+              return {
+                id: `t${index}`,
+                raw,
+                token: normalizeToken(raw),
+                startMs: Number(match[1]),
+                endMs: Number(match[2]),
+              };
+            }
+            return {
+              id: `t${index}`,
+              raw: line,
+              token: normalizeToken(line),
+              startMs: index * 500,
+              endMs: index * 500 + 450,
+            };
+          })
+          .filter((item) => item.token);
+      }
+
+      function parseEpub(text) {
+        return (text.match(/\b[\p{L}\p{N}'’-]+\b/gu) || [])
+          .map((raw, index) => ({
+            id: `e${index}`,
+            raw,
+            token: normalizeToken(raw),
+          }))
+          .filter((item) => item.token);
+      }
+
+      function align(epubTokens, transcriptTokens, config) {
+        const rows = epubTokens.length;
+        const cols = transcriptTokens.length;
+        const dp = Array.from({ length: rows + 1 }, () => new Array(cols + 1).fill(-Infinity));
+        const back = Array.from({ length: rows + 1 }, () => new Array(cols + 1).fill(null));
+        const fillSteps = [];
+        dp[0][0] = 0;
+
+        for (let i = 1; i <= rows; i += 1) {
+          dp[i][0] = dp[i - 1][0] + config.gap;
+          back[i][0] = "up";
+        }
+        for (let j = 1; j <= cols; j += 1) {
+          dp[0][j] = dp[0][j - 1] + config.gap;
+          back[0][j] = "left";
+        }
+
+        for (let i = 1; i <= rows; i += 1) {
+          const expected = rows > 0 ? Math.round((i / Math.max(1, rows)) * cols) : 0;
+          const minJ = Math.max(1, expected - config.bandWidth);
+          const maxJ = Math.min(cols, expected + config.bandWidth);
+
+          for (let j = minJ; j <= maxJ; j += 1) {
+            const similarity = tokenSimilarity(epubTokens[i - 1].token, transcriptTokens[j - 1].token, config);
+            const diag = dp[i - 1][j - 1] + similarity.score;
+            const up = dp[i - 1][j] + config.gap;
+            const left = dp[i][j - 1] + config.gap;
+
+            let best = diag;
+            let dir = "diag";
+            if (up > best) {
+              best = up;
+              dir = "up";
+            }
+            if (left > best) {
+              best = left;
+              dir = "left";
+            }
+
+            dp[i][j] = best;
+            back[i][j] = dir;
+            fillSteps.push({
+              phase: "fill",
+              i,
+              j,
+              minJ,
+              maxJ,
+              dir,
+              similarity: similarity.type,
+              value: best,
+            });
+          }
+        }
+
+        let bestJ = cols;
+        let bestScore = dp[rows][cols];
+        for (let j = 0; j <= cols; j += 1) {
+          if (dp[rows][j] > bestScore) {
+            bestScore = dp[rows][j];
+            bestJ = j;
+          }
+        }
+
+        let i = rows;
+        let j = bestJ;
+        const pairs = [];
+        const path = new Set();
+        const backtrackSteps = [];
+
+        while (i > 0 || j > 0) {
+          path.add(`${i}:${j}`);
+          const dir = back[i][j];
+          backtrackSteps.push({ phase: "backtrack", i, j, dir });
+          if (dir === "diag") {
+            const similarity = tokenSimilarity(epubTokens[i - 1]?.token, transcriptTokens[j - 1]?.token, config);
+            pairs.push({
+              epub: epubTokens[i - 1],
+              transcript: transcriptTokens[j - 1],
+              type: similarity.type,
+            });
+            i -= 1;
+            j -= 1;
+            continue;
+          }
+          if (dir === "up") {
+            pairs.push({
+              epub: epubTokens[i - 1],
+              transcript: null,
+              type: "gap",
+            });
+            i -= 1;
+            continue;
+          }
+          if (dir === "left") {
+            pairs.push({
+              epub: null,
+              transcript: transcriptTokens[j - 1],
+              type: "gap",
+            });
+            j -= 1;
+            continue;
+          }
+          break;
+        }
+
+        pairs.reverse();
+        return { dp, pairs, path, score: bestScore, fillSteps, backtrackSteps, bestJ };
+      }
+
+      function projectTimings(pairs) {
+        const epubRows = pairs
+          .filter((pair) => pair.epub)
+          .map((pair) => ({
+            raw: pair.epub.raw,
+            token: pair.epub.token,
+            matched: Boolean(pair.transcript),
+            startMs: pair.transcript?.startMs ?? null,
+            endMs: pair.transcript?.endMs ?? null,
+          }));
+
+        for (let index = 0; index < epubRows.length; index += 1) {
+          if (epubRows[index].startMs !== null) continue;
+
+          let left = index - 1;
+          while (left >= 0 && epubRows[left].startMs === null) left -= 1;
+          let right = index + 1;
+          while (right < epubRows.length && epubRows[right].startMs === null) right += 1;
+
+          const leftStart = left >= 0 ? epubRows[left].endMs : null;
+          const rightStart = right < epubRows.length ? epubRows[right].startMs : null;
+
+          if (leftStart !== null && rightStart !== null) {
+            const span = right - left;
+            const offset = index - left;
+            const t = offset / span;
+            const interp = Math.round(leftStart + (rightStart - leftStart) * t);
+            epubRows[index].startMs = interp;
+            epubRows[index].endMs = interp;
+          } else if (leftStart !== null) {
+            epubRows[index].startMs = leftStart;
+            epubRows[index].endMs = leftStart;
+          } else if (rightStart !== null) {
+            epubRows[index].startMs = rightStart;
+            epubRows[index].endMs = rightStart;
+          } else {
+            epubRows[index].startMs = 0;
+            epubRows[index].endMs = 0;
+          }
+        }
+
+        return epubRows;
+      }
+
+      function renderStats(result, projected) {
+        const exactMatches = result.pairs.filter((pair) => pair.type === "match").length;
+        const fuzzyMatches = result.pairs.filter((pair) => pair.type === "fuzzy").length;
+        const gaps = result.pairs.filter((pair) => pair.type === "gap").length;
+        const timed = projected.filter((row) => row.startMs !== null).length;
+        stats.innerHTML = [
+          ["Score", result.score.toFixed(1)],
+          ["Exact Matches", exactMatches],
+          ["Fuzzy Matches", fuzzyMatches],
+          ["Timed EPUB Tokens", `${timed}/${projected.length}`],
+        ]
+          .map(
+            ([label, value]) => `
+              <div class="stat">
+                <div class="k">${label}</div>
+                <div class="v">${value}</div>
+              </div>
+            `
+          )
+          .join("");
+      }
+
+      function renderTokens(epubTokens, transcriptTokens) {
+        epubTokensEl.innerHTML = epubTokens
+          .map((token) => `<span class="token"><strong>${token.raw}</strong><small>${token.token}</small></span>`)
+          .join("");
+        transcriptTokensEl.innerHTML = transcriptTokens
+          .map(
+            (token) =>
+              `<span class="token"><strong>${token.raw}</strong><small>${token.startMs}-${token.endMs}ms</small></span>`
+          )
+          .join("");
+      }
+
+      function renderAlignmentList(pairs) {
+        alignmentList.innerHTML = pairs
+          .map((pair) => {
+            const left = pair.epub ? `${pair.epub.raw} <code>${pair.epub.token}</code>` : "∅";
+            const right = pair.transcript
+              ? `${pair.transcript.raw} <code>${pair.transcript.startMs}-${pair.transcript.endMs}</code>`
+              : "∅";
+            return `
+              <div class="pair ${pair.type}">
+                <div>${left}</div>
+                <div class="middle">${pair.type}</div>
+                <div>${right}</div>
+              </div>
+            `;
+          })
+          .join("");
+      }
+
+      function renderProjection(projected) {
+        projection.innerHTML = projected
+          .map(
+            (row) => `
+              <div class="projection-row">
+                <div><strong>${row.raw}</strong> <code>${row.token}</code></div>
+                <div>${row.matched ? "aligned" : "interpolated"}</div>
+                <div>${row.startMs}ms → ${row.endMs}ms</div>
+              </div>
+            `
+          )
+          .join("");
+      }
+
+      function describeMatrixStep(step, epubTokens, transcriptTokens) {
+        if (!step) {
+          return "Press Play Matrix to watch the DP table fill in. The orange band shows the only columns we bother scoring for the current EPUB row, because the two texts should stay roughly on the same diagonal. After filling, the animation switches to backtracking and walks backward through the moves that produced the best final score.";
+        }
+        if (step.phase === "fill") {
+          const epubWord = epubTokens[step.i - 1]?.raw ?? "∅";
+          const transcriptWord = transcriptTokens[step.j - 1]?.raw ?? "∅";
+          const moveText =
+            step.dir === "diag"
+              ? "Diagonal won, so aligning these two tokens beat both gap options."
+              : step.dir === "up"
+                ? "Up won, so skipping the EPUB token scored better than forcing a bad match."
+                : "Left won, so skipping the transcript token scored better than forcing a bad match.";
+          return `Fill phase. We are on EPUB row ${step.i} ("${epubWord}") and transcript column ${step.j} ("${transcriptWord}"). The orange band shows the only plausible columns for this row: ${step.minJ} through ${step.maxJ}. In this cell, the algorithm compares three possibilities: diagonal (match or substitute), up (delete from EPUB), and left (insert from transcript). ${moveText}`;
+        }
+        return `Backtrack phase. We already know the best final score, so now we walk backward from cell (${step.i}, ${step.j}) following the recorded winner in each cell. A diagonal step means the two tokens align; up means the EPUB token had no good transcript partner; left means the transcript token was extra noise or narration.`;
+      }
+
+      function stopMatrixAnimation() {
+        if (animationTimer) {
+          clearInterval(animationTimer);
+          animationTimer = null;
+        }
+      }
+
+      function renderMatrix(result, epubTokens, transcriptTokens, matrixLimit, bandWidth, animationState) {
+        const rows = Math.min(epubTokens.length, matrixLimit);
+        const cols = Math.min(transcriptTokens.length, matrixLimit);
+        const header = [
+          `<tr><th class="sticky">EPUB \\ Transcript</th>`,
+          ...Array.from({ length: cols }, (_, index) => `<th>${transcriptTokens[index]?.raw ?? "∅"}</th>`),
+          `</tr>`,
+        ].join("");
+
+        const body = [];
+        for (let i = 0; i <= rows; i += 1) {
+          const cells = [
+            `<td class="sticky">${i === 0 ? "∅" : epubTokens[i - 1]?.raw ?? ""}</td>`,
+          ];
+          for (let j = 1; j <= cols; j += 1) {
+            const expected = rows > 0 ? Math.round((i / Math.max(1, rows)) * cols) : 0;
+            const inBand = i === 0 || Math.abs(j - expected) <= bandWidth;
+            const isPath = result.path.has(`${i}:${j}`);
+            const activeFill =
+              animationState?.phase === "fill" &&
+              i === animationState.step?.i &&
+              j === animationState.step?.j;
+            const activeBand =
+              animationState?.phase === "fill" &&
+              i === animationState.step?.i &&
+              j >= animationState.step?.minJ &&
+              j <= animationState.step?.maxJ;
+            const activeBacktrack =
+              animationState?.phase === "backtrack" &&
+              i === animationState.step?.i &&
+              j === animationState.step?.j;
+            const similarity =
+              i > 0 && j > 0
+                ? tokenSimilarity(epubTokens[i - 1]?.token, transcriptTokens[j - 1]?.token, {
+                    match: 3,
+                    fuzzy: 1.5,
+                    mismatch: -2,
+                    gap: -1,
+                  }).type
+                : "mismatch";
+            const classes = [
+              !inBand ? "band-off" : "",
+              isPath ? "path" : "",
+              activeBand ? "active-band" : "",
+              activeFill ? "active-cell" : "",
+              activeBacktrack ? "backtrack-cell" : "",
+              inBand && similarity === "match" ? "match-cell" : "",
+              inBand && similarity === "fuzzy" ? "fuzzy-cell" : "",
+            ]
+              .filter(Boolean)
+              .join(" ");
+            const value = Number.isFinite(result.dp[i]?.[j]) ? result.dp[i][j].toFixed(1) : "·";
+            cells.push(`<td class="${classes}">${value}</td>`);
+          }
+          body.push(`<tr>${cells.join("")}</tr>`);
+        }
+
+        matrix.innerHTML = header + body.join("");
+        matrixCaption.textContent = describeMatrixStep(animationState?.step ?? null, epubTokens, transcriptTokens);
+      }
+
+      function buildAnimationFrames(result, matrixLimit) {
+        const limitedFill = result.fillSteps.filter((step) => step.i <= matrixLimit && step.j <= matrixLimit);
+        const limitedBacktrack = result.backtrackSteps.filter((step) => step.i <= matrixLimit && step.j <= matrixLimit);
+        return [{ phase: "idle", step: null }]
+          .concat(limitedFill.map((step) => ({ phase: "fill", step })))
+          .concat(limitedBacktrack.map((step) => ({ phase: "backtrack", step })));
+      }
+
+      function updateMatrixAnimationFrame(frameIndex) {
+        if (!currentAnimation) return;
+        const { result, epubTokens, transcriptTokens, matrixLimit, bandWidth, frames } = currentAnimation;
+        const clamped = Math.max(0, Math.min(frames.length - 1, frameIndex));
+        matrixStep.value = String(clamped);
+        renderMatrix(result, epubTokens, transcriptTokens, matrixLimit, bandWidth, frames[clamped]);
+      }
+
+      function setAnimation(result, epubTokens, transcriptTokens, matrixLimit, bandWidth) {
+        stopMatrixAnimation();
+        const frames = buildAnimationFrames(result, matrixLimit);
+        currentAnimation = { result, epubTokens, transcriptTokens, matrixLimit, bandWidth, frames };
+        matrixStep.max = String(Math.max(0, frames.length - 1));
+        matrixStep.value = "0";
+        updateMatrixAnimationFrame(0);
+      }
+
+      function playMatrix() {
+        if (!currentAnimation) return;
+        stopMatrixAnimation();
+        animationTimer = setInterval(() => {
+          const next = Number(matrixStep.value) + 1;
+          if (!currentAnimation || next >= currentAnimation.frames.length) {
+            stopMatrixAnimation();
+            return;
+          }
+          updateMatrixAnimationFrame(next);
+        }, 420);
+      }
+
+      function run() {
+        stopMatrixAnimation();
+        const config = {
+          match: Number(scoreInputs.match.value),
+          fuzzy: Number(scoreInputs.fuzzy.value),
+          mismatch: Number(scoreInputs.mismatch.value),
+          gap: Number(scoreInputs.gap.value),
+          bandWidth: Math.max(1, Number(scoreInputs.bandWidth.value)),
+        };
+        const matrixLimit = Math.max(6, Number(scoreInputs.matrixLimit.value));
+        const transcriptTokens = parseTranscript(transcriptInput.value);
+        const epubTokens = parseEpub(epubInput.value);
+        renderTokens(epubTokens, transcriptTokens);
+
+        const result = align(epubTokens, transcriptTokens, config);
+        const projected = projectTimings(result.pairs);
+        renderStats(result, projected);
+        renderAlignmentList(result.pairs);
+        renderProjection(projected);
+        setAnimation(result, epubTokens, transcriptTokens, matrixLimit, config.bandWidth);
+      }
+
+      function loadSample() {
+        transcriptInput.value = sampleTranscript;
+        epubInput.value = sampleEpub;
+        run();
+      }
+
+      runButton.addEventListener("click", run);
+      sampleButton.addEventListener("click", loadSample);
+      playMatrixButton.addEventListener("click", playMatrix);
+      pauseMatrixButton.addEventListener("click", stopMatrixAnimation);
+      resetMatrixButton.addEventListener("click", () => {
+        stopMatrixAnimation();
+        updateMatrixAnimationFrame(0);
+      });
+      matrixStep.addEventListener("input", () => {
+        stopMatrixAnimation();
+        updateMatrixAnimationFrame(Number(matrixStep.value));
+      });
+
+      loadSample();
+    </script>
+  </body>
+</html>

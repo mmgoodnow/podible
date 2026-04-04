@@ -1,12 +1,34 @@
 import { promises as fs } from "node:fs";
 
+import { hydrateBookFromOpenLibrary } from "./hydration";
 import { buildJsonFeed, buildRssFeed } from "./feed";
-import { authorizeRequest } from "./auth";
-import { loadStoredTranscriptPayload } from "./chapter-analysis";
-import { buildChapters, preferredAudioForBooks, streamAudioAsset, streamExtension } from "./media";
+import { resolveOpenLibraryCandidate, searchOpenLibrary, type OpenLibraryCandidate } from "./openlibrary";
+import {
+  authorizeRequest,
+  buildSessionCookie,
+  clearSessionCookie,
+  createSessionToken,
+  hashSessionToken,
+  isApiKeyAuthorized,
+  resolveSessionFromRequest,
+  sessionExpiresAt,
+} from "./auth";
+import { loadStoredTranscriptPayload, selectPreferredEpubAsset } from "./chapter-analysis";
+import { buildChapters, preferredAudioForBooks, selectPreferredAudioAsset, streamAudioAsset, streamExtension } from "./media";
+import {
+  buildPlexAuthUrl,
+  checkPlexUserAccess,
+  createEphemeralPlexIdentity,
+  createPlexPin,
+  exchangePlexPinForToken,
+  fetchPlexServerDevices,
+  fetchPlexUser,
+  isPlexUserAllowed,
+} from "./plex";
 import { BooksRepo } from "./repo";
 import { handleRpcMethod, handleRpcRequest } from "./rpc";
-import type { AppSettings } from "./types";
+import { triggerAutoAcquire } from "./service";
+import type { AppSettings, PlexJwk, SessionWithUserRow, UserRow } from "./types";
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value, null, 2), {
@@ -84,12 +106,1114 @@ function truncateText(value: string, max: number): string {
   return `${value.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
 }
 
-function renderHomePage(repo: BooksRepo, settings: AppSettings): Response {
+function formatMinutes(durationMs: number | null): string {
+  if (!durationMs || !Number.isFinite(durationMs) || durationMs <= 0) return "Unknown";
+  return `${Math.round(durationMs / 60000)} min`;
+}
+
+function parseMediaSelection(value: string | null): Array<"audio" | "ebook"> {
+  if (value === "audio") return ["audio"];
+  if (value === "ebook") return ["ebook"];
+  return ["audio", "ebook"];
+}
+
+function messageMarkup(notice?: string | null, error?: string | null): string {
+  const blocks: string[] = [];
+  if (notice?.trim()) {
+    blocks.push(`<p class="muted" style="margin-top: 10px;">${escapeHtml(notice)}</p>`);
+  }
+  if (error?.trim()) {
+    blocks.push(`<p style="margin-top: 10px; color: #8b0000;">${escapeHtml(error)}</p>`);
+  }
+  return blocks.join("");
+}
+
+function describeBookState(book: {
+  status: string;
+  audioStatus: string;
+  ebookStatus: string;
+}): string {
+  if (book.audioStatus === "imported" && book.ebookStatus === "imported") {
+    return "Audio and eBook are both ready.";
+  }
+  if (book.audioStatus === "imported") {
+    return "Audio is ready now.";
+  }
+  if (book.ebookStatus === "imported") {
+    return "The eBook is ready while audio is still in progress.";
+  }
+  if (book.status === "error") {
+    return "This book needs attention before it will be fully ready.";
+  }
+  if (book.status === "downloading" || book.status === "snatched") {
+    return "Podible is still working on this book.";
+  }
+  return "This book is still being prepared.";
+}
+
+function formatOverallStatus(status: string): string {
+  if (status === "imported") return "Ready";
+  if (status === "partial") return "Partially ready";
+  if (status === "downloading") return "In progress";
+  if (status === "downloaded") return "Downloaded";
+  if (status === "snatched") return "Queued";
+  if (status === "error") return "Needs attention";
+  return "Wanted";
+}
+
+function formatMediaStatus(label: string, status: string): string {
+  if (status === "imported") return `${label} ready`;
+  if (status === "downloading") return `${label} downloading`;
+  if (status === "downloaded") return `${label} downloaded`;
+  if (status === "snatched") return `${label} queued`;
+  if (status === "error") return `${label} needs attention`;
+  return `${label} wanted`;
+}
+
+function formatBookStatusLine(book: {
+  status: string;
+  audioStatus: string;
+  ebookStatus: string;
+  fullPseudoProgress?: number;
+}): string {
+  const parts = [formatOverallStatus(book.status), formatMediaStatus("Audio", book.audioStatus), formatMediaStatus("eBook", book.ebookStatus)];
+  if (typeof book.fullPseudoProgress === "number" && Number.isFinite(book.fullPseudoProgress) && book.status !== "imported") {
+    parts.push(`${book.fullPseudoProgress}%`);
+  }
+  return parts.join(" • ");
+}
+
+function redirect(location: string, status = 303): Response {
+  return new Response(null, {
+    status,
+    headers: {
+      Location: location,
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
+function normalizeLocalUserKey(value: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "user";
+}
+
+function displayUserName(user: Pick<UserRow, "display_name" | "username">): string {
+  return user.display_name?.trim() || user.username;
+}
+
+function renderAppPage(
+  title: string,
+  body: string,
+  settings: AppSettings,
+  currentUser: SessionWithUserRow | null = null,
+  extraNav = ""
+): Response {
+  const apiKey = settings.auth.mode === "apikey" ? settings.auth.key : null;
+  const accountNav = currentUser
+    ? `<span class="muted">Signed in as ${escapeHtml(displayUserName(currentUser))}</span>
+       <form method="post" action="${escapeHtml(addApiKey("/logout", apiKey))}" style="display:inline-flex;">
+         <button type="submit">Sign out</button>
+       </form>`
+    : settings.auth.mode === "local" || settings.auth.mode === "plex"
+      ? `<a href="${escapeHtml(addApiKey("/login", apiKey))}">Sign in</a>`
+      : "";
+  const nav = `
+    <nav class="site-nav">
+      <a href="${escapeHtml(addApiKey("/", apiKey))}">Home</a>
+      <a href="${escapeHtml(addApiKey("/library", apiKey))}">Library</a>
+      <a href="${escapeHtml(addApiKey("/add", apiKey))}">Add</a>
+      <a href="${escapeHtml(addApiKey("/activity", apiKey))}">Activity</a>
+      <a href="${escapeHtml(addApiKey("/admin", apiKey))}">Admin</a>
+      ${accountNav}
+      ${extraNav}
+    </nav>`;
+  return new Response(
+    `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(title)}</title>
+    <style>
+      :root {
+        --bg: #f6f7f3;
+        --paper: #fffdf7;
+        --line: #ddd6c8;
+        --text: #1f261c;
+        --muted: #5f6b58;
+        --accent: #285943;
+        --accent-soft: #eef5f0;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: ui-serif, Georgia, serif;
+        background: radial-gradient(circle at top, #fffefb 0%, var(--bg) 60%);
+        color: var(--text);
+      }
+      a { color: var(--accent); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .page { max-width: 1120px; margin: 0 auto; padding: 18px; }
+      .site-nav { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; font-size: 14px; }
+      .hero, .card { background: var(--paper); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 1px 2px rgba(31,38,28,.05); }
+      .hero { padding: 20px; margin-bottom: 18px; }
+      .hero h1 { margin: 0 0 8px; font-size: 34px; line-height: 1.05; }
+      .hero p { margin: 0; color: var(--muted); max-width: 70ch; }
+      .grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px; }
+      .span-12 { grid-column: span 12; }
+      .span-8 { grid-column: span 8; }
+      .span-6 { grid-column: span 6; }
+      .span-4 { grid-column: span 4; }
+      .card { padding: 14px; }
+      .card h2 { margin: 0 0 8px; font-size: 18px; }
+      .muted { color: var(--muted); }
+      .book-list { display: grid; gap: 10px; }
+      .book-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; align-items: start; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+      .cover, .cover-fallback { width: 72px; height: 72px; border-radius: 10px; }
+      .cover-fallback { display: flex; align-items: center; justify-content: center; background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+      .cover { object-fit: cover; display: block; border: 1px solid var(--line); }
+      .meta h3 { margin: 0 0 2px; font-size: 18px; }
+      .meta p { margin: 0; }
+      .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; font-size: 14px; }
+      .button-link, .actions button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 36px;
+        padding: 8px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: #fff;
+        color: var(--text);
+        text-decoration: none;
+      }
+      .button-link:hover { text-decoration: none; }
+      .button-link-primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      .button-link-primary:hover {
+        color: #fff;
+      }
+      .pill { display: inline-flex; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); background: #fff; font-size: 12px; color: var(--muted); }
+      .stats { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+      .empty { padding: 16px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); background: #fff; }
+      .detail-grid { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 18px; }
+      .detail-cover, .detail-cover-fallback { width: 180px; height: 180px; border-radius: 16px; }
+      .detail-cover { object-fit: cover; border: 1px solid var(--line); display: block; }
+      .detail-cover-fallback { display: flex; align-items: center; justify-content: center; background: var(--accent-soft); color: var(--accent); font-size: 42px; font-weight: 700; }
+      .section-list { display: grid; gap: 8px; }
+      .chapter-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+      @media (max-width: 900px) {
+        .span-8, .span-6, .span-4 { grid-column: span 12; }
+        .detail-grid { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      ${nav}
+      ${body}
+    </div>
+  </body>
+</html>`,
+    {
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+      },
+    }
+  );
+}
+
+function coverMarkup(coverUrl: string | null, title: string, large = false): string {
+  const initials =
+    title
+      .split(/\s+/)
+      .map((part) => part[0] || "")
+      .join("")
+      .slice(0, 2)
+      .toUpperCase() || "BK";
+  if (!coverUrl) {
+    return `<div class="${large ? "detail-cover-fallback" : "cover-fallback"}">${escapeHtml(initials)}</div>`;
+  }
+  return `<img class="${large ? "detail-cover" : "cover"}" src="${escapeHtml(coverUrl)}" alt="${escapeHtml(title)} cover" />`;
+}
+
+function renderLandingPage(repo: BooksRepo, settings: AppSettings, currentUser: SessionWithUserRow | null = null): Response {
+  const apiKey = settings.auth.mode === "apikey" ? settings.auth.key : null;
+  const recentBooks = repo.listAllBooks().slice(0, 6);
+  const featured = preferredAudioForBooks(repo).slice(0, 6);
+  const inProgress = repo.listInProgressBooks().slice(0, 8);
+  const needsAttention = repo.listAllBooks().filter((book) => book.status === "error").slice(0, 6);
+  const body = `
+    <section class="hero">
+      <h1>Your audiobook shelf</h1>
+      <p>Find something ready to play, check what Podible is still working on, and fix anything that needs attention without dropping into the admin console.</p>
+      <div class="stats">
+        <span class="pill">${featured.length} ready to play</span>
+        <span class="pill">${inProgress.length} active imports</span>
+        <span class="pill">${needsAttention.length} need attention</span>
+      </div>
+      <div class="actions" style="margin-top: 14px;">
+        <a href="${escapeHtml(addApiKey("/library", apiKey))}">Browse library</a>
+        <a href="${escapeHtml(addApiKey("/add", apiKey))}">Add a book</a>
+      </div>
+    </section>
+    <div class="grid">
+      <section class="card span-6">
+        <h2>Ready now</h2>
+        ${
+          featured.length > 0
+            ? `<div class="book-list">${featured
+                .map(({ book, asset }) => {
+                  const detailUrl = addApiKey(`/book/${book.id}`, apiKey);
+                  const streamUrl = addApiKey(`/stream/${asset.id}.${streamExtension(asset)}`, apiKey);
+                  return `<article class="book-row">
+                    ${coverMarkup(book.coverUrl ? addApiKey(book.coverUrl, apiKey) : null, book.title)}
+                    <div class="meta">
+                      <h3><a href="${escapeHtml(detailUrl)}">${escapeHtml(book.title)}</a></h3>
+                      <p class="muted">${escapeHtml(book.author)}</p>
+                      <p class="muted">${formatMinutes(book.durationMs)} • ${escapeHtml(formatBookStatusLine(book))}</p>
+                      <p class="muted">${escapeHtml(truncateText((book.description || `${book.title} by ${book.author}`).replace(/\s+/g, " "), 160))}</p>
+                      <div class="actions">
+                        <a href="${escapeHtml(detailUrl)}">Details</a>
+                        <a href="${escapeHtml(streamUrl)}">Play</a>
+                      </div>
+                    </div>
+                  </article>`;
+                })
+                .join("")}</div>`
+            : `<div class="empty">No playable books yet.</div>`
+        }
+      </section>
+      <section class="card span-6">
+        <h2>Still working</h2>
+        ${
+          inProgress.length > 0
+            ? `<div class="section-list">${inProgress
+                .map(
+                  (book) => `<div>
+                    <strong><a href="${escapeHtml(addApiKey(`/book/${book.id}`, apiKey))}">${escapeHtml(book.title)}</a></strong>
+                    <div class="muted">${escapeHtml(book.author)} • ${escapeHtml(formatBookStatusLine(book))}</div>
+                  </div>`
+                )
+                .join("")}</div>`
+            : `<div class="empty">No active work right now.</div>`
+        }
+      </section>
+      <section class="card span-6">
+        <h2>Needs attention</h2>
+        ${
+          needsAttention.length > 0
+            ? `<div class="section-list">${needsAttention
+                .map(
+                  (book) => `<div>
+                    <strong><a href="${escapeHtml(addApiKey(`/book/${book.id}`, apiKey))}">${escapeHtml(book.title)}</a></strong>
+                    <div class="muted">${escapeHtml(book.author)} • ${escapeHtml(formatBookStatusLine(book))}</div>
+                  </div>`
+                )
+                .join("")}</div>`
+            : `<div class="empty">Nothing needs attention right now.</div>`
+        }
+      </section>
+      <section class="card span-6">
+        <h2>Recently added</h2>
+        ${
+          recentBooks.length > 0
+            ? `<div class="section-list">${recentBooks
+                .map(
+                  (book) => `<div>
+                    <strong><a href="${escapeHtml(addApiKey(`/book/${book.id}`, apiKey))}">${escapeHtml(book.title)}</a></strong>
+                    <div class="muted">${escapeHtml(book.author)} • ${escapeHtml(formatOverallStatus(book.status))}${book.durationMs ? ` • ${formatMinutes(book.durationMs)}` : ""}</div>
+                  </div>`
+                )
+                .join("")}</div>`
+            : `<div class="empty">No books yet.</div>`
+        }
+      </section>
+    </div>`;
+  return renderAppPage("Podible", body, settings, currentUser);
+}
+
+function renderLibraryPage(
+  repo: BooksRepo,
+  settings: AppSettings,
+  options: { query?: string | null; currentUser?: SessionWithUserRow | null } = {}
+): Response {
+  const apiKey = settings.auth.mode === "apikey" ? settings.auth.key : null;
+  const query = options.query?.trim() ?? "";
+  const books = repo.listBooks(200, undefined, query || undefined).items;
+  const body = `
+    <section class="hero">
+      <h1>Library</h1>
+      <p>${books.length} book${books.length === 1 ? "" : "s"}${query ? ` matching “${escapeHtml(query)}”` : ""}.</p>
+      <form method="get" action="${escapeHtml(addApiKey("/library", apiKey))}">
+        <div class="actions" style="margin-top: 14px;">
+          <input type="search" name="q" value="${escapeHtml(query)}" placeholder="Search by title or author" style="min-width: 280px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px;" />
+          <button type="submit">Search</button>
+          ${query ? `<a href="${escapeHtml(addApiKey("/library", apiKey))}">Clear</a>` : ""}
+        </div>
+      </form>
+    </section>
+    <section class="card span-12">
+      ${
+        books.length > 0
+          ? `<div class="book-list">${books
+              .map((book) => {
+                const asset = selectPreferredAudioAsset(repo.listAssetsByBook(book.id));
+                const detailUrl = addApiKey(`/book/${book.id}`, apiKey);
+                const streamUrl = asset ? addApiKey(`/stream/${asset.id}.${streamExtension(asset)}`, apiKey) : null;
+                return `<article class="book-row">
+                  ${coverMarkup(book.coverUrl ? addApiKey(book.coverUrl, apiKey) : null, book.title)}
+                  <div class="meta">
+                    <h3><a href="${escapeHtml(detailUrl)}">${escapeHtml(book.title)}</a></h3>
+                    <p class="muted">${escapeHtml(book.author)}</p>
+                    <div class="stats">
+                      <span class="pill">${escapeHtml(book.status)}</span>
+                      <span class="pill">audio ${escapeHtml(book.audioStatus)}</span>
+                      <span class="pill">ebook ${escapeHtml(book.ebookStatus)}</span>
+                    </div>
+                    <div class="actions">
+                      <a href="${escapeHtml(detailUrl)}">Details</a>
+                      ${streamUrl ? `<a href="${escapeHtml(streamUrl)}">Play</a>` : ""}
+                    </div>
+                  </div>
+                </article>`;
+              })
+              .join("")}</div>`
+          : `<div class="empty">No books found.</div>`
+      }
+    </section>`;
+  return renderAppPage("Library", body, settings, options.currentUser ?? null);
+}
+
+function renderAddPage(
+  settings: AppSettings,
+  options: {
+    query?: string;
+    results?: OpenLibraryCandidate[];
+    status?: string | null;
+    error?: string | null;
+    currentUser?: SessionWithUserRow | null;
+  } = {}
+): Response {
+  const apiKey = settings.auth.mode === "apikey" ? settings.auth.key : null;
+  const query = options.query?.trim() ?? "";
+  const results = options.results ?? [];
+  const status = options.status?.trim() ?? "";
+  const error = options.error?.trim() ?? "";
+  const resultMarkup =
+    query && results.length === 0 && !error
+      ? `<div class="empty">No Open Library matches for “${escapeHtml(query)}”.</div>`
+      : results.length > 0
+        ? `<div class="book-list">${results
+            .map((result) => {
+              const publishYear = result.publishedAt ? new Date(result.publishedAt).getUTCFullYear() : null;
+              return `<article class="book-row">
+                ${coverMarkup(result.coverId ? `https://covers.openlibrary.org/b/id/${result.coverId}-L.jpg` : null, result.title)}
+                <div class="meta">
+                  <h3>${escapeHtml(result.title)}</h3>
+                  <p class="muted">${escapeHtml(result.author)}${publishYear ? ` • ${publishYear}` : ""}</p>
+                  <p class="muted">${escapeHtml(result.openLibraryKey)}</p>
+                  <form method="post" action="${escapeHtml(addApiKey("/add", apiKey))}">
+                    <input type="hidden" name="openLibraryKey" value="${escapeHtml(result.openLibraryKey)}" />
+                    <div class="actions">
+                      <button type="submit">Add and acquire</button>
+                    </div>
+                  </form>
+                </div>
+              </article>`;
+            })
+            .join("")}</div>`
+        : `<div class="empty">Search Open Library by title and author to add a book.</div>`;
+
+  const body = `
+    <section class="hero">
+      <h1>Add a book</h1>
+      <p>Search Open Library, pick the correct work, and Podible will create the book and queue acquisition.</p>
+    </section>
+    <div class="grid">
+      <section class="card span-12">
+        <h2>Search Open Library</h2>
+        <form method="get" action="${escapeHtml(addApiKey("/add", apiKey))}">
+          <div class="actions">
+            <input type="search" name="q" value="${escapeHtml(query)}" placeholder="Title Author (e.g. Hyperion Dan Simmons)" style="min-width: 320px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px;" />
+            <button type="submit">Search</button>
+          </div>
+        </form>
+        ${status ? `<p class="muted" style="margin-top: 10px;">${escapeHtml(status)}</p>` : ""}
+        ${error ? `<p style="margin-top: 10px; color: #8b0000;">${escapeHtml(error)}</p>` : ""}
+      </section>
+      <section class="card span-12">
+        <h2>Results</h2>
+        ${resultMarkup}
+      </section>
+    </div>`;
+  return renderAppPage("Add", body, settings, options.currentUser ?? null);
+}
+
+function renderLoginPage(
+  settings: AppSettings,
+  localUsers: UserRow[],
+  options: { notice?: string | null; error?: string | null; currentUser?: SessionWithUserRow | null } = {}
+): Response {
+  const apiKey = settings.auth.mode === "apikey" ? settings.auth.key : null;
+  if (settings.auth.mode === "plex") {
+    const body = `
+      <section class="hero">
+        <h1>Sign in</h1>
+        <p>Use your Plex account to sign in to this Podible instance. Podible will create its own local session after Plex confirms your identity.</p>
+        ${messageMarkup(options.notice, options.error)}
+        <div class="actions" style="margin-top: 14px;">
+          <button id="plex-login-btn" type="button">Sign in with Plex</button>
+        </div>
+        <p id="plex-login-status" class="muted" style="margin-top: 10px;"></p>
+      </section>
+      <script>
+        (() => {
+          const button = document.getElementById("plex-login-btn");
+          const status = document.getElementById("plex-login-status");
+          const startUrl = ${JSON.stringify(addApiKey("/login/plex/start", apiKey))};
+          const loadingUrl = ${JSON.stringify(addApiKey("/login/plex/loading", apiKey))};
+          const successPath = ${JSON.stringify(addApiKey("/", apiKey))};
+          function setStatus(message) {
+            if (status) status.textContent = message || "";
+          }
+          window.addEventListener("message", (event) => {
+            if (event.origin !== window.location.origin || !event.data || event.data.type !== "podible-plex-login") {
+              return;
+            }
+            if (event.data.ok) {
+              window.location.href = event.data.redirectTo || successPath;
+              return;
+            }
+            setStatus(event.data.error || "Plex sign-in failed.");
+            if (button) button.disabled = false;
+          });
+          button?.addEventListener("click", async () => {
+            button.disabled = true;
+            setStatus("Opening Plex sign-in…");
+            const popup = window.open(loadingUrl, "podible-plex-login", "width=640,height=760");
+            if (!popup) {
+              setStatus("Popup blocked. Please allow popups for this site.");
+              button.disabled = false;
+              return;
+            }
+            try {
+              const response = await fetch(startUrl, { method: "POST" });
+              const payload = await response.json();
+              if (!response.ok || !payload.authUrl) {
+                throw new Error(payload.error || "Unable to start Plex sign-in.");
+              }
+              popup.location.href = payload.authUrl;
+              setStatus("Finish sign-in in the Plex window…");
+            } catch (error) {
+              popup.close();
+              setStatus(error && error.message ? error.message : "Unable to start Plex sign-in.");
+              button.disabled = false;
+            }
+          });
+        })();
+      </script>`;
+    return renderAppPage("Sign in", body, settings, options.currentUser ?? null);
+  }
+
+  if (settings.auth.mode !== "local") {
+    const body = `
+      <section class="hero">
+        <h1>Sign in</h1>
+        <p>Browser sign-in is not enabled for this Podible instance.</p>
+        ${messageMarkup(options.notice, options.error)}
+      </section>`;
+    return renderAppPage("Sign in", body, settings, options.currentUser ?? null);
+  }
+
+  const existingUsersMarkup =
+    localUsers.length > 0
+      ? `<div class="section-list">${localUsers
+          .map(
+            (user) => `<form method="post" action="${escapeHtml(addApiKey("/login", apiKey))}" class="book-row" style="grid-template-columns: minmax(0, 1fr);">
+                <input type="hidden" name="userId" value="${user.id}" />
+                <div class="meta">
+                  <h3>${escapeHtml(displayUserName(user))}</h3>
+                  <p class="muted">@${escapeHtml(user.username)}${user.is_admin ? " • admin" : ""}</p>
+                  <div class="actions"><button type="submit">Sign in</button></div>
+                </div>
+              </form>`
+          )
+          .join("")}</div>`
+      : `<div class="empty">No local users yet. Create the first one below.</div>`;
+
+  const body = `
+    <section class="hero">
+      <h1>Sign in</h1>
+      <p>Choose an existing user or create a new local user for this Podible instance.</p>
+      ${messageMarkup(options.notice, options.error)}
+    </section>
+    <div class="grid">
+      <section class="card span-6">
+        <h2>Existing users</h2>
+        ${existingUsersMarkup}
+      </section>
+      <section class="card span-6">
+        <h2>Create a user</h2>
+        <form method="post" action="${escapeHtml(addApiKey("/login", apiKey))}">
+          <div class="section-list">
+            <label>
+              <div class="muted">Username</div>
+              <input type="text" name="username" placeholder="alice" style="min-width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px;" />
+            </label>
+            <label>
+              <div class="muted">Display name</div>
+              <input type="text" name="displayName" placeholder="Alice" style="min-width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px;" />
+            </label>
+          </div>
+          <div class="actions" style="margin-top: 12px;">
+            <button type="submit">Create and sign in</button>
+          </div>
+        </form>
+      </section>
+    </div>`;
+  return renderAppPage("Sign in", body, settings, options.currentUser ?? null);
+}
+
+function renderPlexLoadingPage(settings: AppSettings): Response {
+  const body = `
+    <section class="hero">
+      <h1>Plex sign-in</h1>
+      <p>Finish the Plex sign-in flow in this window. Podible will continue automatically when Plex redirects back.</p>
+    </section>`;
+  return renderAppPage("Plex sign in", body, settings);
+}
+
+function renderPlexCompletePage(
+  settings: AppSettings,
+  pinId: number,
+  request: Request
+): Response {
+  const statusUrl = new URL(addApiKey(`/login/plex/status?pinId=${pinId}`, settings.auth.mode === "apikey" ? settings.auth.key : null), request.url);
+  const loadingMessage = "Waiting for Plex to finish sign-in…";
+  return new Response(
+    `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Plex sign-in complete</title>
+  </head>
+  <body style="font-family: ui-sans-serif, system-ui, sans-serif; padding: 24px;">
+    <p id="plex-complete-status">${escapeHtml(loadingMessage)}</p>
+    <script>
+      (function () {
+        var statusUrl = ${JSON.stringify(statusUrl.toString())};
+        var statusEl = document.getElementById("plex-complete-status");
+        var tries = 0;
+        var maxTries = 30;
+        function setStatus(message) {
+          if (statusEl) statusEl.textContent = message || "";
+        }
+        function finish(payload) {
+          if (window.opener && !window.opener.closed) {
+            window.opener.postMessage(payload, window.location.origin);
+            if (payload.ok) {
+              window.close();
+            }
+            return;
+          }
+          if (payload.ok && payload.redirectTo) {
+            window.location.href = payload.redirectTo;
+          }
+        }
+        async function poll() {
+          tries += 1;
+          if (tries > maxTries) {
+            finish({
+              type: "podible-plex-login",
+              ok: false,
+              redirectTo: "/login",
+              error: "Timed out waiting for Plex sign-in."
+            });
+            setStatus("Timed out waiting for Plex sign-in.");
+            return;
+          }
+          try {
+            var response = await fetch(statusUrl, {
+              method: "GET",
+              headers: { "Accept": "application/json" },
+              credentials: "same-origin"
+            });
+            var payload = await response.json();
+            if (payload.pending) {
+              setStatus(payload.message || ${JSON.stringify(loadingMessage)});
+              window.setTimeout(poll, payload.retryAfterMs || 3000);
+              return;
+            }
+            finish({
+              type: "podible-plex-login",
+              ok: !!payload.ok,
+              redirectTo: payload.redirectTo || "/",
+              error: payload.error || null
+            });
+            if (!payload.ok) {
+              setStatus(payload.error || "Plex sign-in failed.");
+            }
+          } catch (error) {
+            if (tries < 5) {
+              setStatus("Still waiting for Plex…");
+              window.setTimeout(poll, 3000);
+              return;
+            }
+            finish({
+              type: "podible-plex-login",
+              ok: false,
+              redirectTo: "/login",
+              error: "Unable to complete Plex sign-in."
+            });
+            setStatus("Unable to complete Plex sign-in.");
+          }
+        }
+        poll();
+      })();
+    </script>
+  </body>
+</html>`,
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+      },
+    }
+  );
+}
+
+function renderPlexImmediateResultPage(
+  result: { ok: boolean; redirectTo: string; error?: string | null }
+): Response {
+  const payload = JSON.stringify({
+    type: "podible-plex-login",
+    ok: result.ok,
+    redirectTo: result.redirectTo,
+    error: result.error ?? null,
+  });
+  return new Response(
+    `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Plex sign-in complete</title>
+  </head>
+  <body style="font-family: ui-sans-serif, system-ui, sans-serif; padding: 24px;">
+    <p>${escapeHtml(result.ok ? "Sign-in complete. You can close this window." : result.error ?? "Plex sign-in failed.")}</p>
+    <script>
+      (function () {
+        var payload = ${payload};
+        if (window.opener && !window.opener.closed) {
+          window.opener.postMessage(payload, window.location.origin);
+          ${result.ok ? "window.close();" : ""}
+        } else if (payload.ok && payload.redirectTo) {
+          window.location.href = payload.redirectTo;
+        }
+      })();
+    </script>
+  </body>
+</html>`,
+    {
+      status: result.ok ? 200 : 400,
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+      },
+    }
+  );
+}
+
+async function resolvePlexLoginStatus(
+  repo: BooksRepo,
+  settings: AppSettings,
+  pinId: number
+): Promise<
+  | { kind: "pending"; settings: AppSettings; message: string }
+  | { kind: "error"; settings: AppSettings; error: string; redirectTo: string }
+  | { kind: "success"; settings: AppSettings; redirectTo: string; sessionToken: string }
+> {
+  const attempt = repo.getPlexLoginAttempt(pinId);
+  if (!attempt) {
+    return {
+      kind: "error",
+      settings,
+      error: "This Plex login attempt is missing or has expired.",
+      redirectTo: "/login",
+    };
+  }
+  const ageMs = Date.now() - Date.parse(attempt.created_at);
+  if (!Number.isFinite(ageMs) || ageMs > 15 * 60_000) {
+    repo.deletePlexLoginAttempt(pinId);
+    return {
+      kind: "error",
+      settings,
+      error: "This Plex login attempt has expired. Please try again.",
+      redirectTo: "/login",
+    };
+  }
+  const identity = {
+    productName: settings.auth.plex.productName,
+    clientIdentifier: attempt.client_identifier,
+    publicJwk: JSON.parse(attempt.public_jwk_json) as PlexJwk,
+    privateKeyPkcs8: attempt.private_key_pkcs8,
+  };
+
+  console.log(
+    `[plex] checking login status pinId=${pinId} ownerToken=${settings.auth.plex.ownerToken ? "present" : "missing"} machineId=${settings.auth.plex.machineId || "missing"} clientId=${attempt.client_identifier}`
+  );
+
+  let plexToken: string;
+  try {
+    plexToken = await exchangePlexPinForToken(identity, pinId);
+  } catch (error) {
+    const message = (error as Error).message || "";
+    if (message.includes("has not been claimed yet")) {
+      return {
+        kind: "pending",
+        settings,
+        message: "Waiting for Plex to finish sign-in…",
+      };
+    }
+    if (message.includes("rate limited")) {
+      return {
+        kind: "pending",
+        settings,
+        message: "Plex is asking Podible to slow down. Retrying…",
+      };
+    }
+    console.log(`[plex] login failed pinId=${pinId} error=${message || "unknown"}`);
+    return {
+      kind: "error",
+      settings,
+      error: message || "Plex sign-in failed.",
+      redirectTo: "/login",
+    };
+  }
+
+  console.log(`[plex] pin claimed pinId=${pinId}`);
+
+  try {
+    const plexUser = await fetchPlexUser(settings, plexToken, attempt.client_identifier);
+    console.log(`[plex] fetched user id=${plexUser.id} username=${plexUser.username}`);
+    const existingPlexUser = repo.listUsers("plex").find((user) => user.provider_user_id === plexUser.id) ?? null;
+    const existingUsers = repo.listUsers();
+    const isBootstrap = existingUsers.length === 0;
+    let allowed = false;
+    let denialReason = "This Plex user is not allowed on this Podible instance.";
+
+    if (isBootstrap) {
+      allowed = true;
+    } else if (!settings.auth.plex.ownerToken || !settings.auth.plex.machineId) {
+      allowed = Boolean(existingPlexUser);
+      if (!allowed) {
+        denialReason = "An admin needs to choose which Plex server controls Podible access first.";
+      }
+    } else {
+      const hasServerAccess =
+        plexUser.id === (existingUsers.find((user) => user.is_admin === 1 && user.provider === "plex")?.provider_user_id ?? "")
+          ? true
+          : await checkPlexUserAccess(settings, plexUser.id);
+      allowed = hasServerAccess;
+    }
+
+    if (!allowed || !isPlexUserAllowed(settings, plexUser)) {
+      repo.deletePlexLoginAttempt(pinId);
+      return {
+        kind: "error",
+        settings,
+        error: denialReason,
+        redirectTo: "/login",
+      };
+    }
+
+    const hasAdminUser = existingUsers.some((user) => user.is_admin === 1);
+    if (!settings.auth.plex.ownerToken && (!hasAdminUser || existingPlexUser?.is_admin === 1)) {
+      settings = repo.updateSettings({
+        ...settings,
+        auth: {
+          ...settings.auth,
+          plex: {
+            ...settings.auth.plex,
+            ownerToken: plexToken,
+          },
+        },
+      });
+      console.log(`[plex] captured owner token from user id=${plexUser.id}`);
+    }
+
+    const user = repo.upsertUser({
+      provider: "plex",
+      providerUserId: plexUser.id,
+      username: plexUser.username,
+      displayName: plexUser.displayName,
+      thumbUrl: plexUser.thumbUrl,
+      isAdmin: existingPlexUser ? existingPlexUser.is_admin === 1 : !hasAdminUser,
+    });
+    const sessionToken = createSessionToken();
+    repo.createSession(user.id, hashSessionToken(sessionToken), sessionExpiresAt());
+    repo.deletePlexLoginAttempt(pinId);
+    return {
+      kind: "success",
+      settings,
+      redirectTo: addApiKey("/", settings.auth.mode === "apikey" ? settings.auth.key : null),
+      sessionToken,
+    };
+  } catch (error) {
+    const message = (error as Error).message || "Plex sign-in failed.";
+    console.log(`[plex] login failed pinId=${pinId} error=${message || "unknown"}`);
+    repo.deletePlexLoginAttempt(pinId);
+    return {
+      kind: "error",
+      settings,
+      error: message,
+      redirectTo: "/login",
+    };
+  }
+}
+
+async function renderBookPage(
+  repo: BooksRepo,
+  settings: AppSettings,
+  bookId: number,
+  flash: { notice?: string | null; error?: string | null; currentUser?: SessionWithUserRow | null } = {}
+): Promise<Response> {
+  const apiKey = settings.auth.mode === "apikey" ? settings.auth.key : null;
+  const book = repo.getBook(bookId);
+  const bookRow = repo.getBookRow(bookId);
+  if (!book || !bookRow) {
+    return new Response("Not found", { status: 404 });
+  }
+  const assets = repo.listAssetsByBook(bookId);
+  const audio = selectPreferredAudioAsset(assets);
+  const ebook = selectPreferredEpubAsset(assets);
+  const audioFiles = audio ? repo.getAssetFiles(audio.id) : [];
+  const chapters = audio ? await buildChapters(repo, audio, audioFiles) : null;
+  const transcriptUrl = audio ? addApiKey(`/transcripts/${audio.id}.json`, apiKey) : null;
+  const streamUrl = audio ? addApiKey(`/stream/${audio.id}.${streamExtension(audio)}`, apiKey) : null;
+  const chaptersUrl = audio ? addApiKey(`/chapters/${audio.id}.json`, apiKey) : null;
+  const ebookUrl = ebook ? addApiKey(`/ebook/${ebook.id}`, apiKey) : null;
+  const releases = repo.listReleasesByBook(bookId).slice(0, 8);
+  const stateSummary = describeBookState(book);
+  const body = `
+    <section class="hero">
+      <div class="detail-grid">
+        ${coverMarkup(book.coverUrl ? addApiKey(book.coverUrl, apiKey) : null, book.title, true)}
+        <div>
+          <h1>${escapeHtml(book.title)}</h1>
+          <p class="muted">${escapeHtml(book.author)}</p>
+          <div class="stats">
+            <span class="pill">${escapeHtml(stateSummary)}</span>
+            <span class="pill">${escapeHtml(formatMediaStatus("Audio", book.audioStatus))}</span>
+            <span class="pill">${escapeHtml(formatMediaStatus("eBook", book.ebookStatus))}</span>
+          </div>
+          <div class="actions" style="margin-top: 12px;">
+            ${streamUrl ? `<a class="button-link button-link-primary" href="${escapeHtml(streamUrl)}">Play audio</a>` : ""}
+            ${ebookUrl ? `<a class="button-link" href="${escapeHtml(ebookUrl)}">Download EPUB/PDF</a>` : ""}
+          </div>
+          ${messageMarkup(flash.notice, flash.error)}
+          <p style="margin-top: 12px;">${escapeHtml(book.description || `${book.title} by ${book.author}`)}</p>
+        </div>
+      </div>
+    </section>
+    <div class="grid">
+      <section class="card span-6">
+        <h2>What you can do now</h2>
+        <div class="section-list">
+          <div><strong>Audio:</strong> ${audio ? "Ready to play" : "Not attached yet"}</div>
+          <div><strong>eBook:</strong> ${ebook ? "Ready to export" : "Not attached yet"}</div>
+          <div><strong>Duration:</strong> ${formatMinutes(book.durationMs)}</div>
+        </div>
+        <div class="actions" style="margin-top: 12px;">
+          ${streamUrl ? `<a class="button-link button-link-primary" href="${escapeHtml(streamUrl)}">Play audio</a>` : ""}
+          ${ebookUrl ? `<a class="button-link" href="${escapeHtml(ebookUrl)}">Download EPUB/PDF</a>` : ""}
+          <form method="post" action="${escapeHtml(addApiKey(`/book/${book.id}/acquire`, apiKey))}">
+            <input type="hidden" name="media" value="audio" />
+            <button type="submit">Find audio</button>
+          </form>
+          <form method="post" action="${escapeHtml(addApiKey(`/book/${book.id}/acquire`, apiKey))}">
+            <input type="hidden" name="media" value="ebook" />
+            <button type="submit">Find ebook</button>
+          </form>
+          <form method="post" action="${escapeHtml(addApiKey(`/book/${book.id}/acquire`, apiKey))}">
+            <input type="hidden" name="media" value="both" />
+            <button type="submit">Find both</button>
+          </form>
+        </div>
+      </section>
+      <section class="card span-6">
+        <h2>Files and exports</h2>
+        <div class="section-list">
+          <div><strong>Audio:</strong> ${audio ? `ready (#${audio.id}, ${escapeHtml(audio.kind)})` : "not attached"}</div>
+          <div><strong>eBook:</strong> ${ebook ? `ready (#${ebook.id})` : "not attached"}</div>
+          <div><strong>Transcript:</strong> ${transcriptUrl ? "available" : "not available yet"}</div>
+          <div><strong>Chapters:</strong> ${chaptersUrl ? "available" : "not available yet"}</div>
+        </div>
+        <div class="actions" style="margin-top: 12px;">
+          ${chaptersUrl ? `<a class="button-link" href="${escapeHtml(chaptersUrl)}">Chapters JSON</a>` : ""}
+          ${transcriptUrl ? `<a class="button-link" href="${escapeHtml(transcriptUrl)}">Transcript JSON</a>` : ""}
+        </div>
+      </section>
+      <section class="card span-12">
+        <h2>Chapter preview</h2>
+        ${
+          chapters?.chapters?.length
+            ? `<div class="section-list">${chapters.chapters
+                .slice(0, 12)
+                .map((chapter) => `<div class="chapter-row"><span>${escapeHtml(chapter.title)}</span><span class="muted">${chapter.startTime.toFixed(0)}s</span></div>`)
+                .join("")}${chapters.chapters.length > 12 ? `<div class="muted">+ ${chapters.chapters.length - 12} more</div>` : ""}</div>`
+            : `<div class="empty">No chapter data yet.</div>`
+        }
+      </section>
+      <section class="card span-12">
+        <h2>Release history</h2>
+        ${
+          releases.length > 0
+            ? `<div class="section-list">${releases
+                .map(
+                  (release) => `<div>
+                    <strong>${escapeHtml(release.title)}</strong>
+                    <div class="muted">${escapeHtml(release.media_type)} • ${escapeHtml(release.provider)} • ${escapeHtml(release.status)}${release.error ? ` • ${escapeHtml(release.error)}` : ""}</div>
+                  </div>`
+                )
+                .join("")}</div>`
+            : `<div class="empty">No release activity yet.</div>`
+        }
+      </section>
+    </div>`;
+  return renderAppPage(
+    book.title,
+    body,
+    settings,
+    flash.currentUser ?? null,
+    `<a href="${escapeHtml(addApiKey(`/rpc/library/get?bookId=${book.id}`, apiKey))}">Raw JSON</a>`
+  );
+}
+
+function renderActivityPage(
+  repo: BooksRepo,
+  settings: AppSettings,
+  flash: { notice?: string | null; error?: string | null; currentUser?: SessionWithUserRow | null } = {}
+): Response {
+  const inProgress = repo.listInProgressBooks();
+  const recentBooks = repo.listAllBooks().filter((book) => book.status === "imported").slice(0, 8);
+  const needsAttention = repo.listAllBooks().filter((book) => book.status === "error").slice(0, 8);
+  const apiKey = settings.auth.mode === "apikey" ? settings.auth.key : null;
+  const body = `
+    <section class="hero">
+      <h1>Activity</h1>
+      <p>What Podible is working on right now, what just landed, and anything that needs attention.</p>
+      <div class="actions" style="margin-top: 14px;">
+        <form method="post" action="${escapeHtml(addApiKey("/activity/refresh", apiKey))}">
+          <button type="submit">Refresh library</button>
+        </form>
+      </div>
+      ${messageMarkup(flash.notice, flash.error)}
+    </section>
+    <div class="grid">
+      <section class="card span-6">
+        <h2>Books in progress</h2>
+        ${
+          inProgress.length > 0
+            ? `<div class="section-list">${inProgress
+                .map(
+                  (book) => `<div>
+                    <strong><a href="${escapeHtml(addApiKey(`/book/${book.id}`, apiKey))}">${escapeHtml(book.title)}</a></strong>
+                    <div class="muted">${escapeHtml(book.author)} • ${escapeHtml(formatBookStatusLine(book))}</div>
+                  </div>`
+                )
+                .join("")}</div>`
+            : `<div class="empty">No active work right now.</div>`
+        }
+      </section>
+      <section class="card span-6">
+        <h2>Recently ready</h2>
+        ${
+          recentBooks.length > 0
+            ? `<div class="section-list">${recentBooks
+                .map(
+                  (book) => `<div>
+                    <strong><a href="${escapeHtml(addApiKey(`/book/${book.id}`, apiKey))}">${escapeHtml(book.title)}</a></strong>
+                    <div class="muted">${escapeHtml(book.author)} • ready to play${book.durationMs ? ` • ${formatMinutes(book.durationMs)}` : ""}</div>
+                  </div>`
+                )
+                .join("")}</div>`
+            : `<div class="empty">No recently finished books yet.</div>`
+        }
+      </section>
+      <section class="card span-12">
+        <h2>Needs attention</h2>
+        ${
+          needsAttention.length > 0
+            ? `<div class="section-list">${needsAttention
+                .map(
+                  (book) => `<div>
+                    <strong><a href="${escapeHtml(addApiKey(`/book/${book.id}`, apiKey))}">${escapeHtml(book.title)}</a></strong>
+                    <div class="muted">${escapeHtml(book.author)} • ${escapeHtml(formatBookStatusLine(book))}</div>
+                  </div>`
+                )
+                .join("")}</div>`
+            : `<div class="empty">Nothing needs attention right now.</div>`
+        }
+      </section>
+    </div>`;
+  return renderAppPage("Activity", body, settings, flash.currentUser ?? null);
+}
+
+async function createBookFromOpenLibrary(repo: BooksRepo, openLibraryKey: string): Promise<number> {
+  const resolved = await resolveOpenLibraryCandidate({ openLibraryKey });
+  if (!resolved) {
+    throw new Error("Open Library match not found");
+  }
+
+  const book = repo.createBook({
+    title: resolved.title,
+    author: resolved.author,
+  });
+
+  repo.updateBookMetadata(book.id, {
+    publishedAt: resolved.publishedAt ?? null,
+    language: resolved.language ?? null,
+    identifiers: resolved.identifiers,
+  });
+
+  const hydrated = repo.getBook(book.id);
+  if (hydrated) {
+    await hydrateBookFromOpenLibrary(repo, hydrated);
+  }
+
+  await triggerAutoAcquire(repo, book.id);
+  return book.id;
+}
+
+function renderAdminPage(
+  repo: BooksRepo,
+  settings: AppSettings,
+  currentUser: SessionWithUserRow | null = null,
+  options: {
+    plexServers?: Array<{ machineId: string; name: string; product: string; owned: boolean; sourceTitle: string | null }>;
+    plexNotice?: string | null;
+    plexError?: string | null;
+  } = {}
+): Response {
   const health = repo.getHealthSummary();
   const books = repo.listBooks(30).items;
   const previewBooks = preferredAudioForBooks(repo).slice(0, 12);
   const apiKey = settings.auth.mode === "apikey" ? settings.auth.key : null;
   const settingsJson = escapeHtml(JSON.stringify(settings, null, 2));
+  const plexServers = options.plexServers ?? [];
 
   const rows = books
     .map((book) => {
@@ -391,6 +1515,40 @@ function renderHomePage(repo: BooksRepo, settings: AppSettings): Response {
           </div>
         </section>
 
+        ${
+          settings.auth.mode === "plex"
+            ? `<section class="card card-full">
+          <h2>Plex Access Control</h2>
+          <p class="muted">Choose which Plex server controls who can sign in to Podible. Future Plex logins will only be allowed for users who can access that server.</p>
+          <p class="muted">Owner token: <strong>${settings.auth.plex.ownerToken ? "captured" : "missing"}</strong> | Selected server: <strong>${escapeHtml(settings.auth.plex.machineName || settings.auth.plex.machineId || "not set")}</strong></p>
+          ${messageMarkup(options.plexNotice, options.plexError)}
+          ${
+            plexServers.length > 0
+              ? `<div class="feed-preview-grid">${plexServers
+                  .map(
+                    (server) => `<form method="post" action="${escapeHtml(addApiKey("/admin/plex/select", apiKey))}" class="feed-preview-item">
+  <input type="hidden" name="machineId" value="${escapeHtml(server.machineId)}" />
+  <input type="hidden" name="machineName" value="${escapeHtml(server.name)}" />
+  <div class="feed-preview-body" style="grid-column: 1 / -1;">
+    <div class="feed-preview-title-row">
+      <strong>${escapeHtml(server.name)}</strong>
+      <span class="muted">${server.machineId === settings.auth.plex.machineId ? "Selected" : "Available"}</span>
+    </div>
+    <p class="feed-preview-author">${escapeHtml(server.product || "Plex server")} • ${server.owned ? "owned" : "shared"}${server.sourceTitle ? ` • ${escapeHtml(server.sourceTitle)}` : ""}</p>
+    <p class="feed-preview-desc"><code>${escapeHtml(server.machineId)}</code></p>
+    <div class="feed-preview-links">
+      <button type="submit">${server.machineId === settings.auth.plex.machineId ? "Selected server" : "Use this server"}</button>
+    </div>
+  </div>
+</form>`
+                  )
+                  .join("")}</div>`
+              : `<p class="muted">No Plex servers were found for the current owner token.</p>`
+          }
+        </section>`
+            : ""
+        }
+
         <section class="card card-full">
           <h2>Manual Search + Snatch</h2>
           <div class="panel">
@@ -559,6 +1717,7 @@ function renderHomePage(repo: BooksRepo, settings: AppSettings): Response {
                 <option value="download">download</option>
                 <option value="import">import</option>
                 <option value="reconcile">reconcile</option>
+                <option value="chapter_analysis">chapter analysis</option>
               </select>
               <button id="jobs-refresh-btn" type="button">Refresh Jobs</button>
             </div>
@@ -1567,11 +2726,15 @@ function renderHomePage(repo: BooksRepo, settings: AppSettings): Response {
 export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (request: Request) => Promise<Response> {
   return async (request: Request): Promise<Response> => {
     const startedAt = Date.now();
-    const settings = repo.getSettings();
+    let settings = repo.getSettings();
     const url = new URL(request.url);
     const method = request.method;
     const pathname = url.pathname;
     let logSuffix = "";
+    let currentSession = resolveSessionFromRequest(request, (tokenHash) => repo.getSessionByTokenHash(tokenHash));
+    if (currentSession) {
+      currentSession = repo.touchSession(currentSession.id) ?? currentSession;
+    }
 
     const logRequest = (status: number): void => {
       const elapsedMs = Date.now() - startedAt;
@@ -1581,7 +2744,14 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
 
     let response: Response;
 
-    if (!authorizeRequest(request, settings)) {
+    const isPublicRoute =
+      pathname === "/login" ||
+      pathname === "/logout" ||
+      pathname === "/login/plex/start" ||
+      pathname === "/login/plex/loading" ||
+      pathname === "/login/plex/complete" ||
+      pathname === "/login/plex/status";
+    if (!isPublicRoute && !authorizeRequest(request, settings, () => currentSession)) {
       response = new Response("Unauthorized", {
         status: 401,
         headers: { "WWW-Authenticate": 'Bearer realm="podible"' },
@@ -1591,8 +2761,355 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
     }
 
     try {
+      const hasAdminAccess =
+        (process.env.NODE_ENV !== "production" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname)) ||
+        (currentSession?.is_admin ?? 0) === 1 ||
+        isApiKeyAuthorized(request, settings);
+
+      if (pathname === "/login" && request.method === "GET") {
+        response = renderLoginPage(settings, repo.listUsers("local"), {
+          notice: url.searchParams.get("notice"),
+          error: url.searchParams.get("error"),
+          currentUser: currentSession,
+        });
+        logRequest(response.status);
+        return response;
+      }
+
+      if (pathname === "/login" && request.method === "POST") {
+        if (settings.auth.mode !== "local") {
+          response = new Response("Forbidden", { status: 403 });
+          logRequest(response.status);
+          return response;
+        }
+        const body = await request.text();
+        const form = new URLSearchParams(body);
+        const userIdValue = form.get("userId");
+        let user: UserRow | null = null;
+
+        if (userIdValue) {
+          const userId = Number.parseInt(userIdValue, 10);
+          if (Number.isInteger(userId) && userId > 0) {
+            const existing = repo.getUserById(userId);
+            if (existing?.provider === "local") {
+              user = existing;
+            }
+          }
+        } else {
+          const username = (form.get("username") ?? "").trim();
+          const displayName = (form.get("displayName") ?? "").trim();
+          if (!username) {
+            const page = renderLoginPage(settings, repo.listUsers("local"), { error: "Username is required." });
+            response = new Response(await page.text(), {
+              status: 400,
+              headers: page.headers,
+            });
+            logRequest(response.status);
+            return response;
+          }
+          const providerUserId = normalizeLocalUserKey(username);
+          const localUsers = repo.listUsers("local");
+          const existing = localUsers.find((candidate) => candidate.provider_user_id === providerUserId) ?? null;
+          user = repo.upsertUser({
+            provider: "local",
+            providerUserId,
+            username,
+            displayName: displayName || username,
+            isAdmin: existing ? existing.is_admin === 1 : localUsers.length === 0,
+          });
+        }
+
+        if (!user) {
+          const page = renderLoginPage(settings, repo.listUsers("local"), { error: "User not found." });
+          response = new Response(await page.text(), {
+            status: 400,
+            headers: page.headers,
+          });
+          logRequest(response.status);
+          return response;
+        }
+
+        const sessionToken = createSessionToken();
+        repo.createSession(user.id, hashSessionToken(sessionToken), sessionExpiresAt());
+        response = redirect("/");
+        response.headers.append("Set-Cookie", buildSessionCookie(sessionToken, request));
+        logRequest(response.status);
+        return response;
+      }
+
+      if (pathname === "/login/plex/start" && request.method === "POST") {
+        if (settings.auth.mode !== "plex") {
+          response = json({ error: "Plex sign-in is not enabled." }, 403);
+          logRequest(response.status);
+          return response;
+        }
+        try {
+          repo.deleteExpiredPlexLoginAttempts(new Date(Date.now() - 15 * 60_000).toISOString());
+          const identity = createEphemeralPlexIdentity(settings.auth.plex.productName);
+          const pin = await createPlexPin(identity);
+          repo.createPlexLoginAttempt({
+            pinId: pin.id,
+            clientIdentifier: identity.clientIdentifier,
+            publicJwkJson: JSON.stringify(identity.publicJwk),
+            privateKeyPkcs8: identity.privateKeyPkcs8,
+          });
+          console.log(`[plex] created pin id=${pin.id} clientId=${identity.clientIdentifier}`);
+          const forwardUrl = new URL(request.url);
+          forwardUrl.pathname = "/login/plex/complete";
+          forwardUrl.search = "";
+          forwardUrl.searchParams.set("pinId", String(pin.id));
+          response = json({
+            pinId: pin.id,
+            authUrl: buildPlexAuthUrl(identity, pin.code, forwardUrl.toString()),
+          });
+        } catch (error) {
+          response = json({ error: (error as Error).message || "Unable to start Plex sign-in." }, 502);
+        }
+        logRequest(response.status);
+        return response;
+      }
+
+      if (pathname === "/login/plex/loading" && request.method === "GET") {
+        response = renderPlexLoadingPage(settings);
+        logRequest(response.status);
+        return response;
+      }
+
+      if (pathname === "/login/plex/complete" && request.method === "GET") {
+        if (settings.auth.mode !== "plex") {
+          response = renderPlexImmediateResultPage({ ok: false, redirectTo: "/", error: "Plex sign-in is not enabled." });
+          logRequest(response.status);
+          return response;
+        }
+        const pinId = Number.parseInt(url.searchParams.get("pinId") ?? "", 10);
+        if (!Number.isInteger(pinId) || pinId <= 0) {
+          response = renderPlexImmediateResultPage({ ok: false, redirectTo: "/login", error: "Missing or invalid Plex PIN id." });
+          logRequest(response.status);
+          return response;
+        }
+        response = renderPlexCompletePage(settings, pinId, request);
+        logRequest(response.status);
+        return response;
+      }
+
+      if (pathname === "/login/plex/status" && request.method === "GET") {
+        if (settings.auth.mode !== "plex") {
+          response = json({ ok: false, pending: false, redirectTo: "/", error: "Plex sign-in is not enabled." }, 403);
+          logRequest(response.status);
+          return response;
+        }
+        const pinId = Number.parseInt(url.searchParams.get("pinId") ?? "", 10);
+        if (!Number.isInteger(pinId) || pinId <= 0) {
+          response = json({ ok: false, pending: false, redirectTo: "/login", error: "Missing or invalid Plex PIN id." }, 400);
+          logRequest(response.status);
+          return response;
+        }
+        const statusResult = await resolvePlexLoginStatus(repo, settings, pinId);
+        settings = statusResult.settings;
+        if (statusResult.kind === "pending") {
+          response = json({ ok: false, pending: true, message: statusResult.message, pinId, retryAfterMs: 3000 });
+          logRequest(response.status);
+          return response;
+        }
+        if (statusResult.kind === "error") {
+          response = json({ ok: false, pending: false, redirectTo: statusResult.redirectTo, error: statusResult.error }, 400);
+          logRequest(response.status);
+          return response;
+        }
+        response = json({ ok: true, pending: false, redirectTo: statusResult.redirectTo });
+        response.headers.append("Set-Cookie", buildSessionCookie(statusResult.sessionToken, request));
+        logRequest(response.status);
+        return response;
+      }
+
+      if (pathname === "/logout" && request.method === "POST") {
+        if (currentSession) {
+          repo.deleteSession(currentSession.id);
+        }
+        response = redirect(addApiKey("/login?notice=Signed%20out.", settings.auth.mode === "apikey" ? settings.auth.key : null));
+        response.headers.append("Set-Cookie", clearSessionCookie(request));
+        logRequest(response.status);
+        return response;
+      }
+
       if (pathname === "/" && request.method === "GET") {
-        response = renderHomePage(repo, settings);
+        response = renderLandingPage(repo, settings, currentSession);
+        logRequest(response.status);
+        return response;
+      }
+
+      if ((pathname === "/admin" || pathname === "/rpc" || pathname.startsWith("/rpc/")) && !hasAdminAccess) {
+        response = new Response("Forbidden", { status: 403 });
+        logRequest(response.status);
+        return response;
+      }
+
+      if (pathname === "/admin/plex" && request.method === "GET") {
+        response = redirect("/admin");
+        logRequest(response.status);
+        return response;
+      }
+
+      if (pathname === "/admin/plex/select" && request.method === "POST") {
+        if (settings.auth.mode !== "plex") {
+          response = new Response("Forbidden", { status: 403 });
+          logRequest(response.status);
+          return response;
+        }
+        const form = new URLSearchParams(await request.text());
+        const machineId = (form.get("machineId") ?? "").trim();
+        const machineName = (form.get("machineName") ?? "").trim();
+        if (!machineId) {
+          response = redirect("/admin?plex_error=Missing%20machine%20id");
+          logRequest(response.status);
+          return response;
+        }
+        settings = repo.updateSettings({
+          ...settings,
+          auth: {
+            ...settings.auth,
+            plex: {
+              ...settings.auth.plex,
+              machineId,
+              machineName,
+            },
+          },
+        });
+        response = redirect(`/admin?plex_notice=${encodeURIComponent(`Selected ${machineName || machineId}.`)}`);
+        logRequest(response.status);
+        return response;
+      }
+
+      if (pathname === "/library" && request.method === "GET") {
+        response = renderLibraryPage(repo, settings, {
+          query: url.searchParams.get("q"),
+          currentUser: currentSession,
+        });
+        logRequest(response.status);
+        return response;
+      }
+
+      if (pathname === "/add" && request.method === "GET") {
+        const query = (url.searchParams.get("q") ?? "").trim();
+        if (!query) {
+          response = renderAddPage(settings, { currentUser: currentSession });
+          logRequest(response.status);
+          return response;
+        }
+        try {
+          const results = await searchOpenLibrary(query, 10);
+          response = renderAddPage(settings, {
+            query,
+            results,
+            status: `Found ${results.length} result${results.length === 1 ? "" : "s"} for “${query}”.`,
+            currentUser: currentSession,
+          });
+        } catch (error) {
+          response = renderAddPage(settings, {
+            query,
+            error: `Search failed: ${(error as Error).message}`,
+            currentUser: currentSession,
+          });
+        }
+        logRequest(response.status);
+        return response;
+      }
+
+      if (pathname === "/add" && request.method === "POST") {
+        const body = await request.text();
+        const form = new URLSearchParams(body);
+        const openLibraryKey = (form.get("openLibraryKey") ?? "").trim();
+        if (!openLibraryKey) {
+          const addResponse = renderAddPage(settings, { error: "openLibraryKey is required.", currentUser: currentSession });
+          response = new Response(await addResponse.text(), {
+            status: 400,
+            headers: addResponse.headers,
+          });
+          logRequest(response.status);
+          return response;
+        }
+        try {
+          const bookId = await createBookFromOpenLibrary(repo, openLibraryKey);
+          response = redirect(addApiKey(`/book/${bookId}`, settings.auth.mode === "apikey" ? settings.auth.key : null));
+        } catch (error) {
+          const addResponse = renderAddPage(settings, {
+            error: `Add failed: ${(error as Error).message}`,
+            currentUser: currentSession,
+          });
+          response = new Response(await addResponse.text(), {
+            status: 400,
+            headers: addResponse.headers,
+          });
+        }
+        logRequest(response.status);
+        return response;
+      }
+
+      if (pathname.startsWith("/book/") && request.method === "GET") {
+        const bookId = parseId(pathname.split("/")[2] ?? "");
+        response = await renderBookPage(repo, settings, bookId, {
+          notice: url.searchParams.get("notice"),
+          error: url.searchParams.get("error"),
+          currentUser: currentSession,
+        });
+        logRequest(response.status);
+        return response;
+      }
+
+      if (pathname.startsWith("/book/") && pathname.endsWith("/acquire") && request.method === "POST") {
+        const bookId = parseId(pathname.split("/")[2] ?? "");
+        const body = await request.text();
+        const form = new URLSearchParams(body);
+        const media = parseMediaSelection(form.get("media"));
+        const book = repo.getBookRow(bookId);
+        if (!book) {
+          response = new Response("Not found", { status: 404 });
+          logRequest(response.status);
+          return response;
+        }
+        const jobId = await triggerAutoAcquire(repo, bookId, media);
+        const notice = `Queued ${media.join(" + ")} acquire for ${book.title} (job ${jobId}).`;
+        response = redirect(
+          addApiKey(`/book/${bookId}?notice=${encodeURIComponent(notice)}`, settings.auth.mode === "apikey" ? settings.auth.key : null)
+        );
+        logRequest(response.status);
+        return response;
+      }
+
+      if (pathname === "/activity" && request.method === "GET") {
+        response = renderActivityPage(repo, settings, {
+          notice: url.searchParams.get("notice"),
+          error: url.searchParams.get("error"),
+          currentUser: currentSession,
+        });
+        logRequest(response.status);
+        return response;
+      }
+
+      if (pathname === "/activity/refresh" && request.method === "POST") {
+        const job = repo.createJob({ type: "full_library_refresh" });
+        response = redirect(
+          addApiKey(`/activity?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`, settings.auth.mode === "apikey" ? settings.auth.key : null)
+        );
+        logRequest(response.status);
+        return response;
+      }
+
+      if (pathname === "/admin" && request.method === "GET") {
+        let plexServers: Array<{ machineId: string; name: string; product: string; owned: boolean; sourceTitle: string | null }> = [];
+        let plexError = url.searchParams.get("plex_error");
+        if (settings.auth.mode === "plex" && settings.auth.plex.ownerToken) {
+          try {
+            plexServers = await fetchPlexServerDevices(settings);
+          } catch (error) {
+            plexError = plexError || (error as Error).message || "Unable to load Plex servers.";
+          }
+        }
+        response = renderAdminPage(repo, settings, currentSession, {
+          plexServers,
+          plexNotice: url.searchParams.get("plex_notice"),
+          plexError,
+        });
         logRequest(response.status);
         return response;
       }
@@ -1686,7 +3203,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
           logRequest(response.status);
           return response;
         }
-        response = await jsonResponse(request, chapters, 200, "application/json+chapters");
+        response = await jsonResponse(request, chapters);
         logRequest(response.status);
         return response;
       }

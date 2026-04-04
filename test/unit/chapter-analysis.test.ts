@@ -93,6 +93,10 @@ function setupRepo(): { db: Database; repo: BooksRepo } {
   return { db, repo: new BooksRepo(db) };
 }
 
+function chapterWords(tokens: string[]): Array<{ text: string; token: string }> {
+  return tokens.map((token) => ({ text: token, token }));
+}
+
 describe("chapter analysis", () => {
   test("loads EPUB chapters through parser adapter", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "podible-epub-test-"));
@@ -181,6 +185,7 @@ describe("chapter analysis", () => {
           title: "Copyright Page",
           href: "copyright.xhtml",
           text: "Frontmatterium Frontmatterium Frontmatterium Frontmatterium",
+          words: chapterWords(["frontmatterium", "frontmatterium", "frontmatterium", "frontmatterium"]),
           tokens: ["frontmatterium", "frontmatterium", "frontmatterium", "frontmatterium"],
           wordCount: 4,
           cumulativeWords: 4,
@@ -191,6 +196,7 @@ describe("chapter analysis", () => {
           title: "Author's Note",
           href: "note.xhtml",
           text: "Frontmatterium Frontmatterium Frontmatterium Frontmatterium",
+          words: chapterWords(["frontmatterium", "frontmatterium", "frontmatterium", "frontmatterium"]),
           tokens: ["frontmatterium", "frontmatterium", "frontmatterium", "frontmatterium"],
           wordCount: 4,
           cumulativeWords: 8,
@@ -201,6 +207,7 @@ describe("chapter analysis", () => {
           title: "Part One",
           href: "part.xhtml",
           text: "Dividerword Dividerword Dividerword Dividerword",
+          words: chapterWords(["dividerword", "dividerword", "dividerword", "dividerword"]),
           tokens: ["dividerword", "dividerword", "dividerword", "dividerword"],
           wordCount: 4,
           cumulativeWords: 12,
@@ -211,6 +218,7 @@ describe("chapter analysis", () => {
           title: "Chapter 1",
           href: "one.xhtml",
           text: "MuadDib Arrakis MuadDib Arrakis MuadDib Arrakis",
+          words: chapterWords(["muaddib", "arrakis", "muaddib", "arrakis", "muaddib", "arrakis"]),
           tokens: ["muaddib", "arrakis", "muaddib", "arrakis", "muaddib", "arrakis"],
           wordCount: 6,
           cumulativeWords: 18,
@@ -221,6 +229,7 @@ describe("chapter analysis", () => {
           title: "Chapter 2",
           href: "two.xhtml",
           text: "MuadDib Arrakis MuadDib Arrakis MuadDib Arrakis",
+          words: chapterWords(["muaddib", "arrakis", "muaddib", "arrakis", "muaddib", "arrakis"]),
           tokens: ["muaddib", "arrakis", "muaddib", "arrakis", "muaddib", "arrakis"],
           wordCount: 6,
           cumulativeWords: 24,
@@ -243,6 +252,7 @@ describe("chapter analysis", () => {
           title: "1",
           href: "one.xhtml",
           text: "Sensing Ignoring Mixing Reminded Pays Shes Arrakis MuadDib",
+          words: chapterWords(["sensing", "ignoring", "mixing", "reminded", "pays", "shes", "arrakis", "muaddib"]),
           tokens: ["sensing", "ignoring", "mixing", "reminded", "pays", "shes", "arrakis", "muaddib"],
           wordCount: 8,
           cumulativeWords: 8,
@@ -253,6 +263,7 @@ describe("chapter analysis", () => {
           title: "2",
           href: "two.xhtml",
           text: "Sensing Ignoring Mixing Reminded Pays Shes Arrakis MuadDib",
+          words: chapterWords(["sensing", "ignoring", "mixing", "reminded", "pays", "shes", "arrakis", "muaddib"]),
           tokens: ["sensing", "ignoring", "mixing", "reminded", "pays", "shes", "arrakis", "muaddib"],
           wordCount: 8,
           cumulativeWords: 16,
@@ -280,6 +291,7 @@ describe("chapter analysis", () => {
           title: "1",
           href: "one.xhtml",
           text: "She's Let's Edward's Esme's Carlisle's Volterra",
+          words: chapterWords(["shes", "lets", "edwards", "esmes", "carlisles", "volterra"]),
           tokens: ["shes", "lets", "edwards", "esmes", "carlisles", "volterra"],
           wordCount: 6,
           cumulativeWords: 6,
@@ -290,6 +302,7 @@ describe("chapter analysis", () => {
           title: "2",
           href: "two.xhtml",
           text: "She's Let's Edward's Esme's Carlisle's Volterra",
+          words: chapterWords(["shes", "lets", "edwards", "esmes", "carlisles", "volterra"]),
           tokens: ["shes", "lets", "edwards", "esmes", "carlisles", "volterra"],
           wordCount: 6,
           cumulativeWords: 12,
@@ -409,6 +422,7 @@ describe("chapter analysis", () => {
               title: "One",
               href: "one.xhtml",
               text: "one one one",
+              words: chapterWords(Array.from({ length: 30 }, (_, index) => `one${index}`)),
               tokens: Array.from({ length: 30 }, (_, index) => `one${index}`),
               wordCount: 30,
               cumulativeWords: 30,
@@ -419,6 +433,7 @@ describe("chapter analysis", () => {
               title: "Two",
               href: "two.xhtml",
               text: "two two two",
+              words: chapterWords(Array.from({ length: 30 }, (_, index) => `two${index}`)),
               tokens: Array.from({ length: 30 }, (_, index) => `two${index}`),
               wordCount: 30,
               cumulativeWords: 60,
@@ -429,6 +444,7 @@ describe("chapter analysis", () => {
               title: "Three",
               href: "three.xhtml",
               text: "three three three",
+              words: chapterWords(Array.from({ length: 30 }, (_, index) => `three${index}`)),
               tokens: Array.from({ length: 30 }, (_, index) => `three${index}`),
               wordCount: 30,
               cumulativeWords: 90,
@@ -460,12 +476,162 @@ describe("chapter analysis", () => {
       expect(stored?.length).toBe(3);
       expect(stored?.[1]?.title).toBe("Two");
       expect(transcript?.words.length).toBeGreaterThan(0);
-      expect(transcript?.text).toContain("one0");
+      expect(transcript?.text).toContain("one one one");
+      expect(transcript?.segments?.length).toBe(3);
+      expect(transcript?.segments?.[1]?.title).toBe("Two");
+      expect(transcript?.segments?.[1]?.matchedWordCount).toBeGreaterThan(0);
+      expect(transcript?.words.length).toBe(90);
 
       const chapters = await buildChapters(repo, audio, repo.getAssetFiles(audio.id));
       expect(chapters?.chapters.length).toBe(3);
       expect(chapters?.chapters[1]?.title).toBe("Two");
       expect(chapters?.chapters[1]?.startTime).toBeGreaterThan(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      db.close();
+    }
+  });
+
+  test("fuzzy boundary alignment tolerates substitutions insertions and omissions", async () => {
+    const { db, repo } = setupRepo();
+    const root = await mkdtemp(path.join(os.tmpdir(), "podible-chapter-alignment-"));
+    try {
+      const settings = repo.ensureSettings();
+      repo.updateSettings(
+        defaultSettings({
+          ...settings,
+          auth: { mode: "local", key: "test" },
+          agents: {
+            ...settings.agents,
+            apiKey: "test-key",
+          },
+        })
+      );
+
+      const audioPath = path.join(root, "audio.mp3");
+      const epubPath = path.join(root, "book.epub");
+      await mkdir(root, { recursive: true });
+      await writeFile(audioPath, Buffer.from("audio"));
+      await writeFile(epubPath, Buffer.from("epub"));
+
+      const chapterOneTokens = Array.from({ length: 40 }, (_, index) => `alpha${index}`);
+      const chapterTwoTokens = Array.from({ length: 40 }, (_, index) => `beta${index}`);
+
+      const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+      const audio = repo.addAsset({
+        bookId: book.id,
+        kind: "single",
+        mime: "audio/mpeg",
+        totalSize: 200,
+        durationMs: 100_000,
+        files: [
+          {
+            path: audioPath,
+            size: 200,
+            start: 0,
+            end: 199,
+            durationMs: 100_000,
+            title: "Book",
+          },
+        ],
+      });
+      const epub = repo.addAsset({
+        bookId: book.id,
+        kind: "ebook",
+        mime: "application/epub+zip",
+        totalSize: 100,
+        durationMs: null,
+        files: [
+          {
+            path: epubPath,
+            size: 100,
+            start: 0,
+            end: 99,
+            durationMs: 0,
+            title: null,
+          },
+        ],
+      });
+      const job = repo.createJob({
+        type: "chapter_analysis",
+        bookId: book.id,
+        payload: {
+          assetId: audio.id,
+          ebookAssetId: epub.id,
+        },
+      });
+
+      await processChapterAnalysisJob(
+        {
+          repo,
+          getSettings: () => repo.getSettings(),
+        },
+        job,
+        {
+          loadEpubEntries: async () => [
+            {
+              id: "one",
+              title: "One",
+              href: "one.xhtml",
+              text: chapterOneTokens.join(" "),
+              words: chapterWords(chapterOneTokens),
+              tokens: chapterOneTokens,
+              wordCount: chapterOneTokens.length,
+              cumulativeWords: chapterOneTokens.length,
+              cumulativeRatio: 0.5,
+            },
+            {
+              id: "two",
+              title: "Two",
+              href: "two.xhtml",
+              text: chapterTwoTokens.join(" "),
+              words: chapterWords(chapterTwoTokens),
+              tokens: chapterTwoTokens,
+              wordCount: chapterTwoTokens.length,
+              cumulativeWords: chapterOneTokens.length + chapterTwoTokens.length,
+              cumulativeRatio: 1,
+            },
+          ],
+          extractChunkClip: async ({ tempDir, clipName }) => {
+            const clipPath = path.join(tempDir, `${clipName}.mp3`);
+            await mkdir(tempDir, { recursive: true });
+            await writeFile(clipPath, Buffer.from("clip"));
+            return clipPath;
+          },
+          transcribeChunk: async () => {
+            const transcriptTokens = [
+              ...chapterOneTokens.slice(0, 6),
+              "filler0",
+              ...chapterOneTokens.slice(6, 10).map((token, index) => (index === 1 ? `${token}x` : token)),
+              ...chapterOneTokens.slice(10, 18),
+              "filler1",
+              ...chapterOneTokens.slice(19),
+              "bridgeword",
+              ...chapterTwoTokens.slice(0, 5).map((token, index) => (index === 2 ? `${token}x` : token)),
+              "filler2",
+              ...chapterTwoTokens.slice(5, 12),
+              ...chapterTwoTokens.slice(13),
+            ];
+            return transcriptTokens.map((token, index) => ({
+              token: token.toLowerCase(),
+              raw: token,
+              startMs: index * 1_000,
+              endMs: index * 1_000 + 600,
+            }));
+          },
+        }
+      );
+
+      const stored = await loadStoredChapterTimings(repo, audio, repo.getAssetFiles(audio.id));
+      const transcript = await loadStoredTranscriptPayload(repo, audio.id);
+      expect(stored?.length).toBe(2);
+      expect(stored?.[1]?.startMs).toBeGreaterThan(20_000);
+      expect(stored?.[1]?.startMs).toBeLessThan(70_000);
+      expect(transcript?.segments?.length).toBe(2);
+      expect(transcript?.segments?.[0]?.anchorCoverage).toBeGreaterThan(0.5);
+      expect(transcript?.segments?.[1]?.anchorCoverage).toBeGreaterThan(0.5);
+      expect(transcript?.segments?.[0]?.matchedWordCount).toBeGreaterThan(20);
+      expect(transcript?.segments?.[1]?.matchedWordCount).toBeGreaterThan(20);
     } finally {
       await rm(root, { recursive: true, force: true });
       db.close();

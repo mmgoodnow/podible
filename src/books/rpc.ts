@@ -330,11 +330,12 @@ function parseJobType(value: unknown): JobType {
     value === "acquire" ||
     value === "download" ||
     value === "import" ||
-    value === "reconcile"
+    value === "reconcile" ||
+    value === "chapter_analysis"
   ) {
     return value;
   }
-  throw new RpcError(-32602, "type must be one of full_library_refresh|acquire|download|import|reconcile");
+  throw new RpcError(-32602, "type must be one of full_library_refresh|acquire|download|import|reconcile|chapter_analysis");
 }
 
 function uniqueManualInfoHash(bookId: number, mediaType: MediaType, sourcePath: string): string {
@@ -780,7 +781,7 @@ const handlers: Record<string, RpcMethodHandler> = {
     const type = params.type === undefined ? undefined : parseJobType(params.type);
     const jobs = type
       ? ctx.repo.listJobsByType(type)
-      : (["full_library_refresh", "acquire", "download", "import", "reconcile"] as JobType[]).flatMap((jobType) =>
+      : (["full_library_refresh", "acquire", "download", "import", "reconcile", "chapter_analysis"] as JobType[]).flatMap((jobType) =>
           ctx.repo.listJobsByType(jobType)
         );
     return {

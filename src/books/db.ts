@@ -11,6 +11,9 @@ const TORRENT_CACHE_MIGRATION_ID = 5;
 const REMOVE_TRANSCODE_JOB_TYPE_MIGRATION_ID = 6;
 const CHAPTER_ANALYSIS_MIGRATION_ID = 7;
 const ASSET_TRANSCRIPTS_MIGRATION_ID = 8;
+const USERS_AND_SESSIONS_MIGRATION_ID = 9;
+const LOCAL_USERS_PROVIDER_MIGRATION_ID = 10;
+const PLEX_LOGIN_ATTEMPTS_MIGRATION_ID = 11;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -120,6 +123,36 @@ CREATE TABLE IF NOT EXISTS asset_transcripts (
   FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider TEXT NOT NULL CHECK (provider IN ('plex', 'local')),
+  provider_user_id TEXT NOT NULL,
+  username TEXT NOT NULL,
+  display_name TEXT NULL,
+  thumb_url TEXT NULL,
+  is_admin INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  token_hash TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS plex_login_attempts (
+  pin_id INTEGER PRIMARY KEY,
+  client_identifier TEXT NOT NULL,
+  public_jwk_json TEXT NOT NULL,
+  private_key_pkcs8 TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   value_json TEXT NOT NULL
@@ -154,6 +187,11 @@ CREATE INDEX IF NOT EXISTS idx_torrent_cache_provider_guid ON torrent_cache(prov
 CREATE INDEX IF NOT EXISTS idx_torrent_cache_url ON torrent_cache(url);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_releases_info_hash ON releases(info_hash);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_releases_provider_guid ON releases(provider, provider_guid) WHERE provider_guid IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_users_provider_user ON users(provider, provider_user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_sessions_token_hash ON sessions(token_hash);
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_plex_login_attempts_created_at ON plex_login_attempts(created_at);
 `;
 
 function hasColumn(db: Database, table: string, column: string): boolean {
@@ -335,6 +373,80 @@ CREATE TABLE IF NOT EXISTS asset_transcripts (
 `);
 }
 
+function applyUsersAndSessionsMigration(db: Database): void {
+  db.exec(`
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider TEXT NOT NULL CHECK (provider IN ('plex', 'local')),
+  provider_user_id TEXT NOT NULL,
+  username TEXT NOT NULL,
+  display_name TEXT NULL,
+  thumb_url TEXT NULL,
+  is_admin INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  token_hash TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_users_provider_user ON users(provider, provider_user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_sessions_token_hash ON sessions(token_hash);
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+`);
+}
+
+function applyLocalUsersProviderMigration(db: Database): void {
+  db.exec("PRAGMA foreign_keys = OFF;");
+  db.exec(`
+CREATE TABLE users_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider TEXT NOT NULL CHECK (provider IN ('plex', 'local')),
+  provider_user_id TEXT NOT NULL,
+  username TEXT NOT NULL,
+  display_name TEXT NULL,
+  thumb_url TEXT NULL,
+  is_admin INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+INSERT INTO users_new (
+  id, provider, provider_user_id, username, display_name, thumb_url, is_admin, created_at, updated_at
+)
+SELECT
+  id, provider, provider_user_id, username, display_name, thumb_url, is_admin, created_at, updated_at
+FROM users;
+
+DROP TABLE users;
+ALTER TABLE users_new RENAME TO users;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_users_provider_user ON users(provider, provider_user_id);
+`);
+  db.exec("PRAGMA foreign_keys = ON;");
+}
+
+function applyPlexLoginAttemptsMigration(db: Database): void {
+  db.exec(`
+CREATE TABLE IF NOT EXISTS plex_login_attempts (
+  pin_id INTEGER PRIMARY KEY,
+  client_identifier TEXT NOT NULL,
+  public_jwk_json TEXT NOT NULL,
+  private_key_pkcs8 TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_plex_login_attempts_created_at ON plex_login_attempts(created_at);
+`);
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
@@ -388,5 +500,14 @@ export function runMigrations(db: Database): void {
   });
   apply(ASSET_TRANSCRIPTS_MIGRATION_ID, () => {
     applyAssetTranscriptsMigration(db);
+  });
+  apply(USERS_AND_SESSIONS_MIGRATION_ID, () => {
+    applyUsersAndSessionsMigration(db);
+  });
+  apply(LOCAL_USERS_PROVIDER_MIGRATION_ID, () => {
+    applyLocalUsersProviderMigration(db);
+  });
+  apply(PLEX_LOGIN_ATTEMPTS_MIGRATION_ID, () => {
+    applyPlexLoginAttemptsMigration(db);
   });
 }

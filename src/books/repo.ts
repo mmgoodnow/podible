@@ -6,6 +6,7 @@ import { deriveBookStatus, deriveMediaStatus, MediaStatus, ReleaseStatus } from 
 import { defaultSettings, parseSettings } from "./settings";
 import type {
   AppSettings,
+  AuthProvider,
   AssetFileRow,
   AssetTranscriptRow,
   AssetTranscriptStatus,
@@ -20,7 +21,10 @@ import type {
   LibraryBook,
   MediaType,
   ReleaseRow,
+  SessionWithUserRow,
+  UserRow,
   TorrentCacheRow,
+  PlexLoginAttemptRow,
 } from "./types";
 
 type CreateBookInput = {
@@ -92,6 +96,15 @@ type AddAssetInput = {
   }>;
 };
 
+type UpsertUserInput = {
+  provider: AuthProvider;
+  providerUserId: string;
+  username: string;
+  displayName?: string | null;
+  thumbUrl?: string | null;
+  isAdmin?: boolean;
+};
+
 function parseIdentifiers(value: string | null): Record<string, string> {
   if (!value) return {};
   try {
@@ -146,6 +159,136 @@ export class BooksRepo {
       .query("INSERT INTO settings (id, value_json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET value_json = excluded.value_json")
       .run(stringifySettings(next));
     return next;
+  }
+
+  upsertUser(input: UpsertUserInput): UserRow {
+    const now = nowIso();
+    return this.db
+      .query(
+        `INSERT INTO users (
+           provider, provider_user_id, username, display_name, thumb_url, is_admin, created_at, updated_at
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(provider, provider_user_id) DO UPDATE SET
+           username = excluded.username,
+           display_name = excluded.display_name,
+           thumb_url = excluded.thumb_url,
+           is_admin = excluded.is_admin,
+           updated_at = excluded.updated_at
+         RETURNING *`
+      )
+      .get(
+        input.provider,
+        input.providerUserId,
+        input.username,
+        input.displayName ?? null,
+        input.thumbUrl ?? null,
+        input.isAdmin ? 1 : 0,
+        now,
+        now
+      ) as UserRow;
+  }
+
+  getUserById(userId: number): UserRow | null {
+    assertPositiveInt(userId);
+    return (this.db.query("SELECT * FROM users WHERE id = ?").get(userId) as UserRow | null) ?? null;
+  }
+
+  listUsers(provider?: AuthProvider): UserRow[] {
+    if (provider) {
+      return this.db.query("SELECT * FROM users WHERE provider = ? ORDER BY username COLLATE NOCASE ASC, id ASC").all(provider) as UserRow[];
+    }
+    return this.db.query("SELECT * FROM users ORDER BY username COLLATE NOCASE ASC, id ASC").all() as UserRow[];
+  }
+
+  createSession(userId: number, tokenHash: string, expiresAt: string): SessionWithUserRow {
+    assertPositiveInt(userId);
+    const now = nowIso();
+    const row = this.db
+      .query(
+        `INSERT INTO sessions (user_id, token_hash, expires_at, created_at, last_seen_at)
+         VALUES (?, ?, ?, ?, ?)
+         RETURNING id`
+      )
+      .get(userId, tokenHash, expiresAt, now, now) as { id: number } | null;
+    if (!row) {
+      throw new Error("Failed to create session");
+    }
+    const session = this.getSessionByTokenHash(tokenHash);
+    if (!session) {
+      throw new Error("Failed to load created session");
+    }
+    return session;
+  }
+
+  getSessionByTokenHash(tokenHash: string): SessionWithUserRow | null {
+    return (
+      this.db
+        .query(
+          `SELECT
+             s.id, s.user_id, s.token_hash, s.expires_at, s.created_at, s.last_seen_at,
+             u.provider, u.provider_user_id, u.username, u.display_name, u.thumb_url, u.is_admin
+           FROM sessions s
+           JOIN users u ON u.id = s.user_id
+           WHERE s.token_hash = ?`
+        )
+        .get(tokenHash) as SessionWithUserRow | null
+    ) ?? null;
+  }
+
+  touchSession(sessionId: number): SessionWithUserRow | null {
+    assertPositiveInt(sessionId);
+    const now = nowIso();
+    const row = this.db
+      .query(
+        `UPDATE sessions
+         SET last_seen_at = ?
+         WHERE id = ?
+         RETURNING token_hash`
+      )
+      .get(now, sessionId) as { token_hash: string } | null;
+    if (!row) return null;
+    return this.getSessionByTokenHash(row.token_hash);
+  }
+
+  deleteSession(sessionId: number): boolean {
+    assertPositiveInt(sessionId);
+    return this.db.query("DELETE FROM sessions WHERE id = ?").run(sessionId).changes > 0;
+  }
+
+  createPlexLoginAttempt(input: {
+    pinId: number;
+    clientIdentifier: string;
+    publicJwkJson: string;
+    privateKeyPkcs8: string;
+  }): PlexLoginAttemptRow {
+    const now = nowIso();
+    return this.db
+      .query(
+        `INSERT INTO plex_login_attempts (pin_id, client_identifier, public_jwk_json, private_key_pkcs8, created_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(pin_id) DO UPDATE SET
+           client_identifier = excluded.client_identifier,
+           public_jwk_json = excluded.public_jwk_json,
+           private_key_pkcs8 = excluded.private_key_pkcs8,
+           created_at = excluded.created_at
+         RETURNING *`
+      )
+      .get(input.pinId, input.clientIdentifier, input.publicJwkJson, input.privateKeyPkcs8, now) as PlexLoginAttemptRow;
+  }
+
+  getPlexLoginAttempt(pinId: number): PlexLoginAttemptRow | null {
+    assertPositiveInt(pinId);
+    return (this.db.query("SELECT * FROM plex_login_attempts WHERE pin_id = ?").get(pinId) as PlexLoginAttemptRow | null) ?? null;
+  }
+
+  deletePlexLoginAttempt(pinId: number): boolean {
+    assertPositiveInt(pinId);
+    return this.db.query("DELETE FROM plex_login_attempts WHERE pin_id = ?").run(pinId).changes > 0;
+  }
+
+  deleteExpiredPlexLoginAttempts(beforeIso: string): number {
+    return this.db.query("DELETE FROM plex_login_attempts WHERE created_at < ?").run(beforeIso).changes;
   }
 
   getTorrentCache(key: string): TorrentCacheRow | null {
@@ -394,12 +537,26 @@ export class BooksRepo {
       torrentCache: number;
       chapterAnalysis: number;
       assetTranscripts: number;
+      users: number;
+      sessions: number;
+      plexLoginAttempts: number;
     };
     settingsPreserved: boolean;
   } {
     return this.db.transaction(() => {
       const countRow = (
-        table: "books" | "releases" | "assets" | "asset_files" | "jobs" | "torrent_cache" | "chapter_analysis" | "asset_transcripts"
+        table:
+          | "books"
+          | "releases"
+          | "assets"
+          | "asset_files"
+          | "jobs"
+          | "torrent_cache"
+          | "chapter_analysis"
+          | "asset_transcripts"
+          | "users"
+          | "sessions"
+          | "plex_login_attempts"
       ) =>
         ((this.db.query(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number } | null)?.count ?? 0);
       const deleted = {
@@ -411,8 +568,14 @@ export class BooksRepo {
         torrentCache: countRow("torrent_cache"),
         chapterAnalysis: countRow("chapter_analysis"),
         assetTranscripts: countRow("asset_transcripts"),
+        users: countRow("users"),
+        sessions: countRow("sessions"),
+        plexLoginAttempts: countRow("plex_login_attempts"),
       };
 
+      this.db.query("DELETE FROM plex_login_attempts").run();
+      this.db.query("DELETE FROM sessions").run();
+      this.db.query("DELETE FROM users").run();
       this.db.query("DELETE FROM asset_transcripts").run();
       this.db.query("DELETE FROM chapter_analysis").run();
       this.db.query("DELETE FROM torrent_cache").run();
@@ -423,7 +586,7 @@ export class BooksRepo {
       this.db.query("DELETE FROM books").run();
       this.db
         .query(
-          "DELETE FROM sqlite_sequence WHERE name IN ('books', 'releases', 'assets', 'asset_files', 'jobs', 'chapter_analysis', 'asset_transcripts')"
+          "DELETE FROM sqlite_sequence WHERE name IN ('books', 'releases', 'assets', 'asset_files', 'jobs', 'chapter_analysis', 'asset_transcripts', 'users', 'sessions')"
         )
         .run();
 

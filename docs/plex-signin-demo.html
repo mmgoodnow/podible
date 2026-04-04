@@ -1,0 +1,736 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Plex Sign-In Flow Demo</title>
+    <style>
+      :root {
+        --bg: #f4f1ea;
+        --panel: rgba(255, 252, 247, 0.92);
+        --ink: #18231d;
+        --muted: #627066;
+        --line: rgba(49, 72, 58, 0.16);
+        --accent: #245847;
+        --accent-soft: rgba(36, 88, 71, 0.1);
+        --plex: #d95f02;
+        --plex-soft: rgba(217, 95, 2, 0.1);
+        --browser: #5b4ab8;
+        --browser-soft: rgba(91, 74, 184, 0.1);
+        --good: #1d7d57;
+        --warn: #a86a00;
+        --shadow: 0 20px 60px rgba(52, 64, 58, 0.14);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+        background:
+          radial-gradient(circle at top left, rgba(91, 74, 184, 0.14), transparent 22%),
+          radial-gradient(circle at top right, rgba(217, 95, 2, 0.12), transparent 24%),
+          linear-gradient(180deg, #fbf7f1 0%, var(--bg) 100%);
+      }
+
+      .page {
+        max-width: 1480px;
+        margin: 0 auto;
+        padding: 28px 20px 48px;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: 1.1fr 0.9fr;
+        gap: 18px;
+        margin-bottom: 18px;
+      }
+
+      .card,
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(10px);
+      }
+
+      .hero-card {
+        padding: 28px;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: clamp(2rem, 5vw, 4.1rem);
+        line-height: 0.94;
+        letter-spacing: -0.04em;
+      }
+
+      p,
+      li {
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .legend {
+        display: grid;
+        gap: 12px;
+        padding: 22px;
+      }
+
+      .legend h2,
+      .panel h2 {
+        margin: 0;
+        font-size: 1rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      .chips {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .chip {
+        padding: 12px 14px;
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.62);
+      }
+
+      .chip strong {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--ink);
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 0.92fr 1.08fr;
+        gap: 18px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 18px;
+      }
+
+      .panel {
+        padding: 18px;
+      }
+
+      .controls {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+        margin-top: 14px;
+      }
+
+      button,
+      input[type="range"] {
+        font: inherit;
+      }
+
+      button {
+        border: 0;
+        border-radius: 999px;
+        padding: 11px 16px;
+        background: var(--accent);
+        color: white;
+        cursor: pointer;
+        box-shadow: 0 10px 24px rgba(36, 88, 71, 0.24);
+      }
+
+      button.secondary {
+        background: rgba(24, 35, 29, 0.08);
+        color: var(--ink);
+        box-shadow: none;
+      }
+
+      .stepper {
+        display: grid;
+        gap: 10px;
+      }
+
+      .step-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .step-item {
+        padding: 12px 14px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.62);
+      }
+
+      .step-item.active {
+        border-color: rgba(36, 88, 71, 0.32);
+        background: var(--accent-soft);
+      }
+
+      .step-item strong {
+        display: block;
+        color: var(--ink);
+      }
+
+      .caption {
+        padding: 14px 16px;
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.62);
+        color: var(--ink);
+        min-height: 76px;
+      }
+
+      .track {
+        width: 100%;
+      }
+
+      .sequence {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .lane {
+        border-radius: 20px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.62);
+        overflow: hidden;
+      }
+
+      .lane header {
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .lane.browser header {
+        background: var(--browser-soft);
+      }
+
+      .lane.server header {
+        background: var(--accent-soft);
+      }
+
+      .lane.plex header {
+        background: var(--plex-soft);
+      }
+
+      .lane h3 {
+        margin: 0 0 4px;
+        font-size: 1.15rem;
+      }
+
+      .events {
+        display: grid;
+        gap: 10px;
+        padding: 14px;
+        min-height: 520px;
+      }
+
+      .event {
+        padding: 12px 12px 12px 14px;
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.72);
+        opacity: 0.42;
+        transform: translateY(0);
+        transition: opacity 160ms ease, transform 160ms ease, border-color 160ms ease, background 160ms ease;
+      }
+
+      .event.active {
+        opacity: 1;
+        transform: translateY(-2px);
+      }
+
+      .lane.browser .event.active {
+        border-color: rgba(91, 74, 184, 0.28);
+        background: rgba(91, 74, 184, 0.1);
+      }
+
+      .lane.server .event.active {
+        border-color: rgba(36, 88, 71, 0.28);
+        background: rgba(36, 88, 71, 0.1);
+      }
+
+      .lane.plex .event.active {
+        border-color: rgba(217, 95, 2, 0.28);
+        background: rgba(217, 95, 2, 0.1);
+      }
+
+      .event .tag {
+        display: inline-flex;
+        margin-bottom: 6px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: rgba(24, 35, 29, 0.08);
+        color: var(--muted);
+        font-size: 0.76rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      .event strong {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--ink);
+      }
+
+      .packet-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .packet {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.62);
+        padding: 14px;
+      }
+
+      .packet h3 {
+        margin: 0 0 8px;
+        font-size: 1rem;
+      }
+
+      pre {
+        margin: 0;
+        overflow: auto;
+        white-space: pre-wrap;
+        font-size: 0.9rem;
+        line-height: 1.45;
+        color: var(--ink);
+      }
+
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      .notes {
+        display: grid;
+        gap: 10px;
+      }
+
+      .note {
+        border-left: 4px solid var(--accent);
+        padding: 10px 12px;
+        background: rgba(255, 255, 255, 0.62);
+        border-radius: 0 14px 14px 0;
+      }
+
+      .note.warn {
+        border-left-color: var(--warn);
+      }
+
+      .note.good {
+        border-left-color: var(--good);
+      }
+
+      @media (max-width: 1120px) {
+        .hero,
+        .layout,
+        .sequence,
+        .packet-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .events {
+          min-height: auto;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <section class="hero">
+        <article class="card hero-card">
+          <h1>Plex Sign-In, The Modern Way</h1>
+          <p>
+            This is the flow Podible should use for browser sign-in: keep one persisted instance keypair, upload the public JWK
+            when requesting a PIN, open Plex Auth in the browser, then let Podible sign a short-lived device JWT to exchange the
+            approved PIN for a Plex JWT and finally create a normal Podible session cookie.
+          </p>
+          <div class="controls">
+            <button id="play">Play Flow</button>
+            <button id="pause" class="secondary">Pause</button>
+            <button id="reset" class="secondary">Reset</button>
+          </div>
+        </article>
+        <aside class="card legend">
+          <h2>What Matters</h2>
+          <div class="chips">
+            <div class="chip">
+              <strong>Instance keypair</strong>
+              Generate it once per Podible instance, not per request and not per user.
+            </div>
+            <div class="chip">
+              <strong>Browser starts auth</strong>
+              The user still authenticates in a Plex-controlled browser window.
+            </div>
+            <div class="chip">
+              <strong>Private key stays on Podible</strong>
+              The browser never needs the private key and never has to sign the device JWT.
+            </div>
+            <div class="chip">
+              <strong>Podible session stays local</strong>
+              After Plex identity is verified, Podible still issues its own session cookie.
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="layout">
+        <div class="stack">
+          <article class="panel stepper">
+            <h2>Step Through The Flow</h2>
+            <div class="caption" id="caption"></div>
+            <input id="step" class="track" type="range" min="0" max="8" step="1" value="0" />
+            <div class="step-list" id="step-list"></div>
+          </article>
+
+          <article class="panel">
+            <h2>What Travels Across The Wire</h2>
+            <div class="packet-grid">
+              <section class="packet">
+                <h3>Public data Podible can send</h3>
+                <pre id="public-packet"><code></code></pre>
+              </section>
+              <section class="packet">
+                <h3>Private data that stays on Podible</h3>
+                <pre><code>privateKeyPkcs8
+clientIdentifier
+session signing state
+
+Never shipped to the browser.</code></pre>
+              </section>
+            </div>
+          </article>
+
+          <article class="panel">
+            <h2>Why This Is Better Than The Old Token Flow</h2>
+            <div class="notes">
+              <div class="note good">
+                The browser still goes through Plex Auth, but Podible no longer needs to treat the old PIN token as the primary
+                trust model.
+              </div>
+              <div class="note">
+                Podible proves it is the same app instance by signing a short-lived device JWT with its persisted private key.
+              </div>
+              <div class="note warn">
+                More moving parts means more implementation work: key generation, JWK storage, deviceJWT signing, and a small
+                browser-side login helper.
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <article class="panel">
+          <h2>Who Does What At Each Step</h2>
+          <div class="sequence">
+            <section class="lane browser">
+              <header>
+                <h3>Browser</h3>
+                <p>The user-facing Podible tab and popup window.</p>
+              </header>
+              <div class="events" id="browser-events"></div>
+            </section>
+            <section class="lane server">
+              <header>
+                <h3>Podible Server</h3>
+                <p>Owns the instance keypair, user mapping, and session cookie.</p>
+              </header>
+              <div class="events" id="server-events"></div>
+            </section>
+            <section class="lane plex">
+              <header>
+                <h3>Plex</h3>
+                <p>Issues the PIN, hosts the auth UI, and returns the final Plex identity.</p>
+              </header>
+              <div class="events" id="plex-events"></div>
+            </section>
+          </div>
+        </article>
+      </section>
+    </div>
+
+    <script>
+      const steps = [
+        {
+          title: "1. Bootstrap the instance once",
+          caption:
+            "Podible generates and persists one Ed25519 keypair plus one stable clientIdentifier for the whole instance. This is app identity, not user identity.",
+          publicPacket: `{
+  "clientIdentifier": "podible-01hzy...",
+  "publicJwk": {
+    "kty": "OKP",
+    "crv": "Ed25519",
+    "x": "base64url...",
+    "kid": "podible-key-1",
+    "alg": "EdDSA",
+    "use": "sig"
+  }
+}`,
+          browser: [
+            { tag: "Idle", title: "No user is signing in yet.", body: "The browser does not need the keypair. It only needs a Sign in with Plex button." }
+          ],
+          server: [
+            { tag: "Setup", title: "Persist keypair and client identifier.", body: "Do this once per Podible instance and reuse it for every future Plex login." }
+          ],
+          plex: [
+            { tag: "None", title: "Plex is not involved yet.", body: "No network request has gone out to Plex at this point." }
+          ]
+        },
+        {
+          title: "2. User clicks Sign in with Plex",
+          caption:
+            "The click happens in the browser. Podible should open a popup immediately so it is not blocked, then ask its own backend to start the Plex auth flow.",
+          publicPacket: `POST /login/plex/start
+
+Browser -> Podible
+{
+  "forwardUrl": "https://podible.example/login/plex/loading"
+}`,
+          browser: [
+            { tag: "Click", title: "Open a placeholder popup.", body: "Open the popup first while the click gesture is still live. Then fetch /login/plex/start." }
+          ],
+          server: [
+            { tag: "Route", title: "Accept /login/plex/start.", body: "This route verifies Plex mode is enabled and loads the persisted keypair and clientIdentifier." }
+          ],
+          plex: [
+            { tag: "Wait", title: "Plex still has no state yet.", body: "The next step is where Podible asks Plex for a PIN." }
+          ]
+        },
+        {
+          title: "3. Podible asks Plex for a PIN",
+          caption:
+            "Podible sends the public JWK to Plex when creating the PIN. This tells Plex which public key belongs to this app instance before the PIN is later exchanged.",
+          publicPacket: `POST https://clients.plex.tv/api/v2/pins
+
+{
+  "strong": true,
+  "jwk": { ...publicJwk }
+}`,
+          browser: [
+            { tag: "Hold", title: "Browser waits for the start response.", body: "The popup is open but still showing a local loading page." }
+          ],
+          server: [
+            { tag: "Create PIN", title: "POST /api/v2/pins with the public JWK.", body: "Only the public JWK is sent. The private key never leaves Podible." }
+          ],
+          plex: [
+            { tag: "PIN", title: "Return a PIN id and code.", body: "Plex now has a short-lived login challenge tied to Podible's public key." }
+          ]
+        },
+        {
+          title: "4. Browser is sent to Plex Auth",
+          caption:
+            "Podible returns an auth URL built around the PIN code. The browser popup navigates to app.plex.tv/auth so the user authenticates directly with Plex.",
+          publicPacket: `https://app.plex.tv/auth/#!?
+clientID=podible-01hzy...
+code=ABCD1234
+forwardUrl=https://podible.example/login/plex/loading`,
+          browser: [
+            { tag: "Popup", title: "Navigate popup to Plex Auth.", body: "The user sees Plex's sign-in or approval UI, not a Podible impersonation of it." }
+          ],
+          server: [
+            { tag: "Respond", title: "Return authUrl + pinId to the browser.", body: "Podible also keeps the pinId around so the browser can ask Podible to complete the flow later." }
+          ],
+          plex: [
+            { tag: "Auth UI", title: "Render the official Plex auth page.", body: "The user signs in and approves Podible inside Plex-controlled UI." }
+          ]
+        },
+        {
+          title: "5. User approves the login in Plex",
+          caption:
+            "At this point Plex knows the PIN has been claimed by the user. Podible still does not have a usable Plex JWT until it proves possession of its private key.",
+          publicPacket: `PIN state on Plex
+
+{
+  "id": 12345,
+  "code": "ABCD1234",
+  "claimed": true
+}`,
+          browser: [
+            { tag: "Approved", title: "Popup reaches the forward URL.", body: "The popup can now show a simple 'You can close this window' message while the main page keeps polling Podible." }
+          ],
+          server: [
+            { tag: "Poll", title: "Browser starts polling /login/plex/complete.", body: "The browser does not need the Plex JWT itself. It just asks Podible whether the login is ready." }
+          ],
+          plex: [
+            { tag: "Claimed", title: "PIN is now approved.", body: "Plex is ready for the next step: deviceJWT exchange." }
+          ]
+        },
+        {
+          title: "6. Podible signs the device JWT",
+          caption:
+            "Now Podible uses its persisted private key to sign a short-lived device JWT. This is the proof that the same app instance that uploaded the JWK is the one trying to finish the login.",
+          publicPacket: `deviceJWT header
+{
+  "alg": "EdDSA",
+  "typ": "JWT",
+  "kid": "podible-key-1"
+}
+
+deviceJWT payload
+{
+  "aud": "plex.tv",
+  "iss": "podible-01hzy...",
+  "iat": 1712123456,
+  "exp": 1712123756
+}`,
+          browser: [
+            { tag: "Wait", title: "Browser still only polls Podible.", body: "The browser never signs this JWT. It stays a server responsibility." }
+          ],
+          server: [
+            { tag: "Sign", title: "Sign deviceJWT with the instance private key.", body: "This is why the keypair must be persisted once and reused instead of being generated on the fly." }
+          ],
+          plex: [
+            { tag: "Expect", title: "Plex expects a deviceJWT for PIN exchange.", body: "The signed JWT is how Podible upgrades from a claimed PIN to a real Plex JWT." }
+          ]
+        },
+        {
+          title: "7. Podible exchanges the approved PIN",
+          caption:
+            "Podible sends the deviceJWT when checking the claimed PIN. If everything matches, Plex returns the real Plex JWT for that user session.",
+          publicPacket: `GET https://clients.plex.tv/api/v2/pins/12345?deviceJWT=eyJ...
+
+response
+{
+  "authToken": "plex-jwt..."
+}`,
+          browser: [
+            { tag: "Poll", title: "Browser receives 'not ready' or 'complete'.", body: "This can stay as a simple loop that retries until Podible has the final answer." }
+          ],
+          server: [
+            { tag: "Exchange", title: "Check the PIN with deviceJWT.", body: "Podible does the privileged exchange on the server, not in browser JavaScript." }
+          ],
+          plex: [
+            { tag: "JWT", title: "Return the final Plex JWT.", body: "This is the token Podible can now use to fetch the user's Plex identity." }
+          ]
+        },
+        {
+          title: "8. Podible fetches the Plex user and creates a local session",
+          caption:
+            "With the Plex JWT in hand, Podible resolves the Plex account, upserts a local user row, and creates its own normal session cookie.",
+          publicPacket: `GET https://plex.tv/api/v2/user
+X-Plex-Token: plex-jwt...
+
+Podible local session:
+Set-Cookie: podible_session=...; HttpOnly`,
+          browser: [
+            { tag: "Cookie", title: "Receive Podible's session cookie.", body: "The browser no longer needs Plex-specific state for the normal signed-in app experience." }
+          ],
+          server: [
+            { tag: "Map user", title: "Upsert users(provider='plex', provider_user_id=...).", body: "Plex identity becomes a local Podible user, then Podible issues its own session cookie." }
+          ],
+          plex: [
+            { tag: "Profile", title: "Return account identity.", body: "Podible extracts the Plex user id, username, display name, and avatar/thumb from this response." }
+          ]
+        },
+        {
+          title: "9. Browser redirects into the signed-in app",
+          caption:
+            "At this point Plex auth is over. The rest of the app uses the normal Podible session cookie, exactly like any other browser auth flow.",
+          publicPacket: `complete: true
+redirectTo: "/library"`,
+          browser: [
+            { tag: "Done", title: "Redirect to /library or /.", body: "From here on out, the browser just looks like a normal signed-in Podible session." }
+          ],
+          server: [
+            { tag: "Session", title: "Use existing users/sessions tables.", body: "Plex login becomes one more way to create a Podible browser session. The rest of the app stays unchanged." }
+          ],
+          plex: [
+            { tag: "Finished", title: "Plex is out of the critical path.", body: "Normal app navigation no longer needs live Plex interaction." }
+          ]
+        }
+      ];
+
+      const stepInput = document.getElementById("step");
+      const stepList = document.getElementById("step-list");
+      const caption = document.getElementById("caption");
+      const publicPacket = document.querySelector("#public-packet code");
+      const browserEvents = document.getElementById("browser-events");
+      const serverEvents = document.getElementById("server-events");
+      const plexEvents = document.getElementById("plex-events");
+      const playButton = document.getElementById("play");
+      const pauseButton = document.getElementById("pause");
+      const resetButton = document.getElementById("reset");
+      let timer = null;
+
+      function renderStepList(activeIndex) {
+        stepList.innerHTML = steps
+          .map(
+            (step, index) => `
+              <div class="step-item ${index === activeIndex ? "active" : ""}">
+                <strong>${step.title}</strong>
+                <div>${step.caption}</div>
+              </div>`
+          )
+          .join("");
+      }
+
+      function renderEvents(container, items) {
+        container.innerHTML = items
+          .map(
+            (item) => `
+              <div class="event active">
+                <div class="tag">${item.tag}</div>
+                <strong>${item.title}</strong>
+                <div>${item.body}</div>
+              </div>`
+          )
+          .join("");
+      }
+
+      function render(index) {
+        const step = steps[index];
+        caption.textContent = step.caption;
+        publicPacket.textContent = step.publicPacket;
+        renderStepList(index);
+        renderEvents(browserEvents, step.browser);
+        renderEvents(serverEvents, step.server);
+        renderEvents(plexEvents, step.plex);
+        stepInput.value = String(index);
+      }
+
+      function stopPlayback() {
+        if (timer) {
+          clearInterval(timer);
+          timer = null;
+        }
+      }
+
+      function play() {
+        stopPlayback();
+        timer = setInterval(() => {
+          const next = Number(stepInput.value) + 1;
+          if (next >= steps.length) {
+            stopPlayback();
+            return;
+          }
+          render(next);
+        }, 1600);
+      }
+
+      stepInput.addEventListener("input", (event) => {
+        stopPlayback();
+        render(Number(event.target.value));
+      });
+
+      playButton.addEventListener("click", play);
+      pauseButton.addEventListener("click", stopPlayback);
+      resetButton.addEventListener("click", () => {
+        stopPlayback();
+        render(0);
+      });
+
+      render(0);
+    </script>
+  </body>
+</html>

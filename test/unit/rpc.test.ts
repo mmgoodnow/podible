@@ -75,6 +75,7 @@ describe("json-rpc handler", () => {
     expect(JSON.parse(acquireJob?.payload_json ?? "{}").rejectedInfoHashes).toEqual([]);
 
     const queued = repo.createJob({ type: "full_library_refresh" });
+    const chapter = repo.createJob({ type: "chapter_analysis", bookId: book.id, payload: { assetId: 1, ebookAssetId: 2 } });
     const jobs = await callRpc(repo, {
       jsonrpc: "2.0",
       id: 3,
@@ -82,7 +83,18 @@ describe("json-rpc handler", () => {
       params: { limit: 5 },
     });
     expect(Array.isArray(jobs.result.jobs)).toBe(true);
-    expect(jobs.result.jobs[0].id).toBe(queued.id);
+    expect(jobs.result.jobs[0].id).toBe(chapter.id);
+    expect(jobs.result.jobs.some((job: { type: string }) => job.type === "chapter_analysis")).toBe(true);
+
+    const filteredJobs = await callRpc(repo, {
+      jsonrpc: "2.0",
+      id: 4,
+      method: "jobs.list",
+      params: { limit: 5, type: "chapter_analysis" },
+    });
+    expect(filteredJobs.result.jobs).toHaveLength(1);
+    expect(filteredJobs.result.jobs[0].id).toBe(chapter.id);
+    expect(filteredJobs.result.jobs[0].type).toBe("chapter_analysis");
 
     db.close();
   });

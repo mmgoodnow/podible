@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { randomBytes } from "node:crypto";
 
 import { runMigrations } from "../../src/books/db";
 import { BooksRepo } from "../../src/books/repo";
@@ -71,6 +72,24 @@ describe("books repo", () => {
     const claimed4 = repo.claimNextRunnableJob();
     expect(claimed4).toBeNull();
 
+    db.close();
+  });
+
+  test("creates users and resolves sessions by token hash", () => {
+    const { db, repo } = setupRepo();
+    const user = repo.upsertUser({
+      provider: "plex",
+      providerUserId: "plex-123",
+      username: "andy",
+      displayName: "Andy",
+      isAdmin: true,
+    });
+    const tokenHash = randomBytes(16).toString("hex");
+    repo.createSession(user.id, tokenHash, new Date(Date.now() + 60_000).toISOString());
+    const session = repo.getSessionByTokenHash(tokenHash);
+    expect(session?.user_id).toBe(user.id);
+    expect(session?.username).toBe("andy");
+    expect(session?.is_admin).toBe(1);
     db.close();
   });
 

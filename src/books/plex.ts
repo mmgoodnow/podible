@@ -1,0 +1,279 @@
+import { createPrivateKey, generateKeyPairSync, randomBytes, sign as cryptoSign } from "node:crypto";
+import { XMLParser } from "fast-xml-parser";
+
+import type { AppSettings, PlexJwk } from "./types";
+
+type PlexPinResponse = {
+  id: number;
+  code: string;
+  authToken?: string | null;
+};
+
+type PlexUserIdentity = {
+  id: string;
+  username: string;
+  displayName: string;
+  thumbUrl: string | null;
+};
+
+export type PlexServerDevice = {
+  machineId: string;
+  name: string;
+  product: string;
+  owned: boolean;
+  provides: string[];
+  accessToken: string | null;
+  sourceTitle: string | null;
+};
+
+export type PlexClientIdentity = {
+  productName: string;
+  clientIdentifier: string;
+  publicJwk: PlexJwk;
+  privateKeyPkcs8: string;
+};
+
+const xmlParser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: "",
+  parseTagValue: false,
+  parseAttributeValue: false,
+});
+
+function asArray<T>(value: T | T[] | null | undefined): T[] {
+  if (Array.isArray(value)) return value;
+  return value == null ? [] : [value];
+}
+
+function base64UrlJson(value: unknown): string {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
+}
+
+function plexHeaders(productName: string, clientIdentifier: string, extra?: Record<string, string>): Headers {
+  const headers = new Headers(extra);
+  headers.set("Accept", "application/json");
+  headers.set("X-Plex-Product", productName);
+  headers.set("X-Plex-Client-Identifier", clientIdentifier);
+  return headers;
+}
+
+function settingsClientIdentifier(_settings: AppSettings): string {
+  return "podible-server";
+}
+
+function normalizeAllowedUsernames(values: string[]): string[] {
+  return values.map((value) => value.trim().toLowerCase()).filter(Boolean);
+}
+
+function normalizePlexName(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function coercePlexUser(payload: unknown): PlexUserIdentity {
+  const raw = (payload && typeof payload === "object" ? payload : {}) as Record<string, unknown>;
+  const source =
+    (raw.user && typeof raw.user === "object" ? (raw.user as Record<string, unknown>) : null) ??
+    (raw.MediaContainer && typeof raw.MediaContainer === "object" ? (raw.MediaContainer as Record<string, unknown>) : null) ??
+    raw;
+  const idValue = source.id ?? source.uuid ?? source.userID ?? source.userId;
+  const usernameValue = source.username ?? source.email ?? source.title ?? source.name;
+  const displayNameValue = source.title ?? source.username ?? source.email ?? source.name;
+  const thumbValue = source.thumb ?? source.avatar ?? null;
+  const id = typeof idValue === "string" || typeof idValue === "number" ? String(idValue) : "";
+  const username =
+    (typeof usernameValue === "string" && usernameValue.trim()) ||
+    (typeof displayNameValue === "string" && displayNameValue.trim()) ||
+    (id ? `plex-${id}` : "");
+  if (!id || !username) {
+    throw new Error("Unable to determine Plex user identity");
+  }
+  return {
+    id,
+    username,
+    displayName:
+      (typeof displayNameValue === "string" && displayNameValue.trim()) ||
+      (typeof usernameValue === "string" && usernameValue.trim()) ||
+      username,
+    thumbUrl: typeof thumbValue === "string" && thumbValue.trim() ? thumbValue : null,
+  };
+}
+
+export function createEphemeralPlexIdentity(productName: string): PlexClientIdentity {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const exported = publicKey.export({ format: "jwk" }) as Record<string, unknown>;
+  const x = typeof exported.x === "string" ? exported.x : "";
+  if (!x) {
+    throw new Error("Unable to export Plex public JWK");
+  }
+
+  const kid = `podible-plex-${randomBytes(8).toString("hex")}`;
+  const publicJwk: PlexJwk = {
+    kty: "OKP",
+    crv: "Ed25519",
+    x,
+    kid,
+    alg: "EdDSA",
+    use: "sig",
+  };
+  return {
+    productName,
+    clientIdentifier: `podible-${randomBytes(12).toString("hex")}`,
+    publicJwk,
+    privateKeyPkcs8: privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+  };
+}
+
+export function buildPlexAuthUrl(identity: Pick<PlexClientIdentity, "clientIdentifier" | "productName">, code: string, forwardUrl: string): string {
+  const params = new URLSearchParams({
+    clientID: identity.clientIdentifier,
+    code,
+    forwardUrl,
+    "context[device][product]": identity.productName,
+  });
+  return `https://app.plex.tv/auth#?${params.toString()}`;
+}
+
+export async function createPlexPin(identity: PlexClientIdentity): Promise<PlexPinResponse> {
+  const response = await fetch("https://plex.tv/api/v2/pins?strong=true", {
+    method: "POST",
+    headers: plexHeaders(identity.productName, identity.clientIdentifier, {
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      jwk: identity.publicJwk,
+      strong: true,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Plex PIN creation failed with ${response.status}`);
+  }
+  return (await response.json()) as PlexPinResponse;
+}
+
+export function signPlexDeviceJwt(identity: PlexClientIdentity): string {
+  const kid = identity.publicJwk?.kid;
+  if (!kid || !identity.privateKeyPkcs8 || !identity.clientIdentifier) {
+    throw new Error("Plex auth is not configured");
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const header = {
+    alg: "EdDSA",
+    typ: "JWT",
+    kid,
+  };
+  const payload = {
+    aud: "plex.tv",
+    iss: identity.clientIdentifier,
+    iat: now,
+    exp: now + 300,
+  };
+  const unsigned = `${base64UrlJson(header)}.${base64UrlJson(payload)}`;
+  const privateKey = createPrivateKey(identity.privateKeyPkcs8);
+  const signature = cryptoSign(null, Buffer.from(unsigned), privateKey);
+  return `${unsigned}.${signature.toString("base64url")}`;
+}
+
+export async function exchangePlexPinForToken(identity: PlexClientIdentity, pinId: number): Promise<string> {
+  const deviceJwt = signPlexDeviceJwt(identity);
+  const url = new URL(`https://plex.tv/api/v2/pins/${pinId}`);
+  url.searchParams.set("deviceJWT", deviceJwt);
+  const response = await fetch(url, {
+    headers: plexHeaders(identity.productName, identity.clientIdentifier),
+  });
+  if (!response.ok) {
+    if (response.status === 429) {
+      throw new Error("Plex PIN exchange is being rate limited");
+    }
+    throw new Error(`Plex PIN exchange failed with ${response.status}`);
+  }
+  const payload = (await response.json()) as PlexPinResponse;
+  if (!payload.authToken) {
+    throw new Error("Plex PIN has not been claimed yet");
+  }
+  return payload.authToken;
+}
+
+export async function fetchPlexUser(
+  settings: AppSettings,
+  plexToken: string,
+  clientIdentifier = settingsClientIdentifier(settings)
+): Promise<PlexUserIdentity> {
+  const response = await fetch("https://plex.tv/api/v2/user", {
+    headers: plexHeaders(settings.auth.plex.productName, clientIdentifier, {
+      "X-Plex-Token": plexToken,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Plex user lookup failed with ${response.status}`);
+  }
+  return coercePlexUser(await response.json());
+}
+
+export async function fetchPlexServerDevices(settings: AppSettings, plexToken = settings.auth.plex.ownerToken): Promise<PlexServerDevice[]> {
+  if (!plexToken) {
+    return [];
+  }
+  const response = await fetch("https://plex.tv/api/resources?includeHttps=1", {
+    headers: plexHeaders(settings.auth.plex.productName, settingsClientIdentifier(settings), {
+      "X-Plex-Token": plexToken,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Plex device lookup failed with ${response.status}`);
+  }
+  const payload = xmlParser.parse(await response.text()) as Record<string, unknown>;
+  const rawDevices = asArray((payload.MediaContainer as Record<string, unknown> | undefined)?.Device as Record<string, unknown> | Array<Record<string, unknown>> | undefined);
+  return rawDevices
+    .map((device) => (device && typeof device === "object" ? (device as Record<string, unknown>) : null))
+    .filter((device): device is Record<string, unknown> => Boolean(device))
+    .map((device) => ({
+      machineId: typeof device.clientIdentifier === "string" ? device.clientIdentifier : "",
+      name: typeof device.name === "string" ? device.name : typeof device.sourceTitle === "string" ? device.sourceTitle : "Unknown server",
+      product: typeof device.product === "string" ? device.product : "",
+      owned: device.owned === "1" || device.owned === 1 || device.owned === true,
+      provides:
+        typeof device.provides === "string"
+          ? device.provides.split(",").map((value) => value.trim()).filter(Boolean)
+          : [],
+      accessToken: typeof device.accessToken === "string" ? device.accessToken : null,
+      sourceTitle: typeof device.sourceTitle === "string" ? device.sourceTitle : null,
+    }))
+    .filter((device) => device.machineId && device.provides.includes("server"));
+}
+
+export async function checkPlexUserAccess(settings: AppSettings, userId: string): Promise<boolean> {
+  const ownerToken = settings.auth.plex.ownerToken;
+  const machineId = settings.auth.plex.machineId;
+  if (!ownerToken || !machineId) {
+    return false;
+  }
+  const response = await fetch("https://plex.tv/api/users", {
+    headers: plexHeaders(settings.auth.plex.productName, settingsClientIdentifier(settings), {
+      "X-Plex-Token": ownerToken,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Plex shared-user lookup failed with ${response.status}`);
+  }
+  const payload = xmlParser.parse(await response.text()) as Record<string, unknown>;
+  const rawUsers = asArray((payload.MediaContainer as Record<string, unknown> | undefined)?.User as Record<string, unknown> | Array<Record<string, unknown>> | undefined);
+  const matched = rawUsers
+    .map((user) => (user && typeof user === "object" ? (user as Record<string, unknown>) : null))
+    .filter((user): user is Record<string, unknown> => Boolean(user))
+    .find((user) => String(user.id ?? "") === userId);
+  if (!matched) {
+    return false;
+  }
+  const rawServers = asArray(matched.Server as Record<string, unknown> | Array<Record<string, unknown>> | undefined);
+  return rawServers
+    .map((server) => (server && typeof server === "object" ? (server as Record<string, unknown>) : null))
+    .filter((server): server is Record<string, unknown> => Boolean(server))
+    .some((server) => String(server.machineIdentifier ?? "") === machineId);
+}
+
+export function isPlexUserAllowed(settings: AppSettings, user: PlexUserIdentity): boolean {
+  const allowlist = normalizeAllowedUsernames(settings.auth.plex.allowedUsernames);
+  if (allowlist.length === 0) return true;
+  const candidates = [normalizePlexName(user.username), normalizePlexName(user.displayName)];
+  return candidates.some((candidate) => candidate && allowlist.includes(candidate));
+}
