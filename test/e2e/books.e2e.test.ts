@@ -5,10 +5,12 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import JSZip from "jszip";
 
 import { runMigrations } from "../../src/books/db";
 import { createPodibleFetchHandler } from "../../src/books/http";
 import { BooksRepo } from "../../src/books/repo";
+import { hashSessionToken } from "../../src/books/auth";
 import { defaultSettings } from "../../src/books/settings";
 import { infoHashFromTorrentBytes } from "../../src/books/torrent";
 import { runWorker } from "../../src/books/worker";
@@ -19,6 +21,44 @@ function makeTorrentBytes(name: string): Uint8Array {
   const nameLen = Buffer.byteLength(name);
   const content = `d8:announce15:http://tracker/4:infod4:name${nameLen}:${name}12:piece lengthi16384e6:lengthi10e6:pieces20:12345678901234567890ee`;
   return new Uint8Array(Buffer.from(content, "ascii"));
+}
+
+async function createMinimalEpub(filePath: string): Promise<void> {
+  const zip = new JSZip();
+  zip.file("mimetype", "application/epub+zip", { compression: "STORE" });
+  zip.file(
+    "META-INF/container.xml",
+    `<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`
+  );
+  zip.file(
+    "OEBPS/content.opf",
+    `<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="BookId">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Test Book</dc:title>
+    <dc:creator>Test Author</dc:creator>
+    <dc:language>en</dc:language>
+    <dc:identifier id="BookId">urn:uuid:test-book</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>`
+  );
+  zip.file(
+    "OEBPS/chapter1.xhtml",
+    `<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>One two three four five.</p></body></html>`
+  );
+  await writeFile(filePath, await zip.generateAsync({ type: "uint8array" }));
 }
 
 async function eventually<T>(fn: () => T | Promise<T>, predicate: (value: T) => boolean, label: string): Promise<T> {
@@ -33,11 +73,30 @@ async function eventually<T>(fn: () => T | Promise<T>, predicate: (value: T) => 
   }
 }
 
-async function rpc(fetchHandler: (request: Request) => Promise<Response>, method: string, params: unknown, id = 1) {
+function createBrowserSessionCookie(repo: BooksRepo, username = "admin", isAdmin = true): string {
+  const user = repo.upsertUser({
+    provider: "local",
+    providerUserId: `local-${username}`,
+    username,
+    displayName: username,
+    isAdmin,
+  });
+  const token = `${username}-session-token`;
+  repo.createSession(user.id, hashSessionToken(token), new Date(Date.now() + 60_000).toISOString());
+  return `podible_session=${token}`;
+}
+
+async function rpc(
+  fetchHandler: (request: Request) => Promise<Response>,
+  method: string,
+  params: unknown,
+  id = 1,
+  headers: Record<string, string> = {}
+) {
   const response = await fetchHandler(
     new Request("http://localhost/rpc", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...headers },
       body: JSON.stringify({
         jsonrpc: "2.0",
         id,
@@ -67,8 +126,8 @@ describe("books e2e", () => {
     const ebookFile = path.join(downloadEbook, "book.epub");
     const reconcileFile = path.join(downloadRecon, "other.epub");
     await writeFile(audioFile, Buffer.from("ID3-audio-test-data"));
-    await writeFile(ebookFile, Buffer.from("ebook-epub-test-data"));
-    await writeFile(reconcileFile, Buffer.from("ebook-reconcile-test-data"));
+    await createMinimalEpub(ebookFile);
+    await createMinimalEpub(reconcileFile);
 
     const audioTorrent = makeTorrentBytes("audio-book");
     const ebookTorrent = makeTorrentBytes("ebook-book");
@@ -118,7 +177,7 @@ describe("books e2e", () => {
     const repo = new BooksRepo(db);
     repo.updateSettings(
       defaultSettings({
-        auth: { mode: "local", key: "test" },
+        auth: { mode: "local" },
         torznab: [
           {
             name: "mock",
@@ -138,6 +197,7 @@ describe("books e2e", () => {
     );
 
     const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+    const adminCookie = createBrowserSessionCookie(repo);
 
     let stopWorker = false;
     const worker = runWorker({
@@ -149,8 +209,12 @@ describe("books e2e", () => {
     try {
       const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
 
-      const audioSearch = await rpc(fetchHandler, "search.run", { query: "Dune Frank Herbert", media: "audio" }, 1);
-      const ebookSearch = await rpc(fetchHandler, "search.run", { query: "Dune Frank Herbert", media: "ebook" }, 11);
+      const audioSearch = await rpc(fetchHandler, "search.run", { query: "Dune Frank Herbert", media: "audio" }, 1, {
+        cookie: adminCookie,
+      });
+      const ebookSearch = await rpc(fetchHandler, "search.run", { query: "Dune Frank Herbert", media: "ebook" }, 11, {
+        cookie: adminCookie,
+      });
       const audioResult = audioSearch.result.results.find((row: any) => row.title === "Dune Audio");
       const ebookResult = ebookSearch.result.results.find((row: any) => row.title === "Dune Ebook");
       expect(audioResult).toBeTruthy();
@@ -164,7 +228,9 @@ describe("books e2e", () => {
         url: audioResult.url,
         infoHash: audioResult.infoHash,
         sizeBytes: audioResult.sizeBytes,
-      }, 2);
+      }, 2, {
+        cookie: adminCookie,
+      });
       expect(snatchAudio.result.idempotent).toBe(false);
 
       const snatchAgainJson = await rpc(fetchHandler, "snatch.create", {
@@ -175,7 +241,9 @@ describe("books e2e", () => {
         url: audioResult.url,
         infoHash: audioResult.infoHash,
         sizeBytes: audioResult.sizeBytes,
-      }, 3);
+      }, 3, {
+        cookie: adminCookie,
+      });
       expect(snatchAgainJson.result.idempotent).toBe(true);
 
       const snatchEbook = await rpc(fetchHandler, "snatch.create", {
@@ -186,7 +254,9 @@ describe("books e2e", () => {
         url: ebookResult.url,
         infoHash: ebookResult.infoHash,
         sizeBytes: ebookResult.sizeBytes,
-      }, 4);
+      }, 4, {
+        cookie: adminCookie,
+      });
       expect(snatchEbook.result.idempotent).toBe(false);
 
       await eventually(
@@ -195,7 +265,11 @@ describe("books e2e", () => {
         "audio+ebook assets"
       );
 
-      const assetsRes = await fetchHandler(new Request(`http://localhost/assets?bookId=${book.id}`));
+      const assetsRes = await fetchHandler(
+        new Request(`http://localhost/assets?bookId=${book.id}`, {
+          headers: { cookie: adminCookie },
+        })
+      );
       expect(assetsRes.status).toBe(200);
       const assetsJson = (await assetsRes.json()) as any;
       const audioAsset = assetsJson.assets.find((asset: any) => asset.kind !== "ebook");
@@ -203,17 +277,29 @@ describe("books e2e", () => {
       expect(audioAsset).toBeTruthy();
       expect(ebookAsset).toBeTruthy();
 
-      const streamRes = await fetchHandler(new Request(`http://localhost/stream/${audioAsset.id}.mp3`));
+      const streamRes = await fetchHandler(
+        new Request(`http://localhost/stream/${audioAsset.id}.mp3`, {
+          headers: { cookie: adminCookie },
+        })
+      );
       expect(streamRes.status).toBe(200);
       const streamBytes = new Uint8Array(await streamRes.arrayBuffer());
       expect(streamBytes.length).toBeGreaterThan(0);
 
-      const ebookRes = await fetchHandler(new Request(`http://localhost/ebook/${ebookAsset.id}`));
+      const ebookRes = await fetchHandler(
+        new Request(`http://localhost/ebook/${ebookAsset.id}`, {
+          headers: { cookie: adminCookie },
+        })
+      );
       expect(ebookRes.status).toBe(200);
       const ebookBytes = new Uint8Array(await ebookRes.arrayBuffer());
       expect(ebookBytes.length).toBeGreaterThan(0);
 
-      const feedRes = await fetchHandler(new Request("http://localhost/feed.xml"));
+      const feedRes = await fetchHandler(
+        new Request("http://localhost/feed.xml", {
+          headers: { cookie: adminCookie },
+        })
+      );
       expect(feedRes.status).toBe(200);
       const feedXml = await feedRes.text();
       expect(feedXml.includes(`/stream/${audioAsset.id}.`)).toBe(true);
@@ -230,7 +316,9 @@ describe("books e2e", () => {
         status: "downloaded",
       });
 
-      const reconcileRes = await rpc(fetchHandler, "import.reconcile", {}, 5);
+      const reconcileRes = await rpc(fetchHandler, "import.reconcile", {}, 5, {
+        cookie: adminCookie,
+      });
       expect(reconcileRes.result.jobId).toBeGreaterThan(0);
 
       await eventually(

@@ -4,10 +4,49 @@ import path from "node:path";
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import JSZip from "jszip";
 
 import { runMigrations } from "../../src/books/db";
 import { BooksRepo } from "../../src/books/repo";
 import { scanLibraryRoot } from "../../src/books/scanner";
+
+async function createMinimalEpub(filePath: string, text: string): Promise<void> {
+  const zip = new JSZip();
+  zip.file("mimetype", "application/epub+zip", { compression: "STORE" });
+  zip.file(
+    "META-INF/container.xml",
+    `<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`
+  );
+  zip.file(
+    "OEBPS/content.opf",
+    `<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="BookId">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Test Book</dc:title>
+    <dc:creator>Test Author</dc:creator>
+    <dc:language>en</dc:language>
+    <dc:identifier id="BookId">urn:uuid:test-book</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>`
+  );
+  zip.file(
+    "OEBPS/chapter1.xhtml",
+    `<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>${text}</p></body></html>`
+  );
+  await writeFile(filePath, Buffer.from(await zip.generateAsync({ type: "uint8array" })));
+}
 
 describe("library scanner metadata hydration", () => {
   test("hydrates work identifiers from Open Library for discovered books", async () => {
@@ -16,7 +55,7 @@ describe("library scanner metadata hydration", () => {
     const title = "Dune";
     const bookDir = path.join(tmpRoot, author, title);
     await mkdir(bookDir, { recursive: true });
-    await writeFile(path.join(bookDir, "Dune.epub"), Buffer.from("epub-bytes"));
+    await createMinimalEpub(path.join(bookDir, "Dune.epub"), "Dune");
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown) => {
@@ -65,7 +104,7 @@ describe("library scanner metadata hydration", () => {
     const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "books-scan-ignore-"));
     const validBookDir = path.join(tmpRoot, "Frank Herbert", "Dune");
     await mkdir(validBookDir, { recursive: true });
-    await writeFile(path.join(validBookDir, "Dune.epub"), Buffer.from("epub-bytes"));
+    await createMinimalEpub(path.join(validBookDir, "Dune.epub"), "Dune");
 
     const hiddenDir = path.join(tmpRoot, ".idea", "dataSources");
     await mkdir(hiddenDir, { recursive: true });
@@ -118,7 +157,7 @@ describe("library scanner metadata hydration", () => {
     const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "books-scan-hidden-files-"));
     const bookDir = path.join(tmpRoot, "Sally Rooney", "Normal People");
     await mkdir(bookDir, { recursive: true });
-    await writeFile(path.join(bookDir, "Normal People.epub"), Buffer.from("epub-bytes"));
+    await createMinimalEpub(path.join(bookDir, "Normal People.epub"), "Normal People");
     await writeFile(path.join(bookDir, "._Normal People.epub"), Buffer.from("sidecar"));
 
     const originalFetch = globalThis.fetch;

@@ -351,7 +351,7 @@ describe("chapter analysis", () => {
       repo.updateSettings(
         defaultSettings({
           ...settings,
-          auth: { mode: "local", key: "test" },
+          auth: { mode: "local" },
           agents: {
             ...settings.agents,
             apiKey: "test-key",
@@ -500,7 +500,7 @@ describe("chapter analysis", () => {
       repo.updateSettings(
         defaultSettings({
           ...settings,
-          auth: { mode: "local", key: "test" },
+          auth: { mode: "local" },
           agents: {
             ...settings.agents,
             apiKey: "test-key",

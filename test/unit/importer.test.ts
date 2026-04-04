@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import JSZip from "jszip";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -30,6 +31,44 @@ function setupRepo(): { db: Database; repo: BooksRepo } {
   return { db, repo: new BooksRepo(db) };
 }
 
+async function createMinimalEpub(filePath: string, text: string): Promise<void> {
+  const zip = new JSZip();
+  zip.file("mimetype", "application/epub+zip", { compression: "STORE" });
+  zip.file(
+    "META-INF/container.xml",
+    `<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`
+  );
+  zip.file(
+    "OEBPS/content.opf",
+    `<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="BookId">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Test Book</dc:title>
+    <dc:creator>Test Author</dc:creator>
+    <dc:language>en</dc:language>
+    <dc:identifier id="BookId">urn:uuid:test-book</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>`
+  );
+  zip.file(
+    "OEBPS/chapter1.xhtml",
+    `<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>${text}</p></body></html>`
+  );
+  writeFileSync(filePath, Buffer.from(await zip.generateAsync({ type: "uint8array" })));
+}
+
 describe("importer path collisions", () => {
   test("allocates a unique library path when a different source collides with an existing import path", async () => {
     const { db, repo } = setupRepo();
@@ -39,8 +78,8 @@ describe("importer path collisions", () => {
 
     const sourceA = path.join(srcA, "book.epub");
     const sourceB = path.join(srcB, "book.epub");
-    writeFileSync(sourceA, "first-ebook-content");
-    writeFileSync(sourceB, "second-ebook-content");
+    await createMinimalEpub(sourceA, "First ebook content");
+    await createMinimalEpub(sourceB, "Second ebook content");
 
     const book = repo.createBook({ title: "Twilight", author: "Stephenie Meyer" });
     const release1 = repo.createRelease({

@@ -31,7 +31,7 @@ describe("worker acquire auto-acquire retries", () => {
     const repo = new BooksRepo(db);
     repo.updateSettings(
       defaultSettings({
-        auth: { mode: "local", key: "test" },
+        auth: { mode: "local" },
         torznab: [{ name: "mock", baseUrl: torznab.baseUrl }],
         // Intentionally unreachable to force runSnatch failure.
         rtorrent: {
@@ -100,7 +100,7 @@ describe("worker acquire auto-acquire retries", () => {
     const repo = new BooksRepo(db);
     repo.updateSettings(
       defaultSettings({
-        auth: { mode: "local", key: "test" },
+        auth: { mode: "local" },
         torznab: [{ name: "mock", baseUrl: torznab.baseUrl }],
         rtorrent: {
           transport: "http-xmlrpc",
@@ -220,7 +220,7 @@ describe("worker robustness", () => {
       repo: fakeRepo,
       getSettings: () =>
         defaultSettings({
-          auth: { mode: "local", key: "test" },
+          auth: { mode: "local" },
           torznab: [],
         }),
       shouldStop: () => stopWorker,
@@ -268,7 +268,7 @@ describe("worker import recovery", () => {
 
     repo.updateSettings(
       defaultSettings({
-        auth: { mode: "local", key: "test" },
+        auth: { mode: "local" },
         libraryRoot,
         rtorrent: {
           transport: "http-xmlrpc",
@@ -389,7 +389,7 @@ describe("worker stalled torrent recovery", () => {
 
     repo.updateSettings(
       defaultSettings({
-        auth: { mode: "local", key: "test" },
+        auth: { mode: "local" },
         rtorrent: {
           transport: "http-xmlrpc",
           url: rtorrentUrl,
@@ -504,7 +504,7 @@ describe("worker stalled torrent recovery", () => {
 
     repo.updateSettings(
       defaultSettings({
-        auth: { mode: "local", key: "test" },
+        auth: { mode: "local" },
         rtorrent: {
           transport: "http-xmlrpc",
           url: rtorrentUrl,
@@ -604,7 +604,7 @@ describe("worker stalled torrent recovery", () => {
 
     repo.updateSettings(
       defaultSettings({
-        auth: { mode: "local", key: "test" },
+        auth: { mode: "local" },
         torznab: [],
         notifications: {
           pushover: {
