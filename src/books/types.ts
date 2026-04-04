@@ -68,7 +68,6 @@ export type AppSettings = {
       ownerToken: string;
       machineId: string;
       machineName: string;
-      allowedUsernames: string[];
     };
   };
   agents: {

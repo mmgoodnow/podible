@@ -46,7 +46,6 @@ export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
         ownerToken: "",
         machineId: "",
         machineName: "",
-        allowedUsernames: [],
       },
     },
     agents: {
@@ -176,9 +175,6 @@ export function parseSettings(value: string): AppSettings {
           typeof parsedAuthPlex.machineName === "string"
             ? parsedAuthPlex.machineName
             : defaults.auth.plex.machineName,
-        allowedUsernames: Array.isArray(parsedAuthPlex.allowedUsernames)
-          ? parsedAuthPlex.allowedUsernames.filter((value): value is string => typeof value === "string")
-          : defaults.auth.plex.allowedUsernames,
       },
     },
     agents: {

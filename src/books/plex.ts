@@ -61,14 +61,6 @@ function settingsClientIdentifier(_settings: AppSettings): string {
   return "podible-server";
 }
 
-function normalizeAllowedUsernames(values: string[]): string[] {
-  return values.map((value) => value.trim().toLowerCase()).filter(Boolean);
-}
-
-function normalizePlexName(value: string | null | undefined): string {
-  return (value ?? "").trim().toLowerCase();
-}
-
 function coercePlexUser(payload: unknown): PlexUserIdentity {
   const raw = (payload && typeof payload === "object" ? payload : {}) as Record<string, unknown>;
   const source =
@@ -269,11 +261,4 @@ export async function checkPlexUserAccess(settings: AppSettings, userId: string)
     .map((server) => (server && typeof server === "object" ? (server as Record<string, unknown>) : null))
     .filter((server): server is Record<string, unknown> => Boolean(server))
     .some((server) => String(server.machineIdentifier ?? "") === machineId);
-}
-
-export function isPlexUserAllowed(settings: AppSettings, user: PlexUserIdentity): boolean {
-  const allowlist = normalizeAllowedUsernames(settings.auth.plex.allowedUsernames);
-  if (allowlist.length === 0) return true;
-  const candidates = [normalizePlexName(user.username), normalizePlexName(user.displayName)];
-  return candidates.some((candidate) => candidate && allowlist.includes(candidate));
 }

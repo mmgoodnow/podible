@@ -24,7 +24,6 @@ import {
   exchangePlexPinForToken,
   fetchPlexServerDevices,
   fetchPlexUser,
-  isPlexUserAllowed,
 } from "./plex";
 import { BooksRepo } from "./repo";
 import { handleRpcMethod, handleRpcRequest } from "./rpc";
@@ -808,6 +807,32 @@ function renderPlexCompletePage(
   );
 }
 
+async function waitForPlexLoginResult(
+  repo: BooksRepo,
+  settings: AppSettings,
+  pinId: number,
+  apiKey: string | null
+): Promise<
+  | { kind: "error"; settings: AppSettings; error: string; redirectTo: string }
+  | { kind: "success"; settings: AppSettings; redirectTo: string; sessionToken: string }
+> {
+  let currentSettings = settings;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const result = await resolvePlexLoginStatus(repo, currentSettings, pinId, apiKey);
+    currentSettings = result.settings;
+    if (result.kind === "success" || result.kind === "error") {
+      return result;
+    }
+    await Bun.sleep(3000);
+  }
+  return {
+    kind: "error",
+    settings: currentSettings,
+    error: "Timed out waiting for Plex sign-in.",
+    redirectTo: "/login",
+  };
+}
+
 function renderPlexImmediateResultPage(
   result: { ok: boolean; redirectTo: string; error?: string | null }
 ): Response {
@@ -944,7 +969,7 @@ async function resolvePlexLoginStatus(
       allowed = hasServerAccess;
     }
 
-    if (!allowed || !isPlexUserAllowed(settings, plexUser)) {
+    if (!allowed) {
       repo.deletePlexLoginAttempt(pinId);
       return {
         kind: "error",
@@ -2918,7 +2943,16 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
           logRequest(response.status);
           return response;
         }
-        response = renderPlexCompletePage(settings, pinId, request, requestApiKey);
+        const result = await waitForPlexLoginResult(repo, settings, pinId, requestApiKey);
+        settings = result.settings;
+        response = renderPlexImmediateResultPage({
+          ok: result.kind === "success",
+          redirectTo: result.redirectTo,
+          error: result.kind === "error" ? result.error : null,
+        });
+        if (result.kind === "success") {
+          response.headers.append("Set-Cookie", buildSessionCookie(result.sessionToken, request));
+        }
         logRequest(response.status);
         return response;
       }

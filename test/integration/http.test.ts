@@ -649,11 +649,8 @@ describe("podible http", () => {
       const complete = await fetchHandler(new Request("http://app.test/login/plex/complete?pinId=123"));
       expect(complete.status).toBe(200);
       const completeBody = await complete.text();
-      expect(completeBody.includes("/login/plex/status?pinId=123")).toBe(true);
-
-      const status = await fetchHandler(new Request("http://app.test/login/plex/status?pinId=123"));
-      expect(status.status).toBe(200);
-      const setCookie = status.headers.get("set-cookie") ?? "";
+      expect(completeBody.includes("Sign-in complete. You can close this window.")).toBe(true);
+      const setCookie = complete.headers.get("set-cookie") ?? "";
       expect(setCookie.includes("podible_session=")).toBe(true);
 
       const cookieHeader = setCookie.split(";")[0] ?? "";
@@ -826,12 +823,9 @@ describe("podible http", () => {
       expect(start.status).toBe(200);
 
       const complete = await fetchHandler(new Request("http://app.test/login/plex/complete?pinId=123"));
-      expect(complete.status).toBe(200);
-
-      const status = await fetchHandler(new Request("http://app.test/login/plex/status?pinId=123"));
-      expect(status.status).toBe(400);
-      expect(status.headers.get("set-cookie")).toBeNull();
-      const body = await status.text();
+      expect(complete.status).toBe(400);
+      expect(complete.headers.get("set-cookie")).toBeNull();
+      const body = await complete.text();
       expect(body.includes("This Plex user is not allowed on this Podible instance.")).toBe(true);
       expect(repo.listUsers("plex")).toHaveLength(1);
 
