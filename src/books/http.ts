@@ -213,6 +213,18 @@ function displayUserName(user: Pick<UserRow, "display_name" | "username">): stri
   return user.display_name?.trim() || user.username;
 }
 
+function sanitizeRedirectPath(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("/")) return null;
+  if (trimmed.startsWith("//")) return null;
+  return trimmed;
+}
+
+function isHtmlPageRoute(pathname: string): boolean {
+  return pathname === "/" || pathname === "/library" || pathname === "/add" || pathname === "/activity" || pathname === "/admin" || pathname === "/login" || pathname === "/login/plex/loading" || pathname.startsWith("/book/");
+}
+
 function renderAppPage(
   title: string,
   body: string,
@@ -523,7 +535,7 @@ function renderAddPage(
   const error = options.error?.trim() ?? "";
   const resultMarkup =
     query && results.length === 0 && !error
-      ? `<div class="empty">No Open Library matches for “${escapeHtml(query)}”.</div>`
+      ? `<div class="empty">No matches for “${escapeHtml(query)}”.</div>`
       : results.length > 0
         ? `<div class="book-list">${results
             .map((result) => {
@@ -533,7 +545,6 @@ function renderAddPage(
                 <div class="meta">
                   <h3>${escapeHtml(result.title)}</h3>
                   <p class="muted">${escapeHtml(result.author)}${publishYear ? ` • ${publishYear}` : ""}</p>
-                  <p class="muted">${escapeHtml(result.openLibraryKey)}</p>
                   <form method="post" action="${escapeHtml(addApiKey("/add", apiKey))}">
                     <input type="hidden" name="openLibraryKey" value="${escapeHtml(result.openLibraryKey)}" />
                     <div class="actions">
@@ -544,16 +555,16 @@ function renderAddPage(
               </article>`;
             })
             .join("")}</div>`
-        : `<div class="empty">Search Open Library by title and author to add a book.</div>`;
+        : `<div class="empty">Search by title and author to add a book.</div>`;
 
   const body = `
     <section class="hero">
       <h1>Add a book</h1>
-      <p>Search Open Library, pick the correct work, and Podible will create the book and queue acquisition.</p>
+      <p>Search for a book, pick the right match, and Podible will create it and queue acquisition.</p>
     </section>
     <div class="grid">
       <section class="card span-12">
-        <h2>Search Open Library</h2>
+        <h2>Search catalog</h2>
         <form method="get" action="${escapeHtml(addApiKey("/add", apiKey))}">
           <div class="actions">
             <input type="search" name="q" value="${escapeHtml(query)}" placeholder="Title Author (e.g. Hyperion Dan Simmons)" style="min-width: 320px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px;" />
@@ -574,9 +585,13 @@ function renderAddPage(
 function renderLoginPage(
   settings: AppSettings,
   localUsers: UserRow[],
-  options: { notice?: string | null; error?: string | null; currentUser?: SessionWithUserRow | null; apiKey?: string | null } = {}
+  options: { notice?: string | null; error?: string | null; currentUser?: SessionWithUserRow | null; apiKey?: string | null; redirectTo?: string | null } = {}
 ): Response {
   const apiKey = options.apiKey ?? null;
+  const redirectTo = sanitizeRedirectPath(options.redirectTo) ?? "/";
+  const loginPath = addApiKey(`/login?redirectTo=${encodeURIComponent(redirectTo)}`, apiKey);
+  const plexStartPath = addApiKey(`/login/plex/start?redirectTo=${encodeURIComponent(redirectTo)}`, apiKey);
+  const plexLoadingPath = addApiKey(`/login/plex/loading?redirectTo=${encodeURIComponent(redirectTo)}`, apiKey);
   if (settings.auth.mode === "plex") {
     const body = `
       <section class="hero">
@@ -592,9 +607,9 @@ function renderLoginPage(
         (() => {
           const button = document.getElementById("plex-login-btn");
           const status = document.getElementById("plex-login-status");
-          const startUrl = ${JSON.stringify(addApiKey("/login/plex/start", apiKey))};
-          const loadingUrl = ${JSON.stringify(addApiKey("/login/plex/loading", apiKey))};
-          const successPath = ${JSON.stringify(addApiKey("/", apiKey))};
+          const startUrl = ${JSON.stringify(plexStartPath)};
+          const loadingUrl = ${JSON.stringify(plexLoadingPath)};
+          const successPath = ${JSON.stringify(addApiKey(redirectTo, apiKey))};
           function setStatus(message) {
             if (status) status.textContent = message || "";
           }
@@ -651,7 +666,7 @@ function renderLoginPage(
     localUsers.length > 0
       ? `<div class="section-list">${localUsers
           .map(
-            (user) => `<form method="post" action="${escapeHtml(addApiKey("/login", apiKey))}" class="book-row" style="grid-template-columns: minmax(0, 1fr);">
+            (user) => `<form method="post" action="${escapeHtml(loginPath)}" class="book-row" style="grid-template-columns: minmax(0, 1fr);">
                 <input type="hidden" name="userId" value="${user.id}" />
                 <div class="meta">
                   <h3>${escapeHtml(displayUserName(user))}</h3>
@@ -676,7 +691,7 @@ function renderLoginPage(
       </section>
       <section class="card span-6">
         <h2>Create a user</h2>
-        <form method="post" action="${escapeHtml(addApiKey("/login", apiKey))}">
+        <form method="post" action="${escapeHtml(loginPath)}">
           <div class="section-list">
             <label>
               <div class="muted">Username</div>
@@ -811,14 +826,15 @@ async function waitForPlexLoginResult(
   repo: BooksRepo,
   settings: AppSettings,
   pinId: number,
-  apiKey: string | null
+  apiKey: string | null,
+  redirectTo: string | null
 ): Promise<
   | { kind: "error"; settings: AppSettings; error: string; redirectTo: string }
   | { kind: "success"; settings: AppSettings; redirectTo: string; sessionToken: string }
 > {
   let currentSettings = settings;
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const result = await resolvePlexLoginStatus(repo, currentSettings, pinId, apiKey);
+    const result = await resolvePlexLoginStatus(repo, currentSettings, pinId, apiKey, redirectTo);
     currentSettings = result.settings;
     if (result.kind === "success" || result.kind === "error") {
       return result;
@@ -879,7 +895,8 @@ async function resolvePlexLoginStatus(
   repo: BooksRepo,
   settings: AppSettings,
   pinId: number,
-  apiKey: string | null = null
+  apiKey: string | null = null,
+  redirectTo: string | null = null
 ): Promise<
   | { kind: "pending"; settings: AppSettings; message: string }
   | { kind: "error"; settings: AppSettings; error: string; redirectTo: string }
@@ -1008,7 +1025,7 @@ async function resolvePlexLoginStatus(
     return {
       kind: "success",
       settings,
-      redirectTo: addApiKey("/", apiKey),
+      redirectTo: addApiKey(sanitizeRedirectPath(redirectTo) ?? "/", apiKey),
       sessionToken,
     };
   } catch (error) {
@@ -1254,6 +1271,7 @@ function renderAdminPage(
 ): Response {
   const health = repo.getHealthSummary();
   const books = repo.listBooks(30).items;
+  const users = repo.listUsers();
   const previewBooks = preferredAudioForBooks(repo).slice(0, 12);
   const apiKey = options.apiKey ?? null;
   const settingsJson = escapeHtml(JSON.stringify(settings, null, 2));
@@ -1320,6 +1338,21 @@ function renderAdminPage(
 </article>`;
     })
     .join("");
+
+  const userRows =
+    users.length > 0
+      ? users
+          .map(
+            (user) => `<tr>
+  <td>${user.id}</td>
+  <td>${escapeHtml(user.provider)}</td>
+  <td>${escapeHtml(user.username)}</td>
+  <td>${escapeHtml(user.display_name || "")}</td>
+  <td>${user.is_admin ? "yes" : "no"}</td>
+</tr>`
+          )
+          .join("")
+      : `<tr><td colspan="5">No users yet.</td></tr>`;
 
   const body = `<!doctype html>
 <html>
@@ -1599,6 +1632,26 @@ function renderAdminPage(
         </section>`
             : ""
         }
+
+        <section class="card card-mid">
+          <h2>Users</h2>
+          <div class="panel">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Provider</th>
+                    <th>Username</th>
+                    <th>Display Name</th>
+                    <th>Admin</th>
+                  </tr>
+                </thead>
+                <tbody>${userRows}</tbody>
+              </table>
+            </div>
+          </div>
+        </section>
 
         <section class="card card-full">
           <h2>Manual Search + Snatch</h2>
@@ -2782,6 +2835,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
     const method = request.method;
     const pathname = url.pathname;
     const requestApiKey = linkApiKeyFromRequest(request, settings);
+    const redirectTo = sanitizeRedirectPath(url.searchParams.get("redirectTo"));
     let logSuffix = "";
     let currentSession = resolveSessionFromRequest(request, (tokenHash) => repo.getSessionByTokenHash(tokenHash));
     if (currentSession) {
@@ -2795,19 +2849,26 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
     };
 
     let response: Response;
+    const isAuthorizedRequest = authorizeRequest(request, settings, () => currentSession);
 
     const isPublicRoute =
+      pathname === "/" ||
       pathname === "/login" ||
       pathname === "/logout" ||
       pathname === "/login/plex/start" ||
       pathname === "/login/plex/loading" ||
       pathname === "/login/plex/complete" ||
       pathname === "/login/plex/status";
-    if (!isPublicRoute && !authorizeRequest(request, settings, () => currentSession)) {
-      response = new Response("Unauthorized", {
-        status: 401,
-        headers: { "WWW-Authenticate": 'Bearer realm="podible"' },
-      });
+    if (!isPublicRoute && !isAuthorizedRequest) {
+      if (request.method === "GET" && isHtmlPageRoute(pathname)) {
+        const nextPath = `${pathname}${url.search}`;
+        response = redirect(`/login?redirectTo=${encodeURIComponent(nextPath)}`);
+      } else {
+        response = new Response("Unauthorized", {
+          status: 401,
+          headers: { "WWW-Authenticate": 'Bearer realm="podible"' },
+        });
+      }
       logRequest(response.status);
       return response;
     }
@@ -2824,6 +2885,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
           error: url.searchParams.get("error"),
           currentUser: currentSession,
           apiKey: requestApiKey,
+          redirectTo,
         });
         logRequest(response.status);
         return response;
@@ -2887,7 +2949,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
 
         const sessionToken = createSessionToken();
         repo.createSession(user.id, hashSessionToken(sessionToken), sessionExpiresAt());
-        response = redirect("/");
+        response = redirect(sanitizeRedirectPath(url.searchParams.get("redirectTo")) ?? "/");
         response.headers.append("Set-Cookie", buildSessionCookie(sessionToken, request));
         logRequest(response.status);
         return response;
@@ -2914,6 +2976,9 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
           forwardUrl.pathname = "/login/plex/complete";
           forwardUrl.search = "";
           forwardUrl.searchParams.set("pinId", String(pin.id));
+          if (redirectTo) {
+            forwardUrl.searchParams.set("redirectTo", redirectTo);
+          }
           response = json({
             pinId: pin.id,
             authUrl: buildPlexAuthUrl(identity, pin.code, forwardUrl.toString()),
@@ -2943,7 +3008,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
           logRequest(response.status);
           return response;
         }
-        const result = await waitForPlexLoginResult(repo, settings, pinId, requestApiKey);
+        const result = await waitForPlexLoginResult(repo, settings, pinId, requestApiKey, redirectTo);
         settings = result.settings;
         response = renderPlexImmediateResultPage({
           ok: result.kind === "success",
@@ -2998,7 +3063,12 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
       }
 
       if (pathname === "/" && request.method === "GET") {
-        response = renderLandingPage(repo, settings, currentSession, requestApiKey);
+        response = isAuthorizedRequest
+          ? renderLandingPage(repo, settings, currentSession, requestApiKey)
+          : renderLoginPage(settings, repo.listUsers("local"), {
+              currentUser: currentSession,
+              apiKey: requestApiKey,
+            });
         logRequest(response.status);
         return response;
       }

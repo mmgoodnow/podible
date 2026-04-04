@@ -66,6 +66,8 @@ describe("podible http", () => {
     expect(adminBody.includes("Podible Backend")).toBe(true);
     expect(adminBody.includes("Open Library Search")).toBe(true);
     expect(adminBody.includes("Manual Search + Snatch")).toBe(true);
+    expect(adminBody.includes("Users")).toBe(true);
+    expect(adminBody.includes("No users yet.")).toBe(true);
     expect(adminBody.includes("manual-import-btn")).toBe(true);
     expect(adminBody.includes("settings-editor")).toBe(true);
     expect(adminBody.includes("Refresh Library")).toBe(true);
@@ -519,20 +521,28 @@ describe("podible http", () => {
     const fetchHandler = createPodibleFetchHandler(repo, Date.now());
 
     const unauthorized = await fetchHandler(new Request("http://app.test/library"));
-    expect(unauthorized.status).toBe(401);
+    expect(unauthorized.status).toBe(303);
+    expect(unauthorized.headers.get("location")).toBe("/login?redirectTo=%2Flibrary");
 
-    const loginPage = await fetchHandler(new Request("http://app.test/login"));
+    const publicHome = await fetchHandler(new Request("http://app.test/"));
+    expect(publicHome.status).toBe(200);
+    const publicHomeBody = await publicHome.text();
+    expect(publicHomeBody.includes("Sign in")).toBe(true);
+    expect(publicHomeBody.includes("Your audiobook shelf")).toBe(false);
+
+    const loginPage = await fetchHandler(new Request("http://app.test/login?redirectTo=%2Flibrary"));
     expect(loginPage.status).toBe(200);
     const loginBody = await loginPage.text();
     expect(loginBody.includes("Create a user")).toBe(true);
 
     const login = await fetchHandler(
-      new Request("http://app.test/login", {
+      new Request("http://app.test/login?redirectTo=%2Flibrary", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: "username=alice&displayName=Alice",
       })
     );
+    expect(login.headers.get("location")).toBe("/library");
     expect(login.status).toBe(303);
     const setCookie = login.headers.get("set-cookie") ?? "";
     expect(setCookie.includes("podible_session=")).toBe(true);
