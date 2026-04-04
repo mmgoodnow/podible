@@ -1,16 +1,13 @@
-import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 
 import { hydrateBookFromOpenLibrary } from "./hydration";
 import { buildJsonFeed, buildRssFeed } from "./feed";
 import { resolveOpenLibraryCandidate, searchOpenLibrary, type OpenLibraryCandidate } from "./openlibrary";
 import {
-  authorizeRequest,
   buildSessionCookie,
   clearSessionCookie,
   createSessionToken,
   hashSessionToken,
-  isApiKeyAuthorized,
   resolveSessionFromRequest,
   sessionExpiresAt,
 } from "./auth";
@@ -97,15 +94,8 @@ function escapeHtml(value: string): string {
 }
 
 function addApiKey(path: string, apiKey: string | null): string {
-  if (!apiKey) return path;
-  return path.includes("?") ? `${path}&api_key=${encodeURIComponent(apiKey)}` : `${path}?api_key=${encodeURIComponent(apiKey)}`;
-}
-
-function linkApiKeyFromRequest(request: Request, settings: AppSettings): string | null {
-  if (settings.auth.mode !== "apikey") return null;
-  const queryValue = new URL(request.url).searchParams.get("api_key")?.trim();
-  if (!queryValue) return null;
-  return queryValue === settings.auth.key ? queryValue : null;
+  void apiKey;
+  return path;
 }
 
 function truncateText(value: string, max: number): string {
@@ -221,6 +211,24 @@ function sanitizeRedirectPath(value: string | null | undefined): string | null {
   return trimmed;
 }
 
+function parseAppLoginPath(pathname: string): { attemptId: string; isComplete: boolean } | null {
+  const match = pathname.match(/^\/auth\/app\/([^/]+?)(\/complete)?$/);
+  if (!match?.[1]) return null;
+  return {
+    attemptId: decodeURIComponent(match[1]),
+    isComplete: match[2] === "/complete",
+  };
+}
+
+function renderAppAuthErrorPage(settings: AppSettings, message: string): Response {
+  const body = `
+    <section class="hero">
+      <h1>App sign-in</h1>
+      <p>${escapeHtml(message)}</p>
+    </section>`;
+  return renderAppPage("App sign in", body, settings, null);
+}
+
 function isHtmlPageRoute(pathname: string): boolean {
   return pathname === "/" || pathname === "/library" || pathname === "/add" || pathname === "/activity" || pathname === "/admin" || pathname === "/login" || pathname === "/login/plex/loading" || pathname.startsWith("/book/");
 }
@@ -239,9 +247,7 @@ function renderAppPage(
        <form method="post" action="${escapeHtml(addApiKey("/logout", apiKey))}" style="display:inline-flex;">
          <button type="submit">Sign out</button>
        </form>`
-    : settings.auth.mode === "local" || settings.auth.mode === "plex"
-      ? `<a href="${escapeHtml(addApiKey("/login", apiKey))}">Sign in</a>`
-      : "";
+    : `<a href="${escapeHtml(addApiKey("/login", apiKey))}">Sign in</a>`;
   const nav = `
     <nav class="site-nav">
       <a href="${escapeHtml(addApiKey("/", apiKey))}">Home</a>
@@ -586,10 +592,18 @@ function renderAddPage(
 function renderLoginPage(
   settings: AppSettings,
   localUsers: UserRow[],
-  options: { notice?: string | null; error?: string | null; currentUser?: SessionWithUserRow | null; apiKey?: string | null; redirectTo?: string | null } = {}
+  options: {
+    notice?: string | null;
+    error?: string | null;
+    currentUser?: SessionWithUserRow | null;
+    apiKey?: string | null;
+    redirectTo?: string | null;
+    inlinePlexLogin?: boolean;
+  } = {}
 ): Response {
   const apiKey = options.apiKey ?? null;
   const redirectTo = sanitizeRedirectPath(options.redirectTo) ?? "/";
+  const inlinePlexLogin = options.inlinePlexLogin === true;
   const loginPath = addApiKey(`/login?redirectTo=${encodeURIComponent(redirectTo)}`, apiKey);
   const plexStartPath = addApiKey(`/login/plex/start?redirectTo=${encodeURIComponent(redirectTo)}`, apiKey);
   const plexLoadingPath = addApiKey(`/login/plex/loading?redirectTo=${encodeURIComponent(redirectTo)}`, apiKey);
@@ -611,25 +625,28 @@ function renderLoginPage(
           const startUrl = ${JSON.stringify(plexStartPath)};
           const loadingUrl = ${JSON.stringify(plexLoadingPath)};
           const successPath = ${JSON.stringify(addApiKey(redirectTo, apiKey))};
+          const inlineLogin = ${inlinePlexLogin ? "true" : "false"};
           function setStatus(message) {
             if (status) status.textContent = message || "";
           }
-          window.addEventListener("message", (event) => {
-            if (event.origin !== window.location.origin || !event.data || event.data.type !== "podible-plex-login") {
-              return;
-            }
-            if (event.data.ok) {
-              window.location.href = event.data.redirectTo || successPath;
-              return;
-            }
-            setStatus(event.data.error || "Plex sign-in failed.");
-            if (button) button.disabled = false;
-          });
+          if (!inlineLogin) {
+            window.addEventListener("message", (event) => {
+              if (event.origin !== window.location.origin || !event.data || event.data.type !== "podible-plex-login") {
+                return;
+              }
+              if (event.data.ok) {
+                window.location.href = event.data.redirectTo || successPath;
+                return;
+              }
+              setStatus(event.data.error || "Plex sign-in failed.");
+              if (button) button.disabled = false;
+            });
+          }
           button?.addEventListener("click", async () => {
             button.disabled = true;
             setStatus("Opening Plex sign-in…");
-            const popup = window.open(loadingUrl, "podible-plex-login", "width=640,height=760");
-            if (!popup) {
+            const popup = inlineLogin ? null : window.open(loadingUrl, "podible-plex-login", "width=640,height=760");
+            if (!inlineLogin && !popup) {
               setStatus("Popup blocked. Please allow popups for this site.");
               button.disabled = false;
               return;
@@ -640,10 +657,14 @@ function renderLoginPage(
               if (!response.ok || !payload.authUrl) {
                 throw new Error(payload.error || "Unable to start Plex sign-in.");
               }
+              if (inlineLogin) {
+                window.location.href = payload.authUrl;
+                return;
+              }
               popup.location.href = payload.authUrl;
               setStatus("Finish sign-in in the Plex window…");
             } catch (error) {
-              popup.close();
+              if (popup) popup.close();
               setStatus(error && error.message ? error.message : "Unable to start Plex sign-in.");
               button.disabled = false;
             }
@@ -1468,7 +1489,7 @@ function renderAdminPage(
           <div class="header-grid">
             <div>
               <h1>Admin</h1>
-              <p class="muted">Auth mode: <strong>${escapeHtml(settings.auth.mode)}</strong>${apiKey ? ` | Authorized links include <code>api_key</code>` : ""}</p>
+              <p class="muted">Auth mode: <strong>${escapeHtml(settings.auth.mode)}</strong></p>
               <p>Queue: <strong>${health.queueSize}</strong> | Jobs: <code>${escapeHtml(JSON.stringify(health.jobs))}</code> | Releases: <code>${escapeHtml(JSON.stringify(health.releases))}</code></p>
             </div>
             <div>
@@ -1478,9 +1499,6 @@ function renderAdminPage(
                   <button id="settings-save-btn" type="button">Save Settings</button>
                   <form method="post" action="${escapeHtml(addApiKey("/admin/refresh", apiKey))}" style="margin: 0;">
                     <button type="submit">Refresh Library</button>
-                  </form>
-                  <form method="post" action="${escapeHtml(addApiKey("/admin/rotate-api-key", apiKey))}" style="margin: 0;">
-                    <button type="submit">Rotate API Key</button>
                   </form>
                   <button id="wipe-db-btn" type="button" style="margin-left: auto; background: var(--danger); color: #fff; border: 1px solid var(--danger-border);">Wipe Entire Database</button>
                 </div>
@@ -1675,12 +1693,8 @@ function renderAdminPage(
       </div>
     <script>
       (function () {
-        var queryApiKey = new URLSearchParams(window.location.search).get("api_key");
         function withAuth(path) {
           var url = new URL(path, window.location.origin);
-          if (queryApiKey && !url.searchParams.get("api_key")) {
-            url.searchParams.set("api_key", queryApiKey);
-          }
           return url.pathname + url.search;
         }
         async function api(path, init) {
@@ -2285,7 +2299,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
     const url = new URL(request.url);
     const method = request.method;
     const pathname = url.pathname;
-    const requestApiKey = linkApiKeyFromRequest(request, settings);
+    const appLoginPath = parseAppLoginPath(pathname);
     const redirectTo = sanitizeRedirectPath(url.searchParams.get("redirectTo"));
     let logSuffix = "";
     let currentSession = resolveSessionFromRequest(request, (tokenHash) => repo.getSessionByTokenHash(tokenHash));
@@ -2300,7 +2314,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
     };
 
     let response: Response;
-    const isAuthorizedRequest = authorizeRequest(request, settings, () => currentSession);
+    const isAuthenticatedRequest = currentSession !== null;
 
     const isPublicRoute =
       pathname === "/" ||
@@ -2309,8 +2323,10 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
       pathname === "/login/plex/start" ||
       pathname === "/login/plex/loading" ||
       pathname === "/login/plex/complete" ||
-      pathname === "/login/plex/status";
-    if (!isPublicRoute && !isAuthorizedRequest) {
+      pathname === "/login/plex/status" ||
+      appLoginPath !== null;
+    const isRpcRoute = pathname === "/rpc" || pathname.startsWith("/rpc/");
+    if (!isPublicRoute && !isRpcRoute && !isAuthenticatedRequest) {
       if (request.method === "GET" && isHtmlPageRoute(pathname)) {
         const nextPath = `${pathname}${url.search}`;
         response = redirect(`/login?redirectTo=${encodeURIComponent(nextPath)}`);
@@ -2325,17 +2341,13 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
     }
 
     try {
-      const hasAdminAccess =
-        (process.env.NODE_ENV !== "production" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname)) ||
-        (currentSession?.is_admin ?? 0) === 1 ||
-        isApiKeyAuthorized(request, settings);
+      const hasAdminAccess = (currentSession?.is_admin ?? 0) === 1;
 
       if (pathname === "/login" && request.method === "GET") {
         response = renderLoginPage(settings, repo.listUsers("local"), {
           notice: url.searchParams.get("notice"),
           error: url.searchParams.get("error"),
           currentUser: currentSession,
-          apiKey: requestApiKey,
           redirectTo,
         });
         logRequest(response.status);
@@ -2367,7 +2379,6 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
           if (!username) {
             const page = renderLoginPage(settings, repo.listUsers("local"), {
               error: "Username is required.",
-              apiKey: requestApiKey,
             });
             response = new Response(await page.text(), {
               status: 400,
@@ -2389,7 +2400,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
         }
 
         if (!user) {
-          const page = renderLoginPage(settings, repo.listUsers("local"), { error: "User not found.", apiKey: requestApiKey });
+          const page = renderLoginPage(settings, repo.listUsers("local"), { error: "User not found." });
           response = new Response(await page.text(), {
             status: 400,
             headers: page.headers,
@@ -2442,7 +2453,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
       }
 
       if (pathname === "/login/plex/loading" && request.method === "GET") {
-        response = renderPlexLoadingPage(settings, requestApiKey);
+        response = renderPlexLoadingPage(settings);
         logRequest(response.status);
         return response;
       }
@@ -2459,7 +2470,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
           logRequest(response.status);
           return response;
         }
-        const result = await waitForPlexLoginResult(repo, settings, pinId, requestApiKey, redirectTo);
+        const result = await waitForPlexLoginResult(repo, settings, pinId, null, redirectTo);
         settings = result.settings;
         response = renderPlexImmediateResultPage({
           ok: result.kind === "success",
@@ -2485,7 +2496,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
           logRequest(response.status);
           return response;
         }
-        const statusResult = await resolvePlexLoginStatus(repo, settings, pinId, requestApiKey);
+        const statusResult = await resolvePlexLoginStatus(repo, settings, pinId, null);
         settings = statusResult.settings;
         if (statusResult.kind === "pending") {
           response = json({ ok: false, pending: true, message: statusResult.message, pinId, retryAfterMs: 3000 });
@@ -2507,24 +2518,69 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
         if (currentSession) {
           repo.deleteSession(currentSession.id);
         }
-        response = redirect(addApiKey("/login?notice=Signed%20out.", requestApiKey));
+        response = redirect("/login?notice=Signed%20out.");
         response.headers.append("Set-Cookie", clearSessionCookie(request));
         logRequest(response.status);
         return response;
       }
 
+      if (appLoginPath && request.method === "GET") {
+        repo.deleteExpiredAppLoginAttempts(new Date().toISOString());
+        const attempt = repo.getAppLoginAttempt(appLoginPath.attemptId);
+        if (!attempt) {
+          response = new Response(await renderAppAuthErrorPage(settings, "This app sign-in attempt is missing or has expired.").text(), {
+            status: 400,
+            headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+          });
+          logRequest(response.status);
+          return response;
+        }
+        const attemptPath = `/auth/app/${encodeURIComponent(attempt.id)}`;
+        if (appLoginPath.isComplete) {
+          if (!currentSession) {
+            response = redirect(attemptPath);
+            logRequest(response.status);
+            return response;
+          }
+          const code = createSessionToken();
+          repo.createAuthCode({
+            codeHash: hashSessionToken(code),
+            userId: currentSession.user_id,
+            attemptId: attempt.id,
+            expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+          });
+          const callbackUrl = new URL(attempt.redirect_uri);
+          callbackUrl.searchParams.set("code", code);
+          callbackUrl.searchParams.set("state", attempt.state);
+          response = redirect(callbackUrl.toString(), 302);
+          logRequest(response.status);
+          return response;
+        }
+        if (currentSession) {
+          response = redirect(`${attemptPath}/complete`);
+          logRequest(response.status);
+          return response;
+        }
+        response = renderLoginPage(settings, repo.listUsers("local"), {
+          currentUser: currentSession,
+          redirectTo: `${attemptPath}/complete`,
+          inlinePlexLogin: true,
+        });
+        logRequest(response.status);
+        return response;
+      }
+
       if (pathname === "/" && request.method === "GET") {
-        response = isAuthorizedRequest
-          ? renderLandingPage(repo, settings, currentSession, requestApiKey)
+        response = isAuthenticatedRequest
+          ? renderLandingPage(repo, settings, currentSession, null)
           : renderLoginPage(settings, repo.listUsers("local"), {
               currentUser: currentSession,
-              apiKey: requestApiKey,
             });
         logRequest(response.status);
         return response;
       }
 
-      if ((pathname === "/admin" || pathname === "/rpc" || pathname.startsWith("/rpc/")) && !hasAdminAccess) {
+      if (pathname === "/admin" && !hasAdminAccess) {
         response = new Response("Forbidden", { status: 403 });
         logRequest(response.status);
         return response;
@@ -2570,7 +2626,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
         response = renderLibraryPage(repo, settings, {
           query: url.searchParams.get("q"),
           currentUser: currentSession,
-          apiKey: requestApiKey,
+          apiKey: null,
         });
         logRequest(response.status);
         return response;
@@ -2579,7 +2635,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
       if (pathname === "/add" && request.method === "GET") {
         const query = (url.searchParams.get("q") ?? "").trim();
         if (!query) {
-          response = renderAddPage(settings, { currentUser: currentSession, apiKey: requestApiKey });
+          response = renderAddPage(settings, { currentUser: currentSession, apiKey: null });
           logRequest(response.status);
           return response;
         }
@@ -2590,14 +2646,14 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
             results,
             status: `Found ${results.length} result${results.length === 1 ? "" : "s"} for “${query}”.`,
             currentUser: currentSession,
-            apiKey: requestApiKey,
+            apiKey: null,
           });
         } catch (error) {
           response = renderAddPage(settings, {
             query,
             error: `Search failed: ${(error as Error).message}`,
             currentUser: currentSession,
-            apiKey: requestApiKey,
+            apiKey: null,
           });
         }
         logRequest(response.status);
@@ -2612,7 +2668,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
           const addResponse = renderAddPage(settings, {
             error: "openLibraryKey is required.",
             currentUser: currentSession,
-            apiKey: requestApiKey,
+            apiKey: null,
           });
           response = new Response(await addResponse.text(), {
             status: 400,
@@ -2623,12 +2679,12 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
         }
         try {
           const bookId = await createBookFromOpenLibrary(repo, openLibraryKey);
-          response = redirect(addApiKey(`/book/${bookId}`, requestApiKey));
+          response = redirect(`/book/${bookId}`);
         } catch (error) {
           const addResponse = renderAddPage(settings, {
             error: `Add failed: ${(error as Error).message}`,
             currentUser: currentSession,
-            apiKey: requestApiKey,
+            apiKey: null,
           });
           response = new Response(await addResponse.text(), {
             status: 400,
@@ -2645,7 +2701,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
           notice: url.searchParams.get("notice"),
           error: url.searchParams.get("error"),
           currentUser: currentSession,
-          apiKey: requestApiKey,
+          apiKey: null,
         });
         logRequest(response.status);
         return response;
@@ -2664,9 +2720,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
         }
         const jobId = await triggerAutoAcquire(repo, bookId, media);
         const notice = `Queued ${media.join(" + ")} acquire for ${book.title} (job ${jobId}).`;
-        response = redirect(
-          addApiKey(`/book/${bookId}?notice=${encodeURIComponent(notice)}`, requestApiKey)
-        );
+        response = redirect(`/book/${bookId}?notice=${encodeURIComponent(notice)}`);
         logRequest(response.status);
         return response;
       }
@@ -2676,7 +2730,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
           notice: url.searchParams.get("notice"),
           error: url.searchParams.get("error"),
           currentUser: currentSession,
-          apiKey: requestApiKey,
+          apiKey: null,
         });
         logRequest(response.status);
         return response;
@@ -2684,34 +2738,14 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
 
       if (pathname === "/activity/refresh" && request.method === "POST") {
         const job = repo.createJob({ type: "full_library_refresh" });
-        response = redirect(
-          addApiKey(`/activity?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`, requestApiKey)
-        );
+        response = redirect(`/activity?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`);
         logRequest(response.status);
         return response;
       }
 
       if (pathname === "/admin/refresh" && request.method === "POST") {
         const job = repo.createJob({ type: "full_library_refresh" });
-        response = redirect(
-          addApiKey(`/admin?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`, requestApiKey)
-        );
-        logRequest(response.status);
-        return response;
-      }
-
-      if (pathname === "/admin/rotate-api-key" && request.method === "POST") {
-        const nextKey = randomBytes(24).toString("hex");
-        settings = repo.updateSettings({
-          ...settings,
-          auth: {
-            ...settings.auth,
-            key: nextKey,
-          },
-        });
-        response = redirect(
-          addApiKey("/admin?notice=Rotated%20API%20key.", requestApiKey ? nextKey : null)
-        );
+        response = redirect(`/admin?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`);
         logRequest(response.status);
         return response;
       }
@@ -2730,7 +2764,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
         }
         response = renderAdminPage(repo, settings, currentSession, {
           plexServers,
-          apiKey: requestApiKey,
+          apiKey: null,
           notice,
           error,
           plexNotice: url.searchParams.get("plex_notice"),
@@ -2750,7 +2784,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
         } catch {
           // ignore parse errors in logging path; handler will return JSON-RPC parse errors.
         }
-        response = await handleRpcRequest(request, { repo, startTime });
+        response = await handleRpcRequest(request, { repo, startTime, request, session: currentSession });
         logRequest(response.status);
         return response;
       }
@@ -2770,7 +2804,6 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
         }
         const params: Record<string, unknown> = {};
         for (const [key, value] of url.searchParams.entries()) {
-          if (key === "api_key") continue;
           const existing = params[key];
           if (existing === undefined) {
             params[key] = value;
@@ -2782,7 +2815,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
             params[key] = [existing, value];
           }
         }
-        response = await handleRpcMethod(parts.join("."), params, { repo, startTime }, { id: null, readOnly: true });
+        response = await handleRpcMethod(parts.join("."), params, { repo, startTime, request, session: currentSession }, { id: null, readOnly: true });
         logRequest(response.status);
         return response;
       }

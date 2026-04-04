@@ -41,11 +41,13 @@ Open Library covers are stored alongside each imported book inside `libraryRoot`
 
 ## Auth
 
-Settings default to API key auth (`Authorization: Bearer <key>` or `X-API-Key`).
+Settings default to Plex browser sign-in.
 
-On boot, the server logs the active API key from settings.
-
-For localhost development, set settings `auth.mode` to `local` via `settings.update` RPC.
+- `auth.mode = "plex"` enables the normal browser login flow.
+- `auth.mode = "local"` is intended for localhost development and tests only.
+- Browser routes use Podible session cookies.
+- App clients can use the app-login flow: `auth.beginAppLogin` -> browser sign-in -> `auth.exchange` for a bearer token.
+- JSON-RPC methods are now scoped by auth level (`public`, `user`, `admin`).
 
 ## Key Endpoints
 
@@ -73,6 +75,10 @@ Removed REST control routes now return `404`:
 
 - `system.health`
 - `system.server`
+- `auth.beginAppLogin`
+- `auth.exchange`
+- `auth.me`
+- `auth.logout`
 - `settings.get`
 - `settings.update`
 - `openlibrary.search`
@@ -122,6 +128,7 @@ Bridge constraints:
 - Read-only methods only (`settings.update`, `library.create`, `snatch.create`, etc. are blocked).
 - Responses still use JSON-RPC envelopes with `id: null`.
 - Canonical control/data write path remains `POST /rpc`.
+- Browser login bootstrap still uses normal HTTP redirect routes behind the scenes.
 
 ## Settings Shape
 
@@ -148,7 +155,16 @@ Bridge constraints:
   "polling": { "rtorrentMs": 5000, "scanMs": 30000 },
   "recovery": { "stalledTorrentMinutes": 10 },
   "feed": { "title": "Books", "author": "Unknown" },
-  "auth": { "mode": "apikey", "key": "..." },
+  "auth": {
+    "mode": "plex",
+    "appRedirectURIs": ["kindling://auth/podible"],
+    "plex": {
+      "productName": "Podible",
+      "ownerToken": "",
+      "machineId": "",
+      "machineName": ""
+    }
+  },
   "agents": {
     "enabled": false,
     "provider": "openai-responses",
@@ -237,6 +253,14 @@ Rehydrate metadata for existing books (all or one):
 curl -X POST http://localhost/rpc \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":3,"method":"library.rehydrate","params":{}}'
+```
+
+Start an app login attempt for Kindling:
+
+```bash
+curl -X POST http://localhost/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":30,"method":"auth.beginAppLogin","params":{"redirectUri":"kindling://auth/podible"}}'
 ```
 
 ```bash
