@@ -1533,7 +1533,7 @@ function renderAdminPage(
       <section class="hero page-header">
           <div class="header-grid">
             <div>
-              <h1>Podible Backend</h1>
+              <h1>Admin</h1>
               <p class="muted">Auth mode: <strong>${escapeHtml(settings.auth.mode)}</strong>${apiKey ? ` | Authorized links include <code>api_key</code>` : ""}</p>
               <p>Queue: <strong>${health.queueSize}</strong> | Jobs: <code>${escapeHtml(JSON.stringify(health.jobs))}</code> | Releases: <code>${escapeHtml(JSON.stringify(health.releases))}</code></p>
             </div>

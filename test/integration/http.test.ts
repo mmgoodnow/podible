@@ -64,7 +64,7 @@ describe("podible http", () => {
     expect(admin.status).toBe(200);
     const adminBody = await admin.text();
     expect(adminBody.includes("site-nav")).toBe(true);
-    expect(adminBody.includes("Podible Backend")).toBe(true);
+    expect(adminBody.includes("Admin")).toBe(true);
     expect(adminBody.includes("Open Library Search")).toBe(true);
     expect(adminBody.includes("Manual Search + Snatch")).toBe(true);
     expect(adminBody.includes("Users")).toBe(true);
