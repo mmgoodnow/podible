@@ -1271,74 +1271,10 @@ function renderAdminPage(
   } = {}
 ): Response {
   const health = repo.getHealthSummary();
-  const books = repo.listBooks(30).items;
   const users = repo.listUsers();
-  const previewBooks = preferredAudioForBooks(repo).slice(0, 12);
   const apiKey = options.apiKey ?? null;
   const settingsJson = escapeHtml(JSON.stringify(settings, null, 2));
   const plexServers = options.plexServers ?? [];
-
-  const rows = books
-    .map((book) => {
-      const detailPath = addApiKey(`/rpc/library/get?bookId=${book.id}`, apiKey);
-      return `<tr>
-  <td><a href="${escapeHtml(detailPath)}">${book.id}</a></td>
-  <td>${escapeHtml(book.title)}</td>
-  <td>${escapeHtml(book.author)}</td>
-  <td>${escapeHtml(book.status)}</td>
-  <td>${escapeHtml(book.audioStatus)}</td>
-  <td>${escapeHtml(book.ebookStatus)}</td>
-  <td class="book-progress" data-book-id="${book.id}" data-audio-status="${escapeHtml(book.audioStatus)}" data-ebook-status="${escapeHtml(book.ebookStatus)}">${escapeHtml(String(book.fullPseudoProgress))}%</td>
-  <td>
-    <button type="button" class="view-files-btn" data-book-id="${book.id}" data-book-title="${escapeHtml(book.title)}">Files</button>
-    <button type="button" class="report-import-issue-btn" data-book-id="${book.id}" data-book-title="${escapeHtml(book.title)}" data-audio-status="${escapeHtml(book.audioStatus)}" data-ebook-status="${escapeHtml(book.ebookStatus)}">Wrong File</button>
-    <button type="button" class="agent-acquire-btn" data-book-id="${book.id}" data-book-title="${escapeHtml(book.title)}">Agent Acquire</button>
-    <button type="button" class="delete-book-btn" data-book-id="${book.id}" data-book-title="${escapeHtml(book.title)}">Delete</button>
-  </td>
-</tr>`;
-    })
-    .join("");
-
-  const previewCards = previewBooks
-    .map(({ book, asset }) => {
-      const streamPath = addApiKey(`/stream/${asset.id}.${streamExtension(asset)}`, apiKey);
-      const chaptersPath = addApiKey(`/chapters/${asset.id}.json`, apiKey);
-      const detailPath = addApiKey(`/rpc/library/get?bookId=${book.id}`, apiKey);
-      const coverPath = book.coverUrl ? addApiKey(book.coverUrl, apiKey) : null;
-      const description = (book.description || "").trim() || `${book.title} by ${book.author}`;
-      const preview = truncateText(description.replace(/\s+/g, " "), 220);
-      const initials =
-        (book.title || "")
-          .split(/\s+/)
-          .map((part) => part[0] || "")
-          .join("")
-          .slice(0, 2)
-          .toUpperCase() || "BK";
-      return `<article class="feed-preview-item">
-  <div class="feed-preview-cover">
-    <span class="feed-preview-fallback">${escapeHtml(initials)}</span>
-    ${
-      coverPath
-        ? `<img src="${escapeHtml(coverPath)}" alt="${escapeHtml(book.title)} cover" loading="lazy" onerror="this.remove()" />`
-        : ""
-    }
-  </div>
-  <div class="feed-preview-body">
-    <div class="feed-preview-title-row">
-      <strong>${escapeHtml(book.title)}</strong>
-      <span class="muted">#${book.id}</span>
-    </div>
-    <p class="feed-preview-author">${escapeHtml(book.author)}</p>
-    <p class="feed-preview-desc">${escapeHtml(preview)}</p>
-    <div class="feed-preview-links">
-      <a href="${escapeHtml(streamPath)}">Stream</a>
-      <a href="${escapeHtml(chaptersPath)}">Chapters</a>
-      <a href="${escapeHtml(detailPath)}">JSON</a>
-    </div>
-  </div>
-</article>`;
-    })
-    .join("");
 
   const userRows =
     users.length > 0
@@ -1444,8 +1380,6 @@ function renderAdminPage(
       }
       pre code { background: transparent; padding: 0; }
       .card h2 + .panel, .card h2 + .table-wrap, .card h2 + p { margin-top: 0; }
-      #library-files-panel { display: none; }
-      .path-cell { word-break: break-all; }
       .feed-preview-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1643,30 +1577,6 @@ function renderAdminPage(
           </div>
         </section>
 
-        ${
-          previewCards
-            ? `<section class="card card-full">
-          <h2>Feed Preview</h2>
-          <p class="muted">First 12 audio books with preferred stream assets. Stream links use each asset's native extension (no forced mp3 transcode).</p>
-          <div class="feed-preview-grid">
-            ${previewCards}
-          </div>
-        </section>`
-            : ""
-        }
-
-        <section class="card card-mid">
-          <h2>Open Library Search</h2>
-          <div class="panel">
-            <div class="row">
-              <input id="ol-query" type="text" placeholder="Title Author (e.g. Hyperion Dan Simmons)" />
-              <button id="ol-search-btn" type="button">Search</button>
-            </div>
-            <p id="ol-status" class="muted"></p>
-            <ul id="ol-results"></ul>
-          </div>
-        </section>
-
         <section class="card card-mid">
           <h2>Manual Import</h2>
           <div class="panel">
@@ -1694,50 +1604,6 @@ function renderAdminPage(
                 <tbody id="manual-import-files-body"><tr><td colspan="4">No inspection yet.</td></tr></tbody>
               </table>
             </div>
-          </div>
-        </section>
-
-        <section class="card card-full">
-          <h2>Recent Library</h2>
-          <p id="library-status" class="muted"></p>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Title</th>
-                  <th>Author</th>
-                  <th>Status</th>
-                  <th>Audio</th>
-                  <th>Ebook</th>
-                  <th>Progress</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="library-table-body">${rows || '<tr><td colspan="8">No books yet.</td></tr>'}</tbody>
-            </table>
-          </div>
-        </section>
-
-        <section id="library-files-panel" class="card card-full">
-          <div class="row">
-            <strong id="library-files-title">Imported Files</strong>
-            <button id="library-files-close-btn" type="button">Close</button>
-          </div>
-          <p id="library-files-status" class="muted"></p>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Asset</th>
-                  <th>Kind</th>
-                  <th>Path</th>
-                  <th>Size</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody id="library-files-body"><tr><td colspan="5">Select a book to view imported files.</td></tr></tbody>
-            </table>
           </div>
         </section>
 
@@ -1848,63 +1714,6 @@ function renderAdminPage(
         function text(id, value) {
           var el = document.getElementById(id);
           if (el) el.textContent = value;
-        }
-
-        var queryInput = document.getElementById("ol-query");
-        var searchBtn = document.getElementById("ol-search-btn");
-        var resultList = document.getElementById("ol-results");
-        async function runOpenLibrarySearch() {
-          var q = (queryInput.value || "").trim();
-          if (!q) {
-            text("ol-status", "Enter a search query.");
-            resultList.innerHTML = "";
-            return;
-          }
-          text("ol-status", "Searching...");
-          var payload;
-          try {
-            payload = await rpc("openlibrary.search", { q: q, limit: 10 });
-          } catch (err) {
-            text("ol-status", "Search failed: " + (err && err.message ? err.message : "request error"));
-            resultList.innerHTML = "";
-            return;
-          }
-          var items = Array.isArray(payload.results) ? payload.results : [];
-          resultList.innerHTML = "";
-          text("ol-status", "Found " + items.length + " result(s).");
-          items.forEach(function (item) {
-            var li = document.createElement("li");
-            var label = document.createElement("span");
-            label.textContent = item.title + " — " + item.author + " (" + item.openLibraryKey + ")";
-            var btn = document.createElement("button");
-            btn.type = "button";
-            btn.style.marginLeft = "8px";
-            btn.textContent = "Add";
-            btn.addEventListener("click", async function () {
-              text("ol-status", "Adding " + item.title + "...");
-              var created;
-              try {
-                created = await rpc("library.create", { openLibraryKey: item.openLibraryKey });
-              } catch (err) {
-                text("ol-status", "Add failed: " + (err && err.message ? err.message : "request error"));
-                return;
-              }
-              text("ol-status", 'Added "' + created.book.title + '" (id ' + created.book.id + '). Refresh to see it below.');
-            });
-            li.appendChild(label);
-            li.appendChild(btn);
-            resultList.appendChild(li);
-          });
-        }
-        if (searchBtn && queryInput && resultList) {
-          searchBtn.addEventListener("click", async function () {
-            await runOpenLibrarySearch();
-          });
-          queryInput.addEventListener("keydown", async function (event) {
-            if (event.key !== "Enter") return;
-            event.preventDefault();
-            await runOpenLibrarySearch();
-          });
         }
 
         var manualBookInput = document.getElementById("manual-book-id");
@@ -2278,58 +2087,6 @@ function renderAdminPage(
           return rounded + " " + units[i];
         }
 
-        function mediaStatusPseudo(status) {
-          if (status === "imported") return 100;
-          if (status === "downloaded") return 90;
-          if (status === "downloading") return 20;
-          if (status === "snatched") return 10;
-          return 0;
-        }
-
-        function updateLibraryProgressFromDownloads(items) {
-          var cells = Array.prototype.slice.call(document.querySelectorAll("td.book-progress"));
-          if (cells.length === 0) return;
-
-          var mediaProgressByBook = {};
-          if (Array.isArray(items)) {
-            items.forEach(function (download) {
-              var bookId = Number(download.book_id);
-              var media = String(download.media_type || "");
-              var progress = Number(download.fullPseudoProgress);
-              if (!Number.isFinite(bookId) || bookId <= 0) return;
-              if (media !== "audio" && media !== "ebook") return;
-              if (!Number.isFinite(progress)) return;
-              var key = String(bookId);
-              if (!mediaProgressByBook[key]) {
-                mediaProgressByBook[key] = {};
-              }
-              var current = mediaProgressByBook[key][media];
-              if (!Number.isFinite(current) || progress > current) {
-                mediaProgressByBook[key][media] = progress;
-              }
-            });
-          }
-
-          cells.forEach(function (cell) {
-            var bookId = Number(cell.getAttribute("data-book-id") || "");
-            if (!Number.isFinite(bookId) || bookId <= 0) return;
-            var key = String(bookId);
-            var audioStatus = String(cell.getAttribute("data-audio-status") || "wanted");
-            var ebookStatus = String(cell.getAttribute("data-ebook-status") || "wanted");
-            var audioProgress = mediaStatusPseudo(audioStatus);
-            var ebookProgress = mediaStatusPseudo(ebookStatus);
-            var bookMedia = mediaProgressByBook[key] || {};
-            if (Number.isFinite(bookMedia.audio)) {
-              audioProgress = Math.max(audioProgress, Number(bookMedia.audio));
-            }
-            if (Number.isFinite(bookMedia.ebook)) {
-              ebookProgress = Math.max(ebookProgress, Number(bookMedia.ebook));
-            }
-            var combined = Math.round((audioProgress + ebookProgress) / 2);
-            cell.textContent = String(combined) + "%";
-          });
-        }
-
         function downloadsCell(row, value) {
           var td = document.createElement("td");
           td.textContent = value;
@@ -2405,12 +2162,10 @@ function renderAdminPage(
             var payload = await rpc("downloads.list", {});
             var items = payload && Array.isArray(payload.downloads) ? payload.downloads : [];
             renderDownloads(items);
-            updateLibraryProgressFromDownloads(items);
             text("downloads-status", "Loaded " + items.length + " download(s).");
           } catch (err) {
             text("downloads-status", "Load failed: " + (err && err.message ? err.message : "request error"));
             renderDownloads([]);
-            updateLibraryProgressFromDownloads([]);
           }
         }
 
@@ -2517,262 +2272,6 @@ function renderAdminPage(
           });
         }
         loadJobs();
-
-        var libraryTableBody = document.getElementById("library-table-body");
-        var libraryFilesPanel = document.getElementById("library-files-panel");
-        var libraryFilesTitle = document.getElementById("library-files-title");
-        var libraryFilesStatus = document.getElementById("library-files-status");
-        var libraryFilesBody = document.getElementById("library-files-body");
-        var libraryFilesCloseBtn = document.getElementById("library-files-close-btn");
-        function ensureLibraryEmptyRow() {
-          if (!libraryTableBody) return;
-          if (libraryTableBody.children.length > 0) return;
-          var row = document.createElement("tr");
-          var cell = document.createElement("td");
-          cell.colSpan = 8;
-          cell.textContent = "No books yet.";
-          row.appendChild(cell);
-          libraryTableBody.appendChild(row);
-        }
-
-        function renderLibraryFiles(assets) {
-          if (!libraryFilesBody) return;
-          libraryFilesBody.innerHTML = "";
-          if (!Array.isArray(assets) || assets.length === 0) {
-            libraryFilesBody.innerHTML = '<tr><td colspan="5">No imported assets for this book.</td></tr>';
-            return;
-          }
-          var rowCount = 0;
-          assets.forEach(function (asset) {
-            var files = Array.isArray(asset.files) ? asset.files : [];
-            files.forEach(function (file) {
-              rowCount += 1;
-              var row = document.createElement("tr");
-              var assetCell = document.createElement("td");
-              assetCell.textContent = String(asset.id || "");
-              row.appendChild(assetCell);
-
-              var kindCell = document.createElement("td");
-              kindCell.textContent = String(asset.kind || "");
-              row.appendChild(kindCell);
-
-              var pathCell = document.createElement("td");
-              pathCell.className = "path-cell";
-              pathCell.textContent = String(file.path || "");
-              row.appendChild(pathCell);
-
-              var sizeCell = document.createElement("td");
-              sizeCell.textContent = formatBytes(Number(file.size));
-              row.appendChild(sizeCell);
-
-              var actionCell = document.createElement("td");
-              var link = document.createElement("a");
-              if (asset.kind === "ebook") {
-                link.href = withAuth("/ebook/" + String(asset.id));
-                link.textContent = "Download";
-              } else {
-                var ext = String(asset.stream_ext || "mp3");
-                link.href = withAuth("/stream/" + String(asset.id) + "." + ext);
-                link.textContent = "Stream";
-              }
-              actionCell.appendChild(link);
-              row.appendChild(actionCell);
-
-              libraryFilesBody.appendChild(row);
-            });
-          });
-          if (rowCount === 0) {
-            libraryFilesBody.innerHTML = '<tr><td colspan="5">No imported files for this book.</td></tr>';
-          }
-        }
-
-        async function loadLibraryFiles(bookId, bookTitle) {
-          if (!libraryFilesPanel) return;
-          libraryFilesPanel.style.display = "block";
-          if (libraryFilesTitle) {
-            libraryFilesTitle.textContent = 'Imported Files - "' + bookTitle + '"';
-          }
-          text("library-files-status", "Loading...");
-          try {
-            var response = await api("/assets?bookId=" + encodeURIComponent(String(bookId)));
-            if (!response.ok) {
-              throw new Error("HTTP " + response.status);
-            }
-            var payload = await response.json();
-            var assets = payload && Array.isArray(payload.assets) ? payload.assets : [];
-            renderLibraryFiles(assets);
-            text("library-files-status", "Loaded " + assets.length + " asset(s).");
-          } catch (err) {
-            renderLibraryFiles([]);
-            text("library-files-status", "Load failed: " + (err && err.message ? err.message : "request error"));
-          }
-        }
-
-        if (libraryFilesCloseBtn && libraryFilesPanel) {
-          libraryFilesCloseBtn.addEventListener("click", function () {
-            libraryFilesPanel.style.display = "none";
-          });
-        }
-
-        var viewFilesButtons = Array.prototype.slice.call(document.querySelectorAll(".view-files-btn"));
-        viewFilesButtons.forEach(function (button) {
-          button.addEventListener("click", async function () {
-            var rawId = button.getAttribute("data-book-id") || "";
-            var bookId = parseInt(rawId, 10);
-            if (!Number.isFinite(bookId) || bookId <= 0) {
-              text("library-status", "View files failed: invalid book id.");
-              return;
-            }
-            var bookTitle = button.getAttribute("data-book-title") || ("Book " + String(bookId));
-            await loadLibraryFiles(bookId, bookTitle);
-          });
-        });
-
-        var reportImportIssueButtons = Array.prototype.slice.call(document.querySelectorAll(".report-import-issue-btn"));
-        function pickReleaseForImportIssue(details, mediaType) {
-          var releases = details && Array.isArray(details.releases) ? details.releases : [];
-          var assets = details && Array.isArray(details.assets) ? details.assets : [];
-          var mediaReleases = releases.filter(function (release) {
-            return String(release.media_type || "") === mediaType;
-          });
-          if (mediaReleases.length === 0) return null;
-
-          var mediaAsset = assets.find(function (asset) {
-            var kind = String(asset.kind || "");
-            if (mediaType === "ebook") return kind === "ebook";
-            return kind !== "ebook";
-          });
-          if (mediaAsset && Number.isFinite(Number(mediaAsset.source_release_id))) {
-            var sourceReleaseId = Number(mediaAsset.source_release_id);
-            var fromAsset = mediaReleases.find(function (release) {
-              return Number(release.id) === sourceReleaseId;
-            });
-            if (fromAsset) return Number(fromAsset.id);
-          }
-
-          var imported = mediaReleases.find(function (release) {
-            return String(release.status || "") === "imported";
-          });
-          if (imported) return Number(imported.id);
-          return Number(mediaReleases[0].id);
-        }
-        reportImportIssueButtons.forEach(function (button) {
-          button.addEventListener("click", async function () {
-            var rawId = button.getAttribute("data-book-id") || "";
-            var bookId = parseInt(rawId, 10);
-            if (!Number.isFinite(bookId) || bookId <= 0) {
-              text("library-status", "Wrong file report failed: invalid book id.");
-              return;
-            }
-            var bookTitle = button.getAttribute("data-book-title") || ("Book " + String(bookId));
-            var audioStatus = String(button.getAttribute("data-audio-status") || "wanted");
-            var ebookStatus = String(button.getAttribute("data-ebook-status") || "wanted");
-            var suggested = audioStatus === "imported" && ebookStatus !== "imported" ? "audio" : ebookStatus === "imported" && audioStatus !== "imported" ? "ebook" : "audio";
-            var response = window.prompt('Which media is wrong? Enter "audio" or "ebook".', suggested);
-            if (!response) return;
-            var mediaType = response.trim().toLowerCase();
-            if (mediaType !== "audio" && mediaType !== "ebook") {
-              text("library-status", "Wrong file report failed: media must be audio or ebook.");
-              return;
-            }
-            button.disabled = true;
-            text("library-status", 'Reporting wrong ' + mediaType + ' file for "' + bookTitle + '"...');
-            try {
-              var details = await rpc("library.get", { bookId: bookId });
-              var releaseId = pickReleaseForImportIssue(details, mediaType);
-              if (!Number.isFinite(releaseId) || releaseId <= 0) {
-                throw new Error("No matching release found for selected media");
-              }
-              var result = await rpc("library.reportImportIssue", {
-                bookId: bookId,
-                mediaType: mediaType,
-                releaseId: releaseId,
-              });
-              if (result && result.action === "agent_imported") {
-                text("library-status", 'Agent imported replacement ' + mediaType + ' file for "' + bookTitle + '".');
-              } else if (result && result.action === "wrong_file_review_queued") {
-                text("library-status", 'Queued wrong-file review for "' + bookTitle + '" (job ' + String(result.jobId) + ").");
-              } else {
-                text("library-status", 'Queued agent reacquire for "' + bookTitle + '" (job ' + String(result.jobId) + ").");
-              }
-              if (typeof loadJobs === "function") {
-                loadJobs();
-              }
-              if (typeof loadDownloads === "function") {
-                loadDownloads();
-              }
-            } catch (err) {
-              text("library-status", "Wrong file report failed: " + (err && err.message ? err.message : "request error"));
-            } finally {
-              button.disabled = false;
-            }
-          });
-        });
-
-        var agentAcquireButtons = Array.prototype.slice.call(document.querySelectorAll(".agent-acquire-btn"));
-        agentAcquireButtons.forEach(function (button) {
-          button.addEventListener("click", async function () {
-            var rawId = button.getAttribute("data-book-id") || "";
-            var bookId = parseInt(rawId, 10);
-            if (!Number.isFinite(bookId) || bookId <= 0) {
-              text("library-status", "Agent acquire failed: invalid book id.");
-              return;
-            }
-            var bookTitle = button.getAttribute("data-book-title") || ("Book " + String(bookId));
-            button.disabled = true;
-            text("library-status", 'Queueing agent acquire for "' + bookTitle + '"...');
-            try {
-              var queued = await rpc("library.acquire", {
-                bookId: bookId,
-                media: ["audio", "ebook"],
-                forceAgent: true,
-                priorFailure: true,
-              });
-              text("library-status", 'Queued agent acquire for "' + bookTitle + '" (job ' + String(queued.jobId) + ").");
-              if (typeof loadJobs === "function") {
-                loadJobs();
-              }
-            } catch (err) {
-              text("library-status", "Agent acquire failed: " + (err && err.message ? err.message : "request error"));
-            } finally {
-              button.disabled = false;
-            }
-          });
-        });
-
-        var deleteButtons = Array.prototype.slice.call(document.querySelectorAll(".delete-book-btn"));
-        deleteButtons.forEach(function (button) {
-          button.addEventListener("click", async function () {
-            var rawId = button.getAttribute("data-book-id") || "";
-            var bookId = parseInt(rawId, 10);
-            if (!Number.isFinite(bookId) || bookId <= 0) {
-              text("library-status", "Delete failed: invalid book id.");
-              return;
-            }
-            var bookTitle = button.getAttribute("data-book-title") || ("Book " + String(bookId));
-            if (!window.confirm('Delete "' + bookTitle + '" and imported files?')) {
-              return;
-            }
-            button.disabled = true;
-            text("library-status", "Deleting...");
-            try {
-              var result = await rpc("library.delete", { bookId: bookId });
-              var row = button.closest("tr");
-              if (row && row.parentNode) {
-                row.parentNode.removeChild(row);
-              }
-              ensureLibraryEmptyRow();
-              text(
-                "library-status",
-                'Deleted "' + bookTitle + '" (book ' + String(result.deletedBookId) + ', files ' + String(result.deletedAssetFileCount || 0) + ")."
-              );
-            } catch (err) {
-              text("library-status", "Delete failed: " + (err && err.message ? err.message : "request error"));
-            } finally {
-              button.disabled = false;
-            }
-          });
-        });
       })();
     </script>`;
 

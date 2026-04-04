@@ -66,7 +66,6 @@ describe("podible http", () => {
     const adminBody = await admin.text();
     expect(adminBody.includes("site-nav")).toBe(true);
     expect(adminBody.includes("Admin")).toBe(true);
-    expect(adminBody.includes("Open Library Search")).toBe(true);
     expect(adminBody.includes("Manual Search + Snatch")).toBe(true);
     expect(adminBody.includes("Users")).toBe(true);
     expect(adminBody.includes("No users yet.")).toBe(true);
@@ -75,6 +74,9 @@ describe("podible http", () => {
     expect(adminBody.includes("Refresh Library")).toBe(true);
     expect(adminBody.includes("Rotate API Key")).toBe(true);
     expect(adminBody.includes("wipe-db-btn")).toBe(true);
+    expect(adminBody.includes("Feed Preview")).toBe(false);
+    expect(adminBody.includes("Recent Library")).toBe(false);
+    expect(adminBody.includes("Open Library Search")).toBe(false);
 
     db.close();
   });
