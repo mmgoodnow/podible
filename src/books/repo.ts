@@ -6,7 +6,9 @@ import { deriveBookStatus, deriveMediaStatus, MediaStatus, ReleaseStatus } from 
 import { defaultSettings, parseSettings } from "./settings";
 import type {
   AppSettings,
+  AppLoginAttemptRow,
   AuthProvider,
+  AuthCodeRow,
   AssetFileRow,
   AssetTranscriptRow,
   AssetTranscriptStatus,
@@ -22,6 +24,7 @@ import type {
   MediaType,
   ReleaseRow,
   SessionWithUserRow,
+  SessionKind,
   UserRow,
   TorrentCacheRow,
   PlexLoginAttemptRow,
@@ -201,16 +204,16 @@ export class BooksRepo {
     return this.db.query("SELECT * FROM users ORDER BY username COLLATE NOCASE ASC, id ASC").all() as UserRow[];
   }
 
-  createSession(userId: number, tokenHash: string, expiresAt: string): SessionWithUserRow {
+  createSession(userId: number, tokenHash: string, expiresAt: string, kind: SessionKind = "browser"): SessionWithUserRow {
     assertPositiveInt(userId);
     const now = nowIso();
     const row = this.db
       .query(
-        `INSERT INTO sessions (user_id, token_hash, expires_at, created_at, last_seen_at)
-         VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO sessions (user_id, kind, token_hash, expires_at, created_at, last_seen_at)
+         VALUES (?, ?, ?, ?, ?, ?)
          RETURNING id`
       )
-      .get(userId, tokenHash, expiresAt, now, now) as { id: number } | null;
+      .get(userId, kind, tokenHash, expiresAt, now, now) as { id: number } | null;
     if (!row) {
       throw new Error("Failed to create session");
     }
@@ -226,7 +229,7 @@ export class BooksRepo {
       this.db
         .query(
           `SELECT
-             s.id, s.user_id, s.token_hash, s.expires_at, s.created_at, s.last_seen_at,
+             s.id, s.user_id, s.kind, s.token_hash, s.expires_at, s.created_at, s.last_seen_at,
              u.provider, u.provider_user_id, u.username, u.display_name, u.thumb_url, u.is_admin
            FROM sessions s
            JOIN users u ON u.id = s.user_id
@@ -289,6 +292,65 @@ export class BooksRepo {
 
   deleteExpiredPlexLoginAttempts(beforeIso: string): number {
     return this.db.query("DELETE FROM plex_login_attempts WHERE created_at < ?").run(beforeIso).changes;
+  }
+
+  createAppLoginAttempt(input: { id: string; redirectUri: string; state: string; expiresAt: string }): AppLoginAttemptRow {
+    const now = nowIso();
+    return this.db
+      .query(
+        `INSERT INTO app_login_attempts (id, redirect_uri, state, expires_at, created_at)
+         VALUES (?, ?, ?, ?, ?)
+         RETURNING *`
+      )
+      .get(input.id, input.redirectUri, input.state, input.expiresAt, now) as AppLoginAttemptRow;
+  }
+
+  getAppLoginAttempt(attemptId: string): AppLoginAttemptRow | null {
+    return (this.db.query("SELECT * FROM app_login_attempts WHERE id = ?").get(attemptId) as AppLoginAttemptRow | null) ?? null;
+  }
+
+  deleteAppLoginAttempt(attemptId: string): boolean {
+    return this.db.query("DELETE FROM app_login_attempts WHERE id = ?").run(attemptId).changes > 0;
+  }
+
+  deleteExpiredAppLoginAttempts(beforeIso: string): number {
+    return this.db.query("DELETE FROM app_login_attempts WHERE expires_at < ?").run(beforeIso).changes;
+  }
+
+  createAuthCode(input: { codeHash: string; userId: number; attemptId: string; expiresAt: string }): AuthCodeRow {
+    const now = nowIso();
+    return this.db
+      .query(
+        `INSERT INTO auth_codes (code_hash, user_id, attempt_id, expires_at, used_at, created_at)
+         VALUES (?, ?, ?, ?, NULL, ?)
+         RETURNING *`
+      )
+      .get(input.codeHash, input.userId, input.attemptId, input.expiresAt, now) as AuthCodeRow;
+  }
+
+  consumeAuthCode(codeHash: string): (AuthCodeRow & { user: UserRow }) | null {
+    const now = nowIso();
+    const row = this.db
+      .query(
+        `UPDATE auth_codes
+         SET used_at = ?
+         WHERE code_hash = ?
+           AND used_at IS NULL
+           AND expires_at > ?
+         RETURNING code_hash, user_id, attempt_id, expires_at, used_at, created_at`
+      )
+      .get(now, codeHash, now) as AuthCodeRow | null;
+    if (!row) return null;
+    const user = this.getUserById(row.user_id);
+    if (!user) return null;
+    return {
+      ...row,
+      user,
+    };
+  }
+
+  deleteExpiredAuthCodes(beforeIso: string): number {
+    return this.db.query("DELETE FROM auth_codes WHERE expires_at < ? OR used_at IS NOT NULL").run(beforeIso).changes;
   }
 
   getTorrentCache(key: string): TorrentCacheRow | null {

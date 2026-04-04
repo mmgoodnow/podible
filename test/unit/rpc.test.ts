@@ -1,24 +1,91 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import JSZip from "jszip";
 
 import { runMigrations } from "../../src/books/db";
+import { hashSessionToken } from "../../src/books/auth";
 import { handleRpcMethod, handleRpcRequest } from "../../src/books/rpc";
 import { BooksRepo } from "../../src/books/repo";
 import { defaultSettings } from "../../src/books/settings";
 
-async function callRpc(repo: BooksRepo, body: string | object) {
+type RpcCallerAuth = "none" | "user" | "admin";
+
+function createRpcSession(repo: BooksRepo, role: Exclude<RpcCallerAuth, "none">) {
+  const user = repo.upsertUser({
+    provider: "local",
+    providerUserId: role,
+    username: role,
+    displayName: role,
+    isAdmin: role === "admin",
+  });
+  return repo.createSession(
+    user.id,
+    hashSessionToken(`rpc-${role}-token-${randomBytes(8).toString("hex")}`),
+    new Date(Date.now() + 60_000).toISOString()
+  );
+}
+
+function makeRpcContext(repo: BooksRepo, request: Request, auth: RpcCallerAuth = "admin") {
+  return {
+    repo,
+    startTime: Date.now() - 1000,
+    request,
+    session: auth === "none" ? null : createRpcSession(repo, auth),
+  };
+}
+
+async function callRpc(repo: BooksRepo, body: string | object, auth: RpcCallerAuth = "admin") {
   const request = new Request("http://localhost/rpc", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
-  const response = await handleRpcRequest(request, { repo, startTime: Date.now() - 1000 });
+  const response = await handleRpcRequest(request, makeRpcContext(repo, request, auth));
   expect(response.status).toBe(200);
   return (await response.json()) as any;
+}
+
+async function createMinimalEpub(filePath: string): Promise<void> {
+  const zip = new JSZip();
+  zip.file("mimetype", "application/epub+zip", { compression: "STORE" });
+  zip.file(
+    "META-INF/container.xml",
+    `<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`
+  );
+  zip.file(
+    "OEBPS/content.opf",
+    `<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="BookId">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Test Book</dc:title>
+    <dc:creator>Test Author</dc:creator>
+    <dc:language>en</dc:language>
+    <dc:identifier id="BookId">urn:uuid:test-book</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>`
+  );
+  zip.file(
+    "OEBPS/chapter1.xhtml",
+    `<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>One two three four five.</p></body></html>`
+  );
+  await writeFile(filePath, await zip.generateAsync({ type: "uint8array" }));
 }
 
 describe("json-rpc handler", () => {
@@ -500,7 +567,7 @@ describe("json-rpc handler", () => {
       await writeFile(importedPath, Buffer.from("wrong import link target"));
       repo.updateSettings(
         defaultSettings({
-          auth: { mode: "local", key: "test" },
+          auth: { mode: "local" },
           libraryRoot: libraryPath,
           rtorrent: {
             transport: "http-xmlrpc",
@@ -620,7 +687,7 @@ describe("json-rpc handler", () => {
       const repo = new BooksRepo(db);
       repo.updateSettings(
         defaultSettings({
-          auth: { mode: "local", key: "test" },
+          auth: { mode: "local" },
           rtorrent: {
             transport: "http-xmlrpc",
             url: "http://mock.local/RPC2",
@@ -921,7 +988,7 @@ describe("json-rpc handler", () => {
       const repo = new BooksRepo(db);
       repo.updateSettings(
         defaultSettings({
-          auth: { mode: "local", key: "test" },
+          auth: { mode: "local" },
           rtorrent: {
             transport: "http-xmlrpc",
             url: "http://mock.local/RPC2",
@@ -998,7 +1065,7 @@ describe("json-rpc handler", () => {
       const repo = new BooksRepo(db);
       repo.updateSettings(
         defaultSettings({
-          auth: { mode: "local", key: "test" },
+          auth: { mode: "local" },
           rtorrent: {
             transport: "http-xmlrpc",
             url: "http://mock.local/RPC2",
@@ -1089,11 +1156,11 @@ describe("json-rpc handler", () => {
     await mkdir(sourceDir, { recursive: true });
     await mkdir(libraryRoot, { recursive: true });
     const sourceFile = path.join(sourceDir, "twilight.epub");
-    await writeFile(sourceFile, Buffer.from("epub-bytes"));
+    await createMinimalEpub(sourceFile);
 
     repo.updateSettings(
       defaultSettings({
-        auth: { mode: "local", key: "test" },
+        auth: { mode: "local" },
         libraryRoot,
       })
     );
@@ -1129,7 +1196,7 @@ describe("json-rpc handler", () => {
     const repo = new BooksRepo(db);
     repo.updateSettings(
       defaultSettings({
-        auth: { mode: "local", key: "test" },
+        auth: { mode: "local" },
         torznab: [],
       })
     );
@@ -1171,7 +1238,7 @@ describe("json-rpc handler", () => {
 
     repo.updateSettings(
       defaultSettings({
-        auth: { mode: "local", key: "test" },
+        auth: { mode: "local" },
         libraryRoot,
       })
     );
@@ -1245,11 +1312,108 @@ describe("json-rpc handler", () => {
     runMigrations(db);
     const repo = new BooksRepo(db);
     repo.ensureSettings();
-
-    const response = await handleRpcMethod("settings.update", {}, { repo, startTime: Date.now() - 1000 }, { readOnly: true });
+    const request = new Request("http://localhost/rpc/settings/update");
+    const response = await handleRpcMethod("settings.update", {}, makeRpcContext(repo, request), { readOnly: true });
     expect(response.status).toBe(200);
     const payload = (await response.json()) as any;
     expect(payload.error.code).toBe(-32601);
+    db.close();
+  });
+
+  test("enforces public, user, and admin rpc auth levels", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    repo.ensureSettings();
+
+    const publicRequest = new Request("http://localhost/rpc/help");
+    const publicResponse = await handleRpcMethod("help", {}, makeRpcContext(repo, publicRequest, "none"));
+    const publicPayload = (await publicResponse.json()) as any;
+    expect(publicPayload.result.name).toBe("podible-rpc");
+
+    const userRequest = new Request("http://localhost/rpc/library/list");
+    const unauthenticatedUserResponse = await handleRpcMethod("library.list", {}, makeRpcContext(repo, userRequest, "none"));
+    const unauthenticatedUserPayload = (await unauthenticatedUserResponse.json()) as any;
+    expect(unauthenticatedUserPayload.error.code).toBe(-32001);
+
+    const adminRequest = new Request("http://localhost/rpc/settings/get");
+    const nonAdminResponse = await handleRpcMethod("settings.get", {}, makeRpcContext(repo, adminRequest, "user"));
+    const nonAdminPayload = (await nonAdminResponse.json()) as any;
+    expect(nonAdminPayload.error.code).toBe(-32003);
+
+    const adminResponse = await handleRpcMethod("settings.get", {}, makeRpcContext(repo, adminRequest, "admin"));
+    const adminPayload = (await adminResponse.json()) as any;
+    expect(adminPayload.result.auth.mode).toBe("plex");
+
+    db.close();
+  });
+
+  test("auth.beginAppLogin validates redirect URIs and auth.exchange returns an app session", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const settings = repo.ensureSettings();
+    repo.updateSettings(
+      defaultSettings({
+        ...settings,
+        auth: {
+          ...settings.auth,
+          appRedirectURIs: ["kindling://auth/podible"],
+        },
+      })
+    );
+
+    const beginRequest = new Request("http://localhost/rpc");
+    const invalidBegin = await handleRpcMethod(
+      "auth.beginAppLogin",
+      { redirectUri: "kindling://evil/callback" },
+      makeRpcContext(repo, beginRequest, "none")
+    );
+    const invalidPayload = (await invalidBegin.json()) as any;
+    expect(invalidPayload.error.code).toBe(-32602);
+
+    const begin = await handleRpcMethod(
+      "auth.beginAppLogin",
+      { redirectUri: "kindling://auth/podible" },
+      makeRpcContext(repo, beginRequest, "none")
+    );
+    const beginPayload = (await begin.json()) as any;
+    expect(beginPayload.result.authorizeUrl).toContain("/auth/app/");
+    expect(beginPayload.result.state).toBeTruthy();
+
+    const user = repo.upsertUser({
+      provider: "plex",
+      providerUserId: "plex-user-1",
+      username: "reader",
+      displayName: "Reader",
+      isAdmin: false,
+    });
+    repo.createAuthCode({
+      codeHash: hashSessionToken("one-time-code"),
+      userId: user.id,
+      attemptId: beginPayload.result.attemptId,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+
+    const exchangeRequest = new Request("http://localhost/rpc");
+    const exchange = await handleRpcMethod(
+      "auth.exchange",
+      { code: "one-time-code" },
+      makeRpcContext(repo, exchangeRequest, "none")
+    );
+    const exchangePayload = (await exchange.json()) as any;
+    expect(typeof exchangePayload.result.accessToken).toBe("string");
+    expect(exchangePayload.result.user.username).toBe("reader");
+
+    const appRequest = new Request("http://localhost/rpc", {
+      headers: { Authorization: `Bearer ${exchangePayload.result.accessToken}` },
+    });
+    const appSession = repo.getSessionByTokenHash(hashSessionToken(exchangePayload.result.accessToken));
+    const me = await handleRpcMethod("auth.me", {}, { repo, startTime: Date.now() - 1000, request: appRequest, session: appSession });
+    const mePayload = (await me.json()) as any;
+    expect(mePayload.result.session.kind).toBe("app");
+    expect(mePayload.result.user.username).toBe("reader");
+
     db.close();
   });
 });

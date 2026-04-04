@@ -10,6 +10,11 @@ await ensureConfigDir();
 const db = openDatabase(booksDbPath);
 const repo = new BooksRepo(db);
 repo.ensureSettings();
+const current = repo.getSettings();
+
+if (process.env.NODE_ENV === "production" && current.auth.mode === "local") {
+  throw new Error("auth.mode=local is not allowed in production");
+}
 
 void runWorker({
   repo,
@@ -24,17 +29,11 @@ const server = Bun.serve({
 });
 
 const localBase = `http://localhost${port === 80 ? "" : `:${port}`}`;
-const current = repo.getSettings();
 
 console.log(`Podible backend listening on ${localBase}`);
 console.log(`Library root: ${current.libraryRoot}`);
 console.log(`RPC endpoint: ${localBase}/rpc`);
 console.log(`Home: ${localBase}/`);
-if (current.auth.mode === "apikey") {
-  console.log(`API key: ${current.auth.key}`);
-  const authorizedHome = `${localBase}/?api_key=${encodeURIComponent(current.auth.key)}`;
-  console.log(`Authorized home: ${authorizedHome}`);
-}
 
 process.on("SIGINT", () => {
   server.stop();

@@ -1,100 +1,113 @@
 import { describe, expect, test } from "bun:test";
 
-import { authorizeRequest, hashSessionToken, SESSION_COOKIE_NAME } from "../../src/books/auth";
-import { defaultSettings } from "../../src/books/settings";
+import {
+  buildSessionCookie,
+  clearSessionCookie,
+  hashSessionToken,
+  resolveBearerSessionFromRequest,
+  resolveBrowserSessionFromRequest,
+  resolveSessionFromRequest,
+  SESSION_COOKIE_NAME,
+} from "../../src/books/auth";
+import type { SessionWithUserRow } from "../../src/books/types";
+
+function makeSession(token: string, overrides: Partial<SessionWithUserRow> = {}): SessionWithUserRow {
+  const tokenHash = hashSessionToken(token);
+  return {
+    id: 1,
+    user_id: 1,
+    kind: "browser" as const,
+    token_hash: tokenHash,
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+    created_at: new Date().toISOString(),
+    last_seen_at: new Date().toISOString(),
+    provider: "plex" as const,
+    provider_user_id: "plex-1",
+    username: "user",
+    display_name: "User",
+    thumb_url: null,
+    is_admin: 1,
+    ...overrides,
+  };
+}
 
 describe("auth", () => {
-  test("allows localhost bypass outside production", () => {
-    const settings = defaultSettings({ auth: { mode: "apikey", key: "abc123" } });
-    const previousNodeEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = "development";
-
-    try {
-      const localReq = new Request("http://localhost/health");
-      const remoteReq = new Request("http://example.com/health");
-
-      expect(authorizeRequest(localReq, settings)).toBe(true);
-      expect(authorizeRequest(remoteReq, settings)).toBe(false);
-    } finally {
-      process.env.NODE_ENV = previousNodeEnv;
-    }
-  });
-
-  test("does not allow localhost bypass in production without credentials", () => {
-    const settings = defaultSettings({ auth: { mode: "apikey", key: "abc123" } });
-    const previousNodeEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = "production";
-
-    try {
-      const localReq = new Request("http://localhost/health");
-      expect(authorizeRequest(localReq, settings)).toBe(false);
-    } finally {
-      process.env.NODE_ENV = previousNodeEnv;
-    }
-  });
-
-  test("accepts query, bearer, and x-api-key tokens", () => {
-    const settings = defaultSettings({ auth: { mode: "apikey", key: "abc123" } });
-
-    const queryReq = new Request("http://localhost/health?api_key=abc123");
-    const bearerReq = new Request("http://localhost/health", {
-      headers: { Authorization: "Bearer abc123" },
-    });
-    const headerReq = new Request("http://localhost/health", {
-      headers: { "X-API-Key": "abc123" },
+  test("resolves a browser session from the session cookie", () => {
+    const token = "session-token";
+    const request = new Request("http://example.com/library", {
+      headers: { Cookie: `${SESSION_COOKIE_NAME}=${token}` },
     });
 
-    expect(authorizeRequest(queryReq, settings)).toBe(true);
-    expect(authorizeRequest(bearerReq, settings)).toBe(true);
-    expect(authorizeRequest(headerReq, settings)).toBe(true);
+    const session = resolveBrowserSessionFromRequest(request, (tokenHash) =>
+      tokenHash === hashSessionToken(token) ? makeSession(token) : null
+    );
+
+    expect(session?.user_id).toBe(1);
+    expect(session?.username).toBe("user");
   });
 
-  test("allows localhost bypass in local mode", () => {
-    const settings = defaultSettings({ auth: { mode: "local", key: "ignored" } });
-    const previousNodeEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = "production";
-    const localReq = new Request("http://localhost/health");
-    const remoteReq = new Request("http://example.com/health");
+  test("resolves a bearer session from the authorization header", () => {
+    const token = "app-token";
+    const request = new Request("http://example.com/rpc", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
 
-    try {
-      expect(authorizeRequest(localReq, settings)).toBe(true);
-      expect(authorizeRequest(remoteReq, settings)).toBe(false);
-    } finally {
-      process.env.NODE_ENV = previousNodeEnv;
-    }
+    const session = resolveBearerSessionFromRequest(request, (tokenHash) =>
+      tokenHash === hashSessionToken(token) ? makeSession(token, { kind: "app" }) : null
+    );
+
+    expect(session?.kind).toBe("app");
+    expect(session?.username).toBe("user");
   });
 
-  test("accepts a valid session cookie", () => {
-    const settings = defaultSettings({ auth: { mode: "apikey", key: "abc123" } });
-    const previousNodeEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = "production";
-    try {
-      const token = "session-token";
-      const req = new Request("http://example.com/library", {
-        headers: { Cookie: `${SESSION_COOKIE_NAME}=${token}` },
-      });
-      expect(
-        authorizeRequest(req, settings, (tokenHash) =>
-          tokenHash === hashSessionToken(token)
-            ? ({
-                id: 1,
-                user_id: 1,
-                token_hash: tokenHash,
-                expires_at: new Date(Date.now() + 60_000).toISOString(),
-                created_at: new Date().toISOString(),
-                last_seen_at: new Date().toISOString(),
-                provider: "plex",
-                provider_user_id: "u1",
-                username: "user",
-                display_name: "User",
-                thumb_url: null,
-                is_admin: 1,
-              } as const)
-            : null
-        )
-      ).toBe(true);
-    } finally {
-      process.env.NODE_ENV = previousNodeEnv;
-    }
+  test("prefers bearer auth over the browser cookie when both are present", () => {
+    const cookieToken = "browser-token";
+    const bearerToken = "bearer-token";
+    const request = new Request("http://example.com/rpc", {
+      headers: {
+        Cookie: `${SESSION_COOKIE_NAME}=${cookieToken}`,
+        Authorization: `Bearer ${bearerToken}`,
+      },
+    });
+
+    const session = resolveSessionFromRequest(request, (tokenHash) => {
+      if (tokenHash === hashSessionToken(bearerToken)) {
+        return makeSession(bearerToken, { id: 2, kind: "app" });
+      }
+      if (tokenHash === hashSessionToken(cookieToken)) {
+        return makeSession(cookieToken, { id: 3, kind: "browser" });
+      }
+      return null;
+    });
+
+    expect(session?.id).toBe(2);
+    expect(session?.kind).toBe("app");
+  });
+
+  test("ignores expired sessions", () => {
+    const token = "expired-token";
+    const request = new Request("http://example.com/library", {
+      headers: { Cookie: `${SESSION_COOKIE_NAME}=${token}` },
+    });
+
+    const session = resolveBrowserSessionFromRequest(request, (tokenHash) =>
+      tokenHash === hashSessionToken(token)
+        ? makeSession(token, { expires_at: new Date(Date.now() - 60_000).toISOString() })
+        : null
+    );
+
+    expect(session).toBeNull();
+  });
+
+  test("marks session cookies secure for forwarded https requests", () => {
+    const request = new Request("http://podible.internal/login", {
+      headers: { "X-Forwarded-Proto": "https" },
+    });
+
+    const cookie = buildSessionCookie("token", request);
+    expect(cookie).toContain("Secure");
+
+    const cleared = clearSessionCookie(request);
+    expect(cleared).toContain("Secure");
   });
 });

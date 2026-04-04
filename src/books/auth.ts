@@ -1,13 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import type { AppSettings, SessionWithUserRow } from "./types";
+import type { SessionWithUserRow } from "./types";
 
 export const SESSION_COOKIE_NAME = "podible_session";
 const SESSION_DURATION_MS = 1000 * 60 * 60 * 24 * 30;
-
-function isLocalhost(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-}
 
 function parseCookies(request: Request): Map<string, string> {
   const header = request.headers.get("cookie") ?? "";
@@ -29,14 +25,24 @@ export function createSessionToken(): string {
   return randomBytes(32).toString("base64url");
 }
 
-export function resolveSessionFromRequest(
-  request: Request,
+function isSecureRequest(request: Request): boolean {
+  const url = new URL(request.url);
+  if (url.protocol === "https:") return true;
+  const forwardedProto = request.headers.get("x-forwarded-proto");
+  if (!forwardedProto) return false;
+  return forwardedProto
+    .split(",")
+    .some((value) => value.trim().toLowerCase() === "https");
+}
+
+function resolveSessionFromToken(
+  token: string | null | undefined,
   resolveSession?: (tokenHash: string) => SessionWithUserRow | null
 ): SessionWithUserRow | null {
   if (!resolveSession) return null;
-  const sessionToken = parseCookies(request).get(SESSION_COOKIE_NAME)?.trim();
-  if (!sessionToken) return null;
-  const session = resolveSession(hashSessionToken(sessionToken));
+  const trimmed = token?.trim();
+  if (!trimmed) return null;
+  const session = resolveSession(hashSessionToken(trimmed));
   if (!session) return null;
   if (new Date(session.expires_at).getTime() <= Date.now()) {
     return null;
@@ -44,9 +50,31 @@ export function resolveSessionFromRequest(
   return session;
 }
 
+export function resolveBrowserSessionFromRequest(
+  request: Request,
+  resolveSession?: (tokenHash: string) => SessionWithUserRow | null
+): SessionWithUserRow | null {
+  return resolveSessionFromToken(parseCookies(request).get(SESSION_COOKIE_NAME), resolveSession);
+}
+
+export function resolveBearerSessionFromRequest(
+  request: Request,
+  resolveSession?: (tokenHash: string) => SessionWithUserRow | null
+): SessionWithUserRow | null {
+  const authorization = request.headers.get("authorization");
+  if (!authorization?.toLowerCase().startsWith("bearer ")) return null;
+  return resolveSessionFromToken(authorization.slice("bearer ".length), resolveSession);
+}
+
+export function resolveSessionFromRequest(
+  request: Request,
+  resolveSession?: (tokenHash: string) => SessionWithUserRow | null
+): SessionWithUserRow | null {
+  return resolveBearerSessionFromRequest(request, resolveSession) ?? resolveBrowserSessionFromRequest(request, resolveSession);
+}
+
 export function buildSessionCookie(token: string, request: Request): string {
-  const url = new URL(request.url);
-  const secure = url.protocol === "https:";
+  const secure = isSecureRequest(request);
   const parts = [
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
     "Path=/",
@@ -61,8 +89,7 @@ export function buildSessionCookie(token: string, request: Request): string {
 }
 
 export function clearSessionCookie(request: Request): string {
-  const url = new URL(request.url);
-  const secure = url.protocol === "https:";
+  const secure = isSecureRequest(request);
   const parts = [`${SESSION_COOKIE_NAME}=`, "Path=/", "HttpOnly", "SameSite=Lax", "Max-Age=0", "Expires=Thu, 01 Jan 1970 00:00:00 GMT"];
   if (secure) {
     parts.push("Secure");
@@ -72,43 +99,4 @@ export function clearSessionCookie(request: Request): string {
 
 export function sessionExpiresAt(): string {
   return new Date(Date.now() + SESSION_DURATION_MS).toISOString();
-}
-
-export function isApiKeyAuthorized(request: Request, settings: AppSettings): boolean {
-  const url = new URL(request.url);
-  const queryApiKey = url.searchParams.get("api_key")?.trim();
-  if (queryApiKey && queryApiKey === settings.auth.key) {
-    return true;
-  }
-
-  const bearer = request.headers.get("authorization");
-  if (bearer?.toLowerCase().startsWith("bearer ")) {
-    const token = bearer.slice("bearer ".length).trim();
-    if (token && token === settings.auth.key) return true;
-  }
-
-  const apiKey = request.headers.get("x-api-key")?.trim();
-  if (apiKey && apiKey === settings.auth.key) return true;
-
-  return false;
-}
-
-export function authorizeRequest(
-  request: Request,
-  settings: AppSettings,
-  resolveSession?: (tokenHash: string) => SessionWithUserRow | null
-): boolean {
-  const url = new URL(request.url);
-  if (process.env.NODE_ENV !== "production" && isLocalhost(url.hostname)) {
-    return true;
-  }
-  if (settings.auth.mode === "local" && isLocalhost(url.hostname)) {
-    return true;
-  }
-
-  if (isApiKeyAuthorized(request, settings)) return true;
-
-  if (resolveSessionFromRequest(request, resolveSession)) return true;
-
-  return false;
 }

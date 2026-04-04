@@ -15,6 +15,7 @@ const USERS_AND_SESSIONS_MIGRATION_ID = 9;
 const LOCAL_USERS_PROVIDER_MIGRATION_ID = 10;
 const PLEX_LOGIN_ATTEMPTS_MIGRATION_ID = 11;
 const BOOK_WORD_COUNT_MIGRATION_ID = 12;
+const APP_AUTH_MIGRATION_ID = 13;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -140,6 +141,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('browser', 'app')) DEFAULT 'browser',
   token_hash TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   created_at TEXT NOT NULL,
@@ -194,6 +196,29 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_sessions_token_hash ON sessions(token_hash)
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_plex_login_attempts_created_at ON plex_login_attempts(created_at);
+
+CREATE TABLE IF NOT EXISTS app_login_attempts (
+  id TEXT PRIMARY KEY,
+  redirect_uri TEXT NOT NULL,
+  state TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS auth_codes (
+  code_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  attempt_id TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (attempt_id) REFERENCES app_login_attempts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_login_attempts_expires_at ON app_login_attempts(expires_at);
+CREATE INDEX IF NOT EXISTS idx_auth_codes_attempt_id ON auth_codes(attempt_id);
+CREATE INDEX IF NOT EXISTS idx_auth_codes_expires_at ON auth_codes(expires_at);
 `;
 
 function hasColumn(db: Database, table: string, column: string): boolean {
@@ -392,6 +417,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('browser', 'app')) DEFAULT 'browser',
   token_hash TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   created_at TEXT NOT NULL,
@@ -453,6 +479,36 @@ function applyBookWordCountMigration(db: Database): void {
   if (!hasColumn(db, "books", "word_count")) {
     db.exec("ALTER TABLE books ADD COLUMN word_count INTEGER NULL");
   }
+}
+
+function applyAppAuthMigration(db: Database): void {
+  if (!hasColumn(db, "sessions", "kind")) {
+    db.exec("ALTER TABLE sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'browser'");
+  }
+  db.exec(`
+CREATE TABLE IF NOT EXISTS app_login_attempts (
+  id TEXT PRIMARY KEY,
+  redirect_uri TEXT NOT NULL,
+  state TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS auth_codes (
+  code_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  attempt_id TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (attempt_id) REFERENCES app_login_attempts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_login_attempts_expires_at ON app_login_attempts(expires_at);
+CREATE INDEX IF NOT EXISTS idx_auth_codes_attempt_id ON auth_codes(attempt_id);
+CREATE INDEX IF NOT EXISTS idx_auth_codes_expires_at ON auth_codes(expires_at);
+`);
 }
 
 export function nowIso(): string {
@@ -520,5 +576,8 @@ export function runMigrations(db: Database): void {
   });
   apply(BOOK_WORD_COUNT_MIGRATION_ID, () => {
     applyBookWordCountMigration(db);
+  });
+  apply(APP_AUTH_MIGRATION_ID, () => {
+    applyAppAuthMigration(db);
   });
 }

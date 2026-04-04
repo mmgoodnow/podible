@@ -17,8 +17,8 @@ describe("books repo", () => {
     const { db, repo } = setupRepo();
 
     const initial = repo.ensureSettings();
-    expect(initial.auth.mode).toBe("apikey");
-    expect(initial.auth.key.length).toBeGreaterThan(20);
+    expect(initial.auth.mode).toBe("plex");
+    expect(initial.auth.appRedirectURIs).toEqual([]);
     expect(initial.recovery.stalledTorrentMinutes).toBe(10);
     expect(initial.notifications.pushover.enabled).toBe(false);
 
@@ -90,6 +90,7 @@ describe("books repo", () => {
     expect(session?.user_id).toBe(user.id);
     expect(session?.username).toBe("andy");
     expect(session?.is_admin).toBe(1);
+    expect(session?.kind).toBe("browser");
     db.close();
   });
 

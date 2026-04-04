@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 
@@ -10,7 +10,8 @@ import { computeDownloadFraction, pseudoProgressForMediaStatus, pseudoProgressFo
 import { BooksRepo } from "./repo";
 import { RtorrentClient } from "./rtorrent";
 import { runSearch, runSnatch, triggerAutoAcquire } from "./service";
-import type { AppSettings, JobRow, JobType, LibraryBook, MediaType, ReleaseRow } from "./types";
+import { createSessionToken, hashSessionToken, sessionExpiresAt } from "./auth";
+import type { AppSettings, JobRow, JobType, LibraryBook, MediaType, ReleaseRow, SessionWithUserRow } from "./types";
 
 // JSON-RPC v1 transport for Kindling control/data APIs.
 // Single-call requests only; batch mode is intentionally rejected.
@@ -42,10 +43,19 @@ type RpcFailure = {
 };
 
 type RpcMethodHandler = (ctx: RpcContext, params: Record<string, unknown>) => Promise<unknown>;
+type RpcAuthLevel = "public" | "user" | "admin";
+type RpcMethodDefinition = {
+  auth: RpcAuthLevel;
+  readOnly?: boolean;
+  summary: string;
+  handler: RpcMethodHandler;
+};
 
 type RpcContext = {
   repo: BooksRepo;
   startTime: number;
+  request: Request;
+  session: SessionWithUserRow | null;
 };
 
 type RpcDispatchOptions = {
@@ -377,12 +387,13 @@ function parseRequest(raw: unknown): RpcRequest {
 
 const handlers: Record<string, RpcMethodHandler> = {
   async help() {
-    const methods = Object.keys(handlers)
+    const methods = Object.keys(methodsByName)
       .sort()
       .map((name) => ({
         name,
-        readOnly: readOnlyMethods.has(name),
-        description: methodSummaries[name] ?? null,
+        readOnly: Boolean(methodsByName[name]?.readOnly),
+        auth: methodsByName[name]?.auth ?? null,
+        description: methodsByName[name]?.summary ?? null,
       }));
     return {
       name: "podible-rpc",
@@ -902,60 +913,132 @@ const handlers: Record<string, RpcMethodHandler> = {
       throw new RpcError(-32000, "Manual import failed", { message, sourcePath, mediaType });
     }
   },
+
+  async "auth.beginAppLogin"(ctx, params) {
+    const redirectUri = asString(params.redirectUri, "redirectUri").trim();
+    const settings = ctx.repo.getSettings();
+    if (!settings.auth.appRedirectURIs.includes(redirectUri)) {
+      throw new RpcError(-32602, "redirectUri is not allowed");
+    }
+    const now = Date.now();
+    ctx.repo.deleteExpiredAppLoginAttempts(new Date(now).toISOString());
+    ctx.repo.deleteExpiredAuthCodes(new Date(now).toISOString());
+    const attemptId = randomBytes(24).toString("base64url");
+    const state = randomBytes(24).toString("base64url");
+    const expiresAt = new Date(now + 10 * 60_000).toISOString();
+    ctx.repo.createAppLoginAttempt({
+      id: attemptId,
+      redirectUri,
+      state,
+      expiresAt,
+    });
+    const authorizeUrl = new URL(`/auth/app/${encodeURIComponent(attemptId)}`, ctx.request.url).toString();
+    return {
+      attemptId,
+      state,
+      authorizeUrl,
+      expiresAt,
+    };
+  },
+
+  async "auth.exchange"(ctx, params) {
+    const code = asString(params.code, "code").trim();
+    const consumed = ctx.repo.consumeAuthCode(hashSessionToken(code));
+    if (!consumed) {
+      throw new RpcError(-32000, "Auth code is invalid or expired", { error: "not_found" });
+    }
+    ctx.repo.deleteAppLoginAttempt(consumed.attempt_id);
+    ctx.repo.deleteExpiredAuthCodes(new Date().toISOString());
+    const accessToken = createSessionToken();
+    const session = ctx.repo.createSession(consumed.user.id, hashSessionToken(accessToken), sessionExpiresAt(), "app");
+    return {
+      accessToken,
+      expiresAt: session.expires_at,
+      user: {
+        id: consumed.user.id,
+        provider: consumed.user.provider,
+        username: consumed.user.username,
+        displayName: consumed.user.display_name,
+        thumbUrl: consumed.user.thumb_url,
+        isAdmin: consumed.user.is_admin === 1,
+      },
+    };
+  },
+
+  async "auth.me"(ctx) {
+    const session = ctx.session;
+    if (!session) {
+      throw new RpcError(-32001, "Unauthorized");
+    }
+    return {
+      user: {
+        id: session.user_id,
+        provider: session.provider,
+        username: session.username,
+        displayName: session.display_name,
+        thumbUrl: session.thumb_url,
+        isAdmin: session.is_admin === 1,
+      },
+      session: {
+        kind: session.kind,
+        expiresAt: session.expires_at,
+      },
+    };
+  },
+
+  async "auth.logout"(ctx) {
+    const session = ctx.session;
+    if (!session) {
+      throw new RpcError(-32001, "Unauthorized");
+    }
+    ctx.repo.deleteSession(session.id);
+    return { ok: true };
+  },
 };
 
-const methodSummaries: Record<string, string> = {
-  help: "List available RPC methods with read-only flags and short descriptions.",
-  "system.health": "Service health summary (job/release counts and queue size).",
-  "system.server": "Server runtime metadata (name, runtime, uptime, time).",
-  "settings.get": "Read current application settings.",
-  "settings.update": "Replace application settings.",
-  "admin.wipeDatabase": "Delete all mutable DB data and imported files/covers (local dev reset).",
-  "openlibrary.search": "Search Open Library for works to add.",
-  "library.list": "List books in the library.",
-  "library.get": "Get one book with releases and assets.",
-  "library.inProgress": "List non-terminal LibraryBook rows (optionally filtered by bookIds).",
-  "library.create": "Create a book from an Open Library work key and queue auto-acquire.",
-  "library.refresh": "Queue full library filesystem refresh scan.",
-  "library.acquire": "Queue targeted acquire job for a book/media set.",
-  "library.reportImportIssue": "Report wrong imported file(s), delete imported asset(s), and queue async review/reacquire.",
-  "library.rehydrate": "Re-run Open Library metadata hydration for one/all books.",
-  "library.delete": "Delete a book, cascading DB rows and imported files/covers.",
-  "search.run": "Run Torznab search and return normalized results.",
-  "agent.search.plan": "Run search selection planning (deterministic/agent) without snatching.",
-  "snatch.create": "Create release + download job for a chosen search result.",
-  "releases.list": "List releases for a book.",
-  "downloads.list": "List download jobs with release status/progress.",
-  "downloads.get": "Get one download job with live progress if active.",
-  "downloads.retry": "Requeue a download job.",
-  "jobs.list": "List recent jobs (optionally filtered by type).",
-  "jobs.get": "Get one job row.",
-  "jobs.retry": "Retry a failed/cancelled job.",
-  "import.reconcile": "Queue reconcile job for downloaded releases missing assets.",
-  "import.inspect": "Inspect a local path and list candidate import files.",
-  "agent.import.plan": "Run import-file selection planning (deterministic/agent) without importing.",
-  "import.manual": "Create a manual release and import from a local path.",
+const methodsByName: Record<string, RpcMethodDefinition> = {
+  help: { auth: "public", readOnly: true, summary: "List available RPC methods with read-only flags and auth levels.", handler: handlers.help },
+  "system.health": { auth: "public", readOnly: true, summary: "Service health summary (job/release counts and queue size).", handler: handlers["system.health"] },
+  "system.server": { auth: "public", readOnly: true, summary: "Server runtime metadata (name, runtime, uptime, time).", handler: handlers["system.server"] },
+  "auth.beginAppLogin": { auth: "public", summary: "Create a short-lived app login attempt and return a browser authorize URL.", handler: handlers["auth.beginAppLogin"] },
+  "auth.exchange": { auth: "public", summary: "Exchange a one-time app auth code for a Podible bearer token.", handler: handlers["auth.exchange"] },
+  "auth.me": { auth: "user", readOnly: true, summary: "Return the current authenticated user and session metadata.", handler: handlers["auth.me"] },
+  "auth.logout": { auth: "user", summary: "Invalidate the current authenticated session.", handler: handlers["auth.logout"] },
+  "settings.get": { auth: "admin", readOnly: true, summary: "Read current application settings.", handler: handlers["settings.get"] },
+  "settings.update": { auth: "admin", summary: "Replace application settings.", handler: handlers["settings.update"] },
+  "admin.wipeDatabase": { auth: "admin", summary: "Delete all mutable DB data and imported files/covers (local dev reset).", handler: handlers["admin.wipeDatabase"] },
+  "openlibrary.search": { auth: "user", readOnly: true, summary: "Search Open Library for works to add.", handler: handlers["openlibrary.search"] },
+  "library.list": { auth: "user", readOnly: true, summary: "List books in the library.", handler: handlers["library.list"] },
+  "library.get": { auth: "user", readOnly: true, summary: "Get one book with releases and assets.", handler: handlers["library.get"] },
+  "library.inProgress": { auth: "user", readOnly: true, summary: "List non-terminal LibraryBook rows (optionally filtered by bookIds).", handler: handlers["library.inProgress"] },
+  "library.create": { auth: "user", summary: "Create a book from an Open Library work key and queue auto-acquire.", handler: handlers["library.create"] },
+  "library.refresh": { auth: "admin", summary: "Queue full library filesystem refresh scan.", handler: handlers["library.refresh"] },
+  "library.acquire": { auth: "user", summary: "Queue targeted acquire job for a book/media set.", handler: handlers["library.acquire"] },
+  "library.reportImportIssue": { auth: "admin", summary: "Report wrong imported file(s), delete imported asset(s), and queue async review/reacquire.", handler: handlers["library.reportImportIssue"] },
+  "library.rehydrate": { auth: "admin", summary: "Re-run Open Library metadata hydration for one/all books.", handler: handlers["library.rehydrate"] },
+  "library.delete": { auth: "admin", summary: "Delete a book, cascading DB rows and imported files/covers.", handler: handlers["library.delete"] },
+  "search.run": { auth: "admin", readOnly: true, summary: "Run Torznab search and return normalized results.", handler: handlers["search.run"] },
+  "agent.search.plan": { auth: "admin", readOnly: true, summary: "Run search selection planning (deterministic/agent) without snatching.", handler: handlers["agent.search.plan"] },
+  "snatch.create": { auth: "admin", summary: "Create release + download job for a chosen search result.", handler: handlers["snatch.create"] },
+  "releases.list": { auth: "user", readOnly: true, summary: "List releases for a book.", handler: handlers["releases.list"] },
+  "downloads.list": { auth: "admin", readOnly: true, summary: "List download jobs with release status/progress.", handler: handlers["downloads.list"] },
+  "downloads.get": { auth: "admin", readOnly: true, summary: "Get one download job with live progress if active.", handler: handlers["downloads.get"] },
+  "downloads.retry": { auth: "admin", summary: "Requeue a download job.", handler: handlers["downloads.retry"] },
+  "jobs.list": { auth: "admin", readOnly: true, summary: "List recent jobs (optionally filtered by type).", handler: handlers["jobs.list"] },
+  "jobs.get": { auth: "admin", readOnly: true, summary: "Get one job row.", handler: handlers["jobs.get"] },
+  "jobs.retry": { auth: "admin", summary: "Retry a failed/cancelled job.", handler: handlers["jobs.retry"] },
+  "import.reconcile": { auth: "admin", summary: "Queue reconcile job for downloaded releases missing assets.", handler: handlers["import.reconcile"] },
+  "import.inspect": { auth: "admin", readOnly: true, summary: "Inspect a local path and list candidate import files.", handler: handlers["import.inspect"] },
+  "agent.import.plan": { auth: "admin", readOnly: true, summary: "Run import-file selection planning (deterministic/agent) without importing.", handler: handlers["agent.import.plan"] },
+  "import.manual": { auth: "admin", summary: "Create a manual release and import from a local path.", handler: handlers["import.manual"] },
 };
 
-const readOnlyMethods = new Set<string>([
-  "help",
-  "system.health",
-  "system.server",
-  "settings.get",
-  "openlibrary.search",
-  "library.list",
-  "library.get",
-  "library.inProgress",
-  "search.run",
-  "agent.search.plan",
-  "releases.list",
-  "downloads.list",
-  "downloads.get",
-  "jobs.list",
-  "jobs.get",
-  "agent.import.plan",
-  "import.inspect",
-]);
+function hasRpcAccess(level: RpcAuthLevel, session: SessionWithUserRow | null): boolean {
+  if (level === "public") return true;
+  if (!session) return false;
+  if (level === "user") return true;
+  return session.is_admin === 1;
+}
 
 async function dispatchRpcMethod(
   methodName: string,
@@ -965,11 +1048,14 @@ async function dispatchRpcMethod(
 ): Promise<Response> {
   const id = options.id ?? null;
   try {
-    const method = handlers[methodName];
-    if (!method || (options.readOnly && !readOnlyMethods.has(methodName))) {
+    const method = methodsByName[methodName];
+    if (!method || (options.readOnly && !method.readOnly)) {
       throw new RpcError(-32601, "Method not found");
     }
-    const result = await method(ctx, params);
+    if (!hasRpcAccess(method.auth, ctx.session)) {
+      throw new RpcError(ctx.session ? -32003 : -32001, ctx.session ? "Forbidden" : "Unauthorized");
+    }
+    const result = await method.handler(ctx, params);
     return success(id, result);
   } catch (error) {
     if (error instanceof RpcError) {

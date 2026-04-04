@@ -1,5 +1,3 @@
-import { randomBytes } from "node:crypto";
-
 import type { AppSettings } from "./types";
 
 type SettingsOverrides = Partial<Omit<AppSettings, "rtorrent" | "polling" | "recovery" | "feed" | "auth" | "agents" | "notifications">> & {
@@ -7,9 +5,9 @@ type SettingsOverrides = Partial<Omit<AppSettings, "rtorrent" | "polling" | "rec
   polling?: Partial<AppSettings["polling"]>;
   recovery?: Partial<AppSettings["recovery"]>;
   feed?: Partial<AppSettings["feed"]>;
-  auth?: Partial<Omit<AppSettings["auth"], "plex">> & {
-    plex?: Partial<AppSettings["auth"]["plex"]>;
-  };
+    auth?: Partial<Omit<AppSettings["auth"], "plex">> & {
+      plex?: Partial<AppSettings["auth"]["plex"]>;
+    };
   agents?: Partial<AppSettings["agents"]>;
   notifications?: {
     pushover?: Partial<AppSettings["notifications"]["pushover"]>;
@@ -39,8 +37,8 @@ export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
       author: "Unknown",
     },
     auth: {
-      mode: "apikey",
-      key: randomBytes(24).toString("hex"),
+      mode: "plex",
+      appRedirectURIs: [],
       plex: {
         productName: "Podible",
         ownerToken: "",
@@ -156,8 +154,10 @@ export function parseSettings(value: string): AppSettings {
       ...(parsed.feed && typeof parsed.feed === "object" ? parsed.feed : {}),
     },
     auth: {
-      mode: parsedAuth.mode === "apikey" || parsedAuth.mode === "local" || parsedAuth.mode === "plex" ? parsedAuth.mode : defaults.auth.mode,
-      key: typeof parsedAuth.key === "string" ? parsedAuth.key : defaults.auth.key,
+      mode: parsedAuth.mode === "local" || parsedAuth.mode === "plex" ? parsedAuth.mode : defaults.auth.mode,
+      appRedirectURIs: Array.isArray(parsedAuth.appRedirectURIs)
+        ? parsedAuth.appRedirectURIs.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        : defaults.auth.appRedirectURIs,
       plex: {
         productName:
           typeof parsedAuthPlex.productName === "string" && parsedAuthPlex.productName.trim()

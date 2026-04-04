@@ -17,8 +17,9 @@ export type AssetTranscriptStatus = "pending" | "succeeded" | "failed";
 
 export type AssetKind = "single" | "multi" | "ebook";
 
-export type AuthMode = "apikey" | "local" | "plex";
+export type AuthMode = "local" | "plex";
 export type AuthProvider = "plex" | "local";
+export type SessionKind = "browser" | "app";
 
 export type PlexJwk = {
   kty: "OKP";
@@ -62,7 +63,7 @@ export type AppSettings = {
   };
   auth: {
     mode: AuthMode;
-    key: string;
+    appRedirectURIs: string[];
     plex: {
       productName: string;
       ownerToken: string;
@@ -201,6 +202,7 @@ export type UserRow = {
 export type SessionRow = {
   id: number;
   user_id: number;
+  kind: SessionKind;
   token_hash: string;
   expires_at: string;
   created_at: string;
@@ -221,6 +223,23 @@ export type PlexLoginAttemptRow = {
   client_identifier: string;
   public_jwk_json: string;
   private_key_pkcs8: string;
+  created_at: string;
+};
+
+export type AppLoginAttemptRow = {
+  id: string;
+  redirect_uri: string;
+  state: string;
+  expires_at: string;
+  created_at: string;
+};
+
+export type AuthCodeRow = {
+  code_hash: string;
+  user_id: number;
+  attempt_id: string;
+  expires_at: string;
+  used_at: string | null;
   created_at: string;
 };
 
