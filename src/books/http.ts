@@ -233,6 +233,7 @@ function renderAppPage(
   extraNav = "",
   apiKey: string | null = null
 ): Response {
+  const showAdminNav = Boolean(apiKey) || (currentUser?.is_admin ?? 0) === 1;
   const accountNav = currentUser
     ? `<span class="muted">Signed in as ${escapeHtml(displayUserName(currentUser))}</span>
        <form method="post" action="${escapeHtml(addApiKey("/logout", apiKey))}" style="display:inline-flex;">
@@ -247,7 +248,7 @@ function renderAppPage(
       <a href="${escapeHtml(addApiKey("/library", apiKey))}">Library</a>
       <a href="${escapeHtml(addApiKey("/add", apiKey))}">Add</a>
       <a href="${escapeHtml(addApiKey("/activity", apiKey))}">Activity</a>
-      <a href="${escapeHtml(addApiKey("/admin", apiKey))}">Admin</a>
+      ${showAdminNav ? `<a href="${escapeHtml(addApiKey("/admin", apiKey))}">Admin</a>` : ""}
       ${accountNav}
       ${extraNav}
     </nav>`;
@@ -1354,105 +1355,74 @@ function renderAdminPage(
           .join("")
       : `<tr><td colspan="5">No users yet.</td></tr>`;
 
-  const body = `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Podible</title>
-    <style>
+  const body = `<style>
       :root {
-        --bg: #f5f7fb;
-        --card: #ffffff;
-        --line: #d7deea;
-        --line-soft: #e7edf7;
-        --text: #1b2430;
-        --muted: #5d6a7c;
-        --code-bg: #eef3fb;
+        --line-soft: #ebe5d8;
+        --code-bg: #f3f1ea;
         --danger: #8b0000;
         --danger-border: #6f0000;
       }
-      * { box-sizing: border-box; }
-      body {
-        font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
-        margin: 0;
-        padding: 14px;
-        background: radial-gradient(circle at top, #fbfdff 0%, var(--bg) 55%);
-        color: var(--text);
-      }
-      h1, h2 { margin: 0 0 8px; }
-      h2 { font-size: 18px; }
-      p { margin: 0 0 8px; }
-      .muted { color: var(--muted); }
-      ul { margin-top: 6px; margin-bottom: 0; padding-left: 18px; }
-      .page { max-width: 1600px; margin: 0 auto; }
       .dashboard-grid {
         display: grid;
         grid-template-columns: repeat(12, minmax(0, 1fr));
-        gap: 12px;
+        gap: 14px;
         align-items: start;
       }
-      .card {
-        background: var(--card);
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        padding: 10px;
-        box-shadow: 0 1px 2px rgba(22, 34, 51, 0.04);
-        min-width: 0;
-      }
-      .card-full { grid-column: 1 / -1; }
-      .card-wide { grid-column: span 8; }
+      .card-full { grid-column: span 12; }
       .card-mid { grid-column: span 6; }
-      .card-narrow { grid-column: span 4; }
       .page-header {
         background:
-          radial-gradient(circle at 90% 10%, rgba(95, 143, 255, 0.08), transparent 45%),
-          linear-gradient(180deg, #ffffff, #fbfdff);
+          radial-gradient(circle at 90% 10%, rgba(40, 89, 67, 0.08), transparent 45%),
+          linear-gradient(180deg, #fffdf7, #f7f5ed);
       }
       .header-grid {
         display: grid;
         grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
-        gap: 10px;
+        gap: 14px;
       }
       .header-grid > div { min-width: 0; }
       .panel {
         border: 0;
-        border-radius: 0;
         padding: 0;
         margin: 0;
         background: transparent;
       }
-      .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+      .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
       input, button, textarea, select { font: inherit; }
       input, select {
-        padding: 6px 8px;
+        padding: 8px 10px;
         min-width: 220px;
         border: 1px solid var(--line);
-        border-radius: 7px;
+        border-radius: 10px;
         background: #fff;
       }
       button {
-        padding: 6px 10px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 36px;
+        padding: 8px 12px;
         cursor: pointer;
         border: 1px solid var(--line);
-        border-radius: 7px;
-        background: #f8fbff;
+        border-radius: 10px;
+        background: #fff;
+        color: var(--text);
       }
-      button:hover { background: #f1f6ff; }
+      button:hover { background: #faf8f1; }
       textarea {
         width: 100%;
         min-height: 220px;
-        padding: 8px;
+        padding: 10px 12px;
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         font-size: 13px;
         border: 1px solid var(--line);
-        border-radius: 8px;
-        background: #fbfdff;
+        border-radius: 12px;
+        background: #fff;
       }
       .table-wrap {
         overflow: auto;
         border: 1px solid var(--line-soft);
-        border-radius: 8px;
+        border-radius: 12px;
         background: #fff;
       }
       table {
@@ -1462,14 +1432,14 @@ function renderAdminPage(
         min-width: 640px;
       }
       th, td { border: 1px solid var(--line-soft); padding: 6px 7px; text-align: left; font-size: 13px; vertical-align: top; }
-      th { background: #f7faff; }
+      th { background: #f8f5ed; }
       code { background: var(--code-bg); padding: 2px 4px; border-radius: 4px; }
       pre {
         margin: 0;
         padding: 8px;
         border: 1px solid var(--line-soft);
-        border-radius: 8px;
-        background: #fbfdff;
+        border-radius: 12px;
+        background: #fff;
         overflow: auto;
       }
       pre code { background: transparent; padding: 0; }
@@ -1486,7 +1456,7 @@ function renderAdminPage(
         grid-template-columns: 64px minmax(0, 1fr);
         gap: 10px;
         border: 1px solid var(--line-soft);
-        border-radius: 10px;
+        border-radius: 12px;
         background: #fff;
         padding: 8px;
       }
@@ -1496,7 +1466,7 @@ function renderAdminPage(
         height: 64px;
         border-radius: 8px;
         border: 1px solid var(--line-soft);
-        background: linear-gradient(135deg, #e6efff, #f3f7ff);
+        background: linear-gradient(135deg, #eef5f0, #f7f5ed);
         color: var(--muted);
         font-weight: 700;
         overflow: hidden;
@@ -1546,32 +1516,21 @@ function renderAdminPage(
         margin-top: 6px;
         font-size: 12px;
       }
-      .feed-preview-links a {
-        color: #1d4ed8;
-        text-decoration: none;
-      }
       .feed-preview-links a:hover { text-decoration: underline; }
       @media (max-width: 1200px) {
-        .card-wide, .card-mid { grid-column: span 12; }
-        .card-narrow { grid-column: span 6; }
+        .card-mid { grid-column: span 12; }
         .header-grid { grid-template-columns: 1fr; }
         .feed-preview-grid { grid-template-columns: 1fr; }
       }
       @media (max-width: 900px) {
-        body { padding: 10px; }
         .dashboard-grid { gap: 10px; }
-        .card-narrow, .card-mid, .card-wide { grid-column: span 12; }
         input, select { min-width: 150px; }
         table { min-width: 560px; }
         .feed-preview-item { grid-template-columns: 56px minmax(0, 1fr); }
         .feed-preview-cover { width: 56px; height: 56px; }
       }
     </style>
-  </head>
-  <body>
-    <div class="page">
-      <div class="dashboard-grid">
-        <section class="card card-full page-header">
+      <section class="hero page-header">
           <div class="header-grid">
             <div>
               <h1>Podible Backend</h1>
@@ -1598,6 +1557,7 @@ function renderAdminPage(
             </div>
           </div>
         </section>
+      <div class="dashboard-grid">
 
         ${
           settings.auth.mode === "plex"
@@ -1847,7 +1807,6 @@ function renderAdminPage(
           </div>
         </section>
       </div>
-    </div>
     <script>
       (function () {
         var queryApiKey = new URLSearchParams(window.location.search).get("api_key");
@@ -2815,16 +2774,9 @@ function renderAdminPage(
           });
         });
       })();
-    </script>
-  </body>
-</html>`;
+    </script>`;
 
-  return new Response(body, {
-    headers: {
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-store",
-    },
-  });
+  return renderAppPage("Admin", body, settings, currentUser, "", apiKey);
 }
 
 export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (request: Request) => Promise<Response> {

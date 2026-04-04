@@ -58,11 +58,12 @@ describe("podible http", () => {
     expect(body.includes("Needs attention")).toBe(true);
     expect(body.includes("/library")).toBe(true);
     expect(body.includes("/add")).toBe(true);
-    expect(body.includes("/admin")).toBe(true);
+    expect(body.includes(">Admin<")).toBe(false);
 
     const admin = await fetchHandler(new Request("http://localhost/admin"));
     expect(admin.status).toBe(200);
     const adminBody = await admin.text();
+    expect(adminBody.includes("site-nav")).toBe(true);
     expect(adminBody.includes("Podible Backend")).toBe(true);
     expect(adminBody.includes("Open Library Search")).toBe(true);
     expect(adminBody.includes("Manual Search + Snatch")).toBe(true);
