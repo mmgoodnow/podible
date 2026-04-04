@@ -379,7 +379,7 @@ function renderLandingPage(
   const body = `
     <section class="hero">
       <h1>Podible</h1>
-      <p>Your audiobook shelf, with eBooks when you want the source text.</p>
+      <p>Your shelf for audiobooks and eBooks.</p>
       <div class="stats">
         <span class="pill">${featured.length} ready to play</span>
         <span class="pill">${inProgress.length} in progress</span>

@@ -53,7 +53,7 @@ describe("podible http", () => {
     expect(home.headers.get("content-type")).toContain("text/html");
     const body = await home.text();
     expect(body.includes("Podible")).toBe(true);
-    expect(body.includes("Your audiobook shelf, with eBooks when you want the source text.")).toBe(true);
+    expect(body.includes("Your shelf for audiobooks and eBooks.")).toBe(true);
     expect(body.includes("Ready now")).toBe(true);
     expect(body.includes("Still working")).toBe(true);
     expect(body.includes("Needs attention")).toBe(true);
