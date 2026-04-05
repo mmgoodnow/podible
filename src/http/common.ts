@@ -49,6 +49,7 @@ function renderAppPage(
   void settings;
   const showNav = options.showNav !== false;
   const showAdminNav = Boolean(apiKey) || (currentUser?.is_admin ?? 0) === 1;
+  const themeToggle = `<button type="button" class="theme-toggle" id="theme-toggle">Dark mode</button>`;
   const accountNav = currentUser
     ? `<span class="muted">Signed in as ${escapeHtml(displayUserName(currentUser))}</span>
        <form method="post" action="${escapeHtml(addApiKey("/logout", apiKey))}" class="nav-signout-form">
@@ -63,6 +64,7 @@ function renderAppPage(
       <a href="${escapeHtml(addApiKey("/activity", apiKey))}">Activity</a>
       ${showAdminNav ? `<a href="${escapeHtml(addApiKey("/admin", apiKey))}">Admin</a>` : ""}
       ${accountNav}
+      ${themeToggle}
       ${extraNav}
     </nav>`;
   return new Response(
@@ -73,9 +75,20 @@ function renderAppPage(
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
     <title>${escapeHtml(title)}</title>
+    <script>
+      (() => {
+        const stored = localStorage.getItem("podible-theme");
+        const theme = stored === "dark" || stored === "light" ? stored : "system";
+        if (theme === "dark") {
+          document.documentElement.dataset.theme = "dark";
+        } else if (theme === "light") {
+          document.documentElement.dataset.theme = "light";
+        }
+      })();
+    </script>
     <style>
       :root {
-        color-scheme: light dark;
+        color-scheme: light;
         --bg: #f6f7f3;
         --paper: #fffdf7;
         --surface: #ffffff;
@@ -94,8 +107,29 @@ function renderAppPage(
         --bg-grad-start: #fffefb;
         --shadow: 0 1px 2px rgba(31, 38, 28, 0.05);
       }
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+        --bg: #111713;
+        --paper: #18211b;
+        --surface: #1d2720;
+        --surface-hover: #233127;
+        --line: #324037;
+        --line-soft: #2a352e;
+        --text: #edf4eb;
+        --muted: #a5b5a5;
+        --accent: #8cc2a5;
+        --accent-contrast: #0f1713;
+        --accent-soft: #1e2b23;
+        --code-bg: #101713;
+        --danger: #ff8f8f;
+        --danger-border: #b85d5d;
+        --danger-contrast: #1a0f0f;
+        --bg-grad-start: #1a231d;
+        --shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+      }
       @media (prefers-color-scheme: dark) {
-        :root {
+        :root:not([data-theme]) {
+          color-scheme: dark;
           --bg: #111713;
           --paper: #18211b;
           --surface: #1d2720;
@@ -173,6 +207,27 @@ function renderAppPage(
         color: var(--accent);
         text-decoration: underline;
       }
+      .site-nav .theme-toggle {
+        display: inline-block;
+        appearance: none;
+        -webkit-appearance: none;
+        min-height: 0;
+        margin: 0 0 0 auto;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+        color: var(--muted);
+        font: inherit;
+        cursor: pointer;
+        line-height: inherit;
+        text-decoration: none;
+      }
+      .site-nav .theme-toggle:hover {
+        color: var(--accent);
+        text-decoration: underline;
+      }
       .hero, .card { background: var(--paper); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); }
       .hero { padding: 20px; margin-bottom: 18px; }
       .hero h1 { margin: 0 0 8px; font-size: 34px; line-height: 1.05; }
@@ -219,9 +274,47 @@ function renderAppPage(
   </head>
   <body>
     <div class="page">
+      ${showNav ? "" : `<div class="site-nav" style="justify-content: flex-end; margin-bottom: 18px;">${themeToggle}</div>`}
       ${showNav ? nav : ""}
       ${body}
     </div>
+    <script>
+      (() => {
+        const button = document.getElementById("theme-toggle");
+        const root = document.documentElement;
+        const media = window.matchMedia("(prefers-color-scheme: dark)");
+
+        function storedTheme() {
+          const value = localStorage.getItem("podible-theme");
+          return value === "dark" || value === "light" ? value : null;
+        }
+
+        function resolvedTheme() {
+          return root.dataset.theme || (media.matches ? "dark" : "light");
+        }
+
+        function apply(theme) {
+          if (theme === "dark" || theme === "light") {
+            root.dataset.theme = theme;
+          } else {
+            delete root.dataset.theme;
+          }
+          if (button) {
+            button.textContent = resolvedTheme() === "dark" ? "Light mode" : "Dark mode";
+          }
+        }
+
+        apply(storedTheme());
+        media.addEventListener("change", () => {
+          if (!storedTheme()) apply(null);
+        });
+        button?.addEventListener("click", () => {
+          const next = resolvedTheme() === "dark" ? "light" : "dark";
+          localStorage.setItem("podible-theme", next);
+          apply(next);
+        });
+      })();
+    </script>
   </body>
 </html>`,
     {
