@@ -1,7 +1,6 @@
-import { statSync } from "node:fs";
 import path from "node:path";
 
-import { AudioSegment, Book, ChapterTiming } from "../types";
+import { ChapterTiming } from "../types";
 
 type CoverArt = {
   mime: string;
@@ -163,35 +162,4 @@ function coverMimeFromPath(coverPath: string): string {
   return "image/jpeg";
 }
 
-function estimateCoverFrameLength(coverPath: string | undefined): number {
-  if (!coverPath) return 0;
-  try {
-    const stat = statSync(coverPath);
-    if (!stat.isFile() || stat.size <= 0) return 0;
-    const mimeLen = encoder.encode(coverMimeFromPath(coverPath)).byteLength;
-    const payloadLen = 1 + mimeLen + 1 + 1 + 1 + stat.size;
-    return 10 + payloadLen;
-  } catch {
-    return 0;
-  }
-}
-
-function estimateId3TagLength(book: Book): number {
-  if (book.kind !== "multi" || !book.files) return 0;
-  let cursorMs = 0;
-  const dummyTimings: ChapterTiming[] = book.files.map((segment: AudioSegment, index) => {
-    const startMs = cursorMs;
-    const endMs = startMs + segment.durationMs;
-    cursorMs = endMs;
-    return {
-      id: `ch${index}`,
-      title: path.basename(segment.name, path.extname(segment.name)),
-      startMs,
-      endMs,
-    };
-  });
-  const base = buildId3ChaptersTag(dummyTimings).byteLength;
-  return base + estimateCoverFrameLength(book.coverPath);
-}
-
-export { buildId3ChaptersTag, estimateId3TagLength };
+export { buildId3ChaptersTag };

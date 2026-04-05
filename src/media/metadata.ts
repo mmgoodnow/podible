@@ -4,7 +4,7 @@ import path from "node:path";
 import { XMLParser } from "fast-xml-parser";
 
 import { cleanMetaValue, htmlToPlainText, nodeText, normalizeDescriptionHtml, slugify, toArray } from "../utils/strings";
-import { AudioTagMetadata, Book, OpfMetadata } from "../types";
+import { AudioTagMetadata, OpfMetadata } from "../types";
 import { probeData } from "./probe-cache";
 
 const xmlParser = new XMLParser({
@@ -126,55 +126,12 @@ function mimeFromExt(ext: string): string {
   return normalized === "m4a" ? "audio/mp4" : "audio/mpeg";
 }
 
-function bookExtension(book: Book): string {
-  const sourcePath =
-    book.kind === "single"
-      ? book.primaryFile
-      : book.files && book.files.length > 0
-        ? book.files[0].path || book.files[0].name
-        : undefined;
-  if (sourcePath) {
-    return normalizeAudioExt(path.extname(sourcePath));
-  }
-  return normalizeAudioExt(book.mime);
-}
-
-function bookMime(book: Book): string {
-  const ext = bookExtension(book);
-  return mimeFromExt(ext);
-}
-
 function bookId(author: string, title: string): string {
   return slugify(`${author}-${title}`);
 }
 
-function formatDateIso(date: Date | undefined): string | undefined {
-  if (!date) return undefined;
-  const iso = date.toISOString();
-  return iso.slice(0, 10);
-}
-
-function bookIsbn(book: Book): string | undefined {
-  if (book.isbn) return book.isbn;
-  const identifiers = book.identifiers ?? {};
-  return identifiers["isbn"] ?? identifiers["ISBN"];
-}
-
-function cleanLanguage(language: string | undefined): string | undefined {
-  if (!language) return undefined;
-  const trimmed = language.trim();
-  if (!trimmed) return undefined;
-  if (trimmed.toLowerCase() === "unknown") return undefined;
-  return trimmed;
-}
-
 export {
-  bookExtension,
   bookId,
-  bookIsbn,
-  bookMime,
-  cleanLanguage,
-  formatDateIso,
   mimeFromExt,
   normalizeAudioExt,
   parseAudioTagDate,
