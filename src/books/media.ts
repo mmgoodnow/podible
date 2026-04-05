@@ -4,10 +4,13 @@ import path from "node:path";
 import { parseRange, segmentsForRange, streamSegmentsWithXingPatch } from "../streaming/range";
 import { buildId3ChaptersTag } from "../streaming/id3";
 import { readFfprobeChapters } from "../media/probe-cache";
+import { selectPreferredAudioAsset } from "./asset-selection";
 import { loadStoredChapterTimings } from "./chapter-analysis";
 
 import type { BooksRepo } from "./repo";
 import type { AssetFileRow, AssetRow, BookRow, LibraryBook } from "./types";
+
+export { selectPreferredAudioAsset } from "./asset-selection";
 
 export type PreferredAudio = {
   book: LibraryBook;
@@ -24,30 +27,6 @@ type ChapterTiming = {
   startOffset?: number;
   endOffset?: number;
 };
-
-function assetMediaType(asset: AssetRow): "audio" | "ebook" {
-  return asset.kind === "ebook" ? "ebook" : "audio";
-}
-
-function scoreAudioAsset(asset: AssetRow): number {
-  let score = 0;
-  if (asset.kind === "single" && asset.mime === "audio/mp4") score += 100;
-  if (asset.kind === "single" && asset.mime === "audio/mpeg") score += 80;
-  if (asset.kind === "multi") score += 60;
-  score += Math.min(50, Math.trunc((asset.duration_ms ?? 0) / 60_000));
-  return score;
-}
-
-export function selectPreferredAudioAsset(assets: AssetRow[]): AssetRow | null {
-  const audio = assets.filter((asset) => assetMediaType(asset) === "audio");
-  if (audio.length === 0) return null;
-  return [...audio].sort((a, b) => {
-    const s = scoreAudioAsset(b) - scoreAudioAsset(a);
-    if (s !== 0) return s;
-    if (a.created_at !== b.created_at) return b.created_at.localeCompare(a.created_at);
-    return b.id - a.id;
-  })[0] ?? null;
-}
 
 function extensionForMime(mime: string): string {
   if (mime === "audio/mp4") return "m4a";
