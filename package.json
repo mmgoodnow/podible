@@ -13,7 +13,8 @@
     "@lingo-reader/epub-parser": "^0.4.5",
     "bencode": "^4.0.0",
     "fast-xml-parser": "^4.4.1",
-    "openai": "^6.22.0"
+    "openai": "^6.22.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@playwright/cli": "^0.1.5",

@@ -1,5 +1,13 @@
-import { adminRpcMethods } from "./rpc/admin-methods";
-import { createPublicRpcMethods } from "./rpc/public-methods";
+import { adminRouter } from "./rpc/admin-router";
+import { agentRouter } from "./rpc/agent-router";
+import { createAuthRouter } from "./rpc/auth-router";
+import { downloadsRouter } from "./rpc/downloads-router";
+import { defineRouter, flattenRouter, parseMethodParams, type RpcMethodDefinition } from "./rpc/framework";
+import { importRouter } from "./rpc/import-router";
+import { jobsRouter } from "./rpc/jobs-router";
+import { libraryRouter } from "./rpc/library-router";
+import { openLibraryRouter } from "./rpc/openlibrary-router";
+import { settingsRouter } from "./rpc/settings-router";
 import {
   RpcError,
   parseRequest,
@@ -8,10 +16,10 @@ import {
   type RpcDispatchOptions,
   type RpcFailure,
   type RpcId,
-  type RpcMethodDefinition,
   type RpcSuccess,
 } from "./rpc/shared";
-import { userRpcMethods } from "./rpc/user-methods";
+import { searchRouter } from "./rpc/search-router";
+import { systemRouter } from "./rpc/system-router";
 
 function response(payload: RpcSuccess | RpcFailure): Response {
   return new Response(JSON.stringify(payload, null, 2), {
@@ -39,12 +47,22 @@ function failure(id: RpcId, code: number, message: string, data?: unknown): Resp
   });
 }
 
-let methodsByName: Record<string, RpcMethodDefinition> = {};
-methodsByName = {
-  ...createPublicRpcMethods(() => methodsByName),
-  ...userRpcMethods,
-  ...adminRpcMethods,
-};
+let methodsByName: Record<string, RpcMethodDefinition<any>> = {};
+methodsByName = flattenRouter(
+  defineRouter({
+    ...createAuthRouter(() => methodsByName).routes,
+    ...systemRouter.routes,
+    ...openLibraryRouter.routes,
+    ...libraryRouter.routes,
+    ...settingsRouter.routes,
+    ...searchRouter.routes,
+    ...downloadsRouter.routes,
+    ...jobsRouter.routes,
+    ...importRouter.routes,
+    ...agentRouter.routes,
+    ...adminRouter.routes,
+  })
+);
 
 function hasRpcAccess(level: RpcAuthLevel, session: RpcContext["session"]): boolean {
   if (level === "public") return true;
@@ -68,7 +86,8 @@ async function dispatchRpcMethod(
     if (!hasRpcAccess(method.auth, ctx.session)) {
       throw new RpcError(ctx.session ? -32003 : -32001, ctx.session ? "Forbidden" : "Unauthorized");
     }
-    const result = await method.handler(ctx, params);
+    const parsedParams = parseMethodParams(method, params);
+    const result = await method.handler(ctx, parsedParams);
     return success(id, result);
   } catch (error) {
     if (error instanceof RpcError) {
