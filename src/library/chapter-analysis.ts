@@ -237,6 +237,7 @@ type EpubChapterEntry = {
 type ChapterBoundaryProbe = {
   boundaryIndex: number;
   estimateMs: number;
+  estimateCandidatesMs: number[];
   previousTitle: string;
   nextTitle: string;
   previousProbes: string[][];
@@ -542,14 +543,18 @@ function boundaryEstimateRatios(entries: EpubChapterEntry[]): number[] {
 }
 
 function boundaryProbes(entries: EpubChapterEntry[], durationMs: number): ChapterBoundaryProbe[] {
-  const ratios = boundaryEstimateRatios(entries);
+  const weightedRatios = boundaryEstimateRatios(entries);
+  const rawRatios = chapterStartRatios(entries);
   const out: ChapterBoundaryProbe[] = [];
   for (let index = 0; index < entries.length - 1; index += 1) {
     const previous = entries[index]!;
     const next = entries[index + 1]!;
+    const weightedEstimateMs = Math.round(durationMs * (weightedRatios[index + 1] ?? 0));
+    const rawEstimateMs = Math.round(durationMs * (rawRatios[index + 1] ?? 0));
     out.push({
       boundaryIndex: index,
-      estimateMs: Math.round(durationMs * (ratios[index + 1] ?? 0)),
+      estimateMs: weightedEstimateMs,
+      estimateCandidatesMs: [...new Set([weightedEstimateMs, rawEstimateMs])],
       previousTitle: previous.title,
       nextTitle: next.title,
       previousProbes: boundaryProbeCandidates(previous, "end"),
@@ -804,22 +809,24 @@ function alignProbeToTranscriptWindow(
 function alignBestProbeToTranscriptWindow(
   transcriptWords: TranscriptWord[],
   probeCandidates: string[][],
-  estimateMs: number,
+  estimateCandidatesMs: number[],
   mode: "start" | "end"
 ): ProbeAlignmentResult | null {
   let best: ProbeAlignmentResult | null = null;
-  for (const candidate of probeCandidates) {
-    const result = alignProbeToTranscriptWindow(transcriptWords, candidate, estimateMs, mode);
-    if (!result) continue;
-    if (
-      !best ||
-      result.coverage > best.coverage ||
-      (result.coverage === best.coverage && result.matchedTokenCount > best.matchedTokenCount) ||
-      (result.coverage === best.coverage &&
-        result.matchedTokenCount === best.matchedTokenCount &&
-        Math.abs(result.resolvedMs - estimateMs) < Math.abs(best.resolvedMs - estimateMs))
-    ) {
-      best = result;
+  for (const estimateMs of estimateCandidatesMs) {
+    for (const candidate of probeCandidates) {
+      const result = alignProbeToTranscriptWindow(transcriptWords, candidate, estimateMs, mode);
+      if (!result) continue;
+      if (
+        !best ||
+        result.coverage > best.coverage ||
+        (result.coverage === best.coverage && result.matchedTokenCount > best.matchedTokenCount) ||
+        (result.coverage === best.coverage &&
+          result.matchedTokenCount === best.matchedTokenCount &&
+          Math.abs(result.resolvedMs - estimateMs) < Math.abs(best.resolvedMs - estimateMs))
+      ) {
+        best = result;
+      }
     }
   }
   return best;
@@ -1852,8 +1859,8 @@ function analyzeTranscript(
 ): AnalysisResult {
   const probes = boundaryProbes(entries, durationMs);
   const probeAlignments = probes.map((probe) => ({
-    previous: alignBestProbeToTranscriptWindow(transcriptWords, probe.previousProbes, probe.estimateMs, "end"),
-    next: alignBestProbeToTranscriptWindow(transcriptWords, probe.nextProbes, probe.estimateMs, "start"),
+    previous: alignBestProbeToTranscriptWindow(transcriptWords, probe.previousProbes, probe.estimateCandidatesMs, "end"),
+    next: alignBestProbeToTranscriptWindow(transcriptWords, probe.nextProbes, probe.estimateCandidatesMs, "start"),
   }));
   const matches: BoundaryMatch[] = probes.map((probe) => {
     const previousAlignment = probeAlignments[probe.boundaryIndex]?.previous ?? null;
