@@ -378,7 +378,7 @@ function renderLoginPage(
       .login-hero .actions {
         justify-content: center;
       }
-      .login-cta {
+      button.login-cta {
         min-width: 220px;
         justify-content: center;
         font-weight: 600;
@@ -386,7 +386,7 @@ function renderLoginPage(
         border-color: #e5a00d;
         color: #1f261c;
       }
-      .login-cta:hover {
+      button.login-cta:hover {
         background: #d09108;
         border-color: #d09108;
         color: #1f261c;
