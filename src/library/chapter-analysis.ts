@@ -10,6 +10,7 @@ import OpenAI from "openai";
 import type { TranscriptionVerbose } from "openai/resources/audio/transcriptions";
 
 import { selectPreferredAudioAsset } from "./asset-selection";
+import { analyzeTranscriptInWorkerPool } from "./transcript-analysis-pool";
 import type { BooksRepo } from "../repo";
 import type { AppSettings, AssetFileRow, AssetRow, AssetTranscriptRow, BookRow, ChapterAnalysisRow, JobRow } from "../app-types";
 
@@ -352,6 +353,7 @@ type ChapterAnalysisDeps = {
   loadEpubEntries: typeof loadEpubEntries;
   extractChunkClip: typeof extractChunkClip;
   transcribeChunk: typeof transcribeChunk;
+  analyzeTranscript: typeof analyzeTranscriptInWorkerPool;
 };
 
 type ExtractChunkArgs = {
@@ -2024,12 +2026,15 @@ function storedPayload(chapters: StoredChapterTiming[]): StoredChapterPayload {
 export async function processChapterAnalysisJob(
   ctx: ChapterAnalysisContext,
   job: JobRow,
-  deps: ChapterAnalysisDeps = {
+  deps: Partial<ChapterAnalysisDeps> = {}
+): Promise<"done"> {
+  const resolvedDeps: ChapterAnalysisDeps = {
     loadEpubEntries,
     extractChunkClip,
     transcribeChunk,
-  }
-): Promise<"done"> {
+    analyzeTranscript: analyzeTranscriptInWorkerPool,
+    ...deps,
+  };
   const jobStartedAt = performance.now();
   const phaseStartedAt = new Map<string, number>();
   const phaseDurations: Record<string, number> = {};
@@ -2103,7 +2108,7 @@ export async function processChapterAnalysisJob(
   }
 
   startPhase("loadEpubEntries");
-  const entries = await deps.loadEpubEntries(ebookFile.path);
+  const entries = await resolvedDeps.loadEpubEntries(ebookFile.path);
   endPhase("loadEpubEntries");
   if (entries.length < 2) {
     ctx.repo.markJobSucceeded(job.id);
@@ -2154,7 +2159,7 @@ export async function processChapterAnalysisJob(
         error: null,
       });
       startPhase("transcribeAsset");
-      const transcript = await transcribeAssetWithDeps(ctx, target.asset, target.files, book, settings, deps, job, glossary);
+      const transcript = await transcribeAssetWithDeps(ctx, target.asset, target.files, book, settings, resolvedDeps, job, glossary);
       endPhase("transcribeAsset");
       transcriptWords = transcript.transcriptWords;
       plans = transcript.plans;
@@ -2162,7 +2167,7 @@ export async function processChapterAnalysisJob(
     }
 
     startPhase("analyzeTranscript");
-    const result = runTranscriptAnalysis({
+    const result = await resolvedDeps.analyzeTranscript({
       entries,
       durationMs,
       transcriptWords,
