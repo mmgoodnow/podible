@@ -1,50 +1,25 @@
 import { promises as fs } from "node:fs";
 
 import { buildJsonFeed, buildRssFeed } from "./feed";
-import { searchOpenLibrary } from "./openlibrary";
 import {
   buildSessionCookie,
-  clearSessionCookie,
-  createSessionToken,
-  hashSessionToken,
   resolveSessionFromRequest,
 } from "./auth";
 import { loadStoredTranscriptPayload } from "./chapter-analysis";
 import { buildChapters, streamAudioAsset, streamExtension } from "./media";
-import { buildPlexAuthUrl, createEphemeralPlexIdentity, createPlexPin, fetchPlexServerDevices } from "./plex";
 import { BooksRepo } from "./repo";
 import {
   addApiKey,
-  createBookFromOpenLibrary,
   isHtmlPageRoute,
   parseAppLoginPath,
-  parseMediaSelection,
-  renderActivityPage,
-  renderAddPage,
-  renderAdminPage,
-  renderAppAuthErrorPage,
-  renderBookPage,
-  renderLandingPage,
-  renderLibraryPage,
-  renderLoginPage,
-  renderPlexImmediateResultPage,
-  renderPlexLoadingPage,
   sanitizeRedirectPath,
-  waitForPlexLoginResult,
 } from "./http/support";
+import { handleAuthRoute, isPublicRoute } from "./http/auth-routes";
+import { handleAdminRoute, isAdminRoute } from "./http/admin-routes";
+import { json, parseId, redirect } from "./http/route-helpers";
+import { handleUserRoute } from "./http/user-routes";
 import { handleRpcMethod, handleRpcRequest } from "./rpc";
-import { triggerAutoAcquire } from "./service";
 import type { AppSettings } from "./types";
-
-function json(value: unknown, status = 200): Response {
-  return new Response(JSON.stringify(value, null, 2), {
-    status,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "no-store",
-    },
-  });
-}
 
 function acceptsBrotli(request: Request): boolean {
   return (request.headers.get("accept-encoding")?.toLowerCase() ?? "").includes("br");
@@ -85,24 +60,6 @@ async function jsonResponse(
   );
 }
 
-function redirect(location: string, status = 303): Response {
-  return new Response(null, {
-    status,
-    headers: {
-      Location: location,
-      "Cache-Control": "no-store",
-    },
-  });
-}
-
-function parseId(value: string): number {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error("Invalid id");
-  }
-  return parsed;
-}
-
 export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (request: Request) => Promise<Response> {
   return async (request: Request): Promise<Response> => {
     const startedAt = Date.now();
@@ -127,16 +84,9 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
     let response: Response;
     const isAuthenticatedRequest = currentSession !== null;
 
-    const isPublicRoute =
-      pathname === "/" ||
-      pathname === "/login" ||
-      pathname === "/logout" ||
-      pathname === "/login/plex/start" ||
-      pathname === "/login/plex/loading" ||
-      pathname === "/login/plex/complete" ||
-      appLoginPath !== null;
+    const publicRoute = isPublicRoute(pathname, appLoginPath);
     const isRpcRoute = pathname === "/rpc" || pathname.startsWith("/rpc/");
-    if (!isPublicRoute && !isRpcRoute && !isAuthenticatedRequest) {
+    if (!publicRoute && !isRpcRoute && !isAuthenticatedRequest) {
       if (request.method === "GET" && isHtmlPageRoute(pathname)) {
         const nextPath = `${pathname}${url.search}`;
         response = redirect(`/login?redirectTo=${encodeURIComponent(nextPath)}`);
@@ -153,338 +103,55 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
     try {
       const hasAdminAccess = (currentSession?.is_admin ?? 0) === 1;
 
-      if (pathname === "/login" && request.method === "GET") {
-        response = renderLoginPage(settings, {
-          notice: url.searchParams.get("notice"),
-          error: url.searchParams.get("error"),
-          currentUser: currentSession,
-          redirectTo,
-        });
+      const authMatch = await handleAuthRoute({
+        repo,
+        request,
+        settings,
+        currentSession,
+        pathname,
+        method,
+        redirectTo,
+        appLoginPath,
+      });
+      if (authMatch) {
+        settings = authMatch.settings;
+        response = authMatch.response;
         logRequest(response.status);
         return response;
       }
 
-      if (pathname === "/login/plex/start" && request.method === "POST") {
-        if (settings.auth.mode !== "plex") {
-          response = json({ error: "Plex sign-in is not enabled." }, 403);
-          logRequest(response.status);
-          return response;
-        }
-        try {
-          repo.deleteExpiredPlexLoginAttempts(new Date(Date.now() - 15 * 60_000).toISOString());
-          const identity = createEphemeralPlexIdentity(settings.auth.plex.productName);
-          const pin = await createPlexPin(identity);
-          repo.createPlexLoginAttempt({
-            pinId: pin.id,
-            clientIdentifier: identity.clientIdentifier,
-            publicJwkJson: JSON.stringify(identity.publicJwk),
-            privateKeyPkcs8: identity.privateKeyPkcs8,
-          });
-          console.log(`[plex] created pin id=${pin.id} clientId=${identity.clientIdentifier}`);
-          const forwardUrl = new URL(request.url);
-          forwardUrl.pathname = "/login/plex/complete";
-          forwardUrl.search = "";
-          forwardUrl.searchParams.set("pinId", String(pin.id));
-          if (redirectTo) {
-            forwardUrl.searchParams.set("redirectTo", redirectTo);
-          }
-          response = json({
-            pinId: pin.id,
-            authUrl: buildPlexAuthUrl(identity, pin.code, forwardUrl.toString()),
-          });
-        } catch (error) {
-          response = json({ error: (error as Error).message || "Unable to start Plex sign-in." }, 502);
-        }
-        logRequest(response.status);
-        return response;
-      }
-
-      if (pathname === "/login/plex/loading" && request.method === "GET") {
-        response = renderPlexLoadingPage(settings);
-        logRequest(response.status);
-        return response;
-      }
-
-      if (pathname === "/login/plex/complete" && request.method === "GET") {
-        if (settings.auth.mode !== "plex") {
-          response = renderPlexImmediateResultPage({ ok: false, redirectTo: "/", error: "Plex sign-in is not enabled." });
-          logRequest(response.status);
-          return response;
-        }
-        const pinId = Number.parseInt(url.searchParams.get("pinId") ?? "", 10);
-        if (!Number.isInteger(pinId) || pinId <= 0) {
-          response = renderPlexImmediateResultPage({ ok: false, redirectTo: "/login", error: "Missing or invalid Plex PIN id." });
-          logRequest(response.status);
-          return response;
-        }
-        const result = await waitForPlexLoginResult(repo, settings, pinId, null, redirectTo);
-        settings = result.settings;
-        response = renderPlexImmediateResultPage({
-          ok: result.kind === "success",
-          redirectTo: result.redirectTo,
-          error: result.kind === "error" ? result.error : null,
-        });
-        if (result.kind === "success") {
-          response.headers.append("Set-Cookie", buildSessionCookie(result.sessionToken, request));
-        }
-        logRequest(response.status);
-        return response;
-      }
-
-      if (pathname === "/logout" && request.method === "POST") {
-        if (currentSession) {
-          repo.deleteSession(currentSession.id);
-        }
-        response = redirect("/login?notice=Signed%20out.");
-        response.headers.append("Set-Cookie", clearSessionCookie(request));
-        logRequest(response.status);
-        return response;
-      }
-
-      if (appLoginPath && request.method === "GET") {
-        repo.deleteExpiredAppLoginAttempts(new Date().toISOString());
-        const attempt = repo.getAppLoginAttempt(appLoginPath.attemptId);
-        if (!attempt) {
-          response = new Response(await renderAppAuthErrorPage(settings, "This app sign-in attempt is missing or has expired.").text(), {
-            status: 400,
-            headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
-          });
-          logRequest(response.status);
-          return response;
-        }
-        const attemptPath = `/auth/app/${encodeURIComponent(attempt.id)}`;
-        if (appLoginPath.isComplete) {
-          if (!currentSession) {
-            response = redirect(attemptPath);
-            logRequest(response.status);
-            return response;
-          }
-          const code = createSessionToken();
-          repo.createAuthCode({
-            codeHash: hashSessionToken(code),
-            userId: currentSession.user_id,
-            attemptId: attempt.id,
-            expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-          });
-          const callbackUrl = new URL(attempt.redirect_uri);
-          callbackUrl.searchParams.set("code", code);
-          callbackUrl.searchParams.set("state", attempt.state);
-          response = redirect(callbackUrl.toString(), 302);
-          logRequest(response.status);
-          return response;
-        }
-        if (currentSession) {
-          response = redirect(`${attemptPath}/complete`);
-          logRequest(response.status);
-          return response;
-        }
-        response = renderLoginPage(settings, {
-          currentUser: currentSession,
-          redirectTo: `${attemptPath}/complete`,
-          inlinePlexLogin: true,
-        });
-        logRequest(response.status);
-        return response;
-      }
-
-      if (pathname === "/" && request.method === "GET") {
-        response = isAuthenticatedRequest
-          ? renderLandingPage(repo, settings, currentSession, null)
-          : renderLoginPage(settings, {
-              currentUser: currentSession,
-            });
-        logRequest(response.status);
-        return response;
-      }
-
-      if (pathname === "/admin" && !hasAdminAccess) {
+      if (isAdminRoute(pathname) && !hasAdminAccess) {
         response = new Response("Forbidden", { status: 403 });
         logRequest(response.status);
         return response;
       }
 
-      if (pathname === "/admin/plex" && request.method === "GET") {
-        response = redirect("/admin");
+      const adminMatch = await handleAdminRoute({
+        repo,
+        request,
+        settings,
+        currentSession,
+        pathname,
+        method,
+      });
+      if (adminMatch) {
+        settings = adminMatch.settings;
+        response = adminMatch.response;
         logRequest(response.status);
         return response;
       }
 
-      if (pathname === "/admin/plex/select" && request.method === "POST") {
-        if (settings.auth.mode !== "plex") {
-          response = new Response("Forbidden", { status: 403 });
-          logRequest(response.status);
-          return response;
-        }
-        const form = new URLSearchParams(await request.text());
-        const machineId = (form.get("machineId") ?? "").trim();
-        if (!machineId) {
-          response = redirect("/admin?plex_error=Missing%20machine%20id");
-          logRequest(response.status);
-          return response;
-        }
-        settings = repo.updateSettings({
-          ...settings,
-          auth: {
-            ...settings.auth,
-            plex: {
-              ...settings.auth.plex,
-              machineId,
-            },
-          },
-        });
-        response = redirect("/admin?plex_notice=Selected%20server.");
-        logRequest(response.status);
-        return response;
-      }
-
-      if (pathname === "/library" && request.method === "GET") {
-        response = renderLibraryPage(repo, settings, {
-          query: url.searchParams.get("q"),
-          currentUser: currentSession,
-          apiKey: null,
-        });
-        logRequest(response.status);
-        return response;
-      }
-
-      if (pathname === "/add" && request.method === "GET") {
-        const query = (url.searchParams.get("q") ?? "").trim();
-        if (!query) {
-          response = renderAddPage(settings, { currentUser: currentSession, apiKey: null });
-          logRequest(response.status);
-          return response;
-        }
-        try {
-          const results = await searchOpenLibrary(query, 10);
-          response = renderAddPage(settings, {
-            query,
-            results,
-            status: `Found ${results.length} result${results.length === 1 ? "" : "s"} for “${query}”.`,
-            currentUser: currentSession,
-            apiKey: null,
-          });
-        } catch (error) {
-          response = renderAddPage(settings, {
-            query,
-            error: `Search failed: ${(error as Error).message}`,
-            currentUser: currentSession,
-            apiKey: null,
-          });
-        }
-        logRequest(response.status);
-        return response;
-      }
-
-      if (pathname === "/add" && request.method === "POST") {
-        const body = await request.text();
-        const form = new URLSearchParams(body);
-        const openLibraryKey = (form.get("openLibraryKey") ?? "").trim();
-        if (!openLibraryKey) {
-          const addResponse = renderAddPage(settings, {
-            error: "openLibraryKey is required.",
-            currentUser: currentSession,
-            apiKey: null,
-          });
-          response = new Response(await addResponse.text(), {
-            status: 400,
-            headers: addResponse.headers,
-          });
-          logRequest(response.status);
-          return response;
-        }
-        try {
-          const bookId = await createBookFromOpenLibrary(repo, openLibraryKey);
-          response = redirect(`/book/${bookId}`);
-        } catch (error) {
-          const addResponse = renderAddPage(settings, {
-            error: `Add failed: ${(error as Error).message}`,
-            currentUser: currentSession,
-            apiKey: null,
-          });
-          response = new Response(await addResponse.text(), {
-            status: 400,
-            headers: addResponse.headers,
-          });
-        }
-        logRequest(response.status);
-        return response;
-      }
-
-      if (pathname.startsWith("/book/") && request.method === "GET") {
-        const bookId = parseId(pathname.split("/")[2] ?? "");
-        response = await renderBookPage(repo, settings, bookId, {
-          notice: url.searchParams.get("notice"),
-          error: url.searchParams.get("error"),
-          currentUser: currentSession,
-          apiKey: null,
-        });
-        logRequest(response.status);
-        return response;
-      }
-
-      if (pathname.startsWith("/book/") && pathname.endsWith("/acquire") && request.method === "POST") {
-        const bookId = parseId(pathname.split("/")[2] ?? "");
-        const body = await request.text();
-        const form = new URLSearchParams(body);
-        const media = parseMediaSelection(form.get("media"));
-        const book = repo.getBookRow(bookId);
-        if (!book) {
-          response = new Response("Not found", { status: 404 });
-          logRequest(response.status);
-          return response;
-        }
-        const jobId = await triggerAutoAcquire(repo, bookId, media);
-        const notice = `Queued ${media.join(" + ")} acquire for ${book.title} (job ${jobId}).`;
-        response = redirect(`/book/${bookId}?notice=${encodeURIComponent(notice)}`);
-        logRequest(response.status);
-        return response;
-      }
-
-      if (pathname === "/activity" && request.method === "GET") {
-        response = renderActivityPage(repo, settings, {
-          notice: url.searchParams.get("notice"),
-          error: url.searchParams.get("error"),
-          currentUser: currentSession,
-          apiKey: null,
-        });
-        logRequest(response.status);
-        return response;
-      }
-
-      if (pathname === "/activity/refresh" && request.method === "POST") {
-        const job = repo.createJob({ type: "full_library_refresh" });
-        response = redirect(`/activity?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`);
-        logRequest(response.status);
-        return response;
-      }
-
-      if (pathname === "/admin/refresh" && request.method === "POST") {
-        const job = repo.createJob({ type: "full_library_refresh" });
-        response = redirect(`/admin?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`);
-        logRequest(response.status);
-        return response;
-      }
-
-      if (pathname === "/admin" && request.method === "GET") {
-        let plexServers: Array<{ machineId: string; name: string; product: string; owned: boolean; sourceTitle: string | null }> = [];
-        const notice = url.searchParams.get("notice");
-        const error = url.searchParams.get("error");
-        let plexError = url.searchParams.get("plex_error");
-        if (settings.auth.mode === "plex" && settings.auth.plex.ownerToken) {
-          try {
-            plexServers = await fetchPlexServerDevices(settings);
-          } catch (error) {
-            plexError = plexError || (error as Error).message || "Unable to load Plex servers.";
-          }
-        }
-        response = renderAdminPage(repo, settings, currentSession, {
-          plexServers,
-          apiKey: null,
-          notice,
-          error,
-          plexNotice: url.searchParams.get("plex_notice"),
-          plexError,
-        });
+      const userResponse = await handleUserRoute({
+        repo,
+        request,
+        settings,
+        currentSession,
+        pathname,
+        method,
+        isAuthenticatedRequest,
+      });
+      if (userResponse) {
+        response = userResponse;
         logRequest(response.status);
         return response;
       }
