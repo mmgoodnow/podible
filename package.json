@@ -16,6 +16,7 @@
     "openai": "^6.22.0"
   },
   "devDependencies": {
+    "@playwright/cli": "^0.1.5",
     "bun-types": "^1.3.9",
     "typescript": "^5.9.3"
   }

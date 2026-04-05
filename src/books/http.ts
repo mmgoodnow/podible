@@ -1240,15 +1240,15 @@ function renderAdminPage(
         flex-wrap: wrap;
         align-items: center;
       }
-      input, button, textarea, select { font: inherit; }
-      input, select {
+      .dashboard-grid input, .dashboard-grid button, .dashboard-grid textarea, .dashboard-grid select { font: inherit; }
+      .dashboard-grid input, .dashboard-grid select {
         padding: 8px 10px;
         min-width: 220px;
         border: 1px solid var(--line);
         border-radius: 10px;
         background: #fff;
       }
-      button {
+      .dashboard-grid button {
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -1260,8 +1260,8 @@ function renderAdminPage(
         background: #fff;
         color: var(--text);
       }
-      button:hover { background: #faf8f1; }
-      textarea {
+      .dashboard-grid button:hover { background: #faf8f1; }
+      .dashboard-grid textarea {
         width: 100%;
         min-height: 220px;
         padding: 10px 12px;
