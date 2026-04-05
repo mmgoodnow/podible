@@ -1190,6 +1190,19 @@ function renderAdminPage(
         background: transparent;
       }
       .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+      .settings-actions {
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+      .settings-actions-left {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
       input, button, textarea, select { font: inherit; }
       input, select {
         padding: 8px 10px;
@@ -1344,12 +1357,14 @@ function renderAdminPage(
             <div>
               <h2>Settings JSON</h2>
               <div class="panel">
-                <div class="row">
-                  <button id="settings-save-btn" type="button">Save Settings</button>
-                  <form method="post" action="${escapeHtml(addApiKey("/admin/refresh", apiKey))}" style="margin: 0;">
-                    <button type="submit">Refresh Library</button>
-                  </form>
-                  <button id="wipe-db-btn" type="button" style="margin-left: auto; background: var(--danger); color: #fff; border: 1px solid var(--danger-border);">Wipe Entire Database</button>
+                <div class="settings-actions">
+                  <div class="settings-actions-left">
+                    <button id="settings-save-btn" type="button">Save Settings</button>
+                    <form method="post" action="${escapeHtml(addApiKey("/admin/refresh", apiKey))}" style="margin: 0;">
+                      <button type="submit">Refresh Library</button>
+                    </form>
+                  </div>
+                  <button id="wipe-db-btn" type="button" style="background: var(--danger); color: #fff; border: 1px solid var(--danger-border);">Wipe Entire Database</button>
                 </div>
                 <p id="settings-status" class="muted"></p>
                 ${messageMarkup(options.notice, options.error)}
