@@ -1174,14 +1174,18 @@ function renderAdminPage(
         gap: 14px;
         align-items: start;
       }
+      .admin-top-grid > * { min-width: 0; }
       .admin-stack {
         grid-column: span 6;
         display: grid;
         gap: 14px;
         align-content: start;
+        min-width: 0;
       }
+      .admin-stack > * { min-width: 0; }
       .settings-card {
         grid-column: span 6;
+        min-width: 0;
       }
       .card-full { grid-column: span 12; }
       .card-mid { grid-column: span 6; }
@@ -1246,6 +1250,7 @@ function renderAdminPage(
       }
       .table-wrap {
         overflow: auto;
+        min-width: 0;
         border: 1px solid var(--line-soft);
         border-radius: 12px;
         background: #fff;
