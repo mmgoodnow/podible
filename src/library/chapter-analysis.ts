@@ -525,8 +525,24 @@ function chapterStartRatios(entries: EpubChapterEntry[]): number[] {
   return ratios;
 }
 
+function boundaryEstimateRatios(entries: EpubChapterEntry[]): number[] {
+  const weightedCounts = entries.map((entry) => {
+    if (isFrontMatterTitle(entry.title)) return 0;
+    if (isSectionDividerEntry(entry)) return Math.min(entry.wordCount, 16);
+    return entry.wordCount;
+  });
+  const totalWords = weightedCounts.reduce((sum, count) => sum + count, 0);
+  const ratios = [0];
+  let runningWords = 0;
+  for (let index = 0; index < entries.length - 1; index += 1) {
+    runningWords += weightedCounts[index] ?? 0;
+    ratios.push(totalWords > 0 ? runningWords / totalWords : 0);
+  }
+  return ratios;
+}
+
 function boundaryProbes(entries: EpubChapterEntry[], durationMs: number): ChapterBoundaryProbe[] {
-  const ratios = chapterStartRatios(entries);
+  const ratios = boundaryEstimateRatios(entries);
   const out: ChapterBoundaryProbe[] = [];
   for (let index = 0; index < entries.length - 1; index += 1) {
     const previous = entries[index]!;
