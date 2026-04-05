@@ -1138,6 +1138,14 @@ function renderAdminPage(
   const activeJobs = (health.jobs.queued ?? 0) + (health.jobs.running ?? 0);
   const failedJobs = health.jobs.failed ?? 0;
   const releaseIssues = health.releases.failed ?? 0;
+  const plexServerOptions = plexServers
+    .map((server) => {
+      const label = `${server.name} (${server.owned ? "owned" : "shared"}${server.sourceTitle ? ` • ${server.sourceTitle}` : ""})`;
+      return `<option value="${escapeHtml(server.machineId)}" data-machine-name="${escapeHtml(server.name)}"${
+        server.machineId === settings.auth.plex.machineId ? " selected" : ""
+      }>${escapeHtml(label)}</option>`;
+    })
+    .join("");
 
   const userRows =
     users.length > 0
@@ -1274,93 +1282,14 @@ function renderAdminPage(
       }
       pre code { background: transparent; padding: 0; }
       .card h2 + .panel, .card h2 + .table-wrap, .card h2 + p { margin-top: 0; }
-      .feed-preview-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
-      }
-      .plex-server-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        gap: 10px;
-      }
-      .feed-preview-item {
-        display: grid;
-        grid-template-columns: 64px minmax(0, 1fr);
-        gap: 10px;
-        border: 1px solid var(--line-soft);
-        border-radius: 12px;
-        background: #fff;
-        padding: 8px;
-      }
-      .feed-preview-cover {
-        position: relative;
-        width: 64px;
-        height: 64px;
-        border-radius: 8px;
-        border: 1px solid var(--line-soft);
-        background: linear-gradient(135deg, #eef5f0, #f7f5ed);
-        color: var(--muted);
-        font-weight: 700;
-        overflow: hidden;
-      }
-      .feed-preview-fallback {
-        width: 100%;
-        height: 100%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-      .feed-preview-cover img {
-        position: absolute;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-        display: block;
-      }
-      .feed-preview-body { min-width: 0; }
-      .feed-preview-title-row {
-        display: flex;
-        justify-content: space-between;
-        gap: 8px;
-        align-items: baseline;
-      }
-      .feed-preview-title-row strong {
-        display: block;
-        min-width: 0;
-        line-height: 1.2;
-      }
-      .feed-preview-author {
-        margin: 2px 0 4px;
-        color: var(--muted);
-        font-size: 12px;
-      }
-      .feed-preview-desc {
-        margin: 0;
-        color: var(--text);
-        font-size: 12px;
-        line-height: 1.35;
-      }
-      .feed-preview-links {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        margin-top: 6px;
-        font-size: 12px;
-      }
-      .feed-preview-links a:hover { text-decoration: underline; }
       @media (max-width: 1200px) {
         .card-mid { grid-column: span 12; }
         .admin-stack, .settings-card { grid-column: span 12; }
-        .feed-preview-grid { grid-template-columns: 1fr; }
       }
       @media (max-width: 900px) {
         .dashboard-grid { gap: 10px; }
         input, select { min-width: 150px; }
         table { min-width: 560px; }
-        .feed-preview-item { grid-template-columns: 56px minmax(0, 1fr); }
-        .feed-preview-cover { width: 56px; height: 56px; }
       }
     </style>
       <div class="dashboard-grid">
@@ -1385,25 +1314,15 @@ function renderAdminPage(
           ${messageMarkup(options.plexNotice, options.plexError)}
           ${
             plexServers.length > 0
-              ? `<div class="plex-server-grid">${plexServers
-                  .map(
-                    (server) => `<form method="post" action="${escapeHtml(addApiKey("/admin/plex/select", apiKey))}" class="feed-preview-item">
-  <input type="hidden" name="machineId" value="${escapeHtml(server.machineId)}" />
-  <input type="hidden" name="machineName" value="${escapeHtml(server.name)}" />
-  <div class="feed-preview-body" style="grid-column: 1 / -1;">
-    <div class="feed-preview-title-row">
-      <strong>${escapeHtml(server.name)}</strong>
-      <span class="muted">${server.machineId === settings.auth.plex.machineId ? "Selected" : "Available"}</span>
-    </div>
-    <p class="feed-preview-author">${escapeHtml(server.product || "Plex server")} • ${server.owned ? "owned" : "shared"}${server.sourceTitle ? ` • ${escapeHtml(server.sourceTitle)}` : ""}</p>
-    <p class="feed-preview-desc"><code>${escapeHtml(server.machineId)}</code></p>
-    <div class="feed-preview-links">
-      <button type="submit">${server.machineId === settings.auth.plex.machineId ? "Selected server" : "Use this server"}</button>
-    </div>
-  </div>
-</form>`
-                  )
-                  .join("")}</div>`
+              ? `<form method="post" action="${escapeHtml(addApiKey("/admin/plex/select", apiKey))}" class="panel">
+          <div class="row">
+            <select id="plex-server-select" name="machineId">
+              ${plexServerOptions}
+            </select>
+            <input id="plex-server-name" type="hidden" name="machineName" value="${escapeHtml(settings.auth.plex.machineName || plexServers[0]?.name || "")}" />
+            <button type="submit">Use selected server</button>
+          </div>
+        </form>`
               : `<p class="muted">No Plex servers were found for the current owner token.</p>`
           }
         </section>`
@@ -1899,12 +1818,20 @@ function renderAdminPage(
         var settingsEditor = document.getElementById("settings-editor");
         var settingsSaveBtn = document.getElementById("settings-save-btn");
         var wipeDbBtn = document.getElementById("wipe-db-btn");
+        var plexServerSelect = document.getElementById("plex-server-select");
+        var plexServerNameInput = document.getElementById("plex-server-name");
         var jobsTableBody = document.getElementById("jobs-table-body");
         var jobsRefreshBtn = document.getElementById("jobs-refresh-btn");
         var jobsLimitInput = document.getElementById("jobs-limit");
         var jobsTypeInput = document.getElementById("jobs-type");
         var downloadsTableBody = document.getElementById("downloads-table-body");
         var downloadsRefreshBtn = document.getElementById("downloads-refresh-btn");
+        if (plexServerSelect && plexServerNameInput) {
+          plexServerSelect.addEventListener("change", function () {
+            var selected = plexServerSelect.options[plexServerSelect.selectedIndex];
+            plexServerNameInput.value = selected && selected.dataset ? selected.dataset.machineName || selected.textContent || "" : "";
+          });
+        }
         async function loadSettings() {
           try {
             text("settings-status", "Loading...");
