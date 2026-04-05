@@ -49,7 +49,7 @@ function renderAppPage(
   void settings;
   const showNav = options.showNav !== false;
   const showAdminNav = Boolean(apiKey) || (currentUser?.is_admin ?? 0) === 1;
-  const themeToggle = `<button type="button" class="theme-toggle" id="theme-toggle">Theme: System</button>`;
+  const themeToggle = `<button type="button" class="theme-toggle" id="theme-toggle">System</button>`;
   const accountNav = currentUser
     ? `<span class="muted">Signed in as ${escapeHtml(displayUserName(currentUser))}</span>
        <form method="post" action="${escapeHtml(addApiKey("/logout", apiKey))}" class="nav-signout-form">
@@ -307,7 +307,7 @@ function renderAppPage(
           }
           if (button) {
             const resolved = resolvedTheme(mode);
-            const label = "Theme: " + mode[0].toUpperCase() + mode.slice(1) + (mode === "system" ? " (" + resolved + ")" : "");
+            const label = mode[0].toUpperCase() + mode.slice(1) + (mode === "system" ? " (" + resolved + ")" : "");
             button.textContent = label;
           }
         }
