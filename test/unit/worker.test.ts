@@ -188,29 +188,33 @@ describe("worker acquire auto-acquire retries", () => {
 
 describe("worker robustness", () => {
   test("does not crash when failed job row was deleted before markJobFailed", async () => {
-    let claimed = false;
+    const queuedJobs = [
+      {
+        id: 123,
+        type: "acquire",
+        status: "queued",
+        book_id: 1,
+        release_id: null,
+        payload_json: JSON.stringify({ bookId: 1, media: ["audio"] }),
+        error: null,
+        attempt_count: 0,
+        max_attempts: 5,
+        next_run_at: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ];
     const logs: string[] = [];
     let stopWorker = false;
 
     const fakeRepo = {
       requeueRunningJobs: () => 0,
-      claimNextRunnableJob: () => {
-        if (claimed) return null;
-        claimed = true;
-        return {
-          id: 123,
-          type: "acquire",
-          status: "running",
-          book_id: 1,
-          release_id: null,
-          payload_json: JSON.stringify({ bookId: 1, media: ["audio"] }),
-          error: null,
-          attempt_count: 0,
-          max_attempts: 5,
-          next_run_at: null,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        };
+      listRunnableJobs: () => queuedJobs.filter((job) => job.status === "queued"),
+      claimQueuedJob: (jobId: number) => {
+        const job = queuedJobs.find((candidate) => candidate.id === jobId && candidate.status === "queued");
+        if (!job) return null;
+        job.status = "running";
+        return job;
       },
       getBookRow: () => ({ id: 1, title: "Twilight", author: "Stephenie Meyer" }),
       markJobFailed: () => null,
@@ -247,6 +251,250 @@ describe("worker robustness", () => {
       stopWorker = true;
       await Promise.race([worker, sleep(1000)]);
     }
+  });
+});
+
+describe("worker concurrency", () => {
+  test("runs audio and ebook acquire jobs for the same book in parallel", async () => {
+    const queuedJobs = [
+      {
+        id: 1,
+        type: "acquire",
+        status: "queued",
+        book_id: 7,
+        release_id: null,
+        payload_json: JSON.stringify({ bookId: 7, media: ["audio"] }),
+        error: null,
+        attempt_count: 0,
+        max_attempts: 5,
+        next_run_at: null,
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: 2,
+        type: "acquire",
+        status: "queued",
+        book_id: 7,
+        release_id: null,
+        payload_json: JSON.stringify({ bookId: 7, media: ["ebook"] }),
+        error: null,
+        attempt_count: 0,
+        max_attempts: 5,
+        next_run_at: null,
+        created_at: "2026-01-01T00:00:01.000Z",
+        updated_at: "2026-01-01T00:00:01.000Z",
+      },
+    ];
+    let stopWorker = false;
+    let active = 0;
+    let maxConcurrent = 0;
+    let processed = 0;
+
+    const fakeRepo = {
+      requeueRunningJobs: () => 0,
+      listRunnableJobs: () => queuedJobs.filter((job) => job.status === "queued"),
+      claimQueuedJob: (jobId: number) => {
+        const job = queuedJobs.find((candidate) => candidate.id === jobId && candidate.status === "queued");
+        if (!job) return null;
+        job.status = "running";
+        return job;
+      },
+      getAsset: () => null,
+      getRelease: () => null,
+    } as unknown as BooksRepo;
+
+    await Promise.race([
+      runWorker(
+        {
+          repo: fakeRepo,
+          getSettings: () => defaultSettings({ auth: { mode: "plex" } }),
+          shouldStop: () => stopWorker,
+        },
+        {
+          concurrency: 2,
+          processJob: async () => {
+            active += 1;
+            maxConcurrent = Math.max(maxConcurrent, active);
+            await sleep(50);
+            active -= 1;
+            processed += 1;
+            if (processed === 2) stopWorker = true;
+            return "done";
+          },
+          handleJobFailure: async () => {
+            throw new Error("unexpected failure");
+          },
+        }
+      ),
+      sleep(1000),
+    ]);
+
+    expect(processed).toBe(2);
+    expect(maxConcurrent).toBe(2);
+  });
+
+  test("serializes conflicting same-media acquire jobs for the same book", async () => {
+    const queuedJobs = [
+      {
+        id: 1,
+        type: "acquire",
+        status: "queued",
+        book_id: 7,
+        release_id: null,
+        payload_json: JSON.stringify({ bookId: 7, media: ["audio"] }),
+        error: null,
+        attempt_count: 0,
+        max_attempts: 5,
+        next_run_at: null,
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: 2,
+        type: "acquire",
+        status: "queued",
+        book_id: 7,
+        release_id: null,
+        payload_json: JSON.stringify({ bookId: 7, media: ["audio"] }),
+        error: null,
+        attempt_count: 0,
+        max_attempts: 5,
+        next_run_at: null,
+        created_at: "2026-01-01T00:00:01.000Z",
+        updated_at: "2026-01-01T00:00:01.000Z",
+      },
+    ];
+    let stopWorker = false;
+    let active = 0;
+    let maxConcurrent = 0;
+    let processed = 0;
+
+    const fakeRepo = {
+      requeueRunningJobs: () => 0,
+      listRunnableJobs: () => queuedJobs.filter((job) => job.status === "queued"),
+      claimQueuedJob: (jobId: number) => {
+        const job = queuedJobs.find((candidate) => candidate.id === jobId && candidate.status === "queued");
+        if (!job) return null;
+        job.status = "running";
+        return job;
+      },
+      getAsset: () => null,
+      getRelease: () => null,
+    } as unknown as BooksRepo;
+
+    await Promise.race([
+      runWorker(
+        {
+          repo: fakeRepo,
+          getSettings: () => defaultSettings({ auth: { mode: "plex" } }),
+          shouldStop: () => stopWorker,
+        },
+        {
+          concurrency: 2,
+          processJob: async () => {
+            active += 1;
+            maxConcurrent = Math.max(maxConcurrent, active);
+            await sleep(50);
+            active -= 1;
+            processed += 1;
+            if (processed === 2) stopWorker = true;
+            return "done";
+          },
+          handleJobFailure: async () => {
+            throw new Error("unexpected failure");
+          },
+        }
+      ),
+      sleep(1000),
+    ]);
+
+    expect(processed).toBe(2);
+    expect(maxConcurrent).toBe(1);
+  });
+
+  test("runs chapter analysis jobs in parallel for different assets", async () => {
+    const queuedJobs = [
+      {
+        id: 1,
+        type: "chapter_analysis",
+        status: "queued",
+        book_id: 7,
+        release_id: null,
+        payload_json: JSON.stringify({ assetId: 101, ebookAssetId: 201 }),
+        error: null,
+        attempt_count: 0,
+        max_attempts: 5,
+        next_run_at: null,
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: 2,
+        type: "chapter_analysis",
+        status: "queued",
+        book_id: 9,
+        release_id: null,
+        payload_json: JSON.stringify({ assetId: 102, ebookAssetId: 202 }),
+        error: null,
+        attempt_count: 0,
+        max_attempts: 5,
+        next_run_at: null,
+        created_at: "2026-01-01T00:00:01.000Z",
+        updated_at: "2026-01-01T00:00:01.000Z",
+      },
+    ];
+    let stopWorker = false;
+    let active = 0;
+    let maxConcurrent = 0;
+    let processed = 0;
+
+    const assets = new Map([
+      [101, { id: 101, book_id: 7, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
+      [102, { id: 102, book_id: 9, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
+    ]);
+
+    const fakeRepo = {
+      requeueRunningJobs: () => 0,
+      listRunnableJobs: () => queuedJobs.filter((job) => job.status === "queued"),
+      claimQueuedJob: (jobId: number) => {
+        const job = queuedJobs.find((candidate) => candidate.id === jobId && candidate.status === "queued");
+        if (!job) return null;
+        job.status = "running";
+        return job;
+      },
+      getAsset: (assetId: number) => assets.get(assetId) ?? null,
+      getRelease: () => null,
+    } as unknown as BooksRepo;
+
+    await Promise.race([
+      runWorker(
+        {
+          repo: fakeRepo,
+          getSettings: () => defaultSettings({ auth: { mode: "plex" } }),
+          shouldStop: () => stopWorker,
+        },
+        {
+          concurrency: 2,
+          processJob: async () => {
+            active += 1;
+            maxConcurrent = Math.max(maxConcurrent, active);
+            await sleep(50);
+            active -= 1;
+            processed += 1;
+            if (processed === 2) stopWorker = true;
+            return "done";
+          },
+          handleJobFailure: async () => {
+            throw new Error("unexpected failure");
+          },
+        }
+      ),
+      sleep(1000),
+    ]);
+
+    expect(processed).toBe(2);
+    expect(maxConcurrent).toBe(2);
   });
 });
 

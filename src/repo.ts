@@ -972,31 +972,36 @@ export class BooksRepo {
     return Number(result.changes);
   }
 
-  claimNextRunnableJob(now = nowIso()): JobRow | null {
+  listRunnableJobs(now = nowIso(), limit = 10): JobRow[] {
+    return this.db
+      .query(
+        `SELECT * FROM jobs
+         WHERE status = 'queued'
+           AND (next_run_at IS NULL OR next_run_at <= ?)
+         ORDER BY created_at ASC, id ASC
+         LIMIT ?`
+      )
+      .all(now, limit) as JobRow[];
+  }
+
+  claimQueuedJob(jobId: number, now = nowIso()): JobRow | null {
+    assertPositiveInt(jobId);
     return this.db.transaction(() => {
-      const candidate = this.db
-        .query(
-          `SELECT * FROM jobs
-           WHERE status = 'queued'
-             AND (next_run_at IS NULL OR next_run_at <= ?)
-           ORDER BY created_at ASC, id ASC
-           LIMIT 1`
-        )
-        .get(now) as JobRow | null;
-
-      if (!candidate) return null;
-
-      const claimed = this.db
+      return (this.db
         .query(
           `UPDATE jobs
            SET status = 'running', updated_at = ?
            WHERE id = ? AND status = 'queued'
            RETURNING *`
         )
-        .get(nowIso(), candidate.id) as JobRow | null;
-
-      return claimed;
+        .get(now, jobId) as JobRow | null) ?? null;
     })();
+  }
+
+  claimNextRunnableJob(now = nowIso()): JobRow | null {
+    const candidate = this.listRunnableJobs(now, 1)[0];
+    if (!candidate) return null;
+    return this.claimQueuedJob(candidate.id, nowIso());
   }
 
   listDownloads(): DownloadView[] {
