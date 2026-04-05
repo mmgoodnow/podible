@@ -10,8 +10,8 @@ import OpenAI from "openai";
 import type { TranscriptionVerbose } from "openai/resources/audio/transcriptions";
 
 import { selectPreferredAudioAsset } from "./asset-selection";
-import type { BooksRepo } from "./repo";
-import type { AppSettings, AssetFileRow, AssetRow, AssetTranscriptRow, BookRow, ChapterAnalysisRow, JobRow } from "./app-types";
+import type { BooksRepo } from "../repo";
+import type { AppSettings, AssetFileRow, AssetRow, AssetTranscriptRow, BookRow, ChapterAnalysisRow, JobRow } from "../app-types";
 
 const CHAPTER_ANALYSIS_SOURCE = "full_transcript_epub";
 const CHAPTER_ANALYSIS_ALGORITHM_VERSION = "2026-04-02-v5";

@@ -1,4 +1,4 @@
-import { searchOpenLibrary } from "../openlibrary";
+import { searchOpenLibrary } from "../library/openlibrary";
 
 import { defineMethod, defineRouter } from "./framework";
 import { emptyParamsSchema, limitSchema, nonEmptyStringSchema, openLibraryCandidateSchema } from "./schemas";

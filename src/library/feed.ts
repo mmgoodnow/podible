@@ -1,8 +1,8 @@
-import { escapeXml, firstLine, htmlToPlainText, truncate } from "./utils/strings";
-import { formatDuration } from "./utils/time";
+import { escapeXml, firstLine, htmlToPlainText, truncate } from "../utils/strings";
+import { formatDuration } from "../utils/time";
 
 import { preferredAudioForBooks, streamExtension } from "./media";
-import type { BooksRepo } from "./repo";
+import type { BooksRepo } from "../repo";
 
 function requestOrigin(request: Request): string {
   const url = new URL(request.url);

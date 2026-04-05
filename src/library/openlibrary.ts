@@ -1,4 +1,4 @@
-import type { BookRow } from "./app-types";
+import type { BookRow } from "../app-types";
 
 type OpenLibraryDoc = {
   title?: string;

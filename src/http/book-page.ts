@@ -1,5 +1,5 @@
-import { buildChapters, selectPreferredAudioAsset, streamExtension } from "../media";
-import { selectPreferredEpubAsset } from "../chapter-analysis";
+import { buildChapters, selectPreferredAudioAsset, streamExtension } from "../library/media";
+import { selectPreferredEpubAsset } from "../library/chapter-analysis";
 import { BooksRepo } from "../repo";
 import type { AppSettings, SessionWithUserRow } from "../app-types";
 

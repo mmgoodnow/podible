@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 
-import { infoHashFromTorrentBytes, normalizeInfoHash } from "../../src/torrent";
+import { infoHashFromTorrentBytes, normalizeInfoHash } from "../../src/library/torrent";
 
 function makeTorrentBytes(name: string): Uint8Array {
   const nameLen = Buffer.byteLength(name);

@@ -1,6 +1,6 @@
 import { XMLParser } from "fast-xml-parser";
 
-import type { MediaType, TorznabSource } from "./app-types";
+import type { MediaType, TorznabSource } from "../app-types";
 import { normalizeInfoHash } from "./torrent";
 
 type TorznabResult = {

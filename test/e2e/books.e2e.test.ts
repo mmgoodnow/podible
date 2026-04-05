@@ -12,7 +12,7 @@ import { createPodibleFetchHandler } from "../../src/http";
 import { BooksRepo } from "../../src/repo";
 import { hashSessionToken } from "../../src/auth";
 import { defaultSettings } from "../../src/settings";
-import { infoHashFromTorrentBytes } from "../../src/torrent";
+import { infoHashFromTorrentBytes } from "../../src/library/torrent";
 import { runWorker } from "../../src/worker";
 import { startMockRtorrent } from "../mocks/rtorrent";
 import { startMockTorznab } from "../mocks/torznab";

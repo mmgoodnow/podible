@@ -1,14 +1,14 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { parseRange, segmentsForRange, streamSegmentsWithXingPatch } from "./streaming/range";
-import { buildId3ChaptersTag } from "./streaming/id3";
-import { readFfprobeChapters } from "./media/probe-cache";
+import { parseRange, segmentsForRange, streamSegmentsWithXingPatch } from "../streaming/range";
+import { buildId3ChaptersTag } from "../streaming/id3";
+import { readFfprobeChapters } from "../media/probe-cache";
 import { selectPreferredAudioAsset } from "./asset-selection";
 import { loadStoredChapterTimings } from "./chapter-analysis";
 
-import type { BooksRepo } from "./repo";
-import type { AssetFileRow, AssetRow, BookRow, LibraryBook } from "./app-types";
+import type { BooksRepo } from "../repo";
+import type { AssetFileRow, AssetRow, BookRow, LibraryBook } from "../app-types";
 
 export { selectPreferredAudioAsset } from "./asset-selection";
 

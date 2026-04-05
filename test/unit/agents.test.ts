@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import bencode from "bencode";
 
-import { selectManualImportPaths, selectSearchCandidate } from "../../src/agents";
+import { selectManualImportPaths, selectSearchCandidate } from "../../src/library/agents";
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { defaultSettings, parseSettings } from "../../src/settings";

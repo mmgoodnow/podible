@@ -1,4 +1,4 @@
-import { scanLibraryRoot } from "../scanner";
+import { scanLibraryRoot } from "../library/scanner";
 import type { JobRow } from "../app-types";
 import type { WorkerContext } from "./context";
 

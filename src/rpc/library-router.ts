@@ -1,9 +1,9 @@
 import { z } from "zod";
 
-import { hydrateBookFromOpenLibrary } from "../hydration";
-import { resolveOpenLibraryCandidate } from "../openlibrary";
+import { hydrateBookFromOpenLibrary } from "../library/hydration";
+import { resolveOpenLibraryCandidate } from "../library/openlibrary";
 import { RtorrentClient } from "../rtorrent";
-import { triggerAutoAcquire } from "../service";
+import { triggerAutoAcquire } from "../library/service";
 
 import { defineMethod, defineRouter } from "./framework";
 import {

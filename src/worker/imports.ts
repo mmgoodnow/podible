@@ -1,5 +1,5 @@
-import { selectManualImportPaths } from "../agents";
-import { importReleaseFromPath, inspectImportPath } from "../importer";
+import { selectManualImportPaths } from "../library/agents";
+import { importReleaseFromPath, inspectImportPath } from "../library/importer";
 import { RtorrentClient } from "../rtorrent";
 import type { JobRow } from "../app-types";
 import { workerLog, type WorkerContext } from "./context";

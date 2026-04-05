@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises";
 
 import { z } from "zod";
 
-import { computeDownloadFraction, pseudoProgressForMediaStatus, pseudoProgressForRelease } from "../progress";
+import { computeDownloadFraction, pseudoProgressForMediaStatus, pseudoProgressForRelease } from "../library/progress";
 import { BooksRepo } from "../repo";
 import { RtorrentClient } from "../rtorrent";
 import type { JobRow, LibraryBook, ReleaseRow, SessionWithUserRow } from "../app-types";

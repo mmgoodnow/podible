@@ -1,6 +1,6 @@
-import { selectManualImportPaths, selectSearchCandidate } from "../agents";
-import { inspectImportPath } from "../importer";
-import { runSearch } from "../service";
+import { selectManualImportPaths, selectSearchCandidate } from "../library/agents";
+import { inspectImportPath } from "../library/importer";
+import { runSearch } from "../library/service";
 import { z } from "zod";
 
 import { defineMethod, defineRouter } from "./framework";

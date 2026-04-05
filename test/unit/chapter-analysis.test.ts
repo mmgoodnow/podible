@@ -16,8 +16,8 @@ import {
   normalizeTranscriptionLanguage,
   processChapterAnalysisJob,
   queueChapterAnalysisForBook,
-} from "../../src/chapter-analysis";
-import { buildChapters } from "../../src/media";
+} from "../../src/library/chapter-analysis";
+import { buildChapters } from "../../src/library/media";
 import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
 

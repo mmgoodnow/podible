@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 
-import { loadStoredTranscriptPayload } from "../chapter-analysis";
-import { buildChapters, streamAudioAsset, streamExtension } from "../media";
+import { loadStoredTranscriptPayload } from "../library/chapter-analysis";
+import { buildChapters, streamAudioAsset, streamExtension } from "../library/media";
 import { BooksRepo } from "../repo";
 import { requireAuthenticatedRequest, type HttpEnv } from "./middleware";
 import { jsonResponse, parseId } from "./route-helpers";

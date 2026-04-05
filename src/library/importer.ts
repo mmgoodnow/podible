@@ -1,12 +1,12 @@
 import { constants, promises as fs } from "node:fs";
 import path from "node:path";
 
-import { getDurationSeconds } from "./media/probe-cache";
-import { normalizeAudioExt } from "./media/metadata";
+import { getDurationSeconds } from "../media/probe-cache";
+import { normalizeAudioExt } from "../media/metadata";
 import { computeEpubWordCount, queueChapterAnalysisForBook } from "./chapter-analysis";
 
-import type { BooksRepo } from "./repo";
-import type { AssetKind, MediaType, ReleaseRow } from "./app-types";
+import type { BooksRepo } from "../repo";
+import type { AssetKind, MediaType, ReleaseRow } from "../app-types";
 
 /**
  * Release importer that materializes downloader output as library assets.

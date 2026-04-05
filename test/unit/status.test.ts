@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { deriveBookStatus, deriveMediaStatus, MediaStatus } from "../../src/status";
+import { deriveBookStatus, deriveMediaStatus, MediaStatus } from "../../src/library/status";
 
 describe("status derivation", () => {
   test("media status precedence follows plan", () => {

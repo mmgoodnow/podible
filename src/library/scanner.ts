@@ -1,11 +1,11 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { getDurationSeconds } from "./media/probe-cache";
+import { getDurationSeconds } from "../media/probe-cache";
 import { computeEpubWordCount, queueChapterAnalysisForBook } from "./chapter-analysis";
 
 import { hydrateBookFromOpenLibrary } from "./hydration";
-import type { BooksRepo } from "./repo";
+import type { BooksRepo } from "../repo";
 
 /**
  * Filesystem-first scanner for existing libraries.

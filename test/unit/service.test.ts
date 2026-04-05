@@ -4,9 +4,9 @@ import { Database } from "bun:sqlite";
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
-import { runSearch, runSnatch } from "../../src/service";
-import { torrentCacheKeyFor } from "../../src/torrent-cache";
-import { infoHashFromTorrentBytes } from "../../src/torrent";
+import { runSearch, runSnatch } from "../../src/library/service";
+import { torrentCacheKeyFor } from "../../src/library/torrent-cache";
+import { infoHashFromTorrentBytes } from "../../src/library/torrent";
 
 describe("search ranking", () => {
   test("penalizes box-set style matches", async () => {

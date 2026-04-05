@@ -1,6 +1,6 @@
 import { nowIso } from "../db";
 import { RtorrentClient } from "../rtorrent";
-import { triggerAutoAcquire } from "../service";
+import { triggerAutoAcquire } from "../library/service";
 import type { RtorrentDownloadState } from "../rtorrent";
 import type { AppSettings, JobRow, MediaType } from "../app-types";
 import type { WorkerContext } from "./context";

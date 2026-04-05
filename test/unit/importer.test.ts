@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { runMigrations } from "../../src/db";
-import { importReleaseFromPath } from "../../src/importer";
+import { importReleaseFromPath } from "../../src/library/importer";
 import { BooksRepo } from "../../src/repo";
 
 const tempDirs: string[] = [];

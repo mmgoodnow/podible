@@ -1,7 +1,7 @@
-import { hydrateBookFromOpenLibrary } from "../hydration";
-import { resolveOpenLibraryCandidate, type OpenLibraryCandidate } from "../openlibrary";
+import { hydrateBookFromOpenLibrary } from "../library/hydration";
+import { resolveOpenLibraryCandidate, type OpenLibraryCandidate } from "../library/openlibrary";
 import { BooksRepo } from "../repo";
-import { triggerAutoAcquire } from "../service";
+import { triggerAutoAcquire } from "../library/service";
 import type { AppSettings, SessionWithUserRow } from "../app-types";
 
 import { addApiKey, escapeHtml, renderAppPage } from "./common";

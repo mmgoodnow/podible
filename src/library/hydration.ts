@@ -2,8 +2,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { fetchOpenLibraryMetadata } from "./openlibrary";
-import type { BooksRepo } from "./repo";
-import type { LibraryBook } from "./app-types";
+import type { BooksRepo } from "../repo";
+import type { LibraryBook } from "../app-types";
 
 function sanitizePathSegment(value: string): string {
   const trimmed = value.trim();

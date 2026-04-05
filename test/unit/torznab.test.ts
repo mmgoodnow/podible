@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseTorznabSearch } from "../../src/torznab";
+import { parseTorznabSearch } from "../../src/library/torznab";
 
 const SAMPLE = `<?xml version="1.0"?>
 <rss><channel>

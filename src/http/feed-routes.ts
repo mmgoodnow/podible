@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 
-import { buildJsonFeed, buildRssFeed } from "../feed";
+import { buildJsonFeed, buildRssFeed } from "../library/feed";
 import { BooksRepo } from "../repo";
 import { requireAuthenticatedRequest, type HttpEnv } from "./middleware";
 

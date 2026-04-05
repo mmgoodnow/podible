@@ -1,12 +1,12 @@
 import OpenAI from "openai";
 
 import type { ImportInspectionFile } from "./importer";
-import type { BooksRepo } from "./repo";
+import type { BooksRepo } from "../repo";
 import { rankSearchResults } from "./service";
 import type { TorznabResult } from "./torznab";
 import { getOrFetchCachedTorrentBytes, inspectTorrentFiles } from "./torrent-cache";
 import { normalizeInfoHash } from "./torrent";
-import type { AppSettings, MediaType } from "./app-types";
+import type { AppSettings, MediaType } from "../app-types";
 
 /**
  * Optional agent decision layer.

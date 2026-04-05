@@ -5,7 +5,7 @@ import {
   pseudoProgressForBook,
   pseudoProgressForMediaStatus,
   pseudoProgressForRelease,
-} from "../../src/progress";
+} from "../../src/library/progress";
 
 describe("progress helpers", () => {
   test("maps media states to pseudo progress", () => {

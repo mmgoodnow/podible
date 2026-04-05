@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 
-import { searchOpenLibrary } from "../openlibrary";
+import { searchOpenLibrary } from "../library/openlibrary";
 import { BooksRepo } from "../repo";
-import { triggerAutoAcquire } from "../service";
+import { triggerAutoAcquire } from "../library/service";
 import { renderActivityPage } from "./activity-page";
 import { createBookFromOpenLibrary, renderAddPage } from "./add-page";
 import { renderBookPage } from "./book-page";

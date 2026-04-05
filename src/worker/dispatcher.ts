@@ -1,4 +1,4 @@
-import { processChapterAnalysisJob } from "../chapter-analysis";
+import { processChapterAnalysisJob } from "../library/chapter-analysis";
 import type { JobRow } from "../app-types";
 
 import { processAcquireJob } from "./acquire";

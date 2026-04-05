@@ -1,6 +1,6 @@
 import bencode from "bencode";
 
-import type { BooksRepo } from "./repo";
+import type { BooksRepo } from "../repo";
 
 type TorrentCacheIdentity = {
   provider?: string | null;

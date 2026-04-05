@@ -1,4 +1,4 @@
-import type { AssetRow } from "./app-types";
+import type { AssetRow } from "../app-types";
 
 function assetMediaType(asset: AssetRow): "audio" | "ebook" {
   return asset.kind === "ebook" ? "ebook" : "audio";

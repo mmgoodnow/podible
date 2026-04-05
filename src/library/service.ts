@@ -1,10 +1,10 @@
-import { BooksRepo } from "./repo";
-import { RtorrentClient } from "./rtorrent";
+import { BooksRepo } from "../repo";
+import { RtorrentClient } from "../rtorrent";
 import { getOrFetchCachedTorrentBytes, torrentCacheKeyFor } from "./torrent-cache";
 import { infoHashFromTorrentBytes, normalizeInfoHash } from "./torrent";
 import { searchTorznab } from "./torznab";
 import type { TorznabResult } from "./torznab";
-import type { AppSettings, MediaType, ReleaseRow } from "./app-types";
+import type { AppSettings, MediaType, ReleaseRow } from "../app-types";
 
 type SearchRequest = {
   query: string;

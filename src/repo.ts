@@ -1,8 +1,8 @@
 import { Database } from "bun:sqlite";
 
 import { nowIso } from "./db";
-import { pseudoProgressForBook } from "./progress";
-import { deriveBookStatus, deriveMediaStatus, MediaStatus, ReleaseStatus } from "./status";
+import { pseudoProgressForBook } from "./library/progress";
+import { deriveBookStatus, deriveMediaStatus, MediaStatus, ReleaseStatus } from "./library/status";
 import { defaultSettings, parseSettings } from "./settings";
 import type {
   AppSettings,

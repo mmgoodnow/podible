@@ -1,4 +1,4 @@
-import { selectPreferredAudioAsset, streamExtension } from "../media";
+import { selectPreferredAudioAsset, streamExtension } from "../library/media";
 import { BooksRepo } from "../repo";
 import type { AppSettings, SessionWithUserRow } from "../app-types";
 

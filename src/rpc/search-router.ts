@@ -1,4 +1,4 @@
-import { runSearch, runSnatch } from "../service";
+import { runSearch, runSnatch } from "../library/service";
 import { z } from "zod";
 
 import { defineMethod, defineRouter } from "./framework";

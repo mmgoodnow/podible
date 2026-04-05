@@ -9,7 +9,7 @@ import { Database } from "bun:sqlite";
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
-import { infoHashFromTorrentBytes } from "../../src/torrent";
+import { infoHashFromTorrentBytes } from "../../src/library/torrent";
 import { pollMsForMedia, runWorker, selectDownloadPollMs } from "../../src/worker";
 import { startMockTorznab } from "../mocks/torznab";
 

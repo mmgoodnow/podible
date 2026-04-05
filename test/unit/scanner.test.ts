@@ -8,7 +8,7 @@ import JSZip from "jszip";
 
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
-import { scanLibraryRoot } from "../../src/scanner";
+import { scanLibraryRoot } from "../../src/library/scanner";
 
 async function createMinimalEpub(filePath: string, text: string): Promise<void> {
   const zip = new JSZip();

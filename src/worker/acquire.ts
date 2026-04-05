@@ -1,5 +1,5 @@
-import { selectSearchCandidate } from "../agents";
-import { runSearch, runSnatch } from "../service";
+import { selectSearchCandidate } from "../library/agents";
+import { runSearch, runSnatch } from "../library/service";
 import type { JobRow, MediaType } from "../app-types";
 import { workerLog, type WorkerContext } from "./context";
 

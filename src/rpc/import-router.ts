@@ -1,7 +1,7 @@
 import path from "node:path";
 import { z } from "zod";
 
-import { importReleaseFromPath, inspectImportPath } from "../importer";
+import { importReleaseFromPath, inspectImportPath } from "../library/importer";
 
 import { defineMethod, defineRouter } from "./framework";
 import {
