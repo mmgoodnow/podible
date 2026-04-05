@@ -49,7 +49,7 @@ function renderAppPage(
   void settings;
   const showNav = options.showNav !== false;
   const showAdminNav = Boolean(apiKey) || (currentUser?.is_admin ?? 0) === 1;
-  const themeToggle = `<button type="button" class="theme-toggle" id="theme-toggle">Dark mode</button>`;
+  const themeToggle = `<button type="button" class="theme-toggle" id="theme-toggle">Theme: System</button>`;
   const accountNav = currentUser
     ? `<span class="muted">Signed in as ${escapeHtml(displayUserName(currentUser))}</span>
        <form method="post" action="${escapeHtml(addApiKey("/logout", apiKey))}" class="nav-signout-form">
@@ -80,11 +80,7 @@ function renderAppPage(
         const stored = localStorage.getItem("podible-theme");
         if (stored === "dark" || stored === "light") {
           document.documentElement.dataset.theme = stored;
-          return;
         }
-        document.documentElement.dataset.theme = window.matchMedia("(prefers-color-scheme: dark)").matches
-          ? "dark"
-          : "light";
       })();
     </script>
     <style>
@@ -127,6 +123,28 @@ function renderAppPage(
         --danger-contrast: #1a0f0f;
         --bg-grad-start: #1a231d;
         --shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme]) {
+          color-scheme: dark;
+          --bg: #111713;
+          --paper: #18211b;
+          --surface: #1d2720;
+          --surface-hover: #233127;
+          --line: #324037;
+          --line-soft: #2a352e;
+          --text: #edf4eb;
+          --muted: #a5b5a5;
+          --accent: #8cc2a5;
+          --accent-contrast: #0f1713;
+          --accent-soft: #1e2b23;
+          --code-bg: #101713;
+          --danger: #ff8f8f;
+          --danger-border: #b85d5d;
+          --danger-contrast: #1a0f0f;
+          --bg-grad-start: #1a231d;
+          --shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+        }
       }
       * { box-sizing: border-box; }
       body {
@@ -265,31 +283,46 @@ function renderAppPage(
 
         function storedTheme() {
           const value = localStorage.getItem("podible-theme");
-          return value === "dark" || value === "light" ? value : null;
+          return value === "dark" || value === "light" ? value : "system";
         }
 
-        function resolvedTheme() {
-          return root.dataset.theme === "dark" ? "dark" : "light";
+        function resolvedTheme(mode) {
+          if (mode === "system") {
+            return media.matches ? "dark" : "light";
+          }
+          return mode;
         }
 
-        function apply(theme) {
-          if (theme === "dark" || theme === "light") {
-            root.dataset.theme = theme;
+        function cycleTheme(mode) {
+          if (mode === "system") return "dark";
+          if (mode === "dark") return "light";
+          return "system";
+        }
+
+        function apply(mode) {
+          if (mode === "dark" || mode === "light") {
+            root.dataset.theme = mode;
           } else {
-            root.dataset.theme = media.matches ? "dark" : "light";
+            delete root.dataset.theme;
           }
           if (button) {
-            button.textContent = resolvedTheme() === "dark" ? "Light mode" : "Dark mode";
+            const resolved = resolvedTheme(mode);
+            const label = "Theme: " + mode[0].toUpperCase() + mode.slice(1) + (mode === "system" ? " (" + resolved + ")" : "");
+            button.textContent = label;
           }
         }
 
         apply(storedTheme());
         media.addEventListener("change", () => {
-          if (!storedTheme()) apply(null);
+          if (storedTheme() === "system") apply("system");
         });
         button?.addEventListener("click", () => {
-          const next = resolvedTheme() === "dark" ? "light" : "dark";
-          localStorage.setItem("podible-theme", next);
+          const next = cycleTheme(storedTheme());
+          if (next === "system") {
+            localStorage.removeItem("podible-theme");
+          } else {
+            localStorage.setItem("podible-theme", next);
+          }
           apply(next);
         });
       })();
