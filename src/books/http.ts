@@ -1172,17 +1172,12 @@ function renderAdminPage(
       }
       .card-full { grid-column: span 12; }
       .card-mid { grid-column: span 6; }
+      .card-tall { grid-row: span 2; }
       .page-header {
         background:
           radial-gradient(circle at 90% 10%, rgba(40, 89, 67, 0.08), transparent 45%),
           linear-gradient(180deg, #fffdf7, #f7f5ed);
       }
-      .header-grid {
-        display: grid;
-        grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
-        gap: 14px;
-      }
-      .header-grid > div { min-width: 0; }
       .panel {
         border: 0;
         padding: 0;
@@ -1233,6 +1228,9 @@ function renderAdminPage(
         border: 1px solid var(--line);
         border-radius: 12px;
         background: #fff;
+      }
+      .settings-editor {
+        min-height: 620px;
       }
       .table-wrap {
         overflow: auto;
@@ -1332,8 +1330,8 @@ function renderAdminPage(
       .feed-preview-links a:hover { text-decoration: underline; }
       @media (max-width: 1200px) {
         .card-mid { grid-column: span 12; }
-        .header-grid { grid-template-columns: 1fr; }
         .feed-preview-grid { grid-template-columns: 1fr; }
+        .card-tall { grid-row: auto; }
       }
       @media (max-width: 900px) {
         .dashboard-grid { gap: 10px; }
@@ -1343,41 +1341,38 @@ function renderAdminPage(
         .feed-preview-cover { width: 56px; height: 56px; }
       }
     </style>
-      <section class="hero page-header">
-          <div class="header-grid">
-            <div>
-              <h1>Admin</h1>
-              <p class="muted">Manage settings, users, library refreshes, and recovery tools.</p>
-              <div class="stats">
-                <span class="pill">${activeJobs} active jobs</span>
-                <span class="pill">${failedJobs} failed jobs</span>
-                <span class="pill">${releaseIssues} release issues</span>
-              </div>
-            </div>
-            <div>
-              <h2>Settings JSON</h2>
-              <div class="panel">
-                <div class="settings-actions">
-                  <div class="settings-actions-left">
-                    <button id="settings-save-btn" type="button">Save Settings</button>
-                    <form method="post" action="${escapeHtml(addApiKey("/admin/refresh", apiKey))}" style="margin: 0;">
-                      <button type="submit">Refresh Library</button>
-                    </form>
-                  </div>
-                  <button id="wipe-db-btn" type="button" style="background: var(--danger); color: #fff; border: 1px solid var(--danger-border);">Wipe Entire Database</button>
-                </div>
-                <p id="settings-status" class="muted"></p>
-                ${messageMarkup(options.notice, options.error)}
-                <textarea id="settings-editor" spellcheck="false">${settingsJson}</textarea>
-              </div>
-            </div>
+      <div class="dashboard-grid">
+        <section class="card card-mid page-header">
+          <h1>Admin</h1>
+          <p class="muted">Manage settings, users, library refreshes, and recovery tools.</p>
+          <div class="stats">
+            <span class="pill">${activeJobs} active jobs</span>
+            <span class="pill">${failedJobs} failed jobs</span>
+            <span class="pill">${releaseIssues} release issues</span>
           </div>
         </section>
-      <div class="dashboard-grid">
+
+        <section class="card card-mid card-tall">
+          <h2>Settings JSON</h2>
+          <div class="panel">
+            <div class="settings-actions">
+              <div class="settings-actions-left">
+                <button id="settings-save-btn" type="button">Save Settings</button>
+                <form method="post" action="${escapeHtml(addApiKey("/admin/refresh", apiKey))}" style="margin: 0;">
+                  <button type="submit">Refresh Library</button>
+                </form>
+              </div>
+              <button id="wipe-db-btn" type="button" style="background: var(--danger); color: #fff; border: 1px solid var(--danger-border);">Wipe Entire Database</button>
+            </div>
+            <p id="settings-status" class="muted"></p>
+            ${messageMarkup(options.notice, options.error)}
+            <textarea id="settings-editor" class="settings-editor" spellcheck="false">${settingsJson}</textarea>
+          </div>
+        </section>
 
         ${
           settings.auth.mode === "plex"
-            ? `<section class="card card-full">
+            ? `<section class="card card-mid">
           <h2>Plex Access Control</h2>
           <p class="muted">Choose which Plex server controls who can sign in to Podible. Future Plex logins will only be allowed for users who can access that server.</p>
           <p class="muted">Owner token: <strong>${settings.auth.plex.ownerToken ? "captured" : "missing"}</strong> | Selected server: <strong>${escapeHtml(settings.auth.plex.machineName || settings.auth.plex.machineId || "not set")}</strong></p>
@@ -1515,7 +1510,7 @@ function renderAdminPage(
           </div>
         </section>
 
-        <section class="card card-mid">
+        <section class="card card-full">
           <h2>Recent Jobs</h2>
           <div class="panel">
             <div class="row">
