@@ -25,7 +25,7 @@ describe("books repo", () => {
     const next = {
       ...initial,
       libraryRoot: "/tmp/library",
-      auth: { ...initial.auth, mode: "local" as const },
+      auth: { ...initial.auth, mode: "plex" as const },
       recovery: { stalledTorrentMinutes: 15 },
       notifications: {
         pushover: {
@@ -37,13 +37,13 @@ describe("books repo", () => {
     };
     const saved = repo.updateSettings(next);
     expect(saved.libraryRoot).toBe("/tmp/library");
-    expect(saved.auth.mode).toBe("local");
+    expect(saved.auth.mode).toBe("plex");
     expect(saved.recovery.stalledTorrentMinutes).toBe(15);
     expect(saved.notifications.pushover.enabled).toBe(true);
 
     const fetched = repo.getSettings();
     expect(fetched.libraryRoot).toBe("/tmp/library");
-    expect(fetched.auth.mode).toBe("local");
+    expect(fetched.auth.mode).toBe("plex");
     expect(fetched.recovery.stalledTorrentMinutes).toBe(15);
     expect(fetched.notifications.pushover.userKey).toBe("user");
 

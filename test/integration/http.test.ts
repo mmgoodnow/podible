@@ -16,9 +16,9 @@ const TINY_PNG_BASE64 =
 
 function createBrowserSessionCookie(
   repo: InstanceType<typeof BooksRepo>,
-  options: { provider?: "local" | "plex"; username?: string; displayName?: string; isAdmin?: boolean } = {}
+  options: { provider?: "plex"; username?: string; displayName?: string; isAdmin?: boolean } = {}
 ): string {
-  const provider = options.provider ?? "local";
+  const provider = options.provider ?? "plex";
   const username = options.username ?? (options.isAdmin ? "admin" : "user");
   const user = repo.upsertUser({
     provider,
@@ -67,7 +67,7 @@ describe("podible http", () => {
     const settings = repo.ensureSettings();
     repo.updateSettings({
       ...settings,
-      auth: { ...settings.auth, mode: "local" },
+      auth: { ...settings.auth, mode: "plex" },
       torznab: [],
     });
 
@@ -141,7 +141,7 @@ describe("podible http", () => {
       const settings = repo.ensureSettings();
       repo.updateSettings({
         ...settings,
-        auth: { ...settings.auth, mode: "local" },
+        auth: { ...settings.auth, mode: "plex" },
         torznab: [],
       });
 
@@ -174,7 +174,7 @@ describe("podible http", () => {
       const settingsRpc = await rpc(fetchHandler, "settings.get", {}, 4, {
         cookie: adminCookie,
       });
-      expect(settingsRpc.result.auth.mode).toBe("local");
+      expect(settingsRpc.result.auth.mode).toBe("plex");
 
       const removed = [
         new Request("http://localhost/health", { method: "GET" }),
@@ -217,7 +217,7 @@ describe("podible http", () => {
     const settings = repo.ensureSettings();
     repo.updateSettings({
       ...settings,
-      auth: { ...settings.auth, mode: "local" },
+      auth: { ...settings.auth, mode: "plex" },
       torznab: [],
     });
 
@@ -275,7 +275,7 @@ describe("podible http", () => {
     const settings = repo.ensureSettings();
     repo.updateSettings({
       ...settings,
-      auth: { ...settings.auth, mode: "local" },
+      auth: { ...settings.auth, mode: "plex" },
       torznab: [],
     });
 
@@ -305,7 +305,7 @@ describe("podible http", () => {
     const settings = repo.ensureSettings();
     repo.updateSettings({
       ...settings,
-      auth: { ...settings.auth, mode: "local" },
+      auth: { ...settings.auth, mode: "plex" },
       torznab: [],
     });
 
@@ -338,7 +338,7 @@ describe("podible http", () => {
     const settings = repo.ensureSettings();
     repo.updateSettings({
       ...settings,
-      auth: { ...settings.auth, mode: "local" },
+      auth: { ...settings.auth, mode: "plex" },
       torznab: [],
     });
 
@@ -409,7 +409,7 @@ describe("podible http", () => {
     const settings = repo.ensureSettings();
     repo.updateSettings({
       ...settings,
-      auth: { ...settings.auth, mode: "local" },
+      auth: { ...settings.auth, mode: "plex" },
       torznab: [],
     });
 
@@ -496,7 +496,7 @@ describe("podible http", () => {
       const settings = repo.ensureSettings();
       repo.updateSettings({
         ...settings,
-        auth: { ...settings.auth, mode: "local" },
+        auth: { ...settings.auth, mode: "plex" },
         torznab: [],
       });
 
@@ -541,14 +541,14 @@ describe("podible http", () => {
     }
   });
 
-  test("supports local user login and session-based browser access", async () => {
+  test("supports browser-session access and logout", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
     const settings = repo.ensureSettings();
     repo.updateSettings({
       ...settings,
-      auth: { ...settings.auth, mode: "local" },
+      auth: { ...settings.auth, mode: "plex" },
       torznab: [],
     });
 
@@ -586,21 +586,12 @@ describe("podible http", () => {
     const loginPage = await fetchHandler(new Request("http://app.test/login?redirectTo=%2Flibrary"));
     expect(loginPage.status).toBe(200);
     const loginBody = await loginPage.text();
-    expect(loginBody.includes("Create a user")).toBe(true);
+    expect(loginBody.includes("Sign in with Plex")).toBe(true);
 
-    const login = await fetchHandler(
-      new Request("http://app.test/login?redirectTo=%2Flibrary", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: "username=alice&displayName=Alice",
-      })
-    );
-    expect(login.headers.get("location")).toBe("/library");
-    expect(login.status).toBe(303);
-    const setCookie = login.headers.get("set-cookie") ?? "";
-    expect(setCookie.includes("podible_session=")).toBe(true);
-
-    const cookieHeader = setCookie.split(";")[0] ?? "";
+    const cookieHeader = createBrowserSessionCookie(repo, {
+      username: "alice",
+      displayName: "Alice",
+    });
     const authed = await fetchHandler(
       new Request("http://app.test/library", {
         headers: { cookie: cookieHeader },
@@ -632,7 +623,7 @@ describe("podible http", () => {
       ...settings,
       auth: {
         ...settings.auth,
-        mode: "local",
+        mode: "plex",
         appRedirectURIs: ["kindling://auth/podible"],
       },
       torznab: [],
@@ -648,20 +639,13 @@ describe("podible http", () => {
     const authorize = await fetchHandler(new Request(authorizeUrl));
     expect(authorize.status).toBe(200);
     const authorizeBody = await authorize.text();
-    expect(authorizeBody.includes("Create a user")).toBe(true);
+    expect(authorizeBody.includes("Sign in with Plex")).toBe(true);
 
     const authorizePath = new URL(authorizeUrl).pathname;
-    const login = await fetchHandler(
-      new Request(`http://app.test/login?redirectTo=${encodeURIComponent(`${authorizePath}/complete`)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: "username=kindling&displayName=Kindling",
-      })
-    );
-    expect(login.status).toBe(303);
-    expect(login.headers.get("location")).toBe(`${authorizePath}/complete`);
-    const browserCookie = (login.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
-    expect(browserCookie).toContain("podible_session=");
+    const browserCookie = createBrowserSessionCookie(repo, {
+      username: "kindling",
+      displayName: "Kindling",
+    });
 
     const complete = await fetchHandler(
       new Request(`http://app.test${authorizePath}/complete`, {
@@ -690,7 +674,7 @@ describe("podible http", () => {
     db.close();
   });
 
-  test("supports Plex browser login and creates a local session", async () => {
+  test("supports Plex browser login and creates a browser session", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
       const url = new URL(String(input));
@@ -1062,7 +1046,7 @@ describe("podible http", () => {
       const settings = repo.ensureSettings();
       repo.updateSettings({
         ...settings,
-        auth: { ...settings.auth, mode: "local" },
+        auth: { ...settings.auth, mode: "plex" },
         torznab: [],
       });
 
@@ -1126,7 +1110,7 @@ describe("podible http", () => {
       const settings = repo.ensureSettings();
       repo.updateSettings({
         ...settings,
-        auth: { ...settings.auth, mode: "local" },
+        auth: { ...settings.auth, mode: "plex" },
         torznab: [],
       });
 
@@ -1153,7 +1137,7 @@ describe("podible http", () => {
     const settings = repo.ensureSettings();
     repo.updateSettings({
       ...settings,
-      auth: { ...settings.auth, mode: "local" },
+      auth: { ...settings.auth, mode: "plex" },
       torznab: [],
     });
     const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
@@ -1175,7 +1159,7 @@ describe("podible http", () => {
     expect(readJson.result.book.wordCount).toBe(188000);
 
     const writeRes = await fetchHandler(
-      new Request("http://localhost/rpc/settings/update?auth.mode=local")
+      new Request("http://localhost/rpc/settings/update?auth.mode=plex")
     );
     expect(writeRes.status).toBe(200);
     const writeJson = (await writeRes.json()) as any;
@@ -1236,7 +1220,7 @@ describe("podible http", () => {
       const libraryRoot = path.join(isolatedDataDir, "library-rehydrate");
       repo.updateSettings({
         ...settings,
-        auth: { ...settings.auth, mode: "local" },
+        auth: { ...settings.auth, mode: "plex" },
         torznab: [],
         libraryRoot,
       });
@@ -1278,7 +1262,7 @@ describe("podible http", () => {
     const settings = repo.ensureSettings();
     repo.updateSettings({
       ...settings,
-      auth: { ...settings.auth, mode: "local" },
+      auth: { ...settings.auth, mode: "plex" },
       torznab: [],
     });
     const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
@@ -1306,7 +1290,7 @@ describe("podible http", () => {
     const settings = repo.ensureSettings();
     repo.updateSettings({
       ...settings,
-      auth: { ...settings.auth, mode: "local" },
+      auth: { ...settings.auth, mode: "plex" },
       torznab: [],
     });
 
@@ -1374,7 +1358,7 @@ describe("podible http", () => {
     const settings = repo.ensureSettings();
     repo.updateSettings({
       ...settings,
-      auth: { ...settings.auth, mode: "local" },
+      auth: { ...settings.auth, mode: "plex" },
       torznab: [],
     });
 

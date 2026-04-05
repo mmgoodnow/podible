@@ -75,8 +75,8 @@ async function eventually<T>(fn: () => T | Promise<T>, predicate: (value: T) => 
 
 function createBrowserSessionCookie(repo: BooksRepo, username = "admin", isAdmin = true): string {
   const user = repo.upsertUser({
-    provider: "local",
-    providerUserId: `local-${username}`,
+    provider: "plex",
+    providerUserId: `plex-${username}`,
     username,
     displayName: username,
     isAdmin,
@@ -177,7 +177,7 @@ describe("books e2e", () => {
     const repo = new BooksRepo(db);
     repo.updateSettings(
       defaultSettings({
-        auth: { mode: "local" },
+        auth: { mode: "plex" },
         torznab: [
           {
             name: "mock",

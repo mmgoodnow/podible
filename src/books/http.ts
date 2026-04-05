@@ -190,15 +190,6 @@ function redirect(location: string, status = 303): Response {
   });
 }
 
-function normalizeLocalUserKey(value: string): string {
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return normalized || "user";
-}
-
 function displayUserName(user: Pick<UserRow, "display_name" | "username">): string {
   return user.display_name?.trim() || user.username;
 }
@@ -591,7 +582,6 @@ function renderAddPage(
 
 function renderLoginPage(
   settings: AppSettings,
-  localUsers: UserRow[],
   options: {
     notice?: string | null;
     error?: string | null;
@@ -604,132 +594,71 @@ function renderLoginPage(
   const apiKey = options.apiKey ?? null;
   const redirectTo = sanitizeRedirectPath(options.redirectTo) ?? "/";
   const inlinePlexLogin = options.inlinePlexLogin === true;
-  const loginPath = addApiKey(`/login?redirectTo=${encodeURIComponent(redirectTo)}`, apiKey);
   const plexStartPath = addApiKey(`/login/plex/start?redirectTo=${encodeURIComponent(redirectTo)}`, apiKey);
   const plexLoadingPath = addApiKey(`/login/plex/loading?redirectTo=${encodeURIComponent(redirectTo)}`, apiKey);
-  if (settings.auth.mode === "plex") {
-    const body = `
-      <section class="hero">
-        <h1>Sign in</h1>
-        <p>Use your Plex account to sign in to this Podible instance. Podible will create its own local session after Plex confirms your identity.</p>
-        ${messageMarkup(options.notice, options.error)}
-        <div class="actions" style="margin-top: 14px;">
-          <button id="plex-login-btn" type="button">Sign in with Plex</button>
-        </div>
-        <p id="plex-login-status" class="muted" style="margin-top: 10px;"></p>
-      </section>
-      <script>
-        (() => {
-          const button = document.getElementById("plex-login-btn");
-          const status = document.getElementById("plex-login-status");
-          const startUrl = ${JSON.stringify(plexStartPath)};
-          const loadingUrl = ${JSON.stringify(plexLoadingPath)};
-          const successPath = ${JSON.stringify(addApiKey(redirectTo, apiKey))};
-          const inlineLogin = ${inlinePlexLogin ? "true" : "false"};
-          function setStatus(message) {
-            if (status) status.textContent = message || "";
-          }
-          if (!inlineLogin) {
-            window.addEventListener("message", (event) => {
-              if (event.origin !== window.location.origin || !event.data || event.data.type !== "podible-plex-login") {
-                return;
-              }
-              if (event.data.ok) {
-                window.location.href = event.data.redirectTo || successPath;
-                return;
-              }
-              setStatus(event.data.error || "Plex sign-in failed.");
-              if (button) button.disabled = false;
-            });
-          }
-          button?.addEventListener("click", async () => {
-            button.disabled = true;
-            setStatus("Opening Plex sign-in…");
-            const popup = inlineLogin ? null : window.open(loadingUrl, "podible-plex-login", "width=640,height=760");
-            if (!inlineLogin && !popup) {
-              setStatus("Popup blocked. Please allow popups for this site.");
-              button.disabled = false;
-              return;
-            }
-            try {
-              const response = await fetch(startUrl, { method: "POST" });
-              const payload = await response.json();
-              if (!response.ok || !payload.authUrl) {
-                throw new Error(payload.error || "Unable to start Plex sign-in.");
-              }
-              if (inlineLogin) {
-                window.location.href = payload.authUrl;
-                return;
-              }
-              popup.location.href = payload.authUrl;
-              setStatus("Finish sign-in in the Plex window…");
-            } catch (error) {
-              if (popup) popup.close();
-              setStatus(error && error.message ? error.message : "Unable to start Plex sign-in.");
-              button.disabled = false;
-            }
-          });
-        })();
-      </script>`;
-    return renderAppPage("Sign in", body, settings, options.currentUser ?? null, "", apiKey);
-  }
-
-  if (settings.auth.mode !== "local") {
-    const body = `
-      <section class="hero">
-        <h1>Sign in</h1>
-        <p>Browser sign-in is not enabled for this Podible instance.</p>
-        ${messageMarkup(options.notice, options.error)}
-      </section>`;
-    return renderAppPage("Sign in", body, settings, options.currentUser ?? null, "", apiKey);
-  }
-
-  const existingUsersMarkup =
-    localUsers.length > 0
-      ? `<div class="section-list">${localUsers
-          .map(
-            (user) => `<form method="post" action="${escapeHtml(loginPath)}" class="book-row" style="grid-template-columns: minmax(0, 1fr);">
-                <input type="hidden" name="userId" value="${user.id}" />
-                <div class="meta">
-                  <h3>${escapeHtml(displayUserName(user))}</h3>
-                  <p class="muted">@${escapeHtml(user.username)}${user.is_admin ? " • admin" : ""}</p>
-                  <div class="actions"><button type="submit">Sign in</button></div>
-                </div>
-              </form>`
-          )
-          .join("")}</div>`
-      : `<div class="empty">No local users yet. Create the first one below.</div>`;
-
   const body = `
     <section class="hero">
       <h1>Sign in</h1>
-      <p>Choose an existing user or create a new local user for this Podible instance.</p>
+      <p>Use your Plex account to sign in to this Podible instance.</p>
       ${messageMarkup(options.notice, options.error)}
+      <div class="actions" style="margin-top: 14px;">
+        <button id="plex-login-btn" type="button">Sign in with Plex</button>
+      </div>
+      <p id="plex-login-status" class="muted" style="margin-top: 10px;"></p>
     </section>
-    <div class="grid">
-      <section class="card span-6">
-        <h2>Existing users</h2>
-        ${existingUsersMarkup}
-      </section>
-      <section class="card span-6">
-        <h2>Create a user</h2>
-        <form method="post" action="${escapeHtml(loginPath)}">
-          <div class="section-list">
-            <label>
-              <div class="muted">Username</div>
-              <input type="text" name="username" placeholder="alice" style="min-width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px;" />
-            </label>
-            <label>
-              <div class="muted">Display name</div>
-              <input type="text" name="displayName" placeholder="Alice" style="min-width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px;" />
-            </label>
-          </div>
-          <div class="actions" style="margin-top: 12px;">
-            <button type="submit">Create and sign in</button>
-          </div>
-        </form>
-      </section>
-    </div>`;
+    <script>
+      (() => {
+        const button = document.getElementById("plex-login-btn");
+        const status = document.getElementById("plex-login-status");
+        const startUrl = ${JSON.stringify(plexStartPath)};
+        const loadingUrl = ${JSON.stringify(plexLoadingPath)};
+        const successPath = ${JSON.stringify(addApiKey(redirectTo, apiKey))};
+        const inlineLogin = ${inlinePlexLogin ? "true" : "false"};
+        function setStatus(message) {
+          if (status) status.textContent = message || "";
+        }
+        if (!inlineLogin) {
+          window.addEventListener("message", (event) => {
+            if (event.origin !== window.location.origin || !event.data || event.data.type !== "podible-plex-login") {
+              return;
+            }
+            if (event.data.ok) {
+              window.location.href = event.data.redirectTo || successPath;
+              return;
+            }
+            setStatus(event.data.error || "Plex sign-in failed.");
+            if (button) button.disabled = false;
+          });
+        }
+        button?.addEventListener("click", async () => {
+          button.disabled = true;
+          setStatus("Opening Plex sign-in…");
+          const popup = inlineLogin ? null : window.open(loadingUrl, "podible-plex-login", "width=640,height=760");
+          if (!inlineLogin && !popup) {
+            setStatus("Popup blocked. Please allow popups for this site.");
+            button.disabled = false;
+            return;
+          }
+          try {
+            const response = await fetch(startUrl, { method: "POST" });
+            const payload = await response.json();
+            if (!response.ok || !payload.authUrl) {
+              throw new Error(payload.error || "Unable to start Plex sign-in.");
+            }
+            if (inlineLogin) {
+              window.location.href = payload.authUrl;
+              return;
+            }
+            popup.location.href = payload.authUrl;
+            setStatus("Finish sign-in in the Plex window…");
+          } catch (error) {
+            if (popup) popup.close();
+            setStatus(error && error.message ? error.message : "Unable to start Plex sign-in.");
+            button.disabled = false;
+          }
+        });
+      })();
+    </script>`;
   return renderAppPage("Sign in", body, settings, options.currentUser ?? null, "", apiKey);
 }
 
@@ -740,108 +669,6 @@ function renderPlexLoadingPage(settings: AppSettings, apiKey: string | null = nu
       <p>Finish the Plex sign-in flow in this window. Podible will continue automatically when Plex redirects back.</p>
     </section>`;
   return renderAppPage("Plex sign in", body, settings, null, "", apiKey);
-}
-
-function renderPlexCompletePage(
-  settings: AppSettings,
-  pinId: number,
-  request: Request,
-  apiKey: string | null = null
-): Response {
-  const statusUrl = new URL(addApiKey(`/login/plex/status?pinId=${pinId}`, apiKey), request.url);
-  const loadingMessage = "Waiting for Plex to finish sign-in…";
-  return new Response(
-    `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Plex sign-in complete</title>
-  </head>
-  <body style="font-family: ui-sans-serif, system-ui, sans-serif; padding: 24px;">
-    <p id="plex-complete-status">${escapeHtml(loadingMessage)}</p>
-    <script>
-      (function () {
-        var statusUrl = ${JSON.stringify(statusUrl.toString())};
-        var statusEl = document.getElementById("plex-complete-status");
-        var tries = 0;
-        var maxTries = 30;
-        function setStatus(message) {
-          if (statusEl) statusEl.textContent = message || "";
-        }
-        function finish(payload) {
-          if (window.opener && !window.opener.closed) {
-            window.opener.postMessage(payload, window.location.origin);
-            if (payload.ok) {
-              window.close();
-            }
-            return;
-          }
-          if (payload.ok && payload.redirectTo) {
-            window.location.href = payload.redirectTo;
-          }
-        }
-        async function poll() {
-          tries += 1;
-          if (tries > maxTries) {
-            finish({
-              type: "podible-plex-login",
-              ok: false,
-              redirectTo: "/login",
-              error: "Timed out waiting for Plex sign-in."
-            });
-            setStatus("Timed out waiting for Plex sign-in.");
-            return;
-          }
-          try {
-            var response = await fetch(statusUrl, {
-              method: "GET",
-              headers: { "Accept": "application/json" },
-              credentials: "same-origin"
-            });
-            var payload = await response.json();
-            if (payload.pending) {
-              setStatus(payload.message || ${JSON.stringify(loadingMessage)});
-              window.setTimeout(poll, payload.retryAfterMs || 3000);
-              return;
-            }
-            finish({
-              type: "podible-plex-login",
-              ok: !!payload.ok,
-              redirectTo: payload.redirectTo || "/",
-              error: payload.error || null
-            });
-            if (!payload.ok) {
-              setStatus(payload.error || "Plex sign-in failed.");
-            }
-          } catch (error) {
-            if (tries < 5) {
-              setStatus("Still waiting for Plex…");
-              window.setTimeout(poll, 3000);
-              return;
-            }
-            finish({
-              type: "podible-plex-login",
-              ok: false,
-              redirectTo: "/login",
-              error: "Unable to complete Plex sign-in."
-            });
-            setStatus("Unable to complete Plex sign-in.");
-          }
-        }
-        poll();
-      })();
-    </script>
-  </body>
-</html>`,
-    {
-      status: 200,
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": "no-store",
-      },
-    }
-  );
 }
 
 async function waitForPlexLoginResult(
@@ -2323,7 +2150,6 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
       pathname === "/login/plex/start" ||
       pathname === "/login/plex/loading" ||
       pathname === "/login/plex/complete" ||
-      pathname === "/login/plex/status" ||
       appLoginPath !== null;
     const isRpcRoute = pathname === "/rpc" || pathname.startsWith("/rpc/");
     if (!isPublicRoute && !isRpcRoute && !isAuthenticatedRequest) {
@@ -2344,75 +2170,12 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
       const hasAdminAccess = (currentSession?.is_admin ?? 0) === 1;
 
       if (pathname === "/login" && request.method === "GET") {
-        response = renderLoginPage(settings, repo.listUsers("local"), {
+        response = renderLoginPage(settings, {
           notice: url.searchParams.get("notice"),
           error: url.searchParams.get("error"),
           currentUser: currentSession,
           redirectTo,
         });
-        logRequest(response.status);
-        return response;
-      }
-
-      if (pathname === "/login" && request.method === "POST") {
-        if (settings.auth.mode !== "local") {
-          response = new Response("Forbidden", { status: 403 });
-          logRequest(response.status);
-          return response;
-        }
-        const body = await request.text();
-        const form = new URLSearchParams(body);
-        const userIdValue = form.get("userId");
-        let user: UserRow | null = null;
-
-        if (userIdValue) {
-          const userId = Number.parseInt(userIdValue, 10);
-          if (Number.isInteger(userId) && userId > 0) {
-            const existing = repo.getUserById(userId);
-            if (existing?.provider === "local") {
-              user = existing;
-            }
-          }
-        } else {
-          const username = (form.get("username") ?? "").trim();
-          const displayName = (form.get("displayName") ?? "").trim();
-          if (!username) {
-            const page = renderLoginPage(settings, repo.listUsers("local"), {
-              error: "Username is required.",
-            });
-            response = new Response(await page.text(), {
-              status: 400,
-              headers: page.headers,
-            });
-            logRequest(response.status);
-            return response;
-          }
-          const providerUserId = normalizeLocalUserKey(username);
-          const localUsers = repo.listUsers("local");
-          const existing = localUsers.find((candidate) => candidate.provider_user_id === providerUserId) ?? null;
-          user = repo.upsertUser({
-            provider: "local",
-            providerUserId,
-            username,
-            displayName: displayName || username,
-            isAdmin: existing ? existing.is_admin === 1 : localUsers.length === 0,
-          });
-        }
-
-        if (!user) {
-          const page = renderLoginPage(settings, repo.listUsers("local"), { error: "User not found." });
-          response = new Response(await page.text(), {
-            status: 400,
-            headers: page.headers,
-          });
-          logRequest(response.status);
-          return response;
-        }
-
-        const sessionToken = createSessionToken();
-        repo.createSession(user.id, hashSessionToken(sessionToken), sessionExpiresAt());
-        response = redirect(sanitizeRedirectPath(url.searchParams.get("redirectTo")) ?? "/");
-        response.headers.append("Set-Cookie", buildSessionCookie(sessionToken, request));
         logRequest(response.status);
         return response;
       }
@@ -2484,36 +2247,6 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
         return response;
       }
 
-      if (pathname === "/login/plex/status" && request.method === "GET") {
-        if (settings.auth.mode !== "plex") {
-          response = json({ ok: false, pending: false, redirectTo: "/", error: "Plex sign-in is not enabled." }, 403);
-          logRequest(response.status);
-          return response;
-        }
-        const pinId = Number.parseInt(url.searchParams.get("pinId") ?? "", 10);
-        if (!Number.isInteger(pinId) || pinId <= 0) {
-          response = json({ ok: false, pending: false, redirectTo: "/login", error: "Missing or invalid Plex PIN id." }, 400);
-          logRequest(response.status);
-          return response;
-        }
-        const statusResult = await resolvePlexLoginStatus(repo, settings, pinId, null);
-        settings = statusResult.settings;
-        if (statusResult.kind === "pending") {
-          response = json({ ok: false, pending: true, message: statusResult.message, pinId, retryAfterMs: 3000 });
-          logRequest(response.status);
-          return response;
-        }
-        if (statusResult.kind === "error") {
-          response = json({ ok: false, pending: false, redirectTo: statusResult.redirectTo, error: statusResult.error }, 400);
-          logRequest(response.status);
-          return response;
-        }
-        response = json({ ok: true, pending: false, redirectTo: statusResult.redirectTo });
-        response.headers.append("Set-Cookie", buildSessionCookie(statusResult.sessionToken, request));
-        logRequest(response.status);
-        return response;
-      }
-
       if (pathname === "/logout" && request.method === "POST") {
         if (currentSession) {
           repo.deleteSession(currentSession.id);
@@ -2561,7 +2294,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
           logRequest(response.status);
           return response;
         }
-        response = renderLoginPage(settings, repo.listUsers("local"), {
+        response = renderLoginPage(settings, {
           currentUser: currentSession,
           redirectTo: `${attemptPath}/complete`,
           inlinePlexLogin: true,
@@ -2573,7 +2306,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
       if (pathname === "/" && request.method === "GET") {
         response = isAuthenticatedRequest
           ? renderLandingPage(repo, settings, currentSession, null)
-          : renderLoginPage(settings, repo.listUsers("local"), {
+          : renderLoginPage(settings, {
               currentUser: currentSession,
             });
         logRequest(response.status);

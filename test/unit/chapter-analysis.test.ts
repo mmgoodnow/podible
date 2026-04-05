@@ -351,7 +351,7 @@ describe("chapter analysis", () => {
       repo.updateSettings(
         defaultSettings({
           ...settings,
-          auth: { mode: "local" },
+          auth: { mode: "plex" },
           agents: {
             ...settings.agents,
             apiKey: "test-key",
@@ -500,7 +500,7 @@ describe("chapter analysis", () => {
       repo.updateSettings(
         defaultSettings({
           ...settings,
-          auth: { mode: "local" },
+          auth: { mode: "plex" },
           agents: {
             ...settings.agents,
             apiKey: "test-key",

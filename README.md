@@ -44,7 +44,6 @@ Open Library covers are stored alongside each imported book inside `libraryRoot`
 Settings default to Plex browser sign-in.
 
 - `auth.mode = "plex"` enables the normal browser login flow.
-- `auth.mode = "local"` is intended for localhost development and tests only.
 - Browser routes use Podible session cookies.
 - App clients can use the app-login flow: `auth.beginAppLogin` -> browser sign-in -> `auth.exchange` for a bearer token.
 - JSON-RPC methods are now scoped by auth level (`public`, `user`, `admin`).

@@ -154,7 +154,7 @@ export function parseSettings(value: string): AppSettings {
       ...(parsed.feed && typeof parsed.feed === "object" ? parsed.feed : {}),
     },
     auth: {
-      mode: parsedAuth.mode === "local" || parsedAuth.mode === "plex" ? parsedAuth.mode : defaults.auth.mode,
+      mode: parsedAuth.mode === "plex" ? parsedAuth.mode : defaults.auth.mode,
       appRedirectURIs: Array.isArray(parsedAuth.appRedirectURIs)
         ? parsedAuth.appRedirectURIs.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
         : defaults.auth.appRedirectURIs,

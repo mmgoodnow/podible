@@ -17,8 +17,8 @@ export type AssetTranscriptStatus = "pending" | "succeeded" | "failed";
 
 export type AssetKind = "single" | "multi" | "ebook";
 
-export type AuthMode = "local" | "plex";
-export type AuthProvider = "plex" | "local";
+export type AuthMode = "plex";
+export type AuthProvider = "plex";
 export type SessionKind = "browser" | "app";
 
 export type PlexJwk = {

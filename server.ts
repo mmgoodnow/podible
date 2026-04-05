@@ -12,10 +12,6 @@ const repo = new BooksRepo(db);
 repo.ensureSettings();
 const current = repo.getSettings();
 
-if (process.env.NODE_ENV === "production" && current.auth.mode === "local") {
-  throw new Error("auth.mode=local is not allowed in production");
-}
-
 void runWorker({
   repo,
   getSettings: () => repo.getSettings(),

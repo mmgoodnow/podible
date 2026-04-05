@@ -17,7 +17,7 @@ type RpcCallerAuth = "none" | "user" | "admin";
 
 function createRpcSession(repo: BooksRepo, role: Exclude<RpcCallerAuth, "none">) {
   const user = repo.upsertUser({
-    provider: "local",
+    provider: "plex",
     providerUserId: role,
     username: role,
     displayName: role,
@@ -567,7 +567,7 @@ describe("json-rpc handler", () => {
       await writeFile(importedPath, Buffer.from("wrong import link target"));
       repo.updateSettings(
         defaultSettings({
-          auth: { mode: "local" },
+          auth: { mode: "plex" },
           libraryRoot: libraryPath,
           rtorrent: {
             transport: "http-xmlrpc",
@@ -687,7 +687,7 @@ describe("json-rpc handler", () => {
       const repo = new BooksRepo(db);
       repo.updateSettings(
         defaultSettings({
-          auth: { mode: "local" },
+          auth: { mode: "plex" },
           rtorrent: {
             transport: "http-xmlrpc",
             url: "http://mock.local/RPC2",
@@ -988,7 +988,7 @@ describe("json-rpc handler", () => {
       const repo = new BooksRepo(db);
       repo.updateSettings(
         defaultSettings({
-          auth: { mode: "local" },
+          auth: { mode: "plex" },
           rtorrent: {
             transport: "http-xmlrpc",
             url: "http://mock.local/RPC2",
@@ -1065,7 +1065,7 @@ describe("json-rpc handler", () => {
       const repo = new BooksRepo(db);
       repo.updateSettings(
         defaultSettings({
-          auth: { mode: "local" },
+          auth: { mode: "plex" },
           rtorrent: {
             transport: "http-xmlrpc",
             url: "http://mock.local/RPC2",
@@ -1160,7 +1160,7 @@ describe("json-rpc handler", () => {
 
     repo.updateSettings(
       defaultSettings({
-        auth: { mode: "local" },
+        auth: { mode: "plex" },
         libraryRoot,
       })
     );
@@ -1196,7 +1196,7 @@ describe("json-rpc handler", () => {
     const repo = new BooksRepo(db);
     repo.updateSettings(
       defaultSettings({
-        auth: { mode: "local" },
+        auth: { mode: "plex" },
         torznab: [],
       })
     );
@@ -1238,7 +1238,7 @@ describe("json-rpc handler", () => {
 
     repo.updateSettings(
       defaultSettings({
-        auth: { mode: "local" },
+        auth: { mode: "plex" },
         libraryRoot,
       })
     );
