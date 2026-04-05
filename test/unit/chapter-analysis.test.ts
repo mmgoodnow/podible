@@ -638,6 +638,156 @@ describe("chapter analysis", () => {
     }
   });
 
+  test("reruns successful chapter analysis when algorithm version changes", async () => {
+    const { db, repo } = setupRepo();
+    const root = await mkdtemp(path.join(os.tmpdir(), "podible-chapter-rerun-"));
+    try {
+      const settings = repo.ensureSettings();
+      repo.updateSettings(
+        defaultSettings({
+          ...settings,
+          auth: { mode: "plex" },
+          agents: {
+            ...settings.agents,
+            apiKey: "test-key",
+          },
+        })
+      );
+
+      const audioPath = path.join(root, "audio.mp3");
+      const epubPath = path.join(root, "book.epub");
+      await mkdir(root, { recursive: true });
+      await writeFile(audioPath, Buffer.from("audio"));
+      await writeFile(epubPath, Buffer.from("epub"));
+
+      const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+      const audio = repo.addAsset({
+        bookId: book.id,
+        kind: "single",
+        mime: "audio/mpeg",
+        totalSize: 120,
+        durationMs: 90_000,
+        files: [
+          {
+            path: audioPath,
+            size: 120,
+            start: 0,
+            end: 119,
+            durationMs: 90_000,
+            title: "Book",
+          },
+        ],
+      });
+      const epub = repo.addAsset({
+        bookId: book.id,
+        kind: "ebook",
+        mime: "application/epub+zip",
+        totalSize: 100,
+        durationMs: null,
+        files: [
+          {
+            path: epubPath,
+            size: 100,
+            start: 0,
+            end: 99,
+            durationMs: 0,
+            title: null,
+          },
+        ],
+      });
+
+      const deps = {
+        loadEpubEntries: async () => [
+          {
+            id: "one",
+            title: "One",
+            href: "one.xhtml",
+            text: "one one one",
+            words: chapterWords(Array.from({ length: 30 }, (_, index) => `one${index}`)),
+            tokens: Array.from({ length: 30 }, (_, index) => `one${index}`),
+            wordCount: 30,
+            cumulativeWords: 30,
+            cumulativeRatio: 1 / 2,
+          },
+          {
+            id: "two",
+            title: "Two",
+            href: "two.xhtml",
+            text: "two two two",
+            words: chapterWords(Array.from({ length: 30 }, (_, index) => `two${index}`)),
+            tokens: Array.from({ length: 30 }, (_, index) => `two${index}`),
+            wordCount: 30,
+            cumulativeWords: 60,
+            cumulativeRatio: 1,
+          },
+        ],
+        extractChunkClip: async ({ tempDir, clipName }: { tempDir: string; clipName: string }) => {
+          const clipPath = path.join(tempDir, `${clipName}.mp3`);
+          await mkdir(tempDir, { recursive: true });
+          await writeFile(clipPath, Buffer.from("clip"));
+          return clipPath;
+        },
+        transcribeChunk: async () =>
+          Array.from({ length: 60 }, (_, index) => {
+            const prefix = index < 30 ? "one" : "two";
+            return {
+              token: `${prefix}${index % 30}`,
+              raw: `${prefix}${index % 30}`,
+              startMs: index * 1_500,
+              endMs: index * 1_500 + 400,
+            };
+          }),
+      };
+
+      const initialJob = repo.createJob({
+        type: "chapter_analysis",
+        bookId: book.id,
+        payload: {
+          assetId: audio.id,
+          ebookAssetId: epub.id,
+        },
+      });
+
+      await processChapterAnalysisJob(
+        {
+          repo,
+          getSettings: () => repo.getSettings(),
+        },
+        initialJob,
+        deps
+      );
+
+      const initialRow = repo.getChapterAnalysis(audio.id);
+      expect(initialRow?.status).toBe("succeeded");
+      db.query("UPDATE chapter_analysis SET algorithm_version = 'old-version' WHERE asset_id = ?").run(audio.id);
+
+      const rerunJob = repo.createJob({
+        type: "chapter_analysis",
+        bookId: book.id,
+        payload: {
+          assetId: audio.id,
+          ebookAssetId: epub.id,
+        },
+      });
+
+      await processChapterAnalysisJob(
+        {
+          repo,
+          getSettings: () => repo.getSettings(),
+        },
+        rerunJob,
+        deps
+      );
+
+      const rerunRow = repo.getChapterAnalysis(audio.id);
+      expect(rerunRow?.status).toBe("succeeded");
+      expect(rerunRow?.algorithm_version).not.toBe("old-version");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      db.close();
+    }
+  });
+
   test("falls back to ratio-based chapter timings when full-transcript boundaries do not resolve", async () => {
     const { db, repo } = setupRepo();
     const root = await mkdtemp(path.join(os.tmpdir(), "podible-chapter-ratio-fallback-"));

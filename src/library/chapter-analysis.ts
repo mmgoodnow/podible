@@ -2079,6 +2079,7 @@ export async function processChapterAnalysisJob(
   if (
     existing &&
     existing.status === "succeeded" &&
+    existing.algorithm_version === CHAPTER_ANALYSIS_ALGORITHM_VERSION &&
     existing.fingerprint === chapterFingerprint &&
     existing.transcript_fingerprint === transcriptFingerprint
   ) {
