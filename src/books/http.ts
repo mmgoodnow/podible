@@ -1167,9 +1167,24 @@ function renderAdminPage(
         gap: 14px;
         align-items: start;
       }
+      .admin-top-grid {
+        grid-column: span 12;
+        display: grid;
+        grid-template-columns: repeat(12, minmax(0, 1fr));
+        gap: 14px;
+        align-items: start;
+      }
+      .admin-stack {
+        grid-column: span 6;
+        display: grid;
+        gap: 14px;
+        align-content: start;
+      }
+      .settings-card {
+        grid-column: span 6;
+      }
       .card-full { grid-column: span 12; }
       .card-mid { grid-column: span 6; }
-      .card-tall { grid-row: span 2; }
       .page-header {
         background:
           radial-gradient(circle at 90% 10%, rgba(40, 89, 67, 0.08), transparent 45%),
@@ -1259,6 +1274,11 @@ function renderAdminPage(
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 10px;
       }
+      .plex-server-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 10px;
+      }
       .feed-preview-item {
         display: grid;
         grid-template-columns: 64px minmax(0, 1fr);
@@ -1327,8 +1347,8 @@ function renderAdminPage(
       .feed-preview-links a:hover { text-decoration: underline; }
       @media (max-width: 1200px) {
         .card-mid { grid-column: span 12; }
+        .admin-stack, .settings-card { grid-column: span 12; }
         .feed-preview-grid { grid-template-columns: 1fr; }
-        .card-tall { grid-row: auto; }
       }
       @media (max-width: 900px) {
         .dashboard-grid { gap: 10px; }
@@ -1339,44 +1359,28 @@ function renderAdminPage(
       }
     </style>
       <div class="dashboard-grid">
-        <section class="card card-mid page-header">
-          <h1>Admin</h1>
-          <p class="muted">Manage settings, users, library refreshes, and recovery tools.</p>
-          <div class="stats">
-            <span class="pill">${activeJobs} active jobs</span>
-            <span class="pill">${failedJobs} failed jobs</span>
-            <span class="pill">${releaseIssues} release issues</span>
-          </div>
-        </section>
-
-        <section class="card card-mid card-tall">
-          <h2>Settings JSON</h2>
-          <div class="panel">
-            <div class="settings-actions">
-              <div class="settings-actions-left">
-                <button id="settings-save-btn" type="button">Save Settings</button>
-                <form method="post" action="${escapeHtml(addApiKey("/admin/refresh", apiKey))}" style="margin: 0;">
-                  <button type="submit">Refresh Library</button>
-                </form>
+        <div class="admin-top-grid">
+          <div class="admin-stack">
+            <section class="card page-header">
+              <h1>Admin</h1>
+              <p class="muted">Manage settings, users, library refreshes, and recovery tools.</p>
+              <div class="stats">
+                <span class="pill">${activeJobs} active jobs</span>
+                <span class="pill">${failedJobs} failed jobs</span>
+                <span class="pill">${releaseIssues} release issues</span>
               </div>
-              <button id="wipe-db-btn" type="button" style="background: var(--danger); color: #fff; border: 1px solid var(--danger-border);">Wipe Entire Database</button>
-            </div>
-            <p id="settings-status" class="muted"></p>
-            ${messageMarkup(options.notice, options.error)}
-            <textarea id="settings-editor" class="settings-editor" spellcheck="false">${settingsJson}</textarea>
-          </div>
-        </section>
+            </section>
 
-        ${
-          settings.auth.mode === "plex"
-            ? `<section class="card card-mid">
+            ${
+              settings.auth.mode === "plex"
+                ? `<section class="card">
           <h2>Plex Access Control</h2>
           <p class="muted">Choose which Plex server controls who can sign in to Podible. Future Plex logins will only be allowed for users who can access that server.</p>
           <p class="muted">Owner token: <strong>${settings.auth.plex.ownerToken ? "captured" : "missing"}</strong> | Selected server: <strong>${escapeHtml(settings.auth.plex.machineName || settings.auth.plex.machineId || "not set")}</strong></p>
           ${messageMarkup(options.plexNotice, options.plexError)}
           ${
             plexServers.length > 0
-              ? `<div class="feed-preview-grid">${plexServers
+              ? `<div class="plex-server-grid">${plexServers
                   .map(
                     (server) => `<form method="post" action="${escapeHtml(addApiKey("/admin/plex/select", apiKey))}" class="feed-preview-item">
   <input type="hidden" name="machineId" value="${escapeHtml(server.machineId)}" />
@@ -1398,28 +1402,48 @@ function renderAdminPage(
               : `<p class="muted">No Plex servers were found for the current owner token.</p>`
           }
         </section>`
-            : ""
-        }
+                : ""
+            }
 
-        <section class="card card-mid">
-          <h2>Users</h2>
-          <div class="panel">
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>Provider</th>
-                    <th>Username</th>
-                    <th>Display Name</th>
-                    <th>Admin</th>
-                  </tr>
-                </thead>
-                <tbody>${userRows}</tbody>
-              </table>
-            </div>
+            <section class="card">
+              <h2>Users</h2>
+              <div class="panel">
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>Provider</th>
+                        <th>Username</th>
+                        <th>Display Name</th>
+                        <th>Admin</th>
+                      </tr>
+                    </thead>
+                    <tbody>${userRows}</tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
           </div>
-        </section>
+
+          <section class="card settings-card">
+            <h2>Settings JSON</h2>
+            <div class="panel">
+              <div class="settings-actions">
+                <div class="settings-actions-left">
+                  <button id="settings-save-btn" type="button">Save Settings</button>
+                  <form method="post" action="${escapeHtml(addApiKey("/admin/refresh", apiKey))}" style="margin: 0;">
+                    <button type="submit">Refresh Library</button>
+                  </form>
+                </div>
+                <button id="wipe-db-btn" type="button" style="background: var(--danger); color: #fff; border: 1px solid var(--danger-border);">Wipe Entire Database</button>
+              </div>
+              <p id="settings-status" class="muted"></p>
+              ${messageMarkup(options.notice, options.error)}
+              <textarea id="settings-editor" class="settings-editor" spellcheck="false">${settingsJson}</textarea>
+            </div>
+          </section>
+        </div>
 
         <section class="card card-full">
           <h2>Manual Search + Snatch</h2>
