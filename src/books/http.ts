@@ -276,22 +276,19 @@ function renderAppPage(
       a { color: var(--accent); text-decoration: none; }
       a:hover { text-decoration: underline; }
       .page { max-width: 1120px; margin: 0 auto; padding: 18px; }
-      .site-nav { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; font-size: 14px; }
-      .nav-signout-form { display: inline-flex; margin: 0; }
+      .site-nav { display: flex; gap: 14px; flex-wrap: wrap; align-items: baseline; margin-bottom: 18px; font-size: 14px; }
+      .nav-signout-form { display: inline-flex; align-items: baseline; margin: 0; }
       .site-nav .nav-signout-button {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        min-height: 36px;
-        padding: 8px 12px;
-        border-radius: 10px;
-        border: 1px solid var(--line);
-        background: #fff;
-        color: var(--text);
+        display: inline;
+        padding: 0;
+        border: 0;
+        background: none;
+        color: var(--accent);
         font: inherit;
         cursor: pointer;
+        line-height: inherit;
       }
-      .site-nav .nav-signout-button:hover { background: #faf8f1; }
+      .site-nav .nav-signout-button:hover { text-decoration: underline; }
       .hero, .card { background: var(--paper); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 1px 2px rgba(31,38,28,.05); }
       .hero { padding: 20px; margin-bottom: 18px; }
       .hero h1 { margin: 0 0 8px; font-size: 34px; line-height: 1.05; }
