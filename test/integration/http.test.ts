@@ -866,9 +866,11 @@ describe("podible http", () => {
 
   test("allows admin to select which Plex server controls access", async () => {
     const originalFetch = globalThis.fetch;
+    let plexResourcesFetches = 0;
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
       const url = new URL(String(input));
       if (url.origin === "https://plex.tv" && url.pathname === "/api/resources") {
+        plexResourcesFetches += 1;
         expect(new Headers(init?.headers).get("X-Plex-Token")).toBe("owner-token");
         return new Response(
           `<?xml version="1.0"?>
@@ -920,6 +922,15 @@ describe("podible http", () => {
       expect(pageBody.includes("Plex Access Control")).toBe(true);
       expect(pageBody.includes("Family Server")).toBe(true);
       expect(pageBody.includes("Friends Server")).toBe(true);
+      expect(plexResourcesFetches).toBe(1);
+
+      const cachedPage = await fetchHandler(
+        new Request("http://app.test/admin", {
+          headers: { cookie: adminCookie },
+        })
+      );
+      expect(cachedPage.status).toBe(200);
+      expect(plexResourcesFetches).toBe(1);
 
       const selected = await fetchHandler(
         new Request("http://app.test/admin/plex/select", {
