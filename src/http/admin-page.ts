@@ -53,10 +53,14 @@ function renderAdminPage(
 
   const body = `<style>
       :root {
-        --line-soft: #ebe5d8;
-        --code-bg: #f3f1ea;
-        --danger: #8b0000;
-        --danger-border: #6f0000;
+        --page-header-glow: rgba(40, 89, 67, 0.08);
+        --page-header-end: #f7f5ed;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --page-header-glow: rgba(140, 194, 165, 0.12);
+          --page-header-end: #141c17;
+        }
       }
       .dashboard-grid {
         display: grid;
@@ -88,8 +92,8 @@ function renderAdminPage(
       .card-mid { grid-column: span 6; }
       .page-header {
         background:
-          radial-gradient(circle at 90% 10%, rgba(40, 89, 67, 0.08), transparent 45%),
-          linear-gradient(180deg, #fffdf7, #f7f5ed);
+          radial-gradient(circle at 90% 10%, var(--page-header-glow), transparent 45%),
+          linear-gradient(180deg, var(--paper), var(--page-header-end));
       }
       .page-header h1 {
         margin: 0 0 8px;
@@ -133,7 +137,7 @@ function renderAdminPage(
         min-width: 0;
         border: 1px solid var(--line-soft);
         border-radius: 12px;
-        background: #fff;
+        background: var(--surface);
       }
       table {
         border-collapse: collapse;
@@ -142,14 +146,14 @@ function renderAdminPage(
         min-width: 640px;
       }
       th, td { border: 1px solid var(--line-soft); padding: 6px 7px; text-align: left; font-size: 13px; vertical-align: top; }
-      th { background: #f8f5ed; }
+      th { background: var(--accent-soft); }
       code { background: var(--code-bg); padding: 2px 4px; border-radius: 4px; }
       pre {
         margin: 0;
         padding: 8px;
         border: 1px solid var(--line-soft);
         border-radius: 12px;
-        background: #fff;
+        background: var(--surface);
         overflow: auto;
       }
       pre code { background: transparent; padding: 0; }
@@ -231,7 +235,7 @@ function renderAdminPage(
                     <button type="submit">Refresh Library</button>
                   </form>
                 </div>
-                <button id="wipe-db-btn" type="button" style="background: var(--danger); color: #fff; border: 1px solid var(--danger-border);">Wipe Entire Database</button>
+                <button id="wipe-db-btn" type="button" style="background: var(--danger); color: var(--danger-contrast); border: 1px solid var(--danger-border);">Wipe Entire Database</button>
               </div>
               <p id="settings-status" class="muted"></p>
               ${messageMarkup(options.notice, options.error)}

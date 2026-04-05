@@ -20,7 +20,7 @@ function messageMarkup(notice?: string | null, error?: string | null): string {
     blocks.push(`<p class="muted" style="margin-top: 10px;">${escapeHtml(notice)}</p>`);
   }
   if (error?.trim()) {
-    blocks.push(`<p style="margin-top: 10px; color: #8b0000;">${escapeHtml(error)}</p>`);
+    blocks.push(`<p style="margin-top: 10px; color: var(--danger);">${escapeHtml(error)}</p>`);
   }
   return blocks.join("");
 }
@@ -71,22 +71,55 @@ function renderAppPage(
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
     <title>${escapeHtml(title)}</title>
     <style>
       :root {
+        color-scheme: light dark;
         --bg: #f6f7f3;
         --paper: #fffdf7;
+        --surface: #ffffff;
+        --surface-hover: #faf8f1;
         --line: #ddd6c8;
+        --line-soft: #ebe5d8;
         --text: #1f261c;
         --muted: #5f6b58;
         --accent: #285943;
+        --accent-contrast: #ffffff;
         --accent-soft: #eef5f0;
+        --code-bg: #f3f1ea;
+        --danger: #8b0000;
+        --danger-border: #6f0000;
+        --danger-contrast: #fff;
+        --bg-grad-start: #fffefb;
+        --shadow: 0 1px 2px rgba(31, 38, 28, 0.05);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #111713;
+          --paper: #18211b;
+          --surface: #1d2720;
+          --surface-hover: #233127;
+          --line: #324037;
+          --line-soft: #2a352e;
+          --text: #edf4eb;
+          --muted: #a5b5a5;
+          --accent: #8cc2a5;
+          --accent-contrast: #0f1713;
+          --accent-soft: #1e2b23;
+          --code-bg: #101713;
+          --danger: #ff8f8f;
+          --danger-border: #b85d5d;
+          --danger-contrast: #1a0f0f;
+          --bg-grad-start: #1a231d;
+          --shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+        }
       }
       * { box-sizing: border-box; }
       body {
         margin: 0;
         font-family: ui-serif, Georgia, serif;
-        background: radial-gradient(circle at top, #fffefb 0%, var(--bg) 60%);
+        background: radial-gradient(circle at top, var(--bg-grad-start) 0%, var(--bg) 60%);
         color: var(--text);
       }
       a { color: var(--accent); text-decoration: none; }
@@ -99,7 +132,7 @@ function renderAppPage(
         padding: 8px 10px;
         border: 1px solid var(--line);
         border-radius: 10px;
-        background: #fff;
+        background: var(--surface);
         color: var(--text);
       }
       button:not(.nav-signout-button), .button-link, .actions button {
@@ -110,13 +143,13 @@ function renderAppPage(
         padding: 8px 12px;
         border-radius: 10px;
         border: 1px solid var(--line);
-        background: #fff;
+        background: var(--surface);
         color: var(--text);
         text-decoration: none;
         cursor: pointer;
       }
       button:not(.nav-signout-button):hover, .button-link:hover {
-        background: #faf8f1;
+        background: var(--surface-hover);
         text-decoration: none;
       }
       .site-nav .nav-signout-button {
@@ -140,7 +173,7 @@ function renderAppPage(
         color: var(--accent);
         text-decoration: underline;
       }
-      .hero, .card { background: var(--paper); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 1px 2px rgba(31,38,28,.05); }
+      .hero, .card { background: var(--paper); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); }
       .hero { padding: 20px; margin-bottom: 18px; }
       .hero h1 { margin: 0 0 8px; font-size: 34px; line-height: 1.05; }
       .hero p { margin: 0; color: var(--muted); max-width: 70ch; }
@@ -153,7 +186,7 @@ function renderAppPage(
       .card h2 { margin: 0 0 8px; font-size: 18px; }
       .muted { color: var(--muted); }
       .book-list { display: grid; gap: 10px; }
-      .book-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; align-items: start; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+      .book-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; align-items: start; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
       .cover, .cover-fallback { width: 72px; height: 72px; border-radius: 10px; }
       .cover-fallback { display: flex; align-items: center; justify-content: center; background: var(--accent-soft); color: var(--accent); font-weight: 700; }
       .cover { object-fit: cover; display: block; border: 1px solid var(--line); }
@@ -163,15 +196,15 @@ function renderAppPage(
       .button-link-primary {
         background: var(--accent);
         border-color: var(--accent);
-        color: #fff;
+        color: var(--accent-contrast);
       }
       .button-link-primary:hover {
         background: var(--accent);
-        color: #fff;
+        color: var(--accent-contrast);
       }
-      .pill { display: inline-flex; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); background: #fff; font-size: 12px; color: var(--muted); }
+      .pill { display: inline-flex; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: 12px; color: var(--muted); }
       .stats { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-      .empty { padding: 16px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); background: #fff; }
+      .empty { padding: 16px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); background: var(--surface); }
       .detail-grid { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 18px; }
       .detail-cover, .detail-cover-fallback { width: 180px; height: 180px; border-radius: 16px; }
       .detail-cover { object-fit: cover; border: 1px solid var(--line); display: block; }

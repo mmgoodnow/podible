@@ -62,7 +62,7 @@ export function renderAddPage(
           </div>
         </form>
         ${status ? `<p class="muted" style="margin-top: 10px;">${escapeHtml(status)}</p>` : ""}
-        ${error ? `<p style="margin-top: 10px; color: #8b0000;">${escapeHtml(error)}</p>` : ""}
+        ${error ? `<p style="margin-top: 10px; color: var(--danger);">${escapeHtml(error)}</p>` : ""}
       </section>
       <section class="card span-12">
         <h2>Results</h2>
