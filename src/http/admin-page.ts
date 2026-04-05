@@ -52,16 +52,6 @@ function renderAdminPage(
       : `<tr><td colspan="5">No users yet.</td></tr>`;
 
   const body = `<style>
-      :root {
-        --page-header-glow: rgba(40, 89, 67, 0.08);
-        --page-header-end: #f7f5ed;
-      }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --page-header-glow: rgba(140, 194, 165, 0.12);
-          --page-header-end: #141c17;
-        }
-      }
       .dashboard-grid {
         display: grid;
         grid-template-columns: repeat(12, minmax(0, 1fr));
@@ -90,11 +80,6 @@ function renderAdminPage(
       }
       .card-full { grid-column: span 12; }
       .card-mid { grid-column: span 6; }
-      .page-header {
-        background:
-          radial-gradient(circle at 90% 10%, var(--page-header-glow), transparent 45%),
-          linear-gradient(180deg, var(--paper), var(--page-header-end));
-      }
       .page-header h1 {
         margin: 0 0 8px;
         line-height: 1.05;
