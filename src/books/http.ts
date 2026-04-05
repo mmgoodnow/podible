@@ -279,15 +279,21 @@ function renderAppPage(
       .site-nav { display: flex; gap: 14px; flex-wrap: wrap; align-items: baseline; margin-bottom: 18px; font-size: 14px; }
       .nav-signout-form { display: inline-flex; align-items: baseline; margin: 0; }
       .site-nav .nav-signout-button {
-        display: inline;
+        display: inline-block;
+        appearance: none;
+        -webkit-appearance: none;
         min-height: 0;
+        margin: 0;
         padding: 0;
         border: 0;
-        background: none;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
         color: var(--muted);
         font: inherit;
         cursor: pointer;
         line-height: inherit;
+        text-decoration: none;
       }
       .site-nav .nav-signout-button:hover {
         color: var(--accent);
