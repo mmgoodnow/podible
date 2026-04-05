@@ -280,6 +280,7 @@ function renderAppPage(
       .nav-signout-form { display: inline-flex; align-items: baseline; margin: 0; }
       .site-nav .nav-signout-button {
         display: inline;
+        min-height: 0;
         padding: 0;
         border: 0;
         background: none;
