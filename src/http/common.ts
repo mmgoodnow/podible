@@ -78,12 +78,13 @@ function renderAppPage(
     <script>
       (() => {
         const stored = localStorage.getItem("podible-theme");
-        const theme = stored === "dark" || stored === "light" ? stored : "system";
-        if (theme === "dark") {
-          document.documentElement.dataset.theme = "dark";
-        } else if (theme === "light") {
-          document.documentElement.dataset.theme = "light";
+        if (stored === "dark" || stored === "light") {
+          document.documentElement.dataset.theme = stored;
+          return;
         }
+        document.documentElement.dataset.theme = window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light";
       })();
     </script>
     <style>
@@ -126,28 +127,6 @@ function renderAppPage(
         --danger-contrast: #1a0f0f;
         --bg-grad-start: #1a231d;
         --shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
-      }
-      @media (prefers-color-scheme: dark) {
-        :root:not([data-theme]) {
-          color-scheme: dark;
-          --bg: #111713;
-          --paper: #18211b;
-          --surface: #1d2720;
-          --surface-hover: #233127;
-          --line: #324037;
-          --line-soft: #2a352e;
-          --text: #edf4eb;
-          --muted: #a5b5a5;
-          --accent: #8cc2a5;
-          --accent-contrast: #0f1713;
-          --accent-soft: #1e2b23;
-          --code-bg: #101713;
-          --danger: #ff8f8f;
-          --danger-border: #b85d5d;
-          --danger-contrast: #1a0f0f;
-          --bg-grad-start: #1a231d;
-          --shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
-        }
       }
       * { box-sizing: border-box; }
       body {
@@ -290,14 +269,14 @@ function renderAppPage(
         }
 
         function resolvedTheme() {
-          return root.dataset.theme || (media.matches ? "dark" : "light");
+          return root.dataset.theme === "dark" ? "dark" : "light";
         }
 
         function apply(theme) {
           if (theme === "dark" || theme === "light") {
             root.dataset.theme = theme;
           } else {
-            delete root.dataset.theme;
+            root.dataset.theme = media.matches ? "dark" : "light";
           }
           if (button) {
             button.textContent = resolvedTheme() === "dark" ? "Light mode" : "Dark mode";
