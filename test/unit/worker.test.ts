@@ -413,6 +413,107 @@ describe("worker concurrency", () => {
     expect(maxConcurrent).toBe(1);
   });
 
+  test("starts newly queued non-conflicting jobs while a long job is still active", async () => {
+    const queuedJobs: Array<Record<string, unknown>> = [
+      {
+        id: 1,
+        type: "chapter_analysis",
+        status: "queued",
+        book_id: 7,
+        release_id: null,
+        payload_json: JSON.stringify({ assetId: 11, ebookAssetId: 21 }),
+        error: null,
+        attempt_count: 0,
+        max_attempts: 5,
+        next_run_at: null,
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+    let stopWorker = false;
+    const started: number[] = [];
+    let releaseSecondJob: (() => void) | undefined;
+    const firstJobGate = new Promise<void>((resolve) => {
+      releaseSecondJob = resolve;
+    });
+
+    const fakeRepo = {
+      requeueRunningJobs: () => 0,
+      listRunnableJobs: () => queuedJobs.filter((job) => job.status === "queued"),
+      claimQueuedJob: (jobId: number) => {
+        const job = queuedJobs.find((candidate) => candidate.id === jobId && candidate.status === "queued");
+        if (!job) return null;
+        job.status = "running";
+        return job;
+      },
+      getAsset: (assetId: number) => (assetId === 11 ? { id: 11, book_id: 7, source_release_id: null } : { id: 12, book_id: 8, source_release_id: null }),
+      getRelease: () => null,
+    } as unknown as BooksRepo;
+
+    const worker = runWorker(
+      {
+        repo: fakeRepo,
+        getSettings: () => defaultSettings({ auth: { mode: "plex" } }),
+        shouldStop: () => stopWorker,
+      },
+      {
+        concurrency: 2,
+        processJob: async (_ctx, job) => {
+          started.push(job.id);
+          if (job.id === 1) {
+            await firstJobGate;
+          }
+          if (job.id === 2) {
+            stopWorker = true;
+          }
+          return "done";
+        },
+        handleJobFailure: async () => {
+          throw new Error("unexpected failure");
+        },
+      }
+    );
+
+    try {
+      const startedWaitingAt = Date.now();
+      while (!started.includes(1)) {
+        if (Date.now() - startedWaitingAt > 1000) {
+          throw new Error("Timed out waiting for first job to start");
+        }
+        await sleep(10);
+      }
+
+      queuedJobs.push({
+        id: 2,
+        type: "download",
+        status: "queued",
+        book_id: 8,
+        release_id: 42,
+        payload_json: JSON.stringify({ infoHash: "abc123" }),
+        error: null,
+        attempt_count: 0,
+        max_attempts: 5,
+        next_run_at: null,
+        created_at: "2026-01-01T00:00:01.000Z",
+        updated_at: "2026-01-01T00:00:01.000Z",
+      });
+
+      const secondJobWaitingAt = Date.now();
+      while (!started.includes(2)) {
+        if (Date.now() - secondJobWaitingAt > 1000) {
+          throw new Error("Timed out waiting for second job to start while first was active");
+        }
+        await sleep(10);
+      }
+
+      expect(started).toEqual([1, 2]);
+    } finally {
+      releaseSecondJob?.();
+      stopWorker = true;
+      await Promise.race([worker, sleep(1000)]);
+    }
+  });
+
   test("runs chapter analysis jobs in parallel for different assets", async () => {
     const queuedJobs = [
       {

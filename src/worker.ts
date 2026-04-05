@@ -66,6 +66,7 @@ export async function runWorker(ctx: WorkerContext, deps: WorkerDeps = {}): Prom
       return;
     }
 
+    let launchedAny = false;
     if (!ctx.shouldStop?.()) {
       while (active.size < workerConcurrency) {
         const candidates = ctx.repo.listRunnableJobs(nowIso(), RUNNABLE_SCAN_LIMIT);
@@ -74,6 +75,7 @@ export async function runWorker(ctx: WorkerContext, deps: WorkerDeps = {}): Prom
         const claimed = ctx.repo.claimQueuedJob(candidate.id, nowIso());
         if (!claimed) continue;
         launchJob(claimed, jobLockKeys(ctx.repo, claimed));
+        launchedAny = true;
       }
     }
 
@@ -82,6 +84,10 @@ export async function runWorker(ctx: WorkerContext, deps: WorkerDeps = {}): Prom
       continue;
     }
 
-    await Promise.race([...active.values()].map((entry) => entry.done));
+    if (launchedAny && active.size < workerConcurrency) {
+      continue;
+    }
+
+    await Promise.race([...active.values()].map((entry) => entry.done).concat(sleep(300).then(() => -1)));
   }
 }
