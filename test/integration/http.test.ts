@@ -16,7 +16,7 @@ const TINY_PNG_BASE64 =
 
 function createBrowserSessionCookie(
   repo: InstanceType<typeof BooksRepo>,
-  options: { provider?: "plex"; username?: string; displayName?: string; isAdmin?: boolean } = {}
+  options: { provider?: "plex" | "local"; username?: string; displayName?: string; isAdmin?: boolean } = {}
 ): string {
   const provider = options.provider ?? "plex";
   const username = options.username ?? (options.isAdmin ? "admin" : "user");
@@ -780,6 +780,77 @@ describe("podible http", () => {
       expect(repo.listUsers("plex")[0]?.is_admin).toBe(1);
       expect(repo.getSettings().auth.plex.ownerToken).toBe("plex-jwt-token");
       expect(repo.getPlexLoginAttempt(123)).toBeNull();
+
+      db.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("supports Plex bootstrap even when a local dev admin user already exists", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.origin === "https://plex.tv" && url.pathname === "/api/v2/pins" && init?.method === "POST") {
+        return new Response(JSON.stringify({ id: 123, code: "PINCODE123" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.origin === "https://plex.tv" && url.pathname === "/api/v2/pins/123") {
+        return new Response(JSON.stringify({ id: 123, code: "PINCODE123", authToken: "plex-jwt-token" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.origin === "https://plex.tv" && url.pathname === "/api/v2/user") {
+        expect(new Headers(init?.headers).get("X-Plex-Token")).toBe("plex-jwt-token");
+        return new Response(
+          JSON.stringify({
+            id: "plex-user-1",
+            username: "alice",
+            title: "Alice",
+            thumb: "https://images.example/alice.jpg",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      throw new Error(`Unexpected external fetch in test: ${url.toString()}`);
+    }) as typeof fetch;
+
+    try {
+      const db = new Database(":memory:");
+      runMigrations(db);
+      const repo = new BooksRepo(db);
+      const settings = repo.ensureSettings();
+      repo.updateSettings({
+        ...settings,
+        auth: { ...settings.auth, mode: "plex" },
+      });
+
+      repo.upsertUser({
+        provider: "local",
+        providerUserId: "dev:michael",
+        username: "michael",
+        displayName: "Michael Goodnow",
+        isAdmin: true,
+      });
+
+      const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+      const start = await fetchHandler(
+        new Request("http://app.test/login/plex/start", {
+          method: "POST",
+        })
+      );
+      expect(start.status).toBe(200);
+
+      const complete = await fetchHandler(new Request("http://app.test/login/plex/complete?pinId=123"));
+      expect(complete.status).toBe(200);
+      const completeBody = await complete.text();
+      expect(completeBody.includes("Sign-in complete. You can close this window.")).toBe(true);
+
+      expect(repo.listUsers("plex")).toHaveLength(1);
+      expect(repo.getSettings().auth.plex.ownerToken).toBe("plex-jwt-token");
 
       db.close();
     } finally {

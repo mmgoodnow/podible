@@ -829,9 +829,10 @@ async function resolvePlexLoginStatus(
   try {
     const plexUser = await fetchPlexUser(settings, plexToken, attempt.client_identifier);
     console.log(`[plex] fetched user id=${plexUser.id} username=${plexUser.username}`);
-    const existingPlexUser = repo.listUsers("plex").find((user) => user.provider_user_id === plexUser.id) ?? null;
+    const existingPlexUsers = repo.listUsers("plex");
+    const existingPlexUser = existingPlexUsers.find((user) => user.provider_user_id === plexUser.id) ?? null;
     const existingUsers = repo.listUsers();
-    const isBootstrap = existingUsers.length === 0;
+    const isBootstrap = existingPlexUsers.length === 0;
     let allowed = false;
     let denialReason = "This Plex user is not allowed on this Podible instance.";
 
@@ -844,7 +845,7 @@ async function resolvePlexLoginStatus(
       }
     } else {
       const hasServerAccess =
-        plexUser.id === (existingUsers.find((user) => user.is_admin === 1 && user.provider === "plex")?.provider_user_id ?? "")
+        plexUser.id === (existingPlexUsers.find((user) => user.is_admin === 1)?.provider_user_id ?? "")
           ? true
           : await checkPlexUserAccess(settings, plexUser.id);
       allowed = hasServerAccess;
@@ -860,8 +861,8 @@ async function resolvePlexLoginStatus(
       };
     }
 
-    const hasAdminUser = existingUsers.some((user) => user.is_admin === 1);
-    if (!settings.auth.plex.ownerToken && (!hasAdminUser || existingPlexUser?.is_admin === 1)) {
+    const hasPlexAdminUser = existingPlexUsers.some((user) => user.is_admin === 1);
+    if (!settings.auth.plex.ownerToken && (!hasPlexAdminUser || existingPlexUser?.is_admin === 1)) {
       settings = repo.updateSettings({
         ...settings,
         auth: {
@@ -881,7 +882,7 @@ async function resolvePlexLoginStatus(
       username: plexUser.username,
       displayName: plexUser.displayName,
       thumbUrl: plexUser.thumbUrl,
-      isAdmin: existingPlexUser ? existingPlexUser.is_admin === 1 : !hasAdminUser,
+      isAdmin: existingPlexUser ? existingPlexUser.is_admin === 1 : !hasPlexAdminUser,
     });
     const sessionToken = createSessionToken();
     repo.createSession(user.id, hashSessionToken(sessionToken), sessionExpiresAt());

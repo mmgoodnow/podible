@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "start": "bun run server.ts",
+    "dev-login": "bun run scripts/dev-login.ts",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit"
   },
