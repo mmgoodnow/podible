@@ -637,4 +637,150 @@ describe("chapter analysis", () => {
       db.close();
     }
   });
+
+  test("falls back to ratio-based chapter timings when full-transcript boundaries do not resolve", async () => {
+    const { db, repo } = setupRepo();
+    const root = await mkdtemp(path.join(os.tmpdir(), "podible-chapter-ratio-fallback-"));
+    try {
+      const settings = repo.ensureSettings();
+      repo.updateSettings(
+        defaultSettings({
+          ...settings,
+          auth: { mode: "plex" },
+          agents: {
+            ...settings.agents,
+            apiKey: "test-key",
+          },
+        })
+      );
+
+      const audioPath = path.join(root, "audio.mp3");
+      const epubPath = path.join(root, "book.epub");
+      await mkdir(root, { recursive: true });
+      await writeFile(audioPath, Buffer.from("audio"));
+      await writeFile(epubPath, Buffer.from("epub"));
+
+      const chapterOneTokens = Array.from({ length: 40 }, (_, index) => `alpha${index}`);
+      const chapterTwoTokens = Array.from({ length: 20 }, (_, index) => `beta${index}`);
+      const chapterThreeTokens = Array.from({ length: 60 }, (_, index) => `gamma${index}`);
+
+      const book = repo.createBook({ title: "Twilight", author: "Stephenie Meyer" });
+      const audio = repo.addAsset({
+        bookId: book.id,
+        kind: "single",
+        mime: "audio/mpeg",
+        totalSize: 200,
+        durationMs: 120_000,
+        files: [
+          {
+            path: audioPath,
+            size: 200,
+            start: 0,
+            end: 199,
+            durationMs: 120_000,
+            title: "Book",
+          },
+        ],
+      });
+      const epub = repo.addAsset({
+        bookId: book.id,
+        kind: "ebook",
+        mime: "application/epub+zip",
+        totalSize: 100,
+        durationMs: null,
+        files: [
+          {
+            path: epubPath,
+            size: 100,
+            start: 0,
+            end: 99,
+            durationMs: 0,
+            title: null,
+          },
+        ],
+      });
+      const job = repo.createJob({
+        type: "chapter_analysis",
+        bookId: book.id,
+        payload: {
+          assetId: audio.id,
+          ebookAssetId: epub.id,
+        },
+      });
+
+      await processChapterAnalysisJob(
+        {
+          repo,
+          getSettings: () => repo.getSettings(),
+        },
+        job,
+        {
+          loadEpubEntries: async () => [
+            {
+              id: "one",
+              title: "One",
+              href: "one.xhtml",
+              text: chapterOneTokens.join(" "),
+              words: chapterWords(chapterOneTokens),
+              tokens: chapterOneTokens,
+              wordCount: chapterOneTokens.length,
+              cumulativeWords: chapterOneTokens.length,
+              cumulativeRatio: 40 / 120,
+            },
+            {
+              id: "two",
+              title: "Two",
+              href: "two.xhtml",
+              text: chapterTwoTokens.join(" "),
+              words: chapterWords(chapterTwoTokens),
+              tokens: chapterTwoTokens,
+              wordCount: chapterTwoTokens.length,
+              cumulativeWords: 60,
+              cumulativeRatio: 60 / 120,
+            },
+            {
+              id: "three",
+              title: "Three",
+              href: "three.xhtml",
+              text: chapterThreeTokens.join(" "),
+              words: chapterWords(chapterThreeTokens),
+              tokens: chapterThreeTokens,
+              wordCount: chapterThreeTokens.length,
+              cumulativeWords: 120,
+              cumulativeRatio: 1,
+            },
+          ],
+          extractChunkClip: async ({ tempDir, clipName }) => {
+            const clipPath = path.join(tempDir, `${clipName}.mp3`);
+            await mkdir(tempDir, { recursive: true });
+            await writeFile(clipPath, Buffer.from("clip"));
+            return clipPath;
+          },
+          transcribeChunk: async () =>
+            Array.from({ length: 120 }, (_, index) => ({
+              token: `filler${index}`,
+              raw: `filler${index}`,
+              startMs: index * 1_000,
+              endMs: index * 1_000 + 600,
+            })),
+        }
+      );
+
+      const stored = await loadStoredChapterTimings(repo, audio, repo.getAssetFiles(audio.id));
+      const transcript = await loadStoredTranscriptPayload(repo, audio.id);
+      const chapters = await buildChapters(repo, audio, repo.getAssetFiles(audio.id));
+
+      expect(stored?.length).toBe(3);
+      expect(stored?.[1]?.startMs).toBe(40_000);
+      expect(stored?.[2]?.startMs).toBe(60_000);
+      expect(chapters?.chapters.length).toBe(3);
+      expect(transcript?.segments?.length).toBe(3);
+      expect(transcript?.segments?.every((segment) => segment.matchedWordCount === 0)).toBe(true);
+      expect(repo.getChapterAnalysis(audio.id)?.status).toBe("succeeded");
+      expect(repo.getChapterAnalysis(audio.id)?.resolved_boundary_count).toBe(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      db.close();
+    }
+  });
 });

@@ -14,7 +14,7 @@ import type { BooksRepo } from "../repo";
 import type { AppSettings, AssetFileRow, AssetRow, AssetTranscriptRow, BookRow, ChapterAnalysisRow, JobRow } from "../app-types";
 
 const CHAPTER_ANALYSIS_SOURCE = "full_transcript_epub";
-const CHAPTER_ANALYSIS_ALGORITHM_VERSION = "2026-04-02-v5";
+const CHAPTER_ANALYSIS_ALGORITHM_VERSION = "2026-04-05-v6";
 const CHAPTERS_API_VERSION = "1.4.0";
 const TRANSCRIPTION_MODEL = "whisper-1";
 const CHUNK_MS = 30 * 60_000;
@@ -29,7 +29,6 @@ const CHAPTER_ANCHOR_INTERVAL_WORDS = 480;
 const CHAPTER_ANCHOR_PROBE_WORDS = 8;
 const CHAPTER_ANCHOR_SEARCH_RADIUS_WORDS = 72;
 const MAX_DRIFT_MS = 150_000;
-const MIN_RESOLVED_BOUNDARY_RATIO = 0.5;
 const GLOSSARY_LIMIT = 48;
 const ORDINARY_WORDS_PATH = "/usr/share/dict/words";
 const MAX_FRONT_MATTER_SKIP = 8;
@@ -1808,10 +1807,6 @@ function analyzeTranscript(
   if (totalBoundaryCount === 0) {
     throw new Error("No chapter boundaries available for analysis");
   }
-  if (resolvedBoundaryCount / totalBoundaryCount < MIN_RESOLVED_BOUNDARY_RATIO) {
-    throw new Error("Too few chapter boundaries resolved from full transcript");
-  }
-
   const startTimes = interpolateChapterStarts(
     entries,
     matches.map((match) => match.resolvedMs),
