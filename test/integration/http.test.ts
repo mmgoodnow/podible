@@ -78,6 +78,8 @@ describe("podible http", () => {
     const body = await home.text();
     expect(body.includes("Podible")).toBe(true);
     expect(body.includes("Sign in")).toBe(true);
+    expect(body.includes("Continue with Plex")).toBe(true);
+    expect(body.includes('<nav class="site-nav">')).toBe(false);
     expect(body.includes(">Admin<")).toBe(false);
 
     const adminRedirect = await fetchHandler(new Request("http://localhost/admin"));
@@ -586,7 +588,8 @@ describe("podible http", () => {
     const loginPage = await fetchHandler(new Request("http://app.test/login?redirectTo=%2Flibrary"));
     expect(loginPage.status).toBe(200);
     const loginBody = await loginPage.text();
-    expect(loginBody.includes("Sign in with Plex")).toBe(true);
+    expect(loginBody.includes("Continue with Plex")).toBe(true);
+    expect(loginBody.includes('<nav class="site-nav">')).toBe(false);
 
     const cookieHeader = createBrowserSessionCookie(repo, {
       username: "alice",
@@ -639,7 +642,8 @@ describe("podible http", () => {
     const authorize = await fetchHandler(new Request(authorizeUrl));
     expect(authorize.status).toBe(200);
     const authorizeBody = await authorize.text();
-    expect(authorizeBody.includes("Sign in with Plex")).toBe(true);
+    expect(authorizeBody.includes("Continue with Plex")).toBe(true);
+    expect(authorizeBody.includes('<nav class="site-nav">')).toBe(false);
 
     const authorizePath = new URL(authorizeUrl).pathname;
     const browserCookie = createBrowserSessionCookie(repo, {
@@ -746,7 +750,9 @@ describe("podible http", () => {
 
       const loginPage = await fetchHandler(new Request("http://app.test/login"));
       expect(loginPage.status).toBe(200);
-      expect((await loginPage.text()).includes("Sign in with Plex")).toBe(true);
+      const loginBody = await loginPage.text();
+      expect(loginBody.includes("Continue with Plex")).toBe(true);
+      expect(loginBody.includes('<nav class="site-nav">')).toBe(false);
 
       const start = await fetchHandler(
         new Request("http://app.test/login/plex/start", {

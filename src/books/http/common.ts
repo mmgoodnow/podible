@@ -52,9 +52,11 @@ function renderAppPage(
   settings: AppSettings,
   currentUser: SessionWithUserRow | null = null,
   extraNav = "",
-  apiKey: string | null = null
+  apiKey: string | null = null,
+  options: { showNav?: boolean } = {}
 ): Response {
   void settings;
+  const showNav = options.showNav !== false;
   const showAdminNav = Boolean(apiKey) || (currentUser?.is_admin ?? 0) === 1;
   const accountNav = currentUser
     ? `<span class="muted">Signed in as ${escapeHtml(displayUserName(currentUser))}</span>
@@ -193,7 +195,7 @@ function renderAppPage(
   </head>
   <body>
     <div class="page">
-      ${nav}
+      ${showNav ? nav : ""}
       ${body}
     </div>
   </body>

@@ -356,15 +356,47 @@ function renderLoginPage(
   const plexStartPath = addApiKey(`/login/plex/start?redirectTo=${encodeURIComponent(redirectTo)}`, apiKey);
   const plexLoadingPath = addApiKey(`/login/plex/loading?redirectTo=${encodeURIComponent(redirectTo)}`, apiKey);
   const body = `
-    <section class="hero">
-      <h1>Sign in</h1>
-      <p>Use your Plex account to sign in to this Podible instance.</p>
+    <style>
+      .login-shell {
+        min-height: calc(100vh - 36px);
+        display: grid;
+        place-items: center;
+      }
+      .login-hero {
+        max-width: 560px;
+        margin: 0 auto;
+        padding: 28px;
+        text-align: center;
+        background:
+          radial-gradient(circle at top, rgba(40, 89, 67, 0.08), transparent 55%),
+          var(--paper);
+      }
+      .login-hero p {
+        margin-left: auto;
+        margin-right: auto;
+      }
+      .login-cta {
+        min-width: 220px;
+        justify-content: center;
+        font-weight: 600;
+      }
+    </style>
+    <div class="login-shell">
+    <section class="hero login-hero">
+      <h1>Sign in to Podible</h1>
+      <p>Open your library, keep your place, and get back to listening with your Plex account.</p>
+      <div class="stats">
+        <span class="pill">Audiobooks</span>
+        <span class="pill">eBooks</span>
+        <span class="pill">Plex sign-in</span>
+      </div>
       ${messageMarkup(options.notice, options.error)}
       <div class="actions" style="margin-top: 14px;">
-        <button id="plex-login-btn" type="button">Sign in with Plex</button>
+        <button id="plex-login-btn" type="button" class="button-link-primary login-cta">Continue with Plex</button>
       </div>
       <p id="plex-login-status" class="muted" style="margin-top: 10px;"></p>
     </section>
+    </div>
     <script>
       (() => {
         const button = document.getElementById("plex-login-btn");
@@ -418,7 +450,7 @@ function renderLoginPage(
         });
       })();
     </script>`;
-  return renderAppPage("Sign in", body, settings, options.currentUser ?? null, "", apiKey);
+  return renderAppPage("Sign in", body, settings, options.currentUser ?? null, "", apiKey, { showNav: false });
 }
 
 function renderPlexLoadingPage(settings: AppSettings, apiKey: string | null = null): Response {
