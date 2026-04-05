@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
 
+import { Hono } from "hono";
+
 import { fetchPlexServerDevices } from "../plex";
 import { BooksRepo } from "../repo";
 import { renderAdminPage } from "./admin-page";
+import { getCurrentSession, requireAdminSession, type HttpEnv } from "./middleware";
 import { redirect } from "./route-helpers";
-import type { AppSettings, SessionWithUserRow } from "../types";
+import type { AppSettings } from "../types";
 
 type CachedPlexServers = {
   ownerTokenHash: string;
@@ -45,36 +48,25 @@ function cachePlexServers(
   } satisfies CachedPlexServers);
 }
 
-export function isAdminRoute(pathname: string): boolean {
-  return pathname === "/admin" || pathname === "/admin/plex" || pathname === "/admin/plex/select" || pathname === "/admin/refresh";
-}
+export function createAdminRoutes(repo: BooksRepo): Hono<HttpEnv> {
+  const app = new Hono<HttpEnv>();
 
-export async function handleAdminRoute(input: {
-  repo: BooksRepo;
-  request: Request;
-  settings: AppSettings;
-  currentSession: SessionWithUserRow | null;
-  pathname: string;
-  method: string;
-}): Promise<{ response: Response; settings: AppSettings } | null> {
-  const { repo, request, currentSession, pathname, method } = input;
-  let { settings } = input;
-  const url = new URL(request.url);
+  app.use("/admin", requireAdminSession);
+  app.use("/admin/*", requireAdminSession);
 
-  if (pathname === "/admin/plex" && method === "GET") {
-    return { response: redirect("/admin"), settings };
-  }
+  app.get("/admin/plex", (c) => c.redirect("/admin", 303));
 
-  if (pathname === "/admin/plex/select" && method === "POST") {
+  app.post("/admin/plex/select", async (c) => {
+    const settings = repo.getSettings();
     if (settings.auth.mode !== "plex") {
-      return { response: new Response("Forbidden", { status: 403 }), settings };
+      return new Response("Forbidden", { status: 403 });
     }
-    const form = new URLSearchParams(await request.text());
+    const form = new URLSearchParams(await c.req.raw.text());
     const machineId = (form.get("machineId") ?? "").trim();
     if (!machineId) {
-      return { response: redirect("/admin?plex_error=Missing%20machine%20id"), settings };
+      return redirect("/admin?plex_error=Missing%20machine%20id");
     }
-    settings = repo.updateSettings({
+    repo.updateSettings({
       ...settings,
       auth: {
         ...settings.auth,
@@ -84,19 +76,20 @@ export async function handleAdminRoute(input: {
         },
       },
     });
-    return { response: redirect("/admin?plex_notice=Selected%20server."), settings };
-  }
+    return redirect("/admin?plex_notice=Selected%20server.");
+  });
 
-  if (pathname === "/admin/refresh" && method === "POST") {
+  app.post("/admin/refresh", () => {
     const job = repo.createJob({ type: "full_library_refresh" });
-    return { response: redirect(`/admin?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`), settings };
-  }
+    return redirect(`/admin?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`);
+  });
 
-  if (pathname === "/admin" && method === "GET") {
+  app.get("/admin", async (c) => {
+    const settings = repo.getSettings();
     let plexServers: Array<{ machineId: string; name: string; product: string; owned: boolean; sourceTitle: string | null }> = [];
-    const notice = url.searchParams.get("notice");
-    const error = url.searchParams.get("error");
-    let plexError = url.searchParams.get("plex_error");
+    const notice = c.req.query("notice");
+    const error = c.req.query("error");
+    let plexError = c.req.query("plex_error");
     if (settings.auth.mode === "plex" && settings.auth.plex.ownerToken) {
       const cached = getCachedPlexServers(repo, settings);
       try {
@@ -114,18 +107,15 @@ export async function handleAdminRoute(input: {
         }
       }
     }
-    return {
-      response: renderAdminPage(repo, settings, currentSession, {
-        plexServers,
-        apiKey: null,
-        notice,
-        error,
-        plexNotice: url.searchParams.get("plex_notice"),
-        plexError,
-      }),
-      settings,
-    };
-  }
+    return renderAdminPage(repo, settings, getCurrentSession(c), {
+      plexServers,
+      apiKey: null,
+      notice,
+      error,
+      plexNotice: c.req.query("plex_notice"),
+      plexError,
+    });
+  });
 
-  return null;
+  return app;
 }

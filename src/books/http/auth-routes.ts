@@ -1,3 +1,5 @@
+import { Hono, type Context } from "hono";
+
 import {
   buildSessionCookie,
   clearSessionCookie,
@@ -6,54 +8,31 @@ import {
 } from "../auth";
 import { buildPlexAuthUrl, createEphemeralPlexIdentity, createPlexPin } from "../plex";
 import { BooksRepo } from "../repo";
+import type { AppSettings } from "../types";
 import { renderLoginPage } from "./login-page";
-import { renderAppAuthErrorPage } from "./common";
+import { renderAppAuthErrorPage, sanitizeRedirectPath } from "./common";
+import { getCurrentSession, type HttpEnv } from "./middleware";
+import { json } from "./route-helpers";
 import { renderPlexImmediateResultPage, renderPlexLoadingPage, waitForPlexLoginResult } from "./support";
-import { json, redirect } from "./route-helpers";
-import type { AppSettings, SessionWithUserRow } from "../types";
 
-type AppLoginPath = { attemptId: string; isComplete: boolean } | null;
+export function createAuthRoutes(repo: BooksRepo): Hono<HttpEnv> {
+  const app = new Hono<HttpEnv>();
 
-export function isPublicRoute(pathname: string, appLoginPath: AppLoginPath): boolean {
-  return (
-    pathname === "/" ||
-    pathname === "/login" ||
-    pathname === "/logout" ||
-    pathname === "/login/plex/start" ||
-    pathname === "/login/plex/loading" ||
-    pathname === "/login/plex/complete" ||
-    appLoginPath !== null
-  );
-}
+  app.get("/login", (c) => {
+    const settings = repo.getSettings();
+    return renderLoginPage(settings, {
+      notice: c.req.query("notice"),
+      error: c.req.query("error"),
+      currentUser: getCurrentSession(c),
+      redirectTo: sanitizeRedirectPath(c.req.query("redirectTo")),
+    });
+  });
 
-export async function handleAuthRoute(input: {
-  repo: BooksRepo;
-  request: Request;
-  settings: AppSettings;
-  currentSession: SessionWithUserRow | null;
-  pathname: string;
-  method: string;
-  redirectTo: string | null;
-  appLoginPath: AppLoginPath;
-}): Promise<{ response: Response; settings: AppSettings } | null> {
-  const { repo, request, currentSession, pathname, method, redirectTo, appLoginPath } = input;
-  let { settings } = input;
-
-  if (pathname === "/login" && method === "GET") {
-    return {
-      response: renderLoginPage(settings, {
-        notice: new URL(request.url).searchParams.get("notice"),
-        error: new URL(request.url).searchParams.get("error"),
-        currentUser: currentSession,
-        redirectTo,
-      }),
-      settings,
-    };
-  }
-
-  if (pathname === "/login/plex/start" && method === "POST") {
+  app.post("/login/plex/start", async (c) => {
+    const settings = repo.getSettings();
+    const redirectTo = sanitizeRedirectPath(c.req.query("redirectTo"));
     if (settings.auth.mode !== "plex") {
-      return { response: json({ error: "Plex sign-in is not enabled." }, 403), settings };
+      return json({ error: "Plex sign-in is not enabled." }, 403);
     }
     try {
       repo.deleteExpiredPlexLoginAttempts(new Date(Date.now() - 15 * 60_000).toISOString());
@@ -66,42 +45,33 @@ export async function handleAuthRoute(input: {
         privateKeyPkcs8: identity.privateKeyPkcs8,
       });
       console.log(`[plex] created pin id=${pin.id} clientId=${identity.clientIdentifier}`);
-      const forwardUrl = new URL(request.url);
+      const forwardUrl = new URL(c.req.url);
       forwardUrl.pathname = "/login/plex/complete";
       forwardUrl.search = "";
       forwardUrl.searchParams.set("pinId", String(pin.id));
       if (redirectTo) {
         forwardUrl.searchParams.set("redirectTo", redirectTo);
       }
-      return {
-        response: json({
-          pinId: pin.id,
-          authUrl: buildPlexAuthUrl(identity, pin.code, forwardUrl.toString()),
-        }),
-        settings,
-      };
+      return json({
+        pinId: pin.id,
+        authUrl: buildPlexAuthUrl(identity, pin.code, forwardUrl.toString()),
+      });
     } catch (error) {
-      return { response: json({ error: (error as Error).message || "Unable to start Plex sign-in." }, 502), settings };
+      return json({ error: (error as Error).message || "Unable to start Plex sign-in." }, 502);
     }
-  }
+  });
 
-  if (pathname === "/login/plex/loading" && method === "GET") {
-    return { response: renderPlexLoadingPage(settings), settings };
-  }
+  app.get("/login/plex/loading", (c) => renderPlexLoadingPage(repo.getSettings()));
 
-  if (pathname === "/login/plex/complete" && method === "GET") {
+  app.get("/login/plex/complete", async (c) => {
+    let settings = repo.getSettings();
+    const redirectTo = sanitizeRedirectPath(c.req.query("redirectTo"));
     if (settings.auth.mode !== "plex") {
-      return {
-        response: renderPlexImmediateResultPage({ ok: false, redirectTo: "/", error: "Plex sign-in is not enabled." }),
-        settings,
-      };
+      return renderPlexImmediateResultPage({ ok: false, redirectTo: "/", error: "Plex sign-in is not enabled." });
     }
-    const pinId = Number.parseInt(new URL(request.url).searchParams.get("pinId") ?? "", 10);
+    const pinId = Number.parseInt(c.req.query("pinId") ?? "", 10);
     if (!Number.isInteger(pinId) || pinId <= 0) {
-      return {
-        response: renderPlexImmediateResultPage({ ok: false, redirectTo: "/login", error: "Missing or invalid Plex PIN id." }),
-        settings,
-      };
+      return renderPlexImmediateResultPage({ ok: false, redirectTo: "/login", error: "Missing or invalid Plex PIN id." });
     }
     const result = await waitForPlexLoginResult(repo, settings, pinId, null, redirectTo);
     settings = result.settings;
@@ -111,55 +81,65 @@ export async function handleAuthRoute(input: {
       error: result.kind === "error" ? result.error : null,
     });
     if (result.kind === "success") {
-      response.headers.append("Set-Cookie", buildSessionCookie(result.sessionToken, request));
+      response.headers.append("Set-Cookie", buildSessionCookie(result.sessionToken, c.req.raw));
     }
-    return { response, settings };
-  }
+    return response;
+  });
 
-  if (pathname === "/logout" && method === "POST") {
+  app.post("/logout", (c) => {
+    const currentSession = getCurrentSession(c);
     if (currentSession) {
       repo.deleteSession(currentSession.id);
     }
-    const response = redirect("/login?notice=Signed%20out.");
-    response.headers.append("Set-Cookie", clearSessionCookie(request));
-    return { response, settings };
+    const response = c.redirect("/login?notice=Signed%20out.", 303);
+    response.headers.append("Set-Cookie", clearSessionCookie(c.req.raw));
+    return response;
+  });
+
+  app.get("/auth/app/:attemptId", (c) => renderAppLogin(repo, c, false));
+  app.get("/auth/app/:attemptId/complete", (c) => renderAppLogin(repo, c, true));
+
+  return app;
+}
+
+function renderAppLogin(repo: BooksRepo, c: Context<HttpEnv>, isComplete: boolean): Response {
+  const settings = repo.getSettings();
+  repo.deleteExpiredAppLoginAttempts(new Date().toISOString());
+  const attemptId = c.req.param("attemptId");
+  if (!attemptId) {
+    return renderAppAuthErrorPage(settings, "This app sign-in attempt is missing or has expired.");
+  }
+  const attempt = repo.getAppLoginAttempt(attemptId);
+  if (!attempt) {
+    return renderAppAuthErrorPage(settings, "This app sign-in attempt is missing or has expired.");
   }
 
-  if (appLoginPath && method === "GET") {
-    repo.deleteExpiredAppLoginAttempts(new Date().toISOString());
-    const attempt = repo.getAppLoginAttempt(appLoginPath.attemptId);
-    if (!attempt) {
-      return { response: renderAppAuthErrorPage(settings, "This app sign-in attempt is missing or has expired."), settings };
+  const currentSession = getCurrentSession(c);
+  const attemptPath = `/auth/app/${encodeURIComponent(attempt.id)}`;
+  if (isComplete) {
+    if (!currentSession) {
+      return c.redirect(attemptPath, 303);
     }
-    const attemptPath = `/auth/app/${encodeURIComponent(attempt.id)}`;
-    if (appLoginPath.isComplete) {
-      if (!currentSession) {
-        return { response: redirect(attemptPath), settings };
-      }
-      const code = createSessionToken();
-      repo.createAuthCode({
-        codeHash: hashSessionToken(code),
-        userId: currentSession.user_id,
-        attemptId: attempt.id,
-        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-      });
-      const callbackUrl = new URL(attempt.redirect_uri);
-      callbackUrl.searchParams.set("code", code);
-      callbackUrl.searchParams.set("state", attempt.state);
-      return { response: redirect(callbackUrl.toString(), 302), settings };
-    }
-    if (currentSession) {
-      return { response: redirect(`${attemptPath}/complete`), settings };
-    }
-    return {
-      response: renderLoginPage(settings, {
-        currentUser: currentSession,
-        redirectTo: `${attemptPath}/complete`,
-        inlinePlexLogin: true,
-      }),
-      settings,
-    };
+    const code = createSessionToken();
+    repo.createAuthCode({
+      codeHash: hashSessionToken(code),
+      userId: currentSession.user_id,
+      attemptId: attempt.id,
+      expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+    });
+    const callbackUrl = new URL(attempt.redirect_uri);
+    callbackUrl.searchParams.set("code", code);
+    callbackUrl.searchParams.set("state", attempt.state);
+    return c.redirect(callbackUrl.toString(), 302);
   }
 
-  return null;
+  if (currentSession) {
+    return c.redirect(`${attemptPath}/complete`, 303);
+  }
+
+  return renderLoginPage(settings, {
+    currentUser: currentSession,
+    redirectTo: `${attemptPath}/complete`,
+    inlinePlexLogin: true,
+  });
 }

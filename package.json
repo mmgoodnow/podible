@@ -13,6 +13,7 @@
     "@lingo-reader/epub-parser": "^0.4.5",
     "bencode": "^4.0.0",
     "fast-xml-parser": "^4.4.1",
+    "hono": "^4.12.10",
     "openai": "^6.22.0",
     "zod": "^4.3.6"
   },

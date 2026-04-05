@@ -11,9 +11,6 @@ import type { AppSettings, PlexJwk, SessionWithUserRow } from "../types";
 import {
   addApiKey,
   escapeHtml,
-  isHtmlPageRoute,
-  parseAppLoginPath,
-  renderAppAuthErrorPage,
   renderAppPage,
   sanitizeRedirectPath,
 } from "./common";

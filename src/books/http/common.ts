@@ -37,15 +37,6 @@ function sanitizeRedirectPath(value: string | null | undefined): string | null {
   return trimmed;
 }
 
-function parseAppLoginPath(pathname: string): { attemptId: string; isComplete: boolean } | null {
-  const match = pathname.match(/^\/auth\/app\/([^/]+?)(\/complete)?$/);
-  if (!match?.[1]) return null;
-  return {
-    attemptId: decodeURIComponent(match[1]),
-    isComplete: match[2] === "/complete",
-  };
-}
-
 function renderAppPage(
   title: string,
   body: string,
@@ -218,16 +209,10 @@ function renderAppAuthErrorPage(settings: AppSettings, message: string): Respons
   return renderAppPage("App sign in", body, settings, null);
 }
 
-function isHtmlPageRoute(pathname: string): boolean {
-  return pathname === "/" || pathname === "/library" || pathname === "/add" || pathname === "/activity" || pathname === "/admin" || pathname === "/login" || pathname === "/login/plex/loading" || pathname.startsWith("/book/");
-}
-
 export {
   addApiKey,
   escapeHtml,
-  isHtmlPageRoute,
   messageMarkup,
-  parseAppLoginPath,
   renderAppAuthErrorPage,
   renderAppPage,
   sanitizeRedirectPath,

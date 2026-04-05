@@ -1,3 +1,5 @@
+import { Hono } from "hono";
+
 import { searchOpenLibrary } from "../openlibrary";
 import { BooksRepo } from "../repo";
 import { triggerAutoAcquire } from "../service";
@@ -7,38 +9,39 @@ import { renderBookPage } from "./book-page";
 import { renderLandingPage } from "./landing-page";
 import { renderLibraryPage } from "./library-page";
 import { renderLoginPage } from "./login-page";
+import { getCurrentSession, requireAuthenticatedPageSession, type HttpEnv } from "./middleware";
 import { parseMediaSelection } from "./page-helpers";
 import { parseId, redirect } from "./route-helpers";
-import type { AppSettings, SessionWithUserRow } from "../types";
 
-export async function handleUserRoute(input: {
-  repo: BooksRepo;
-  request: Request;
-  settings: AppSettings;
-  currentSession: SessionWithUserRow | null;
-  pathname: string;
-  method: string;
-  isAuthenticatedRequest: boolean;
-}): Promise<Response | null> {
-  const { repo, request, settings, currentSession, pathname, method, isAuthenticatedRequest } = input;
-  const url = new URL(request.url);
+export function createUserRoutes(repo: BooksRepo): Hono<HttpEnv> {
+  const app = new Hono<HttpEnv>();
 
-  if (pathname === "/" && method === "GET") {
-    return isAuthenticatedRequest
+  app.use("/library", requireAuthenticatedPageSession);
+  app.use("/add", requireAuthenticatedPageSession);
+  app.use("/activity", requireAuthenticatedPageSession);
+  app.use("/activity/*", requireAuthenticatedPageSession);
+  app.use("/book/*", requireAuthenticatedPageSession);
+
+  app.get("/", (c) => {
+    const settings = repo.getSettings();
+    const currentSession = getCurrentSession(c);
+    return currentSession
       ? renderLandingPage(repo, settings, currentSession, null)
       : renderLoginPage(settings, { currentUser: currentSession });
-  }
+  });
 
-  if (pathname === "/library" && method === "GET") {
-    return renderLibraryPage(repo, settings, {
-      query: url.searchParams.get("q"),
-      currentUser: currentSession,
+  app.get("/library", (c) =>
+    renderLibraryPage(repo, repo.getSettings(), {
+      query: c.req.query("q"),
+      currentUser: getCurrentSession(c),
       apiKey: null,
-    });
-  }
+    })
+  );
 
-  if (pathname === "/add" && method === "GET") {
-    const query = (url.searchParams.get("q") ?? "").trim();
+  app.get("/add", async (c) => {
+    const settings = repo.getSettings();
+    const currentSession = getCurrentSession(c);
+    const query = (c.req.query("q") ?? "").trim();
     if (!query) {
       return renderAddPage(settings, { currentUser: currentSession, apiKey: null });
     }
@@ -59,10 +62,12 @@ export async function handleUserRoute(input: {
         apiKey: null,
       });
     }
-  }
+  });
 
-  if (pathname === "/add" && method === "POST") {
-    const form = new URLSearchParams(await request.text());
+  app.post("/add", async (c) => {
+    const settings = repo.getSettings();
+    const currentSession = getCurrentSession(c);
+    const form = new URLSearchParams(await c.req.raw.text());
     const openLibraryKey = (form.get("openLibraryKey") ?? "").trim();
     if (!openLibraryKey) {
       const addResponse = renderAddPage(settings, {
@@ -83,21 +88,20 @@ export async function handleUserRoute(input: {
       });
       return new Response(await addResponse.text(), { status: 400, headers: addResponse.headers });
     }
-  }
+  });
 
-  if (pathname.startsWith("/book/") && method === "GET") {
-    const bookId = parseId(pathname.split("/")[2] ?? "");
-    return renderBookPage(repo, settings, bookId, {
-      notice: url.searchParams.get("notice"),
-      error: url.searchParams.get("error"),
-      currentUser: currentSession,
+  app.get("/book/:bookId", (c) =>
+    renderBookPage(repo, repo.getSettings(), parseId(c.req.param("bookId")), {
+      notice: c.req.query("notice"),
+      error: c.req.query("error"),
+      currentUser: getCurrentSession(c),
       apiKey: null,
-    });
-  }
+    })
+  );
 
-  if (pathname.startsWith("/book/") && pathname.endsWith("/acquire") && method === "POST") {
-    const bookId = parseId(pathname.split("/")[2] ?? "");
-    const form = new URLSearchParams(await request.text());
+  app.post("/book/:bookId/acquire", async (c) => {
+    const bookId = parseId(c.req.param("bookId"));
+    const form = new URLSearchParams(await c.req.raw.text());
     const media = parseMediaSelection(form.get("media"));
     const book = repo.getBookRow(bookId);
     if (!book) {
@@ -106,21 +110,21 @@ export async function handleUserRoute(input: {
     const jobId = await triggerAutoAcquire(repo, bookId, media);
     const notice = `Queued ${media.join(" + ")} acquire for ${book.title} (job ${jobId}).`;
     return redirect(`/book/${bookId}?notice=${encodeURIComponent(notice)}`);
-  }
+  });
 
-  if (pathname === "/activity" && method === "GET") {
-    return renderActivityPage(repo, settings, {
-      notice: url.searchParams.get("notice"),
-      error: url.searchParams.get("error"),
-      currentUser: currentSession,
+  app.get("/activity", (c) =>
+    renderActivityPage(repo, repo.getSettings(), {
+      notice: c.req.query("notice"),
+      error: c.req.query("error"),
+      currentUser: getCurrentSession(c),
       apiKey: null,
-    });
-  }
+    })
+  );
 
-  if (pathname === "/activity/refresh" && method === "POST") {
+  app.post("/activity/refresh", () => {
     const job = repo.createJob({ type: "full_library_refresh" });
     return redirect(`/activity?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`);
-  }
+  });
 
-  return null;
+  return app;
 }
