@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import JSZip from "jszip";
 
-import { runMigrations } from "../../src/books/db";
+import { runMigrations } from "../../src/db";
 import {
   buildChunkPlan,
   extractGlossaryTerms,
@@ -16,10 +16,10 @@ import {
   normalizeTranscriptionLanguage,
   processChapterAnalysisJob,
   queueChapterAnalysisForBook,
-} from "../../src/books/chapter-analysis";
-import { buildChapters } from "../../src/books/media";
-import { BooksRepo } from "../../src/books/repo";
-import { defaultSettings } from "../../src/books/settings";
+} from "../../src/chapter-analysis";
+import { buildChapters } from "../../src/media";
+import { BooksRepo } from "../../src/repo";
+import { defaultSettings } from "../../src/settings";
 
 async function createMinimalEpub(filePath: string): Promise<void> {
   const zip = new JSZip();

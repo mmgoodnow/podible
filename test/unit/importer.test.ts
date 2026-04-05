@@ -5,9 +5,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { runMigrations } from "../../src/books/db";
-import { importReleaseFromPath } from "../../src/books/importer";
-import { BooksRepo } from "../../src/books/repo";
+import { runMigrations } from "../../src/db";
+import { importReleaseFromPath } from "../../src/importer";
+import { BooksRepo } from "../../src/repo";
 
 const tempDirs: string[] = [];
 

@@ -6,11 +6,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
-import { runMigrations } from "../../src/books/db";
-import { BooksRepo } from "../../src/books/repo";
-import { defaultSettings } from "../../src/books/settings";
-import { infoHashFromTorrentBytes } from "../../src/books/torrent";
-import { pollMsForMedia, runWorker, selectDownloadPollMs } from "../../src/books/worker";
+import { runMigrations } from "../../src/db";
+import { BooksRepo } from "../../src/repo";
+import { defaultSettings } from "../../src/settings";
+import { infoHashFromTorrentBytes } from "../../src/torrent";
+import { pollMsForMedia, runWorker, selectDownloadPollMs } from "../../src/worker";
 import { startMockTorznab } from "../mocks/torznab";
 
 function makeTorrentBytes(name: string): Uint8Array {

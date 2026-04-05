@@ -2,10 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import bencode from "bencode";
 
-import { selectManualImportPaths, selectSearchCandidate } from "../../src/books/agents";
-import { runMigrations } from "../../src/books/db";
-import { BooksRepo } from "../../src/books/repo";
-import { defaultSettings, parseSettings } from "../../src/books/settings";
+import { selectManualImportPaths, selectSearchCandidate } from "../../src/agents";
+import { runMigrations } from "../../src/db";
+import { BooksRepo } from "../../src/repo";
+import { defaultSettings, parseSettings } from "../../src/settings";
 
 function makeMultiFileTorrentBytes(rootName: string, files: Array<{ path: string[]; length: number }>): Uint8Array {
   return bencode.encode({

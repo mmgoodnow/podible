@@ -8,8 +8,8 @@ import {
   resolveBrowserSessionFromRequest,
   resolveSessionFromRequest,
   SESSION_COOKIE_NAME,
-} from "../../src/books/auth";
-import type { SessionWithUserRow } from "../../src/books/types";
+} from "../../src/auth";
+import type { SessionWithUserRow } from "../../src/app-types";
 
 function makeSession(token: string, overrides: Partial<SessionWithUserRow> = {}): SessionWithUserRow {
   const tokenHash = hashSessionToken(token);

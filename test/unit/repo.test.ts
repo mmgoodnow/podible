@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 
-import { runMigrations } from "../../src/books/db";
-import { BooksRepo } from "../../src/books/repo";
+import { runMigrations } from "../../src/db";
+import { BooksRepo } from "../../src/repo";
 
 function setupRepo(): { db: Database; repo: BooksRepo } {
   const db = new Database(":memory:");

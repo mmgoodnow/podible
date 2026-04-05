@@ -6,10 +6,10 @@ import path from "node:path";
 
 const isolatedDataDir = await mkdtemp(path.join(os.tmpdir(), "podible-http-test-data-"));
 
-const { runMigrations } = await import("../../src/books/db");
-const { createPodibleFetchHandler } = await import("../../src/books/http");
-const { BooksRepo } = await import("../../src/books/repo");
-const { hashSessionToken } = await import("../../src/books/auth");
+const { runMigrations } = await import("../../src/db");
+const { createPodibleFetchHandler } = await import("../../src/http");
+const { BooksRepo } = await import("../../src/repo");
+const { hashSessionToken } = await import("../../src/auth");
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+XGfQAAAAASUVORK5CYII=";

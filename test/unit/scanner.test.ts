@@ -6,9 +6,9 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import JSZip from "jszip";
 
-import { runMigrations } from "../../src/books/db";
-import { BooksRepo } from "../../src/books/repo";
-import { scanLibraryRoot } from "../../src/books/scanner";
+import { runMigrations } from "../../src/db";
+import { BooksRepo } from "../../src/repo";
+import { scanLibraryRoot } from "../../src/scanner";
 
 async function createMinimalEpub(filePath: string, text: string): Promise<void> {
   const zip = new JSZip();

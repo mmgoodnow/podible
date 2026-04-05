@@ -7,13 +7,13 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import JSZip from "jszip";
 
-import { runMigrations } from "../../src/books/db";
-import { createPodibleFetchHandler } from "../../src/books/http";
-import { BooksRepo } from "../../src/books/repo";
-import { hashSessionToken } from "../../src/books/auth";
-import { defaultSettings } from "../../src/books/settings";
-import { infoHashFromTorrentBytes } from "../../src/books/torrent";
-import { runWorker } from "../../src/books/worker";
+import { runMigrations } from "../../src/db";
+import { createPodibleFetchHandler } from "../../src/http";
+import { BooksRepo } from "../../src/repo";
+import { hashSessionToken } from "../../src/auth";
+import { defaultSettings } from "../../src/settings";
+import { infoHashFromTorrentBytes } from "../../src/torrent";
+import { runWorker } from "../../src/worker";
 import { startMockRtorrent } from "../mocks/rtorrent";
 import { startMockTorznab } from "../mocks/torznab";
 

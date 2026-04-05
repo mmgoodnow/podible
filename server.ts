@@ -1,8 +1,8 @@
 import { ensureConfigDir, booksDbPath, port } from "./src/config";
-import { openDatabase } from "./src/books/db";
-import { createPodibleFetchHandler } from "./src/books/http";
-import { BooksRepo } from "./src/books/repo";
-import { runWorker } from "./src/books/worker";
+import { openDatabase } from "./src/db";
+import { createPodibleFetchHandler } from "./src/http";
+import { BooksRepo } from "./src/repo";
+import { runWorker } from "./src/worker";
 
 const startTime = Date.now();
 

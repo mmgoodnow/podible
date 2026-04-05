@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { normalizeInfoHash } from "../../src/books/torrent";
+import { normalizeInfoHash } from "../../src/torrent";
 
 type DownloadConfig = {
   name: string;

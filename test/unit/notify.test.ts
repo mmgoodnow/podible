@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { sendPushoverNotification } from "../../src/books/notify";
-import { defaultSettings } from "../../src/books/settings";
+import { sendPushoverNotification } from "../../src/notify";
+import { defaultSettings } from "../../src/settings";
 
 describe("pushover notifications", () => {
   test("times out hung requests", async () => {

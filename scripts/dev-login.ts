@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 
 import { ensureConfigDir } from "../src/config";
-import { createSessionToken, hashSessionToken, sessionExpiresAt } from "../src/books/auth";
-import { openDatabase } from "../src/books/db";
-import { BooksRepo } from "../src/books/repo";
-import type { AuthProvider } from "../src/books/types";
+import { createSessionToken, hashSessionToken, sessionExpiresAt } from "../src/auth";
+import { openDatabase } from "../src/db";
+import { BooksRepo } from "../src/repo";
+import type { AuthProvider } from "../src/app-types";
 
 function usage(): never {
   console.error('Usage: bun run dev-login --user "Michael Goodnow" [--admin] [--origin http://localhost:3187]');

@@ -7,11 +7,11 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import JSZip from "jszip";
 
-import { runMigrations } from "../../src/books/db";
-import { hashSessionToken } from "../../src/books/auth";
-import { handleRpcMethod, handleRpcRequest } from "../../src/books/rpc";
-import { BooksRepo } from "../../src/books/repo";
-import { defaultSettings } from "../../src/books/settings";
+import { runMigrations } from "../../src/db";
+import { hashSessionToken } from "../../src/auth";
+import { handleRpcMethod, handleRpcRequest } from "../../src/rpc";
+import { BooksRepo } from "../../src/repo";
+import { defaultSettings } from "../../src/settings";
 
 type RpcCallerAuth = "none" | "user" | "admin";
 
