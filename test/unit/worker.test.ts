@@ -563,6 +563,11 @@ describe("worker import recovery", () => {
         if (method === "d.complete") return "<i8>1</i8>";
         if (method === "d.is_active") return "<i8>0</i8>";
         if (method === "d.base_path") return `<string>${downloadDir}</string>`;
+        if (method === "d.directory") return `<string>${downloadDir}</string>`;
+        if (method === "d.is_multi_file") return "<i8>0</i8>";
+        if (method === "f.multicall") {
+          return "<array><data><value><array><data><value><string>unrelated.txt</string></value></data></array></value></data></array>";
+        }
         if (method === "d.bytes_done") return "<i8>100</i8>";
         if (method === "d.size_bytes") return "<i8>100</i8>";
         if (method === "d.left_bytes") return "<i8>0</i8>";
@@ -679,6 +684,9 @@ describe("worker stalled torrent recovery", () => {
         if (method === "d.complete") return "<i8>0</i8>";
         if (method === "d.is_active") return "<i8>0</i8>";
         if (method === "d.base_path") return "<string>/downloads/dune</string>";
+        if (method === "d.directory") return "<string>/downloads</string>";
+        if (method === "d.is_multi_file") return "<i8>0</i8>";
+        if (method === "f.multicall") return "<array><data></data></array>";
         if (method === "d.bytes_done") return "<i8>10</i8>";
         if (method === "d.size_bytes") return "<i8>100</i8>";
         if (method === "d.left_bytes") return "<i8>90</i8>";
@@ -792,6 +800,9 @@ describe("worker stalled torrent recovery", () => {
           if (method === "d.complete") return "<i8>0</i8>";
           if (method === "d.is_active") return "<i8>0</i8>";
           if (method === "d.base_path") return "<string>/downloads/dune</string>";
+          if (method === "d.directory") return "<string>/downloads</string>";
+          if (method === "d.is_multi_file") return "<i8>0</i8>";
+          if (method === "f.multicall") return "<array><data></data></array>";
           if (method === "d.bytes_done") return "<i8>10</i8>";
           if (method === "d.size_bytes") return "<i8>100</i8>";
           if (method === "d.left_bytes") return "<i8>90</i8>";
@@ -939,6 +950,8 @@ describe("download ETA polling", () => {
         complete: false,
         isActive: true,
         basePath: null,
+        directory: null,
+        isMultiFile: false,
         bytesDone: 90,
         sizeBytes: 100,
         leftBytes: 10,
@@ -958,6 +971,8 @@ describe("download ETA polling", () => {
         complete: false,
         isActive: true,
         basePath: null,
+        directory: null,
+        isMultiFile: false,
         bytesDone: 0,
         sizeBytes: 500,
         leftBytes: 500,
@@ -977,6 +992,8 @@ describe("download ETA polling", () => {
         complete: false,
         isActive: true,
         basePath: null,
+        directory: null,
+        isMultiFile: false,
         bytesDone: 50,
         sizeBytes: 100,
         leftBytes: 50,
@@ -996,6 +1013,8 @@ describe("download ETA polling", () => {
         complete: false,
         isActive: true,
         basePath: null,
+        directory: null,
+        isMultiFile: false,
         bytesDone: 960,
         sizeBytes: 1000,
         leftBytes: null,

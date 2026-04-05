@@ -627,8 +627,14 @@ describe("json-rpc handler", () => {
               return '<?xml version="1.0"?><methodResponse><params><param><value><string>ABC123</string></value></param></params></methodResponse>';
             case "d.complete":
               return '<?xml version="1.0"?><methodResponse><params><param><value><i8>1</i8></value></param></params></methodResponse>';
+            case "d.is_active":
+              return '<?xml version="1.0"?><methodResponse><params><param><value><i8>0</i8></value></param></params></methodResponse>';
             case "d.base_path":
               return `<?xml version="1.0"?><methodResponse><params><param><value><string>${badPath}</string></value></param></params></methodResponse>`;
+            case "d.directory":
+              return `<?xml version="1.0"?><methodResponse><params><param><value><string>${badPath}</string></value></param></params></methodResponse>`;
+            case "d.is_multi_file":
+              return '<?xml version="1.0"?><methodResponse><params><param><value><i8>0</i8></value></param></params></methodResponse>';
             case "d.bytes_done":
               return '<?xml version="1.0"?><methodResponse><params><param><value><i8>100</i8></value></param></params></methodResponse>';
             case "d.size_bytes":
@@ -968,8 +974,14 @@ describe("json-rpc handler", () => {
             return '<?xml version="1.0"?><methodResponse><params><param><value><string>ABC</string></value></param></params></methodResponse>';
           case "d.complete":
             return '<?xml version="1.0"?><methodResponse><params><param><value><i8>0</i8></value></param></params></methodResponse>';
+          case "d.is_active":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>1</i8></value></param></params></methodResponse>';
           case "d.base_path":
             return '<?xml version="1.0"?><methodResponse><params><param><value><string>/downloads/dune</string></value></param></params></methodResponse>';
+          case "d.directory":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string>/downloads</string></value></param></params></methodResponse>';
+          case "d.is_multi_file":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>0</i8></value></param></params></methodResponse>';
           case "d.bytes_done":
             return '<?xml version="1.0"?><methodResponse><params><param><value><i8>500</i8></value></param></params></methodResponse>';
           case "d.size_bytes":
@@ -1045,8 +1057,14 @@ describe("json-rpc handler", () => {
             return '<?xml version="1.0"?><methodResponse><params><param><value><string>ABC123ABC123ABC123ABC123ABC123ABC123ABCD</string></value></param></params></methodResponse>';
           case "d.complete":
             return '<?xml version="1.0"?><methodResponse><params><param><value><i8>0</i8></value></param></params></methodResponse>';
+          case "d.is_active":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>1</i8></value></param></params></methodResponse>';
           case "d.base_path":
             return '<?xml version="1.0"?><methodResponse><params><param><value><string>/downloads/twilight-audio</string></value></param></params></methodResponse>';
+          case "d.directory":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string>/downloads</string></value></param></params></methodResponse>';
+          case "d.is_multi_file":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>0</i8></value></param></params></methodResponse>';
           case "d.bytes_done":
             return '<?xml version="1.0"?><methodResponse><params><param><value><i8>500</i8></value></param></params></methodResponse>';
           case "d.size_bytes":

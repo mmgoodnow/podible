@@ -180,7 +180,7 @@ describe("snatch transport", () => {
       expect(result.release.info_hash).toBe(expectedHash);
       expect(methods).toContain("load.raw_start");
       expect(methods).not.toContain("load.start");
-      expect(rpcBodies.some((body) => body.includes("d.directory_base.set=&quot;/downloads/books&quot;"))).toBe(true);
+      expect(rpcBodies.some((body) => body.includes("d.directory.set=&quot;/downloads/books&quot;"))).toBe(true);
       expect(rpcBodies.some((body) => body.includes("d.custom1.set=&quot;Podible&quot;"))).toBe(true);
       expect(rpcBodies.some((body) => /d\.custom\.set=addtime,\d{10}/.test(body))).toBe(true);
     } finally {
@@ -254,7 +254,7 @@ describe("snatch transport", () => {
       expect(fetches).toContain(rpcUrl);
       expect(rpcBodies.some((body) => body.includes("d.custom1.set=&quot;Podible&quot;"))).toBe(true);
       expect(rpcBodies.some((body) => /d\.custom\.set=addtime,\d{10}/.test(body))).toBe(true);
-      expect(rpcBodies.some((body) => body.includes("d.directory_base.set="))).toBe(false);
+      expect(rpcBodies.some((body) => body.includes("d.directory.set="))).toBe(false);
     } finally {
       globalThis.fetch = originalFetch;
       db.close();

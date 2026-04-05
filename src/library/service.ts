@@ -225,7 +225,7 @@ export async function runSnatch(
   const client = new RtorrentClient(settings.rtorrent);
   const downloadPath = settings.rtorrent.downloadPath?.trim() ?? "";
   const commands = [
-    ...(downloadPath ? [`d.directory_base.set="${rtorrentStringLiteral(downloadPath)}"`] : []),
+    ...(downloadPath ? [`d.directory.set="${rtorrentStringLiteral(downloadPath)}"`] : []),
     'd.custom1.set="Podible"',
     `d.custom.set=addtime,${Math.round(Date.now() / 1000)}`,
   ];

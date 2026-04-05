@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import path from "node:path";
 
 import { XMLParser } from "fast-xml-parser";
 
@@ -10,11 +11,18 @@ type RtorrentDownloadState = {
   complete: boolean;
   isActive: boolean;
   basePath: string | null;
+  directory: string | null;
+  isMultiFile: boolean;
   bytesDone: number | null;
   sizeBytes: number | null;
   leftBytes: number | null;
   downRate: number | null;
   message: string | null;
+};
+
+type RtorrentImportSource = {
+  basePath: string | null;
+  selectedPaths: string[];
 };
 
 const parser = new XMLParser({
@@ -63,6 +71,42 @@ function parseFault(doc: Record<string, unknown>): string | null {
   return JSON.stringify(fault);
 }
 
+function parseXmlRpcValue(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  if ("string" in record) return record.string;
+  if ("i4" in record) return record.i4;
+  if ("i8" in record) return record.i8;
+  if ("int" in record) return record.int;
+  if ("long" in record) return record.long;
+  if ("boolean" in record) return record.boolean;
+  if ("double" in record) return record.double;
+  if ("base64" in record) return record.base64;
+  if ("#text" in record) return record["#text"];
+  if ("array" in record) {
+    const arrayRecord = record.array as Record<string, unknown> | undefined;
+    const dataRecord = arrayRecord?.data as Record<string, unknown> | undefined;
+    const rawItems = dataRecord?.value;
+    const items = Array.isArray(rawItems) ? rawItems : rawItems === undefined ? [] : [rawItems];
+    return items.map((item) => parseXmlRpcValue(item));
+  }
+  if ("struct" in record) {
+    const structRecord = record.struct as Record<string, unknown> | undefined;
+    const rawMembers = structRecord?.member;
+    const members = Array.isArray(rawMembers) ? rawMembers : rawMembers === undefined ? [] : [rawMembers];
+    const out: Record<string, unknown> = {};
+    for (const rawMember of members) {
+      const member = rawMember as Record<string, unknown>;
+      const name = member.name;
+      if (typeof name !== "string") continue;
+      out[name] = parseXmlRpcValue(member.value);
+    }
+    return out;
+  }
+  return record;
+}
+
 function parseResponseValue(xml: string): unknown {
   const doc = parser.parse(xml) as Record<string, unknown>;
   const fault = parseFault(doc);
@@ -71,18 +115,7 @@ function parseResponseValue(xml: string): unknown {
     {}) as Record<string, unknown>;
   const param = params.param as Record<string, unknown> | undefined;
   const value = (param?.value ?? null) as unknown;
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    if ("string" in record) return record.string;
-    if ("i4" in record) return record.i4;
-    if ("i8" in record) return record.i8;
-    if ("int" in record) return record.int;
-    if ("long" in record) return record.long;
-    if ("boolean" in record) return record.boolean;
-    if ("double" in record) return record.double;
-    return record["#text"] ?? record;
-  }
-  return value;
+  return parseXmlRpcValue(value);
 }
 
 function toNumber(value: unknown): number | null {
@@ -99,6 +132,36 @@ function toBool(value: unknown): boolean {
   if (typeof value === "number") return value !== 0;
   if (typeof value === "string") return value === "1" || value.toLowerCase() === "true";
   return false;
+}
+
+function deriveDownloadPath(args: {
+  name: string | null;
+  basePath: string | null;
+  directory: string | null;
+  isMultiFile: boolean;
+}): string | null {
+  if (args.isMultiFile) {
+    return args.directory ?? args.basePath;
+  }
+  if (args.basePath) {
+    return args.basePath;
+  }
+  if (args.directory && args.name) {
+    return path.join(args.directory, args.name);
+  }
+  return args.directory;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (Array.isArray(item)) {
+        return maybeText(item[0]) ?? "";
+      }
+      return maybeText(item) ?? "";
+    })
+    .filter((item) => item.length > 0);
 }
 
 export class RtorrentClient {
@@ -137,13 +200,15 @@ export class RtorrentClient {
 
   async getDownloadState(infoHash: string): Promise<RtorrentDownloadState> {
     const hash = infoHash.toUpperCase();
-    const [name, returnedHash, complete, isActive, basePath, bytesDone, sizeBytes, leftBytes, downRate, message] =
+    const [name, returnedHash, complete, isActive, basePath, directory, isMultiFile, bytesDone, sizeBytes, leftBytes, downRate, message] =
       await Promise.all([
         this.call("d.name", [xmlParamString(hash)]),
         this.call("d.hash", [xmlParamString(hash)]),
         this.call("d.complete", [xmlParamString(hash)]),
         this.call("d.is_active", [xmlParamString(hash)]),
         this.call("d.base_path", [xmlParamString(hash)]),
+        this.call("d.directory", [xmlParamString(hash)]),
+        this.call("d.is_multi_file", [xmlParamString(hash)]),
         this.call("d.bytes_done", [xmlParamString(hash)]),
         this.call("d.size_bytes", [xmlParamString(hash)]),
         this.call("d.left_bytes", [xmlParamString(hash)]),
@@ -151,12 +216,24 @@ export class RtorrentClient {
         this.call("d.message", [xmlParamString(hash)]),
       ]);
 
+    const parsedName = maybeText(name);
+    const parsedBasePath = maybeText(basePath);
+    const parsedDirectory = maybeText(directory);
+    const parsedIsMultiFile = toBool(isMultiFile);
+
     return {
-      name: maybeText(name),
+      name: parsedName,
       hash: maybeText(returnedHash),
       complete: toBool(complete),
       isActive: toBool(isActive),
-      basePath: maybeText(basePath),
+      basePath: deriveDownloadPath({
+        name: parsedName,
+        basePath: parsedBasePath,
+        directory: parsedDirectory,
+        isMultiFile: parsedIsMultiFile,
+      }),
+      directory: parsedDirectory,
+      isMultiFile: parsedIsMultiFile,
       bytesDone: toNumber(bytesDone),
       sizeBytes: toNumber(sizeBytes),
       leftBytes: toNumber(leftBytes),
@@ -164,7 +241,38 @@ export class RtorrentClient {
       message: maybeText(message),
     };
   }
+
+  async getImportSource(infoHash: string): Promise<RtorrentImportSource> {
+    const hash = infoHash.toUpperCase();
+    const [name, basePath, directory, isMultiFile, fileRows] = await Promise.all([
+      this.call("d.name", [xmlParamString(hash)]),
+      this.call("d.base_path", [xmlParamString(hash)]),
+      this.call("d.directory", [xmlParamString(hash)]),
+      this.call("d.is_multi_file", [xmlParamString(hash)]),
+      this.call("f.multicall", [xmlParamString(hash), xmlParamString(""), xmlParamString("f.path=")]),
+    ]);
+
+    const parsedName = maybeText(name);
+    const parsedBasePath = maybeText(basePath);
+    const parsedDirectory = maybeText(directory);
+    const parsedIsMultiFile = toBool(isMultiFile);
+    const selectedPaths = asStringArray(fileRows)
+      .map((relativePath) =>
+        parsedDirectory ? path.join(parsedDirectory, relativePath) : relativePath
+      )
+      .filter(Boolean);
+
+    return {
+      basePath: deriveDownloadPath({
+        name: parsedName,
+        basePath: parsedBasePath,
+        directory: parsedDirectory,
+        isMultiFile: parsedIsMultiFile,
+      }),
+      selectedPaths,
+    };
+  }
 }
 
-export { buildMethodCall, parseResponseValue };
-export type { RtorrentDownloadState };
+export { buildMethodCall, deriveDownloadPath, parseResponseValue };
+export type { RtorrentDownloadState, RtorrentImportSource };

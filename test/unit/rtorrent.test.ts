@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { buildMethodCall, parseResponseValue, RtorrentClient } from "../../src/rtorrent";
+import { buildMethodCall, deriveDownloadPath, parseResponseValue, RtorrentClient } from "../../src/rtorrent";
 
 describe("rtorrent xmlrpc helpers", () => {
   test("builds method call payload", () => {
@@ -24,12 +24,38 @@ describe("rtorrent xmlrpc helpers", () => {
     expect(i8).toBe(2);
   });
 
+  test("parses xmlrpc arrays", () => {
+    const value = parseResponseValue(
+      '<?xml version="1.0"?><methodResponse><params><param><value><array><data><value><array><data><value><string>a.mp3</string></value></data></array></value><value><array><data><value><string>b.mp3</string></value></data></array></value></data></array></value></param></params></methodResponse>'
+    );
+    expect(value).toEqual([["a.mp3"], ["b.mp3"]]);
+  });
+
   test("throws on fault payload", () => {
     expect(() =>
       parseResponseValue(
         '<?xml version="1.0"?><methodResponse><fault><value><string>bad</string></value></fault></methodResponse>'
       )
     ).toThrow();
+  });
+
+  test("derives download paths like rTorrent expects", () => {
+    expect(
+      deriveDownloadPath({
+        name: "book.m4b",
+        basePath: "/downloads/book.m4b",
+        directory: "/downloads",
+        isMultiFile: false,
+      })
+    ).toBe("/downloads/book.m4b");
+    expect(
+      deriveDownloadPath({
+        name: "Book Folder",
+        basePath: "/downloads",
+        directory: "/downloads/Book Folder",
+        isMultiFile: true,
+      })
+    ).toBe("/downloads/Book Folder");
   });
 
   test("uses direct d.* methods for state snapshot", async () => {
@@ -51,7 +77,11 @@ describe("rtorrent xmlrpc helpers", () => {
           case "d.is_active":
             return '<?xml version="1.0"?><methodResponse><params><param><value><i8>0</i8></value></param></params></methodResponse>';
           case "d.base_path":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string>/downloads</string></value></param></params></methodResponse>';
+          case "d.directory":
             return '<?xml version="1.0"?><methodResponse><params><param><value><string>/downloads/book</string></value></param></params></methodResponse>';
+          case "d.is_multi_file":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>1</i8></value></param></params></methodResponse>';
           case "d.bytes_done":
             return '<?xml version="1.0"?><methodResponse><params><param><value><i8>50</i8></value></param></params></methodResponse>';
           case "d.size_bytes":
@@ -78,6 +108,8 @@ describe("rtorrent xmlrpc helpers", () => {
       });
       const state = await client.getDownloadState("0123456789abcdef0123456789abcdef01234567");
       expect(state.basePath).toBe("/downloads/book");
+      expect(state.directory).toBe("/downloads/book");
+      expect(state.isMultiFile).toBe(true);
       expect(state.isActive).toBe(false);
       expect(state.bytesDone).toBe(50);
       expect(state.sizeBytes).toBe(100);
@@ -85,6 +117,8 @@ describe("rtorrent xmlrpc helpers", () => {
       expect(state.downRate).toBe(10);
       expect(state.message).toBe("tracker needs credits");
       expect(calls.includes("d.is_active")).toBe(true);
+      expect(calls.includes("d.directory")).toBe(true);
+      expect(calls.includes("d.is_multi_file")).toBe(true);
       expect(calls.includes("d.base_path")).toBe(true);
       expect(calls.includes("d.bytes_done")).toBe(true);
       expect(calls.includes("d.size_bytes")).toBe(true);
@@ -92,6 +126,48 @@ describe("rtorrent xmlrpc helpers", () => {
       expect(calls.includes("d.down.rate")).toBe(true);
       expect(calls.includes("d.message")).toBe(true);
       expect(calls.includes("d.get_size_bytes")).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("derives import source from exact torrent file paths", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      const body = String(init?.body ?? "");
+      const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
+      const responseXml = (() => {
+        switch (method) {
+          case "d.name":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string>03 The Hero of Ages</string></value></param></params></methodResponse>';
+          case "d.base_path":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string>/downloads</string></value></param></params></methodResponse>';
+          case "d.directory":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string>/downloads</string></value></param></params></methodResponse>';
+          case "d.is_multi_file":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><i8>1</i8></value></param></params></methodResponse>';
+          case "f.multicall":
+            return '<?xml version="1.0"?><methodResponse><params><param><value><array><data><value><array><data><value><string>Mistborn Book 3 - The Hero of Ages.m4b</string></value></data></array></value><value><array><data><value><string>Mistborn Book 3 - The Hero of Ages.nfo</string></value></data></array></value></data></array></value></param></params></methodResponse>';
+          default:
+            return '<?xml version="1.0"?><methodResponse><params><param><value><string></string></value></param></params></methodResponse>';
+        }
+      })();
+      return new Response(responseXml, { status: 200, headers: { "Content-Type": "text/xml" } });
+    }) as unknown as typeof fetch;
+
+    try {
+      const client = new RtorrentClient({
+        transport: "http-xmlrpc",
+        url: "http://mock.local/RPC2",
+        username: "",
+        password: "",
+      });
+      const source = await client.getImportSource("0123456789abcdef0123456789abcdef01234567");
+      expect(source.basePath).toBe("/downloads");
+      expect(source.selectedPaths).toEqual([
+        "/downloads/Mistborn Book 3 - The Hero of Ages.m4b",
+        "/downloads/Mistborn Book 3 - The Hero of Ages.nfo",
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
     }

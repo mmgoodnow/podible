@@ -279,9 +279,10 @@ export async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promi
     return "rescheduled";
   }
 
+  const importSource = await client.getImportSource(release.info_hash);
   logMessage(
     ctx,
-    `[download] job=${job.id} release=${release.id} hash=${release.info_hash} complete=1 bytes_done=${state.bytesDone ?? "null"} size_bytes=${state.sizeBytes ?? "null"} base_path=${JSON.stringify(state.basePath)}`
+    `[download] job=${job.id} release=${release.id} hash=${release.info_hash} complete=1 bytes_done=${state.bytesDone ?? "null"} size_bytes=${state.sizeBytes ?? "null"} base_path=${JSON.stringify(importSource.basePath)} selected_paths=${importSource.selectedPaths.length}`
   );
   ctx.repo.setReleaseStatus(release.id, "downloaded", null);
   ctx.repo.createJob({
@@ -289,7 +290,8 @@ export async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promi
     releaseId: release.id,
     bookId: release.book_id,
     payload: {
-      basePath: state.basePath,
+      basePath: importSource.basePath,
+      selectedPaths: importSource.selectedPaths,
       infoHash: release.info_hash,
       preferAgentFirst: payload.preferAgentImport === true,
     },

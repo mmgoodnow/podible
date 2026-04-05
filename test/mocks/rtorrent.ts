@@ -5,6 +5,9 @@ import { normalizeInfoHash } from "../../src/library/torrent";
 type DownloadConfig = {
   name: string;
   basePath: string;
+  directory?: string;
+  isMultiFile?: boolean;
+  filePaths?: string[];
   sizeBytes: number;
   completeAfterPolls: number;
 };
@@ -118,6 +121,28 @@ export function startMockRtorrent(options: MockRtorrentOptions): MockRtorrent {
       }
       if (method === "d.base_path") {
         return new Response(xmlResponseString(state.basePath), { headers: { "Content-Type": "text/xml" } });
+      }
+      if (method === "d.directory") {
+        return new Response(xmlResponseString(state.directory ?? state.basePath), {
+          headers: { "Content-Type": "text/xml" },
+        });
+      }
+      if (method === "d.is_multi_file") {
+        return new Response(xmlResponseInt(state.isMultiFile ? 1 : 0), {
+          headers: { "Content-Type": "text/xml" },
+        });
+      }
+      if (method === "f.multicall") {
+        const items = (state.filePaths ?? []).map((filePath) => {
+          const relative = filePath.startsWith(`${state.directory ?? state.basePath}/`)
+            ? filePath.slice((state.directory ?? state.basePath).length + 1)
+            : filePath;
+          return `<value><array><data><value><string>${relative}</string></value></data></array></value>`;
+        });
+        return new Response(
+          `<?xml version="1.0"?><methodResponse><params><param><value><array><data>${items.join("")}</data></array></value></param></params></methodResponse>`,
+          { headers: { "Content-Type": "text/xml" } }
+        );
       }
       if (method === "d.bytes_done") {
         return new Response(xmlResponseInt(state.bytesDone), { headers: { "Content-Type": "text/xml" } });

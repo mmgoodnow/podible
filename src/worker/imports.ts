@@ -5,6 +5,9 @@ import type { JobRow } from "../app-types";
 import { workerLog, type WorkerContext } from "./context";
 
 type ImportJobPayload = {
+  basePath?: string | null;
+  infoHash?: string;
+  selectedPaths?: string[];
   reason?: string;
   userReportedIssue?: boolean;
   rejectedSourcePaths?: string[];
@@ -24,8 +27,14 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
   const settings = ctx.getSettings();
   const payload = job.payload_json ? (JSON.parse(job.payload_json) as ImportJobPayload) : {};
   const client = new RtorrentClient(settings.rtorrent);
-  const state = await client.getDownloadState(release.info_hash);
-  const basePath = state.basePath;
+  const importSource =
+    payload.basePath || (Array.isArray(payload.selectedPaths) && payload.selectedPaths.length > 0)
+      ? {
+          basePath: payload.basePath ?? null,
+          selectedPaths: Array.isArray(payload.selectedPaths) ? payload.selectedPaths : [],
+        }
+      : await client.getImportSource(release.info_hash);
+  const basePath = importSource.basePath;
   if (!basePath) {
     const nextRun = new Date(Date.now() + Math.max(1000, settings.polling.rtorrentMs || 5000)).toISOString();
     ctx.repo.rescheduleJob(job.id, nextRun);
@@ -54,9 +63,7 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
       agentDecisionError = decision.error;
 
       if (decision.selectedPaths.length > 0) {
-        await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, {
-          selectedPaths: decision.selectedPaths,
-        });
+        await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, { selectedPaths: decision.selectedPaths });
         ctx.repo.setReleaseStatus(release.id, "imported", null);
         ctx.repo.markJobSucceeded(job.id);
         workerLog(
@@ -107,9 +114,7 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
         book: book ? { id: book.id, title: book.title, author: book.author } : null,
       });
       if (decision.selectedPaths.length > 0) {
-        await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, {
-          selectedPaths: decision.selectedPaths,
-        });
+        await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, { selectedPaths: decision.selectedPaths });
         ctx.repo.setReleaseStatus(release.id, "imported", null);
         ctx.repo.markJobSucceeded(job.id);
         workerLog(
@@ -129,7 +134,9 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
   }
 
   try {
-    await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot);
+    await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, {
+      selectedPaths: importSource.selectedPaths,
+    });
     ctx.repo.setReleaseStatus(release.id, "imported", null);
     ctx.repo.markJobSucceeded(job.id);
     return "done";
@@ -156,9 +163,7 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
       agentDecisionError = decision.error;
 
       if (decision.selectedPaths.length > 0) {
-        await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, {
-          selectedPaths: decision.selectedPaths,
-        });
+        await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, { selectedPaths: decision.selectedPaths });
         ctx.repo.setReleaseStatus(release.id, "imported", null);
         ctx.repo.markJobSucceeded(job.id);
         workerLog(
