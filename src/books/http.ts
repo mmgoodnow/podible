@@ -235,8 +235,8 @@ function renderAppPage(
   const showAdminNav = Boolean(apiKey) || (currentUser?.is_admin ?? 0) === 1;
   const accountNav = currentUser
     ? `<span class="muted">Signed in as ${escapeHtml(displayUserName(currentUser))}</span>
-       <form method="post" action="${escapeHtml(addApiKey("/logout", apiKey))}" style="display:inline-flex;">
-         <button type="submit">Sign out</button>
+       <form method="post" action="${escapeHtml(addApiKey("/logout", apiKey))}" class="nav-signout-form">
+         <button type="submit" class="nav-signout-button">Sign out</button>
        </form>`
     : `<a href="${escapeHtml(addApiKey("/login", apiKey))}">Sign in</a>`;
   const nav = `
@@ -277,6 +277,21 @@ function renderAppPage(
       a:hover { text-decoration: underline; }
       .page { max-width: 1120px; margin: 0 auto; padding: 18px; }
       .site-nav { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; font-size: 14px; }
+      .nav-signout-form { display: inline-flex; margin: 0; }
+      .site-nav .nav-signout-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 36px;
+        padding: 8px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: #fff;
+        color: var(--text);
+        font: inherit;
+        cursor: pointer;
+      }
+      .site-nav .nav-signout-button:hover { background: #faf8f1; }
       .hero, .card { background: var(--paper); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 1px 2px rgba(31,38,28,.05); }
       .hero { padding: 20px; margin-bottom: 18px; }
       .hero h1 { margin: 0 0 8px; font-size: 34px; line-height: 1.05; }
