@@ -537,7 +537,7 @@ function boundaryProbes(entries: EpubChapterEntry[], durationMs: number): Chapte
       previousTitle: previous.title,
       nextTitle: next.title,
       previousProbe: previous.tokens.slice(Math.max(0, previous.tokens.length - ALIGNMENT_PROBE_WORDS)),
-      nextProbe: trimHeadingTokens(next).slice(0, ALIGNMENT_PROBE_WORDS),
+      nextProbe: next.tokens.slice(0, ALIGNMENT_PROBE_WORDS),
     });
   }
   return out;
@@ -1023,36 +1023,6 @@ function hasDistinctiveGlossarySurface(term: string): boolean {
 
 function normalizeTitleForMatching(value: string): string {
   return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-}
-
-function titleProbeTokens(title: string): string[] {
-  const normalized = normalizeTitleForMatching(title);
-  if (!normalized) return [];
-  return normalized
-    .split(/\s+/u)
-    .map((token) => normalizeToken(token))
-    .filter(
-      (token) =>
-        token.length >= 3 &&
-        !/^\d+$/u.test(token) &&
-        !/^[ivxlcdm]+$/u.test(token) &&
-        token !== "chapter" &&
-        token !== "part" &&
-        token !== "book" &&
-        token !== "section" &&
-        token !== "prologue" &&
-        token !== "epilogue"
-    );
-}
-
-function trimHeadingTokens(entry: EpubChapterEntry): string[] {
-  const titleTokens = titleProbeTokens(entry.title);
-  if (titleTokens.length === 0) return entry.tokens;
-  let offset = 0;
-  while (offset < titleTokens.length && entry.tokens[offset] === titleTokens[offset]) {
-    offset += 1;
-  }
-  return offset > 0 ? entry.tokens.slice(offset) : entry.tokens;
 }
 
 function isFrontMatterTitle(title: string): boolean {
