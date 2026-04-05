@@ -325,6 +325,13 @@ export type AnalysisResult = {
   debug: Record<string, unknown>;
 };
 
+type ChapterAnalysisProfile = {
+  probeAlignmentMs: number;
+  interpolationMs: number;
+  chapterSegmentMatchMs: number;
+  totalAnalyzeMs: number;
+};
+
 type ChapterAnalysisContext = {
   repo: BooksRepo;
   getSettings: () => AppSettings;
@@ -1863,11 +1870,14 @@ function analyzeTranscript(
   transcriptSource: "new" | "cached",
   options?: { includeTranscriptSegments?: boolean }
 ): AnalysisResult {
+  const analyzeStartedAt = performance.now();
   const probes = boundaryProbes(entries, durationMs);
+  const probeAlignmentStartedAt = performance.now();
   const probeAlignments = probes.map((probe) => ({
     previous: alignBestProbeToTranscriptWindow(transcriptWords, probe.previousProbes, probe.estimateCandidatesMs, "end"),
     next: alignBestProbeToTranscriptWindow(transcriptWords, probe.nextProbes, probe.estimateCandidatesMs, "start"),
   }));
+  const probeAlignmentMs = Math.round((performance.now() - probeAlignmentStartedAt) * 100) / 100;
   const matches: BoundaryMatch[] = probes.map((probe) => {
     const previousAlignment = probeAlignments[probe.boundaryIndex]?.previous ?? null;
     const nextAlignment = probeAlignments[probe.boundaryIndex]?.next ?? null;
@@ -1895,11 +1905,13 @@ function analyzeTranscript(
   if (totalBoundaryCount === 0) {
     throw new Error("No chapter boundaries available for analysis");
   }
+  const interpolationStartedAt = performance.now();
   const startTimes = interpolateChapterStarts(
     entries,
     matches.map((match) => match.resolvedMs),
     durationMs
   );
+  const interpolationMs = Math.round((performance.now() - interpolationStartedAt) * 100) / 100;
   if (!startTimes) {
     throw new Error("Interpolated chapter timings were not monotonic");
   }
@@ -1909,8 +1921,17 @@ function analyzeTranscript(
     throw new Error("Failed to assemble chapter timings");
   }
 
+  const chapterSegmentMatchStartedAt = performance.now();
   const transcriptSegments =
     options?.includeTranscriptSegments === false ? [] : chapterSegmentMatches(entries, chapters, transcriptWords);
+  const chapterSegmentMatchMs = Math.round((performance.now() - chapterSegmentMatchStartedAt) * 100) / 100;
+  const totalAnalyzeMs = Math.round((performance.now() - analyzeStartedAt) * 100) / 100;
+  const profile: ChapterAnalysisProfile = {
+    probeAlignmentMs,
+    interpolationMs,
+    chapterSegmentMatchMs,
+    totalAnalyzeMs,
+  };
 
   return {
     transcriptWords,
@@ -1929,6 +1950,7 @@ function analyzeTranscript(
         trimStartMs: plan.trimStartMs,
         trimEndMs: plan.trimEndMs,
       })),
+      profile,
       transcriptWordCount: transcriptWords.length,
       matches: matches.map((match, index) => ({
         ...match,
@@ -2005,6 +2027,18 @@ export async function processChapterAnalysisJob(
     transcribeChunk,
   }
 ): Promise<"done"> {
+  const jobStartedAt = performance.now();
+  const phaseStartedAt = new Map<string, number>();
+  const phaseDurations: Record<string, number> = {};
+  const startPhase = (name: string) => {
+    phaseStartedAt.set(name, performance.now());
+  };
+  const endPhase = (name: string) => {
+    const startedAt = phaseStartedAt.get(name);
+    if (typeof startedAt !== "number") return;
+    phaseDurations[name] = Math.round((performance.now() - startedAt) * 100) / 100;
+    phaseStartedAt.delete(name);
+  };
   const payload = job.payload_json ? (JSON.parse(job.payload_json) as { assetId?: number; ebookAssetId?: number }) : {};
   if (!payload.assetId) {
     ctx.repo.markJobSucceeded(job.id);
@@ -2037,8 +2071,10 @@ export async function processChapterAnalysisJob(
     return "done";
   }
 
+  startPhase("fingerprints");
   const chapterFingerprint = await computeChapterFingerprint(target.asset, target.files, ebookFile.path);
   const transcriptFingerprint = await computeTranscriptFingerprint(target.asset, target.files);
+  endPhase("fingerprints");
   const existing = ctx.repo.getChapterAnalysis(target.asset.id);
   if (
     existing &&
@@ -2062,7 +2098,9 @@ export async function processChapterAnalysisJob(
     return "done";
   }
 
+  startPhase("loadEpubEntries");
   const entries = await deps.loadEpubEntries(ebookFile.path);
+  endPhase("loadEpubEntries");
   if (entries.length < 2) {
     ctx.repo.markJobSucceeded(job.id);
     return "done";
@@ -2096,9 +2134,11 @@ export async function processChapterAnalysisJob(
     let transcriptSource: "new" | "cached";
 
     if (hasCachedTranscript && existingTranscriptPayload) {
+      startPhase("loadCachedTranscript");
       transcriptWords = transcriptWordsFromStoredPayload(existingTranscriptPayload);
       plans = [];
       transcriptSource = "cached";
+      endPhase("loadCachedTranscript");
     } else {
       ctx.repo.upsertAssetTranscript({
         assetId: target.asset.id,
@@ -2109,13 +2149,18 @@ export async function processChapterAnalysisJob(
         transcriptJson: null,
         error: null,
       });
+      startPhase("transcribeAsset");
       const transcript = await transcribeAssetWithDeps(ctx, target.asset, target.files, book, settings, deps, job, glossary);
+      endPhase("transcribeAsset");
       transcriptWords = transcript.transcriptWords;
       plans = transcript.plans;
       transcriptSource = "new";
     }
 
+    startPhase("analyzeTranscript");
     const result = analyzeTranscript(entries, durationMs, transcriptWords, glossary, plans, transcriptSource);
+    endPhase("analyzeTranscript");
+    startPhase("persistResults");
     ctx.repo.upsertAssetTranscript({
       assetId: target.asset.id,
       status: "succeeded",
@@ -2146,9 +2191,14 @@ export async function processChapterAnalysisJob(
       error: null,
     });
     ctx.repo.markJobSucceeded(job.id);
+    endPhase("persistResults");
+    const totalJobMs = Math.round((performance.now() - jobStartedAt) * 100) / 100;
     log(
       ctx,
-      `[chapter-analysis] job=${job.id} asset=${target.asset.id} chunks=${result.debug.chunkCount} boundaries=${result.resolvedBoundaryCount}/${result.totalBoundaryCount} success=1`
+      `[chapter-analysis] job=${job.id} asset=${target.asset.id} chunks=${result.debug.chunkCount} boundaries=${result.resolvedBoundaryCount}/${result.totalBoundaryCount} success=1 total_ms=${totalJobMs} phases=${JSON.stringify({
+        ...phaseDurations,
+        ...(typeof result.debug.profile === "object" && result.debug.profile ? { analyze: result.debug.profile } : {}),
+      })}`
     );
     return "done";
   } catch (error) {
