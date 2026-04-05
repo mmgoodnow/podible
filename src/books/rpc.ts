@@ -1,11 +1,11 @@
 import { adminRouter } from "./rpc/admin-router";
 import { agentRouter } from "./rpc/agent-router";
-import { createAuthRouter } from "./rpc/auth-router";
+import { authRouter, createHelpMethod } from "./rpc/auth-router";
 import { downloadsRouter } from "./rpc/downloads-router";
 import { defineRouter, flattenRouter, parseMethodParams, type RpcMethodDefinition } from "./rpc/framework";
 import { importRouter } from "./rpc/import-router";
 import { jobsRouter } from "./rpc/jobs-router";
-import { libraryRouter } from "./rpc/library-router";
+import { libraryRouter, releasesRouter } from "./rpc/library-router";
 import { openLibraryRouter } from "./rpc/openlibrary-router";
 import { settingsRouter } from "./rpc/settings-router";
 import {
@@ -18,7 +18,7 @@ import {
   type RpcId,
   type RpcSuccess,
 } from "./rpc/shared";
-import { searchRouter } from "./rpc/search-router";
+import { searchRouter, snatchRouter } from "./rpc/search-router";
 import { systemRouter } from "./rpc/system-router";
 
 function response(payload: RpcSuccess | RpcFailure): Response {
@@ -48,21 +48,23 @@ function failure(id: RpcId, code: number, message: string, data?: unknown): Resp
 }
 
 let methodsByName: Record<string, RpcMethodDefinition<any>> = {};
-methodsByName = flattenRouter(
-  defineRouter({
-    ...createAuthRouter(() => methodsByName).routes,
-    ...systemRouter.routes,
-    ...openLibraryRouter.routes,
-    ...libraryRouter.routes,
-    ...settingsRouter.routes,
-    ...searchRouter.routes,
-    ...downloadsRouter.routes,
-    ...jobsRouter.routes,
-    ...importRouter.routes,
-    ...agentRouter.routes,
-    ...adminRouter.routes,
-  })
-);
+const rootRouter = defineRouter({
+  help: createHelpMethod(() => methodsByName),
+  auth: authRouter,
+  system: systemRouter,
+  openlibrary: openLibraryRouter,
+  library: libraryRouter,
+  releases: releasesRouter,
+  settings: settingsRouter,
+  search: searchRouter,
+  snatch: snatchRouter,
+  downloads: downloadsRouter,
+  jobs: jobsRouter,
+  import: importRouter,
+  agent: agentRouter,
+  admin: adminRouter,
+});
+methodsByName = flattenRouter(rootRouter);
 
 function hasRpcAccess(level: RpcAuthLevel, session: RpcContext["session"]): boolean {
   if (level === "public") return true;
