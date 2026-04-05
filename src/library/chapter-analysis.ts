@@ -284,6 +284,12 @@ type ChapterAnchor = {
   attemptedTokenCount: number;
 };
 
+type ChapterEdgeAlignment = {
+  alignment: ProbeAlignmentResult;
+  epubStart: number;
+  attemptedTokenCount: number;
+};
+
 type TranscriptWord = {
   startMs: number;
   endMs: number;
@@ -602,6 +608,32 @@ function boundaryProbeCandidates(entry: EpubChapterEntry, side: "start" | "end")
   }
 
   return uniqueProbeCandidates(candidates);
+}
+
+function alignChapterEdge(
+  transcriptWords: TranscriptWord[],
+  entry: EpubChapterEntry,
+  estimateMs: number,
+  side: "start" | "end"
+): ChapterEdgeAlignment | null {
+  const lengths = [ALIGNMENT_PROBE_WORDS, 72, 48, 24];
+  let best: ChapterEdgeAlignment | null = null;
+  for (const length of lengths) {
+    const attemptedTokenCount = Math.min(length, entry.words.length);
+    if (attemptedTokenCount < 12) continue;
+    const epubStart = side === "start" ? 0 : Math.max(0, entry.words.length - attemptedTokenCount);
+    const tokens = entry.words.slice(epubStart, epubStart + attemptedTokenCount).map((word) => word.token);
+    const alignment = alignProbeToTranscriptWindow(transcriptWords, tokens, estimateMs, side);
+    if (!alignment) continue;
+    if (
+      !best ||
+      alignment.coverage > best.alignment.coverage ||
+      (alignment.coverage === best.alignment.coverage && alignment.matchedTokenCount > best.alignment.matchedTokenCount)
+    ) {
+      best = { alignment, epubStart, attemptedTokenCount };
+    }
+  }
+  return best;
 }
 
 function contiguousMatchLength(haystack: string[], needle: string[], haystackStart: number, needleStart: number): number {
@@ -1663,21 +1695,18 @@ function chapterSegmentMatches(
     );
     const anchors: ChapterAnchor[] = [];
 
-    const startProbeLength = Math.min(ALIGNMENT_PROBE_WORDS, entry.words.length);
-    const startAlignment = alignProbeToTranscriptWindow(
-      transcriptWords,
-      entry.words.slice(0, startProbeLength).map((word) => word.token),
-      chapter.startMs,
-      "start"
-    );
+    const startAlignment = alignChapterEdge(transcriptWords, entry, chapter.startMs, "start");
     if (startAlignment) {
       anchors.push({
         epubStart: 0,
-        epubEnd: startProbeLength - 1,
-        transcriptStart: startAlignment.startTranscriptIndex,
-        transcriptEnd: startAlignment.endTranscriptIndex,
-        matchedPairs: startAlignment.matchedPairs.map((pair) => ({ epubIndex: pair.probeIndex, transcriptIndex: pair.transcriptIndex })),
-        attemptedTokenCount: startProbeLength,
+        epubEnd: startAlignment.epubStart + startAlignment.attemptedTokenCount - 1,
+        transcriptStart: startAlignment.alignment.startTranscriptIndex,
+        transcriptEnd: startAlignment.alignment.endTranscriptIndex,
+        matchedPairs: startAlignment.alignment.matchedPairs.map((pair) => ({
+          epubIndex: startAlignment.epubStart + pair.probeIndex,
+          transcriptIndex: pair.transcriptIndex,
+        })),
+        attemptedTokenCount: startAlignment.attemptedTokenCount,
       });
     }
 
@@ -1699,25 +1728,19 @@ function chapterSegmentMatches(
       });
     }
 
-    const endProbeLength = Math.min(ALIGNMENT_PROBE_WORDS, entry.words.length);
-    const endProbeStart = Math.max(0, entry.words.length - endProbeLength);
-    const endAlignment = alignProbeToTranscriptWindow(
-      transcriptWords,
-      entry.words.slice(endProbeStart).map((word) => word.token),
-      chapter.endMs,
-      "end"
-    );
+    const endAlignment = alignChapterEdge(transcriptWords, entry, chapter.endMs, "end");
     if (endAlignment) {
+      const endProbeStart = endAlignment.epubStart;
       anchors.push({
         epubStart: endProbeStart,
         epubEnd: entry.words.length - 1,
-        transcriptStart: endAlignment.startTranscriptIndex,
-        transcriptEnd: endAlignment.endTranscriptIndex,
-        matchedPairs: endAlignment.matchedPairs.map((pair) => ({
+        transcriptStart: endAlignment.alignment.startTranscriptIndex,
+        transcriptEnd: endAlignment.alignment.endTranscriptIndex,
+        matchedPairs: endAlignment.alignment.matchedPairs.map((pair) => ({
           epubIndex: endProbeStart + pair.probeIndex,
           transcriptIndex: pair.transcriptIndex,
         })),
-        attemptedTokenCount: endProbeLength,
+        attemptedTokenCount: endAlignment.attemptedTokenCount,
       });
     }
 
