@@ -278,7 +278,7 @@ describe("worker import recovery", () => {
         },
         agents: {
           ...defaultSettings().agents,
-          enabled: false,
+          apiKey: "",
         },
       })
     );

@@ -52,7 +52,6 @@ export type AppSettings = {
   libraryRoot: string;
   polling: {
     rtorrentMs: number;
-    scanMs: number;
   };
   recovery: {
     stalledTorrentMinutes: number;
@@ -68,11 +67,9 @@ export type AppSettings = {
       productName: string;
       ownerToken: string;
       machineId: string;
-      machineName: string;
     };
   };
   agents: {
-    enabled: boolean;
     provider: "openai-responses";
     model: string;
     apiKey: string;

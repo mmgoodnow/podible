@@ -27,7 +27,6 @@ export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
     libraryRoot: "/media/library",
     polling: {
       rtorrentMs: 5000,
-      scanMs: 30000,
     },
     recovery: {
       stalledTorrentMinutes: 10,
@@ -43,11 +42,9 @@ export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
         productName: "Podible",
         ownerToken: "",
         machineId: "",
-        machineName: "",
       },
     },
     agents: {
-      enabled: false,
       provider: "openai-responses",
       model: "gpt-5-mini",
       apiKey: "",
@@ -72,7 +69,7 @@ export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
     },
     polling: {
       ...defaults.polling,
-      ...(overrides?.polling ?? {}),
+      rtorrentMs: overrides?.polling?.rtorrentMs ?? defaults.polling.rtorrentMs,
     },
     recovery: {
       ...defaults.recovery,
@@ -171,14 +168,9 @@ export function parseSettings(value: string): AppSettings {
           typeof parsedAuthPlex.machineId === "string"
             ? parsedAuthPlex.machineId
             : defaults.auth.plex.machineId,
-        machineName:
-          typeof parsedAuthPlex.machineName === "string"
-            ? parsedAuthPlex.machineName
-            : defaults.auth.plex.machineName,
       },
     },
     agents: {
-      enabled: typeof parsedAgents.enabled === "boolean" ? parsedAgents.enabled : defaults.agents.enabled,
       provider: parsedAgents.provider === "openai-responses" ? parsedAgents.provider : defaults.agents.provider,
       model: typeof parsedAgents.model === "string" && parsedAgents.model.trim() ? parsedAgents.model : defaults.agents.model,
       apiKey: typeof parsedAgents.apiKey === "string" ? parsedAgents.apiKey : defaults.agents.apiKey,

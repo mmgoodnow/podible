@@ -577,7 +577,7 @@ describe("json-rpc handler", () => {
           },
           agents: {
             ...defaultSettings().agents,
-            enabled: false,
+            apiKey: "",
           },
         })
       );
@@ -696,7 +696,7 @@ describe("json-rpc handler", () => {
           },
           agents: {
             ...defaultSettings().agents,
-            enabled: false,
+            apiKey: "",
           },
         })
       );

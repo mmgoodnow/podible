@@ -192,7 +192,7 @@ describe("books e2e", () => {
           password: "",
         },
         libraryRoot,
-        polling: { rtorrentMs: 50, scanMs: 200 },
+        polling: { rtorrentMs: 50 },
       })
     );
 

@@ -851,12 +851,11 @@ describe("podible http", () => {
             cookie: adminCookie,
             "Content-Type": "application/x-www-form-urlencoded",
           },
-          body: "machineId=family-server&machineName=Family%20Server",
+          body: "machineId=family-server",
         })
       );
       expect(selected.status).toBe(303);
       expect(repo.getSettings().auth.plex.machineId).toBe("family-server");
-      expect(repo.getSettings().auth.plex.machineName).toBe("Family Server");
 
       db.close();
     } finally {
@@ -920,7 +919,6 @@ describe("podible http", () => {
             ...settings.auth.plex,
             ownerToken: "owner-token",
             machineId: "family-server",
-            machineName: "Family Server",
           },
         },
       });

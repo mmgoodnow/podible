@@ -1138,10 +1138,12 @@ function renderAdminPage(
   const activeJobs = (health.jobs.queued ?? 0) + (health.jobs.running ?? 0);
   const failedJobs = health.jobs.failed ?? 0;
   const releaseIssues = health.releases.failed ?? 0;
+  const selectedPlexServer =
+    plexServers.find((server) => server.machineId === settings.auth.plex.machineId) ?? null;
   const plexServerOptions = plexServers
     .map((server) => {
       const label = `${server.name} (${server.owned ? "owned" : "shared"}${server.sourceTitle ? ` • ${server.sourceTitle}` : ""})`;
-      return `<option value="${escapeHtml(server.machineId)}" data-machine-name="${escapeHtml(server.name)}"${
+      return `<option value="${escapeHtml(server.machineId)}"${
         server.machineId === settings.auth.plex.machineId ? " selected" : ""
       }>${escapeHtml(label)}</option>`;
     })
@@ -1310,7 +1312,7 @@ function renderAdminPage(
                 ? `<section class="card">
           <h2>Plex Access Control</h2>
           <p class="muted">Choose which Plex server controls who can sign in to Podible. Future Plex logins will only be allowed for users who can access that server.</p>
-          <p class="muted">Owner token: <strong>${settings.auth.plex.ownerToken ? "captured" : "missing"}</strong> | Selected server: <strong>${escapeHtml(settings.auth.plex.machineName || settings.auth.plex.machineId || "not set")}</strong></p>
+          <p class="muted">Owner token: <strong>${settings.auth.plex.ownerToken ? "captured" : "missing"}</strong> | Selected server: <strong>${escapeHtml(selectedPlexServer?.name || settings.auth.plex.machineId || "not set")}</strong></p>
           ${messageMarkup(options.plexNotice, options.plexError)}
           ${
             plexServers.length > 0
@@ -1319,7 +1321,6 @@ function renderAdminPage(
             <select id="plex-server-select" name="machineId">
               ${plexServerOptions}
             </select>
-            <input id="plex-server-name" type="hidden" name="machineName" value="${escapeHtml(settings.auth.plex.machineName || plexServers[0]?.name || "")}" />
             <button type="submit">Use selected server</button>
           </div>
         </form>`
@@ -1818,20 +1819,12 @@ function renderAdminPage(
         var settingsEditor = document.getElementById("settings-editor");
         var settingsSaveBtn = document.getElementById("settings-save-btn");
         var wipeDbBtn = document.getElementById("wipe-db-btn");
-        var plexServerSelect = document.getElementById("plex-server-select");
-        var plexServerNameInput = document.getElementById("plex-server-name");
         var jobsTableBody = document.getElementById("jobs-table-body");
         var jobsRefreshBtn = document.getElementById("jobs-refresh-btn");
         var jobsLimitInput = document.getElementById("jobs-limit");
         var jobsTypeInput = document.getElementById("jobs-type");
         var downloadsTableBody = document.getElementById("downloads-table-body");
         var downloadsRefreshBtn = document.getElementById("downloads-refresh-btn");
-        if (plexServerSelect && plexServerNameInput) {
-          plexServerSelect.addEventListener("change", function () {
-            var selected = plexServerSelect.options[plexServerSelect.selectedIndex];
-            plexServerNameInput.value = selected && selected.dataset ? selected.dataset.machineName || selected.textContent || "" : "";
-          });
-        }
         async function loadSettings() {
           try {
             text("settings-status", "Loading...");
@@ -2318,7 +2311,6 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
         }
         const form = new URLSearchParams(await request.text());
         const machineId = (form.get("machineId") ?? "").trim();
-        const machineName = (form.get("machineName") ?? "").trim();
         if (!machineId) {
           response = redirect("/admin?plex_error=Missing%20machine%20id");
           logRequest(response.status);
@@ -2331,11 +2323,10 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
             plex: {
               ...settings.auth.plex,
               machineId,
-              machineName,
             },
           },
         });
-        response = redirect(`/admin?plex_notice=${encodeURIComponent(`Selected ${machineName || machineId}.`)}`);
+        response = redirect("/admin?plex_notice=Selected%20server.");
         logRequest(response.status);
         return response;
       }

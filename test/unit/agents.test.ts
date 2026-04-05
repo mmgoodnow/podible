@@ -25,7 +25,6 @@ function makeMultiFileTorrentBytes(rootName: string, files: Array<{ path: string
 function agentSettings(overrides?: Partial<ReturnType<typeof defaultSettings>["agents"]>) {
   return {
     ...defaultSettings().agents,
-    enabled: true,
     apiKey: "test-key",
     ...overrides,
   };
@@ -33,12 +32,7 @@ function agentSettings(overrides?: Partial<ReturnType<typeof defaultSettings>["a
 
 describe("agent decisions", () => {
   test("search selection is deterministic by default", async () => {
-    const settings = defaultSettings({
-      agents: {
-        ...defaultSettings().agents,
-        enabled: false,
-      },
-    });
+    const settings = defaultSettings();
 
     const decision = await selectSearchCandidate(settings, {
       query: "Dune Frank Herbert",
@@ -322,9 +316,9 @@ describe("agent decisions", () => {
       JSON.stringify({
         ...defaultSettings(),
         agents: {
-          enabled: true,
           provider: "openai-responses",
           model: "gpt-5-mini",
+          apiKey: "test-key",
           lowConfidenceThreshold: 0.45,
           timeoutMs: 8000,
         },
@@ -355,12 +349,7 @@ describe("agent decisions", () => {
   });
 
   test("search selection excludes rejected guid and infohash", async () => {
-    const settings = defaultSettings({
-      agents: {
-        ...defaultSettings().agents,
-        enabled: false,
-      },
-    });
+    const settings = defaultSettings();
 
     const decision = await selectSearchCandidate(settings, {
       query: "Dune Frank Herbert",
@@ -400,12 +389,7 @@ describe("agent decisions", () => {
   });
 
   test("manual import selection is deterministic by default", async () => {
-    const settings = defaultSettings({
-      agents: {
-        ...defaultSettings().agents,
-        enabled: false,
-      },
-    });
+    const settings = defaultSettings();
 
     const decision = await selectManualImportPaths(settings, {
       mediaType: "ebook",

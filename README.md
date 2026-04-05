@@ -151,7 +151,7 @@ Bridge constraints:
     "downloadPath": ""
   },
   "libraryRoot": "/media/library",
-  "polling": { "rtorrentMs": 5000, "scanMs": 30000 },
+  "polling": { "rtorrentMs": 5000 },
   "recovery": { "stalledTorrentMinutes": 10 },
   "feed": { "title": "Books", "author": "Unknown" },
   "auth": {
@@ -160,12 +160,10 @@ Bridge constraints:
     "plex": {
       "productName": "Podible",
       "ownerToken": "",
-      "machineId": "",
-      "machineName": ""
+      "machineId": ""
     }
   },
   "agents": {
-    "enabled": false,
     "provider": "openai-responses",
     "model": "gpt-5-mini",
     "apiKey": "",
@@ -185,7 +183,7 @@ Bridge constraints:
 Agent behavior:
 
 - Deterministic ranking/selection remains the default behavior.
-- Responses API is used only when `agents.enabled=true` and a trigger condition is met (`forceAgent`, prior failure, or low confidence).
+- Responses API is used only when `agents.apiKey` is configured and a trigger condition is met (`forceAgent`, prior failure, or low confidence).
 - Missing/failed agent calls fall back to deterministic selection.
 
 Download recovery behavior:
