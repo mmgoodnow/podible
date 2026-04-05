@@ -307,7 +307,10 @@ function renderAppPage(
           }
           if (button) {
             const resolved = resolvedTheme(mode);
-            const label = mode[0].toUpperCase() + mode.slice(1) + (mode === "system" ? " (" + resolved + ")" : "");
+            const label =
+              mode === "system"
+                ? "System (" + resolved + " mode)"
+                : mode[0].toUpperCase() + mode.slice(1) + " mode";
             button.textContent = label;
           }
         }
