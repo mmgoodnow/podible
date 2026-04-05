@@ -581,13 +581,14 @@ function boundaryProbeCandidates(entry: EpubChapterEntry, side: "start" | "end")
   if (entry.tokens.length === 0) return [];
 
   const candidates: string[][] = [];
+  const offsets = [0, 24, 48, 72, 96, 144, 192, 240, 320, 480, 640, 800];
   if (side === "start") {
-    for (const offset of [0, 24, 48, 72, 96, 144, 192, 240]) {
+    for (const offset of offsets) {
       if (offset >= entry.tokens.length) break;
       candidates.push(entry.tokens.slice(offset, offset + ALIGNMENT_PROBE_WORDS));
     }
   } else {
-    for (const backoff of [0, 24, 48, 72, 96, 144, 192, 240]) {
+    for (const backoff of offsets) {
       const end = entry.tokens.length - backoff;
       if (end <= 0) break;
       const start = Math.max(0, end - ALIGNMENT_PROBE_WORDS);
