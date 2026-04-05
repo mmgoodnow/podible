@@ -49,7 +49,7 @@ function renderAppPage(
   void settings;
   const showNav = options.showNav !== false;
   const showAdminNav = Boolean(apiKey) || (currentUser?.is_admin ?? 0) === 1;
-  const themeToggle = `<button type="button" class="theme-toggle" id="theme-toggle">System</button>`;
+  const themeToggle = `<button type="button" class="theme-toggle" id="theme-toggle">Dark mode</button>`;
   const accountNav = currentUser
     ? `<span class="muted">Signed in as ${escapeHtml(displayUserName(currentUser))}</span>
        <form method="post" action="${escapeHtml(addApiKey("/logout", apiKey))}" class="nav-signout-form">
@@ -283,50 +283,49 @@ function renderAppPage(
 
         function storedTheme() {
           const value = localStorage.getItem("podible-theme");
-          return value === "dark" || value === "light" ? value : "system";
+          return value === "dark" || value === "light" ? value : null;
         }
 
-        function resolvedTheme(mode) {
-          if (mode === "system") {
-            return media.matches ? "dark" : "light";
-          }
-          return mode;
+        function systemTheme() {
+          return media.matches ? "dark" : "light";
         }
 
-        function cycleTheme(mode) {
-          if (mode === "system") return "dark";
-          if (mode === "dark") return "light";
-          return "system";
+        function resolvedTheme() {
+          return storedTheme() || systemTheme();
         }
 
-        function apply(mode) {
-          if (mode === "dark" || mode === "light") {
-            root.dataset.theme = mode;
+        function oppositeTheme(theme) {
+          return theme === "dark" ? "light" : "dark";
+        }
+
+        function apply() {
+          const stored = storedTheme();
+          if (stored === "dark" || stored === "light") {
+            root.dataset.theme = stored;
           } else {
             delete root.dataset.theme;
           }
           if (button) {
-            const resolved = resolvedTheme(mode);
-            const label =
-              mode === "system"
-                ? "System (" + resolved + " mode)"
-                : mode[0].toUpperCase() + mode.slice(1) + " mode";
-            button.textContent = label;
+            const labelTheme = oppositeTheme(resolvedTheme());
+            button.textContent = labelTheme[0].toUpperCase() + labelTheme.slice(1) + " mode";
           }
         }
 
-        apply(storedTheme());
+        apply();
         media.addEventListener("change", () => {
-          if (storedTheme() === "system") apply("system");
+          apply();
         });
         button?.addEventListener("click", () => {
-          const next = cycleTheme(storedTheme());
-          if (next === "system") {
+          const stored = storedTheme();
+          const system = systemTheme();
+          if (!stored) {
+            localStorage.setItem("podible-theme", oppositeTheme(system));
+          } else if (stored !== system) {
             localStorage.removeItem("podible-theme");
           } else {
-            localStorage.setItem("podible-theme", next);
+            localStorage.setItem("podible-theme", oppositeTheme(system));
           }
-          apply(next);
+          apply();
         });
       })();
     </script>
