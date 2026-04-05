@@ -9,6 +9,7 @@ export const settingsRouter = defineRouter({
     readOnly: true,
     summary: "Read current application settings.",
     paramsSchema: emptyParamsSchema,
+    resultSchema: appSettingsSchema,
     async handler(ctx) {
       return ctx.repo.getSettings();
     },
@@ -20,6 +21,7 @@ export const settingsRouter = defineRouter({
     paramsSchema: emptyParamsSchema.extend({
       settings: appSettingsSchema,
     }),
+    resultSchema: appSettingsSchema,
     async handler(ctx, params) {
       return ctx.repo.updateSettings(params.settings as AppSettings);
     },

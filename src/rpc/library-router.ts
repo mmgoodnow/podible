@@ -7,8 +7,12 @@ import { triggerAutoAcquire } from "../service";
 
 import { defineMethod, defineRouter } from "./framework";
 import {
+  assetRowSchema,
   emptyParamsSchema,
+  jobIdResultSchema,
+  libraryBookSchema,
   limitSchema,
+  mediaSchema,
   mediaSelectionSchema,
   optionalBooleanSchema,
   optionalPositiveIntArraySchema,
@@ -17,6 +21,7 @@ import {
   optionalStringSchema,
   positiveIntSchema,
   nonEmptyStringSchema,
+  releaseRowSchema,
 } from "./schemas";
 import { enrichLibraryBookProgress, removeFileIfPresent, RpcError } from "./shared";
 
@@ -30,6 +35,10 @@ export const libraryRouter = defineRouter({
       cursor: optionalPositiveIntSchema,
       q: optionalStringSchema,
     }),
+    resultSchema: z.object({
+      items: z.array(libraryBookSchema),
+      nextCursor: positiveIntSchema.optional(),
+    }),
     async handler(ctx, params) {
       return ctx.repo.listBooks(params.limit ?? 50, params.cursor, params.q);
     },
@@ -41,6 +50,11 @@ export const libraryRouter = defineRouter({
     summary: "Get one book with releases and assets.",
     paramsSchema: emptyParamsSchema.extend({
       bookId: positiveIntSchema,
+    }),
+    resultSchema: z.object({
+      book: libraryBookSchema,
+      releases: z.array(releaseRowSchema),
+      assets: z.array(assetRowSchema),
     }),
     async handler(ctx, params) {
       const book = ctx.repo.getBook(params.bookId);
@@ -67,6 +81,9 @@ export const libraryRouter = defineRouter({
     paramsSchema: emptyParamsSchema.extend({
       bookIds: optionalPositiveIntArraySchema,
     }),
+    resultSchema: z.object({
+      items: z.array(libraryBookSchema),
+    }),
     async handler(ctx, params) {
       const items = ctx.repo.listInProgressBooks(params.bookIds);
       const hasDownloading = items.some((book) => book.audioStatus === "downloading" || book.ebookStatus === "downloading");
@@ -82,6 +99,10 @@ export const libraryRouter = defineRouter({
     summary: "Create a book from an Open Library work key and queue auto-acquire.",
     paramsSchema: emptyParamsSchema.extend({
       openLibraryKey: nonEmptyStringSchema,
+    }),
+    resultSchema: z.object({
+      book: libraryBookSchema.nullable(),
+      acquisition_job_id: positiveIntSchema,
     }),
     async handler(ctx, params) {
       const resolved = await resolveOpenLibraryCandidate({ openLibraryKey: params.openLibraryKey.trim() });
@@ -124,6 +145,15 @@ export const libraryRouter = defineRouter({
       rejectedGuids: optionalStringArraySchema,
       rejectedInfoHashes: optionalStringArraySchema,
     }),
+    resultSchema: z.object({
+      jobId: positiveIntSchema,
+      media: z.array(mediaSchema),
+      forceAgent: z.boolean(),
+      priorFailure: z.boolean(),
+      rejectedUrls: z.array(z.string()),
+      rejectedGuids: z.array(z.string()),
+      rejectedInfoHashes: z.array(z.string()),
+    }),
     async handler(ctx, params) {
       const book = ctx.repo.getBookRow(params.bookId);
       if (!book) {
@@ -150,6 +180,7 @@ export const libraryRouter = defineRouter({
     auth: "admin",
     summary: "Queue full library filesystem refresh scan.",
     paramsSchema: emptyParamsSchema,
+    resultSchema: jobIdResultSchema,
     async handler(ctx) {
       const job = ctx.repo.createJob({
         type: "full_library_refresh",
@@ -165,6 +196,16 @@ export const libraryRouter = defineRouter({
       bookId: positiveIntSchema,
       mediaType: z.enum(["audio", "ebook"]),
       releaseId: optionalPositiveIntSchema,
+    }),
+    resultSchema: z.object({
+      action: z.literal("wrong_file_review_queued"),
+      jobId: positiveIntSchema,
+      releaseId: positiveIntSchema,
+      mediaType: mediaSchema,
+      rejectedSourcePathsCount: z.number().int().nonnegative(),
+      deletedAssetCount: z.number().int().nonnegative(),
+      deletedAssetFileCount: z.number().int().nonnegative(),
+      deletedAssetPaths: z.array(z.string()),
     }),
     async handler(ctx, params) {
       const book = ctx.repo.getBookRow(params.bookId);
@@ -236,7 +277,7 @@ export const libraryRouter = defineRouter({
         },
       });
       return {
-        action: "wrong_file_review_queued",
+        action: "wrong_file_review_queued" as const,
         jobId: importJob.id,
         releaseId: release.id,
         mediaType: params.mediaType,
@@ -253,6 +294,10 @@ export const libraryRouter = defineRouter({
     summary: "Re-run Open Library metadata hydration for one/all books.",
     paramsSchema: emptyParamsSchema.extend({
       bookId: optionalPositiveIntSchema,
+    }),
+    resultSchema: z.object({
+      attempted: z.number().int().nonnegative(),
+      updatedBookIds: z.array(positiveIntSchema),
     }),
     async handler(ctx, params) {
       const books = params.bookId === undefined ? ctx.repo.listAllBooks() : [ctx.repo.getBook(params.bookId)];
@@ -280,6 +325,12 @@ export const libraryRouter = defineRouter({
     summary: "Delete a book, cascading DB rows and imported files/covers.",
     paramsSchema: emptyParamsSchema.extend({
       bookId: positiveIntSchema,
+    }),
+    resultSchema: z.object({
+      deletedBookId: positiveIntSchema,
+      deletedAssetFileCount: z.number().int().nonnegative(),
+      deletedAssetPaths: z.array(z.string()),
+      deletedCoverPath: z.string().nullable(),
     }),
     async handler(ctx, params) {
       const book = ctx.repo.getBookRow(params.bookId);
@@ -317,6 +368,9 @@ export const releasesRouter = defineRouter({
     summary: "List releases for a book.",
     paramsSchema: emptyParamsSchema.extend({
       bookId: positiveIntSchema,
+    }),
+    resultSchema: z.object({
+      releases: z.array(releaseRowSchema),
     }),
     async handler(ctx, params) {
       return { releases: ctx.repo.listReleasesByBook(params.bookId) };

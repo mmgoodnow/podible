@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { defineMethod, defineRouter } from "./framework";
-import { emptyParamsSchema, jobTypeSchema, limitSchema, positiveIntSchema } from "./schemas";
+import { emptyParamsSchema, jobRowSchema, jobTypeSchema, limitSchema, positiveIntSchema } from "./schemas";
 import { enrichJob, RpcError } from "./shared";
 
 const allJobTypes = ["full_library_refresh", "acquire", "download", "import", "reconcile", "chapter_analysis"] as const;
@@ -17,6 +17,9 @@ export const jobsRouter = defineRouter({
         if (value === undefined || value === null || value === "") return undefined;
         return value;
       }, jobTypeSchema.optional()),
+    }),
+    resultSchema: z.object({
+      jobs: z.array(jobRowSchema),
     }),
     async handler(ctx, params) {
       const jobs = params.type
@@ -38,6 +41,9 @@ export const jobsRouter = defineRouter({
     paramsSchema: emptyParamsSchema.extend({
       jobId: positiveIntSchema,
     }),
+    resultSchema: z.object({
+      job: jobRowSchema,
+    }),
     async handler(ctx, params) {
       const job = ctx.repo.getJob(params.jobId);
       if (!job) {
@@ -52,6 +58,9 @@ export const jobsRouter = defineRouter({
     summary: "Retry a failed/cancelled job.",
     paramsSchema: emptyParamsSchema.extend({
       jobId: positiveIntSchema,
+    }),
+    resultSchema: z.object({
+      job: jobRowSchema,
     }),
     async handler(ctx, params) {
       const job = ctx.repo.getJob(params.jobId);

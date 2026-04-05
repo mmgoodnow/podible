@@ -109,3 +109,144 @@ export const appSettingsSchema: z.ZodType<AppSettings> = z.object({
     }),
   }),
 });
+
+export const stringRecordSchema = z.record(z.string(), z.string());
+export const countMapSchema = z.record(z.string(), z.number().int().nonnegative());
+export const anyObjectSchema = z.object({}).passthrough();
+export const okResultSchema = z.object({ ok: z.literal(true) });
+export const jobIdResultSchema = z.object({ jobId: positiveIntSchema });
+
+export const libraryBookSchema = z.object({
+  id: positiveIntSchema,
+  title: z.string(),
+  author: z.string(),
+  coverUrl: z.string().nullable(),
+  durationMs: z.number().int().nullable(),
+  wordCount: z.number().int().nullable(),
+  addedAt: z.string(),
+  updatedAt: z.string(),
+  publishedAt: z.string().nullable(),
+  description: z.string().nullable(),
+  descriptionHtml: z.string().nullable(),
+  language: z.string().nullable(),
+  identifiers: stringRecordSchema,
+  audioStatus: z.enum(["wanted", "snatched", "downloading", "downloaded", "imported", "error"]),
+  ebookStatus: z.enum(["wanted", "snatched", "downloading", "downloaded", "imported", "error"]),
+  status: z.enum(["wanted", "snatched", "downloading", "downloaded", "imported", "error", "partial"]),
+  fullPseudoProgress: z.number(),
+});
+
+export const releaseRowSchema = z.object({
+  id: positiveIntSchema,
+  book_id: positiveIntSchema,
+  provider: z.string(),
+  provider_guid: z.string().nullable(),
+  title: z.string(),
+  media_type: mediaSchema,
+  info_hash: z.string(),
+  size_bytes: z.number().int().nullable(),
+  url: z.string(),
+  snatched_at: z.string(),
+  status: z.enum(["snatched", "downloading", "downloaded", "imported", "failed"]),
+  error: z.string().nullable(),
+  updated_at: z.string(),
+});
+
+export const assetRowSchema = z.object({
+  id: positiveIntSchema,
+  book_id: positiveIntSchema,
+  kind: z.enum(["single", "multi", "ebook"]),
+  mime: z.string(),
+  total_size: z.number().int().nonnegative(),
+  duration_ms: z.number().int().nullable(),
+  source_release_id: z.number().int().positive().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const jobRowSchema = z.object({
+  id: positiveIntSchema,
+  type: jobTypeSchema,
+  status: z.enum(["queued", "running", "succeeded", "failed", "cancelled"]),
+  book_id: z.number().int().positive().nullable(),
+  book_title: z.string().nullable().optional(),
+  release_id: z.number().int().positive().nullable(),
+  payload_json: z.string().nullable(),
+  error: z.string().nullable(),
+  attempt_count: z.number().int().nonnegative(),
+  max_attempts: z.number().int().positive(),
+  next_run_at: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const importInspectionFileSchema = z.object({
+  sourcePath: z.string(),
+  relativePath: z.string(),
+  ext: z.string(),
+  size: z.number().int().nonnegative(),
+  mtimeMs: z.number().nonnegative(),
+  supportedAudio: z.boolean(),
+  supportedEbook: z.boolean(),
+});
+
+export const torznabResultSchema = z.object({
+  title: z.string(),
+  provider: z.string(),
+  mediaType: mediaSchema,
+  sizeBytes: z.number().int().nullable(),
+  url: z.string(),
+  guid: z.string().nullable(),
+  infoHash: z.string().nullable(),
+  seeders: z.number().int().nullable(),
+  leechers: z.number().int().nullable(),
+  raw: anyObjectSchema,
+});
+
+export const openLibraryCandidateSchema = z.object({
+  openLibraryKey: z.string(),
+  title: z.string(),
+  author: z.string(),
+  publishedAt: z.string().optional(),
+  language: z.string().optional(),
+  coverId: z.number().int().positive().optional(),
+  identifiers: stringRecordSchema,
+});
+
+export const userProfileSchema = z.object({
+  id: positiveIntSchema,
+  provider: z.enum(["plex", "local"]),
+  username: z.string(),
+  displayName: z.string().nullable(),
+  thumbUrl: z.string().nullable(),
+  isAdmin: z.boolean(),
+});
+
+export const sessionSummarySchema = z.object({
+  kind: z.enum(["browser", "app"]),
+  expiresAt: z.string(),
+});
+
+export const downloadProgressSchema = z.object({
+  bytesDone: z.number().int().nullable(),
+  sizeBytes: z.number().int().nullable(),
+  leftBytes: z.number().int().nullable(),
+  downRate: z.number().int().nullable(),
+  fraction: z.number().nullable(),
+  percent: z.number().int().nullable(),
+});
+
+export const downloadRpcViewSchema = z.object({
+  job_id: positiveIntSchema,
+  job_type: jobTypeSchema,
+  job_status: z.enum(["queued", "running", "succeeded", "failed", "cancelled"]),
+  job_error: z.string().nullable(),
+  release_id: z.number().int().positive().nullable(),
+  release_status: z.enum(["snatched", "downloading", "downloaded", "imported", "failed"]).nullable(),
+  release_error: z.string().nullable(),
+  media_type: mediaSchema.nullable(),
+  info_hash: z.string().nullable(),
+  book_id: z.number().int().positive().nullable(),
+  fullPseudoProgress: z.number(),
+  downloadProgress: downloadProgressSchema.optional(),
+});

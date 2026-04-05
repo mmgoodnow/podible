@@ -1,7 +1,8 @@
 import { RtorrentClient } from "../rtorrent";
 
 import { defineMethod, defineRouter } from "./framework";
-import { emptyParamsSchema, positiveIntSchema } from "./schemas";
+import { downloadRpcViewSchema, emptyParamsSchema, jobRowSchema, positiveIntSchema } from "./schemas";
+import { z } from "zod";
 import { enrichDownload, RpcError } from "./shared";
 
 export const downloadsRouter = defineRouter({
@@ -10,6 +11,9 @@ export const downloadsRouter = defineRouter({
     readOnly: true,
     summary: "List download jobs with release status/progress.",
     paramsSchema: emptyParamsSchema,
+    resultSchema: z.object({
+      downloads: z.array(downloadRpcViewSchema),
+    }),
     async handler(ctx) {
       const downloads = ctx.repo.listDownloads();
       const hasDownloading = downloads.some((download) => download.release_status === "downloading" && download.info_hash);
@@ -26,6 +30,7 @@ export const downloadsRouter = defineRouter({
     paramsSchema: emptyParamsSchema.extend({
       jobId: positiveIntSchema,
     }),
+    resultSchema: downloadRpcViewSchema,
     async handler(ctx, params) {
       const download = ctx.repo.getDownload(params.jobId);
       if (!download) {
@@ -44,6 +49,9 @@ export const downloadsRouter = defineRouter({
     summary: "Requeue a download job.",
     paramsSchema: emptyParamsSchema.extend({
       jobId: positiveIntSchema,
+    }),
+    resultSchema: z.object({
+      job: jobRowSchema,
     }),
     async handler(ctx, params) {
       return { job: ctx.repo.retryJob(params.jobId) };

@@ -1,15 +1,19 @@
 import { selectManualImportPaths, selectSearchCandidate } from "../agents";
 import { inspectImportPath } from "../importer";
 import { runSearch } from "../service";
+import { z } from "zod";
 
 import { defineMethod, defineRouter } from "./framework";
 import {
+  anyObjectSchema,
   emptyParamsSchema,
+  importInspectionFileSchema,
   mediaSchema,
   nonEmptyStringSchema,
   optionalBooleanSchema,
   optionalPositiveIntSchema,
   optionalStringArraySchema,
+  torznabResultSchema,
 } from "./schemas";
 import { RpcError } from "./shared";
 
@@ -26,6 +30,10 @@ export const agentRouter = defineRouter({
         forceAgent: optionalBooleanSchema,
         priorFailure: optionalBooleanSchema,
         rejectedUrls: optionalStringArraySchema,
+      }),
+      resultSchema: z.object({
+        resultCount: z.number().int().nonnegative(),
+        decision: anyObjectSchema,
       }),
       async handler(ctx, params) {
         const book =
@@ -73,6 +81,12 @@ export const agentRouter = defineRouter({
         bookId: optionalPositiveIntSchema,
         forceAgent: optionalBooleanSchema,
         priorFailure: optionalBooleanSchema,
+      }),
+      resultSchema: z.object({
+        path: z.string(),
+        fileCount: z.number().int().nonnegative(),
+        files: z.array(importInspectionFileSchema),
+        decision: anyObjectSchema,
       }),
       async handler(ctx, params) {
         const book =

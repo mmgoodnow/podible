@@ -1,6 +1,5 @@
-import { z } from "zod";
-
 import { runSearch, runSnatch } from "../service";
+import { z } from "zod";
 
 import { defineMethod, defineRouter } from "./framework";
 import {
@@ -9,6 +8,8 @@ import {
   nonEmptyStringSchema,
   optionalStringSchema,
   positiveIntSchema,
+  torznabResultSchema,
+  releaseRowSchema,
 } from "./schemas";
 
 export const searchRouter = defineRouter({
@@ -19,6 +20,9 @@ export const searchRouter = defineRouter({
     paramsSchema: emptyParamsSchema.extend({
       query: nonEmptyStringSchema,
       media: mediaSchema,
+    }),
+    resultSchema: z.object({
+      results: z.array(torznabResultSchema),
     }),
     async handler(ctx, params) {
       const results = await runSearch(ctx.repo.getSettings(), {
@@ -47,6 +51,11 @@ export const snatchRouter = defineRouter({
         if (typeof value === "number") return Math.trunc(value);
         return Number.parseInt(String(value), 10);
       }, z.number().int().nullable()),
+    }),
+    resultSchema: z.object({
+      release: releaseRowSchema,
+      jobId: positiveIntSchema,
+      idempotent: z.boolean(),
     }),
     async handler(ctx, params) {
       return runSnatch(ctx.repo, ctx.repo.getSettings(), {

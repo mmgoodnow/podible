@@ -2,7 +2,7 @@ import { adminRouter } from "./rpc/admin-router";
 import { agentRouter } from "./rpc/agent-router";
 import { authRouter, createHelpMethod } from "./rpc/auth-router";
 import { downloadsRouter } from "./rpc/downloads-router";
-import { defineRouter, flattenRouter, parseMethodParams, type RpcMethodDefinition } from "./rpc/framework";
+import { defineRouter, flattenRouter, parseMethodParams, parseMethodResult, type RpcMethodDefinition } from "./rpc/framework";
 import { importRouter } from "./rpc/import-router";
 import { jobsRouter } from "./rpc/jobs-router";
 import { libraryRouter, releasesRouter } from "./rpc/library-router";
@@ -89,7 +89,8 @@ async function dispatchRpcMethod(
       throw new RpcError(ctx.session ? -32003 : -32001, ctx.session ? "Forbidden" : "Unauthorized");
     }
     const parsedParams = parseMethodParams(method, params);
-    const result = await method.handler(ctx, parsedParams);
+    const rawResult = await method.handler(ctx, parsedParams);
+    const result = parseMethodResult(method, rawResult);
     return success(id, result);
   } catch (error) {
     if (error instanceof RpcError) {

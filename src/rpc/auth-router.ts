@@ -1,9 +1,16 @@
 import { randomBytes } from "node:crypto";
 
 import { createSessionToken, hashSessionToken, sessionExpiresAt } from "../auth";
+import { z } from "zod";
 
 import { defineMethod, defineRouter, type RpcMethodDefinition } from "./framework";
-import { emptyParamsSchema, nonEmptyStringSchema } from "./schemas";
+import {
+  emptyParamsSchema,
+  nonEmptyStringSchema,
+  okResultSchema,
+  sessionSummarySchema,
+  userProfileSchema,
+} from "./schemas";
 import { RpcError } from "./shared";
 
 export function createHelpMethod(
@@ -14,6 +21,19 @@ export function createHelpMethod(
     readOnly: true,
     summary: "List available RPC methods with read-only flags and auth levels.",
     paramsSchema: emptyParamsSchema,
+    resultSchema: z.object({
+      name: z.string(),
+      version: z.string(),
+      methodCount: z.number().int().nonnegative(),
+      methods: z.array(
+        z.object({
+          name: z.string(),
+          readOnly: z.boolean(),
+          auth: z.enum(["public", "user", "admin"]).nullable(),
+          description: z.string().nullable(),
+        })
+      ),
+    }),
     async handler() {
       const methodsByName = getMethodsByName();
       const methods = Object.keys(methodsByName)
@@ -40,6 +60,12 @@ export const authRouter = defineRouter({
     summary: "Create a short-lived app login attempt and return a browser authorize URL.",
     paramsSchema: emptyParamsSchema.extend({
       redirectUri: nonEmptyStringSchema,
+    }),
+    resultSchema: z.object({
+      attemptId: z.string(),
+      state: z.string(),
+      authorizeUrl: z.string().url(),
+      expiresAt: z.string(),
     }),
     async handler(ctx, params) {
       const redirectUri = params.redirectUri.trim();
@@ -75,6 +101,11 @@ export const authRouter = defineRouter({
     paramsSchema: emptyParamsSchema.extend({
       code: nonEmptyStringSchema,
     }),
+    resultSchema: z.object({
+      accessToken: z.string(),
+      expiresAt: z.string(),
+      user: userProfileSchema,
+    }),
     async handler(ctx, params) {
       const consumed = ctx.repo.consumeAuthCode(hashSessionToken(params.code.trim()));
       if (!consumed) {
@@ -104,6 +135,10 @@ export const authRouter = defineRouter({
     readOnly: true,
     summary: "Return the current authenticated user and session metadata.",
     paramsSchema: emptyParamsSchema,
+    resultSchema: z.object({
+      user: userProfileSchema,
+      session: sessionSummarySchema,
+    }),
     async handler(ctx) {
       const session = ctx.session;
       if (!session) {
@@ -130,6 +165,7 @@ export const authRouter = defineRouter({
     auth: "user",
     summary: "Invalidate the current authenticated session.",
     paramsSchema: emptyParamsSchema,
+    resultSchema: okResultSchema,
     async handler(ctx) {
       const session = ctx.session;
       if (!session) {

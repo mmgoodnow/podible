@@ -1,15 +1,19 @@
 import path from "node:path";
+import { z } from "zod";
 
 import { importReleaseFromPath, inspectImportPath } from "../importer";
 
 import { defineMethod, defineRouter } from "./framework";
 import {
   emptyParamsSchema,
+  importInspectionFileSchema,
   mediaSchema,
   nonEmptyStringSchema,
   optionalStringArraySchema,
   optionalStringSchema,
   positiveIntSchema,
+  releaseRowSchema,
+  jobIdResultSchema,
 } from "./schemas";
 import { RpcError, uniqueManualInfoHash } from "./shared";
 
@@ -18,6 +22,7 @@ export const importRouter = defineRouter({
     auth: "admin",
     summary: "Queue reconcile job for downloaded releases missing assets.",
     paramsSchema: emptyParamsSchema,
+    resultSchema: jobIdResultSchema,
     async handler(ctx) {
       const job = ctx.repo.createJob({ type: "reconcile" });
       return { jobId: job.id };
@@ -30,6 +35,10 @@ export const importRouter = defineRouter({
     summary: "Inspect a local path and list candidate import files.",
     paramsSchema: emptyParamsSchema.extend({
       path: nonEmptyStringSchema,
+    }),
+    resultSchema: z.object({
+      path: z.string(),
+      files: z.array(importInspectionFileSchema),
     }),
     async handler(_ctx, params) {
       return {
@@ -48,6 +57,11 @@ export const importRouter = defineRouter({
       path: nonEmptyStringSchema,
       selectedPaths: optionalStringArraySchema,
       title: optionalStringSchema,
+    }),
+    resultSchema: z.object({
+      release: releaseRowSchema,
+      assetId: positiveIntSchema,
+      linkedFiles: z.array(z.string()),
     }),
     async handler(ctx, params) {
       const sourcePath = params.path.trim();

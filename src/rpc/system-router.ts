@@ -1,5 +1,6 @@
 import { defineMethod, defineRouter } from "./framework";
-import { emptyParamsSchema } from "./schemas";
+import { countMapSchema, emptyParamsSchema } from "./schemas";
+import { z } from "zod";
 
 export const systemRouter = defineRouter({
   health: defineMethod({
@@ -7,6 +8,12 @@ export const systemRouter = defineRouter({
     readOnly: true,
     summary: "Service health summary (job/release counts and queue size).",
     paramsSchema: emptyParamsSchema,
+    resultSchema: z.object({
+      ok: z.literal(true),
+      jobs: countMapSchema,
+      releases: countMapSchema,
+      queueSize: z.number().int().nonnegative(),
+    }),
     async handler(ctx) {
       return {
         ok: true,
@@ -20,6 +27,12 @@ export const systemRouter = defineRouter({
     readOnly: true,
     summary: "Server runtime metadata (name, runtime, uptime, time).",
     paramsSchema: emptyParamsSchema,
+    resultSchema: z.object({
+      name: z.literal("podible-backend"),
+      runtime: z.literal("bun"),
+      uptimeMs: z.number().nonnegative(),
+      now: z.string(),
+    }),
     async handler(ctx) {
       return {
         name: "podible-backend",

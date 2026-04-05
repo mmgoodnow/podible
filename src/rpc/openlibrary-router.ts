@@ -1,7 +1,8 @@
 import { searchOpenLibrary } from "../openlibrary";
 
 import { defineMethod, defineRouter } from "./framework";
-import { emptyParamsSchema, limitSchema, nonEmptyStringSchema } from "./schemas";
+import { emptyParamsSchema, limitSchema, nonEmptyStringSchema, openLibraryCandidateSchema } from "./schemas";
+import { z } from "zod";
 
 export const openLibraryRouter = defineRouter({
   search: defineMethod({
@@ -11,6 +12,9 @@ export const openLibraryRouter = defineRouter({
     paramsSchema: emptyParamsSchema.extend({
       q: nonEmptyStringSchema,
       limit: limitSchema.optional(),
+    }),
+    resultSchema: z.object({
+      results: z.array(openLibraryCandidateSchema),
     }),
     async handler(_ctx, params) {
       const results = await searchOpenLibrary(params.q.trim(), Math.min(params.limit ?? 50, 50));
