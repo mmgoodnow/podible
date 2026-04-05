@@ -283,12 +283,15 @@ function renderAppPage(
         padding: 0;
         border: 0;
         background: none;
-        color: var(--accent);
+        color: var(--muted);
         font: inherit;
         cursor: pointer;
         line-height: inherit;
       }
-      .site-nav .nav-signout-button:hover { text-decoration: underline; }
+      .site-nav .nav-signout-button:hover {
+        color: var(--accent);
+        text-decoration: underline;
+      }
       .hero, .card { background: var(--paper); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 1px 2px rgba(31,38,28,.05); }
       .hero { padding: 20px; margin-bottom: 18px; }
       .hero h1 { margin: 0 0 8px; font-size: 34px; line-height: 1.05; }
@@ -1204,6 +1207,11 @@ function renderAdminPage(
           radial-gradient(circle at 90% 10%, rgba(40, 89, 67, 0.08), transparent 45%),
           linear-gradient(180deg, #fffdf7, #f7f5ed);
       }
+      .page-header h1 {
+        margin: 0 0 8px;
+        line-height: 1.05;
+      }
+      .page-header p { margin: 0; }
       .panel {
         border: 0;
         padding: 0;
