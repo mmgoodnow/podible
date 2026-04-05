@@ -275,7 +275,7 @@ function renderAppPage(
       }
       a { color: var(--accent); text-decoration: none; }
       a:hover { text-decoration: underline; }
-      .page { max-width: 1120px; margin: 0 auto; padding: 18px; }
+      .page { max-width: 1120px; margin: 0 auto; padding: 12px 18px 18px; }
       .site-nav { display: flex; gap: 14px; flex-wrap: wrap; align-items: baseline; margin-bottom: 18px; font-size: 14px; }
       .nav-signout-form { display: inline-flex; align-items: baseline; margin: 0; }
       .site-nav .nav-signout-button {
