@@ -6,7 +6,7 @@ import { fetchPlexServerDevices } from "../plex";
 import { BooksRepo } from "../repo";
 import { renderAdminPage } from "./admin-page";
 import { getCurrentSession, requireAdminSession, type HttpEnv } from "./middleware";
-import { redirect } from "./route-helpers";
+import { formString } from "./route-helpers";
 import type { AppSettings } from "../types";
 
 type CachedPlexServers = {
@@ -58,12 +58,12 @@ export function createAdminRoutes(repo: BooksRepo): Hono<HttpEnv> {
   app.post("/plex/select", async (c) => {
     const settings = repo.getSettings();
     if (settings.auth.mode !== "plex") {
-      return new Response("Forbidden", { status: 403 });
+      return c.text("Forbidden", 403);
     }
-    const form = new URLSearchParams(await c.req.raw.text());
-    const machineId = (form.get("machineId") ?? "").trim();
+    const body = await c.req.parseBody();
+    const machineId = formString(body, "machineId").trim();
     if (!machineId) {
-      return redirect("/admin?plex_error=Missing%20machine%20id");
+      return c.redirect("/admin?plex_error=Missing%20machine%20id", 303);
     }
     repo.updateSettings({
       ...settings,
@@ -75,12 +75,12 @@ export function createAdminRoutes(repo: BooksRepo): Hono<HttpEnv> {
         },
       },
     });
-    return redirect("/admin?plex_notice=Selected%20server.");
+    return c.redirect("/admin?plex_notice=Selected%20server.", 303);
   });
 
-  app.post("/refresh", () => {
+  app.post("/refresh", (c) => {
     const job = repo.createJob({ type: "full_library_refresh" });
-    return redirect(`/admin?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`);
+    return c.redirect(`/admin?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`, 303);
   });
 
   app.get("/", async (c) => {

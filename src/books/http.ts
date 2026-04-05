@@ -1,14 +1,21 @@
 import { Hono } from "hono";
+import { HTTPException } from "hono/http-exception";
 
 import { BooksRepo } from "./repo";
 import { createAdminRoutes } from "./http/admin-routes";
-import { createAssetRoutes } from "./http/asset-routes";
+import {
+  createAssetsIndexRoutes,
+  createChaptersRoutes,
+  createCoverRoutes,
+  createEbookRoutes,
+  createStreamRoutes,
+  createTranscriptsRoutes,
+} from "./http/asset-routes";
 import { createAppAuthRoutes, createLoginRoutes, createLogoutRoutes } from "./http/auth-routes";
 import { createFeedRoutes } from "./http/feed-routes";
 import { createRequestContextMiddleware, type HttpEnv } from "./http/middleware";
 import { createRpcRoutes } from "./http/rpc-routes";
 import { createActivityRoutes, createAddRoutes, createBookRoutes, createHomeRoutes, createLibraryRoutes } from "./http/user-routes";
-import { json } from "./http/route-helpers";
 
 export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (request: Request) => Promise<Response> {
   const app = new Hono<HttpEnv>();
@@ -25,11 +32,22 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
   app.route("/activity", createActivityRoutes(repo));
   app.route("/admin", createAdminRoutes(repo));
   app.route("/rpc", createRpcRoutes(repo, startTime));
-  app.route("/", createAssetRoutes(repo));
+  app.route("/assets", createAssetsIndexRoutes(repo));
+  app.route("/stream", createStreamRoutes(repo));
+  app.route("/chapters", createChaptersRoutes(repo));
+  app.route("/transcripts", createTranscriptsRoutes(repo));
+  app.route("/covers", createCoverRoutes(repo));
+  app.route("/ebook", createEbookRoutes(repo));
   app.route("/", createFeedRoutes(repo));
 
-  app.notFound(() => new Response("Not found", { status: 404 }));
-  app.onError((error) => json({ error: (error as Error).message }, 400));
+  app.notFound((c) => c.notFound());
+  app.onError((error, c) => {
+    if (error instanceof HTTPException) {
+      return error.getResponse();
+    }
+    console.error(error);
+    return c.json({ error: "Internal server error" }, 500);
+  });
 
   return async (request: Request) => app.fetch(request);
 }

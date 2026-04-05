@@ -2,7 +2,6 @@ import type { MiddlewareHandler } from "hono";
 
 import { resolveSessionFromRequest } from "../auth";
 import { BooksRepo } from "../repo";
-import { redirect } from "./route-helpers";
 import type { SessionWithUserRow } from "../types";
 
 export type HttpEnv = {
@@ -50,7 +49,7 @@ export const requireAuthenticatedPageSession: MiddlewareHandler<HttpEnv> = async
     await next();
     return;
   }
-  return redirect(loginRedirectPath(new URL(c.req.url)));
+  return c.redirect(loginRedirectPath(new URL(c.req.url)), 303);
 };
 
 export const requireAuthenticatedRequest: MiddlewareHandler<HttpEnv> = async (c, next) => {
@@ -58,25 +57,19 @@ export const requireAuthenticatedRequest: MiddlewareHandler<HttpEnv> = async (c,
     await next();
     return;
   }
-  return new Response("Unauthorized", {
-    status: 401,
-    headers: { "WWW-Authenticate": 'Bearer realm="podible"' },
-  });
+  return c.text("Unauthorized", 401, { "WWW-Authenticate": 'Bearer realm="podible"' });
 };
 
 export const requireAdminSession: MiddlewareHandler<HttpEnv> = async (c, next) => {
   const session = getCurrentSession(c);
   if (!session) {
     if (c.req.method === "GET") {
-      return redirect(loginRedirectPath(new URL(c.req.url)));
+      return c.redirect(loginRedirectPath(new URL(c.req.url)), 303);
     }
-    return new Response("Unauthorized", {
-      status: 401,
-      headers: { "WWW-Authenticate": 'Bearer realm="podible"' },
-    });
+    return c.text("Unauthorized", 401, { "WWW-Authenticate": 'Bearer realm="podible"' });
   }
   if (session.is_admin !== 1) {
-    return new Response("Forbidden", { status: 403 });
+    return c.text("Forbidden", 403);
   }
   await next();
 };

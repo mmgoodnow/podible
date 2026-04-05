@@ -11,7 +11,7 @@ import { renderLibraryPage } from "./library-page";
 import { renderLoginPage } from "./login-page";
 import { getCurrentSession, requireAuthenticatedPageSession, type HttpEnv } from "./middleware";
 import { parseMediaSelection } from "./page-helpers";
-import { parseId, redirect } from "./route-helpers";
+import { formString, parseId } from "./route-helpers";
 
 export function createHomeRoutes(repo: BooksRepo): Hono<HttpEnv> {
   const app = new Hono<HttpEnv>();
@@ -70,8 +70,8 @@ export function createAddRoutes(repo: BooksRepo): Hono<HttpEnv> {
   app.post("/", async (c) => {
     const settings = repo.getSettings();
     const currentSession = getCurrentSession(c);
-    const form = new URLSearchParams(await c.req.raw.text());
-    const openLibraryKey = (form.get("openLibraryKey") ?? "").trim();
+    const body = await c.req.parseBody();
+    const openLibraryKey = formString(body, "openLibraryKey").trim();
     if (!openLibraryKey) {
       const addResponse = renderAddPage(settings, {
         error: "openLibraryKey is required.",
@@ -82,7 +82,7 @@ export function createAddRoutes(repo: BooksRepo): Hono<HttpEnv> {
     }
     try {
       const bookId = await createBookFromOpenLibrary(repo, openLibraryKey);
-      return redirect(`/book/${bookId}`);
+      return c.redirect(`/book/${bookId}`, 303);
     } catch (error) {
       const addResponse = renderAddPage(settings, {
         error: `Add failed: ${(error as Error).message}`,
@@ -110,15 +110,15 @@ export function createBookRoutes(repo: BooksRepo): Hono<HttpEnv> {
 
   app.post("/:bookId/acquire", async (c) => {
     const bookId = parseId(c.req.param("bookId"));
-    const form = new URLSearchParams(await c.req.raw.text());
-    const media = parseMediaSelection(form.get("media"));
+    const body = await c.req.parseBody();
+    const media = parseMediaSelection(formString(body, "media"));
     const book = repo.getBookRow(bookId);
     if (!book) {
-      return new Response("Not found", { status: 404 });
+      return c.notFound();
     }
     const jobId = await triggerAutoAcquire(repo, bookId, media);
     const notice = `Queued ${media.join(" + ")} acquire for ${book.title} (job ${jobId}).`;
-    return redirect(`/book/${bookId}?notice=${encodeURIComponent(notice)}`);
+    return c.redirect(`/book/${bookId}?notice=${encodeURIComponent(notice)}`, 303);
   });
 
   return app;
@@ -136,9 +136,9 @@ export function createActivityRoutes(repo: BooksRepo): Hono<HttpEnv> {
     })
   );
 
-  app.post("/refresh", () => {
+  app.post("/refresh", (c) => {
     const job = repo.createJob({ type: "full_library_refresh" });
-    return redirect(`/activity?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`);
+    return c.redirect(`/activity?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`, 303);
   });
 
   return app;

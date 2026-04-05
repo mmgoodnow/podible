@@ -8,11 +8,9 @@ import {
 } from "../auth";
 import { buildPlexAuthUrl, createEphemeralPlexIdentity, createPlexPin } from "../plex";
 import { BooksRepo } from "../repo";
-import type { AppSettings } from "../types";
 import { renderLoginPage } from "./login-page";
 import { renderAppAuthErrorPage, sanitizeRedirectPath } from "./common";
 import { getCurrentSession, type HttpEnv } from "./middleware";
-import { json } from "./route-helpers";
 import { renderPlexImmediateResultPage, renderPlexLoadingPage, waitForPlexLoginResult } from "./support";
 
 export function createLoginRoutes(repo: BooksRepo): Hono<HttpEnv> {
@@ -31,7 +29,7 @@ export function createLoginRoutes(repo: BooksRepo): Hono<HttpEnv> {
     const settings = repo.getSettings();
     const redirectTo = sanitizeRedirectPath(c.req.query("redirectTo"));
     if (settings.auth.mode !== "plex") {
-      return json({ error: "Plex sign-in is not enabled." }, 403);
+      return c.json({ error: "Plex sign-in is not enabled." }, 403);
     }
     try {
       repo.deleteExpiredPlexLoginAttempts(new Date(Date.now() - 15 * 60_000).toISOString());
@@ -51,12 +49,12 @@ export function createLoginRoutes(repo: BooksRepo): Hono<HttpEnv> {
       if (redirectTo) {
         forwardUrl.searchParams.set("redirectTo", redirectTo);
       }
-      return json({
+      return c.json({
         pinId: pin.id,
         authUrl: buildPlexAuthUrl(identity, pin.code, forwardUrl.toString()),
       });
     } catch (error) {
-      return json({ error: (error as Error).message || "Unable to start Plex sign-in." }, 502);
+      return c.json({ error: (error as Error).message || "Unable to start Plex sign-in." }, 502);
     }
   });
 
