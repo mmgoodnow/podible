@@ -3,7 +3,7 @@ import { RtorrentClient } from "./rtorrent";
 import { triggerAutoAcquire } from "./service";
 import type { RtorrentDownloadState } from "./rtorrent";
 import type { AppSettings, JobRow, MediaType } from "./types";
-import type { WorkerContext } from "./worker";
+import type { WorkerContext } from "./worker-context";
 
 const FAST_POLL_MS = 500;
 const MID_POLL_MS = 2_000;
