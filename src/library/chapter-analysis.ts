@@ -325,6 +325,16 @@ export type AnalysisResult = {
   debug: Record<string, unknown>;
 };
 
+export type TranscriptAnalysisInput = {
+  entries: EpubChapterEntry[];
+  durationMs: number;
+  transcriptWords: TranscriptWord[];
+  glossary: string[];
+  plans: TranscriptChunkPlan[];
+  transcriptSource: "new" | "cached";
+  includeTranscriptSegments?: boolean;
+};
+
 type ChapterAnalysisProfile = {
   probeAlignmentMs: number;
   interpolationMs: number;
@@ -1861,15 +1871,8 @@ async function transcribeAssetWithDeps(
   return { transcriptWords, plans };
 }
 
-function analyzeTranscript(
-  entries: EpubChapterEntry[],
-  durationMs: number,
-  transcriptWords: TranscriptWord[],
-  glossary: string[],
-  plans: TranscriptChunkPlan[],
-  transcriptSource: "new" | "cached",
-  options?: { includeTranscriptSegments?: boolean }
-): AnalysisResult {
+export function runTranscriptAnalysis(input: TranscriptAnalysisInput): AnalysisResult {
+  const { entries, durationMs, transcriptWords, glossary, plans, transcriptSource, includeTranscriptSegments } = input;
   const analyzeStartedAt = performance.now();
   const probes = boundaryProbes(entries, durationMs);
   const probeAlignmentStartedAt = performance.now();
@@ -1923,7 +1926,7 @@ function analyzeTranscript(
 
   const chapterSegmentMatchStartedAt = performance.now();
   const transcriptSegments =
-    options?.includeTranscriptSegments === false ? [] : chapterSegmentMatches(entries, chapters, transcriptWords);
+    includeTranscriptSegments === false ? [] : chapterSegmentMatches(entries, chapters, transcriptWords);
   const chapterSegmentMatchMs = Math.round((performance.now() - chapterSegmentMatchStartedAt) * 100) / 100;
   const totalAnalyzeMs = Math.round((performance.now() - analyzeStartedAt) * 100) / 100;
   const profile: ChapterAnalysisProfile = {
@@ -1968,14 +1971,14 @@ export async function replayChapterAnalysisFromStoredTranscript(
   durationMs: number,
   transcriptPayload: StoredTranscriptPayload
 ): Promise<AnalysisResult> {
-  return analyzeTranscript(
+  return runTranscriptAnalysis({
     entries,
     durationMs,
-    transcriptWordsFromStoredPayload(transcriptPayload),
-    extractGlossaryTerms(entries),
-    [],
-    "cached"
-  );
+    transcriptWords: transcriptWordsFromStoredPayload(transcriptPayload),
+    glossary: extractGlossaryTerms(entries),
+    plans: [],
+    transcriptSource: "cached",
+  });
 }
 
 export async function replayChapterBoundaryAnalysisFromStoredTranscript(
@@ -1983,15 +1986,15 @@ export async function replayChapterBoundaryAnalysisFromStoredTranscript(
   durationMs: number,
   transcriptPayload: StoredTranscriptPayload
 ): Promise<AnalysisResult> {
-  return analyzeTranscript(
+  return runTranscriptAnalysis({
     entries,
     durationMs,
-    transcriptWordsFromStoredPayload(transcriptPayload),
-    extractGlossaryTerms(entries),
-    [],
-    "cached",
-    { includeTranscriptSegments: false }
-  );
+    transcriptWords: transcriptWordsFromStoredPayload(transcriptPayload),
+    glossary: extractGlossaryTerms(entries),
+    plans: [],
+    transcriptSource: "cached",
+    includeTranscriptSegments: false,
+  });
 }
 
 export async function queueChapterAnalysisForBook(repo: BooksRepo, bookId: number): Promise<JobRow | null> {
@@ -2159,7 +2162,14 @@ export async function processChapterAnalysisJob(
     }
 
     startPhase("analyzeTranscript");
-    const result = analyzeTranscript(entries, durationMs, transcriptWords, glossary, plans, transcriptSource);
+    const result = runTranscriptAnalysis({
+      entries,
+      durationMs,
+      transcriptWords,
+      glossary,
+      plans,
+      transcriptSource,
+    });
     endPhase("analyzeTranscript");
     startPhase("persistResults");
     ctx.repo.upsertAssetTranscript({
