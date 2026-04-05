@@ -414,6 +414,24 @@ function renderLoginPage(
         function setStatus(message) {
           if (status) status.textContent = message || "";
         }
+        function openCenteredPopup(url, name, width, height) {
+          const dualScreenLeft = window.screenLeft ?? window.screenX ?? 0;
+          const dualScreenTop = window.screenTop ?? window.screenY ?? 0;
+          const viewportWidth = window.innerWidth || document.documentElement.clientWidth || screen.width;
+          const viewportHeight = window.innerHeight || document.documentElement.clientHeight || screen.height;
+          const left = Math.max(0, Math.round(dualScreenLeft + (viewportWidth - width) / 2));
+          const top = Math.max(0, Math.round(dualScreenTop + (viewportHeight - height) / 2));
+          const features = [
+            "popup=yes",
+            "width=" + width,
+            "height=" + height,
+            "left=" + left,
+            "top=" + top,
+            "resizable=yes",
+            "scrollbars=yes",
+          ].join(",");
+          return window.open(url, name, features);
+        }
         if (!inlineLogin) {
           window.addEventListener("message", (event) => {
             if (event.origin !== window.location.origin || !event.data || event.data.type !== "podible-plex-login") {
@@ -430,7 +448,7 @@ function renderLoginPage(
         button?.addEventListener("click", async () => {
           button.disabled = true;
           setStatus("Opening Plex sign-in…");
-          const popup = inlineLogin ? null : window.open(loadingUrl, "podible-plex-login", "width=640,height=760");
+          const popup = inlineLogin ? null : openCenteredPopup(loadingUrl, "podible-plex-login", 640, 760);
           if (!inlineLogin && !popup) {
             setStatus("Popup blocked. Please allow popups for this site.");
             button.disabled = false;
