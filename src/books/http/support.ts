@@ -448,7 +448,7 @@ function renderLoginPage(
         button?.addEventListener("click", async () => {
           button.disabled = true;
           setStatus("Opening Plex sign-in…");
-          const popup = inlineLogin ? null : openCenteredPopup(loadingUrl, "podible-plex-login", 640, 760);
+          const popup = inlineLogin ? null : openCenteredPopup(loadingUrl, "podible-plex-login", 520, 680);
           if (!inlineLogin && !popup) {
             setStatus("Popup blocked. Please allow popups for this site.");
             button.disabled = false;
