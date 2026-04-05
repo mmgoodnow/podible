@@ -626,13 +626,7 @@ function overlapRatio(haystackSlice: string[], needle: string[]): number {
   return overlap / needle.length;
 }
 
-function findProbeTimestamp(
-  words: TranscriptWord[],
-  probe: string[],
-  mode: "start" | "end",
-  estimateMs: number,
-  maxDriftMs = MAX_DRIFT_MS
-): number | null {
+function findProbeTimestamp(words: TranscriptWord[], probe: string[], mode: "start" | "end", estimateMs: number): number | null {
   if (probe.length === 0 || words.length === 0) return null;
   const transcriptTokens = words.map((word) => word.token);
   const probeShingles: Array<{ start: number; tokens: string[] }> = [];
@@ -656,7 +650,7 @@ function findProbeTimestamp(
       const overlap = overlapRatio(slice, probe);
       const boundaryWordIndex = mode === "start" ? haystackStart : Math.min(words.length - 1, haystackStart + probe.length - 1);
       const timeMs = mode === "start" ? words[boundaryWordIndex]!.startMs : words[boundaryWordIndex]!.endMs;
-      if (Math.abs(timeMs - estimateMs) > maxDriftMs) continue;
+      if (Math.abs(timeMs - estimateMs) > MAX_DRIFT_MS) continue;
       if (contiguous < MIN_SHINGLE && overlap < 0.75) continue;
       const score = contiguous * 100 - Math.abs(timeMs - estimateMs);
       if (!best || score > best.score || (score === best.score && overlap > best.overlap)) {
@@ -665,42 +659,6 @@ function findProbeTimestamp(
     }
   }
   return best?.timeMs ?? null;
-}
-
-function fallbackExactProbeAlignment(
-  transcriptWords: TranscriptWord[],
-  probeCandidates: string[][],
-  estimateCandidatesMs: number[],
-  mode: "start" | "end"
-): ProbeAlignmentResult | null {
-  let best: ProbeAlignmentResult | null = null;
-  for (const estimateMs of estimateCandidatesMs) {
-    for (const candidate of probeCandidates) {
-      if (candidate.length < 24) continue;
-      const resolvedMs = findProbeTimestamp(transcriptWords, candidate, mode, estimateMs, Number.POSITIVE_INFINITY);
-      if (typeof resolvedMs !== "number") continue;
-      const transcriptIndex = transcriptWordIndexForTime(transcriptWords, resolvedMs);
-      const result: ProbeAlignmentResult = {
-        resolvedMs,
-        startTranscriptIndex: transcriptIndex,
-        endTranscriptIndex: transcriptIndex,
-        score: 0,
-        matchedTokenCount: candidate.length,
-        coverage: 1,
-        mode,
-        matchedPairs: [],
-      };
-      if (
-        !best ||
-        Math.abs(result.resolvedMs - estimateMs) < Math.abs(best.resolvedMs - estimateMs) ||
-        (Math.abs(result.resolvedMs - estimateMs) === Math.abs(best.resolvedMs - estimateMs) &&
-          result.matchedTokenCount > best.matchedTokenCount)
-      ) {
-        best = result;
-      }
-    }
-  }
-  return best;
 }
 
 function transcriptWordIndexForTime(words: TranscriptWord[], timeMs: number): number {
@@ -877,7 +835,7 @@ function alignBestProbeToTranscriptWindow(
       }
     }
   }
-  return best ?? fallbackExactProbeAlignment(transcriptWords, probeCandidates, estimateCandidatesMs, mode);
+  return best;
 }
 
 export function interpolateChapterStarts(
