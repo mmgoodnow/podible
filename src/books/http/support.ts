@@ -398,7 +398,7 @@ function renderLoginPage(
       <p>Use Plex to sign in and open your library.</p>
       ${messageMarkup(options.notice, options.error)}
       <div class="actions" style="margin-top: 14px;">
-        <button id="plex-login-btn" type="button" class="button-link-primary login-cta">Continue with Plex</button>
+        <button id="plex-login-btn" type="button" class="login-cta">Continue with Plex</button>
       </div>
       <p id="plex-login-status" class="muted" style="margin-top: 10px;"></p>
     </section>
