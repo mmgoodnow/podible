@@ -315,7 +315,7 @@ type TranscriptChunk = TranscriptChunkPlan & {
   words: TranscriptWord[];
 };
 
-type AnalysisResult = {
+export type AnalysisResult = {
   transcriptWords: TranscriptWord[];
   chapters: StoredChapterTiming[];
   transcriptSegments: ChapterSegmentMatch[];
@@ -1773,7 +1773,8 @@ function analyzeTranscript(
   transcriptWords: TranscriptWord[],
   glossary: string[],
   plans: TranscriptChunkPlan[],
-  transcriptSource: "new" | "cached"
+  transcriptSource: "new" | "cached",
+  options?: { includeTranscriptSegments?: boolean }
 ): AnalysisResult {
   const probes = boundaryProbes(entries, durationMs);
   const probeAlignments = probes.map((probe) => ({
@@ -1821,7 +1822,8 @@ function analyzeTranscript(
     throw new Error("Failed to assemble chapter timings");
   }
 
-  const transcriptSegments = chapterSegmentMatches(entries, chapters, transcriptWords);
+  const transcriptSegments =
+    options?.includeTranscriptSegments === false ? [] : chapterSegmentMatches(entries, chapters, transcriptWords);
 
   return {
     transcriptWords,
@@ -1850,6 +1852,37 @@ function analyzeTranscript(
       })),
     },
   };
+}
+
+export async function replayChapterAnalysisFromStoredTranscript(
+  entries: EpubChapterEntry[],
+  durationMs: number,
+  transcriptPayload: StoredTranscriptPayload
+): Promise<AnalysisResult> {
+  return analyzeTranscript(
+    entries,
+    durationMs,
+    transcriptWordsFromStoredPayload(transcriptPayload),
+    extractGlossaryTerms(entries),
+    [],
+    "cached"
+  );
+}
+
+export async function replayChapterBoundaryAnalysisFromStoredTranscript(
+  entries: EpubChapterEntry[],
+  durationMs: number,
+  transcriptPayload: StoredTranscriptPayload
+): Promise<AnalysisResult> {
+  return analyzeTranscript(
+    entries,
+    durationMs,
+    transcriptWordsFromStoredPayload(transcriptPayload),
+    extractGlossaryTerms(entries),
+    [],
+    "cached",
+    { includeTranscriptSegments: false }
+  );
 }
 
 export async function queueChapterAnalysisForBook(repo: BooksRepo, bookId: number): Promise<JobRow | null> {
@@ -2073,3 +2106,4 @@ export async function readStoredChapterPayload(row: ChapterAnalysisRow | null): 
 }
 
 export { CHAPTERS_API_VERSION, CHAPTER_ANALYSIS_ALGORITHM_VERSION };
+export type { StoredTranscriptPayload };
