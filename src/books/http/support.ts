@@ -384,12 +384,7 @@ function renderLoginPage(
     <div class="login-shell">
     <section class="hero login-hero">
       <h1>Sign in to Podible</h1>
-      <p>Open your library, keep your place, and get back to listening with your Plex account.</p>
-      <div class="stats">
-        <span class="pill">Audiobooks</span>
-        <span class="pill">eBooks</span>
-        <span class="pill">Plex sign-in</span>
-      </div>
+      <p>Use Plex to sign in and open your library.</p>
       ${messageMarkup(options.notice, options.error)}
       <div class="actions" style="margin-top: 14px;">
         <button id="plex-login-btn" type="button" class="button-link-primary login-cta">Continue with Plex</button>
