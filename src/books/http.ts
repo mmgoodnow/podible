@@ -230,8 +230,7 @@ function renderAppPage(
   settings: AppSettings,
   currentUser: SessionWithUserRow | null = null,
   extraNav = "",
-  apiKey: string | null = null,
-  pageClass = ""
+  apiKey: string | null = null
 ): Response {
   const showAdminNav = Boolean(apiKey) || (currentUser?.is_admin ?? 0) === 1;
   const accountNav = currentUser
@@ -277,7 +276,6 @@ function renderAppPage(
       a { color: var(--accent); text-decoration: none; }
       a:hover { text-decoration: underline; }
       .page { max-width: 1120px; margin: 0 auto; padding: 18px; }
-      .page.admin-page { padding-top: 0; }
       .site-nav { display: flex; gap: 14px; flex-wrap: wrap; align-items: baseline; margin-bottom: 18px; font-size: 14px; }
       .nav-signout-form { display: inline-flex; align-items: baseline; margin: 0; }
       .site-nav .nav-signout-button {
@@ -351,7 +349,7 @@ function renderAppPage(
     </style>
   </head>
   <body>
-    <div class="page${pageClass ? ` ${escapeHtml(pageClass)}` : ""}">
+    <div class="page">
       ${nav}
       ${body}
     </div>
@@ -2104,7 +2102,7 @@ function renderAdminPage(
       })();
     </script>`;
 
-  return renderAppPage("Admin", body, settings, currentUser, "", apiKey, "admin-page");
+  return renderAppPage("Admin", body, settings, currentUser, "", apiKey);
 }
 
 export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (request: Request) => Promise<Response> {
