@@ -379,6 +379,14 @@ function renderLoginPage(
         min-width: 220px;
         justify-content: center;
         font-weight: 600;
+        background: #e5a00d;
+        border-color: #e5a00d;
+        color: #1f261c;
+      }
+      .login-cta:hover {
+        background: #d09108;
+        border-color: #d09108;
+        color: #1f261c;
       }
     </style>
     <div class="login-shell">
