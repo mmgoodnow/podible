@@ -375,6 +375,9 @@ function renderLoginPage(
         margin-left: auto;
         margin-right: auto;
       }
+      .login-hero .actions {
+        justify-content: center;
+      }
       .login-cta {
         min-width: 220px;
         justify-content: center;
