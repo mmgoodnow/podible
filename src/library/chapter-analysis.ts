@@ -767,7 +767,7 @@ function alignProbeToTranscriptWindow(
   matchedPairs.reverse();
   if (matchedIndices.length === 0) return null;
   const coverage = matchedIndices.length / probeTokens.length;
-  if (coverage < 0.35 || matchedIndices.length < Math.min(PROBE_WORDS, probeTokens.length)) return null;
+  if (coverage < 0.25 || matchedIndices.length < Math.min(12, probeTokens.length)) return null;
   const startTranscriptIndex = matchedIndices[0]!;
   const endTranscriptIndex = matchedIndices[matchedIndices.length - 1]!;
   const resolvedMs =
