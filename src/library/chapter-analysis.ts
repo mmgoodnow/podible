@@ -239,8 +239,8 @@ type ChapterBoundaryProbe = {
   estimateMs: number;
   previousTitle: string;
   nextTitle: string;
-  previousProbe: string[];
-  nextProbe: string[];
+  previousProbes: string[][];
+  nextProbes: string[][];
 };
 
 type BoundaryMatch = {
@@ -536,11 +536,45 @@ function boundaryProbes(entries: EpubChapterEntry[], durationMs: number): Chapte
       estimateMs: Math.round(durationMs * (ratios[index + 1] ?? 0)),
       previousTitle: previous.title,
       nextTitle: next.title,
-      previousProbe: previous.tokens.slice(Math.max(0, previous.tokens.length - ALIGNMENT_PROBE_WORDS)),
-      nextProbe: next.tokens.slice(0, ALIGNMENT_PROBE_WORDS),
+      previousProbes: boundaryProbeCandidates(previous, "end"),
+      nextProbes: boundaryProbeCandidates(next, "start"),
     });
   }
   return out;
+}
+
+function uniqueProbeCandidates(candidates: string[][]): string[][] {
+  const seen = new Set<string>();
+  const out: string[][] = [];
+  for (const candidate of candidates) {
+    if (candidate.length < PROBE_WORDS) continue;
+    const key = candidate.join("\u0001");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(candidate);
+  }
+  return out;
+}
+
+function boundaryProbeCandidates(entry: EpubChapterEntry, side: "start" | "end"): string[][] {
+  if (entry.tokens.length === 0) return [];
+
+  const candidates: string[][] = [];
+  if (side === "start") {
+    for (const offset of [0, 24, 48, 72, 96, 144, 192, 240]) {
+      if (offset >= entry.tokens.length) break;
+      candidates.push(entry.tokens.slice(offset, offset + ALIGNMENT_PROBE_WORDS));
+    }
+  } else {
+    for (const backoff of [0, 24, 48, 72, 96, 144, 192, 240]) {
+      const end = entry.tokens.length - backoff;
+      if (end <= 0) break;
+      const start = Math.max(0, end - ALIGNMENT_PROBE_WORDS);
+      candidates.push(entry.tokens.slice(start, end));
+    }
+  }
+
+  return uniqueProbeCandidates(candidates);
 }
 
 function contiguousMatchLength(haystack: string[], needle: string[], haystackStart: number, needleStart: number): number {
@@ -749,6 +783,30 @@ function alignProbeToTranscriptWindow(
     mode,
     matchedPairs,
   };
+}
+
+function alignBestProbeToTranscriptWindow(
+  transcriptWords: TranscriptWord[],
+  probeCandidates: string[][],
+  estimateMs: number,
+  mode: "start" | "end"
+): ProbeAlignmentResult | null {
+  let best: ProbeAlignmentResult | null = null;
+  for (const candidate of probeCandidates) {
+    const result = alignProbeToTranscriptWindow(transcriptWords, candidate, estimateMs, mode);
+    if (!result) continue;
+    if (
+      !best ||
+      result.coverage > best.coverage ||
+      (result.coverage === best.coverage && result.matchedTokenCount > best.matchedTokenCount) ||
+      (result.coverage === best.coverage &&
+        result.matchedTokenCount === best.matchedTokenCount &&
+        Math.abs(result.resolvedMs - estimateMs) < Math.abs(best.resolvedMs - estimateMs))
+    ) {
+      best = result;
+    }
+  }
+  return best;
 }
 
 export function interpolateChapterStarts(
@@ -1778,8 +1836,8 @@ function analyzeTranscript(
 ): AnalysisResult {
   const probes = boundaryProbes(entries, durationMs);
   const probeAlignments = probes.map((probe) => ({
-    previous: alignProbeToTranscriptWindow(transcriptWords, probe.previousProbe, probe.estimateMs, "end"),
-    next: alignProbeToTranscriptWindow(transcriptWords, probe.nextProbe, probe.estimateMs, "start"),
+    previous: alignBestProbeToTranscriptWindow(transcriptWords, probe.previousProbes, probe.estimateMs, "end"),
+    next: alignBestProbeToTranscriptWindow(transcriptWords, probe.nextProbes, probe.estimateMs, "start"),
   }));
   const matches: BoundaryMatch[] = probes.map((probe) => {
     const previousAlignment = probeAlignments[probe.boundaryIndex]?.previous ?? null;
