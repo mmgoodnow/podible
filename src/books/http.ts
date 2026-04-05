@@ -1138,6 +1138,9 @@ function renderAdminPage(
   const apiKey = options.apiKey ?? null;
   const settingsJson = escapeHtml(JSON.stringify(settings, null, 2));
   const plexServers = options.plexServers ?? [];
+  const activeJobs = (health.jobs.queued ?? 0) + (health.jobs.running ?? 0);
+  const failedJobs = health.jobs.failed ?? 0;
+  const releaseIssues = health.releases.failed ?? 0;
 
   const userRows =
     users.length > 0
@@ -1331,8 +1334,12 @@ function renderAdminPage(
           <div class="header-grid">
             <div>
               <h1>Admin</h1>
-              <p class="muted">Auth mode: <strong>${escapeHtml(settings.auth.mode)}</strong></p>
-              <p>Queue: <strong>${health.queueSize}</strong> | Jobs: <code>${escapeHtml(JSON.stringify(health.jobs))}</code> | Releases: <code>${escapeHtml(JSON.stringify(health.releases))}</code></p>
+              <p class="muted">Manage settings, users, library refreshes, and recovery tools.</p>
+              <div class="stats">
+                <span class="pill">${activeJobs} active jobs</span>
+                <span class="pill">${failedJobs} failed jobs</span>
+                <span class="pill">${releaseIssues} release issues</span>
+              </div>
             </div>
             <div>
               <h2>Settings JSON</h2>
