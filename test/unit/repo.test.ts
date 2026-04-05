@@ -103,6 +103,17 @@ describe("books repo", () => {
     db.close();
   });
 
+  test("stores and loads json app state through the main repo", () => {
+    const { db, repo } = setupRepo();
+    repo.setJsonState("probe_cache_v1", [{ file: "/tmp/a.mp3", mtimeMs: 123, data: null, error: "boom" }]);
+    expect(
+      repo.getJsonState<Array<{ file: string; mtimeMs: number; data: null; error: string }>>("probe_cache_v1")
+    ).toEqual([
+      { file: "/tmp/a.mp3", mtimeMs: 123, data: null, error: "boom" },
+    ]);
+    db.close();
+  });
+
   test("rescheduleJob clears stale error", () => {
     const { db, repo } = setupRepo();
 

@@ -464,6 +464,7 @@ describe("json-rpc handler", () => {
       }),
     });
     repo.createJob({ type: "acquire", bookId: book.id });
+    repo.setJsonState("probe_cache_v1", [{ file: assetPath, mtimeMs: 123, data: null, error: "boom" }]);
 
     const wiped = await callRpc(repo, {
       jsonrpc: "2.0",
@@ -480,6 +481,7 @@ describe("json-rpc handler", () => {
     expect(wiped.result.deleted.jobs).toBe(1);
     expect(wiped.result.deleted.chapterAnalysis).toBe(1);
     expect(wiped.result.deleted.assetTranscripts).toBe(1);
+    expect(wiped.result.deleted.appState).toBe(1);
     expect(wiped.result.deletedAssetFileCount).toBe(2);
     expect(wiped.result.deletedAssetPaths).toEqual([assetPath, path.join(root, "library", "Dune.mp3")]);
     expect(wiped.result.deletedCoverFileCount).toBe(1);
@@ -487,6 +489,7 @@ describe("json-rpc handler", () => {
     expect(repo.listBooks(10).items).toHaveLength(0);
     expect(repo.listReleasesByBook(book.id)).toHaveLength(0);
     expect(repo.listJobsByType("acquire")).toHaveLength(0);
+    expect(repo.getJsonState("probe_cache_v1")).toBeNull();
     expect(repo.getHealthSummary().queueSize).toBe(0);
     expect(repo.getSettings().feed.title).toBe("Books Test Feed");
     expect(await Bun.file(assetPath).exists()).toBe(false);

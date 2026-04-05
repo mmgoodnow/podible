@@ -16,6 +16,7 @@ const LOCAL_USERS_PROVIDER_MIGRATION_ID = 10;
 const PLEX_LOGIN_ATTEMPTS_MIGRATION_ID = 11;
 const BOOK_WORD_COUNT_MIGRATION_ID = 12;
 const APP_AUTH_MIGRATION_ID = 13;
+const APP_STATE_MIGRATION_ID = 14;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -219,6 +220,12 @@ CREATE TABLE IF NOT EXISTS auth_codes (
 CREATE INDEX IF NOT EXISTS idx_app_login_attempts_expires_at ON app_login_attempts(expires_at);
 CREATE INDEX IF NOT EXISTS idx_auth_codes_attempt_id ON auth_codes(attempt_id);
 CREATE INDEX IF NOT EXISTS idx_auth_codes_expires_at ON auth_codes(expires_at);
+
+CREATE TABLE IF NOT EXISTS app_state (
+  key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `;
 
 function hasColumn(db: Database, table: string, column: string): boolean {
@@ -511,6 +518,16 @@ CREATE INDEX IF NOT EXISTS idx_auth_codes_expires_at ON auth_codes(expires_at);
 `);
 }
 
+function applyAppStateMigration(db: Database): void {
+  db.exec(`
+CREATE TABLE IF NOT EXISTS app_state (
+  key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`);
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
@@ -579,5 +596,8 @@ export function runMigrations(db: Database): void {
   });
   apply(APP_AUTH_MIGRATION_ID, () => {
     applyAppAuthMigration(db);
+  });
+  apply(APP_STATE_MIGRATION_ID, () => {
+    applyAppStateMigration(db);
   });
 }

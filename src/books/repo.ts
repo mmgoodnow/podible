@@ -157,6 +157,30 @@ export class BooksRepo {
     return this.ensureSettings();
   }
 
+  getJsonState<T>(key: string): T | null {
+    const row = this.db.query("SELECT value_json FROM app_state WHERE key = ?").get(key) as
+      | { value_json: string }
+      | null;
+    if (!row) return null;
+    try {
+      return JSON.parse(row.value_json) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  setJsonState(key: string, value: unknown): void {
+    this.db
+      .query(
+        `INSERT INTO app_state (key, value_json, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET
+           value_json = excluded.value_json,
+           updated_at = excluded.updated_at`
+      )
+      .run(key, JSON.stringify(value), nowIso());
+  }
+
   updateSettings(next: AppSettings): AppSettings {
     this.db
       .query("INSERT INTO settings (id, value_json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET value_json = excluded.value_json")
@@ -622,6 +646,9 @@ export class BooksRepo {
           | "users"
           | "sessions"
           | "plex_login_attempts"
+          | "app_login_attempts"
+          | "auth_codes"
+          | "app_state"
       ) =>
         ((this.db.query(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number } | null)?.count ?? 0);
       const deleted = {
@@ -636,11 +663,17 @@ export class BooksRepo {
         users: countRow("users"),
         sessions: countRow("sessions"),
         plexLoginAttempts: countRow("plex_login_attempts"),
+        appLoginAttempts: countRow("app_login_attempts"),
+        authCodes: countRow("auth_codes"),
+        appState: countRow("app_state"),
       };
 
+      this.db.query("DELETE FROM auth_codes").run();
+      this.db.query("DELETE FROM app_login_attempts").run();
       this.db.query("DELETE FROM plex_login_attempts").run();
       this.db.query("DELETE FROM sessions").run();
       this.db.query("DELETE FROM users").run();
+      this.db.query("DELETE FROM app_state").run();
       this.db.query("DELETE FROM asset_transcripts").run();
       this.db.query("DELETE FROM chapter_analysis").run();
       this.db.query("DELETE FROM torrent_cache").run();

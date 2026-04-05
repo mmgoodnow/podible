@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 
-import { loadJsonState, saveJsonState } from "../state/store";
+import { loadJsonState, saveJsonState } from "../books/state";
 import { ChapterTiming, FfprobeChapter, ProbeData, ProbeFailure } from "../types";
 import { cleanMetaValue } from "../utils/strings";
 
