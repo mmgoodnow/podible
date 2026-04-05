@@ -7,7 +7,7 @@ import { setLogSuffix, type HttpEnv } from "./middleware";
 export function createRpcRoutes(repo: BooksRepo, startTime: number): Hono<HttpEnv> {
   const app = new Hono<HttpEnv>();
 
-  app.post("/rpc", async (c) => {
+  app.post("/", async (c) => {
     try {
       const cloned = await c.req.raw.clone().text();
       const payload = JSON.parse(cloned) as { method?: unknown };
@@ -25,7 +25,7 @@ export function createRpcRoutes(repo: BooksRepo, startTime: number): Hono<HttpEn
     });
   });
 
-  app.get("/rpc/:namespace/:method", async (c) => {
+  app.get("/:namespace/:method", async (c) => {
     const methodName = `${c.req.param("namespace")}.${c.req.param("method")}`;
     setLogSuffix(c, `rpc=${methodName}`);
 

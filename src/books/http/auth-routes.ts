@@ -15,10 +15,9 @@ import { getCurrentSession, type HttpEnv } from "./middleware";
 import { json } from "./route-helpers";
 import { renderPlexImmediateResultPage, renderPlexLoadingPage, waitForPlexLoginResult } from "./support";
 
-export function createAuthRoutes(repo: BooksRepo): Hono<HttpEnv> {
+export function createLoginRoutes(repo: BooksRepo): Hono<HttpEnv> {
   const app = new Hono<HttpEnv>();
-
-  app.get("/login", (c) => {
+  app.get("/", (c) => {
     const settings = repo.getSettings();
     return renderLoginPage(settings, {
       notice: c.req.query("notice"),
@@ -28,7 +27,7 @@ export function createAuthRoutes(repo: BooksRepo): Hono<HttpEnv> {
     });
   });
 
-  app.post("/login/plex/start", async (c) => {
+  app.post("/plex/start", async (c) => {
     const settings = repo.getSettings();
     const redirectTo = sanitizeRedirectPath(c.req.query("redirectTo"));
     if (settings.auth.mode !== "plex") {
@@ -61,9 +60,9 @@ export function createAuthRoutes(repo: BooksRepo): Hono<HttpEnv> {
     }
   });
 
-  app.get("/login/plex/loading", (c) => renderPlexLoadingPage(repo.getSettings()));
+  app.get("/plex/loading", (c) => renderPlexLoadingPage(repo.getSettings()));
 
-  app.get("/login/plex/complete", async (c) => {
+  app.get("/plex/complete", async (c) => {
     let settings = repo.getSettings();
     const redirectTo = sanitizeRedirectPath(c.req.query("redirectTo"));
     if (settings.auth.mode !== "plex") {
@@ -86,7 +85,12 @@ export function createAuthRoutes(repo: BooksRepo): Hono<HttpEnv> {
     return response;
   });
 
-  app.post("/logout", (c) => {
+  return app;
+}
+
+export function createLogoutRoutes(repo: BooksRepo): Hono<HttpEnv> {
+  const app = new Hono<HttpEnv>();
+  app.post("/", (c) => {
     const currentSession = getCurrentSession(c);
     if (currentSession) {
       repo.deleteSession(currentSession.id);
@@ -96,9 +100,13 @@ export function createAuthRoutes(repo: BooksRepo): Hono<HttpEnv> {
     return response;
   });
 
-  app.get("/auth/app/:attemptId", (c) => renderAppLogin(repo, c, false));
-  app.get("/auth/app/:attemptId/complete", (c) => renderAppLogin(repo, c, true));
+  return app;
+}
 
+export function createAppAuthRoutes(repo: BooksRepo): Hono<HttpEnv> {
+  const app = new Hono<HttpEnv>();
+  app.get("/:attemptId", (c) => renderAppLogin(repo, c, false));
+  app.get("/:attemptId/complete", (c) => renderAppLogin(repo, c, true));
   return app;
 }
 

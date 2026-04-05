@@ -13,15 +13,8 @@ import { getCurrentSession, requireAuthenticatedPageSession, type HttpEnv } from
 import { parseMediaSelection } from "./page-helpers";
 import { parseId, redirect } from "./route-helpers";
 
-export function createUserRoutes(repo: BooksRepo): Hono<HttpEnv> {
+export function createHomeRoutes(repo: BooksRepo): Hono<HttpEnv> {
   const app = new Hono<HttpEnv>();
-
-  app.use("/library", requireAuthenticatedPageSession);
-  app.use("/add", requireAuthenticatedPageSession);
-  app.use("/activity", requireAuthenticatedPageSession);
-  app.use("/activity/*", requireAuthenticatedPageSession);
-  app.use("/book/*", requireAuthenticatedPageSession);
-
   app.get("/", (c) => {
     const settings = repo.getSettings();
     const currentSession = getCurrentSession(c);
@@ -29,16 +22,26 @@ export function createUserRoutes(repo: BooksRepo): Hono<HttpEnv> {
       ? renderLandingPage(repo, settings, currentSession, null)
       : renderLoginPage(settings, { currentUser: currentSession });
   });
+  return app;
+}
 
-  app.get("/library", (c) =>
+export function createLibraryRoutes(repo: BooksRepo): Hono<HttpEnv> {
+  const app = new Hono<HttpEnv>();
+  app.use("*", requireAuthenticatedPageSession);
+  app.get("/", (c) =>
     renderLibraryPage(repo, repo.getSettings(), {
       query: c.req.query("q"),
       currentUser: getCurrentSession(c),
       apiKey: null,
     })
   );
+  return app;
+}
 
-  app.get("/add", async (c) => {
+export function createAddRoutes(repo: BooksRepo): Hono<HttpEnv> {
+  const app = new Hono<HttpEnv>();
+  app.use("*", requireAuthenticatedPageSession);
+  app.get("/", async (c) => {
     const settings = repo.getSettings();
     const currentSession = getCurrentSession(c);
     const query = (c.req.query("q") ?? "").trim();
@@ -64,7 +67,7 @@ export function createUserRoutes(repo: BooksRepo): Hono<HttpEnv> {
     }
   });
 
-  app.post("/add", async (c) => {
+  app.post("/", async (c) => {
     const settings = repo.getSettings();
     const currentSession = getCurrentSession(c);
     const form = new URLSearchParams(await c.req.raw.text());
@@ -90,7 +93,13 @@ export function createUserRoutes(repo: BooksRepo): Hono<HttpEnv> {
     }
   });
 
-  app.get("/book/:bookId", (c) =>
+  return app;
+}
+
+export function createBookRoutes(repo: BooksRepo): Hono<HttpEnv> {
+  const app = new Hono<HttpEnv>();
+  app.use("*", requireAuthenticatedPageSession);
+  app.get("/:bookId", (c) =>
     renderBookPage(repo, repo.getSettings(), parseId(c.req.param("bookId")), {
       notice: c.req.query("notice"),
       error: c.req.query("error"),
@@ -99,7 +108,7 @@ export function createUserRoutes(repo: BooksRepo): Hono<HttpEnv> {
     })
   );
 
-  app.post("/book/:bookId/acquire", async (c) => {
+  app.post("/:bookId/acquire", async (c) => {
     const bookId = parseId(c.req.param("bookId"));
     const form = new URLSearchParams(await c.req.raw.text());
     const media = parseMediaSelection(form.get("media"));
@@ -112,7 +121,13 @@ export function createUserRoutes(repo: BooksRepo): Hono<HttpEnv> {
     return redirect(`/book/${bookId}?notice=${encodeURIComponent(notice)}`);
   });
 
-  app.get("/activity", (c) =>
+  return app;
+}
+
+export function createActivityRoutes(repo: BooksRepo): Hono<HttpEnv> {
+  const app = new Hono<HttpEnv>();
+  app.use("*", requireAuthenticatedPageSession);
+  app.get("/", (c) =>
     renderActivityPage(repo, repo.getSettings(), {
       notice: c.req.query("notice"),
       error: c.req.query("error"),
@@ -121,7 +136,7 @@ export function createUserRoutes(repo: BooksRepo): Hono<HttpEnv> {
     })
   );
 
-  app.post("/activity/refresh", () => {
+  app.post("/refresh", () => {
     const job = repo.createJob({ type: "full_library_refresh" });
     return redirect(`/activity?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`);
   });

@@ -51,12 +51,11 @@ function cachePlexServers(
 export function createAdminRoutes(repo: BooksRepo): Hono<HttpEnv> {
   const app = new Hono<HttpEnv>();
 
-  app.use("/admin", requireAdminSession);
-  app.use("/admin/*", requireAdminSession);
+  app.use("*", requireAdminSession);
 
-  app.get("/admin/plex", (c) => c.redirect("/admin", 303));
+  app.get("/plex", (c) => c.redirect("/admin", 303));
 
-  app.post("/admin/plex/select", async (c) => {
+  app.post("/plex/select", async (c) => {
     const settings = repo.getSettings();
     if (settings.auth.mode !== "plex") {
       return new Response("Forbidden", { status: 403 });
@@ -79,12 +78,12 @@ export function createAdminRoutes(repo: BooksRepo): Hono<HttpEnv> {
     return redirect("/admin?plex_notice=Selected%20server.");
   });
 
-  app.post("/admin/refresh", () => {
+  app.post("/refresh", () => {
     const job = repo.createJob({ type: "full_library_refresh" });
     return redirect(`/admin?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`);
   });
 
-  app.get("/admin", async (c) => {
+  app.get("/", async (c) => {
     const settings = repo.getSettings();
     let plexServers: Array<{ machineId: string; name: string; product: string; owned: boolean; sourceTitle: string | null }> = [];
     const notice = c.req.query("notice");

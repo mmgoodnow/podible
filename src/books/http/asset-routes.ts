@@ -7,16 +7,22 @@ import { requireAuthenticatedRequest, type HttpEnv } from "./middleware";
 import { json, jsonResponse, parseId } from "./route-helpers";
 
 export function createAssetRoutes(repo: BooksRepo): Hono<HttpEnv> {
+  const assets = new Hono<HttpEnv>();
+  const stream = new Hono<HttpEnv>();
+  const chapters = new Hono<HttpEnv>();
+  const transcripts = new Hono<HttpEnv>();
+  const covers = new Hono<HttpEnv>();
+  const ebook = new Hono<HttpEnv>();
   const app = new Hono<HttpEnv>();
 
-  app.use("/assets", requireAuthenticatedRequest);
-  app.use("/stream/*", requireAuthenticatedRequest);
-  app.use("/chapters/*", requireAuthenticatedRequest);
-  app.use("/transcripts/*", requireAuthenticatedRequest);
-  app.use("/covers/*", requireAuthenticatedRequest);
-  app.use("/ebook/*", requireAuthenticatedRequest);
+  assets.use("*", requireAuthenticatedRequest);
+  stream.use("*", requireAuthenticatedRequest);
+  chapters.use("*", requireAuthenticatedRequest);
+  transcripts.use("*", requireAuthenticatedRequest);
+  covers.use("*", requireAuthenticatedRequest);
+  ebook.use("*", requireAuthenticatedRequest);
 
-  app.get("/assets", (c) => {
+  assets.get("/", (c) => {
     const bookId = parseId(c.req.query("bookId") ?? "");
     const assets = repo.listAssetsByBook(bookId).map((asset) => ({
       ...asset,
@@ -26,7 +32,7 @@ export function createAssetRoutes(repo: BooksRepo): Hono<HttpEnv> {
     return json({ assets });
   });
 
-  app.get("/stream/:idPart", async (c) => {
+  stream.get("/:idPart", async (c) => {
     const assetId = parseId((c.req.param("idPart").split(".")[0] ?? ""));
     const target = repo.getAssetWithFiles(assetId);
     if (!target) {
@@ -36,7 +42,7 @@ export function createAssetRoutes(repo: BooksRepo): Hono<HttpEnv> {
     return streamAudioAsset(c.req.raw, repo, target.asset, target.files, book?.cover_path);
   });
 
-  app.get("/chapters/:idPart", async (c) => {
+  chapters.get("/:idPart", async (c) => {
     const assetId = parseId(c.req.param("idPart").replace(/\.json$/i, ""));
     const target = repo.getAssetWithFiles(assetId);
     if (!target) {
@@ -49,7 +55,7 @@ export function createAssetRoutes(repo: BooksRepo): Hono<HttpEnv> {
     return jsonResponse(c.req.raw, chapters);
   });
 
-  app.get("/transcripts/:idPart", async (c) => {
+  transcripts.get("/:idPart", async (c) => {
     const assetId = parseId(c.req.param("idPart").replace(/\.json$/i, ""));
     const asset = repo.getAsset(assetId);
     if (!asset || asset.kind === "ebook") {
@@ -62,7 +68,7 @@ export function createAssetRoutes(repo: BooksRepo): Hono<HttpEnv> {
     return jsonResponse(c.req.raw, transcript);
   });
 
-  app.get("/covers/:idPart", async (c) => {
+  covers.get("/:idPart", async (c) => {
     const bookId = parseId(c.req.param("idPart").replace(/\.jpg$/i, ""));
     const book = repo.getBookRow(bookId);
     if (!book?.cover_path) {
@@ -79,7 +85,7 @@ export function createAssetRoutes(repo: BooksRepo): Hono<HttpEnv> {
     });
   });
 
-  app.get("/ebook/:assetId", async (c) => {
+  ebook.get("/:assetId", async (c) => {
     const assetId = parseId(c.req.param("assetId"));
     const target = repo.getAssetWithFiles(assetId);
     if (!target || target.asset.kind !== "ebook") {
@@ -100,6 +106,13 @@ export function createAssetRoutes(repo: BooksRepo): Hono<HttpEnv> {
       },
     });
   });
+
+  app.route("/assets", assets);
+  app.route("/stream", stream);
+  app.route("/chapters", chapters);
+  app.route("/transcripts", transcripts);
+  app.route("/covers", covers);
+  app.route("/ebook", ebook);
 
   return app;
 }
