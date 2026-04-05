@@ -40,7 +40,6 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
   app.route("/ebook", createEbookRoutes(repo));
   app.route("/", createFeedRoutes(repo));
 
-  app.notFound((c) => c.notFound());
   app.onError((error, c) => {
     if (error instanceof HTTPException) {
       return error.getResponse();
