@@ -6,7 +6,9 @@ import {
 } from "../auth";
 import { buildPlexAuthUrl, createEphemeralPlexIdentity, createPlexPin } from "../plex";
 import { BooksRepo } from "../repo";
-import { renderAppAuthErrorPage, renderLoginPage, renderPlexImmediateResultPage, renderPlexLoadingPage, waitForPlexLoginResult } from "./support";
+import { renderLoginPage } from "./login-page";
+import { renderAppAuthErrorPage } from "./common";
+import { renderPlexImmediateResultPage, renderPlexLoadingPage, waitForPlexLoginResult } from "./support";
 import { json, redirect } from "./route-helpers";
 import type { AppSettings, SessionWithUserRow } from "../types";
 

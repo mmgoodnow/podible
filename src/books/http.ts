@@ -9,11 +9,10 @@ import { loadStoredTranscriptPayload } from "./chapter-analysis";
 import { buildChapters, streamAudioAsset, streamExtension } from "./media";
 import { BooksRepo } from "./repo";
 import {
-  addApiKey,
   isHtmlPageRoute,
   parseAppLoginPath,
   sanitizeRedirectPath,
-} from "./http/support";
+} from "./http/common";
 import { handleAuthRoute, isPublicRoute } from "./http/auth-routes";
 import { handleAdminRoute, isAdminRoute } from "./http/admin-routes";
 import { json, parseId, redirect } from "./http/route-helpers";

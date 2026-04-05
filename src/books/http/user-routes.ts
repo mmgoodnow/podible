@@ -1,7 +1,13 @@
 import { searchOpenLibrary } from "../openlibrary";
 import { BooksRepo } from "../repo";
 import { triggerAutoAcquire } from "../service";
-import { renderActivityPage, renderAddPage, renderBookPage, renderLandingPage, renderLibraryPage, renderLoginPage, createBookFromOpenLibrary, parseMediaSelection } from "./support";
+import { renderActivityPage } from "./activity-page";
+import { createBookFromOpenLibrary, renderAddPage } from "./add-page";
+import { renderBookPage } from "./book-page";
+import { renderLandingPage } from "./landing-page";
+import { renderLibraryPage } from "./library-page";
+import { renderLoginPage } from "./login-page";
+import { parseMediaSelection } from "./page-helpers";
 import { parseId, redirect } from "./route-helpers";
 import type { AppSettings, SessionWithUserRow } from "../types";
 

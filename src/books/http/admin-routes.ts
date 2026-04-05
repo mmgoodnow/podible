@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import { fetchPlexServerDevices } from "../plex";
 import { BooksRepo } from "../repo";
-import { renderAdminPage } from "./support";
+import { renderAdminPage } from "./admin-page";
 import { redirect } from "./route-helpers";
 import type { AppSettings, SessionWithUserRow } from "../types";
 
