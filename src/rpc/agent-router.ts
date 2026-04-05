@@ -5,15 +5,15 @@ import { z } from "zod";
 
 import { defineMethod, defineRouter } from "./framework";
 import {
-  anyObjectSchema,
   emptyParamsSchema,
   importInspectionFileSchema,
+  manualImportSelectionDecisionSchema,
   mediaSchema,
   nonEmptyStringSchema,
   optionalBooleanSchema,
   optionalPositiveIntSchema,
   optionalStringArraySchema,
-  torznabResultSchema,
+  searchSelectionDecisionSchema,
 } from "./schemas";
 import { RpcError } from "./shared";
 
@@ -33,7 +33,7 @@ export const agentRouter = defineRouter({
       }),
       resultSchema: z.object({
         resultCount: z.number().int().nonnegative(),
-        decision: anyObjectSchema,
+        decision: searchSelectionDecisionSchema,
       }),
       async handler(ctx, params) {
         const book =
@@ -86,7 +86,7 @@ export const agentRouter = defineRouter({
         path: z.string(),
         fileCount: z.number().int().nonnegative(),
         files: z.array(importInspectionFileSchema),
-        decision: anyObjectSchema,
+        decision: manualImportSelectionDecisionSchema,
       }),
       async handler(ctx, params) {
         const book =

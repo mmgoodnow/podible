@@ -115,6 +115,8 @@ export const countMapSchema = z.record(z.string(), z.number().int().nonnegative(
 export const anyObjectSchema = z.object({}).passthrough();
 export const okResultSchema = z.object({ ok: z.literal(true) });
 export const jobIdResultSchema = z.object({ jobId: positiveIntSchema });
+export const decisionModeSchema = z.enum(["deterministic", "agent"]);
+export const decisionTriggerSchema = z.enum(["none", "forced", "prior_failure", "low_confidence"]);
 
 export const libraryBookSchema = z.object({
   id: positiveIntSchema,
@@ -201,6 +203,24 @@ export const torznabResultSchema = z.object({
   seeders: z.number().int().nullable(),
   leechers: z.number().int().nullable(),
   raw: anyObjectSchema,
+});
+
+export const searchSelectionDecisionSchema = z.object({
+  candidate: torznabResultSchema.nullable(),
+  confidence: z.number(),
+  mode: decisionModeSchema,
+  trigger: decisionTriggerSchema,
+  reason: z.string(),
+  error: z.string().nullable(),
+});
+
+export const manualImportSelectionDecisionSchema = z.object({
+  selectedPaths: z.array(z.string()),
+  confidence: z.number(),
+  mode: decisionModeSchema,
+  trigger: decisionTriggerSchema,
+  reason: z.string(),
+  error: z.string().nullable(),
 });
 
 export const openLibraryCandidateSchema = z.object({
