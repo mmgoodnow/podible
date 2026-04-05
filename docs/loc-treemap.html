@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Podible Source LOC Treemap</title>
+    <style>
+      :root {
+        --bg: #f6f1e7;
+        --panel: rgba(255, 252, 245, 0.9);
+        --line: #d5c9b7;
+        --text: #213126;
+        --muted: #5f6d61;
+        --accent: #c98b00;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top left, rgba(201, 139, 0, 0.12), transparent 28%),
+          radial-gradient(circle at bottom right, rgba(118, 149, 109, 0.16), transparent 32%),
+          var(--bg);
+      }
+
+      .page {
+        max-width: 1420px;
+        margin: 0 auto;
+        padding: 28px;
+      }
+
+      .hero {
+        margin-bottom: 20px;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: clamp(2.25rem, 5vw, 4rem);
+        line-height: 0.95;
+      }
+
+      .subhead {
+        max-width: 760px;
+        margin: 0;
+        font-size: 1.2rem;
+        line-height: 1.4;
+        color: var(--muted);
+      }
+
+      .summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin: 18px 0 22px;
+      }
+
+      .pill {
+        border: 1px solid var(--line);
+        background: rgba(255, 252, 245, 0.7);
+        border-radius: 999px;
+        padding: 8px 14px;
+        font-size: 0.98rem;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1.6fr) minmax(320px, 0.75fr);
+        gap: 18px;
+      }
+
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: var(--panel);
+        box-shadow: 0 14px 34px rgba(42, 56, 41, 0.08);
+        overflow: hidden;
+      }
+
+      .card-head {
+        padding: 18px 20px 10px;
+        border-bottom: 1px solid rgba(213, 201, 183, 0.65);
+      }
+
+      .card-title {
+        margin: 0;
+        font-size: 1.2rem;
+      }
+
+      .card-copy {
+        margin: 8px 0 0;
+        color: var(--muted);
+        line-height: 1.4;
+      }
+
+      .breadcrumb {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 14px 18px 0;
+      }
+
+      .crumb {
+        border: 1px solid var(--line);
+        background: rgba(255, 252, 245, 0.95);
+        color: var(--text);
+        border-radius: 999px;
+        padding: 7px 12px;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .crumb.active {
+        background: #efe5d2;
+      }
+
+      .viz {
+        padding: 16px 18px 18px;
+      }
+
+      svg {
+        display: block;
+        width: 100%;
+        height: auto;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.55);
+      }
+
+      .node {
+        cursor: pointer;
+      }
+
+      .node rect {
+        stroke: rgba(255, 255, 255, 0.95);
+        stroke-width: 2px;
+      }
+
+      .label {
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        fill: #18231b;
+        pointer-events: none;
+      }
+
+      .label.dim {
+        fill: rgba(24, 35, 27, 0.8);
+      }
+
+      .sidebar {
+        display: grid;
+        gap: 18px;
+        align-content: start;
+      }
+
+      .panel {
+        padding: 18px 20px;
+      }
+
+      .panel h2 {
+        margin: 0 0 10px;
+        font-size: 1.12rem;
+      }
+
+      .current-name {
+        font-size: 1.4rem;
+        margin: 0 0 4px;
+      }
+
+      .meta {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .rankings {
+        display: grid;
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: baseline;
+      }
+
+      .row button {
+        all: unset;
+        cursor: pointer;
+        color: var(--text);
+        line-height: 1.35;
+      }
+
+      .row button:hover {
+        color: var(--accent);
+      }
+
+      .row-value {
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+
+      .hint {
+        margin-top: 14px;
+        color: var(--muted);
+        font-size: 0.96rem;
+      }
+
+      @media (max-width: 980px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <h1>Source LOC Treemap</h1>
+        <p class="subhead">
+          A bundle-explorer style view of Podible’s codebase, sized by lines of code instead of bytes. Click any
+          directory to zoom in.
+        </p>
+        <div class="summary" id="summary"></div>
+      </section>
+
+      <section class="layout">
+        <div class="card">
+          <div class="card-head">
+            <h2 class="card-title">Treemap</h2>
+            <p class="card-copy">Directories aggregate their descendants. Files are terminal nodes.</p>
+          </div>
+          <div class="breadcrumb" id="breadcrumb"></div>
+          <div class="viz">
+            <svg id="treemap" viewBox="0 0 920 620" preserveAspectRatio="xMidYMid meet"></svg>
+          </div>
+        </div>
+
+        <aside class="sidebar">
+          <section class="card panel">
+            <h2>Selection</h2>
+            <p class="current-name" id="current-name">src</p>
+            <p class="meta" id="current-meta"></p>
+            <p class="hint">Click a rectangle or a name below to zoom. Click the current breadcrumb to stay put.</p>
+          </section>
+
+          <section class="card panel">
+            <h2>Largest Children</h2>
+            <div class="rankings" id="largest"></div>
+          </section>
+        </aside>
+      </section>
+    </main>
+
+    <script>
+      const rootData = {"name":"src","children":[{"name":"app-types.ts","value":285,"path":"src/app-types.ts"},{"name":"auth.ts","value":102,"path":"src/auth.ts"},{"name":"config.ts","value":27,"path":"src/config.ts"},{"name":"db.ts","value":603,"path":"src/db.ts"},{"name":"http","children":[{"name":"activity-page.ts","value":75,"path":"src/http/activity-page.ts"},{"name":"add-page.ts","value":99,"path":"src/http/add-page.ts"},{"name":"admin-page-client.ts","value":321,"path":"src/http/admin-page-client.ts"},{"name":"admin-page.ts","value":374,"path":"src/http/admin-page.ts"},{"name":"admin-routes.ts","value":120,"path":"src/http/admin-routes.ts"},{"name":"asset-routes.ts","value":122,"path":"src/http/asset-routes.ts"},{"name":"auth-routes.ts","value":151,"path":"src/http/auth-routes.ts"},{"name":"book-page.ts","value":126,"path":"src/http/book-page.ts"},{"name":"common.ts","value":219,"path":"src/http/common.ts"},{"name":"feed-routes.ts","value":24,"path":"src/http/feed-routes.ts"},{"name":"landing-page.ts","value":106,"path":"src/http/landing-page.ts"},{"name":"library-page.ts","value":58,"path":"src/http/library-page.ts"},{"name":"login-page.ts","value":141,"path":"src/http/login-page.ts"},{"name":"middleware.ts","value":75,"path":"src/http/middleware.ts"},{"name":"page-helpers.ts","value":90,"path":"src/http/page-helpers.ts"},{"name":"route-helpers.ts","value":61,"path":"src/http/route-helpers.ts"},{"name":"rpc-routes.ts","value":55,"path":"src/http/rpc-routes.ts"},{"name":"support.ts","value":251,"path":"src/http/support.ts"},{"name":"user-routes.ts","value":145,"path":"src/http/user-routes.ts"}]},{"name":"http.ts","value":52,"path":"src/http.ts"},{"name":"library","children":[{"name":"agents.ts","value":709,"path":"src/library/agents.ts"},{"name":"asset-selection.ts","value":25,"path":"src/library/asset-selection.ts"},{"name":"chapter-analysis.ts","value":2080,"path":"src/library/chapter-analysis.ts"},{"name":"feed.ts","value":118,"path":"src/library/feed.ts"},{"name":"hydration.ts","value":81,"path":"src/library/hydration.ts"},{"name":"importer.ts","value":355,"path":"src/library/importer.ts"},{"name":"media.ts","value":236,"path":"src/library/media.ts"},{"name":"openlibrary.ts","value":227,"path":"src/library/openlibrary.ts"},{"name":"progress.ts","value":59,"path":"src/library/progress.ts"},{"name":"scanner.ts","value":201,"path":"src/library/scanner.ts"},{"name":"service.ts","value":295,"path":"src/library/service.ts"},{"name":"status.ts","value":60,"path":"src/library/status.ts"},{"name":"torrent-cache.ts","value":123,"path":"src/library/torrent-cache.ts"},{"name":"torrent.ts","value":117,"path":"src/library/torrent.ts"},{"name":"torznab.ts","value":163,"path":"src/library/torznab.ts"}]},{"name":"media","children":[{"name":"metadata.ts","value":142,"path":"src/media/metadata.ts"},{"name":"probe-cache.ts","value":157,"path":"src/media/probe-cache.ts"}]},{"name":"notify.ts","value":61,"path":"src/notify.ts"},{"name":"plex.ts","value":264,"path":"src/plex.ts"},{"name":"repo.ts","value":1201,"path":"src/repo.ts"},{"name":"rpc","children":[{"name":"admin-router.ts","value":61,"path":"src/rpc/admin-router.ts"},{"name":"agent-router.ts","value":119,"path":"src/rpc/agent-router.ts"},{"name":"auth-router.ts","value":178,"path":"src/rpc/auth-router.ts"},{"name":"downloads-router.ts","value":60,"path":"src/rpc/downloads-router.ts"},{"name":"framework.ts","value":98,"path":"src/rpc/framework.ts"},{"name":"import-router.ts","value":103,"path":"src/rpc/import-router.ts"},{"name":"jobs-router.ts","value":80,"path":"src/rpc/jobs-router.ts"},{"name":"library-router.ts","value":379,"path":"src/rpc/library-router.ts"},{"name":"openlibrary-router.ts","value":24,"path":"src/rpc/openlibrary-router.ts"},{"name":"schemas.ts","value":272,"path":"src/rpc/schemas.ts"},{"name":"search-router.ts","value":73,"path":"src/rpc/search-router.ts"},{"name":"settings-router.ts","value":29,"path":"src/rpc/settings-router.ts"},{"name":"shared.ts","value":227,"path":"src/rpc/shared.ts"},{"name":"system-router.ts","value":45,"path":"src/rpc/system-router.ts"}]},{"name":"rpc.ts","value":138,"path":"src/rpc.ts"},{"name":"rtorrent.ts","value":170,"path":"src/rtorrent.ts"},{"name":"settings.ts","value":194,"path":"src/settings.ts"},{"name":"state.ts","value":20,"path":"src/state.ts"},{"name":"streaming","children":[{"name":"id3.ts","value":165,"path":"src/streaming/id3.ts"},{"name":"range.ts","value":262,"path":"src/streaming/range.ts"}]},{"name":"types","children":[{"name":"bencode.d.ts","value":9,"path":"src/types/bencode.d.ts"}]},{"name":"types.ts","value":128,"path":"src/types.ts"},{"name":"utils","children":[{"name":"strings.ts","value":96,"path":"src/utils/strings.ts"},{"name":"time.ts","value":21,"path":"src/utils/time.ts"}]},{"name":"worker","children":[{"name":"acquire.ts","value":139,"path":"src/worker/acquire.ts"},{"name":"context.ts","value":17,"path":"src/worker/context.ts"},{"name":"dispatcher.ts","value":38,"path":"src/worker/dispatcher.ts"},{"name":"downloads.ts","value":299,"path":"src/worker/downloads.ts"},{"name":"failure.ts","value":56,"path":"src/worker/failure.ts"},{"name":"imports.ts","value":201,"path":"src/worker/imports.ts"},{"name":"locks.ts","value":64,"path":"src/worker/locks.ts"},{"name":"maintenance.ts","value":31,"path":"src/worker/maintenance.ts"}]},{"name":"worker.ts","value":87,"path":"src/worker.ts"}]};
+
+      const svg = document.getElementById("treemap");
+      const summary = document.getElementById("summary");
+      const breadcrumb = document.getElementById("breadcrumb");
+      const largest = document.getElementById("largest");
+      const currentName = document.getElementById("current-name");
+      const currentMeta = document.getElementById("current-meta");
+      const width = 920;
+      const height = 620;
+      const palette = ["#d5ae58", "#98b18d", "#bb8f79", "#8aa4b5", "#d3a9b9", "#c2b28b"];
+
+      function sumTree(node, parent = null, depth = 0, path = []) {
+        node.parent = parent;
+        node.depth = depth;
+        node.pathParts = [...path, node.name];
+        if (!node.children) {
+          node.total = node.value;
+          return node.total;
+        }
+        node.total = node.children.reduce((sum, child) => sum + sumTree(child, node, depth + 1, node.pathParts), 0);
+        return node.total;
+      }
+
+      function countFiles(node) {
+        if (!node.children) return 1;
+        return node.children.reduce((sum, child) => sum + countFiles(child), 0);
+      }
+
+      function formatLines(value) {
+        return `${value.toLocaleString()} LOC`;
+      }
+
+      function nodeType(node) {
+        return node.children ? "directory" : "file";
+      }
+
+      function topChildren(node, count = 12) {
+        if (!node.children) return [];
+        return [...node.children].sort((a, b) => b.total - a.total).slice(0, count);
+      }
+
+      function colorFor(node, index) {
+        const base = palette[index % palette.length];
+        return node.children ? base : `${base}cc`;
+      }
+
+      function layoutSliceDice(children, x, y, w, h, depth = 0) {
+        const total = children.reduce((sum, child) => sum + child.total, 0) || 1;
+        let cursor = 0;
+        const horizontal = depth % 2 === 0;
+        return children.map((child) => {
+          const fraction = child.total / total;
+          const rect = horizontal
+            ? { x: x + cursor, y, w: w * fraction, h }
+            : { x, y: y + cursor, w, h: h * fraction };
+          cursor += horizontal ? rect.w : rect.h;
+          return { child, ...rect };
+        });
+      }
+
+      function renderSummary() {
+        const directories = [];
+        const files = [];
+        (function walk(node) {
+          if (node.children) {
+            directories.push(node);
+            node.children.forEach(walk);
+          } else {
+            files.push(node);
+          }
+        })(rootData);
+        summary.innerHTML = "";
+        [
+          `${directories.length - 1} directories`,
+          `${files.length} source files`,
+          formatLines(rootData.total),
+          `Largest file: ${files.sort((a, b) => b.total - a.total)[0].path}`,
+        ].forEach((text) => {
+          const pill = document.createElement("div");
+          pill.className = "pill";
+          pill.textContent = text;
+          summary.appendChild(pill);
+        });
+      }
+
+      function renderBreadcrumb(node) {
+        breadcrumb.innerHTML = "";
+        node.pathParts.forEach((part, index) => {
+          const crumb = document.createElement("button");
+          crumb.className = "crumb" + (index === node.pathParts.length - 1 ? " active" : "");
+          crumb.textContent = part;
+          crumb.addEventListener("click", () => {
+            let target = node;
+            while (target.depth > index) target = target.parent;
+            render(target);
+          });
+          breadcrumb.appendChild(crumb);
+        });
+      }
+
+      function renderSidebar(node) {
+        currentName.textContent = node.name;
+        const path = node.path ?? node.pathParts.join("/");
+        currentMeta.textContent = `${nodeType(node)} · ${formatLines(node.total)} · ${countFiles(node)} file${countFiles(node) === 1 ? "" : "s"} · ${path}`;
+        largest.innerHTML = "";
+        topChildren(node).forEach((child) => {
+          const row = document.createElement("div");
+          row.className = "row";
+          const button = document.createElement("button");
+          button.textContent = child.name;
+          button.addEventListener("click", () => render(child));
+          const value = document.createElement("div");
+          value.className = "row-value";
+          value.textContent = `${formatLines(child.total)} · ${nodeType(child)}`;
+          row.append(button, value);
+          largest.appendChild(row);
+        });
+      }
+
+      function addLabel(group, x, y, w, h, node) {
+        if (w < 72 || h < 34) return;
+        const title = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        title.setAttribute("x", x + 10);
+        title.setAttribute("y", y + 18);
+        title.setAttribute("class", "label");
+        title.setAttribute("font-size", "13");
+        title.textContent = node.name;
+        group.appendChild(title);
+
+        if (w < 120 || h < 52) return;
+        const meta = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        meta.setAttribute("x", x + 10);
+        meta.setAttribute("y", y + 34);
+        meta.setAttribute("class", "label dim");
+        meta.setAttribute("font-size", "11");
+        meta.textContent = formatLines(node.total);
+        group.appendChild(meta);
+      }
+
+      function render(node) {
+        renderBreadcrumb(node);
+        renderSidebar(node);
+        svg.innerHTML = "";
+
+        const children = node.children ? [...node.children].sort((a, b) => b.total - a.total) : [node];
+        const items = layoutSliceDice(children, 0, 0, width, height, node.depth);
+
+        items.forEach(({ child, x, y, w, h }, index) => {
+          const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+          group.setAttribute("class", "node");
+
+          const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+          rect.setAttribute("x", x);
+          rect.setAttribute("y", y);
+          rect.setAttribute("width", Math.max(0, w));
+          rect.setAttribute("height", Math.max(0, h));
+          rect.setAttribute("fill", colorFor(child, index));
+          group.appendChild(rect);
+
+          const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+          title.textContent = `${child.path ?? child.pathParts.join("/")} · ${formatLines(child.total)} · ${nodeType(child)}`;
+          group.appendChild(title);
+
+          addLabel(group, x, y, w, h, child);
+
+          group.addEventListener("click", () => render(child));
+          svg.appendChild(group);
+        });
+      }
+
+      sumTree(rootData);
+      renderSummary();
+      render(rootData);
+    </script>
+  </body>
+</html>
