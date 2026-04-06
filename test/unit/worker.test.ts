@@ -312,7 +312,6 @@ describe("worker concurrency", () => {
           shouldStop: () => stopWorker,
         },
         {
-          concurrency: 2,
           processJob: async () => {
             active += 1;
             maxConcurrent = Math.max(maxConcurrent, active);
@@ -391,7 +390,6 @@ describe("worker concurrency", () => {
           shouldStop: () => stopWorker,
         },
         {
-          concurrency: 2,
           processJob: async () => {
             active += 1;
             maxConcurrent = Math.max(maxConcurrent, active);
@@ -457,7 +455,6 @@ describe("worker concurrency", () => {
         shouldStop: () => stopWorker,
       },
       {
-        concurrency: 2,
         processJob: async (_ctx, job) => {
           started.push(job.id);
           if (job.id === 1) {
@@ -576,7 +573,6 @@ describe("worker concurrency", () => {
           shouldStop: () => stopWorker,
         },
         {
-          concurrency: 2,
           processJob: async () => {
             active += 1;
             maxConcurrent = Math.max(maxConcurrent, active);
@@ -673,6 +669,10 @@ describe("worker concurrency", () => {
     ];
     let stopWorker = false;
     const started: number[] = [];
+    let releaseAcquireOne: (() => void) | undefined;
+    const acquireOneGate = new Promise<void>((resolve) => {
+      releaseAcquireOne = resolve;
+    });
     const assets = new Map([
       [101, { id: 101, book_id: 7, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
       [102, { id: 102, book_id: 9, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
@@ -700,10 +700,12 @@ describe("worker concurrency", () => {
           shouldStop: () => stopWorker,
         },
         {
-          concurrency: 3,
           processJob: async (_ctx, job) => {
             started.push(job.id);
-            if (started.length >= 3) {
+            if (job.id === 4) {
+              await acquireOneGate;
+            }
+            if (job.id === 5) {
               stopWorker = true;
             }
             await sleep(25);
@@ -717,10 +719,26 @@ describe("worker concurrency", () => {
       sleep(1000),
     ]);
 
-    expect(started.length).toBe(3);
+    const startedWaitingAt = Date.now();
+    while (!started.includes(4) || started.filter((id) => id <= 3).length < 3) {
+      if (Date.now() - startedWaitingAt > 1000) {
+        throw new Error("Timed out waiting for acquire priority observation");
+      }
+      await sleep(10);
+    }
+
     expect(started[0]).toBe(4);
-    expect(started.filter((id) => id >= 4)).toEqual([4]);
-    expect(started.filter((id) => id <= 3)).toEqual([1, 2]);
+    expect(started.includes(5)).toBe(false);
+    expect(started.filter((id) => id <= 3)).toEqual([1, 2, 3]);
+
+    releaseAcquireOne?.();
+    const secondAcquireWaitingAt = Date.now();
+    while (!started.includes(5)) {
+      if (Date.now() - secondAcquireWaitingAt > 1000) {
+        throw new Error("Timed out waiting for second acquire to start after first finished");
+      }
+      await sleep(10);
+    }
   });
 
   test("limits concurrent acquire jobs globally", async () => {
@@ -794,7 +812,6 @@ describe("worker concurrency", () => {
           shouldStop: () => stopWorker,
         },
         {
-          concurrency: 3,
           processJob: async () => {
             active += 1;
             maxConcurrent = Math.max(maxConcurrent, active);

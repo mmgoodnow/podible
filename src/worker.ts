@@ -1,4 +1,3 @@
-import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { nowIso } from "./db";
@@ -8,14 +7,11 @@ import { handleJobFailure } from "./worker/failure";
 import { jobLockKeys, lockSetsConflict } from "./worker/locks";
 
 export { pollMsForMedia, selectDownloadPollMs } from "./worker/downloads";
-
-const DEFAULT_WORKER_CONCURRENCY = Math.max(8, Math.min(16, os.availableParallelism?.() ?? os.cpus().length));
 const RUNNABLE_SCAN_LIMIT = 200;
 
 type WorkerDeps = {
   processJob?: typeof processJob;
   handleJobFailure?: typeof handleJobFailure;
-  concurrency?: number;
 };
 
 type ActiveJob = {
@@ -73,7 +69,6 @@ export async function runWorker(ctx: WorkerContext, deps: WorkerDeps = {}): Prom
 
   const active = new Map<number, ActiveJob>();
   const activeLocks = new Set<string>();
-  const workerConcurrency = Math.max(1, Math.trunc(deps.concurrency ?? DEFAULT_WORKER_CONCURRENCY));
   const jobProcessor = deps.processJob ?? processJob;
   const failureHandler = deps.handleJobFailure ?? handleJobFailure;
 
@@ -107,7 +102,7 @@ export async function runWorker(ctx: WorkerContext, deps: WorkerDeps = {}): Prom
 
     let launchedAny = false;
     if (!ctx.shouldStop?.()) {
-      while (active.size < workerConcurrency) {
+      for (;;) {
         const candidates = ctx.repo.listRunnableJobs(nowIso(), RUNNABLE_SCAN_LIMIT);
         const runnable = candidates.filter((job) => !lockSetsConflict(activeLocks, jobLockKeys(ctx.repo, job)));
         const candidate = chooseCandidateJob(runnable, active);
@@ -124,7 +119,7 @@ export async function runWorker(ctx: WorkerContext, deps: WorkerDeps = {}): Prom
       continue;
     }
 
-    if (launchedAny && active.size < workerConcurrency) {
+    if (launchedAny) {
       continue;
     }
 
