@@ -318,6 +318,8 @@ export const libraryRouter = defineRouter({
       deletedBookId: positiveIntSchema,
       deletedAssetFileCount: z.number().int().nonnegative(),
       deletedAssetPaths: z.array(z.string()),
+      deletedTranscriptFileCount: z.number().int().nonnegative(),
+      deletedTranscriptPaths: z.array(z.string()),
       deletedCoverPath: z.string().nullable(),
     }),
     async handler(ctx, params) {
@@ -337,12 +339,20 @@ export const libraryRouter = defineRouter({
           deletedAssetPaths.push(filePath);
         }
       }
+      const deletedTranscriptPaths: string[] = [];
+      for (const filePath of artifacts.transcriptPaths) {
+        if (await removeFileIfPresent(filePath)) {
+          deletedTranscriptPaths.push(filePath);
+        }
+      }
       const deletedCoverPath = artifacts.coverPath ? ((await removeFileIfPresent(artifacts.coverPath)) ? artifacts.coverPath : null) : null;
 
       return {
         deletedBookId: params.bookId,
         deletedAssetFileCount: deletedAssetPaths.length,
         deletedAssetPaths,
+        deletedTranscriptFileCount: deletedTranscriptPaths.length,
+        deletedTranscriptPaths,
         deletedCoverPath,
       };
     },

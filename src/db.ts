@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS asset_transcripts (
   source TEXT NOT NULL,
   algorithm_version TEXT NOT NULL,
   fingerprint TEXT NOT NULL,
+  transcript_path TEXT NULL,
   transcript_json TEXT NULL,
   error TEXT NULL,
   updated_at TEXT NOT NULL,
@@ -399,12 +400,16 @@ CREATE TABLE IF NOT EXISTS asset_transcripts (
   source TEXT NOT NULL,
   algorithm_version TEXT NOT NULL,
   fingerprint TEXT NOT NULL,
+  transcript_path TEXT NULL,
   transcript_json TEXT NULL,
   error TEXT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
 );
 `);
+  if (!hasColumn(db, "asset_transcripts", "transcript_path")) {
+    db.exec("ALTER TABLE asset_transcripts ADD COLUMN transcript_path TEXT NULL");
+  }
 }
 
 function applyUsersAndSessionsMigration(db: Database): void {

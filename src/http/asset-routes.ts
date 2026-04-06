@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 
-import { loadStoredTranscriptPayload } from "../library/chapter-analysis";
+import { ensureStoredTranscriptFile } from "../library/chapter-analysis";
 import { buildChapters, streamAudioAsset, streamExtension } from "../library/media";
 import { BooksRepo } from "../repo";
 import { requireAuthenticatedRequest, type HttpEnv } from "./middleware";
@@ -63,11 +63,20 @@ export function createTranscriptsRoutes(repo: BooksRepo): Hono<HttpEnv> {
     if (!asset || asset.kind === "ebook") {
       return c.json({ error: "not_found" }, 404);
     }
-    const transcript = await loadStoredTranscriptPayload(repo, assetId);
-    if (!transcript) {
+    const transcriptPath = await ensureStoredTranscriptFile(repo, assetId);
+    if (!transcriptPath) {
       return c.json({ error: "not_found" }, 404);
     }
-    return jsonResponse(c.req.raw, transcript);
+    const file = Bun.file(transcriptPath);
+    if (!(await file.exists())) {
+      return c.json({ error: "not_found" }, 404);
+    }
+    return new Response(file, {
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+      },
+    });
   });
   return app;
 }

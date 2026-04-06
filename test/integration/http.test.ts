@@ -1490,6 +1490,9 @@ describe("podible http", () => {
     const payload = (await response.json()) as any;
     expect(payload.text).toBe("fear is the mind killer");
     expect(payload.words[0].text).toBe("fear");
+    const transcriptRow = repo.getAssetTranscript(audio.id);
+    expect(transcriptRow?.transcript_path).toBeTruthy();
+    expect(transcriptRow?.transcript_json).toBeNull();
 
     const missing = await fetchHandler(
       new Request("http://localhost/transcripts/999.json", {
@@ -1501,7 +1504,7 @@ describe("podible http", () => {
     db.close();
   });
 
-  test("serves brotli-compressed transcript json when requested", async () => {
+  test("serves transcript json without app-level brotli recompression", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -1554,12 +1557,11 @@ describe("podible http", () => {
       })
     );
     expect(response.status).toBe(200);
-    expect(response.headers.get("content-encoding")).toBe("br");
-    expect(response.headers.get("vary")).toContain("Accept-Encoding");
-
-    const decompressed = new Response(response.body?.pipeThrough(new DecompressionStream("brotli")));
-    const payload = (await decompressed.json()) as any;
+    expect(response.headers.get("content-encoding")).toBeNull();
+    const payload = (await response.json()) as any;
     expect(payload.text).toBe("fear is the mind killer");
+    expect(repo.getAssetTranscript(audio.id)?.transcript_path).toBeTruthy();
+    expect(repo.getAssetTranscript(audio.id)?.transcript_json).toBeNull();
 
     db.close();
   });

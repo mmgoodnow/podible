@@ -236,6 +236,7 @@ describe("books repo", () => {
     const artifacts = repo.getBookDeleteArtifacts(book1.id);
     expect(artifacts.assetPaths).toContain("/tmp/book-one-only.mp3");
     expect(artifacts.assetPaths).not.toContain("/tmp/shared.mp3");
+    expect(artifacts.transcriptPaths).toEqual([]);
     expect(artifacts.coverPath).toBeNull();
 
     const deleted = repo.deleteBook(book1.id);

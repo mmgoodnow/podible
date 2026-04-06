@@ -77,6 +77,7 @@ type UpsertAssetTranscriptInput = {
   source: string;
   algorithmVersion: string;
   fingerprint: string;
+  transcriptPath?: string | null;
   transcriptJson?: string | null;
   error?: string | null;
 };
@@ -567,7 +568,7 @@ export class BooksRepo {
    * Returns filesystem artifacts owned exclusively by a single book so callers
    * can safely delete files after DB cascade delete.
    */
-  getBookDeleteArtifacts(bookId: number): { assetPaths: string[]; coverPath: string | null } {
+  getBookDeleteArtifacts(bookId: number): { assetPaths: string[]; transcriptPaths: string[]; coverPath: string | null } {
     assertPositiveInt(bookId);
     const assetPaths = this.db
       .query(
@@ -580,6 +581,23 @@ export class BooksRepo {
              FROM asset_files af2
              INNER JOIN assets a2 ON a2.id = af2.asset_id
              WHERE af2.path = af.path
+               AND a2.book_id <> ?
+           )`
+      )
+      .all(bookId, bookId) as Array<{ path: string }>;
+    const transcriptPaths = this.db
+      .query(
+        `SELECT DISTINCT at.transcript_path AS path
+         FROM asset_transcripts at
+         INNER JOIN assets a ON a.id = at.asset_id
+         WHERE a.book_id = ?
+           AND at.transcript_path IS NOT NULL
+           AND at.transcript_path <> ''
+           AND NOT EXISTS (
+             SELECT 1
+             FROM asset_transcripts at2
+             INNER JOIN assets a2 ON a2.id = at2.asset_id
+             WHERE at2.transcript_path = at.transcript_path
                AND a2.book_id <> ?
            )`
       )
@@ -598,6 +616,7 @@ export class BooksRepo {
 
     return {
       assetPaths: assetPaths.map((row) => row.path),
+      transcriptPaths: transcriptPaths.map((row) => row.path),
       coverPath,
     };
   }
@@ -612,15 +631,19 @@ export class BooksRepo {
    * Returns all on-disk artifacts referenced by the current DB so callers can
    * perform a full local-dev wipe including imported files/covers.
    */
-  getWipeArtifacts(): { assetPaths: string[]; coverPaths: string[] } {
+  getWipeArtifacts(): { assetPaths: string[]; transcriptPaths: string[]; coverPaths: string[] } {
     const assetPaths = this.db
       .query("SELECT DISTINCT path FROM asset_files WHERE path IS NOT NULL AND path <> ''")
       .all() as Array<{ path: string }>;
+    const transcriptPaths = this.db
+      .query("SELECT DISTINCT transcript_path FROM asset_transcripts WHERE transcript_path IS NOT NULL AND transcript_path <> ''")
+      .all() as Array<{ transcript_path: string }>;
     const coverPaths = this.db
       .query("SELECT DISTINCT cover_path FROM books WHERE cover_path IS NOT NULL AND cover_path <> ''")
       .all() as Array<{ cover_path: string }>;
     return {
       assetPaths: assetPaths.map((row) => row.path),
+      transcriptPaths: transcriptPaths.map((row) => row.transcript_path),
       coverPaths: coverPaths.map((row) => row.cover_path),
     };
   }
@@ -1101,14 +1124,15 @@ export class BooksRepo {
       .query(
         `INSERT INTO asset_transcripts (
            asset_id, status, source, algorithm_version, fingerprint,
-           transcript_json, error, updated_at
+           transcript_path, transcript_json, error, updated_at
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(asset_id) DO UPDATE SET
            status = excluded.status,
            source = excluded.source,
            algorithm_version = excluded.algorithm_version,
            fingerprint = excluded.fingerprint,
+           transcript_path = excluded.transcript_path,
            transcript_json = excluded.transcript_json,
            error = excluded.error,
            updated_at = excluded.updated_at
@@ -1120,6 +1144,7 @@ export class BooksRepo {
         input.source,
         input.algorithmVersion,
         input.fingerprint,
+        input.transcriptPath ?? null,
         input.transcriptJson ?? null,
         input.error ?? null,
         now

@@ -484,6 +484,8 @@ describe("json-rpc handler", () => {
     expect(wiped.result.deleted.appState).toBe(1);
     expect(wiped.result.deletedAssetFileCount).toBe(2);
     expect(wiped.result.deletedAssetPaths).toEqual([assetPath, path.join(root, "library", "Dune.mp3")]);
+    expect(wiped.result.deletedTranscriptFileCount).toBe(0);
+    expect(wiped.result.deletedTranscriptPaths).toEqual([]);
     expect(wiped.result.deletedCoverFileCount).toBe(1);
     expect(wiped.result.deletedCoverPaths).toEqual([coverPath]);
     expect(repo.listBooks(10).items).toHaveLength(0);

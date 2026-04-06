@@ -28,6 +28,8 @@ export const adminRouter = defineRouter({
       settingsPreserved: z.boolean(),
       deletedAssetFileCount: z.number().int().nonnegative(),
       deletedAssetPaths: z.array(z.string()),
+      deletedTranscriptFileCount: z.number().int().nonnegative(),
+      deletedTranscriptPaths: z.array(z.string()),
       deletedCoverFileCount: z.number().int().nonnegative(),
       deletedCoverPaths: z.array(z.string()),
     }),
@@ -42,6 +44,13 @@ export const adminRouter = defineRouter({
         }
       }
 
+      const deletedTranscriptPaths: string[] = [];
+      for (const filePath of artifacts.transcriptPaths) {
+        if (await removeFileIfPresent(filePath)) {
+          deletedTranscriptPaths.push(filePath);
+        }
+      }
+
       const deletedCoverPaths: string[] = [];
       for (const filePath of artifacts.coverPaths) {
         if (await removeFileIfPresent(filePath)) {
@@ -53,6 +62,8 @@ export const adminRouter = defineRouter({
         ...wiped,
         deletedAssetFileCount: deletedAssetPaths.length,
         deletedAssetPaths,
+        deletedTranscriptFileCount: deletedTranscriptPaths.length,
+        deletedTranscriptPaths,
         deletedCoverFileCount: deletedCoverPaths.length,
         deletedCoverPaths,
       };

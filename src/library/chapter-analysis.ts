@@ -9,6 +9,7 @@ import { initEpubFile } from "@lingo-reader/epub-parser";
 import OpenAI from "openai";
 import type { TranscriptionVerbose } from "openai/resources/audio/transcriptions";
 
+import { configDir, ensureConfigDirSync } from "../config";
 import { selectPreferredAudioAsset } from "./asset-selection";
 import { analyzeTranscriptInWorkerPool } from "./transcript-analysis-pool";
 import type { BooksRepo } from "../repo";
@@ -158,6 +159,8 @@ const GLOSSARY_ARTIFACT_WORDS = new Set([
   "title",
   "xhtml",
 ]);
+
+const TRANSCRIPTS_DIR = path.join(configDir, "transcripts");
 
 const ISO_639_2_TO_1 = new Map<string, string>([
   ["deu", "de"],
@@ -1085,10 +1088,60 @@ function publicStoredTranscriptPayload(payload: StoredTranscriptPayload): Stored
   };
 }
 
-export async function readStoredTranscriptPayload(row: AssetTranscriptRow | null): Promise<StoredTranscriptPayload | null> {
-  if (!row || row.status !== "succeeded" || !row.transcript_json) return null;
+function transcriptArtifactPath(assetId: number, fingerprint: string): string {
+  const safeFingerprint = fingerprint.replace(/[^a-zA-Z0-9._-]+/g, "_");
+  return path.join(TRANSCRIPTS_DIR, `${assetId}-${safeFingerprint}.json`);
+}
+
+async function persistTranscriptArtifact(assetId: number, fingerprint: string, transcriptJson: string): Promise<string> {
+  ensureConfigDirSync();
+  await mkdir(TRANSCRIPTS_DIR, { recursive: true });
+  const filePath = transcriptArtifactPath(assetId, fingerprint);
+  await writeFile(filePath, transcriptJson);
+  return filePath;
+}
+
+async function ensureStoredTranscriptFileForRow(repo: BooksRepo, row: AssetTranscriptRow | null): Promise<string | null> {
+  if (!row || row.status !== "succeeded") return null;
+  if (row.transcript_path && (await Bun.file(row.transcript_path).exists())) {
+    return row.transcript_path;
+  }
+  if (!row.transcript_json) {
+    return null;
+  }
+  const filePath = await persistTranscriptArtifact(row.asset_id, row.fingerprint, row.transcript_json);
+  repo.upsertAssetTranscript({
+    assetId: row.asset_id,
+    status: row.status,
+    source: row.source,
+    algorithmVersion: row.algorithm_version,
+    fingerprint: row.fingerprint,
+    transcriptPath: filePath,
+    transcriptJson: null,
+    error: row.error,
+  });
+  return filePath;
+}
+
+export function hasStoredTranscriptPayload(repo: BooksRepo, assetId: number): boolean {
+  const row = repo.getAssetTranscript(assetId);
+  return Boolean(row && row.status === "succeeded" && (row.transcript_path || row.transcript_json));
+}
+
+export async function ensureStoredTranscriptFile(repo: BooksRepo, assetId: number): Promise<string | null> {
+  return ensureStoredTranscriptFileForRow(repo, repo.getAssetTranscript(assetId));
+}
+
+export async function readStoredTranscriptPayload(
+  repo: BooksRepo,
+  row: AssetTranscriptRow | null
+): Promise<StoredTranscriptPayload | null> {
+  if (!row || row.status !== "succeeded") return null;
+  const filePath = await ensureStoredTranscriptFileForRow(repo, row);
+  const jsonText = filePath ? await Bun.file(filePath).text() : row.transcript_json;
+  if (!jsonText) return null;
   try {
-    const parsed = JSON.parse(row.transcript_json) as StoredTranscriptPayload;
+    const parsed = JSON.parse(jsonText) as StoredTranscriptPayload;
     if (!parsed || !Array.isArray(parsed.words)) return null;
     return parsed;
   } catch {
@@ -1097,7 +1150,7 @@ export async function readStoredTranscriptPayload(row: AssetTranscriptRow | null
 }
 
 export async function loadStoredTranscriptPayload(repo: BooksRepo, assetId: number): Promise<StoredTranscriptPayload | null> {
-  const parsed = await readStoredTranscriptPayload(repo.getAssetTranscript(assetId));
+  const parsed = await readStoredTranscriptPayload(repo, repo.getAssetTranscript(assetId));
   return parsed ? publicStoredTranscriptPayload(parsed) : null;
 }
 
@@ -2097,7 +2150,7 @@ export async function processChapterAnalysisJob(
 
   const settings = ctx.getSettings();
   const existingTranscriptRow = ctx.repo.getAssetTranscript(target.asset.id);
-  const existingTranscriptPayload = await readStoredTranscriptPayload(existingTranscriptRow);
+  const existingTranscriptPayload = await readStoredTranscriptPayload(ctx.repo, existingTranscriptRow);
   const hasCachedTranscript =
     Boolean(existingTranscriptPayload) &&
     existingTranscriptRow?.status === "succeeded" &&
@@ -2177,20 +2230,26 @@ export async function processChapterAnalysisJob(
     });
     endPhase("analyzeTranscript");
     startPhase("persistResults");
+    const transcriptJson = JSON.stringify(
+      storedTranscriptPayload(
+        transcriptWords,
+        entries,
+        result.chapters,
+        result.transcriptSegments
+      )
+    );
+    const transcriptPath = await persistTranscriptArtifact(target.asset.id, transcriptFingerprint, transcriptJson);
+    if (existingTranscriptRow?.transcript_path && existingTranscriptRow.transcript_path !== transcriptPath) {
+      await rm(existingTranscriptRow.transcript_path, { force: true });
+    }
     ctx.repo.upsertAssetTranscript({
       assetId: target.asset.id,
       status: "succeeded",
       source: CHAPTER_ANALYSIS_SOURCE,
       algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
       fingerprint: transcriptFingerprint,
-      transcriptJson: JSON.stringify(
-        storedTranscriptPayload(
-          transcriptWords,
-          entries,
-          result.chapters,
-          result.transcriptSegments
-        )
-      ),
+      transcriptPath,
+      transcriptJson: null,
       error: null,
     });
     ctx.repo.upsertChapterAnalysis({
@@ -2227,6 +2286,7 @@ export async function processChapterAnalysisJob(
         source: CHAPTER_ANALYSIS_SOURCE,
         algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
         fingerprint: transcriptFingerprint,
+        transcriptPath: transcript?.transcript_path ?? null,
         transcriptJson: transcript?.transcript_json ?? null,
         error: message,
       });
