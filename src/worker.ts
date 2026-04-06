@@ -24,39 +24,39 @@ type ActiveJob = {
   done: Promise<number>;
 };
 
-const BACKGROUND_JOB_TYPES = new Set<Parameters<typeof processJob>[1]["type"]>(["chapter_analysis"]);
+const JOB_TYPE_CONCURRENCY_LIMITS = new Map<Parameters<typeof processJob>[1]["type"], number>([["acquire", 1]]);
+const JOB_TYPE_PRIORITY = new Map<Parameters<typeof processJob>[1]["type"], number>([["acquire", 0]]);
 
-function isBackgroundJobType(type: Parameters<typeof processJob>[1]["type"]): boolean {
-  return BACKGROUND_JOB_TYPES.has(type);
+function activeJobTypeCounts(active: Map<number, ActiveJob>): Map<Parameters<typeof processJob>[1]["type"], number> {
+  const counts = new Map<Parameters<typeof processJob>[1]["type"], number>();
+  for (const entry of active.values()) {
+    counts.set(entry.jobType, (counts.get(entry.jobType) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function canStartJobType(
+  type: Parameters<typeof processJob>[1]["type"],
+  activeCounts: Map<Parameters<typeof processJob>[1]["type"], number>
+): boolean {
+  const limit = JOB_TYPE_CONCURRENCY_LIMITS.get(type);
+  if (limit === undefined) return true;
+  return (activeCounts.get(type) ?? 0) < limit;
 }
 
 function chooseCandidateJob(
   candidates: Parameters<typeof processJob>[1][],
-  active: Map<number, ActiveJob>,
-  workerConcurrency: number
+  active: Map<number, ActiveJob>
 ): Parameters<typeof processJob>[1] | null {
   if (candidates.length === 0) return null;
-
-  const foregroundCandidates = candidates.filter((job) => !isBackgroundJobType(job.type));
-  const backgroundCandidates = candidates.filter((job) => isBackgroundJobType(job.type));
-  const activeForeground = [...active.values()].filter((entry) => !isBackgroundJobType(entry.jobType)).length;
-  const activeBackground = active.size - activeForeground;
-  const reservedForegroundSlots = workerConcurrency > 1 ? 1 : 0;
-  const maxBackgroundSlots = Math.max(0, workerConcurrency - reservedForegroundSlots);
-  const backgroundLaneDemand = activeBackground + backgroundCandidates.length > 0 ? 1 : 0;
-  const targetForegroundSlots = Math.max(1, workerConcurrency - backgroundLaneDemand);
-
-  if (foregroundCandidates.length > 0 && activeForeground < targetForegroundSlots) {
-    return foregroundCandidates[0] ?? null;
-  }
-  if (backgroundCandidates.length > 0 && activeBackground < maxBackgroundSlots) {
-    return backgroundCandidates[0] ?? null;
-  }
-  if (foregroundCandidates.length > 0) {
-    return foregroundCandidates[0] ?? null;
-  }
-  if (backgroundCandidates.length > 0 && activeBackground < maxBackgroundSlots) {
-    return backgroundCandidates[0] ?? null;
+  const activeCounts = activeJobTypeCounts(active);
+  const prioritized = [...candidates].sort(
+    (left, right) => (JOB_TYPE_PRIORITY.get(left.type) ?? 100) - (JOB_TYPE_PRIORITY.get(right.type) ?? 100)
+  );
+  for (const candidate of prioritized) {
+    if (canStartJobType(candidate.type, activeCounts)) {
+      return candidate;
+    }
   }
   return null;
 }
@@ -110,7 +110,7 @@ export async function runWorker(ctx: WorkerContext, deps: WorkerDeps = {}): Prom
       while (active.size < workerConcurrency) {
         const candidates = ctx.repo.listRunnableJobs(nowIso(), RUNNABLE_SCAN_LIMIT);
         const runnable = candidates.filter((job) => !lockSetsConflict(activeLocks, jobLockKeys(ctx.repo, job)));
-        const candidate = chooseCandidateJob(runnable, active, workerConcurrency);
+        const candidate = chooseCandidateJob(runnable, active);
         if (!candidate) break;
         const claimed = ctx.repo.claimQueuedJob(candidate.id, nowIso());
         if (!claimed) continue;

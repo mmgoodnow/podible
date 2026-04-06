@@ -255,7 +255,7 @@ describe("worker robustness", () => {
 });
 
 describe("worker concurrency", () => {
-  test("runs audio and ebook acquire jobs for the same book in parallel", async () => {
+  test("serializes acquire jobs globally even for different media on the same book", async () => {
     const queuedJobs = [
       {
         id: 1,
@@ -331,7 +331,7 @@ describe("worker concurrency", () => {
     ]);
 
     expect(processed).toBe(2);
-    expect(maxConcurrent).toBe(2);
+    expect(maxConcurrent).toBe(1);
   });
 
   test("serializes conflicting same-media acquire jobs for the same book", async () => {
@@ -514,7 +514,7 @@ describe("worker concurrency", () => {
     }
   });
 
-  test("limits chapter analysis concurrency to preserve foreground headroom", async () => {
+  test("runs chapter analysis jobs in parallel for different assets", async () => {
     const queuedJobs = [
       {
         id: 1,
@@ -595,10 +595,10 @@ describe("worker concurrency", () => {
     ]);
 
     expect(processed).toBe(2);
-    expect(maxConcurrent).toBe(1);
+    expect(maxConcurrent).toBe(2);
   });
 
-  test("prefers foreground jobs over older chapter analysis jobs while keeping background progress", async () => {
+  test("prefers acquire jobs over older chapter analysis jobs while respecting the acquire throttle", async () => {
     const queuedJobs = [
       {
         id: 1,
@@ -718,19 +718,20 @@ describe("worker concurrency", () => {
     ]);
 
     expect(started.length).toBe(3);
-    expect(started.filter((id) => id >= 4)).toEqual([4, 5]);
-    expect(started.some((id) => id <= 3)).toBe(true);
+    expect(started[0]).toBe(4);
+    expect(started.filter((id) => id >= 4)).toEqual([4]);
+    expect(started.filter((id) => id <= 3)).toEqual([1, 2]);
   });
 
-  test("keeps one worker slot open instead of letting chapter analysis fill the whole pool", async () => {
+  test("limits concurrent acquire jobs globally", async () => {
     const queuedJobs = [
       {
         id: 1,
-        type: "chapter_analysis",
+        type: "acquire",
         status: "queued",
         book_id: 7,
         release_id: null,
-        payload_json: JSON.stringify({ assetId: 101, ebookAssetId: 201 }),
+        payload_json: JSON.stringify({ bookId: 7, media: ["audio"] }),
         error: null,
         attempt_count: 0,
         max_attempts: 5,
@@ -740,11 +741,11 @@ describe("worker concurrency", () => {
       },
       {
         id: 2,
-        type: "chapter_analysis",
+        type: "acquire",
         status: "queued",
         book_id: 8,
         release_id: null,
-        payload_json: JSON.stringify({ assetId: 102, ebookAssetId: 202 }),
+        payload_json: JSON.stringify({ bookId: 8, media: ["audio"] }),
         error: null,
         attempt_count: 0,
         max_attempts: 5,
@@ -754,11 +755,11 @@ describe("worker concurrency", () => {
       },
       {
         id: 3,
-        type: "chapter_analysis",
+        type: "acquire",
         status: "queued",
         book_id: 9,
         release_id: null,
-        payload_json: JSON.stringify({ assetId: 103, ebookAssetId: 203 }),
+        payload_json: JSON.stringify({ bookId: 9, media: ["audio"] }),
         error: null,
         attempt_count: 0,
         max_attempts: 5,
@@ -768,12 +769,9 @@ describe("worker concurrency", () => {
       },
     ];
     let stopWorker = false;
-    const started: number[] = [];
-    const assets = new Map([
-      [101, { id: 101, book_id: 7, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
-      [102, { id: 102, book_id: 8, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
-      [103, { id: 103, book_id: 9, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
-    ]);
+    let active = 0;
+    let maxConcurrent = 0;
+    let processed = 0;
 
     const fakeRepo = {
       requeueRunningJobs: () => 0,
@@ -784,7 +782,7 @@ describe("worker concurrency", () => {
         job.status = "running";
         return job;
       },
-      getAsset: (assetId: number) => assets.get(assetId) ?? null,
+      getAsset: () => null,
       getRelease: () => null,
     } as unknown as BooksRepo;
 
@@ -797,10 +795,13 @@ describe("worker concurrency", () => {
         },
         {
           concurrency: 3,
-          processJob: async (_ctx, job) => {
-            started.push(job.id);
+          processJob: async () => {
+            active += 1;
+            maxConcurrent = Math.max(maxConcurrent, active);
             await sleep(50);
-            stopWorker = true;
+            active -= 1;
+            processed += 1;
+            if (processed === 3) stopWorker = true;
             return "done";
           },
           handleJobFailure: async () => {
@@ -811,8 +812,8 @@ describe("worker concurrency", () => {
       sleep(1000),
     ]);
 
-    expect(started).toEqual([1, 2]);
-    expect(queuedJobs.find((job) => job.id === 3)?.status).toBe("queued");
+    expect(processed).toBe(3);
+    expect(maxConcurrent).toBe(1);
   });
 });
 
