@@ -17,6 +17,7 @@ const PLEX_LOGIN_ATTEMPTS_MIGRATION_ID = 11;
 const BOOK_WORD_COUNT_MIGRATION_ID = 12;
 const APP_AUTH_MIGRATION_ID = 13;
 const APP_STATE_MIGRATION_ID = 14;
+const ASSET_TRANSCRIPT_PATH_MIGRATION_ID = 15;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -407,6 +408,9 @@ CREATE TABLE IF NOT EXISTS asset_transcripts (
   FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
 );
 `);
+}
+
+function applyAssetTranscriptPathMigration(db: Database): void {
   if (!hasColumn(db, "asset_transcripts", "transcript_path")) {
     db.exec("ALTER TABLE asset_transcripts ADD COLUMN transcript_path TEXT NULL");
   }
@@ -604,5 +608,8 @@ export function runMigrations(db: Database): void {
   });
   apply(APP_STATE_MIGRATION_ID, () => {
     applyAppStateMigration(db);
+  });
+  apply(ASSET_TRANSCRIPT_PATH_MIGRATION_ID, () => {
+    applyAssetTranscriptPathMigration(db);
   });
 }
