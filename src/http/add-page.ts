@@ -1,7 +1,6 @@
-import { hydrateBookFromOpenLibrary } from "../library/hydration";
+import { createOrReuseBookFromOpenLibrary } from "../library/create";
 import { resolveOpenLibraryCandidate, type OpenLibraryCandidate } from "../library/openlibrary";
 import { BooksRepo } from "../repo";
-import { triggerAutoAcquire } from "../library/service";
 import type { AppSettings, SessionWithUserRow } from "../app-types";
 
 import { addApiKey, escapeHtml, renderAppPage } from "./common";
@@ -73,27 +72,6 @@ export function renderAddPage(
 }
 
 export async function createBookFromOpenLibrary(repo: BooksRepo, openLibraryKey: string): Promise<number> {
-  const resolved = await resolveOpenLibraryCandidate({ openLibraryKey });
-  if (!resolved) {
-    throw new Error("Open Library match not found");
-  }
-
-  const book = repo.createBook({
-    title: resolved.title,
-    author: resolved.author,
-  });
-
-  repo.updateBookMetadata(book.id, {
-    publishedAt: resolved.publishedAt ?? null,
-    language: resolved.language ?? null,
-    identifiers: resolved.identifiers,
-  });
-
-  const hydrated = repo.getBook(book.id);
-  if (hydrated) {
-    await hydrateBookFromOpenLibrary(repo, hydrated);
-  }
-
-  await triggerAutoAcquire(repo, book.id);
-  return book.id;
+  const result = await createOrReuseBookFromOpenLibrary(repo, openLibraryKey);
+  return result.bookId;
 }

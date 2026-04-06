@@ -1216,6 +1216,68 @@ describe("podible http", () => {
     }
   });
 
+  test("reuses existing book row when add-by-key is repeated for the same Open Library work", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown) => {
+      const url = new URL(String(input));
+      if (url.origin !== "https://openlibrary.org" || url.pathname !== "/search.json") {
+        throw new Error(`Unexpected external fetch in test: ${url.toString()}`);
+      }
+
+      if ((url.searchParams.get("q") ?? "").includes("OL25432584W")) {
+        return new Response(
+          JSON.stringify({
+            docs: [
+              {
+                key: "/works/OL25432584W",
+                title: "Tough Guy",
+                author_name: ["Rachel Reid"],
+                first_publish_year: 2020,
+                language: ["eng"],
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      return new Response(JSON.stringify({ docs: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      const db = new Database(":memory:");
+      runMigrations(db);
+      const repo = new BooksRepo(db);
+      const settings = repo.ensureSettings();
+      repo.updateSettings({
+        ...settings,
+        auth: { ...settings.auth, mode: "plex" },
+        torznab: [],
+      });
+
+      const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+      const userCookie = createBrowserSessionCookie(repo, { username: "reader" });
+
+      const first = await rpc(fetchHandler, "library.create", { openLibraryKey: "/works/OL25432584W" }, 1, {
+        cookie: userCookie,
+      });
+      const second = await rpc(fetchHandler, "library.create", { openLibraryKey: "/works/OL25432584W" }, 2, {
+        cookie: userCookie,
+      });
+
+      expect(first.result.book.id).toBe(second.result.book.id);
+      expect(repo.listAllBooks().map((book: any) => book.title)).toEqual(["Tough Guy"]);
+      expect(repo.listJobsByType("acquire").filter((job) => job.book_id === first.result.book.id).length).toBe(2);
+
+      db.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("supports read-only GET rpc bridge and blocks mutating methods", async () => {
     const db = new Database(":memory:");
     runMigrations(db);

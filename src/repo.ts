@@ -138,6 +138,10 @@ export class BooksRepo {
     this.db.exec("PRAGMA foreign_keys = ON;");
   }
 
+  transaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
+  }
+
   ensureSettings(): AppSettings {
     const existing = this.db.query("SELECT value_json FROM settings WHERE id = 1").get() as
       | { value_json: string }
@@ -429,6 +433,15 @@ export class BooksRepo {
     return (this.db
       .query("SELECT * FROM books WHERE title = ? AND author = ? ORDER BY id DESC LIMIT 1")
       .get(title, author) as BookRow | null) ?? null;
+  }
+
+  findBookByOpenLibraryKey(openLibraryKey: string): BookRow | null {
+    const key = openLibraryKey.trim();
+    if (!key) return null;
+    const rows = this.db
+      .query("SELECT * FROM books WHERE identifiers_json IS NOT NULL ORDER BY id DESC")
+      .all() as BookRow[];
+    return rows.find((row) => parseIdentifiers(row.identifiers_json).openlibrary === key) ?? null;
   }
 
   updateBookMetadata(

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
+import { createOrReuseBookFromOpenLibrary } from "../library/create";
 import { hydrateBookFromOpenLibrary } from "../library/hydration";
-import { resolveOpenLibraryCandidate } from "../library/openlibrary";
 import { RtorrentClient } from "../rtorrent";
 import { triggerAutoAcquire } from "../library/service";
 
@@ -105,30 +105,18 @@ export const libraryRouter = defineRouter({
       acquisition_job_id: positiveIntSchema,
     }),
     async handler(ctx, params) {
-      const resolved = await resolveOpenLibraryCandidate({ openLibraryKey: params.openLibraryKey.trim() });
-      if (!resolved) {
-        throw new RpcError(-32000, "Open Library match not found", { error: "not_found" });
+      let result: { bookId: number; acquisitionJobId: number };
+      try {
+        result = await createOrReuseBookFromOpenLibrary(ctx.repo, params.openLibraryKey.trim());
+      } catch (error) {
+        if (error instanceof Error && error.message === "Open Library match not found") {
+          throw new RpcError(-32000, "Open Library match not found", { error: "not_found" });
+        }
+        throw error;
       }
-
-      const book = ctx.repo.createBook({
-        title: resolved.title,
-        author: resolved.author,
-      });
-
-      ctx.repo.updateBookMetadata(book.id, {
-        publishedAt: resolved.publishedAt ?? null,
-        language: resolved.language ?? null,
-        identifiers: resolved.identifiers,
-      });
-      const hydrated = ctx.repo.getBook(book.id);
-      if (hydrated) {
-        await hydrateBookFromOpenLibrary(ctx.repo, hydrated);
-      }
-
-      const jobId = await triggerAutoAcquire(ctx.repo, book.id);
       return {
-        book: ctx.repo.getBook(book.id),
-        acquisition_job_id: jobId,
+        book: ctx.repo.getBook(result.bookId),
+        acquisition_job_id: result.acquisitionJobId,
       };
     },
   }),
