@@ -1,3 +1,4 @@
+import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { nowIso } from "./db";
@@ -8,8 +9,8 @@ import { jobLockKeys, lockSetsConflict } from "./worker/locks";
 
 export { pollMsForMedia, selectDownloadPollMs } from "./worker/downloads";
 
-const DEFAULT_WORKER_CONCURRENCY = 3;
-const RUNNABLE_SCAN_LIMIT = 25;
+const DEFAULT_WORKER_CONCURRENCY = Math.max(8, Math.min(16, os.availableParallelism?.() ?? os.cpus().length));
+const RUNNABLE_SCAN_LIMIT = 200;
 
 type WorkerDeps = {
   processJob?: typeof processJob;
@@ -18,9 +19,46 @@ type WorkerDeps = {
 };
 
 type ActiveJob = {
+  jobType: Parameters<typeof processJob>[1]["type"];
   keys: string[];
   done: Promise<number>;
 };
+
+const BACKGROUND_JOB_TYPES = new Set<Parameters<typeof processJob>[1]["type"]>(["chapter_analysis"]);
+
+function isBackgroundJobType(type: Parameters<typeof processJob>[1]["type"]): boolean {
+  return BACKGROUND_JOB_TYPES.has(type);
+}
+
+function chooseCandidateJob(
+  candidates: Parameters<typeof processJob>[1][],
+  active: Map<number, ActiveJob>,
+  workerConcurrency: number
+): Parameters<typeof processJob>[1] | null {
+  if (candidates.length === 0) return null;
+
+  const foregroundCandidates = candidates.filter((job) => !isBackgroundJobType(job.type));
+  const backgroundCandidates = candidates.filter((job) => isBackgroundJobType(job.type));
+  const activeForeground = [...active.values()].filter((entry) => !isBackgroundJobType(entry.jobType)).length;
+  const activeBackground = active.size - activeForeground;
+  const reservedBackgroundSlots = workerConcurrency > 1 ? 1 : 0;
+  const targetForegroundSlots = Math.max(1, workerConcurrency - reservedBackgroundSlots);
+  const targetBackgroundSlots = Math.max(0, workerConcurrency - targetForegroundSlots);
+
+  if (foregroundCandidates.length > 0 && activeForeground < targetForegroundSlots) {
+    return foregroundCandidates[0] ?? null;
+  }
+  if (backgroundCandidates.length > 0 && activeBackground < targetBackgroundSlots) {
+    return backgroundCandidates[0] ?? null;
+  }
+  if (foregroundCandidates.length > 0) {
+    return foregroundCandidates[0] ?? null;
+  }
+  if (backgroundCandidates.length > 0) {
+    return backgroundCandidates[0] ?? null;
+  }
+  return null;
+}
 
 /**
  * Main worker loop: recover abandoned running jobs, then repeatedly claim and
@@ -58,7 +96,7 @@ export async function runWorker(ctx: WorkerContext, deps: WorkerDeps = {}): Prom
       }
       return job.id;
     })();
-    active.set(job.id, { keys, done });
+    active.set(job.id, { jobType: job.type, keys, done });
   };
 
   for (;;) {
@@ -70,7 +108,8 @@ export async function runWorker(ctx: WorkerContext, deps: WorkerDeps = {}): Prom
     if (!ctx.shouldStop?.()) {
       while (active.size < workerConcurrency) {
         const candidates = ctx.repo.listRunnableJobs(nowIso(), RUNNABLE_SCAN_LIMIT);
-        const candidate = candidates.find((job) => !lockSetsConflict(activeLocks, jobLockKeys(ctx.repo, job)));
+        const runnable = candidates.filter((job) => !lockSetsConflict(activeLocks, jobLockKeys(ctx.repo, job)));
+        const candidate = chooseCandidateJob(runnable, active, workerConcurrency);
         if (!candidate) break;
         const claimed = ctx.repo.claimQueuedJob(candidate.id, nowIso());
         if (!claimed) continue;

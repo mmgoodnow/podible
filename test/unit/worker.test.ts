@@ -597,6 +597,130 @@ describe("worker concurrency", () => {
     expect(processed).toBe(2);
     expect(maxConcurrent).toBe(2);
   });
+
+  test("prefers foreground jobs over older chapter analysis jobs while keeping background progress", async () => {
+    const queuedJobs = [
+      {
+        id: 1,
+        type: "chapter_analysis",
+        status: "queued",
+        book_id: 7,
+        release_id: null,
+        payload_json: JSON.stringify({ assetId: 101, ebookAssetId: 201 }),
+        error: null,
+        attempt_count: 0,
+        max_attempts: 5,
+        next_run_at: null,
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: 2,
+        type: "chapter_analysis",
+        status: "queued",
+        book_id: 9,
+        release_id: null,
+        payload_json: JSON.stringify({ assetId: 102, ebookAssetId: 202 }),
+        error: null,
+        attempt_count: 0,
+        max_attempts: 5,
+        next_run_at: null,
+        created_at: "2026-01-01T00:00:01.000Z",
+        updated_at: "2026-01-01T00:00:01.000Z",
+      },
+      {
+        id: 3,
+        type: "chapter_analysis",
+        status: "queued",
+        book_id: 10,
+        release_id: null,
+        payload_json: JSON.stringify({ assetId: 103, ebookAssetId: 203 }),
+        error: null,
+        attempt_count: 0,
+        max_attempts: 5,
+        next_run_at: null,
+        created_at: "2026-01-01T00:00:02.000Z",
+        updated_at: "2026-01-01T00:00:02.000Z",
+      },
+      {
+        id: 4,
+        type: "acquire",
+        status: "queued",
+        book_id: 11,
+        release_id: null,
+        payload_json: JSON.stringify({ bookId: 11, media: ["audio"] }),
+        error: null,
+        attempt_count: 0,
+        max_attempts: 5,
+        next_run_at: null,
+        created_at: "2026-01-01T00:00:03.000Z",
+        updated_at: "2026-01-01T00:00:03.000Z",
+      },
+      {
+        id: 5,
+        type: "acquire",
+        status: "queued",
+        book_id: 12,
+        release_id: null,
+        payload_json: JSON.stringify({ bookId: 12, media: ["audio"] }),
+        error: null,
+        attempt_count: 0,
+        max_attempts: 5,
+        next_run_at: null,
+        created_at: "2026-01-01T00:00:04.000Z",
+        updated_at: "2026-01-01T00:00:04.000Z",
+      },
+    ];
+    let stopWorker = false;
+    const started: number[] = [];
+    const assets = new Map([
+      [101, { id: 101, book_id: 7, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
+      [102, { id: 102, book_id: 9, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
+      [103, { id: 103, book_id: 10, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
+    ]);
+
+    const fakeRepo = {
+      requeueRunningJobs: () => 0,
+      listRunnableJobs: () => queuedJobs.filter((job) => job.status === "queued"),
+      claimQueuedJob: (jobId: number) => {
+        const job = queuedJobs.find((candidate) => candidate.id === jobId && candidate.status === "queued");
+        if (!job) return null;
+        job.status = "running";
+        return job;
+      },
+      getAsset: (assetId: number) => assets.get(assetId) ?? null,
+      getRelease: () => null,
+    } as unknown as BooksRepo;
+
+    await Promise.race([
+      runWorker(
+        {
+          repo: fakeRepo,
+          getSettings: () => defaultSettings({ auth: { mode: "plex" } }),
+          shouldStop: () => stopWorker,
+        },
+        {
+          concurrency: 3,
+          processJob: async (_ctx, job) => {
+            started.push(job.id);
+            if (started.length >= 3) {
+              stopWorker = true;
+            }
+            await sleep(25);
+            return "done";
+          },
+          handleJobFailure: async () => {
+            throw new Error("unexpected failure");
+          },
+        }
+      ),
+      sleep(1000),
+    ]);
+
+    expect(started.length).toBe(3);
+    expect(started.filter((id) => id >= 4)).toEqual([4, 5]);
+    expect(started.some((id) => id <= 3)).toBe(true);
+  });
 });
 
 describe("worker import recovery", () => {
