@@ -41,20 +41,21 @@ function chooseCandidateJob(
   const backgroundCandidates = candidates.filter((job) => isBackgroundJobType(job.type));
   const activeForeground = [...active.values()].filter((entry) => !isBackgroundJobType(entry.jobType)).length;
   const activeBackground = active.size - activeForeground;
-  const reservedBackgroundSlots = workerConcurrency > 1 ? 1 : 0;
-  const targetForegroundSlots = Math.max(1, workerConcurrency - reservedBackgroundSlots);
-  const targetBackgroundSlots = Math.max(0, workerConcurrency - targetForegroundSlots);
+  const reservedForegroundSlots = workerConcurrency > 1 ? 1 : 0;
+  const maxBackgroundSlots = Math.max(0, workerConcurrency - reservedForegroundSlots);
+  const backgroundLaneDemand = activeBackground + backgroundCandidates.length > 0 ? 1 : 0;
+  const targetForegroundSlots = Math.max(1, workerConcurrency - backgroundLaneDemand);
 
   if (foregroundCandidates.length > 0 && activeForeground < targetForegroundSlots) {
     return foregroundCandidates[0] ?? null;
   }
-  if (backgroundCandidates.length > 0 && activeBackground < targetBackgroundSlots) {
+  if (backgroundCandidates.length > 0 && activeBackground < maxBackgroundSlots) {
     return backgroundCandidates[0] ?? null;
   }
   if (foregroundCandidates.length > 0) {
     return foregroundCandidates[0] ?? null;
   }
-  if (backgroundCandidates.length > 0) {
+  if (backgroundCandidates.length > 0 && activeBackground < maxBackgroundSlots) {
     return backgroundCandidates[0] ?? null;
   }
   return null;

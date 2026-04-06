@@ -514,7 +514,7 @@ describe("worker concurrency", () => {
     }
   });
 
-  test("runs chapter analysis jobs in parallel for different assets", async () => {
+  test("limits chapter analysis concurrency to preserve foreground headroom", async () => {
     const queuedJobs = [
       {
         id: 1,
@@ -595,7 +595,7 @@ describe("worker concurrency", () => {
     ]);
 
     expect(processed).toBe(2);
-    expect(maxConcurrent).toBe(2);
+    expect(maxConcurrent).toBe(1);
   });
 
   test("prefers foreground jobs over older chapter analysis jobs while keeping background progress", async () => {
@@ -720,6 +720,99 @@ describe("worker concurrency", () => {
     expect(started.length).toBe(3);
     expect(started.filter((id) => id >= 4)).toEqual([4, 5]);
     expect(started.some((id) => id <= 3)).toBe(true);
+  });
+
+  test("keeps one worker slot open instead of letting chapter analysis fill the whole pool", async () => {
+    const queuedJobs = [
+      {
+        id: 1,
+        type: "chapter_analysis",
+        status: "queued",
+        book_id: 7,
+        release_id: null,
+        payload_json: JSON.stringify({ assetId: 101, ebookAssetId: 201 }),
+        error: null,
+        attempt_count: 0,
+        max_attempts: 5,
+        next_run_at: null,
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: 2,
+        type: "chapter_analysis",
+        status: "queued",
+        book_id: 8,
+        release_id: null,
+        payload_json: JSON.stringify({ assetId: 102, ebookAssetId: 202 }),
+        error: null,
+        attempt_count: 0,
+        max_attempts: 5,
+        next_run_at: null,
+        created_at: "2026-01-01T00:00:01.000Z",
+        updated_at: "2026-01-01T00:00:01.000Z",
+      },
+      {
+        id: 3,
+        type: "chapter_analysis",
+        status: "queued",
+        book_id: 9,
+        release_id: null,
+        payload_json: JSON.stringify({ assetId: 103, ebookAssetId: 203 }),
+        error: null,
+        attempt_count: 0,
+        max_attempts: 5,
+        next_run_at: null,
+        created_at: "2026-01-01T00:00:02.000Z",
+        updated_at: "2026-01-01T00:00:02.000Z",
+      },
+    ];
+    let stopWorker = false;
+    const started: number[] = [];
+    const assets = new Map([
+      [101, { id: 101, book_id: 7, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
+      [102, { id: 102, book_id: 8, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
+      [103, { id: 103, book_id: 9, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
+    ]);
+
+    const fakeRepo = {
+      requeueRunningJobs: () => 0,
+      listRunnableJobs: () => queuedJobs.filter((job) => job.status === "queued"),
+      claimQueuedJob: (jobId: number) => {
+        const job = queuedJobs.find((candidate) => candidate.id === jobId && candidate.status === "queued");
+        if (!job) return null;
+        job.status = "running";
+        return job;
+      },
+      getAsset: (assetId: number) => assets.get(assetId) ?? null,
+      getRelease: () => null,
+    } as unknown as BooksRepo;
+
+    await Promise.race([
+      runWorker(
+        {
+          repo: fakeRepo,
+          getSettings: () => defaultSettings({ auth: { mode: "plex" } }),
+          shouldStop: () => stopWorker,
+        },
+        {
+          concurrency: 3,
+          processJob: async (_ctx, job) => {
+            started.push(job.id);
+            await sleep(50);
+            stopWorker = true;
+            return "done";
+          },
+          handleJobFailure: async () => {
+            throw new Error("unexpected failure");
+          },
+        }
+      ),
+      sleep(1000),
+    ]);
+
+    expect(started).toEqual([1, 2]);
+    expect(queuedJobs.find((job) => job.id === 3)?.status).toBe("queued");
   });
 });
 
