@@ -4,6 +4,7 @@ books/
 node_modules/
 .env
 data/
+tmp/
 .DS_Store
 .playwright-cli/
 podible.sqlite
