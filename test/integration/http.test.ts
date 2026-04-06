@@ -264,6 +264,8 @@ describe("podible http", () => {
     const detailBody = await detail.text();
     expect(detailBody.includes("Play audio")).toBe(true);
     expect(detailBody.includes("Available now")).toBe(true);
+    expect(detailBody.includes("<strong>Transcript:</strong> Not ready yet")).toBe(true);
+    expect(detailBody.includes("Transcript JSON")).toBe(false);
     expect(detailBody.includes("Find audio")).toBe(true);
     expect(detailBody.includes("Release history")).toBe(true);
 

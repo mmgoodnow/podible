@@ -1,5 +1,5 @@
 import { buildChapters, selectPreferredAudioAsset, streamExtension } from "../library/media";
-import { selectPreferredEpubAsset } from "../library/chapter-analysis";
+import { loadStoredTranscriptPayload, selectPreferredEpubAsset } from "../library/chapter-analysis";
 import { BooksRepo } from "../repo";
 import type { AppSettings, SessionWithUserRow } from "../app-types";
 
@@ -23,7 +23,8 @@ export async function renderBookPage(
   const ebook = selectPreferredEpubAsset(assets);
   const audioFiles = audio ? repo.getAssetFiles(audio.id) : [];
   const chapters = audio ? await buildChapters(repo, audio, audioFiles) : null;
-  const transcriptUrl = audio ? addApiKey(`/transcripts/${audio.id}.json`, apiKey) : null;
+  const transcript = audio ? await loadStoredTranscriptPayload(repo, audio.id) : null;
+  const transcriptUrl = audio && transcript ? addApiKey(`/transcripts/${audio.id}.json`, apiKey) : null;
   const streamUrl = audio ? addApiKey(`/stream/${audio.id}.${streamExtension(audio)}`, apiKey) : null;
   const chaptersUrl = audio ? addApiKey(`/chapters/${audio.id}.json`, apiKey) : null;
   const ebookUrl = ebook ? addApiKey(`/ebook/${ebook.id}`, apiKey) : null;
