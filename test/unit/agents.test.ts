@@ -315,12 +315,13 @@ describe("agent decisions", () => {
     const legacySettings = parseSettings(
       JSON.stringify({
         ...defaultSettings(),
-        agents: {
-          provider: "openai-responses",
-          model: "gpt-5-mini",
-          apiKey: "test-key",
-          lowConfidenceThreshold: 0.45,
-          timeoutMs: 8000,
+    agents: {
+      provider: "openai-responses",
+      model: "gpt-5-mini",
+      transcriptionModel: "gpt-4o-transcribe",
+      apiKey: "test-key",
+      lowConfidenceThreshold: 0.45,
+      timeoutMs: 8000,
         },
       })
     );

@@ -47,6 +47,7 @@ export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
     agents: {
       provider: "openai-responses",
       model: "gpt-5-mini",
+      transcriptionModel: "gpt-4o-transcribe",
       apiKey: "",
       lowConfidenceThreshold: 0.45,
       timeoutMs: 30000,
@@ -173,6 +174,10 @@ export function parseSettings(value: string): AppSettings {
     agents: {
       provider: parsedAgents.provider === "openai-responses" ? parsedAgents.provider : defaults.agents.provider,
       model: typeof parsedAgents.model === "string" && parsedAgents.model.trim() ? parsedAgents.model : defaults.agents.model,
+      transcriptionModel:
+        typeof parsedAgents.transcriptionModel === "string" && parsedAgents.transcriptionModel.trim()
+          ? parsedAgents.transcriptionModel
+          : defaults.agents.transcriptionModel,
       apiKey: typeof parsedAgents.apiKey === "string" ? parsedAgents.apiKey : defaults.agents.apiKey,
       lowConfidenceThreshold:
         typeof parsedAgents.lowConfidenceThreshold === "number" && Number.isFinite(parsedAgents.lowConfidenceThreshold)

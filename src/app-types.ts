@@ -72,6 +72,7 @@ export type AppSettings = {
   agents: {
     provider: "openai-responses";
     model: string;
+    transcriptionModel: string;
     apiKey: string;
     lowConfidenceThreshold: number;
     timeoutMs: number;

@@ -97,6 +97,7 @@ export const appSettingsSchema: z.ZodType<AppSettings> = z.object({
   agents: z.object({
     provider: z.literal("openai-responses"),
     model: z.string(),
+    transcriptionModel: z.string(),
     apiKey: z.string(),
     lowConfidenceThreshold: z.number(),
     timeoutMs: z.number(),

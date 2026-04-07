@@ -18,7 +18,7 @@ import type { AppSettings, AssetFileRow, AssetRow, AssetTranscriptRow, BookRow, 
 const CHAPTER_ANALYSIS_SOURCE = "full_transcript_epub";
 const CHAPTER_ANALYSIS_ALGORITHM_VERSION = "2026-04-05-v6";
 const CHAPTERS_API_VERSION = "1.4.0";
-const TRANSCRIPTION_MODEL = "whisper-1";
+const TRANSCRIPTION_FALLBACK_MODEL = "whisper-1";
 const CHUNK_MS = 30 * 60_000;
 const CHUNK_OVERLAP_MS = 30_000;
 const TRANSCRIPTION_TIMEOUT_MS = 5 * 60_000;
@@ -1471,33 +1471,48 @@ export async function transcribeChunk(
   const apiKey = settings.agents.apiKey.trim();
   if (!apiKey) throw new Error("OpenAI API key not configured");
   const requestTimeoutMs = Math.max(TRANSCRIPTION_TIMEOUT_MS, Math.trunc(settings.agents.timeoutMs || 30_000));
+  const preferredModel = settings.agents.transcriptionModel?.trim() || "gpt-4o-transcribe";
+  const models = [preferredModel, TRANSCRIPTION_FALLBACK_MODEL].filter((model, index, all) => all.indexOf(model) === index);
   const client = new OpenAI({
     apiKey,
     timeout: requestTimeoutMs,
   });
   const transcriptionLanguage = normalizeTranscriptionLanguage(book.language);
-  const response = (await client.audio.transcriptions.create(
-    {
-      file: createReadStream(clipPath),
-      model: TRANSCRIPTION_MODEL,
-      response_format: "verbose_json",
-      timestamp_granularities: ["word"],
-      ...(transcriptionLanguage ? { language: transcriptionLanguage } : {}),
-      prompt,
-    },
-    {
-      timeout: requestTimeoutMs,
+  let lastError: unknown = null;
+  for (const model of models) {
+    try {
+      const response = (await client.audio.transcriptions.create(
+        {
+          file: createReadStream(clipPath),
+          model,
+          response_format: "verbose_json",
+          timestamp_granularities: ["word"],
+          ...(transcriptionLanguage ? { language: transcriptionLanguage } : {}),
+          prompt,
+        },
+        {
+          timeout: requestTimeoutMs,
+        }
+      )) as TranscriptionVerbose;
+      const words = Array.isArray(response.words) ? response.words : [];
+      const mappedWords = words
+        .map((word) => ({
+          startMs: Math.max(0, Math.round(Number(word.start) * 1000)),
+          endMs: Math.max(0, Math.round(Number(word.end) * 1000)),
+          token: normalizeToken(word.word),
+          raw: String(word.word ?? "").trim(),
+        }))
+        .filter((word) => Boolean(word.token));
+      if (mappedWords.length > 0 || model === TRANSCRIPTION_FALLBACK_MODEL) {
+        return mappedWords;
+      }
+      lastError = new Error(`Transcription model ${model} did not return word timestamps`);
+    } catch (error) {
+      lastError = error;
+      if (model === TRANSCRIPTION_FALLBACK_MODEL) break;
     }
-  )) as TranscriptionVerbose;
-  const words = Array.isArray(response.words) ? response.words : [];
-  return words
-    .map((word) => ({
-      startMs: Math.max(0, Math.round(Number(word.start) * 1000)),
-      endMs: Math.max(0, Math.round(Number(word.end) * 1000)),
-      token: normalizeToken(word.word),
-      raw: String(word.word ?? "").trim(),
-    }))
-    .filter((word) => Boolean(word.token));
+  }
+  throw lastError instanceof Error ? lastError : new Error("Transcription failed");
 }
 
 function dedupeTranscriptWords(words: TranscriptWord[]): TranscriptWord[] {

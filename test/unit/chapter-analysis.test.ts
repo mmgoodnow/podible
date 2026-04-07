@@ -16,6 +16,7 @@ import {
   normalizeTranscriptionLanguage,
   processChapterAnalysisJob,
   queueChapterAnalysisForBook,
+  transcribeChunk,
 } from "../../src/library/chapter-analysis";
 import { buildChapters } from "../../src/library/media";
 import { BooksRepo } from "../../src/repo";
@@ -341,6 +342,68 @@ describe("chapter analysis", () => {
     expect(normalizeTranscriptionLanguage("fr")).toBe("fr");
     expect(normalizeTranscriptionLanguage("zzz")).toBeNull();
     expect(normalizeTranscriptionLanguage(null)).toBeNull();
+  });
+
+  test("tries configured transcription model before whisper fallback", async () => {
+    const originalFetch = globalThis.fetch;
+    const calls: string[] = [];
+    const root = await mkdtemp(path.join(os.tmpdir(), "podible-transcription-model-"));
+    const clipPath = path.join(root, "clip.mp3");
+    try {
+      await writeFile(clipPath, Buffer.from("audio"));
+      globalThis.fetch = (async (_url, init) => {
+        const body = init?.body;
+        if (!(body instanceof FormData) || !body.has("model")) {
+          return Response.json({});
+        }
+        const model = String(body.get("model"));
+        calls.push(model);
+        if (model === "gpt-4o-transcribe") {
+          return Response.json({ error: { message: "word timestamps unsupported" } }, { status: 400 });
+        }
+        return Response.json({
+          task: "transcribe",
+          language: "en",
+          duration: 1,
+          text: "Hello world",
+          words: [{ word: "Hello", start: 0, end: 0.5 }],
+        });
+      }) as typeof fetch;
+
+      const now = new Date().toISOString();
+      const words = await transcribeChunk(
+        defaultSettings({
+          agents: {
+            ...defaultSettings().agents,
+            apiKey: "test-key",
+            transcriptionModel: "gpt-4o-transcribe",
+          },
+        }),
+        clipPath,
+        "Prompt",
+        {
+          id: 1,
+          title: "Dune",
+          author: "Frank Herbert",
+          cover_path: null,
+          duration_ms: 1000,
+          word_count: null,
+          added_at: now,
+          updated_at: now,
+          published_at: null,
+          description: null,
+          description_html: null,
+          language: "eng",
+          identifiers_json: null,
+        }
+      );
+
+      expect(calls).toEqual(["gpt-4o-transcribe", "whisper-1"]);
+      expect(words).toEqual([{ startMs: 0, endMs: 500, token: "hello", raw: "Hello" }]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test("stores derived timings and chapters endpoint prefers cached analysis", async () => {
