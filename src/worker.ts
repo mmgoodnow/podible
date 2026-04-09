@@ -20,7 +20,10 @@ type ActiveJob = {
   done: Promise<number>;
 };
 
-const JOB_TYPE_CONCURRENCY_LIMITS = new Map<Parameters<typeof processJob>[1]["type"], number>([["acquire", 1]]);
+const JOB_TYPE_CONCURRENCY_LIMITS = new Map<Parameters<typeof processJob>[1]["type"], number>([
+  ["acquire", 1],
+  ["chapter_analysis", 2],
+]);
 const JOB_TYPE_PRIORITY = new Map<Parameters<typeof processJob>[1]["type"], number>([["acquire", 0]]);
 
 function activeJobTypeCounts(active: Map<number, ActiveJob>): Map<Parameters<typeof processJob>[1]["type"], number> {

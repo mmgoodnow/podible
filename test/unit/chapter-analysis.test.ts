@@ -996,4 +996,211 @@ describe("chapter analysis", () => {
       db.close();
     }
   });
+
+  test("limits per-job transcription chunk fanout", async () => {
+    const { db, repo } = setupRepo();
+    const root = await mkdtemp(path.join(os.tmpdir(), "podible-chunk-limit-"));
+    try {
+      const settings = repo.ensureSettings();
+      repo.updateSettings(
+        defaultSettings({
+          ...settings,
+          auth: { mode: "plex" },
+          agents: {
+            ...settings.agents,
+            apiKey: "test-key",
+          },
+        })
+      );
+
+      const audioPath = path.join(root, "audio.mp3");
+      const epubPath = path.join(root, "book.epub");
+      await mkdir(root, { recursive: true });
+      await writeFile(audioPath, Buffer.from("audio"));
+      await writeFile(epubPath, Buffer.from("epub"));
+
+      const entryOneTokens = Array.from({ length: 60 }, (_, index) => `one${index}`);
+      const entryTwoTokens = Array.from({ length: 60 }, (_, index) => `two${index}`);
+      const book = repo.createBook({ title: "Chunk Fanout", author: "Tester" });
+      const audio = repo.addAsset({
+        bookId: book.id,
+        kind: "single",
+        mime: "audio/mpeg",
+        totalSize: 200,
+        durationMs: 7_200_000,
+        files: [
+          {
+            path: audioPath,
+            size: 200,
+            start: 0,
+            end: 199,
+            durationMs: 7_200_000,
+            title: "Book",
+          },
+        ],
+      });
+      const epub = repo.addAsset({
+        bookId: book.id,
+        kind: "ebook",
+        mime: "application/epub+zip",
+        totalSize: 100,
+        durationMs: null,
+        files: [
+          {
+            path: epubPath,
+            size: 100,
+            start: 0,
+            end: 99,
+            durationMs: 0,
+            title: null,
+          },
+        ],
+      });
+      const job = repo.createJob({
+        type: "chapter_analysis",
+        bookId: book.id,
+        payload: {
+          assetId: audio.id,
+          ebookAssetId: epub.id,
+        },
+      });
+
+      let activeChunkWork = 0;
+      let maxChunkWork = 0;
+      const chunkDelayMs = 15;
+
+      await processChapterAnalysisJob(
+        {
+          repo,
+          getSettings: () => repo.getSettings(),
+        },
+        job,
+        {
+          loadEpubEntries: async () => [
+            {
+              id: "one",
+              title: "One",
+              href: "one.xhtml",
+              text: entryOneTokens.join(" "),
+              words: chapterWords(entryOneTokens),
+              tokens: entryOneTokens,
+              wordCount: entryOneTokens.length,
+              cumulativeWords: entryOneTokens.length,
+              cumulativeRatio: 0.5,
+            },
+            {
+              id: "two",
+              title: "Two",
+              href: "two.xhtml",
+              text: entryTwoTokens.join(" "),
+              words: chapterWords(entryTwoTokens),
+              tokens: entryTwoTokens,
+              wordCount: entryTwoTokens.length,
+              cumulativeWords: entryOneTokens.length + entryTwoTokens.length,
+              cumulativeRatio: 1,
+            },
+          ],
+          extractChunkClip: async ({ tempDir, clipName }) => {
+            activeChunkWork += 1;
+            maxChunkWork = Math.max(maxChunkWork, activeChunkWork);
+            try {
+              const clipPath = path.join(tempDir, `${clipName}.mp3`);
+              await mkdir(tempDir, { recursive: true });
+              await Bun.sleep(chunkDelayMs);
+              await writeFile(clipPath, Buffer.from("clip"));
+              return clipPath;
+            } finally {
+              activeChunkWork -= 1;
+            }
+          },
+          transcribeChunk: async () => {
+            activeChunkWork += 1;
+            maxChunkWork = Math.max(maxChunkWork, activeChunkWork);
+            try {
+              await Bun.sleep(chunkDelayMs);
+              return Array.from({ length: 60 }, (_, index) => ({
+                token: index < 30 ? `one${index}` : `two${index - 30}`,
+                raw: index < 30 ? `one${index}` : `two${index - 30}`,
+                startMs: index * 1_000,
+                endMs: index * 1_000 + 500,
+              }));
+            } finally {
+              activeChunkWork -= 1;
+            }
+          },
+          analyzeTranscript: async () => ({
+            chapters: [
+              {
+                id: "one",
+                title: "One",
+                startMs: 0,
+                endMs: 3_600_000,
+              },
+              {
+                id: "two",
+                title: "Two",
+                startMs: 3_600_000,
+                endMs: 7_200_000,
+              },
+            ],
+            transcriptSegments: [
+              {
+                chapterIndex: 0,
+                startMs: 0,
+                endMs: 7_200_000,
+                matchedWordCount: 60,
+                anchorTokenCount: 60,
+                matchedAnchorTokenCount: 60,
+                anchorCoverage: 1,
+                words: Array.from({ length: 60 }, (_, index) => ({
+                  text: `one${index}`,
+                  token: `one${index}`,
+                  startMs: index * 1_000,
+                  endMs: index * 1_000 + 500,
+                })),
+              },
+              {
+                chapterIndex: 1,
+                startMs: 3_600_000,
+                endMs: 7_200_000,
+                matchedWordCount: 60,
+                anchorTokenCount: 60,
+                matchedAnchorTokenCount: 60,
+                anchorCoverage: 1,
+                words: Array.from({ length: 60 }, (_, index) => ({
+                  text: `two${index}`,
+                  token: `two${index}`,
+                  startMs: 3_600_000 + index * 1_000,
+                  endMs: 3_600_000 + index * 1_000 + 500,
+                })),
+              },
+            ],
+            transcriptWords: [],
+            resolvedBoundaryCount: 2,
+            totalBoundaryCount: 2,
+            debug: {
+              chunkCount: buildChunkPlan(7_200_000).length,
+              transcriptSource: "new",
+              chapterStarts: [0, 3_600_000],
+              boundaryMatches: [],
+              segmentMatches: [],
+              profile: {
+                probeAlignmentMs: 0,
+                interpolationMs: 0,
+                chapterSegmentMatchMs: 0,
+                totalAnalyzeMs: 0,
+              },
+            },
+          }),
+        }
+      );
+
+      expect(buildChunkPlan(7_200_000).length).toBeGreaterThan(2);
+      expect(maxChunkWork).toBe(2);
+      expect(repo.getChapterAnalysis(audio.id)?.status).toBe("succeeded");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      db.close();
+    }
+  });
 });

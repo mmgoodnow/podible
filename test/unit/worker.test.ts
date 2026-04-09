@@ -511,7 +511,7 @@ describe("worker concurrency", () => {
     }
   });
 
-  test("runs chapter analysis jobs in parallel for different assets", async () => {
+  test("limits chapter analysis jobs to two in parallel for different assets", async () => {
     const queuedJobs = [
       {
         id: 1,
@@ -541,6 +541,20 @@ describe("worker concurrency", () => {
         created_at: "2026-01-01T00:00:01.000Z",
         updated_at: "2026-01-01T00:00:01.000Z",
       },
+      {
+        id: 3,
+        type: "chapter_analysis",
+        status: "queued",
+        book_id: 10,
+        release_id: null,
+        payload_json: JSON.stringify({ assetId: 103, ebookAssetId: 203 }),
+        error: null,
+        attempt_count: 0,
+        max_attempts: 5,
+        next_run_at: null,
+        created_at: "2026-01-01T00:00:02.000Z",
+        updated_at: "2026-01-01T00:00:02.000Z",
+      },
     ];
     let stopWorker = false;
     let active = 0;
@@ -550,6 +564,7 @@ describe("worker concurrency", () => {
     const assets = new Map([
       [101, { id: 101, book_id: 7, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
       [102, { id: 102, book_id: 9, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
+      [103, { id: 103, book_id: 10, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
     ]);
 
     const fakeRepo = {
@@ -579,7 +594,7 @@ describe("worker concurrency", () => {
             await sleep(50);
             active -= 1;
             processed += 1;
-            if (processed === 2) stopWorker = true;
+            if (processed === 3) stopWorker = true;
             return "done";
           },
           handleJobFailure: async () => {
@@ -590,7 +605,7 @@ describe("worker concurrency", () => {
       sleep(1000),
     ]);
 
-    expect(processed).toBe(2);
+    expect(processed).toBe(3);
     expect(maxConcurrent).toBe(2);
   });
 

@@ -19,6 +19,7 @@ const CHAPTER_ANALYSIS_SOURCE = "full_transcript_epub";
 const CHAPTER_ANALYSIS_ALGORITHM_VERSION = "2026-04-05-v6";
 const CHAPTERS_API_VERSION = "1.4.0";
 const TRANSCRIPTION_FALLBACK_MODEL = "whisper-1";
+const CHAPTER_ANALYSIS_TRANSCRIPTION_CONCURRENCY = 2;
 const CHUNK_MS = 30 * 60_000;
 const CHUNK_OVERLAP_MS = 30_000;
 const TRANSCRIPTION_TIMEOUT_MS = 5 * 60_000;
@@ -367,6 +368,33 @@ type ExtractChunkArgs = {
   tempDir: string;
   clipName: string;
 };
+
+function createAsyncLimiter(limit: number) {
+  let active = 0;
+  const queue: Array<() => void> = [];
+
+  const release = () => {
+    active -= 1;
+    const next = queue.shift();
+    if (!next) return;
+    active += 1;
+    next();
+  };
+
+  return async function runLimited<T>(fn: () => Promise<T>): Promise<T> {
+    if (active >= limit) {
+      await new Promise<void>((resolve) => queue.push(resolve));
+    } else {
+      active += 1;
+    }
+
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  };
+}
 
 function log(ctx: ChapterAnalysisContext, message: string): void {
   if (ctx.onLog) {
@@ -1895,42 +1923,45 @@ async function transcribeAssetWithDeps(
 
   const tempDir = path.join(os.tmpdir(), "podible-chapter-analysis");
   await mkdir(tempDir, { recursive: true });
+  const limitChunkWork = createAsyncLimiter(CHAPTER_ANALYSIS_TRANSCRIPTION_CONCURRENCY);
 
   const transcriptChunks = await Promise.all(
     plans.map(async (plan) => {
-      const clipName = `asset-${asset.id}-chunk-${plan.index}-attempt-${job.attempt_count}`;
-      let clipPath: string | null = null;
-      try {
-        log(
-          ctx,
-          `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=extract start_ms=${plan.startMs} duration_ms=${plan.durationMs}`
-        );
-        clipPath = await deps.extractChunkClip({
-          asset,
-          files,
-          startMs: plan.startMs,
-          durationMs: plan.durationMs,
-          tempDir,
-          clipName,
-        });
-        log(
-          ctx,
-          `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=transcribe clip=${JSON.stringify(clipPath)}`
-        );
-        const words = await deps.transcribeChunk(settings, clipPath, prompt, book);
-        log(
-          ctx,
-          `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=done words=${words.length}`
-        );
-        return {
-          ...plan,
-          words,
-        };
-      } finally {
-        if (clipPath) {
-          await rm(clipPath, { force: true }).catch(() => undefined);
+      return limitChunkWork(async () => {
+        const clipName = `asset-${asset.id}-chunk-${plan.index}-attempt-${job.attempt_count}`;
+        let clipPath: string | null = null;
+        try {
+          log(
+            ctx,
+            `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=extract start_ms=${plan.startMs} duration_ms=${plan.durationMs}`
+          );
+          clipPath = await deps.extractChunkClip({
+            asset,
+            files,
+            startMs: plan.startMs,
+            durationMs: plan.durationMs,
+            tempDir,
+            clipName,
+          });
+          log(
+            ctx,
+            `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=transcribe clip=${JSON.stringify(clipPath)}`
+          );
+          const words = await deps.transcribeChunk(settings, clipPath, prompt, book);
+          log(
+            ctx,
+            `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=done words=${words.length}`
+          );
+          return {
+            ...plan,
+            words,
+          };
+        } finally {
+          if (clipPath) {
+            await rm(clipPath, { force: true }).catch(() => undefined);
+          }
         }
-      }
+      });
     })
   );
 

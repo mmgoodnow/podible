@@ -31,7 +31,7 @@ type AnalyzeResponse =
 
 function transcriptAnalysisWorkerCount(): number {
   const available = os.availableParallelism?.() ?? os.cpus().length;
-  return Math.max(1, Math.min(4, available > 1 ? available - 1 : 1));
+  return Math.max(1, Math.min(2, available > 1 ? available - 1 : 1));
 }
 
 class TranscriptAnalysisPool {
