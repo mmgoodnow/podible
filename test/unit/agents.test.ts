@@ -318,7 +318,6 @@ describe("agent decisions", () => {
     agents: {
       provider: "openai-responses",
       model: "gpt-5-mini",
-      transcriptionModel: "gpt-4o-transcribe",
       apiKey: "test-key",
       lowConfidenceThreshold: 0.45,
       timeoutMs: 8000,

@@ -3,248 +3,113 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Podible Chapter Alignment Pipeline</title>
+    <title>Podible Transcript Pipeline</title>
     <style>
       :root {
         color-scheme: light dark;
-        --bg: #f7f3ea;
-        --panel: rgba(255, 252, 246, 0.9);
-        --text: #20261f;
-        --muted: #5f6a5b;
-        --border: rgba(94, 108, 88, 0.22);
-        --accent: #365b46;
-        --accent-soft: rgba(54, 91, 70, 0.1);
-        --code: rgba(54, 91, 70, 0.08);
-        --danger: #8f3425;
-        --shadow: 0 12px 32px rgba(28, 31, 28, 0.08);
+        --bg: #f7f4ec;
+        --panel: #fffdf7;
+        --text: #20291f;
+        --muted: #62705f;
+        --line: #d8d0c1;
+        --accent: #e5a800;
+        --code: #eee7d8;
       }
 
       @media (prefers-color-scheme: dark) {
         :root {
-          --bg: #111512;
-          --panel: rgba(24, 31, 26, 0.94);
-          --text: #eef4ee;
-          --muted: #9eb19f;
-          --border: rgba(180, 205, 180, 0.16);
-          --accent: #9fd3ab;
-          --accent-soft: rgba(159, 211, 171, 0.12);
-          --code: rgba(255, 255, 255, 0.06);
-          --danger: #ff9e8f;
-          --shadow: 0 14px 36px rgba(0, 0, 0, 0.28);
+          --bg: #171a16;
+          --panel: #20251f;
+          --text: #edf1e8;
+          --muted: #aeb8aa;
+          --line: #3d463b;
+          --accent: #f5c84c;
+          --code: #2d342b;
         }
-      }
-
-      * {
-        box-sizing: border-box;
       }
 
       body {
         margin: 0;
-        font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
-        background:
-          radial-gradient(circle at top, rgba(102, 130, 108, 0.12), transparent 38%),
-          var(--bg);
+        background: var(--bg);
         color: var(--text);
+        font-family: Georgia, "Times New Roman", serif;
         line-height: 1.5;
       }
 
       main {
-        width: min(1120px, calc(100vw - 32px));
+        max-width: 960px;
         margin: 0 auto;
-        padding: 40px 0 80px;
-      }
-
-      header {
-        margin-bottom: 28px;
-      }
-
-      h1,
-      h2,
-      h3 {
-        line-height: 1.05;
-        margin: 0 0 14px;
+        padding: 48px 24px 72px;
       }
 
       h1 {
-        font-size: clamp(2.4rem, 6vw, 4.5rem);
-        letter-spacing: -0.04em;
+        font-size: clamp(2.4rem, 6vw, 4.8rem);
+        line-height: 0.95;
+        margin: 0 0 16px;
       }
 
       h2 {
-        font-size: clamp(1.6rem, 3vw, 2.2rem);
-        margin-top: 8px;
+        margin: 40px 0 12px;
+        font-size: 1.7rem;
       }
 
       h3 {
-        font-size: 1.2rem;
+        margin: 22px 0 8px;
+        font-size: 1.15rem;
       }
 
       p,
       li {
         font-size: 1.05rem;
-        color: var(--text);
+      }
+
+      code,
+      pre {
+        background: var(--code);
+        border-radius: 8px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      code {
+        padding: 0.1em 0.25em;
+      }
+
+      pre {
+        overflow-x: auto;
+        padding: 16px;
       }
 
       .lede {
-        max-width: 760px;
-        font-size: 1.22rem;
         color: var(--muted);
+        font-size: 1.3rem;
+        max-width: 760px;
       }
 
-      .panel,
-      .flow-step {
+      .card {
         background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 22px;
-        box-shadow: var(--shadow);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        margin-top: 22px;
+        padding: 22px;
       }
 
-      .panel {
-        padding: 24px;
-      }
-
-      .hero-grid,
-      .summary-grid,
-      .storage-grid {
+      .grid {
         display: grid;
-        gap: 18px;
-      }
-
-      .hero-grid {
-        grid-template-columns: 1.3fr 0.9fr;
-        align-items: start;
-        margin-top: 26px;
-      }
-
-      .summary-grid,
-      .storage-grid {
-        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-        margin-top: 18px;
-      }
-
-      .eyebrow,
-      .pill {
-        display: inline-block;
-        border-radius: 999px;
-        padding: 7px 12px;
-        background: var(--accent-soft);
-        color: var(--accent);
-        font-size: 0.88rem;
-        font-weight: 700;
-        letter-spacing: 0.01em;
-      }
-
-      .pill {
-        margin: 4px 8px 0 0;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
       }
 
       .metric {
-        font-size: 2rem;
-        font-weight: 700;
-        letter-spacing: -0.03em;
+        border-left: 5px solid var(--accent);
+        padding-left: 14px;
       }
 
       .muted {
         color: var(--muted);
       }
 
-      code {
-        background: var(--code);
-        padding: 0.12em 0.36em;
-        border-radius: 8px;
-        font-size: 0.95em;
-      }
-
-      pre {
-        margin: 0;
-        overflow-x: auto;
-        border-radius: 16px;
-        padding: 18px;
-        background: var(--code);
-        border: 1px solid var(--border);
-      }
-
-      .flow {
-        margin-top: 22px;
-        display: grid;
-        gap: 16px;
-      }
-
-      .flow-step {
-        display: grid;
-        grid-template-columns: 76px 1fr;
-        gap: 18px;
-        padding: 20px;
-      }
-
-      .step-index {
-        width: 56px;
-        height: 56px;
-        border-radius: 18px;
-        display: grid;
-        place-items: center;
-        background: var(--accent-soft);
-        color: var(--accent);
-        font-weight: 700;
-        font-size: 1.15rem;
-      }
-
-      .step-body p:last-child,
-      .panel p:last-child,
-      .panel ul:last-child {
-        margin-bottom: 0;
-      }
-
-      .file-list {
-        margin: 0;
-        padding-left: 20px;
-      }
-
-      .warning {
-        color: var(--danger);
-        font-weight: 600;
-      }
-
-      .section {
-        margin-top: 36px;
-      }
-
-      .diagram {
-        display: grid;
-        gap: 14px;
-        margin-top: 18px;
-      }
-
-      .diagram-row {
-        display: grid;
-        gap: 14px;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      }
-
-      .card {
-        border: 1px solid var(--border);
-        border-radius: 18px;
-        padding: 16px;
-        background: var(--panel);
-      }
-
-      .arrow {
-        text-align: center;
-        color: var(--muted);
-        font-size: 1.6rem;
-        line-height: 1;
-      }
-
-      a {
-        color: inherit;
-      }
-
-      @media (max-width: 860px) {
-        .hero-grid {
-          grid-template-columns: 1fr;
-        }
-
-        .flow-step {
+      @media (max-width: 760px) {
+        .grid {
           grid-template-columns: 1fr;
         }
       }
@@ -252,384 +117,92 @@
   </head>
   <body>
     <main>
-      <header>
-        <span class="eyebrow">Production pipeline</span>
-        <h1>Chapter alignment from EPUB + audio to timestamped canonical words</h1>
-        <p class="lede">
-          This is the real Podible pipeline behind <code>chapter_analysis</code>: how an EPUB and an audio asset become
-          chapter timings plus transcript words that are projected back onto the canonical EPUB chapter structure.
-        </p>
-      </header>
+      <h1>Transcript pipeline</h1>
+      <p class="lede">
+        Podible now treats chapter analysis as timestamped audio transcription. It no longer projects Whisper output
+        onto canonical EPUB words or derives chapter markers from EPUB structure.
+      </p>
 
-      <section class="hero-grid">
-        <div class="panel">
-          <h2>What the job produces</h2>
-          <div class="summary-grid">
-            <div>
-              <div class="metric">Chapter start/end times</div>
-              <p class="muted">Stored as chapter timing JSON for <code>/chapters/:assetId.json</code>.</p>
-            </div>
-            <div>
-              <div class="metric">Canonical transcript words</div>
-              <p class="muted">Transcript timestamps projected back onto EPUB wording instead of raw Whisper wording.</p>
-            </div>
-            <div>
-              <div class="metric">Per-chapter transcript segments</div>
-              <p class="muted">Stored in transcript JSON so the app can show chapter-level aligned text.</p>
-            </div>
-          </div>
+      <section class="grid">
+        <div class="card metric">
+          <h3>Input</h3>
+          <p>Preferred audio asset, optional EPUB for glossary hints, book metadata, and OpenAI settings.</p>
         </div>
-
-        <div class="panel">
-          <h2>Key files</h2>
-          <ul class="file-list">
-            <li><code>src/library/chapter-analysis.ts</code></li>
-            <li><code>src/library/transcript-analysis-pool.ts</code></li>
-            <li><code>src/library/transcript-analysis-worker.ts</code></li>
-            <li><code>src/library/media.ts</code></li>
-          </ul>
-          <p class="muted">
-            The heavy alignment core now runs in worker threads, while EPUB loading, transcription, DB writes, and job
-            orchestration stay in the main worker process.
-          </p>
+        <div class="card metric">
+          <h3>Output</h3>
+          <p>A persisted transcript JSON file containing raw Whisper text and word-level timestamps.</p>
+        </div>
+        <div class="card metric">
+          <h3>Chapters</h3>
+          <p>Served from embedded M4B chapters or multi-file audio boundaries, not transcript alignment.</p>
         </div>
       </section>
 
-      <section class="section">
-        <h2>High-level flow</h2>
-        <div class="flow">
-          <article class="flow-step">
-            <div class="step-index">1</div>
-            <div class="step-body">
-              <h3>Queue selection</h3>
-              <p>
-                Podible only queues the job when a book has both a preferred audio asset and a preferred EPUB asset.
-                The worker later refuses to run if the target audio is no longer the preferred audio asset.
-              </p>
-            </div>
-          </article>
-
-          <article class="flow-step">
-            <div class="step-index">2</div>
-            <div class="step-body">
-              <h3>Fingerprint gate</h3>
-              <p>
-                Before doing any expensive work, the job computes a chapter fingerprint from the audio + EPUB inputs and
-                a transcript fingerprint from the audio files. A prior success is reused only when the stored
-                fingerprints <strong>and</strong> <code>algorithm_version</code> still match.
-              </p>
-            </div>
-          </article>
-
-          <article class="flow-step">
-            <div class="step-index">3</div>
-            <div class="step-body">
-              <h3>EPUB parsing</h3>
-              <p>
-                Podible loads the EPUB spine and TOC, strips HTML, tokenizes each chapter, computes cumulative word
-                counts, and normalizes chapter ordering into a list of canonical chapter entries.
-              </p>
-            </div>
-          </article>
-
-          <article class="flow-step">
-            <div class="step-index">4</div>
-            <div class="step-body">
-              <h3>Whole-book transcript acquisition</h3>
-              <p>
-                If there is no cached transcript for the current transcript fingerprint, Podible splits the audio into
-                overlapping chunks, extracts clips, calls Whisper, and merges the chunk transcripts into a single
-                ordered word stream with timestamps.
-              </p>
-            </div>
-          </article>
-
-          <article class="flow-step">
-            <div class="step-index">5</div>
-            <div class="step-body">
-              <h3>Pure transcript analysis</h3>
-              <p>
-                The CPU-heavy alignment phase runs in a worker thread through
-                <code>runTranscriptAnalysis(...)</code>. This phase consumes only serializable inputs: EPUB entries,
-                transcript words, duration, glossary terms, and chunk plans.
-              </p>
-            </div>
-          </article>
-
-          <article class="flow-step">
-            <div class="step-index">6</div>
-            <div class="step-body">
-              <h3>Persist canonical outputs</h3>
-              <p>
-                The main thread stores the aligned transcript payload and chapter timing payload back into SQLite. From
-                there, <code>/transcripts/:assetId.json</code> and <code>/chapters/:assetId.json</code> can serve the
-                aligned output without recomputing.
-              </p>
-            </div>
-          </article>
-        </div>
-      </section>
-
-      <section class="section">
-        <h2>Inside the pure analysis phase</h2>
-        <div class="diagram">
-          <div class="diagram-row">
-            <div class="card">
-              <h3>Inputs</h3>
-              <p>Canonical EPUB chapters, transcript words with timestamps, duration, glossary terms, chunk plan metadata.</p>
-            </div>
-            <div class="card">
-              <h3>Boundary probes</h3>
-              <p>Generate candidate snippets around EPUB chapter boundaries and estimate when those boundaries should occur.</p>
-            </div>
-            <div class="card">
-              <h3>Best probe alignment</h3>
-              <p>Search transcript windows near each estimate and score fuzzy probe matches to resolve real boundary times.</p>
-            </div>
-          </div>
-          <div class="arrow">↓</div>
-          <div class="diagram-row">
-            <div class="card">
-              <h3>Interpolation</h3>
-              <p>Use resolved boundaries to assign a start and end time to every EPUB chapter, with ratio-based fallback for gaps.</p>
-            </div>
-            <div class="card">
-              <h3>Chapter segment matching</h3>
-              <p>Within each chapter window, align EPUB tokens to transcript tokens to recover chapter-local canonical words.</p>
-            </div>
-            <div class="card">
-              <h3>Output</h3>
-              <p>Chapter timings, chapter-level transcript segments, boundary counts, and debug/profile metadata.</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="section">
-        <h2>How canonical EPUB words get timestamps</h2>
+      <section class="card">
+        <h2>Why the alignment layer was removed</h2>
         <p>
-          The raw Whisper transcript is useful because it has timestamps, but its wording is noisy: substitutions,
-          dropped words, extra narration tokens, punctuation drift, and occasional hallucinated filler. Podible therefore
-          treats the EPUB as the canonical text and the transcript as a timestamp source.
+          The old pipeline attempted to align noisy transcript tokens to EPUB tokens, then generate synthetic chapter
+          boundaries and canonical timestamped EPUB words. That produced a lot of code, high CPU and memory pressure,
+          and brittle chapter markers. The practical value was low compared with directly serving Whisper's word-level
+          timestamp output.
         </p>
-        <pre><code>audio chunk -> Whisper transcript words with timestamps
-EPUB chapter text -> canonical tokens with no timestamps
-
-alignment:
-  match canonical EPUB tokens to nearby transcript tokens
-  project transcript start/end times back onto the EPUB token positions
-
-result:
-  canonical EPUB words with audiobook timing</code></pre>
         <p>
-          This is why the stored transcript payload contains both the merged whole-book transcript and the
-          chapter-aligned canonical segments. The app can show transcript text that actually matches the book instead of
-          exposing raw Whisper output directly.
+          <code>gpt-4o-transcribe</code> currently does not expose word or segment timestamps through the transcription
+          API. Because timestamps are a hard requirement, Podible uses <code>whisper-1</code> for this path.
         </p>
       </section>
 
-      <section class="section">
-        <h2>Alignment algorithm, end to end</h2>
+      <section class="card">
+        <h2>End-to-end flow</h2>
+        <ol>
+          <li>The importer or scanner queues a <code>chapter_analysis</code> job for the preferred audio asset.</li>
+          <li>The job fingerprints the audio files and reuses a matching persisted transcript when one exists.</li>
+          <li>If an EPUB is available, Podible extracts a compact glossary of names and terms for the Whisper prompt.</li>
+          <li>The audio is split into overlapping chunks and each chunk is extracted with <code>ffmpeg</code>.</li>
+          <li>Each chunk is sent to <code>whisper-1</code> with <code>verbose_json</code> and word timestamps enabled.</li>
+          <li>Chunk results are persisted immediately to temporary JSON files, then merged after all chunks finish.</li>
+          <li>The merged transcript is written under the config transcript directory and referenced by SQLite.</li>
+          <li><code>/transcripts/:assetId.json</code> file-serves the persisted artifact.</li>
+        </ol>
+      </section>
+
+      <section class="card">
+        <h2>Transcript shape</h2>
+        <pre><code>{
+  "version": "1.4.0",
+  "text": "full raw transcript text",
+  "words": [
+    { "startMs": 0, "endMs": 420, "text": "Hello", "token": "hello" }
+  ],
+  "chunks": [
+    {
+      "index": 0,
+      "startMs": 0,
+      "durationMs": 1800000,
+      "trimStartMs": 0,
+      "trimEndMs": 15000,
+      "wordStartIndex": 0,
+      "wordEndIndex": 5120,
+      "text": "chunk text"
+    }
+  ]
+}</code></pre>
+        <p class="muted">
+          The public payload omits legacy canonical EPUB segments. Old aligned transcript artifacts can still exist on
+          disk until the audio fingerprint or algorithm version causes a new transcript run.
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>Runtime boundaries</h2>
         <p>
-          The algorithm has two layers. First it resolves <em>chapter boundaries</em> across the whole book. Then it
-          resolves <em>word-level alignment inside each chapter window</em>. The first layer determines where chapters
-          start and end in time. The second layer assigns timestamps to canonical EPUB words.
+          <code>src/library/chapter-analysis.ts</code> owns EPUB glossary loading, chunk extraction, Whisper calls, chunk
+          merging, transcript artifact persistence, and job bookkeeping. The deleted alignment worker files are no longer
+          part of production.
         </p>
-
-        <div class="flow">
-          <article class="flow-step">
-            <div class="step-index">A</div>
-            <div class="step-body">
-              <h3>Build chapter boundary probes from EPUB text</h3>
-              <p>
-                For every boundary between chapter <code>n</code> and chapter <code>n+1</code>, Podible builds probe
-                snippets from the tail of the previous chapter and the head of the next chapter. It also computes one or
-                more estimated timestamps for that boundary from EPUB word ratios and, when available, transcript chunk
-                plan hints.
-              </p>
-            </div>
-          </article>
-
-          <article class="flow-step">
-            <div class="step-index">B</div>
-            <div class="step-body">
-              <h3>Search a transcript window near the estimate</h3>
-              <p>
-                Podible does not scan the entire transcript for every probe. It finds the transcript word index nearest
-                the estimated timestamp, opens a bounded window around that point, and aligns the probe only inside that
-                window. This is why the algorithm stays tractable on long books.
-              </p>
-            </div>
-          </article>
-
-          <article class="flow-step">
-            <div class="step-index">C</div>
-            <div class="step-body">
-              <h3>Use fuzzy dynamic programming for probe alignment</h3>
-              <p>
-                Probe alignment is a dynamic-programming matrix over EPUB probe tokens and transcript tokens. A diagonal
-                step means “match or substitute these two tokens,” up means “skip the EPUB token,” and left means “skip
-                the transcript token.”
-              </p>
-              <p>
-                The scoring is intentionally forgiving:
-              </p>
-              <ul class="file-list">
-                <li>exact token match: strong positive score</li>
-                <li>prefix/suffix or small edit-distance match: smaller positive score</li>
-                <li>bad mismatch: negative score</li>
-                <li>skip/delete/insert: mild negative gap penalty</li>
-              </ul>
-              <p>
-                After filling the matrix, Podible backtracks only the best end column, keeps positively scored token
-                pairs, and rejects alignments that fail coverage or drift constraints.
-              </p>
-            </div>
-          </article>
-
-          <article class="flow-step">
-            <div class="step-index">D</div>
-            <div class="step-body">
-              <h3>Resolve the actual boundary timestamp</h3>
-              <p>
-                Podible tries multiple probe candidates and multiple estimated timestamps. It keeps the best alignment by
-                preferring higher coverage, then more matched tokens, then the result closest to the estimate. This
-                produces a resolved timestamp for the boundary, plus debug data about why it won.
-              </p>
-            </div>
-          </article>
-
-          <article class="flow-step">
-            <div class="step-index">E</div>
-            <div class="step-body">
-              <h3>Interpolate all chapter timings</h3>
-              <p>
-                Once some boundaries are resolved, Podible interpolates start times for all chapters between those
-                anchors using EPUB cumulative word ratios. That produces a full chapter timing list even when not every
-                raw boundary probe lands.
-              </p>
-              <p>
-                This is the point where the pipeline shifts from “find confident whole-book anchors” to “build a usable
-                chapter timeline.”
-              </p>
-            </div>
-          </article>
-
-          <article class="flow-step">
-            <div class="step-index">F</div>
-            <div class="step-body">
-              <h3>Find chapter-local anchors inside each interpolated window</h3>
-              <p>
-                For each chapter, Podible takes the interpolated start/end window and looks for stronger local anchors:
-                the chapter opening, the chapter ending, and a few informative mid-chapter anchor snippets chosen from
-                the EPUB text. Each of those anchors is aligned against the transcript window the same fuzzy way.
-              </p>
-            </div>
-          </article>
-
-          <article class="flow-step">
-            <div class="step-index">G</div>
-            <div class="step-body">
-              <h3>Fill the gaps between anchors with token-span alignment</h3>
-              <p>
-                Between any two accepted anchors, Podible aligns the EPUB token span and transcript token span with
-                another dynamic-programming pass. This is more local than the whole-book boundary stage: it works inside
-                one chapter and inside one bounded transcript region.
-              </p>
-            </div>
-          </article>
-
-          <article class="flow-step">
-            <div class="step-index">H</div>
-            <div class="step-body">
-              <h3>Project timestamps back onto canonical EPUB words</h3>
-              <p>
-                Each aligned EPUB word inherits the matched transcript word’s <code>startMs</code> and
-                <code>endMs</code>. EPUB words that do not get a direct transcript partner are filled by interpolation
-                between the nearest timed words, constrained by the chapter start/end window.
-              </p>
-              <p>
-                The result is a chapter-local stream of canonical EPUB words with timestamps, not just a noisy transcript
-                excerpt.
-              </p>
-            </div>
-          </article>
-        </div>
-      </section>
-
-      <section class="section">
-        <h2>Why there are two dynamic-programming passes</h2>
-        <div class="storage-grid">
-          <div class="panel">
-            <h3>Pass 1: whole-book boundary resolution</h3>
-            <p>
-              This pass is coarse and estimate-driven. Its job is to answer: “Where in the audiobook does the boundary
-              between these two EPUB chapters probably happen?”
-            </p>
-          </div>
-          <div class="panel">
-            <h3>Pass 2: chapter-local word projection</h3>
-            <p>
-              This pass is narrow and anchor-driven. Its job is to answer: “Inside this already-bounded chapter region,
-              which transcript words correspond to which canonical EPUB words?”
-            </p>
-          </div>
-          <div class="panel">
-            <h3>Why split them</h3>
-            <p>
-              Doing only a whole-book pass would be too weak for word-level projection. Doing only chapter-local passes
-              would be too fragile because the chapter windows would be unknown. The pipeline needs both.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section class="section">
-        <h2>Stored artifacts</h2>
-        <div class="storage-grid">
-          <div class="panel">
-            <h3><code>asset_transcripts.transcript_json</code></h3>
-            <p>
-              Stores the aligned transcript payload: canonical text, canonical words with timestamps, and per-chapter
-              transcript segments.
-            </p>
-          </div>
-          <div class="panel">
-            <h3><code>chapter_analysis.chapters_json</code></h3>
-            <p>
-              Stores chapter start and end timestamps for the preferred audio asset, which powers the chapter endpoint.
-            </p>
-          </div>
-          <div class="panel">
-            <h3><code>chapter_analysis.debug_json</code></h3>
-            <p>
-              Stores boundary counts, profiling, chunk counts, glossary data, and other debug information used to inspect
-              alignment quality.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section class="section">
-        <h2>Why worker threads were added</h2>
         <p>
-          Profiling showed that the expensive part was not SQLite or transcription orchestration. The hot path was pure
-          JavaScript alignment, especially boundary probing and chapter segment matching. Moving just that phase into a
-          small thread pool keeps the rest of the pipeline simple while preventing a handful of long alignment jobs from
-          monopolizing the main worker loop.
-        </p>
-        <p class="warning">
-          Important: the thread boundary is intentionally narrow. The worker thread does not touch the DB, the network,
-          EPUB parsing, or filesystem writes. It only runs the pure transcript analysis function.
-        </p>
-      </section>
-
-      <section class="section">
-        <h2>Relationship to the alignment demo</h2>
-        <p>
-          If you want the toy visualization for the token-matching part, see
-          <a href="./alignment-demo.html"><code>docs/alignment-demo.html</code></a>. That page is useful for the fuzzy
-          alignment intuition. This document is the production pipeline view.
+          <code>src/library/media.ts</code> owns chapter JSON. It reads embedded chapters for single-file audio and file
+          boundaries for multi-file audio. Transcript jobs do not mutate chapter output.
         </p>
       </section>
     </main>

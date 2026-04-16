@@ -5,7 +5,6 @@ import { parseRange, segmentsForRange, streamSegmentsWithXingPatch } from "../st
 import { buildId3ChaptersTag } from "../streaming/id3";
 import { readFfprobeChapters } from "../media/probe-cache";
 import { selectPreferredAudioAsset } from "./asset-selection";
-import { loadStoredChapterTimings } from "./chapter-analysis";
 
 import type { BooksRepo } from "../repo";
 import type { AssetFileRow, AssetRow, BookRow, LibraryBook } from "../app-types";
@@ -72,11 +71,7 @@ async function buildFallbackChapterTimings(asset: AssetRow, files: AssetFileRow[
   return out;
 }
 
-async function buildChapterTimings(repo: BooksRepo, asset: AssetRow, files: AssetFileRow[]): Promise<ChapterTiming[] | null> {
-  const stored = await loadStoredChapterTimings(repo, asset, files);
-  if (stored && stored.length > 0) {
-    return stored;
-  }
+async function buildChapterTimings(_repo: BooksRepo, asset: AssetRow, files: AssetFileRow[]): Promise<ChapterTiming[] | null> {
   return buildFallbackChapterTimings(asset, files);
 }
 
