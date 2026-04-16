@@ -335,7 +335,7 @@ describe("podible http", () => {
     db.close();
   });
 
-  test("serves activity page and queues a refresh job", async () => {
+  test("serves activity page and restricts library refresh to admins", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -390,13 +390,31 @@ describe("podible http", () => {
     expect(activityBody.includes("Books in progress")).toBe(true);
     expect(activityBody.includes("Recently ready")).toBe(true);
     expect(activityBody.includes("Needs attention")).toBe(true);
-    expect(activityBody.includes("Refresh library")).toBe(true);
+    expect(activityBody.includes("Refresh library")).toBe(false);
     expect(activityBody.includes("Broken Book")).toBe(true);
+
+    const rejected = await fetchHandler(
+      new Request("http://localhost/activity/refresh", {
+        method: "POST",
+        headers: { cookie: userCookie },
+      })
+    );
+    expect(rejected.status).toBe(403);
+    expect(repo.listJobsByType("full_library_refresh").length).toBe(0);
+
+    const adminCookie = createBrowserSessionCookie(repo, { isAdmin: true, username: "admin" });
+    const adminActivity = await fetchHandler(
+      new Request("http://localhost/activity", {
+        headers: { cookie: adminCookie },
+      })
+    );
+    expect(adminActivity.status).toBe(200);
+    expect((await adminActivity.text()).includes("Refresh library")).toBe(true);
 
     const refreshed = await fetchHandler(
       new Request("http://localhost/activity/refresh", {
         method: "POST",
-        headers: { cookie: userCookie },
+        headers: { cookie: adminCookie },
       })
     );
     expect(refreshed.status).toBe(303);

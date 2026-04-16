@@ -13,15 +13,20 @@ export function renderActivityPage(
   const recentBooks = repo.listAllBooks().filter((book) => book.status === "imported").slice(0, 8);
   const needsAttention = repo.listAllBooks().filter((book) => book.status === "error").slice(0, 8);
   const apiKey = flash.apiKey ?? null;
+  const canRefreshLibrary = Boolean(apiKey) || (flash.currentUser?.is_admin ?? 0) === 1;
   const body = `
     <section class="hero">
       <h1>Activity</h1>
       <p>What Podible is working on right now, what just landed, and anything that needs attention.</p>
-      <div class="actions" style="margin-top: 14px;">
-        <form method="post" action="${escapeHtml(addApiKey("/activity/refresh", apiKey))}">
-          <button type="submit">Refresh library</button>
-        </form>
-      </div>
+      ${
+        canRefreshLibrary
+          ? `<div class="actions" style="margin-top: 14px;">
+              <form method="post" action="${escapeHtml(addApiKey("/activity/refresh", apiKey))}">
+                <button type="submit">Refresh library</button>
+              </form>
+            </div>`
+          : ""
+      }
       ${messageMarkup(flash.notice, flash.error)}
     </section>
     <div class="grid">

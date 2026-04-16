@@ -9,7 +9,7 @@ import { renderBookPage } from "./book-page";
 import { renderLandingPage } from "./landing-page";
 import { renderLibraryPage } from "./library-page";
 import { renderLoginPage } from "./login-page";
-import { getCurrentSession, requireAuthenticatedPageSession, type HttpEnv } from "./middleware";
+import { getCurrentSession, requireAdminSession, requireAuthenticatedPageSession, type HttpEnv } from "./middleware";
 import { parseMediaSelection } from "./page-helpers";
 import { formString, parseId } from "./route-helpers";
 
@@ -136,7 +136,7 @@ export function createActivityRoutes(repo: BooksRepo): Hono<HttpEnv> {
     })
   );
 
-  app.post("/refresh", (c) => {
+  app.post("/refresh", requireAdminSession, (c) => {
     const job = repo.createJob({ type: "full_library_refresh" });
     return c.redirect(`/activity?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`, 303);
   });
