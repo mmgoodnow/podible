@@ -218,10 +218,13 @@ describe("chapter analysis", () => {
         job,
         {
           extractChunkClip: async () => audioPath,
-          transcribeChunk: async () => [
-            { startMs: 0, endMs: 500, raw: "The", token: "the" },
-            { startMs: 500, endMs: 1200, raw: "spice", token: "spice" },
-          ],
+          transcribeChunk: async () => ({
+            words: [
+              { startMs: 0, endMs: 500, raw: "The", token: "the" },
+              { startMs: 500, endMs: 1200, raw: "spice", token: "spice" },
+            ],
+            segments: [{ startMs: 0, endMs: 1200, text: "The spice" }],
+          }),
         }
       );
 
@@ -230,6 +233,9 @@ describe("chapter analysis", () => {
       expect(transcript?.words).toEqual([
         { startMs: 0, endMs: 500, text: "The", token: "the" },
         { startMs: 500, endMs: 1200, text: "spice", token: "spice" },
+      ]);
+      expect(transcript?.utterances).toEqual([
+        { startMs: 0, endMs: 1200, text: "The spice" },
       ]);
       expect(transcript?.chunks?.length).toBe(1);
       expect(repo.getChapterAnalysis(asset.id)?.chapters_json).toBeNull();

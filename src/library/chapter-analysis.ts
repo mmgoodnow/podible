@@ -15,8 +15,8 @@ import type { BooksRepo } from "../repo";
 import { selectPreferredAudioAsset } from "./asset-selection";
 
 const CHAPTER_ANALYSIS_SOURCE = "whisper_transcript";
-const CHAPTER_ANALYSIS_ALGORITHM_VERSION = "2026-04-16-transcript-only-v1";
-const CHAPTERS_API_VERSION = "1.4.0";
+const CHAPTER_ANALYSIS_ALGORITHM_VERSION = "2026-04-18-utterance-segments-v1";
+const CHAPTERS_API_VERSION = "1.5.0";
 const TIMESTAMP_TRANSCRIPTION_MODEL = "whisper-1";
 const CHAPTER_ANALYSIS_TRANSCRIPTION_CONCURRENCY = 2;
 const CHUNK_MS = 30 * 60_000;
@@ -173,6 +173,12 @@ type StoredTranscriptWord = {
   token: string;
 };
 
+type StoredTranscriptUtterance = {
+  startMs: number;
+  endMs: number;
+  text: string;
+};
+
 type StoredTranscriptChunk = {
   index: number;
   startMs: number;
@@ -188,6 +194,7 @@ type StoredTranscriptPayload = {
   version: string;
   text: string;
   words: StoredTranscriptWord[];
+  utterances?: StoredTranscriptUtterance[];
   chunks?: StoredTranscriptChunk[];
   rawText?: string;
   rawWords?: StoredTranscriptWord[];
@@ -217,6 +224,17 @@ type TranscriptWord = {
   raw: string;
 };
 
+type TranscriptSegment = {
+  startMs: number;
+  endMs: number;
+  text: string;
+};
+
+type TranscribedChunk = {
+  words: TranscriptWord[];
+  segments: TranscriptSegment[];
+};
+
 type TranscriptChunkPlan = {
   index: number;
   startMs: number;
@@ -228,6 +246,7 @@ type TranscriptChunkPlan = {
 type PersistedTranscriptChunk = TranscriptChunkPlan & {
   path: string;
   wordCount: number;
+  segmentCount: number;
 };
 
 type GlossaryTermStats = {
@@ -745,7 +764,7 @@ export async function transcribeChunk(
   clipPath: string,
   prompt: string,
   book: BookRow
-): Promise<TranscriptWord[]> {
+): Promise<TranscribedChunk> {
   const apiKey = settings.agents.apiKey.trim();
   if (!apiKey) throw new Error("OpenAI API key not configured");
   const requestTimeoutMs = Math.max(TRANSCRIPTION_TIMEOUT_MS, Math.trunc(settings.agents.timeoutMs || 30_000));
@@ -756,14 +775,13 @@ export async function transcribeChunk(
       file: createReadStream(clipPath),
       model: TIMESTAMP_TRANSCRIPTION_MODEL,
       response_format: "verbose_json",
-      timestamp_granularities: ["word"],
+      timestamp_granularities: ["word", "segment"],
       ...(transcriptionLanguage ? { language: transcriptionLanguage } : {}),
       prompt,
     },
     { timeout: requestTimeoutMs }
   )) as TranscriptionVerbose;
-  const words = Array.isArray(response.words) ? response.words : [];
-  return words
+  const words = (Array.isArray(response.words) ? response.words : [])
     .map((word) => ({
       startMs: Math.max(0, Math.round(Number(word.start) * 1000)),
       endMs: Math.max(0, Math.round(Number(word.end) * 1000)),
@@ -771,6 +789,14 @@ export async function transcribeChunk(
       raw: String(word.word ?? "").trim(),
     }))
     .filter((word) => Boolean(word.token));
+  const segments = (Array.isArray(response.segments) ? response.segments : [])
+    .map((segment) => ({
+      startMs: Math.max(0, Math.round(Number(segment.start) * 1000)),
+      endMs: Math.max(0, Math.round(Number(segment.end) * 1000)),
+      text: String(segment.text ?? "").trim(),
+    }))
+    .filter((segment) => segment.text.length > 0 && segment.endMs > segment.startMs);
+  return { words, segments };
 }
 
 function dedupeTranscriptWords(words: TranscriptWord[]): TranscriptWord[] {
@@ -790,39 +816,88 @@ function dedupeTranscriptWords(words: TranscriptWord[]): TranscriptWord[] {
   return deduped;
 }
 
-async function persistTranscriptChunk(workDir: string, chunk: TranscriptChunkPlan, words: TranscriptWord[]): Promise<PersistedTranscriptChunk> {
+async function persistTranscriptChunk(
+  workDir: string,
+  chunk: TranscriptChunkPlan,
+  transcribed: TranscribedChunk
+): Promise<PersistedTranscriptChunk> {
   const chunkPath = path.join(workDir, `chunk-${String(chunk.index).padStart(4, "0")}.json`);
-  await writeFile(chunkPath, JSON.stringify({ ...chunk, words }));
-  return { ...chunk, path: chunkPath, wordCount: words.length };
+  await writeFile(chunkPath, JSON.stringify({ ...chunk, words: transcribed.words, segments: transcribed.segments }));
+  return { ...chunk, path: chunkPath, wordCount: transcribed.words.length, segmentCount: transcribed.segments.length };
 }
 
-async function readPersistedTranscriptChunk(chunk: PersistedTranscriptChunk): Promise<TranscriptWord[]> {
-  const parsed = JSON.parse(await Bun.file(chunk.path).text()) as TranscriptChunkPlan & { words?: TranscriptWord[] };
-  return Array.isArray(parsed.words) ? parsed.words : [];
+async function readPersistedTranscriptChunk(chunk: PersistedTranscriptChunk): Promise<TranscribedChunk> {
+  const parsed = JSON.parse(await Bun.file(chunk.path).text()) as TranscriptChunkPlan & {
+    words?: TranscriptWord[];
+    segments?: TranscriptSegment[];
+  };
+  return {
+    words: Array.isArray(parsed.words) ? parsed.words : [],
+    segments: Array.isArray(parsed.segments) ? parsed.segments : [],
+  };
 }
 
-async function mergePersistedTranscriptChunks(chunks: PersistedTranscriptChunk[]): Promise<TranscriptWord[]> {
-  const merged: TranscriptWord[] = [];
+async function mergePersistedTranscriptChunks(
+  chunks: PersistedTranscriptChunk[]
+): Promise<{ words: TranscriptWord[]; segments: TranscriptSegment[] }> {
+  const mergedWords: TranscriptWord[] = [];
+  const mergedSegments: TranscriptSegment[] = [];
   for (const chunk of [...chunks].sort((a, b) => a.index - b.index)) {
-    const words = await readPersistedTranscriptChunk(chunk);
+    const { words, segments } = await readPersistedTranscriptChunk(chunk);
     const keepStartMs = chunk.startMs + chunk.trimStartMs;
     const keepEndMs = chunk.startMs + chunk.durationMs - chunk.trimEndMs;
     for (const word of words) {
       const startMs = word.startMs + chunk.startMs;
       const endMs = word.endMs + chunk.startMs;
       if (startMs < keepStartMs || endMs > keepEndMs) continue;
-      merged.push({ ...word, startMs, endMs });
+      mergedWords.push({ ...word, startMs, endMs });
+    }
+    for (const segment of segments) {
+      const startMs = segment.startMs + chunk.startMs;
+      const endMs = segment.endMs + chunk.startMs;
+      // v1: drop segments that straddle chunk trim seams. Reconstruction from overlap is a follow-up.
+      if (startMs < keepStartMs || endMs > keepEndMs) continue;
+      mergedSegments.push({ startMs, endMs, text: segment.text });
     }
   }
-  return dedupeTranscriptWords(merged.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs));
+  return {
+    words: dedupeTranscriptWords(mergedWords.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)),
+    segments: dedupeTranscriptSegments(mergedSegments.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)),
+  };
 }
 
-function storedTranscriptPayload(rawWords: TranscriptWord[], plans: TranscriptChunkPlan[]): StoredTranscriptPayload {
+function dedupeTranscriptSegments(segments: TranscriptSegment[]): TranscriptSegment[] {
+  const deduped: TranscriptSegment[] = [];
+  for (const segment of segments) {
+    const last = deduped[deduped.length - 1];
+    if (
+      last &&
+      last.text === segment.text &&
+      Math.abs(last.startMs - segment.startMs) <= 1_500 &&
+      Math.abs(last.endMs - segment.endMs) <= 1_500
+    ) {
+      continue;
+    }
+    deduped.push(segment);
+  }
+  return deduped;
+}
+
+function storedTranscriptPayload(
+  rawWords: TranscriptWord[],
+  plans: TranscriptChunkPlan[],
+  rawSegments: TranscriptSegment[] = []
+): StoredTranscriptPayload {
   const words = rawWords.map((word) => ({
     startMs: word.startMs,
     endMs: word.endMs,
     text: word.raw,
     token: word.token,
+  }));
+  const utterances: StoredTranscriptUtterance[] = rawSegments.map((segment) => ({
+    startMs: segment.startMs,
+    endMs: segment.endMs,
+    text: segment.text,
   }));
   const text = rawWords.map((word) => word.raw).filter(Boolean).join(" ").trim();
   const chunks = plans.map((plan) => {
@@ -849,6 +924,7 @@ function storedTranscriptPayload(rawWords: TranscriptWord[], plans: TranscriptCh
     version: CHAPTERS_API_VERSION,
     text,
     words,
+    ...(utterances.length > 0 ? { utterances } : {}),
     chunks,
     rawText: text,
     rawWords: words,
@@ -860,6 +936,7 @@ function publicStoredTranscriptPayload(payload: StoredTranscriptPayload): Stored
     version: payload.version,
     text: payload.text,
     words: payload.words,
+    ...(Array.isArray(payload.utterances) ? { utterances: payload.utterances } : {}),
     ...(Array.isArray(payload.chunks) ? { chunks: payload.chunks } : {}),
   };
 }
@@ -986,7 +1063,12 @@ async function transcribeAssetWithDeps(
   deps: ChapterAnalysisDeps,
   job: JobRow,
   glossary: string[]
-): Promise<{ transcriptWords: TranscriptWord[]; plans: TranscriptChunkPlan[]; chunkWordCounts: number[] }> {
+): Promise<{
+  transcriptWords: TranscriptWord[];
+  transcriptSegments: TranscriptSegment[];
+  plans: TranscriptChunkPlan[];
+  chunkWordCounts: number[];
+}> {
   const durationMs = asset.duration_ms ?? 0;
   if (durationMs <= 0) throw new Error("Audio asset duration is required for transcription");
   const plans = buildChunkPlan(durationMs);
@@ -1018,11 +1100,11 @@ async function transcribeAssetWithDeps(
               ctx,
               `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=transcribe clip=${JSON.stringify(clipPath)}`
             );
-            const words = await deps.transcribeChunk(settings, clipPath, prompt, book);
-            const persisted = await persistTranscriptChunk(workDir, plan, words);
+            const transcribed = await deps.transcribeChunk(settings, clipPath, prompt, book);
+            const persisted = await persistTranscriptChunk(workDir, plan, transcribed);
             log(
               ctx,
-              `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=done words=${words.length}`
+              `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=done words=${transcribed.words.length} segments=${transcribed.segments.length}`
             );
             return persisted;
           } finally {
@@ -1031,10 +1113,11 @@ async function transcribeAssetWithDeps(
         })
       )
     );
-    const transcriptWords = await mergePersistedTranscriptChunks(persistedChunks);
-    if (transcriptWords.length === 0) throw new Error("Whole-book transcription did not produce usable word timestamps");
+    const merged = await mergePersistedTranscriptChunks(persistedChunks);
+    if (merged.words.length === 0) throw new Error("Whole-book transcription did not produce usable word timestamps");
     return {
-      transcriptWords,
+      transcriptWords: merged.words,
+      transcriptSegments: merged.segments,
       plans,
       chunkWordCounts: persistedChunks.sort((a, b) => a.index - b.index).map((chunk) => chunk.wordCount),
     };
@@ -1153,7 +1236,7 @@ export async function processChapterAnalysisJob(
       plans = transcript.plans;
       chunkWordCounts = transcript.chunkWordCounts;
       transcriptSource = "new";
-      transcriptPayload = storedTranscriptPayload(transcriptWords, plans);
+      transcriptPayload = storedTranscriptPayload(transcriptWords, plans, transcript.transcriptSegments);
     }
 
     if (!transcriptPayload) {
