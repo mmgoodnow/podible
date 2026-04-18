@@ -10,11 +10,13 @@ import { runMigrations } from "../../src/db";
 import {
   buildChunkPlan,
   extractGlossaryTerms,
+  getBookTranscriptStatus,
   loadEpubEntries,
   loadStoredTranscriptPayload,
   normalizeTranscriptionLanguage,
   processChapterAnalysisJob,
   queueChapterAnalysisForBook,
+  requestBookTranscription,
 } from "../../src/library/chapter-analysis";
 import { buildChapters } from "../../src/library/media";
 import { BooksRepo } from "../../src/repo";
@@ -243,6 +245,55 @@ describe("chapter analysis", () => {
     } finally {
       db.close();
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("requestBookTranscription is idempotent and reports current/pending states", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "podible-transcript-status-"));
+    const { db, repo } = setupRepo();
+    try {
+      await mkdir(root, { recursive: true });
+      const audioPath = path.join(root, "audio.mp3");
+      await writeFile(audioPath, "fake audio bytes");
+      const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+      repo.addAsset({
+        bookId: book.id,
+        kind: "single",
+        mime: "audio/mpeg",
+        totalSize: 16,
+        durationMs: 1000,
+        files: [{ path: audioPath, size: 16, start: 0, end: 15, durationMs: 1000, title: null }],
+      });
+
+      const beforeApi = await getBookTranscriptStatus(repo, book.id, { apiKeyConfigured: false });
+      expect(beforeApi.status).toBe("missing_config");
+      expect(beforeApi.jobId).toBeNull();
+
+      const first = await requestBookTranscription(repo, book.id, { apiKeyConfigured: true });
+      expect(first.status).toBe("pending");
+      expect(first.jobId).not.toBeNull();
+      expect(repo.listJobsByType("chapter_analysis").length).toBe(1);
+
+      const second = await requestBookTranscription(repo, book.id, { apiKeyConfigured: true });
+      expect(second.status).toBe("pending");
+      expect(second.jobId).toBe(first.jobId);
+      expect(repo.listJobsByType("chapter_analysis").length).toBe(1);
+    } finally {
+      db.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("requestBookTranscription returns missing_audio when no audio asset", async () => {
+    const { db, repo } = setupRepo();
+    try {
+      const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+      const result = await requestBookTranscription(repo, book.id, { apiKeyConfigured: true });
+      expect(result.status).toBe("missing_audio");
+      expect(result.jobId).toBeNull();
+      expect(repo.listJobsByType("chapter_analysis").length).toBe(0);
+    } finally {
+      db.close();
     }
   });
 });

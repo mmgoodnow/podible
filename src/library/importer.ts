@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { getDurationSeconds } from "../media/probe-cache";
 import { normalizeAudioExt } from "../media/metadata";
-import { computeEpubWordCount, queueChapterAnalysisForBook } from "./chapter-analysis";
+import { computeEpubWordCount } from "./chapter-analysis";
 
 import type { BooksRepo } from "../repo";
 import type { AssetKind, MediaType, ReleaseRow } from "../app-types";
@@ -323,8 +323,6 @@ export async function importReleaseFromPath(
       repo.updateBookMetadata(book.id, { wordCount });
     }
   }
-
-  await queueChapterAnalysisForBook(repo, book.id);
 
   return {
     assetId: asset.id,

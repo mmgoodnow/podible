@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { createOrReuseBookFromOpenLibrary } from "../library/create";
+import { getBookTranscriptStatus, requestBookTranscription } from "../library/chapter-analysis";
 import { hydrateBookFromOpenLibrary } from "../library/hydration";
 import { RtorrentClient } from "../rtorrent";
 import { triggerAutoAcquire } from "../library/service";
@@ -305,6 +306,53 @@ export const libraryRouter = defineRouter({
         attempted: resolved.length,
         updatedBookIds,
       };
+    },
+  }),
+
+  transcriptStatus: defineMethod({
+    auth: "user",
+    readOnly: true,
+    summary: "Report transcript state for a book's preferred audio asset.",
+    paramsSchema: emptyParamsSchema.extend({
+      bookId: positiveIntSchema,
+    }),
+    resultSchema: z.object({
+      status: z.enum(["current", "stale", "pending", "running", "failed", "missing_audio", "missing_config"]),
+      fingerprint: z.string().nullable(),
+      currentFingerprint: z.string().nullable(),
+      jobId: positiveIntSchema.nullable(),
+      error: z.string().nullable(),
+    }),
+    async handler(ctx, params) {
+      const book = ctx.repo.getBookRow(params.bookId);
+      if (!book) {
+        throw new RpcError(-32000, "Book not found", { error: "not_found", bookId: params.bookId });
+      }
+      const apiKeyConfigured = Boolean(ctx.repo.getSettings().agents.apiKey.trim());
+      return await getBookTranscriptStatus(ctx.repo, params.bookId, { apiKeyConfigured });
+    },
+  }),
+
+  requestTranscription: defineMethod({
+    auth: "user",
+    summary: "Pull-trigger transcription for a book. Idempotent; returns current status.",
+    paramsSchema: emptyParamsSchema.extend({
+      bookId: positiveIntSchema,
+    }),
+    resultSchema: z.object({
+      status: z.enum(["current", "stale", "pending", "running", "failed", "missing_audio", "missing_config"]),
+      fingerprint: z.string().nullable(),
+      currentFingerprint: z.string().nullable(),
+      jobId: positiveIntSchema.nullable(),
+      error: z.string().nullable(),
+    }),
+    async handler(ctx, params) {
+      const book = ctx.repo.getBookRow(params.bookId);
+      if (!book) {
+        throw new RpcError(-32000, "Book not found", { error: "not_found", bookId: params.bookId });
+      }
+      const apiKeyConfigured = Boolean(ctx.repo.getSettings().agents.apiKey.trim());
+      return await requestBookTranscription(ctx.repo, params.bookId, { apiKeyConfigured });
     },
   }),
 

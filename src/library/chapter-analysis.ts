@@ -1143,6 +1143,114 @@ export async function queueChapterAnalysisForBook(repo: BooksRepo, bookId: numbe
   });
 }
 
+export type TranscriptRequestStatus =
+  | "current"
+  | "stale"
+  | "pending"
+  | "running"
+  | "failed"
+  | "missing_audio"
+  | "missing_config";
+
+export type TranscriptRequestResult = {
+  status: TranscriptRequestStatus;
+  fingerprint: string | null;
+  currentFingerprint: string | null;
+  jobId: number | null;
+  error: string | null;
+};
+
+async function buildTranscriptStatus(
+  repo: BooksRepo,
+  bookId: number,
+  options: { apiKeyConfigured: boolean }
+): Promise<{
+  audioAsset: AssetRow | null;
+  epubAsset: AssetRow | null;
+  files: AssetFileRow[];
+  transcript: AssetTranscriptRow | null;
+  currentFingerprint: string | null;
+  base: TranscriptRequestResult;
+}> {
+  const assets = repo.listAssetsByBook(bookId);
+  const audioAsset = selectPreferredAudioAsset(assets);
+  const epubAsset = selectPreferredEpubAsset(assets);
+  if (!audioAsset) {
+    return {
+      audioAsset: null,
+      epubAsset,
+      files: [],
+      transcript: null,
+      currentFingerprint: null,
+      base: { status: "missing_audio", fingerprint: null, currentFingerprint: null, jobId: null, error: null },
+    };
+  }
+  const files = repo.getAssetFiles(audioAsset.id);
+  const currentFingerprint = await computeTranscriptFingerprint(audioAsset, files);
+  const transcript = repo.getAssetTranscript(audioAsset.id);
+  const existingJob = repo.findQueuedOrRunningJobByAsset("chapter_analysis", audioAsset.id);
+
+  let status: TranscriptRequestStatus;
+  if (existingJob) {
+    status = existingJob.status === "running" ? "running" : "pending";
+  } else if (transcript?.status === "succeeded" && transcript.fingerprint === currentFingerprint) {
+    status = "current";
+  } else if (transcript?.status === "failed" && transcript.fingerprint === currentFingerprint) {
+    status = "failed";
+  } else if (transcript?.status === "succeeded") {
+    status = "stale";
+  } else if (!options.apiKeyConfigured) {
+    status = "missing_config";
+  } else {
+    status = transcript?.status === "failed" ? "failed" : "stale";
+  }
+
+  return {
+    audioAsset,
+    epubAsset,
+    files,
+    transcript,
+    currentFingerprint,
+    base: {
+      status,
+      fingerprint: transcript?.fingerprint ?? null,
+      currentFingerprint,
+      jobId: existingJob?.id ?? null,
+      error: transcript?.error ?? null,
+    },
+  };
+}
+
+export async function getBookTranscriptStatus(
+  repo: BooksRepo,
+  bookId: number,
+  options: { apiKeyConfigured: boolean }
+): Promise<TranscriptRequestResult> {
+  const { base } = await buildTranscriptStatus(repo, bookId, options);
+  return base;
+}
+
+export async function requestBookTranscription(
+  repo: BooksRepo,
+  bookId: number,
+  options: { apiKeyConfigured: boolean }
+): Promise<TranscriptRequestResult> {
+  const { audioAsset, epubAsset, base } = await buildTranscriptStatus(repo, bookId, options);
+  if (!audioAsset) return base;
+  if (base.status === "current" || base.status === "pending" || base.status === "running") return base;
+  if (base.status === "missing_config") return base;
+
+  const job = repo.createJob({
+    type: "chapter_analysis",
+    bookId,
+    payload: {
+      assetId: audioAsset.id,
+      ...(epubAsset ? { ebookAssetId: epubAsset.id } : {}),
+    },
+  });
+  return { ...base, status: "pending", jobId: job.id };
+}
+
 export async function processChapterAnalysisJob(
   ctx: ChapterAnalysisContext,
   job: JobRow,
