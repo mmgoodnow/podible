@@ -1186,7 +1186,12 @@ async function buildTranscriptStatus(
     };
   }
   const files = repo.getAssetFiles(audioAsset.id);
-  const currentFingerprint = await computeTranscriptFingerprint(audioAsset, files);
+  let currentFingerprint: string | null;
+  try {
+    currentFingerprint = await computeTranscriptFingerprint(audioAsset, files);
+  } catch {
+    currentFingerprint = null;
+  }
   const transcript = repo.getAssetTranscript(audioAsset.id);
   const existingJob = repo.findQueuedOrRunningJobByAsset("chapter_analysis", audioAsset.id);
 

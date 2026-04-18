@@ -264,8 +264,9 @@ describe("podible http", () => {
     const detailBody = await detail.text();
     expect(detailBody.includes("Play audio")).toBe(true);
     expect(detailBody.includes("Available now")).toBe(true);
-    expect(detailBody.includes("<strong>Transcript:</strong> Not ready yet")).toBe(true);
-    expect(detailBody.includes("Transcript JSON")).toBe(false);
+    expect(detailBody.includes("data-transcript-panel")).toBe(true);
+    // No transcript row and no API key → "Unavailable" messaging.
+    expect(detailBody.includes("Unavailable (API key not configured)")).toBe(true);
     expect(detailBody.includes("Find audio")).toBe(true);
     expect(detailBody.includes("Release history")).toBe(true);
 
