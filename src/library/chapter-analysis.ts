@@ -9,13 +9,16 @@ import { initEpubFile } from "@lingo-reader/epub-parser";
 import OpenAI from "openai";
 import type { TranscriptionVerbose } from "openai/resources/audio/transcriptions";
 
+import { promises as fsPromises } from "node:fs";
+
 import { configDir, ensureConfigDirSync } from "../config";
 import type { AppSettings, AssetFileRow, AssetRow, AssetTranscriptRow, BookRow, JobRow } from "../app-types";
+import { readFfprobeChapters } from "../media/probe-cache";
 import type { BooksRepo } from "../repo";
 import { selectPreferredAudioAsset } from "./asset-selection";
 
 const CHAPTER_ANALYSIS_SOURCE = "whisper_transcript";
-const CHAPTER_ANALYSIS_ALGORITHM_VERSION = "2026-04-18-utterance-segments-v1";
+const CHAPTER_ANALYSIS_ALGORITHM_VERSION = "2026-04-22-chapter-snap-v1";
 const CHAPTERS_API_VERSION = "1.5.0";
 const TIMESTAMP_TRANSCRIPTION_MODEL = "whisper-1";
 const CHAPTER_ANALYSIS_TRANSCRIPTION_CONCURRENCY = 2;
@@ -630,20 +633,76 @@ export function extractGlossaryTerms(entries: EpubChapterEntry[], ordinaryWords 
     .map((entry) => entry.display);
 }
 
-export function buildChunkPlan(durationMs: number): TranscriptChunkPlan[] {
+const CHUNK_BOUNDARY_SNAP_WINDOW_MS = 60_000;
+
+async function collectAssetChapterBoundariesMs(asset: AssetRow, files: AssetFileRow[]): Promise<number[]> {
+  if (asset.kind === "ebook") return [];
+  const boundaries = new Set<number>();
+  if (asset.kind === "single") {
+    const file = files[0];
+    if (!file) return [];
+    const stat = await fsPromises.stat(file.path).catch(() => null);
+    if (!stat) return [];
+    const chapters = readFfprobeChapters(file.path, Number(stat.mtimeMs));
+    if (chapters) for (const chapter of chapters) boundaries.add(chapter.startMs);
+    return [...boundaries].filter((b) => b > 0).sort((a, b) => a - b);
+  }
+  // Multi-file assets: per-file boundaries are at the cumulative file start times.
+  let cursor = 0;
+  for (const file of files) {
+    if (cursor > 0) boundaries.add(cursor);
+    cursor += file.duration_ms;
+  }
+  return [...boundaries].sort((a, b) => a - b);
+}
+
+function snapChunkEndToChapterBoundary(
+  nominalEndMs: number,
+  startMs: number,
+  durationMs: number,
+  chapterBoundariesMs: number[]
+): number {
+  if (chapterBoundariesMs.length === 0) return Math.min(nominalEndMs, durationMs);
+  const minEndMs = startMs + CHUNK_MS / 2; // never snap so short that we'd make a useless tiny chunk
+  const maxEndMs = Math.min(durationMs, startMs + CHUNK_MS + CHUNK_BOUNDARY_SNAP_WINDOW_MS);
+  let best: number | null = null;
+  let bestDelta = Number.POSITIVE_INFINITY;
+  for (const boundary of chapterBoundariesMs) {
+    if (boundary <= minEndMs) continue;
+    if (boundary > maxEndMs) break;
+    if (Math.abs(boundary - nominalEndMs) > CHUNK_BOUNDARY_SNAP_WINDOW_MS) continue;
+    const delta = Math.abs(boundary - nominalEndMs);
+    if (delta < bestDelta) {
+      best = boundary;
+      bestDelta = delta;
+    }
+  }
+  if (best == null) return Math.min(nominalEndMs, durationMs);
+  return best;
+}
+
+export function buildChunkPlan(durationMs: number, chapterBoundariesMs: number[] = []): TranscriptChunkPlan[] {
   if (!Number.isFinite(durationMs) || durationMs <= 0) return [];
-  const stepMs = CHUNK_MS - CHUNK_OVERLAP_MS;
   const overlapTrimMs = Math.round(CHUNK_OVERLAP_MS / 2);
+  const boundaries = [...chapterBoundariesMs]
+    .filter((b) => Number.isFinite(b) && b > 0 && b < durationMs)
+    .sort((a, b) => a - b);
   const chunks: TranscriptChunkPlan[] = [];
-  for (let startMs = 0, index = 0; startMs < durationMs; startMs += stepMs, index += 1) {
-    const chunkDurationMs = Math.min(CHUNK_MS, durationMs - startMs);
+  let startMs = 0;
+  for (let index = 0; startMs < durationMs; index += 1) {
+    const nominalEndMs = Math.min(durationMs, startMs + CHUNK_MS);
+    const endMs = snapChunkEndToChapterBoundary(nominalEndMs, startMs, durationMs, boundaries);
+    const chunkDurationMs = endMs - startMs;
+    const isLast = endMs >= durationMs;
     chunks.push({
       index,
       startMs,
       durationMs: chunkDurationMs,
       trimStartMs: index === 0 ? 0 : overlapTrimMs,
-      trimEndMs: startMs + chunkDurationMs >= durationMs ? 0 : overlapTrimMs,
+      trimEndMs: isLast ? 0 : overlapTrimMs,
     });
+    if (isLast) break;
+    startMs = endMs - CHUNK_OVERLAP_MS;
   }
   return chunks;
 }
@@ -1071,7 +1130,8 @@ async function transcribeAssetWithDeps(
 }> {
   const durationMs = asset.duration_ms ?? 0;
   if (durationMs <= 0) throw new Error("Audio asset duration is required for transcription");
-  const plans = buildChunkPlan(durationMs);
+  const chapterBoundariesMs = await collectAssetChapterBoundariesMs(asset, files);
+  const plans = buildChunkPlan(durationMs, chapterBoundariesMs);
   if (plans.length === 0) throw new Error("No audio chunks available for transcription");
 
   const workDir = await mkdtemp(path.join(os.tmpdir(), "podible-transcript-"));

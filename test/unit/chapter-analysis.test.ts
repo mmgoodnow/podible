@@ -172,6 +172,30 @@ describe("chapter analysis", () => {
     expect(chunks[1]?.trimEndMs).toBe(0);
   });
 
+  test("snaps chunk boundaries to nearby chapter markers", () => {
+    // 62-min audio with chapter markers at 29:30 and 58:45 (close to the next nominal end).
+    const durationMs = 62 * 60_000;
+    const boundaries = [29.5 * 60_000, 58.75 * 60_000];
+    const chunks = buildChunkPlan(durationMs, boundaries);
+    // First chunk snaps end from 30:00 to 29:30 (within ±60s window).
+    expect(chunks[0]?.startMs).toBe(0);
+    expect(chunks[0]?.durationMs).toBe(29.5 * 60_000);
+    // Second chunk starts at 29:30 - 30s overlap = 29:00. Nominal end 59:00 snaps to 58:45.
+    expect(chunks[1]?.startMs).toBe(29 * 60_000);
+    expect(chunks[1]?.startMs + chunks[1]!.durationMs).toBe(58.75 * 60_000);
+    // Third chunk runs to the end of the 62-min audio.
+    expect(chunks[2]?.startMs).toBe(58.75 * 60_000 - 30_000);
+    expect(chunks[2]?.trimEndMs).toBe(0);
+    expect(chunks[2]!.startMs + chunks[2]!.durationMs).toBe(durationMs);
+  });
+
+  test("ignores chapter markers outside the snap window", () => {
+    // Marker at 15:00 is far from the 30:00 nominal boundary — should not snap.
+    const chunks = buildChunkPlan(35 * 60_000, [15 * 60_000]);
+    expect(chunks[0]?.durationMs).toBe(30 * 60_000);
+    expect(chunks[1]?.startMs).toBe(29 * 60_000 + 30_000);
+  });
+
   test("stores raw timestamp transcript payload and leaves chapter timings to audio metadata", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "podible-transcript-test-"));
     const { db, repo } = setupRepo();
