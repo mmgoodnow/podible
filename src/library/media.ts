@@ -114,14 +114,16 @@ function stripTerminalPunctuation(text: string): string {
   return text.replace(/[\s.,:;!?\-—–]+$/u, "");
 }
 
-function applyTranscriptLabels(timings: ChapterTiming[], utterances: StoredTranscriptUtterance[]): ChapterTiming[] {
+export function applyTranscriptLabels(timings: ChapterTiming[], utterances: StoredTranscriptUtterance[]): ChapterTiming[] {
   if (utterances.length === 0) return timings;
   const sorted = [...utterances].sort((a, b) => a.startMs - b.startMs);
   return timings.map((chapter) => {
     if (!isGenericChapterLabel(chapter.title)) return chapter;
     const label = pickTranscriptLabelForWindow(sorted, chapter.startMs, chapter.endMs);
-    if (!label) return chapter;
-    return { ...chapter, title: label };
+    if (label) return { ...chapter, title: label };
+    // Transcript is available but has nothing inside this window — mark explicitly
+    // so the UI doesn't read as if this were a normal content chapter.
+    return { ...chapter, title: `Unknown (${chapter.title.trim()})` };
   });
 }
 

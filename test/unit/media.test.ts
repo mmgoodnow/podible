@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { isGenericChapterLabel, pickTranscriptLabelForWindow, selectPreferredAudioAsset } from "../../src/library/media";
+import { applyTranscriptLabels, isGenericChapterLabel, pickTranscriptLabelForWindow, selectPreferredAudioAsset } from "../../src/library/media";
 import type { AssetRow } from "../../src/app-types";
 
 function asset(overrides: Partial<AssetRow>): AssetRow {
@@ -69,5 +69,25 @@ describe("chapter label heuristics", () => {
   test("returns null when no utterance falls in the window", () => {
     const utterances = [{ startMs: 0, endMs: 1000, text: "Intro" }];
     expect(pickTranscriptLabelForWindow(utterances, 5000, 10_000)).toBeNull();
+  });
+
+  test("marks unlabeled generic chapters as 'Unknown (<original>)' when a transcript is present", () => {
+    const timings = [
+      { id: "ch0", title: "Chapter 1", startMs: 0, endMs: 10_000 },
+      { id: "ch1", title: "Chapter 2", startMs: 10_000, endMs: 20_000 },
+      { id: "ch2", title: "Prologue", startMs: 20_000, endMs: 30_000 }, // non-generic, should not be touched
+    ];
+    // Transcript only has content for chapter 2's window.
+    const utterances = [{ startMs: 12_000, endMs: 14_000, text: "Hello world" }];
+    const labeled = applyTranscriptLabels(timings, utterances);
+    expect(labeled[0]?.title).toBe("Unknown (Chapter 1)");
+    expect(labeled[1]?.title).toBe("Hello world");
+    expect(labeled[2]?.title).toBe("Prologue");
+  });
+
+  test("leaves chapters untouched when no utterances are available at all", () => {
+    const timings = [{ id: "ch0", title: "Chapter 1", startMs: 0, endMs: 10_000 }];
+    const labeled = applyTranscriptLabels(timings, []);
+    expect(labeled[0]?.title).toBe("Chapter 1");
   });
 });
