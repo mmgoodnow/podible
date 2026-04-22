@@ -18,7 +18,7 @@ import type { BooksRepo } from "../repo";
 import { selectPreferredAudioAsset } from "./asset-selection";
 
 const CHAPTER_ANALYSIS_SOURCE = "whisper_transcript";
-const CHAPTER_ANALYSIS_ALGORITHM_VERSION = "2026-04-22-chapter-snap-v1";
+const CHAPTER_ANALYSIS_ALGORITHM_VERSION = "2026-04-22-seam-midpoint-v1";
 const CHAPTERS_API_VERSION = "1.5.0";
 const TIMESTAMP_TRANSCRIPTION_MODEL = "whisper-1";
 const CHAPTER_ANALYSIS_TRANSCRIPTION_CONCURRENCY = 2;
@@ -896,11 +896,32 @@ async function readPersistedTranscriptChunk(chunk: PersistedTranscriptChunk): Pr
   };
 }
 
+export function mergeChunkSegments(
+  chunks: Array<{ plan: TranscriptChunkPlan; segments: TranscriptSegment[] }>
+): TranscriptSegment[] {
+  const merged: TranscriptSegment[] = [];
+  for (const { plan, segments } of [...chunks].sort((a, b) => a.plan.index - b.plan.index)) {
+    const keepStartMs = plan.startMs + plan.trimStartMs;
+    const keepEndMs = plan.startMs + plan.durationMs - plan.trimEndMs;
+    for (const segment of segments) {
+      const startMs = segment.startMs + plan.startMs;
+      const endMs = segment.endMs + plan.startMs;
+      // Midpoint-wins: whichever chunk contains the segment's midpoint is the
+      // canonical owner. Segments that straddle a seam are kept once (from the
+      // chunk whose keep range includes the midpoint) instead of dropped twice.
+      const midMs = Math.round((startMs + endMs) / 2);
+      if (midMs < keepStartMs || midMs >= keepEndMs) continue;
+      merged.push({ startMs, endMs, text: segment.text });
+    }
+  }
+  return dedupeTranscriptSegments(merged.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs));
+}
+
 async function mergePersistedTranscriptChunks(
   chunks: PersistedTranscriptChunk[]
 ): Promise<{ words: TranscriptWord[]; segments: TranscriptSegment[] }> {
   const mergedWords: TranscriptWord[] = [];
-  const mergedSegments: TranscriptSegment[] = [];
+  const segmentInputs: Array<{ plan: TranscriptChunkPlan; segments: TranscriptSegment[] }> = [];
   for (const chunk of [...chunks].sort((a, b) => a.index - b.index)) {
     const { words, segments } = await readPersistedTranscriptChunk(chunk);
     const keepStartMs = chunk.startMs + chunk.trimStartMs;
@@ -911,17 +932,11 @@ async function mergePersistedTranscriptChunks(
       if (startMs < keepStartMs || endMs > keepEndMs) continue;
       mergedWords.push({ ...word, startMs, endMs });
     }
-    for (const segment of segments) {
-      const startMs = segment.startMs + chunk.startMs;
-      const endMs = segment.endMs + chunk.startMs;
-      // v1: drop segments that straddle chunk trim seams. Reconstruction from overlap is a follow-up.
-      if (startMs < keepStartMs || endMs > keepEndMs) continue;
-      mergedSegments.push({ startMs, endMs, text: segment.text });
-    }
+    segmentInputs.push({ plan: chunk, segments });
   }
   return {
     words: dedupeTranscriptWords(mergedWords.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)),
-    segments: dedupeTranscriptSegments(mergedSegments.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)),
+    segments: mergeChunkSegments(segmentInputs),
   };
 }
 
@@ -1492,4 +1507,4 @@ export async function processChapterAnalysisJob(
 }
 
 export { CHAPTERS_API_VERSION, CHAPTER_ANALYSIS_ALGORITHM_VERSION };
-export type { StoredTranscriptPayload, TranscriptWord, TranscriptChunkPlan, EpubChapterEntry };
+export type { StoredTranscriptPayload, TranscriptWord, TranscriptChunkPlan, TranscriptSegment, EpubChapterEntry };

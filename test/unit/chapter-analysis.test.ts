@@ -13,6 +13,7 @@ import {
   getBookTranscriptStatus,
   loadEpubEntries,
   loadStoredTranscriptPayload,
+  mergeChunkSegments,
   normalizeTranscriptionLanguage,
   processChapterAnalysisJob,
   queueChapterAnalysisForBook,
@@ -187,6 +188,34 @@ describe("chapter analysis", () => {
     expect(chunks[2]?.startMs).toBe(58.75 * 60_000 - 30_000);
     expect(chunks[2]?.trimEndMs).toBe(0);
     expect(chunks[2]!.startMs + chunks[2]!.durationMs).toBe(durationMs);
+  });
+
+  test("merges chunk segments by midpoint ownership", () => {
+    // Two adjacent 30-min chunks with a 30s overlap (seam at 29:45 per trim).
+    // Chunk 0 covers 0–30min, keep [0, 29:45]. Chunk 1 covers 29:30–60min, keep [29:45, 59:45].
+    const chunk0Plan = { index: 0, startMs: 0, durationMs: 30 * 60_000, trimStartMs: 0, trimEndMs: 15_000 };
+    const chunk1Plan = { index: 1, startMs: 29 * 60_000 + 30_000, durationMs: 30 * 60_000, trimStartMs: 15_000, trimEndMs: 0 };
+    // A seam-straddling segment: 29:40 -> 29:50 (midpoint 29:45, on the seam).
+    // In chunk 0's frame: absolute 29:40-29:50 => relative (29:40, 29:50).
+    // In chunk 1's frame: absolute 29:40-29:50 => relative (10s, 20s).
+    const chunk0Segments = [
+      { startMs: 0, endMs: 60_000, text: "hello world" },
+      { startMs: 29 * 60_000 + 40_000, endMs: 29 * 60_000 + 50_000, text: "seam utterance" },
+    ];
+    const chunk1Segments = [
+      { startMs: 10_000, endMs: 20_000, text: "seam utterance" }, // same utterance, chunk-1 frame
+      { startMs: 60_000, endMs: 120_000, text: "later" },
+    ];
+    const merged = mergeChunkSegments([
+      { plan: chunk0Plan, segments: chunk0Segments },
+      { plan: chunk1Plan, segments: chunk1Segments },
+    ]);
+    // Seam utterance should appear exactly once.
+    const seamCount = merged.filter((s) => s.text === "seam utterance").length;
+    expect(seamCount).toBe(1);
+    // The other segments should also be present.
+    expect(merged.find((s) => s.text === "hello world")).toBeDefined();
+    expect(merged.find((s) => s.text === "later")).toBeDefined();
   });
 
   test("ignores chapter markers outside the snap window", () => {
