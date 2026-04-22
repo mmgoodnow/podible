@@ -40,6 +40,11 @@ describe("chapter label heuristics", () => {
     expect(isGenericChapterLabel("Chapter 1")).toBe(true);
     expect(isGenericChapterLabel("Chapter One")).toBe(true);
     expect(isGenericChapterLabel("chapter 42")).toBe(true);
+    expect(isGenericChapterLabel("Ch. 5")).toBe(true);
+    expect(isGenericChapterLabel("001")).toBe(true);
+    expect(isGenericChapterLabel("14")).toBe(true);
+    expect(isGenericChapterLabel("Track 01")).toBe(true);
+    expect(isGenericChapterLabel("Part 2")).toBe(true);
     expect(isGenericChapterLabel("Prologue")).toBe(false);
     expect(isGenericChapterLabel("Chapter 1: The Beginning")).toBe(false);
     expect(isGenericChapterLabel("")).toBe(false);

@@ -73,11 +73,17 @@ async function buildFallbackChapterTimings(asset: AssetRow, files: AssetFileRow[
   return out;
 }
 
-const GENERIC_CHAPTER_LABEL_RE = /^\s*chapter\s+[0-9a-z]+\s*$/i;
+const GENERIC_CHAPTER_LABEL_RES: RegExp[] = [
+  /^\s*chapter\s+[0-9a-z]+\s*$/i, // "Chapter 1", "chapter one"
+  /^\s*ch\.?\s*[0-9a-z]+\s*$/i, // "Ch 1", "Ch. 12"
+  /^\s*[0-9]{1,4}\s*$/, // "1", "001"
+  /^\s*track\s+[0-9a-z]+\s*$/i, // "Track 01"
+  /^\s*part\s+[0-9a-z]+\s*$/i, // "Part 2"
+];
 const TRANSCRIPT_LABEL_MAX_CHARS = 60;
 
 export function isGenericChapterLabel(label: string): boolean {
-  return GENERIC_CHAPTER_LABEL_RE.test(label);
+  return GENERIC_CHAPTER_LABEL_RES.some((re) => re.test(label));
 }
 
 export function pickTranscriptLabelForWindow(
