@@ -3,6 +3,8 @@ import path from "node:path";
 
 import { parseRange, segmentsForRange, streamSegmentsWithXingPatch } from "../streaming/range";
 import { buildId3ChaptersTag } from "../streaming/id3";
+import { loadStoredTranscriptPayload } from "./chapter-analysis";
+import type { StoredTranscriptUtterance } from "./chapter-analysis";
 import { readFfprobeChapters } from "../media/probe-cache";
 import { selectPreferredAudioAsset } from "./asset-selection";
 
@@ -71,8 +73,60 @@ async function buildFallbackChapterTimings(asset: AssetRow, files: AssetFileRow[
   return out;
 }
 
-async function buildChapterTimings(_repo: BooksRepo, asset: AssetRow, files: AssetFileRow[]): Promise<ChapterTiming[] | null> {
-  return buildFallbackChapterTimings(asset, files);
+const GENERIC_CHAPTER_LABEL_RE = /^\s*chapter\s+[0-9a-z]+\s*$/i;
+const TRANSCRIPT_LABEL_MAX_CHARS = 60;
+
+export function isGenericChapterLabel(label: string): boolean {
+  return GENERIC_CHAPTER_LABEL_RE.test(label);
+}
+
+export function pickTranscriptLabelForWindow(
+  utterances: StoredTranscriptUtterance[],
+  windowStartMs: number,
+  windowEndMs: number
+): string | null {
+  // Find the first utterance whose midpoint is inside the window.
+  const windowMs = windowEndMs - windowStartMs;
+  if (windowMs <= 0) return null;
+  for (const u of utterances) {
+    const mid = (u.startMs + u.endMs) / 2;
+    if (mid < windowStartMs) continue;
+    if (mid >= windowEndMs) return null;
+    const text = u.text.trim().replace(/\s+/g, " ");
+    if (!text) continue;
+    if (text.length <= TRANSCRIPT_LABEL_MAX_CHARS) return stripTerminalPunctuation(text);
+    // Truncate at the last word boundary before the limit, then add ellipsis.
+    const slice = text.slice(0, TRANSCRIPT_LABEL_MAX_CHARS);
+    const lastSpace = slice.lastIndexOf(" ");
+    const cut = lastSpace > TRANSCRIPT_LABEL_MAX_CHARS / 2 ? slice.slice(0, lastSpace) : slice;
+    return `${stripTerminalPunctuation(cut)}…`;
+  }
+  return null;
+}
+
+function stripTerminalPunctuation(text: string): string {
+  return text.replace(/[\s.,:;!?\-—–]+$/u, "");
+}
+
+function applyTranscriptLabels(timings: ChapterTiming[], utterances: StoredTranscriptUtterance[]): ChapterTiming[] {
+  if (utterances.length === 0) return timings;
+  const sorted = [...utterances].sort((a, b) => a.startMs - b.startMs);
+  return timings.map((chapter) => {
+    if (!isGenericChapterLabel(chapter.title)) return chapter;
+    const label = pickTranscriptLabelForWindow(sorted, chapter.startMs, chapter.endMs);
+    if (!label) return chapter;
+    return { ...chapter, title: label };
+  });
+}
+
+async function buildChapterTimings(repo: BooksRepo, asset: AssetRow, files: AssetFileRow[]): Promise<ChapterTiming[] | null> {
+  const timings = await buildFallbackChapterTimings(asset, files);
+  if (!timings || timings.length === 0) return timings;
+  if (asset.kind === "ebook") return timings;
+  const transcript = await loadStoredTranscriptPayload(repo, asset.id).catch(() => null);
+  const utterances = transcript?.utterances ?? [];
+  if (utterances.length === 0) return timings;
+  return applyTranscriptLabels(timings, utterances);
 }
 
 export async function buildChapters(

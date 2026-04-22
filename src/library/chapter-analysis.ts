@@ -1507,4 +1507,4 @@ export async function processChapterAnalysisJob(
 }
 
 export { CHAPTERS_API_VERSION, CHAPTER_ANALYSIS_ALGORITHM_VERSION };
-export type { StoredTranscriptPayload, TranscriptWord, TranscriptChunkPlan, TranscriptSegment, EpubChapterEntry };
+export type { StoredTranscriptPayload, StoredTranscriptUtterance, TranscriptWord, TranscriptChunkPlan, TranscriptSegment, EpubChapterEntry };
