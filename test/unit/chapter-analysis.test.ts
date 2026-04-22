@@ -15,6 +15,7 @@ import {
   loadStoredTranscriptPayload,
   mergeChunkSegments,
   normalizeTranscriptionLanguage,
+  parseWhisperResponse,
   processChapterAnalysisJob,
   queueChapterAnalysisForBook,
   requestBookTranscription,
@@ -216,6 +217,34 @@ describe("chapter analysis", () => {
     // The other segments should also be present.
     expect(merged.find((s) => s.text === "hello world")).toBeDefined();
     expect(merged.find((s) => s.text === "later")).toBeDefined();
+  });
+
+  test("rescales Whisper timestamps to real audio time when audio was sped up", () => {
+    // Whisper response represents a 2x sped-up clip. A word Whisper says ends
+    // at 0.5s in its own frame is really at 1.0s in the original audio.
+    const response = {
+      words: [
+        { word: "Hello", start: 0, end: 0.5 },
+        { word: "world", start: 0.5, end: 1.0 },
+      ],
+      segments: [{ start: 0, end: 1.0, text: "Hello world" }],
+    } as unknown as Parameters<typeof parseWhisperResponse>[0];
+    const parsed = parseWhisperResponse(response, 2);
+    expect(parsed.words).toEqual([
+      { startMs: 0, endMs: 1000, token: "hello", raw: "Hello" },
+      { startMs: 1000, endMs: 2000, token: "world", raw: "world" },
+    ]);
+    expect(parsed.segments).toEqual([{ startMs: 0, endMs: 2000, text: "Hello world" }]);
+  });
+
+  test("parseWhisperResponse with multiplier=1 leaves timestamps untouched", () => {
+    const response = {
+      words: [{ word: "Hi", start: 0.25, end: 0.5 }],
+      segments: [{ start: 0, end: 0.5, text: "Hi" }],
+    } as unknown as Parameters<typeof parseWhisperResponse>[0];
+    const parsed = parseWhisperResponse(response, 1);
+    expect(parsed.words).toEqual([{ startMs: 250, endMs: 500, token: "hi", raw: "Hi" }]);
+    expect(parsed.segments).toEqual([{ startMs: 0, endMs: 500, text: "Hi" }]);
   });
 
   test("ignores chapter markers outside the snap window", () => {

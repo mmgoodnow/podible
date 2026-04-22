@@ -18,9 +18,15 @@ import type { BooksRepo } from "../repo";
 import { selectPreferredAudioAsset } from "./asset-selection";
 
 const CHAPTER_ANALYSIS_SOURCE = "whisper_transcript";
-const CHAPTER_ANALYSIS_ALGORITHM_VERSION = "2026-04-22-seam-midpoint-v1";
+const CHAPTER_ANALYSIS_ALGORITHM_VERSION = "2026-04-22-atempo-2x-v1";
 const CHAPTERS_API_VERSION = "1.5.0";
 const TIMESTAMP_TRANSCRIPTION_MODEL = "whisper-1";
+// We pre-process audio with ffmpeg `atempo` before sending to Whisper so OpenAI
+// charges us for half the duration (they bill by minutes of input audio).
+// Whisper tolerates this well — voice is still intelligible at 2x, and the
+// timestamps it returns are in the sped-up frame, so we multiply them back by
+// this factor to recover real-audio timestamps.
+const TRANSCRIPTION_SPEED_MULTIPLIER = 2;
 const CHAPTER_ANALYSIS_TRANSCRIPTION_CONCURRENCY = 2;
 const CHUNK_MS = 30 * 60_000;
 const CHUNK_OVERLAP_MS = 30_000;
@@ -743,6 +749,8 @@ export async function extractChunkClip(args: ExtractChunkArgs): Promise<string> 
       "-i",
       input.path,
       "-vn",
+      "-filter:a",
+      `atempo=${TRANSCRIPTION_SPEED_MULTIPLIER}`,
       "-ac",
       "1",
       "-ar",
@@ -789,6 +797,8 @@ export async function extractChunkClip(args: ExtractChunkArgs): Promise<string> 
       "-i",
       concatPath,
       "-vn",
+      "-filter:a",
+      `atempo=${TRANSCRIPTION_SPEED_MULTIPLIER}`,
       "-ac",
       "1",
       "-ar",
@@ -840,18 +850,25 @@ export async function transcribeChunk(
     },
     { timeout: requestTimeoutMs }
   )) as TranscriptionVerbose;
+  return parseWhisperResponse(response, TRANSCRIPTION_SPEED_MULTIPLIER);
+}
+
+// Exported for testing. Whisper sees audio sped up by `speedMultiplier`, so its
+// timestamps are in the sped-up frame. We multiply by the same factor to
+// recover real-audio timestamps.
+export function parseWhisperResponse(response: TranscriptionVerbose, speedMultiplier: number): TranscribedChunk {
   const words = (Array.isArray(response.words) ? response.words : [])
     .map((word) => ({
-      startMs: Math.max(0, Math.round(Number(word.start) * 1000)),
-      endMs: Math.max(0, Math.round(Number(word.end) * 1000)),
+      startMs: Math.max(0, Math.round(Number(word.start) * 1000 * speedMultiplier)),
+      endMs: Math.max(0, Math.round(Number(word.end) * 1000 * speedMultiplier)),
       token: normalizeToken(word.word),
       raw: String(word.word ?? "").trim(),
     }))
     .filter((word) => Boolean(word.token));
   const segments = (Array.isArray(response.segments) ? response.segments : [])
     .map((segment) => ({
-      startMs: Math.max(0, Math.round(Number(segment.start) * 1000)),
-      endMs: Math.max(0, Math.round(Number(segment.end) * 1000)),
+      startMs: Math.max(0, Math.round(Number(segment.start) * 1000 * speedMultiplier)),
+      endMs: Math.max(0, Math.round(Number(segment.end) * 1000 * speedMultiplier)),
       text: String(segment.text ?? "").trim(),
     }))
     .filter((segment) => segment.text.length > 0 && segment.endMs > segment.startMs);
