@@ -3,6 +3,20 @@ import type { AppSettings, SessionWithUserRow } from "../app-types";
 
 import { addApiKey, escapeHtml, messageMarkup, renderAppPage } from "./common";
 import { renderAdminPageScript } from "./admin-page-client";
+import { decodePlexTokenExpiry } from "../plex";
+
+function plexOwnerTokenStatus(token: string): string {
+  if (!token) return "missing";
+  const expiry = decodePlexTokenExpiry(token);
+  if (expiry.expSeconds === null) return "captured";
+  if (expiry.expired) return "EXPIRED — log out and sign in again as a Plex admin to re-link";
+  const days = Math.floor((expiry.expiresInMs ?? 0) / 86_400_000);
+  const hours = Math.floor(((expiry.expiresInMs ?? 0) % 86_400_000) / 3_600_000);
+  if (days > 0) return `captured (expires in ${days}d ${hours}h)`;
+  if (hours > 0) return `captured (expires in ${hours}h — re-link soon)`;
+  const minutes = Math.max(0, Math.floor((expiry.expiresInMs ?? 0) / 60_000));
+  return `captured (expires in ${minutes}m — re-link now)`;
+}
 
 function renderAdminPage(
   repo: BooksRepo,
@@ -171,7 +185,7 @@ function renderAdminPage(
                 ? `<section class="card">
           <h2>Plex Access Control</h2>
           <p class="muted">Choose which Plex server controls who can sign in to Podible. Future Plex logins will only be allowed for users who can access that server.</p>
-          <p class="muted">Owner token: <strong>${settings.auth.plex.ownerToken ? "captured" : "missing"}</strong> | Selected server: <strong>${escapeHtml(selectedPlexServer?.name || settings.auth.plex.machineId || "not set")}</strong></p>
+          <p class="muted">Owner token: <strong>${escapeHtml(plexOwnerTokenStatus(settings.auth.plex.ownerToken))}</strong> | Selected server: <strong>${escapeHtml(selectedPlexServer?.name || settings.auth.plex.machineId || "not set")}</strong></p>
           ${messageMarkup(options.plexNotice, options.plexError)}
           ${
             plexServers.length > 0

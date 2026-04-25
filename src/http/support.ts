@@ -200,7 +200,13 @@ async function resolvePlexLoginStatus(
     }
 
     const hasPlexAdminUser = existingPlexUsers.some((user) => user.is_admin === 1);
-    if (!settings.auth.plex.ownerToken && (!hasPlexAdminUser || existingPlexUser?.is_admin === 1)) {
+    // Refresh the stored owner token on every admin login (or during bootstrap).
+    // Plex JWTs only last ~7 days, so without this an instance silently breaks
+    // shared-user lookups a week after setup. Logging out and back in as an
+    // admin is now the documented re-link path.
+    const isBecomingAdmin = !hasPlexAdminUser || existingPlexUser?.is_admin === 1;
+    if (isBecomingAdmin) {
+      const hadOwnerToken = Boolean(settings.auth.plex.ownerToken);
       settings = repo.updateSettings({
         ...settings,
         auth: {
@@ -211,7 +217,7 @@ async function resolvePlexLoginStatus(
           },
         },
       });
-      console.log(`[plex] captured owner token from user id=${plexUser.id}`);
+      console.log(`[plex] ${hadOwnerToken ? "refreshed" : "captured"} owner token from user id=${plexUser.id}`);
     }
 
     const user = repo.upsertUser({

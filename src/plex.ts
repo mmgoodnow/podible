@@ -233,11 +233,43 @@ export async function fetchPlexServerDevices(settings: AppSettings, plexToken = 
     .filter((device) => device.machineId && device.provides.includes("server"));
 }
 
+export type PlexTokenExpiry = {
+  expSeconds: number | null;
+  expired: boolean;
+  expiresInMs: number | null;
+};
+
+// Plex.tv issues short-lived (~7 day) JWT tokens via the PIN flow. The
+// payload's `exp` claim tells us when it stops working. This helper is
+// best-effort — if the token isn't a JWT or the payload doesn't parse, we
+// treat expiry as unknown (callers should treat unknown as "still try it,"
+// since older non-JWT Plex tokens never expire).
+export function decodePlexTokenExpiry(token: string | null | undefined, nowMs = Date.now()): PlexTokenExpiry {
+  if (!token) return { expSeconds: null, expired: false, expiresInMs: null };
+  const parts = token.split(".");
+  if (parts.length !== 3) return { expSeconds: null, expired: false, expiresInMs: null };
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8")) as { exp?: number };
+    const exp = typeof payload.exp === "number" ? payload.exp : null;
+    if (exp === null) return { expSeconds: null, expired: false, expiresInMs: null };
+    const expiresInMs = exp * 1000 - nowMs;
+    return { expSeconds: exp, expired: expiresInMs <= 0, expiresInMs };
+  } catch {
+    return { expSeconds: null, expired: false, expiresInMs: null };
+  }
+}
+
 export async function checkPlexUserAccess(settings: AppSettings, userId: string): Promise<boolean> {
   const ownerToken = settings.auth.plex.ownerToken;
   const machineId = settings.auth.plex.machineId;
   if (!ownerToken || !machineId) {
     return false;
+  }
+  // Short-circuit on a known-expired JWT so we don't waste an HTTP round trip
+  // and we surface a clearer error than "401". The admin page reads the same
+  // expiry helper to display a re-link prompt.
+  if (decodePlexTokenExpiry(ownerToken).expired) {
+    throw new Error("Plex owner token has expired — an admin needs to re-link Plex");
   }
   const response = await fetch("https://plex.tv/api/users", {
     headers: plexHeaders(settings.auth.plex.productName, settingsClientIdentifier(settings), {
@@ -245,6 +277,9 @@ export async function checkPlexUserAccess(settings: AppSettings, userId: string)
     }),
   });
   if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error("Plex owner token was rejected (401) — an admin needs to re-link Plex");
+    }
     throw new Error(`Plex shared-user lookup failed with ${response.status}`);
   }
   const payload = xmlParser.parse(await response.text()) as Record<string, unknown>;
