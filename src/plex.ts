@@ -233,6 +233,29 @@ export async function fetchPlexServerDevices(settings: AppSettings, plexToken = 
     .filter((device) => device.machineId && device.provides.includes("server"));
 }
 
+// Plex.tv supports `GET /api/v2/ping` as a "keep this token alive" endpoint.
+// Hitting it with a still-valid token before it expires extends the token's
+// server-side validity (similar to a session-touch). Overseerr does this once
+// daily for every user — that's how it avoids the 7-day JWT expiry trap that
+// bit us. Returns true on a successful pong; false on any failure (including
+// 401, which means the token is already past saving and an admin must re-link).
+export async function pingPlexOwnerToken(settings: AppSettings): Promise<boolean> {
+  const ownerToken = settings.auth.plex.ownerToken;
+  if (!ownerToken) return false;
+  try {
+    const response = await fetch("https://plex.tv/api/v2/ping", {
+      headers: plexHeaders(settings.auth.plex.productName, settingsClientIdentifier(settings), {
+        "X-Plex-Token": ownerToken,
+      }),
+    });
+    if (!response.ok) return false;
+    const payload = (await response.json().catch(() => null)) as { pong?: unknown } | null;
+    return Boolean(payload && payload.pong);
+  } catch {
+    return false;
+  }
+}
+
 export type PlexTokenExpiry = {
   expSeconds: number | null;
   expired: boolean;

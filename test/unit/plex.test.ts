@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { decodePlexTokenExpiry } from "../../src/plex";
+import { decodePlexTokenExpiry, pingPlexOwnerToken } from "../../src/plex";
+import { defaultSettings } from "../../src/settings";
 
 function makeJwt(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "JWT" })).toString("base64url");
@@ -50,6 +51,69 @@ describe("decodePlexTokenExpiry", () => {
     const result = decodePlexTokenExpiry("a.bm90LWpzb24.b");
     expect(result.expSeconds).toBeNull();
     expect(result.expired).toBe(false);
+  });
+
+  test("pingPlexOwnerToken sends owner token and returns true on pong", async () => {
+    const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
+      const headers: Record<string, string> = {};
+      const headerInit = init?.headers;
+      if (headerInit instanceof Headers) {
+        headerInit.forEach((value, key) => {
+          headers[key.toLowerCase()] = value;
+        });
+      }
+      calls.push({ url, headers });
+      return new Response(JSON.stringify({ pong: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as unknown as typeof fetch;
+    try {
+      const settings = defaultSettings();
+      settings.auth.plex.ownerToken = "abc123";
+      const ok = await pingPlexOwnerToken(settings);
+      expect(ok).toBe(true);
+      expect(calls.length).toBe(1);
+      expect(calls[0]!.url).toBe("https://plex.tv/api/v2/ping");
+      expect(calls[0]!.headers["x-plex-token"]).toBe("abc123");
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  test("pingPlexOwnerToken returns false on 401 and skips when token is missing", async () => {
+    const original = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response("nope", { status: 401 });
+    }) as unknown as typeof fetch;
+    try {
+      const settings = defaultSettings();
+      // No token set: should not even hit the network.
+      expect(await pingPlexOwnerToken(settings)).toBe(false);
+      expect(calls).toBe(0);
+      // Token set: should hit and return false on 401.
+      settings.auth.plex.ownerToken = "stale-token";
+      expect(await pingPlexOwnerToken(settings)).toBe(false);
+      expect(calls).toBe(1);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  test("pingPlexOwnerToken returns false when fetch throws", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      throw new Error("network down");
+    }) as unknown as typeof fetch;
+    try {
+      const settings = defaultSettings();
+      settings.auth.plex.ownerToken = "any-token";
+      expect(await pingPlexOwnerToken(settings)).toBe(false);
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 
   test("matches the real-world stale token from cyprus (April 11 expiry)", () => {
