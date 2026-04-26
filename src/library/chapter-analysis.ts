@@ -1096,6 +1096,14 @@ export function hasStoredTranscriptPayload(repo: BooksRepo, assetId: number): bo
   return Boolean(row && row.status === "succeeded" && (row.transcript_path || row.transcript_json));
 }
 
+export function hasStoredManifestationTranscriptPayload(
+  repo: BooksRepo,
+  containers: Array<{ asset: Pick<AssetRow, "id" | "kind"> }>
+): boolean {
+  const audioContainers = containers.filter((container) => container.asset.kind !== "ebook");
+  return audioContainers.length > 0 && audioContainers.every((container) => hasStoredTranscriptPayload(repo, container.asset.id));
+}
+
 export async function ensureStoredTranscriptFile(repo: BooksRepo, assetId: number): Promise<string | null> {
   return ensureStoredTranscriptFileForRow(repo, repo.getAssetTranscript(assetId));
 }

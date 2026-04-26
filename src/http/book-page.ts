@@ -1,5 +1,5 @@
 import { buildManifestationChapters, selectPreferredAudioManifestation, streamExtensionForManifestation } from "../library/media";
-import { getBookTranscriptStatus, hasStoredTranscriptPayload, selectPreferredEpubAsset } from "../library/chapter-analysis";
+import { getBookTranscriptStatus, hasStoredManifestationTranscriptPayload, selectPreferredEpubAsset } from "../library/chapter-analysis";
 import { BooksRepo } from "../repo";
 import type { AppSettings, AssetRow, ManifestationRow, SessionWithUserRow } from "../app-types";
 
@@ -182,6 +182,101 @@ function renderTranscriptRuntimeScript(bookId: number, transcriptHref: string): 
   `;
 }
 
+function renderCoverRuntimeScript(bookId: number): string {
+  return `
+    <script>
+      (() => {
+        const panel = document.querySelector('[data-cover-panel][data-book-id="${bookId}"]');
+        if (!panel) return;
+        const button = panel.querySelector('[data-cover-load]');
+        const status = panel.querySelector('[data-cover-status]');
+        const results = panel.querySelector('[data-cover-results]');
+
+        function setStatus(message) {
+          if (status) status.textContent = message;
+        }
+
+        function escapeText(value) {
+          return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;",
+          })[char]);
+        }
+
+        async function rpc(method, params) {
+          const url = new URL("/rpc", window.location.origin);
+          url.search = window.location.search;
+          const response = await fetch(url.pathname + url.search, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+          });
+          const payload = await response.json();
+          if (payload.error) throw new Error(payload.error.message || "Request failed");
+          return payload.result;
+        }
+
+        function renderCandidates(candidates) {
+          if (!results) return;
+          if (!candidates.length) {
+            results.innerHTML = '<div class="empty">No alternate Open Library covers found.</div>';
+            return;
+          }
+          results.innerHTML = candidates.map((cover) => {
+            const details = [cover.source, cover.publishDate, cover.publisher, cover.language].filter(Boolean).join(" • ");
+            return '<button type="button" class="cover-candidate" data-cover-id="' + cover.coverId + '">' +
+              '<img src="' + escapeText(cover.coverUrl) + '" alt="Cover candidate ' + cover.coverId + '" loading="lazy" />' +
+              '<span><strong>Use cover ' + cover.coverId + '</strong></span>' +
+              (details ? '<span class="muted">' + escapeText(details) + '</span>' : '') +
+              '</button>';
+          }).join("");
+        }
+
+        if (button) {
+          button.addEventListener("click", async () => {
+            button.disabled = true;
+            setStatus("Loading alternate covers...");
+            try {
+              const result = await rpc("openlibrary.covers", { bookId: ${bookId}, limit: 24 });
+              renderCandidates(result.results || []);
+              setStatus((result.results || []).length ? "Choose a cover to apply." : "No alternate covers found.");
+            } catch (error) {
+              console.error("openlibrary.covers failed:", error);
+              setStatus(error.message || "Unable to load covers.");
+            } finally {
+              button.disabled = false;
+            }
+          });
+        }
+
+        if (results) {
+          results.addEventListener("click", async (event) => {
+            const target = event.target instanceof Element ? event.target : null;
+            const candidate = target?.closest("[data-cover-id]");
+            if (!candidate) return;
+            const coverId = Number(candidate.getAttribute("data-cover-id"));
+            if (!Number.isSafeInteger(coverId) || coverId <= 0) return;
+            candidate.disabled = true;
+            setStatus("Applying cover...");
+            try {
+              await rpc("openlibrary.setCover", { bookId: ${bookId}, coverId });
+              setStatus("Cover updated. Refreshing...");
+              window.location.reload();
+            } catch (error) {
+              console.error("openlibrary.setCover failed:", error);
+              candidate.disabled = false;
+              setStatus(error.message || "Unable to update cover.");
+            }
+          });
+        }
+      })();
+    </script>
+  `;
+}
+
 export async function renderBookPage(
   repo: BooksRepo,
   settings: AppSettings,
@@ -214,7 +309,10 @@ export async function renderBookPage(
     : [];
   const ebook = selectPreferredEpubAsset(assets);
   const chapters = audioContainers.length > 0 ? await buildManifestationChapters(repo, audioContainers) : null;
-  const transcriptUrl = audio && hasStoredTranscriptPayload(repo, audio.id) ? addApiKey(`/transcripts/${audio.id}.json`, apiKey) : null;
+  const transcriptUrl =
+    audioChoice && hasStoredManifestationTranscriptPayload(repo, audioContainers)
+      ? addApiKey(`/transcripts/m/${audioChoice.manifestation.id}.json`, apiKey)
+      : null;
   const streamUrl = audioChoice ? addApiKey(`/stream/m/${audioChoice.manifestation.id}.${streamExtensionForManifestation(audioContainers)}`, apiKey) : null;
   const chaptersUrl = audioChoice ? addApiKey(`/chapters/m/${audioChoice.manifestation.id}.json`, apiKey) : null;
   const ebookUrl = ebook ? addApiKey(`/ebook/${ebook.id}`, apiKey) : null;
@@ -285,6 +383,15 @@ export async function renderBookPage(
         ${transcriptStatus?.status === "missing_config" ? `<p class="muted" style="margin-top:8px;">Transcription requires an OpenAI API key in Settings.</p>` : ""}
         ${transcriptStatus?.status === "failed" && transcriptStatus.error ? `<p class="muted" style="margin-top:8px;">Last error: ${escapeHtml(transcriptStatus.error)}</p>` : ""}
       </section>
+      <section class="card span-12" data-cover-panel data-book-id="${book.id}">
+        <h2>Artwork</h2>
+        <p class="muted">Try alternate Open Library covers for this book.</p>
+        <div class="actions" style="margin-top: 12px;">
+          <button type="button" data-cover-load>Load alternate covers</button>
+        </div>
+        <p class="muted" data-cover-status style="margin-top: 8px;"></p>
+        <div class="cover-candidates" data-cover-results></div>
+      </section>
       <section class="card span-12">
         <h2>Chapter preview</h2>
         ${
@@ -312,7 +419,29 @@ export async function renderBookPage(
         }
       </section>
     </div>
-    ${audio ? renderTranscriptRuntimeScript(book.id, addApiKey(`/transcripts/${audio.id}.json`, apiKey)) : ""}`;
+    <style>
+      .cover-candidates {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+        gap: 12px;
+        margin-top: 12px;
+      }
+      .cover-candidate {
+        display: grid;
+        gap: 6px;
+        text-align: left;
+      }
+      .cover-candidate img {
+        width: 100%;
+        aspect-ratio: 2 / 3;
+        object-fit: cover;
+        border: 1px solid var(--line-soft);
+        border-radius: 8px;
+        background: var(--surface);
+      }
+    </style>
+    ${audio ? renderTranscriptRuntimeScript(book.id, transcriptUrl ?? "") : ""}
+    ${renderCoverRuntimeScript(book.id)}`;
   return renderAppPage(
     book.title,
     body,

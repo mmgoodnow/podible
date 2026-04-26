@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises";
 
 import { z } from "zod";
 
-import { hasStoredTranscriptPayload, selectPreferredEpubAsset } from "../library/chapter-analysis";
+import { hasStoredManifestationTranscriptPayload, selectPreferredEpubAsset } from "../library/chapter-analysis";
 import { selectPreferredAudioManifestation, streamExtensionForManifestation } from "../library/media";
 import { computeDownloadFraction, pseudoProgressForMediaStatus, pseudoProgressForRelease } from "../library/progress";
 import { BooksRepo } from "../repo";
@@ -227,14 +227,6 @@ function requestOrigin(request: Request): string {
   return `${proto}://${url.host}`;
 }
 
-function hasManifestationTranscript(
-  repo: BooksRepo,
-  containers: Array<{ asset: { id: number; kind: string } }>
-): boolean {
-  const audioContainers = containers.filter((container) => container.asset.kind !== "ebook");
-  return audioContainers.length > 0 && audioContainers.every((container) => hasStoredTranscriptPayload(repo, container.asset.id));
-}
-
 export function buildLibraryPlayback(repo: BooksRepo, request: Request, bookId: number): LibraryPlayback {
   const origin = requestOrigin(request);
   const manifestations = repo.listManifestationsByBook(bookId);
@@ -255,7 +247,7 @@ export function buildLibraryPlayback(repo: BooksRepo, request: Request, bookId: 
           editionNote: audioChoice.manifestation.edition_note,
           streamUrl: `${origin}/stream/m/${audioChoice.manifestation.id}.${streamExtensionForManifestation(audioContainers)}`,
           chaptersUrl: `${origin}/chapters/m/${audioChoice.manifestation.id}.json`,
-          transcriptUrl: hasManifestationTranscript(repo, audioContainers)
+          transcriptUrl: hasStoredManifestationTranscriptPayload(repo, audioContainers)
             ? `${origin}/transcripts/m/${audioChoice.manifestation.id}.json`
             : null,
           mimeType: primaryAudio.mime,

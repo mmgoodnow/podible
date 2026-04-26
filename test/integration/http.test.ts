@@ -242,6 +242,18 @@ describe("podible http", () => {
         },
       ],
     });
+    repo.upsertAssetTranscript({
+      assetId: standardAudio.id,
+      status: "succeeded",
+      source: "whisper_transcript",
+      algorithmVersion: "test",
+      fingerprint: "test",
+      transcriptJson: JSON.stringify({
+        version: "test",
+        text: "arrakis dune desert planet",
+        words: [{ startMs: 0, endMs: 100, text: "arrakis", token: "arrakis" }],
+      }),
+    });
     const graphicAudio = repo.addManifestation({
       bookId: book.id,
       kind: "audio",
@@ -291,8 +303,12 @@ describe("podible http", () => {
     expect(detailBody.includes("Play audio")).toBe(true);
     expect(detailBody.includes("Available now")).toBe(true);
     expect(detailBody.includes("data-transcript-panel")).toBe(true);
-    // No transcript row and no API key → "Unavailable" messaging.
-    expect(detailBody.includes("Unavailable (API key not configured)")).toBe(true);
+    expect(detailBody.includes(`/transcripts/m/${standardAudio.manifestation_id}.json`)).toBe(true);
+    expect(detailBody.includes("Artwork")).toBe(true);
+    expect(detailBody.includes("Load alternate covers")).toBe(true);
+    expect(detailBody.includes("data-cover-panel")).toBe(true);
+    // Stored transcript payloads surface the manifestation-level transcript URL.
+    expect(detailBody.includes("Out of date")).toBe(true);
     expect(detailBody.includes("Find audio")).toBe(true);
     expect(detailBody.includes("Release history")).toBe(true);
     expect(detailBody.includes("Audio edition")).toBe(true);
