@@ -1,13 +1,28 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 
+import { runMigrations } from "../../src/db";
 import {
   applyTranscriptLabels,
+  buildManifestationChapters,
   isGenericChapterLabel,
   pickTranscriptLabelForWindow,
   selectPreferredAudioAsset,
   selectPreferredAudioManifestation,
+  streamAudioManifestation,
 } from "../../src/library/media";
+import { BooksRepo } from "../../src/repo";
 import type { AssetRow, ManifestationRow } from "../../src/app-types";
+
+function setupRepo(): { db: Database; repo: BooksRepo } {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  return { db, repo: new BooksRepo(db) };
+}
 
 function asset(overrides: Partial<AssetRow>): AssetRow {
   return {
@@ -175,5 +190,92 @@ describe("chapter label heuristics", () => {
     const timings = [{ id: "ch0", title: "Chapter 1", startMs: 0, endMs: 10_000 }];
     const labeled = applyTranscriptLabels(timings, []);
     expect(labeled[0]?.title).toBe("Chapter 1");
+  });
+});
+
+describe("manifestation media", () => {
+  test("builds chapter boundaries across multiple containers", async () => {
+    const { db, repo } = setupRepo();
+    try {
+      const book = repo.createBook({ title: "Red Rising", author: "Pierce Brown" });
+      const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio", label: "GraphicAudio dramatization" });
+      repo.addAsset({
+        bookId: book.id,
+        kind: "multi",
+        mime: "audio/mpeg",
+        totalSize: 10,
+        durationMs: 1500,
+        manifestationId: manifestation.id,
+        sequenceInManifestation: 0,
+        files: [{ path: "/tmp/part-one.mp3", size: 10, start: 0, end: 9, durationMs: 1500, title: "Part One" }],
+      });
+      repo.addAsset({
+        bookId: book.id,
+        kind: "multi",
+        mime: "audio/mpeg",
+        totalSize: 20,
+        durationMs: 2500,
+        manifestationId: manifestation.id,
+        sequenceInManifestation: 1,
+        files: [{ path: "/tmp/part-two.mp3", size: 20, start: 0, end: 19, durationMs: 2500, title: "Part Two" }],
+      });
+
+      const target = repo.getManifestationWithContainers(manifestation.id);
+      expect(target).toBeTruthy();
+      const chapters = await buildManifestationChapters(repo, target!.containers);
+
+      expect(chapters?.chapters).toEqual([
+        { startTime: 0, title: "Part One" },
+        { startTime: 1.5, title: "Part Two" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("streams a multi-container manifestation as one virtual audio file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "podible-manifestation-stream-"));
+    const { db, repo } = setupRepo();
+    try {
+      const partOnePath = path.join(root, "part-one.mp3");
+      const partTwoPath = path.join(root, "part-two.mp3");
+      await writeFile(partOnePath, "PARTONE");
+      await writeFile(partTwoPath, "PARTTWO");
+
+      const book = repo.createBook({ title: "Red Rising", author: "Pierce Brown" });
+      const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio", label: "GraphicAudio dramatization" });
+      repo.addAsset({
+        bookId: book.id,
+        kind: "multi",
+        mime: "audio/mpeg",
+        totalSize: 7,
+        durationMs: 1000,
+        manifestationId: manifestation.id,
+        sequenceInManifestation: 0,
+        files: [{ path: partOnePath, size: 7, start: 0, end: 6, durationMs: 1000, title: "Part One" }],
+      });
+      repo.addAsset({
+        bookId: book.id,
+        kind: "multi",
+        mime: "audio/mpeg",
+        totalSize: 7,
+        durationMs: 1000,
+        manifestationId: manifestation.id,
+        sequenceInManifestation: 1,
+        files: [{ path: partTwoPath, size: 7, start: 0, end: 6, durationMs: 1000, title: "Part Two" }],
+      });
+
+      const target = repo.getManifestationWithContainers(manifestation.id);
+      expect(target).toBeTruthy();
+      const response = await streamAudioManifestation(new Request("http://localhost/stream"), repo, target!.manifestation, target!.containers);
+      const text = new TextDecoder().decode(await response.arrayBuffer());
+
+      expect(response.status).toBe(206);
+      expect(text).toContain("PARTONE");
+      expect(text).toContain("PARTTWO");
+    } finally {
+      db.close();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

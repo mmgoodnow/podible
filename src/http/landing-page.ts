@@ -1,4 +1,4 @@
-import { preferredAudioManifestationsForBooks, streamExtension } from "../library/media";
+import { preferredAudioManifestationsForBooks, streamExtensionForManifestation } from "../library/media";
 import { BooksRepo } from "../repo";
 import type { AppSettings, SessionWithUserRow } from "../app-types";
 
@@ -35,10 +35,9 @@ export function renderLandingPage(
         ${
           featured.length > 0
             ? `<div class="book-list">${featured
-                .map(({ book, containers }) => {
-                  const asset = containers[0]!.asset;
+                .map(({ book, manifestation, containers }) => {
                   const detailUrl = addApiKey(`/book/${book.id}`, apiKey);
-                  const streamUrl = addApiKey(`/stream/${asset.id}.${streamExtension(asset)}`, apiKey);
+                  const streamUrl = addApiKey(`/stream/m/${manifestation.id}.${streamExtensionForManifestation(containers)}`, apiKey);
                   return `<article class="book-row">
                     ${coverMarkup(book.coverUrl ? addApiKey(book.coverUrl, apiKey) : null, book.title)}
                     <div class="meta">

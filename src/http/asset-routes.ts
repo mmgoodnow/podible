@@ -1,7 +1,13 @@
 import { Hono } from "hono";
 
 import { ensureStoredTranscriptFile } from "../library/chapter-analysis";
-import { buildChapters, streamAudioAsset, streamExtension } from "../library/media";
+import {
+  buildChapters,
+  buildManifestationChapters,
+  streamAudioAsset,
+  streamAudioManifestation,
+  streamExtension,
+} from "../library/media";
 import { BooksRepo } from "../repo";
 import { requireAuthenticatedRequest, type HttpEnv } from "./middleware";
 import { jsonResponse, parseId } from "./route-helpers";
@@ -24,6 +30,15 @@ export function createAssetsIndexRoutes(repo: BooksRepo): Hono<HttpEnv> {
 export function createStreamRoutes(repo: BooksRepo): Hono<HttpEnv> {
   const app = new Hono<HttpEnv>();
   app.use("*", requireAuthenticatedRequest);
+  app.get("/m/:idPart", async (c) => {
+    const manifestationId = parseId(c.req.param("idPart").split(".")[0] ?? "");
+    const target = repo.getManifestationWithContainers(manifestationId);
+    if (!target) {
+      return c.notFound();
+    }
+    const book = repo.getBookRow(target.manifestation.book_id);
+    return streamAudioManifestation(c.req.raw, repo, target.manifestation, target.containers, book?.cover_path);
+  });
   app.get("/:idPart", async (c) => {
     const assetId = parseId((c.req.param("idPart").split(".")[0] ?? ""));
     const target = repo.getAssetWithFiles(assetId);
@@ -39,6 +54,18 @@ export function createStreamRoutes(repo: BooksRepo): Hono<HttpEnv> {
 export function createChaptersRoutes(repo: BooksRepo): Hono<HttpEnv> {
   const app = new Hono<HttpEnv>();
   app.use("*", requireAuthenticatedRequest);
+  app.get("/m/:idPart", async (c) => {
+    const manifestationId = parseId(c.req.param("idPart").replace(/\.json$/i, ""));
+    const target = repo.getManifestationWithContainers(manifestationId);
+    if (!target) {
+      return c.json({ error: "not_found" }, 404);
+    }
+    const chapters = await buildManifestationChapters(repo, target.containers);
+    if (!chapters) {
+      return c.json({ error: "not_found" }, 404);
+    }
+    return jsonResponse(c.req.raw, chapters);
+  });
   app.get("/:idPart", async (c) => {
     const assetId = parseId(c.req.param("idPart").replace(/\.json$/i, ""));
     const target = repo.getAssetWithFiles(assetId);

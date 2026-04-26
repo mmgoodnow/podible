@@ -1,4 +1,4 @@
-import { selectPreferredAudioManifestation, streamExtension } from "../library/media";
+import { selectPreferredAudioManifestation, streamExtensionForManifestation } from "../library/media";
 import { BooksRepo } from "../repo";
 import type { AppSettings, SessionWithUserRow } from "../app-types";
 
@@ -36,9 +36,13 @@ export function renderLibraryPage(
                   containers: repo.listAssetsByManifestation(manifestation.id),
                 }));
                 const chosen = selectPreferredAudioManifestation(candidates);
-                const asset = chosen?.containers[0] ?? null;
                 const detailUrl = addApiKey(`/book/${book.id}`, apiKey);
-                const streamUrl = asset ? addApiKey(`/stream/${asset.id}.${streamExtension(asset)}`, apiKey) : null;
+                const streamExt = chosen
+                  ? streamExtensionForManifestation(chosen.containers.map((asset) => ({ asset })))
+                  : null;
+                const streamUrl = chosen
+                  ? addApiKey(`/stream/m/${chosen.manifestation.id}.${streamExt}`, apiKey)
+                  : null;
                 return `<article class="book-row">
                   ${coverMarkup(book.coverUrl ? addApiKey(book.coverUrl, apiKey) : null, book.title)}
                   <div class="meta">

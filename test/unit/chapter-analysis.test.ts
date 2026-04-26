@@ -144,6 +144,43 @@ describe("chapter analysis", () => {
     }
   });
 
+  test("queues one transcript job per preferred manifestation container", async () => {
+    const { db, repo } = setupRepo();
+    try {
+      const book = repo.createBook({ title: "Red Rising", author: "Pierce Brown" });
+      const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio", label: "GraphicAudio dramatization" });
+      const partOne = repo.addAsset({
+        bookId: book.id,
+        kind: "single",
+        mime: "audio/mpeg",
+        totalSize: 100,
+        durationMs: 1000,
+        manifestationId: manifestation.id,
+        sequenceInManifestation: 0,
+        files: [{ path: "/tmp/red-rising-1.mp3", size: 100, start: 0, end: 99, durationMs: 1000, title: "Part 1" }],
+      });
+      const partTwo = repo.addAsset({
+        bookId: book.id,
+        kind: "single",
+        mime: "audio/mpeg",
+        totalSize: 100,
+        durationMs: 1000,
+        manifestationId: manifestation.id,
+        sequenceInManifestation: 1,
+        files: [{ path: "/tmp/red-rising-2.mp3", size: 100, start: 0, end: 99, durationMs: 1000, title: "Part 2" }],
+      });
+
+      await queueChapterAnalysisForBook(repo, book.id);
+      await queueChapterAnalysisForBook(repo, book.id);
+
+      const jobs = repo.listJobsByType("chapter_analysis");
+      expect(jobs.length).toBe(2);
+      expect(jobs.map((job) => JSON.parse(job.payload_json ?? "{}").assetId).sort()).toEqual([partOne.id, partTwo.id].sort());
+    } finally {
+      db.close();
+    }
+  });
+
   test("extracts compact glossary hints from epub text", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "podible-epub-glossary-"));
     try {

@@ -467,20 +467,19 @@ export async function computeEpubWordCount(epubPath: string): Promise<number | n
   return entries.reduce((sum, entry) => sum + entry.wordCount, 0);
 }
 
-// Step-2 helper: pick the audio asset that today's chapter-analysis pipeline
-// should target for a given book. Routes through manifestation selection but
-// returns a single asset (the one container of the chosen manifestation),
-// which is what every existing caller expects. Step 3 will return all
-// containers so multi-part manifestations get fully transcribed.
-function selectPreferredAudioAssetForBook(repo: BooksRepo, bookId: number): AssetRow | null {
+function selectPreferredAudioAssetsForBook(repo: BooksRepo, bookId: number): AssetRow[] {
   const manifestations = repo.listManifestationsByBook(bookId);
-  if (manifestations.length === 0) return null;
+  if (manifestations.length === 0) return [];
   const candidates = manifestations.map((manifestation) => ({
     manifestation,
     containers: repo.listAssetsByManifestation(manifestation.id),
   }));
   const chosen = selectPreferredAudioManifestation(candidates);
-  return chosen?.containers[0] ?? null;
+  return chosen?.containers.filter((asset) => asset.kind !== "ebook") ?? [];
+}
+
+function selectPreferredAudioAssetForBook(repo: BooksRepo, bookId: number): AssetRow | null {
+  return selectPreferredAudioAssetsForBook(repo, bookId)[0] ?? null;
 }
 
 export function selectPreferredEpubAsset(assets: AssetRow[]): AssetRow | null {
@@ -1235,19 +1234,27 @@ async function transcribeAssetWithDeps(
 }
 
 export async function queueChapterAnalysisForBook(repo: BooksRepo, bookId: number): Promise<JobRow | null> {
-  const audioAsset = selectPreferredAudioAssetForBook(repo, bookId);
-  if (!audioAsset) return null;
-  const existing = repo.findQueuedOrRunningJobByAsset("chapter_analysis", audioAsset.id);
-  if (existing) return existing;
+  const audioAssets = selectPreferredAudioAssetsForBook(repo, bookId);
+  if (audioAssets.length === 0) return null;
   const epubAsset = selectPreferredEpubAsset(repo.listAssetsByBook(bookId));
-  return repo.createJob({
-    type: "chapter_analysis",
-    bookId,
-    payload: {
-      assetId: audioAsset.id,
-      ...(epubAsset ? { ebookAssetId: epubAsset.id } : {}),
-    },
-  });
+  let first: JobRow | null = null;
+  for (const audioAsset of audioAssets) {
+    const existing = repo.findQueuedOrRunningJobByAsset("chapter_analysis", audioAsset.id);
+    if (existing) {
+      first ??= existing;
+      continue;
+    }
+    const job = repo.createJob({
+      type: "chapter_analysis",
+      bookId,
+      payload: {
+        assetId: audioAsset.id,
+        ...(epubAsset ? { ebookAssetId: epubAsset.id } : {}),
+      },
+    });
+    first ??= job;
+  }
+  return first;
 }
 
 export type TranscriptRequestStatus =
@@ -1346,19 +1353,13 @@ export async function requestBookTranscription(
   bookId: number,
   options: { apiKeyConfigured: boolean }
 ): Promise<TranscriptRequestResult> {
-  const { audioAsset, epubAsset, base } = await buildTranscriptStatus(repo, bookId, options);
+  const { audioAsset, base } = await buildTranscriptStatus(repo, bookId, options);
   if (!audioAsset) return base;
   if (base.status === "current" || base.status === "pending" || base.status === "running") return base;
   if (base.status === "missing_config") return base;
 
-  const job = repo.createJob({
-    type: "chapter_analysis",
-    bookId,
-    payload: {
-      assetId: audioAsset.id,
-      ...(epubAsset ? { ebookAssetId: epubAsset.id } : {}),
-    },
-  });
+  const job = await queueChapterAnalysisForBook(repo, bookId);
+  if (!job) return base;
   return { ...base, status: "pending", jobId: job.id };
 }
 
@@ -1386,12 +1387,8 @@ export async function processChapterAnalysisJob(
     return "done";
   }
 
-  // Step 2: skip the job if this asset isn't part of the book's preferred
-  // manifestation any more. With one container per manifestation today this
-  // is identical to the legacy "is this still the preferred audio asset"
-  // check. Step 3 will accept any container of the chosen manifestation.
-  const preferredAudio = selectPreferredAudioAssetForBook(ctx.repo, target.asset.book_id);
-  if (!preferredAudio || preferredAudio.id !== target.asset.id) {
+  const preferredAudio = selectPreferredAudioAssetsForBook(ctx.repo, target.asset.book_id);
+  if (!preferredAudio.some((asset) => asset.id === target.asset.id)) {
     ctx.repo.markJobSucceeded(job.id);
     return "done";
   }

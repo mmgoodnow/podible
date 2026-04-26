@@ -1,4 +1,4 @@
-import { buildChapters, selectPreferredAudioManifestation, streamExtension } from "../library/media";
+import { buildManifestationChapters, selectPreferredAudioManifestation, streamExtensionForManifestation } from "../library/media";
 import { getBookTranscriptStatus, hasStoredTranscriptPayload, selectPreferredEpubAsset } from "../library/chapter-analysis";
 import { BooksRepo } from "../repo";
 import type { AppSettings, SessionWithUserRow } from "../app-types";
@@ -145,16 +145,15 @@ export async function renderBookPage(
     containers: repo.listAssetsByManifestation(manifestation.id),
   }));
   const audioChoice = selectPreferredAudioManifestation(audioCandidates);
-  // Step 2: every manifestation has exactly one container, so the chosen
-  // container's asset is the same row that selectPreferredAudioAsset would
-  // have returned. Step 3 starts using all containers.
   const audio = audioChoice?.containers[0] ?? null;
+  const audioContainers = audioChoice
+    ? audioChoice.containers.map((container) => ({ asset: container, files: repo.getAssetFiles(container.id) }))
+    : [];
   const ebook = selectPreferredEpubAsset(assets);
-  const audioFiles = audio ? repo.getAssetFiles(audio.id) : [];
-  const chapters = audio ? await buildChapters(repo, audio, audioFiles) : null;
+  const chapters = audioContainers.length > 0 ? await buildManifestationChapters(repo, audioContainers) : null;
   const transcriptUrl = audio && hasStoredTranscriptPayload(repo, audio.id) ? addApiKey(`/transcripts/${audio.id}.json`, apiKey) : null;
-  const streamUrl = audio ? addApiKey(`/stream/${audio.id}.${streamExtension(audio)}`, apiKey) : null;
-  const chaptersUrl = audio ? addApiKey(`/chapters/${audio.id}.json`, apiKey) : null;
+  const streamUrl = audioChoice ? addApiKey(`/stream/m/${audioChoice.manifestation.id}.${streamExtensionForManifestation(audioContainers)}`, apiKey) : null;
+  const chaptersUrl = audioChoice ? addApiKey(`/chapters/m/${audioChoice.manifestation.id}.json`, apiKey) : null;
   const ebookUrl = ebook ? addApiKey(`/ebook/${ebook.id}`, apiKey) : null;
   const apiKeyConfigured = Boolean(settings.agents.apiKey.trim());
   const transcriptStatus = audio ? await getBookTranscriptStatus(repo, bookId, { apiKeyConfigured }) : null;

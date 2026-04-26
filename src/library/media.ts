@@ -10,6 +10,7 @@ import { selectPreferredAudioAsset, selectPreferredAudioManifestation } from "./
 
 import type { BooksRepo } from "../repo";
 import type { AssetFileRow, AssetRow, BookRow, LibraryBook, ManifestationRow } from "../app-types";
+import type { AudioSegment } from "../types";
 
 export { selectPreferredAudioAsset, selectPreferredAudioManifestation } from "./asset-selection";
 
@@ -50,6 +51,41 @@ function extensionForMime(mime: string): string {
 
 export function streamExtension(asset: AssetRow): string {
   return extensionForMime(asset.mime);
+}
+
+export function streamExtensionForManifestation(containers: Array<{ asset: AssetRow }>): string {
+  const primary = containers.find((container) => container.asset.kind !== "ebook")?.asset;
+  return primary ? streamExtension(primary) : "bin";
+}
+
+function containerDurationMs(asset: AssetRow, files: AssetFileRow[]): number {
+  return asset.duration_ms ?? files.reduce((sum, file) => sum + file.duration_ms, 0);
+}
+
+function containerSizeBytes(asset: AssetRow, files: AssetFileRow[]): number {
+  return asset.total_size || files.reduce((sum, file) => sum + file.size, 0);
+}
+
+function flattenAudioFiles(containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>): AudioSegment[] {
+  const out: AudioSegment[] = [];
+  let cursor = 0;
+  for (const container of containers) {
+    for (const file of container.files) {
+      const start = cursor;
+      const end = start + file.size - 1;
+      out.push({
+        path: file.path,
+        name: path.basename(file.path),
+        size: file.size,
+        start,
+        end,
+        durationMs: file.duration_ms,
+        title: file.title ?? undefined,
+      });
+      cursor = end + 1;
+    }
+  }
+  return out;
 }
 
 async function buildFallbackChapterTimings(asset: AssetRow, files: AssetFileRow[]): Promise<ChapterTiming[] | null> {
@@ -164,10 +200,158 @@ export async function buildChapters(
   };
 }
 
+async function buildManifestationChapterTimings(
+  repo: BooksRepo,
+  containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>
+): Promise<ChapterTiming[] | null> {
+  const audioContainers = containers.filter((container) => container.asset.kind !== "ebook");
+  if (audioContainers.length === 0) return null;
+  if (audioContainers.length === 1) {
+    const container = audioContainers[0]!;
+    return buildChapterTimings(repo, container.asset, container.files);
+  }
+
+  const out: ChapterTiming[] = [];
+  let timeCursor = 0;
+  let byteCursor = 0;
+
+  for (const [containerIndex, container] of audioContainers.entries()) {
+    const durationMs = containerDurationMs(container.asset, container.files);
+    const sizeBytes = containerSizeBytes(container.asset, container.files);
+    const timings = await buildChapterTimings(repo, container.asset, container.files);
+    const containerTimings =
+      timings && timings.length > 0
+        ? timings
+        : [
+            {
+              id: "container",
+              title: container.files[0]?.title ?? `Part ${containerIndex + 1}`,
+              startMs: 0,
+              endMs: durationMs,
+              startOffset: 0,
+              endOffset: Math.max(0, sizeBytes - 1),
+            },
+          ];
+
+    for (const chapter of containerTimings) {
+      out.push({
+        ...chapter,
+        id: `c${containerIndex}-${chapter.id}`,
+        startMs: timeCursor + chapter.startMs,
+        endMs: timeCursor + chapter.endMs,
+        startOffset: chapter.startOffset === undefined ? undefined : byteCursor + chapter.startOffset,
+        endOffset: chapter.endOffset === undefined ? undefined : byteCursor + chapter.endOffset,
+      });
+    }
+
+    timeCursor += durationMs;
+    byteCursor += sizeBytes;
+  }
+
+  return out.length > 0 ? out : null;
+}
+
+export async function buildManifestationChapters(
+  repo: BooksRepo,
+  containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>
+): Promise<{ version: string; chapters: Array<{ startTime: number; title: string }> } | null> {
+  const timings = await buildManifestationChapterTimings(repo, containers);
+  if (!timings || timings.length === 0) return null;
+  return {
+    version: "1.2.0",
+    chapters: timings.map((chapter) => ({
+      startTime: chapter.startMs / 1000,
+      title: chapter.title,
+    })),
+  };
+}
+
 function coverMimeFromPath(coverPath: string): string {
   const ext = path.extname(coverPath).toLowerCase();
   if (ext === ".png") return "image/png";
   return "image/jpeg";
+}
+
+async function readCoverArt(coverPath?: string | null): Promise<{ mime: string; data: Uint8Array<ArrayBufferLike> } | undefined> {
+  if (!coverPath) return undefined;
+  const bytes = await fs.readFile(coverPath).catch(() => null);
+  if (!bytes || bytes.length === 0) return undefined;
+  return { mime: coverMimeFromPath(coverPath), data: bytes };
+}
+
+async function streamTaggedAudioSegments(
+  request: Request,
+  mime: string,
+  segments: AudioSegment[],
+  timings: ChapterTiming[] | null,
+  durationMs: number,
+  coverPath?: string | null
+): Promise<Response> {
+  const rangeHeader = request.headers.get("range");
+  const headers: Record<string, string> = {
+    "Accept-Ranges": "bytes",
+    "Content-Type": mime,
+  };
+
+  let tag: Uint8Array<ArrayBufferLike> = new Uint8Array();
+  if (timings && timings.length > 0) {
+    const coverArt = await readCoverArt(coverPath);
+    tag = buildId3ChaptersTag(timings, coverArt);
+    if (timings.some((chapter) => chapter.startOffset !== undefined || chapter.endOffset !== undefined)) {
+      tag = buildId3ChaptersTag(timings, coverArt, tag.byteLength);
+    }
+  }
+
+  const totalAudio = segments.reduce((sum, file) => sum + file.size, 0);
+  const totalSize = totalAudio + tag.byteLength;
+  if (totalSize <= 0) return new Response("Not found", { status: 404 });
+
+  const range = parseRange(rangeHeader, totalSize) ?? { start: 0, end: totalSize - 1 };
+  if (range.start >= totalSize) {
+    headers["Content-Range"] = `bytes */${totalSize}`;
+    return new Response("Range Not Satisfiable", { status: 416, headers });
+  }
+
+  const includeTag = range.start < tag.byteLength;
+  const tagStart = range.start;
+  const tagEnd = Math.min(range.end, tag.byteLength - 1);
+  const includeAudio = range.end >= tag.byteLength;
+  const audioStart = Math.max(0, range.start - tag.byteLength);
+  const audioEnd = Math.max(0, range.end - tag.byteLength);
+  const slices = includeAudio ? segmentsForRange(segments, audioStart, audioEnd) : [];
+
+  headers["Content-Length"] = String(range.end - range.start + 1);
+  headers["Content-Range"] = `bytes ${range.start}-${range.end}/${totalSize}`;
+
+  const tagSlice = includeTag ? tag.slice(tagStart, tagEnd + 1) : null;
+  const audioStream = includeAudio
+    ? await streamSegmentsWithXingPatch(slices, {
+        durationSeconds: durationMs / 1000,
+        audioSize: totalAudio,
+      })
+    : null;
+
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      if (tagSlice) controller.enqueue(tagSlice);
+      if (!audioStream) {
+        controller.close();
+        return;
+      }
+      const reader = audioStream.getReader();
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        controller.enqueue(chunk.value);
+      }
+      controller.close();
+    },
+  });
+
+  return new Response(body, {
+    status: 206,
+    headers,
+  });
 }
 
 export async function streamAudioAsset(
@@ -201,84 +385,40 @@ export async function streamAudioAsset(
     return new Response(payload.slice(range.start, range.end + 1), { status: 206, headers });
   }
 
-  const timings = await buildChapterTimings(repo, asset, files);
-  let tag: Uint8Array<ArrayBufferLike> = new Uint8Array();
-  if (timings && timings.length > 0) {
-    let coverArt: { mime: string; data: Uint8Array<ArrayBufferLike> } | undefined;
-    if (coverPath) {
-      const bytes = await fs.readFile(coverPath).catch(() => null);
-      if (bytes && bytes.length > 0) {
-        coverArt = { mime: coverMimeFromPath(coverPath), data: bytes };
-      }
-    }
-    tag = buildId3ChaptersTag(timings, coverArt);
-    if (timings.some((chapter) => chapter.startOffset !== undefined || chapter.endOffset !== undefined)) {
-      tag = buildId3ChaptersTag(timings, coverArt, tag.byteLength);
-    }
+  return streamTaggedAudioSegments(
+    request,
+    asset.mime,
+    flattenAudioFiles([{ asset, files }]),
+    await buildChapterTimings(repo, asset, files),
+    asset.duration_ms ?? 0,
+    coverPath
+  );
+}
+
+export async function streamAudioManifestation(
+  request: Request,
+  repo: BooksRepo,
+  manifestation: ManifestationRow,
+  containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>,
+  coverPath?: string | null
+): Promise<Response> {
+  if (manifestation.kind !== "audio") return new Response("Not found", { status: 404 });
+  const audioContainers = containers.filter((container) => container.asset.kind !== "ebook");
+  if (audioContainers.length === 0) return new Response("Not found", { status: 404 });
+  if (audioContainers.length === 1) {
+    const container = audioContainers[0]!;
+    return streamAudioAsset(request, repo, container.asset, container.files, coverPath);
   }
 
-  const totalAudio = files.reduce((sum, file) => sum + file.size, 0);
-  const totalSize = totalAudio + tag.byteLength;
-  const range = parseRange(rangeHeader, totalSize) ?? { start: 0, end: totalSize - 1 };
-  if (range.start >= totalSize) {
-    headers["Content-Range"] = `bytes */${totalSize}`;
-    return new Response("Range Not Satisfiable", { status: 416, headers });
-  }
-
-  const includeTag = range.start < tag.byteLength;
-  const tagStart = range.start;
-  const tagEnd = Math.min(range.end, tag.byteLength - 1);
-  const includeAudio = range.end >= tag.byteLength;
-  const audioStart = Math.max(0, range.start - tag.byteLength);
-  const audioEnd = Math.max(0, range.end - tag.byteLength);
-  const slices = includeAudio
-    ? segmentsForRange(
-        files.map((file) => ({
-          path: file.path,
-          name: path.basename(file.path),
-          size: file.size,
-          start: file.start,
-          end: file.end,
-          durationMs: file.duration_ms,
-          title: file.title ?? undefined,
-        })),
-        audioStart,
-        audioEnd
-      )
-    : [];
-
-  headers["Content-Length"] = String(range.end - range.start + 1);
-  headers["Content-Range"] = `bytes ${range.start}-${range.end}/${totalSize}`;
-
-  const tagSlice = includeTag ? tag.slice(tagStart, tagEnd + 1) : null;
-  const audioStream = includeAudio
-    ? await streamSegmentsWithXingPatch(slices, {
-        durationSeconds: (asset.duration_ms ?? 0) / 1000,
-        audioSize: totalAudio,
-      })
-    : null;
-
-  const body = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      if (tagSlice) controller.enqueue(tagSlice);
-      if (!audioStream) {
-        controller.close();
-        return;
-      }
-      const reader = audioStream.getReader();
-      for (;;) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        controller.enqueue(chunk.value);
-      }
-      controller.close();
-    },
-  });
-
-  return new Response(body, {
-    status: 206,
-    headers,
-  });
+  const primary = audioContainers[0]!.asset;
+  return streamTaggedAudioSegments(
+    request,
+    primary.mime,
+    flattenAudioFiles(audioContainers),
+    await buildManifestationChapterTimings(repo, audioContainers),
+    manifestation.duration_ms ?? audioContainers.reduce((sum, container) => sum + containerDurationMs(container.asset, container.files), 0),
+    coverPath
+  );
 }
 
 export function preferredAudioForBooks(repo: BooksRepo): PreferredAudio[] {

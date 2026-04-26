@@ -302,7 +302,9 @@ describe("books e2e", () => {
       );
       expect(feedRes.status).toBe(200);
       const feedXml = await feedRes.text();
-      expect(feedXml.includes(`/stream/${audioAsset.id}.`)).toBe(true);
+      const manifestation = repo.listManifestationsByBook(book.id).find((row) => row.kind === "audio");
+      expect(manifestation).toBeTruthy();
+      expect(feedXml.includes(`/stream/m/${manifestation!.id}.`)).toBe(true);
 
       const book2 = repo.createBook({ title: "Dune 2", author: "Frank Herbert" });
       repo.createRelease({

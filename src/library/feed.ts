@@ -1,7 +1,7 @@
 import { escapeXml, firstLine, htmlToPlainText, truncate } from "../utils/strings";
 import { formatDuration } from "../utils/time";
 
-import { preferredAudioManifestationsForBooks, streamExtension } from "./media";
+import { preferredAudioManifestationsForBooks, streamExtensionForManifestation } from "./media";
 import type { BooksRepo } from "../repo";
 
 function requestOrigin(request: Request): string {
@@ -40,15 +40,12 @@ export function buildRssFeed(request: Request, repo: BooksRepo, feedTitle: strin
 <lastBuildDate>${new Date(lastModified).toUTCString()}</lastBuildDate>
 ${items
   .map(({ book, manifestation, containers }) => {
-    // Step-2 compat: every manifestation has exactly one container today, so
-    // we keep emitting the asset-keyed URLs that existing podcast-app
-    // subscriptions cache. Step 3 introduces manifestation-keyed routes.
     const primary = containers[0]!;
     const asset = primary.asset;
     const description = itemDescription(book.description, book.descriptionHtml, book.title, book.author);
-    const ext = streamExtension(asset);
-    const enclosure = `${origin}/stream/${asset.id}.${ext}`;
-    const chapters = `${origin}/chapters/${asset.id}.json`;
+    const ext = streamExtensionForManifestation(containers);
+    const enclosure = `${origin}/stream/m/${manifestation.id}.${ext}`;
+    const chapters = `${origin}/chapters/m/${manifestation.id}.json`;
     const pubDate = new Date(book.addedAt).toUTCString();
     const coverTag = book.coverUrl ? `<itunes:image href="${origin}${book.coverUrl}" />` : "";
     const durationMs = manifestation.duration_ms ?? asset.duration_ms ?? 0;
@@ -87,8 +84,8 @@ export function buildJsonFeed(request: Request, repo: BooksRepo, feedTitle: stri
     const primary = containers[0]!;
     const asset = primary.asset;
     const description = itemDescription(book.description, book.descriptionHtml, book.title, book.author);
-    const ext = streamExtension(asset);
-    const streamUrl = `${origin}/stream/${asset.id}.${ext}`;
+    const ext = streamExtensionForManifestation(containers);
+    const streamUrl = `${origin}/stream/m/${manifestation.id}.${ext}`;
     const durationMs = manifestation.duration_ms ?? asset.duration_ms ?? 0;
     const totalSize = manifestation.total_size || asset.total_size;
     return {
