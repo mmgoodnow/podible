@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 
-import { ensureStoredTranscriptFile } from "../library/chapter-analysis";
+import { ensureStoredTranscriptFile, loadStoredManifestationTranscriptPayload } from "../library/chapter-analysis";
 import {
   buildChapters,
   buildManifestationChapters,
@@ -84,6 +84,18 @@ export function createChaptersRoutes(repo: BooksRepo): Hono<HttpEnv> {
 export function createTranscriptsRoutes(repo: BooksRepo): Hono<HttpEnv> {
   const app = new Hono<HttpEnv>();
   app.use("*", requireAuthenticatedRequest);
+  app.get("/m/:idPart", async (c) => {
+    const manifestationId = parseId(c.req.param("idPart").replace(/\.json$/i, ""));
+    const target = repo.getManifestationWithContainers(manifestationId);
+    if (!target) {
+      return c.json({ error: "not_found" }, 404);
+    }
+    const payload = await loadStoredManifestationTranscriptPayload(repo, target.containers);
+    if (!payload) {
+      return c.json({ error: "not_found" }, 404);
+    }
+    return jsonResponse(c.req.raw, payload);
+  });
   app.get("/:idPart", async (c) => {
     const assetId = parseId(c.req.param("idPart").replace(/\.json$/i, ""));
     const asset = repo.getAsset(assetId);

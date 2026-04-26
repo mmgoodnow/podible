@@ -11,7 +11,7 @@ import {
   assetRowSchema,
   emptyParamsSchema,
   jobIdResultSchema,
-  libraryBookSchema,
+  libraryBookWithPlaybackSchema,
   limitSchema,
   mediaSchema,
   mediaSelectionSchema,
@@ -24,7 +24,7 @@ import {
   nonEmptyStringSchema,
   releaseRowSchema,
 } from "./schemas";
-import { enrichLibraryBookProgress, removeFileIfPresent, RpcError } from "./shared";
+import { enrichLibraryBookPlayback, enrichLibraryBookProgress, removeFileIfPresent, RpcError } from "./shared";
 
 export const libraryRouter = defineRouter({
   list: defineMethod({
@@ -37,11 +37,15 @@ export const libraryRouter = defineRouter({
       q: optionalStringSchema,
     }),
     resultSchema: z.object({
-      items: z.array(libraryBookSchema),
+      items: z.array(libraryBookWithPlaybackSchema),
       nextCursor: positiveIntSchema.optional(),
     }),
     async handler(ctx, params) {
-      return ctx.repo.listBooks(params.limit ?? 50, params.cursor, params.q);
+      const result = ctx.repo.listBooks(params.limit ?? 50, params.cursor, params.q);
+      return {
+        ...result,
+        items: result.items.map((book) => enrichLibraryBookPlayback(ctx.repo, ctx.request, book)),
+      };
     },
   }),
 
@@ -53,7 +57,7 @@ export const libraryRouter = defineRouter({
       bookId: positiveIntSchema,
     }),
     resultSchema: z.object({
-      book: libraryBookSchema,
+      book: libraryBookWithPlaybackSchema,
       releases: z.array(releaseRowSchema),
       assets: z.array(assetRowSchema),
     }),
@@ -68,7 +72,7 @@ export const libraryRouter = defineRouter({
           : null;
       const enrichedBook = await enrichLibraryBookProgress(ctx.repo, book, bookClient);
       return {
-        book: enrichedBook,
+        book: enrichLibraryBookPlayback(ctx.repo, ctx.request, enrichedBook),
         releases: ctx.repo.listReleasesByBook(params.bookId),
         assets: ctx.repo.listAssetsByBook(params.bookId),
       };
@@ -83,14 +87,16 @@ export const libraryRouter = defineRouter({
       bookIds: optionalPositiveIntArraySchema,
     }),
     resultSchema: z.object({
-      items: z.array(libraryBookSchema),
+      items: z.array(libraryBookWithPlaybackSchema),
     }),
     async handler(ctx, params) {
       const items = ctx.repo.listInProgressBooks(params.bookIds);
       const hasDownloading = items.some((book) => book.audioStatus === "downloading" || book.ebookStatus === "downloading");
       const client = hasDownloading ? new RtorrentClient(ctx.repo.getSettings().rtorrent) : null;
       return {
-        items: await Promise.all(items.map((book) => enrichLibraryBookProgress(ctx.repo, book, client))),
+        items: (await Promise.all(items.map((book) => enrichLibraryBookProgress(ctx.repo, book, client)))).map((book) =>
+          enrichLibraryBookPlayback(ctx.repo, ctx.request, book)
+        ),
       };
     },
   }),
@@ -102,7 +108,7 @@ export const libraryRouter = defineRouter({
       openLibraryKey: nonEmptyStringSchema,
     }),
     resultSchema: z.object({
-      book: libraryBookSchema.nullable(),
+      book: libraryBookWithPlaybackSchema.nullable(),
       acquisition_job_id: positiveIntSchema,
     }),
     async handler(ctx, params) {
@@ -116,7 +122,10 @@ export const libraryRouter = defineRouter({
         throw error;
       }
       return {
-        book: ctx.repo.getBook(result.bookId),
+        book: (() => {
+          const book = ctx.repo.getBook(result.bookId);
+          return book ? enrichLibraryBookPlayback(ctx.repo, ctx.request, book) : null;
+        })(),
         acquisition_job_id: result.acquisitionJobId,
       };
     },

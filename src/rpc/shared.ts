@@ -3,6 +3,8 @@ import { rm } from "node:fs/promises";
 
 import { z } from "zod";
 
+import { hasStoredTranscriptPayload, selectPreferredEpubAsset } from "../library/chapter-analysis";
+import { selectPreferredAudioManifestation, streamExtensionForManifestation } from "../library/media";
 import { computeDownloadFraction, pseudoProgressForMediaStatus, pseudoProgressForRelease } from "../library/progress";
 import { BooksRepo } from "../repo";
 import { RtorrentClient } from "../rtorrent";
@@ -42,6 +44,30 @@ export type RpcContext = {
   startTime: number;
   request: Request;
   session: SessionWithUserRow | null;
+};
+
+export type LibraryPlayback = {
+  audio: {
+    manifestationId: number;
+    label: string | null;
+    editionNote: string | null;
+    streamUrl: string;
+    chaptersUrl: string;
+    transcriptUrl: string | null;
+    mimeType: string;
+    durationMs: number | null;
+    sizeBytes: number;
+  } | null;
+  ebook: {
+    assetId: number;
+    downloadUrl: string;
+    mimeType: string;
+    sizeBytes: number;
+  } | null;
+};
+
+export type LibraryBookWithPlayback = LibraryBook & {
+  playback: LibraryPlayback;
 };
 
 export type RpcDispatchOptions = {
@@ -191,6 +217,70 @@ export async function enrichLibraryBookProgress(
   return {
     ...book,
     fullPseudoProgress: liveBookProgress,
+  };
+}
+
+function requestOrigin(request: Request): string {
+  const url = new URL(request.url);
+  const forwardedProto = request.headers.get("x-forwarded-proto");
+  const proto = forwardedProto ? forwardedProto.split(",")[0]?.trim() : url.protocol.replace(":", "");
+  return `${proto}://${url.host}`;
+}
+
+function hasManifestationTranscript(
+  repo: BooksRepo,
+  containers: Array<{ asset: { id: number; kind: string } }>
+): boolean {
+  const audioContainers = containers.filter((container) => container.asset.kind !== "ebook");
+  return audioContainers.length > 0 && audioContainers.every((container) => hasStoredTranscriptPayload(repo, container.asset.id));
+}
+
+export function buildLibraryPlayback(repo: BooksRepo, request: Request, bookId: number): LibraryPlayback {
+  const origin = requestOrigin(request);
+  const manifestations = repo.listManifestationsByBook(bookId);
+  const audioCandidates = manifestations.map((manifestation) => ({
+    manifestation,
+    containers: repo.listAssetsByManifestation(manifestation.id),
+  }));
+  const audioChoice = selectPreferredAudioManifestation(audioCandidates);
+  const audioContainers = audioChoice
+    ? audioChoice.containers.map((asset) => ({ asset, files: repo.getAssetFiles(asset.id) }))
+    : [];
+  const primaryAudio = audioContainers[0]?.asset ?? null;
+  const audio =
+    audioChoice && primaryAudio
+      ? {
+          manifestationId: audioChoice.manifestation.id,
+          label: audioChoice.manifestation.label,
+          editionNote: audioChoice.manifestation.edition_note,
+          streamUrl: `${origin}/stream/m/${audioChoice.manifestation.id}.${streamExtensionForManifestation(audioContainers)}`,
+          chaptersUrl: `${origin}/chapters/m/${audioChoice.manifestation.id}.json`,
+          transcriptUrl: hasManifestationTranscript(repo, audioContainers)
+            ? `${origin}/transcripts/m/${audioChoice.manifestation.id}.json`
+            : null,
+          mimeType: primaryAudio.mime,
+          durationMs: audioChoice.manifestation.duration_ms ?? primaryAudio.duration_ms,
+          sizeBytes: audioChoice.manifestation.total_size || primaryAudio.total_size,
+        }
+      : null;
+
+  const ebookAsset = selectPreferredEpubAsset(repo.listAssetsByBook(bookId));
+  const ebook = ebookAsset
+    ? {
+        assetId: ebookAsset.id,
+        downloadUrl: `${origin}/ebook/${ebookAsset.id}`,
+        mimeType: ebookAsset.mime,
+        sizeBytes: ebookAsset.total_size,
+      }
+    : null;
+
+  return { audio, ebook };
+}
+
+export function enrichLibraryBookPlayback(repo: BooksRepo, request: Request, book: LibraryBook): LibraryBookWithPlayback {
+  return {
+    ...book,
+    playback: buildLibraryPlayback(repo, request, book.id),
   };
 }
 

@@ -1122,6 +1122,82 @@ export async function loadStoredTranscriptPayload(repo: BooksRepo, assetId: numb
   return parsed ? publicStoredTranscriptPayload(parsed) : null;
 }
 
+function offsetStoredTranscriptPayload(
+  payload: StoredTranscriptPayload,
+  offsetMs: number,
+  chunkIndexOffset: number,
+  wordIndexOffset: number
+): StoredTranscriptPayload {
+  return {
+    version: payload.version,
+    text: payload.text,
+    words: payload.words.map((word) => ({
+      ...word,
+      startMs: word.startMs + offsetMs,
+      endMs: word.endMs + offsetMs,
+    })),
+    ...(Array.isArray(payload.utterances)
+      ? {
+          utterances: payload.utterances.map((utterance) => ({
+            ...utterance,
+            startMs: utterance.startMs + offsetMs,
+            endMs: utterance.endMs + offsetMs,
+          })),
+        }
+      : {}),
+    ...(Array.isArray(payload.chunks)
+      ? {
+          chunks: payload.chunks.map((chunk) => ({
+            ...chunk,
+            index: chunk.index + chunkIndexOffset,
+            startMs: chunk.startMs + offsetMs,
+            wordStartIndex: chunk.wordStartIndex + wordIndexOffset,
+            wordEndIndex: chunk.wordEndIndex + wordIndexOffset,
+          })),
+        }
+      : {}),
+  };
+}
+
+function assetDurationMs(asset: AssetRow, files: AssetFileRow[]): number {
+  return asset.duration_ms ?? files.reduce((sum, file) => sum + file.duration_ms, 0);
+}
+
+export async function loadStoredManifestationTranscriptPayload(
+  repo: BooksRepo,
+  containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>
+): Promise<StoredTranscriptPayload | null> {
+  const audioContainers = containers.filter((container) => container.asset.kind !== "ebook");
+  if (audioContainers.length === 0) return null;
+
+  const payloads: StoredTranscriptPayload[] = [];
+  let offsetMs = 0;
+  let chunkIndexOffset = 0;
+  let wordIndexOffset = 0;
+  for (const container of audioContainers) {
+    const payload = await loadStoredTranscriptPayload(repo, container.asset.id);
+    if (!payload) return null;
+    const offsetPayload = offsetStoredTranscriptPayload(payload, offsetMs, chunkIndexOffset, wordIndexOffset);
+    payloads.push(offsetPayload);
+    offsetMs += assetDurationMs(container.asset, container.files);
+    chunkIndexOffset += offsetPayload.chunks?.length ?? 0;
+    wordIndexOffset += offsetPayload.words.length;
+  }
+
+  const first = payloads[0]!;
+  return {
+    version: first.version,
+    text: payloads.map((payload) => payload.text).filter(Boolean).join("\n\n"),
+    words: payloads.flatMap((payload) => payload.words),
+    ...(payloads.some((payload) => payload.utterances?.length)
+      ? { utterances: payloads.flatMap((payload) => payload.utterances ?? []) }
+      : {}),
+    ...(payloads.some((payload) => payload.chunks?.length)
+      ? { chunks: payloads.flatMap((payload) => payload.chunks ?? []) }
+      : {}),
+  };
+}
+
 async function fileFingerprintData(files: AssetFileRow[]): Promise<Array<{ path: string; size: number; mtimeMs: number }>> {
   return Promise.all(
     files.map(async (file) => {

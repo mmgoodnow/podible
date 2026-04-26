@@ -1681,6 +1681,107 @@ describe("podible http", () => {
     db.close();
   });
 
+  test("exposes opaque playback urls over rpc and serves manifestation transcripts", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const settings = repo.ensureSettings();
+    repo.updateSettings({
+      ...settings,
+      auth: { ...settings.auth, mode: "plex" },
+      torznab: [],
+    });
+
+    const book = repo.createBook({ title: "Red Rising", author: "Pierce Brown" });
+    const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio", label: "GraphicAudio dramatization" });
+    const partOne = repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mp4",
+      totalSize: 100,
+      durationMs: 1_000,
+      manifestationId: manifestation.id,
+      sequenceInManifestation: 0,
+      files: [
+        {
+          path: path.join(isolatedDataDir, "red-rising-part-1.m4b"),
+          size: 100,
+          start: 0,
+          end: 99,
+          durationMs: 1_000,
+          title: "Part 1",
+        },
+      ],
+    });
+    const partTwo = repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mp4",
+      totalSize: 200,
+      durationMs: 2_000,
+      manifestationId: manifestation.id,
+      sequenceInManifestation: 1,
+      files: [
+        {
+          path: path.join(isolatedDataDir, "red-rising-part-2.m4b"),
+          size: 200,
+          start: 0,
+          end: 199,
+          durationMs: 2_000,
+          title: "Part 2",
+        },
+      ],
+    });
+    repo.upsertAssetTranscript({
+      assetId: partOne.id,
+      status: "succeeded",
+      source: "whisper_transcript",
+      algorithmVersion: "test",
+      fingerprint: "part-one",
+      transcriptJson: JSON.stringify({
+        version: "test",
+        text: "part one",
+        words: [{ startMs: 0, endMs: 100, text: "part", token: "part" }],
+        utterances: [{ startMs: 0, endMs: 100, text: "part one" }],
+      }),
+    });
+    repo.upsertAssetTranscript({
+      assetId: partTwo.id,
+      status: "succeeded",
+      source: "whisper_transcript",
+      algorithmVersion: "test",
+      fingerprint: "part-two",
+      transcriptJson: JSON.stringify({
+        version: "test",
+        text: "part two",
+        words: [{ startMs: 0, endMs: 100, text: "two", token: "two" }],
+        utterances: [{ startMs: 0, endMs: 100, text: "part two" }],
+      }),
+    });
+
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+    const userCookie = createBrowserSessionCookie(repo, { username: "reader" });
+    const result = await rpc(fetchHandler, "library.get", { bookId: book.id }, 1, { cookie: userCookie });
+    const playback = result.result.book.playback;
+    expect(playback.audio.manifestationId).toBe(manifestation.id);
+    expect(playback.audio.streamUrl).toBe(`http://localhost/stream/m/${manifestation.id}.m4a`);
+    expect(playback.audio.chaptersUrl).toBe(`http://localhost/chapters/m/${manifestation.id}.json`);
+    expect(playback.audio.transcriptUrl).toBe(`http://localhost/transcripts/m/${manifestation.id}.json`);
+
+    const transcript = await fetchHandler(
+      new Request(playback.audio.transcriptUrl, {
+        headers: { cookie: userCookie },
+      })
+    );
+    expect(transcript.status).toBe(200);
+    const transcriptBody = await transcript.json() as any;
+    expect(transcriptBody.text).toBe("part one\n\npart two");
+    expect(transcriptBody.words.map((word: any) => word.startMs)).toEqual([0, 1_000]);
+    expect(transcriptBody.utterances.map((utterance: any) => utterance.startMs)).toEqual([0, 1_000]);
+
+    db.close();
+  });
+
   test("serves transcript json without app-level brotli recompression", async () => {
     const db = new Database(":memory:");
     runMigrations(db);

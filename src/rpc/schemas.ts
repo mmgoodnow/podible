@@ -139,6 +139,34 @@ export const libraryBookSchema = z.object({
   fullPseudoProgress: z.number(),
 });
 
+export const libraryPlaybackSchema = z.object({
+  audio: z
+    .object({
+      manifestationId: positiveIntSchema,
+      label: z.string().nullable(),
+      editionNote: z.string().nullable(),
+      streamUrl: z.string(),
+      chaptersUrl: z.string(),
+      transcriptUrl: z.string().nullable(),
+      mimeType: z.string(),
+      durationMs: z.number().int().nullable(),
+      sizeBytes: z.number().int().nonnegative(),
+    })
+    .nullable(),
+  ebook: z
+    .object({
+      assetId: positiveIntSchema,
+      downloadUrl: z.string(),
+      mimeType: z.string(),
+      sizeBytes: z.number().int().nonnegative(),
+    })
+    .nullable(),
+});
+
+export const libraryBookWithPlaybackSchema = libraryBookSchema.extend({
+  playback: libraryPlaybackSchema,
+});
+
 export const releaseRowSchema = z.object({
   id: positiveIntSchema,
   book_id: positiveIntSchema,
