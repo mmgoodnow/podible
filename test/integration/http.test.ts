@@ -97,6 +97,7 @@ describe("podible http", () => {
     expect(adminBody.includes("site-nav")).toBe(true);
     expect(adminBody.includes("Admin")).toBe(true);
     expect(adminBody.includes("Manual Search + Snatch")).toBe(true);
+    expect(adminBody.includes("Snatch Checked as One Edition")).toBe(true);
     expect(adminBody.includes("Users")).toBe(true);
     expect(adminBody.includes("admin")).toBe(true);
     expect(adminBody.includes("manual-import-btn")).toBe(true);

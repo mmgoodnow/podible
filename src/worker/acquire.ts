@@ -1,5 +1,5 @@
 import { selectSearchCandidates } from "../library/agents";
-import { runSearch, runSnatch } from "../library/service";
+import { runSearch, runSnatchGroup } from "../library/service";
 import type { JobRow, MediaType } from "../app-types";
 import { workerLog, type WorkerContext } from "./context";
 
@@ -81,48 +81,38 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
       }
       try {
         for (const [selectionIndex, selection] of decision.selections.entries()) {
-          const needsExplicitManifestation =
-            selection.parts.length > 1 || selection.manifestation.label !== null || selection.manifestation.editionNote !== null;
-          const manifestationId = needsExplicitManifestation
-            ? ctx.repo.addManifestation({
-                bookId: book.id,
-                kind: media === "ebook" ? "ebook" : "audio",
-                label: selection.manifestation.label,
-                editionNote: selection.manifestation.editionNote,
-              }).id
-            : null;
-
           workerLog(
             ctx,
             `[acquire] job=${job.id} book=${book.id} media=${media} selection=${selectionIndex} mode=${decision.mode} confidence=${decision.confidence.toFixed(
               2
-            )} trigger=${decision.trigger} parts=${selection.parts.length} manifestation=${manifestationId ?? "auto"} reason=${JSON.stringify(decision.reason)}`
+            )} trigger=${decision.trigger} parts=${selection.parts.length} reason=${JSON.stringify(decision.reason)}`
           );
 
-          for (const [partIndex, part] of selection.parts.entries()) {
-            const snatch = await runSnatch(
-              ctx.repo,
-              settings,
-              {
-                bookId: book.id,
+          const group = await runSnatchGroup(
+            ctx.repo,
+            settings,
+            {
+              bookId: book.id,
+              mediaType: media,
+              manifestation: selection.manifestation,
+              parts: selection.parts.map((part) => ({
                 provider: part.provider,
                 providerGuid: part.guid ?? null,
                 title: part.title,
-                mediaType: media,
                 url: part.url,
                 sizeBytes: part.sizeBytes,
                 infoHash: part.infoHash ?? null,
-                manifestationId,
-                sequenceInManifestation: needsExplicitManifestation ? partIndex : null,
-              },
-              {
-                onLog: (line) => workerLog(ctx, `[acquire] job=${job.id} book=${book.id} media=${media} ${line}`),
-                preferAgentImport: decision.mode === "agent",
-              }
-            );
+              })),
+            },
+            {
+              onLog: (line) => workerLog(ctx, `[acquire] job=${job.id} book=${book.id} media=${media} ${line}`),
+              preferAgentImport: decision.mode === "agent",
+            }
+          );
+          for (const [partIndex, snatch] of group.results.entries()) {
             workerLog(
               ctx,
-              `[acquire] job=${job.id} book=${book.id} media=${media} selection=${selectionIndex} part=${partIndex} snatch_release=${snatch.release.id} download_job=${snatch.jobId} idempotent=${snatch.idempotent}`
+              `[acquire] job=${job.id} book=${book.id} media=${media} selection=${selectionIndex} part=${partIndex} manifestation=${group.manifestationId ?? "auto"} snatch_release=${snatch.release.id} download_job=${snatch.jobId} idempotent=${snatch.idempotent}`
             );
           }
         }

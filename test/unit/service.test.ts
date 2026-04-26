@@ -4,7 +4,7 @@ import { Database } from "bun:sqlite";
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
-import { runSearch, runSnatch } from "../../src/library/service";
+import { runSearch, runSnatch, runSnatchGroup } from "../../src/library/service";
 import { torrentCacheKeyFor } from "../../src/library/torrent-cache";
 import { infoHashFromTorrentBytes } from "../../src/library/torrent";
 
@@ -311,6 +311,82 @@ describe("snatch transport", () => {
       const payload = JSON.parse(job?.payload_json ?? "{}");
       expect(payload.manifestationId).toBe(manifestation.id);
       expect(payload.sequenceInManifestation).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+      db.close();
+    }
+  });
+
+  test("snatches ordered release groups into one manifestation", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const book = repo.createBook({ title: "Red Rising", author: "Pierce Brown" });
+
+    const partOneUrl = "https://example.com/red-rising-part-1.torrent";
+    const partTwoUrl = "https://example.com/red-rising-part-2.torrent";
+    const torrentBytes = new Map([
+      [partOneUrl, makeTorrentBytes("red-rising-part-1")],
+      [partTwoUrl, makeTorrentBytes("red-rising-part-2")],
+    ]);
+    const rpcUrl = "https://rtorrent.example/RPC2";
+    const settings = defaultSettings({
+      rtorrent: {
+        transport: "http-xmlrpc",
+        url: rpcUrl,
+        downloadPath: "",
+      },
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown) => {
+      const url = String(input);
+      const bytes = torrentBytes.get(url);
+      if (bytes) {
+        return new Response(bytes, {
+          status: 200,
+          headers: { "Content-Type": "application/x-bittorrent" },
+        });
+      }
+      if (url === rpcUrl) {
+        return new Response(
+          '<?xml version="1.0"?><methodResponse><params><param><value><int>0</int></value></param></params></methodResponse>',
+          { status: 200, headers: { "Content-Type": "text/xml" } }
+        );
+      }
+      throw new Error(`Unexpected fetch url: ${url}`);
+    }) as unknown as typeof fetch;
+
+    try {
+      const result = await runSnatchGroup(repo, settings, {
+        bookId: book.id,
+        mediaType: "audio",
+        manifestation: {
+          label: "GraphicAudio dramatization",
+          editionNote: null,
+        },
+        parts: [
+          {
+            provider: "mock",
+            title: "Red Rising GraphicAudio Part 1",
+            url: partOneUrl,
+          },
+          {
+            provider: "mock",
+            title: "Red Rising GraphicAudio Part 2",
+            url: partTwoUrl,
+          },
+        ],
+      });
+
+      expect(result.results).toHaveLength(2);
+      expect(result.manifestationId).toBeTruthy();
+      const manifestation = repo.getManifestation(result.manifestationId!);
+      expect(manifestation?.label).toBe("GraphicAudio dramatization");
+      const jobs = repo.listJobsByType("download");
+      const payloads = jobs.map((job) => JSON.parse(job.payload_json ?? "{}")).sort((a, b) => a.sequenceInManifestation - b.sequenceInManifestation);
+      expect(payloads.map((payload) => payload.manifestationId)).toEqual([result.manifestationId, result.manifestationId]);
+      expect(payloads.map((payload) => payload.sequenceInManifestation)).toEqual([0, 1]);
     } finally {
       globalThis.fetch = originalFetch;
       db.close();

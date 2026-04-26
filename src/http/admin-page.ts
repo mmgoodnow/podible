@@ -255,11 +255,16 @@ function renderAdminPage(
               <input id="manual-query" type="text" placeholder="Search query (e.g. Twilight Stephenie Meyer)" />
               <button id="manual-search-btn" type="button">Search</button>
             </div>
+            <div class="row" style="margin-top: 8px;">
+              <input id="manual-manifestation-label" type="text" placeholder="Edition label (e.g. GraphicAudio dramatization)" />
+              <button id="manual-group-snatch-btn" type="button">Snatch Checked as One Edition</button>
+            </div>
             <p id="manual-search-status" class="muted"></p>
             <div class="table-wrap">
               <table>
                 <thead>
                   <tr>
+                    <th></th>
                     <th>Title</th>
                     <th>Provider</th>
                     <th>Seeders</th>
@@ -267,7 +272,7 @@ function renderAdminPage(
                     <th>Action</th>
                   </tr>
                 </thead>
-                <tbody id="manual-search-body"><tr><td colspan="5">No search yet.</td></tr></tbody>
+                <tbody id="manual-search-body"><tr><td colspan="6">No search yet.</td></tr></tbody>
               </table>
             </div>
           </div>

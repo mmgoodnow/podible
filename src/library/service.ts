@@ -11,7 +11,7 @@ type SearchRequest = {
   media: MediaType;
 };
 
-type SnatchRequest = {
+export type SnatchRequest = {
   bookId: number;
   provider: string;
   providerGuid?: string | null;
@@ -22,6 +22,30 @@ type SnatchRequest = {
   sizeBytes?: number | null;
   manifestationId?: number | null;
   sequenceInManifestation?: number | null;
+};
+
+export type SnatchGroupRequest = {
+  bookId: number;
+  mediaType: MediaType;
+  manifestation: {
+    label: string | null;
+    editionNote: string | null;
+  };
+  parts: Array<{
+    provider: string;
+    providerGuid?: string | null;
+    title: string;
+    url: string;
+    infoHash?: string | null;
+    sizeBytes?: number | null;
+  }>;
+};
+
+export type SnatchResult = { release: ReleaseRow; jobId: number; idempotent: boolean };
+
+export type SnatchGroupResult = {
+  manifestationId: number | null;
+  results: SnatchResult[];
 };
 
 type AutoAcquireOptions = {
@@ -54,7 +78,7 @@ function resolveInfoHash(explicitHash?: string | null): string | null {
   return normalizeInfoHash(explicitHash);
 }
 
-function idempotentResult(repo: BooksRepo, existing: ReleaseRow): { release: ReleaseRow; jobId: number; idempotent: boolean } {
+function idempotentResult(repo: BooksRepo, existing: ReleaseRow): SnatchResult {
   const existingJob = repo
     .listJobsByType("download")
     .find((job) => job.release_id === existing.id && (job.status === "queued" || job.status === "running"));
@@ -140,7 +164,7 @@ export async function runSnatch(
   settings: AppSettings,
   request: SnatchRequest,
   runtime: SnatchRuntimeOptions = {}
-): Promise<{ release: ReleaseRow; jobId: number; idempotent: boolean }> {
+): Promise<SnatchResult> {
   const snatchLog = (message: string): void => {
     if (runtime.onLog) {
       runtime.onLog(message);
@@ -290,6 +314,50 @@ export async function runSnatch(
     jobId: job.id,
     idempotent: false,
   };
+}
+
+export async function runSnatchGroup(
+  repo: BooksRepo,
+  settings: AppSettings,
+  request: SnatchGroupRequest,
+  runtime: SnatchRuntimeOptions = {}
+): Promise<SnatchGroupResult> {
+  if (request.parts.length === 0) {
+    throw new Error("At least one release is required");
+  }
+  const needsExplicitManifestation =
+    request.parts.length > 1 || request.manifestation.label !== null || request.manifestation.editionNote !== null;
+  const manifestationId = needsExplicitManifestation
+    ? repo.addManifestation({
+        bookId: request.bookId,
+        kind: request.mediaType === "ebook" ? "ebook" : "audio",
+        label: request.manifestation.label,
+        editionNote: request.manifestation.editionNote,
+      }).id
+    : null;
+  const results: SnatchResult[] = [];
+  for (const [index, part] of request.parts.entries()) {
+    results.push(
+      await runSnatch(
+        repo,
+        settings,
+        {
+          bookId: request.bookId,
+          provider: part.provider,
+          providerGuid: part.providerGuid ?? null,
+          title: part.title,
+          mediaType: request.mediaType,
+          url: part.url,
+          sizeBytes: part.sizeBytes ?? null,
+          infoHash: part.infoHash ?? null,
+          manifestationId,
+          sequenceInManifestation: needsExplicitManifestation ? index : null,
+        },
+        runtime
+      )
+    );
+  }
+  return { manifestationId, results };
 }
 
 export async function triggerAutoAcquire(

@@ -171,6 +171,8 @@ function renderJobsScript(): string {
 
 function renderManualSearchScript(): string {
   return `
+        let manualSearchResults = [];
+
         async function runManualSearch() {
           const status = document.getElementById("manual-search-status");
           const body = document.getElementById("manual-search-body");
@@ -185,11 +187,13 @@ function renderManualSearchScript(): string {
           try {
             const result = await rpcCall("search.run", { media: media, query: query });
             const rows = result.results || [];
+            manualSearchResults = rows;
             if (rows.length === 0) {
-              body.innerHTML = '<tr><td colspan="5">No results.</td></tr>';
+              body.innerHTML = '<tr><td colspan="6">No results.</td></tr>';
             } else {
-              body.innerHTML = rows.map(function (release) {
+              body.innerHTML = rows.map(function (release, index) {
                 return '<tr>' +
+                  '<td><input type="checkbox" data-search-result-index="' + escapeHtml(index) + '" /></td>' +
                   '<td>' + escapeHtml(release.title || '') + '</td>' +
                   '<td>' + escapeHtml(release.provider || '') + '</td>' +
                   '<td>' + escapeHtml(release.seeders ?? '') + '</td>' +
@@ -199,6 +203,43 @@ function renderManualSearchScript(): string {
               }).join('');
             }
             status.textContent = rows.length + ' result' + (rows.length === 1 ? '' : 's') + '.';
+          } catch (error) {
+            status.textContent = error instanceof Error ? error.message : String(error);
+          }
+        }
+
+        async function snatchCheckedAsManifestation() {
+          const status = document.getElementById("manual-search-status");
+          const bookId = Number(document.getElementById("manual-book-id").value || 0);
+          const media = document.getElementById("manual-media").value;
+          const label = document.getElementById("manual-manifestation-label").value.trim();
+          const checked = Array.from(document.querySelectorAll("#manual-search-body input[data-search-result-index]:checked"));
+          const releases = checked
+            .map(function (input) {
+              const index = Number(input.getAttribute("data-search-result-index"));
+              return manualSearchResults[index] || null;
+            })
+            .filter(Boolean);
+          if (!bookId) {
+            status.textContent = "Book ID is required.";
+            return;
+          }
+          if (releases.length < 2) {
+            status.textContent = "Select at least two search results to group.";
+            return;
+          }
+          status.textContent = "Snatching grouped edition…";
+          try {
+            const result = await rpcCall("snatch.createGroup", {
+              bookId: bookId,
+              mediaType: media,
+              manifestation: {
+                label: label || null,
+                editionNote: null,
+              },
+              releases: releases,
+            });
+            status.textContent = "Grouped snatch created (" + result.results.length + " parts).";
           } catch (error) {
             status.textContent = error instanceof Error ? error.message : String(error);
           }
@@ -286,6 +327,7 @@ function renderAdminBootstrapScript(): string {
         document.getElementById("settings-save-btn")?.addEventListener("click", saveSettings);
         document.getElementById("wipe-db-btn")?.addEventListener("click", wipeDatabase);
         document.getElementById("manual-search-btn")?.addEventListener("click", runManualSearch);
+        document.getElementById("manual-group-snatch-btn")?.addEventListener("click", snatchCheckedAsManifestation);
         document.getElementById("manual-import-inspect-btn")?.addEventListener("click", inspectManualImport);
         document.getElementById("manual-import-btn")?.addEventListener("click", runManualImport);
         document.getElementById("downloads-refresh-btn")?.addEventListener("click", refreshDownloads);

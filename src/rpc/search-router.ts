@@ -1,4 +1,4 @@
-import { runSearch, runSnatch } from "../library/service";
+import { runSearch, runSnatch, runSnatchGroup } from "../library/service";
 import { z } from "zod";
 
 import { defineMethod, defineRouter } from "./framework";
@@ -79,6 +79,48 @@ export const snatchRouter = defineRouter({
         sizeBytes: Number.isFinite(params.sizeBytes) ? params.sizeBytes : null,
         manifestationId: params.manifestationId,
         sequenceInManifestation: params.sequenceInManifestation,
+      });
+    },
+  }),
+
+  createGroup: defineMethod({
+    auth: "admin",
+    summary: "Create a grouped manifestation from ordered search results.",
+    paramsSchema: emptyParamsSchema.extend({
+      bookId: positiveIntSchema,
+      mediaType: mediaSchema,
+      manifestation: z.object({
+        label: optionalStringSchema.nullable(),
+        editionNote: optionalStringSchema.nullable(),
+      }),
+      releases: z.array(torznabResultSchema).min(1),
+    }),
+    resultSchema: z.object({
+      manifestationId: positiveIntSchema.nullable(),
+      results: z.array(
+        z.object({
+          release: releaseRowSchema,
+          jobId: positiveIntSchema,
+          idempotent: z.boolean(),
+        })
+      ),
+    }),
+    async handler(ctx, params) {
+      return runSnatchGroup(ctx.repo, ctx.repo.getSettings(), {
+        bookId: params.bookId,
+        mediaType: params.mediaType,
+        manifestation: {
+          label: params.manifestation.label?.trim() || null,
+          editionNote: params.manifestation.editionNote?.trim() || null,
+        },
+        parts: params.releases.map((release) => ({
+          provider: release.provider,
+          providerGuid: release.guid ?? null,
+          title: release.title,
+          url: release.url,
+          infoHash: release.infoHash ?? null,
+          sizeBytes: release.sizeBytes,
+        })),
       });
     },
   }),
