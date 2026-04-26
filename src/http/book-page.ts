@@ -1,12 +1,17 @@
 import { buildManifestationChapters, selectPreferredAudioManifestation, streamExtensionForManifestation } from "../library/media";
 import { getBookTranscriptStatus, hasStoredTranscriptPayload, selectPreferredEpubAsset } from "../library/chapter-analysis";
 import { BooksRepo } from "../repo";
-import type { AppSettings, SessionWithUserRow } from "../app-types";
+import type { AppSettings, AssetRow, ManifestationRow, SessionWithUserRow } from "../app-types";
 
 import type { TranscriptRequestResult } from "../library/chapter-analysis";
 
 import { addApiKey, escapeHtml, messageMarkup, renderAppPage } from "./common";
 import { coverMarkup, describeBookState, formatBookStatusLine, formatMediaStatus, formatMinutes } from "./page-helpers";
+
+type BookAudioCandidate = {
+  manifestation: ManifestationRow;
+  containers: AssetRow[];
+};
 
 function describeTranscriptStatus(status: TranscriptRequestResult | null): string {
   if (!status) return "No audio";
@@ -33,6 +38,57 @@ function describeTranscriptStatus(status: TranscriptRequestResult | null): strin
 function canRequestTranscription(status: TranscriptRequestResult | null): boolean {
   if (!status) return false;
   return status.status === "stale" || status.status === "failed" || status.status === "missing_config";
+}
+
+export function parseRequestedEditionId(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const id = Number(value);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+function chooseAudioCandidate(candidates: BookAudioCandidate[], requestedEditionId: number | null): BookAudioCandidate | null {
+  if (requestedEditionId !== null) {
+    const requested = candidates.find(
+      (candidate) => candidate.manifestation.kind === "audio" && candidate.containers.length > 0 && candidate.manifestation.id === requestedEditionId
+    );
+    if (requested) return requested;
+  }
+  return selectPreferredAudioManifestation(candidates);
+}
+
+function manifestationDisplayName(candidate: BookAudioCandidate, index: number): string {
+  if (candidate.manifestation.label?.trim()) return candidate.manifestation.label.trim();
+  if (candidate.containers.length > 1) return `Audio edition ${index + 1} (${candidate.containers.length} parts)`;
+  return `Audio edition ${index + 1}`;
+}
+
+function manifestationMeta(candidate: BookAudioCandidate): string {
+  const parts = [
+    candidate.manifestation.edition_note?.trim() || null,
+    candidate.containers.length > 1 ? `${candidate.containers.length} parts` : "1 part",
+    formatMinutes(candidate.manifestation.duration_ms),
+  ].filter(Boolean);
+  return parts.join(" • ");
+}
+
+function renderEditionPicker(bookId: number, candidates: BookAudioCandidate[], selectedManifestationId: number | null, apiKey: string | null): string {
+  const audioCandidates = candidates.filter((candidate) => candidate.manifestation.kind === "audio" && candidate.containers.length > 0);
+  if (audioCandidates.length <= 1) return "";
+  return `
+    <form class="edition-picker" method="get" action="${escapeHtml(addApiKey(`/book/${bookId}`, apiKey))}">
+      <label for="edition-select"><strong>Audio edition</strong></label>
+      <select id="edition-select" name="edition" onchange="this.form.submit()">
+        ${audioCandidates
+          .map((candidate, index) => {
+            const selected = candidate.manifestation.id === selectedManifestationId ? " selected" : "";
+            const label = manifestationDisplayName(candidate, index);
+            const meta = manifestationMeta(candidate);
+            return `<option value="${candidate.manifestation.id}"${selected}>${escapeHtml(meta ? `${label} — ${meta}` : label)}</option>`;
+          })
+          .join("")}
+      </select>
+      <noscript><button type="submit">Use edition</button></noscript>
+    </form>`;
 }
 
 function renderTranscriptRuntimeScript(bookId: number, transcriptHref: string): string {
@@ -130,7 +186,13 @@ export async function renderBookPage(
   repo: BooksRepo,
   settings: AppSettings,
   bookId: number,
-  flash: { notice?: string | null; error?: string | null; currentUser?: SessionWithUserRow | null; apiKey?: string | null } = {}
+  flash: {
+    notice?: string | null;
+    error?: string | null;
+    currentUser?: SessionWithUserRow | null;
+    apiKey?: string | null;
+    selectedEditionId?: number | null;
+  } = {}
 ): Promise<Response> {
   const apiKey = flash.apiKey ?? null;
   const book = repo.getBook(bookId);
@@ -144,8 +206,9 @@ export async function renderBookPage(
     manifestation,
     containers: repo.listAssetsByManifestation(manifestation.id),
   }));
-  const audioChoice = selectPreferredAudioManifestation(audioCandidates);
+  const audioChoice = chooseAudioCandidate(audioCandidates, flash.selectedEditionId ?? null);
   const audio = audioChoice?.containers[0] ?? null;
+  const selectedManifestationId = audioChoice?.manifestation.id ?? null;
   const audioContainers = audioChoice
     ? audioChoice.containers.map((container) => ({ asset: container, files: repo.getAssetFiles(container.id) }))
     : [];
@@ -175,6 +238,7 @@ export async function renderBookPage(
             ${streamUrl ? `<a class="button-link button-link-primary" href="${escapeHtml(streamUrl)}">Play audio</a>` : ""}
             ${ebookUrl ? `<a class="button-link" href="${escapeHtml(ebookUrl)}">Download EPUB/PDF</a>` : ""}
           </div>
+          ${renderEditionPicker(book.id, audioCandidates, selectedManifestationId, apiKey)}
           ${messageMarkup(flash.notice, flash.error)}
           <p style="margin-top: 12px;">${escapeHtml(book.description || `${book.title} by ${book.author}`)}</p>
         </div>

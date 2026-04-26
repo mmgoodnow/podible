@@ -5,7 +5,7 @@ import { BooksRepo } from "../repo";
 import { triggerAutoAcquire } from "../library/service";
 import { renderActivityPage } from "./activity-page";
 import { createBookFromOpenLibrary, renderAddPage } from "./add-page";
-import { renderBookPage } from "./book-page";
+import { parseRequestedEditionId, renderBookPage } from "./book-page";
 import { renderLandingPage } from "./landing-page";
 import { renderLibraryPage } from "./library-page";
 import { renderLoginPage } from "./login-page";
@@ -105,6 +105,7 @@ export function createBookRoutes(repo: BooksRepo): Hono<HttpEnv> {
       error: c.req.query("error"),
       currentUser: getCurrentSession(c),
       apiKey: null,
+      selectedEditionId: parseRequestedEditionId(c.req.query("edition")),
     })
   );
 

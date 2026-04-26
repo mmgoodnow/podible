@@ -224,10 +224,10 @@ describe("podible http", () => {
     });
 
     const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
-    repo.addAsset({
+    const standardAudio = repo.addAsset({
       bookId: book.id,
       kind: "single",
-      mime: "audio/mpeg",
+      mime: "audio/mp4",
       totalSize: 123,
       durationMs: 1_000,
       files: [
@@ -238,6 +238,31 @@ describe("podible http", () => {
           end: 122,
           durationMs: 1_000,
           title: "Dune",
+        },
+      ],
+    });
+    const graphicAudio = repo.addManifestation({
+      bookId: book.id,
+      kind: "audio",
+      label: "GraphicAudio dramatization",
+      editionNote: "full cast",
+    });
+    repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mpeg",
+      totalSize: 456,
+      durationMs: 2_000,
+      manifestationId: graphicAudio.id,
+      sequenceInManifestation: 0,
+      files: [
+        {
+          path: path.join(isolatedDataDir, "dune-graphic.mp3"),
+          size: 456,
+          start: 0,
+          end: 455,
+          durationMs: 2_000,
+          title: "Dune GraphicAudio",
         },
       ],
     });
@@ -269,6 +294,19 @@ describe("podible http", () => {
     expect(detailBody.includes("Unavailable (API key not configured)")).toBe(true);
     expect(detailBody.includes("Find audio")).toBe(true);
     expect(detailBody.includes("Release history")).toBe(true);
+    expect(detailBody.includes("Audio edition")).toBe(true);
+    expect(detailBody.includes("GraphicAudio dramatization")).toBe(true);
+    expect(detailBody.includes(`/stream/m/${standardAudio.manifestation_id}.`)).toBe(true);
+
+    const selectedEdition = await fetchHandler(
+      new Request(`http://localhost/book/${book.id}?edition=${graphicAudio.id}`, {
+        headers: { cookie: userCookie },
+      })
+    );
+    expect(selectedEdition.status).toBe(200);
+    const selectedEditionBody = await selectedEdition.text();
+    expect(selectedEditionBody.includes(`<option value="${graphicAudio.id}" selected>`)).toBe(true);
+    expect(selectedEditionBody.includes(`/stream/m/${graphicAudio.id}.`)).toBe(true);
 
     db.close();
   });
