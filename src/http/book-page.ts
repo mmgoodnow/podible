@@ -426,10 +426,16 @@ export async function renderBookPage(
         gap: 12px;
         margin-top: 12px;
       }
-      .cover-candidate {
+      .cover-candidates button.cover-candidate {
         display: grid;
         gap: 6px;
+        align-items: start;
+        justify-content: stretch;
+        width: 100%;
+        min-height: 0;
+        padding: 10px;
         text-align: left;
+        overflow: hidden;
       }
       .cover-candidate img {
         width: 100%;
@@ -438,6 +444,10 @@ export async function renderBookPage(
         border: 1px solid var(--line-soft);
         border-radius: 8px;
         background: var(--surface);
+      }
+      .cover-candidate span {
+        min-width: 0;
+        overflow-wrap: anywhere;
       }
     </style>
     ${audio ? renderTranscriptRuntimeScript(book.id, transcriptUrl ?? "") : ""}
