@@ -19,12 +19,20 @@ type DecisionMode = "deterministic" | "agent";
 type DecisionTrigger = "none" | "forced" | "prior_failure" | "low_confidence";
 
 type SearchSelectionResult = {
-  candidate: TorznabResult | null;
+  selections: SearchSelection[];
   confidence: number;
   mode: DecisionMode;
   trigger: DecisionTrigger;
   reason: string;
   error: string | null;
+};
+
+type SearchSelection = {
+  manifestation: {
+    label: string | null;
+    editionNote: string | null;
+  };
+  parts: TorznabResult[];
 };
 
 type ManualImportSelectionResult = {
@@ -45,6 +53,7 @@ type SearchSelectionInput = {
   rejectedInfoHashes?: string[];
   forceAgent?: boolean;
   priorFailure?: boolean;
+  editionPreference?: string;
   book?: {
     id: number;
     title: string;
@@ -66,7 +75,14 @@ type ManualImportSelectionInput = {
 };
 
 type SearchAgentOutput = {
-  selectedIndex: number | null;
+  selections?: Array<{
+    manifestation?: {
+      label?: string | null;
+      editionNote?: string | null;
+      edition_note?: string | null;
+    } | null;
+    parts?: number[];
+  }>;
   confidence: number;
   reason: string;
 };
@@ -351,6 +367,47 @@ function isRejectedCandidate(
   return false;
 }
 
+function searchSelectionFromIndex(result: TorznabResult): SearchSelection {
+  return { manifestation: { label: null, editionNote: null }, parts: [result] };
+}
+
+function parseSearchAgentSelections(output: SearchAgentOutput, ranked: ReturnType<typeof rankSearchResults>): SearchSelection[] {
+  if (!Array.isArray(output.selections)) {
+    throw new Error("Agent returned invalid selections");
+  }
+
+  const selections: SearchSelection[] = [];
+  for (const selection of output.selections) {
+    const parts = selection?.parts;
+    if (!Array.isArray(parts)) {
+      throw new Error("Agent returned selection without parts");
+    }
+    const selectedParts: TorznabResult[] = [];
+    const seen = new Set<number>();
+    for (const index of parts) {
+      if (!Number.isInteger(index) || index < 0 || index >= ranked.length) {
+        throw new Error("Agent selected invalid candidate index");
+      }
+      if (seen.has(index)) {
+        throw new Error("Agent selected the same candidate more than once");
+      }
+      seen.add(index);
+      selectedParts.push(ranked[index]!.result);
+    }
+    if (selectedParts.length === 0) continue;
+    const manifestation = selection?.manifestation ?? null;
+    const label = typeof manifestation?.label === "string" && manifestation.label.trim() ? manifestation.label.trim() : null;
+    const rawEditionNote = manifestation?.editionNote ?? manifestation?.edition_note;
+    const editionNote = typeof rawEditionNote === "string" && rawEditionNote.trim() ? rawEditionNote.trim() : null;
+    selections.push({
+      manifestation: { label, editionNote },
+      parts: selectedParts,
+    });
+  }
+
+  return selections;
+}
+
 function deterministicSearchSelection(input: SearchSelectionInput): SearchSelectionResult {
   const rejectedUrls = new Set((input.rejectedUrls ?? []).map((item) => normalizeRejectedUrl(item)).filter(Boolean));
   const rejectedGuids = new Set((input.rejectedGuids ?? []).map((item) => item.trim()).filter(Boolean));
@@ -364,7 +421,7 @@ function deterministicSearchSelection(input: SearchSelectionInput): SearchSelect
   );
   if (ranked.length === 0) {
     return {
-      candidate: null,
+      selections: [],
       confidence: 0,
       mode: "deterministic",
       trigger: "none",
@@ -384,7 +441,7 @@ function deterministicSearchSelection(input: SearchSelectionInput): SearchSelect
   const gapNormalized = clamp01((gap + 20) / 120);
   const confidence = clamp01(0.25 + matched * 0.45 + gapNormalized * 0.3);
   return {
-    candidate: top.result,
+    selections: [searchSelectionFromIndex(top.result)],
     confidence,
     mode: "deterministic",
     trigger: "none",
@@ -483,6 +540,10 @@ function buildSearchAgentPrompt(trigger: DecisionTrigger, input: SearchSelection
   } else {
     lines.push("- Book: unknown");
   }
+  const editionPreference = input.media === "audio" ? input.editionPreference?.trim() : "";
+  if (editionPreference) {
+    lines.push(`- Global audio edition preference: ${mdTableCell(editionPreference)}`);
+  }
   if (trigger !== "none" && trigger !== "forced") {
     lines.push(`- Context: ${trigger === "prior_failure" ? "this follows a prior failure" : "deterministic confidence was low"}`);
   }
@@ -498,7 +559,11 @@ function buildSearchAgentPrompt(trigger: DecisionTrigger, input: SearchSelection
   }
   lines.push("");
   lines.push("# Output");
-  lines.push("Return strict JSON only with keys `selectedIndex`, `confidence`, `reason`.");
+  lines.push("Return strict JSON only with keys `selections`, `confidence`, `reason`.");
+  lines.push("`selections` is an array. Use an empty array when no safe candidate exists.");
+  lines.push("For normal single-release acquisitions, return one selection with one candidate index in `parts`.");
+  lines.push("If the preferred edition is split across multiple releases, return one selection whose ordered `parts` array contains each release index.");
+  lines.push("Each selection may include `manifestation.label` and `manifestation.editionNote`; use null when there is no meaningful edition label.");
   return lines.join("\n");
 }
 
@@ -554,7 +619,7 @@ function buildManualImportAgentPrompt(trigger: DecisionTrigger, input: ManualImp
   return lines.join("\n");
 }
 
-export async function selectSearchCandidate(
+export async function selectSearchCandidates(
   settings: AppSettings,
   input: SearchSelectionInput,
   runtime: SearchSelectionRuntime = {}
@@ -564,7 +629,7 @@ export async function selectSearchCandidate(
     forceAgent: input.forceAgent,
     priorFailure: input.priorFailure,
   });
-  if (trigger === "none" || !deterministic.candidate) {
+  if (trigger === "none" || deterministic.selections.length === 0) {
     return deterministic;
   }
 
@@ -588,17 +653,19 @@ export async function selectSearchCandidate(
       "For ebook selection, avoid comic/graphic-novel formats and comic releases (for example CBR/CBZ or titles mentioning graphic novel) unless the user explicitly asked for that.",
       "If no good single-book candidate exists, it is better to choose a plausible box set/collection containing the target book than to choose the wrong work.",
       "If the list is too poor or ambiguous to choose safely, return no candidate.",
-      "Return strict JSON only with keys: selectedIndex, confidence, reason.",
-      "selectedIndex must be an integer index into the candidate list or null.",
+      "Return strict JSON only with keys: selections, confidence, reason.",
+      "selections must be an array. Use an empty array when no candidate is safe.",
+      "Each selection must have ordered candidate indices in parts.",
       "confidence must be a number from 0 to 1.",
     ].join(" ");
     const user = buildSearchAgentPrompt(trigger, input, ranked);
     const output = runtime.repo
       ? await callSearchResponsesWithInspectTool(settings, system, user, ranked, runtime.repo)
       : await callResponsesJson<SearchAgentOutput>(settings, system, user);
-    if (output.selectedIndex === null) {
+    const selections = parseSearchAgentSelections(output, ranked);
+    if (selections.length === 0) {
       return {
-        candidate: null,
+        selections: [],
         confidence: clamp01(output.confidence),
         mode: "agent",
         trigger,
@@ -606,15 +673,12 @@ export async function selectSearchCandidate(
         error: null,
       };
     }
-    if (!Number.isInteger(output.selectedIndex) || output.selectedIndex < 0 || output.selectedIndex >= ranked.length) {
-      throw new Error("Agent selected invalid candidate index");
-    }
     return {
-      candidate: ranked[output.selectedIndex].result,
+      selections,
       confidence: clamp01(output.confidence),
       mode: "agent",
       trigger,
-      reason: output.reason || "Agent selected candidate",
+      reason: output.reason || "Agent selected candidates",
       error: null,
     };
   } catch (error) {
@@ -706,4 +770,4 @@ export async function selectManualImportPaths(
   }
 }
 
-export type { ManualImportSelectionInput, ManualImportSelectionResult, SearchSelectionInput, SearchSelectionResult };
+export type { ManualImportSelectionInput, ManualImportSelectionResult, SearchSelection, SearchSelectionInput, SearchSelectionResult };

@@ -98,6 +98,7 @@ export const appSettingsSchema: z.ZodType<AppSettings> = z.object({
     provider: z.literal("openai-responses"),
     model: z.string(),
     apiKey: z.string(),
+    editionPreference: z.string(),
     lowConfidenceThreshold: z.number(),
     timeoutMs: z.number(),
   }),
@@ -206,7 +207,15 @@ export const torznabResultSchema = z.object({
 });
 
 export const searchSelectionDecisionSchema = z.object({
-  candidate: torznabResultSchema.nullable(),
+  selections: z.array(
+    z.object({
+      manifestation: z.object({
+        label: z.string().nullable(),
+        editionNote: z.string().nullable(),
+      }),
+      parts: z.array(torznabResultSchema),
+    })
+  ),
   confidence: z.number(),
   mode: decisionModeSchema,
   trigger: decisionTriggerSchema,

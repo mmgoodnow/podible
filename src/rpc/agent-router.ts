@@ -1,4 +1,4 @@
-import { selectManualImportPaths, selectSearchCandidate } from "../library/agents";
+import { selectManualImportPaths, selectSearchCandidates } from "../library/agents";
 import { inspectImportPath } from "../library/importer";
 import { runSearch } from "../library/service";
 import { z } from "zod";
@@ -47,12 +47,14 @@ export const agentRouter = defineRouter({
                 return { id: row.id, title: row.title, author: row.author };
               })();
         const results = await runSearch(ctx.repo.getSettings(), { query: params.query, media: params.media });
-        const decision = await selectSearchCandidate(
-          ctx.repo.getSettings(),
+        const settings = ctx.repo.getSettings();
+        const decision = await selectSearchCandidates(
+          settings,
           {
             query: params.query,
             media: params.media,
             results,
+            editionPreference: settings.agents.editionPreference,
             rejectedUrls: params.rejectedUrls ?? [],
             forceAgent: params.forceAgent ?? false,
             priorFailure: params.priorFailure ?? false,

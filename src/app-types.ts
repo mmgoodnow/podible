@@ -73,6 +73,7 @@ export type AppSettings = {
     provider: "openai-responses";
     model: string;
     apiKey: string;
+    editionPreference: string;
     lowConfidenceThreshold: number;
     timeoutMs: number;
   };

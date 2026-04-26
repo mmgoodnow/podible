@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import bencode from "bencode";
 
-import { selectManualImportPaths, selectSearchCandidate } from "../../src/library/agents";
+import { selectManualImportPaths, selectSearchCandidates } from "../../src/library/agents";
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { defaultSettings, parseSettings } from "../../src/settings";
@@ -34,7 +34,7 @@ describe("agent decisions", () => {
   test("search selection is deterministic by default", async () => {
     const settings = defaultSettings();
 
-    const decision = await selectSearchCandidate(settings, {
+    const decision = await selectSearchCandidates(settings, {
       query: "Dune Frank Herbert",
       media: "audio",
       results: [
@@ -66,7 +66,7 @@ describe("agent decisions", () => {
     });
 
     expect(decision.mode).toBe("deterministic");
-    expect(decision.candidate?.url).toBe("https://example.com/one.torrent");
+    expect(decision.selections[0]?.parts[0]?.url).toBe("https://example.com/one.torrent");
     expect(decision.error).toBeNull();
   });
 
@@ -87,7 +87,7 @@ describe("agent decisions", () => {
       return new Response(
         JSON.stringify({
           output_text: JSON.stringify({
-            selectedIndex: 1,
+            selections: [{ manifestation: { label: null, editionNote: null }, parts: [1] }],
             confidence: 0.73,
             reason: "Candidate two better matches requested edition",
           }),
@@ -100,7 +100,7 @@ describe("agent decisions", () => {
       const settings = defaultSettings({
         agents: agentSettings({ lowConfidenceThreshold: 0.99 }),
       });
-      const decision = await selectSearchCandidate(settings, {
+      const decision = await selectSearchCandidates(settings, {
         query: "Dune Frank Herbert",
         media: "audio",
         forceAgent: true,
@@ -134,9 +134,106 @@ describe("agent decisions", () => {
 
       expect(decision.mode).toBe("agent");
       expect(decision.trigger).toBe("forced");
-      expect(decision.candidate?.url).toBe("https://example.com/two.torrent");
+      expect(decision.selections[0]?.parts[0]?.url).toBe("https://example.com/two.torrent");
       expect(decision.confidence).toBe(0.73);
       expect(decision.error).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("search agent can select ordered multipart manifestation releases", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input instanceof Request
+              ? input.url
+              : String(input);
+      if (url !== "https://api.openai.com/v1/responses") {
+        throw new Error(`Unexpected url: ${url}`);
+      }
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      expect(JSON.stringify(body)).toContain("prefer GraphicAudio");
+      return new Response(
+        JSON.stringify({
+          output_text: JSON.stringify({
+            selections: [
+              {
+                manifestation: { label: "GraphicAudio dramatization", editionNote: "full cast" },
+                parts: [1, 2],
+              },
+            ],
+            confidence: 0.82,
+            reason: "GraphicAudio is split across two releases and matches the global preference.",
+          }),
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as typeof fetch;
+
+    try {
+      const settings = defaultSettings({
+        agents: agentSettings({ lowConfidenceThreshold: 0.99, editionPreference: "prefer GraphicAudio dramatizations" }),
+      });
+      const decision = await selectSearchCandidates(settings, {
+        query: "Red Rising Pierce Brown",
+        media: "audio",
+        forceAgent: true,
+        editionPreference: settings.agents.editionPreference,
+        results: [
+          {
+            title: "Red Rising GraphicAudio Part 1 [MP3]",
+            provider: "mock",
+            mediaType: "audio",
+            sizeBytes: 1000,
+            url: "https://example.com/ga-part-1.torrent",
+            guid: "ga1",
+            infoHash: null,
+            seeders: 3,
+            leechers: 0,
+            raw: {},
+          },
+          {
+            title: "Red Rising GraphicAudio Part 2 [MP3]",
+            provider: "mock",
+            mediaType: "audio",
+            sizeBytes: 1000,
+            url: "https://example.com/ga-part-2.torrent",
+            guid: "ga2",
+            infoHash: null,
+            seeders: 3,
+            leechers: 0,
+            raw: {},
+          },
+          {
+            title: "Red Rising Tim Gerard Reynolds [M4B]",
+            provider: "mock",
+            mediaType: "audio",
+            sizeBytes: 1000,
+            url: "https://example.com/classic.torrent",
+            guid: "classic",
+            infoHash: null,
+            seeders: 10,
+            leechers: 0,
+            raw: {},
+          },
+        ],
+      });
+
+      expect(decision.mode).toBe("agent");
+      expect(decision.selections).toHaveLength(1);
+      expect(decision.selections[0]?.manifestation).toEqual({
+        label: "GraphicAudio dramatization",
+        editionNote: "full cast",
+      });
+      expect(decision.selections[0]?.parts.map((part) => part.url)).toEqual([
+        "https://example.com/ga-part-1.torrent",
+        "https://example.com/ga-part-2.torrent",
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -193,7 +290,7 @@ describe("agent decisions", () => {
           JSON.stringify({
             id: "resp_2",
             output_text: JSON.stringify({
-              selectedIndex: 1,
+              selections: [{ manifestation: { label: null, editionNote: null }, parts: [1] }],
               confidence: 0.71,
               reason: "Inspected candidate 1 and verified the torrent contains Twilight files.",
             }),
@@ -215,7 +312,7 @@ describe("agent decisions", () => {
       const settings = defaultSettings({
         agents: agentSettings(),
       });
-      const decision = await selectSearchCandidate(
+      const decision = await selectSearchCandidates(
         settings,
         {
           query: "Twilight Stephenie Meyer",
@@ -253,7 +350,7 @@ describe("agent decisions", () => {
       );
 
       expect(decision.mode).toBe("agent");
-      expect(decision.candidate?.url).toBe(torrentUrl);
+      expect(decision.selections[0]?.parts[0]?.url).toBe(torrentUrl);
       expect(torrentFetchCount).toBe(1);
       expect(openAiBodies).toHaveLength(2);
       expect(openAiBodies[0]?.tools?.[0]?.name).toBe("inspect");
@@ -274,7 +371,7 @@ describe("agent decisions", () => {
         agents: agentSettings({ lowConfidenceThreshold: 0.99 }),
       });
       await expect(
-        selectSearchCandidate(settings, {
+        selectSearchCandidates(settings, {
           query: "Dune Frank Herbert",
           media: "audio",
           forceAgent: true,
@@ -325,7 +422,7 @@ describe("agent decisions", () => {
       })
     );
 
-    const decision = await selectSearchCandidate(legacySettings, {
+    const decision = await selectSearchCandidates(legacySettings, {
       query: "Dune Frank Herbert",
       media: "audio",
       results: [
@@ -345,13 +442,13 @@ describe("agent decisions", () => {
     });
 
     expect(decision.mode).toBe("deterministic");
-    expect(decision.candidate?.url).toBe("https://example.com/one.torrent");
+    expect(decision.selections[0]?.parts[0]?.url).toBe("https://example.com/one.torrent");
   });
 
   test("search selection excludes rejected guid and infohash", async () => {
     const settings = defaultSettings();
 
-    const decision = await selectSearchCandidate(settings, {
+    const decision = await selectSearchCandidates(settings, {
       query: "Dune Frank Herbert",
       media: "audio",
       rejectedGuids: ["g1"],
@@ -385,7 +482,7 @@ describe("agent decisions", () => {
     });
 
     expect(decision.mode).toBe("deterministic");
-    expect(decision.candidate?.url).toBe("https://example.com/two.torrent");
+    expect(decision.selections[0]?.parts[0]?.url).toBe("https://example.com/two.torrent");
   });
 
   test("manual import selection is deterministic by default", async () => {

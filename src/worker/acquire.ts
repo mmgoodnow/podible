@@ -1,4 +1,4 @@
-import { selectSearchCandidate } from "../library/agents";
+import { selectSearchCandidates } from "../library/agents";
 import { runSearch, runSnatch } from "../library/service";
 import type { JobRow, MediaType } from "../app-types";
 import { workerLog, type WorkerContext } from "./context";
@@ -47,12 +47,13 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
         ctx,
         `[acquire] job=${job.id} book=${book.id} media=${media} query=${JSON.stringify(query)} results=${results.length}`
       );
-      const decision = await selectSearchCandidate(
+      const decision = await selectSearchCandidates(
         settings,
         {
           query,
           media,
           results,
+          editionPreference: settings.agents.editionPreference,
           forceAgent: payload.forceAgent === true,
           priorFailure: payload.priorFailure === true,
           rejectedUrls: Array.isArray(payload.rejectedUrls) ? payload.rejectedUrls : [],
@@ -70,7 +71,7 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
           `[acquire] job=${job.id} book=${book.id} media=${media} decision_error=${JSON.stringify(decision.error)} trigger=${decision.trigger}`
         );
       }
-      if (!decision.candidate) {
+      if (decision.selections.length === 0) {
         workerLog(
           ctx,
           `[acquire] job=${job.id} book=${book.id} media=${media} no_result mode=${decision.mode} trigger=${decision.trigger} reason=${JSON.stringify(decision.reason)}`
@@ -78,37 +79,53 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
         result.noResultReason = `${media}: ${decision.reason ?? "no candidate selected"}`;
         return result;
       }
-      workerLog(
-        ctx,
-        `[acquire] job=${job.id} book=${book.id} media=${media} candidate_mode=${decision.mode} confidence=${decision.confidence.toFixed(
-          2
-        )} trigger=${decision.trigger} reason=${JSON.stringify(decision.reason)} candidate_title=${JSON.stringify(
-          decision.candidate.title
-        )} candidate_guid=${JSON.stringify(decision.candidate.guid ?? null)}`
-      );
       try {
-        const snatch = await runSnatch(
-          ctx.repo,
-          settings,
-          {
-            bookId: book.id,
-            provider: decision.candidate.provider,
-            providerGuid: decision.candidate.guid ?? null,
-            title: decision.candidate.title,
-            mediaType: media,
-            url: decision.candidate.url,
-            sizeBytes: decision.candidate.sizeBytes,
-            infoHash: decision.candidate.infoHash ?? null,
-          },
-          {
-            onLog: (line) => workerLog(ctx, `[acquire] job=${job.id} book=${book.id} media=${media} ${line}`),
-            preferAgentImport: decision.mode === "agent",
+        for (const [selectionIndex, selection] of decision.selections.entries()) {
+          const needsExplicitManifestation =
+            selection.parts.length > 1 || selection.manifestation.label !== null || selection.manifestation.editionNote !== null;
+          const manifestationId = needsExplicitManifestation
+            ? ctx.repo.addManifestation({
+                bookId: book.id,
+                kind: media === "ebook" ? "ebook" : "audio",
+                label: selection.manifestation.label,
+                editionNote: selection.manifestation.editionNote,
+              }).id
+            : null;
+
+          workerLog(
+            ctx,
+            `[acquire] job=${job.id} book=${book.id} media=${media} selection=${selectionIndex} mode=${decision.mode} confidence=${decision.confidence.toFixed(
+              2
+            )} trigger=${decision.trigger} parts=${selection.parts.length} manifestation=${manifestationId ?? "auto"} reason=${JSON.stringify(decision.reason)}`
+          );
+
+          for (const [partIndex, part] of selection.parts.entries()) {
+            const snatch = await runSnatch(
+              ctx.repo,
+              settings,
+              {
+                bookId: book.id,
+                provider: part.provider,
+                providerGuid: part.guid ?? null,
+                title: part.title,
+                mediaType: media,
+                url: part.url,
+                sizeBytes: part.sizeBytes,
+                infoHash: part.infoHash ?? null,
+                manifestationId,
+                sequenceInManifestation: needsExplicitManifestation ? partIndex : null,
+              },
+              {
+                onLog: (line) => workerLog(ctx, `[acquire] job=${job.id} book=${book.id} media=${media} ${line}`),
+                preferAgentImport: decision.mode === "agent",
+              }
+            );
+            workerLog(
+              ctx,
+              `[acquire] job=${job.id} book=${book.id} media=${media} selection=${selectionIndex} part=${partIndex} snatch_release=${snatch.release.id} download_job=${snatch.jobId} idempotent=${snatch.idempotent}`
+            );
           }
-        );
-        workerLog(
-          ctx,
-          `[acquire] job=${job.id} book=${book.id} media=${media} snatch_release=${snatch.release.id} download_job=${snatch.jobId} idempotent=${snatch.idempotent}`
-        );
+        }
         result.snatchSucceeded = true;
       } catch (error) {
         const message = (error as Error).message;

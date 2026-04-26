@@ -1236,7 +1236,7 @@ describe("json-rpc handler", () => {
 
     expect(result.result.resultCount).toBe(0);
     expect(result.result.decision.mode).toBe("deterministic");
-    expect(result.result.decision.candidate).toBeNull();
+    expect(result.result.decision.selections).toEqual([]);
 
     db.close();
   });
