@@ -12,6 +12,8 @@ function asset(overrides: Partial<AssetRow>): AssetRow {
     total_size: 100,
     duration_ms: 1000,
     source_release_id: null,
+    manifestation_id: null,
+    sequence_in_manifestation: 0,
     created_at: "2026-01-01T00:00:00.000Z",
     updated_at: "2026-01-01T00:00:00.000Z",
     ...overrides,

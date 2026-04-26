@@ -14,6 +14,8 @@ import type {
   AssetTranscriptStatus,
   AssetRow,
   BookRow,
+  ManifestationKind,
+  ManifestationRow,
   ChapterAnalysisRow,
   ChapterAnalysisStatus,
   DownloadView,
@@ -89,6 +91,12 @@ type AddAssetInput = {
   totalSize: number;
   durationMs?: number | null;
   sourceReleaseId?: number | null;
+  // When set, the asset is added as a container in this existing
+  // manifestation. When null/undefined, a new one-container manifestation is
+  // auto-created so callers that don't know about manifestations get the
+  // legacy 1:1 behavior.
+  manifestationId?: number | null;
+  sequenceInManifestation?: number;
   files: Array<{
     path: string;
     sourcePath?: string | null;
@@ -98,6 +106,16 @@ type AddAssetInput = {
     durationMs: number;
     title?: string | null;
   }>;
+};
+
+type AddManifestationInput = {
+  bookId: number;
+  kind: ManifestationKind;
+  label?: string | null;
+  editionNote?: string | null;
+  durationMs?: number | null;
+  totalSize?: number;
+  preferredScore?: number;
 };
 
 type UpsertUserInput = {
@@ -810,10 +828,35 @@ export class BooksRepo {
     }
     const now = nowIso();
     return this.db.transaction(() => {
+      // Resolve the manifestation we attach this container to. If the caller
+      // didn't supply one, auto-create a single-container manifestation that
+      // mirrors the asset 1:1 — the legacy shape every existing caller assumes.
+      let manifestationId = input.manifestationId ?? null;
+      let sequence = input.sequenceInManifestation ?? 0;
+      if (manifestationId == null) {
+        const manifestationKind: ManifestationKind = input.kind === "ebook" ? "ebook" : "audio";
+        const created = this.db
+          .query(
+            `INSERT INTO manifestations (book_id, kind, label, edition_note, duration_ms, total_size, preferred_score, created_at, updated_at)
+             VALUES (?, ?, NULL, NULL, ?, ?, 0, ?, ?)
+             RETURNING id`
+          )
+          .get(
+            input.bookId,
+            manifestationKind,
+            input.durationMs ?? null,
+            input.totalSize,
+            now,
+            now
+          ) as { id: number };
+        manifestationId = created.id;
+        sequence = 0;
+      }
+
       const asset = this.db
         .query(
-          `INSERT INTO assets (book_id, kind, mime, total_size, duration_ms, source_release_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO assets (book_id, kind, mime, total_size, duration_ms, source_release_id, manifestation_id, sequence_in_manifestation, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            RETURNING *`
         )
         .get(
@@ -823,6 +866,8 @@ export class BooksRepo {
           input.totalSize,
           input.durationMs ?? null,
           input.sourceReleaseId ?? null,
+          manifestationId,
+          sequence,
           now,
           now
         ) as AssetRow;
@@ -849,8 +894,83 @@ export class BooksRepo {
         .query("UPDATE books SET updated_at = ?, duration_ms = COALESCE(?, duration_ms) WHERE id = ?")
         .run(now, input.durationMs ?? null, input.bookId);
 
+      // Refresh aggregate manifestation stats. For a brand-new manifestation
+      // this is a no-op since the seed values already match. For an existing
+      // one (when a caller attaches a new container to it later), this picks
+      // up the new container's contribution.
+      this.recomputeManifestationAggregates(manifestationId);
+
       return asset;
     })();
+  }
+
+  addManifestation(input: AddManifestationInput): ManifestationRow {
+    assertPositiveInt(input.bookId);
+    const now = nowIso();
+    return this.db
+      .query(
+        `INSERT INTO manifestations (book_id, kind, label, edition_note, duration_ms, total_size, preferred_score, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         RETURNING *`
+      )
+      .get(
+        input.bookId,
+        input.kind,
+        input.label ?? null,
+        input.editionNote ?? null,
+        input.durationMs ?? null,
+        input.totalSize ?? 0,
+        input.preferredScore ?? 0,
+        now,
+        now
+      ) as ManifestationRow;
+  }
+
+  getManifestation(manifestationId: number): ManifestationRow | null {
+    assertPositiveInt(manifestationId);
+    return (this.db.query("SELECT * FROM manifestations WHERE id = ?").get(manifestationId) as ManifestationRow | null) ?? null;
+  }
+
+  listManifestationsByBook(bookId: number): ManifestationRow[] {
+    assertPositiveInt(bookId);
+    return this.db
+      .query("SELECT * FROM manifestations WHERE book_id = ? ORDER BY preferred_score DESC, created_at DESC, id DESC")
+      .all(bookId) as ManifestationRow[];
+  }
+
+  listAssetsByManifestation(manifestationId: number): AssetRow[] {
+    assertPositiveInt(manifestationId);
+    return this.db
+      .query("SELECT * FROM assets WHERE manifestation_id = ? ORDER BY sequence_in_manifestation ASC, id ASC")
+      .all(manifestationId) as AssetRow[];
+  }
+
+  getManifestationWithContainers(
+    manifestationId: number
+  ): { manifestation: ManifestationRow; containers: Array<{ asset: AssetRow; files: AssetFileRow[] }> } | null {
+    const manifestation = this.getManifestation(manifestationId);
+    if (!manifestation) return null;
+    const assets = this.listAssetsByManifestation(manifestationId);
+    const containers = assets.map((asset) => ({ asset, files: this.getAssetFiles(asset.id) }));
+    return { manifestation, containers };
+  }
+
+  // Sums duration / size across the manifestation's containers and writes
+  // them back. Called whenever a container is added/removed/changed.
+  private recomputeManifestationAggregates(manifestationId: number): void {
+    const row = this.db
+      .query(
+        `SELECT
+           COALESCE(SUM(duration_ms), 0) AS duration_ms,
+           COALESCE(SUM(total_size), 0) AS total_size,
+           COUNT(*) AS container_count
+         FROM assets WHERE manifestation_id = ?`
+      )
+      .get(manifestationId) as { duration_ms: number; total_size: number; container_count: number };
+    const durationMs = row.container_count > 0 && row.duration_ms > 0 ? row.duration_ms : null;
+    this.db
+      .query("UPDATE manifestations SET duration_ms = ?, total_size = ?, updated_at = ? WHERE id = ?")
+      .run(durationMs, row.total_size, nowIso(), manifestationId);
   }
 
   getAsset(assetId: number): AssetRow | null {

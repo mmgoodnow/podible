@@ -248,4 +248,101 @@ describe("books repo", () => {
 
     db.close();
   });
+
+  test("addAsset auto-creates a one-container manifestation when none is supplied", () => {
+    const { db, repo } = setupRepo();
+    const book = repo.createBook({ title: "Solo Book", author: "A" });
+    const asset = repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mp4",
+      totalSize: 1234,
+      durationMs: 5000,
+      files: [{ path: "/tmp/solo.m4b", size: 1234, start: 0, end: 1233, durationMs: 5000 }],
+    });
+    expect(asset.manifestation_id).not.toBeNull();
+    expect(asset.sequence_in_manifestation).toBe(0);
+    const manifestations = repo.listManifestationsByBook(book.id);
+    expect(manifestations.length).toBe(1);
+    expect(manifestations[0]!.kind).toBe("audio");
+    expect(manifestations[0]!.label).toBeNull();
+    expect(manifestations[0]!.duration_ms).toBe(5000);
+    expect(manifestations[0]!.total_size).toBe(1234);
+    db.close();
+  });
+
+  test("ebook asset auto-creates an ebook manifestation", () => {
+    const { db, repo } = setupRepo();
+    const book = repo.createBook({ title: "B", author: "A" });
+    repo.addAsset({
+      bookId: book.id,
+      kind: "ebook",
+      mime: "application/epub+zip",
+      totalSize: 555,
+      files: [{ path: "/tmp/b.epub", size: 555, start: 0, end: 554, durationMs: 0 }],
+    });
+    const manifestations = repo.listManifestationsByBook(book.id);
+    expect(manifestations.length).toBe(1);
+    expect(manifestations[0]!.kind).toBe("ebook");
+    db.close();
+  });
+
+  test("addAsset attaches to an existing manifestation when manifestationId is provided", () => {
+    const { db, repo } = setupRepo();
+    const book = repo.createBook({ title: "Multi-part Book", author: "A" });
+    const manifestation = repo.addManifestation({
+      bookId: book.id,
+      kind: "audio",
+      label: "GraphicAudio dramatization",
+      editionNote: "full cast",
+    });
+    const part1 = repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mpeg",
+      totalSize: 1000,
+      durationMs: 30 * 60_000,
+      manifestationId: manifestation.id,
+      sequenceInManifestation: 0,
+      files: [{ path: "/tmp/p1.mp3", size: 1000, start: 0, end: 999, durationMs: 30 * 60_000 }],
+    });
+    const part2 = repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mpeg",
+      totalSize: 2000,
+      durationMs: 45 * 60_000,
+      manifestationId: manifestation.id,
+      sequenceInManifestation: 1,
+      files: [{ path: "/tmp/p2.mp3", size: 2000, start: 0, end: 1999, durationMs: 45 * 60_000 }],
+    });
+    expect(part1.manifestation_id).toBe(manifestation.id);
+    expect(part2.manifestation_id).toBe(manifestation.id);
+    expect(part1.sequence_in_manifestation).toBe(0);
+    expect(part2.sequence_in_manifestation).toBe(1);
+
+    const containers = repo.listAssetsByManifestation(manifestation.id);
+    expect(containers.map((c) => c.id)).toEqual([part1.id, part2.id]);
+
+    // Aggregate fields recompute on second container.
+    const refreshed = repo.getManifestation(manifestation.id);
+    expect(refreshed?.duration_ms).toBe(75 * 60_000);
+    expect(refreshed?.total_size).toBe(3000);
+
+    const bundle = repo.getManifestationWithContainers(manifestation.id);
+    expect(bundle?.containers.length).toBe(2);
+    expect(bundle?.containers[0]!.files.length).toBe(1);
+    db.close();
+  });
+
+  test("listManifestationsByBook orders by preferred_score then created_at desc", () => {
+    const { db, repo } = setupRepo();
+    const book = repo.createBook({ title: "C", author: "A" });
+    const low = repo.addManifestation({ bookId: book.id, kind: "audio", preferredScore: 1 });
+    const high = repo.addManifestation({ bookId: book.id, kind: "audio", preferredScore: 10 });
+    const mid = repo.addManifestation({ bookId: book.id, kind: "audio", preferredScore: 5 });
+    const ordered = repo.listManifestationsByBook(book.id).map((m) => m.id);
+    expect(ordered).toEqual([high.id, mid.id, low.id]);
+    db.close();
+  });
 });

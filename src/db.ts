@@ -18,6 +18,7 @@ const BOOK_WORD_COUNT_MIGRATION_ID = 12;
 const APP_AUTH_MIGRATION_ID = 13;
 const APP_STATE_MIGRATION_ID = 14;
 const ASSET_TRANSCRIPT_PATH_MIGRATION_ID = 15;
+const MANIFESTATIONS_MIGRATION_ID = 16;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -537,6 +538,77 @@ CREATE TABLE IF NOT EXISTS app_state (
 `);
 }
 
+// Introduces a `manifestations` table to model "playable editions" of a book
+// distinct from the "containers" (assets) that make them up. Every existing
+// asset is wrapped in a one-container manifestation, so behavior is unchanged
+// until later steps swap readers over to query manifestations directly.
+function applyManifestationsMigration(db: Database): void {
+  db.exec(`
+CREATE TABLE IF NOT EXISTS manifestations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  book_id INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('audio', 'ebook')),
+  label TEXT NULL,
+  edition_note TEXT NULL,
+  duration_ms INTEGER NULL,
+  total_size INTEGER NOT NULL,
+  preferred_score INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_manifestations_book ON manifestations(book_id);
+`);
+
+  if (!hasColumn(db, "assets", "manifestation_id")) {
+    db.exec("ALTER TABLE assets ADD COLUMN manifestation_id INTEGER NULL REFERENCES manifestations(id) ON DELETE CASCADE");
+  }
+  if (!hasColumn(db, "assets", "sequence_in_manifestation")) {
+    db.exec("ALTER TABLE assets ADD COLUMN sequence_in_manifestation INTEGER NOT NULL DEFAULT 0");
+  }
+  db.exec(`
+CREATE INDEX IF NOT EXISTS idx_assets_manifestation_seq
+  ON assets(manifestation_id, sequence_in_manifestation);
+`);
+
+  // Backfill: every existing asset becomes a one-container manifestation.
+  // We map the legacy asset.kind ('single' / 'multi' / 'ebook') to the new
+  // manifestation.kind ('audio' / 'ebook'). Keeping it as a single statement
+  // (per asset) so the asset's manifestation_id can be set in the same row.
+  const orphanAssets = db
+    .query("SELECT id, book_id, kind, mime, total_size, duration_ms, created_at, updated_at FROM assets WHERE manifestation_id IS NULL")
+    .all() as Array<{
+      id: number;
+      book_id: number;
+      kind: string;
+      mime: string;
+      total_size: number;
+      duration_ms: number | null;
+      created_at: string;
+      updated_at: string;
+    }>;
+  const insertManifestation = db.prepare(
+    `INSERT INTO manifestations (book_id, kind, label, edition_note, duration_ms, total_size, preferred_score, created_at, updated_at)
+     VALUES (?, ?, NULL, NULL, ?, ?, 0, ?, ?)
+     RETURNING id`
+  );
+  const linkAsset = db.prepare(
+    "UPDATE assets SET manifestation_id = ?, sequence_in_manifestation = 0 WHERE id = ?"
+  );
+  for (const asset of orphanAssets) {
+    const manifestationKind = asset.kind === "ebook" ? "ebook" : "audio";
+    const result = insertManifestation.get(
+      asset.book_id,
+      manifestationKind,
+      asset.duration_ms,
+      asset.total_size,
+      asset.created_at,
+      asset.updated_at
+    ) as { id: number };
+    linkAsset.run(result.id, asset.id);
+  }
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
@@ -611,5 +683,8 @@ export function runMigrations(db: Database): void {
   });
   apply(ASSET_TRANSCRIPT_PATH_MIGRATION_ID, () => {
     applyAssetTranscriptPathMigration(db);
+  });
+  apply(MANIFESTATIONS_MIGRATION_ID, () => {
+    applyManifestationsMigration(db);
   });
 }

@@ -125,6 +125,23 @@ export type AssetRow = {
   total_size: number;
   duration_ms: number | null;
   source_release_id: number | null;
+  manifestation_id: number | null;
+  sequence_in_manifestation: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ManifestationKind = "audio" | "ebook";
+
+export type ManifestationRow = {
+  id: number;
+  book_id: number;
+  kind: ManifestationKind;
+  label: string | null;
+  edition_note: string | null;
+  duration_ms: number | null;
+  total_size: number;
+  preferred_score: number;
   created_at: string;
   updated_at: string;
 };
