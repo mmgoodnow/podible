@@ -260,4 +260,60 @@ describe("snatch transport", () => {
       db.close();
     }
   });
+
+  test("carries manifestation attachment metadata into the download job", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const book = repo.createBook({ title: "Red Rising", author: "Pierce Brown" });
+    const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio", label: "GraphicAudio dramatization" });
+
+    const torrentUrl = "https://example.com/red-rising-part-2.torrent";
+    const torrentBytes = makeTorrentBytes("red-rising-part-2");
+    const rpcUrl = "https://rtorrent.example/RPC2";
+    const settings = defaultSettings({
+      rtorrent: {
+        transport: "http-xmlrpc",
+        url: rpcUrl,
+        downloadPath: "",
+      },
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown) => {
+      const url = String(input);
+      if (url === torrentUrl) {
+        return new Response(torrentBytes, {
+          status: 200,
+          headers: { "Content-Type": "application/x-bittorrent" },
+        });
+      }
+      if (url === rpcUrl) {
+        return new Response(
+          '<?xml version="1.0"?><methodResponse><params><param><value><int>0</int></value></param></params></methodResponse>',
+          { status: 200, headers: { "Content-Type": "text/xml" } }
+        );
+      }
+      throw new Error(`Unexpected fetch url: ${url}`);
+    }) as unknown as typeof fetch;
+
+    try {
+      const result = await runSnatch(repo, settings, {
+        bookId: book.id,
+        provider: "mock",
+        title: "Red Rising GraphicAudio Part 2",
+        mediaType: "audio",
+        url: torrentUrl,
+        manifestationId: manifestation.id,
+        sequenceInManifestation: 1,
+      });
+      const job = repo.listJobsByType("download").find((row) => row.id === result.jobId);
+      const payload = JSON.parse(job?.payload_json ?? "{}");
+      expect(payload.manifestationId).toBe(manifestation.id);
+      expect(payload.sequenceInManifestation).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+      db.close();
+    }
+  });
 });

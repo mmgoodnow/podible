@@ -20,6 +20,8 @@ type SnatchRequest = {
   url: string;
   infoHash?: string | null;
   sizeBytes?: number | null;
+  manifestationId?: number | null;
+  sequenceInManifestation?: number | null;
 };
 
 type AutoAcquireOptions = {
@@ -154,8 +156,28 @@ export async function runSnatch(
 
   const providerGuid = request.providerGuid?.trim() || null;
   const explicitHash = resolveInfoHash(request.infoHash);
+  let manifestationId = request.manifestationId ?? null;
+  const sequenceInManifestation = request.sequenceInManifestation ?? null;
+  if (sequenceInManifestation !== null && (!Number.isInteger(sequenceInManifestation) || sequenceInManifestation < 0)) {
+    throw new Error("sequenceInManifestation must be a nonnegative integer");
+  }
+  if (manifestationId !== null) {
+    const manifestation = repo.getManifestation(manifestationId);
+    if (!manifestation || manifestation.book_id !== request.bookId) {
+      throw new Error(`Manifestation ${manifestationId} not found for book ${request.bookId}`);
+    }
+    const expectedKind = request.mediaType === "ebook" ? "ebook" : "audio";
+    if (manifestation.kind !== expectedKind) {
+      throw new Error(`Manifestation ${manifestationId} is ${manifestation.kind}, not ${expectedKind}`);
+    }
+  } else if (sequenceInManifestation !== null) {
+    manifestationId = repo.addManifestation({
+      bookId: request.bookId,
+      kind: request.mediaType === "ebook" ? "ebook" : "audio",
+    }).id;
+  }
   snatchLog(
-    `[snatch] start book=${request.bookId} media=${request.mediaType} provider=${JSON.stringify(request.provider)} title=${JSON.stringify(request.title)} guid=${JSON.stringify(providerGuid)} explicit_hash=${JSON.stringify(explicitHash)}`
+    `[snatch] start book=${request.bookId} media=${request.mediaType} provider=${JSON.stringify(request.provider)} title=${JSON.stringify(request.title)} guid=${JSON.stringify(providerGuid)} explicit_hash=${JSON.stringify(explicitHash)} manifestation=${manifestationId ?? "auto"} sequence=${sequenceInManifestation ?? "auto"}`
   );
 
   if (explicitHash) {
@@ -257,6 +279,8 @@ export async function runSnatch(
     payload: {
       infoHash: release.info_hash,
       preferAgentImport: runtime.preferAgentImport === true,
+      manifestationId,
+      sequenceInManifestation,
     },
   });
   snatchLog(`[snatch] created release=${release.id} download_job=${job.id} info_hash=${release.info_hash}`);

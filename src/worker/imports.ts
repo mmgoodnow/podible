@@ -12,6 +12,8 @@ type ImportJobPayload = {
   userReportedIssue?: boolean;
   rejectedSourcePaths?: string[];
   preferAgentFirst?: boolean;
+  manifestationId?: number | null;
+  sequenceInManifestation?: number | null;
 };
 
 export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done" | "rescheduled"> {
@@ -63,7 +65,11 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
       agentDecisionError = decision.error;
 
       if (decision.selectedPaths.length > 0) {
-        await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, { selectedPaths: decision.selectedPaths });
+        await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, {
+          selectedPaths: decision.selectedPaths,
+          manifestationId: payload.manifestationId ?? null,
+          sequenceInManifestation: payload.sequenceInManifestation ?? null,
+        });
         ctx.repo.setReleaseStatus(release.id, "imported", null);
         ctx.repo.markJobSucceeded(job.id);
         workerLog(
@@ -114,7 +120,11 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
         book: book ? { id: book.id, title: book.title, author: book.author } : null,
       });
       if (decision.selectedPaths.length > 0) {
-        await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, { selectedPaths: decision.selectedPaths });
+        await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, {
+          selectedPaths: decision.selectedPaths,
+          manifestationId: payload.manifestationId ?? null,
+          sequenceInManifestation: payload.sequenceInManifestation ?? null,
+        });
         ctx.repo.setReleaseStatus(release.id, "imported", null);
         ctx.repo.markJobSucceeded(job.id);
         workerLog(
@@ -136,6 +146,8 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
   try {
     await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, {
       selectedPaths: importSource.selectedPaths,
+      manifestationId: payload.manifestationId ?? null,
+      sequenceInManifestation: payload.sequenceInManifestation ?? null,
     });
     ctx.repo.setReleaseStatus(release.id, "imported", null);
     ctx.repo.markJobSucceeded(job.id);
@@ -163,7 +175,11 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
       agentDecisionError = decision.error;
 
       if (decision.selectedPaths.length > 0) {
-        await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, { selectedPaths: decision.selectedPaths });
+        await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, {
+          selectedPaths: decision.selectedPaths,
+          manifestationId: payload.manifestationId ?? null,
+          sequenceInManifestation: payload.sequenceInManifestation ?? null,
+        });
         ctx.repo.setReleaseStatus(release.id, "imported", null);
         ctx.repo.markJobSucceeded(job.id);
         workerLog(

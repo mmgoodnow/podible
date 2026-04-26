@@ -51,6 +51,16 @@ export const snatchRouter = defineRouter({
         if (typeof value === "number") return Math.trunc(value);
         return Number.parseInt(String(value), 10);
       }, z.number().int().nullable()),
+      manifestationId: z.preprocess((value) => {
+        if (value === undefined || value === null || value === "") return null;
+        if (typeof value === "number") return Math.trunc(value);
+        return Number.parseInt(String(value), 10);
+      }, z.number().int().positive().nullable()),
+      sequenceInManifestation: z.preprocess((value) => {
+        if (value === undefined || value === null || value === "") return null;
+        if (typeof value === "number") return Math.trunc(value);
+        return Number.parseInt(String(value), 10);
+      }, z.number().int().nonnegative().nullable()),
     }),
     resultSchema: z.object({
       release: releaseRowSchema,
@@ -67,6 +77,8 @@ export const snatchRouter = defineRouter({
         url: params.url,
         infoHash: params.infoHash,
         sizeBytes: Number.isFinite(params.sizeBytes) ? params.sizeBytes : null,
+        manifestationId: params.manifestationId,
+        sequenceInManifestation: params.sequenceInManifestation,
       });
     },
   }),

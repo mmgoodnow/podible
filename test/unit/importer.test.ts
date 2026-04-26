@@ -124,4 +124,36 @@ describe("importer path collisions", () => {
 
     db.close();
   });
+
+  test("attaches imported assets to a requested manifestation", async () => {
+    const { db, repo } = setupRepo();
+    const libraryRoot = tempDir("books-lib-");
+    const src = tempDir("books-src-manifestation-");
+    const source = path.join(src, "book.epub");
+    await createMinimalEpub(source, "Manifestation ebook content");
+
+    const book = repo.createBook({ title: "New Moon", author: "Stephenie Meyer" });
+    const manifestation = repo.addManifestation({ bookId: book.id, kind: "ebook", label: "Annotated EPUB" });
+    const release = repo.createRelease({
+      bookId: book.id,
+      provider: "test",
+      title: "New Moon [EPUB]",
+      mediaType: "ebook",
+      infoHash: "3333333333333333333333333333333333333333",
+      url: "https://example.com/3.torrent",
+      status: "downloaded",
+    });
+
+    await importReleaseFromPath(repo, release, source, libraryRoot, {
+      manifestationId: manifestation.id,
+      sequenceInManifestation: 2,
+    });
+
+    const asset = repo.listAssetsByManifestation(manifestation.id)[0];
+    expect(asset?.source_release_id).toBe(release.id);
+    expect(asset?.manifestation_id).toBe(manifestation.id);
+    expect(asset?.sequence_in_manifestation).toBe(2);
+
+    db.close();
+  });
 });

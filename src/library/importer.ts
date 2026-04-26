@@ -39,6 +39,8 @@ export type ImportInspectionFile = {
 
 type ImportReleaseOptions = {
   selectedPaths?: string[];
+  manifestationId?: number | null;
+  sequenceInManifestation?: number | null;
 };
 
 function sanitizePathSegment(value: string): string {
@@ -299,6 +301,8 @@ export async function importReleaseFromPath(
     totalSize,
     durationMs: release.media_type === "audio" ? durationMsTotal : null,
     sourceReleaseId: release.id,
+    manifestationId: options.manifestationId ?? null,
+    sequenceInManifestation: options.sequenceInManifestation ?? undefined,
     files: assetFiles,
   });
 
