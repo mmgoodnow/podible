@@ -212,6 +212,22 @@ curl -X POST http://localhost/rpc \
   -d '{"jsonrpc":"2.0","id":2,"method":"library.create","params":{"openLibraryKey":"/works/OL45804W"}}'
 ```
 
+List alternate Open Library covers for an existing book:
+
+```bash
+curl -X POST http://localhost/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"openlibrary.covers","params":{"bookId":123,"limit":50}}'
+```
+
+Apply a selected Open Library cover ID to an existing book:
+
+```bash
+curl -X POST http://localhost/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":4,"method":"openlibrary.setCover","params":{"bookId":123,"coverId":240727}}'
+```
+
 Re-trigger auto-acquire for an existing book:
 
 ```bash

@@ -233,6 +233,19 @@ export const openLibraryCandidateSchema = z.object({
   identifiers: stringRecordSchema,
 });
 
+export const openLibraryCoverCandidateSchema = z.object({
+  coverId: positiveIntSchema,
+  coverUrl: z.string(),
+  source: z.enum(["work", "edition"]),
+  openLibraryKey: z.string(),
+  editionKey: z.string().optional(),
+  title: z.string().optional(),
+  publishDate: z.string().optional(),
+  publisher: z.string().optional(),
+  language: z.string().optional(),
+  isbn: z.string().optional(),
+});
+
 export const userProfileSchema = z.object({
   id: positiveIntSchema,
   provider: z.enum(["plex", "local"]),
