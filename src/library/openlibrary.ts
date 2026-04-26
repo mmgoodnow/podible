@@ -1,4 +1,4 @@
-import type { BookRow } from "../app-types";
+import type { BookRow, LibraryBook } from "../app-types";
 
 type OpenLibraryDoc = {
   title?: string;
@@ -16,6 +16,21 @@ type OpenLibraryResponse = {
 type OpenLibraryWorkResponse = {
   description?: string | { value?: string };
   covers?: number[];
+};
+
+type OpenLibraryEditionsResponse = {
+  entries?: OpenLibraryEdition[];
+};
+
+type OpenLibraryEdition = {
+  key?: string;
+  title?: string;
+  covers?: number[];
+  publish_date?: string;
+  publishers?: string[];
+  languages?: Array<{ key?: string }>;
+  isbn_10?: string[];
+  isbn_13?: string[];
 };
 
 export type OpenLibraryMetadata = {
@@ -37,6 +52,19 @@ export type OpenLibraryCandidate = {
   identifiers: Record<string, string>;
 };
 
+export type OpenLibraryCoverCandidate = {
+  coverId: number;
+  coverUrl: string;
+  source: "work" | "edition";
+  openLibraryKey: string;
+  editionKey?: string;
+  title?: string;
+  publishDate?: string;
+  publisher?: string;
+  language?: string;
+  isbn?: string;
+};
+
 type ResolveOptions = {
   openLibraryKey?: string | null;
   title?: string | null;
@@ -56,7 +84,7 @@ function normalizeOpenLibraryKey(value: string): string | null {
   return null;
 }
 
-function coverUrlFromId(coverId: number): string {
+export function coverUrlFromId(coverId: number): string {
   return `https://covers.openlibrary.org/b/id/${coverId}-L.jpg`;
 }
 
@@ -110,6 +138,23 @@ async function fetchWorkDetails(openLibraryKey: string): Promise<{ description?:
     description,
     coverId,
   };
+}
+
+async function fetchWorkCoverIds(openLibraryKey: string): Promise<number[]> {
+  const url = new URL(`https://openlibrary.org${openLibraryKey}.json`);
+  const response = await fetch(url, { method: "GET" });
+  if (!response.ok) return [];
+  const payload = (await response.json()) as OpenLibraryWorkResponse;
+  return Array.isArray(payload.covers) ? payload.covers.filter((value) => Number.isInteger(value) && value > 0) : [];
+}
+
+async function fetchWorkEditions(openLibraryKey: string, limit: number): Promise<OpenLibraryEdition[]> {
+  const url = new URL(`https://openlibrary.org${openLibraryKey}/editions.json`);
+  url.searchParams.set("limit", String(Math.max(1, Math.min(200, Math.trunc(limit || 50)))));
+  const response = await fetch(url, { method: "GET" });
+  if (!response.ok) return [];
+  const payload = (await response.json()) as OpenLibraryEditionsResponse;
+  return payload.entries ?? [];
 }
 
 function docToCandidate(doc: OpenLibraryDoc, fallbackTitle?: string, fallbackAuthor?: string): OpenLibraryCandidate | null {
@@ -224,4 +269,84 @@ export async function fetchOpenLibraryMetadata(
 
   const details = await fetchWorkDetails(candidate.openLibraryKey).catch(() => null);
   return candidateToMetadata(candidate, details);
+}
+
+function languageFromEdition(edition: OpenLibraryEdition): string | undefined {
+  const key = edition.languages?.[0]?.key;
+  if (!key) return undefined;
+  return key.split("/").pop();
+}
+
+function firstString(values: string[] | undefined): string | undefined {
+  const value = values?.find((item) => item.trim());
+  return value?.trim() || undefined;
+}
+
+export async function findOpenLibraryCoverCandidates(
+  book: Pick<LibraryBook, "title" | "author" | "identifiers">,
+  limit = 50
+): Promise<OpenLibraryCoverCandidate[]> {
+  const requestedLimit = Math.max(1, Math.min(200, Math.trunc(limit || 50)));
+  const storedKey = book.identifiers.openlibrary ? normalizeOpenLibraryKey(book.identifiers.openlibrary) : null;
+  let candidate: OpenLibraryCandidate | null;
+  if (storedKey) {
+    candidate = {
+      openLibraryKey: storedKey,
+      title: book.title,
+      author: book.author,
+      identifiers: { openlibrary: storedKey },
+    };
+  } else {
+    candidate = await resolveOpenLibraryCandidate({
+      title: book.title,
+      author: book.author,
+    });
+  }
+  if (!candidate) return [];
+
+  const seen = new Set<number>();
+  const results: OpenLibraryCoverCandidate[] = [];
+  const addCandidate = (cover: OpenLibraryCoverCandidate) => {
+    if (seen.has(cover.coverId) || results.length >= requestedLimit) return;
+    seen.add(cover.coverId);
+    results.push(cover);
+  };
+
+  const workCovers = await fetchWorkCoverIds(candidate.openLibraryKey).catch(() => []);
+  for (const coverId of workCovers) {
+    addCandidate({
+      coverId,
+      coverUrl: coverUrlFromId(coverId),
+      source: "work",
+      openLibraryKey: candidate.openLibraryKey,
+      title: candidate.title,
+      language: candidate.language,
+    });
+  }
+
+  if (results.length >= requestedLimit) return results;
+
+  const editions = await fetchWorkEditions(candidate.openLibraryKey, requestedLimit).catch(() => []);
+  for (const edition of editions) {
+    const covers = Array.isArray(edition.covers)
+      ? edition.covers.filter((value) => Number.isInteger(value) && value > 0)
+      : [];
+    for (const coverId of covers) {
+      addCandidate({
+        coverId,
+        coverUrl: coverUrlFromId(coverId),
+        source: "edition",
+        openLibraryKey: candidate.openLibraryKey,
+        editionKey: typeof edition.key === "string" ? edition.key : undefined,
+        title: edition.title?.trim() || candidate.title,
+        publishDate: edition.publish_date?.trim() || undefined,
+        publisher: firstString(edition.publishers),
+        language: languageFromEdition(edition) ?? candidate.language,
+        isbn: firstString(edition.isbn_13) ?? firstString(edition.isbn_10),
+      });
+    }
+    if (results.length >= requestedLimit) return results;
+  }
+
+  return results;
 }

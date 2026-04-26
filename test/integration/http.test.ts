@@ -1424,6 +1424,125 @@ describe("podible http", () => {
     }
   });
 
+  test("supports rpc openlibrary.covers and openlibrary.setCover for existing books", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown) => {
+      const url = new URL(String(input));
+      if (url.origin !== "https://openlibrary.org" && url.origin !== "https://covers.openlibrary.org") {
+        throw new Error(`Unexpected external fetch in test: ${url.toString()}`);
+      }
+      if (url.pathname === "/search.json" && (url.searchParams.get("q") ?? "") === "key:/works/OL17352669W") {
+        return new Response(
+          JSON.stringify({
+            docs: [
+              {
+                key: "/works/OL17352669W",
+                title: "A Court of Thorns and Roses",
+                author_name: ["Sarah J. Maas"],
+                first_publish_year: 2015,
+                language: ["eng"],
+                cover_i: 111,
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url.pathname === "/works/OL17352669W.json") {
+        return new Response(JSON.stringify({ covers: [111, 222] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.pathname === "/works/OL17352669W/editions.json") {
+        return new Response(
+          JSON.stringify({
+            entries: [
+              {
+                key: "/books/OL47309317M",
+                title: "A Court of Thorns and Roses",
+                covers: [222, 333],
+                publish_date: "2020",
+                publishers: ["Bloomsbury Publishing"],
+                languages: [{ key: "/languages/eng" }],
+                isbn_13: ["9781635575569"],
+              },
+              {
+                key: "/books/OL28352792M",
+                title: "A Court of Thorns and Roses",
+                covers: [444],
+                publish_date: "Nov 05, 2019",
+                publishers: ["Bloomsbury YA"],
+                languages: [{ key: "/languages/eng" }],
+                isbn_13: ["9781547604173"],
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url.origin === "https://covers.openlibrary.org" && url.pathname === "/b/id/444-L.jpg") {
+        return new Response(Buffer.from(TINY_PNG_BASE64, "base64"), {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        });
+      }
+      return new Response(JSON.stringify({ docs: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      const db = new Database(":memory:");
+      runMigrations(db);
+      const repo = new BooksRepo(db);
+      const settings = repo.ensureSettings();
+      const libraryRoot = path.join(isolatedDataDir, "library-cover-rpc");
+      repo.updateSettings({
+        ...settings,
+        auth: { ...settings.auth, mode: "plex" },
+        torznab: [],
+        libraryRoot,
+      });
+      const book = repo.createBook({ title: "A Court of Thorns and Roses", author: "Sarah J. Maas" });
+      repo.updateBookMetadata(book.id, { identifiers: { openlibrary: "/works/OL17352669W" } });
+      const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+      const userCookie = createBrowserSessionCookie(repo, { username: "reader" });
+
+      const covers = await rpc(fetchHandler, "openlibrary.covers", { bookId: book.id, limit: 10 }, 1, {
+        cookie: userCookie,
+      });
+      expect(covers.result.results.map((candidate: any) => candidate.coverId)).toEqual([111, 222, 333, 444]);
+      expect(covers.result.results[2]).toMatchObject({
+        coverId: 333,
+        coverUrl: "https://covers.openlibrary.org/b/id/333-L.jpg",
+        source: "edition",
+        editionKey: "/books/OL47309317M",
+        publisher: "Bloomsbury Publishing",
+        isbn: "9781635575569",
+      });
+
+      const applied = await rpc(fetchHandler, "openlibrary.setCover", { bookId: book.id, coverId: 444 }, 2, {
+        cookie: userCookie,
+      });
+      expect(applied.result.cover.coverUrl).toBe("https://covers.openlibrary.org/b/id/444-L.jpg");
+      expect(applied.result.book.coverUrl).toBe(`/covers/${book.id}.jpg`);
+
+      const coverRes = await fetchHandler(
+        new Request(`http://localhost/covers/${book.id}.jpg`, {
+          headers: { cookie: userCookie },
+        })
+      );
+      expect(coverRes.status).toBe(200);
+      expect((await coverRes.arrayBuffer()).byteLength).toBeGreaterThan(16);
+
+      db.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("supports rpc library.acquire for existing books", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
