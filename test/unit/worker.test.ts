@@ -11,6 +11,7 @@ import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
 import { infoHashFromTorrentBytes } from "../../src/library/torrent";
 import { pollMsForMedia, runWorker, selectDownloadPollMs } from "../../src/worker";
+import { processAcquireJob } from "../../src/worker/acquire";
 import { startMockTorznab } from "../mocks/torznab";
 
 function makeTorrentBytes(name: string): Uint8Array {
@@ -180,6 +181,117 @@ describe("worker acquire auto-acquire retries", () => {
       stopWorker = true;
       globalThis.fetch = originalFetch;
       await Promise.race([worker, sleep(1000)]);
+      torznab.stop();
+      db.close();
+    }
+  });
+
+  test("agent acquire can snatch ordered multipart selections into one manifestation", async () => {
+    const partOneTorrent = makeTorrentBytes("red-rising-ga-part-1");
+    const partTwoTorrent = makeTorrentBytes("red-rising-ga-part-2");
+    const torznab = startMockTorznab({
+      results: [
+        { title: "Red Rising GraphicAudio Part 1 [MP3]", torrentId: "part-1", size: 1111 },
+        { title: "Red Rising GraphicAudio Part 2 [MP3]", torrentId: "part-2", size: 2222 },
+      ],
+      torrents: { "part-1": partOneTorrent, "part-2": partTwoTorrent },
+    });
+
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    repo.updateSettings(
+      defaultSettings({
+        auth: { mode: "plex" },
+        torznab: [{ name: "mock", baseUrl: torznab.baseUrl }],
+        agents: {
+          apiKey: "test-key",
+          editionPreference: "prefer GraphicAudio dramatizations",
+        },
+        rtorrent: {
+          transport: "http-xmlrpc",
+          url: "http://rtorrent.mock/RPC2",
+          username: "",
+          password: "",
+        },
+      })
+    );
+
+    const book = repo.createBook({ title: "Red Rising", author: "Pierce Brown" });
+    const acquireJob = repo.createJob({
+      type: "acquire",
+      bookId: book.id,
+      payload: { bookId: book.id, media: ["audio"], forceAgent: true },
+    });
+
+    const originalFetch = globalThis.fetch;
+    const openAiBodies: unknown[] = [];
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://api.openai.com/v1/responses") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        openAiBodies.push(body);
+        return new Response(
+          JSON.stringify({
+            output_text: JSON.stringify({
+              selections: [
+                {
+                  manifestation: { label: "GraphicAudio dramatization", editionNote: "full cast" },
+                  parts: [0, 1],
+                },
+              ],
+              confidence: 0.88,
+              reason: "The preferred GraphicAudio edition is split across two parts.",
+            }),
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url === "http://rtorrent.mock/RPC2") {
+        const body = String(init?.body ?? "");
+        const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
+        expect(method).toBe("load.raw_start");
+        return new Response(
+          `<?xml version="1.0"?><methodResponse><params><param><value><int>0</int></value></param></params></methodResponse>`,
+          {
+            status: 200,
+            headers: { "Content-Type": "text/xml" },
+          }
+        );
+      }
+      return (originalFetch as typeof fetch)(input as any, init);
+    }) as typeof fetch;
+
+    try {
+      const logs: string[] = [];
+      await processAcquireJob({
+        repo,
+        getSettings: () => repo.getSettings(),
+        onLog: (line) => logs.push(line),
+      }, acquireJob);
+
+      const manifestations = repo.listManifestationsByBook(book.id);
+      expect(manifestations).toHaveLength(1);
+      expect(manifestations[0]?.label).toBe("GraphicAudio dramatization");
+      expect(manifestations[0]?.edition_note).toBe("full cast");
+
+      const releases = repo.listReleasesByBook(book.id);
+      expect(releases.map((release) => release.title).sort()).toEqual([
+        "Red Rising GraphicAudio Part 1 [MP3]",
+        "Red Rising GraphicAudio Part 2 [MP3]",
+      ]);
+      const downloadPayloads = repo
+        .listJobsByType("download")
+        .map((job) => JSON.parse(job.payload_json ?? "{}"))
+        .sort((a, b) => a.sequenceInManifestation - b.sequenceInManifestation);
+      expect(downloadPayloads).toMatchObject([
+        { manifestationId: manifestations[0]?.id, sequenceInManifestation: 0, preferAgentImport: true },
+        { manifestationId: manifestations[0]?.id, sequenceInManifestation: 1, preferAgentImport: true },
+      ]);
+      expect(JSON.stringify(openAiBodies)).toContain("prefer GraphicAudio");
+      expect(logs.some((line) => line.includes("parts=2"))).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
       torznab.stop();
       db.close();
     }
