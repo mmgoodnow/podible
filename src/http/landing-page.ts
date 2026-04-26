@@ -1,4 +1,4 @@
-import { preferredAudioForBooks, streamExtension } from "../library/media";
+import { preferredAudioManifestationsForBooks, streamExtension } from "../library/media";
 import { BooksRepo } from "../repo";
 import type { AppSettings, SessionWithUserRow } from "../app-types";
 
@@ -12,7 +12,7 @@ export function renderLandingPage(
   apiKey: string | null = null
 ): Response {
   const recentBooks = repo.listAllBooks().slice(0, 6);
-  const featured = preferredAudioForBooks(repo).slice(0, 6);
+  const featured = preferredAudioManifestationsForBooks(repo).slice(0, 6);
   const inProgress = repo.listInProgressBooks().slice(0, 8);
   const needsAttention = repo.listAllBooks().filter((book) => book.status === "error").slice(0, 6);
   const body = `
@@ -35,7 +35,8 @@ export function renderLandingPage(
         ${
           featured.length > 0
             ? `<div class="book-list">${featured
-                .map(({ book, asset }) => {
+                .map(({ book, containers }) => {
+                  const asset = containers[0]!.asset;
                   const detailUrl = addApiKey(`/book/${book.id}`, apiKey);
                   const streamUrl = addApiKey(`/stream/${asset.id}.${streamExtension(asset)}`, apiKey);
                   return `<article class="book-row">

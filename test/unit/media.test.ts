@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
-import { applyTranscriptLabels, isGenericChapterLabel, pickTranscriptLabelForWindow, selectPreferredAudioAsset } from "../../src/library/media";
-import type { AssetRow } from "../../src/app-types";
+import {
+  applyTranscriptLabels,
+  isGenericChapterLabel,
+  pickTranscriptLabelForWindow,
+  selectPreferredAudioAsset,
+  selectPreferredAudioManifestation,
+} from "../../src/library/media";
+import type { AssetRow, ManifestationRow } from "../../src/app-types";
 
 function asset(overrides: Partial<AssetRow>): AssetRow {
   return {
@@ -19,6 +25,84 @@ function asset(overrides: Partial<AssetRow>): AssetRow {
     ...overrides,
   };
 }
+
+function manifestation(overrides: Partial<ManifestationRow>): ManifestationRow {
+  return {
+    id: 1,
+    book_id: 1,
+    kind: "audio",
+    label: null,
+    edition_note: null,
+    duration_ms: 1000,
+    total_size: 100,
+    preferred_score: 0,
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+describe("manifestation selection", () => {
+  test("prefers a single-container m4b audio manifestation over a multi mp3 one", () => {
+    const chosen = selectPreferredAudioManifestation([
+      {
+        manifestation: manifestation({ id: 100, kind: "audio" }),
+        containers: [asset({ id: 1, kind: "multi", mime: "audio/mpeg", duration_ms: 5000, manifestation_id: 100 })],
+      },
+      {
+        manifestation: manifestation({ id: 101, kind: "audio" }),
+        containers: [asset({ id: 2, kind: "single", mime: "audio/mp4", duration_ms: 4000, manifestation_id: 101 })],
+      },
+    ]);
+    expect(chosen?.manifestation.id).toBe(101);
+  });
+
+  test("ignores ebook manifestations entirely", () => {
+    const chosen = selectPreferredAudioManifestation([
+      {
+        manifestation: manifestation({ id: 100, kind: "ebook" }),
+        containers: [asset({ id: 1, kind: "ebook", mime: "application/epub+zip" })],
+      },
+    ]);
+    expect(chosen).toBeNull();
+  });
+
+  test("uses preferred_score as the dominant tiebreak", () => {
+    const chosen = selectPreferredAudioManifestation([
+      {
+        manifestation: manifestation({ id: 100, kind: "audio", preferred_score: 0 }),
+        containers: [asset({ id: 1, kind: "single", mime: "audio/mp4", duration_ms: 4000 })],
+      },
+      {
+        // Worse-scoring container, but a much higher preferred_score.
+        manifestation: manifestation({ id: 101, kind: "audio", preferred_score: 1000 }),
+        containers: [asset({ id: 2, kind: "multi", mime: "audio/mpeg", duration_ms: 1000 })],
+      },
+    ]);
+    expect(chosen?.manifestation.id).toBe(101);
+  });
+
+  test("a two-container manifestation is selectable and reports both containers", () => {
+    const chosen = selectPreferredAudioManifestation([
+      {
+        manifestation: manifestation({ id: 100, kind: "audio" }),
+        containers: [
+          asset({ id: 1, kind: "single", mime: "audio/mpeg", duration_ms: 30 * 60_000, sequence_in_manifestation: 0 }),
+          asset({ id: 2, kind: "single", mime: "audio/mpeg", duration_ms: 45 * 60_000, sequence_in_manifestation: 1 }),
+        ],
+      },
+    ]);
+    expect(chosen?.containers.length).toBe(2);
+    expect(chosen?.containers.map((c) => c.id)).toEqual([1, 2]);
+  });
+
+  test("an empty-containers manifestation is excluded", () => {
+    const chosen = selectPreferredAudioManifestation([
+      { manifestation: manifestation({ id: 100, kind: "audio" }), containers: [] },
+    ]);
+    expect(chosen).toBeNull();
+  });
+});
 
 describe("media asset selection", () => {
   test("prefers single m4b-style audio over multi mp3", () => {

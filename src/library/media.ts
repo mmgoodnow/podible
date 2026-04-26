@@ -6,18 +6,29 @@ import { buildId3ChaptersTag } from "../streaming/id3";
 import { loadStoredTranscriptPayload } from "./chapter-analysis";
 import type { StoredTranscriptUtterance } from "./chapter-analysis";
 import { readFfprobeChapters } from "../media/probe-cache";
-import { selectPreferredAudioAsset } from "./asset-selection";
+import { selectPreferredAudioAsset, selectPreferredAudioManifestation } from "./asset-selection";
 
 import type { BooksRepo } from "../repo";
-import type { AssetFileRow, AssetRow, BookRow, LibraryBook } from "../app-types";
+import type { AssetFileRow, AssetRow, BookRow, LibraryBook, ManifestationRow } from "../app-types";
 
-export { selectPreferredAudioAsset } from "./asset-selection";
+export { selectPreferredAudioAsset, selectPreferredAudioManifestation } from "./asset-selection";
 
 export type PreferredAudio = {
   book: LibraryBook;
   bookRow: BookRow;
   asset: AssetRow;
   files: AssetFileRow[];
+};
+
+// New manifestation-shaped result. Today every manifestation has exactly one
+// container, so `containers[0]` is the asset that the legacy PreferredAudio
+// would have surfaced. Multi-container manifestations (GraphicAudio etc.)
+// will arrive in step 3.
+export type PreferredManifestation = {
+  book: LibraryBook;
+  bookRow: BookRow;
+  manifestation: ManifestationRow;
+  containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>;
 };
 
 type ChapterTiming = {
@@ -286,6 +297,36 @@ export function preferredAudioForBooks(repo: BooksRepo): PreferredAudio[] {
       bookRow,
       asset: chosen,
       files,
+    });
+  }
+
+  return out.sort((a, b) => b.book.addedAt.localeCompare(a.book.addedAt));
+}
+
+// Manifestation-shaped equivalent of preferredAudioForBooks. Picks the best
+// audio manifestation per book, returns it with all its containers and their
+// files. Today this is functionally identical to preferredAudioForBooks since
+// each manifestation has exactly one container; the difference becomes
+// visible once multi-container manifestations exist.
+export function preferredAudioManifestationsForBooks(repo: BooksRepo): PreferredManifestation[] {
+  const books = repo.listAllBooks();
+  const out: PreferredManifestation[] = [];
+
+  for (const book of books) {
+    const manifestations = repo.listManifestationsByBook(book.id);
+    const candidates = manifestations.map((manifestation) => ({
+      manifestation,
+      containers: repo.listAssetsByManifestation(manifestation.id),
+    }));
+    const chosen = selectPreferredAudioManifestation(candidates);
+    if (!chosen) continue;
+    const bookRow = repo.getBookRow(book.id);
+    if (!bookRow) continue;
+    out.push({
+      book,
+      bookRow,
+      manifestation: chosen.manifestation,
+      containers: chosen.containers.map((asset) => ({ asset, files: repo.getAssetFiles(asset.id) })),
     });
   }
 

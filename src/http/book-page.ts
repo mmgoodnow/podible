@@ -1,4 +1,4 @@
-import { buildChapters, selectPreferredAudioAsset, streamExtension } from "../library/media";
+import { buildChapters, selectPreferredAudioManifestation, streamExtension } from "../library/media";
 import { getBookTranscriptStatus, hasStoredTranscriptPayload, selectPreferredEpubAsset } from "../library/chapter-analysis";
 import { BooksRepo } from "../repo";
 import type { AppSettings, SessionWithUserRow } from "../app-types";
@@ -139,7 +139,16 @@ export async function renderBookPage(
     return new Response("Not found", { status: 404 });
   }
   const assets = repo.listAssetsByBook(bookId);
-  const audio = selectPreferredAudioAsset(assets);
+  const manifestations = repo.listManifestationsByBook(bookId);
+  const audioCandidates = manifestations.map((manifestation) => ({
+    manifestation,
+    containers: repo.listAssetsByManifestation(manifestation.id),
+  }));
+  const audioChoice = selectPreferredAudioManifestation(audioCandidates);
+  // Step 2: every manifestation has exactly one container, so the chosen
+  // container's asset is the same row that selectPreferredAudioAsset would
+  // have returned. Step 3 starts using all containers.
+  const audio = audioChoice?.containers[0] ?? null;
   const ebook = selectPreferredEpubAsset(assets);
   const audioFiles = audio ? repo.getAssetFiles(audio.id) : [];
   const chapters = audio ? await buildChapters(repo, audio, audioFiles) : null;

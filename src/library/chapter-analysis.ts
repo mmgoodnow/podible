@@ -15,7 +15,7 @@ import { configDir, ensureConfigDirSync } from "../config";
 import type { AppSettings, AssetFileRow, AssetRow, AssetTranscriptRow, BookRow, JobRow } from "../app-types";
 import { readFfprobeChapters } from "../media/probe-cache";
 import type { BooksRepo } from "../repo";
-import { selectPreferredAudioAsset } from "./asset-selection";
+import { selectPreferredAudioManifestation } from "./asset-selection";
 
 const CHAPTER_ANALYSIS_SOURCE = "whisper_transcript";
 const CHAPTER_ANALYSIS_ALGORITHM_VERSION = "2026-04-22-atempo-2x-v1";
@@ -465,6 +465,22 @@ export async function computeEpubWordCount(epubPath: string): Promise<number | n
   const entries = await loadEpubEntries(epubPath);
   if (entries.length === 0) return null;
   return entries.reduce((sum, entry) => sum + entry.wordCount, 0);
+}
+
+// Step-2 helper: pick the audio asset that today's chapter-analysis pipeline
+// should target for a given book. Routes through manifestation selection but
+// returns a single asset (the one container of the chosen manifestation),
+// which is what every existing caller expects. Step 3 will return all
+// containers so multi-part manifestations get fully transcribed.
+function selectPreferredAudioAssetForBook(repo: BooksRepo, bookId: number): AssetRow | null {
+  const manifestations = repo.listManifestationsByBook(bookId);
+  if (manifestations.length === 0) return null;
+  const candidates = manifestations.map((manifestation) => ({
+    manifestation,
+    containers: repo.listAssetsByManifestation(manifestation.id),
+  }));
+  const chosen = selectPreferredAudioManifestation(candidates);
+  return chosen?.containers[0] ?? null;
 }
 
 export function selectPreferredEpubAsset(assets: AssetRow[]): AssetRow | null {
@@ -1219,12 +1235,11 @@ async function transcribeAssetWithDeps(
 }
 
 export async function queueChapterAnalysisForBook(repo: BooksRepo, bookId: number): Promise<JobRow | null> {
-  const assets = repo.listAssetsByBook(bookId);
-  const audioAsset = selectPreferredAudioAsset(assets);
+  const audioAsset = selectPreferredAudioAssetForBook(repo, bookId);
   if (!audioAsset) return null;
   const existing = repo.findQueuedOrRunningJobByAsset("chapter_analysis", audioAsset.id);
   if (existing) return existing;
-  const epubAsset = selectPreferredEpubAsset(assets);
+  const epubAsset = selectPreferredEpubAsset(repo.listAssetsByBook(bookId));
   return repo.createJob({
     type: "chapter_analysis",
     bookId,
@@ -1264,9 +1279,8 @@ async function buildTranscriptStatus(
   currentFingerprint: string | null;
   base: TranscriptRequestResult;
 }> {
-  const assets = repo.listAssetsByBook(bookId);
-  const audioAsset = selectPreferredAudioAsset(assets);
-  const epubAsset = selectPreferredEpubAsset(assets);
+  const audioAsset = selectPreferredAudioAssetForBook(repo, bookId);
+  const epubAsset = selectPreferredEpubAsset(repo.listAssetsByBook(bookId));
   if (!audioAsset) {
     return {
       audioAsset: null,
@@ -1372,8 +1386,11 @@ export async function processChapterAnalysisJob(
     return "done";
   }
 
-  const assets = ctx.repo.listAssetsByBook(target.asset.book_id);
-  const preferredAudio = selectPreferredAudioAsset(assets);
+  // Step 2: skip the job if this asset isn't part of the book's preferred
+  // manifestation any more. With one container per manifestation today this
+  // is identical to the legacy "is this still the preferred audio asset"
+  // check. Step 3 will accept any container of the chosen manifestation.
+  const preferredAudio = selectPreferredAudioAssetForBook(ctx.repo, target.asset.book_id);
   if (!preferredAudio || preferredAudio.id !== target.asset.id) {
     ctx.repo.markJobSucceeded(job.id);
     return "done";
