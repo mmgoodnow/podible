@@ -19,6 +19,7 @@ const APP_AUTH_MIGRATION_ID = 13;
 const APP_STATE_MIGRATION_ID = 14;
 const ASSET_TRANSCRIPT_PATH_MIGRATION_ID = 15;
 const MANIFESTATIONS_MIGRATION_ID = 16;
+const PRUNE_EMPTY_MANIFESTATIONS_MIGRATION_ID = 17;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -609,6 +610,24 @@ CREATE INDEX IF NOT EXISTS idx_assets_manifestation_seq
   }
 }
 
+function applyPruneEmptyManifestationsMigration(db: Database): void {
+  // Delete stale manifestation rows left behind by earlier asset deletion
+  // paths, but keep empty rows that queued/running import jobs still intend
+  // to attach containers to.
+  db.exec(`
+DELETE FROM manifestations
+WHERE NOT EXISTS (
+  SELECT 1 FROM assets WHERE assets.manifestation_id = manifestations.id
+)
+AND NOT EXISTS (
+  SELECT 1 FROM jobs
+  WHERE jobs.status IN ('queued', 'running')
+    AND json_valid(jobs.payload_json)
+    AND CAST(json_extract(jobs.payload_json, '$.manifestationId') AS INTEGER) = manifestations.id
+);
+`);
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
@@ -686,5 +705,8 @@ export function runMigrations(db: Database): void {
   });
   apply(MANIFESTATIONS_MIGRATION_ID, () => {
     applyManifestationsMigration(db);
+  });
+  apply(PRUNE_EMPTY_MANIFESTATIONS_MIGRATION_ID, () => {
+    applyPruneEmptyManifestationsMigration(db);
   });
 }

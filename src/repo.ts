@@ -973,6 +973,29 @@ export class BooksRepo {
       .run(durationMs, row.total_size, nowIso(), manifestationId);
   }
 
+  private pruneEmptyManifestationIfUnreferenced(manifestationId: number): void {
+    const row = this.db
+      .query(
+        `SELECT
+           (SELECT COUNT(*) FROM assets WHERE manifestation_id = ?) AS container_count,
+           (SELECT COUNT(*) FROM jobs
+              WHERE status IN ('queued', 'running')
+                AND json_valid(payload_json)
+                AND CAST(json_extract(payload_json, '$.manifestationId') AS INTEGER) = ?
+           ) AS active_job_count`
+      )
+      .get(manifestationId, manifestationId) as { container_count: number; active_job_count: number };
+    if (row.container_count > 0) {
+      this.recomputeManifestationAggregates(manifestationId);
+      return;
+    }
+    if (row.active_job_count > 0) {
+      this.recomputeManifestationAggregates(manifestationId);
+      return;
+    }
+    this.db.query("DELETE FROM manifestations WHERE id = ?").run(manifestationId);
+  }
+
   getAsset(assetId: number): AssetRow | null {
     assertPositiveInt(assetId);
     return (this.db.query("SELECT * FROM assets WHERE id = ?").get(assetId) as AssetRow | null) ?? null;
@@ -980,8 +1003,15 @@ export class BooksRepo {
 
   deleteAsset(assetId: number): boolean {
     assertPositiveInt(assetId);
-    const result = this.db.query("DELETE FROM assets WHERE id = ?").run(assetId);
-    return Number(result.changes) > 0;
+    return this.db.transaction(() => {
+      const asset = this.getAsset(assetId);
+      if (!asset) return false;
+      const result = this.db.query("DELETE FROM assets WHERE id = ?").run(assetId);
+      if (asset.manifestation_id !== null) {
+        this.pruneEmptyManifestationIfUnreferenced(asset.manifestation_id);
+      }
+      return Number(result.changes) > 0;
+    })();
   }
 
   getAssetWithFiles(assetId: number): { asset: AssetRow; files: AssetFileRow[] } | null {

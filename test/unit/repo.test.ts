@@ -335,6 +335,103 @@ describe("books repo", () => {
     db.close();
   });
 
+  test("deleteAsset removes an empty manifestation", () => {
+    const { db, repo } = setupRepo();
+    const book = repo.createBook({ title: "Delete Me", author: "A" });
+    const asset = repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mp4",
+      totalSize: 100,
+      durationMs: 1000,
+      files: [{ path: "/tmp/delete-me.m4b", size: 100, start: 0, end: 99, durationMs: 1000 }],
+    });
+    expect(asset.manifestation_id).not.toBeNull();
+
+    expect(repo.deleteAsset(asset.id)).toBe(true);
+
+    expect(repo.getAsset(asset.id)).toBeNull();
+    expect(repo.getManifestation(asset.manifestation_id!)).toBeNull();
+    expect(repo.listManifestationsByBook(book.id)).toEqual([]);
+    db.close();
+  });
+
+  test("deleteAsset recomputes non-empty manifestation aggregates", () => {
+    const { db, repo } = setupRepo();
+    const book = repo.createBook({ title: "Multi-part Book", author: "A" });
+    const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio", label: "Two parts" });
+    const part1 = repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mpeg",
+      totalSize: 1000,
+      durationMs: 30 * 60_000,
+      manifestationId: manifestation.id,
+      sequenceInManifestation: 0,
+      files: [{ path: "/tmp/two-parts-1.mp3", size: 1000, start: 0, end: 999, durationMs: 30 * 60_000 }],
+    });
+    const part2 = repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mpeg",
+      totalSize: 2000,
+      durationMs: 45 * 60_000,
+      manifestationId: manifestation.id,
+      sequenceInManifestation: 1,
+      files: [{ path: "/tmp/two-parts-2.mp3", size: 2000, start: 0, end: 1999, durationMs: 45 * 60_000 }],
+    });
+
+    expect(repo.deleteAsset(part1.id)).toBe(true);
+
+    const refreshed = repo.getManifestation(manifestation.id);
+    expect(refreshed).not.toBeNull();
+    expect(refreshed?.duration_ms).toBe(45 * 60_000);
+    expect(refreshed?.total_size).toBe(2000);
+    expect(repo.listAssetsByManifestation(manifestation.id).map((asset) => asset.id)).toEqual([part2.id]);
+    db.close();
+  });
+
+  test("deleteAsset keeps empty manifestations referenced by active jobs", () => {
+    const { db, repo } = setupRepo();
+    const book = repo.createBook({ title: "Pending Import", author: "A" });
+    const release = repo.createRelease({
+      bookId: book.id,
+      provider: "mock",
+      providerGuid: "pending",
+      title: "Pending Import Part",
+      mediaType: "audio",
+      infoHash: "1111111111111111111111111111111111111111",
+      url: "https://example.com/pending.torrent",
+      status: "downloaded",
+    });
+    const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio", label: "Pending grouped edition" });
+    const asset = repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mpeg",
+      totalSize: 1000,
+      durationMs: 30 * 60_000,
+      manifestationId: manifestation.id,
+      sequenceInManifestation: 0,
+      files: [{ path: "/tmp/pending-part.mp3", size: 1000, start: 0, end: 999, durationMs: 30 * 60_000 }],
+    });
+    repo.createJob({
+      type: "import",
+      bookId: book.id,
+      releaseId: release.id,
+      payload: { manifestationId: manifestation.id, sequenceInManifestation: 0 },
+    });
+
+    expect(repo.deleteAsset(asset.id)).toBe(true);
+
+    const refreshed = repo.getManifestation(manifestation.id);
+    expect(refreshed).not.toBeNull();
+    expect(refreshed?.duration_ms).toBeNull();
+    expect(refreshed?.total_size).toBe(0);
+    expect(repo.listAssetsByManifestation(manifestation.id)).toEqual([]);
+    db.close();
+  });
+
   test("listManifestationsByBook orders by preferred_score then created_at desc", () => {
     const { db, repo } = setupRepo();
     const book = repo.createBook({ title: "C", author: "A" });

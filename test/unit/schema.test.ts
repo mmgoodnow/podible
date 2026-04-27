@@ -65,4 +65,47 @@ describe("schema migrations", () => {
 
     db.close();
   });
+
+  test("prunes stale empty manifestations while preserving active import targets", () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+
+    const now = new Date().toISOString();
+    const book = db
+      .query("INSERT INTO books (title, author, added_at, updated_at) VALUES (?, ?, ?, ?) RETURNING id")
+      .get("Book", "Author", now, now) as { id: number };
+    const stale = db
+      .query(
+        `INSERT INTO manifestations (book_id, kind, label, edition_note, duration_ms, total_size, preferred_score, created_at, updated_at)
+         VALUES (?, 'audio', 'stale', NULL, 1000, 100, 0, ?, ?)
+         RETURNING id`
+      )
+      .get(book.id, now, now) as { id: number };
+    const active = db
+      .query(
+        `INSERT INTO manifestations (book_id, kind, label, edition_note, duration_ms, total_size, preferred_score, created_at, updated_at)
+         VALUES (?, 'audio', 'active', NULL, 2000, 200, 0, ?, ?)
+         RETURNING id`
+      )
+      .get(book.id, now, now) as { id: number };
+    const release = db
+      .query(
+        `INSERT INTO releases (book_id, provider, title, media_type, info_hash, size_bytes, url, snatched_at, status, updated_at)
+         VALUES (?, 'mock', 'Book Active', 'audio', ?, 200, 'https://example.com/active.torrent', ?, 'downloaded', ?)
+         RETURNING id`
+      )
+      .get(book.id, "2222222222222222222222222222222222222222", now, now) as { id: number };
+    db.query(
+      `INSERT INTO jobs (type, status, book_id, release_id, payload_json, attempt_count, max_attempts, created_at, updated_at)
+       VALUES ('import', 'queued', ?, ?, ?, 0, 5, ?, ?)`
+    ).run(book.id, release.id, JSON.stringify({ manifestationId: active.id, sequenceInManifestation: 0 }), now, now);
+
+    db.query("DELETE FROM schema_migrations WHERE id = 17").run();
+    runMigrations(db);
+
+    expect(db.query("SELECT id FROM manifestations WHERE id = ?").get(stale.id)).toBeNull();
+    expect(db.query("SELECT id FROM manifestations WHERE id = ?").get(active.id)).not.toBeNull();
+
+    db.close();
+  });
 });
