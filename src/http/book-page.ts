@@ -1,4 +1,4 @@
-import { buildManifestationChapters, selectPreferredAudioManifestation, streamExtensionForManifestation } from "../library/media";
+import { buildManifestationChapters, manifestationDurationMs, selectPreferredAudioManifestation, streamExtensionForManifestation } from "../library/media";
 import { getBookTranscriptStatus, hasStoredManifestationTranscriptPayload, selectPreferredEpubAsset } from "../library/chapter-analysis";
 import { BooksRepo } from "../repo";
 import type { AppSettings, AssetRow, ManifestationRow, SessionWithUserRow } from "../app-types";
@@ -316,6 +316,7 @@ export async function renderBookPage(
   const streamUrl = audioChoice ? addApiKey(`/stream/m/${audioChoice.manifestation.id}.${streamExtensionForManifestation(audioContainers)}`, apiKey) : null;
   const chaptersUrl = audioChoice ? addApiKey(`/chapters/m/${audioChoice.manifestation.id}.json`, apiKey) : null;
   const ebookUrl = ebook ? addApiKey(`/ebook/${ebook.id}`, apiKey) : null;
+  const audioDurationMs = audioChoice ? manifestationDurationMs(audioChoice.manifestation, audioContainers) : null;
   const apiKeyConfigured = Boolean(settings.agents.apiKey.trim());
   const transcriptStatus = audio ? await getBookTranscriptStatus(repo, bookId, { apiKeyConfigured }) : null;
   const releases = repo.listReleasesByBook(bookId).slice(0, 8);
@@ -348,7 +349,7 @@ export async function renderBookPage(
         <div class="section-list">
           <div><strong>Audio:</strong> ${audio ? "Ready to play" : "Still looking"}</div>
           <div><strong>eBook:</strong> ${ebook ? "Ready to download" : "Still looking"}</div>
-          <div><strong>Duration:</strong> ${formatMinutes(book.durationMs)}</div>
+          <div><strong>Audio duration:</strong> ${formatMinutes(audioDurationMs)}</div>
         </div>
         <div class="actions" style="margin-top: 12px;">
           ${streamUrl ? `<a class="button-link button-link-primary" href="${escapeHtml(streamUrl)}">Play audio</a>` : ""}

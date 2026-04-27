@@ -1,3 +1,4 @@
+import { manifestationDurationMs, preferredAudioManifestationsForBooks } from "../library/media";
 import { BooksRepo } from "../repo";
 import type { AppSettings, SessionWithUserRow } from "../app-types";
 
@@ -12,6 +13,7 @@ export function renderActivityPage(
   const inProgress = repo.listInProgressBooks();
   const recentBooks = repo.listAllBooks().filter((book) => book.status === "imported").slice(0, 8);
   const needsAttention = repo.listAllBooks().filter((book) => book.status === "error").slice(0, 8);
+  const playableByBookId = new Map(preferredAudioManifestationsForBooks(repo).map((entry) => [entry.book.id, entry]));
   const apiKey = flash.apiKey ?? null;
   const canRefreshLibrary = Boolean(apiKey) || (flash.currentUser?.is_admin ?? 0) === 1;
   const body = `
@@ -51,10 +53,14 @@ export function renderActivityPage(
           recentBooks.length > 0
             ? `<div class="section-list">${recentBooks
                 .map(
-                  (book) => `<div>
+                  (book) => {
+                    const playable = playableByBookId.get(book.id);
+                    const audioDurationMs = playable ? manifestationDurationMs(playable.manifestation, playable.containers) : null;
+                    return `<div>
                     <strong><a href="${escapeHtml(addApiKey(`/book/${book.id}`, apiKey))}">${escapeHtml(book.title)}</a></strong>
-                    <div class="muted">${escapeHtml(book.author)} • ready to play${book.durationMs ? ` • ${formatMinutes(book.durationMs)}` : ""}</div>
-                  </div>`
+                    <div class="muted">${escapeHtml(book.author)} • ready to play${audioDurationMs ? ` • ${formatMinutes(audioDurationMs)}` : ""}</div>
+                  </div>`;
+                  }
                 )
                 .join("")}</div>`
             : `<div class="empty">No recently finished books yet.</div>`

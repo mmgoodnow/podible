@@ -1,4 +1,4 @@
-import { preferredAudioManifestationsForBooks, streamExtensionForManifestation } from "../library/media";
+import { manifestationDurationMs, preferredAudioManifestationsForBooks, streamExtensionForManifestation } from "../library/media";
 import { BooksRepo } from "../repo";
 import type { AppSettings, SessionWithUserRow } from "../app-types";
 
@@ -38,12 +38,13 @@ export function renderLandingPage(
                 .map(({ book, manifestation, containers }) => {
                   const detailUrl = addApiKey(`/book/${book.id}`, apiKey);
                   const streamUrl = addApiKey(`/stream/m/${manifestation.id}.${streamExtensionForManifestation(containers)}`, apiKey);
+                  const audioDurationMs = manifestationDurationMs(manifestation, containers);
                   return `<article class="book-row">
                     ${coverMarkup(book.coverUrl ? addApiKey(book.coverUrl, apiKey) : null, book.title)}
                     <div class="meta">
                       <h3><a href="${escapeHtml(detailUrl)}">${escapeHtml(book.title)}</a></h3>
                       <p class="muted">${escapeHtml(book.author)}</p>
-                      <p class="muted">${formatMinutes(book.durationMs)} • ${escapeHtml(formatBookStatusLine(book))}</p>
+                      <p class="muted">${formatMinutes(audioDurationMs)} • ${escapeHtml(formatBookStatusLine(book))}</p>
                       <p class="muted">${escapeHtml(truncateText((book.description || `${book.title} by ${book.author}`).replace(/\s+/g, " "), 160))}</p>
                       <div class="actions">
                         <a href="${escapeHtml(detailUrl)}">Details</a>

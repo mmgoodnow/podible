@@ -62,6 +62,16 @@ function containerDurationMs(asset: AssetRow, files: AssetFileRow[]): number {
   return asset.duration_ms ?? files.reduce((sum, file) => sum + file.duration_ms, 0);
 }
 
+export function manifestationDurationMs(
+  manifestation: Pick<ManifestationRow, "duration_ms">,
+  containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>
+): number | null {
+  if (manifestation.duration_ms !== null) return manifestation.duration_ms;
+  const audioContainers = containers.filter((container) => container.asset.kind !== "ebook");
+  if (audioContainers.length === 0) return null;
+  return audioContainers.reduce((sum, container) => sum + containerDurationMs(container.asset, container.files), 0);
+}
+
 function containerSizeBytes(asset: AssetRow, files: AssetFileRow[]): number {
   return asset.total_size || files.reduce((sum, file) => sum + file.size, 0);
 }
