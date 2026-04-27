@@ -225,12 +225,23 @@ describe("podible http", () => {
     });
 
     const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const standardRelease = repo.createRelease({
+      bookId: book.id,
+      provider: "mock",
+      providerGuid: "standard-guid",
+      title: "Dune Standard Audio",
+      mediaType: "audio",
+      infoHash: "1111111111111111111111111111111111111111",
+      url: "https://example.com/dune-standard.torrent",
+      status: "imported",
+    });
     const standardAudio = repo.addAsset({
       bookId: book.id,
       kind: "single",
       mime: "audio/mp4",
       totalSize: 123,
       durationMs: 1_000,
+      sourceReleaseId: standardRelease.id,
       files: [
         {
           path: path.join(isolatedDataDir, "dune.mp3"),
@@ -314,6 +325,23 @@ describe("podible http", () => {
     expect(detailBody.includes("Audio edition")).toBe(true);
     expect(detailBody.includes("GraphicAudio dramatization")).toBe(true);
     expect(detailBody.includes(`/stream/m/${standardAudio.manifestation_id}.`)).toBe(true);
+    expect(detailBody.includes("Something wrong?")).toBe(true);
+    expect(detailBody.includes("Report wrong audio")).toBe(true);
+    expect(detailBody.includes("data-report-import-issue")).toBe(true);
+    expect(detailBody.includes("Admin: Manifestations")).toBe(false);
+
+    const adminCookie = createBrowserSessionCookie(repo, { isAdmin: true, username: "admin" });
+    const adminDetail = await fetchHandler(
+      new Request(`http://localhost/book/${book.id}`, {
+        headers: { cookie: adminCookie },
+      })
+    );
+    expect(adminDetail.status).toBe(200);
+    const adminDetailBody = await adminDetail.text();
+    expect(adminDetailBody.includes("Admin: Manifestations")).toBe(true);
+    expect(adminDetailBody.includes("GraphicAudio dramatization")).toBe(true);
+    expect(adminDetailBody.includes(`Asset ${standardAudio.id}`)).toBe(true);
+    expect(adminDetailBody.includes("Dune Standard Audio")).toBe(true);
 
     const selectedEdition = await fetchHandler(
       new Request(`http://localhost/book/${book.id}?edition=${graphicAudio.id}`, {

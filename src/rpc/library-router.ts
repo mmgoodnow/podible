@@ -188,7 +188,7 @@ export const libraryRouter = defineRouter({
   }),
 
   reportImportIssue: defineMethod({
-    auth: "admin",
+    auth: "user",
     summary: "Report wrong imported file(s), delete imported asset(s), and queue async review/reacquire.",
     paramsSchema: emptyParamsSchema.extend({
       bookId: positiveIntSchema,

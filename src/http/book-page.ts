@@ -1,7 +1,7 @@
 import { buildManifestationChapters, manifestationDurationMs, selectPreferredAudioManifestation, streamExtensionForManifestation } from "../library/media";
 import { getBookTranscriptStatus, hasStoredManifestationTranscriptPayload, selectPreferredEpubAsset } from "../library/chapter-analysis";
 import { BooksRepo } from "../repo";
-import type { AppSettings, AssetRow, ManifestationRow, SessionWithUserRow } from "../app-types";
+import type { AppSettings, AssetFileRow, AssetRow, ManifestationRow, ReleaseRow, SessionWithUserRow } from "../app-types";
 
 import type { TranscriptRequestResult } from "../library/chapter-analysis";
 
@@ -91,6 +91,95 @@ function renderEditionPicker(bookId: number, candidates: BookAudioCandidate[], s
     </form>`;
 }
 
+function uniqueReleaseIds(assets: AssetRow[]): number[] {
+  return Array.from(new Set(assets.map((asset) => asset.source_release_id).filter((id): id is number => id !== null)));
+}
+
+function renderReportIssueButton(bookId: number, mediaType: "audio" | "ebook", label: string, releaseId: number): string {
+  return `<button type="button" data-report-import-issue data-book-id="${bookId}" data-media-type="${mediaType}" data-release-id="${releaseId}">${escapeHtml(label)}</button>`;
+}
+
+function renderReportIssueSection(bookId: number, audioChoice: BookAudioCandidate | null, ebook: AssetRow | null): string {
+  const buttons: string[] = [];
+  const audioReleaseIds = audioChoice ? uniqueReleaseIds(audioChoice.containers) : [];
+  if (audioReleaseIds.length === 1) {
+    buttons.push(renderReportIssueButton(bookId, "audio", "Report wrong audio", audioReleaseIds[0]!));
+  } else if (audioReleaseIds.length > 1) {
+    buttons.push(
+      ...audioReleaseIds.map((releaseId, index) =>
+        renderReportIssueButton(bookId, "audio", `Report wrong audio part ${index + 1}`, releaseId)
+      )
+    );
+  }
+  if (ebook?.source_release_id) {
+    buttons.push(renderReportIssueButton(bookId, "ebook", "Report wrong ebook", ebook.source_release_id));
+  }
+  if (buttons.length === 0) return "";
+  return `
+      <section class="card span-12" data-report-import-panel data-book-id="${bookId}">
+        <h2>Something wrong?</h2>
+        <p class="muted">Report a bad import to remove the wrong file, retry import with the agent, and escalate to an agent reacquire if import cannot be recovered.</p>
+        <div class="actions" style="margin-top: 12px;">${buttons.join("")}</div>
+        <p class="muted" data-report-import-status style="margin-top: 8px;"></p>
+      </section>`;
+}
+
+function renderAdminManifestationSection(
+  repo: BooksRepo,
+  manifestations: ManifestationRow[],
+  releases: ReleaseRow[],
+  selectedManifestationId: number | null
+): string {
+  const releasesById = new Map(releases.map((release) => [release.id, release]));
+  const rows = manifestations
+    .map((manifestation) => {
+      const containers = repo.listAssetsByManifestation(manifestation.id);
+      const isSelected = manifestation.id === selectedManifestationId;
+      const open = isSelected ? " open" : "";
+      const label = manifestation.label?.trim() || `Manifestation ${manifestation.id}`;
+      const meta = [
+        manifestation.kind,
+        manifestation.edition_note?.trim() || null,
+        formatMinutes(manifestation.duration_ms),
+        `${manifestation.total_size} bytes`,
+        `score ${manifestation.preferred_score}`,
+      ].filter(Boolean);
+      const containerMarkup =
+        containers.length > 0
+          ? containers
+              .map((asset) => {
+                const release = asset.source_release_id ? releasesById.get(asset.source_release_id) : null;
+                const files = repo.getAssetFiles(asset.id);
+                return `<li>
+                  <div><strong>Asset ${asset.id}</strong> • ${escapeHtml(asset.kind)} • ${escapeHtml(asset.mime)} • seq ${asset.sequence_in_manifestation}${release ? ` • release ${release.id}: ${escapeHtml(release.title)}` : ""}</div>
+                  ${
+                    files.length > 0
+                      ? `<ul>${files.map((file) => renderAdminAssetFile(file)).join("")}</ul>`
+                      : `<div class="muted">No files.</div>`
+                  }
+                </li>`;
+              })
+              .join("")
+          : `<li class="muted">No containers.</li>`;
+      return `<details${open} class="manifestation-details">
+        <summary><strong>${escapeHtml(label)}</strong> <span class="muted">#${manifestation.id} • ${escapeHtml(meta.join(" • "))}${isSelected ? " • selected" : ""}</span></summary>
+        <ul>${containerMarkup}</ul>
+      </details>`;
+    })
+    .join("");
+  return `
+      <section class="card span-12">
+        <h2>Admin: Manifestations</h2>
+        <p class="muted">Diagnostic view of editions, containers, source releases, and imported files.</p>
+        ${rows || `<div class="empty">No manifestations.</div>`}
+      </section>`;
+}
+
+function renderAdminAssetFile(file: AssetFileRow): string {
+  const source = file.source_path && file.source_path !== file.path ? ` • source ${file.source_path}` : "";
+  return `<li><code>${escapeHtml(file.path)}</code><span class="muted"> • ${file.size} bytes • ${formatMinutes(file.duration_ms)}${escapeHtml(source)}</span></li>`;
+}
+
 function renderTranscriptRuntimeScript(bookId: number, transcriptHref: string): string {
   return `
     <script>
@@ -177,6 +266,56 @@ function renderTranscriptRuntimeScript(bookId: number, transcriptHref: string): 
             }
           });
         }
+      })();
+    </script>
+  `;
+}
+
+function renderReportIssueRuntimeScript(bookId: number): string {
+  return `
+    <script>
+      (() => {
+        const panel = document.querySelector('[data-report-import-panel][data-book-id="${bookId}"]');
+        if (!panel) return;
+        const status = panel.querySelector('[data-report-import-status]');
+
+        function setStatus(message) {
+          if (status) status.textContent = message;
+        }
+
+        async function rpc(method, params) {
+          const url = new URL("/rpc", window.location.origin);
+          url.search = window.location.search;
+          const response = await fetch(url.pathname + url.search, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+          });
+          const payload = await response.json();
+          if (payload.error) throw new Error(payload.error.message || "Request failed");
+          return payload.result;
+        }
+
+        panel.addEventListener("click", async (event) => {
+          const target = event.target instanceof Element ? event.target : null;
+          const button = target?.closest("[data-report-import-issue]");
+          if (!(button instanceof HTMLButtonElement)) return;
+          const mediaType = button.getAttribute("data-media-type");
+          const releaseId = Number(button.getAttribute("data-release-id"));
+          if (mediaType !== "audio" && mediaType !== "ebook") return;
+          if (!Number.isSafeInteger(releaseId) || releaseId <= 0) return;
+          if (!window.confirm("Report this " + mediaType + " as the wrong file? Podible will remove the imported file and queue agent recovery.")) return;
+          button.disabled = true;
+          setStatus("Reporting wrong " + mediaType + "...");
+          try {
+            const result = await rpc("library.reportImportIssue", { bookId: ${bookId}, mediaType, releaseId });
+            setStatus("Queued agent import review job " + result.jobId + ". If that cannot recover it, Podible will queue agent reacquire.");
+          } catch (error) {
+            console.error("library.reportImportIssue failed:", error);
+            button.disabled = false;
+            setStatus(error.message || "Unable to report issue.");
+          }
+        });
       })();
     </script>
   `;
@@ -319,7 +458,9 @@ export async function renderBookPage(
   const audioDurationMs = audioChoice ? manifestationDurationMs(audioChoice.manifestation, audioContainers) : null;
   const apiKeyConfigured = Boolean(settings.agents.apiKey.trim());
   const transcriptStatus = audio ? await getBookTranscriptStatus(repo, bookId, { apiKeyConfigured }) : null;
-  const releases = repo.listReleasesByBook(bookId).slice(0, 8);
+  const allReleases = repo.listReleasesByBook(bookId);
+  const releases = allReleases.slice(0, 8);
+  const isAdmin = Boolean(apiKey) || (flash.currentUser?.is_admin ?? 0) === 1;
   const stateSummary = describeBookState(book);
   const body = `
     <section class="hero">
@@ -384,6 +525,7 @@ export async function renderBookPage(
         ${transcriptStatus?.status === "missing_config" ? `<p class="muted" style="margin-top:8px;">Transcription requires an OpenAI API key in Settings.</p>` : ""}
         ${transcriptStatus?.status === "failed" && transcriptStatus.error ? `<p class="muted" style="margin-top:8px;">Last error: ${escapeHtml(transcriptStatus.error)}</p>` : ""}
       </section>
+      ${renderReportIssueSection(book.id, audioChoice, ebook)}
       <section class="card span-12" data-cover-panel data-book-id="${book.id}">
         <h2>Artwork</h2>
         <p class="muted">Try alternate Open Library covers for this book.</p>
@@ -419,6 +561,7 @@ export async function renderBookPage(
             : `<div class="empty">No release activity yet.</div>`
         }
       </section>
+      ${isAdmin ? renderAdminManifestationSection(repo, manifestations, allReleases, selectedManifestationId) : ""}
     </div>
     <style>
       .cover-candidates {
@@ -450,8 +593,26 @@ export async function renderBookPage(
         min-width: 0;
         overflow-wrap: anywhere;
       }
+      .manifestation-details {
+        border-top: 1px solid var(--line-soft);
+        padding: 10px 0;
+      }
+      .manifestation-details:first-of-type {
+        border-top: 0;
+      }
+      .manifestation-details summary {
+        cursor: pointer;
+      }
+      .manifestation-details ul {
+        margin: 8px 0 0 18px;
+        padding: 0;
+      }
+      .manifestation-details li {
+        margin: 6px 0;
+      }
     </style>
     ${audio ? renderTranscriptRuntimeScript(book.id, transcriptUrl ?? "") : ""}
+    ${renderReportIssueRuntimeScript(book.id)}
     ${renderCoverRuntimeScript(book.id)}`;
   return renderAppPage(
     book.title,

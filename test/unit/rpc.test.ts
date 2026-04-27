@@ -660,7 +660,7 @@ describe("json-rpc handler", () => {
           bookId: book.id,
           mediaType: "audio",
         },
-      });
+      }, "user");
 
       expect(result.result.action).toBe("wrong_file_review_queued");
       expect(result.result.releaseId).toBe(release.id);
