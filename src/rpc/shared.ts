@@ -46,18 +46,21 @@ export type RpcContext = {
   session: SessionWithUserRow | null;
 };
 
+export type LibraryPlaybackAudio = {
+  manifestationId: number;
+  label: string | null;
+  editionNote: string | null;
+  streamUrl: string;
+  chaptersUrl: string;
+  transcriptUrl: string | null;
+  mimeType: string;
+  durationMs: number | null;
+  sizeBytes: number;
+};
+
 export type LibraryPlayback = {
-  audio: {
-    manifestationId: number;
-    label: string | null;
-    editionNote: string | null;
-    streamUrl: string;
-    chaptersUrl: string;
-    transcriptUrl: string | null;
-    mimeType: string;
-    durationMs: number | null;
-    sizeBytes: number;
-  } | null;
+  audio: LibraryPlaybackAudio | null;
+  audioOptions: LibraryPlaybackAudio[];
   ebook: {
     assetId: number;
     downloadUrl: string;
@@ -238,23 +241,27 @@ export function buildLibraryPlayback(repo: BooksRepo, request: Request, bookId: 
   const audioContainers = audioChoice
     ? audioChoice.containers.map((asset) => ({ asset, files: repo.getAssetFiles(asset.id) }))
     : [];
-  const primaryAudio = audioContainers[0]?.asset ?? null;
-  const audio =
-    audioChoice && primaryAudio
-      ? {
-          manifestationId: audioChoice.manifestation.id,
-          label: audioChoice.manifestation.label,
-          editionNote: audioChoice.manifestation.edition_note,
-          streamUrl: `${origin}/stream/m/${audioChoice.manifestation.id}.${streamExtensionForManifestation(audioContainers)}`,
-          chaptersUrl: `${origin}/chapters/m/${audioChoice.manifestation.id}.json`,
-          transcriptUrl: hasStoredManifestationTranscriptPayload(repo, audioContainers)
-            ? `${origin}/transcripts/m/${audioChoice.manifestation.id}.json`
-            : null,
-          mimeType: primaryAudio.mime,
-          durationMs: audioChoice.manifestation.duration_ms ?? primaryAudio.duration_ms,
-          sizeBytes: audioChoice.manifestation.total_size || primaryAudio.total_size,
-        }
-      : null;
+  const buildAudioOption = (candidate: (typeof audioCandidates)[number]): LibraryPlaybackAudio | null => {
+    if (candidate.manifestation.kind !== "audio" || candidate.containers.length === 0) return null;
+    const containers = candidate.containers.map((asset) => ({ asset, files: repo.getAssetFiles(asset.id) }));
+    const primaryAudio = containers[0]?.asset ?? null;
+    if (!primaryAudio) return null;
+    return {
+      manifestationId: candidate.manifestation.id,
+      label: candidate.manifestation.label,
+      editionNote: candidate.manifestation.edition_note,
+      streamUrl: `${origin}/stream/m/${candidate.manifestation.id}.${streamExtensionForManifestation(containers)}`,
+      chaptersUrl: `${origin}/chapters/m/${candidate.manifestation.id}.json`,
+      transcriptUrl: hasStoredManifestationTranscriptPayload(repo, containers)
+        ? `${origin}/transcripts/m/${candidate.manifestation.id}.json`
+        : null,
+      mimeType: primaryAudio.mime,
+      durationMs: candidate.manifestation.duration_ms ?? primaryAudio.duration_ms,
+      sizeBytes: candidate.manifestation.total_size || primaryAudio.total_size,
+    };
+  };
+  const audioOptions = audioCandidates.map(buildAudioOption).filter((option): option is LibraryPlaybackAudio => option !== null);
+  const audio = audioChoice ? (audioOptions.find((option) => option.manifestationId === audioChoice.manifestation.id) ?? null) : null;
 
   const ebookAsset = selectPreferredEpubAsset(repo.listAssetsByBook(bookId));
   const ebook = ebookAsset
@@ -266,7 +273,7 @@ export function buildLibraryPlayback(repo: BooksRepo, request: Request, bookId: 
       }
     : null;
 
-  return { audio, ebook };
+  return { audio, audioOptions, ebook };
 }
 
 export function enrichLibraryBookPlayback(repo: BooksRepo, request: Request, book: LibraryBook): LibraryBookWithPlayback {

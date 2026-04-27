@@ -321,9 +321,10 @@ export const libraryRouter = defineRouter({
   transcriptStatus: defineMethod({
     auth: "user",
     readOnly: true,
-    summary: "Report transcript state for a book's preferred audio asset.",
+    summary: "Report transcript state for a book audio manifestation.",
     paramsSchema: emptyParamsSchema.extend({
       bookId: positiveIntSchema,
+      manifestationId: optionalPositiveIntSchema,
     }),
     resultSchema: z.object({
       status: z.enum(["current", "stale", "pending", "running", "failed", "missing_audio", "missing_config"]),
@@ -337,16 +338,27 @@ export const libraryRouter = defineRouter({
       if (!book) {
         throw new RpcError(-32000, "Book not found", { error: "not_found", bookId: params.bookId });
       }
+      if (params.manifestationId !== undefined) {
+        const manifestation = ctx.repo.getManifestation(params.manifestationId);
+        if (!manifestation || manifestation.book_id !== params.bookId || manifestation.kind !== "audio") {
+          throw new RpcError(-32000, "Audio manifestation not found", {
+            error: "not_found",
+            bookId: params.bookId,
+            manifestationId: params.manifestationId,
+          });
+        }
+      }
       const apiKeyConfigured = Boolean(ctx.repo.getSettings().agents.apiKey.trim());
-      return await getBookTranscriptStatus(ctx.repo, params.bookId, { apiKeyConfigured });
+      return await getBookTranscriptStatus(ctx.repo, params.bookId, { apiKeyConfigured, manifestationId: params.manifestationId });
     },
   }),
 
   requestTranscription: defineMethod({
     auth: "user",
-    summary: "Pull-trigger transcription for a book. Idempotent; returns current status.",
+    summary: "Pull-trigger transcription for a book audio manifestation. Idempotent; returns current status.",
     paramsSchema: emptyParamsSchema.extend({
       bookId: positiveIntSchema,
+      manifestationId: optionalPositiveIntSchema,
     }),
     resultSchema: z.object({
       status: z.enum(["current", "stale", "pending", "running", "failed", "missing_audio", "missing_config"]),
@@ -360,8 +372,18 @@ export const libraryRouter = defineRouter({
       if (!book) {
         throw new RpcError(-32000, "Book not found", { error: "not_found", bookId: params.bookId });
       }
+      if (params.manifestationId !== undefined) {
+        const manifestation = ctx.repo.getManifestation(params.manifestationId);
+        if (!manifestation || manifestation.book_id !== params.bookId || manifestation.kind !== "audio") {
+          throw new RpcError(-32000, "Audio manifestation not found", {
+            error: "not_found",
+            bookId: params.bookId,
+            manifestationId: params.manifestationId,
+          });
+        }
+      }
       const apiKeyConfigured = Boolean(ctx.repo.getSettings().agents.apiKey.trim());
-      return await requestBookTranscription(ctx.repo, params.bookId, { apiKeyConfigured });
+      return await requestBookTranscription(ctx.repo, params.bookId, { apiKeyConfigured, manifestationId: params.manifestationId });
     },
   }),
 

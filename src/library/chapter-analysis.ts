@@ -478,8 +478,10 @@ function selectPreferredAudioAssetsForBook(repo: BooksRepo, bookId: number): Ass
   return chosen?.containers.filter((asset) => asset.kind !== "ebook") ?? [];
 }
 
-function selectPreferredAudioAssetForBook(repo: BooksRepo, bookId: number): AssetRow | null {
-  return selectPreferredAudioAssetsForBook(repo, bookId)[0] ?? null;
+function selectAudioAssetsForManifestation(repo: BooksRepo, bookId: number, manifestationId: number): AssetRow[] {
+  const manifestation = repo.getManifestation(manifestationId);
+  if (!manifestation || manifestation.book_id !== bookId || manifestation.kind !== "audio") return [];
+  return repo.listAssetsByManifestation(manifestationId).filter((asset) => asset.kind !== "ebook");
 }
 
 export function selectPreferredEpubAsset(assets: AssetRow[]): AssetRow | null {
@@ -1319,6 +1321,19 @@ async function transcribeAssetWithDeps(
 
 export async function queueChapterAnalysisForBook(repo: BooksRepo, bookId: number): Promise<JobRow | null> {
   const audioAssets = selectPreferredAudioAssetsForBook(repo, bookId);
+  return queueChapterAnalysisForAudioAssets(repo, bookId, audioAssets);
+}
+
+export async function queueChapterAnalysisForManifestation(
+  repo: BooksRepo,
+  bookId: number,
+  manifestationId: number
+): Promise<JobRow | null> {
+  const audioAssets = selectAudioAssetsForManifestation(repo, bookId, manifestationId);
+  return queueChapterAnalysisForAudioAssets(repo, bookId, audioAssets);
+}
+
+async function queueChapterAnalysisForAudioAssets(repo: BooksRepo, bookId: number, audioAssets: AssetRow[]): Promise<JobRow | null> {
   if (audioAssets.length === 0) return null;
   const epubAsset = selectPreferredEpubAsset(repo.listAssetsByBook(bookId));
   let first: JobRow | null = null;
@@ -1361,64 +1376,97 @@ export type TranscriptRequestResult = {
 async function buildTranscriptStatus(
   repo: BooksRepo,
   bookId: number,
-  options: { apiKeyConfigured: boolean }
+  options: { apiKeyConfigured: boolean; manifestationId?: number | null }
 ): Promise<{
-  audioAsset: AssetRow | null;
+  audioAssets: AssetRow[];
   epubAsset: AssetRow | null;
-  files: AssetFileRow[];
-  transcript: AssetTranscriptRow | null;
+  transcripts: AssetTranscriptRow[];
   currentFingerprint: string | null;
   base: TranscriptRequestResult;
 }> {
-  const audioAsset = selectPreferredAudioAssetForBook(repo, bookId);
+  const audioAssets =
+    options.manifestationId == null
+      ? selectPreferredAudioAssetsForBook(repo, bookId)
+      : selectAudioAssetsForManifestation(repo, bookId, options.manifestationId);
   const epubAsset = selectPreferredEpubAsset(repo.listAssetsByBook(bookId));
-  if (!audioAsset) {
+  if (audioAssets.length === 0) {
     return {
-      audioAsset: null,
+      audioAssets: [],
       epubAsset,
-      files: [],
-      transcript: null,
+      transcripts: [],
       currentFingerprint: null,
       base: { status: "missing_audio", fingerprint: null, currentFingerprint: null, jobId: null, error: null },
     };
   }
-  const files = repo.getAssetFiles(audioAsset.id);
-  let currentFingerprint: string | null;
-  try {
-    currentFingerprint = await computeTranscriptFingerprint(audioAsset, files);
-  } catch {
-    currentFingerprint = null;
-  }
-  const transcript = repo.getAssetTranscript(audioAsset.id);
-  const existingJob = repo.findQueuedOrRunningJobByAsset("chapter_analysis", audioAsset.id);
+
+  const entries = await Promise.all(
+    audioAssets.map(async (audioAsset) => {
+      const files = repo.getAssetFiles(audioAsset.id);
+      let currentFingerprint: string | null;
+      try {
+        currentFingerprint = await computeTranscriptFingerprint(audioAsset, files);
+      } catch {
+        currentFingerprint = null;
+      }
+      return {
+        audioAsset,
+        transcript: repo.getAssetTranscript(audioAsset.id),
+        existingJob: repo.findQueuedOrRunningJobByAsset("chapter_analysis", audioAsset.id),
+        currentFingerprint,
+      };
+    })
+  );
+  const transcripts = entries.map((entry) => entry.transcript).filter((transcript): transcript is AssetTranscriptRow => transcript !== null);
+  const runningJob = entries.find((entry) => entry.existingJob?.status === "running")?.existingJob ?? null;
+  const pendingJob = entries.find((entry) => entry.existingJob)?.existingJob ?? null;
+  const combinedCurrentFingerprint =
+    entries.every((entry) => entry.currentFingerprint !== null)
+      ? createHash("sha1")
+          .update(entries.map((entry) => `${entry.audioAsset.id}:${entry.currentFingerprint}`).join("|"))
+          .digest("hex")
+      : null;
+  const combinedStoredFingerprint =
+    entries.every((entry) => entry.transcript?.fingerprint)
+      ? createHash("sha1")
+          .update(entries.map((entry) => `${entry.audioAsset.id}:${entry.transcript!.fingerprint}`).join("|"))
+          .digest("hex")
+      : null;
 
   let status: TranscriptRequestStatus;
-  if (existingJob) {
-    status = existingJob.status === "running" ? "running" : "pending";
-  } else if (transcript?.status === "succeeded" && transcript.fingerprint === currentFingerprint) {
+  if (runningJob) {
+    status = "running";
+  } else if (pendingJob) {
+    status = "pending";
+  } else if (
+    entries.every(
+      (entry) =>
+        entry.currentFingerprint !== null &&
+        entry.transcript?.status === "succeeded" &&
+        entry.transcript.fingerprint === entry.currentFingerprint
+    )
+  ) {
     status = "current";
-  } else if (transcript?.status === "failed" && transcript.fingerprint === currentFingerprint) {
+  } else if (entries.some((entry) => entry.transcript?.status === "failed" && entry.transcript.fingerprint === entry.currentFingerprint)) {
     status = "failed";
-  } else if (transcript?.status === "succeeded") {
+  } else if (entries.some((entry) => entry.transcript?.status === "succeeded")) {
     status = "stale";
   } else if (!options.apiKeyConfigured) {
     status = "missing_config";
   } else {
-    status = transcript?.status === "failed" ? "failed" : "stale";
+    status = entries.some((entry) => entry.transcript?.status === "failed") ? "failed" : "stale";
   }
 
   return {
-    audioAsset,
+    audioAssets,
     epubAsset,
-    files,
-    transcript,
-    currentFingerprint,
+    transcripts,
+    currentFingerprint: combinedCurrentFingerprint,
     base: {
       status,
-      fingerprint: transcript?.fingerprint ?? null,
-      currentFingerprint,
-      jobId: existingJob?.id ?? null,
-      error: transcript?.error ?? null,
+      fingerprint: combinedStoredFingerprint,
+      currentFingerprint: combinedCurrentFingerprint,
+      jobId: runningJob?.id ?? pendingJob?.id ?? null,
+      error: entries.find((entry) => entry.transcript?.error)?.transcript?.error ?? null,
     },
   };
 }
@@ -1426,7 +1474,7 @@ async function buildTranscriptStatus(
 export async function getBookTranscriptStatus(
   repo: BooksRepo,
   bookId: number,
-  options: { apiKeyConfigured: boolean }
+  options: { apiKeyConfigured: boolean; manifestationId?: number | null }
 ): Promise<TranscriptRequestResult> {
   const { base } = await buildTranscriptStatus(repo, bookId, options);
   return base;
@@ -1435,16 +1483,19 @@ export async function getBookTranscriptStatus(
 export async function requestBookTranscription(
   repo: BooksRepo,
   bookId: number,
-  options: { apiKeyConfigured: boolean }
+  options: { apiKeyConfigured: boolean; manifestationId?: number | null }
 ): Promise<TranscriptRequestResult> {
-  const { audioAsset, base } = await buildTranscriptStatus(repo, bookId, options);
-  if (!audioAsset) return base;
-  if (base.status === "current" || base.status === "pending" || base.status === "running") return base;
+  const { audioAssets, base } = await buildTranscriptStatus(repo, bookId, options);
+  if (audioAssets.length === 0) return base;
+  if (base.status === "current") return base;
   if (base.status === "missing_config") return base;
 
-  const job = await queueChapterAnalysisForBook(repo, bookId);
+  const job =
+    options.manifestationId == null
+      ? await queueChapterAnalysisForBook(repo, bookId)
+      : await queueChapterAnalysisForManifestation(repo, bookId, options.manifestationId);
   if (!job) return base;
-  return { ...base, status: "pending", jobId: job.id };
+  return { ...base, status: base.status === "running" ? "running" : "pending", jobId: base.jobId ?? job.id };
 }
 
 export async function processChapterAnalysisJob(

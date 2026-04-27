@@ -1811,6 +1811,8 @@ describe("podible http", () => {
     expect(playback.audio.streamUrl).toBe(`http://localhost/stream/m/${manifestation.id}.m4a`);
     expect(playback.audio.chaptersUrl).toBe(`http://localhost/chapters/m/${manifestation.id}.json`);
     expect(playback.audio.transcriptUrl).toBe(`http://localhost/transcripts/m/${manifestation.id}.json`);
+    expect(playback.audioOptions.map((option: any) => option.manifestationId)).toEqual([manifestation.id]);
+    expect(playback.audioOptions[0].transcriptUrl).toBe(`http://localhost/transcripts/m/${manifestation.id}.json`);
 
     const transcript = await fetchHandler(
       new Request(playback.audio.transcriptUrl, {

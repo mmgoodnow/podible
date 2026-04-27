@@ -180,7 +180,7 @@ function renderAdminAssetFile(file: AssetFileRow): string {
   return `<li><code>${escapeHtml(file.path)}</code><span class="muted"> • ${file.size} bytes • ${formatMinutes(file.duration_ms)}${escapeHtml(source)}</span></li>`;
 }
 
-function renderTranscriptRuntimeScript(bookId: number, transcriptHref: string): string {
+function renderTranscriptRuntimeScript(bookId: number, manifestationId: number | null, transcriptHref: string): string {
   return `
     <script>
       (() => {
@@ -237,7 +237,15 @@ function renderTranscriptRuntimeScript(bookId: number, transcriptHref: string): 
           const response = await fetch(url.pathname + url.search, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: { bookId: ${bookId} } }),
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+              method,
+              params: {
+                bookId: ${bookId},
+                ${manifestationId === null ? "" : `manifestationId: ${manifestationId},`}
+              },
+            }),
           });
           const payload = await response.json();
           if (payload.error) throw new Error(payload.error.message || "Request failed");
@@ -457,7 +465,10 @@ export async function renderBookPage(
   const ebookUrl = ebook ? addApiKey(`/ebook/${ebook.id}`, apiKey) : null;
   const audioDurationMs = audioChoice ? manifestationDurationMs(audioChoice.manifestation, audioContainers) : null;
   const apiKeyConfigured = Boolean(settings.agents.apiKey.trim());
-  const transcriptStatus = audio ? await getBookTranscriptStatus(repo, bookId, { apiKeyConfigured }) : null;
+  const transcriptStatus =
+    audio && selectedManifestationId !== null
+      ? await getBookTranscriptStatus(repo, bookId, { apiKeyConfigured, manifestationId: selectedManifestationId })
+      : null;
   const allReleases = repo.listReleasesByBook(bookId);
   const releases = allReleases.slice(0, 8);
   const isAdmin = Boolean(apiKey) || (flash.currentUser?.is_admin ?? 0) === 1;
@@ -611,7 +622,7 @@ export async function renderBookPage(
         margin: 6px 0;
       }
     </style>
-    ${audio ? renderTranscriptRuntimeScript(book.id, transcriptUrl ?? "") : ""}
+    ${audio ? renderTranscriptRuntimeScript(book.id, selectedManifestationId, transcriptUrl ?? "") : ""}
     ${renderReportIssueRuntimeScript(book.id)}
     ${renderCoverRuntimeScript(book.id)}`;
   return renderAppPage(

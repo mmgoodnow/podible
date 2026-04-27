@@ -793,6 +793,83 @@ describe("json-rpc handler", () => {
     }
   });
 
+  test("library.requestTranscription targets the requested audio manifestation", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    repo.updateSettings(
+      defaultSettings({
+        auth: { mode: "plex" },
+        agents: {
+          ...defaultSettings().agents,
+          apiKey: "test-key",
+        },
+      })
+    );
+
+    const book = repo.createBook({ title: "Red Rising", author: "Pierce Brown" });
+    const preferred = repo.addManifestation({ bookId: book.id, kind: "audio", label: "Standard", preferredScore: 100 });
+    const alternate = repo.addManifestation({ bookId: book.id, kind: "audio", label: "GraphicAudio dramatization" });
+    const preferredAsset = repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mp4",
+      totalSize: 100,
+      durationMs: 1000,
+      manifestationId: preferred.id,
+      sequenceInManifestation: 0,
+      files: [{ path: "/tmp/preferred.m4b", size: 100, start: 0, end: 99, durationMs: 1000 }],
+    });
+    const alternateAsset = repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mp4",
+      totalSize: 100,
+      durationMs: 1000,
+      manifestationId: alternate.id,
+      sequenceInManifestation: 0,
+      files: [{ path: "/tmp/alternate.m4b", size: 100, start: 0, end: 99, durationMs: 1000 }],
+    });
+
+    const result = await callRpc(
+      repo,
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "library.requestTranscription",
+        params: {
+          bookId: book.id,
+          manifestationId: alternate.id,
+        },
+      },
+      "user"
+    );
+
+    expect(result.result.status).toBe("pending");
+    const jobs = repo.listJobsByType("chapter_analysis");
+    expect(jobs.length).toBe(1);
+    expect(JSON.parse(jobs[0]!.payload_json ?? "{}").assetId).toBe(alternateAsset.id);
+    expect(JSON.parse(jobs[0]!.payload_json ?? "{}").assetId).not.toBe(preferredAsset.id);
+
+    const status = await callRpc(
+      repo,
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "library.transcriptStatus",
+        params: {
+          bookId: book.id,
+          manifestationId: alternate.id,
+        },
+      },
+      "user"
+    );
+    expect(status.result.status).toBe("pending");
+    expect(status.result.jobId).toBe(jobs[0]!.id);
+
+    db.close();
+  });
+
   test("returns parse error for malformed json", async () => {
     const db = new Database(":memory:");
     runMigrations(db);

@@ -139,20 +139,21 @@ export const libraryBookSchema = z.object({
   fullPseudoProgress: z.number(),
 });
 
+const libraryPlaybackAudioSchema = z.object({
+  manifestationId: positiveIntSchema,
+  label: z.string().nullable(),
+  editionNote: z.string().nullable(),
+  streamUrl: z.string(),
+  chaptersUrl: z.string(),
+  transcriptUrl: z.string().nullable(),
+  mimeType: z.string(),
+  durationMs: z.number().int().nullable(),
+  sizeBytes: z.number().int().nonnegative(),
+});
+
 export const libraryPlaybackSchema = z.object({
-  audio: z
-    .object({
-      manifestationId: positiveIntSchema,
-      label: z.string().nullable(),
-      editionNote: z.string().nullable(),
-      streamUrl: z.string(),
-      chaptersUrl: z.string(),
-      transcriptUrl: z.string().nullable(),
-      mimeType: z.string(),
-      durationMs: z.number().int().nullable(),
-      sizeBytes: z.number().int().nonnegative(),
-    })
-    .nullable(),
+  audio: libraryPlaybackAudioSchema.nullable(),
+  audioOptions: z.array(libraryPlaybackAudioSchema),
   ebook: z
     .object({
       assetId: positiveIntSchema,
