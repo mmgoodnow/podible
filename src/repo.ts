@@ -102,11 +102,10 @@ type AddAssetInput = {
   totalSize: number;
   durationMs?: number | null;
   sourceReleaseId?: number | null;
-  // When set, the asset is added as a container in this existing
-  // manifestation. When null/undefined, a new one-container manifestation is
-  // auto-created so callers that don't know about manifestations get the
-  // legacy 1:1 behavior.
-  manifestationId?: number | null;
+  // Assets are containers inside a manifestation. Callers must create or
+  // choose the manifestation explicitly before inserting an asset; otherwise
+  // a lost handoff silently creates poisoned edition state.
+  manifestationId: number;
   sequenceInManifestation?: number;
   files: Array<{
     path: string;
@@ -875,30 +874,18 @@ export class BooksRepo {
     }
     const now = nowIso();
     return this.db.transaction(() => {
-      // Resolve the manifestation we attach this container to. If the caller
-      // didn't supply one, auto-create a single-container manifestation that
-      // mirrors the asset 1:1 — the legacy shape every existing caller assumes.
-      let manifestationId = input.manifestationId ?? null;
-      let sequence = input.sequenceInManifestation ?? 0;
-      if (manifestationId == null) {
-        const manifestationKind: ManifestationKind = input.kind === "ebook" ? "ebook" : "audio";
-        const created = this.db
-          .query(
-            `INSERT INTO manifestations (book_id, kind, label, edition_note, duration_ms, total_size, preferred_score, created_at, updated_at)
-             VALUES (?, ?, NULL, NULL, ?, ?, 0, ?, ?)
-             RETURNING id`
-          )
-          .get(
-            input.bookId,
-            manifestationKind,
-            input.durationMs ?? null,
-            input.totalSize,
-            now,
-            now
-          ) as { id: number };
-        manifestationId = created.id;
-        sequence = 0;
+      const rawManifestationId = input.manifestationId;
+      if (rawManifestationId == null) {
+        throw new Error("Asset requires an explicit manifestation");
       }
+      const manifestationId = rawManifestationId;
+      assertPositiveInt(manifestationId);
+      const manifestation = this.getManifestation(manifestationId);
+      const expectedKind: ManifestationKind = input.kind === "ebook" ? "ebook" : "audio";
+      if (!manifestation || manifestation.book_id !== input.bookId || manifestation.kind !== expectedKind) {
+        throw new Error(`Asset requires a ${expectedKind} manifestation for book ${input.bookId}`);
+      }
+      const sequence = input.sequenceInManifestation ?? 0;
 
       const asset = this.db
         .query(

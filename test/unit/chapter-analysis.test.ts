@@ -116,12 +116,14 @@ describe("chapter analysis", () => {
     const { db, repo } = setupRepo();
     try {
       const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+      const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
       repo.addAsset({
         bookId: book.id,
         kind: "single",
         mime: "audio/mpeg",
         totalSize: 100,
         durationMs: 1000,
+        manifestationId: manifestation.id,
         files: [
           {
             path: "/tmp/audio-1.mp3",
@@ -301,12 +303,14 @@ describe("chapter analysis", () => {
       const book = repo.updateBookMetadata(repo.createBook({ title: "Dune", author: "Frank Herbert" }).id, {
         language: "eng",
       });
+      const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
       const asset = repo.addAsset({
         bookId: book.id,
         kind: "single",
         mime: "audio/mpeg",
         totalSize: 16,
         durationMs: 90_000,
+        manifestationId: manifestation.id,
         files: [
           {
             path: audioPath,
@@ -375,12 +379,14 @@ describe("chapter analysis", () => {
       const audioPath = path.join(root, "audio.mp3");
       await writeFile(audioPath, "fake audio bytes");
       const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+      const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
       repo.addAsset({
         bookId: book.id,
         kind: "single",
         mime: "audio/mpeg",
         totalSize: 16,
         durationMs: 1000,
+        manifestationId: manifestation.id,
         files: [{ path: audioPath, size: 16, start: 0, end: 15, durationMs: 1000, title: null }],
       });
 

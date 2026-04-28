@@ -109,6 +109,10 @@ export async function scanLibraryRoot(repo: BooksRepo, libraryRoot: string): Pro
         const chosen = [...m4].sort((a, b) => b.size - a.size)[0];
         if (chosen && !repo.hasAssetFilePath(chosen.path)) {
           const durationMs = Math.round((getDurationSeconds(chosen.path, chosen.mtimeMs) ?? 0) * 1000);
+          const manifestation = repo.addManifestation({
+            bookId: book.id,
+            kind: "audio",
+          });
           repo.addAsset({
             bookId: book.id,
             kind: "single",
@@ -116,6 +120,7 @@ export async function scanLibraryRoot(repo: BooksRepo, libraryRoot: string): Pro
             totalSize: chosen.size,
             durationMs,
             sourceReleaseId: null,
+            manifestationId: manifestation.id,
             files: [
               {
                 path: chosen.path,
@@ -149,6 +154,10 @@ export async function scanLibraryRoot(repo: BooksRepo, libraryRoot: string): Pro
             return row;
           });
 
+          const manifestation = repo.addManifestation({
+            bookId: book.id,
+            kind: "audio",
+          });
           repo.addAsset({
             bookId: book.id,
             kind: mp3.length > 1 ? "multi" : "single",
@@ -156,6 +165,7 @@ export async function scanLibraryRoot(repo: BooksRepo, libraryRoot: string): Pro
             totalSize: mp3.reduce((sum, file) => sum + file.size, 0),
             durationMs: durationMsTotal,
             sourceReleaseId: null,
+            manifestationId: manifestation.id,
             files: assetFiles,
           });
           assetsCreated += 1;
@@ -172,6 +182,10 @@ export async function scanLibraryRoot(repo: BooksRepo, libraryRoot: string): Pro
         }
       }
       if (ebook && !repo.hasAssetFilePath(ebook.path)) {
+        const manifestation = repo.addManifestation({
+          bookId: book.id,
+          kind: "ebook",
+        });
         repo.addAsset({
           bookId: book.id,
           kind: "ebook",
@@ -179,6 +193,7 @@ export async function scanLibraryRoot(repo: BooksRepo, libraryRoot: string): Pro
           totalSize: ebook.size,
           durationMs: null,
           sourceReleaseId: null,
+          manifestationId: manifestation.id,
           files: [
             {
               path: ebook.path,

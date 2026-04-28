@@ -182,7 +182,7 @@ export async function runSnatch(
   const providerGuid = request.providerGuid?.trim() || null;
   const explicitHash = resolveInfoHash(request.infoHash);
   let manifestationId = request.manifestationId ?? null;
-  const sequenceInManifestation = request.sequenceInManifestation ?? null;
+  let sequenceInManifestation = request.sequenceInManifestation ?? null;
   if (sequenceInManifestation !== null && (!Number.isInteger(sequenceInManifestation) || sequenceInManifestation < 0)) {
     throw new Error("sequenceInManifestation must be a nonnegative integer");
   }
@@ -283,6 +283,14 @@ export async function runSnatch(
   } catch (error) {
     snatchLog(`[snatch] rtorrent load.raw_start error=${JSON.stringify((error as Error).message)}`);
     throw error;
+  }
+
+  if (manifestationId === null) {
+    manifestationId = repo.addManifestation({
+      bookId: request.bookId,
+      kind: request.mediaType === "ebook" ? "ebook" : "audio",
+    }).id;
+    sequenceInManifestation = 0;
   }
 
   const release = repo.createRelease({

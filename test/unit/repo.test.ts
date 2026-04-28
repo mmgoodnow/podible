@@ -147,12 +147,14 @@ describe("books repo", () => {
       url: "https://example.com/dune-audio.torrent",
       status: "downloaded",
     });
+    const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
     repo.addAsset({
       bookId: book.id,
       kind: "single",
       mime: "audio/mpeg",
       totalSize: 123,
       durationMs: 1000,
+      manifestationId: manifestation.id,
       files: [
         {
           path: "/tmp/a.mp3",
@@ -188,12 +190,14 @@ describe("books repo", () => {
       status: "downloaded",
     });
 
+    const bookOneManifestation = repo.addManifestation({ bookId: book1.id, kind: "audio" });
     repo.addAsset({
       bookId: book1.id,
       kind: "single",
       mime: "audio/mpeg",
       totalSize: 300,
       sourceReleaseId: release.id,
+      manifestationId: bookOneManifestation.id,
       files: [
         {
           path: "/tmp/book-one-only.mp3",
@@ -213,11 +217,13 @@ describe("books repo", () => {
         },
       ],
     });
+    const bookTwoManifestation = repo.addManifestation({ bookId: book2.id, kind: "audio" });
     repo.addAsset({
       bookId: book2.id,
       kind: "single",
       mime: "audio/mpeg",
       totalSize: 100,
+      manifestationId: bookTwoManifestation.id,
       files: [
         {
           path: "/tmp/shared.mp3",
@@ -249,41 +255,36 @@ describe("books repo", () => {
     db.close();
   });
 
-  test("addAsset auto-creates a one-container manifestation when none is supplied", () => {
+  test("addAsset requires an explicit manifestation", () => {
     const { db, repo } = setupRepo();
     const book = repo.createBook({ title: "Solo Book", author: "A" });
-    const asset = repo.addAsset({
-      bookId: book.id,
-      kind: "single",
-      mime: "audio/mp4",
-      totalSize: 1234,
-      durationMs: 5000,
-      files: [{ path: "/tmp/solo.m4b", size: 1234, start: 0, end: 1233, durationMs: 5000 }],
-    });
-    expect(asset.manifestation_id).not.toBeNull();
-    expect(asset.sequence_in_manifestation).toBe(0);
-    const manifestations = repo.listManifestationsByBook(book.id);
-    expect(manifestations.length).toBe(1);
-    expect(manifestations[0]!.kind).toBe("audio");
-    expect(manifestations[0]!.label).toBeNull();
-    expect(manifestations[0]!.duration_ms).toBe(5000);
-    expect(manifestations[0]!.total_size).toBe(1234);
+    expect(() =>
+      repo.addAsset({
+        bookId: book.id,
+        kind: "single",
+        mime: "audio/mp4",
+        totalSize: 1234,
+        durationMs: 5000,
+        files: [{ path: "/tmp/solo.m4b", size: 1234, start: 0, end: 1233, durationMs: 5000 }],
+      } as Parameters<typeof repo.addAsset>[0])
+    ).toThrow("Asset requires an explicit manifestation");
     db.close();
   });
 
-  test("ebook asset auto-creates an ebook manifestation", () => {
+  test("addAsset rejects a manifestation with the wrong media kind", () => {
     const { db, repo } = setupRepo();
     const book = repo.createBook({ title: "B", author: "A" });
-    repo.addAsset({
-      bookId: book.id,
-      kind: "ebook",
-      mime: "application/epub+zip",
-      totalSize: 555,
-      files: [{ path: "/tmp/b.epub", size: 555, start: 0, end: 554, durationMs: 0 }],
-    });
-    const manifestations = repo.listManifestationsByBook(book.id);
-    expect(manifestations.length).toBe(1);
-    expect(manifestations[0]!.kind).toBe("ebook");
+    const audioManifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
+    expect(() =>
+      repo.addAsset({
+        bookId: book.id,
+        kind: "ebook",
+        mime: "application/epub+zip",
+        totalSize: 555,
+        manifestationId: audioManifestation.id,
+        files: [{ path: "/tmp/b.epub", size: 555, start: 0, end: 554, durationMs: 0 }],
+      })
+    ).toThrow("Asset requires a ebook manifestation");
     db.close();
   });
 
@@ -338,12 +339,14 @@ describe("books repo", () => {
   test("deleteAsset removes an empty manifestation", () => {
     const { db, repo } = setupRepo();
     const book = repo.createBook({ title: "Delete Me", author: "A" });
+    const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
     const asset = repo.addAsset({
       bookId: book.id,
       kind: "single",
       mime: "audio/mp4",
       totalSize: 100,
       durationMs: 1000,
+      manifestationId: manifestation.id,
       files: [{ path: "/tmp/delete-me.m4b", size: 100, start: 0, end: 99, durationMs: 1000 }],
     });
     expect(asset.manifestation_id).not.toBeNull();

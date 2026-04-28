@@ -235,6 +235,7 @@ describe("podible http", () => {
       url: "https://example.com/dune-standard.torrent",
       status: "imported",
     });
+    const standardManifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
     const standardAudio = repo.addAsset({
       bookId: book.id,
       kind: "single",
@@ -242,6 +243,7 @@ describe("podible http", () => {
       totalSize: 123,
       durationMs: 1_000,
       sourceReleaseId: standardRelease.id,
+      manifestationId: standardManifestation.id,
       files: [
         {
           path: path.join(isolatedDataDir, "dune.mp3"),
@@ -431,12 +433,14 @@ describe("podible http", () => {
     });
 
     const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
     repo.addAsset({
       bookId: book.id,
       kind: "single",
       mime: "audio/mpeg",
       totalSize: 123,
       durationMs: 1_000,
+      manifestationId: manifestation.id,
       files: [
         {
           path: path.join(isolatedDataDir, "activity-dune.mp3"),
@@ -659,12 +663,14 @@ describe("podible http", () => {
     });
 
     const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
     repo.addAsset({
       bookId: book.id,
       kind: "single",
       mime: "audio/mpeg",
       totalSize: 123,
       durationMs: 1_000,
+      manifestationId: manifestation.id,
       files: [
         {
           path: path.join(isolatedDataDir, "login-dune.mp3"),
@@ -832,12 +838,14 @@ describe("podible http", () => {
       });
 
       const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+      const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
       repo.addAsset({
         bookId: book.id,
         kind: "single",
         mime: "audio/mpeg",
         totalSize: 123,
         durationMs: 1_000,
+        manifestationId: manifestation.id,
         files: [
           {
             path: path.join(isolatedDataDir, "plex-dune.mp3"),
@@ -1666,12 +1674,14 @@ describe("podible http", () => {
     });
 
     const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
     const audio = repo.addAsset({
       bookId: book.id,
       kind: "single",
       mime: "audio/mpeg",
       totalSize: 123,
       durationMs: 1_000,
+      manifestationId: manifestation.id,
       files: [
         {
           path: path.join(isolatedDataDir, "transcript-route.mp3"),
@@ -1840,12 +1850,14 @@ describe("podible http", () => {
     });
 
     const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
     const audio = repo.addAsset({
       bookId: book.id,
       kind: "single",
       mime: "audio/mpeg",
       totalSize: 123,
       durationMs: 1_000,
+      manifestationId: manifestation.id,
       files: [
         {
           path: path.join(isolatedDataDir, "transcript-route-br.mp3"),

@@ -294,6 +294,12 @@ export async function importReleaseFromPath(
   }
 
   const totalSize = assetFiles.reduce((sum, item) => sum + item.size, 0);
+  const manifestationId =
+    options.manifestationId ??
+    repo.addManifestation({
+      bookId: book.id,
+      kind: release.media_type === "ebook" ? "ebook" : "audio",
+    }).id;
   const asset = repo.addAsset({
     bookId: book.id,
     kind: selected.kind,
@@ -301,7 +307,7 @@ export async function importReleaseFromPath(
     totalSize,
     durationMs: release.media_type === "audio" ? durationMsTotal : null,
     sourceReleaseId: release.id,
-    manifestationId: options.manifestationId ?? null,
+    manifestationId,
     sequenceInManifestation: options.sequenceInManifestation ?? undefined,
     files: assetFiles,
   });

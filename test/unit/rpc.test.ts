@@ -192,12 +192,14 @@ describe("json-rpc handler", () => {
       url: "https://example.com/partial-audio.torrent",
       status: "imported",
     });
+    const partialManifestation = repo.addManifestation({ bookId: partial.id, kind: "audio" });
     repo.addAsset({
       bookId: partial.id,
       kind: "single",
       mime: "audio/mpeg",
       totalSize: 100,
       sourceReleaseId: partialAudio.id,
+      manifestationId: partialManifestation.id,
       files: [
         {
           path: "/tmp/partial-audio.mp3",
@@ -220,12 +222,14 @@ describe("json-rpc handler", () => {
       url: "https://example.com/imported-audio.torrent",
       status: "imported",
     });
+    const importedAudioManifestation = repo.addManifestation({ bookId: imported.id, kind: "audio" });
     repo.addAsset({
       bookId: imported.id,
       kind: "single",
       mime: "audio/mpeg",
       totalSize: 100,
       sourceReleaseId: importedAudio.id,
+      manifestationId: importedAudioManifestation.id,
       files: [
         {
           path: "/tmp/imported-audio.mp3",
@@ -246,12 +250,14 @@ describe("json-rpc handler", () => {
       url: "https://example.com/imported-ebook.torrent",
       status: "imported",
     });
+    const importedEbookManifestation = repo.addManifestation({ bookId: imported.id, kind: "ebook" });
     repo.addAsset({
       bookId: imported.id,
       kind: "ebook",
       mime: "application/epub+zip",
       totalSize: 100,
       sourceReleaseId: importedEbook.id,
+      manifestationId: importedEbookManifestation.id,
       files: [
         {
           path: "/tmp/imported-ebook.epub",
@@ -411,12 +417,14 @@ describe("json-rpc handler", () => {
       url: "/tmp/Dune.epub",
       status: "imported",
     });
+    const ebookManifestation = repo.addManifestation({ bookId: book.id, kind: "ebook" });
     repo.addAsset({
       bookId: book.id,
       kind: "ebook",
       mime: "application/epub+zip",
       totalSize: 123,
       sourceReleaseId: release.id,
+      manifestationId: ebookManifestation.id,
       files: [
         {
           path: assetPath,
@@ -428,12 +436,14 @@ describe("json-rpc handler", () => {
         },
       ],
     });
+    const audioManifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
     const audioAsset = repo.addAsset({
       bookId: book.id,
       kind: "single",
       mime: "audio/mpeg",
       totalSize: 456,
       durationMs: 1000,
+      manifestationId: audioManifestation.id,
       files: [
         {
           path: path.join(root, "library", "Dune.mp3"),
@@ -606,12 +616,14 @@ describe("json-rpc handler", () => {
         url: "https://example.com/wrong-audio.torrent",
         status: "imported",
       });
+      const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
       const asset = repo.addAsset({
         bookId: book.id,
         kind: "single",
         mime: "audio/mpeg",
         totalSize: 12,
         sourceReleaseId: release.id,
+        manifestationId: manifestation.id,
         files: [
           {
             path: importedPath,
@@ -734,12 +746,14 @@ describe("json-rpc handler", () => {
       const root = await mkdtemp(path.join(os.tmpdir(), "books-report-issue-target-"));
       const importedPath = path.join(root, "Dune.mp3");
       await writeFile(importedPath, Buffer.from("wrong import"));
+      const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
       repo.addAsset({
         bookId: book.id,
         kind: "single",
         mime: "audio/mpeg",
         totalSize: 1234,
         sourceReleaseId: importedRelease.id,
+        manifestationId: manifestation.id,
         files: [
           {
             path: importedPath,
@@ -1192,12 +1206,14 @@ describe("json-rpc handler", () => {
       url: "https://example.com/dune-audio.torrent",
       status: "downloaded",
     });
+    const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
     repo.addAsset({
       bookId: book.id,
       kind: "single",
       mime: "audio/mpeg",
       totalSize: 10,
       sourceReleaseId: release.id,
+      manifestationId: manifestation.id,
       files: [
         {
           path: assetPath,
@@ -1382,12 +1398,14 @@ describe("json-rpc handler", () => {
         url: "https://example.com/twilight-ebook.torrent",
         status: "imported",
       });
+      const manifestation = repo.addManifestation({ bookId: book.id, kind: "ebook" });
       repo.addAsset({
         bookId: book.id,
         kind: "ebook",
         mime: "application/epub+zip",
         totalSize: 123,
         sourceReleaseId: ebookRelease.id,
+        manifestationId: manifestation.id,
         files: [
           {
             path: "/tmp/twilight.epub",
