@@ -12,6 +12,7 @@ import { defaultSettings } from "../../src/settings";
 import { infoHashFromTorrentBytes } from "../../src/library/torrent";
 import { pollMsForMedia, runWorker, selectDownloadPollMs } from "../../src/worker";
 import { processAcquireJob } from "../../src/worker/acquire";
+import { processImportJob } from "../../src/worker/imports";
 import { startMockTorznab } from "../mocks/torznab";
 
 function makeTorrentBytes(name: string): Uint8Array {
@@ -962,6 +963,88 @@ describe("worker concurrency", () => {
 });
 
 describe("worker import recovery", () => {
+  test("skips wrong-file agent reimport when only one importable file exists", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "books-wrong-file-single-importable-"));
+    const downloadDir = path.join(root, "download");
+    const libraryRoot = path.join(root, "library");
+    await mkdir(downloadDir, { recursive: true });
+    await mkdir(libraryRoot, { recursive: true });
+    const onlyFile = path.join(downloadDir, "Red Rising.m4b");
+    await writeFile(onlyFile, Buffer.from("audio"));
+
+    repo.updateSettings(
+      defaultSettings({
+        auth: { mode: "plex" },
+        libraryRoot,
+        agents: {
+          ...defaultSettings().agents,
+          apiKey: "test-key",
+        },
+      })
+    );
+
+    const book = repo.createBook({ title: "Red Rising", author: "Pierce Brown" });
+    const release = repo.createRelease({
+      bookId: book.id,
+      provider: "mock",
+      providerGuid: "guid-red",
+      title: "Red Rising by Pierce Brown [ENG / M4B]",
+      mediaType: "audio",
+      infoHash: "4444444444444444444444444444444444444444",
+      url: "https://example.com/red-rising.torrent",
+      status: "imported",
+    });
+    const importJob = repo.createJob({
+      type: "import",
+      bookId: book.id,
+      releaseId: release.id,
+      payload: {
+        basePath: downloadDir,
+        reason: "user_reported_wrong_file",
+        userReportedIssue: true,
+        rejectedSourcePaths: [onlyFile],
+      },
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      throw new Error("OpenAI should not be called for a single importable file");
+    }) as unknown as typeof fetch;
+
+    try {
+      const result = await processImportJob({
+        repo,
+        getSettings: () => repo.getSettings(),
+        onLog: () => {},
+      }, importJob);
+
+      expect(result).toBe("done");
+      const finalImportJob = repo.getJob(importJob.id);
+      expect(finalImportJob?.status).toBe("cancelled");
+      expect(String(finalImportJob?.error || "")).toContain("no_alternative_single_importable_file:1");
+
+      const failedRelease = repo.getRelease(release.id);
+      expect(failedRelease?.status).toBe("failed");
+      expect(String(failedRelease?.error || "")).toContain("no_alternative_single_importable_file:1");
+
+      const acquireJobs = repo.listJobsByType("acquire").filter((job) => job.book_id === book.id);
+      expect(acquireJobs).toHaveLength(1);
+      const payload = JSON.parse(acquireJobs[0]!.payload_json ?? "{}");
+      expect(payload.forceAgent).toBe(true);
+      expect(payload.priorFailure).toBe(true);
+      expect(payload.rejectedUrls).toEqual([release.url]);
+      expect(payload.rejectedGuids).toEqual(["guid-red"]);
+      expect(payload.rejectedInfoHashes).toEqual([release.info_hash]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      db.close();
+    }
+  });
+
   test("queues forced agent acquire when deterministic import cannot map files", async () => {
     const db = new Database(":memory:");
     runMigrations(db);

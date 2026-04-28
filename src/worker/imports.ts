@@ -1,5 +1,5 @@
 import { selectManualImportPaths } from "../library/agents";
-import { importReleaseFromPath, inspectImportPath } from "../library/importer";
+import { importReleaseFromPath, inspectImportPath, type ImportInspectionFile } from "../library/importer";
 import { RtorrentClient } from "../rtorrent";
 import type { JobRow } from "../app-types";
 import { workerLog, type WorkerContext } from "./context";
@@ -15,6 +15,10 @@ type ImportJobPayload = {
   manifestationId?: number | null;
   sequenceInManifestation?: number | null;
 };
+
+function importableFilesForMedia(files: ImportInspectionFile[], mediaType: "audio" | "ebook"): ImportInspectionFile[] {
+  return files.filter((file) => (mediaType === "audio" ? file.supportedAudio : file.supportedEbook));
+}
 
 export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done" | "rescheduled"> {
   if (!job.release_id) {
@@ -52,31 +56,36 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
     let agentDecisionError: string | null = null;
     try {
       const files = await inspectImportPath(basePath);
-      const book = ctx.repo.getBookRow(release.book_id);
-      const decision = await selectManualImportPaths(settings, {
-        mediaType: release.media_type,
-        files,
-        rejectedSourcePaths: Array.isArray(payload.rejectedSourcePaths) ? payload.rejectedSourcePaths : [],
-        forceAgent: true,
-        priorFailure: true,
-        book: book ? { id: book.id, title: book.title, author: book.author } : null,
-      });
-      agentDecisionReason = `${decision.mode}:${decision.reason}`;
-      agentDecisionError = decision.error;
-
-      if (decision.selectedPaths.length > 0) {
-        await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, {
-          selectedPaths: decision.selectedPaths,
-          manifestationId: payload.manifestationId ?? null,
-          sequenceInManifestation: payload.sequenceInManifestation ?? null,
+      const importableFiles = importableFilesForMedia(files, release.media_type);
+      if (importableFiles.length <= 1) {
+        agentDecisionReason = `deterministic:no_alternative_single_importable_file:${importableFiles.length}`;
+      } else {
+        const book = ctx.repo.getBookRow(release.book_id);
+        const decision = await selectManualImportPaths(settings, {
+          mediaType: release.media_type,
+          files,
+          rejectedSourcePaths: Array.isArray(payload.rejectedSourcePaths) ? payload.rejectedSourcePaths : [],
+          forceAgent: true,
+          priorFailure: true,
+          book: book ? { id: book.id, title: book.title, author: book.author } : null,
         });
-        ctx.repo.setReleaseStatus(release.id, "imported", null);
-        ctx.repo.markJobSucceeded(job.id);
-        workerLog(
-          ctx,
-          `[import] job=${job.id} release=${release.id} wrong_file_agent_reimport=success selected=${decision.selectedPaths.length}`
-        );
-        return "done";
+        agentDecisionReason = `${decision.mode}:${decision.reason}`;
+        agentDecisionError = decision.error;
+
+        if (decision.selectedPaths.length > 0) {
+          await importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, {
+            selectedPaths: decision.selectedPaths,
+            manifestationId: payload.manifestationId ?? null,
+            sequenceInManifestation: payload.sequenceInManifestation ?? null,
+          });
+          ctx.repo.setReleaseStatus(release.id, "imported", null);
+          ctx.repo.markJobSucceeded(job.id);
+          workerLog(
+            ctx,
+            `[import] job=${job.id} release=${release.id} wrong_file_agent_reimport=success selected=${decision.selectedPaths.length}`
+          );
+          return "done";
+        }
       }
     } catch (agentImportError) {
       agentDecisionError = (agentImportError as Error).message || "agent import failed";

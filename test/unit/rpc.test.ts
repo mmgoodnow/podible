@@ -667,14 +667,14 @@ describe("json-rpc handler", () => {
       expect(result.result.mediaType).toBe("audio");
       expect(result.result.jobId).toBeGreaterThan(0);
       expect(result.result.rejectedSourcePathsCount).toBe(1);
-      expect(result.result.deletedAssetCount).toBe(1);
-      expect(result.result.deletedAssetFileCount).toBe(1);
-      expect(result.result.deletedAssetPaths).toEqual([importedPath]);
+      expect(result.result.deletedAssetCount).toBe(0);
+      expect(result.result.deletedAssetFileCount).toBe(0);
+      expect(result.result.deletedAssetPaths).toEqual([]);
 
       const failedRelease = repo.getRelease(release.id);
-      expect(failedRelease?.status).toBe("downloaded");
-      expect(repo.getAsset(asset.id)).toBeNull();
-      expect(await Bun.file(importedPath).exists()).toBe(false);
+      expect(failedRelease?.status).toBe("imported");
+      expect(repo.getAsset(asset.id)).not.toBeNull();
+      expect(await Bun.file(importedPath).exists()).toBe(true);
 
       const reviewJob = repo.getJob(result.result.jobId);
       expect(reviewJob?.type).toBe("import");
@@ -772,14 +772,14 @@ describe("json-rpc handler", () => {
       expect(result.result.action).toBe("wrong_file_review_queued");
       expect(result.result.releaseId).toBe(importedRelease.id);
       expect(result.result.releaseId).not.toBe(newerRelease.id);
-      expect(result.result.deletedAssetCount).toBe(1);
+      expect(result.result.deletedAssetCount).toBe(0);
 
       const failedImported = repo.getRelease(importedRelease.id);
-      expect(failedImported?.status).toBe("downloaded");
+      expect(failedImported?.status).toBe("imported");
       const untouchedNewer = repo.getRelease(newerRelease.id);
       expect(untouchedNewer?.status).toBe("snatched");
-      expect(repo.listAssetsByBook(book.id)).toHaveLength(0);
-      expect(await Bun.file(importedPath).exists()).toBe(false);
+      expect(repo.listAssetsByBook(book.id)).toHaveLength(1);
+      expect(await Bun.file(importedPath).exists()).toBe(true);
 
       const reviewJob = repo.getJob(result.result.jobId);
       expect(reviewJob?.type).toBe("import");
@@ -791,6 +791,74 @@ describe("json-rpc handler", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test("library.reportImportIssue scopes reports to a manifestation when provided", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    repo.updateSettings(defaultSettings({ auth: { mode: "plex" } }));
+
+    const book = repo.createBook({ title: "Red Rising", author: "Pierce Brown" });
+    const release = repo.createRelease({
+      bookId: book.id,
+      provider: "mock",
+      providerGuid: "guid-red",
+      title: "Red Rising by Pierce Brown [ENG / MP3]",
+      mediaType: "audio",
+      infoHash: "3333333333333333333333333333333333333333",
+      url: "https://example.com/red-rising.torrent",
+      status: "imported",
+    });
+    const oldManifestation = repo.addManifestation({ bookId: book.id, kind: "audio", label: "Old narration" });
+    const newManifestation = repo.addManifestation({ bookId: book.id, kind: "audio", label: "New narration" });
+    const oldAsset = repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mp4",
+      totalSize: 100,
+      manifestationId: oldManifestation.id,
+      sourceReleaseId: release.id,
+      files: [{ path: "/tmp/red-old.m4b", sourcePath: "/raw/red-old.m4b", size: 100, start: 0, end: 99, durationMs: 1000 }],
+    });
+    const newAsset = repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "audio/mp4",
+      totalSize: 100,
+      manifestationId: newManifestation.id,
+      sourceReleaseId: release.id,
+      files: [{ path: "/tmp/red-new.m4b", sourcePath: "/raw/red-new.m4b", size: 100, start: 0, end: 99, durationMs: 1000 }],
+    });
+
+    const result = await callRpc(
+      repo,
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "library.reportImportIssue",
+        params: {
+          bookId: book.id,
+          mediaType: "audio",
+          releaseId: release.id,
+          manifestationId: newManifestation.id,
+        },
+      },
+      "user"
+    );
+
+    expect(result.result.rejectedSourcePathsCount).toBe(1);
+    expect(result.result.deletedAssetCount).toBe(0);
+    expect(repo.getAsset(oldAsset.id)).not.toBeNull();
+    expect(repo.getAsset(newAsset.id)).not.toBeNull();
+
+    const reviewJob = repo.getJob(result.result.jobId);
+    const payload = JSON.parse(reviewJob?.payload_json ?? "{}");
+    expect(payload.rejectedSourcePaths).toEqual(["/raw/red-new.m4b"]);
+    expect(payload.rejectedManifestationId).toBe(newManifestation.id);
+    expect(payload.rejectedSourcePaths).not.toContain("/raw/red-old.m4b");
+
+    db.close();
   });
 
   test("library.requestTranscription targets the requested audio manifestation", async () => {

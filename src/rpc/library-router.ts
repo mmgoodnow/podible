@@ -189,11 +189,12 @@ export const libraryRouter = defineRouter({
 
   reportImportIssue: defineMethod({
     auth: "user",
-    summary: "Report wrong imported file(s), delete imported asset(s), and queue async review/reacquire.",
+    summary: "Report wrong imported file(s), preserve the current edition, and queue async review/reacquire.",
     paramsSchema: emptyParamsSchema.extend({
       bookId: positiveIntSchema,
       mediaType: z.enum(["audio", "ebook"]),
       releaseId: optionalPositiveIntSchema,
+      manifestationId: optionalPositiveIntSchema,
     }),
     resultSchema: z.object({
       action: z.literal("wrong_file_review_queued"),
@@ -209,6 +210,18 @@ export const libraryRouter = defineRouter({
       const book = ctx.repo.getBookRow(params.bookId);
       if (!book) {
         throw new RpcError(-32000, "Book not found", { error: "not_found", bookId: params.bookId });
+      }
+      if (params.manifestationId !== undefined) {
+        const manifestation = ctx.repo.getManifestation(params.manifestationId);
+        const expectedKind = params.mediaType === "ebook" ? "ebook" : "audio";
+        if (!manifestation || manifestation.book_id !== params.bookId || manifestation.kind !== expectedKind) {
+          throw new RpcError(-32000, "Manifestation not found for media", {
+            error: "not_found",
+            bookId: params.bookId,
+            mediaType: params.mediaType,
+            manifestationId: params.manifestationId,
+          });
+        }
       }
 
       const releases = ctx.repo.listReleasesByBook(params.bookId).filter((release) => release.media_type === params.mediaType);
@@ -242,27 +255,9 @@ export const libraryRouter = defineRouter({
       }
       const wrongAssets = assets.filter((asset) => asset.source_release_id === release.id).filter((asset) =>
         params.mediaType === "ebook" ? asset.kind === "ebook" : asset.kind !== "ebook"
-      );
+      ).filter((asset) => params.manifestationId === undefined || asset.manifestation_id === params.manifestationId);
       const wrongAssetFiles = wrongAssets.flatMap((asset) => ctx.repo.getAssetFiles(asset.id));
       const rejectedSourcePaths = wrongAssetFiles.map((file) => file.source_path ?? file.path);
-
-      const candidateDeletePaths = Array.from(new Set(wrongAssetFiles.map((file) => file.path).filter(Boolean)));
-      for (const asset of wrongAssets) {
-        ctx.repo.deleteAsset(asset.id);
-      }
-      const deletedAssetPaths: string[] = [];
-      for (const filePath of candidateDeletePaths) {
-        if (ctx.repo.hasAssetFilePath(filePath)) {
-          continue;
-        }
-        if (await removeFileIfPresent(filePath)) {
-          deletedAssetPaths.push(filePath);
-        }
-      }
-
-      if (wrongAssets.length > 0 && release.status === "imported") {
-        ctx.repo.setReleaseStatus(release.id, "downloaded", null);
-      }
 
       const importJob = ctx.repo.createJob({
         type: "import",
@@ -272,6 +267,7 @@ export const libraryRouter = defineRouter({
           reason: "user_reported_wrong_file",
           userReportedIssue: true,
           rejectedSourcePaths,
+          rejectedManifestationId: params.manifestationId ?? null,
         },
       });
       return {
@@ -280,9 +276,9 @@ export const libraryRouter = defineRouter({
         releaseId: release.id,
         mediaType: params.mediaType,
         rejectedSourcePathsCount: rejectedSourcePaths.length,
-        deletedAssetCount: wrongAssets.length,
-        deletedAssetFileCount: deletedAssetPaths.length,
-        deletedAssetPaths,
+        deletedAssetCount: 0,
+        deletedAssetFileCount: 0,
+        deletedAssetPaths: [],
       };
     },
   }),

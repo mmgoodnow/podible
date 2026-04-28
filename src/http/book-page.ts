@@ -95,30 +95,37 @@ function uniqueReleaseIds(assets: AssetRow[]): number[] {
   return Array.from(new Set(assets.map((asset) => asset.source_release_id).filter((id): id is number => id !== null)));
 }
 
-function renderReportIssueButton(bookId: number, mediaType: "audio" | "ebook", label: string, releaseId: number): string {
-  return `<button type="button" data-report-import-issue data-book-id="${bookId}" data-media-type="${mediaType}" data-release-id="${releaseId}">${escapeHtml(label)}</button>`;
+function renderReportIssueButton(
+  bookId: number,
+  mediaType: "audio" | "ebook",
+  label: string,
+  releaseId: number,
+  manifestationId: number | null
+): string {
+  const manifestationAttr = manifestationId === null ? "" : ` data-manifestation-id="${manifestationId}"`;
+  return `<button type="button" data-report-import-issue data-book-id="${bookId}" data-media-type="${mediaType}" data-release-id="${releaseId}"${manifestationAttr}>${escapeHtml(label)}</button>`;
 }
 
 function renderReportIssueSection(bookId: number, audioChoice: BookAudioCandidate | null, ebook: AssetRow | null): string {
   const buttons: string[] = [];
   const audioReleaseIds = audioChoice ? uniqueReleaseIds(audioChoice.containers) : [];
   if (audioReleaseIds.length === 1) {
-    buttons.push(renderReportIssueButton(bookId, "audio", "Report wrong audio", audioReleaseIds[0]!));
+    buttons.push(renderReportIssueButton(bookId, "audio", "Report wrong audio", audioReleaseIds[0]!, audioChoice?.manifestation.id ?? null));
   } else if (audioReleaseIds.length > 1) {
     buttons.push(
       ...audioReleaseIds.map((releaseId, index) =>
-        renderReportIssueButton(bookId, "audio", `Report wrong audio part ${index + 1}`, releaseId)
+        renderReportIssueButton(bookId, "audio", `Report wrong audio part ${index + 1}`, releaseId, audioChoice?.manifestation.id ?? null)
       )
     );
   }
   if (ebook?.source_release_id) {
-    buttons.push(renderReportIssueButton(bookId, "ebook", "Report wrong ebook", ebook.source_release_id));
+    buttons.push(renderReportIssueButton(bookId, "ebook", "Report wrong ebook", ebook.source_release_id, ebook.manifestation_id));
   }
   if (buttons.length === 0) return "";
   return `
       <section class="card span-12" data-report-import-panel data-book-id="${bookId}">
         <h2>Something wrong?</h2>
-        <p class="muted">Report a bad import to remove the wrong file, retry import with the agent, and escalate to an agent reacquire if import cannot be recovered.</p>
+        <p class="muted">Report a bad import to preserve the current edition, try an alternate import with the agent, and escalate to an agent reacquire if import cannot be recovered.</p>
         <div class="actions" style="margin-top: 12px;">${buttons.join("")}</div>
         <p class="muted" data-report-import-status style="margin-top: 8px;"></p>
       </section>`;
@@ -310,13 +317,18 @@ function renderReportIssueRuntimeScript(bookId: number): string {
           if (!(button instanceof HTMLButtonElement)) return;
           const mediaType = button.getAttribute("data-media-type");
           const releaseId = Number(button.getAttribute("data-release-id"));
+          const manifestationId = Number(button.getAttribute("data-manifestation-id"));
           if (mediaType !== "audio" && mediaType !== "ebook") return;
           if (!Number.isSafeInteger(releaseId) || releaseId <= 0) return;
-          if (!window.confirm("Report this " + mediaType + " as the wrong file? Podible will remove the imported file and queue agent recovery.")) return;
+          const params = { bookId: ${bookId}, mediaType, releaseId };
+          if (Number.isSafeInteger(manifestationId) && manifestationId > 0) {
+            params.manifestationId = manifestationId;
+          }
+          if (!window.confirm("Report this " + mediaType + " as the wrong file? Podible will keep the current files and queue agent recovery.")) return;
           button.disabled = true;
           setStatus("Reporting wrong " + mediaType + "...");
           try {
-            const result = await rpc("library.reportImportIssue", { bookId: ${bookId}, mediaType, releaseId });
+            const result = await rpc("library.reportImportIssue", params);
             setStatus("Queued agent import review job " + result.jobId + ". If that cannot recover it, Podible will queue agent reacquire.");
           } catch (error) {
             console.error("library.reportImportIssue failed:", error);
