@@ -12,6 +12,7 @@ import { hashSessionToken } from "../../src/auth";
 import { handleRpcMethod, handleRpcRequest } from "../../src/rpc";
 import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
+import { startMockRtorrent } from "../mocks/rtorrent";
 import { startMockTorznab } from "../mocks/torznab";
 
 type RpcCallerAuth = "none" | "user" | "admin";
@@ -38,6 +39,12 @@ function makeRpcContext(repo: BooksRepo, request: Request, auth: RpcCallerAuth =
     request,
     session: auth === "none" ? null : createRpcSession(repo, auth),
   };
+}
+
+function makeTorrentBytes(name: string): Uint8Array {
+  const nameLen = Buffer.byteLength(name);
+  const content = `d8:announce15:http://tracker/4:infod4:name${nameLen}:${name}12:piece lengthi16384e6:lengthi10e6:pieces20:12345678901234567890ee`;
+  return new Uint8Array(Buffer.from(content, "ascii"));
 }
 
 async function callRpc(repo: BooksRepo, body: string | object, auth: RpcCallerAuth = "admin") {
@@ -1064,6 +1071,72 @@ describe("json-rpc handler", () => {
     expect(JSON.parse(search?.results_json ?? "[]")[0].url).toContain("/torrent/dune-audio.torrent");
 
     torznab.stop();
+    db.close();
+  });
+
+  test("library.createManifestationFromSearch snatches selected indexes into a new manifestation", async () => {
+    const torrentBytes = makeTorrentBytes("dune-audio");
+    const torznab = startMockTorznab({
+      results: [{ title: "Dune by Frank Herbert [ENG / M4B]", torrentId: "dune-audio", size: 1234 }],
+      torrents: { "dune-audio": torrentBytes },
+    });
+    const rtorrent = startMockRtorrent({ byHash: {} });
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    repo.updateSettings(
+      defaultSettings({
+        auth: { mode: "plex" },
+        torznab: [{ name: "mock", baseUrl: torznab.baseUrl }],
+        rtorrent: {
+          transport: "http-xmlrpc",
+          url: rtorrent.url,
+          username: "",
+          password: "",
+        },
+      })
+    );
+
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const search = await callRpc(
+      repo,
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "library.searchReleases",
+        params: { bookId: book.id, mediaType: "audio" },
+      },
+      "user"
+    );
+    const created = await callRpc(
+      repo,
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "library.createManifestationFromSearch",
+        params: {
+          bookId: book.id,
+          mediaType: "audio",
+          searchId: search.result.searchId,
+          indexes: [0],
+          manifestation: { label: null, editionNote: null },
+        },
+      },
+      "user"
+    );
+
+    expect(created.result.manifestationId).toBeGreaterThan(0);
+    expect(created.result.results).toHaveLength(1);
+    const manifestation = repo.getManifestation(created.result.manifestationId);
+    expect(manifestation?.book_id).toBe(book.id);
+    expect(manifestation?.kind).toBe("audio");
+    const downloadJob = repo.getJob(created.result.results[0].jobId);
+    const payload = JSON.parse(downloadJob?.payload_json ?? "{}");
+    expect(payload.manifestationId).toBe(created.result.manifestationId);
+    expect(payload.sequenceInManifestation).toBe(0);
+
+    torznab.stop();
+    rtorrent.stop();
     db.close();
   });
 

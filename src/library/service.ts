@@ -27,6 +27,7 @@ export type SnatchRequest = {
 export type SnatchGroupRequest = {
   bookId: number;
   mediaType: MediaType;
+  forceManifestation?: boolean;
   manifestation: {
     label: string | null;
     editionNote: string | null;
@@ -326,7 +327,10 @@ export async function runSnatchGroup(
     throw new Error("At least one release is required");
   }
   const needsExplicitManifestation =
-    request.parts.length > 1 || request.manifestation.label !== null || request.manifestation.editionNote !== null;
+    request.forceManifestation === true ||
+    request.parts.length > 1 ||
+    request.manifestation.label !== null ||
+    request.manifestation.editionNote !== null;
   const manifestationId = needsExplicitManifestation
     ? repo.addManifestation({
         bookId: request.bookId,

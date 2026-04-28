@@ -6,7 +6,7 @@ import { createOrReuseBookFromOpenLibrary } from "../library/create";
 import { getBookTranscriptStatus, requestBookTranscription } from "../library/chapter-analysis";
 import { hydrateBookFromOpenLibrary } from "../library/hydration";
 import { RtorrentClient } from "../rtorrent";
-import { runSearch, triggerAutoAcquire } from "../library/service";
+import { runSearch, runSnatchGroup, triggerAutoAcquire } from "../library/service";
 
 import { defineMethod, defineRouter } from "./framework";
 import {
@@ -43,6 +43,7 @@ const releaseSearchResultSchema = z.object({
   seeders: z.number().int().nullable(),
   leechers: z.number().int().nullable(),
 });
+const releaseSearchIndexSchema = z.coerce.number().int().nonnegative();
 
 function defaultSearchQuery(book: BookRow): string {
   return [book.title, book.author].map((part) => part.trim()).filter(Boolean).join(" ");
@@ -258,6 +259,97 @@ export const libraryRouter = defineRouter({
         expiresAt,
         results: results.map(publicSearchResult),
       };
+    },
+  }),
+
+  createManifestationFromSearch: defineMethod({
+    auth: "user",
+    summary: "Create a new manifestation from ordered releases selected from a persisted library.searchReleases result.",
+    paramsSchema: emptyParamsSchema.extend({
+      bookId: positiveIntSchema,
+      mediaType: mediaSchema,
+      searchId: nonEmptyStringSchema,
+      indexes: z.array(releaseSearchIndexSchema).min(1),
+      manifestation: z.object({
+        label: optionalStringSchema.nullable(),
+        editionNote: optionalStringSchema.nullable(),
+      }),
+    }),
+    resultSchema: z.object({
+      manifestationId: positiveIntSchema.nullable(),
+      results: z.array(
+        z.object({
+          release: releaseRowSchema,
+          jobId: positiveIntSchema,
+          idempotent: z.boolean(),
+        })
+      ),
+    }),
+    async handler(ctx, params) {
+      const book = ctx.repo.getBookRow(params.bookId);
+      if (!book) {
+        throw new RpcError(-32000, "Book not found", { error: "not_found", bookId: params.bookId });
+      }
+      ctx.repo.deleteExpiredReleaseSearches(new Date().toISOString());
+      const search = ctx.repo.getReleaseSearch(params.searchId);
+      if (!search || search.expires_at <= new Date().toISOString()) {
+        throw new RpcError(-32000, "Release search expired or not found", {
+          error: "not_found",
+          searchId: params.searchId,
+        });
+      }
+      if (search.book_id !== params.bookId || search.media_type !== params.mediaType) {
+        throw new RpcError(-32000, "Release search does not match requested book/media", {
+          error: "search_mismatch",
+          searchId: params.searchId,
+          bookId: params.bookId,
+          mediaType: params.mediaType,
+        });
+      }
+      if (search.user_id !== null && search.user_id !== ctx.session?.user_id) {
+        throw new RpcError(-32003, "Forbidden");
+      }
+
+      const seen = new Set<number>();
+      for (const index of params.indexes) {
+        if (seen.has(index)) {
+          throw new RpcError(-32602, "Duplicate release index", { error: "duplicate_index", index });
+        }
+        seen.add(index);
+      }
+
+      let storedResults: Array<z.infer<typeof torznabResultSchema>>;
+      try {
+        storedResults = z.array(torznabResultSchema).parse(JSON.parse(search.results_json));
+      } catch {
+        throw new RpcError(-32000, "Stored release search is invalid", { error: "invalid_search", searchId: params.searchId });
+      }
+
+      const selected = params.indexes.map((index) => {
+        const release = storedResults[index];
+        if (!release) {
+          throw new RpcError(-32602, "Release index out of range", { error: "index_out_of_range", index });
+        }
+        return release;
+      });
+
+      return await runSnatchGroup(ctx.repo, ctx.repo.getSettings(), {
+        bookId: params.bookId,
+        mediaType: params.mediaType,
+        forceManifestation: true,
+        manifestation: {
+          label: params.manifestation.label?.trim() || null,
+          editionNote: params.manifestation.editionNote?.trim() || null,
+        },
+        parts: selected.map((release) => ({
+          provider: release.provider,
+          providerGuid: release.guid ?? null,
+          title: release.title,
+          url: release.url,
+          infoHash: release.infoHash ?? null,
+          sizeBytes: release.sizeBytes,
+        })),
+      });
     },
   }),
 
