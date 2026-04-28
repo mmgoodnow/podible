@@ -131,6 +131,43 @@ function renderReportIssueSection(bookId: number, audioChoice: BookAudioCandidat
       </section>`;
 }
 
+function renderManualReleaseSearchSection(bookId: number, bookTitle: string, bookAuthor: string): string {
+  const defaultQuery = [bookTitle, bookAuthor].map((part) => part.trim()).filter(Boolean).join(" ");
+  return `
+      <section class="card span-12" data-release-search-panel data-book-id="${bookId}">
+        <h2>Find a specific edition</h2>
+        <p class="muted">Search indexer releases for this book, select one or more ordered results, and snatch them as a new edition.</p>
+        <div class="release-search-controls">
+          <select data-release-search-media aria-label="Media type">
+            <option value="audio">audio</option>
+            <option value="ebook">ebook</option>
+          </select>
+          <input data-release-search-query type="text" value="${escapeHtml(defaultQuery)}" placeholder="${escapeHtml(defaultQuery || "Search query")}" />
+          <button type="button" data-release-search-run>Search releases</button>
+        </div>
+        <div class="release-search-controls">
+          <input data-release-search-label type="text" placeholder="Edition label (optional)" />
+          <input data-release-search-note type="text" placeholder="Edition note (optional)" />
+          <button type="button" data-release-search-snatch>Snatch selected as new edition</button>
+        </div>
+        <p class="muted" data-release-search-status style="margin-top: 8px;"></p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th></th>
+                <th>Title</th>
+                <th>Provider</th>
+                <th>Seeders</th>
+                <th>Size</th>
+              </tr>
+            </thead>
+            <tbody data-release-search-results><tr><td colspan="5">No search yet.</td></tr></tbody>
+          </table>
+        </div>
+      </section>`;
+}
+
 function renderAdminManifestationSection(
   repo: BooksRepo,
   manifestations: ManifestationRow[],
@@ -338,6 +375,154 @@ function renderReportIssueRuntimeScript(bookId: number): string {
             setStatus(error.message || "Unable to report issue.");
           }
         });
+      })();
+    </script>
+  `;
+}
+
+function renderManualReleaseSearchRuntimeScript(bookId: number): string {
+  return `
+    <script>
+      (() => {
+        const panel = document.querySelector('[data-release-search-panel][data-book-id="${bookId}"]');
+        if (!panel) return;
+        const media = panel.querySelector('[data-release-search-media]');
+        const query = panel.querySelector('[data-release-search-query]');
+        const searchButton = panel.querySelector('[data-release-search-run]');
+        const snatchButton = panel.querySelector('[data-release-search-snatch]');
+        const label = panel.querySelector('[data-release-search-label]');
+        const editionNote = panel.querySelector('[data-release-search-note]');
+        const status = panel.querySelector('[data-release-search-status]');
+        const body = panel.querySelector('[data-release-search-results]');
+        let currentSearchId = null;
+        let currentMediaType = "audio";
+        let currentResults = [];
+
+        function setStatus(message) {
+          if (status) status.textContent = message;
+        }
+
+        function escapeText(value) {
+          return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;",
+          })[char]);
+        }
+
+        function formatBytes(value) {
+          const bytes = Number(value);
+          if (!Number.isFinite(bytes) || bytes <= 0) return "";
+          if (bytes < 1024) return bytes + " B";
+          const units = ["KB", "MB", "GB", "TB"];
+          let amount = bytes / 1024;
+          let unit = 0;
+          while (amount >= 1024 && unit < units.length - 1) {
+            amount /= 1024;
+            unit += 1;
+          }
+          return amount.toFixed(amount >= 10 ? 0 : 1) + " " + units[unit];
+        }
+
+        async function rpc(method, params) {
+          const url = new URL("/rpc", window.location.origin);
+          url.search = window.location.search;
+          const response = await fetch(url.pathname + url.search, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+          });
+          const payload = await response.json();
+          if (payload.error) throw new Error(payload.error.message || "Request failed");
+          return payload.result;
+        }
+
+        function renderResults(results) {
+          if (!body) return;
+          if (!results.length) {
+            body.innerHTML = '<tr><td colspan="5">No results.</td></tr>';
+            return;
+          }
+          body.innerHTML = results.map((release) => {
+            const index = Number(release.index);
+            return '<tr>' +
+              '<td><input type="checkbox" data-release-result-index="' + escapeText(index) + '" /></td>' +
+              '<td>' + escapeText(release.title) + '</td>' +
+              '<td>' + escapeText(release.provider) + '</td>' +
+              '<td>' + escapeText(release.seeders ?? '') + '</td>' +
+              '<td>' + escapeText(formatBytes(release.sizeBytes)) + '</td>' +
+            '</tr>';
+          }).join('');
+        }
+
+        async function runSearch() {
+          if (!(searchButton instanceof HTMLButtonElement)) return;
+          const mediaType = media?.value === "ebook" ? "ebook" : "audio";
+          const searchQuery = query?.value?.trim() || "";
+          searchButton.disabled = true;
+          if (snatchButton instanceof HTMLButtonElement) snatchButton.disabled = true;
+          setStatus("Searching releases...");
+          try {
+            const params = { bookId: ${bookId}, mediaType, limit: 50 };
+            if (searchQuery) params.query = searchQuery;
+            const result = await rpc("library.searchReleases", params);
+            currentSearchId = result.searchId;
+            currentMediaType = result.mediaType;
+            currentResults = result.results || [];
+            renderResults(currentResults);
+            setStatus(currentResults.length + " result" + (currentResults.length === 1 ? "" : "s") + ". Select one or more in playback order.");
+          } catch (error) {
+            console.error("library.searchReleases failed:", error);
+            currentSearchId = null;
+            currentResults = [];
+            renderResults([]);
+            setStatus(error.message || "Search failed.");
+          } finally {
+            searchButton.disabled = false;
+            if (snatchButton instanceof HTMLButtonElement) snatchButton.disabled = false;
+          }
+        }
+
+        async function snatchSelected() {
+          if (!(snatchButton instanceof HTMLButtonElement)) return;
+          if (!currentSearchId) {
+            setStatus("Search first, then choose releases.");
+            return;
+          }
+          const checked = Array.from(panel.querySelectorAll('input[data-release-result-index]:checked'));
+          const indexes = checked
+            .map((input) => Number(input.getAttribute("data-release-result-index")))
+            .filter((index) => Number.isSafeInteger(index) && index >= 0);
+          if (indexes.length === 0) {
+            setStatus("Select at least one release.");
+            return;
+          }
+          snatchButton.disabled = true;
+          setStatus("Snatching selected release" + (indexes.length === 1 ? "" : "s") + "...");
+          try {
+            const result = await rpc("library.createManifestationFromSearch", {
+              bookId: ${bookId},
+              mediaType: currentMediaType,
+              searchId: currentSearchId,
+              indexes,
+              manifestation: {
+                label: label?.value?.trim() || null,
+                editionNote: editionNote?.value?.trim() || null,
+              },
+            });
+            setStatus("Created manifestation " + result.manifestationId + " with " + result.results.length + " download job" + (result.results.length === 1 ? "" : "s") + ".");
+          } catch (error) {
+            console.error("library.createManifestationFromSearch failed:", error);
+            setStatus(error.message || "Snatch failed.");
+          } finally {
+            snatchButton.disabled = false;
+          }
+        }
+
+        searchButton?.addEventListener("click", runSearch);
+        snatchButton?.addEventListener("click", snatchSelected);
       })();
     </script>
   `;
@@ -551,6 +736,7 @@ export async function renderBookPage(
         ${transcriptStatus?.status === "failed" && transcriptStatus.error ? `<p class="muted" style="margin-top:8px;">Last error: ${escapeHtml(transcriptStatus.error)}</p>` : ""}
       </section>
       ${renderReportIssueSection(book.id, audioChoice, ebook)}
+      ${renderManualReleaseSearchSection(book.id, book.title, book.author)}
       <section class="card span-12" data-cover-panel data-book-id="${book.id}">
         <h2>Artwork</h2>
         <p class="muted">Try alternate Open Library covers for this book.</p>
@@ -635,9 +821,21 @@ export async function renderBookPage(
       .manifestation-details li {
         margin: 6px 0;
       }
+      .release-search-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        margin-top: 10px;
+      }
+      .release-search-controls input[type="text"] {
+        min-width: min(100%, 260px);
+        flex: 1 1 260px;
+      }
     </style>
     ${audio ? renderTranscriptRuntimeScript(book.id, selectedManifestationId, transcriptUrl ?? "") : ""}
     ${renderReportIssueRuntimeScript(book.id)}
+    ${renderManualReleaseSearchRuntimeScript(book.id)}
     ${renderCoverRuntimeScript(book.id)}`;
   return renderAppPage(
     book.title,

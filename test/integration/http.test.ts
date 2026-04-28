@@ -330,6 +330,11 @@ describe("podible http", () => {
     expect(detailBody.includes("Something wrong?")).toBe(true);
     expect(detailBody.includes("Report wrong audio")).toBe(true);
     expect(detailBody.includes("data-report-import-issue")).toBe(true);
+    expect(detailBody.includes("Find a specific edition")).toBe(true);
+    expect(detailBody.includes("data-release-search-panel")).toBe(true);
+    expect(detailBody.includes("library.searchReleases")).toBe(true);
+    expect(detailBody.includes("library.createManifestationFromSearch")).toBe(true);
+    expect(detailBody.includes("snatch.create")).toBe(false);
     expect(detailBody.includes("Admin: Manifestations")).toBe(false);
 
     const adminCookie = createBrowserSessionCookie(repo, { isAdmin: true, username: "admin" });
