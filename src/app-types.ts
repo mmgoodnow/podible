@@ -118,6 +118,17 @@ export type ReleaseRow = {
   updated_at: string;
 };
 
+export type ReleaseSearchRow = {
+  id: string;
+  user_id: number | null;
+  book_id: number;
+  media_type: MediaType;
+  query: string;
+  results_json: string;
+  expires_at: string;
+  created_at: string;
+};
+
 export type AssetRow = {
   id: number;
   book_id: number;

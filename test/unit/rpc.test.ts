@@ -12,6 +12,7 @@ import { hashSessionToken } from "../../src/auth";
 import { handleRpcMethod, handleRpcRequest } from "../../src/rpc";
 import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
+import { startMockTorznab } from "../mocks/torznab";
 
 type RpcCallerAuth = "none" | "user" | "admin";
 
@@ -1017,6 +1018,52 @@ describe("json-rpc handler", () => {
     });
     expect(invalidMedia.error.code).toBe(-32602);
 
+    db.close();
+  });
+
+  test("library.searchReleases persists a user-scoped indexed release search without exposing download URLs", async () => {
+    const torznab = startMockTorznab({
+      results: [
+        { title: "Dune by Frank Herbert [ENG / M4B]", torrentId: "dune-audio", size: 1234 },
+        { title: "Dune by Frank Herbert [ENG / EPUB]", torrentId: "dune-ebook", size: 456 },
+      ],
+      torrents: {},
+    });
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    repo.updateSettings(
+      defaultSettings({
+        auth: { mode: "plex" },
+        torznab: [{ name: "mock", baseUrl: torznab.baseUrl }],
+      })
+    );
+
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const result = await callRpc(
+      repo,
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "library.searchReleases",
+        params: { bookId: book.id, mediaType: "audio" },
+      },
+      "user"
+    );
+
+    expect(result.result.query).toBe("Dune Frank Herbert");
+    expect(result.result.results).toHaveLength(1);
+    expect(result.result.results[0].index).toBe(0);
+    expect(result.result.results[0].title).toContain("M4B");
+    expect(result.result.results[0].url).toBeUndefined();
+    expect(result.result.results[0].raw).toBeUndefined();
+
+    const search = repo.getReleaseSearch(result.result.searchId);
+    expect(search?.book_id).toBe(book.id);
+    expect(search?.media_type).toBe("audio");
+    expect(JSON.parse(search?.results_json ?? "[]")[0].url).toContain("/torrent/dune-audio.torrent");
+
+    torznab.stop();
     db.close();
   });
 

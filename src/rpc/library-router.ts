@@ -1,10 +1,12 @@
+import { randomUUID } from "node:crypto";
+
 import { z } from "zod";
 
 import { createOrReuseBookFromOpenLibrary } from "../library/create";
 import { getBookTranscriptStatus, requestBookTranscription } from "../library/chapter-analysis";
 import { hydrateBookFromOpenLibrary } from "../library/hydration";
 import { RtorrentClient } from "../rtorrent";
-import { triggerAutoAcquire } from "../library/service";
+import { runSearch, triggerAutoAcquire } from "../library/service";
 
 import { defineMethod, defineRouter } from "./framework";
 import {
@@ -23,8 +25,42 @@ import {
   positiveIntSchema,
   nonEmptyStringSchema,
   releaseRowSchema,
+  torznabResultSchema,
 } from "./schemas";
 import { enrichLibraryBookPlayback, enrichLibraryBookProgress, removeFileIfPresent, RpcError } from "./shared";
+import type { BookRow } from "../app-types";
+
+const RELEASE_SEARCH_TTL_MS = 30 * 60 * 1000;
+
+const releaseSearchResultSchema = z.object({
+  index: z.number().int().nonnegative(),
+  title: z.string(),
+  provider: z.string(),
+  mediaType: mediaSchema,
+  sizeBytes: z.number().int().nullable(),
+  guid: z.string().nullable(),
+  infoHash: z.string().nullable(),
+  seeders: z.number().int().nullable(),
+  leechers: z.number().int().nullable(),
+});
+
+function defaultSearchQuery(book: BookRow): string {
+  return [book.title, book.author].map((part) => part.trim()).filter(Boolean).join(" ");
+}
+
+function publicSearchResult(result: z.infer<typeof torznabResultSchema>, index: number): z.infer<typeof releaseSearchResultSchema> {
+  return {
+    index,
+    title: result.title,
+    provider: result.provider,
+    mediaType: result.mediaType,
+    sizeBytes: result.sizeBytes,
+    guid: result.guid,
+    infoHash: result.infoHash,
+    seeders: result.seeders,
+    leechers: result.leechers,
+  };
+}
 
 export const libraryRouter = defineRouter({
   list: defineMethod({
@@ -171,6 +207,57 @@ export const libraryRouter = defineRouter({
         rejectedInfoHashes,
       });
       return { jobId, media, forceAgent, priorFailure, rejectedUrls, rejectedGuids, rejectedInfoHashes };
+    },
+  }),
+
+  searchReleases: defineMethod({
+    auth: "user",
+    readOnly: true,
+    summary: "Search configured indexers for releases for a library book and persist a short-lived server-side result set.",
+    paramsSchema: emptyParamsSchema.extend({
+      bookId: positiveIntSchema,
+      mediaType: mediaSchema,
+      query: optionalStringSchema,
+      limit: limitSchema.optional(),
+    }),
+    resultSchema: z.object({
+      searchId: z.string(),
+      query: z.string(),
+      mediaType: mediaSchema,
+      expiresAt: z.string(),
+      results: z.array(releaseSearchResultSchema),
+    }),
+    async handler(ctx, params) {
+      const book = ctx.repo.getBookRow(params.bookId);
+      if (!book) {
+        throw new RpcError(-32000, "Book not found", { error: "not_found", bookId: params.bookId });
+      }
+      const query = params.query?.trim() || defaultSearchQuery(book);
+      if (!query) {
+        throw new RpcError(-32602, "Search query is empty", { error: "invalid_query", bookId: params.bookId });
+      }
+
+      const limit = params.limit ?? 50;
+      const results = (await runSearch(ctx.repo.getSettings(), { query, media: params.mediaType })).slice(0, limit);
+      const expiresAt = new Date(Date.now() + RELEASE_SEARCH_TTL_MS).toISOString();
+      ctx.repo.deleteExpiredReleaseSearches(new Date().toISOString());
+      const search = ctx.repo.createReleaseSearch({
+        id: randomUUID(),
+        userId: ctx.session?.user_id ?? null,
+        bookId: book.id,
+        mediaType: params.mediaType,
+        query,
+        resultsJson: JSON.stringify(results),
+        expiresAt,
+      });
+
+      return {
+        searchId: search.id,
+        query,
+        mediaType: params.mediaType,
+        expiresAt,
+        results: results.map(publicSearchResult),
+      };
     },
   }),
 

@@ -20,6 +20,7 @@ const APP_STATE_MIGRATION_ID = 14;
 const ASSET_TRANSCRIPT_PATH_MIGRATION_ID = 15;
 const MANIFESTATIONS_MIGRATION_ID = 16;
 const PRUNE_EMPTY_MANIFESTATIONS_MIGRATION_ID = 17;
+const RELEASE_SEARCHES_MIGRATION_ID = 18;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -628,6 +629,25 @@ AND NOT EXISTS (
 `);
 }
 
+function applyReleaseSearchesMigration(db: Database): void {
+  db.exec(`
+CREATE TABLE IF NOT EXISTS release_searches (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NULL,
+  book_id INTEGER NOT NULL,
+  media_type TEXT NOT NULL CHECK (media_type IN ('audio', 'ebook')),
+  query TEXT NOT NULL,
+  results_json TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_release_searches_expires_at ON release_searches(expires_at);
+CREATE INDEX IF NOT EXISTS idx_release_searches_book_user ON release_searches(book_id, user_id);
+`);
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
@@ -708,5 +728,8 @@ export function runMigrations(db: Database): void {
   });
   apply(PRUNE_EMPTY_MANIFESTATIONS_MIGRATION_ID, () => {
     applyPruneEmptyManifestationsMigration(db);
+  });
+  apply(RELEASE_SEARCHES_MIGRATION_ID, () => {
+    applyReleaseSearchesMigration(db);
   });
 }

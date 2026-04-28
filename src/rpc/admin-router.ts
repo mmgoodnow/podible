@@ -21,6 +21,7 @@ export const adminRouter = defineRouter({
         users: z.number().int().nonnegative(),
         sessions: z.number().int().nonnegative(),
         plexLoginAttempts: z.number().int().nonnegative(),
+        releaseSearches: z.number().int().nonnegative(),
         appLoginAttempts: z.number().int().nonnegative(),
         authCodes: z.number().int().nonnegative(),
         appState: z.number().int().nonnegative(),

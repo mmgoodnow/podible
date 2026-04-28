@@ -24,6 +24,7 @@ import type {
   JobType,
   LibraryBook,
   MediaType,
+  ReleaseSearchRow,
   ReleaseRow,
   SessionWithUserRow,
   SessionKind,
@@ -47,6 +48,16 @@ type CreateReleaseInput = {
   sizeBytes?: number | null;
   url: string;
   status?: ReleaseStatus;
+};
+
+type CreateReleaseSearchInput = {
+  id: string;
+  userId?: number | null;
+  bookId: number;
+  mediaType: MediaType;
+  query: string;
+  resultsJson: string;
+  expiresAt: string;
 };
 
 type CreateJobInput = {
@@ -438,6 +449,35 @@ export class BooksRepo {
       ) as TorrentCacheRow;
   }
 
+  createReleaseSearch(input: CreateReleaseSearchInput): ReleaseSearchRow {
+    assertPositiveInt(input.bookId);
+    const now = nowIso();
+    return this.db
+      .query(
+        `INSERT INTO release_searches (id, user_id, book_id, media_type, query, results_json, expires_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         RETURNING *`
+      )
+      .get(
+        input.id,
+        input.userId ?? null,
+        input.bookId,
+        input.mediaType,
+        input.query,
+        input.resultsJson,
+        input.expiresAt,
+        now
+      ) as ReleaseSearchRow;
+  }
+
+  getReleaseSearch(id: string): ReleaseSearchRow | null {
+    return (this.db.query("SELECT * FROM release_searches WHERE id = ?").get(id) as ReleaseSearchRow | null) ?? null;
+  }
+
+  deleteExpiredReleaseSearches(beforeIso: string): number {
+    return this.db.query("DELETE FROM release_searches WHERE expires_at <= ?").run(beforeIso).changes;
+  }
+
   createBook(input: CreateBookInput): BookRow {
     const now = nowIso();
     const row = this.db
@@ -683,6 +723,10 @@ export class BooksRepo {
       users: number;
       sessions: number;
       plexLoginAttempts: number;
+      releaseSearches: number;
+      appLoginAttempts: number;
+      authCodes: number;
+      appState: number;
     };
     settingsPreserved: boolean;
   } {
@@ -700,6 +744,7 @@ export class BooksRepo {
           | "users"
           | "sessions"
           | "plex_login_attempts"
+          | "release_searches"
           | "app_login_attempts"
           | "auth_codes"
           | "app_state"
@@ -717,6 +762,7 @@ export class BooksRepo {
         users: countRow("users"),
         sessions: countRow("sessions"),
         plexLoginAttempts: countRow("plex_login_attempts"),
+        releaseSearches: countRow("release_searches"),
         appLoginAttempts: countRow("app_login_attempts"),
         authCodes: countRow("auth_codes"),
         appState: countRow("app_state"),
@@ -725,6 +771,7 @@ export class BooksRepo {
       this.db.query("DELETE FROM auth_codes").run();
       this.db.query("DELETE FROM app_login_attempts").run();
       this.db.query("DELETE FROM plex_login_attempts").run();
+      this.db.query("DELETE FROM release_searches").run();
       this.db.query("DELETE FROM sessions").run();
       this.db.query("DELETE FROM users").run();
       this.db.query("DELETE FROM app_state").run();
