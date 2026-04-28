@@ -159,6 +159,7 @@ function renderAdminManifestationSection(
                 const files = repo.getAssetFiles(asset.id);
                 return `<li>
                   <div><strong>Asset ${asset.id}</strong> • ${escapeHtml(asset.kind)} • ${escapeHtml(asset.mime)} • seq ${asset.sequence_in_manifestation}${release ? ` • release ${release.id}: ${escapeHtml(release.title)}` : ""}</div>
+                  ${asset.import_note ? `<div class="muted">Import note: ${escapeHtml(asset.import_note)}</div>` : ""}
                   ${
                     files.length > 0
                       ? `<ul>${files.map((file) => renderAdminAssetFile(file)).join("")}</ul>`
@@ -170,6 +171,7 @@ function renderAdminManifestationSection(
           : `<li class="muted">No containers.</li>`;
       return `<details${open} class="manifestation-details">
         <summary><strong>${escapeHtml(label)}</strong> <span class="muted">#${manifestation.id} • ${escapeHtml(meta.join(" • "))}${isSelected ? " • selected" : ""}</span></summary>
+        ${manifestation.selection_note ? `<p class="muted">Selection note: ${escapeHtml(manifestation.selection_note)}</p>` : ""}
         <ul>${containerMarkup}</ul>
       </details>`;
     })

@@ -22,6 +22,7 @@ export type SnatchRequest = {
   sizeBytes?: number | null;
   manifestationId?: number | null;
   sequenceInManifestation?: number | null;
+  selectionNote?: string | null;
 };
 
 export type SnatchGroupRequest = {
@@ -31,6 +32,7 @@ export type SnatchGroupRequest = {
   manifestation: {
     label: string | null;
     editionNote: string | null;
+    selectionNote?: string | null;
   };
   parts: Array<{
     provider: string;
@@ -199,6 +201,7 @@ export async function runSnatch(
     manifestationId = repo.addManifestation({
       bookId: request.bookId,
       kind: request.mediaType === "ebook" ? "ebook" : "audio",
+      selectionNote: request.selectionNote ?? null,
     }).id;
   }
   snatchLog(
@@ -289,6 +292,7 @@ export async function runSnatch(
     manifestationId = repo.addManifestation({
       bookId: request.bookId,
       kind: request.mediaType === "ebook" ? "ebook" : "audio",
+      selectionNote: request.selectionNote ?? null,
     }).id;
     sequenceInManifestation = 0;
   }
@@ -338,13 +342,15 @@ export async function runSnatchGroup(
     request.forceManifestation === true ||
     request.parts.length > 1 ||
     request.manifestation.label !== null ||
-    request.manifestation.editionNote !== null;
+    request.manifestation.editionNote !== null ||
+    request.manifestation.selectionNote != null;
   const manifestationId = needsExplicitManifestation
     ? repo.addManifestation({
         bookId: request.bookId,
         kind: request.mediaType === "ebook" ? "ebook" : "audio",
         label: request.manifestation.label,
         editionNote: request.manifestation.editionNote,
+        selectionNote: request.manifestation.selectionNote ?? null,
       }).id
     : null;
   const results: SnatchResult[] = [];

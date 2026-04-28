@@ -1144,6 +1144,7 @@ describe("json-rpc handler", () => {
     const manifestation = repo.getManifestation(created.result.manifestationId);
     expect(manifestation?.book_id).toBe(book.id);
     expect(manifestation?.kind).toBe("audio");
+    expect(manifestation?.selection_note).toContain("Manual selection from library release search");
     const downloadJob = repo.getJob(created.result.results[0].jobId);
     const payload = JSON.parse(downloadJob?.payload_json ?? "{}");
     expect(payload.manifestationId).toBe(created.result.manifestationId);

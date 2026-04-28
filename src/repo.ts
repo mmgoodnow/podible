@@ -107,6 +107,7 @@ type AddAssetInput = {
   // a lost handoff silently creates poisoned edition state.
   manifestationId: number;
   sequenceInManifestation?: number;
+  importNote?: string | null;
   files: Array<{
     path: string;
     sourcePath?: string | null;
@@ -123,6 +124,7 @@ type AddManifestationInput = {
   kind: ManifestationKind;
   label?: string | null;
   editionNote?: string | null;
+  selectionNote?: string | null;
   durationMs?: number | null;
   totalSize?: number;
   preferredScore?: number;
@@ -889,8 +891,8 @@ export class BooksRepo {
 
       const asset = this.db
         .query(
-          `INSERT INTO assets (book_id, kind, mime, total_size, duration_ms, source_release_id, manifestation_id, sequence_in_manifestation, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO assets (book_id, kind, mime, total_size, duration_ms, source_release_id, manifestation_id, sequence_in_manifestation, import_note, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            RETURNING *`
         )
         .get(
@@ -902,6 +904,7 @@ export class BooksRepo {
           input.sourceReleaseId ?? null,
           manifestationId,
           sequence,
+          input.importNote?.trim() || null,
           now,
           now
         ) as AssetRow;
@@ -943,8 +946,8 @@ export class BooksRepo {
     const now = nowIso();
     return this.db
       .query(
-        `INSERT INTO manifestations (book_id, kind, label, edition_note, duration_ms, total_size, preferred_score, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO manifestations (book_id, kind, label, edition_note, selection_note, duration_ms, total_size, preferred_score, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING *`
       )
       .get(
@@ -952,6 +955,7 @@ export class BooksRepo {
         input.kind,
         input.label ?? null,
         input.editionNote ?? null,
+        input.selectionNote?.trim() || null,
         input.durationMs ?? null,
         input.totalSize ?? 0,
         input.preferredScore ?? 0,

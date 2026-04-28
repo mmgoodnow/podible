@@ -340,6 +340,7 @@ export const libraryRouter = defineRouter({
         manifestation: {
           label: params.manifestation.label?.trim() || null,
           editionNote: params.manifestation.editionNote?.trim() || null,
+          selectionNote: `Manual selection from library release search ${params.searchId}: ${params.indexes.length} ordered ${params.mediaType} release${params.indexes.length === 1 ? "" : "s"}.`,
         },
         parts: selected.map((release) => ({
           provider: release.provider,

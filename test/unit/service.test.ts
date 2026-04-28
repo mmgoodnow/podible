@@ -364,6 +364,7 @@ describe("snatch transport", () => {
         manifestation: {
           label: "GraphicAudio dramatization",
           editionNote: null,
+          selectionNote: "Agent selected both parts because they match the GraphicAudio preference.",
         },
         parts: [
           {
@@ -383,6 +384,7 @@ describe("snatch transport", () => {
       expect(result.manifestationId).toBeTruthy();
       const manifestation = repo.getManifestation(result.manifestationId!);
       expect(manifestation?.label).toBe("GraphicAudio dramatization");
+      expect(manifestation?.selection_note).toBe("Agent selected both parts because they match the GraphicAudio preference.");
       const jobs = repo.listJobsByType("download");
       const payloads = jobs.map((job) => JSON.parse(job.payload_json ?? "{}")).sort((a, b) => a.sequenceInManifestation - b.sequenceInManifestation);
       expect(payloads.map((payload) => payload.manifestationId)).toEqual([result.manifestationId, result.manifestationId]);

@@ -147,12 +147,14 @@ describe("importer path collisions", () => {
     await importReleaseFromPath(repo, release, source, libraryRoot, {
       manifestationId: manifestation.id,
       sequenceInManifestation: 2,
+      importNote: "Agent selected the EPUB file.",
     });
 
     const asset = repo.listAssetsByManifestation(manifestation.id)[0];
     expect(asset?.source_release_id).toBe(release.id);
     expect(asset?.manifestation_id).toBe(manifestation.id);
     expect(asset?.sequence_in_manifestation).toBe(2);
+    expect(asset?.import_note).toBe("Agent selected the EPUB file.");
 
     db.close();
   });

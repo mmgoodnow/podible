@@ -21,6 +21,7 @@ const ASSET_TRANSCRIPT_PATH_MIGRATION_ID = 15;
 const MANIFESTATIONS_MIGRATION_ID = 16;
 const PRUNE_EMPTY_MANIFESTATIONS_MIGRATION_ID = 17;
 const RELEASE_SEARCHES_MIGRATION_ID = 18;
+const DOMAIN_DECISION_NOTES_MIGRATION_ID = 19;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -66,6 +67,7 @@ CREATE TABLE IF NOT EXISTS assets (
   total_size INTEGER NOT NULL,
   duration_ms INTEGER NULL,
   source_release_id INTEGER NULL,
+  import_note TEXT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
@@ -552,6 +554,7 @@ CREATE TABLE IF NOT EXISTS manifestations (
   kind TEXT NOT NULL CHECK (kind IN ('audio', 'ebook')),
   label TEXT NULL,
   edition_note TEXT NULL,
+  selection_note TEXT NULL,
   duration_ms INTEGER NULL,
   total_size INTEGER NOT NULL,
   preferred_score INTEGER NOT NULL DEFAULT 0,
@@ -590,8 +593,8 @@ CREATE INDEX IF NOT EXISTS idx_assets_manifestation_seq
       updated_at: string;
     }>;
   const insertManifestation = db.prepare(
-    `INSERT INTO manifestations (book_id, kind, label, edition_note, duration_ms, total_size, preferred_score, created_at, updated_at)
-     VALUES (?, ?, NULL, NULL, ?, ?, 0, ?, ?)
+    `INSERT INTO manifestations (book_id, kind, label, edition_note, selection_note, duration_ms, total_size, preferred_score, created_at, updated_at)
+     VALUES (?, ?, NULL, NULL, NULL, ?, ?, 0, ?, ?)
      RETURNING id`
   );
   const linkAsset = db.prepare(
@@ -646,6 +649,15 @@ CREATE TABLE IF NOT EXISTS release_searches (
 CREATE INDEX IF NOT EXISTS idx_release_searches_expires_at ON release_searches(expires_at);
 CREATE INDEX IF NOT EXISTS idx_release_searches_book_user ON release_searches(book_id, user_id);
 `);
+}
+
+function applyDomainDecisionNotesMigration(db: Database): void {
+  if (!hasColumn(db, "manifestations", "selection_note")) {
+    db.exec("ALTER TABLE manifestations ADD COLUMN selection_note TEXT NULL");
+  }
+  if (!hasColumn(db, "assets", "import_note")) {
+    db.exec("ALTER TABLE assets ADD COLUMN import_note TEXT NULL");
+  }
 }
 
 export function nowIso(): string {
@@ -731,5 +743,8 @@ export function runMigrations(db: Database): void {
   });
   apply(RELEASE_SEARCHES_MIGRATION_ID, () => {
     applyReleaseSearchesMigration(db);
+  });
+  apply(DOMAIN_DECISION_NOTES_MIGRATION_ID, () => {
+    applyDomainDecisionNotesMigration(db);
   });
 }

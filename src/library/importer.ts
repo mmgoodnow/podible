@@ -41,6 +41,7 @@ type ImportReleaseOptions = {
   selectedPaths?: string[];
   manifestationId?: number | null;
   sequenceInManifestation?: number | null;
+  importNote?: string | null;
 };
 
 function sanitizePathSegment(value: string): string {
@@ -309,6 +310,7 @@ export async function importReleaseFromPath(
     sourceReleaseId: release.id,
     manifestationId,
     sequenceInManifestation: options.sequenceInManifestation ?? undefined,
+    importNote: options.importNote ?? null,
     files: assetFiles,
   });
 

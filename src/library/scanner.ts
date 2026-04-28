@@ -121,6 +121,7 @@ export async function scanLibraryRoot(repo: BooksRepo, libraryRoot: string): Pro
             durationMs,
             sourceReleaseId: null,
             manifestationId: manifestation.id,
+            importNote: "Filesystem scanner selected largest m4 audio file.",
             files: [
               {
                 path: chosen.path,
@@ -166,6 +167,7 @@ export async function scanLibraryRoot(repo: BooksRepo, libraryRoot: string): Pro
             durationMs: durationMsTotal,
             sourceReleaseId: null,
             manifestationId: manifestation.id,
+            importNote: `Filesystem scanner selected ${mp3.length} MP3 file${mp3.length === 1 ? "" : "s"}.`,
             files: assetFiles,
           });
           assetsCreated += 1;
@@ -194,6 +196,7 @@ export async function scanLibraryRoot(repo: BooksRepo, libraryRoot: string): Pro
           durationMs: null,
           sourceReleaseId: null,
           manifestationId: manifestation.id,
+          importNote: "Filesystem scanner selected ebook file.",
           files: [
             {
               path: ebook.path,

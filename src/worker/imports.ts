@@ -20,6 +20,21 @@ function importableFilesForMedia(files: ImportInspectionFile[], mediaType: "audi
   return files.filter((file) => (mediaType === "audio" ? file.supportedAudio : file.supportedEbook));
 }
 
+function importNote(
+  context: "wrong_file_review" | "agent_first" | "deterministic" | "agent_recovery",
+  detail?: { mode?: string; trigger?: string; confidence?: number; reason?: string | null; selectedPaths?: string[] }
+): string {
+  const selectedCount = detail?.selectedPaths?.length;
+  const selectedText = selectedCount === undefined ? "" : `; selected ${selectedCount} path${selectedCount === 1 ? "" : "s"}`;
+  if (!detail?.reason) {
+    return `${context}${selectedText}`;
+  }
+  const mode = detail.mode ? `${detail.mode}` : "unknown";
+  const trigger = detail.trigger ? `, trigger ${detail.trigger}` : "";
+  const confidence = typeof detail.confidence === "number" ? `, confidence ${detail.confidence.toFixed(2)}` : "";
+  return `${context}: ${mode}${trigger}${confidence}: ${detail.reason}${selectedText}`;
+}
+
 export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done" | "rescheduled"> {
   if (!job.release_id) {
     throw new Error("Import job missing release_id");
@@ -77,6 +92,7 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
             selectedPaths: decision.selectedPaths,
             manifestationId: payload.manifestationId ?? null,
             sequenceInManifestation: payload.sequenceInManifestation ?? null,
+            importNote: importNote("wrong_file_review", decision),
           });
           ctx.repo.setReleaseStatus(release.id, "imported", null);
           ctx.repo.markJobSucceeded(job.id);
@@ -133,6 +149,7 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
           selectedPaths: decision.selectedPaths,
           manifestationId: payload.manifestationId ?? null,
           sequenceInManifestation: payload.sequenceInManifestation ?? null,
+          importNote: importNote("agent_first", decision),
         });
         ctx.repo.setReleaseStatus(release.id, "imported", null);
         ctx.repo.markJobSucceeded(job.id);
@@ -157,6 +174,7 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
       selectedPaths: importSource.selectedPaths,
       manifestationId: payload.manifestationId ?? null,
       sequenceInManifestation: payload.sequenceInManifestation ?? null,
+      importNote: importNote("deterministic", { selectedPaths: importSource.selectedPaths }),
     });
     ctx.repo.setReleaseStatus(release.id, "imported", null);
     ctx.repo.markJobSucceeded(job.id);
@@ -188,6 +206,7 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
           selectedPaths: decision.selectedPaths,
           manifestationId: payload.manifestationId ?? null,
           sequenceInManifestation: payload.sequenceInManifestation ?? null,
+          importNote: importNote("agent_recovery", decision),
         });
         ctx.repo.setReleaseStatus(release.id, "imported", null);
         ctx.repo.markJobSucceeded(job.id);

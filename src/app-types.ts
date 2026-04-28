@@ -139,6 +139,7 @@ export type AssetRow = {
   source_release_id: number | null;
   manifestation_id: number | null;
   sequence_in_manifestation: number;
+  import_note: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -151,6 +152,7 @@ export type ManifestationRow = {
   kind: ManifestationKind;
   label: string | null;
   edition_note: string | null;
+  selection_note: string | null;
   duration_ms: number | null;
   total_size: number;
   preferred_score: number;

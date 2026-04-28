@@ -16,6 +16,11 @@ export type AcquirePayload = {
   rejectedInfoHashes?: string[];
 };
 
+function selectionNote(media: MediaType, decision: { mode: string; trigger: string; confidence: number; reason: string }): string {
+  const prefix = decision.mode === "agent" ? "Agent selected" : "Deterministic search selected";
+  return `${prefix} this ${media} manifestation (confidence ${decision.confidence.toFixed(2)}, trigger ${decision.trigger}): ${decision.reason}`;
+}
+
 export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
   const settings = ctx.getSettings();
   const payload = job.payload_json ? (JSON.parse(job.payload_json) as AcquirePayload) : {};
@@ -94,7 +99,10 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
             {
               bookId: book.id,
               mediaType: media,
-              manifestation: selection.manifestation,
+              manifestation: {
+                ...selection.manifestation,
+                selectionNote: selectionNote(media, decision),
+              },
               parts: selection.parts.map((part) => ({
                 provider: part.provider,
                 providerGuid: part.guid ?? null,
