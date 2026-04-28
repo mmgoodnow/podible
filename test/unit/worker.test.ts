@@ -12,7 +12,9 @@ import { defaultSettings } from "../../src/settings";
 import { infoHashFromTorrentBytes } from "../../src/library/torrent";
 import { pollMsForMedia, runWorker, selectDownloadPollMs } from "../../src/worker";
 import { processAcquireJob } from "../../src/worker/acquire";
+import { processDownloadJob } from "../../src/worker/downloads";
 import { processImportJob } from "../../src/worker/imports";
+import { startMockRtorrent } from "../mocks/rtorrent";
 import { startMockTorznab } from "../mocks/torznab";
 
 function makeTorrentBytes(name: string): Uint8Array {
@@ -963,6 +965,84 @@ describe("worker concurrency", () => {
 });
 
 describe("worker import recovery", () => {
+  test("download completion preserves manifestation attachment metadata for import", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+
+    const infoHash = infoHashFromTorrentBytes(makeTorrentBytes("red-rising-manifestation"));
+    const rtorrent = startMockRtorrent({
+      preloaded: [infoHash],
+      byHash: {
+        [infoHash]: {
+          name: "Red Rising GraphicAudio Part 2",
+          basePath: "/downloads/red-rising-part-2.m4b",
+          sizeBytes: 1234,
+          completeAfterPolls: 1,
+        },
+      },
+    });
+
+    repo.updateSettings(
+      defaultSettings({
+        auth: { mode: "plex" },
+        rtorrent: {
+          transport: "http-xmlrpc",
+          url: rtorrent.url,
+          username: "",
+          password: "",
+        },
+      })
+    );
+
+    const book = repo.createBook({ title: "Red Rising", author: "Pierce Brown" });
+    const manifestation = repo.addManifestation({
+      bookId: book.id,
+      kind: "audio",
+      label: "GraphicAudio dramatization",
+    });
+    const release = repo.createRelease({
+      bookId: book.id,
+      provider: "mock",
+      providerGuid: "guid-red-part-2",
+      title: "Red Rising GraphicAudio Part 2",
+      mediaType: "audio",
+      infoHash,
+      url: "https://example.com/red-rising-part-2.torrent",
+      status: "downloading",
+    });
+    const downloadJob = repo.createJob({
+      type: "download",
+      bookId: book.id,
+      releaseId: release.id,
+      payload: {
+        infoHash,
+        preferAgentImport: true,
+        manifestationId: manifestation.id,
+        sequenceInManifestation: 1,
+      },
+    });
+
+    try {
+      const result = await processDownloadJob({
+        repo,
+        getSettings: () => repo.getSettings(),
+        onLog: () => {},
+      }, downloadJob);
+
+      expect(result).toBe("done");
+      const importJobs = repo.listJobsByType("import").filter((job) => job.release_id === release.id);
+      expect(importJobs).toHaveLength(1);
+      const payload = JSON.parse(importJobs[0]!.payload_json ?? "{}");
+      expect(payload.manifestationId).toBe(manifestation.id);
+      expect(payload.sequenceInManifestation).toBe(1);
+      expect(payload.preferAgentFirst).toBe(true);
+    } finally {
+      rtorrent.stop();
+      db.close();
+    }
+  });
+
   test("skips wrong-file agent reimport when only one importable file exists", async () => {
     const db = new Database(":memory:");
     runMigrations(db);

@@ -14,6 +14,8 @@ const ETA_MID_WINDOW_SECONDS = 120;
 type DownloadJobPayload = {
   infoHash?: string;
   preferAgentImport?: boolean;
+  manifestationId?: number | null;
+  sequenceInManifestation?: number | null;
   telemetry?: {
     lastBytesDone?: number | null;
     stagnantSince?: string | null;
@@ -294,6 +296,8 @@ export async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promi
       selectedPaths: importSource.selectedPaths,
       infoHash: release.info_hash,
       preferAgentFirst: payload.preferAgentImport === true,
+      manifestationId: payload.manifestationId ?? null,
+      sequenceInManifestation: payload.sequenceInManifestation ?? null,
     },
   });
   ctx.repo.markJobSucceeded(job.id);
