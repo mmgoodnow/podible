@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
@@ -7,6 +9,7 @@ import { loadStoredTranscriptPayload } from "./chapter-analysis";
 import type { StoredTranscriptUtterance } from "./chapter-analysis";
 import { readFfprobeChapters } from "../media/probe-cache";
 import { selectPreferredAudioAsset, selectPreferredAudioManifestation } from "./asset-selection";
+import { configDir } from "../config";
 
 import type { BooksRepo } from "../repo";
 import type { AssetFileRow, AssetRow, BookRow, LibraryBook, ManifestationRow } from "../app-types";
@@ -364,6 +367,143 @@ async function streamTaggedAudioSegments(
   });
 }
 
+function streamFileWithRange(request: Request, filePath: string, size: number, mime: string): Response {
+  const rangeHeader = request.headers.get("range");
+  const headers: Record<string, string> = {
+    "Accept-Ranges": "bytes",
+    "Content-Type": mime,
+  };
+  const payload = Bun.file(filePath);
+  const range = parseRange(rangeHeader, size);
+  if (!range) {
+    headers["Content-Length"] = String(size);
+    return new Response(payload, { status: 200, headers });
+  }
+  headers["Content-Length"] = String(range.end - range.start + 1);
+  headers["Content-Range"] = `bytes ${range.start}-${range.end}/${size}`;
+  return new Response(payload.slice(range.start, range.end + 1), { status: 206, headers });
+}
+
+function isMp4AudioManifestation(containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>): boolean {
+  return containers.length > 1 && containers.every((container) => container.asset.mime === "audio/mp4");
+}
+
+function remuxCacheFingerprint(manifestation: ManifestationRow, containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>): string {
+  const hash = createHash("sha256");
+  hash.update(
+    JSON.stringify({
+      manifestation: {
+        id: manifestation.id,
+        updatedAt: manifestation.updated_at,
+        durationMs: manifestation.duration_ms,
+        totalSize: manifestation.total_size,
+      },
+      containers: containers.map((container) => ({
+        asset: {
+          id: container.asset.id,
+          mime: container.asset.mime,
+          kind: container.asset.kind,
+          updatedAt: container.asset.updated_at,
+          sequence: container.asset.sequence_in_manifestation,
+          durationMs: container.asset.duration_ms,
+          totalSize: container.asset.total_size,
+        },
+        files: container.files.map((file) => ({
+          path: file.path,
+          size: file.size,
+          durationMs: file.duration_ms,
+          start: file.start,
+          end: file.end,
+        })),
+      })),
+    })
+  );
+  return hash.digest("hex").slice(0, 20);
+}
+
+function ffconcatPathLine(filePath: string): string {
+  return `file '${filePath.replace(/'/g, "'\\''")}'`;
+}
+
+async function runProcess(command: string, args: string[]): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["ignore", "ignore", "pipe"] });
+    const stderr: Buffer[] = [];
+    child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      const detail = Buffer.concat(stderr).toString("utf8").trim();
+      reject(new Error(`${command} exited with code ${code}${detail ? `: ${detail}` : ""}`));
+    });
+  });
+}
+
+async function pruneOldRemuxes(cacheDir: string, manifestationId: number, keepPath: string): Promise<void> {
+  const entries = await fs.readdir(cacheDir).catch(() => []);
+  await Promise.all(
+    entries
+      .filter((entry) => entry.startsWith(`m${manifestationId}-`) && entry.endsWith(".m4b"))
+      .map(async (entry) => {
+        const candidate = path.join(cacheDir, entry);
+        if (candidate === keepPath) return;
+        await fs.rm(candidate, { force: true }).catch(() => undefined);
+      })
+  );
+}
+
+async function ensureRemuxedMp4Manifestation(
+  manifestation: ManifestationRow,
+  containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>
+): Promise<{ path: string; size: number }> {
+  const inputFiles = containers.flatMap((container) => container.files);
+  if (inputFiles.length === 0) throw new Error("Manifestation has no audio files to remux");
+
+  const cacheDir = process.env.PODIBLE_DERIVED_DIR ?? path.join(configDir, "derived", "manifestations");
+  await fs.mkdir(cacheDir, { recursive: true });
+
+  const fingerprint = remuxCacheFingerprint(manifestation, containers);
+  const finalPath = path.join(cacheDir, `m${manifestation.id}-${fingerprint}.m4b`);
+  const existing = await fs.stat(finalPath).catch(() => null);
+  if (existing?.isFile() && existing.size > 0) {
+    return { path: finalPath, size: existing.size };
+  }
+
+  const tempDir = await fs.mkdtemp(path.join(cacheDir, `m${manifestation.id}-work-`));
+  const concatPath = path.join(tempDir, "concat.txt");
+  const outputPath = path.join(tempDir, "output.m4b");
+  try {
+    await fs.writeFile(concatPath, `${inputFiles.map((file) => ffconcatPathLine(file.path)).join("\n")}\n`, "utf8");
+    await runProcess("ffmpeg", [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-f",
+      "concat",
+      "-safe",
+      "0",
+      "-i",
+      concatPath,
+      "-map",
+      "0:a",
+      "-c",
+      "copy",
+      "-movflags",
+      "+faststart",
+      outputPath,
+    ]);
+    await fs.rename(outputPath, finalPath);
+    await pruneOldRemuxes(cacheDir, manifestation.id, finalPath);
+    const stat = await fs.stat(finalPath);
+    return { path: finalPath, size: stat.size };
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 export async function streamAudioAsset(
   request: Request,
   repo: BooksRepo,
@@ -375,24 +515,10 @@ export async function streamAudioAsset(
     return new Response("Not found", { status: 404 });
   }
 
-  const rangeHeader = request.headers.get("range");
-  const headers: Record<string, string> = {
-    "Accept-Ranges": "bytes",
-    "Content-Type": asset.mime,
-  };
-
   if (asset.kind === "single") {
     const file = files[0];
     if (!file) return new Response("Not found", { status: 404 });
-    const payload = Bun.file(file.path);
-    const range = parseRange(rangeHeader, file.size);
-    if (!range) {
-      headers["Content-Length"] = String(file.size);
-      return new Response(payload, { status: 200, headers });
-    }
-    headers["Content-Length"] = String(range.end - range.start + 1);
-    headers["Content-Range"] = `bytes ${range.start}-${range.end}/${file.size}`;
-    return new Response(payload.slice(range.start, range.end + 1), { status: 206, headers });
+    return streamFileWithRange(request, file.path, file.size, asset.mime);
   }
 
   return streamTaggedAudioSegments(
@@ -418,6 +544,16 @@ export async function streamAudioManifestation(
   if (audioContainers.length === 1) {
     const container = audioContainers[0]!;
     return streamAudioAsset(request, repo, container.asset, container.files, coverPath);
+  }
+
+  if (isMp4AudioManifestation(audioContainers)) {
+    try {
+      const remuxed = await ensureRemuxedMp4Manifestation(manifestation, audioContainers);
+      return streamFileWithRange(request, remuxed.path, remuxed.size, "audio/mp4");
+    } catch (error) {
+      console.error(`Failed to prepare manifestation ${manifestation.id} MP4 stream: ${(error as Error).message}`);
+      return new Response("Unable to prepare audio stream", { status: 500 });
+    }
   }
 
   const primary = audioContainers[0]!.asset;

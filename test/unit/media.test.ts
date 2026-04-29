@@ -1,4 +1,5 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -22,6 +23,31 @@ function setupRepo(): { db: Database; repo: BooksRepo } {
   const db = new Database(":memory:");
   runMigrations(db);
   return { db, repo: new BooksRepo(db) };
+}
+
+async function runCommand(command: string, args: string[]): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["ignore", "ignore", "pipe"] });
+    const stderr: Buffer[] = [];
+    child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`${command} exited with code ${code}: ${Buffer.concat(stderr).toString("utf8")}`));
+    });
+  });
+}
+
+async function commandSucceeds(command: string, args: string[]): Promise<boolean> {
+  try {
+    await runCommand(command, args);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function asset(overrides: Partial<AssetRow>): AssetRow {
@@ -276,6 +302,98 @@ describe("manifestation media", () => {
       expect(text).toContain("PARTONE");
       expect(text).toContain("PARTTWO");
     } finally {
+      db.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("remuxes multi-container mp4 manifestations into a valid ranged m4b stream", async () => {
+    if (!(await commandSucceeds("ffmpeg", ["-version"]))) return;
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "podible-manifestation-mp4-stream-"));
+    const previousDerivedDir = process.env.PODIBLE_DERIVED_DIR;
+    process.env.PODIBLE_DERIVED_DIR = path.join(root, "derived");
+    const { db, repo } = setupRepo();
+    try {
+      const partOnePath = path.join(root, "part-one.m4a");
+      const partTwoPath = path.join(root, "part-two.m4a");
+      await runCommand("ffmpeg", [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:duration=0.1",
+        "-c:a",
+        "aac",
+        partOnePath,
+      ]);
+      await runCommand("ffmpeg", [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=660:duration=0.1",
+        "-c:a",
+        "aac",
+        partTwoPath,
+      ]);
+      const partOneSize = (await stat(partOnePath)).size;
+      const partTwoSize = (await stat(partTwoPath)).size;
+
+      const book = repo.createBook({ title: "Red Rising", author: "Pierce Brown" });
+      const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio", label: "Two-part M4B" });
+      repo.addAsset({
+        bookId: book.id,
+        kind: "single",
+        mime: "audio/mp4",
+        totalSize: partOneSize,
+        durationMs: 100,
+        manifestationId: manifestation.id,
+        sequenceInManifestation: 0,
+        files: [{ path: partOnePath, size: partOneSize, start: 0, end: partOneSize - 1, durationMs: 100, title: "Part One" }],
+      });
+      repo.addAsset({
+        bookId: book.id,
+        kind: "single",
+        mime: "audio/mp4",
+        totalSize: partTwoSize,
+        durationMs: 100,
+        manifestationId: manifestation.id,
+        sequenceInManifestation: 1,
+        files: [{ path: partTwoPath, size: partTwoSize, start: 0, end: partTwoSize - 1, durationMs: 100, title: "Part Two" }],
+      });
+
+      const target = repo.getManifestationWithContainers(manifestation.id);
+      expect(target).toBeTruthy();
+      const response = await streamAudioManifestation(new Request("http://localhost/stream/m/1.m4a"), repo, target!.manifestation, target!.containers);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      const typeBox = new TextDecoder().decode(bytes.slice(4, 8));
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("audio/mp4");
+      expect(typeBox).toBe("ftyp");
+
+      const rangeResponse = await streamAudioManifestation(
+        new Request("http://localhost/stream/m/1.m4a", { headers: { Range: "bytes=0-15" } }),
+        repo,
+        target!.manifestation,
+        target!.containers
+      );
+      const rangeBytes = new Uint8Array(await rangeResponse.arrayBuffer());
+      expect(rangeResponse.status).toBe(206);
+      expect(rangeResponse.headers.get("content-range")).toMatch(/^bytes 0-15\/\d+$/);
+      expect(rangeBytes.byteLength).toBe(16);
+      expect(new TextDecoder().decode(rangeBytes.slice(4, 8))).toBe("ftyp");
+    } finally {
+      if (previousDerivedDir === undefined) {
+        delete process.env.PODIBLE_DERIVED_DIR;
+      } else {
+        process.env.PODIBLE_DERIVED_DIR = previousDerivedDir;
+      }
       db.close();
       await rm(root, { recursive: true, force: true });
     }
