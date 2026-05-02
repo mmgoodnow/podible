@@ -116,6 +116,83 @@ describe("chapter marker proposal", () => {
     expect(headings.map((heading) => heading.title)).toEqual([]);
   });
 
+  test("keeps generic chapter labels when they own substantial EPUB content", () => {
+    const headings = selectMajorEpubHeadings(
+      ["Contents", "Chapter 1", "Chapter 2", "Epilogue"].map((title, index) => ({
+        ...epubEntry(title, index),
+        wordCount: title.startsWith("Chapter") ? 20_000 : 50,
+      }))
+    );
+
+    expect(headings.map((heading) => heading.title)).toEqual(["Chapter 1", "Chapter 2", "Epilogue"]);
+  });
+
+  test("matches substantial generic chapters from bare spoken ordinals before embedded sections", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["Chapter 1", "Chapter 2"].map((title, index) => ({
+        ...epubEntry(title, index),
+        wordCount: 20_000,
+      })),
+      transcriptUtterances: [
+        utterance(60_000, "1"),
+        utterance(900_000, "2"),
+      ],
+      embeddedChapters: [
+        { startMs: 0, endMs: 900_000, title: "001" },
+        { startMs: 3_400_000, endMs: 6_000_000, title: "002" },
+      ],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Opening credits"],
+      [60, "Chapter 1"],
+      [900, "Chapter 2"],
+    ]);
+  });
+
+  test("matches bare number-word generic labels only as standalone sentences", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["Chapter Ten", "Chapter Eleven"].map((title, index) => ({
+        ...epubEntry(title, index),
+        wordCount: 20_000,
+      })),
+      transcriptUtterances: [
+        utterance(60_000, "Chapter ten."),
+        utterance(120_000, "Eleven years of keeping this a secret."),
+        utterance(180_000, "Eleven."),
+      ],
+      embeddedChapters: [],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Opening credits"],
+      [60, "Chapter Ten"],
+      [180, "Chapter Eleven"],
+    ]);
+  });
+
+  test("drops substantial generic wrappers when named ordinal chapters exist", () => {
+    const headings = selectMajorEpubHeadings(
+      ["Chapter 8", "1. ULTIMATUM", "2. COMPROMISE", "3. CHOICE", "Chapter 9"].map((title, index) => ({
+        ...epubEntry(title, index),
+        wordCount: 20_000,
+      }))
+    );
+
+    expect(headings.map((heading) => heading.title)).toEqual(["1. ULTIMATUM", "2. COMPROMISE", "3. CHOICE"]);
+  });
+
+  test("drops many normal generic chapters even when they own content", () => {
+    const headings = selectMajorEpubHeadings(
+      Array.from({ length: 12 }, (_, index) => ({
+        ...epubEntry(`Chapter ${index + 1}`, index),
+        wordCount: 5_000,
+      }))
+    );
+
+    expect(headings.map((heading) => heading.title)).toEqual([]);
+  });
+
   test("trusts user-facing embedded audiobook chapter titles", () => {
     const report = proposeChapterMarkers({
       epubEntries: ["Author’s Note", "1. Date you? Date him?!", "Epilogue"].map(epubEntry),

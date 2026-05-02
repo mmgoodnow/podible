@@ -38,6 +38,7 @@ type Heading = {
   ordinalLabel: "chapter" | "book" | "part" | null;
   titleWords: string[];
   sourceIndex: number;
+  wordCount: number;
 };
 
 type HeadingCandidate = {
@@ -216,7 +217,7 @@ function parseLeadingOrdinal(tokens: string[]): { ordinal: number; consumed: num
   return null;
 }
 
-function headingFromTitle(title: string, sourceIndex = -1): Heading {
+function headingFromTitle(title: string, sourceIndex = -1, wordCount = 0): Heading {
   const normalized = normalizeText(title);
   const tokens = normalized.split(" ").filter(Boolean);
   let label: Heading["ordinalLabel"] = null;
@@ -232,6 +233,7 @@ function headingFromTitle(title: string, sourceIndex = -1): Heading {
     ordinalLabel: label,
     titleWords: titleOnly.split(" ").filter(Boolean),
     sourceIndex,
+    wordCount,
   };
 }
 
@@ -305,11 +307,13 @@ function collectHeadingCandidates(entries: EpubChapterEntry[]): HeadingCandidate
     if (BACK_MATTER.has(normalized)) break;
     if (!title || seen.has(title)) continue;
     seen.add(title);
-    headings.push(headingFromTitle(title, sourceIndex));
+    headings.push(headingFromTitle(title, sourceIndex, entry.wordCount));
   }
   const ordinalHeadings = headings.filter((heading) => !isGenericTocTitle(heading.title) && isOrdinalChapterStructureHeading(heading));
   const hasOrdinalChapterStructure =
     ordinalHeadings.length >= 3;
+  const substantialGenericChapterCount = headings.filter((heading) => isGenericNumberedChapterTocHeading(heading.title) && heading.wordCount >= 500).length;
+  const allowSubstantialGenericChapters = !hasOrdinalChapterStructure && substantialGenericChapterCount > 0 && substantialGenericChapterCount <= 10;
   const hasGenericChapterTocStructure = headings.filter((heading) => isGenericNumberedChapterTocHeading(heading.title)).length >= 3;
   const chapterOrdinalHeadings = headings.filter((heading) => !isGenericTocTitle(heading.title) && isOrdinalChapterHeading(heading));
   const firstChapterOrdinalIndex = chapterOrdinalHeadings[0]?.sourceIndex ?? ordinalHeadings[0]?.sourceIndex ?? Number.POSITIVE_INFINITY;
@@ -320,6 +324,7 @@ function collectHeadingCandidates(entries: EpubChapterEntry[]): HeadingCandidate
   return headings.map((heading, headingIndex) => {
     const normalized = normalizeText(heading.title);
     const genericToc = isGenericTocTitle(heading.title);
+    const substantialGenericChapter = allowSubstantialGenericChapters && genericToc && isGenericNumberedChapterTocHeading(heading.title) && heading.wordCount >= 500;
     const mainOrdinal = isMainOrdinalHeading(heading);
     const shortUnnumbered = isShortUnnumberedHeading(heading);
     const shortHeadingCount = shortInterstitialCounts.get(normalized) ?? 0;
@@ -333,8 +338,11 @@ function collectHeadingCandidates(entries: EpubChapterEntry[]): HeadingCandidate
 
     let include = false;
     let decision = "excluded";
-    if (genericToc || BACK_MATTER.has(normalized)) {
+    if (genericToc && !substantialGenericChapter || BACK_MATTER.has(normalized)) {
       decision = "excluded-generic-toc";
+    } else if (substantialGenericChapter) {
+      include = true;
+      decision = "substantial-generic-chapter-heading";
     } else if (/^(prologue|epilogue)$/.test(normalized) || /^epilogue\s+/.test(normalized)) {
       include = true;
       decision = "structural-terminal-heading";
@@ -361,7 +369,7 @@ function collectHeadingCandidates(entries: EpubChapterEntry[]): HeadingCandidate
     return {
       heading,
       include,
-      preferDirectMatch: shortUnnumbered || normalized.startsWith("epilogue"),
+      preferDirectMatch: shortUnnumbered || normalized.startsWith("epilogue") || substantialGenericChapter,
       features: {
         genericToc,
         genericChapterTocStructure: hasGenericChapterTocStructure,
@@ -496,6 +504,19 @@ function headingMatchesWindow(heading: Heading, text: string): boolean {
   return ordinalMatches || phraseMatch || (heading.titleWords.length > 1 && wordsMatch);
 }
 
+function standaloneOrdinalTextMatches(text: string, ordinal: number): boolean {
+  const normalized = normalizeText(text);
+  if (parseOrdinalToken(normalized) === ordinal) return true;
+  return text
+    .split(/[.!?。！？]+/)
+    .map((sentence) => normalizeText(sentence))
+    .some((sentence) => parseOrdinalToken(sentence) === ordinal);
+}
+
+function isBareOrdinalHeading(heading: Heading): boolean {
+  return Boolean(heading.ordinal && heading.ordinalLabel && heading.titleWords.length === 0);
+}
+
 function headingTitleWordMatches(word: string, normalizedText: string, tokens: string[]): boolean {
   if (normalizedText.includes(word)) return true;
   const ordinal = parseOrdinalToken(word);
@@ -600,6 +621,9 @@ function findDirectTranscriptMatch(
   const candidates = utterances.filter((utterance) => utterance.startMs > afterMs + minGapMs);
   let fallback: TranscriptUtterance | null = null;
   for (const utterance of candidates) {
+    if (heading.ordinal && isBareOrdinalHeading(heading) && standaloneOrdinalTextMatches(utterance.text, heading.ordinal)) {
+      return utterance;
+    }
     const text = shortUtterancesNear(utterances, utterance.startMs, 1_000, 4_000)
       .map((candidate) => candidate.text)
       .join(" ");
