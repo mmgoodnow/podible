@@ -298,4 +298,27 @@ describe("chapter marker proposal", () => {
       [60, "Thirteen Mountains"],
     ]);
   });
+
+  test("uses first story utterance when the first major heading is not spoken", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["I: The Traveler", "II: Red Royal"].map(epubEntry),
+      transcriptUtterances: [
+        utterance(0, "This is audible."),
+        utterance(120_000, "Kell wore a very peculiar coat."),
+        utterance(2_945_760, "Two. Red Royal."),
+        utterance(21_115_810, "The traveler word appears much later in prose."),
+      ],
+      embeddedChapters: [
+        { startMs: 0, endMs: 1_016_940, title: "001" },
+        { startMs: 2_945_760, endMs: 3_522_770, title: "001" },
+        { startMs: 21_115_810, endMs: 22_000_000, title: "001" },
+      ],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Opening credits"],
+      [120, "I: The Traveler"],
+      [2945.76, "II: Red Royal"],
+    ]);
+  });
 });

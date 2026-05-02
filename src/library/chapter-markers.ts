@@ -464,7 +464,7 @@ export function proposeChapterMarkers(input: {
       }
     }
 
-    if (!matched && index === 0 && firstStoryMs !== null) {
+    if (index === 0 && firstStoryMs !== null && (!matched || matched.startMs - firstStoryMs > 300_000)) {
       matched = { startMs: firstStoryMs };
       confidence = "medium";
       reason = "First EPUB heading was not spoken; used first story utterance after opening gap.";
