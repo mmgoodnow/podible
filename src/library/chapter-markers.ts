@@ -123,10 +123,29 @@ const FRONT_MATTER = new Set([
 ]);
 
 const BACK_MATTER = new Set([
-  "acknowledgments",
-  "acknowledgements",
   "about the author",
   "also available",
+]);
+
+const SPOKEN_BACK_MATTER = new Set([
+  "acknowledgments",
+  "acknowledgements",
+  "discover more",
+]);
+
+const MONTH_CARDS = new Set([
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
 ]);
 
 function normalizeText(value: string): string {
@@ -234,6 +253,7 @@ export function selectMajorEpubHeadings(entries: EpubChapterEntry[]): Heading[] 
       const heading = headingFromTitle(title);
       return heading.ordinal && (heading.ordinalLabel === "chapter" || heading.ordinalLabel === "book" || /^([ivxlcdm]+|\d+)\s+/.test(normalized));
     }).length >= 3;
+  const hasMonthCards = titles.some((title) => MONTH_CARDS.has(normalizeText(title)));
 
   return titles
     .filter((title) => !isGenericTocTitle(title))
@@ -241,6 +261,10 @@ export function selectMajorEpubHeadings(entries: EpubChapterEntry[]): Heading[] 
       const normalized = normalizeText(title);
       if (BACK_MATTER.has(normalized)) return false;
       if (/^(prologue|epilogue)$/.test(normalized)) return true;
+      if (/^epilogue\s+/.test(normalized)) return true;
+      if (normalized === "preface") return !hasOrdinalChapterStructure || hasMonthCards;
+      if (SPOKEN_BACK_MATTER.has(normalized)) return !hasOrdinalChapterStructure || hasMonthCards;
+      if (MONTH_CARDS.has(normalized)) return true;
       const heading = headingFromTitle(title);
       if (!heading.ordinal) return !hasOrdinalChapterStructure && heading.titleWords.length > 0;
       if (/^book\s+/.test(normalized)) return true;
@@ -301,6 +325,20 @@ function headingMatchesDirectUtterance(heading: Heading, text: string): boolean 
   return headingMatchesWindow(heading, text);
 }
 
+function isMonthHeading(heading: Heading): boolean {
+  return MONTH_CARDS.has(normalizeText(heading.title));
+}
+
+function shouldPreferDirectMatch(heading: Heading): boolean {
+  const normalized = normalizeText(heading.title);
+  return isMonthHeading(heading) || normalized === "preface" || normalized.startsWith("epilogue") || SPOKEN_BACK_MATTER.has(normalized);
+}
+
+function isSupplementalHeading(heading: Heading): boolean {
+  const normalized = normalizeText(heading.title);
+  return normalized === "preface" || normalized.startsWith("epilogue") || SPOKEN_BACK_MATTER.has(normalized);
+}
+
 function compactPhraseMatches(headingWords: string[], normalizedText: string): boolean {
   const needle = headingWords.join("");
   if (needle.length < 8) return false;
@@ -341,7 +379,7 @@ function findEmbeddedMatch(
   utterances: TranscriptUtterance[],
   afterMs: number
 ): RawAudioChapter | null {
-  const candidates = embeddedChapters.filter((chapter) => chapter.startMs > afterMs + 15_000);
+  const candidates = embeddedChapters.filter((chapter) => chapter.startMs > afterMs + 2_000);
   for (const chapter of candidates) {
     if (headingMatchesWindow(heading, windowText(utterances, chapter.startMs))) {
       return chapter;
@@ -451,17 +489,25 @@ export function proposeChapterMarkers(input: {
   }
 
   for (const [index, heading] of headings.entries()) {
-    let matched = findEmbeddedMatch(heading, embedded, utterances, previousMs);
+    if (chapters.some((chapter) => chapter.title === "Opening credits") && isSupplementalHeading(heading)) continue;
+    const directFirst = shouldPreferDirectMatch(heading);
+    let matched = directFirst ? findDirectTranscriptMatch(heading, utterances, previousMs) : findEmbeddedMatch(heading, embedded, utterances, previousMs);
     let confidence: ProposedChapter["confidence"] = "high";
     let reason = "Matched EPUB major heading to transcript heading near embedded chapter boundary.";
 
     if (!matched) {
-      const direct = findDirectTranscriptMatch(heading, utterances, previousMs);
-      if (direct) {
-        matched = { startMs: direct.startMs };
-        confidence = "medium";
-        reason = "Matched EPUB major heading directly in transcript where no embedded chapter boundary matched.";
-      }
+      const fallback = directFirst
+        ? findEmbeddedMatch(heading, embedded, utterances, previousMs)
+        : findDirectTranscriptMatch(heading, utterances, previousMs);
+      if (fallback) matched = { startMs: fallback.startMs };
+    }
+
+    if (matched && directFirst) {
+      confidence = "medium";
+      reason = "Matched EPUB major heading directly in transcript where no embedded chapter boundary matched.";
+    } else if (matched && !directFirst && !embedded.some((chapter) => chapter.startMs === matched.startMs)) {
+      confidence = "medium";
+      reason = "Matched EPUB major heading directly in transcript where no embedded chapter boundary matched.";
     }
 
     if (index === 0 && firstStoryMs !== null && (!matched || matched.startMs - firstStoryMs > 300_000)) {
@@ -471,6 +517,12 @@ export function proposeChapterMarkers(input: {
     }
 
     if (!matched) continue;
+    const matchedWindow = headingMatchesWindow(heading, windowText(utterances, matched.startMs));
+    const nextHeading = headings[index + 1];
+    const nextDirect = nextHeading && shouldPreferDirectMatch(nextHeading) ? findDirectTranscriptMatch(nextHeading, utterances, previousMs) : null;
+    if (!matchedWindow && nextDirect && nextDirect.startMs < matched.startMs) {
+      continue;
+    }
     chapters.push({
       startTime: matched.startMs / 1000,
       title: heading.title,

@@ -66,6 +66,26 @@ describe("chapter marker proposal", () => {
       "Prologue",
       "Part One: Of Blacke Cholor",
       "A Private Plague",
+      "Acknowledgments",
+    ]);
+  });
+
+  test("keeps spoken front matter, month cards, and useful back matter", () => {
+    const headings = selectMajorEpubHeadings(
+      ["Copyright", "Preface", "1. PARTY", "OCTOBER", "NOVEMBER", "4. WAKING UP", "EPILOGUE—TREATY", "ACKNOWLEDGMENTS", "DISCOVER MORE"].map(
+        epubEntry
+      )
+    );
+
+    expect(headings.map((heading) => heading.title)).toEqual([
+      "Preface",
+      "1. PARTY",
+      "OCTOBER",
+      "NOVEMBER",
+      "4. WAKING UP",
+      "EPILOGUE—TREATY",
+      "ACKNOWLEDGMENTS",
+      "DISCOVER MORE",
     ]);
   });
 
@@ -319,6 +339,26 @@ describe("chapter marker proposal", () => {
       [0, "Opening credits"],
       [120, "I: The Traveler"],
       [2945.76, "II: Red Royal"],
+    ]);
+  });
+
+  test("does not let numeric embedded chapters jump over a directly spoken next heading", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["23. THE TRUTH", "24. VOTE", "EPILOGUE—TREATY"].map(epubEntry),
+      transcriptUtterances: [
+        utterance(46_954_138, "23. The Truth."),
+        utterance(49_308_713, "Epilogue Treaty."),
+        utterance(49_336_320, "Almost everything was back to normal."),
+      ],
+      embeddedChapters: [
+        { startMs: 46_954_138, endMs: 49_336_320, title: "023" },
+        { startMs: 49_336_320, endMs: 51_948_797, title: "024" },
+      ],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [46954.138, "23. THE TRUTH"],
+      [49308.713, "EPILOGUE—TREATY"],
     ]);
   });
 });
