@@ -23,6 +23,13 @@ function epubEntry(title: string, index: number): EpubChapterEntry {
   };
 }
 
+function epubEntryWithText(title: string, text: string, index: number): EpubChapterEntry {
+  return {
+    ...epubEntry(title, index),
+    text,
+  };
+}
+
 function utterance(startMs: number, text: string): TranscriptUtterance {
   return {
     startMs,
@@ -86,6 +93,27 @@ describe("chapter marker proposal", () => {
       "EPILOGUE—TREATY",
       "ACKNOWLEDGMENTS",
       "DISCOVER MORE",
+    ]);
+  });
+
+  test("derives useful titles from numeric nonfiction EPUB headings", () => {
+    const headings = selectMajorEpubHeadings([
+      epubEntryWithText("An Explanatory Note", "AN EXPLANATORY NOTE In the summer of 2003.", 0),
+      epubEntryWithText("Preface to the Revised and Expanded Edition", "PREFACE TO THE REVISED AND EXPANDED EDITION.", 1),
+      epubEntryWithText("Introduction", "INTRODUCTION: The Hidden Side of Everything Anyone living in the United States.", 2),
+      epubEntryWithText("1", "1 What Do Schoolteachers and Sumo Wrestlers Have in Common? Imagine for a moment.", 3),
+      epubEntryWithText("2", "2 How Is the Ku Klux Klan Like a Group of Real-Estate Agents? As institutions go.", 4),
+      epubEntryWithText("6", "Perfect Parenting, Part II; or: Would a Roshanda by Any Other Name Smell as Sweet? Obsessive or not.", 5),
+      epubEntryWithText("Epilogue", "EPILOGUE: Two Paths to Harvard And now.", 6),
+    ]);
+
+    expect(headings.map((heading) => heading.title)).toEqual([
+      "An Explanatory Note",
+      "Introduction: The Hidden Side of Everything",
+      "1. What Do Schoolteachers and Sumo Wrestlers Have in Common?",
+      "2. How Is the Ku Klux Klan Like a Group of Real-Estate Agents?",
+      "6. Perfect Parenting, Part II; or: Would a Roshanda by Any Other Name Smell as Sweet?",
+      "Epilogue",
     ]);
   });
 
@@ -234,6 +262,41 @@ describe("chapter marker proposal", () => {
       [0, "Opening credits"],
       [60, "Prologue"],
       [180, "Closing credits"],
+    ]);
+  });
+
+  test("uses publisher closing credits when they precede the audible closing line", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["Chapter One"].map(epubEntry),
+      transcriptUtterances: [
+        utterance(60_000, "Chapter One."),
+        utterance(180_000, "We hope you've enjoyed this program from Harper Audio. Audible hopes you've enjoyed this program."),
+      ],
+      embeddedChapters: [],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Opening credits"],
+      [60, "Chapter One"],
+      [180, "Closing credits"],
+    ]);
+  });
+
+  test("prefers explicit chapter ordinal when a title appears earlier in prose", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["An Explanatory Note", "1. What Do Schoolteachers and Sumo Wrestlers Have in Common?"].map(epubEntry),
+      transcriptUtterances: [
+        utterance(60_000, "Opening essay text."),
+        utterance(120_000, "A simple unasked question, such as what do school teachers and sumo wrestlers have in common?"),
+        utterance(180_000, "And so, chapter one, what do school teachers and sumo wrestlers have in common?"),
+      ],
+      embeddedChapters: [{ startMs: 0, endMs: 240_000, title: "001" }],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Opening credits"],
+      [120, "An Explanatory Note"],
+      [180, "1. What Do Schoolteachers and Sumo Wrestlers Have in Common?"],
     ]);
   });
 
