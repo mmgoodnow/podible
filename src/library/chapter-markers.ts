@@ -39,6 +39,7 @@ type Heading = {
   titleWords: string[];
   sourceIndex: number;
   wordCount: number;
+  inline: boolean;
 };
 
 type HeadingCandidate = {
@@ -217,7 +218,7 @@ function parseLeadingOrdinal(tokens: string[]): { ordinal: number; consumed: num
   return null;
 }
 
-function headingFromTitle(title: string, sourceIndex = -1, wordCount = 0): Heading {
+function headingFromTitle(title: string, sourceIndex = -1, wordCount = 0, options: { inline?: boolean } = {}): Heading {
   const normalized = normalizeText(title);
   const tokens = normalized.split(" ").filter(Boolean);
   let label: Heading["ordinalLabel"] = null;
@@ -234,6 +235,7 @@ function headingFromTitle(title: string, sourceIndex = -1, wordCount = 0): Headi
     titleWords: titleOnly.split(" ").filter(Boolean),
     sourceIndex,
     wordCount,
+    inline: options.inline ?? false,
   };
 }
 
@@ -298,6 +300,44 @@ function deriveHeadingTitle(entry: EpubChapterEntry): string {
   return title;
 }
 
+function titleCaseHeading(value: string): string {
+  const smallWords = new Set(["a", "an", "and", "as", "at", "but", "by", "for", "in", "nor", "of", "on", "or", "the", "to", "with", "without"]);
+  return normalizeText(value)
+    .split(" ")
+    .map((word, index) => {
+      if (index > 0 && smallWords.has(word)) return word;
+      return word
+        .split("-")
+        .map((part) => part ? `${part[0]!.toUpperCase()}${part.slice(1)}` : part)
+        .join("-");
+    })
+    .join(" ");
+}
+
+function cleanInlineTaleSubtitle(value: string): string {
+  const tokens = value.replace(/[“”"]/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+  while (tokens.length > 3 && /^[A-Z]$/u.test(tokens.at(-1)!)) tokens.pop();
+  return tokens.join(" ");
+}
+
+function deriveInlineHeadingTitles(entry: EpubChapterEntry): string[] {
+  const title = deriveHeadingTitle(entry);
+  if (!isGenericNumberedChapterTocHeading(title) || entry.wordCount < 500) return [];
+  const titles: string[] = [];
+  const text = entry.text.replace(/\s+/g, " ");
+  const inlineTaleHeading =
+    /(?:^|[.!?]["”]?\s+)(THE\s+[A-Z][A-Z’' -]{2,40}\s+TALE):\s*["“]?([A-Z][A-Z’' -]+?)["”]?(?=\s+["“]?\s*[A-Z](?:\s+[A-Z]{2,}){0,3}\s+[a-z])/g;
+  let match: RegExpExecArray | null;
+  while ((match = inlineTaleHeading.exec(text))) {
+    const label = titleCaseHeading(match[1] ?? "");
+    const subtitle = titleCaseHeading(cleanInlineTaleSubtitle(match[2] ?? ""));
+    const candidate = `${label}: ${subtitle}`.trim();
+    const wordCount = normalizeText(candidate).split(" ").filter(Boolean).length;
+    if (wordCount >= 4 && wordCount <= 14) titles.push(candidate);
+  }
+  return [...new Set(titles)];
+}
+
 function collectHeadingCandidates(entries: EpubChapterEntry[]): HeadingCandidate[] {
   const headings: Heading[] = [];
   const seen = new Set<string>();
@@ -308,6 +348,13 @@ function collectHeadingCandidates(entries: EpubChapterEntry[]): HeadingCandidate
     if (!title || seen.has(title)) continue;
     seen.add(title);
     headings.push(headingFromTitle(title, sourceIndex, entry.wordCount));
+    const inlineTitles = deriveInlineHeadingTitles(entry);
+    for (const [inlineIndex, inlineTitle] of inlineTitles.entries()) {
+      const inlineNormalized = normalizeText(inlineTitle);
+      if (!inlineTitle || seen.has(inlineNormalized)) continue;
+      seen.add(inlineNormalized);
+      headings.push(headingFromTitle(inlineTitle, sourceIndex + (inlineIndex + 1) / 100, 0, { inline: true }));
+    }
   }
   const ordinalHeadings = headings.filter((heading) => !isGenericTocTitle(heading.title) && isOrdinalChapterStructureHeading(heading));
   const hasOrdinalChapterStructure =
@@ -343,6 +390,9 @@ function collectHeadingCandidates(entries: EpubChapterEntry[]): HeadingCandidate
     } else if (substantialGenericChapter) {
       include = true;
       decision = "substantial-generic-chapter-heading";
+    } else if (heading.inline) {
+      include = true;
+      decision = "inline-epub-heading";
     } else if (/^(prologue|epilogue)$/.test(normalized) || /^epilogue\s+/.test(normalized)) {
       include = true;
       decision = "structural-terminal-heading";
@@ -369,7 +419,7 @@ function collectHeadingCandidates(entries: EpubChapterEntry[]): HeadingCandidate
     return {
       heading,
       include,
-      preferDirectMatch: shortUnnumbered || normalized.startsWith("epilogue") || substantialGenericChapter,
+      preferDirectMatch: heading.inline || shortUnnumbered || normalized.startsWith("epilogue") || substantialGenericChapter,
       features: {
         genericToc,
         genericChapterTocStructure: hasGenericChapterTocStructure,

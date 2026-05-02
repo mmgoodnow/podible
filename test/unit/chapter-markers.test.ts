@@ -150,6 +150,36 @@ describe("chapter marker proposal", () => {
     ]);
   });
 
+  test("keeps spoken inline tale headings from substantial generic chapters", () => {
+    const headings = selectMajorEpubHeadings([
+      {
+        ...epubEntryWithText(
+          "Chapter 1",
+          "The pilgrims sat quietly. THE PRIEST’S TALE: “THE MAN WHO CRIED GOD” “ S OMETIMES THERE IS a thin line separating orthodox zeal from apostasy. THE SOLDIER’S TALE: THE WAR LOVERS I T WAS DURING the battle.",
+          0
+        ),
+        wordCount: 20_000,
+      },
+    ]);
+
+    expect(headings.map((heading) => heading.title)).toEqual([
+      "Chapter 1",
+      "The Priests Tale: The Man Who Cried God",
+      "The Soldiers Tale: The War Lovers",
+    ]);
+  });
+
+  test("does not promote inline colon titles from non-generic appendix entries", () => {
+    const headings = selectMajorEpubHeadings([
+      {
+        ...epubEntryWithText("Notes", "PART TWO: AN IMPATIENT WAR 105. This note explains a source citation.", 0),
+        wordCount: 20_000,
+      },
+    ]);
+
+    expect(headings.map((heading) => heading.title)).toEqual(["Notes"]);
+  });
+
   test("matches bare number-word generic labels only as standalone sentences", () => {
     const report = proposeChapterMarkers({
       epubEntries: ["Chapter Ten", "Chapter Eleven"].map((title, index) => ({
