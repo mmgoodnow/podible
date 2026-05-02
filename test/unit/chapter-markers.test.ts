@@ -150,6 +150,27 @@ describe("chapter marker proposal", () => {
     ]);
   });
 
+  test("keeps publisher title credits separate from an unspoken prologue", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: [
+        {
+          ...epubEntryWithText("Prologue", "Once upon a time, a man came from the sky and killed my wife.", 0),
+          wordCount: 500,
+        },
+      ],
+      transcriptUtterances: [
+        utterance(0, "Recorded Books and One Click Digital present Golden Son by Pierce Brown, narrated by Tim Gerard Reynolds."),
+        utterance(24_920, "Once upon a time, a man came from the sky and killed my wife."),
+      ],
+      embeddedChapters: [],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Opening credits"],
+      [24.92, "Prologue"],
+    ]);
+  });
+
   test("keeps spoken inline tale headings from substantial generic chapters", () => {
     const headings = selectMajorEpubHeadings([
       {
@@ -491,6 +512,23 @@ describe("chapter marker proposal", () => {
       transcriptUtterances: [
         utterance(60_000, "Chapter One."),
         utterance(180_000, "We hope you've enjoyed this program from Harper Audio. Audible hopes you've enjoyed this program."),
+      ],
+      embeddedChapters: [],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Opening credits"],
+      [60, "Chapter One"],
+      [180, "Closing credits"],
+    ]);
+  });
+
+  test("uses publisher production credits as closing credits", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["Chapter One"].map(epubEntry),
+      transcriptUtterances: [
+        utterance(60_000, "Chapter One."),
+        utterance(180_000, "We hope you have enjoyed this production of Golden Son by Pierce Brown."),
       ],
       embeddedChapters: [],
     });

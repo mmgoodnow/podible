@@ -767,7 +767,14 @@ function firstStoryUtteranceMs(utterances: TranscriptUtterance[], beforeMs: numb
     const current = early[index]!;
     if (current.startMs - previous.endMs >= 30_000) return current.startMs;
   }
-  return early.find((utterance) => normalizeText(utterance.text) !== "this is audible")?.startMs ?? null;
+  return early.find((utterance) => !isOpeningCreditUtterance(utterance.text))?.startMs ?? null;
+}
+
+function isOpeningCreditUtterance(text: string): boolean {
+  const normalized = normalizeText(text);
+  if (normalized === "this is audible") return true;
+  if (normalized.startsWith("recorded books") && normalized.includes("present")) return true;
+  return normalized.includes("present") && normalized.includes("narrated by") && normalized.split(" ").length <= 30;
 }
 
 function findClosingCreditsMs(utterances: TranscriptUtterance[], afterMs: number): number | null {
@@ -776,7 +783,13 @@ function findClosingCreditsMs(utterances: TranscriptUtterance[], afterMs: number
     const text = normalizeText(utterance.text);
     if (text.startsWith("this concludes ")) return true;
     if (text.includes("audible") && /\bproduc\w*\b/.test(text)) return true;
-    if (!text.startsWith("audible hopes you have enjoyed") && !text.startsWith("we hope youve enjoyed this program")) return false;
+    if (
+      !text.startsWith("audible hopes you have enjoyed") &&
+      !text.startsWith("we hope youve enjoyed this program") &&
+      !text.startsWith("we hope you have enjoyed this production")
+    ) {
+      return false;
+    }
     const previous = utterances
       .slice(Math.max(0, index - 3), index)
       .map((candidate) => normalizeText(candidate.text))
@@ -932,7 +945,8 @@ export function proposeChapterMarkers(input: {
   let previousMs = -1;
   const firstEmbeddedAfterIntro = embedded.find((chapter) => chapter.startMs > 30_000)?.startMs ?? Number.POSITIVE_INFINITY;
   const firstStoryMs = firstStoryUtteranceMs(utterances, firstEmbeddedAfterIntro);
-  if (firstStoryMs !== null && firstStoryMs > 30_000) {
+  const startsWithOpeningCredit = utterances.some((utterance) => utterance.startMs <= 5_000 && isOpeningCreditUtterance(utterance.text));
+  if (firstStoryMs !== null && (firstStoryMs > 30_000 || startsWithOpeningCredit)) {
     chapters.push({
       startTime: 0,
       title: "Opening credits",
