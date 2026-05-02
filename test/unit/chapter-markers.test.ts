@@ -201,6 +201,22 @@ describe("chapter marker proposal", () => {
     ]);
   });
 
+  test("does not treat decimal fragments as standalone ordinal sentences", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["Chapter Five"].map((title, index) => ({
+        ...epubEntry(title, index),
+        wordCount: 20_000,
+      })),
+      transcriptUtterances: [utterance(60_000, "They accelerated to Mach 1.5 with no lights."), utterance(120_000, "Five.")],
+      embeddedChapters: [],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Opening credits"],
+      [120, "Chapter Five"],
+    ]);
+  });
+
   test("drops substantial generic wrappers when named ordinal chapters exist", () => {
     const headings = selectMajorEpubHeadings(
       ["Chapter 8", "1. ULTIMATUM", "2. COMPROMISE", "3. CHOICE", "Chapter 9"].map((title, index) => ({

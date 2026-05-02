@@ -558,7 +558,7 @@ function standaloneOrdinalTextMatches(text: string, ordinal: number): boolean {
   const normalized = normalizeText(text);
   if (parseOrdinalToken(normalized) === ordinal) return true;
   return text
-    .split(/[.!?。！？]+/)
+    .split(/(?<!\d)[.!?。！？]+(?!\d)/u)
     .map((sentence) => normalizeText(sentence))
     .some((sentence) => parseOrdinalToken(sentence) === ordinal);
 }
