@@ -481,7 +481,10 @@ function headingMatchesWindow(heading: Heading, text: string): boolean {
     heading.ordinalLabel &&
     tokens.some((token, index) => token === heading.ordinalLabel && parseSpokenOrdinalToken(tokens[index + 1] ?? "") === heading.ordinal);
   if (heading.ordinalLabel === "part" && ordinalLabelMatches) return true;
-  const wordsMatch = heading.titleWords.length === 0 || phraseMatch || heading.titleWords.every((word) => normalized.includes(word));
+  const wordsMatch =
+    heading.titleWords.length === 0 ||
+    phraseMatch ||
+    heading.titleWords.every((word) => headingTitleWordMatches(word, normalized, tokens));
   if (!wordsMatch) return false;
   if (!heading.ordinal) return true;
   const ordinalMatches = tokens.some((token) => parseSpokenOrdinalToken(token) === heading.ordinal);
@@ -491,6 +494,14 @@ function headingMatchesWindow(heading: Heading, text: string): boolean {
   // Many audiobooks speak/show only the chapter title ("LONG NIGHT") while
   // the EPUB labels it as "2. LONG NIGHT"; a strong title phrase is enough.
   return ordinalMatches || phraseMatch || (heading.titleWords.length > 1 && wordsMatch);
+}
+
+function headingTitleWordMatches(word: string, normalizedText: string, tokens: string[]): boolean {
+  if (normalizedText.includes(word)) return true;
+  const ordinal = parseOrdinalToken(word);
+  if (ordinal === null) return false;
+  if (!/^\d+$/.test(word) && !/^[ivxlcdm]+$/.test(word) && !NUMBER_WORDS.has(word)) return false;
+  return tokens.some((token) => parseSpokenOrdinalToken(token) === ordinal || parseOrdinalToken(token) === ordinal);
 }
 
 function headingMatchesDirectUtterance(heading: Heading, text: string): boolean {
@@ -600,6 +611,12 @@ function findDirectTranscriptMatch(
   return fallback;
 }
 
+function shouldRequireExplicitOrdinalForDirectOverride(heading: Heading): boolean {
+  if (!heading.ordinal) return false;
+  const distinctiveWords = heading.titleWords.filter((word) => word.length >= 4 && !["chapter", "part", "book"].includes(word));
+  return new Set(distinctiveWords).size <= 1;
+}
+
 function firstStoryUtteranceMs(utterances: TranscriptUtterance[], beforeMs: number): number | null {
   const early = utterances.filter((utterance) => utterance.startMs < beforeMs);
   for (let index = 1; index < early.length; index += 1) {
@@ -693,7 +710,7 @@ function resolveHeadingCandidate(
     if (context.preferCoarseTranscriptHeadings) {
       const direct = findDirectTranscriptMatch(heading, context.utterances, context.previousMs, {
         ...directOptions,
-        requireExplicitOrdinal: heading.ordinal !== null,
+        requireExplicitOrdinal: shouldRequireExplicitOrdinalForDirectOverride(heading),
       });
       if (direct && direct.startMs > context.previousMs && direct.startMs < matched.startMs) {
         matched = { startMs: direct.startMs };
@@ -717,7 +734,10 @@ function resolveHeadingCandidate(
   if (!matched) return null;
   let matchedWindow = headingMatchesWindow(heading, windowText(context.utterances, matched.startMs));
   if (!matchedWindow && context.preferCoarseTranscriptHeadings) {
-    const direct = findDirectTranscriptMatch(heading, context.utterances, context.previousMs, directOptions);
+    const direct = findDirectTranscriptMatch(heading, context.utterances, context.previousMs, {
+      ...directOptions,
+      requireExplicitOrdinal: shouldRequireExplicitOrdinalForDirectOverride(heading),
+    });
     const matchedStartMs = matched.startMs;
     const nextEmbedded = context.embedded.find((chapter) => chapter.startMs > matchedStartMs);
     if (direct && direct.startMs >= matchedStartMs && (!nextEmbedded || direct.startMs < nextEmbedded.startMs)) {

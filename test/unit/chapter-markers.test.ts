@@ -396,6 +396,56 @@ describe("chapter marker proposal", () => {
     ]);
   });
 
+  test("does not move an embedded ordinal boundary to later title prose", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["49: Why We Sing", "50: The Deep", "51: Golden Son"].map(epubEntry),
+      transcriptUtterances: [
+        utterance(62_307_000, "Chapter 49. Why We Sing."),
+        utterance(63_947_000, "Mustang is gone."),
+        utterance(64_074_000, "I stand alone listening to the call of the deep mines."),
+        utterance(65_285_000, "Chapter 51. Golden Son."),
+      ],
+      embeddedChapters: [
+        { startMs: 62_307_000, endMs: 63_947_000, title: "049" },
+        { startMs: 63_947_000, endMs: 65_285_000, title: "050" },
+        { startMs: 65_285_000, endMs: 68_577_000, title: "051" },
+      ],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [62307, "49: Why We Sing"],
+      [63947, "50: The Deep"],
+      [65285, "51: Golden Son"],
+    ]);
+  });
+
+  test("allows distinctive long titles to refine coarse embedded boundaries", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: [
+        "An Explanatory Note",
+        "5. What Makes a Perfect Parent?",
+        "6. Perfect Parenting, Part II; or: Would a Roshanda by Any Other Name Smell as Sweet?",
+      ].map(epubEntry),
+      transcriptUtterances: [
+        utterance(120_000, "An explanatory note."),
+        utterance(16_859_000, "Chapter five. What makes a perfect parent?"),
+        utterance(19_367_000, "In a later section about parenting."),
+        utterance(20_514_000, "Chapter 6. Perfect parenting, part two, or would a Roshanda by any other name smell as sweet?"),
+      ],
+      embeddedChapters: [
+        { startMs: 16_859_000, endMs: 19_367_000, title: "005" },
+        { startMs: 19_367_000, endMs: 23_164_000, title: "006" },
+      ],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Opening credits"],
+      [120, "An Explanatory Note"],
+      [16859, "5. What Makes a Perfect Parent?"],
+      [20514, "6. Perfect Parenting, Part II; or: Would a Roshanda by Any Other Name Smell as Sweet?"],
+    ]);
+  });
+
   test("matches numbered part headings despite subtitle transcription variants", () => {
     const report = proposeChapterMarkers({
       epubEntries: ["Part One: Of Blacke Cholor, without Boyling"].map(epubEntry),
