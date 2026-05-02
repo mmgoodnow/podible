@@ -689,8 +689,16 @@ function resolveHeadingCandidate(
     confidence = "medium";
     reason = "Matched EPUB major heading directly in transcript where no embedded chapter boundary matched.";
   } else if (matched && !directFirst) {
+    if (context.preferCoarseTranscriptHeadings) {
+      const direct = findDirectTranscriptMatch(heading, context.utterances, context.previousMs, directOptions);
+      if (direct && direct.startMs > context.previousMs && direct.startMs < matched.startMs) {
+        matched = { startMs: direct.startMs };
+        confidence = "medium";
+        reason = "Preferred a spoken transcript heading inside a coarse embedded chapter section.";
+      }
+    }
     const matchedStartMs = matched.startMs;
-    if (!context.embedded.some((chapter) => chapter.startMs === matchedStartMs)) {
+    if (!context.embedded.some((chapter) => chapter.startMs === matchedStartMs) && reason === "Matched EPUB major heading to transcript heading near embedded chapter boundary.") {
       confidence = "medium";
       reason = "Matched EPUB major heading directly in transcript where no embedded chapter boundary matched.";
     }

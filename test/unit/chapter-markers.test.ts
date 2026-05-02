@@ -349,6 +349,30 @@ describe("chapter marker proposal", () => {
     ]);
   });
 
+  test("uses a spoken chapter heading inside a coarse embedded part section", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["Part II: Break", "12: Blood for Blood", "13: Mad Dogs"].map(epubEntry),
+      transcriptUtterances: [
+        utterance(15_702_000, "Part 2."),
+        utterance(15_704_000, "Break."),
+        utterance(15_720_000, "Chapter 12."),
+        utterance(15_722_000, "Blood for Blood."),
+        utterance(18_581_000, "Chapter 13."),
+        utterance(18_583_000, "Mad Dogs."),
+      ],
+      embeddedChapters: [
+        { startMs: 15_701_000, endMs: 18_581_000, title: "012" },
+        { startMs: 18_581_000, endMs: 20_165_000, title: "013" },
+      ],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [15701, "Part II: Break"],
+      [15720, "12: Blood for Blood"],
+      [18581, "13: Mad Dogs"],
+    ]);
+  });
+
   test("matches numbered part headings despite subtitle transcription variants", () => {
     const report = proposeChapterMarkers({
       epubEntries: ["Part One: Of Blacke Cholor, without Boyling"].map(epubEntry),
