@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 
 import { searchOpenLibrary } from "../library/openlibrary";
+import { recordUserJourneyAction } from "../metrics";
 import { BooksRepo } from "../repo";
 import { triggerAutoAcquire } from "../library/service";
 import { renderActivityPage } from "./activity-page";
@@ -50,6 +51,7 @@ export function createAddRoutes(repo: BooksRepo): Hono<HttpEnv> {
     }
     try {
       const results = await searchOpenLibrary(query, 10);
+      recordUserJourneyAction("search_openlibrary", "ok");
       return renderAddPage(settings, {
         query,
         results,
@@ -58,6 +60,7 @@ export function createAddRoutes(repo: BooksRepo): Hono<HttpEnv> {
         apiKey: null,
       });
     } catch (error) {
+      recordUserJourneyAction("search_openlibrary", "error");
       return renderAddPage(settings, {
         query,
         error: `Search failed: ${(error as Error).message}`,
@@ -82,8 +85,10 @@ export function createAddRoutes(repo: BooksRepo): Hono<HttpEnv> {
     }
     try {
       const bookId = await createBookFromOpenLibrary(repo, openLibraryKey);
+      recordUserJourneyAction("add_book", "ok");
       return c.redirect(`/book/${bookId}`, 303);
     } catch (error) {
+      recordUserJourneyAction("add_book", "error");
       const addResponse = renderAddPage(settings, {
         error: `Add failed: ${(error as Error).message}`,
         currentUser: currentSession,
@@ -115,9 +120,11 @@ export function createBookRoutes(repo: BooksRepo): Hono<HttpEnv> {
     const media = parseMediaSelection(formString(body, "media"));
     const book = repo.getBookRow(bookId);
     if (!book) {
+      recordUserJourneyAction("queue_acquire", "error");
       return c.notFound();
     }
     const jobId = await triggerAutoAcquire(repo, bookId, media);
+    recordUserJourneyAction("queue_acquire", "ok");
     const notice = `Queued ${media.join(" + ")} acquire for ${book.title} (job ${jobId}).`;
     return c.redirect(`/book/${bookId}?notice=${encodeURIComponent(notice)}`, 303);
   });
@@ -139,6 +146,7 @@ export function createActivityRoutes(repo: BooksRepo): Hono<HttpEnv> {
 
   app.post("/refresh", requireAdminSession, (c) => {
     const job = repo.createJob({ type: "full_library_refresh" });
+    recordUserJourneyAction("refresh_library", "ok");
     return c.redirect(`/activity?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`, 303);
   });
 

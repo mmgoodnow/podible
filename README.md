@@ -59,6 +59,9 @@ Settings default to Plex browser sign-in.
 - `GET /feed.xml`
 - `GET /feed.json`
 - `GET /ebook/{assetId}`
+- `GET /metrics` (Prometheus scrape endpoint)
+
+`/metrics` exposes low-cardinality HTTP endpoint counters/durations, RPC method counters/durations, process uptime, and core user journey action counters.
 
 Removed REST control routes now return `404`:
 

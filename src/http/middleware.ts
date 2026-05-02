@@ -3,6 +3,7 @@ import type { MiddlewareHandler } from "hono";
 import { resolveSessionFromRequest } from "../auth";
 import { BooksRepo } from "../repo";
 import type { SessionWithUserRow } from "../app-types";
+import { recordHttpRequest } from "../metrics";
 
 export type HttpEnv = {
   Variables: {
@@ -26,7 +27,7 @@ function loginRedirectPath(url: URL): string {
 
 export function createRequestContextMiddleware(repo: BooksRepo): MiddlewareHandler<HttpEnv> {
   return async (c, next) => {
-    const startedAt = Date.now();
+    const startedAt = performance.now();
     c.set("logSuffix", "");
 
     let session = resolveSessionFromRequest(c.req.raw, (tokenHash) => repo.getSessionByTokenHash(tokenHash));
@@ -37,10 +38,12 @@ export function createRequestContextMiddleware(repo: BooksRepo): MiddlewareHandl
 
     await next();
 
-    const elapsedMs = Date.now() - startedAt;
+    const elapsedMs = Math.round(performance.now() - startedAt);
     const suffix = c.get("logSuffix");
     const logSuffix = suffix ? ` ${suffix}` : "";
-    console.log(`[http] ${c.req.method} ${new URL(c.req.url).pathname} status=${c.res.status} ms=${elapsedMs}${logSuffix}`);
+    const pathname = new URL(c.req.url).pathname;
+    recordHttpRequest(c.req.method, pathname, c.res.status, startedAt);
+    console.log(`[http] ${c.req.method} ${pathname} status=${c.res.status} ms=${elapsedMs}${logSuffix}`);
   };
 }
 

@@ -8,6 +8,7 @@ import {
 } from "../auth";
 import { buildPlexAuthUrl, createEphemeralPlexIdentity, createPlexPin } from "../plex";
 import { BooksRepo } from "../repo";
+import { recordUserJourneyAction } from "../metrics";
 import { renderLoginPage } from "./login-page";
 import { renderAppAuthErrorPage, sanitizeRedirectPath } from "./common";
 import { getCurrentSession, type HttpEnv } from "./middleware";
@@ -49,11 +50,13 @@ export function createLoginRoutes(repo: BooksRepo): Hono<HttpEnv> {
       if (redirectTo) {
         forwardUrl.searchParams.set("redirectTo", redirectTo);
       }
+      recordUserJourneyAction("begin_plex_login", "ok");
       return c.json({
         pinId: pin.id,
         authUrl: buildPlexAuthUrl(identity, pin.code, forwardUrl.toString()),
       });
     } catch (error) {
+      recordUserJourneyAction("begin_plex_login", "error");
       return c.json({ error: (error as Error).message || "Unable to start Plex sign-in." }, 502);
     }
   });
@@ -78,7 +81,10 @@ export function createLoginRoutes(repo: BooksRepo): Hono<HttpEnv> {
       error: result.kind === "error" ? result.error : null,
     });
     if (result.kind === "success") {
+      recordUserJourneyAction("finish_plex_login", "ok");
       response.headers.append("Set-Cookie", buildSessionCookie(result.sessionToken, c.req.raw));
+    } else {
+      recordUserJourneyAction("finish_plex_login", "error");
     }
     return response;
   });
@@ -93,6 +99,7 @@ export function createLogoutRoutes(repo: BooksRepo): Hono<HttpEnv> {
     if (currentSession) {
       repo.deleteSession(currentSession.id);
     }
+    recordUserJourneyAction("logout", "ok");
     const response = c.redirect("/login?notice=Signed%20out.", 303);
     response.headers.append("Set-Cookie", clearSessionCookie(c.req.raw));
     return response;
@@ -136,6 +143,7 @@ function renderAppLogin(repo: BooksRepo, c: Context<HttpEnv>, isComplete: boolea
     const callbackUrl = new URL(attempt.redirect_uri);
     callbackUrl.searchParams.set("code", code);
     callbackUrl.searchParams.set("state", attempt.state);
+    recordUserJourneyAction("finish_app_login", "ok");
     return c.redirect(callbackUrl.toString(), 302);
   }
 

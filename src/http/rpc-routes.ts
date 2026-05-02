@@ -48,7 +48,7 @@ export function createRpcRoutes(repo: BooksRepo, startTime: number): Hono<HttpEn
       startTime,
       request: c.req.raw,
       session: c.get("session"),
-    }, { id: null, readOnly: true });
+    }, { id: null, readOnly: true, transport: "get" });
   });
 
   return app;

@@ -13,6 +13,7 @@ import {
 } from "./http/asset-routes";
 import { createAppAuthRoutes, createLoginRoutes, createLogoutRoutes } from "./http/auth-routes";
 import { createFeedRoutes } from "./http/feed-routes";
+import { createMetricsRoutes } from "./http/metrics-routes";
 import { createRequestContextMiddleware, type HttpEnv } from "./http/middleware";
 import { createRpcRoutes } from "./http/rpc-routes";
 import { createActivityRoutes, createAddRoutes, createBookRoutes, createHomeRoutes, createLibraryRoutes } from "./http/user-routes";
@@ -31,6 +32,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number): (
   app.route("/book", createBookRoutes(repo));
   app.route("/activity", createActivityRoutes(repo));
   app.route("/admin", createAdminRoutes(repo));
+  app.route("/metrics", createMetricsRoutes(startTime));
   app.route("/rpc", createRpcRoutes(repo, startTime));
   app.route("/assets", createAssetsIndexRoutes(repo));
   app.route("/stream", createStreamRoutes(repo));

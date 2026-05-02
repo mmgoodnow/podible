@@ -45,6 +45,7 @@ const localBase = `http://localhost${port === 80 ? "" : `:${port}`}`;
 console.log(`Podible backend listening on ${localBase}`);
 console.log(`Library root: ${current.libraryRoot}`);
 console.log(`RPC endpoint: ${localBase}/rpc`);
+console.log(`Metrics endpoint: ${localBase}/metrics`);
 console.log(`Home: ${localBase}/`);
 
 process.on("SIGINT", () => {

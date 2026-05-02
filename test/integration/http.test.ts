@@ -10,6 +10,7 @@ const { runMigrations } = await import("../../src/db");
 const { createPodibleFetchHandler } = await import("../../src/http");
 const { BooksRepo } = await import("../../src/repo");
 const { hashSessionToken } = await import("../../src/auth");
+const { resetMetricsForTest } = await import("../../src/metrics");
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+XGfQAAAAASUVORK5CYII=";
@@ -211,6 +212,51 @@ describe("podible http", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test("serves prometheus metrics for http, rpc, and user journey actions", async () => {
+    resetMetricsForTest();
+
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const settings = repo.ensureSettings();
+    repo.updateSettings({
+      ...settings,
+      auth: { ...settings.auth, mode: "plex" },
+      torznab: [],
+    });
+
+    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now() - 1_000);
+    const userCookie = createBrowserSessionCookie(repo, { username: "reader" });
+
+    const acquireRpc = await rpc(fetchHandler, "library.acquire", { bookId: book.id, media: ["audio"] }, 1, {
+      cookie: userCookie,
+    });
+    expect(acquireRpc.result.jobId).toBeGreaterThan(0);
+
+    const libraryPage = await fetchHandler(
+      new Request("http://localhost/library?q=dune", {
+        headers: { cookie: userCookie },
+      })
+    );
+    expect(libraryPage.status).toBe(200);
+
+    const metrics = await fetchHandler(new Request("http://localhost/metrics"));
+    expect(metrics.status).toBe(200);
+    expect(metrics.headers.get("content-type")).toContain("text/plain");
+    const body = await metrics.text();
+    expect(body).toContain("# TYPE podible_http_requests_total counter");
+    expect(body).toContain('podible_http_requests_total{method="POST",route="/rpc",status="200"} 1');
+    expect(body).toContain('podible_http_requests_total{method="GET",route="/library",status="200"} 1');
+    expect(body).toContain('podible_rpc_requests_total{method="library.acquire",transport="post",status="ok",error_code=""} 1');
+    expect(body).toContain('podible_user_journey_actions_total{action="queue_acquire",status="ok"} 1');
+    expect(body).toContain("podible_http_request_duration_seconds_bucket");
+    expect(body).toContain("podible_rpc_request_duration_seconds_bucket");
+    expect(body).toContain("podible_uptime_seconds");
+
+    db.close();
   });
 
   test("serves library and book detail pages", async () => {

@@ -6,6 +6,7 @@ import { defineRouter, flattenRouter, parseMethodParams, parseMethodResult, type
 import { importRouter } from "./rpc/import-router";
 import { jobsRouter } from "./rpc/jobs-router";
 import { libraryRouter, releasesRouter } from "./rpc/library-router";
+import { recordRpcRequest } from "./metrics";
 import { openLibraryRouter } from "./rpc/openlibrary-router";
 import { settingsRouter } from "./rpc/settings-router";
 import {
@@ -79,7 +80,10 @@ async function dispatchRpcMethod(
   ctx: RpcContext,
   options: RpcDispatchOptions = {}
 ): Promise<Response> {
+  const startedAt = performance.now();
   const id = options.id ?? null;
+  const methodLabel = methodsByName[methodName] ? methodName : "unknown";
+  const transport = options.transport ?? "direct";
   try {
     const method = methodsByName[methodName];
     if (!method || (options.readOnly && !method.readOnly)) {
@@ -91,17 +95,21 @@ async function dispatchRpcMethod(
     const parsedParams = parseMethodParams(method, params);
     const rawResult = await method.handler(ctx, parsedParams);
     const result = parseMethodResult(method, rawResult);
+    recordRpcRequest(methodLabel, transport, "ok", null, startedAt);
     return success(id, result);
   } catch (error) {
     if (error instanceof RpcError) {
+      recordRpcRequest(methodLabel, transport, "error", error.code, startedAt);
       return failure(id, error.code, error.message, error.data);
     }
     const message = (error as Error).message;
+    recordRpcRequest(methodLabel, transport, "error", -32000, startedAt);
     return failure(id, -32000, message || "Application error", { message });
   }
 }
 
 export async function handleRpcRequest(request: Request, ctx: RpcContext): Promise<Response> {
+  const startedAt = performance.now();
   let parsed: ReturnType<typeof parseRequest> | null = null;
   try {
     const body = await request.text();
@@ -109,15 +117,18 @@ export async function handleRpcRequest(request: Request, ctx: RpcContext): Promi
     parsed = parseRequest(payload);
   } catch (error) {
     if (error instanceof SyntaxError) {
+      recordRpcRequest("parse_error", "post", "error", -32700, startedAt);
       return failure(null, -32700, "Parse error");
     }
     if (error instanceof RpcError) {
+      recordRpcRequest(parsed?.method ?? "invalid_request", "post", "error", error.code, startedAt);
       return failure(parsed?.id ?? null, error.code, error.message, error.data);
     }
+    recordRpcRequest("invalid_request", "post", "error", -32603, startedAt);
     return failure(null, -32603, "Internal error");
   }
 
-  return dispatchRpcMethod(parsed.method, parsed.params ?? {}, ctx, { id: parsed.id });
+  return dispatchRpcMethod(parsed.method, parsed.params ?? {}, ctx, { id: parsed.id, transport: "post" });
 }
 
 export async function handleRpcMethod(
@@ -126,10 +137,14 @@ export async function handleRpcMethod(
   ctx: RpcContext,
   options: RpcDispatchOptions = {}
 ): Promise<Response> {
+  const startedAt = performance.now();
+  const transport = options.transport ?? "direct";
   if (typeof methodName !== "string" || !methodName.trim()) {
+    recordRpcRequest("invalid_request", transport, "error", -32600, startedAt);
     return failure(options.id ?? null, -32600, "Invalid Request");
   }
   if (!params || typeof params !== "object" || Array.isArray(params)) {
+    recordRpcRequest(methodsByName[methodName] ? methodName : "unknown", transport, "error", -32600, startedAt);
     return failure(options.id ?? null, -32600, "params must be an object");
   }
   return dispatchRpcMethod(methodName, params, ctx, options);

@@ -76,6 +76,7 @@ export type LibraryBookWithPlayback = LibraryBook & {
 export type RpcDispatchOptions = {
   id?: RpcId;
   readOnly?: boolean;
+  transport?: string;
 };
 
 export class RpcError extends Error {
