@@ -40,6 +40,7 @@ type Heading = {
   sourceIndex: number;
   wordCount: number;
   inline: boolean;
+  openingWords: string[];
 };
 
 type HeadingCandidate = {
@@ -218,7 +219,7 @@ function parseLeadingOrdinal(tokens: string[]): { ordinal: number; consumed: num
   return null;
 }
 
-function headingFromTitle(title: string, sourceIndex = -1, wordCount = 0, options: { inline?: boolean } = {}): Heading {
+function headingFromTitle(title: string, sourceIndex = -1, wordCount = 0, options: { inline?: boolean; openingWords?: string[] } = {}): Heading {
   const normalized = normalizeText(title);
   const tokens = normalized.split(" ").filter(Boolean);
   let label: Heading["ordinalLabel"] = null;
@@ -236,6 +237,7 @@ function headingFromTitle(title: string, sourceIndex = -1, wordCount = 0, option
     sourceIndex,
     wordCount,
     inline: options.inline ?? false,
+    openingWords: options.openingWords ?? [],
   };
 }
 
@@ -300,6 +302,21 @@ function deriveHeadingTitle(entry: EpubChapterEntry): string {
   return title;
 }
 
+function repairOpeningDropCaps(text: string): string {
+  const sample = text.slice(0, 300);
+  const dropCapMatches = sample.match(/\b[A-Z]\s+[A-Z]{2,}\b/g) ?? [];
+  if (dropCapMatches.length < 2) return text;
+  return text.replace(/\b([A-Z])\s+([A-Z]{2,})\b/g, (_, first: string, rest: string) => `${first}${rest}`);
+}
+
+function deriveOpeningWords(entry: EpubChapterEntry): string[] {
+  const ignored = new Set(["a", "an", "and", "the"]);
+  return normalizeText(repairOpeningDropCaps(entry.text))
+    .split(" ")
+    .filter((word) => word.length >= 3 && !ignored.has(word))
+    .slice(0, 8);
+}
+
 function titleCaseHeading(value: string): string {
   const smallWords = new Set(["a", "an", "and", "as", "at", "but", "by", "for", "in", "nor", "of", "on", "or", "the", "to", "with", "without"]);
   return normalizeText(value)
@@ -347,7 +364,7 @@ function collectHeadingCandidates(entries: EpubChapterEntry[]): HeadingCandidate
     if (BACK_MATTER.has(normalized)) break;
     if (!title || seen.has(title)) continue;
     seen.add(title);
-    headings.push(headingFromTitle(title, sourceIndex, entry.wordCount));
+    headings.push(headingFromTitle(title, sourceIndex, entry.wordCount, { openingWords: deriveOpeningWords(entry) }));
     const inlineTitles = deriveInlineHeadingTitles(entry);
     for (const [inlineIndex, inlineTitle] of inlineTitles.entries()) {
       const inlineNormalized = normalizeText(inlineTitle);
@@ -563,6 +580,20 @@ function standaloneOrdinalTextMatches(text: string, ordinal: number): boolean {
     .some((sentence) => parseOrdinalToken(sentence) === ordinal);
 }
 
+function ordinalWithOpeningWordsMatches(heading: Heading, text: string): boolean {
+  if (!heading.ordinal || heading.openingWords.length < 3) return false;
+  const tokens = normalizeText(text).split(" ").filter(Boolean);
+  if (parseSpokenOrdinalToken(tokens[0] ?? "") !== heading.ordinal) return false;
+  const searchable = tokens.slice(1, 14);
+  let cursor = 0;
+  for (const word of heading.openingWords.slice(0, 4)) {
+    const index = searchable.findIndex((token, candidateIndex) => candidateIndex >= cursor && token === word);
+    if (index < 0) return false;
+    cursor = index + 1;
+  }
+  return true;
+}
+
 function isBareOrdinalHeading(heading: Heading): boolean {
   return Boolean(heading.ordinal && heading.ordinalLabel && heading.titleWords.length === 0);
 }
@@ -671,6 +702,9 @@ function findDirectTranscriptMatch(
   const candidates = utterances.filter((utterance) => utterance.startMs > afterMs + minGapMs);
   let fallback: TranscriptUtterance | null = null;
   for (const utterance of candidates) {
+    if (isBareOrdinalHeading(heading) && ordinalWithOpeningWordsMatches(heading, utterance.text)) {
+      return utterance;
+    }
     if (heading.ordinal && isBareOrdinalHeading(heading) && standaloneOrdinalTextMatches(utterance.text, heading.ordinal)) {
       return utterance;
     }

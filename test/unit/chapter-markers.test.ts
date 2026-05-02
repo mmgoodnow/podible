@@ -217,6 +217,27 @@ describe("chapter marker proposal", () => {
     ]);
   });
 
+  test("matches generic chapter labels when ordinal is spoken with the EPUB opening", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: [
+        {
+          ...epubEntryWithText("Chapter 3", "T HE BARGE B ENARES entered the river port of Naiad an hour before sunset.", 0),
+          wordCount: 20_000,
+        },
+      ],
+      transcriptUtterances: [
+        utterance(60_000, "3 unrelated words about another river port."),
+        utterance(120_000, "3 The barge Benares entered the river port of Nyad an hour before sunset."),
+      ],
+      embeddedChapters: [],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Opening credits"],
+      [120, "Chapter 3"],
+    ]);
+  });
+
   test("drops substantial generic wrappers when named ordinal chapters exist", () => {
     const headings = selectMajorEpubHeadings(
       ["Chapter 8", "1. ULTIMATUM", "2. COMPROMISE", "3. CHOICE", "Chapter 9"].map((title, index) => ({
