@@ -327,6 +327,37 @@ describe("manifestation media", () => {
     }
   });
 
+  test("uses chapter filenames when imported file titles are generic parts", async () => {
+    const { db, repo } = setupRepo();
+    try {
+      const book = repo.createBook({ title: "Project Hail Mary", author: "Andy Weir" });
+      const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
+      repo.addAsset({
+        bookId: book.id,
+        kind: "multi",
+        mime: "audio/mpeg",
+        totalSize: 20,
+        durationMs: 3000,
+        manifestationId: manifestation.id,
+        files: [
+          { path: "/tmp/00 - Intro & Dedication.mp3", size: 10, start: 0, end: 9, durationMs: 1000, title: "Part 1" },
+          { path: "/tmp/01 - Chapter 1.mp3", size: 10, start: 10, end: 19, durationMs: 2000, title: "Part 2" },
+        ],
+      });
+
+      const target = repo.getManifestationWithContainers(manifestation.id);
+      expect(target).toBeTruthy();
+      const chapters = await buildManifestationChapters(repo, target!.manifestation, target!.containers);
+
+      expect(chapters?.chapters).toEqual([
+        { startTime: 0, title: "Intro & Dedication" },
+        { startTime: 1, title: "Chapter 1" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   test("uses EPUB and stored transcript to build major manifestation chapter markers", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "podible-chapter-marker-media-"));
     const { db, repo } = setupRepo();

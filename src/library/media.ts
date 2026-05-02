@@ -123,7 +123,7 @@ async function buildFallbackChapterTimings(asset: AssetRow, files: AssetFileRow[
     const endMs = startMs + file.duration_ms;
     out.push({
       id: `ch${index}`,
-      title: file.title ?? path.basename(file.path, path.extname(file.path)),
+      title: fallbackFileChapterTitle(file),
       startMs,
       endMs,
       startOffset: file.start,
@@ -173,6 +173,13 @@ export function pickTranscriptLabelForWindow(
 
 function stripTerminalPunctuation(text: string): string {
   return text.replace(/[\s.,:;!?\-—–]+$/u, "");
+}
+
+function fallbackFileChapterTitle(file: AssetFileRow): string {
+  const basename = path.basename(file.path, path.extname(file.path)).replace(/[_]+/g, " ").replace(/\s+/g, " ").trim();
+  const cleaned = basename.replace(/^\s*\d+\s*[-_. ]+\s*/u, "").trim();
+  if (cleaned && (!file.title || isGenericChapterLabel(file.title)) && /^(chapter|intro|outro|prologue|epilogue)\b/i.test(cleaned)) return cleaned;
+  return file.title ?? basename;
 }
 
 export function applyTranscriptLabels(timings: ChapterTiming[], utterances: StoredTranscriptUtterance[]): ChapterTiming[] {
