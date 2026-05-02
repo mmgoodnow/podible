@@ -155,7 +155,7 @@ describe("chapter marker proposal", () => {
       {
         ...epubEntryWithText(
           "Chapter 1",
-          "The pilgrims sat quietly. THE PRIEST’S TALE: “THE MAN WHO CRIED GOD” “ S OMETIMES THERE IS a thin line separating orthodox zeal from apostasy. THE SOLDIER’S TALE: THE WAR LOVERS I T WAS DURING the battle.",
+          "The pilgrims sat quietly. THE PRIEST’S TALE: “THE MAN WHO CRIED GOD” “ S OMETIMES THERE IS a thin line separating orthodox zeal from apostasy. THE POET’S TALE: “HYPERION CANTOS” I N THE BEGINNING was the Word. THE SOLDIER’S TALE: THE WAR LOVERS I T WAS DURING the battle.",
           0
         ),
         wordCount: 20_000,
@@ -165,6 +165,7 @@ describe("chapter marker proposal", () => {
     expect(headings.map((heading) => heading.title)).toEqual([
       "Chapter 1",
       "The Priests Tale: The Man Who Cried God",
+      "The Poets Tale: Hyperion Cantos",
       "The Soldiers Tale: The War Lovers",
     ]);
   });

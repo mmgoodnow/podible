@@ -342,9 +342,17 @@ function deriveInlineHeadingTitles(entry: EpubChapterEntry): string[] {
   if (!isGenericNumberedChapterTocHeading(title) || entry.wordCount < 500) return [];
   const titles: string[] = [];
   const text = entry.text.replace(/\s+/g, " ");
+  const quotedInlineTaleHeading = /(?:^|[.!?]["”]?\s+)(THE\s+[A-Z][A-Z’' -]{2,40}\s+TALE):\s*["“]([^"”]{3,80})["”]/g;
   const inlineTaleHeading =
     /(?:^|[.!?]["”]?\s+)(THE\s+[A-Z][A-Z’' -]{2,40}\s+TALE):\s*["“]?([A-Z][A-Z’' -]+?)["”]?(?=\s+["“]?\s*[A-Z](?:\s+[A-Z]{2,}){0,3}\s+[a-z])/g;
   let match: RegExpExecArray | null;
+  while ((match = quotedInlineTaleHeading.exec(text))) {
+    const label = titleCaseHeading(match[1] ?? "");
+    const subtitle = titleCaseHeading(cleanInlineTaleSubtitle(match[2] ?? ""));
+    const candidate = `${label}: ${subtitle}`.trim();
+    const wordCount = normalizeText(candidate).split(" ").filter(Boolean).length;
+    if (wordCount >= 4 && wordCount <= 14) titles.push(candidate);
+  }
   while ((match = inlineTaleHeading.exec(text))) {
     const label = titleCaseHeading(match[1] ?? "");
     const subtitle = titleCaseHeading(cleanInlineTaleSubtitle(match[2] ?? ""));
