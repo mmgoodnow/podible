@@ -257,6 +257,10 @@ function findEmbeddedMatch(
     if (headingMatchesWindow(heading, windowText(utterances, chapter.startMs))) {
       return chapter;
     }
+    const numericChapterHeading = /^(\d+|chapter\s+\d+)/.test(normalizeText(heading.title));
+    if (numericChapterHeading && heading.ordinal && chapter.title && parseOrdinalToken(chapter.title) === heading.ordinal) {
+      return chapter;
+    }
   }
   return null;
 }

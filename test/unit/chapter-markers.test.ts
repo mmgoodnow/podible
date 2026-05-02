@@ -114,4 +114,17 @@ describe("chapter marker proposal", () => {
       { startMs: 1400, endMs: 2100, text: "Red Royal." },
     ]);
   });
+
+  test("trusts a generic embedded chapter number that matches the EPUB ordinal", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["9. TARGET"].map(epubEntry),
+      transcriptUtterances: [
+        utterance(10_000, "She target mentioned something in ordinary prose."),
+        utterance(60_000, "Alice dropped me off in the morning."),
+      ],
+      embeddedChapters: [{ startMs: 60_000, endMs: 120_000, title: "009" }],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([[60, "9. TARGET"]]);
+  });
 });
