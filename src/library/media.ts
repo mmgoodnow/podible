@@ -5,8 +5,9 @@ import path from "node:path";
 
 import { parseRange, segmentsForRange, streamSegmentsWithXingPatch } from "../streaming/range";
 import { buildId3ChaptersTag } from "../streaming/id3";
-import { loadStoredTranscriptPayload } from "./chapter-analysis";
+import { loadEpubEntries, loadStoredManifestationTranscriptPayload, loadStoredTranscriptPayload, selectPreferredEpubAsset } from "./chapter-analysis";
 import type { StoredTranscriptUtterance } from "./chapter-analysis";
+import { proposeChapterMarkers, type RawAudioChapter } from "./chapter-markers";
 import { readFfprobeChapters } from "../media/probe-cache";
 import { selectPreferredAudioAsset, selectPreferredAudioManifestation } from "./asset-selection";
 import { configDir } from "../config";
@@ -197,32 +198,17 @@ async function buildChapterTimings(repo: BooksRepo, asset: AssetRow, files: Asse
   return applyTranscriptLabels(timings, utterances);
 }
 
-export async function buildChapters(
-  repo: BooksRepo,
-  asset: AssetRow,
-  files: AssetFileRow[]
-): Promise<{ version: string; chapters: Array<{ startTime: number; title: string }> } | null> {
-  const timings = await buildChapterTimings(repo, asset, files);
-  if (!timings || timings.length === 0) return null;
-  return {
-    version: "1.2.0",
-    chapters: timings.map((chapter) => ({
-      startTime: chapter.startMs / 1000,
-      title: chapter.title,
-    })),
-  };
+function timingsToRawAudioChapters(timings: ChapterTiming[]): RawAudioChapter[] {
+  return timings.map((timing) => ({
+    startMs: timing.startMs,
+    endMs: timing.endMs,
+    title: timing.title,
+  }));
 }
 
-async function buildManifestationChapterTimings(
-  repo: BooksRepo,
-  containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>
-): Promise<ChapterTiming[] | null> {
+async function buildManifestationFallbackChapterTimings(containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>): Promise<ChapterTiming[] | null> {
   const audioContainers = containers.filter((container) => container.asset.kind !== "ebook");
   if (audioContainers.length === 0) return null;
-  if (audioContainers.length === 1) {
-    const container = audioContainers[0]!;
-    return buildChapterTimings(repo, container.asset, container.files);
-  }
 
   const out: ChapterTiming[] = [];
   let timeCursor = 0;
@@ -231,7 +217,7 @@ async function buildManifestationChapterTimings(
   for (const [containerIndex, container] of audioContainers.entries()) {
     const durationMs = containerDurationMs(container.asset, container.files);
     const sizeBytes = containerSizeBytes(container.asset, container.files);
-    const timings = await buildChapterTimings(repo, container.asset, container.files);
+    const timings = await buildFallbackChapterTimings(container.asset, container.files);
     const containerTimings =
       timings && timings.length > 0
         ? timings
@@ -264,11 +250,89 @@ async function buildManifestationChapterTimings(
   return out.length > 0 ? out : null;
 }
 
+async function buildTranscriptProposedChapterTimings(
+  repo: BooksRepo,
+  manifestation: ManifestationRow,
+  containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>
+): Promise<ChapterTiming[] | null> {
+  const ebookAsset = selectPreferredEpubAsset(repo.listAssetsByBook(manifestation.book_id));
+  if (!ebookAsset) return null;
+  const ebook = repo.getAssetWithFiles(ebookAsset.id);
+  const ebookFile = ebook?.asset.mime === "application/epub+zip" ? ebook.files[0] : null;
+  if (!ebookFile) return null;
+
+  const [epubEntries, transcript, fallbackTimings] = await Promise.all([
+    loadEpubEntries(ebookFile.path).catch(() => null),
+    loadStoredManifestationTranscriptPayload(repo, containers).catch(() => null),
+    buildManifestationFallbackChapterTimings(containers),
+  ]);
+  const utterances = transcript?.utterances ?? [];
+  if (!epubEntries || utterances.length === 0 || !fallbackTimings || fallbackTimings.length === 0) return null;
+
+  const report = proposeChapterMarkers({
+    epubEntries,
+    transcriptUtterances: utterances,
+    embeddedChapters: timingsToRawAudioChapters(fallbackTimings),
+  });
+  if (report.chapters.length < 3) return null;
+
+  const totalDurationMs =
+    manifestation.duration_ms ??
+    containers
+      .filter((container) => container.asset.kind !== "ebook")
+      .reduce((sum, container) => sum + containerDurationMs(container.asset, container.files), 0);
+
+  return report.chapters.map((chapter, index) => {
+    const startMs = Math.round(chapter.startTime * 1000);
+    const next = report.chapters[index + 1];
+    return {
+      id: `proposed-${index}`,
+      title: chapter.title,
+      startMs,
+      endMs: next ? Math.max(startMs, Math.round(next.startTime * 1000)) : Math.max(startMs, totalDurationMs),
+    };
+  });
+}
+
+export async function buildChapters(
+  repo: BooksRepo,
+  asset: AssetRow,
+  files: AssetFileRow[]
+): Promise<{ version: string; chapters: Array<{ startTime: number; title: string }> } | null> {
+  const timings = await buildChapterTimings(repo, asset, files);
+  if (!timings || timings.length === 0) return null;
+  return {
+    version: "1.2.0",
+    chapters: timings.map((chapter) => ({
+      startTime: chapter.startMs / 1000,
+      title: chapter.title,
+    })),
+  };
+}
+
+async function buildManifestationChapterTimings(
+  repo: BooksRepo,
+  manifestation: ManifestationRow,
+  containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>
+): Promise<ChapterTiming[] | null> {
+  const audioContainers = containers.filter((container) => container.asset.kind !== "ebook");
+  if (audioContainers.length === 0) return null;
+  const proposed = await buildTranscriptProposedChapterTimings(repo, manifestation, audioContainers);
+  if (proposed) return proposed;
+  if (audioContainers.length === 1) {
+    const container = audioContainers[0]!;
+    return buildChapterTimings(repo, container.asset, container.files);
+  }
+
+  return buildManifestationFallbackChapterTimings(audioContainers);
+}
+
 export async function buildManifestationChapters(
   repo: BooksRepo,
+  manifestation: ManifestationRow,
   containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>
 ): Promise<{ version: string; chapters: Array<{ startTime: number; title: string }> } | null> {
-  const timings = await buildManifestationChapterTimings(repo, containers);
+  const timings = await buildManifestationChapterTimings(repo, manifestation, containers);
   if (!timings || timings.length === 0) return null;
   return {
     version: "1.2.0",
@@ -561,7 +625,7 @@ export async function streamAudioManifestation(
     request,
     primary.mime,
     flattenAudioFiles(audioContainers),
-    await buildManifestationChapterTimings(repo, audioContainers),
+    await buildManifestationChapterTimings(repo, manifestation, audioContainers),
     manifestation.duration_ms ?? audioContainers.reduce((sum, container) => sum + containerDurationMs(container.asset, container.files), 0),
     coverPath
   );

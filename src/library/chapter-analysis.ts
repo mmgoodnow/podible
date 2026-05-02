@@ -214,7 +214,7 @@ type EpubWord = {
   token: string;
 };
 
-type EpubChapterEntry = {
+export type EpubChapterEntry = {
   id: string;
   title: string;
   href: string;
@@ -1673,4 +1673,4 @@ export async function processChapterAnalysisJob(
 }
 
 export { CHAPTERS_API_VERSION, CHAPTER_ANALYSIS_ALGORITHM_VERSION };
-export type { StoredTranscriptPayload, StoredTranscriptUtterance, TranscriptWord, TranscriptChunkPlan, TranscriptSegment, EpubChapterEntry };
+export type { StoredTranscriptPayload, StoredTranscriptUtterance, TranscriptWord, TranscriptChunkPlan, TranscriptSegment };

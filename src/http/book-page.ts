@@ -654,7 +654,7 @@ export async function renderBookPage(
     ? audioChoice.containers.map((container) => ({ asset: container, files: repo.getAssetFiles(container.id) }))
     : [];
   const ebook = selectPreferredEpubAsset(assets);
-  const chapters = audioContainers.length > 0 ? await buildManifestationChapters(repo, audioContainers) : null;
+  const chapters = audioChoice && audioContainers.length > 0 ? await buildManifestationChapters(repo, audioChoice.manifestation, audioContainers) : null;
   const transcriptUrl =
     audioChoice && hasStoredManifestationTranscriptPayload(repo, audioContainers)
       ? addApiKey(`/transcripts/m/${audioChoice.manifestation.id}.json`, apiKey)

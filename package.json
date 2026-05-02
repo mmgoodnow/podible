@@ -6,6 +6,7 @@
   "scripts": {
     "start": "bun run server.ts",
     "dev-login": "bun run scripts/dev-login.ts",
+    "propose-chapters": "bun run scripts/propose-chapters.ts",
     "replay-chapter-analysis": "bun run scripts/replay-chapter-analysis.ts",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit"

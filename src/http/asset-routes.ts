@@ -60,7 +60,7 @@ export function createChaptersRoutes(repo: BooksRepo): Hono<HttpEnv> {
     if (!target) {
       return c.json({ error: "not_found" }, 404);
     }
-    const chapters = await buildManifestationChapters(repo, target.containers);
+    const chapters = await buildManifestationChapters(repo, target.manifestation, target.containers);
     if (!chapters) {
       return c.json({ error: "not_found" }, 404);
     }

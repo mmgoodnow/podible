@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
+import JSZip from "jszip";
 
 import { runMigrations } from "../../src/db";
 import {
@@ -83,6 +84,71 @@ function manifestation(overrides: Partial<ManifestationRow>): ManifestationRow {
     updated_at: "2026-01-01T00:00:00.000Z",
     ...overrides,
   };
+}
+
+async function createChapterMarkerEpub(filePath: string): Promise<void> {
+  const zip = new JSZip();
+  zip.file("mimetype", "application/epub+zip", { compression: "STORE" });
+  zip.file(
+    "META-INF/container.xml",
+    `<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`
+  );
+  zip.file(
+    "OEBPS/content.opf",
+    `<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="BookId">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Test Book</dc:title>
+    <dc:creator>Test Author</dc:creator>
+    <dc:language>en</dc:language>
+    <dc:identifier id="BookId">urn:uuid:test-book</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch2" href="chapter2.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch3" href="chapter3.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="ncx">
+    <itemref idref="ch1"/>
+    <itemref idref="ch2"/>
+    <itemref idref="ch3"/>
+  </spine>
+</package>`
+  );
+  zip.file(
+    "OEBPS/toc.ncx",
+    `<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head></head>
+  <docTitle><text>Test Book</text></docTitle>
+  <navMap>
+    <navPoint id="navPoint-1" playOrder="1">
+      <navLabel><text>I: The Traveler</text></navLabel>
+      <content src="chapter1.xhtml"/>
+    </navPoint>
+    <navPoint id="navPoint-2" playOrder="2">
+      <navLabel><text>II: Red Royal</text></navLabel>
+      <content src="chapter2.xhtml"/>
+    </navPoint>
+    <navPoint id="navPoint-3" playOrder="3">
+      <navLabel><text>III: Grey Thief</text></navLabel>
+      <content src="chapter3.xhtml"/>
+    </navPoint>
+  </navMap>
+</ncx>`
+  );
+  zip.file("OEBPS/chapter1.xhtml", `<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>I: The Traveler</h1><p>One.</p></body></html>`);
+  zip.file("OEBPS/chapter2.xhtml", `<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>II: Red Royal</h1><p>Two.</p></body></html>`);
+  zip.file("OEBPS/chapter3.xhtml", `<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>III: Grey Thief</h1><p>Three.</p></body></html>`);
+
+  const bytes = await zip.generateAsync({ type: "uint8array" });
+  await writeFile(filePath, bytes);
 }
 
 describe("manifestation selection", () => {
@@ -250,7 +316,7 @@ describe("manifestation media", () => {
 
       const target = repo.getManifestationWithContainers(manifestation.id);
       expect(target).toBeTruthy();
-      const chapters = await buildManifestationChapters(repo, target!.containers);
+      const chapters = await buildManifestationChapters(repo, target!.manifestation, target!.containers);
 
       expect(chapters?.chapters).toEqual([
         { startTime: 0, title: "Part One" },
@@ -258,6 +324,73 @@ describe("manifestation media", () => {
       ]);
     } finally {
       db.close();
+    }
+  });
+
+  test("uses EPUB and stored transcript to build major manifestation chapter markers", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "podible-chapter-marker-media-"));
+    const { db, repo } = setupRepo();
+    try {
+      const epubPath = path.join(root, "book.epub");
+      await createChapterMarkerEpub(epubPath);
+      const book = repo.createBook({ title: "A Darker Shade of Magic", author: "V. E. Schwab" });
+      const audioManifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
+      const ebookManifestation = repo.addManifestation({ bookId: book.id, kind: "ebook" });
+      const audio = repo.addAsset({
+        bookId: book.id,
+        kind: "multi",
+        mime: "audio/mpeg",
+        totalSize: 30,
+        durationMs: 3_000_000,
+        manifestationId: audioManifestation.id,
+        files: [
+          { path: "/tmp/audio-0.mp3", size: 10, start: 0, end: 9, durationMs: 1_000_000, title: "001" },
+          { path: "/tmp/audio-1.mp3", size: 10, start: 10, end: 19, durationMs: 1_000_000, title: "002" },
+          { path: "/tmp/audio-2.mp3", size: 10, start: 20, end: 29, durationMs: 1_000_000, title: "003" },
+        ],
+      });
+      repo.addAsset({
+        bookId: book.id,
+        kind: "ebook",
+        mime: "application/epub+zip",
+        totalSize: 100,
+        manifestationId: ebookManifestation.id,
+        files: [{ path: epubPath, size: 100, start: 0, end: 99, durationMs: 0, title: "EPUB" }],
+      });
+      repo.upsertAssetTranscript({
+        assetId: audio.id,
+        status: "succeeded",
+        source: "test",
+        algorithmVersion: "test",
+        fingerprint: "test",
+        transcriptJson: JSON.stringify({
+          version: "1.5.0",
+          text: "",
+          words: [],
+          utterances: [
+            { startMs: 0, endMs: 1000, text: "This is audible." },
+            { startMs: 120_000, endMs: 122_000, text: "Kell wore a very peculiar coat." },
+            { startMs: 1_000_000, endMs: 1_001_000, text: "Two." },
+            { startMs: 1_001_000, endMs: 1_002_000, text: "Red Royal." },
+            { startMs: 2_000_000, endMs: 2_001_000, text: "Three. Grey Thief." },
+            { startMs: 2_900_000, endMs: 2_901_000, text: "This concludes A Darker Shade of Magic." },
+          ],
+        }),
+      });
+
+      const target = repo.getManifestationWithContainers(audioManifestation.id);
+      const chapters = await buildManifestationChapters(repo, target!.manifestation, target!.containers);
+
+      expect(chapters?.chapters).toEqual([
+        { startTime: 0, title: "Opening credits" },
+        { startTime: 120, title: "I: The Traveler" },
+        { startTime: 1000, title: "II: Red Royal" },
+        { startTime: 2000, title: "III: Grey Thief" },
+        { startTime: 2900, title: "Closing credits" },
+      ]);
+    } finally {
+      db.close();
+      await rm(root, { recursive: true, force: true });
     }
   });
 
