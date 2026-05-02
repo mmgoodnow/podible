@@ -229,4 +229,37 @@ describe("chapter marker proposal", () => {
       [60, "Part One: Of Blacke Cholor, without Boyling"],
     ]);
   });
+
+  test("does not match unnumbered named headings from scattered prose words", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["A Radical Idea"].map(epubEntry),
+      transcriptUtterances: [
+        utterance(60_000, "The radical surgery seemed like an idea from another era."),
+        utterance(120_000, "A radical idea."),
+      ],
+      embeddedChapters: [],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Opening credits"],
+      [120, "A Radical Idea"],
+    ]);
+  });
+
+  test("matches adjacent unnumbered named headings closer than fifteen seconds", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["The Goodness of Show Business", "The House That Jimmy Built"].map(epubEntry),
+      transcriptUtterances: [
+        utterance(60_000, "The goodness of show business."),
+        utterance(68_000, "For the boy next door. The house that Jimmy built."),
+      ],
+      embeddedChapters: [],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Opening credits"],
+      [60, "The Goodness of Show Business"],
+      [68, "The House That Jimmy Built"],
+    ]);
+  });
 });

@@ -292,6 +292,15 @@ function headingMatchesWindow(heading: Heading, text: string): boolean {
   return ordinalMatches || phraseMatch || (heading.titleWords.length > 1 && wordsMatch);
 }
 
+function headingMatchesDirectUtterance(heading: Heading, text: string): boolean {
+  const normalized = normalizeText(text);
+  if (!normalized) return false;
+  if (!heading.ordinal && heading.titleWords.length > 0) {
+    return normalized.includes(heading.titleWords.join(" "));
+  }
+  return headingMatchesWindow(heading, text);
+}
+
 function findEmbeddedMatch(
   heading: Heading,
   embeddedChapters: RawAudioChapter[],
@@ -316,12 +325,13 @@ function findDirectTranscriptMatch(
   utterances: TranscriptUtterance[],
   afterMs: number
 ): TranscriptUtterance | null {
-  const candidates = utterances.filter((utterance) => utterance.startMs > afterMs + 15_000);
+  const minGapMs = !heading.ordinal && heading.titleWords.length > 0 ? 2_000 : 15_000;
+  const candidates = utterances.filter((utterance) => utterance.startMs > afterMs + minGapMs);
   for (const utterance of candidates) {
     const text = shortUtterancesNear(utterances, utterance.startMs, 1_000, 4_000)
       .map((candidate) => candidate.text)
       .join(" ");
-    if (headingMatchesWindow(heading, text)) return utterance;
+    if (headingMatchesDirectUtterance(heading, text)) return utterance;
   }
   return null;
 }
