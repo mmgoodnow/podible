@@ -330,6 +330,39 @@ function findClosingCreditsMs(utterances: TranscriptUtterance[], afterMs: number
   return closing?.startMs ?? null;
 }
 
+function fillSkippedGenericChapterHeadings(chapters: ProposedChapter[], headings: Heading[], embedded: RawAudioChapter[]): ProposedChapter[] {
+  const byTitle = new Map(chapters.map((chapter) => [normalizeText(chapter.title), chapter]));
+  const offsets = new Map<number, number>();
+  for (const heading of headings) {
+    if (!heading.ordinal || heading.ordinalLabel !== "chapter" || heading.titleWords.length > 0) continue;
+    const chapter = byTitle.get(normalizeText(heading.title));
+    if (!chapter) continue;
+    const index = embedded.findIndex((candidate) => Math.abs(candidate.startMs / 1000 - chapter.startTime) <= 12);
+    if (index < 0) continue;
+    const offset = index - heading.ordinal;
+    offsets.set(offset, (offsets.get(offset) ?? 0) + 1);
+  }
+  const [offset, count] = [...offsets.entries()].sort((a, b) => b[1] - a[1])[0] ?? [];
+  if (offset === undefined || count < 3) return chapters;
+
+  const out = [...chapters];
+  const existingTimes = new Set(out.map((chapter) => Math.round(chapter.startTime * 1000)));
+  for (const heading of headings) {
+    if (!heading.ordinal || heading.ordinalLabel !== "chapter" || heading.titleWords.length > 0) continue;
+    if (byTitle.has(normalizeText(heading.title))) continue;
+    const embeddedIndex = heading.ordinal + offset;
+    const matched = embedded[embeddedIndex];
+    if (!matched || existingTimes.has(matched.startMs)) continue;
+    out.push({
+      startTime: matched.startMs / 1000,
+      title: heading.title,
+      confidence: "medium",
+      reason: "Filled skipped generic EPUB chapter from the learned embedded chapter sequence.",
+    });
+  }
+  return out.sort((a, b) => a.startTime - b.startTime);
+}
+
 export function proposeChapterMarkers(input: {
   epubEntries: EpubChapterEntry[];
   transcriptUtterances: TranscriptUtterance[];
@@ -381,6 +414,8 @@ export function proposeChapterMarkers(input: {
     });
     previousMs = matched.startMs;
   }
+
+  chapters.splice(0, chapters.length, ...fillSkippedGenericChapterHeadings(chapters, headings, embedded));
 
   const lastStoryStartMs = chapters.at(-1)?.startTime ? chapters.at(-1)!.startTime * 1000 : 0;
   const closingMs = findClosingCreditsMs(utterances, lastStoryStartMs);

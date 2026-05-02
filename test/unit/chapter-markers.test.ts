@@ -146,4 +146,29 @@ describe("chapter marker proposal", () => {
       [120, "Chapter Twenty-Two"],
     ]);
   });
+
+  test("fills skipped generic chapter headings from a learned embedded sequence", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["Chapter One", "Chapter Two", "Chapter Three", "Chapter Four"].map(epubEntry),
+      transcriptUtterances: [
+        utterance(100_000, "Chapter One."),
+        utterance(200_000, "Chapter Two."),
+        utterance(400_000, "Chapter Four."),
+      ],
+      embeddedChapters: [
+        { startMs: 0, endMs: 10_000, title: "Front matter" },
+        { startMs: 100_000, endMs: 200_000, title: "Chapter 2" },
+        { startMs: 200_000, endMs: 300_000, title: "Chapter 3" },
+        { startMs: 300_000, endMs: 400_000, title: "Chapter 4" },
+        { startMs: 400_000, endMs: 500_000, title: "Chapter 5" },
+      ],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [100, "Chapter One"],
+      [200, "Chapter Two"],
+      [300, "Chapter Three"],
+      [400, "Chapter Four"],
+    ]);
+  });
 });
