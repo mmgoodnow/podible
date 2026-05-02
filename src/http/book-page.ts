@@ -1,5 +1,5 @@
 import { buildManifestationChapters, manifestationDurationMs, selectPreferredAudioManifestation, streamExtensionForManifestation } from "../library/media";
-import { getBookTranscriptStatus, hasStoredManifestationTranscriptPayload, selectPreferredEpubAsset } from "../library/chapter-analysis";
+import { getBookTranscriptStatus, hasStoredManifestationTranscriptPayload, selectPreferredDownloadableEbookAsset } from "../library/chapter-analysis";
 import { BooksRepo } from "../repo";
 import type { AppSettings, AssetFileRow, AssetRow, ManifestationRow, ReleaseRow, SessionWithUserRow } from "../app-types";
 
@@ -653,7 +653,7 @@ export async function renderBookPage(
   const audioContainers = audioChoice
     ? audioChoice.containers.map((container) => ({ asset: container, files: repo.getAssetFiles(container.id) }))
     : [];
-  const ebook = selectPreferredEpubAsset(assets);
+  const ebook = selectPreferredDownloadableEbookAsset(assets);
   const chapters = audioChoice && audioContainers.length > 0 ? await buildManifestationChapters(repo, audioChoice.manifestation, audioContainers) : null;
   const transcriptUrl =
     audioChoice && hasStoredManifestationTranscriptPayload(repo, audioContainers)

@@ -17,6 +17,7 @@ import {
   selectPreferredAudioManifestation,
   streamAudioManifestation,
 } from "../../src/library/media";
+import { selectPreferredDownloadableEbookAsset, selectPreferredEpubAsset } from "../../src/library/chapter-analysis";
 import { BooksRepo } from "../../src/repo";
 import type { AssetRow, ManifestationRow } from "../../src/app-types";
 
@@ -220,6 +221,25 @@ describe("media asset selection", () => {
       asset({ id: 3, kind: "single", mime: "audio/mp4", duration_ms: 4000 }),
     ]);
     expect(chosen?.id).toBe(3);
+  });
+
+  test("selects downloadable ebook with PDF fallback but EPUB preference", () => {
+    const pdf = asset({
+      id: 4,
+      kind: "ebook",
+      mime: "application/pdf",
+      created_at: "2026-01-03T00:00:00.000Z",
+    });
+    const epub = asset({
+      id: 5,
+      kind: "ebook",
+      mime: "application/epub+zip",
+      created_at: "2026-01-01T00:00:00.000Z",
+    });
+
+    expect(selectPreferredEpubAsset([pdf])).toBeNull();
+    expect(selectPreferredDownloadableEbookAsset([pdf])?.id).toBe(4);
+    expect(selectPreferredDownloadableEbookAsset([pdf, epub])?.id).toBe(5);
   });
 
   test("returns null when only ebook assets exist", () => {

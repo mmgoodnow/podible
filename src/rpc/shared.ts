@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises";
 
 import { z } from "zod";
 
-import { hasStoredManifestationTranscriptPayload, selectPreferredEpubAsset } from "../library/chapter-analysis";
+import { hasStoredManifestationTranscriptPayload, selectPreferredDownloadableEbookAsset } from "../library/chapter-analysis";
 import { selectPreferredAudioManifestation, streamExtensionForManifestation } from "../library/media";
 import { computeDownloadFraction, pseudoProgressForMediaStatus, pseudoProgressForRelease } from "../library/progress";
 import { BooksRepo } from "../repo";
@@ -263,7 +263,7 @@ export function buildLibraryPlayback(repo: BooksRepo, request: Request, bookId: 
   const audioOptions = audioCandidates.map(buildAudioOption).filter((option): option is LibraryPlaybackAudio => option !== null);
   const audio = audioChoice ? (audioOptions.find((option) => option.manifestationId === audioChoice.manifestation.id) ?? null) : null;
 
-  const ebookAsset = selectPreferredEpubAsset(repo.listAssetsByBook(bookId));
+  const ebookAsset = selectPreferredDownloadableEbookAsset(repo.listAssetsByBook(bookId));
   const ebook = ebookAsset
     ? {
         assetId: ebookAsset.id,
