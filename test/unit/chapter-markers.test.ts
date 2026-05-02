@@ -373,6 +373,29 @@ describe("chapter marker proposal", () => {
     ]);
   });
 
+  test("does not override an embedded ordinal boundary with short title prose", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["46: Brotherhood", "47: Free", "48: The Magistrate"].map(epubEntry),
+      transcriptUtterances: [
+        utterance(59_200_000, "Chapter 46. Brotherhood."),
+        utterance(60_345_000, "Instead of freeing them."),
+        utterance(60_763_000, "Chapter 47. Free."),
+        utterance(61_250_000, "Chapter 48. The Magistrate."),
+      ],
+      embeddedChapters: [
+        { startMs: 59_200_000, endMs: 60_763_000, title: "046" },
+        { startMs: 60_763_000, endMs: 61_250_000, title: "047" },
+        { startMs: 61_250_000, endMs: 62_307_000, title: "048" },
+      ],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [59200, "46: Brotherhood"],
+      [60763, "47: Free"],
+      [61250, "48: The Magistrate"],
+    ]);
+  });
+
   test("matches numbered part headings despite subtitle transcription variants", () => {
     const report = proposeChapterMarkers({
       epubEntries: ["Part One: Of Blacke Cholor, without Boyling"].map(epubEntry),

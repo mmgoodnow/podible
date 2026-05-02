@@ -583,7 +583,7 @@ function findDirectTranscriptMatch(
   heading: Heading,
   utterances: TranscriptUtterance[],
   afterMs: number,
-  options: { preferExplicitOrdinal?: boolean } = {}
+  options: { preferExplicitOrdinal?: boolean; requireExplicitOrdinal?: boolean } = {}
 ): TranscriptUtterance | null {
   const minGapMs = !heading.ordinal && heading.titleWords.length > 0 ? 2_000 : 15_000;
   const candidates = utterances.filter((utterance) => utterance.startMs > afterMs + minGapMs);
@@ -594,6 +594,7 @@ function findDirectTranscriptMatch(
       .join(" ");
     if (!headingMatchesDirectUtterance(heading, text)) continue;
     if (!options.preferExplicitOrdinal || !heading.ordinal || headingOrdinalMatchesText(heading, text)) return utterance;
+    if (options.requireExplicitOrdinal) continue;
     fallback ??= utterance;
   }
   return fallback;
@@ -690,7 +691,10 @@ function resolveHeadingCandidate(
     reason = "Matched EPUB major heading directly in transcript where no embedded chapter boundary matched.";
   } else if (matched && !directFirst) {
     if (context.preferCoarseTranscriptHeadings) {
-      const direct = findDirectTranscriptMatch(heading, context.utterances, context.previousMs, directOptions);
+      const direct = findDirectTranscriptMatch(heading, context.utterances, context.previousMs, {
+        ...directOptions,
+        requireExplicitOrdinal: heading.ordinal !== null,
+      });
       if (direct && direct.startMs > context.previousMs && direct.startMs < matched.startMs) {
         matched = { startMs: direct.startMs };
         confidence = "medium";
