@@ -227,6 +227,10 @@ export function selectMajorEpubHeadings(entries: EpubChapterEntry[]): Heading[] 
     seen.add(title);
     titles.push(title);
   }
+  const headingCandidates = titles.map(headingFromTitle);
+  const hasOrdinalChapterStructure =
+    headingCandidates.filter((heading) => heading.ordinal && (heading.ordinalLabel === "chapter" || heading.ordinalLabel === "book" || heading.titleWords.length > 0)).length >= 3;
+
   return titles
     .filter((title) => !isGenericTocTitle(title))
     .filter((title) => {
@@ -234,10 +238,11 @@ export function selectMajorEpubHeadings(entries: EpubChapterEntry[]): Heading[] 
       if (BACK_MATTER.has(normalized)) return false;
       if (/^(prologue|epilogue)$/.test(normalized)) return true;
       const heading = headingFromTitle(title);
-      if (!heading.ordinal) return false;
+      if (!heading.ordinal) return !hasOrdinalChapterStructure && heading.titleWords.length > 0;
       if (/^book\s+/.test(normalized)) return true;
       if (/^chapter\s+/.test(normalized)) return true;
-      return /^([ivxlcdm]+|\d+)\s+/.test(normalized) && heading.titleWords.length > 0;
+      if (/^([ivxlcdm]+|\d+)\s+/.test(normalized) && heading.titleWords.length > 0) return true;
+      return false;
     })
     .map(headingFromTitle);
 }

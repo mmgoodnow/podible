@@ -57,6 +57,18 @@ describe("chapter marker proposal", () => {
     expect(headings.map((heading) => heading.title)).toEqual(["I: The Traveler", "II: Red Royal", "III: Grey Thief"]);
   });
 
+  test("keeps named non-fiction EPUB headings", () => {
+    const headings = selectMajorEpubHeadings(
+      ["Title Page", "Author’s Note", "Prologue", "Part One: Of Blacke Cholor", "A Private Plague", "Acknowledgments"].map(epubEntry)
+    );
+    expect(headings.map((heading) => heading.title)).toEqual([
+      "Author’s Note",
+      "Prologue",
+      "Part One: Of Blacke Cholor",
+      "A Private Plague",
+    ]);
+  });
+
   test("proposes usable audiobook chapters from raw EPUB, transcript, and embedded audio chapters", () => {
     const epubEntries = [
       "Title Page",
