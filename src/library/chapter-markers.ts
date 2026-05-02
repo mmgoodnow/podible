@@ -197,7 +197,7 @@ function headingFromTitle(title: string): Heading {
   const normalized = normalizeText(title);
   const tokens = normalized.split(" ").filter(Boolean);
   const label = tokens[0] === "chapter" || tokens[0] === "book" || tokens[0] === "part" ? tokens.shift()! : null;
-  const parsed = parseLeadingOrdinal(tokens);
+  const parsed = label || /^\s*(\d+|[ivxlcdm]+)\s*[:.]/i.test(title) ? parseLeadingOrdinal(tokens) : null;
   const ordinal = parsed?.ordinal ?? null;
   const titleOnly = parsed ? tokens.slice(parsed.consumed).join(" ") : normalized;
   return {
@@ -296,9 +296,43 @@ function headingMatchesDirectUtterance(heading: Heading, text: string): boolean 
   const normalized = normalizeText(text);
   if (!normalized) return false;
   if (!heading.ordinal && heading.titleWords.length > 0) {
-    return normalized.includes(heading.titleWords.join(" "));
+    return normalized.includes(heading.titleWords.join(" ")) || compactPhraseMatches(heading.titleWords, normalized);
   }
   return headingMatchesWindow(heading, text);
+}
+
+function compactPhraseMatches(headingWords: string[], normalizedText: string): boolean {
+  const needle = headingWords.join("");
+  if (needle.length < 8) return false;
+  const haystack = normalizedText.replace(/\s+/g, "");
+  if (haystack.includes(needle)) return true;
+  const maxDistance = needle.length >= 10 ? 2 : 1;
+  const minLength = Math.max(1, needle.length - maxDistance);
+  const maxLength = needle.length + maxDistance;
+  for (let length = minLength; length <= maxLength; length += 1) {
+    for (let index = 0; index + length <= haystack.length; index += 1) {
+      if (editDistanceAtMost(needle, haystack.slice(index, index + length), maxDistance)) return true;
+    }
+  }
+  return false;
+}
+
+function editDistanceAtMost(left: string, right: string, maxDistance: number): boolean {
+  if (Math.abs(left.length - right.length) > maxDistance) return false;
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= left.length; i += 1) {
+    const current = [i];
+    let rowMin = current[0]!;
+    for (let j = 1; j <= right.length; j += 1) {
+      const cost = left[i - 1] === right[j - 1] ? 0 : 1;
+      const value = Math.min(previous[j]! + 1, current[j - 1]! + 1, previous[j - 1]! + cost);
+      current[j] = value;
+      rowMin = Math.min(rowMin, value);
+    }
+    if (rowMin > maxDistance) return false;
+    previous = current;
+  }
+  return previous[right.length]! <= maxDistance;
 }
 
 function findEmbeddedMatch(

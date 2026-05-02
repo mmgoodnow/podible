@@ -262,4 +262,40 @@ describe("chapter marker proposal", () => {
       [68, "The House That Jimmy Built"],
     ]);
   });
+
+  test("matches compact and slightly fuzzy unnumbered heading phrases", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: [
+        "“A moon shot for cancer”",
+        "“The hunting of the sarc”",
+        "Atossa’s War",
+      ].map(epubEntry),
+      transcriptUtterances: [
+        utterance(60_000, "A moonshot for cancer."),
+        utterance(120_000, "The hunting of the snark."),
+        utterance(180_000, "Atos's War."),
+      ],
+      embeddedChapters: [],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Opening credits"],
+      [60, "“A moon shot for cancer”"],
+      [120, "“The hunting of the sarc”"],
+      [180, "Atossa’s War"],
+    ]);
+  });
+
+  test("does not treat number-word titles as ordinal-only headings", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["Thirteen Mountains"].map(epubEntry),
+      transcriptUtterances: [utterance(60_000, "Thirteen Mountains.")],
+      embeddedChapters: [],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Opening credits"],
+      [60, "Thirteen Mountains"],
+    ]);
+  });
 });
