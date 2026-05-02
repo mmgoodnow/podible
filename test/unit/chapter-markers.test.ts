@@ -59,7 +59,7 @@ describe("chapter marker proposal", () => {
 
   test("keeps named non-fiction EPUB headings", () => {
     const headings = selectMajorEpubHeadings(
-      ["Title Page", "Author’s Note", "Prologue", "Part One: Of Blacke Cholor", "A Private Plague", "Acknowledgments"].map(epubEntry)
+      ["Title Page", "Copyright Page", "Author’s Note", "Prologue", "Part One: Of Blacke Cholor", "A Private Plague", "Acknowledgments"].map(epubEntry)
     );
     expect(headings.map((heading) => heading.title)).toEqual([
       "Author’s Note",
@@ -181,6 +181,25 @@ describe("chapter marker proposal", () => {
       [200, "Chapter Two"],
       [300, "Chapter Three"],
       [400, "Chapter Four"],
+    ]);
+  });
+
+  test("does not treat intermediate audiobook part endings as closing credits", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["Prologue"].map(epubEntry),
+      transcriptUtterances: [
+        utterance(60_000, "Prologue."),
+        utterance(120_000, "You have reached the end of a part but not the end of a complete audiobook."),
+        utterance(125_000, "Audible hopes you have enjoyed this program."),
+        utterance(180_000, "This concludes the book."),
+      ],
+      embeddedChapters: [],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Opening credits"],
+      [60, "Prologue"],
+      [180, "Closing credits"],
     ]);
   });
 });

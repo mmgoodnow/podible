@@ -115,6 +115,7 @@ const FRONT_MATTER = new Set([
   "contents",
   "title page",
   "copyright",
+  "copyright page",
   "dedication",
   "epigraph",
   "also by",
@@ -330,7 +331,7 @@ function findClosingCreditsMs(utterances: TranscriptUtterance[], afterMs: number
   const closing = utterances.find((utterance) => {
     if (utterance.startMs <= afterMs) return false;
     const text = normalizeText(utterance.text);
-    return text.startsWith("this concludes ") || text.startsWith("audible hopes you have enjoyed");
+    return text.startsWith("this concludes ");
   });
   return closing?.startMs ?? null;
 }
