@@ -239,6 +239,32 @@ describe("chapter marker proposal", () => {
     ]);
   });
 
+  test("uses embedded boundaries for generic chapters when the EPUB opening is not spoken with an ordinal", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: [
+        {
+          ...epubEntryWithText("Chapter 6", "C HRONOS K EEP JUTTED from the easternmost rim of the great range.", 0),
+          wordCount: 20_000,
+        },
+      ],
+      transcriptUtterances: [
+        utterance(1_000, "Earlier narrative content."),
+        utterance(25_000, "Earlier narrative content continues."),
+        utterance(50_000, "Earlier narrative content continues."),
+        utterance(75_000, "Earlier narrative content continues."),
+        utterance(96_000, "They watched the stars burn cold and distant in the high night."),
+        utterance(104_000, "Kronos Keep jutted from the easternmost rim of the great range."),
+      ],
+      embeddedChapters: [
+        { startMs: 100_000, title: "021" },
+      ],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [100, "Chapter 6"],
+    ]);
+  });
+
   test("drops substantial generic wrappers when named ordinal chapters exist", () => {
     const headings = selectMajorEpubHeadings(
       ["Chapter 8", "1. ULTIMATUM", "2. COMPROMISE", "3. CHOICE", "Chapter 9"].map((title, index) => ({

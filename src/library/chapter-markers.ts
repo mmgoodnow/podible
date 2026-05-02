@@ -602,6 +602,32 @@ function ordinalWithOpeningWordsMatches(heading: Heading, text: string): boolean
   return true;
 }
 
+function openingTokenMatches(expected: string, actual: string, maxDistance: number): boolean {
+  if (actual === expected) return true;
+  if (expected.length < 6 || actual.length < 5) return false;
+  return editDistanceAtMost(expected, actual, maxDistance);
+}
+
+function openingWordsMatchText(heading: Heading, text: string): boolean {
+  if (heading.openingWords.length < 4) return false;
+  const tokens = normalizeText(text).split(" ").filter(Boolean).slice(0, 32);
+  let cursor = 0;
+  for (const [wordIndex, word] of heading.openingWords.slice(0, 4).entries()) {
+    const end = Math.min(tokens.length, cursor + (wordIndex === 0 ? 20 : 10));
+    let foundIndex = -1;
+    for (let index = cursor; index < end; index += 1) {
+      const maxDistance = wordIndex === 0 ? 2 : 1;
+      if (openingTokenMatches(word, tokens[index] ?? "", maxDistance)) {
+        foundIndex = index;
+        break;
+      }
+    }
+    if (foundIndex < 0 || (wordIndex === 0 && foundIndex > 16)) return false;
+    cursor = foundIndex + 1;
+  }
+  return true;
+}
+
 function isBareOrdinalHeading(heading: Heading): boolean {
   return Boolean(heading.ordinal && heading.ordinalLabel && heading.titleWords.length === 0);
 }
@@ -684,7 +710,8 @@ function findEmbeddedMatch(
 ): RawAudioChapter | null {
   const candidates = embeddedChapters.filter((chapter) => chapter.startMs > afterMs + 2_000);
   for (const chapter of candidates) {
-    if (headingMatchesWindow(heading, windowText(utterances, chapter.startMs))) {
+    const text = windowText(utterances, chapter.startMs);
+    if (headingMatchesWindow(heading, text) || (isBareOrdinalHeading(heading) && openingWordsMatchText(heading, text))) {
       return chapter;
     }
     const numericChapterHeading = /^(\d+|chapter\s+\d+)/.test(normalizeText(heading.title));
