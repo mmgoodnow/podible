@@ -706,6 +706,7 @@ function findClosingCreditsMs(utterances: TranscriptUtterance[], afterMs: number
     if (utterance.startMs <= afterMs) return false;
     const text = normalizeText(utterance.text);
     if (text.startsWith("this concludes ")) return true;
+    if (text.includes("audible") && /\bproduc\w*\b/.test(text)) return true;
     if (!text.startsWith("audible hopes you have enjoyed") && !text.startsWith("we hope youve enjoyed this program")) return false;
     const previous = utterances
       .slice(Math.max(0, index - 3), index)

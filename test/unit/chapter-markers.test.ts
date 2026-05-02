@@ -454,6 +454,24 @@ describe("chapter marker proposal", () => {
     ]);
   });
 
+  test("uses Audible production credits before the final Audible hopes line", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["Epilogue"].map(epubEntry),
+      transcriptUtterances: [
+        utterance(60_000, "Epilogue."),
+        utterance(180_000, "Produced by Jane Doe for Audible Studios."),
+        utterance(210_000, "Audible hopes you have enjoyed this program."),
+      ],
+      embeddedChapters: [],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Opening credits"],
+      [60, "Epilogue"],
+      [180, "Closing credits"],
+    ]);
+  });
+
   test("prefers explicit chapter ordinal when a title appears earlier in prose", () => {
     const report = proposeChapterMarkers({
       epubEntries: ["An Explanatory Note", "1. What Do Schoolteachers and Sumo Wrestlers Have in Common?"].map(epubEntry),
