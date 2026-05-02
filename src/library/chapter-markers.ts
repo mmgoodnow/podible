@@ -102,6 +102,13 @@ const NUMBER_WORDS = new Map([
   ["eighteen", 18],
   ["nineteen", 19],
   ["twenty", 20],
+  ["thirty", 30],
+  ["forty", 40],
+  ["fifty", 50],
+  ["sixty", 60],
+  ["seventy", 70],
+  ["eighty", 80],
+  ["ninety", 90],
 ]);
 
 const FRONT_MATTER = new Set([
@@ -149,7 +156,7 @@ function parseOrdinalToken(value: string): number | null {
   const normalized = normalizeText(value);
   if (!normalized) return null;
   if (/^\d+$/.test(normalized)) return Number(normalized);
-  const numberWord = NUMBER_WORDS.get(normalized);
+  const numberWord = parseNumberWords(normalized.split(" "));
   if (numberWord) return numberWord;
   return parseRoman(normalized);
 }
@@ -161,17 +168,41 @@ function parseSpokenOrdinalToken(value: string): number | null {
   return NUMBER_WORDS.get(normalized) ?? null;
 }
 
+function parseNumberWords(tokens: string[]): number | null {
+  if (tokens.length === 0 || tokens.length > 2) return null;
+  const first = NUMBER_WORDS.get(tokens[0]!);
+  if (!first) return null;
+  if (tokens.length === 1) return first;
+  if (first < 20 || first % 10 !== 0) return null;
+  const second = NUMBER_WORDS.get(tokens[1]!);
+  if (!second || second >= 10) return null;
+  return first + second;
+}
+
+function parseLeadingOrdinal(tokens: string[]): { ordinal: number; consumed: number } | null {
+  for (let length = Math.min(2, tokens.length); length >= 1; length -= 1) {
+    const value = parseNumberWords(tokens.slice(0, length));
+    if (value !== null) return { ordinal: value, consumed: length };
+  }
+  const first = tokens[0];
+  if (!first) return null;
+  if (/^\d+$/.test(first)) return { ordinal: Number(first), consumed: 1 };
+  const roman = parseRoman(first);
+  if (roman !== null) return { ordinal: roman, consumed: 1 };
+  return null;
+}
+
 function headingFromTitle(title: string): Heading {
   const normalized = normalizeText(title);
-  const match = /^(?:(chapter|book)\s+)?([ivxlcdm]+|\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)(?:\s+(.*))?$/.exec(
-    normalized
-  );
-  const ordinal = match ? parseOrdinalToken(match[2]!) : null;
-  const titleOnly = match ? (match[3] ?? "").trim() : normalized;
+  const tokens = normalized.split(" ").filter(Boolean);
+  const label = tokens[0] === "chapter" || tokens[0] === "book" ? tokens.shift()! : null;
+  const parsed = parseLeadingOrdinal(tokens);
+  const ordinal = parsed?.ordinal ?? null;
+  const titleOnly = parsed ? tokens.slice(parsed.consumed).join(" ") : normalized;
   return {
     title,
     ordinal,
-    ordinalLabel: match?.[1] === "chapter" || match?.[1] === "book" ? match[1] : null,
+    ordinalLabel: label,
     titleWords: titleOnly.split(" ").filter(Boolean),
   };
 }

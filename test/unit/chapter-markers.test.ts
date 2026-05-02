@@ -127,4 +127,23 @@ describe("chapter marker proposal", () => {
 
     expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([[60, "9. TARGET"]]);
   });
+
+  test("parses compound spoken chapter ordinals after twenty", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["Chapter Twenty-One", "Chapter Twenty-Two"].map(epubEntry),
+      transcriptUtterances: [
+        utterance(60_000, "Chapter 21 December."),
+        utterance(120_000, "Chapter 22."),
+      ],
+      embeddedChapters: [
+        { startMs: 60_000, endMs: 120_000, title: "Chapter 21" },
+        { startMs: 120_000, endMs: 180_000, title: "Chapter 22" },
+      ],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [60, "Chapter Twenty-One"],
+      [120, "Chapter Twenty-Two"],
+    ]);
+  });
 });
