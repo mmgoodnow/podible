@@ -77,7 +77,7 @@ describe("chapter marker proposal", () => {
     ]);
   });
 
-  test("keeps spoken front matter, month cards, and useful back matter", () => {
+  test("keeps spoken front matter, interstitial cards, and useful back matter", () => {
     const headings = selectMajorEpubHeadings(
       ["Copyright", "Preface", "1. PARTY", "OCTOBER", "NOVEMBER", "4. WAKING UP", "EPILOGUE—TREATY", "ACKNOWLEDGMENTS", "DISCOVER MORE"].map(
         epubEntry
@@ -94,6 +94,26 @@ describe("chapter marker proposal", () => {
       "ACKNOWLEDGMENTS",
       "DISCOVER MORE",
     ]);
+  });
+
+  test("recognizes short interstitial cards without naming their vocabulary", () => {
+    const headings = selectMajorEpubHeadings(["1. FIRST", "BLUE DOOR", "RED SKY", "2. SECOND"].map(epubEntry));
+
+    expect(headings.map((heading) => heading.title)).toEqual(["1. FIRST", "BLUE DOOR", "RED SKY", "2. SECOND"]);
+  });
+
+  test("drops isolated short point-of-view cards between book sections and chapters", () => {
+    const headings = selectMajorEpubHeadings(
+      ["BOOK ONE", "bella", "PREFACE", "1. ENGAGED", "BOOK TWO", "jacob", "PREFACE", "2. WAITING"].map(epubEntry)
+    );
+
+    expect(headings.map((heading) => heading.title)).toEqual(["BOOK ONE", "1. ENGAGED", "BOOK TWO", "2. WAITING"]);
+  });
+
+  test("lets generic-only EPUB chapter labels fall through to embedded audio chapters", () => {
+    const headings = selectMajorEpubHeadings(["Chapter 1", "Chapter 2", "Chapter 3", "Acknowledgments", "Other Titles"].map(epubEntry));
+
+    expect(headings.map((heading) => heading.title)).toEqual([]);
   });
 
   test("derives useful titles from numeric nonfiction EPUB headings", () => {

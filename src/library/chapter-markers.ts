@@ -37,6 +37,7 @@ type Heading = {
   ordinal: number | null;
   ordinalLabel: "chapter" | "book" | "part" | null;
   titleWords: string[];
+  sourceIndex: number;
 };
 
 export function wordsToTranscriptUtterances(words: TranscriptWord[]): TranscriptUtterance[] {
@@ -127,27 +128,6 @@ const BACK_MATTER = new Set([
   "also available",
 ]);
 
-const SPOKEN_BACK_MATTER = new Set([
-  "acknowledgments",
-  "acknowledgements",
-  "discover more",
-]);
-
-const MONTH_CARDS = new Set([
-  "january",
-  "february",
-  "march",
-  "april",
-  "may",
-  "june",
-  "july",
-  "august",
-  "september",
-  "october",
-  "november",
-  "december",
-]);
-
 function normalizeText(value: string): string {
   return value
     .toLowerCase()
@@ -212,10 +192,13 @@ function parseLeadingOrdinal(tokens: string[]): { ordinal: number; consumed: num
   return null;
 }
 
-function headingFromTitle(title: string): Heading {
+function headingFromTitle(title: string, sourceIndex = -1): Heading {
   const normalized = normalizeText(title);
   const tokens = normalized.split(" ").filter(Boolean);
-  const label = tokens[0] === "chapter" || tokens[0] === "book" || tokens[0] === "part" ? tokens.shift()! : null;
+  let label: Heading["ordinalLabel"] = null;
+  if (tokens[0] === "chapter" || tokens[0] === "book" || tokens[0] === "part") {
+    label = tokens.shift() as Heading["ordinalLabel"];
+  }
   const parsed = label || /^\s*(\d+|[ivxlcdm]+)\s*[:.]/i.test(title) ? parseLeadingOrdinal(tokens) : null;
   const ordinal = parsed?.ordinal ?? null;
   const titleOnly = parsed ? tokens.slice(parsed.consumed).join(" ") : normalized;
@@ -224,6 +207,7 @@ function headingFromTitle(title: string): Heading {
     ordinal,
     ordinalLabel: label,
     titleWords: titleOnly.split(" ").filter(Boolean),
+    sourceIndex,
   };
 }
 
@@ -231,9 +215,14 @@ function isGenericTocTitle(title: string): boolean {
   const normalized = normalizeText(title);
   if (!normalized) return true;
   if (FRONT_MATTER.has(normalized) || BACK_MATTER.has(normalized)) return true;
-  if (/^(chapter\s*)?\d+$/.test(normalized)) return true;
+  if (isGenericNumberedChapterTocHeading(title)) return true;
   if (/^[ivxlcdm]+$/.test(normalized)) return true;
   return false;
+}
+
+function isGenericNumberedChapterTocHeading(title: string): boolean {
+  const normalized = normalizeText(title);
+  return /^(chapter\s*)?\d+$/.test(normalized);
 }
 
 function deriveHeadingTitle(entry: EpubChapterEntry): string {
@@ -254,45 +243,117 @@ function deriveHeadingTitle(entry: EpubChapterEntry): string {
 }
 
 export function selectMajorEpubHeadings(entries: EpubChapterEntry[]): Heading[] {
-  const titles: string[] = [];
+  const headings: Heading[] = [];
   const seen = new Set<string>();
-  for (const entry of entries) {
+  for (const [sourceIndex, entry] of entries.entries()) {
     const title = deriveHeadingTitle(entry);
     const normalized = normalizeText(title);
     if (BACK_MATTER.has(normalized)) break;
     if (!title || seen.has(title)) continue;
     seen.add(title);
-    titles.push(title);
+    headings.push(headingFromTitle(title, sourceIndex));
   }
+  const ordinalHeadings = headings.filter((heading) => !isGenericTocTitle(heading.title) && isOrdinalChapterStructureHeading(heading));
   const hasOrdinalChapterStructure =
-    titles.filter((title) => {
-      const normalized = normalizeText(title);
-      const heading = headingFromTitle(title);
-      return heading.ordinal && (heading.ordinalLabel === "chapter" || heading.ordinalLabel === "book" || /^([ivxlcdm]+|\d+)\s+/.test(normalized));
-    }).length >= 3;
-  const hasMonthCards = titles.some((title) => MONTH_CARDS.has(normalizeText(title)));
+    ordinalHeadings.length >= 3;
+  const hasGenericChapterTocStructure = headings.filter((heading) => isGenericNumberedChapterTocHeading(heading.title)).length >= 3;
+  const chapterOrdinalHeadings = headings.filter((heading) => !isGenericTocTitle(heading.title) && isOrdinalChapterHeading(heading));
+  const firstChapterOrdinalIndex = chapterOrdinalHeadings[0]?.sourceIndex ?? ordinalHeadings[0]?.sourceIndex ?? Number.POSITIVE_INFINITY;
+  const lastChapterOrdinalIndex = chapterOrdinalHeadings.at(-1)?.sourceIndex ?? ordinalHeadings.at(-1)?.sourceIndex ?? Number.NEGATIVE_INFINITY;
+  const shortInterstitialCounts = countShortInterstitialSequenceHeadings(headings, firstChapterOrdinalIndex, lastChapterOrdinalIndex);
+  const hasUniqueShortInterstitialSequence = [...shortInterstitialCounts.values()].filter((count) => count === 1).length >= 2;
 
-  return titles
-    .filter((title) => !isGenericTocTitle(title))
-    .filter((title) => {
-      const normalized = normalizeText(title);
+  return headings
+    .filter((heading) => !isGenericTocTitle(heading.title))
+    .filter((heading) => {
+      const normalized = normalizeText(heading.title);
       if (BACK_MATTER.has(normalized)) return false;
       if (/^(prologue|epilogue)$/.test(normalized)) return true;
       if (/^epilogue\s+/.test(normalized)) return true;
-      if (normalized === "an explanatory note") return true;
       if (normalized.startsWith("introduction ")) return true;
-      if (normalized === "preface") return !hasOrdinalChapterStructure || hasMonthCards;
-      if (SPOKEN_BACK_MATTER.has(normalized)) return !hasOrdinalChapterStructure || hasMonthCards;
-      if (MONTH_CARDS.has(normalized)) return true;
-      const heading = headingFromTitle(title);
-      if (!heading.ordinal) return !hasOrdinalChapterStructure && heading.titleWords.length > 0;
-      if (/^book\s+/.test(normalized)) return true;
-      if (/^chapter\s+/.test(normalized)) return true;
-      if (/^part\s+/.test(normalized)) return true;
-      if (/^([ivxlcdm]+|\d+)\s+/.test(normalized) && heading.titleWords.length > 0) return true;
+      if (isShortUnnumberedHeading(heading)) {
+        const shortHeadingCount = shortInterstitialCounts.get(normalizeText(heading.title)) ?? 0;
+        return (
+          (!hasOrdinalChapterStructure && !hasGenericChapterTocStructure) ||
+          (heading.sourceIndex < firstChapterOrdinalIndex && (isFrontMatterNoteHeading(heading) || hasUniqueShortInterstitialSequence)) ||
+          (heading.sourceIndex > firstChapterOrdinalIndex && heading.sourceIndex < lastChapterOrdinalIndex && shortHeadingCount === 1) ||
+          (heading.sourceIndex > lastChapterOrdinalIndex && hasUniqueShortInterstitialSequence)
+        );
+      }
+      if (!heading.ordinal) return !hasOrdinalChapterStructure && !hasGenericChapterTocStructure && heading.titleWords.length > 0;
+      if (isMainOrdinalHeading(heading)) return true;
       return false;
-    })
-    .map(headingFromTitle);
+    });
+}
+
+function isOrdinalChapterHeading(heading: Heading): boolean {
+  if (!heading.ordinal) return false;
+  const normalized = normalizeText(heading.title);
+  return heading.ordinalLabel === "chapter" || /^chapter\s+/.test(normalized) || (/^([ivxlcdm]+|\d+)\s+/.test(normalized) && heading.titleWords.length > 0);
+}
+
+function isOrdinalChapterStructureHeading(heading: Heading): boolean {
+  if (!heading.ordinal) return false;
+  const normalized = normalizeText(heading.title);
+  return (
+    heading.ordinalLabel === "chapter" ||
+    heading.ordinalLabel === "book" ||
+    /^book\s+/.test(normalized) ||
+    /^chapter\s+/.test(normalized) ||
+    (/^([ivxlcdm]+|\d+)\s+/.test(normalized) && heading.titleWords.length > 0)
+  );
+}
+
+function isMainOrdinalHeading(heading: Heading): boolean {
+  if (!heading.ordinal) return false;
+  const normalized = normalizeText(heading.title);
+  return (
+    heading.ordinalLabel === "chapter" ||
+    heading.ordinalLabel === "book" ||
+    /^book\s+/.test(normalized) ||
+    /^chapter\s+/.test(normalized) ||
+    /^part\s+/.test(normalized) ||
+    (/^([ivxlcdm]+|\d+)\s+/.test(normalized) && heading.titleWords.length > 0)
+  );
+}
+
+function isShortUnnumberedHeading(heading: Heading): boolean {
+  return !heading.ordinal && heading.titleWords.length > 0 && heading.titleWords.length <= 3;
+}
+
+function isFrontMatterNoteHeading(heading: Heading): boolean {
+  const normalized = normalizeText(heading.title);
+  return normalized.includes("note") || normalized.startsWith("introduction");
+}
+
+function countShortInterstitialSequenceHeadings(headings: Heading[], firstMainOrdinalIndex: number, lastMainOrdinalIndex: number): Map<string, number> {
+  const counts = new Map<string, number>();
+  let run: Heading[] = [];
+  let previousBoundary: Heading | null = null;
+  const flush = (nextBoundary: Heading | null) => {
+    if (run.length >= 2 && previousBoundary && nextBoundary && isOrdinalChapterHeading(previousBoundary) && isOrdinalChapterHeading(nextBoundary)) {
+      for (const heading of run) {
+        const normalized = normalizeText(heading.title);
+        counts.set(normalized, (counts.get(normalized) ?? 0) + 1);
+      }
+    }
+    run = [];
+  };
+  for (const heading of headings) {
+    if (
+      !isGenericTocTitle(heading.title) &&
+      isShortUnnumberedHeading(heading) &&
+      heading.sourceIndex > firstMainOrdinalIndex &&
+      heading.sourceIndex < lastMainOrdinalIndex
+    ) {
+      run.push(heading);
+    } else {
+      flush(heading);
+      previousBoundary = heading;
+    }
+  }
+  flush(null);
+  return counts;
 }
 
 function shortUtterancesNear(
@@ -353,18 +414,14 @@ function headingOrdinalMatchesText(heading: Heading, text: string): boolean {
   });
 }
 
-function isMonthHeading(heading: Heading): boolean {
-  return MONTH_CARDS.has(normalizeText(heading.title));
-}
-
 function shouldPreferDirectMatch(heading: Heading): boolean {
   const normalized = normalizeText(heading.title);
-  return isMonthHeading(heading) || normalized === "preface" || normalized.startsWith("epilogue") || SPOKEN_BACK_MATTER.has(normalized);
+  return isShortUnnumberedHeading(heading) || normalized.startsWith("epilogue");
 }
 
-function isSupplementalHeading(heading: Heading): boolean {
+function isOpeningCoveredPrelude(heading: Heading, headingIndex: number, firstOrdinalIndex: number): boolean {
   const normalized = normalizeText(heading.title);
-  return normalized === "preface" || normalized.startsWith("epilogue") || SPOKEN_BACK_MATTER.has(normalized);
+  return headingIndex < firstOrdinalIndex && normalized === "preface";
 }
 
 function compactPhraseMatches(headingWords: string[], normalizedText: string): boolean {
@@ -529,9 +586,7 @@ export function proposeChapterMarkers(input: {
   }
 
   for (const [index, heading] of headings.entries()) {
-    const normalizedHeading = normalizeText(heading.title);
-    const keepSupplementalAfterOpening = normalizedHeading.startsWith("epilogue") && maxOrdinalHeading > 0 && maxOrdinalHeading <= 6;
-    if (chapters.some((chapter) => chapter.title === "Opening credits") && isSupplementalHeading(heading) && !keepSupplementalAfterOpening) continue;
+    if (chapters.some((chapter) => chapter.title === "Opening credits") && isOpeningCoveredPrelude(heading, index, firstOrdinalIndex)) continue;
     const directFirst = shouldPreferDirectMatch(heading);
     const directOptions = { preferExplicitOrdinal: preferCoarseTranscriptHeadings && heading.ordinal !== null };
     let matched = directFirst ? findDirectTranscriptMatch(heading, utterances, previousMs, directOptions) : findEmbeddedMatch(heading, embedded, utterances, previousMs);
@@ -548,9 +603,12 @@ export function proposeChapterMarkers(input: {
     if (matched && directFirst) {
       confidence = "medium";
       reason = "Matched EPUB major heading directly in transcript where no embedded chapter boundary matched.";
-    } else if (matched && !directFirst && !embedded.some((chapter) => chapter.startMs === matched.startMs)) {
-      confidence = "medium";
-      reason = "Matched EPUB major heading directly in transcript where no embedded chapter boundary matched.";
+    } else if (matched && !directFirst) {
+      const matchedStartMs = matched.startMs;
+      if (!embedded.some((chapter) => chapter.startMs === matchedStartMs)) {
+        confidence = "medium";
+        reason = "Matched EPUB major heading directly in transcript where no embedded chapter boundary matched.";
+      }
     }
 
     if (index === 0 && firstStoryMs !== null && (!matched || matched.startMs - firstStoryMs > 300_000)) {
@@ -563,8 +621,9 @@ export function proposeChapterMarkers(input: {
     let matchedWindow = headingMatchesWindow(heading, windowText(utterances, matched.startMs));
     if (!matchedWindow && preferCoarseTranscriptHeadings) {
       const direct = findDirectTranscriptMatch(heading, utterances, previousMs, directOptions);
-      const nextEmbedded = embedded.find((chapter) => chapter.startMs > matched.startMs);
-      if (direct && direct.startMs >= matched.startMs && (!nextEmbedded || direct.startMs < nextEmbedded.startMs)) {
+      const matchedStartMs = matched.startMs;
+      const nextEmbedded = embedded.find((chapter) => chapter.startMs > matchedStartMs);
+      if (direct && direct.startMs >= matchedStartMs && (!nextEmbedded || direct.startMs < nextEmbedded.startMs)) {
         matched = { startMs: direct.startMs };
         matchedWindow = true;
         confidence = "medium";
