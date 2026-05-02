@@ -116,6 +116,35 @@ describe("chapter marker proposal", () => {
     expect(headings.map((heading) => heading.title)).toEqual([]);
   });
 
+  test("trusts user-facing embedded audiobook chapter titles", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["Author’s Note", "1. Date you? Date him?!", "Epilogue"].map(epubEntry),
+      transcriptUtterances: [
+        utterance(24_000, "Author's note."),
+        utterance(117_000, "Chapter one. Tyler."),
+        utterance(512_000, "Chapter two. Stella."),
+        utterance(900_000, "Credits."),
+      ],
+      embeddedChapters: [
+        { startMs: 0, endMs: 24_000, title: "Book Intro" },
+        { startMs: 24_000, endMs: 50_000, title: "Author’s Note" },
+        { startMs: 50_000, endMs: 117_000, title: "Trigger Warnings" },
+        { startMs: 117_000, endMs: 512_000, title: "Chapter 1: Tyler" },
+        { startMs: 512_000, endMs: 900_000, title: "Chapter 2: Stella" },
+        { startMs: 900_000, endMs: 920_000, title: "Credits" },
+      ],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Book Intro"],
+      [24, "Author’s Note"],
+      [50, "Trigger Warnings"],
+      [117, "Chapter 1: Tyler"],
+      [512, "Chapter 2: Stella"],
+      [900, "Credits"],
+    ]);
+  });
+
   test("derives useful titles from numeric nonfiction EPUB headings", () => {
     const headings = selectMajorEpubHeadings([
       epubEntryWithText("An Explanatory Note", "AN EXPLANATORY NOTE In the summer of 2003.", 0),

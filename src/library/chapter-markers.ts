@@ -249,6 +249,36 @@ function isGenericNumberedChapterTocHeading(title: string): boolean {
   return /^(chapter\s*)?\d+$/.test(normalized);
 }
 
+function isGenericEmbeddedChapterTitle(title?: string): boolean {
+  const normalized = normalizeText(title ?? "");
+  if (!normalized) return true;
+  if (/^\d+$/.test(normalized)) return true;
+  if (/^[ivxlcdm]+$/.test(normalized)) return true;
+  if (/^(track|disc|cd|section)\s+\d+$/.test(normalized)) return true;
+  if (/^(chapter|chap|ch|part|book)\s+(\d+|[ivxlcdm]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)$/.test(normalized)) {
+    return true;
+  }
+  return false;
+}
+
+function embeddedChaptersLookUserFacing(chapters: RawAudioChapter[]): boolean {
+  const titled = chapters.filter((chapter) => chapter.title?.trim());
+  if (titled.length < 4) return false;
+  const nonGenericCount = titled.filter((chapter) => !isGenericEmbeddedChapterTitle(chapter.title)).length;
+  return nonGenericCount / titled.length >= 0.75;
+}
+
+function chaptersFromUserFacingEmbedded(chapters: RawAudioChapter[]): ProposedChapter[] {
+  return chapters
+    .filter((chapter) => chapter.title?.trim())
+    .map((chapter) => ({
+      startTime: chapter.startMs / 1000,
+      title: chapter.title!.trim(),
+      confidence: "high" as const,
+      reason: "Trusted user-facing embedded audiobook chapter title.",
+    }));
+}
+
 function deriveHeadingTitle(entry: EpubChapterEntry): string {
   const title = entry.title.trim();
   const normalizedTitle = normalizeText(title);
@@ -711,6 +741,14 @@ export function proposeChapterMarkers(input: {
   const embedded = [...input.embeddedChapters].sort((a, b) => a.startMs - b.startMs);
   const utterances = [...input.transcriptUtterances].sort((a, b) => a.startMs - b.startMs);
   const chapters: ProposedChapter[] = [];
+  if (embeddedChaptersLookUserFacing(embedded)) {
+    return {
+      epubHeadings: headings.map((heading) => heading.title),
+      embeddedChapterCount: embedded.length,
+      transcriptUtteranceCount: utterances.length,
+      chapters: chaptersFromUserFacingEmbedded(embedded),
+    };
+  }
   const maxOrdinalHeading = Math.max(0, ...headings.map((heading) => heading.ordinal ?? 0));
   const firstOrdinalIndex = headings.findIndex((heading) => heading.ordinal !== null);
   const preferCoarseTranscriptHeadings = maxOrdinalHeading > 0 && embedded.length <= maxOrdinalHeading && firstOrdinalIndex > 0;
