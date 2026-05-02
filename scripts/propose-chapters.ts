@@ -4,23 +4,32 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { loadEpubEntries } from "../src/library/chapter-analysis";
-import { proposeChapterMarkers, type RawAudioChapter, type TranscriptUtterance } from "../src/library/chapter-markers";
+import {
+  proposeChapterMarkers,
+  wordsToTranscriptUtterances,
+  type RawAudioChapter,
+  type TranscriptUtterance,
+  type TranscriptWord,
+} from "../src/library/chapter-markers";
 
 type TranscriptPayload = {
   utterances?: unknown;
+  words?: unknown;
 };
 
 type CliOptions = {
   epub: string;
   transcript: string;
-  audio: string;
+  audio?: string;
+  rawChapters?: string;
+  assetFiles?: string;
   out?: string;
   report?: string;
 };
 
 function usage(): never {
   console.error(`Usage:
-  bun run propose-chapters -- --epub <book.epub> --transcript <transcript.json> --audio <audio.m4a> [--out chapters.json] [--report report.md]`);
+  bun run propose-chapters -- --epub <book.epub> --transcript <transcript.json> (--audio <audio.m4a> | --raw-chapters <chapters.json> | --asset-files <asset-files.json>) [--out chapters.json] [--report report.md]`);
   process.exit(1);
 }
 
@@ -33,12 +42,15 @@ function parseArgs(argv: string[]): CliOptions {
     if (arg === "--epub") options.epub = next;
     else if (arg === "--transcript") options.transcript = next;
     else if (arg === "--audio") options.audio = next;
+    else if (arg === "--raw-chapters") options.rawChapters = next;
+    else if (arg === "--asset-files") options.assetFiles = next;
     else if (arg === "--out") options.out = next;
     else if (arg === "--report") options.report = next;
     else usage();
     i += 1;
   }
-  if (!options.epub || !options.transcript || !options.audio) usage();
+  const audioSources = [options.audio, options.rawChapters, options.assetFiles].filter(Boolean);
+  if (!options.epub || !options.transcript || audioSources.length !== 1) usage();
   return options as CliOptions;
 }
 
@@ -55,16 +67,31 @@ function toUtterance(value: unknown): TranscriptUtterance | null {
   };
 }
 
+function toWord(value: unknown): TranscriptWord | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.startMs !== "number" || typeof candidate.endMs !== "number" || typeof candidate.text !== "string") {
+    return null;
+  }
+  return {
+    startMs: candidate.startMs,
+    endMs: candidate.endMs,
+    text: candidate.text,
+  };
+}
+
 async function loadTranscriptUtterances(transcriptPath: string): Promise<TranscriptUtterance[]> {
   const payload = (await Bun.file(transcriptPath).json()) as TranscriptPayload;
-  if (!Array.isArray(payload.utterances)) {
-    throw new Error(`Transcript does not contain an utterances array: ${transcriptPath}`);
+  if (Array.isArray(payload.utterances)) {
+    const utterances = payload.utterances.map(toUtterance).filter((utterance): utterance is TranscriptUtterance => utterance !== null);
+    if (utterances.length > 0) return utterances;
   }
-  const utterances = payload.utterances.map(toUtterance).filter((utterance): utterance is TranscriptUtterance => utterance !== null);
-  if (utterances.length === 0) {
-    throw new Error(`Transcript has no usable utterances: ${transcriptPath}`);
+  if (Array.isArray(payload.words)) {
+    const words = payload.words.map(toWord).filter((word): word is TranscriptWord => word !== null);
+    const utterances = wordsToTranscriptUtterances(words);
+    if (utterances.length > 0) return utterances;
   }
-  return utterances;
+  throw new Error(`Transcript has no usable utterances or timestamped words: ${transcriptPath}`);
 }
 
 function loadEmbeddedChapters(audioPath: string): RawAudioChapter[] {
@@ -88,6 +115,46 @@ function loadEmbeddedChapters(audioPath: string): RawAudioChapter[] {
   });
 }
 
+async function loadRawChapters(chaptersPath: string): Promise<RawAudioChapter[]> {
+  const payload = await Bun.file(chaptersPath).json();
+  const chapters = Array.isArray(payload) ? payload : Array.isArray(payload?.chapters) ? payload.chapters : null;
+  if (!chapters) throw new Error(`Raw chapter file must be an array or { chapters: [...] }: ${chaptersPath}`);
+  return chapters
+    .map((value: unknown): RawAudioChapter | null => {
+      if (!value || typeof value !== "object") return null;
+      const chapter = value as Record<string, unknown>;
+      if (typeof chapter.startMs !== "number") return null;
+      return {
+        startMs: chapter.startMs,
+        endMs: typeof chapter.endMs === "number" ? chapter.endMs : undefined,
+        title: typeof chapter.title === "string" ? chapter.title : undefined,
+      };
+    })
+    .filter((chapter): chapter is RawAudioChapter => chapter !== null);
+}
+
+async function loadAssetFileBoundaries(assetFilesPath: string): Promise<RawAudioChapter[]> {
+  const payload = await Bun.file(assetFilesPath).json();
+  const files = Array.isArray(payload) ? payload : Array.isArray(payload?.files) ? payload.files : null;
+  if (!files) throw new Error(`Asset file boundary input must be an array or { files: [...] }: ${assetFilesPath}`);
+  let cursor = 0;
+  return files
+    .map((value: unknown, index: number): RawAudioChapter | null => {
+      if (!value || typeof value !== "object") return null;
+      const file = value as Record<string, unknown>;
+      const durationMs = typeof file.durationMs === "number" ? file.durationMs : typeof file.duration_ms === "number" ? file.duration_ms : null;
+      if (durationMs === null) return null;
+      const startMs = cursor;
+      cursor += durationMs;
+      return {
+        startMs,
+        endMs: cursor,
+        title: typeof file.title === "string" && file.title.trim() ? file.title : `Part ${index + 1}`,
+      };
+    })
+    .filter((chapter): chapter is RawAudioChapter => chapter !== null);
+}
+
 function formatTimestamp(seconds: number): string {
   const totalTenths = Math.round(seconds * 10);
   const total = Math.floor(totalTenths / 10);
@@ -107,7 +174,9 @@ function markdownReport(options: CliOptions, report: ReturnType<typeof proposeCh
   lines.push("");
   lines.push(`- EPUB: \`${options.epub}\``);
   lines.push(`- Transcript: \`${options.transcript}\``);
-  lines.push(`- Audio: \`${options.audio}\``);
+  if (options.audio) lines.push(`- Audio: \`${options.audio}\``);
+  if (options.rawChapters) lines.push(`- Raw chapters: \`${options.rawChapters}\``);
+  if (options.assetFiles) lines.push(`- Asset files: \`${options.assetFiles}\``);
   lines.push(`- EPUB major headings: ${report.epubHeadings.length}`);
   lines.push(`- Embedded audio chapters: ${report.embeddedChapterCount}`);
   lines.push(`- Transcript utterances: ${report.transcriptUtteranceCount}`);
@@ -136,7 +205,11 @@ async function main() {
     loadEpubEntries(options.epub),
     loadTranscriptUtterances(options.transcript),
   ]);
-  const embeddedChapters = loadEmbeddedChapters(options.audio);
+  const embeddedChapters = options.audio
+    ? loadEmbeddedChapters(options.audio)
+    : options.rawChapters
+      ? await loadRawChapters(options.rawChapters)
+      : await loadAssetFileBoundaries(options.assetFiles!);
   const report = proposeChapterMarkers({
     epubEntries,
     transcriptUtterances,

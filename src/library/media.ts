@@ -7,7 +7,7 @@ import { parseRange, segmentsForRange, streamSegmentsWithXingPatch } from "../st
 import { buildId3ChaptersTag } from "../streaming/id3";
 import { loadEpubEntries, loadStoredManifestationTranscriptPayload, loadStoredTranscriptPayload, selectPreferredEpubAsset } from "./chapter-analysis";
 import type { StoredTranscriptUtterance } from "./chapter-analysis";
-import { proposeChapterMarkers, type RawAudioChapter } from "./chapter-markers";
+import { proposeChapterMarkers, wordsToTranscriptUtterances, type RawAudioChapter } from "./chapter-markers";
 import { readFfprobeChapters } from "../media/probe-cache";
 import { selectPreferredAudioAsset, selectPreferredAudioManifestation } from "./asset-selection";
 import { configDir } from "../config";
@@ -193,7 +193,12 @@ async function buildChapterTimings(repo: BooksRepo, asset: AssetRow, files: Asse
   if (!timings || timings.length === 0) return timings;
   if (asset.kind === "ebook") return timings;
   const transcript = await loadStoredTranscriptPayload(repo, asset.id).catch(() => null);
-  const utterances = transcript?.utterances ?? [];
+  const utterances =
+    transcript?.utterances && transcript.utterances.length > 0
+      ? transcript.utterances
+      : transcript?.words
+        ? wordsToTranscriptUtterances(transcript.words)
+        : [];
   if (utterances.length === 0) return timings;
   return applyTranscriptLabels(timings, utterances);
 }

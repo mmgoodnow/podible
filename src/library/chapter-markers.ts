@@ -6,6 +6,12 @@ export type TranscriptUtterance = {
   text: string;
 };
 
+export type TranscriptWord = {
+  startMs: number;
+  endMs: number;
+  text: string;
+};
+
 export type RawAudioChapter = {
   startMs: number;
   endMs?: number;
@@ -29,8 +35,41 @@ export type ChapterProposalReport = {
 type Heading = {
   title: string;
   ordinal: number | null;
+  ordinalLabel: "chapter" | "book" | null;
   titleWords: string[];
 };
+
+export function wordsToTranscriptUtterances(words: TranscriptWord[]): TranscriptUtterance[] {
+  const sorted = [...words]
+    .filter((word) => Number.isFinite(word.startMs) && Number.isFinite(word.endMs) && word.text.trim())
+    .sort((a, b) => a.startMs - b.startMs);
+  const utterances: TranscriptUtterance[] = [];
+  let current: TranscriptWord[] = [];
+
+  const flush = () => {
+    if (current.length === 0) return;
+    utterances.push({
+      startMs: current[0]!.startMs,
+      endMs: current.at(-1)!.endMs,
+      text: current.map((word) => word.text).join(" ").replace(/\s+/g, " ").trim(),
+    });
+    current = [];
+  };
+
+  for (const word of sorted) {
+    const previous = current.at(-1);
+    if (previous) {
+      const gapMs = word.startMs - previous.endMs;
+      const durationMs = previous.endMs - current[0]!.startMs;
+      if (gapMs >= 900 || durationMs >= 12_000 || /[.!?]$/.test(previous.text)) {
+        flush();
+      }
+    }
+    current.push(word);
+  }
+  flush();
+  return utterances;
+}
 
 const ROMAN_VALUES = new Map([
   ["i", 1],
@@ -115,16 +154,24 @@ function parseOrdinalToken(value: string): number | null {
   return parseRoman(normalized);
 }
 
+function parseSpokenOrdinalToken(value: string): number | null {
+  const normalized = normalizeText(value);
+  if (!normalized) return null;
+  if (/^\d+$/.test(normalized)) return Number(normalized);
+  return NUMBER_WORDS.get(normalized) ?? null;
+}
+
 function headingFromTitle(title: string): Heading {
   const normalized = normalizeText(title);
-  const match = /^([ivxlcdm]+|\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s+(.*)$/.exec(
+  const match = /^(?:(chapter|book)\s+)?([ivxlcdm]+|\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)(?:\s+(.*))?$/.exec(
     normalized
   );
-  const ordinal = match ? parseOrdinalToken(match[1]!) : null;
-  const titleOnly = match ? match[2]!.trim() : normalized;
+  const ordinal = match ? parseOrdinalToken(match[2]!) : null;
+  const titleOnly = match ? (match[3] ?? "").trim() : normalized;
   return {
     title,
     ordinal,
+    ordinalLabel: match?.[1] === "chapter" || match?.[1] === "book" ? match[1] : null,
     titleWords: titleOnly.split(" ").filter(Boolean),
   };
 }
@@ -139,15 +186,27 @@ function isGenericTocTitle(title: string): boolean {
 }
 
 export function selectMajorEpubHeadings(entries: EpubChapterEntry[]): Heading[] {
-  return entries
-    .map((entry) => entry.title.trim())
-    .filter((title, index, titles) => title && titles.indexOf(title) === index)
+  const titles: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const title = entry.title.trim();
+    const normalized = normalizeText(title);
+    if (BACK_MATTER.has(normalized)) break;
+    if (!title || seen.has(title)) continue;
+    seen.add(title);
+    titles.push(title);
+  }
+  return titles
     .filter((title) => !isGenericTocTitle(title))
     .filter((title) => {
       const normalized = normalizeText(title);
       if (BACK_MATTER.has(normalized)) return false;
       if (/^(prologue|epilogue)$/.test(normalized)) return true;
-      return /^([ivxlcdm]+|\d+)\s+/.test(normalized) && headingFromTitle(title).titleWords.length > 0;
+      const heading = headingFromTitle(title);
+      if (!heading.ordinal) return false;
+      if (/^book\s+/.test(normalized)) return true;
+      if (/^chapter\s+/.test(normalized)) return true;
+      return /^([ivxlcdm]+|\d+)\s+/.test(normalized) && heading.titleWords.length > 0;
     })
     .map(headingFromTitle);
 }
@@ -172,11 +231,19 @@ function windowText(utterances: TranscriptUtterance[], startMs: number): string 
 function headingMatchesWindow(heading: Heading, text: string): boolean {
   const normalized = normalizeText(text);
   if (!normalized) return false;
-  const wordsMatch = heading.titleWords.every((word) => normalized.includes(word));
+  const titlePhrase = heading.titleWords.join(" ");
+  const phraseMatch = titlePhrase.length > 0 && normalized.includes(titlePhrase);
+  const wordsMatch = heading.titleWords.length === 0 || phraseMatch || heading.titleWords.every((word) => normalized.includes(word));
   if (!wordsMatch) return false;
   if (!heading.ordinal) return true;
   const tokens = normalized.split(" ");
-  return tokens.some((token) => parseOrdinalToken(token) === heading.ordinal);
+  const ordinalMatches = tokens.some((token) => parseSpokenOrdinalToken(token) === heading.ordinal);
+  if (heading.titleWords.length === 0 && heading.ordinalLabel) {
+    return tokens.some((token, index) => token === heading.ordinalLabel && parseSpokenOrdinalToken(tokens[index + 1] ?? "") === heading.ordinal);
+  }
+  // Many audiobooks speak/show only the chapter title ("LONG NIGHT") while
+  // the EPUB labels it as "2. LONG NIGHT"; a strong title phrase is enough.
+  return ordinalMatches || phraseMatch || (heading.titleWords.length > 1 && wordsMatch);
 }
 
 function findEmbeddedMatch(
@@ -190,6 +257,21 @@ function findEmbeddedMatch(
     if (headingMatchesWindow(heading, windowText(utterances, chapter.startMs))) {
       return chapter;
     }
+  }
+  return null;
+}
+
+function findDirectTranscriptMatch(
+  heading: Heading,
+  utterances: TranscriptUtterance[],
+  afterMs: number
+): TranscriptUtterance | null {
+  const candidates = utterances.filter((utterance) => utterance.startMs > afterMs + 15_000);
+  for (const utterance of candidates) {
+    const text = shortUtterancesNear(utterances, utterance.startMs, 1_000, 4_000)
+      .map((candidate) => candidate.text)
+      .join(" ");
+    if (headingMatchesWindow(heading, text)) return utterance;
   }
   return null;
 }
@@ -239,6 +321,15 @@ export function proposeChapterMarkers(input: {
     let matched = findEmbeddedMatch(heading, embedded, utterances, previousMs);
     let confidence: ProposedChapter["confidence"] = "high";
     let reason = "Matched EPUB major heading to transcript heading near embedded chapter boundary.";
+
+    if (!matched) {
+      const direct = findDirectTranscriptMatch(heading, utterances, previousMs);
+      if (direct) {
+        matched = { startMs: direct.startMs };
+        confidence = "medium";
+        reason = "Matched EPUB major heading directly in transcript where no embedded chapter boundary matched.";
+      }
+    }
 
     if (!matched && index === 0 && firstStoryMs !== null) {
       matched = { startMs: firstStoryMs };

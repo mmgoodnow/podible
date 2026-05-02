@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   proposeChapterMarkers,
   selectMajorEpubHeadings,
+  wordsToTranscriptUtterances,
   type RawAudioChapter,
   type TranscriptUtterance,
 } from "../../src/library/chapter-markers";
@@ -98,6 +99,19 @@ describe("chapter marker proposal", () => {
       [5325.79, "III: Grey Thief"],
       [25189.73, "X: One White Rook"],
       [41639.5, "Closing credits"],
+    ]);
+  });
+
+  test("synthesizes utterances from timestamped words when raw utterances are unavailable", () => {
+    const utterances = wordsToTranscriptUtterances([
+      { startMs: 0, endMs: 200, text: "Two." },
+      { startMs: 1400, endMs: 1700, text: "Red" },
+      { startMs: 1750, endMs: 2100, text: "Royal." },
+    ]);
+
+    expect(utterances).toEqual([
+      { startMs: 0, endMs: 200, text: "Two." },
+      { startMs: 1400, endMs: 2100, text: "Red Royal." },
     ]);
   });
 });
