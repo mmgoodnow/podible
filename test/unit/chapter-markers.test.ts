@@ -202,4 +202,31 @@ describe("chapter marker proposal", () => {
       [180, "Closing credits"],
     ]);
   });
+
+  test("uses audible hopes as final closing credits without a part-ending warning", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["Prologue"].map(epubEntry),
+      transcriptUtterances: [utterance(60_000, "Prologue."), utterance(180_000, "Audible hopes you have enjoyed this program.")],
+      embeddedChapters: [],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Opening credits"],
+      [60, "Prologue"],
+      [180, "Closing credits"],
+    ]);
+  });
+
+  test("matches numbered part headings despite subtitle transcription variants", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: ["Part One: Of Blacke Cholor, without Boyling"].map(epubEntry),
+      transcriptUtterances: [utterance(10_000, "Publisher preface."), utterance(60_000, "Part 1. Of Black Collar, Without Boiling.")],
+      embeddedChapters: [],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Opening credits"],
+      [60, "Part One: Of Blacke Cholor, without Boyling"],
+    ]);
+  });
 });

@@ -35,7 +35,7 @@ export type ChapterProposalReport = {
 type Heading = {
   title: string;
   ordinal: number | null;
-  ordinalLabel: "chapter" | "book" | null;
+  ordinalLabel: "chapter" | "book" | "part" | null;
   titleWords: string[];
 };
 
@@ -196,7 +196,7 @@ function parseLeadingOrdinal(tokens: string[]): { ordinal: number; consumed: num
 function headingFromTitle(title: string): Heading {
   const normalized = normalizeText(title);
   const tokens = normalized.split(" ").filter(Boolean);
-  const label = tokens[0] === "chapter" || tokens[0] === "book" ? tokens.shift()! : null;
+  const label = tokens[0] === "chapter" || tokens[0] === "book" || tokens[0] === "part" ? tokens.shift()! : null;
   const parsed = parseLeadingOrdinal(tokens);
   const ordinal = parsed?.ordinal ?? null;
   const titleOnly = parsed ? tokens.slice(parsed.consumed).join(" ") : normalized;
@@ -228,9 +228,12 @@ export function selectMajorEpubHeadings(entries: EpubChapterEntry[]): Heading[] 
     seen.add(title);
     titles.push(title);
   }
-  const headingCandidates = titles.map(headingFromTitle);
   const hasOrdinalChapterStructure =
-    headingCandidates.filter((heading) => heading.ordinal && (heading.ordinalLabel === "chapter" || heading.ordinalLabel === "book" || heading.titleWords.length > 0)).length >= 3;
+    titles.filter((title) => {
+      const normalized = normalizeText(title);
+      const heading = headingFromTitle(title);
+      return heading.ordinal && (heading.ordinalLabel === "chapter" || heading.ordinalLabel === "book" || /^([ivxlcdm]+|\d+)\s+/.test(normalized));
+    }).length >= 3;
 
   return titles
     .filter((title) => !isGenericTocTitle(title))
@@ -242,6 +245,7 @@ export function selectMajorEpubHeadings(entries: EpubChapterEntry[]): Heading[] 
       if (!heading.ordinal) return !hasOrdinalChapterStructure && heading.titleWords.length > 0;
       if (/^book\s+/.test(normalized)) return true;
       if (/^chapter\s+/.test(normalized)) return true;
+      if (/^part\s+/.test(normalized)) return true;
       if (/^([ivxlcdm]+|\d+)\s+/.test(normalized) && heading.titleWords.length > 0) return true;
       return false;
     })
@@ -270,13 +274,18 @@ function headingMatchesWindow(heading: Heading, text: string): boolean {
   if (!normalized) return false;
   const titlePhrase = heading.titleWords.join(" ");
   const phraseMatch = titlePhrase.length > 0 && normalized.includes(titlePhrase);
+  const tokens = normalized.split(" ");
+  const ordinalLabelMatches =
+    heading.ordinal &&
+    heading.ordinalLabel &&
+    tokens.some((token, index) => token === heading.ordinalLabel && parseSpokenOrdinalToken(tokens[index + 1] ?? "") === heading.ordinal);
+  if (heading.ordinalLabel === "part" && ordinalLabelMatches) return true;
   const wordsMatch = heading.titleWords.length === 0 || phraseMatch || heading.titleWords.every((word) => normalized.includes(word));
   if (!wordsMatch) return false;
   if (!heading.ordinal) return true;
-  const tokens = normalized.split(" ");
   const ordinalMatches = tokens.some((token) => parseSpokenOrdinalToken(token) === heading.ordinal);
   if (heading.titleWords.length === 0 && heading.ordinalLabel) {
-    return tokens.some((token, index) => token === heading.ordinalLabel && parseSpokenOrdinalToken(tokens[index + 1] ?? "") === heading.ordinal);
+    return Boolean(ordinalLabelMatches);
   }
   // Many audiobooks speak/show only the chapter title ("LONG NIGHT") while
   // the EPUB labels it as "2. LONG NIGHT"; a strong title phrase is enough.
@@ -328,10 +337,16 @@ function firstStoryUtteranceMs(utterances: TranscriptUtterance[], beforeMs: numb
 }
 
 function findClosingCreditsMs(utterances: TranscriptUtterance[], afterMs: number): number | null {
-  const closing = utterances.find((utterance) => {
+  const closing = utterances.find((utterance, index) => {
     if (utterance.startMs <= afterMs) return false;
     const text = normalizeText(utterance.text);
-    return text.startsWith("this concludes ");
+    if (text.startsWith("this concludes ")) return true;
+    if (!text.startsWith("audible hopes you have enjoyed")) return false;
+    const previous = utterances
+      .slice(Math.max(0, index - 3), index)
+      .map((candidate) => normalizeText(candidate.text))
+      .join(" ");
+    return !previous.includes("end of a part but not the end of a complete audiobook");
   });
   return closing?.startMs ?? null;
 }
