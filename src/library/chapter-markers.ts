@@ -226,7 +226,10 @@ function headingFromTitle(title: string, sourceIndex = -1, wordCount = 0, option
   if (tokens[0] === "chapter" || tokens[0] === "book" || tokens[0] === "part") {
     label = tokens.shift() as Heading["ordinalLabel"];
   }
-  const parsed = label || /^\s*(\d+|[ivxlcdm]+)\s*[:.]/i.test(title) ? parseLeadingOrdinal(tokens) : null;
+  const looksLikeNumberedChapterTitle =
+    /^\s*(\d+|[ivxlcdm]+)\s*[:.]/i.test(title) ||
+    (tokens.length > 1 && /^\d+$/.test(tokens[0]!) && Number(tokens[0]!) > 0 && Number(tokens[0]!) <= 200 && !/^\d+$/.test(tokens[1]!));
+  const parsed = label || looksLikeNumberedChapterTitle ? parseLeadingOrdinal(tokens) : null;
   const ordinal = parsed?.ordinal ?? null;
   const titleOnly = parsed ? tokens.slice(parsed.consumed).join(" ") : normalized;
   return {
