@@ -881,6 +881,7 @@ function embeddedChaptersLookEvenlyDivided(chapters: RawAudioChapter[]): boolean
 function buildGenericEmbeddedSequenceChapters(
   entries: EpubChapterEntry[],
   embedded: RawAudioChapter[],
+  utterances: TranscriptUtterance[],
   firstStoryMs: number | null,
   hasOpeningGap: boolean
 ): ProposedChapter[] | null {
@@ -902,6 +903,14 @@ function buildGenericEmbeddedSequenceChapters(
   const prelude = semanticHeadings.find(
     (heading) => heading.sourceIndex < firstNumberedIndex && /^prologue(\s+|$)/.test(normalizeText(heading.title))
   );
+  const firstNumbered = numberedHeadings[0]!;
+  const firstNumberedAtOpeningStory =
+    !prelude &&
+    hasOpeningGap &&
+    firstStoryMs !== null &&
+    embedded[0]?.startMs === 0 &&
+    firstNumbered.ordinal === 1 &&
+    headingMatchesWindow(firstNumbered, windowText(utterances, firstStoryMs));
   const interiorShortUnnumberedHeadingCount = entries.filter((entry, index) => {
     if (index <= firstNumberedIndex || index >= lastNumberedIndex) return false;
     const semantic = semanticSequenceHeadingFromEntry(entry, index);
@@ -922,7 +931,7 @@ function buildGenericEmbeddedSequenceChapters(
           if (index <= lastNumbered.sourceIndex) return false;
           const normalized = normalizeText(title);
           if (!normalized || isFrontMatterTitle(normalized) || BACK_MATTER.has(normalized) || isGenericTocTitle(title)) return false;
-          return entry.wordCount >= 300;
+          return entry.wordCount >= 300 || /^epilogue(\s+|$)/.test(normalized);
         })
     : [];
   const requiredEmbeddedCount = numberedHeadings.length + (prelude ? 1 : 0);
@@ -952,16 +961,26 @@ function buildGenericEmbeddedSequenceChapters(
       });
     }
   }
+  if (firstNumberedAtOpeningStory) {
+    chapters.push({
+      startTime: 0,
+      title: "Opening credits",
+      confidence: "medium",
+      reason: "Audio starts with front matter before the first numbered EPUB heading.",
+    });
+  }
 
   for (const heading of numberedHeadings) {
     const embeddedIndex = heading.ordinal! - 1 + offset;
     const matched = embedded[embeddedIndex];
-    if (!matched) continue;
+    if (!matched && !(firstNumberedAtOpeningStory && heading === firstNumbered)) continue;
     chapters.push({
-      startTime: matched.startMs / 1000,
+      startTime: firstNumberedAtOpeningStory && heading === firstNumbered ? firstStoryMs! / 1000 : matched!.startMs / 1000,
       title: heading.title,
       confidence: "medium",
-      reason: "Retitled generic embedded chapter sequence from EPUB numbered heading.",
+      reason: firstNumberedAtOpeningStory && heading === firstNumbered
+        ? "Used first spoken numbered EPUB heading after opening front matter."
+        : "Retitled generic embedded chapter sequence from EPUB numbered heading.",
     });
   }
 
@@ -1103,7 +1122,7 @@ export function proposeChapterMarkers(input: {
   const startsWithOpeningCredit = utterances.some((utterance) => utterance.startMs <= 5_000 && isOpeningCreditUtterance(utterance.text));
   const hasOpeningGap = firstStoryMs !== null && (firstStoryMs > 30_000 || startsWithOpeningCredit);
   const trustEmbeddedGenericOrdinals = !embeddedChaptersLookEvenlyDivided(embedded);
-  const sequenceChapters = buildGenericEmbeddedSequenceChapters(input.epubEntries, embedded, firstStoryMs, hasOpeningGap);
+  const sequenceChapters = buildGenericEmbeddedSequenceChapters(input.epubEntries, embedded, utterances, firstStoryMs, hasOpeningGap);
   if (sequenceChapters) {
     const sequenceLastStoryStartMs = sequenceChapters.at(-1)?.startTime ? sequenceChapters.at(-1)!.startTime * 1000 : 0;
     const sequenceClosingMs = findClosingCreditsMs(utterances, sequenceLastStoryStartMs);

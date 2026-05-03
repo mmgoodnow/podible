@@ -696,6 +696,41 @@ describe("chapter marker proposal", () => {
     ]);
   });
 
+  test("uses first spoken heading when generic sequence starts with front matter", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: [
+        entryWithWordCount("1. ULTIMATUM", 0, 1),
+        entryWithWordCount("2. EVASION", 1, 1),
+        entryWithWordCount("3. MOTIVES", 2, 1),
+        entryWithWordCount("4. NATURE", 3, 1),
+        entryWithWordCount("5. IMPRINT", 4, 1),
+        entryWithWordCount("EPILOGUE — CHOICE", 5, 2),
+      ],
+      transcriptUtterances: [
+        utterance(0, "Book title and dedication."),
+        utterance(183_000, "1. Ultimatum. Bella, I don't know why."),
+      ],
+      embeddedChapters: [
+        { startMs: 0, endMs: 340_000, title: "001" },
+        { startMs: 340_000, endMs: 620_000, title: "002" },
+        { startMs: 620_000, endMs: 860_000, title: "003" },
+        { startMs: 860_000, endMs: 1_060_000, title: "004" },
+        { startMs: 1_060_000, endMs: 1_240_000, title: "005" },
+        { startMs: 1_240_000, endMs: 1_400_000, title: "006" },
+      ],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "Opening credits"],
+      [183, "1. ULTIMATUM"],
+      [340, "2. EVASION"],
+      [620, "3. MOTIVES"],
+      [860, "4. NATURE"],
+      [1060, "5. IMPRINT"],
+      [1240, "EPILOGUE — CHOICE"],
+    ]);
+  });
+
   test("does not trust evenly divided generic embedded chapter sequences", () => {
     const report = proposeChapterMarkers({
       epubEntries: [
