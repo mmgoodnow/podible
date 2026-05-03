@@ -244,10 +244,14 @@ function headingFromTitle(title: string, sourceIndex = -1, wordCount = 0, option
 function isGenericTocTitle(title: string): boolean {
   const normalized = normalizeText(title);
   if (!normalized) return true;
-  if (FRONT_MATTER.has(normalized) || BACK_MATTER.has(normalized)) return true;
+  if (isFrontMatterTitle(normalized) || BACK_MATTER.has(normalized)) return true;
   if (isGenericNumberedChapterTocHeading(title)) return true;
   if (/^[ivxlcdm]+$/.test(normalized)) return true;
   return false;
+}
+
+function isFrontMatterTitle(normalizedTitle: string): boolean {
+  return FRONT_MATTER.has(normalizedTitle) || normalizedTitle.startsWith("also by ");
 }
 
 function isGenericNumberedChapterTocHeading(title: string): boolean {
@@ -917,7 +921,7 @@ function buildGenericEmbeddedSequenceChapters(
         .filter(({ entry, index, title }) => {
           if (index <= lastNumbered.sourceIndex) return false;
           const normalized = normalizeText(title);
-          if (!normalized || FRONT_MATTER.has(normalized) || BACK_MATTER.has(normalized) || isGenericTocTitle(title)) return false;
+          if (!normalized || isFrontMatterTitle(normalized) || BACK_MATTER.has(normalized) || isGenericTocTitle(title)) return false;
           return entry.wordCount >= 300;
         })
     : [];

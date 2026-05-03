@@ -103,6 +103,14 @@ describe("chapter marker proposal", () => {
     ]);
   });
 
+  test("drops author-specific also-by front matter", () => {
+    const headings = selectMajorEpubHeadings(
+      ["Also by John Green", "Introduction", "Youll Never Walk Alone", "The Anthropocene Reviewed"].map(epubEntry)
+    );
+
+    expect(headings.map((heading) => heading.title)).toEqual(["Introduction", "Youll Never Walk Alone", "The Anthropocene Reviewed"]);
+  });
+
   test("recognizes short interstitial cards without naming their vocabulary", () => {
     const headings = selectMajorEpubHeadings(["1. FIRST", "BLUE DOOR", "RED SKY", "2. SECOND"].map(epubEntry));
 
