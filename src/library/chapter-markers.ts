@@ -832,6 +832,129 @@ function fillSkippedGenericChapterHeadings(chapters: ProposedChapter[], headings
   return out.sort((a, b) => a.startTime - b.startTime);
 }
 
+function semanticSequenceHeadingFromEntry(entry: EpubChapterEntry, sourceIndex: number): Heading | null {
+  const title = deriveHeadingTitle(entry);
+  const normalized = normalizeText(title);
+  if (/^prologue(\s+|$)/.test(normalized) || /^epilogue(\s+|$)/.test(normalized)) {
+    return headingFromTitle(title, sourceIndex, entry.wordCount, { openingWords: deriveOpeningWords(entry) });
+  }
+  const tokens = normalized.split(" ").filter(Boolean);
+  if (tokens.length < 2 || !/^\d+$/.test(tokens[0]!) || /^\d+$/.test(tokens[1]!)) return null;
+  const ordinal = Number(tokens[0]!);
+  if (!Number.isSafeInteger(ordinal) || ordinal <= 0 || ordinal > 200) return null;
+  return {
+    title,
+    ordinal,
+    ordinalLabel: null,
+    titleWords: tokens.slice(1),
+    sourceIndex,
+    wordCount: entry.wordCount,
+    inline: false,
+    openingWords: deriveOpeningWords(entry),
+  };
+}
+
+function sequentialEmbeddedOrdinal(chapter: RawAudioChapter): number | null {
+  if (!isGenericEmbeddedChapterTitle(chapter.title)) return null;
+  const tokens = normalizeText(chapter.title ?? "").split(" ").filter(Boolean);
+  if (tokens[0] === "chapter" || tokens[0] === "track") return parseOrdinalToken(tokens[1] ?? "");
+  return parseOrdinalToken(chapter.title ?? "");
+}
+
+function buildGenericEmbeddedSequenceChapters(
+  entries: EpubChapterEntry[],
+  embedded: RawAudioChapter[],
+  firstStoryMs: number | null,
+  hasOpeningGap: boolean
+): ProposedChapter[] | null {
+  const embeddedOrdinals = embedded.map(sequentialEmbeddedOrdinal);
+  if (embeddedOrdinals.length < 5 || embeddedOrdinals.some((ordinal) => ordinal === null)) return null;
+  for (const [index, ordinal] of embeddedOrdinals.entries()) {
+    if (ordinal !== index + 1) return null;
+  }
+
+  const semanticHeadings = entries
+    .map((entry, index) => semanticSequenceHeadingFromEntry(entry, index))
+    .filter((heading): heading is Heading => heading !== null);
+  const numberedHeadings = semanticHeadings.filter((heading) => heading.ordinal !== null && heading.titleWords.length > 0);
+  if (numberedHeadings.length < 5) return null;
+
+  const firstNumberedIndex = numberedHeadings[0]!.sourceIndex;
+  const prelude = semanticHeadings.find(
+    (heading) => heading.sourceIndex < firstNumberedIndex && /^prologue(\s+|$)/.test(normalizeText(heading.title))
+  );
+  const sectionHeadings = entries
+    .map((entry, index) => headingFromTitle(deriveHeadingTitle(entry), index, entry.wordCount))
+    .filter((heading) => heading.ordinalLabel === "book" || heading.ordinalLabel === "part");
+  if (!prelude && sectionHeadings.length > 0) return null;
+  const lastNumbered = numberedHeadings.at(-1);
+  const trailingHeadings = lastNumbered
+    ? entries
+        .map((entry, index) => ({ entry, index, title: deriveHeadingTitle(entry) }))
+        .filter(({ entry, index, title }) => {
+          if (index <= lastNumbered.sourceIndex) return false;
+          const normalized = normalizeText(title);
+          if (!normalized || FRONT_MATTER.has(normalized) || BACK_MATTER.has(normalized) || isGenericTocTitle(title)) return false;
+          return entry.wordCount >= 300;
+        })
+    : [];
+  const requiredEmbeddedCount = numberedHeadings.length + (prelude ? 1 : 0);
+  if (embedded.length < requiredEmbeddedCount) return null;
+  const offset = prelude ? 1 : 0;
+  const chapters: ProposedChapter[] = [];
+  if (prelude) {
+    if (hasOpeningGap && firstStoryMs !== null) {
+      chapters.push({
+        startTime: 0,
+        title: "Opening credits",
+        confidence: "medium",
+        reason: "Audio starts with an intro and first story utterance is delayed.",
+      });
+      chapters.push({
+        startTime: firstStoryMs / 1000,
+        title: prelude.title,
+        confidence: "medium",
+        reason: "Used first story utterance for EPUB prologue before a generic embedded chapter sequence.",
+      });
+    } else {
+      chapters.push({
+        startTime: embedded[0]!.startMs / 1000,
+        title: prelude.title,
+        confidence: "medium",
+        reason: "Retitled first generic embedded chapter from EPUB prologue.",
+      });
+    }
+  }
+
+  for (const heading of numberedHeadings) {
+    const embeddedIndex = heading.ordinal! - 1 + offset;
+    const matched = embedded[embeddedIndex];
+    if (!matched) continue;
+    chapters.push({
+      startTime: matched.startMs / 1000,
+      title: heading.title,
+      confidence: "medium",
+      reason: "Retitled generic embedded chapter sequence from EPUB numbered heading.",
+    });
+  }
+
+  const lastUsedEmbeddedIndex = Math.max(
+    ...chapters.map((chapter) => embedded.findIndex((candidate) => candidate.startMs / 1000 === chapter.startTime))
+  );
+  for (const [trailingIndex, trailing] of trailingHeadings.entries()) {
+    const matched = embedded[lastUsedEmbeddedIndex + 1 + trailingIndex];
+    if (!matched) break;
+    chapters.push({
+      startTime: matched.startMs / 1000,
+      title: trailing.title,
+      confidence: "medium",
+      reason: "Retitled trailing generic embedded chapter from EPUB back-matter heading.",
+    });
+  }
+
+  return chapters.length >= numberedHeadings.length ? chapters.sort((a, b) => a.startTime - b.startTime) : null;
+}
+
 function resolveHeadingCandidate(
   candidate: HeadingCandidate,
   context: {
@@ -946,7 +1069,27 @@ export function proposeChapterMarkers(input: {
   const firstEmbeddedAfterIntro = embedded.find((chapter) => chapter.startMs > 30_000)?.startMs ?? Number.POSITIVE_INFINITY;
   const firstStoryMs = firstStoryUtteranceMs(utterances, firstEmbeddedAfterIntro);
   const startsWithOpeningCredit = utterances.some((utterance) => utterance.startMs <= 5_000 && isOpeningCreditUtterance(utterance.text));
-  if (firstStoryMs !== null && (firstStoryMs > 30_000 || startsWithOpeningCredit)) {
+  const hasOpeningGap = firstStoryMs !== null && (firstStoryMs > 30_000 || startsWithOpeningCredit);
+  const sequenceChapters = buildGenericEmbeddedSequenceChapters(input.epubEntries, embedded, firstStoryMs, hasOpeningGap);
+  if (sequenceChapters) {
+    const sequenceLastStoryStartMs = sequenceChapters.at(-1)?.startTime ? sequenceChapters.at(-1)!.startTime * 1000 : 0;
+    const sequenceClosingMs = findClosingCreditsMs(utterances, sequenceLastStoryStartMs);
+    if (sequenceClosingMs !== null) {
+      sequenceChapters.push({
+        startTime: sequenceClosingMs / 1000,
+        title: "Closing credits",
+        confidence: "high",
+        reason: "Matched standard audiobook closing-credit phrase in transcript.",
+      });
+    }
+    return {
+      epubHeadings: headings.map((heading) => heading.title),
+      embeddedChapterCount: embedded.length,
+      transcriptUtteranceCount: utterances.length,
+      chapters: sequenceChapters,
+    };
+  }
+  if (hasOpeningGap) {
     chapters.push({
       startTime: 0,
       title: "Opening credits",

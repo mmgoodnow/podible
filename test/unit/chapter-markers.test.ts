@@ -46,6 +46,13 @@ function embedded(startMs: number): RawAudioChapter {
   };
 }
 
+function entryWithWordCount(title: string, index: number, wordCount: number): EpubChapterEntry {
+  return {
+    ...epubEntryWithText(title, `${title} story text begins here.`, index),
+    wordCount,
+  };
+}
+
 describe("chapter marker proposal", () => {
   test("selects major roman-numeral EPUB headings and drops nested generic labels", () => {
     const headings = selectMajorEpubHeadings(
@@ -643,6 +650,41 @@ describe("chapter marker proposal", () => {
       [62307, "49: Why We Sing"],
       [63947, "50: The Deep"],
       [65285, "51: Golden Son"],
+    ]);
+  });
+
+  test("retitles generic embedded chapter sequences from EPUB numbered headings", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: [
+        entryWithWordCount("PROLOGUE: The Treasure Room", 0, 400),
+        entryWithWordCount("BOOK ONE: THE CLEAR, CLEAN, SHEER THING", 1, 20),
+        entryWithWordCount("1 An Abduction", 2, 1000),
+        entryWithWordCount("2 Albert’s Daughters", 3, 1200),
+        entryWithWordCount("3 Evacuation", 4, 1300),
+        entryWithWordCount("4 An Underground Army", 5, 1400),
+        entryWithWordCount("5 St Jude’s Walk", 6, 1500),
+        entryWithWordCount("Acknowledgements", 7, 500),
+      ],
+      transcriptUtterances: [],
+      embeddedChapters: [
+        { startMs: 0, endMs: 60_000, title: "Chapter 1" },
+        { startMs: 60_000, endMs: 120_000, title: "Chapter 2" },
+        { startMs: 120_000, endMs: 180_000, title: "Chapter 3" },
+        { startMs: 180_000, endMs: 240_000, title: "Chapter 4" },
+        { startMs: 240_000, endMs: 300_000, title: "Chapter 5" },
+        { startMs: 300_000, endMs: 360_000, title: "Chapter 6" },
+        { startMs: 360_000, endMs: 420_000, title: "Chapter 7" },
+      ],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [0, "PROLOGUE: The Treasure Room"],
+      [60, "1 An Abduction"],
+      [120, "2 Albert’s Daughters"],
+      [180, "3 Evacuation"],
+      [240, "4 An Underground Army"],
+      [300, "5 St Jude’s Walk"],
+      [360, "Acknowledgements"],
     ]);
   });
 
