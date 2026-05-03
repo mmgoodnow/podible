@@ -375,7 +375,7 @@ describe("chapter marker proposal", () => {
     ]);
   });
 
-  test("derives useful titles from numeric nonfiction EPUB headings", () => {
+  test("derives useful titles from EPUB heading text", () => {
     const headings = selectMajorEpubHeadings([
       epubEntryWithText("An Explanatory Note", "AN EXPLANATORY NOTE In the summer of 2003.", 0),
       epubEntryWithText("Preface to the Revised and Expanded Edition", "PREFACE TO THE REVISED AND EXPANDED EDITION.", 1),

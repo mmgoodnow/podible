@@ -147,7 +147,6 @@ const FRONT_MATTER = new Set([
   "dedication",
   "epigraph",
   "also by",
-  "also by ve schwab",
 ]);
 
 const BACK_MATTER = new Set([
@@ -304,15 +303,28 @@ function deriveHeadingTitle(entry: EpubChapterEntry): string {
     const match = withoutLeadingOrdinal.match(/^(.+?[?!])(?:\s|$)/);
     if (match?.[1]) return `${normalizedTitle}. ${match[1].trim()}`;
   }
-  if (normalizedTitle === "introduction") {
-    const match = firstText.match(/^introduction\s*:\s*(.+?)(?:\s+Anyone\b|$)/i);
-    if (match?.[1]) return `Introduction: ${match[1].trim()}`;
-  }
-  if (normalizedTitle === "epilogue") {
-    const match = firstText.match(/^epilogue\s*:\s*(.+?)(?:\s+And\s+(?:now|then|so)\b|$)/i);
-    if (match?.[1]) return `Epilogue: ${match[1].trim()}`;
-  }
+  const subtitleTitle = deriveColonSubtitleTitle(title, firstText);
+  if (subtitleTitle) return subtitleTitle;
   return title;
+}
+
+function deriveColonSubtitleTitle(title: string, text: string): string | null {
+  const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = text.match(new RegExp(`^${escapedTitle}\\s*:\\s*(.+)$`, "i"));
+  const subtitle = match?.[1]?.trim();
+  if (!subtitle) return null;
+
+  const words = subtitle.split(/\s+/);
+  const titleWords: string[] = [];
+  for (let index = 0; index < words.length; index += 1) {
+    const current = words[index]!;
+    const next = words[index + 1];
+    if (titleWords.length >= 3 && /^[A-Z][a-z]/.test(current) && next !== undefined && /^[a-z]/.test(next)) break;
+    titleWords.push(current);
+    if (/[?!]$/.test(current)) break;
+  }
+  const cleanSubtitle = titleWords.join(" ").replace(/[.,;:]$/, "").trim();
+  return cleanSubtitle ? `${title}: ${cleanSubtitle}` : null;
 }
 
 function repairOpeningDropCaps(text: string): string {
