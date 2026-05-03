@@ -303,6 +303,11 @@ function deriveHeadingTitle(entry: EpubChapterEntry): string {
     const match = firstText.match(/^introduction\s*:\s*(.+?)(?:\s+Anyone\b|$)/i);
     if (match?.[1]) return `Introduction: ${match[1].trim()}`;
   }
+  if (normalizedTitle === "epilogue") {
+    const firstText = entry.text.replace(/\s+/g, " ").trim();
+    const match = firstText.match(/^epilogue\s*:\s*(.+?)(?:\s+And\s+(?:now|then|so)\b|$)/i);
+    if (match?.[1]) return `Epilogue: ${match[1].trim()}`;
+  }
   return title;
 }
 
@@ -337,6 +342,7 @@ function titleCaseHeading(value: string): string {
 
 function cleanInlineTaleSubtitle(value: string): string {
   const tokens = value.replace(/[“”"]/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+  while (tokens.length > 4 && /^[A-Z]$/u.test(tokens.at(-2)!) && /^[A-Z]{2,}$/u.test(tokens.at(-1)!)) tokens.splice(-2, 2);
   while (tokens.length > 3 && /^[A-Z]$/u.test(tokens.at(-1)!)) tokens.pop();
   return tokens.join(" ");
 }

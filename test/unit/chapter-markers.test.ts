@@ -217,6 +217,21 @@ describe("chapter marker proposal", () => {
     expect(headings.map((heading) => heading.title)).toEqual(["Notes"]);
   });
 
+  test("drops inline heading subtitles before drop-cap body text", () => {
+    const headings = selectMajorEpubHeadings([
+      {
+        ...epubEntryWithText(
+          "Chapter 1",
+          "THE SCHOLAR’S TALE: THE RIVER LETHE’S TASTE IS BITTER S OMETIMES THERE is a thin line between memory and grief.",
+          0
+        ),
+        wordCount: 20_000,
+      },
+    ]);
+
+    expect(headings.map((heading) => heading.title)).toEqual(["Chapter 1", "The Scholars Tale: The River Lethes Taste Is Bitter"]);
+  });
+
   test("matches bare number-word generic labels only as standalone sentences", () => {
     const report = proposeChapterMarkers({
       epubEntries: ["Chapter Ten", "Chapter Eleven"].map((title, index) => ({
@@ -369,7 +384,7 @@ describe("chapter marker proposal", () => {
       "1. What Do Schoolteachers and Sumo Wrestlers Have in Common?",
       "2. How Is the Ku Klux Klan Like a Group of Real-Estate Agents?",
       "6. Perfect Parenting, Part II; or: Would a Roshanda by Any Other Name Smell as Sweet?",
-      "Epilogue",
+      "Epilogue: Two Paths to Harvard",
     ]);
   });
 
