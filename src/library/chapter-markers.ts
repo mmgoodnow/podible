@@ -706,7 +706,8 @@ function findEmbeddedMatch(
   heading: Heading,
   embeddedChapters: RawAudioChapter[],
   utterances: TranscriptUtterance[],
-  afterMs: number
+  afterMs: number,
+  options: { allowGenericOrdinalMatch?: boolean } = {}
 ): RawAudioChapter | null {
   const candidates = embeddedChapters.filter((chapter) => chapter.startMs > afterMs + 2_000);
   for (const chapter of candidates) {
@@ -716,6 +717,7 @@ function findEmbeddedMatch(
     }
     const numericChapterHeading = /^(\d+|chapter\s+\d+)/.test(normalizeText(heading.title));
     if (
+      options.allowGenericOrdinalMatch !== false &&
       numericChapterHeading &&
       heading.ordinal &&
       chapter.title &&
@@ -861,12 +863,24 @@ function sequentialEmbeddedOrdinal(chapter: RawAudioChapter): number | null {
   return parseOrdinalToken(chapter.title ?? "");
 }
 
+function embeddedChaptersLookEvenlyDivided(chapters: RawAudioChapter[]): boolean {
+  const durations = chapters
+    .map((chapter) => (chapter.endMs !== undefined ? chapter.endMs - chapter.startMs : null))
+    .filter((duration): duration is number => duration !== null && duration > 0);
+  if (durations.length < 5 || durations.length !== chapters.length) return false;
+  const average = durations.reduce((sum, duration) => sum + duration, 0) / durations.length;
+  const min = Math.min(...durations);
+  const max = Math.max(...durations);
+  return (max - min) / average <= 0.08;
+}
+
 function buildGenericEmbeddedSequenceChapters(
   entries: EpubChapterEntry[],
   embedded: RawAudioChapter[],
   firstStoryMs: number | null,
   hasOpeningGap: boolean
 ): ProposedChapter[] | null {
+  if (embeddedChaptersLookEvenlyDivided(embedded)) return null;
   const embeddedOrdinals = embedded.map(sequentialEmbeddedOrdinal);
   if (embeddedOrdinals.length < 5 || embeddedOrdinals.some((ordinal) => ordinal === null)) return null;
   for (const [index, ordinal] of embeddedOrdinals.entries()) {
@@ -965,6 +979,7 @@ function resolveHeadingCandidate(
     previousMs: number;
     firstStoryMs: number | null;
     preferCoarseTranscriptHeadings: boolean;
+    trustEmbeddedGenericOrdinals: boolean;
   }
 ): HeadingMatchEvidence | null {
   const { heading } = candidate;
@@ -972,13 +987,17 @@ function resolveHeadingCandidate(
   const directFirst = candidate.preferDirectMatch;
   let matched = directFirst
     ? findDirectTranscriptMatch(heading, context.utterances, context.previousMs, directOptions)
-    : findEmbeddedMatch(heading, context.embedded, context.utterances, context.previousMs);
+    : findEmbeddedMatch(heading, context.embedded, context.utterances, context.previousMs, {
+        allowGenericOrdinalMatch: context.trustEmbeddedGenericOrdinals,
+      });
   let confidence: ProposedChapter["confidence"] = "high";
   let reason = "Matched EPUB major heading to transcript heading near embedded chapter boundary.";
 
   if (!matched) {
     const fallback = directFirst
-      ? findEmbeddedMatch(heading, context.embedded, context.utterances, context.previousMs)
+      ? findEmbeddedMatch(heading, context.embedded, context.utterances, context.previousMs, {
+          allowGenericOrdinalMatch: context.trustEmbeddedGenericOrdinals,
+        })
       : findDirectTranscriptMatch(heading, context.utterances, context.previousMs, directOptions);
     if (fallback) matched = { startMs: fallback.startMs };
   }
@@ -1070,6 +1089,7 @@ export function proposeChapterMarkers(input: {
   const firstStoryMs = firstStoryUtteranceMs(utterances, firstEmbeddedAfterIntro);
   const startsWithOpeningCredit = utterances.some((utterance) => utterance.startMs <= 5_000 && isOpeningCreditUtterance(utterance.text));
   const hasOpeningGap = firstStoryMs !== null && (firstStoryMs > 30_000 || startsWithOpeningCredit);
+  const trustEmbeddedGenericOrdinals = !embeddedChaptersLookEvenlyDivided(embedded);
   const sequenceChapters = buildGenericEmbeddedSequenceChapters(input.epubEntries, embedded, firstStoryMs, hasOpeningGap);
   if (sequenceChapters) {
     const sequenceLastStoryStartMs = sequenceChapters.at(-1)?.startTime ? sequenceChapters.at(-1)!.startTime * 1000 : 0;
@@ -1109,6 +1129,7 @@ export function proposeChapterMarkers(input: {
       previousMs,
       firstStoryMs,
       preferCoarseTranscriptHeadings,
+      trustEmbeddedGenericOrdinals,
     });
     if (!matched) continue;
     chapters.push({

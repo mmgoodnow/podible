@@ -668,23 +668,55 @@ describe("chapter marker proposal", () => {
       transcriptUtterances: [],
       embeddedChapters: [
         { startMs: 0, endMs: 60_000, title: "Chapter 1" },
-        { startMs: 60_000, endMs: 120_000, title: "Chapter 2" },
-        { startMs: 120_000, endMs: 180_000, title: "Chapter 3" },
-        { startMs: 180_000, endMs: 240_000, title: "Chapter 4" },
-        { startMs: 240_000, endMs: 300_000, title: "Chapter 5" },
-        { startMs: 300_000, endMs: 360_000, title: "Chapter 6" },
-        { startMs: 360_000, endMs: 420_000, title: "Chapter 7" },
+        { startMs: 60_000, endMs: 150_000, title: "Chapter 2" },
+        { startMs: 150_000, endMs: 330_000, title: "Chapter 3" },
+        { startMs: 330_000, endMs: 420_000, title: "Chapter 4" },
+        { startMs: 420_000, endMs: 660_000, title: "Chapter 5" },
+        { startMs: 660_000, endMs: 780_000, title: "Chapter 6" },
+        { startMs: 780_000, endMs: 960_000, title: "Chapter 7" },
       ],
     });
 
     expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
       [0, "PROLOGUE: The Treasure Room"],
       [60, "1 An Abduction"],
-      [120, "2 Albert’s Daughters"],
-      [180, "3 Evacuation"],
-      [240, "4 An Underground Army"],
-      [300, "5 St Jude’s Walk"],
-      [360, "Acknowledgements"],
+      [150, "2 Albert’s Daughters"],
+      [330, "3 Evacuation"],
+      [420, "4 An Underground Army"],
+      [660, "5 St Jude’s Walk"],
+      [780, "Acknowledgements"],
+    ]);
+  });
+
+  test("does not trust evenly divided generic embedded chapter sequences", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: [
+        entryWithWordCount("1. What Do Schoolteachers and Sumo Wrestlers Have in Common?", 0, 1000),
+        entryWithWordCount("2. How Is the Ku Klux Klan Like a Group of Real-Estate Agents?", 1, 1000),
+        entryWithWordCount("3. Why Do Drug Dealers Still Live with Their Moms?", 2, 1000),
+        entryWithWordCount("4. Where Have All the Criminals Gone?", 3, 1000),
+        entryWithWordCount("5. What Makes a Perfect Parent?", 4, 1000),
+      ],
+      transcriptUtterances: [
+        utterance(10_000, "Chapter one. What do schoolteachers and sumo wrestlers have in common?"),
+        utterance(20_000, "Chapter two. How is the Ku Klux Klan like a group of real-estate agents?"),
+        utterance(30_000, "Chapter three. Why do drug dealers still live with their moms?"),
+        utterance(40_000, "Chapter four. Where have all the criminals gone?"),
+        utterance(50_000, "Chapter five. What makes a perfect parent?"),
+      ],
+      embeddedChapters: [
+        { startMs: 0, endMs: 3_900_000, title: "001" },
+        { startMs: 3_900_000, endMs: 7_800_000, title: "002" },
+        { startMs: 7_800_000, endMs: 11_700_000, title: "003" },
+        { startMs: 11_700_000, endMs: 15_600_000, title: "004" },
+        { startMs: 15_600_000, endMs: 19_500_000, title: "005" },
+      ],
+    });
+
+    expect(report.chapters.map((chapter) => [chapter.startTime, chapter.title])).toEqual([
+      [10, "1. What Do Schoolteachers and Sumo Wrestlers Have in Common?"],
+      [30, "3. Why Do Drug Dealers Still Live with Their Moms?"],
+      [50, "5. What Makes a Perfect Parent?"],
     ]);
   });
 
