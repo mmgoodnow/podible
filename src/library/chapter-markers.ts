@@ -292,19 +292,23 @@ function chaptersFromUserFacingEmbedded(chapters: RawAudioChapter[]): ProposedCh
 function deriveHeadingTitle(entry: EpubChapterEntry): string {
   const title = entry.title.trim();
   const normalizedTitle = normalizeText(title);
+  const firstText = entry.text.replace(/\s+/g, " ").trim();
+  if (/^[“"]/.test(title)) {
+    const quotedHeading = firstText.match(/^([“"].+?[”"])/);
+    if (quotedHeading?.[1] && normalizeText(quotedHeading[1]).replace(/\s+/g, "") === normalizedTitle.replace(/\s+/g, "")) {
+      return quotedHeading[1].trim();
+    }
+  }
   if (/^\d+$/.test(normalizedTitle)) {
-    const firstText = entry.text.replace(/\s+/g, " ").trim();
     const withoutLeadingOrdinal = firstText.replace(new RegExp(`^${normalizedTitle}\\s+`, "i"), "");
     const match = withoutLeadingOrdinal.match(/^(.+?[?!])(?:\s|$)/);
     if (match?.[1]) return `${normalizedTitle}. ${match[1].trim()}`;
   }
   if (normalizedTitle === "introduction") {
-    const firstText = entry.text.replace(/\s+/g, " ").trim();
     const match = firstText.match(/^introduction\s*:\s*(.+?)(?:\s+Anyone\b|$)/i);
     if (match?.[1]) return `Introduction: ${match[1].trim()}`;
   }
   if (normalizedTitle === "epilogue") {
-    const firstText = entry.text.replace(/\s+/g, " ").trim();
     const match = firstText.match(/^epilogue\s*:\s*(.+?)(?:\s+And\s+(?:now|then|so)\b|$)/i);
     if (match?.[1]) return `Epilogue: ${match[1].trim()}`;
   }

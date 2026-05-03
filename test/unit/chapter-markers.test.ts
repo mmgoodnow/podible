@@ -84,6 +84,14 @@ describe("chapter marker proposal", () => {
     ]);
   });
 
+  test("repairs quoted EPUB headings from the entry text", () => {
+    const headings = selectMajorEpubHeadings([
+      epubEntryWithText("“A monster more insatiablethan the guillotine”", "“A monster more insatiable than the guillotine” Medical importance.", 0),
+    ]);
+
+    expect(headings.map((heading) => heading.title)).toEqual(["“A monster more insatiable than the guillotine”"]);
+  });
+
   test("keeps spoken front matter, interstitial cards, and useful back matter", () => {
     const headings = selectMajorEpubHeadings(
       ["Copyright", "Preface", "1. PARTY", "OCTOBER", "NOVEMBER", "4. WAKING UP", "EPILOGUE—TREATY", "ACKNOWLEDGMENTS", "DISCOVER MORE"].map(
