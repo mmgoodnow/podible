@@ -194,7 +194,7 @@ describe("chapter marker proposal", () => {
     ]);
   });
 
-  test("keeps spoken inline tale headings from substantial generic chapters", () => {
+  test("promotes inline all-caps headings from generic wrapper chapters", () => {
     const headings = selectMajorEpubHeadings([
       {
         ...epubEntryWithText(
@@ -225,7 +225,7 @@ describe("chapter marker proposal", () => {
     expect(headings.map((heading) => heading.title)).toEqual(["Notes"]);
   });
 
-  test("drops inline heading subtitles before drop-cap body text", () => {
+  test("drops inline all-caps heading subtitles before drop-cap body text", () => {
     const headings = selectMajorEpubHeadings([
       {
         ...epubEntryWithText(

@@ -342,7 +342,7 @@ function deriveOpeningWords(entry: EpubChapterEntry): string[] {
     .slice(0, 8);
 }
 
-function titleCaseHeading(value: string): string {
+function titleCaseInlineHeading(value: string): string {
   const smallWords = new Set(["a", "an", "and", "as", "at", "but", "by", "for", "in", "nor", "of", "on", "or", "the", "to", "with", "without"]);
   return normalizeText(value)
     .split(" ")
@@ -356,32 +356,33 @@ function titleCaseHeading(value: string): string {
     .join(" ");
 }
 
-function cleanInlineTaleSubtitle(value: string): string {
+function trimInlineHeadingBeforeDropCap(value: string): string {
   const tokens = value.replace(/[“”"]/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
   while (tokens.length > 4 && /^[A-Z]$/u.test(tokens.at(-2)!) && /^[A-Z]{2,}$/u.test(tokens.at(-1)!)) tokens.splice(-2, 2);
   while (tokens.length > 3 && /^[A-Z]$/u.test(tokens.at(-1)!)) tokens.pop();
   return tokens.join(" ");
 }
 
-function deriveInlineHeadingTitles(entry: EpubChapterEntry): string[] {
+function deriveInlineAllCapsHeadingTitles(entry: EpubChapterEntry): string[] {
   const title = deriveHeadingTitle(entry);
   if (!isGenericNumberedChapterTocHeading(title) || entry.wordCount < 500) return [];
   const titles: string[] = [];
   const text = entry.text.replace(/\s+/g, " ");
-  const quotedInlineTaleHeading = /(?:^|[.!?]["”]?\s+)(THE\s+[A-Z][A-Z’' -]{2,40}\s+TALE):\s*["“]([^"”]{3,80})["”]/g;
-  const inlineTaleHeading =
-    /(?:^|[.!?]["”]?\s+)(THE\s+[A-Z][A-Z’' -]{2,40}\s+TALE):\s*["“]?([A-Z][A-Z’' -]+?)["”]?(?=\s+["“]?\s*[A-Z](?:\s+[A-Z]{2,}){0,3}\s+[a-z])/g;
+  const quotedInlineHeading =
+    /(?:^|[.!?]["”]?\s+)([A-Z][A-Z0-9’' -]{2,80}):\s*["“]([^"”]{3,100})["”]/g;
+  const unquotedInlineHeading =
+    /(?:^|[.!?]["”]?\s+)([A-Z][A-Z0-9’' -]{2,80}):\s*([A-Z][A-Z0-9’' ,;-]{3,120}?)(?=\s+["“]?\s*[A-Z](?:\s+[A-Z]{1,}){0,4}\s+[a-z])/g;
   let match: RegExpExecArray | null;
-  while ((match = quotedInlineTaleHeading.exec(text))) {
-    const label = titleCaseHeading(match[1] ?? "");
-    const subtitle = titleCaseHeading(cleanInlineTaleSubtitle(match[2] ?? ""));
+  while ((match = quotedInlineHeading.exec(text))) {
+    const label = titleCaseInlineHeading(match[1] ?? "");
+    const subtitle = titleCaseInlineHeading(trimInlineHeadingBeforeDropCap(match[2] ?? ""));
     const candidate = `${label}: ${subtitle}`.trim();
     const wordCount = normalizeText(candidate).split(" ").filter(Boolean).length;
     if (wordCount >= 4 && wordCount <= 14) titles.push(candidate);
   }
-  while ((match = inlineTaleHeading.exec(text))) {
-    const label = titleCaseHeading(match[1] ?? "");
-    const subtitle = titleCaseHeading(cleanInlineTaleSubtitle(match[2] ?? ""));
+  while ((match = unquotedInlineHeading.exec(text))) {
+    const label = titleCaseInlineHeading(match[1] ?? "");
+    const subtitle = titleCaseInlineHeading(trimInlineHeadingBeforeDropCap(match[2] ?? ""));
     const candidate = `${label}: ${subtitle}`.trim();
     const wordCount = normalizeText(candidate).split(" ").filter(Boolean).length;
     if (wordCount >= 4 && wordCount <= 14) titles.push(candidate);
@@ -399,7 +400,7 @@ function collectHeadingCandidates(entries: EpubChapterEntry[]): HeadingCandidate
     if (!title || seen.has(title)) continue;
     seen.add(title);
     headings.push(headingFromTitle(title, sourceIndex, entry.wordCount, { openingWords: deriveOpeningWords(entry) }));
-    const inlineTitles = deriveInlineHeadingTitles(entry);
+    const inlineTitles = deriveInlineAllCapsHeadingTitles(entry);
     for (const [inlineIndex, inlineTitle] of inlineTitles.entries()) {
       const inlineNormalized = normalizeText(inlineTitle);
       if (!inlineTitle || seen.has(inlineNormalized)) continue;
