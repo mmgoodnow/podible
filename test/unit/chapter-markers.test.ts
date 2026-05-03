@@ -720,6 +720,31 @@ describe("chapter marker proposal", () => {
     ]);
   });
 
+  test("does not sequence-retitle across interior interstitial headings", () => {
+    const report = proposeChapterMarkers({
+      epubEntries: [
+        entryWithWordCount("1. PARTY", 0, 1000),
+        entryWithWordCount("OCTOBER", 1, 5),
+        entryWithWordCount("NOVEMBER", 2, 5),
+        entryWithWordCount("2. WAKING UP", 3, 1000),
+        entryWithWordCount("3. CHEATER", 4, 1000),
+        entryWithWordCount("4. FRIENDS", 5, 1000),
+        entryWithWordCount("5. REPETITION", 6, 1000),
+      ],
+      transcriptUtterances: [utterance(100_000, "October."), utterance(110_000, "November."), utterance(120_000, "Two. Waking up.")],
+      embeddedChapters: [
+        { startMs: 0, endMs: 100_000, title: "001" },
+        { startMs: 100_000, endMs: 200_000, title: "002" },
+        { startMs: 200_000, endMs: 400_000, title: "003" },
+        { startMs: 400_000, endMs: 700_000, title: "004" },
+        { startMs: 700_000, endMs: 1_100_000, title: "005" },
+      ],
+    });
+
+    expect(report.chapters.map((chapter) => chapter.title)).toContain("OCTOBER");
+    expect(report.chapters.map((chapter) => chapter.title)).toContain("NOVEMBER");
+  });
+
   test("allows distinctive long titles to refine coarse embedded boundaries", () => {
     const report = proposeChapterMarkers({
       epubEntries: [

@@ -894,9 +894,18 @@ function buildGenericEmbeddedSequenceChapters(
   if (numberedHeadings.length < 5) return null;
 
   const firstNumberedIndex = numberedHeadings[0]!.sourceIndex;
+  const lastNumberedIndex = numberedHeadings.at(-1)!.sourceIndex;
   const prelude = semanticHeadings.find(
     (heading) => heading.sourceIndex < firstNumberedIndex && /^prologue(\s+|$)/.test(normalizeText(heading.title))
   );
+  const interiorShortUnnumberedHeadingCount = entries.filter((entry, index) => {
+    if (index <= firstNumberedIndex || index >= lastNumberedIndex) return false;
+    const semantic = semanticSequenceHeadingFromEntry(entry, index);
+    if (semantic && semantic.ordinal !== null) return false;
+    const heading = headingFromTitle(deriveHeadingTitle(entry), index, entry.wordCount);
+    return heading.ordinal === null && isShortUnnumberedHeading(heading);
+  }).length;
+  if (!prelude && interiorShortUnnumberedHeadingCount >= 2) return null;
   const sectionHeadings = entries
     .map((entry, index) => headingFromTitle(deriveHeadingTitle(entry), index, entry.wordCount))
     .filter((heading) => heading.ordinalLabel === "book" || heading.ordinalLabel === "part");
