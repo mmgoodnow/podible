@@ -602,6 +602,72 @@ describe("chapter curation tools", () => {
     expect(chapters?.map((chapter) => chapter.title)).toEqual(["Prologue", "Chapter 1", "Chapter 2"]);
   });
 
+  test("resolveRecursiveChapterSpans runs sibling spans concurrently within the configured limit", async () => {
+    const context = ctx({
+      durationMs: 300_000,
+      manifestation: manifestation({ duration_ms: 300_000 }),
+      epubEntries: [
+        epubEntry({ id: "front", title: "Prologue", cumulativeRatio: 0.2, cumulativeWords: 4 }),
+        epubEntry({ id: "chapter-1", title: "Chapter 1", cumulativeRatio: 0.6, cumulativeWords: 16 }),
+        epubEntry({ id: "chapter-2", title: "Chapter 2", cumulativeRatio: 1, cumulativeWords: 24 }),
+      ],
+    });
+    let active = 0;
+    let maxActive = 0;
+    const chapters = await resolveRecursiveChapterSpans(
+      context,
+      async (span): Promise<RecursiveSpanDecision> => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        try {
+          if (span.path !== "root") {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          if (span.path === "root") {
+            return {
+              kind: "split",
+              split: {
+                accepted: true,
+                kind: "split",
+                spanPath: "root",
+                epubNodeId: "chapter-1",
+                epubIndex: 1,
+                title: "Chapter 1",
+                startTime: 120,
+                notes: null,
+                audit: {
+                  epubNodeId: "chapter-1",
+                  title: "Chapter 1",
+                  startTime: 120,
+                  expectedTokens: [],
+                  proseTokens: [],
+                  matchedTokens: [],
+                  proseMatchedTokens: [],
+                  overlapRatio: 1,
+                  transcriptWindow: "",
+                  candidates: [],
+                },
+              },
+            };
+          }
+          return {
+            kind: "leaf",
+            chapters:
+              span.path === "L"
+                ? [{ title: "Prologue", startTime: 0, epubNodeId: "front" }]
+                : [{ title: "Chapter 1", startTime: 120, epubNodeId: "chapter-1" }],
+          };
+        } finally {
+          active--;
+        }
+      },
+      { maxConcurrency: 2 }
+    );
+
+    expect(chapters?.map((chapter) => chapter.title)).toEqual(["Prologue", "Chapter 1"]);
+    expect(maxActive).toBe(2);
+  });
+
   test("resolveRecursiveChapterSpans does not recurse after a failed decision", async () => {
     const reports: Array<{ outcome: string }> = [];
     const chapters = await resolveRecursiveChapterSpans(ctx(), async () => null, { reports: reports as never });

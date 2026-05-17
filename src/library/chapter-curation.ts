@@ -1402,12 +1402,28 @@ export function recursiveSpanToolUseBehavior(_: unknown, toolResults: FunctionTo
 export async function resolveRecursiveChapterSpans(
   ctx: ChapterCurationContext,
   decide: (span: ChapterCurationSpan, forceLeaf: boolean) => Promise<RecursiveSpanDecision | null>,
-  options: { maxDepth?: number; maxCalls?: number; reports?: RecursiveCurationReport[] } = {}
+  options: { maxDepth?: number; maxCalls?: number; maxConcurrency?: number; reports?: RecursiveCurationReport[] } = {}
 ): Promise<SubmittedChapter[] | null> {
   const maxDepth = options.maxDepth ?? 5;
   const maxCalls = options.maxCalls ?? 24;
+  const maxConcurrency = Math.max(1, options.maxConcurrency ?? 4);
   const reports = options.reports;
   let calls = 0;
+  let activeDecisions = 0;
+  const waiters: Array<() => void> = [];
+
+  async function withDecisionSlot<T>(fn: () => Promise<T>): Promise<T> {
+    if (activeDecisions >= maxConcurrency) {
+      await new Promise<void>((resolve) => waiters.push(resolve));
+    }
+    activeDecisions++;
+    try {
+      return await fn();
+    } finally {
+      activeDecisions--;
+      waiters.shift()?.();
+    }
+  }
 
   async function visit(span: ChapterCurationSpan, forceLeaf: boolean): Promise<SubmittedChapter[] | null> {
     if (calls >= maxCalls) {
@@ -1423,7 +1439,7 @@ export async function resolveRecursiveChapterSpans(
     }
     const mustLeaf = forceLeaf || span.depth >= maxDepth || calls >= maxCalls - 1;
     calls++;
-    const decision = await decide(span, mustLeaf);
+    const decision = await withDecisionSlot(() => decide(span, mustLeaf));
     if (!decision) {
       logChapterCurationEvent(ctx, {
         type: "span-no-decision",
@@ -1488,10 +1504,8 @@ export async function resolveRecursiveChapterSpans(
         startTime: decision.split.startTime,
       },
     });
-    const leftChapters = await visit(left, false);
-    if (!leftChapters) return null;
-    const rightChapters = await visit(right, false);
-    if (!rightChapters) return null;
+    const [leftChapters, rightChapters] = await Promise.all([visit(left, false), visit(right, false)]);
+    if (!leftChapters || !rightChapters) return null;
     return normalizeSpanChapters([...leftChapters, ...rightChapters]);
   }
 
@@ -1891,6 +1905,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
       message: "recursive run start=1",
       model: ctx.settings.agents.model,
       timeoutMs: ctx.settings.agents.timeoutMs,
+      maxSpanConcurrency: 4,
       durationSeconds: ctx.durationMs / 1000,
       epubEntries: ctx.epubEntries.length,
       transcriptUtterances: ctx.transcript.utterances?.length ?? 0,
@@ -2022,7 +2037,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
         }
         return null;
       },
-      { maxDepth: 5, maxCalls: 24, reports: recursiveReports }
+      { maxDepth: 5, maxCalls: 24, maxConcurrency: 4, reports: recursiveReports }
     );
     if (recursiveChapters && recursiveChapters.length > 0) {
       logChapterCurationEvent(ctx, {
