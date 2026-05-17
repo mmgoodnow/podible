@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { appendFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -32,6 +33,7 @@ export type ChapterCurationContext = {
   epubEntries: EpubChapterEntry[];
   transcript: StoredTranscriptPayload;
   embeddedChapters: ChapterCurationTiming[];
+  debugEventLogPath?: string;
 };
 
 export type ChapterCurationSpan = {
@@ -746,10 +748,67 @@ export type RecursiveCurationReport = {
   outcome: "leaf" | "split" | "failed" | "limit";
   errors?: string[];
   chapters?: number;
+  chapterPlan?: SubmittedChapter[];
+  split?: {
+    epubNodeId: string;
+    title: string;
+    startTime: number;
+  };
+};
+
+export type RecursiveSpanTrace = {
+  path: string;
+  depth: number;
+  forceLeaf: boolean;
+  finalOutput: unknown;
+  newItems: unknown[];
+  rawResponses: unknown[];
+  error?: unknown;
 };
 
 function logChapterCurationProgress(ctx: Pick<ChapterCurationContext, "manifestation">, message: string): void {
   console.warn(`[chapter-curation] manifestation=${ctx.manifestation.id} ${message}`);
+}
+
+function logChapterCurationEvent(
+  ctx: Pick<ChapterCurationContext, "manifestation" | "debugEventLogPath">,
+  event: Record<string, unknown>
+): void {
+  const payload = {
+    ts: new Date().toISOString(),
+    manifestationId: ctx.manifestation.id,
+    ...event,
+  };
+  if (ctx.debugEventLogPath) {
+    try {
+      appendFileSync(ctx.debugEventLogPath, `${JSON.stringify(payload)}\n`, "utf8");
+    } catch (error) {
+      console.warn(`[chapter-curation] manifestation=${ctx.manifestation.id} event_log_error=${JSON.stringify((error as Error).message)}`);
+    }
+  }
+  if (typeof event.message === "string") logChapterCurationProgress(ctx, event.message);
+}
+
+function summarizeSubmittedChapters(chapters: SubmittedChapter[], limit = 12): string {
+  const shown = chapters.slice(0, limit).map((chapter) => `${Math.round(chapter.startTime)}s:${chapter.title}`).join(" | ");
+  return chapters.length > limit ? `${shown} | ... +${chapters.length - limit}` : shown;
+}
+
+function summarizeSubmittedChapterObjects(chapters: SubmittedChapter[], limit = 24): Array<Pick<SubmittedChapter, "title" | "startTime" | "epubNodeId">> {
+  return chapters.slice(0, limit).map((chapter) => ({
+    title: chapter.title,
+    startTime: chapter.startTime,
+    epubNodeId: chapter.epubNodeId,
+  }));
+}
+
+function serializeAgentError(error: unknown): unknown {
+  const err = error as Error & { state?: { toJSON?: () => unknown } };
+  return {
+    name: err?.name,
+    message: err?.message ?? String(error),
+    state: typeof err?.state?.toJSON === "function" ? err.state.toJSON() : null,
+  };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -1326,6 +1385,13 @@ export async function resolveRecursiveChapterSpans(
 
   async function visit(span: ChapterCurationSpan, forceLeaf: boolean): Promise<SubmittedChapter[] | null> {
     if (calls >= maxCalls) {
+      logChapterCurationEvent(ctx, {
+        type: "span-limit",
+        message: `recursive span=${span.path} limit=max_calls`,
+        span,
+        forceLeaf,
+        maxCalls,
+      });
       reports?.push({ ...span, forceLeaf, outcome: "limit", errors: ["Recursive curation call limit reached."] });
       return null;
     }
@@ -1333,19 +1399,69 @@ export async function resolveRecursiveChapterSpans(
     calls++;
     const decision = await decide(span, mustLeaf);
     if (!decision) {
+      logChapterCurationEvent(ctx, {
+        type: "span-no-decision",
+        message: `recursive span=${span.path} accepted=0 reason=no_decision`,
+        span,
+        forceLeaf: mustLeaf,
+      });
       reports?.push({ ...span, forceLeaf: mustLeaf, outcome: "failed", errors: ["Span curator returned no accepted decision."] });
       return null;
     }
     if (decision.kind === "leaf") {
-      reports?.push({ ...span, forceLeaf: mustLeaf, outcome: "leaf", chapters: decision.chapters.length });
+      logChapterCurationEvent(ctx, {
+        type: "span-leaf-accepted",
+        message: `recursive span=${span.path} leaf accepted=1 chapters=${decision.chapters.length} summary=${JSON.stringify(summarizeSubmittedChapters(decision.chapters))}`,
+        span,
+        forceLeaf: mustLeaf,
+        chapters: decision.chapters.length,
+        chapterPlan: summarizeSubmittedChapterObjects(decision.chapters, 80),
+        result: decision.result,
+      });
+      reports?.push({ ...span, forceLeaf: mustLeaf, outcome: "leaf", chapters: decision.chapters.length, chapterPlan: decision.chapters });
       return decision.chapters;
     }
     if (mustLeaf) {
+      logChapterCurationEvent(ctx, {
+        type: "span-forced-leaf-rejected-split",
+        message: `recursive span=${span.path} accepted=0 reason=split_when_forced_leaf`,
+        span,
+        forceLeaf: mustLeaf,
+        split: {
+          epubNodeId: decision.split.epubNodeId,
+          title: decision.split.title,
+          startTime: decision.split.startTime,
+        },
+      });
       reports?.push({ ...span, forceLeaf: mustLeaf, outcome: "failed", errors: ["Span curator proposed a split when forced to submit a leaf."] });
       return null;
     }
     const { left, right } = splitSpan(span, decision.split.epubIndex, decision.split.startTime);
-    reports?.push({ ...span, forceLeaf: mustLeaf, outcome: "split" });
+    logChapterCurationEvent(ctx, {
+      type: "span-split-accepted",
+      message: `recursive span=${span.path} split accepted=1 epub=${decision.split.epubNodeId} time=${Math.round(decision.split.startTime)}s left=${left.path} right=${right.path}`,
+      span,
+      forceLeaf: mustLeaf,
+      split: {
+        epubNodeId: decision.split.epubNodeId,
+        epubIndex: decision.split.epubIndex,
+        title: decision.split.title,
+        startTime: decision.split.startTime,
+      },
+      left,
+      right,
+      result: decision.result,
+    });
+    reports?.push({
+      ...span,
+      forceLeaf: mustLeaf,
+      outcome: "split",
+      split: {
+        epubNodeId: decision.split.epubNodeId,
+        title: decision.split.title,
+        startTime: decision.split.startTime,
+      },
+    });
     const leftChapters = await visit(left, false);
     if (!leftChapters) return null;
     const rightChapters = await visit(right, false);
@@ -1394,6 +1510,7 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, forc
       : "Choose exactly one outcome: submitLeafChapterPlan if this span is locally solvable, or submitFulcrumSplit if this span should be divided.",
     "For a fulcrum, pick a high-confidence internal EPUB node boundary with transcript prose evidence near the timestamp.",
     "For a leaf, submit only chapter starts inside this span and include epubNodeId for every EPUB-backed chapter.",
+    "Prefer submitFulcrumSplit for spans with more than 8 EPUB nodes or more than 2 hours duration unless the whole span is already strongly evidenced.",
     "All times are seconds.",
   ].join("\n");
 }
@@ -1430,6 +1547,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
       "You curate audiobook chapter markers for one bounded span, not the whole book.",
       "You must either submit a leaf chapter plan or propose one validated fulcrum split.",
       "Use submitFulcrumSplit when the span is broad and you can identify a strong internal boundary.",
+      "If the span has more than 8 EPUB nodes or more than 2 hours duration, prefer finding a fulcrum split instead of attempting a large leaf.",
       "Use submitLeafChapterPlan when the span is small enough or already well evidenced.",
       "Do not submit guessed timestamps. Use transcript evidence tools first.",
       "All tool times and submitted startTime values are seconds, not milliseconds.",
@@ -1719,11 +1837,18 @@ export type ChapterCurationDetailedResult = {
   newItems: unknown[];
   rawResponses: unknown[];
   recursiveReports?: RecursiveCurationReport[];
+  recursiveSpanTraces?: RecursiveSpanTrace[];
 };
 
 export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCurationContext): Promise<ChapterCurationDetailedResult> {
   const apiKey = ctx.settings.agents.apiKey.trim();
-  if (!apiKey) return { result: null, finalOutput: null, newItems: [], rawResponses: [] };
+  if (!apiKey) {
+    logChapterCurationEvent(ctx, {
+      type: "recursive-run-skipped",
+      message: "recursive run skipped=no_api_key",
+    });
+    return { result: null, finalOutput: null, newItems: [], rawResponses: [], recursiveReports: [], recursiveSpanTraces: [] };
+  }
   const abort = new AbortController();
   const timeout = setTimeout(() => abort.abort(), Math.max(5_000, ctx.settings.agents.timeoutMs));
   const provider = new OpenAIProvider({ apiKey, useResponses: true });
@@ -1734,19 +1859,40 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
       traceIncludeSensitiveData: false,
     });
     const recursiveReports: RecursiveCurationReport[] = [];
+    const recursiveSpanTraces: RecursiveSpanTrace[] = [];
+    logChapterCurationEvent(ctx, {
+      type: "recursive-run-start",
+      message: "recursive run start=1",
+      model: ctx.settings.agents.model,
+      timeoutMs: ctx.settings.agents.timeoutMs,
+      durationSeconds: ctx.durationMs / 1000,
+      epubEntries: ctx.epubEntries.length,
+      transcriptUtterances: ctx.transcript.utterances?.length ?? 0,
+      embeddedChapters: ctx.embeddedChapters.length,
+    });
     const recursiveChapters = await resolveRecursiveChapterSpans(
       ctx,
       async (span, forceLeaf) => {
         const spanNodeCount = span.epubEndIndex - span.epubStartIndex + 1;
-        logChapterCurationProgress(
-          ctx,
-          `recursive span=${span.path} depth=${span.depth} epub=${span.epubStartIndex}-${span.epubEndIndex} nodes=${spanNodeCount} time=${Math.round(span.startTime)}-${Math.round(span.endTime)}s force_leaf=${forceLeaf} start=1`
-        );
+        logChapterCurationEvent(ctx, {
+          type: "span-start",
+          message: `recursive span=${span.path} depth=${span.depth} epub=${span.epubStartIndex}-${span.epubEndIndex} nodes=${spanNodeCount} time=${Math.round(span.startTime)}-${Math.round(span.endTime)}s force_leaf=${forceLeaf} start=1`,
+          span,
+          forceLeaf,
+          spanNodeCount,
+        });
         const startedAt = Date.now();
         const delays = [0, 15_000, 45_000];
         for (let attempt = 0; attempt < delays.length; attempt++) {
           if (delays[attempt]! > 0) {
-            logChapterCurationProgress(ctx, `recursive span=${span.path} retry=${attempt} sleep_ms=${delays[attempt]}`);
+            logChapterCurationEvent(ctx, {
+              type: "span-retry-sleep",
+              message: `recursive span=${span.path} retry=${attempt} sleep_ms=${delays[attempt]}`,
+              span,
+              forceLeaf,
+              attempt,
+              sleepMs: delays[attempt],
+            });
             await sleep(delays[attempt]!);
           }
           try {
@@ -1756,16 +1902,72 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
               toolExecution: { maxFunctionToolConcurrency: 4 },
             });
             const decision = parseSpanDecisionOutput(spanResult.finalOutput);
-            logChapterCurationProgress(
-              ctx,
-              `recursive span=${span.path} elapsed_ms=${Date.now() - startedAt} attempt=${attempt + 1} decision=${decision?.kind ?? "none"}${
+            const elapsedMs = Date.now() - startedAt;
+            recursiveSpanTraces.push({
+              path: span.path,
+              depth: span.depth,
+              forceLeaf,
+              finalOutput: spanResult.finalOutput,
+              newItems: spanResult.newItems as unknown[],
+              rawResponses: spanResult.rawResponses as unknown[],
+            });
+            logChapterCurationEvent(ctx, {
+              type: "span-agent-result",
+              message: `recursive span=${span.path} elapsed_ms=${elapsedMs} attempt=${attempt + 1} decision=${decision?.kind ?? "none"}${
                 decision?.kind === "leaf" ? ` chapters=${decision.chapters.length}` : ""
-              }${decision?.kind === "split" ? ` split_epub=${decision.split.epubNodeId} split_time=${Math.round(decision.split.startTime)}s` : ""}`
-            );
+              }${decision?.kind === "split" ? ` split_epub=${decision.split.epubNodeId} split_time=${Math.round(decision.split.startTime)}s` : ""}`,
+              span,
+              forceLeaf,
+              attempt: attempt + 1,
+              elapsedMs,
+              decisionKind: decision?.kind ?? null,
+              decision:
+                decision?.kind === "leaf"
+                  ? {
+                      kind: "leaf",
+                      chapters: decision.chapters.length,
+                      summary: summarizeSubmittedChapters(decision.chapters),
+                      chapterPlan: summarizeSubmittedChapterObjects(decision.chapters),
+                      result: decision.result,
+                    }
+                  : decision?.kind === "split"
+                    ? {
+                        kind: "split",
+                        epubNodeId: decision.split.epubNodeId,
+                        epubIndex: decision.split.epubIndex,
+                        title: decision.split.title,
+                        startTime: decision.split.startTime,
+                        result: decision.result,
+                      }
+                    : null,
+              finalOutput: spanResult.finalOutput,
+              newItems: spanResult.newItems as unknown[],
+              rawResponses: spanResult.rawResponses as unknown[],
+            });
             return decision;
           } catch (error) {
             const message = (error as Error).message;
-            logChapterCurationProgress(ctx, `recursive span=${span.path} elapsed_ms=${Date.now() - startedAt} attempt=${attempt + 1} error=${JSON.stringify(message)}`);
+            const elapsedMs = Date.now() - startedAt;
+            const serializedError = serializeAgentError(error);
+            recursiveSpanTraces.push({
+              path: span.path,
+              depth: span.depth,
+              forceLeaf,
+              finalOutput: null,
+              newItems: [],
+              rawResponses: [],
+              error: serializedError,
+            });
+            logChapterCurationEvent(ctx, {
+              type: "span-error",
+              message: `recursive span=${span.path} elapsed_ms=${elapsedMs} attempt=${attempt + 1} error=${JSON.stringify(message)}`,
+              span,
+              forceLeaf,
+              attempt: attempt + 1,
+              elapsedMs,
+              retryable: retryableAgentError(error),
+              error: serializedError,
+            });
             if (attempt < delays.length - 1 && retryableAgentError(error)) continue;
             recursiveReports.push({
               ...span,
@@ -1781,7 +1983,12 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
       { maxDepth: 5, maxCalls: 24, reports: recursiveReports }
     );
     if (recursiveChapters && recursiveChapters.length > 0) {
-      logChapterCurationProgress(ctx, `recursive merge chapters=${recursiveChapters.length} validate=1`);
+      logChapterCurationEvent(ctx, {
+        type: "recursive-merge-start",
+        message: `recursive merge chapters=${recursiveChapters.length} validate=1`,
+        chapters: recursiveChapters.length,
+        chapterPlan: summarizeSubmittedChapterObjects(recursiveChapters, 80),
+      });
       const recursiveResult = submitChapterPlan(ctx, {
         manifestationId: ctx.manifestation.id,
         strategy: "Recursive fulcrum chapter curation",
@@ -1789,16 +1996,29 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
         notes: "Merged from recursively curated span plans.",
       });
       if (recursiveResult.accepted) {
-        logChapterCurationProgress(ctx, `recursive merge accepted=1 chapters=${recursiveResult.chapters.length}`);
+        logChapterCurationEvent(ctx, {
+          type: "recursive-merge-accepted",
+          message: `recursive merge accepted=1 chapters=${recursiveResult.chapters.length}`,
+          chapters: recursiveResult.chapters.length,
+          result: recursiveResult,
+        });
         return {
           result: recursiveResult,
           finalOutput: recursiveResult,
           newItems: [],
           rawResponses: [],
           recursiveReports,
+          recursiveSpanTraces,
         };
       }
-      logChapterCurationProgress(ctx, `recursive merge accepted=0 chapters=${recursiveChapters.length} errors=${JSON.stringify(recursiveResult.errors.slice(0, 5))}`);
+      logChapterCurationEvent(ctx, {
+        type: "recursive-merge-rejected",
+        message: `recursive merge accepted=0 chapters=${recursiveChapters.length} errors=${JSON.stringify(recursiveResult.errors.slice(0, 5))}`,
+        chapters: recursiveChapters.length,
+        errors: recursiveResult.errors,
+        warnings: recursiveResult.warnings,
+        audit: recursiveResult.audit,
+      });
       recursiveReports.push({
         ...createRootCurationSpan(ctx),
         forceLeaf: false,
@@ -1807,7 +2027,11 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
         chapters: recursiveChapters.length,
       });
     } else {
-      logChapterCurationProgress(ctx, `recursive result=null`);
+      logChapterCurationEvent(ctx, {
+        type: "recursive-result-null",
+        message: "recursive result=null",
+        reports: recursiveReports,
+      });
     }
 
     return {
@@ -1816,6 +2040,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
       newItems: [],
       rawResponses: [],
       recursiveReports,
+      recursiveSpanTraces,
     };
   } finally {
     clearTimeout(timeout);
@@ -1838,20 +2063,34 @@ export async function runAgenticChapterCurationDetailed(ctx: ChapterCurationCont
       tracingDisabled: true,
       traceIncludeSensitiveData: false,
     });
-    logChapterCurationProgress(ctx, `recursive result=null fallback=global`);
-    logChapterCurationProgress(ctx, `global fallback start=1`);
+    logChapterCurationEvent(ctx, {
+      type: "global-fallback-start",
+      message: "recursive result=null fallback=global",
+    });
+    logChapterCurationEvent(ctx, {
+      type: "global-fallback-agent-start",
+      message: "global fallback start=1",
+    });
     const result = await runner.run(createChapterCuratorAgent(ctx), chapterCuratorPrompt(ctx), {
       maxTurns: 64,
       signal: abort.signal,
       toolExecution: { maxFunctionToolConcurrency: 4 },
     });
-    logChapterCurationProgress(ctx, `global fallback done=1 result=${parseSubmitToolOutput(result.finalOutput)?.accepted ? "accepted" : "none"}`);
+    const parsedResult = parseSubmitToolOutput(result.finalOutput);
+    logChapterCurationEvent(ctx, {
+      type: "global-fallback-agent-result",
+      message: `global fallback done=1 result=${parsedResult?.accepted ? "accepted" : "none"}`,
+      finalOutput: result.finalOutput,
+      newItems: result.newItems as unknown[],
+      rawResponses: result.rawResponses as unknown[],
+    });
     return {
-      result: parseSubmitToolOutput(result.finalOutput),
+      result: parsedResult,
       finalOutput: result.finalOutput,
       newItems: result.newItems as unknown[],
       rawResponses: result.rawResponses as unknown[],
       recursiveReports: recursive.recursiveReports,
+      recursiveSpanTraces: recursive.recursiveSpanTraces,
     };
   } finally {
     clearTimeout(timeout);
