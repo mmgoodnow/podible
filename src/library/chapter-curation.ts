@@ -739,6 +739,21 @@ function matchingBadEmbeddedBoundaryRatio(ctx: Pick<ChapterCurationContext, "dur
   return matched / chapters.length;
 }
 
+function claimedEpubIndexes(entries: EpubChapterEntry[], chapters: SubmittedChapter[]): number[] {
+  return chapters
+    .map((chapter) => (chapter.epubNodeId ? entries.findIndex((entry) => entry.id === chapter.epubNodeId) : entries.findIndex((entry) => chapterTitleKey(entry.title) === chapterTitleKey(chapter.title))))
+    .filter((index) => index >= 0)
+    .sort((a, b) => a - b);
+}
+
+function maxEpubIndexGap(indexes: number[]): number {
+  let maxGap = 0;
+  for (let index = 1; index < indexes.length; index++) {
+    maxGap = Math.max(maxGap, indexes[index]! - indexes[index - 1]! - 1);
+  }
+  return maxGap;
+}
+
 export function submitChapterPlan(ctx: ChapterCurationContext, input: unknown): SubmitChapterPlanResult {
   const parsed = submitChapterPlanSchema.safeParse(input);
   if (!parsed.success) {
@@ -797,6 +812,17 @@ export function submitChapterPlan(ctx: ChapterCurationContext, input: unknown): 
   }
   if (ctx.epubEntries.length >= 20 && plan.chapters.length < Math.min(12, Math.ceil(ctx.epubEntries.length * 0.25))) {
     errors.push("Plan is too coarse for an EPUB-rich book; propose a fuller listening chapter map.");
+  }
+  const epubIndexes = claimedEpubIndexes(ctx.epubEntries, plan.chapters);
+  if (ctx.epubEntries.length >= 20) {
+    const minimumCoverage = Math.ceil(ctx.epubEntries.length * 0.55);
+    if (epubIndexes.length < minimumCoverage) {
+      errors.push(`Plan covers only ${epubIndexes.length} EPUB node(s); EPUB-rich books need at least ${minimumCoverage} supported nodes or a clear section-level strategy.`);
+    }
+    const maxGap = maxEpubIndexGap(epubIndexes);
+    if (maxGap > 8) {
+      errors.push(`Plan skips ${maxGap} consecutive EPUB node(s); fill large structural gaps or split into section-level plans.`);
+    }
   }
   for (const [index, chapter] of plan.chapters.entries()) {
     if (!chapter.epubNodeId) continue;
