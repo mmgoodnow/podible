@@ -10,6 +10,7 @@ import type { StoredTranscriptUtterance } from "./chapter-analysis";
 import { proposeChapterMarkers, wordsToTranscriptUtterances, type RawAudioChapter } from "./chapter-markers";
 import { readFfprobeChapters } from "../media/probe-cache";
 import { selectPreferredAudioAsset, selectPreferredAudioManifestation } from "./asset-selection";
+import { runAgenticChapterCuration } from "./chapter-curation";
 import { configDir } from "../config";
 
 import type { BooksRepo } from "../repo";
@@ -279,7 +280,44 @@ async function buildTranscriptProposedChapterTimings(
     buildManifestationFallbackChapterTimings(containers),
   ]);
   const utterances = transcript?.utterances ?? [];
-  if (!epubEntries || utterances.length === 0 || !fallbackTimings || fallbackTimings.length === 0) return null;
+  if (!epubEntries || !transcript || utterances.length === 0 || !fallbackTimings || fallbackTimings.length === 0) return null;
+
+  const totalDurationMs =
+    manifestation.duration_ms ??
+    containers
+      .filter((container) => container.asset.kind !== "ebook")
+      .reduce((sum, container) => sum + containerDurationMs(container.asset, container.files), 0);
+
+  const book = repo.getBookRow(manifestation.book_id);
+  const settings = repo.getSettings();
+  if (book && settings.agents.apiKey.trim()) {
+    try {
+      const agentReport = await runAgenticChapterCuration({
+        book,
+        manifestation,
+        containers,
+        settings,
+        durationMs: totalDurationMs,
+        epubEntries,
+        transcript,
+        embeddedChapters: fallbackTimings,
+      });
+      if (agentReport?.accepted && agentReport.chapters.length > 0) {
+        return agentReport.chapters.map((chapter, index) => {
+          const startMs = Math.round(chapter.startTime * 1000);
+          const next = agentReport.chapters[index + 1];
+          return {
+            id: `agent-${index}`,
+            title: chapter.title,
+            startMs,
+            endMs: next ? Math.max(startMs, Math.round(next.startTime * 1000)) : Math.max(startMs, totalDurationMs),
+          };
+        });
+      }
+    } catch (error) {
+      console.warn(`[chapter-curation] agent failed for manifestation ${manifestation.id}: ${(error as Error).message}`);
+    }
+  }
 
   const report = proposeChapterMarkers({
     epubEntries,
@@ -287,12 +325,6 @@ async function buildTranscriptProposedChapterTimings(
     embeddedChapters: timingsToRawAudioChapters(fallbackTimings),
   });
   if (report.chapters.length < 3) return null;
-
-  const totalDurationMs =
-    manifestation.duration_ms ??
-    containers
-      .filter((container) => container.asset.kind !== "ebook")
-      .reduce((sum, container) => sum + containerDurationMs(container.asset, container.files), 0);
 
   return report.chapters.map((chapter, index) => {
     const startMs = Math.round(chapter.startTime * 1000);
