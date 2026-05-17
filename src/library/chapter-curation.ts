@@ -499,6 +499,26 @@ function chapterTitleKey(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+function textTokens(value: string): string[] {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length >= 4);
+}
+
+function distinctFirstWordTokens(value: string): string[] {
+  const stop = new Set(["chapter", "part", "book", "this", "that", "with", "from", "have", "there", "their", "would", "could", "should"]);
+  const tokens: string[] = [];
+  for (const token of textTokens(value)) {
+    if (stop.has(token)) continue;
+    if (tokens.includes(token)) continue;
+    tokens.push(token);
+    if (tokens.length >= 12) break;
+  }
+  return tokens;
+}
+
 function transcriptAfterStart(ctx: Pick<ChapterCurationContext, "transcript">, startMs: number, radiusMs: number): string {
   return transcriptUtterances(ctx)
     .filter((utterance) => utterance.endMs >= startMs && utterance.startMs <= startMs + radiusMs)
@@ -616,6 +636,25 @@ export function submitChapterPlan(ctx: ChapterCurationContext, input: unknown): 
   const missingEpubClaims = audit.filter((entry) => entry.claimedEpubHeading === null).length;
   if (missingEpubClaims > 0) {
     warnings.push(`${missingEpubClaims} chapter title(s) do not directly match an EPUB heading or supplied epubNodeId.`);
+  }
+  for (const [index, chapter] of plan.chapters.entries()) {
+    if (!chapter.epubNodeId) continue;
+    const heading = audit[index]?.claimedEpubHeading;
+    if (!heading) {
+      errors.push(`chapters[${index}].epubNodeId does not match an EPUB node`);
+      continue;
+    }
+    if (chapterTitleKey(chapter.title) !== chapterTitleKey(heading.title)) {
+      errors.push(`chapters[${index}] title "${chapter.title}" does not match claimed EPUB heading "${heading.title}"`);
+    }
+    const evidenceTokens = distinctFirstWordTokens(heading.firstWords);
+    if (evidenceTokens.length > 0) {
+      const transcriptTokens = new Set(textTokens(audit[index]?.transcriptAfterStart ?? ""));
+      const overlap = evidenceTokens.filter((token) => transcriptTokens.has(token));
+      if (overlap.length < Math.min(2, evidenceTokens.length)) {
+        errors.push(`chapters[${index}] has weak transcript evidence for claimed EPUB heading "${heading.title}"`);
+      }
+    }
   }
   const badEmbeddedRatio = matchingBadEmbeddedBoundaryRatio(ctx, plan.chapters);
   if (badEmbeddedRatio >= 0.8 && plan.chapters.length >= 5) {

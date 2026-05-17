@@ -114,6 +114,7 @@ function transcript(): StoredTranscriptPayload {
     utterances: [
       { startMs: 0, endMs: 1200, text: "Chapter one." },
       { startMs: 1200, endMs: 3000, text: "Once upon a time." },
+      { startMs: 30_000, endMs: 32_000, text: "The first real chapter begins." },
     ],
   };
 }
