@@ -637,6 +637,12 @@ export function submitChapterPlan(ctx: ChapterCurationContext, input: unknown): 
   if (missingEpubClaims > 0) {
     warnings.push(`${missingEpubClaims} chapter title(s) do not directly match an EPUB heading or supplied epubNodeId.`);
   }
+  if (ctx.epubEntries.length >= 10 && missingEpubClaims > plan.chapters.length / 2) {
+    errors.push("Plan does not use enough EPUB heading evidence for an EPUB-rich book.");
+  }
+  if (ctx.epubEntries.length >= 20 && plan.chapters.length < Math.min(12, Math.ceil(ctx.epubEntries.length * 0.25))) {
+    errors.push("Plan is too coarse for an EPUB-rich book; propose a fuller listening chapter map.");
+  }
   for (const [index, chapter] of plan.chapters.entries()) {
     if (!chapter.epubNodeId) continue;
     const heading = audit[index]?.claimedEpubHeading;
