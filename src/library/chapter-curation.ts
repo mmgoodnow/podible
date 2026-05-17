@@ -750,6 +750,7 @@ export function createChapterCuratorAgent(ctx: ChapterCurationContext): Agent {
       toolChoice: "required",
       parallelToolCalls: false,
     },
+    resetToolChoice: false,
     instructions: [
       "You curate audiobook chapter markers from EPUB structure, embedded audio chapters, and transcript evidence.",
       "You must use tools to inspect the available evidence. Embedded audio chapters are evidence, not truth; equal divisions and generic labels are suspicious.",
