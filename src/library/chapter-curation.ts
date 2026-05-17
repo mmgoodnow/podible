@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { rgPath } from "@vscode/ripgrep";
 import uFuzzy from "@leeoniya/ufuzzy";
+import { z } from "zod";
 
 import type { AppSettings, AssetFileRow, AssetRow, BookRow, ManifestationRow } from "../app-types";
 import type { EpubChapterEntry, StoredTranscriptPayload, StoredTranscriptUtterance } from "./chapter-analysis";
@@ -441,4 +442,204 @@ export function getTranscriptWindow(
   input: GetTranscriptWindowInput
 ): TranscriptWindow {
   return getTranscriptWindowFromContext(ctx, secondsToMs(input.startTime), secondsToMs(input.radiusSeconds ?? 20));
+}
+
+const submittedChapterSchema = z.object({
+  title: z.string().trim().min(1),
+  startTime: z.number().finite().nonnegative(),
+  epubNodeId: z.string().trim().min(1).optional(),
+});
+
+const submitChapterPlanSchema = z.object({
+  manifestationId: z.number().int().positive(),
+  strategy: z.string().trim().min(1),
+  chapters: z.array(submittedChapterSchema).min(1).max(300),
+  notes: z.string().trim().optional(),
+});
+
+export type SubmittedChapter = z.infer<typeof submittedChapterSchema>;
+export type SubmitChapterPlanInput = z.infer<typeof submitChapterPlanSchema>;
+
+export type ChapterPlanAuditEntry = {
+  index: number;
+  title: string;
+  startTime: number;
+  nearestEmbeddedBoundary: {
+    title: string;
+    startTime: number;
+    deltaSeconds: number;
+  } | null;
+  transcriptAfterStart: string;
+  claimedEpubHeading: {
+    id: string;
+    title: string;
+    firstWords: string;
+  } | null;
+};
+
+export type SubmitChapterPlanResult =
+  | {
+      accepted: true;
+      strategy: string;
+      notes: string | null;
+      chapters: Array<{ title: string; startTime: number }>;
+      warnings: string[];
+      audit: ChapterPlanAuditEntry[];
+    }
+  | {
+      accepted: false;
+      errors: string[];
+      warnings: string[];
+      audit: ChapterPlanAuditEntry[];
+      instruction: string;
+    };
+
+function chapterTitleKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function transcriptAfterStart(ctx: Pick<ChapterCurationContext, "transcript">, startMs: number, radiusMs: number): string {
+  return transcriptUtterances(ctx)
+    .filter((utterance) => utterance.endMs >= startMs && utterance.startMs <= startMs + radiusMs)
+    .map((utterance) => normalizeToolText(utterance.text))
+    .filter(Boolean)
+    .join(" ");
+}
+
+function nearestEmbeddedBoundary(
+  embeddedChapters: ChapterCurationTiming[],
+  startTime: number
+): ChapterPlanAuditEntry["nearestEmbeddedBoundary"] {
+  if (embeddedChapters.length === 0) return null;
+  const startMs = secondsToMs(startTime);
+  const nearest = embeddedChapters.reduce((best, chapter) => {
+    const delta = Math.abs(chapter.startMs - startMs);
+    return delta < best.delta ? { chapter, delta } : best;
+  }, { chapter: embeddedChapters[0]!, delta: Math.abs(embeddedChapters[0]!.startMs - startMs) });
+  return {
+    title: nearest.chapter.title,
+    startTime: msToSeconds(nearest.chapter.startMs),
+    deltaSeconds: msToSeconds(nearest.delta),
+  };
+}
+
+function claimedEpubHeading(
+  entries: EpubChapterEntry[],
+  chapter: SubmittedChapter
+): ChapterPlanAuditEntry["claimedEpubHeading"] {
+  const entry = chapter.epubNodeId
+    ? entries.find((candidate) => candidate.id === chapter.epubNodeId)
+    : entries.find((candidate) => chapterTitleKey(candidate.title) === chapterTitleKey(chapter.title));
+  if (!entry) return null;
+  return {
+    id: entry.id,
+    title: entry.title,
+    firstWords: summarizeFirstWords(entry, 24),
+  };
+}
+
+function buildPlanAudit(ctx: Pick<ChapterCurationContext, "epubEntries" | "transcript" | "embeddedChapters">, chapters: SubmittedChapter[]): ChapterPlanAuditEntry[] {
+  return chapters.map((chapter, index) => ({
+    index,
+    title: chapter.title,
+    startTime: chapter.startTime,
+    nearestEmbeddedBoundary: nearestEmbeddedBoundary(ctx.embeddedChapters, chapter.startTime),
+    transcriptAfterStart: transcriptAfterStart(ctx, secondsToMs(chapter.startTime), 20_000),
+    claimedEpubHeading: claimedEpubHeading(ctx.epubEntries, chapter),
+  }));
+}
+
+function matchingBadEmbeddedBoundaryRatio(ctx: Pick<ChapterCurationContext, "durationMs" | "embeddedChapters">, chapters: SubmittedChapter[]): number {
+  const embedded = getEmbeddedAudioChapters(ctx);
+  const badEmbedded =
+    embedded.diagnostics.durationPattern === "suspiciously_even" &&
+    (embedded.diagnostics.labelQuality === "generic" || embedded.diagnostics.labelQuality === "repeated");
+  if (!badEmbedded || chapters.length === 0 || embedded.chapters.length === 0) return 0;
+  let matched = 0;
+  for (const chapter of chapters) {
+    const nearest = nearestEmbeddedBoundary(ctx.embeddedChapters, chapter.startTime);
+    if (nearest && Math.abs(nearest.deltaSeconds) <= 2) matched += 1;
+  }
+  return matched / chapters.length;
+}
+
+export function submitChapterPlan(ctx: ChapterCurationContext, input: unknown): SubmitChapterPlanResult {
+  const parsed = submitChapterPlanSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      accepted: false,
+      errors: parsed.error.issues.map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`),
+      warnings: [],
+      audit: [],
+      instruction: "Revise the chapter plan so it matches the submitChapterPlan schema.",
+    };
+  }
+
+  const plan = parsed.data;
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  if (plan.manifestationId !== ctx.manifestation.id) {
+    errors.push(`manifestationId ${plan.manifestationId} does not match current manifestation ${ctx.manifestation.id}`);
+  }
+
+  let previousStartTime = -1;
+  const seenStarts = new Set<number>();
+  const seenTitles = new Set<string>();
+  for (const [index, chapter] of plan.chapters.entries()) {
+    const roundedStart = Math.round(chapter.startTime * 1000) / 1000;
+    if (chapter.startTime >= ctx.durationMs / 1000) {
+      errors.push(`chapters[${index}].startTime is outside manifestation duration`);
+    }
+    if (chapter.startTime <= previousStartTime) {
+      errors.push(`chapters[${index}].startTime must be strictly greater than the previous chapter`);
+    }
+    if (seenStarts.has(roundedStart)) {
+      errors.push(`chapters[${index}].startTime duplicates another chapter timestamp`);
+    }
+    const titleKey = chapterTitleKey(chapter.title);
+    if (seenTitles.has(titleKey)) warnings.push(`chapters[${index}].title repeats a previous title`);
+    seenStarts.add(roundedStart);
+    seenTitles.add(titleKey);
+    previousStartTime = chapter.startTime;
+  }
+
+  if (plan.chapters.length < 3 && ctx.durationMs >= 30 * 60_000) {
+    warnings.push("Long manifestation has fewer than three chapters.");
+  }
+
+  const audit = buildPlanAudit(ctx, plan.chapters);
+  const missingTranscriptEvidence = audit.filter((entry) => !entry.transcriptAfterStart.trim()).length;
+  if (missingTranscriptEvidence > 0) {
+    warnings.push(`${missingTranscriptEvidence} chapter(s) have no transcript text within 20 seconds after the proposed start.`);
+  }
+  const missingEpubClaims = audit.filter((entry) => entry.claimedEpubHeading === null).length;
+  if (missingEpubClaims > 0) {
+    warnings.push(`${missingEpubClaims} chapter title(s) do not directly match an EPUB heading or supplied epubNodeId.`);
+  }
+  const badEmbeddedRatio = matchingBadEmbeddedBoundaryRatio(ctx, plan.chapters);
+  if (badEmbeddedRatio >= 0.8 && plan.chapters.length >= 5) {
+    errors.push("Plan appears to copy suspicious evenly-divided embedded chapter markers; use transcript and EPUB evidence to revise boundaries.");
+  }
+
+  if (errors.length > 0) {
+    return {
+      accepted: false,
+      errors,
+      warnings,
+      audit,
+      instruction: "Revise the plan, then call submitChapterPlan again. Prefer EPUB structure plus transcript evidence over suspicious embedded markers.",
+    };
+  }
+
+  return {
+    accepted: true,
+    strategy: plan.strategy,
+    notes: plan.notes ?? null,
+    chapters: plan.chapters.map((chapter) => ({
+      title: chapter.title,
+      startTime: chapter.startTime,
+    })),
+    warnings,
+    audit,
+  };
 }

@@ -7,6 +7,7 @@ import {
   estimateTimestampFromEpubPosition,
   getTranscriptWindow,
   rgSearchTranscript,
+  submitChapterPlan,
   type ChapterCurationContext,
   type ChapterCurationTiming,
 } from "../../src/library/chapter-curation";
@@ -266,5 +267,65 @@ describe("chapter curation tools", () => {
     expect(result.utterances).toHaveLength(2);
     expect(result.text).toContain("Chapter one");
     expect(result.text).toContain("Once upon a time");
+  });
+
+  test("submitChapterPlan rejects non-monotonic chapter starts with audit feedback", () => {
+    const result = submitChapterPlan(ctx(), {
+      manifestationId: 10,
+      strategy: "test",
+      chapters: [
+        { title: "Prologue", startTime: 10, epubNodeId: "front" },
+        { title: "Chapter 1", startTime: 5, epubNodeId: "chapter-1" },
+      ],
+    });
+    expect(result.accepted).toBe(false);
+    if (result.accepted) throw new Error("expected rejection");
+    expect(result.errors.join("\n")).toContain("strictly greater");
+    expect(result.audit).toHaveLength(2);
+    expect(result.audit[0]?.claimedEpubHeading?.title).toBe("Prologue");
+  });
+
+  test("submitChapterPlan accepts a sane plan and returns normalized chapters", () => {
+    const result = submitChapterPlan(ctx(), {
+      manifestationId: 10,
+      strategy: "epub plus transcript",
+      notes: "Synthetic fixture",
+      chapters: [
+        { title: "Prologue", startTime: 0, epubNodeId: "front" },
+        { title: "Chapter 1", startTime: 30, epubNodeId: "chapter-1" },
+      ],
+    });
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error(result.errors.join("\n"));
+    expect(result.chapters).toEqual([
+      { title: "Prologue", startTime: 0 },
+      { title: "Chapter 1", startTime: 30 },
+    ]);
+    expect(result.audit[1]?.nearestEmbeddedBoundary?.startTime).toBe(0);
+  });
+
+  test("submitChapterPlan rejects plans copied from suspicious equal embedded divisions", () => {
+    const result = submitChapterPlan(
+      ctx({
+        durationMs: 600_000,
+        embeddedChapters: Array.from({ length: 6 }, (_, index) => ({
+          id: `ch${index}`,
+          title: `Chapter ${index + 1}`,
+          startMs: index * 100_000,
+          endMs: (index + 1) * 100_000,
+        })),
+      }),
+      {
+        manifestationId: 10,
+        strategy: "embedded markers",
+        chapters: Array.from({ length: 6 }, (_, index) => ({
+          title: `Chapter ${index + 1}`,
+          startTime: index * 100,
+        })),
+      }
+    );
+    expect(result.accepted).toBe(false);
+    if (result.accepted) throw new Error("expected rejection");
+    expect(result.errors.join("\n")).toContain("suspicious evenly-divided");
   });
 });
