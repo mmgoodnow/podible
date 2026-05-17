@@ -430,3 +430,15 @@ export function estimateTimestampFromEpubPosition(
     },
   };
 }
+
+export type GetTranscriptWindowInput = {
+  startTime: number;
+  radiusSeconds?: number;
+};
+
+export function getTranscriptWindow(
+  ctx: Pick<ChapterCurationContext, "transcript" | "durationMs">,
+  input: GetTranscriptWindowInput
+): TranscriptWindow {
+  return getTranscriptWindowFromContext(ctx, secondsToMs(input.startTime), secondsToMs(input.radiusSeconds ?? 20));
+}

@@ -5,6 +5,7 @@ import {
   getEpubStructure,
   fuzzySearchTranscript,
   estimateTimestampFromEpubPosition,
+  getTranscriptWindow,
   rgSearchTranscript,
   type ChapterCurationContext,
   type ChapterCurationTiming,
@@ -256,5 +257,14 @@ describe("chapter curation tools", () => {
         endRatio: 1,
       },
     });
+  });
+
+  test("getTranscriptWindow returns transcript context around a timestamp", () => {
+    const result = getTranscriptWindow(ctx(), { startTime: 1, radiusSeconds: 1 });
+    expect(result.startMs).toBe(0);
+    expect(result.endMs).toBe(2000);
+    expect(result.utterances).toHaveLength(2);
+    expect(result.text).toContain("Chapter one");
+    expect(result.text).toContain("Once upon a time");
   });
 });
