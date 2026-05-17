@@ -1897,7 +1897,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
           }
           try {
             const spanResult = await runner.run(createRecursiveSpanCuratorAgent(ctx, span, forceLeaf), spanPrompt(ctx, span, forceLeaf), {
-              maxTurns: forceLeaf ? 24 : 32,
+              maxTurns: forceLeaf ? 24 : 64,
               signal: abort.signal,
               toolExecution: { maxFunctionToolConcurrency: 4 },
             });
