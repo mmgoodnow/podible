@@ -2052,7 +2052,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
         }
         return null;
       },
-      { maxDepth: 5, maxCalls: 24, maxConcurrency: 4, reports: recursiveReports }
+      { maxDepth: 5, maxCalls: 64, maxConcurrency: 4, reports: recursiveReports }
     );
     if (recursiveChapters && recursiveChapters.length > 0) {
       logChapterCurationEvent(ctx, {
