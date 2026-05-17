@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { rgPath } from "@vscode/ripgrep";
+import uFuzzy from "@leeoniya/ufuzzy";
 
 import type { AppSettings, AssetFileRow, AssetRow, BookRow, ManifestationRow } from "../app-types";
 import type { EpubChapterEntry, StoredTranscriptPayload, StoredTranscriptUtterance } from "./chapter-analysis";
@@ -350,4 +351,40 @@ export async function rgSearchTranscript(
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+export type FuzzySearchTranscriptInput = {
+  query: string;
+  scope?: TranscriptSearchScope;
+  limit?: number;
+};
+
+export async function fuzzySearchTranscript(
+  ctx: Pick<ChapterCurationContext, "transcript" | "durationMs">,
+  input: FuzzySearchTranscriptInput
+): Promise<{ matches: TranscriptSearchMatch[] }> {
+  const query = input.query.trim();
+  if (!query) return { matches: [] };
+  const utterances = scopedTranscriptUtterances(ctx, input.scope);
+  if (utterances.length === 0) return { matches: [] };
+  const haystack = utterances.map((utterance) => normalizeToolText(utterance.text));
+  const fuzzy = new uFuzzy({ intraMode: 1, intraIns: 1, intraSub: 1, intraTrn: 1, intraDel: 1 });
+  const [idxs, info, order] = fuzzy.search(haystack, query, 5);
+  if (!idxs) return { matches: [] };
+  const orderedIndexes =
+    info && order ? order.map((infoIndex) => info.idx[infoIndex]).filter((index): index is number => typeof index === "number") : idxs;
+  const matches: TranscriptSearchMatch[] = [];
+  for (const haystackIndex of orderedIndexes.slice(0, Math.max(1, Math.min(100, input.limit ?? 20)))) {
+    const utterance = utterances[haystackIndex];
+    if (!utterance) continue;
+    matches.push({
+      index: utterance.index,
+      startTime: msToSeconds(utterance.startMs),
+      endTime: msToSeconds(utterance.endMs),
+      text: utterance.text,
+      before: getTranscriptWindowFromContext(ctx, utterance.startMs, 0),
+      after: getTranscriptWindowFromContext(ctx, utterance.endMs, 10_000),
+    });
+  }
+  return { matches };
 }

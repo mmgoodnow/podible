@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   getEmbeddedAudioChapters,
   getEpubStructure,
+  fuzzySearchTranscript,
   rgSearchTranscript,
   type ChapterCurationContext,
   type ChapterCurationTiming,
@@ -227,5 +228,17 @@ describe("chapter curation tools", () => {
       scope: { startTime: 2 },
     });
     expect(result.matches).toHaveLength(0);
+  });
+
+  test("fuzzySearchTranscript finds close utterance matches", async () => {
+    const result = await fuzzySearchTranscript(ctx(), {
+      query: "once upon tim",
+      limit: 1,
+    });
+    expect(result.matches).toHaveLength(1);
+    expect(result.matches[0]).toMatchObject({
+      index: 1,
+      text: "Once upon a time.",
+    });
   });
 });
