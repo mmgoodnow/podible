@@ -423,6 +423,53 @@ function evidenceQuality(overlapCount: number): EpubChapterEvidenceMatch["qualit
   return "none";
 }
 
+function transcriptWordEvidenceMatches(
+  ctx: Pick<ChapterCurationContext, "transcript" | "durationMs">,
+  queryTokens: string[],
+  scope: TranscriptSearchScope,
+  limit: number
+): EpubChapterEvidenceMatch[] {
+  const distinctQueryTokens = queryTokens.filter((token, index) => token.length >= 4 && queryTokens.indexOf(token) === index);
+  if (distinctQueryTokens.length === 0) return [];
+  const startMs = secondsToMs(scope.startTime ?? 0);
+  const endMs = secondsToMs(scope.endTime ?? msToSeconds(ctx.durationMs));
+  const words = [...ctx.transcript.words]
+    .filter((word) => word.endMs >= startMs && word.startMs <= endMs)
+    .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+  const candidates: Array<EpubChapterEvidenceMatch & { score: number }> = [];
+  const windowSize = Math.min(56, Math.max(24, distinctQueryTokens.length * 4));
+
+  for (let index = 0; index < words.length; index++) {
+    const window = words.slice(index, index + windowSize);
+    if (window.length === 0) continue;
+    const windowTokens = new Set(window.map((word) => word.token || textTokens(word.text)[0] || "").filter(Boolean));
+    const tokenOverlap = distinctQueryTokens.filter((token) => windowTokens.has(token));
+    if (tokenOverlap.length === 0) continue;
+    const orderedBonus = distinctQueryTokens.reduce((score, token, tokenIndex) => {
+      const foundIndex = window.findIndex((word) => (word.token || textTokens(word.text)[0]) === token);
+      return foundIndex >= 0 && foundIndex <= tokenIndex * 6 + 12 ? score + 0.25 : score;
+    }, 0);
+    candidates.push({
+      startTime: msToSeconds(window[0]!.startMs),
+      endTime: msToSeconds(window.at(-1)!.endMs),
+      text: normalizeToolText(window.map((word) => word.text).join(" ")),
+      afterText: normalizeToolText(getTranscriptWindowFromContext(ctx, window[0]!.startMs, 20_000).text).slice(0, 500),
+      tokenOverlap,
+      quality: evidenceQuality(tokenOverlap.length),
+      score: tokenOverlap.length + orderedBonus,
+    });
+  }
+
+  const deduped: Array<EpubChapterEvidenceMatch & { score: number }> = [];
+  for (const candidate of candidates.sort((a, b) => b.score - a.score || a.startTime - b.startTime)) {
+    if (deduped.some((existing) => Math.abs(existing.startTime - candidate.startTime) < 30)) continue;
+    deduped.push(candidate);
+    if (deduped.length >= limit) break;
+  }
+
+  return deduped.map(({ score: _score, ...match }) => match);
+}
+
 export async function findEpubChapterEvidence(
   ctx: Pick<ChapterCurationContext, "epubEntries" | "durationMs" | "transcript">,
   input: FindEpubChapterEvidenceInput
@@ -459,13 +506,19 @@ export async function findEpubChapterEvidence(
       },
       limit: limitPerNode,
     });
+    const wordMatches = transcriptWordEvidenceMatches(
+      ctx,
+      queryTokens,
+      {
+        startTime: Math.max(0, estimate.estimatedStartTime - radiusSeconds),
+        endTime: Math.min(msToSeconds(ctx.durationMs), estimate.estimatedStartTime + radiusSeconds),
+      },
+      limitPerNode
+    );
     const matches = scopedMatches.matches.length > 0 ? scopedMatches.matches : (await fuzzySearchTranscript(ctx, { query, limit: limitPerNode })).matches;
-    nodes.push({
-      epubNodeId: entry.id,
-      title: entry.title,
-      estimatedStartTime: estimate.estimatedStartTime,
-      query,
-      matches: matches.slice(0, limitPerNode).map((match) => {
+    const matchResults = [
+      ...wordMatches,
+      ...matches.map((match) => {
         const candidateText = `${match.text} ${match.after.text}`;
         const candidateTokens = new Set(textTokens(candidateText));
         const tokenOverlap = queryTokens.filter((token) => candidateTokens.has(token));
@@ -478,6 +531,16 @@ export async function findEpubChapterEvidence(
           quality: evidenceQuality(tokenOverlap.length),
         };
       }),
+    ];
+    nodes.push({
+      epubNodeId: entry.id,
+      title: entry.title,
+      estimatedStartTime: estimate.estimatedStartTime,
+      query,
+      matches: matchResults
+        .sort((a, b) => b.tokenOverlap.length - a.tokenOverlap.length || a.startTime - b.startTime)
+        .filter((match, index, array) => array.findIndex((candidate) => Math.abs(candidate.startTime - match.startTime) < 30) === index)
+        .slice(0, limitPerNode),
     });
   }
   return { nodes };
