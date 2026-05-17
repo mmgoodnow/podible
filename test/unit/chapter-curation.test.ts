@@ -11,6 +11,7 @@ import {
   chapterCuratorToolUseBehavior,
   createRootCurationSpan,
   resolveRecursiveChapterSpans,
+  recursiveSpanAllowsLeaf,
   submitChapterPlan,
   validateFulcrumSplit,
   validateLeafChapterPlan,
@@ -536,6 +537,48 @@ describe("chapter curation tools", () => {
     );
 
     expect(result.accepted).toBe(true);
+  });
+
+  test("recursiveSpanAllowsLeaf only permits leaf plans for small or forced spans", () => {
+    expect(
+      recursiveSpanAllowsLeaf(
+        {
+          epubStartIndex: 0,
+          epubEndIndex: 8,
+          startTime: 0,
+          endTime: 60,
+          depth: 0,
+          path: "root",
+        },
+        false
+      )
+    ).toBe(false);
+    expect(
+      recursiveSpanAllowsLeaf(
+        {
+          epubStartIndex: 0,
+          epubEndIndex: 3,
+          startTime: 0,
+          endTime: 3 * 60 * 60,
+          depth: 0,
+          path: "root",
+        },
+        false
+      )
+    ).toBe(false);
+    expect(
+      recursiveSpanAllowsLeaf(
+        {
+          epubStartIndex: 0,
+          epubEndIndex: 8,
+          startTime: 0,
+          endTime: 3 * 60 * 60,
+          depth: 0,
+          path: "root",
+        },
+        true
+      )
+    ).toBe(true);
   });
 
   test("resolveRecursiveChapterSpans returns a leaf-only plan", async () => {

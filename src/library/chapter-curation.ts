@@ -1537,6 +1537,7 @@ function spanScope(span: ChapterCurationSpan, inputScope?: TranscriptSearchScope
 
 function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, forceLeaf: boolean): string {
   const entries = spanEpubEntries(ctx, span);
+  const allowLeaf = recursiveSpanAllowsLeaf(span, forceLeaf);
   return [
     `Curate chapter markers for span ${span.path} of "${ctx.book.title}" by ${ctx.book.author}.`,
     `manifestationId: ${ctx.manifestation.id}`,
@@ -1547,18 +1548,27 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, forc
     `spanEpubNodeCount: ${entries.length}`,
     forceLeaf
       ? "You are forced to submit a leaf chapter plan for this span. Do not call submitFulcrumSplit."
-      : "Choose exactly one outcome: submitLeafChapterPlan if this span is locally solvable, or submitFulcrumSplit if this span should be divided.",
+      : allowLeaf
+        ? "Choose exactly one outcome: submitLeafChapterPlan if this span is locally solvable, or submitFulcrumSplit if this span should be divided."
+        : "This span is too broad for a leaf plan. You must call submitFulcrumSplit with a validated internal boundary.",
     "For a fulcrum, pick a high-confidence internal EPUB node boundary with transcript prose evidence near the timestamp.",
-    "For a leaf, submit only chapter starts inside this span and include epubNodeId for every EPUB-backed chapter.",
+    allowLeaf ? "For a leaf, submit only chapter starts inside this span and include epubNodeId for every EPUB-backed chapter." : "",
     "Prefer submitFulcrumSplit for spans with more than 8 EPUB nodes or more than 2 hours duration unless the whole span is already strongly evidenced.",
     "All times are seconds.",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
+}
+
+export function recursiveSpanAllowsLeaf(span: ChapterCurationSpan, forceLeaf: boolean): boolean {
+  const spanNodeCount = span.epubEndIndex - span.epubStartIndex + 1;
+  const spanDurationSeconds = span.endTime - span.startTime;
+  return forceLeaf || (spanNodeCount <= 8 && spanDurationSeconds <= 2 * 60 * 60);
 }
 
 function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: ChapterCurationSpan, forceLeaf: boolean): Agent {
   let invalidFulcrums = 0;
   let rejectedLeafRequiresEvidence = false;
   let evidenceCallsSinceRejectedLeaf = 0;
+  const allowLeaf = recursiveSpanAllowsLeaf(span, forceLeaf);
 
   function markEvidenceToolUsed(): void {
     if (rejectedLeafRequiresEvidence) evidenceCallsSinceRejectedLeaf++;
@@ -1587,8 +1597,9 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
       "You curate audiobook chapter markers for one bounded span, not the whole book.",
       "You must either submit a leaf chapter plan or propose one validated fulcrum split.",
       "Use submitFulcrumSplit when the span is broad and you can identify a strong internal boundary.",
-      "If the span has more than 8 EPUB nodes or more than 2 hours duration, prefer finding a fulcrum split instead of attempting a large leaf.",
-      "Use submitLeafChapterPlan when the span is small enough or already well evidenced.",
+      allowLeaf
+        ? "Use submitLeafChapterPlan when the span is small enough or already well evidenced."
+        : "This span is too broad for a leaf plan. The submitLeafChapterPlan tool is intentionally unavailable; you must find a fulcrum split.",
       "Do not submit guessed timestamps. Use transcript evidence tools first.",
       "All tool times and submitted startTime values are seconds, not milliseconds.",
       forceLeaf ? "This span is forced leaf mode. You must call submitLeafChapterPlan, not submitFulcrumSplit." : "",
@@ -1676,7 +1687,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         parameters: submitFulcrumSplitSchema,
         strict: true,
         execute: async (input) => {
-          if (forceLeaf || invalidFulcrums >= 2) {
+          if (forceLeaf || (allowLeaf && invalidFulcrums >= 2)) {
             return {
               accepted: false,
               kind: "split",
@@ -1691,19 +1702,23 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
           return result;
         },
       }),
-      tool({
-        name: "submitLeafChapterPlan",
-        description: "Submit the final chapter plan for this span. Validation feedback is returned if rejected.",
-        parameters: submitLeafChapterPlanSchema,
-        strict: true,
-        execute: (input) => {
-          if (rejectedLeafRequiresEvidence && evidenceCallsSinceRejectedLeaf === 0) return rejectedLeafWithoutEvidence();
-          const result = validateLeafChapterPlan(ctx, span, input, { forceLeaf });
-          rejectedLeafRequiresEvidence = !result.accepted;
-          evidenceCallsSinceRejectedLeaf = 0;
-          return result;
-        },
-      }),
+      ...(allowLeaf
+        ? [
+            tool({
+              name: "submitLeafChapterPlan",
+              description: "Submit the final chapter plan for this span. Validation feedback is returned if rejected.",
+              parameters: submitLeafChapterPlanSchema,
+              strict: true,
+              execute: (input) => {
+                if (rejectedLeafRequiresEvidence && evidenceCallsSinceRejectedLeaf === 0) return rejectedLeafWithoutEvidence();
+                const result = validateLeafChapterPlan(ctx, span, input, { forceLeaf });
+                rejectedLeafRequiresEvidence = !result.accepted;
+                evidenceCallsSinceRejectedLeaf = 0;
+                return result;
+              },
+            }),
+          ]
+        : []),
     ],
     toolUseBehavior: recursiveSpanToolUseBehavior,
   });
