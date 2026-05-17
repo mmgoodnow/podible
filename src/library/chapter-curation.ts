@@ -752,6 +752,15 @@ function logChapterCurationProgress(ctx: Pick<ChapterCurationContext, "manifesta
   console.warn(`[chapter-curation] manifestation=${ctx.manifestation.id} ${message}`);
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function retryableAgentError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(429|rate limit|timeout|temporarily|aborted|network|ECONNRESET|ETIMEDOUT)\b/i.test(message);
+}
+
 function chapterTitleKey(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
@@ -1734,30 +1743,40 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
           `recursive span=${span.path} depth=${span.depth} epub=${span.epubStartIndex}-${span.epubEndIndex} nodes=${spanNodeCount} time=${Math.round(span.startTime)}-${Math.round(span.endTime)}s force_leaf=${forceLeaf} start=1`
         );
         const startedAt = Date.now();
-        try {
-          const spanResult = await runner.run(createRecursiveSpanCuratorAgent(ctx, span, forceLeaf), spanPrompt(ctx, span, forceLeaf), {
-            maxTurns: forceLeaf ? 24 : 32,
-            signal: abort.signal,
-            toolExecution: { maxFunctionToolConcurrency: 4 },
-          });
-          const decision = parseSpanDecisionOutput(spanResult.finalOutput);
-          logChapterCurationProgress(
-            ctx,
-            `recursive span=${span.path} elapsed_ms=${Date.now() - startedAt} decision=${decision?.kind ?? "none"}${decision?.kind === "leaf" ? ` chapters=${decision.chapters.length}` : ""}${
-              decision?.kind === "split" ? ` split_epub=${decision.split.epubNodeId} split_time=${Math.round(decision.split.startTime)}s` : ""
-            }`
-          );
-          return decision;
-        } catch (error) {
-          logChapterCurationProgress(ctx, `recursive span=${span.path} elapsed_ms=${Date.now() - startedAt} error=${JSON.stringify((error as Error).message)}`);
-          recursiveReports.push({
-            ...span,
-            forceLeaf,
-            outcome: "failed",
-            errors: [(error as Error).message],
-          });
-          return null;
+        const delays = [0, 15_000, 45_000];
+        for (let attempt = 0; attempt < delays.length; attempt++) {
+          if (delays[attempt]! > 0) {
+            logChapterCurationProgress(ctx, `recursive span=${span.path} retry=${attempt} sleep_ms=${delays[attempt]}`);
+            await sleep(delays[attempt]!);
+          }
+          try {
+            const spanResult = await runner.run(createRecursiveSpanCuratorAgent(ctx, span, forceLeaf), spanPrompt(ctx, span, forceLeaf), {
+              maxTurns: forceLeaf ? 24 : 32,
+              signal: abort.signal,
+              toolExecution: { maxFunctionToolConcurrency: 4 },
+            });
+            const decision = parseSpanDecisionOutput(spanResult.finalOutput);
+            logChapterCurationProgress(
+              ctx,
+              `recursive span=${span.path} elapsed_ms=${Date.now() - startedAt} attempt=${attempt + 1} decision=${decision?.kind ?? "none"}${
+                decision?.kind === "leaf" ? ` chapters=${decision.chapters.length}` : ""
+              }${decision?.kind === "split" ? ` split_epub=${decision.split.epubNodeId} split_time=${Math.round(decision.split.startTime)}s` : ""}`
+            );
+            return decision;
+          } catch (error) {
+            const message = (error as Error).message;
+            logChapterCurationProgress(ctx, `recursive span=${span.path} elapsed_ms=${Date.now() - startedAt} attempt=${attempt + 1} error=${JSON.stringify(message)}`);
+            if (attempt < delays.length - 1 && retryableAgentError(error)) continue;
+            recursiveReports.push({
+              ...span,
+              forceLeaf,
+              outcome: "failed",
+              errors: [message],
+            });
+            return null;
+          }
         }
+        return null;
       },
       { maxDepth: 5, maxCalls: 24, reports: recursiveReports }
     );
