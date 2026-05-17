@@ -743,6 +743,28 @@ export function chapterCuratorToolUseBehavior(_: unknown, toolResults: FunctionT
 }
 
 export function createChapterCuratorAgent(ctx: ChapterCurationContext): Agent {
+  let rejectedSubmitRequiresEvidence = false;
+  let evidenceCallsSinceRejectedSubmit = 0;
+  let submitAttempts = 0;
+
+  function markEvidenceToolUsed(): void {
+    if (rejectedSubmitRequiresEvidence) evidenceCallsSinceRejectedSubmit++;
+  }
+
+  function rejectSubmitUntilEvidence(): SubmitChapterPlanResult {
+    return {
+      accepted: false,
+      errors: [
+        "submitChapterPlan was called again before gathering new transcript evidence after the previous rejection.",
+        "Call rgSearchTranscript, fuzzySearchTranscript, or getTranscriptWindow for the rejected chapters before resubmitting.",
+      ],
+      warnings: [],
+      audit: [],
+      instruction:
+        "Do not call submitChapterPlan again yet. Your next tool call must gather transcript evidence for the rejected chapter starts.",
+    };
+  }
+
   return new Agent({
     name: "ChapterCurator",
     model: ctx.settings.agents.model,
@@ -790,14 +812,20 @@ export function createChapterCuratorAgent(ctx: ChapterCurationContext): Agent {
         description: "Search transcript utterances with ripgrep. Use regex=false for literal phrases and regex=true for regular expressions.",
         parameters: rgSearchTranscriptSchema,
         strict: true,
-        execute: (input) => rgSearchTranscript(ctx, input),
+        execute: (input) => {
+          markEvidenceToolUsed();
+          return rgSearchTranscript(ctx, input);
+        },
       }),
       tool({
         name: "fuzzySearchTranscript",
         description: "Fuzzy-search transcript utterances for approximate chapter-heading or first-words matches.",
         parameters: fuzzySearchTranscriptSchema,
         strict: true,
-        execute: (input) => fuzzySearchTranscript(ctx, input),
+        execute: (input) => {
+          markEvidenceToolUsed();
+          return fuzzySearchTranscript(ctx, input);
+        },
       }),
       tool({
         name: "estimateTimestampFromEpubPosition",
@@ -811,14 +839,25 @@ export function createChapterCuratorAgent(ctx: ChapterCurationContext): Agent {
         description: "Return transcript utterances around a timestamp.",
         parameters: getTranscriptWindowSchema,
         strict: true,
-        execute: (input) => getTranscriptWindow(ctx, input),
+        execute: (input) => {
+          markEvidenceToolUsed();
+          return getTranscriptWindow(ctx, input);
+        },
       }),
       tool({
         name: "submitChapterPlan",
         description: "Submit the final chapter plan. Validation feedback is returned if the plan needs revision.",
         parameters: submitChapterPlanSchema,
         strict: true,
-        execute: (input) => submitChapterPlan(ctx, input),
+        execute: (input) => {
+          submitAttempts++;
+          if (rejectedSubmitRequiresEvidence && evidenceCallsSinceRejectedSubmit === 0) return rejectSubmitUntilEvidence();
+          if (submitAttempts > 6 && evidenceCallsSinceRejectedSubmit === 0) return rejectSubmitUntilEvidence();
+          const result = submitChapterPlan(ctx, input);
+          rejectedSubmitRequiresEvidence = !result.accepted;
+          evidenceCallsSinceRejectedSubmit = 0;
+          return result;
+        },
       }),
     ],
     toolUseBehavior: chapterCuratorToolUseBehavior,
