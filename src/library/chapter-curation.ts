@@ -754,6 +754,12 @@ export function createChapterCuratorAgent(ctx: ChapterCurationContext): Agent {
     instructions: [
       "You curate audiobook chapter markers from EPUB structure, embedded audio chapters, and transcript evidence.",
       "You must use tools to inspect the available evidence. Embedded audio chapters are evidence, not truth; equal divisions and generic labels are suspicious.",
+      "Use submitChapterPlan sparingly. It is the final validation gate, not a search or brainstorming tool.",
+      "Before your first submitChapterPlan call, inspect EPUB structure, embedded audio chapters, and transcript evidence with rgSearchTranscript, fuzzySearchTranscript, or getTranscriptWindow.",
+      "For EPUB-rich books, build the plan from transcript evidence. Estimate tools and embedded boundaries are only priors; they are not enough evidence for an EPUB-heading claim.",
+      "If you claim an epubNodeId for a chapter, verify the proposed start against transcript text near that timestamp or by searching for distinctive words from that EPUB node.",
+      "If submitChapterPlan rejects a chapter for weak transcript evidence, do not resubmit the same timestamp/title. First call rgSearchTranscript, fuzzySearchTranscript, or getTranscriptWindow to find better evidence for that chapter.",
+      "If submitChapterPlan rejects a plan as too coarse, do not fall back to part boundaries. Add supported EPUB-level chapter markers and validate them with transcript evidence.",
       "Do not invent chapters that are not supported by either EPUB structure or transcript context.",
       "When you have a plan, call submitChapterPlan. If submitChapterPlan rejects it, use the audit feedback and call submitChapterPlan again.",
       "Never provide a natural-language final answer instead of submitChapterPlan.",
@@ -826,6 +832,11 @@ export function chapterCuratorPrompt(ctx: ChapterCurationContext): string {
     `embeddedChapterCount: ${ctx.embeddedChapters.length}`,
     "",
     "Find a chapter plan that is useful for listening. Prefer real narrative sections over front/back matter unless the front/back matter is audibly distinct and useful.",
+    "Workflow requirement:",
+    "1. Inspect EPUB structure and embedded audio chapters.",
+    "2. Gather transcript evidence before submitting a plan. For an EPUB-rich book, search or window-check distinctive text for the chapter starts you intend to claim.",
+    "3. Submit one evidence-backed plan.",
+    "4. If rejected, use transcript search/window tools to fix the rejected chapters before resubmitting. Do not repeatedly submit the same coarse plan.",
     "Return only by calling submitChapterPlan.",
   ].join("\n");
 }
