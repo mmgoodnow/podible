@@ -836,7 +836,7 @@ export async function runAgenticChapterCuration(ctx: ChapterCurationContext): Pr
       traceIncludeSensitiveData: false,
     });
     const result = await runner.run(createChapterCuratorAgent(ctx), chapterCuratorPrompt(ctx), {
-      maxTurns: 24,
+      maxTurns: 64,
       signal: abort.signal,
       toolExecution: { maxFunctionToolConcurrency: 4 },
     });
