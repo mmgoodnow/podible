@@ -779,6 +779,7 @@ export function createChapterCuratorAgent(ctx: ChapterCurationContext): Agent {
       "Use submitChapterPlan sparingly. It is the final validation gate, not a search or brainstorming tool.",
       "Before your first submitChapterPlan call, inspect EPUB structure, embedded audio chapters, and transcript evidence with rgSearchTranscript, fuzzySearchTranscript, or getTranscriptWindow.",
       "For EPUB-rich books, build the plan from transcript evidence. Estimate tools and embedded boundaries are only priors; they are not enough evidence for an EPUB-heading claim.",
+      "All tool inputs and submitted chapter startTime values are seconds, not milliseconds. Example: 3 minutes 10 seconds is 190, not 190000.",
       "If you claim an epubNodeId for a chapter, verify the proposed start against transcript text near that timestamp or by searching for distinctive words from that EPUB node.",
       "If submitChapterPlan rejects a chapter for weak transcript evidence, do not resubmit the same timestamp/title. First call rgSearchTranscript, fuzzySearchTranscript, or getTranscriptWindow to find better evidence for that chapter.",
       "If submitChapterPlan rejects a plan as too coarse, do not fall back to part boundaries. Add supported EPUB-level chapter markers and validate them with transcript evidence.",
@@ -809,7 +810,8 @@ export function createChapterCuratorAgent(ctx: ChapterCurationContext): Agent {
       }),
       tool({
         name: "rgSearchTranscript",
-        description: "Search transcript utterances with ripgrep. Use regex=false for literal phrases and regex=true for regular expressions.",
+        description:
+          "Search transcript utterances with ripgrep. Time scopes are in seconds, not milliseconds. Use regex=false for literal phrases and regex=true for regular expressions.",
         parameters: rgSearchTranscriptSchema,
         strict: true,
         execute: (input) => {
@@ -819,7 +821,7 @@ export function createChapterCuratorAgent(ctx: ChapterCurationContext): Agent {
       }),
       tool({
         name: "fuzzySearchTranscript",
-        description: "Fuzzy-search transcript utterances for approximate chapter-heading or first-words matches.",
+        description: "Fuzzy-search transcript utterances for approximate chapter-heading or first-words matches. Time scopes are in seconds, not milliseconds.",
         parameters: fuzzySearchTranscriptSchema,
         strict: true,
         execute: (input) => {
@@ -836,7 +838,7 @@ export function createChapterCuratorAgent(ctx: ChapterCurationContext): Agent {
       }),
       tool({
         name: "getTranscriptWindow",
-        description: "Return transcript utterances around a timestamp.",
+        description: "Return transcript utterances around a timestamp. startTime is seconds, not milliseconds.",
         parameters: getTranscriptWindowSchema,
         strict: true,
         execute: (input) => {
@@ -874,6 +876,7 @@ export function chapterCuratorPrompt(ctx: ChapterCurationContext): string {
     `embeddedChapterCount: ${ctx.embeddedChapters.length}`,
     "",
     "Find a chapter plan that is useful for listening. Prefer real narrative sections over front/back matter unless the front/back matter is audibly distinct and useful.",
+    "All times you pass to tools or submit in the final plan must be seconds. Do not use milliseconds.",
     "Workflow requirement:",
     "1. Inspect EPUB structure and embedded audio chapters.",
     "2. Gather transcript evidence before submitting a plan. For an EPUB-rich book, search or window-check distinctive text for the chapter starts you intend to claim.",
