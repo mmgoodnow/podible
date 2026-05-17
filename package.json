@@ -12,7 +12,10 @@
     "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
+    "@leeoniya/ufuzzy": "^1.0.19",
     "@lingo-reader/epub-parser": "^0.4.5",
+    "@openai/agents": "^0.11.4",
+    "@vscode/ripgrep": "^1.18.0",
     "bencode": "^4.0.0",
     "fast-xml-parser": "^4.4.1",
     "hono": "^4.12.10",
