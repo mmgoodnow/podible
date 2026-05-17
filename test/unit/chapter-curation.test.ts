@@ -13,6 +13,7 @@ import {
   resolveRecursiveChapterSpans,
   submitChapterPlan,
   validateFulcrumSplit,
+  validateLeafChapterPlan,
   type ChapterCurationContext,
   type ChapterCurationTiming,
   type RecursiveSpanDecision,
@@ -473,6 +474,68 @@ describe("chapter curation tools", () => {
     expect(result.accepted).toBe(false);
     if (result.accepted) throw new Error("expected rejection");
     expect(result.errors.join("\n")).toContain("too close");
+  });
+
+  test("validateLeafChapterPlan rejects broad non-forced spans so the agent keeps splitting", () => {
+    const entries = Array.from({ length: 10 }, (_, index) =>
+      epubEntry({
+        id: `chapter-${index + 1}`,
+        title: `Chapter ${index + 1}`,
+        href: `chapter${index + 1}.xhtml`,
+        wordCount: 10,
+        cumulativeWords: (index + 1) * 10,
+        cumulativeRatio: (index + 1) / 10,
+        words: [word("Once"), word("upon"), word("time"), word(String(index + 1))],
+      })
+    );
+    const context = ctx({
+      durationMs: 3 * 60 * 60_000,
+      manifestation: manifestation({ duration_ms: 3 * 60 * 60_000 }),
+      epubEntries: entries,
+    });
+
+    const result = validateLeafChapterPlan(context, createRootCurationSpan(context), {
+      spanPath: "root",
+      strategy: "single chapter",
+      chapters: [{ title: "Chapter 1", startTime: 0, epubNodeId: "chapter-1" }],
+      notes: "",
+    });
+
+    expect(result.accepted).toBe(false);
+    if (result.accepted) throw new Error("expected broad leaf rejection");
+    expect(result.errors.join("\n")).toContain("Span is too broad for a leaf plan");
+  });
+
+  test("validateLeafChapterPlan allows broad spans when recursion is forced to produce a leaf", () => {
+    const context = ctx({
+      durationMs: 3 * 60 * 60_000,
+      manifestation: manifestation({ duration_ms: 3 * 60 * 60_000 }),
+      epubEntries: [
+        epubEntry({
+          id: "chapter-1",
+          title: "Chapter 1",
+          href: "chapter1.xhtml",
+          wordCount: 10,
+          cumulativeWords: 10,
+          cumulativeRatio: 1,
+          words: [word("Once"), word("upon"), word("time")],
+        }),
+      ],
+    });
+
+    const result = validateLeafChapterPlan(
+      context,
+      createRootCurationSpan(context),
+      {
+        spanPath: "root",
+        strategy: "forced leaf",
+        chapters: [{ title: "Chapter 1", startTime: 0, epubNodeId: "chapter-1" }],
+        notes: "",
+      },
+      { forceLeaf: true }
+    );
+
+    expect(result.accepted).toBe(true);
   });
 
   test("resolveRecursiveChapterSpans returns a leaf-only plan", async () => {

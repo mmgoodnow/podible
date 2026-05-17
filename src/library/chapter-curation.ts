@@ -1093,7 +1093,8 @@ export async function validateFulcrumSplit(
 export function validateLeafChapterPlan(
   ctx: ChapterCurationContext,
   span: ChapterCurationSpan,
-  input: unknown
+  input: unknown,
+  options: { forceLeaf?: boolean } = {}
 ): SubmitLeafChapterPlanResult {
   const parsed = submitLeafChapterPlanSchema.safeParse(input);
   if (!parsed.success) {
@@ -1149,6 +1150,12 @@ export function validateLeafChapterPlan(
 
   const spanNodeCount = span.epubEndIndex - span.epubStartIndex + 1;
   const claimedIndexes = claimedEpubIndexes(ctx.epubEntries, plan.chapters).filter((index) => spanContainsEpubIndex(span, index));
+  const spanDurationSeconds = span.endTime - span.startTime;
+  if (!options.forceLeaf && (spanNodeCount > 8 || spanDurationSeconds > 2 * 60 * 60)) {
+    errors.push(
+      `Span is too broad for a leaf plan (${spanNodeCount} EPUB node(s), ${Math.round(spanDurationSeconds / 60)} min); propose a validated fulcrum split instead.`
+    );
+  }
   if (spanNodeCount >= 4 && claimedIndexes.length < Math.ceil(spanNodeCount * 0.5)) {
     warnings.push(`Leaf covers ${claimedIndexes.length}/${spanNodeCount} EPUB node(s) in this span.`);
   }
@@ -1658,7 +1665,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         strict: true,
         execute: (input) => {
           if (rejectedLeafRequiresEvidence && evidenceCallsSinceRejectedLeaf === 0) return rejectedLeafWithoutEvidence();
-          const result = validateLeafChapterPlan(ctx, span, input);
+          const result = validateLeafChapterPlan(ctx, span, input, { forceLeaf });
           rejectedLeafRequiresEvidence = !result.accepted;
           evidenceCallsSinceRejectedLeaf = 0;
           return result;
