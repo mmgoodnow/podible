@@ -736,7 +736,7 @@ export function chapterCuratorToolUseBehavior(_: unknown, toolResults: FunctionT
   return { isFinalOutput: false, isInterrupted: undefined };
 }
 
-function createChapterCuratorAgent(ctx: ChapterCurationContext): Agent {
+export function createChapterCuratorAgent(ctx: ChapterCurationContext): Agent {
   return new Agent({
     name: "ChapterCurator",
     model: ctx.settings.agents.model,
@@ -809,7 +809,7 @@ function createChapterCuratorAgent(ctx: ChapterCurationContext): Agent {
   });
 }
 
-function chapterCuratorPrompt(ctx: ChapterCurationContext): string {
+export function chapterCuratorPrompt(ctx: ChapterCurationContext): string {
   return [
     `Curate chapter markers for "${ctx.book.title}" by ${ctx.book.author}.`,
     `manifestationId: ${ctx.manifestation.id}`,
@@ -824,8 +824,18 @@ function chapterCuratorPrompt(ctx: ChapterCurationContext): string {
 }
 
 export async function runAgenticChapterCuration(ctx: ChapterCurationContext): Promise<SubmitChapterPlanResult | null> {
+  const detailed = await runAgenticChapterCurationDetailed(ctx);
+  return detailed.result;
+}
+
+export async function runAgenticChapterCurationDetailed(ctx: ChapterCurationContext): Promise<{
+  result: SubmitChapterPlanResult | null;
+  finalOutput: unknown;
+  newItems: unknown[];
+  rawResponses: unknown[];
+}> {
   const apiKey = ctx.settings.agents.apiKey.trim();
-  if (!apiKey) return null;
+  if (!apiKey) return { result: null, finalOutput: null, newItems: [], rawResponses: [] };
   const abort = new AbortController();
   const timeout = setTimeout(() => abort.abort(), Math.max(5_000, ctx.settings.agents.timeoutMs));
   const provider = new OpenAIProvider({ apiKey, useResponses: true });
@@ -840,7 +850,12 @@ export async function runAgenticChapterCuration(ctx: ChapterCurationContext): Pr
       signal: abort.signal,
       toolExecution: { maxFunctionToolConcurrency: 4 },
     });
-    return parseSubmitToolOutput(result.finalOutput);
+    return {
+      result: parseSubmitToolOutput(result.finalOutput),
+      finalOutput: result.finalOutput,
+      newItems: result.newItems as unknown[],
+      rawResponses: result.rawResponses as unknown[],
+    };
   } finally {
     clearTimeout(timeout);
     await provider.close().catch(() => undefined);
