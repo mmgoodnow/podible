@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -34,6 +34,7 @@ export type ChapterCurationContext = {
   transcript: StoredTranscriptPayload;
   embeddedChapters: ChapterCurationTiming[];
   debugEventLogPath?: string;
+  debugTraceDir?: string;
 };
 
 export type ChapterCurationSpan = {
@@ -787,6 +788,24 @@ function logChapterCurationEvent(
     }
   }
   if (typeof event.message === "string") logChapterCurationProgress(ctx, event.message);
+}
+
+function writeChapterCurationTrace(
+  ctx: Pick<ChapterCurationContext, "manifestation" | "debugTraceDir">,
+  name: string,
+  payload: unknown
+): string | undefined {
+  if (!ctx.debugTraceDir) return undefined;
+  try {
+    mkdirSync(ctx.debugTraceDir, { recursive: true });
+    const safeName = name.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+    const tracePath = path.join(ctx.debugTraceDir, `${new Date().toISOString().replace(/[:.]/g, "-")}-${safeName || "trace"}.json`);
+    writeFileSync(tracePath, JSON.stringify(payload, null, 2), "utf8");
+    return tracePath;
+  } catch (error) {
+    console.warn(`[chapter-curation] manifestation=${ctx.manifestation.id} trace_write_error=${JSON.stringify((error as Error).message)}`);
+    return undefined;
+  }
 }
 
 function summarizeSubmittedChapters(chapters: SubmittedChapter[], limit = 12): string {
@@ -1910,6 +1929,16 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
             });
             const decision = parseSpanDecisionOutput(spanResult.finalOutput);
             const elapsedMs = Date.now() - startedAt;
+            const tracePayload = {
+              span,
+              forceLeaf,
+              attempt: attempt + 1,
+              elapsedMs,
+              finalOutput: spanResult.finalOutput,
+              newItems: spanResult.newItems as unknown[],
+              rawResponses: spanResult.rawResponses as unknown[],
+            };
+            const tracePath = writeChapterCurationTrace(ctx, `span-${span.path}-attempt-${attempt + 1}-${decision?.kind ?? "none"}`, tracePayload);
             recursiveSpanTraces.push({
               path: span.path,
               depth: span.depth,
@@ -1928,6 +1957,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
               attempt: attempt + 1,
               elapsedMs,
               decisionKind: decision?.kind ?? null,
+              tracePath,
               decision:
                 decision?.kind === "leaf"
                   ? {
@@ -1947,15 +1977,19 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
                         result: decision.result,
                       }
                     : null,
-              finalOutput: spanResult.finalOutput,
-              newItems: spanResult.newItems as unknown[],
-              rawResponses: spanResult.rawResponses as unknown[],
             });
             return decision;
           } catch (error) {
             const message = (error as Error).message;
             const elapsedMs = Date.now() - startedAt;
             const serializedError = serializeAgentError(error);
+            const tracePath = writeChapterCurationTrace(ctx, `span-${span.path}-attempt-${attempt + 1}-error`, {
+              span,
+              forceLeaf,
+              attempt: attempt + 1,
+              elapsedMs,
+              error: serializedError,
+            });
             recursiveSpanTraces.push({
               path: span.path,
               depth: span.depth,
@@ -1973,6 +2007,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
               attempt: attempt + 1,
               elapsedMs,
               retryable: retryableAgentError(error),
+              tracePath,
               error: serializedError,
             });
             if (attempt < delays.length - 1 && retryableAgentError(error)) continue;
@@ -2084,12 +2119,16 @@ export async function runAgenticChapterCurationDetailed(ctx: ChapterCurationCont
       toolExecution: { maxFunctionToolConcurrency: 4 },
     });
     const parsedResult = parseSubmitToolOutput(result.finalOutput);
-    logChapterCurationEvent(ctx, {
-      type: "global-fallback-agent-result",
-      message: `global fallback done=1 result=${parsedResult?.accepted ? "accepted" : "none"}`,
+    const tracePath = writeChapterCurationTrace(ctx, "global-fallback", {
       finalOutput: result.finalOutput,
       newItems: result.newItems as unknown[],
       rawResponses: result.rawResponses as unknown[],
+    });
+    logChapterCurationEvent(ctx, {
+      type: "global-fallback-agent-result",
+      message: `global fallback done=1 result=${parsedResult?.accepted ? "accepted" : "none"}`,
+      tracePath,
+      finalOutput: result.finalOutput,
     });
     return {
       result: parsedResult,
