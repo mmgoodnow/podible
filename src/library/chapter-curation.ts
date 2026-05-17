@@ -760,6 +760,9 @@ export function createChapterCuratorAgent(ctx: ChapterCurationContext): Agent {
       "If you claim an epubNodeId for a chapter, verify the proposed start against transcript text near that timestamp or by searching for distinctive words from that EPUB node.",
       "If submitChapterPlan rejects a chapter for weak transcript evidence, do not resubmit the same timestamp/title. First call rgSearchTranscript, fuzzySearchTranscript, or getTranscriptWindow to find better evidence for that chapter.",
       "If submitChapterPlan rejects a plan as too coarse, do not fall back to part boundaries. Add supported EPUB-level chapter markers and validate them with transcript evidence.",
+      "Never call submitChapterPlan twice in a row after a rejection. The next tool call after a rejected submit must be rgSearchTranscript, fuzzySearchTranscript, or getTranscriptWindow.",
+      "Do not make no-op, compliance, last-resort, or best-effort retries. If you cannot fix a rejected plan with new evidence, gather more evidence instead of resubmitting.",
+      "Aim for at most three submitChapterPlan calls total: one initial plan and up to two evidence-driven revisions.",
       "Do not invent chapters that are not supported by either EPUB structure or transcript context.",
       "When you have a plan, call submitChapterPlan. If submitChapterPlan rejects it, use the audit feedback and call submitChapterPlan again.",
       "Never provide a natural-language final answer instead of submitChapterPlan.",
@@ -836,7 +839,8 @@ export function chapterCuratorPrompt(ctx: ChapterCurationContext): string {
     "1. Inspect EPUB structure and embedded audio chapters.",
     "2. Gather transcript evidence before submitting a plan. For an EPUB-rich book, search or window-check distinctive text for the chapter starts you intend to claim.",
     "3. Submit one evidence-backed plan.",
-    "4. If rejected, use transcript search/window tools to fix the rejected chapters before resubmitting. Do not repeatedly submit the same coarse plan.",
+    "4. If rejected, your next tool call must be transcript search/window evidence, not another submit. Fix rejected chapters before resubmitting.",
+    "5. Never make no-op, compliance, last-resort, or best-effort retry submissions. Repeated invalid submissions waste the turn budget and fail the task.",
     "Return only by calling submitChapterPlan.",
   ].join("\n");
 }
