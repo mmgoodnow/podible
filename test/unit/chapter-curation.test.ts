@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import { getEpubStructure, type ChapterCurationContext, type ChapterCurationTiming } from "../../src/library/chapter-curation";
+import {
+  getEmbeddedAudioChapters,
+  getEpubStructure,
+  type ChapterCurationContext,
+  type ChapterCurationTiming,
+} from "../../src/library/chapter-curation";
 import type { AppSettings, AssetFileRow, AssetRow, BookRow, ManifestationRow } from "../../src/app-types";
 import type { EpubChapterEntry, StoredTranscriptPayload } from "../../src/library/chapter-analysis";
 import { defaultSettings } from "../../src/settings";
@@ -162,5 +167,39 @@ describe("chapter curation tools", () => {
       endRatio: 1,
       firstWords: "The first real chapter",
     });
+  });
+
+  test("getEmbeddedAudioChapters flags generic evenly-divided embedded markers", () => {
+    const result = getEmbeddedAudioChapters(
+      ctx({
+        durationMs: 600_000,
+        embeddedChapters: Array.from({ length: 6 }, (_, index) => ({
+          id: `ch${index}`,
+          title: `Chapter ${index + 1}`,
+          startMs: index * 100_000,
+          endMs: (index + 1) * 100_000,
+        })),
+      })
+    );
+    expect(result.chapters).toHaveLength(6);
+    expect(result.diagnostics.labelQuality).toBe("generic");
+    expect(result.diagnostics.durationPattern).toBe("suspiciously_even");
+    expect(result.diagnostics.boundaryDensity).toBe("dense");
+  });
+
+  test("getEmbeddedAudioChapters recognizes named uneven boundaries as useful evidence", () => {
+    const result = getEmbeddedAudioChapters(
+      ctx({
+        durationMs: 7_200_000,
+        embeddedChapters: [
+          { id: "ch0", title: "Prologue", startMs: 0, endMs: 120_000 },
+          { id: "ch1", title: "The Crossing", startMs: 120_000, endMs: 2_600_000 },
+          { id: "ch2", title: "Epilogue", startMs: 2_600_000, endMs: 7_200_000 },
+        ],
+      })
+    );
+    expect(result.diagnostics.labelQuality).toBe("named");
+    expect(result.diagnostics.durationPattern).toBe("varied");
+    expect(result.diagnostics.boundaryDensity).toBe("plausible");
   });
 });
