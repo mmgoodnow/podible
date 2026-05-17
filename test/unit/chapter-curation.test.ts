@@ -9,9 +9,13 @@ import {
   getTranscriptWindow,
   rgSearchTranscript,
   chapterCuratorToolUseBehavior,
+  createRootCurationSpan,
+  resolveRecursiveChapterSpans,
   submitChapterPlan,
+  validateFulcrumSplit,
   type ChapterCurationContext,
   type ChapterCurationTiming,
+  type RecursiveSpanDecision,
 } from "../../src/library/chapter-curation";
 import type { AppSettings, AssetFileRow, AssetRow, BookRow, ManifestationRow } from "../../src/app-types";
 import type { EpubChapterEntry, StoredTranscriptPayload } from "../../src/library/chapter-analysis";
@@ -117,6 +121,15 @@ function transcript(): StoredTranscriptPayload {
       { startMs: 1200, endMs: 3000, text: "Once upon a time." },
       { startMs: 30_000, endMs: 32_000, text: "The first real chapter begins." },
     ],
+  };
+}
+
+function transcriptWith(text: string, startMs: number, endMs: number): StoredTranscriptPayload {
+  return {
+    version: "test",
+    text,
+    words: text.split(/\s+/).map((text, index) => ({ text, token: text.toLowerCase().replace(/[^a-z0-9]+/g, ""), startMs: startMs + index * 250, endMs: startMs + index * 250 + 200 })),
+    utterances: [{ startMs, endMs, text }],
   };
 }
 
@@ -381,5 +394,195 @@ describe("chapter curation tools", () => {
       } as never,
     ]);
     expect(naturalJson.isFinalOutput).toBe(false);
+  });
+
+  test("validateFulcrumSplit accepts a transcript-backed internal boundary", async () => {
+    const context = ctx({
+      durationMs: 600_000,
+      manifestation: manifestation({ duration_ms: 600_000 }),
+      epubEntries: [
+        epubEntry({ id: "front", title: "Prologue", cumulativeRatio: 0.2, cumulativeWords: 4 }),
+        epubEntry({
+          id: "chapter-1",
+          title: "Chapter 1: Helldiver",
+          cumulativeRatio: 0.6,
+          cumulativeWords: 16,
+          words: [word("Helldiver"), word("The"), word("first"), word("thing"), word("you"), word("should"), word("know")],
+        }),
+        epubEntry({ id: "chapter-2", title: "Chapter 2", cumulativeRatio: 1, cumulativeWords: 24 }),
+      ],
+      transcript: transcriptWith("Chapter 1 Helldiver The first thing you should know about me", 180_000, 186_000),
+    });
+    const result = await validateFulcrumSplit(context, createRootCurationSpan(context), {
+      spanPath: "root",
+      epubNodeId: "chapter-1",
+      title: "Chapter 1: Helldiver",
+      startTime: 180,
+    });
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error(result.errors.join("\n"));
+    expect(result.epubIndex).toBe(1);
+    expect(result.audit.proseMatchedTokens.length).toBeGreaterThan(0);
+  });
+
+  test("validateFulcrumSplit rejects title-only evidence", async () => {
+    const context = ctx({
+      durationMs: 600_000,
+      manifestation: manifestation({ duration_ms: 600_000 }),
+      epubEntries: [
+        epubEntry({ id: "front", title: "Prologue", cumulativeRatio: 0.2, cumulativeWords: 4 }),
+        epubEntry({
+          id: "chapter-1",
+          title: "Chapter 1: Helldiver Gold Mars",
+          cumulativeRatio: 0.6,
+          cumulativeWords: 16,
+          words: [word("Helldiver"), word("The"), word("first"), word("thing"), word("you"), word("should"), word("know")],
+        }),
+        epubEntry({ id: "chapter-2", title: "Chapter 2", cumulativeRatio: 1, cumulativeWords: 24 }),
+      ],
+      transcript: transcriptWith("Chapter 1 Helldiver Gold Mars", 180_000, 183_000),
+    });
+    const result = await validateFulcrumSplit(context, createRootCurationSpan(context), {
+      spanPath: "root",
+      epubNodeId: "chapter-1",
+      title: "Chapter 1: Helldiver Gold Mars",
+      startTime: 180,
+    });
+    expect(result.accepted).toBe(false);
+    if (result.accepted) throw new Error("expected rejection");
+    expect(result.errors.join("\n")).toContain("prose token");
+  });
+
+  test("validateFulcrumSplit rejects timestamps too close to span edges", async () => {
+    const context = ctx({
+      durationMs: 600_000,
+      manifestation: manifestation({ duration_ms: 600_000 }),
+      epubEntries: [
+        epubEntry({ id: "front", title: "Prologue", cumulativeRatio: 0.2, cumulativeWords: 4 }),
+        epubEntry({ id: "chapter-1", title: "Chapter 1", cumulativeRatio: 0.6, cumulativeWords: 16 }),
+        epubEntry({ id: "chapter-2", title: "Chapter 2", cumulativeRatio: 1, cumulativeWords: 24 }),
+      ],
+      transcript: transcriptWith("Chapter one Once upon a time", 30_000, 34_000),
+    });
+    const result = await validateFulcrumSplit(context, createRootCurationSpan(context), {
+      spanPath: "root",
+      epubNodeId: "chapter-1",
+      title: "Chapter 1",
+      startTime: 30,
+    });
+    expect(result.accepted).toBe(false);
+    if (result.accepted) throw new Error("expected rejection");
+    expect(result.errors.join("\n")).toContain("too close");
+  });
+
+  test("resolveRecursiveChapterSpans returns a leaf-only plan", async () => {
+    const context = ctx();
+    const chapters = await resolveRecursiveChapterSpans(context, async () => ({
+      kind: "leaf",
+      chapters: [{ title: "Prologue", startTime: 0, epubNodeId: "front" }],
+    }));
+    expect(chapters).toEqual([{ title: "Prologue", startTime: 0, epubNodeId: "front" }]);
+  });
+
+  test("resolveRecursiveChapterSpans splits and merges child leaves in order", async () => {
+    const context = ctx({
+      durationMs: 300_000,
+      manifestation: manifestation({ duration_ms: 300_000 }),
+      epubEntries: [
+        epubEntry({ id: "front", title: "Prologue", cumulativeRatio: 0.2, cumulativeWords: 4 }),
+        epubEntry({ id: "chapter-1", title: "Chapter 1", cumulativeRatio: 0.6, cumulativeWords: 16 }),
+        epubEntry({ id: "chapter-2", title: "Chapter 2", cumulativeRatio: 1, cumulativeWords: 24 }),
+      ],
+    });
+    const decisions: string[] = [];
+    const chapters = await resolveRecursiveChapterSpans(context, async (span): Promise<RecursiveSpanDecision> => {
+      decisions.push(span.path);
+      if (span.path === "root") {
+        return {
+          kind: "split",
+          split: {
+            accepted: true,
+            kind: "split",
+            spanPath: "root",
+            epubNodeId: "chapter-1",
+            epubIndex: 1,
+            title: "Chapter 1",
+            startTime: 120,
+            notes: null,
+            audit: {
+              epubNodeId: "chapter-1",
+              title: "Chapter 1",
+              startTime: 120,
+              expectedTokens: [],
+              proseTokens: [],
+              matchedTokens: [],
+              proseMatchedTokens: [],
+              overlapRatio: 1,
+              transcriptWindow: "",
+              candidates: [],
+            },
+          },
+        };
+      }
+      return {
+        kind: "leaf",
+        chapters:
+          span.path === "L"
+            ? [{ title: "Prologue", startTime: 0, epubNodeId: "front" }]
+            : [
+                { title: "Chapter 1", startTime: 120, epubNodeId: "chapter-1" },
+                { title: "Chapter 2", startTime: 220, epubNodeId: "chapter-2" },
+              ],
+      };
+    });
+    expect(decisions).toEqual(["root", "L", "R"]);
+    expect(chapters?.map((chapter) => chapter.title)).toEqual(["Prologue", "Chapter 1", "Chapter 2"]);
+  });
+
+  test("resolveRecursiveChapterSpans does not recurse after a failed decision", async () => {
+    const reports: Array<{ outcome: string }> = [];
+    const chapters = await resolveRecursiveChapterSpans(ctx(), async () => null, { reports: reports as never });
+    expect(chapters).toBeNull();
+    expect(reports[0]?.outcome).toBe("failed");
+  });
+
+  test("resolveRecursiveChapterSpans respects call limits", async () => {
+    const context = ctx({
+      epubEntries: [
+        epubEntry({ id: "front", title: "Prologue", cumulativeRatio: 0.2, cumulativeWords: 4 }),
+        epubEntry({ id: "chapter-1", title: "Chapter 1", cumulativeRatio: 0.6, cumulativeWords: 16 }),
+        epubEntry({ id: "chapter-2", title: "Chapter 2", cumulativeRatio: 1, cumulativeWords: 24 }),
+      ],
+    });
+    const chapters = await resolveRecursiveChapterSpans(
+      context,
+      async () => ({
+        kind: "split",
+        split: {
+          accepted: true,
+          kind: "split",
+          spanPath: "root",
+          epubNodeId: "chapter-1",
+          epubIndex: 1,
+          title: "Chapter 1",
+          startTime: 60,
+          notes: null,
+          audit: {
+            epubNodeId: "chapter-1",
+            title: "Chapter 1",
+            startTime: 60,
+            expectedTokens: [],
+            proseTokens: [],
+            matchedTokens: [],
+            proseMatchedTokens: [],
+            overlapRatio: 1,
+            transcriptWindow: "",
+            candidates: [],
+          },
+        },
+      }),
+      { maxCalls: 1 }
+    );
+    expect(chapters).toBeNull();
   });
 });
