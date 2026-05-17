@@ -4,6 +4,7 @@ import {
   getEmbeddedAudioChapters,
   getEpubStructure,
   fuzzySearchTranscript,
+  estimateTimestampFromEpubPosition,
   rgSearchTranscript,
   type ChapterCurationContext,
   type ChapterCurationTiming,
@@ -239,6 +240,21 @@ describe("chapter curation tools", () => {
     expect(result.matches[0]).toMatchObject({
       index: 1,
       text: "Once upon a time.",
+    });
+  });
+
+  test("estimateTimestampFromEpubPosition maps EPUB word position onto duration", () => {
+    const result = estimateTimestampFromEpubPosition(ctx(), { epubNodeId: "chapter-1" });
+    expect(result).toMatchObject({
+      epubNodeId: "chapter-1",
+      title: "Chapter 1",
+      estimatedStartTime: 30,
+      estimatedEndTime: 120,
+      confidence: "low",
+      basis: {
+        startRatio: 0.25,
+        endRatio: 1,
+      },
     });
   });
 });

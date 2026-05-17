@@ -388,3 +388,45 @@ export async function fuzzySearchTranscript(
   }
   return { matches };
 }
+
+export type EstimateTimestampFromEpubPositionInput = {
+  epubNodeId: string;
+};
+
+export type EstimateTimestampFromEpubPositionResult = {
+  epubNodeId: string;
+  title: string;
+  estimatedStartTime: number;
+  estimatedEndTime: number;
+  confidence: "low" | "medium";
+  basis: {
+    startRatio: number;
+    endRatio: number;
+    durationSeconds: number;
+  };
+};
+
+export function estimateTimestampFromEpubPosition(
+  ctx: Pick<ChapterCurationContext, "epubEntries" | "durationMs">,
+  input: EstimateTimestampFromEpubPositionInput
+): EstimateTimestampFromEpubPositionResult | null {
+  const index = ctx.epubEntries.findIndex((entry) => entry.id === input.epubNodeId);
+  if (index < 0 || ctx.durationMs <= 0) return null;
+  const entry = ctx.epubEntries[index]!;
+  const startRatio = inferEntryStartRatio(ctx.epubEntries, index);
+  const endRatio = inferEntryEndRatio(ctx.epubEntries, index);
+  const estimatedStartMs = Math.round(startRatio * ctx.durationMs);
+  const estimatedEndMs = Math.max(estimatedStartMs, Math.round(endRatio * ctx.durationMs));
+  return {
+    epubNodeId: entry.id,
+    title: entry.title,
+    estimatedStartTime: msToSeconds(estimatedStartMs),
+    estimatedEndTime: msToSeconds(estimatedEndMs),
+    confidence: ctx.epubEntries.length >= 3 ? "medium" : "low",
+    basis: {
+      startRatio,
+      endRatio,
+      durationSeconds: msToSeconds(ctx.durationMs),
+    },
+  };
+}
