@@ -81,3 +81,47 @@ export function inferEntryEndRatio(entries: EpubChapterEntry[], index: number): 
   const entry = entries[index];
   return entry ? entry.cumulativeRatio : 1;
 }
+
+export type EpubStructureNode = {
+  id: string;
+  title: string;
+  href: string;
+  index: number;
+  wordCount: number;
+  cumulativeRatio: number;
+  startRatio: number;
+  endRatio: number;
+  firstWords: string;
+};
+
+export type EpubStructureResult = {
+  book: {
+    id: number;
+    title: string;
+    author: string;
+  };
+  totalWordCount: number;
+  nodes: EpubStructureNode[];
+};
+
+export function getEpubStructure(ctx: Pick<ChapterCurationContext, "book" | "epubEntries">): EpubStructureResult {
+  return {
+    book: {
+      id: ctx.book.id,
+      title: ctx.book.title,
+      author: ctx.book.author,
+    },
+    totalWordCount: ctx.epubEntries.reduce((sum, entry) => sum + entry.wordCount, 0),
+    nodes: ctx.epubEntries.map((entry, index) => ({
+      id: entry.id,
+      title: entry.title,
+      href: entry.href,
+      index,
+      wordCount: entry.wordCount,
+      cumulativeRatio: entry.cumulativeRatio,
+      startRatio: inferEntryStartRatio(ctx.epubEntries, index),
+      endRatio: inferEntryEndRatio(ctx.epubEntries, index),
+      firstWords: summarizeFirstWords(entry),
+    })),
+  };
+}
