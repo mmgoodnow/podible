@@ -748,6 +748,10 @@ export type RecursiveCurationReport = {
   chapters?: number;
 };
 
+function logChapterCurationProgress(ctx: Pick<ChapterCurationContext, "manifestation">, message: string): void {
+  console.warn(`[chapter-curation] manifestation=${ctx.manifestation.id} ${message}`);
+}
+
 function chapterTitleKey(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
@@ -1700,13 +1704,15 @@ export async function runAgenticChapterCuration(ctx: ChapterCurationContext): Pr
   return detailed.result;
 }
 
-export async function runAgenticChapterCurationDetailed(ctx: ChapterCurationContext): Promise<{
+export type ChapterCurationDetailedResult = {
   result: SubmitChapterPlanResult | null;
   finalOutput: unknown;
   newItems: unknown[];
   rawResponses: unknown[];
   recursiveReports?: RecursiveCurationReport[];
-}> {
+};
+
+export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCurationContext): Promise<ChapterCurationDetailedResult> {
   const apiKey = ctx.settings.agents.apiKey.trim();
   if (!apiKey) return { result: null, finalOutput: null, newItems: [], rawResponses: [] };
   const abort = new AbortController();
@@ -1722,14 +1728,28 @@ export async function runAgenticChapterCurationDetailed(ctx: ChapterCurationCont
     const recursiveChapters = await resolveRecursiveChapterSpans(
       ctx,
       async (span, forceLeaf) => {
+        const spanNodeCount = span.epubEndIndex - span.epubStartIndex + 1;
+        logChapterCurationProgress(
+          ctx,
+          `recursive span=${span.path} depth=${span.depth} epub=${span.epubStartIndex}-${span.epubEndIndex} nodes=${spanNodeCount} time=${Math.round(span.startTime)}-${Math.round(span.endTime)}s force_leaf=${forceLeaf} start=1`
+        );
+        const startedAt = Date.now();
         try {
           const spanResult = await runner.run(createRecursiveSpanCuratorAgent(ctx, span, forceLeaf), spanPrompt(ctx, span, forceLeaf), {
             maxTurns: forceLeaf ? 24 : 32,
             signal: abort.signal,
             toolExecution: { maxFunctionToolConcurrency: 4 },
           });
-          return parseSpanDecisionOutput(spanResult.finalOutput);
+          const decision = parseSpanDecisionOutput(spanResult.finalOutput);
+          logChapterCurationProgress(
+            ctx,
+            `recursive span=${span.path} elapsed_ms=${Date.now() - startedAt} decision=${decision?.kind ?? "none"}${decision?.kind === "leaf" ? ` chapters=${decision.chapters.length}` : ""}${
+              decision?.kind === "split" ? ` split_epub=${decision.split.epubNodeId} split_time=${Math.round(decision.split.startTime)}s` : ""
+            }`
+          );
+          return decision;
         } catch (error) {
+          logChapterCurationProgress(ctx, `recursive span=${span.path} elapsed_ms=${Date.now() - startedAt} error=${JSON.stringify((error as Error).message)}`);
           recursiveReports.push({
             ...span,
             forceLeaf,
@@ -1742,6 +1762,7 @@ export async function runAgenticChapterCurationDetailed(ctx: ChapterCurationCont
       { maxDepth: 5, maxCalls: 24, reports: recursiveReports }
     );
     if (recursiveChapters && recursiveChapters.length > 0) {
+      logChapterCurationProgress(ctx, `recursive merge chapters=${recursiveChapters.length} validate=1`);
       const recursiveResult = submitChapterPlan(ctx, {
         manifestationId: ctx.manifestation.id,
         strategy: "Recursive fulcrum chapter curation",
@@ -1749,6 +1770,7 @@ export async function runAgenticChapterCurationDetailed(ctx: ChapterCurationCont
         notes: "Merged from recursively curated span plans.",
       });
       if (recursiveResult.accepted) {
+        logChapterCurationProgress(ctx, `recursive merge accepted=1 chapters=${recursiveResult.chapters.length}`);
         return {
           result: recursiveResult,
           finalOutput: recursiveResult,
@@ -1757,6 +1779,7 @@ export async function runAgenticChapterCurationDetailed(ctx: ChapterCurationCont
           recursiveReports,
         };
       }
+      logChapterCurationProgress(ctx, `recursive merge accepted=0 chapters=${recursiveChapters.length} errors=${JSON.stringify(recursiveResult.errors.slice(0, 5))}`);
       recursiveReports.push({
         ...createRootCurationSpan(ctx),
         forceLeaf: false,
@@ -1764,19 +1787,52 @@ export async function runAgenticChapterCurationDetailed(ctx: ChapterCurationCont
         errors: recursiveResult.errors,
         chapters: recursiveChapters.length,
       });
+    } else {
+      logChapterCurationProgress(ctx, `recursive result=null`);
     }
 
+    return {
+      result: null,
+      finalOutput: null,
+      newItems: [],
+      rawResponses: [],
+      recursiveReports,
+    };
+  } finally {
+    clearTimeout(timeout);
+    await provider.close().catch(() => undefined);
+  }
+}
+
+export async function runAgenticChapterCurationDetailed(ctx: ChapterCurationContext): Promise<ChapterCurationDetailedResult> {
+  const recursive = await runRecursiveAgenticChapterCurationDetailed(ctx);
+  if (recursive.result) return recursive;
+
+  const apiKey = ctx.settings.agents.apiKey.trim();
+  if (!apiKey) return recursive;
+  const abort = new AbortController();
+  const timeout = setTimeout(() => abort.abort(), Math.max(5_000, ctx.settings.agents.timeoutMs));
+  const provider = new OpenAIProvider({ apiKey, useResponses: true });
+  try {
+    const runner = new Runner({
+      modelProvider: provider,
+      tracingDisabled: true,
+      traceIncludeSensitiveData: false,
+    });
+    logChapterCurationProgress(ctx, `recursive result=null fallback=global`);
+    logChapterCurationProgress(ctx, `global fallback start=1`);
     const result = await runner.run(createChapterCuratorAgent(ctx), chapterCuratorPrompt(ctx), {
       maxTurns: 64,
       signal: abort.signal,
       toolExecution: { maxFunctionToolConcurrency: 4 },
     });
+    logChapterCurationProgress(ctx, `global fallback done=1 result=${parseSubmitToolOutput(result.finalOutput)?.accepted ? "accepted" : "none"}`);
     return {
       result: parseSubmitToolOutput(result.finalOutput),
       finalOutput: result.finalOutput,
       newItems: result.newItems as unknown[],
       rawResponses: result.rawResponses as unknown[],
-      recursiveReports,
+      recursiveReports: recursive.recursiveReports,
     };
   } finally {
     clearTimeout(timeout);
