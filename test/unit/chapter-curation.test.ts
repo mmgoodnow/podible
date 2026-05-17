@@ -7,6 +7,7 @@ import {
   estimateTimestampFromEpubPosition,
   getTranscriptWindow,
   rgSearchTranscript,
+  chapterCuratorToolUseBehavior,
   submitChapterPlan,
   type ChapterCurationContext,
   type ChapterCurationTiming,
@@ -327,5 +328,27 @@ describe("chapter curation tools", () => {
     expect(result.accepted).toBe(false);
     if (result.accepted) throw new Error("expected rejection");
     expect(result.errors.join("\n")).toContain("suspicious evenly-divided");
+  });
+
+  test("chapterCuratorToolUseBehavior only terminates on accepted submitChapterPlan output", () => {
+    const rejected = chapterCuratorToolUseBehavior(undefined, [
+      {
+        type: "function_output",
+        tool: { name: "submitChapterPlan" },
+        output: { accepted: false, errors: ["bad"], warnings: [], audit: [], instruction: "retry" },
+        runItem: {} as never,
+      } as never,
+    ]);
+    expect(rejected.isFinalOutput).toBe(false);
+
+    const accepted = chapterCuratorToolUseBehavior(undefined, [
+      {
+        type: "function_output",
+        tool: { name: "submitChapterPlan" },
+        output: { accepted: true, strategy: "test", notes: null, chapters: [], warnings: [], audit: [] },
+        runItem: {} as never,
+      } as never,
+    ]);
+    expect(accepted.isFinalOutput).toBe(true);
   });
 });

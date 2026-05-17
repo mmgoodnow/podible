@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { rgPath } from "@vscode/ripgrep";
 import uFuzzy from "@leeoniya/ufuzzy";
+import { Agent, OpenAIProvider, Runner, tool, type FunctionToolResult, type ToolsToFinalOutputResult } from "@openai/agents";
 import { z } from "zod";
 
 import type { AppSettings, AssetFileRow, AssetRow, BookRow, ManifestationRow } from "../app-types";
@@ -642,4 +643,162 @@ export function submitChapterPlan(ctx: ChapterCurationContext, input: unknown): 
     warnings,
     audit,
   };
+}
+
+const emptyToolSchema = z.object({});
+const rgSearchTranscriptSchema = z.object({
+  pattern: z.string(),
+  regex: z.boolean().optional(),
+  scope: z.object({ startTime: z.number().optional(), endTime: z.number().optional() }).optional(),
+  beforeSeconds: z.number().optional(),
+  afterSeconds: z.number().optional(),
+  limit: z.number().int().positive().max(100).optional(),
+});
+const fuzzySearchTranscriptSchema = z.object({
+  query: z.string(),
+  scope: z.object({ startTime: z.number().optional(), endTime: z.number().optional() }).optional(),
+  limit: z.number().int().positive().max(100).optional(),
+});
+const estimateTimestampFromEpubPositionSchema = z.object({
+  epubNodeId: z.string(),
+});
+const getTranscriptWindowSchema = z.object({
+  startTime: z.number(),
+  radiusSeconds: z.number().positive().max(300).optional(),
+});
+
+function parseSubmitToolOutput(output: unknown): SubmitChapterPlanResult | null {
+  if (!output) return null;
+  if (typeof output === "string") {
+    try {
+      return JSON.parse(output) as SubmitChapterPlanResult;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof output === "object" && "accepted" in output) return output as SubmitChapterPlanResult;
+  return null;
+}
+
+export function chapterCuratorToolUseBehavior(_: unknown, toolResults: FunctionToolResult[]): ToolsToFinalOutputResult {
+  const submitResult = toolResults.find((result) => result.type === "function_output" && result.tool.name === "submitChapterPlan");
+  if (!submitResult || submitResult.type !== "function_output") {
+    return { isFinalOutput: false, isInterrupted: undefined };
+  }
+  const parsed = parseSubmitToolOutput(submitResult.output);
+  if (parsed?.accepted) {
+    return {
+      isFinalOutput: true,
+      isInterrupted: undefined,
+      finalOutput: JSON.stringify(parsed),
+    };
+  }
+  return { isFinalOutput: false, isInterrupted: undefined };
+}
+
+function createChapterCuratorAgent(ctx: ChapterCurationContext): Agent {
+  return new Agent({
+    name: "ChapterCurator",
+    model: ctx.settings.agents.model,
+    instructions: [
+      "You curate audiobook chapter markers from EPUB structure, embedded audio chapters, and transcript evidence.",
+      "You must use tools to inspect the available evidence. Embedded audio chapters are evidence, not truth; equal divisions and generic labels are suspicious.",
+      "Do not invent chapters that are not supported by either EPUB structure or transcript context.",
+      "When you have a plan, call submitChapterPlan. If submitChapterPlan rejects it, use the audit feedback and call submitChapterPlan again.",
+      "Never provide a natural-language final answer instead of submitChapterPlan.",
+      ctx.settings.agents.editionPreference ? `Global edition preference, for context only: ${ctx.settings.agents.editionPreference}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    tools: [
+      tool({
+        name: "getEpubStructure",
+        description: "Return ordered EPUB headings, word counts, cumulative ratios, and first words for each EPUB node.",
+        parameters: emptyToolSchema,
+        strict: true,
+        execute: () => getEpubStructure(ctx),
+      }),
+      tool({
+        name: "getEmbeddedAudioChapters",
+        description: "Return embedded audio chapter boundaries and diagnostics about whether they appear trustworthy.",
+        parameters: emptyToolSchema,
+        strict: true,
+        execute: () => getEmbeddedAudioChapters(ctx),
+      }),
+      tool({
+        name: "rgSearchTranscript",
+        description: "Search transcript utterances with ripgrep. Use regex=false for literal phrases and regex=true for regular expressions.",
+        parameters: rgSearchTranscriptSchema,
+        strict: true,
+        execute: (input) => rgSearchTranscript(ctx, input),
+      }),
+      tool({
+        name: "fuzzySearchTranscript",
+        description: "Fuzzy-search transcript utterances for approximate chapter-heading or first-words matches.",
+        parameters: fuzzySearchTranscriptSchema,
+        strict: true,
+        execute: (input) => fuzzySearchTranscript(ctx, input),
+      }),
+      tool({
+        name: "estimateTimestampFromEpubPosition",
+        description: "Estimate the audio timestamp for an EPUB node from its cumulative word position and total audio duration.",
+        parameters: estimateTimestampFromEpubPositionSchema,
+        strict: true,
+        execute: (input) => estimateTimestampFromEpubPosition(ctx, input),
+      }),
+      tool({
+        name: "getTranscriptWindow",
+        description: "Return transcript utterances around a timestamp.",
+        parameters: getTranscriptWindowSchema,
+        strict: true,
+        execute: (input) => getTranscriptWindow(ctx, input),
+      }),
+      tool({
+        name: "submitChapterPlan",
+        description: "Submit the final chapter plan. Validation feedback is returned if the plan needs revision.",
+        parameters: submitChapterPlanSchema,
+        strict: true,
+        execute: (input) => submitChapterPlan(ctx, input),
+      }),
+    ],
+    toolUseBehavior: chapterCuratorToolUseBehavior,
+  });
+}
+
+function chapterCuratorPrompt(ctx: ChapterCurationContext): string {
+  return [
+    `Curate chapter markers for "${ctx.book.title}" by ${ctx.book.author}.`,
+    `manifestationId: ${ctx.manifestation.id}`,
+    `durationSeconds: ${msToSeconds(ctx.durationMs)}`,
+    `epubNodeCount: ${ctx.epubEntries.length}`,
+    `transcriptUtteranceCount: ${ctx.transcript.utterances?.length ?? 0}`,
+    `embeddedChapterCount: ${ctx.embeddedChapters.length}`,
+    "",
+    "Find a chapter plan that is useful for listening. Prefer real narrative sections over front/back matter unless the front/back matter is audibly distinct and useful.",
+    "Return only by calling submitChapterPlan.",
+  ].join("\n");
+}
+
+export async function runAgenticChapterCuration(ctx: ChapterCurationContext): Promise<SubmitChapterPlanResult | null> {
+  const apiKey = ctx.settings.agents.apiKey.trim();
+  if (!apiKey) return null;
+  const abort = new AbortController();
+  const timeout = setTimeout(() => abort.abort(), Math.max(5_000, ctx.settings.agents.timeoutMs));
+  const provider = new OpenAIProvider({ apiKey, useResponses: true });
+  try {
+    const runner = new Runner({
+      modelProvider: provider,
+      tracingDisabled: true,
+      traceIncludeSensitiveData: false,
+    });
+    const result = await runner.run(createChapterCuratorAgent(ctx), chapterCuratorPrompt(ctx), {
+      maxTurns: 10,
+      signal: abort.signal,
+      toolExecution: { maxFunctionToolConcurrency: 4 },
+    });
+    return parseSubmitToolOutput(result.finalOutput);
+  } finally {
+    clearTimeout(timeout);
+    await provider.close().catch(() => undefined);
+  }
 }
