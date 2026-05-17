@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   getEmbeddedAudioChapters,
   getEpubStructure,
+  findEpubChapterEvidence,
   fuzzySearchTranscript,
   estimateTimestampFromEpubPosition,
   getTranscriptWindow,
@@ -245,6 +246,25 @@ describe("chapter curation tools", () => {
       index: 1,
       text: "Once upon a time.",
     });
+  });
+
+  test("findEpubChapterEvidence returns transcript anchors for EPUB nodes", async () => {
+    const result = await findEpubChapterEvidence(ctx(), {
+      nodeIds: ["chapter-1"],
+      searchRadiusSeconds: 120,
+      limitPerNode: 2,
+    });
+    expect(result.nodes).toHaveLength(1);
+    expect(result.nodes[0]).toMatchObject({
+      epubNodeId: "chapter-1",
+      title: "Chapter 1",
+      query: "first real",
+    });
+    expect(result.nodes[0]?.matches[0]).toMatchObject({
+      startTime: 30,
+      quality: "medium",
+    });
+    expect(result.nodes[0]?.matches[0]?.tokenOverlap).toEqual(["first", "real"]);
   });
 
   test("estimateTimestampFromEpubPosition maps EPUB word position onto duration", () => {

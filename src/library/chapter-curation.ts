@@ -391,6 +391,98 @@ export async function fuzzySearchTranscript(
   return { matches };
 }
 
+export type FindEpubChapterEvidenceInput = {
+  nodeIds?: string[];
+  searchRadiusSeconds?: number;
+  limitPerNode?: number;
+};
+
+export type EpubChapterEvidenceMatch = {
+  startTime: number;
+  endTime: number;
+  text: string;
+  afterText: string;
+  tokenOverlap: string[];
+  quality: "none" | "weak" | "medium" | "strong";
+};
+
+export type EpubChapterEvidenceResult = {
+  nodes: Array<{
+    epubNodeId: string;
+    title: string;
+    estimatedStartTime: number;
+    query: string;
+    matches: EpubChapterEvidenceMatch[];
+  }>;
+};
+
+function evidenceQuality(overlapCount: number): EpubChapterEvidenceMatch["quality"] {
+  if (overlapCount >= 5) return "strong";
+  if (overlapCount >= 2) return "medium";
+  if (overlapCount >= 1) return "weak";
+  return "none";
+}
+
+export async function findEpubChapterEvidence(
+  ctx: Pick<ChapterCurationContext, "epubEntries" | "durationMs" | "transcript">,
+  input: FindEpubChapterEvidenceInput
+): Promise<EpubChapterEvidenceResult> {
+  const requestedIds = new Set(input.nodeIds?.map((id) => id.trim()).filter(Boolean));
+  const entries = (requestedIds.size > 0 ? ctx.epubEntries.filter((entry) => requestedIds.has(entry.id)) : ctx.epubEntries).slice(0, 80);
+  const limitPerNode = Math.max(1, Math.min(5, input.limitPerNode ?? 3));
+  const averageChapterSeconds = ctx.epubEntries.length > 0 ? msToSeconds(ctx.durationMs) / ctx.epubEntries.length : msToSeconds(ctx.durationMs);
+  const radiusSeconds = Math.max(300, Math.min(7_200, input.searchRadiusSeconds ?? averageChapterSeconds * 2));
+  const nodes: EpubChapterEvidenceResult["nodes"] = [];
+
+  for (const entry of entries) {
+    const estimate = estimateTimestampFromEpubPosition(ctx, { epubNodeId: entry.id });
+    if (!estimate) continue;
+    const firstWords = summarizeFirstWords(entry, 18);
+    const queryTokens = distinctFirstWordTokens(firstWords);
+    const query = queryTokens.length > 0 ? queryTokens.slice(0, 10).join(" ") : firstWords || entry.title;
+    if (!query.trim()) {
+      nodes.push({
+        epubNodeId: entry.id,
+        title: entry.title,
+        estimatedStartTime: estimate.estimatedStartTime,
+        query: "",
+        matches: [],
+      });
+      continue;
+    }
+
+    const scopedMatches = await fuzzySearchTranscript(ctx, {
+      query,
+      scope: {
+        startTime: Math.max(0, estimate.estimatedStartTime - radiusSeconds),
+        endTime: Math.min(msToSeconds(ctx.durationMs), estimate.estimatedStartTime + radiusSeconds),
+      },
+      limit: limitPerNode,
+    });
+    const matches = scopedMatches.matches.length > 0 ? scopedMatches.matches : (await fuzzySearchTranscript(ctx, { query, limit: limitPerNode })).matches;
+    nodes.push({
+      epubNodeId: entry.id,
+      title: entry.title,
+      estimatedStartTime: estimate.estimatedStartTime,
+      query,
+      matches: matches.slice(0, limitPerNode).map((match) => {
+        const candidateText = `${match.text} ${match.after.text}`;
+        const candidateTokens = new Set(textTokens(candidateText));
+        const tokenOverlap = queryTokens.filter((token) => candidateTokens.has(token));
+        return {
+          startTime: match.startTime,
+          endTime: match.endTime,
+          text: normalizeToolText(match.text),
+          afterText: normalizeToolText(match.after.text).slice(0, 500),
+          tokenOverlap,
+          quality: evidenceQuality(tokenOverlap.length),
+        };
+      }),
+    });
+  }
+  return { nodes };
+}
+
 export type EstimateTimestampFromEpubPositionInput = {
   epubNodeId: string;
 };
@@ -704,6 +796,11 @@ const fuzzySearchTranscriptSchema = z.object({
   scope: z.object({ startTime: z.number().optional(), endTime: z.number().optional() }).optional(),
   limit: z.number().int().positive().max(100).optional(),
 });
+const findEpubChapterEvidenceSchema = z.object({
+  nodeIds: z.array(z.string()).max(80).optional(),
+  searchRadiusSeconds: z.number().positive().max(7_200).optional(),
+  limitPerNode: z.number().int().positive().max(5).optional(),
+});
 const estimateTimestampFromEpubPositionSchema = z.object({
   epubNodeId: z.string(),
 });
@@ -779,6 +876,7 @@ export function createChapterCuratorAgent(ctx: ChapterCurationContext): Agent {
       "Use submitChapterPlan sparingly. It is the final validation gate, not a search or brainstorming tool.",
       "Before your first submitChapterPlan call, inspect EPUB structure, embedded audio chapters, and transcript evidence with rgSearchTranscript, fuzzySearchTranscript, or getTranscriptWindow.",
       "For EPUB-rich books, build the plan from transcript evidence. Estimate tools and embedded boundaries are only priors; they are not enough evidence for an EPUB-heading claim.",
+      "Use findEpubChapterEvidence to gather candidate transcript anchors for many EPUB chapters at once before manually searching individual failures.",
       "All tool inputs and submitted chapter startTime values are seconds, not milliseconds. Example: 3 minutes 10 seconds is 190, not 190000.",
       "If you claim an epubNodeId for a chapter, verify the proposed start against transcript text near that timestamp or by searching for distinctive words from that EPUB node.",
       "If submitChapterPlan rejects a chapter for weak transcript evidence, do not resubmit the same timestamp/title. First call rgSearchTranscript, fuzzySearchTranscript, or getTranscriptWindow to find better evidence for that chapter.",
@@ -827,6 +925,17 @@ export function createChapterCuratorAgent(ctx: ChapterCurationContext): Agent {
         execute: (input) => {
           markEvidenceToolUsed();
           return fuzzySearchTranscript(ctx, input);
+        },
+      }),
+      tool({
+        name: "findEpubChapterEvidence",
+        description:
+          "Batch fuzzy-search transcript evidence for EPUB chapter nodes. Use this before submitting EPUB-rich plans so each epubNodeId has candidate transcript anchors. Times are seconds.",
+        parameters: findEpubChapterEvidenceSchema,
+        strict: true,
+        execute: (input) => {
+          markEvidenceToolUsed();
+          return findEpubChapterEvidence(ctx, input);
         },
       }),
       tool({
@@ -879,7 +988,7 @@ export function chapterCuratorPrompt(ctx: ChapterCurationContext): string {
     "All times you pass to tools or submit in the final plan must be seconds. Do not use milliseconds.",
     "Workflow requirement:",
     "1. Inspect EPUB structure and embedded audio chapters.",
-    "2. Gather transcript evidence before submitting a plan. For an EPUB-rich book, search or window-check distinctive text for the chapter starts you intend to claim.",
+    "2. Gather transcript evidence before submitting a plan. For an EPUB-rich book, use findEpubChapterEvidence for candidate anchors, then search/window-check individual uncertain starts.",
     "3. Submit one evidence-backed plan.",
     "4. If rejected, your next tool call must be transcript search/window evidence, not another submit. Fix rejected chapters before resubmitting.",
     "5. Never make no-op, compliance, last-resort, or best-effort retry submissions. Repeated invalid submissions waste the turn budget and fail the task.",
