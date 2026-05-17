@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   getEmbeddedAudioChapters,
   getEpubStructure,
+  rgSearchTranscript,
   type ChapterCurationContext,
   type ChapterCurationTiming,
 } from "../../src/library/chapter-curation";
@@ -201,5 +202,30 @@ describe("chapter curation tools", () => {
     expect(result.diagnostics.labelQuality).toBe("named");
     expect(result.diagnostics.durationPattern).toBe("varied");
     expect(result.diagnostics.boundaryDensity).toBe("plausible");
+  });
+
+  test("rgSearchTranscript searches timestamped transcript utterances without shell access", async () => {
+    const result = await rgSearchTranscript(ctx(), {
+      pattern: "Once upon",
+      regex: false,
+      afterSeconds: 5,
+    });
+    expect(result.matches).toHaveLength(1);
+    expect(result.matches[0]).toMatchObject({
+      index: 1,
+      startTime: 1.2,
+      endTime: 3,
+      text: "Once upon a time.",
+    });
+    expect(result.matches[0]?.after.text).toContain("Once upon a time");
+  });
+
+  test("rgSearchTranscript respects a scoped time window", async () => {
+    const result = await rgSearchTranscript(ctx(), {
+      pattern: "Chapter",
+      regex: false,
+      scope: { startTime: 2 },
+    });
+    expect(result.matches).toHaveLength(0);
   });
 });

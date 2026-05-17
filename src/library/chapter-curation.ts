@@ -1,3 +1,10 @@
+import { spawn } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { rgPath } from "@vscode/ripgrep";
+
 import type { AppSettings, AssetFileRow, AssetRow, BookRow, ManifestationRow } from "../app-types";
 import type { EpubChapterEntry, StoredTranscriptPayload, StoredTranscriptUtterance } from "./chapter-analysis";
 
@@ -29,6 +36,20 @@ export type TranscriptWindow = {
   endMs: number;
   utterances: StoredTranscriptUtterance[];
   text: string;
+};
+
+export type TranscriptSearchScope = {
+  startTime?: number;
+  endTime?: number;
+};
+
+export type TranscriptSearchMatch = {
+  index: number;
+  startTime: number;
+  endTime: number;
+  text: string;
+  before: TranscriptWindow;
+  after: TranscriptWindow;
 };
 
 export function normalizeToolText(value: string): string {
@@ -219,4 +240,114 @@ export function getEmbeddedAudioChapters(ctx: Pick<ChapterCurationContext, "dura
       durationCoefficientOfVariation: durationCv,
     },
   };
+}
+
+function scopedTranscriptUtterances(
+  ctx: Pick<ChapterCurationContext, "transcript">,
+  scope?: TranscriptSearchScope
+): Array<StoredTranscriptUtterance & { index: number }> {
+  const startMs = scope?.startTime === undefined ? 0 : secondsToMs(scope.startTime);
+  const endMs = scope?.endTime === undefined ? Number.POSITIVE_INFINITY : secondsToMs(scope.endTime);
+  return transcriptUtterances(ctx)
+    .map((utterance, index) => ({ ...utterance, index }))
+    .filter((utterance) => utterance.endMs >= startMs && utterance.startMs <= endMs);
+}
+
+function runRipgrep(args: string[]): Promise<{ status: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
+    child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+    child.on("error", reject);
+    child.on("close", (status) => {
+      resolve({
+        status: status ?? 0,
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+      });
+    });
+  });
+}
+
+function parseRipgrepLine(line: string): number | null {
+  try {
+    const event = JSON.parse(line) as {
+      type?: string;
+      data?: { line_number?: number };
+    };
+    if (event.type !== "match") return null;
+    const lineNumber = event.data?.line_number;
+    return typeof lineNumber === "number" ? lineNumber - 1 : null;
+  } catch {
+    return null;
+  }
+}
+
+export type RgSearchTranscriptInput = {
+  pattern: string;
+  regex?: boolean;
+  scope?: TranscriptSearchScope;
+  beforeSeconds?: number;
+  afterSeconds?: number;
+  limit?: number;
+};
+
+export async function rgSearchTranscript(
+  ctx: Pick<ChapterCurationContext, "transcript" | "durationMs">,
+  input: RgSearchTranscriptInput
+): Promise<{ matches: TranscriptSearchMatch[] }> {
+  const pattern = input.pattern.trim();
+  if (!pattern) return { matches: [] };
+  const utterances = scopedTranscriptUtterances(ctx, input.scope);
+  if (utterances.length === 0) return { matches: [] };
+
+  const dir = await mkdtemp(path.join(os.tmpdir(), "podible-rg-transcript-"));
+  const transcriptPath = path.join(dir, "transcript.txt");
+  try {
+    await writeFile(
+      transcriptPath,
+      utterances.map((utterance) => `${utterance.index}\t${utterance.startMs}\t${utterance.endMs}\t${normalizeToolText(utterance.text)}`).join("\n"),
+      "utf8"
+    );
+    const args = [
+      "--json",
+      "--line-number",
+      "--color",
+      "never",
+      "--max-count",
+      String(Math.max(1, Math.min(100, input.limit ?? 20))),
+      ...(input.regex ? [] : ["--fixed-strings"]),
+      "--",
+      pattern,
+      transcriptPath,
+    ];
+    const result = await runRipgrep(args);
+    if (result.status !== 0 && result.status !== 1) {
+      throw new Error(result.stderr.trim() || `rg exited with status ${result.status}`);
+    }
+    const byLine = new Map(utterances.map((utterance, lineIndex) => [lineIndex, utterance]));
+    const seen = new Set<number>();
+    const matches: TranscriptSearchMatch[] = [];
+    for (const line of result.stdout.split(/\n/)) {
+      if (!line.trim()) continue;
+      const lineIndex = parseRipgrepLine(line);
+      if (lineIndex === null || seen.has(lineIndex)) continue;
+      seen.add(lineIndex);
+      const utterance = byLine.get(lineIndex);
+      if (!utterance) continue;
+      matches.push({
+        index: utterance.index,
+        startTime: msToSeconds(utterance.startMs),
+        endTime: msToSeconds(utterance.endMs),
+        text: utterance.text,
+        before: getTranscriptWindowFromContext(ctx, utterance.startMs, secondsToMs(input.beforeSeconds ?? 0)),
+        after: getTranscriptWindowFromContext(ctx, utterance.endMs, secondsToMs(input.afterSeconds ?? 10)),
+      });
+    }
+    return { matches };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
