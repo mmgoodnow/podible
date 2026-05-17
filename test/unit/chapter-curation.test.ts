@@ -351,5 +351,15 @@ describe("chapter curation tools", () => {
       } as never,
     ]);
     expect(accepted.isFinalOutput).toBe(true);
+
+    const naturalJson = chapterCuratorToolUseBehavior(undefined, [
+      {
+        type: "function_output",
+        tool: { name: "submitChapterPlan" },
+        output: JSON.stringify({ chapters: [{ title: "Chapter 1", startTime: 0 }] }),
+        runItem: {} as never,
+      } as never,
+    ]);
+    expect(naturalJson.isFinalOutput).toBe(false);
   });
 });

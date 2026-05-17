@@ -710,7 +710,8 @@ function parseSubmitToolOutput(output: unknown): SubmitChapterPlanResult | null 
   if (!output) return null;
   if (typeof output === "string") {
     try {
-      return JSON.parse(output) as SubmitChapterPlanResult;
+      const parsed = JSON.parse(output) as unknown;
+      return typeof parsed === "object" && parsed !== null && "accepted" in parsed ? (parsed as SubmitChapterPlanResult) : null;
     } catch {
       return null;
     }
@@ -739,6 +740,10 @@ function createChapterCuratorAgent(ctx: ChapterCurationContext): Agent {
   return new Agent({
     name: "ChapterCurator",
     model: ctx.settings.agents.model,
+    modelSettings: {
+      toolChoice: "required",
+      parallelToolCalls: false,
+    },
     instructions: [
       "You curate audiobook chapter markers from EPUB structure, embedded audio chapters, and transcript evidence.",
       "You must use tools to inspect the available evidence. Embedded audio chapters are evidence, not truth; equal divisions and generic labels are suspicious.",
