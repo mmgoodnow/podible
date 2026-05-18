@@ -1764,6 +1764,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
   let rejectedLeafRequiresEvidence = false;
   let evidenceCallsSinceRejectedLeaf = 0;
   const allowLeaf = recursiveSpanAllowsLeaf(span, forceLeaf);
+  const rejectedFulcrums = new Set<string>();
 
   function markEvidenceToolUsed(): void {
     if (rejectedLeafRequiresEvidence) evidenceCallsSinceRejectedLeaf++;
@@ -1892,12 +1893,27 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
               instruction: "Call submitLeafChapterPlan for this span.",
             } satisfies SubmitFulcrumSplitResult;
           }
+          const rejectedKey = `${input.epubNodeId}:${Math.round(input.startTime)}`;
+          if (rejectedFulcrums.has(rejectedKey)) {
+            return {
+              accepted: false,
+              kind: "split",
+              errors: [`Fulcrum ${input.epubNodeId} near ${Math.round(input.startTime)}s was already rejected for this span.`],
+              warnings: [],
+              audit: null,
+              instruction: "Pick a different EPUB node or a materially different timestamp with stronger transcript evidence.",
+            } satisfies SubmitFulcrumSplitResult;
+          }
           const result = await validateFulcrumSplit(ctx, span, input);
-          if (!result.accepted) invalidFulcrums++;
+          if (!result.accepted) {
+            invalidFulcrums++;
+            rejectedFulcrums.add(rejectedKey);
+          }
           if (result.accepted) {
             const judgment = await judgeFulcrumSplit(ctx, span, result);
             if (judgment && !judgment.accepted) {
               invalidFulcrums++;
+              rejectedFulcrums.add(rejectedKey);
               return {
                 accepted: false,
                 kind: "split",
