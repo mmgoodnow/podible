@@ -1765,9 +1765,12 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
   let evidenceCallsSinceRejectedLeaf = 0;
   const allowLeaf = recursiveSpanAllowsLeaf(span, forceLeaf);
   const rejectedFulcrums = new Set<string>();
+  let rejectedFulcrumRequiresEvidence = false;
+  let evidenceCallsSinceRejectedFulcrum = 0;
 
   function markEvidenceToolUsed(): void {
     if (rejectedLeafRequiresEvidence) evidenceCallsSinceRejectedLeaf++;
+    if (rejectedFulcrumRequiresEvidence) evidenceCallsSinceRejectedFulcrum++;
   }
 
   function rejectedLeafWithoutEvidence(): SubmitLeafChapterPlanResult {
@@ -1778,6 +1781,18 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
       warnings: [],
       audit: [],
       instruction: "Call findEpubChapterEvidence, rgSearchTranscript, fuzzySearchTranscript, or getTranscriptWindow before resubmitting this leaf.",
+    };
+  }
+
+  function rejectedFulcrumWithoutEvidence(): SubmitFulcrumSplitResult {
+    return {
+      accepted: false,
+      kind: "split",
+      errors: ["submitFulcrumSplit was called again before gathering new transcript/EPUB evidence after the previous fulcrum rejection."],
+      warnings: [],
+      audit: null,
+      instruction:
+        "Do more research before proposing another fulcrum. Call findEpubChapterEvidence for multiple candidate EPUB nodes, then inspect the best candidate with getTranscriptWindow or rgSearchTranscript.",
     };
   }
 
@@ -1797,6 +1812,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         ? "Use submitLeafChapterPlan when the span is small enough or already well evidenced."
         : "This span is too broad for a leaf plan. The submitLeafChapterPlan tool is intentionally unavailable; you must find a fulcrum split.",
       "Do not submit guessed timestamps. Use transcript evidence tools first.",
+      "After any rejected fulcrum, gather fresh evidence with findEpubChapterEvidence, rgSearchTranscript, fuzzySearchTranscript, or getTranscriptWindow before trying another fulcrum.",
       "All tool times and submitted startTime values are seconds, not milliseconds.",
       forceLeaf ? "This span is forced leaf mode. You must call submitLeafChapterPlan, not submitFulcrumSplit." : "",
     ]
@@ -1883,6 +1899,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         parameters: submitFulcrumSplitSchema,
         strict: true,
         execute: async (input) => {
+          if (rejectedFulcrumRequiresEvidence && evidenceCallsSinceRejectedFulcrum === 0) return rejectedFulcrumWithoutEvidence();
           if (forceLeaf || (allowLeaf && invalidFulcrums >= 2)) {
             return {
               accepted: false,
@@ -1895,6 +1912,8 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
           }
           const rejectedKey = `${input.epubNodeId}:${Math.round(input.startTime)}`;
           if (rejectedFulcrums.has(rejectedKey)) {
+            rejectedFulcrumRequiresEvidence = true;
+            evidenceCallsSinceRejectedFulcrum = 0;
             return {
               accepted: false,
               kind: "split",
@@ -1908,12 +1927,16 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
           if (!result.accepted) {
             invalidFulcrums++;
             rejectedFulcrums.add(rejectedKey);
+            rejectedFulcrumRequiresEvidence = true;
+            evidenceCallsSinceRejectedFulcrum = 0;
           }
           if (result.accepted) {
             const judgment = await judgeFulcrumSplit(ctx, span, result);
             if (judgment && !judgment.accepted) {
               invalidFulcrums++;
               rejectedFulcrums.add(rejectedKey);
+              rejectedFulcrumRequiresEvidence = true;
+              evidenceCallsSinceRejectedFulcrum = 0;
               return {
                 accepted: false,
                 kind: "split",
@@ -1930,6 +1953,8 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
               } satisfies SubmitFulcrumSplitResult;
             }
           }
+          rejectedFulcrumRequiresEvidence = false;
+          evidenceCallsSinceRejectedFulcrum = 0;
           return result;
         },
       }),
