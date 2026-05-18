@@ -582,6 +582,41 @@ describe("chapter curation tools", () => {
     expect(result.errors.join("\n")).toContain("too close");
   });
 
+  test("validateFulcrumSplit rejects broad-span fulcrums near EPUB edges", async () => {
+    const entries = Array.from({ length: 10 }, (_, index) =>
+      epubEntry({
+        id: `chapter-${index + 1}`,
+        title: `Chapter ${index + 1}`,
+        href: `chapter${index + 1}.xhtml`,
+        wordCount: 10,
+        cumulativeWords: (index + 1) * 10,
+        cumulativeRatio: (index + 1) / 10,
+        words:
+          index === 1
+            ? [word("Helldiver"), word("opened"), word("beneath"), word("Mars"), word("with"), word("furnace"), word("smoke")]
+            : [word("Ordinary"), word("chapter"), word(String(index + 1))],
+      })
+    );
+    const context = ctx({
+      durationMs: 10_000_000,
+      manifestation: manifestation({ duration_ms: 10_000_000 }),
+      epubEntries: entries,
+      transcript: transcriptWith("Helldiver opened beneath Mars with furnace smoke", 1_000_000, 1_006_000),
+    });
+
+    const result = await validateFulcrumSplit(context, createRootCurationSpan(context), {
+      spanPath: "root",
+      epubNodeId: "chapter-2",
+      title: "Chapter 2",
+      startTime: 1_000,
+    });
+
+    expect(result.accepted).toBe(false);
+    if (result.accepted) throw new Error("expected rejection");
+    expect(result.errors.join("\n")).toContain("roughly in the middle");
+    expect(result.instruction).toContain("closer to the span midpoint");
+  });
+
   test("validateFulcrumSplit rejects accidental generic-token overlap far from better evidence", async () => {
     const context = ctx({
       durationMs: 1_000_000,

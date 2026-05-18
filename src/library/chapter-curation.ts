@@ -1004,6 +1004,18 @@ function spanContainsEpubIndex(span: ChapterCurationSpan, index: number): boolea
   return index >= span.epubStartIndex && index <= span.epubEndIndex;
 }
 
+function spanEpubLocalRatio(ctx: Pick<ChapterCurationContext, "epubEntries">, span: ChapterCurationSpan, index: number): number | null {
+  if (!spanContainsEpubIndex(span, index)) return null;
+  const spanStart = inferEntryStartRatio(ctx.epubEntries, span.epubStartIndex);
+  const spanEnd = inferEntryEndRatio(ctx.epubEntries, span.epubEndIndex);
+  return localRatio(inferEntryStartRatio(ctx.epubEntries, index), spanStart, spanEnd);
+}
+
+function isMiddleFulcrumEpubIndex(ctx: Pick<ChapterCurationContext, "epubEntries">, span: ChapterCurationSpan, index: number): boolean {
+  const ratio = spanEpubLocalRatio(ctx, span, index);
+  return ratio !== null && ratio >= 0.25 && ratio <= 0.75;
+}
+
 function spanDurationSeconds(span: ChapterCurationSpan): number {
   return Math.max(0, span.endTime - span.startTime);
 }
@@ -1369,6 +1381,15 @@ export async function validateFulcrumSplit(
   if (split.startTime - span.startTime < edgeMargin || span.endTime - split.startTime < edgeMargin) {
     errors.push("Fulcrum startTime is too close to a span edge.");
   }
+  const broadSpanRequiresMiddleFulcrum = !recursiveSpanAllowsLeaf(span, false);
+  const splitEpubRatio = epubIndex >= 0 ? spanEpubLocalRatio(ctx, span, epubIndex) : null;
+  if (broadSpanRequiresMiddleFulcrum && splitEpubRatio !== null && (splitEpubRatio < 0.25 || splitEpubRatio > 0.75)) {
+    const leftPercent = Math.round(splitEpubRatio * 100);
+    const rightPercent = Math.round((1 - splitEpubRatio) * 100);
+    errors.push(
+      `Broad-span fulcrum must be roughly in the middle by EPUB word position; proposed split leaves ${leftPercent}% of EPUB words on the left and ${rightPercent}% on the right.`
+    );
+  }
 
   const firstWords = entry ? summarizeFirstWords(entry, 72) : "";
   const titleTokens = new Set(textTokens(entry?.title ?? split.title));
@@ -1422,9 +1443,12 @@ export async function validateFulcrumSplit(
       errors,
       warnings,
       audit,
-      instruction: laterProseCandidate
-        ? "The submitted phrase looks like context before the target EPUB opener. Inspect the later prose candidate with getTranscriptWindow and submit only if the opener begins exactly there; otherwise pick a different internal EPUB node."
-        : "Pick a different internal fulcrum with stronger transcript/prose evidence, or submit a leaf plan for this span.",
+      instruction:
+        broadSpanRequiresMiddleFulcrum && splitEpubRatio !== null && (splitEpubRatio < 0.25 || splitEpubRatio > 0.75)
+          ? "Pick an internal EPUB node closer to the span midpoint, ideally leaving 25-75% of the EPUB word span on each side, then search that node's opener prose in the transcript."
+          : laterProseCandidate
+            ? "The submitted phrase looks like context before the target EPUB opener. Inspect the later prose candidate with getTranscriptWindow and submit only if the opener begins exactly there; otherwise pick a different internal EPUB node."
+            : "Pick a different internal fulcrum with stronger transcript/prose evidence, or submit a leaf plan for this span.",
     };
   }
 
@@ -1900,7 +1924,7 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, forc
     ? []
     : [
         "Fulcrum workflow for broad spans:",
-        "1. Call getEpubStructure and choose an internal EPUB node near the span midpoint by word position, not near either edge.",
+        "1. Call getEpubStructure and choose an internal EPUB node near the span midpoint by word position, not near either edge. The fulcrum should generally leave at least 25% of the EPUB word span on both sides.",
         "2. Use that node's firstWords as source text. Prefer 6-12 distinctive opener prose words; ignore generic chapter numbers, titles, names alone, and repeated formulaic text.",
         "3. Estimate the likely transcript neighborhood from the EPUB node's word-position ratio, then search near that neighborhood with rgSearchTranscript. If exact search misses, try shorter exact phrases or fuzzySearchTranscript.",
         "4. Inspect the best match with getTranscriptWindow. The proposed start must look like the opener boundary: the distinctive opener appears immediately after the start, and the preceding transcript does not already contain the same opener content.",
@@ -2111,7 +2135,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         ? "Use submitLeafChapterPlan when the span is small enough or already well evidenced."
         : "This span is too broad for a leaf plan. The submitLeafChapterPlan tool is intentionally unavailable; you must find a fulcrum split.",
       "Concrete fulcrum workflow for broad spans:",
-      "1. Call getEpubStructure, compare node word-position ratios inside this span, and choose an internal EPUB node roughly near the span midpoint. Avoid the first and last node unless no other internal boundary exists.",
+      "1. Call getEpubStructure, compare node word-position ratios inside this span, and choose an internal EPUB node roughly near the span midpoint. Avoid boundaries that leave less than 25% of the EPUB word span on either side; they are poor fulcrums for divide-and-conquer.",
       "2. Take opener prose from that node's firstWords. Build a search phrase from 6-12 distinctive words; drop generic chapter labels, standalone names, punctuation-only differences, and repeated boilerplate.",
       "3. Estimate the likely timestamp neighborhood from the EPUB node position within the current span. Search that neighborhood with rgSearchTranscript first. If there is no strong exact hit, try shorter distinctive exact phrases, then fuzzySearchTranscript.",
       "4. Inspect the best candidate with getTranscriptWindow. Check both sides of the timestamp: the opener prose should begin immediately after the proposed start, and the text just before it should not already be continuing the same opener.",
@@ -2126,14 +2150,17 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
     tools: [
       tool({
         name: "getEpubStructure",
-        description: "Return ordered EPUB nodes for this span only.",
+        description: allowLeaf
+          ? "Return ordered EPUB nodes for this span only."
+          : "Return ordered EPUB nodes that are eligible as middle-band fulcrums for this broad span.",
         parameters: emptyToolSchema,
         strict: true,
         execute: () => {
           const full = getEpubStructure(ctx);
+          const spanNodes = full.nodes.filter((node) => node.index >= span.epubStartIndex && node.index <= span.epubEndIndex);
           return {
             ...full,
-            nodes: full.nodes.filter((node) => node.index >= span.epubStartIndex && node.index <= span.epubEndIndex),
+            nodes: allowLeaf ? spanNodes : spanNodes.filter((node) => isMiddleFulcrumEpubIndex(ctx, span, node.index)),
           };
         },
       }),
@@ -2157,7 +2184,11 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         strict: true,
         execute: async (input) => {
           markEvidenceToolUsed();
-          const allowedIds = new Set(spanEpubEntries(ctx, span).map((entry) => entry.id));
+          const allowedEntries = spanEpubEntries(ctx, span).filter((_, offset) => {
+            const index = span.epubStartIndex + offset;
+            return allowLeaf || isMiddleFulcrumEpubIndex(ctx, span, index);
+          });
+          const allowedIds = new Set(allowedEntries.map((entry) => entry.id));
           const nodeIds = (input.nodeIds?.length ? input.nodeIds : Array.from(allowedIds)).filter((id) => allowedIds.has(id));
           const result = await findEpubChapterEvidence(ctx, { ...input, nodeIds });
           return {
