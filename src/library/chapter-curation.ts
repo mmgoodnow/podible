@@ -1384,6 +1384,9 @@ export async function validateFulcrumSplit(
     : { nodes: [] };
   const candidateMatches = evidence.nodes[0]?.matches ?? [];
   const nearestCandidateDelta = candidateMatches.length === 0 ? null : Math.min(...candidateMatches.map((match) => Math.abs(match.startTime - split.startTime)));
+  const laterProseCandidate = candidateMatches
+    .filter((match) => match.startTime > split.startTime && match.startTime - split.startTime <= 180 && match.tokenOverlap.length >= 3)
+    .sort((a, b) => b.tokenOverlap.length - a.tokenOverlap.length || a.startTime - b.startTime)[0];
   const audit: FulcrumValidationAudit = {
     epubNodeId: entry?.id ?? null,
     title: entry?.title ?? split.title,
@@ -1403,6 +1406,11 @@ export async function validateFulcrumSplit(
   if (proseTokens.length > 0 && proseMatchedTokens.length < Math.min(2, proseTokens.length)) {
     errors.push("Fulcrum evidence only matches title/metadata; at least one EPUB prose token must match.");
   }
+  if (laterProseCandidate && proseMatchedTokens.length < Math.min(2, proseTokens.length)) {
+    errors.push(
+      `Submitted timestamp appears to anchor pre-boundary context before the EPUB opener; stronger ${entry?.id ?? "node"} prose evidence starts ${Math.round(laterProseCandidate.startTime - split.startTime)}s later at ${Math.round(laterProseCandidate.startTime)}s.`
+    );
+  }
   if (nearestCandidateDelta !== null && nearestCandidateDelta > 90) {
     errors.push(`Submitted fulcrum is ${Math.round(nearestCandidateDelta)}s from the nearest transcript evidence candidate; gather stronger candidate evidence before resubmitting.`);
   }
@@ -1414,7 +1422,9 @@ export async function validateFulcrumSplit(
       errors,
       warnings,
       audit,
-      instruction: "Pick a different internal fulcrum with stronger transcript/prose evidence, or submit a leaf plan for this span.",
+      instruction: laterProseCandidate
+        ? "The submitted phrase looks like context before the target EPUB opener. Inspect the later prose candidate with getTranscriptWindow and submit only if the opener begins exactly there; otherwise pick a different internal EPUB node."
+        : "Pick a different internal fulcrum with stronger transcript/prose evidence, or submit a leaf plan for this span.",
     };
   }
 

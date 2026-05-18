@@ -620,6 +620,65 @@ describe("chapter curation tools", () => {
     expect(result.errors.join("\n")).toContain("nearest transcript evidence candidate");
   });
 
+  test("validateFulcrumSplit identifies pre-boundary context before stronger opener evidence", async () => {
+    const openerWords = [
+      "Northwoods",
+      "agony",
+      "claustrophobia",
+      "sick",
+      "wounded",
+      "pain",
+      "dreams",
+      "darkness",
+      "stomach",
+      "scream",
+    ];
+    const context = ctx({
+      durationMs: 600_000,
+      manifestation: manifestation({ duration_ms: 600_000 }),
+      epubEntries: [
+        epubEntry({ id: "chapter-before", title: "Chapter Before", cumulativeRatio: 0.4, cumulativeWords: 20 }),
+        epubEntry({
+          id: "chapter-target",
+          title: "Chapter Target",
+          cumulativeRatio: 0.8,
+          cumulativeWords: 40,
+          words: openerWords.map(word),
+        }),
+        epubEntry({ id: "chapter-after", title: "Chapter After", cumulativeRatio: 1, cumulativeWords: 50 }),
+      ],
+      transcript: {
+        version: "test",
+        text:
+          "The mud is dark and cold. This hurts. Now I know pain. Part four reaper. Northwoods agony claustrophobia sick wounded pain dreams darkness stomach scream.",
+        words: [
+          ...transcriptWith("The mud is dark and cold This hurts Now I know pain", 250_000, 256_000).words,
+          ...transcriptWith("Part four reaper Northwoods agony claustrophobia sick wounded pain dreams darkness stomach scream", 300_000, 309_000).words,
+        ],
+        utterances: [
+          { startMs: 250_000, endMs: 256_000, text: "The mud is dark and cold. This hurts. Now I know pain." },
+          {
+            startMs: 300_000,
+            endMs: 309_000,
+            text: "Part four reaper. Northwoods agony claustrophobia sick wounded pain dreams darkness stomach scream.",
+          },
+        ],
+      },
+    });
+
+    const result = await validateFulcrumSplit(context, createRootCurationSpan(context), {
+      spanPath: "root",
+      epubNodeId: "chapter-target",
+      title: "Chapter Target",
+      startTime: 250,
+    });
+
+    expect(result.accepted).toBe(false);
+    if (result.accepted) throw new Error("expected rejection");
+    expect(result.errors.join("\n")).toContain("pre-boundary context");
+    expect(result.instruction).toContain("later prose candidate");
+  });
+
   test("validateLeafChapterPlan rejects broad non-forced spans so the agent keeps splitting", () => {
     const entries = Array.from({ length: 10 }, (_, index) =>
       epubEntry({
