@@ -4,6 +4,7 @@ import {
   getEmbeddedAudioChapters,
   getEpubStructure,
   findEpubChapterEvidence,
+  findFulcrumCandidates,
   fuzzySearchTranscript,
   fulcrumJudgeToolUseBehavior,
   estimateTimestampFromEpubPosition,
@@ -283,6 +284,41 @@ describe("chapter curation tools", () => {
     expect(result.nodes[0]?.matches[0]?.tokenOverlap).toEqual(["first", "real"]);
   });
 
+  test("findFulcrumCandidates searches middle EPUB opener prose and ranks by position", () => {
+    const entries = Array.from({ length: 5 }, (_, index) =>
+      epubEntry({
+        id: `chapter-${index + 1}`,
+        title: `Chapter ${index + 1}`,
+        href: `chapter${index + 1}.xhtml`,
+        wordCount: 10,
+        cumulativeWords: (index + 1) * 10,
+        cumulativeRatio: (index + 1) / 5,
+        words:
+          index === 2
+            ? [word("Helldiver"), word("opened"), word("beneath"), word("Mars"), word("with"), word("furnace"), word("smoke")]
+            : [word("Ordinary"), word("chapter"), word(String(index + 1))],
+      })
+    );
+    const context = ctx({
+      durationMs: 500_000,
+      manifestation: manifestation({ duration_ms: 500_000 }),
+      epubEntries: entries,
+      transcript: transcriptWith("Helldiver opened beneath Mars with furnace smoke and iron rain", 205_000, 212_000),
+    });
+
+    const result = findFulcrumCandidates(context, createRootCurationSpan(context), {
+      candidateNodeCount: 3,
+      searchRadiusSeconds: 120,
+    });
+
+    expect(result.candidates[0]).toMatchObject({
+      epubNodeId: "chapter-3",
+      title: "Chapter 3",
+    });
+    expect(result.candidates[0]?.startTime).toBeGreaterThanOrEqual(205);
+    expect(result.candidates[0]?.ratioDistance).toBeLessThan(0.05);
+  });
+
   test("estimateTimestampFromEpubPosition maps EPUB word position onto duration", () => {
     const result = estimateTimestampFromEpubPosition(ctx(), { epubNodeId: "chapter-1" });
     expect(result).toMatchObject({
@@ -409,8 +445,6 @@ describe("chapter curation tools", () => {
           confidence: "high",
           reason: "Candidate starts in the previous chapter.",
           concerns: ["better candidate is 700s earlier"],
-          suggestedStartTime: 19830,
-          suggestedEpubNodeId: "part3.html",
         },
         runItem: {} as never,
       } as never,

@@ -509,9 +509,9 @@ export async function findEpubChapterEvidence(
   for (const entry of entries) {
     const estimate = estimateTimestampFromEpubPosition(ctx, { epubNodeId: entry.id });
     if (!estimate) continue;
-    const firstWords = summarizeFirstWords(entry, 18);
+    const firstWords = summarizeFirstWords(entry, 72);
     const queryTokens = distinctFirstWordTokens(firstWords);
-    const query = queryTokens.length > 0 ? queryTokens.slice(0, 10).join(" ") : firstWords || entry.title;
+    const query = queryTokens.length > 0 ? queryTokens.slice(0, 18).join(" ") : firstWords || entry.title;
     if (!query.trim()) {
       nodes.push({
         epubNodeId: entry.id,
@@ -658,8 +658,6 @@ const submitFulcrumJudgmentSchema = z.object({
   confidence: z.enum(["low", "medium", "high"]),
   reason: z.string().trim().min(1),
   concerns: z.array(z.string().trim().min(1)).max(10),
-  suggestedStartTime: z.number().finite().nonnegative().nullable(),
-  suggestedEpubNodeId: z.string().trim().min(1).nullable(),
 });
 
 export type SubmittedChapter = z.infer<typeof submittedChapterSchema>;
@@ -744,6 +742,35 @@ export type SubmitFulcrumSplitResult =
     };
 
 export type SubmitFulcrumJudgmentResult = SubmitFulcrumJudgmentInput;
+
+export type FindFulcrumCandidatesInput = {
+  nodeIds?: string[];
+  candidateNodeCount?: number;
+  searchRadiusSeconds?: number;
+  limitPerNode?: number;
+};
+
+export type FulcrumCandidate = {
+  epubNodeId: string;
+  epubIndex: number;
+  title: string;
+  expectedStartTime: number;
+  startTime: number;
+  endTime: number;
+  score: number;
+  textScore: number;
+  positionScore: number;
+  ratioDistance: number;
+  query: string;
+  matchedTokens: string[];
+  transcriptWindow: string;
+};
+
+export type FindFulcrumCandidatesResult = {
+  spanPath: string;
+  midpointEpubRatio: number;
+  candidates: FulcrumCandidate[];
+};
 
 export type RecursiveSpanDecision =
   | { kind: "leaf"; chapters: SubmittedChapter[]; result?: SubmitLeafChapterPlanResult }
@@ -1064,6 +1091,193 @@ function distinctiveEvidenceTokens(value: string): string[] {
   return out;
 }
 
+function entryStartRatio(entries: EpubChapterEntry[], index: number): number {
+  return inferEntryStartRatio(entries, index);
+}
+
+function localRatio(value: number, start: number, end: number): number {
+  const width = end - start;
+  if (width <= 0) return 0;
+  return Math.max(0, Math.min(1, (value - start) / width));
+}
+
+function candidateQueryTokens(entry: EpubChapterEntry): string[] {
+  const out: string[] = [];
+  for (const word of entry.words.slice(0, 120)) {
+    const token = word.token || textTokens(word.text)[0];
+    if (!token || token.length < 4 || evidenceStopTokens.has(token)) continue;
+    if (out.includes(token)) continue;
+    out.push(token);
+    if (out.length >= 24) break;
+  }
+  return out;
+}
+
+function candidateTranscriptWords(
+  ctx: Pick<ChapterCurationContext, "transcript">,
+  startTime: number,
+  endTime: number
+): Array<{ text: string; token: string; startMs: number; endMs: number }> {
+  const startMs = secondsToMs(startTime);
+  const endMs = secondsToMs(endTime);
+  return [...ctx.transcript.words]
+    .map((word) => ({
+      text: word.text,
+      token: word.token || textTokens(word.text)[0] || "",
+      startMs: word.startMs,
+      endMs: word.endMs,
+    }))
+    .filter((word) => word.token && word.endMs >= startMs && word.startMs <= endMs)
+    .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+}
+
+function selectFulcrumCandidateEntries(
+  ctx: Pick<ChapterCurationContext, "epubEntries">,
+  span: ChapterCurationSpan,
+  input: FindFulcrumCandidatesInput
+): Array<{ entry: EpubChapterEntry; epubIndex: number }> {
+  const requestedIds = new Set(input.nodeIds?.map((id) => id.trim()).filter(Boolean));
+  const internal = ctx.epubEntries
+    .map((entry, epubIndex) => ({ entry, epubIndex }))
+    .filter(({ epubIndex, entry }) => epubIndex > span.epubStartIndex && epubIndex <= span.epubEndIndex && (requestedIds.size === 0 || requestedIds.has(entry.id)));
+  if (requestedIds.size > 0) return internal;
+
+  const spanStartRatio = entryStartRatio(ctx.epubEntries, span.epubStartIndex);
+  const spanEndRatio = inferEntryEndRatio(ctx.epubEntries, span.epubEndIndex);
+  const midpoint = spanStartRatio + (spanEndRatio - spanStartRatio) / 2;
+  const count = Math.max(1, Math.min(15, input.candidateNodeCount ?? 7));
+  return internal
+    .sort((a, b) => Math.abs(entryStartRatio(ctx.epubEntries, a.epubIndex) - midpoint) - Math.abs(entryStartRatio(ctx.epubEntries, b.epubIndex) - midpoint))
+    .slice(0, count)
+    .sort((a, b) => a.epubIndex - b.epubIndex);
+}
+
+function scoreFulcrumCandidateWindow(
+  ctx: Pick<ChapterCurationContext, "epubEntries" | "durationMs" | "transcript">,
+  span: ChapterCurationSpan,
+  entry: EpubChapterEntry,
+  epubIndex: number,
+  queryTokens: string[],
+  words: Array<{ text: string; token: string; startMs: number; endMs: number }>
+): FulcrumCandidate | null {
+  if (queryTokens.length === 0 || words.length === 0) return null;
+  const estimate = estimateTimestampFromEpubPosition(ctx, { epubNodeId: entry.id });
+  if (!estimate) return null;
+  const spanEpubStart = entryStartRatio(ctx.epubEntries, span.epubStartIndex);
+  const spanEpubEnd = inferEntryEndRatio(ctx.epubEntries, span.epubEndIndex);
+  const expectedLocalRatio = localRatio(entryStartRatio(ctx.epubEntries, epubIndex), spanEpubStart, spanEpubEnd);
+  const windowSize = Math.min(80, Math.max(18, queryTokens.length * 3));
+  let best: FulcrumCandidate | null = null;
+
+  for (let index = 0; index < words.length; index++) {
+    const window = words.slice(index, index + windowSize);
+    if (window.length === 0) continue;
+    const windowTokens = new Set(window.map((word) => word.token));
+    const matchedTokens = queryTokens.filter((token) => windowTokens.has(token));
+    if (matchedTokens.length < Math.min(3, queryTokens.length)) continue;
+    let orderedMatches = 0;
+    let searchFrom = 0;
+    for (const token of queryTokens) {
+      const found = window.findIndex((word, wordIndex) => wordIndex >= searchFrom && word.token === token);
+      if (found < 0) continue;
+      orderedMatches++;
+      searchFrom = found + 1;
+    }
+    const startTime = msToSeconds(window[0]!.startMs);
+    const audioLocalRatio = localRatio(startTime, span.startTime, span.endTime);
+    const ratioDistance = Math.abs(audioLocalRatio - expectedLocalRatio);
+    const positionScore = Math.max(0, 1 - ratioDistance / 0.12);
+    const textScore = matchedTokens.length / queryTokens.length + orderedMatches / queryTokens.length;
+    const score = textScore * 20 + positionScore * 8 - ratioDistance * 10;
+    const candidate: FulcrumCandidate = {
+      epubNodeId: entry.id,
+      epubIndex,
+      title: entry.title,
+      expectedStartTime: estimate.estimatedStartTime,
+      startTime,
+      endTime: msToSeconds(window.at(-1)!.endMs),
+      score: Math.round(score * 1000) / 1000,
+      textScore: Math.round(textScore * 1000) / 1000,
+      positionScore: Math.round(positionScore * 1000) / 1000,
+      ratioDistance: Math.round(ratioDistance * 1000) / 1000,
+      query: queryTokens.join(" "),
+      matchedTokens,
+      transcriptWindow: normalizeToolText(window.map((word) => word.text).join(" ")).slice(0, 700),
+    };
+    if (!best || candidate.score > best.score || (candidate.score === best.score && candidate.ratioDistance < best.ratioDistance)) best = candidate;
+  }
+
+  return best;
+}
+
+export function findFulcrumCandidates(
+  ctx: Pick<ChapterCurationContext, "epubEntries" | "durationMs" | "transcript">,
+  span: ChapterCurationSpan,
+  input: FindFulcrumCandidatesInput = {}
+): FindFulcrumCandidatesResult {
+  const spanEpubStart = entryStartRatio(ctx.epubEntries, span.epubStartIndex);
+  const spanEpubEnd = inferEntryEndRatio(ctx.epubEntries, span.epubEndIndex);
+  const midpointEpubRatio = spanEpubStart + (spanEpubEnd - spanEpubStart) / 2;
+  const radiusSeconds = Math.max(600, Math.min(7_200, input.searchRadiusSeconds ?? spanDurationSeconds(span) / 4));
+  const limitPerNode = Math.max(1, Math.min(5, input.limitPerNode ?? 3));
+  const candidates: FulcrumCandidate[] = [];
+
+  for (const { entry, epubIndex } of selectFulcrumCandidateEntries(ctx, span, input)) {
+    const estimate = estimateTimestampFromEpubPosition(ctx, { epubNodeId: entry.id });
+    if (!estimate) continue;
+    const queryTokens = candidateQueryTokens(entry);
+    const words = candidateTranscriptWords(
+      ctx,
+      Math.max(span.startTime, estimate.estimatedStartTime - radiusSeconds),
+      Math.min(span.endTime, estimate.estimatedStartTime + radiusSeconds)
+    );
+    const best = scoreFulcrumCandidateWindow(ctx, span, entry, epubIndex, queryTokens, words);
+    if (!best) continue;
+    const alternates = transcriptWordEvidenceMatches(
+      ctx,
+      queryTokens,
+      {
+        startTime: Math.max(span.startTime, estimate.estimatedStartTime - radiusSeconds),
+        endTime: Math.min(span.endTime, estimate.estimatedStartTime + radiusSeconds),
+      },
+      limitPerNode
+    ).map((match) => {
+      const audioLocalRatio = localRatio(match.startTime, span.startTime, span.endTime);
+      const expectedLocalRatio = localRatio(entryStartRatio(ctx.epubEntries, epubIndex), spanEpubStart, spanEpubEnd);
+      const ratioDistance = Math.abs(audioLocalRatio - expectedLocalRatio);
+      const positionScore = Math.max(0, 1 - ratioDistance / 0.12);
+      const textScore = match.tokenOverlap.length / Math.max(1, queryTokens.length);
+      return {
+        epubNodeId: entry.id,
+        epubIndex,
+        title: entry.title,
+        expectedStartTime: estimate.estimatedStartTime,
+        startTime: match.startTime,
+        endTime: match.endTime,
+        score: Math.round((textScore * 20 + positionScore * 8 - ratioDistance * 10) * 1000) / 1000,
+        textScore: Math.round(textScore * 1000) / 1000,
+        positionScore: Math.round(positionScore * 1000) / 1000,
+        ratioDistance: Math.round(ratioDistance * 1000) / 1000,
+        query: queryTokens.join(" "),
+        matchedTokens: match.tokenOverlap,
+        transcriptWindow: match.afterText,
+      } satisfies FulcrumCandidate;
+    });
+    candidates.push(best, ...alternates);
+  }
+
+  const deduped: FulcrumCandidate[] = [];
+  for (const candidate of candidates.sort((a, b) => b.score - a.score || a.ratioDistance - b.ratioDistance || a.startTime - b.startTime)) {
+    if (deduped.some((existing) => existing.epubNodeId === candidate.epubNodeId && Math.abs(existing.startTime - candidate.startTime) < 30)) continue;
+    deduped.push(candidate);
+  }
+  return {
+    spanPath: span.path,
+    midpointEpubRatio: Math.round(midpointEpubRatio * 1000) / 1000,
+    candidates: deduped.slice(0, 20),
+  };
+}
+
 export async function validateFulcrumSplit(
   ctx: ChapterCurationContext,
   span: ChapterCurationSpan,
@@ -1101,7 +1315,7 @@ export async function validateFulcrumSplit(
     errors.push("Fulcrum startTime is too close to a span edge.");
   }
 
-  const firstWords = entry ? summarizeFirstWords(entry, 28) : "";
+  const firstWords = entry ? summarizeFirstWords(entry, 72) : "";
   const titleTokens = new Set(textTokens(entry?.title ?? split.title));
   const expectedTokens = distinctiveEvidenceTokens(`${entry?.title ?? split.title} ${firstWords}`);
   const proseTokens = distinctiveEvidenceTokens(firstWords).filter((token) => !titleTokens.has(token));
@@ -1135,12 +1349,7 @@ export async function validateFulcrumSplit(
     errors.push("Fulcrum evidence only matches title/metadata; at least one EPUB prose token must match.");
   }
   if (nearestCandidateDelta !== null && nearestCandidateDelta > 90) {
-    const nearest = candidateMatches.reduce((best, match) =>
-      Math.abs(match.startTime - split.startTime) < Math.abs(best.startTime - split.startTime) ? match : best
-    );
-    errors.push(
-      `Submitted fulcrum is ${Math.round(nearestCandidateDelta)}s from the nearest transcript evidence candidate; use the candidate near ${Math.round(nearest.startTime)}s or find stronger local evidence.`
-    );
+    errors.push(`Submitted fulcrum is ${Math.round(nearestCandidateDelta)}s from the nearest transcript evidence candidate; gather stronger candidate evidence before resubmitting.`);
   }
 
   if (errors.length > 0) {
@@ -1393,6 +1602,12 @@ const fuzzySearchTranscriptSchema = z.object({
 });
 const findEpubChapterEvidenceSchema = z.object({
   nodeIds: z.array(z.string()).max(80).optional(),
+  searchRadiusSeconds: z.number().positive().max(7_200).optional(),
+  limitPerNode: z.number().int().positive().max(5).optional(),
+});
+const findFulcrumCandidatesSchema = z.object({
+  nodeIds: z.array(z.string()).max(20).optional(),
+  candidateNodeCount: z.number().int().positive().max(15).optional(),
   searchRadiusSeconds: z.number().positive().max(7_200).optional(),
   limitPerNode: z.number().int().positive().max(5).optional(),
 });
@@ -1654,9 +1869,10 @@ function createFulcrumJudgeAgent(ctx: ChapterCurationContext): Agent {
     instructions: [
       "You are a strict reviewer for audiobook chapter split points.",
       "Your job is to decide whether the proposed fulcrum timestamp is actually the start of the proposed EPUB node.",
-      "Reject a split when the transcript window is only generic overlap, when a listed candidate is clearly better, or when the window starts inside the previous chapter.",
+      "Reject a split when the transcript window is only generic overlap or when the window starts inside the previous chapter.",
       "Accept only when distinctive title/prose evidence appears at or immediately after the proposed timestamp.",
       "Do not invent a full chapter plan. Judge only this proposed split.",
+      "Do not recommend alternate timestamps or EPUB nodes. If the split is wrong, reject it and explain why.",
       "You must call submitFulcrumJudgment.",
     ].join("\n"),
     tools: [
@@ -1676,7 +1892,8 @@ function fulcrumJudgePrompt(ctx: ChapterCurationContext, span: ChapterCurationSp
   return [
     `Judge this proposed audiobook chapter fulcrum for "${ctx.book.title}" by ${ctx.book.author}.`,
     "Return accepted=false if this timestamp is not clearly the start of the EPUB node.",
-    "Prefer rejecting over accepting a suspicious split; recursion can try another fulcrum.",
+    "Prefer rejecting over accepting a suspicious split; the curator owns the next search.",
+    "Do not suggest alternate timestamps or nodes.",
     "",
     JSON.stringify(
       {
@@ -1765,12 +1982,30 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
   let evidenceCallsSinceRejectedLeaf = 0;
   const allowLeaf = recursiveSpanAllowsLeaf(span, forceLeaf);
   const rejectedFulcrums = new Set<string>();
+  const recentFulcrumCandidates = new Map<string, FulcrumCandidate>();
   let rejectedFulcrumRequiresEvidence = false;
   let evidenceCallsSinceRejectedFulcrum = 0;
 
   function markEvidenceToolUsed(): void {
     if (rejectedLeafRequiresEvidence) evidenceCallsSinceRejectedLeaf++;
     if (rejectedFulcrumRequiresEvidence) evidenceCallsSinceRejectedFulcrum++;
+  }
+
+  function rememberFulcrumCandidates(result: FindFulcrumCandidatesResult): void {
+    recentFulcrumCandidates.clear();
+    for (const candidate of result.candidates) {
+      recentFulcrumCandidates.set(`${candidate.epubNodeId}:${Math.round(candidate.startTime)}`, candidate);
+    }
+  }
+
+  function matchingRecentFulcrumCandidate(input: SubmitFulcrumSplitInput): FulcrumCandidate | null {
+    let best: FulcrumCandidate | null = null;
+    for (const candidate of recentFulcrumCandidates.values()) {
+      if (candidate.epubNodeId !== input.epubNodeId) continue;
+      if (Math.abs(candidate.startTime - input.startTime) > 45) continue;
+      if (!best || Math.abs(candidate.startTime - input.startTime) < Math.abs(best.startTime - input.startTime)) best = candidate;
+    }
+    return best;
   }
 
   function rejectedLeafWithoutEvidence(): SubmitLeafChapterPlanResult {
@@ -1792,7 +2027,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
       warnings: [],
       audit: null,
       instruction:
-        "Do more research before proposing another fulcrum. Call findEpubChapterEvidence for multiple candidate EPUB nodes, then inspect the best candidate with getTranscriptWindow or rgSearchTranscript.",
+        "Do more research before proposing another fulcrum. Call findFulcrumCandidates, then inspect the best candidate with getTranscriptWindow or rgSearchTranscript.",
     };
   }
 
@@ -1811,8 +2046,9 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
       allowLeaf
         ? "Use submitLeafChapterPlan when the span is small enough or already well evidenced."
         : "This span is too broad for a leaf plan. The submitLeafChapterPlan tool is intentionally unavailable; you must find a fulcrum split.",
-      "Do not submit guessed timestamps. Use transcript evidence tools first.",
-      "After any rejected fulcrum, gather fresh evidence with findEpubChapterEvidence, rgSearchTranscript, fuzzySearchTranscript, or getTranscriptWindow before trying another fulcrum.",
+      "For broad spans, call findFulcrumCandidates before submitFulcrumSplit. Pick from its ranked candidates, then inspect that candidate with getTranscriptWindow or rgSearchTranscript.",
+      "Do not submit guessed timestamps. Use deterministic candidate evidence and transcript evidence tools first.",
+      "After any rejected fulcrum, gather fresh evidence with findFulcrumCandidates, findEpubChapterEvidence, rgSearchTranscript, fuzzySearchTranscript, or getTranscriptWindow before trying another fulcrum.",
       "All tool times and submitted startTime values are seconds, not milliseconds.",
       forceLeaf ? "This span is forced leaf mode. You must call submitLeafChapterPlan, not submitFulcrumSplit." : "",
     ]
@@ -1843,6 +2079,21 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
             ...result,
             chapters: result.chapters.filter((chapter) => chapter.endTime >= span.startTime && chapter.startTime <= span.endTime),
           };
+        },
+      }),
+      tool({
+        name: "findFulcrumCandidates",
+        description:
+          "Deterministically find ranked fulcrum split candidates for this span. It chooses middle-ish EPUB nodes by word-position, searches opening prose in the transcript, and ranks by text match plus EPUB/audio position proximity.",
+        parameters: findFulcrumCandidatesSchema,
+        strict: true,
+        execute: (input) => {
+          markEvidenceToolUsed();
+          const allowedIds = new Set(spanEpubEntries(ctx, span).map((entry) => entry.id));
+          const nodeIds = input.nodeIds?.filter((id) => allowedIds.has(id));
+          const result = findFulcrumCandidates(ctx, span, { ...input, nodeIds });
+          rememberFulcrumCandidates(result);
+          return result;
         },
       }),
       tool({
@@ -1900,6 +2151,16 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         strict: true,
         execute: async (input) => {
           if (rejectedFulcrumRequiresEvidence && evidenceCallsSinceRejectedFulcrum === 0) return rejectedFulcrumWithoutEvidence();
+          if (!allowLeaf && !matchingRecentFulcrumCandidate(input)) {
+            return {
+              accepted: false,
+              kind: "split",
+              errors: ["Broad-span fulcrums must come from a recent findFulcrumCandidates result for the same EPUB node and timestamp."],
+              warnings: [],
+              audit: null,
+              instruction: "Call findFulcrumCandidates for this span, inspect one of its ranked candidates, then submit that candidate as the fulcrum.",
+            } satisfies SubmitFulcrumSplitResult;
+          }
           if (forceLeaf || (allowLeaf && invalidFulcrums >= 2)) {
             return {
               accepted: false,
@@ -1946,10 +2207,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
                 ],
                 warnings: [],
                 audit: result.audit,
-                instruction:
-                  judgment.suggestedStartTime !== null
-                    ? `Pick a stronger fulcrum. The judge suggested checking ${judgment.suggestedEpubNodeId ?? result.epubNodeId} near ${Math.round(judgment.suggestedStartTime)}s.`
-                    : "Pick a different fulcrum with stronger local transcript evidence.",
+                instruction: "Pick a different fulcrum from deterministic candidate evidence.",
               } satisfies SubmitFulcrumSplitResult;
             }
           }
