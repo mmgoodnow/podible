@@ -317,6 +317,47 @@ describe("chapter curation tools", () => {
     });
     expect(result.candidates[0]?.startTime).toBeGreaterThanOrEqual(205);
     expect(result.candidates[0]?.ratioDistance).toBeLessThan(0.05);
+    expect(result.candidates[0]?.boundaryScore).toBeGreaterThanOrEqual(0.35);
+    expect(result.candidates[0]?.preStartTokenOverlap).toEqual([]);
+  });
+
+  test("findFulcrumCandidates rejects windows that continue opener tokens from pre-roll", () => {
+    const entries = Array.from({ length: 5 }, (_, index) =>
+      epubEntry({
+        id: `chapter-${index + 1}`,
+        title: `Chapter ${index + 1}`,
+        href: `chapter${index + 1}.xhtml`,
+        wordCount: 10,
+        cumulativeWords: (index + 1) * 10,
+        cumulativeRatio: (index + 1) / 5,
+        words:
+          index === 2
+            ? [word("Helldiver"), word("opened"), word("beneath"), word("Mars"), word("with"), word("furnace"), word("smoke")]
+            : [word("Ordinary"), word("chapter"), word(String(index + 1))],
+      })
+    );
+    const context = ctx({
+      durationMs: 500_000,
+      manifestation: manifestation({ duration_ms: 500_000 }),
+      epubEntries: entries,
+      transcript: {
+        version: "test",
+        text: "Helldiver opened beneath Mars with furnace smoke. opened beneath Mars with furnace smoke and iron rain",
+        words: [
+          ...transcriptWith("Helldiver opened beneath Mars with furnace smoke", 198_000, 203_000).words,
+          ...transcriptWith("opened beneath Mars with furnace smoke and iron rain", 205_000, 212_000).words,
+        ],
+        utterances: [],
+      },
+    });
+
+    const result = findFulcrumCandidates(context, createRootCurationSpan(context), {
+      nodeIds: ["chapter-3"],
+      searchRadiusSeconds: 120,
+    });
+
+    expect(result.candidates[0]?.startTime).toBeLessThan(205);
+    expect(result.candidates.every((candidate) => candidate.startTime !== 205)).toBe(true);
   });
 
   test("estimateTimestampFromEpubPosition maps EPUB word position onto duration", () => {

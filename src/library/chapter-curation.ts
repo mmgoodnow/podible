@@ -759,8 +759,12 @@ export type FulcrumCandidate = {
   endTime: number;
   score: number;
   textScore: number;
+  boundaryScore: number;
   positionScore: number;
   ratioDistance: number;
+  openerTokenOffset: number;
+  preStartGapSeconds: number | null;
+  preStartTokenOverlap: string[];
   query: string;
   matchedTokens: string[];
   transcriptWindow: string;
@@ -1131,6 +1135,25 @@ function candidateTranscriptWords(
     .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
 }
 
+function candidatePreStartTokens(ctx: Pick<ChapterCurationContext, "transcript">, startTime: number, seconds = 20): string[] {
+  const startMs = secondsToMs(startTime);
+  const endMs = Math.max(0, startMs - 1);
+  const windowStartMs = Math.max(0, startMs - secondsToMs(seconds));
+  return [...ctx.transcript.words]
+    .filter((word) => word.endMs >= windowStartMs && word.startMs <= endMs)
+    .map((word) => word.token || textTokens(word.text)[0] || "")
+    .filter(Boolean);
+}
+
+function candidatePreStartGapSeconds(ctx: Pick<ChapterCurationContext, "transcript">, startTime: number, seconds = 20): number | null {
+  const startMs = secondsToMs(startTime);
+  const windowStartMs = Math.max(0, startMs - secondsToMs(seconds));
+  const previous = ctx.transcript.words
+    .filter((word) => word.endMs >= windowStartMs && word.endMs <= startMs)
+    .sort((a, b) => b.endMs - a.endMs)[0];
+  return previous ? msToSeconds(Math.max(0, startMs - previous.endMs)) : null;
+}
+
 function selectFulcrumCandidateEntries(
   ctx: Pick<ChapterCurationContext, "epubEntries">,
   span: ChapterCurationSpan,
@@ -1167,6 +1190,7 @@ function scoreFulcrumCandidateWindow(
   const spanEpubEnd = inferEntryEndRatio(ctx.epubEntries, span.epubEndIndex);
   const expectedLocalRatio = localRatio(entryStartRatio(ctx.epubEntries, epubIndex), spanEpubStart, spanEpubEnd);
   const windowSize = Math.min(80, Math.max(18, queryTokens.length * 3));
+  const anchorTokens = queryTokens.slice(0, Math.min(6, queryTokens.length));
   let best: FulcrumCandidate | null = null;
 
   for (let index = 0; index < words.length; index++) {
@@ -1175,6 +1199,11 @@ function scoreFulcrumCandidateWindow(
     const windowTokens = new Set(window.map((word) => word.token));
     const matchedTokens = queryTokens.filter((token) => windowTokens.has(token));
     if (matchedTokens.length < Math.min(3, queryTokens.length)) continue;
+    const openerTokenOffset = window.findIndex((word) => anchorTokens.includes(word.token));
+    if (openerTokenOffset < 0 || openerTokenOffset > 4) continue;
+    const anchorWindowTokens = new Set(window.slice(0, Math.min(12, window.length)).map((word) => word.token));
+    const anchorMatches = anchorTokens.filter((token) => anchorWindowTokens.has(token));
+    if (anchorMatches.length < Math.min(3, anchorTokens.length)) continue;
     let orderedMatches = 0;
     let searchFrom = 0;
     for (const token of queryTokens) {
@@ -1188,7 +1217,14 @@ function scoreFulcrumCandidateWindow(
     const ratioDistance = Math.abs(audioLocalRatio - expectedLocalRatio);
     const positionScore = Math.max(0, 1 - ratioDistance / 0.12);
     const textScore = matchedTokens.length / queryTokens.length + orderedMatches / queryTokens.length;
-    const score = textScore * 20 + positionScore * 8 - ratioDistance * 10;
+    const preStartTokens = new Set(candidatePreStartTokens(ctx, startTime));
+    const preStartTokenOverlap = queryTokens.filter((token) => preStartTokens.has(token));
+    const preStartGapSeconds = candidatePreStartGapSeconds(ctx, startTime);
+    const continuousPreRollPenalty = preStartGapSeconds !== null && preStartGapSeconds < 1.5 ? 0.35 : preStartGapSeconds !== null && preStartGapSeconds < 3 ? 0.2 : 0;
+    const preStartPenalty = Math.min(1, preStartTokenOverlap.length / Math.max(1, anchorTokens.length));
+    const boundaryScore = Math.max(0, anchorMatches.length / anchorTokens.length - preStartPenalty - continuousPreRollPenalty);
+    if (boundaryScore < 0.35) continue;
+    const score = textScore * 12 + boundaryScore * 18 + positionScore * 8 - ratioDistance * 10;
     const candidate: FulcrumCandidate = {
       epubNodeId: entry.id,
       epubIndex,
@@ -1198,8 +1234,12 @@ function scoreFulcrumCandidateWindow(
       endTime: msToSeconds(window.at(-1)!.endMs),
       score: Math.round(score * 1000) / 1000,
       textScore: Math.round(textScore * 1000) / 1000,
+      boundaryScore: Math.round(boundaryScore * 1000) / 1000,
       positionScore: Math.round(positionScore * 1000) / 1000,
       ratioDistance: Math.round(ratioDistance * 1000) / 1000,
+      openerTokenOffset,
+      preStartGapSeconds: preStartGapSeconds === null ? null : Math.round(preStartGapSeconds * 1000) / 1000,
+      preStartTokenOverlap,
       query: queryTokens.join(" "),
       matchedTokens,
       transcriptWindow: normalizeToolText(window.map((word) => word.text).join(" ")).slice(0, 700),
@@ -1247,6 +1287,17 @@ export function findFulcrumCandidates(
       const ratioDistance = Math.abs(audioLocalRatio - expectedLocalRatio);
       const positionScore = Math.max(0, 1 - ratioDistance / 0.12);
       const textScore = match.tokenOverlap.length / Math.max(1, queryTokens.length);
+      const preStartTokens = new Set(candidatePreStartTokens(ctx, match.startTime));
+      const anchorTokens = queryTokens.slice(0, Math.min(6, queryTokens.length));
+      const preStartTokenOverlap = queryTokens.filter((token) => preStartTokens.has(token));
+      const preStartGapSeconds = candidatePreStartGapSeconds(ctx, match.startTime);
+      const continuousPreRollPenalty = preStartGapSeconds !== null && preStartGapSeconds < 1.5 ? 0.35 : preStartGapSeconds !== null && preStartGapSeconds < 3 ? 0.2 : 0;
+      const boundaryScore = Math.max(
+        0,
+        match.tokenOverlap.filter((token) => anchorTokens.includes(token)).length / Math.max(1, anchorTokens.length) -
+          Math.min(1, preStartTokenOverlap.length / Math.max(1, anchorTokens.length)) -
+          continuousPreRollPenalty
+      );
       return {
         epubNodeId: entry.id,
         epubIndex,
@@ -1254,15 +1305,19 @@ export function findFulcrumCandidates(
         expectedStartTime: estimate.estimatedStartTime,
         startTime: match.startTime,
         endTime: match.endTime,
-        score: Math.round((textScore * 20 + positionScore * 8 - ratioDistance * 10) * 1000) / 1000,
+        score: Math.round((textScore * 12 + boundaryScore * 18 + positionScore * 8 - ratioDistance * 10) * 1000) / 1000,
         textScore: Math.round(textScore * 1000) / 1000,
+        boundaryScore: Math.round(boundaryScore * 1000) / 1000,
         positionScore: Math.round(positionScore * 1000) / 1000,
         ratioDistance: Math.round(ratioDistance * 1000) / 1000,
+        openerTokenOffset: 0,
+        preStartGapSeconds: preStartGapSeconds === null ? null : Math.round(preStartGapSeconds * 1000) / 1000,
+        preStartTokenOverlap,
         query: queryTokens.join(" "),
         matchedTokens: match.tokenOverlap,
         transcriptWindow: match.afterText,
       } satisfies FulcrumCandidate;
-    });
+    }).filter((candidate) => candidate.boundaryScore >= 0.35);
     candidates.push(best, ...alternates);
   }
 
@@ -1831,6 +1886,16 @@ function spanScope(span: ChapterCurationSpan, inputScope?: TranscriptSearchScope
 function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, forceLeaf: boolean): string {
   const entries = spanEpubEntries(ctx, span);
   const allowLeaf = recursiveSpanAllowsLeaf(span, forceLeaf);
+  const fulcrumWorkflow = forceLeaf
+    ? []
+    : [
+        "Fulcrum workflow for broad spans:",
+        "1. Call getEpubStructure and choose an internal EPUB node near the span midpoint by word position, not near either edge.",
+        "2. Use that node's firstWords as source text. Prefer 6-12 distinctive opener prose words; ignore generic chapter numbers, titles, names alone, and repeated formulaic text.",
+        "3. Estimate the likely transcript neighborhood from the EPUB node's word-position ratio, then search near that neighborhood with rgSearchTranscript. If exact search misses, try shorter exact phrases or fuzzySearchTranscript.",
+        "4. Inspect the best match with getTranscriptWindow. The proposed start must look like the opener boundary: the distinctive opener appears immediately after the start, and the preceding transcript does not already contain the same opener content.",
+        "5. Submit submitFulcrumSplit only after the transcript search and window inspection support that exact timestamp. If rejected, pick a different EPUB node or phrase and repeat the search; do not resubmit the same node/timestamp.",
+      ];
   return [
     `Curate chapter markers for span ${span.path} of "${ctx.book.title}" by ${ctx.book.author}.`,
     `manifestationId: ${ctx.manifestation.id}`,
@@ -1847,6 +1912,7 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, forc
     "For a fulcrum, pick a high-confidence internal EPUB node boundary with transcript prose evidence near the timestamp.",
     allowLeaf ? "For a leaf, submit only chapter starts inside this span and include epubNodeId for every EPUB-backed chapter." : "",
     "Prefer submitFulcrumSplit for spans with more than 8 EPUB nodes or more than 2 hours duration unless the whole span is already strongly evidenced.",
+    ...fulcrumWorkflow,
     "All times are seconds.",
   ].filter(Boolean).join("\n");
 }
@@ -1982,30 +2048,18 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
   let evidenceCallsSinceRejectedLeaf = 0;
   const allowLeaf = recursiveSpanAllowsLeaf(span, forceLeaf);
   const rejectedFulcrums = new Set<string>();
-  const recentFulcrumCandidates = new Map<string, FulcrumCandidate>();
   let rejectedFulcrumRequiresEvidence = false;
   let evidenceCallsSinceRejectedFulcrum = 0;
+  let transcriptSearchesSinceFulcrumSubmit = 0;
 
   function markEvidenceToolUsed(): void {
     if (rejectedLeafRequiresEvidence) evidenceCallsSinceRejectedLeaf++;
     if (rejectedFulcrumRequiresEvidence) evidenceCallsSinceRejectedFulcrum++;
   }
 
-  function rememberFulcrumCandidates(result: FindFulcrumCandidatesResult): void {
-    recentFulcrumCandidates.clear();
-    for (const candidate of result.candidates) {
-      recentFulcrumCandidates.set(`${candidate.epubNodeId}:${Math.round(candidate.startTime)}`, candidate);
-    }
-  }
-
-  function matchingRecentFulcrumCandidate(input: SubmitFulcrumSplitInput): FulcrumCandidate | null {
-    let best: FulcrumCandidate | null = null;
-    for (const candidate of recentFulcrumCandidates.values()) {
-      if (candidate.epubNodeId !== input.epubNodeId) continue;
-      if (Math.abs(candidate.startTime - input.startTime) > 45) continue;
-      if (!best || Math.abs(candidate.startTime - input.startTime) < Math.abs(best.startTime - input.startTime)) best = candidate;
-    }
-    return best;
+  function markTranscriptSearchToolUsed(): void {
+    markEvidenceToolUsed();
+    transcriptSearchesSinceFulcrumSubmit++;
   }
 
   function rejectedLeafWithoutEvidence(): SubmitLeafChapterPlanResult {
@@ -2027,7 +2081,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
       warnings: [],
       audit: null,
       instruction:
-        "Do more research before proposing another fulcrum. Call findFulcrumCandidates, then inspect the best candidate with getTranscriptWindow or rgSearchTranscript.",
+        "Do more research before proposing another fulcrum. Use rgSearchTranscript or fuzzySearchTranscript on distinctive EPUB opener prose, then inspect the match with getTranscriptWindow.",
     };
   }
 
@@ -2046,9 +2100,14 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
       allowLeaf
         ? "Use submitLeafChapterPlan when the span is small enough or already well evidenced."
         : "This span is too broad for a leaf plan. The submitLeafChapterPlan tool is intentionally unavailable; you must find a fulcrum split.",
-      "For broad spans, call findFulcrumCandidates before submitFulcrumSplit. Pick from its ranked candidates, then inspect that candidate with getTranscriptWindow or rgSearchTranscript.",
-      "Do not submit guessed timestamps. Use deterministic candidate evidence and transcript evidence tools first.",
-      "After any rejected fulcrum, gather fresh evidence with findFulcrumCandidates, findEpubChapterEvidence, rgSearchTranscript, fuzzySearchTranscript, or getTranscriptWindow before trying another fulcrum.",
+      "Concrete fulcrum workflow for broad spans:",
+      "1. Call getEpubStructure, compare node word-position ratios inside this span, and choose an internal EPUB node roughly near the span midpoint. Avoid the first and last node unless no other internal boundary exists.",
+      "2. Take opener prose from that node's firstWords. Build a search phrase from 6-12 distinctive words; drop generic chapter labels, standalone names, punctuation-only differences, and repeated boilerplate.",
+      "3. Estimate the likely timestamp neighborhood from the EPUB node position within the current span. Search that neighborhood with rgSearchTranscript first. If there is no strong exact hit, try shorter distinctive exact phrases, then fuzzySearchTranscript.",
+      "4. Inspect the best candidate with getTranscriptWindow. Check both sides of the timestamp: the opener prose should begin immediately after the proposed start, and the text just before it should not already be continuing the same opener.",
+      "5. Only then call submitFulcrumSplit. If the judge rejects it, do not use the judge as the search engine and do not resubmit the same node/timestamp; choose a different EPUB node or phrase and run a fresh transcript search.",
+      "Do not submit guessed timestamps or timestamps copied from estimated EPUB position. A broad-span fulcrum must be backed by a transcript search result from rgSearchTranscript or fuzzySearchTranscript.",
+      "After any rejected fulcrum, run a fresh rgSearchTranscript or fuzzySearchTranscript query before trying another fulcrum.",
       "All tool times and submitted startTime values are seconds, not milliseconds.",
       forceLeaf ? "This span is forced leaf mode. You must call submitLeafChapterPlan, not submitFulcrumSplit." : "",
     ]
@@ -2082,21 +2141,6 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         },
       }),
       tool({
-        name: "findFulcrumCandidates",
-        description:
-          "Deterministically find ranked fulcrum split candidates for this span. It chooses middle-ish EPUB nodes by word-position, searches opening prose in the transcript, and ranks by text match plus EPUB/audio position proximity.",
-        parameters: findFulcrumCandidatesSchema,
-        strict: true,
-        execute: (input) => {
-          markEvidenceToolUsed();
-          const allowedIds = new Set(spanEpubEntries(ctx, span).map((entry) => entry.id));
-          const nodeIds = input.nodeIds?.filter((id) => allowedIds.has(id));
-          const result = findFulcrumCandidates(ctx, span, { ...input, nodeIds });
-          rememberFulcrumCandidates(result);
-          return result;
-        },
-      }),
-      tool({
         name: "findEpubChapterEvidence",
         description: "Batch fuzzy-search transcript evidence for EPUB chapter nodes in this span. Times are seconds.",
         parameters: findEpubChapterEvidenceSchema,
@@ -2120,7 +2164,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         parameters: rgSearchTranscriptSchema,
         strict: true,
         execute: (input) => {
-          markEvidenceToolUsed();
+          markTranscriptSearchToolUsed();
           return rgSearchTranscript(ctx, { ...input, scope: spanScope(span, input.scope) });
         },
       }),
@@ -2130,7 +2174,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         parameters: fuzzySearchTranscriptSchema,
         strict: true,
         execute: (input) => {
-          markEvidenceToolUsed();
+          markTranscriptSearchToolUsed();
           return fuzzySearchTranscript(ctx, { ...input, scope: spanScope(span, input.scope) });
         },
       }),
@@ -2151,16 +2195,17 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         strict: true,
         execute: async (input) => {
           if (rejectedFulcrumRequiresEvidence && evidenceCallsSinceRejectedFulcrum === 0) return rejectedFulcrumWithoutEvidence();
-          if (!allowLeaf && !matchingRecentFulcrumCandidate(input)) {
+          if (!allowLeaf && transcriptSearchesSinceFulcrumSubmit === 0) {
             return {
               accepted: false,
               kind: "split",
-              errors: ["Broad-span fulcrums must come from a recent findFulcrumCandidates result for the same EPUB node and timestamp."],
+              errors: ["Broad-span fulcrums require a recent rgSearchTranscript or fuzzySearchTranscript result before submission."],
               warnings: [],
               audit: null,
-              instruction: "Call findFulcrumCandidates for this span, inspect one of its ranked candidates, then submit that candidate as the fulcrum.",
+              instruction: "Search distinctive firstWords from the target EPUB node with rgSearchTranscript or fuzzySearchTranscript, inspect the result with getTranscriptWindow, then submit the evidenced timestamp.",
             } satisfies SubmitFulcrumSplitResult;
           }
+          transcriptSearchesSinceFulcrumSubmit = 0;
           if (forceLeaf || (allowLeaf && invalidFulcrums >= 2)) {
             return {
               accepted: false,
@@ -2207,7 +2252,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
                 ],
                 warnings: [],
                 audit: result.audit,
-                instruction: "Pick a different fulcrum from deterministic candidate evidence.",
+                instruction: "Pick a different fulcrum from fresh rgSearchTranscript or fuzzySearchTranscript evidence.",
               } satisfies SubmitFulcrumSplitResult;
             }
           }
