@@ -253,6 +253,35 @@ describe("chapter curation tools", () => {
     expect(result.matches).toHaveLength(0);
   });
 
+  test("rgSearchTranscript can match fixed prose across utterance boundaries", async () => {
+    const context = ctx({
+      transcript: {
+        version: "test",
+        text: "I vomit as I wake. A second fist strikes my full stomach.",
+        words: [
+          ...transcriptWith("I vomit as I wake", 10_000, 12_000).words,
+          ...transcriptWith("A second fist strikes my full stomach", 12_500, 15_000).words,
+        ],
+        utterances: [
+          { startMs: 10_000, endMs: 12_000, text: "I vomit as I wake." },
+          { startMs: 12_500, endMs: 15_000, text: "A second fist strikes my full stomach." },
+        ],
+      },
+    });
+
+    const result = await rgSearchTranscript(context, {
+      pattern: "I vomit as I wake A second fist strikes my full stomach",
+      regex: false,
+      limit: 1,
+    });
+
+    expect(result.matches).toHaveLength(1);
+    expect(result.matches[0]).toMatchObject({
+      startTime: 10,
+      text: "I vomit as I wake A second fist strikes my full stomach",
+    });
+  });
+
   test("fuzzySearchTranscript finds close utterance matches", async () => {
     const result = await fuzzySearchTranscript(ctx(), {
       query: "once upon tim",
@@ -282,6 +311,52 @@ describe("chapter curation tools", () => {
       quality: "medium",
     });
     expect(result.nodes[0]?.matches[0]?.tokenOverlap).toEqual(["first", "real"]);
+  });
+
+  test("findEpubChapterEvidence reports the first opener word instead of pre-boundary context", async () => {
+    const context = ctx({
+      epubEntries: [
+        epubEntry({
+          id: "chapter-19",
+          title: "Chapter 19: The Passage",
+          words: [
+            word("The"),
+            word("Passage"),
+            word("I"),
+            word("vomit"),
+            word("as"),
+            word("I"),
+            word("wake"),
+            word("A"),
+            word("second"),
+            word("fist"),
+          ],
+        }),
+      ],
+      transcript: {
+        version: "test",
+        text: "The locket closes. I vomit as I wake. A second fist strikes.",
+        words: [
+          ...transcriptWith("The locket closes", 8_000, 9_000).words,
+          ...transcriptWith("I vomit as I wake A second fist strikes", 10_000, 13_000).words,
+        ],
+        utterances: [
+          { startMs: 8_000, endMs: 9_000, text: "The locket closes." },
+          { startMs: 10_000, endMs: 13_000, text: "I vomit as I wake. A second fist strikes." },
+        ],
+      },
+    });
+
+    const result = await findEpubChapterEvidence(context, {
+      nodeIds: ["chapter-19"],
+      searchRadiusSeconds: 120,
+      limitPerNode: 1,
+    });
+
+    expect(result.nodes[0]?.matches[0]).toMatchObject({
+      startTime: 10.25,
+    });
+    expect(result.nodes[0]?.matches[0]?.text.startsWith("vomit")).toBe(true);
   });
 
   test("findFulcrumCandidates searches middle EPUB opener prose and ranks by position", () => {

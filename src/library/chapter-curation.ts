@@ -80,6 +80,10 @@ export type TranscriptSearchMatch = {
   after: TranscriptWindow;
 };
 
+function transcriptWords(ctx: Pick<ChapterCurationContext, "transcript">): Array<{ text: string; token: string; startMs: number; endMs: number }> {
+  return [...ctx.transcript.words].sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+}
+
 export function normalizeToolText(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
@@ -374,10 +378,60 @@ export async function rgSearchTranscript(
         after: getTranscriptWindowFromContext(ctx, utterance.endMs, secondsToMs(input.afterSeconds ?? 10)),
       });
     }
-    return { matches };
+    if (!input.regex) {
+      const wordMatches = fixedPhraseWordMatches(ctx, pattern, input.scope, Math.max(1, Math.min(100, input.limit ?? 20)));
+      for (const match of wordMatches) {
+        if (matches.length >= Math.max(1, Math.min(100, input.limit ?? 20))) break;
+        if (matches.some((existing) => Math.abs(existing.startTime - match.startTime) < 1)) continue;
+        matches.push({
+          ...match,
+          before: getTranscriptWindowFromContext(ctx, secondsToMs(match.startTime), secondsToMs(input.beforeSeconds ?? 0)),
+          after: getTranscriptWindowFromContext(ctx, secondsToMs(match.endTime), secondsToMs(input.afterSeconds ?? 10)),
+        });
+      }
+    }
+    return { matches: matches.sort((a, b) => a.startTime - b.startTime).slice(0, Math.max(1, Math.min(100, input.limit ?? 20))) };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+function fixedPhraseWordMatches(
+  ctx: Pick<ChapterCurationContext, "transcript">,
+  pattern: string,
+  scope: TranscriptSearchScope | undefined,
+  limit: number
+): Array<Omit<TranscriptSearchMatch, "before" | "after">> {
+  const queryTokens = normalizedSearchTokens(pattern);
+  if (queryTokens.length === 0) return [];
+  const startMs = secondsToMs(scope?.startTime ?? 0);
+  const endMs = secondsToMs(scope?.endTime ?? Number.POSITIVE_INFINITY);
+  const words = transcriptWords(ctx).filter((word) => word.endMs >= startMs && word.startMs <= endMs);
+  const matches: Array<Omit<TranscriptSearchMatch, "before" | "after">> = [];
+
+  for (let index = 0; index < words.length && matches.length < limit; index++) {
+    const window = words.slice(index, index + queryTokens.length);
+    if (window.length < queryTokens.length) break;
+    const ok = queryTokens.every((token, queryIndex) => window[queryIndex]?.token === token);
+    if (!ok) continue;
+    matches.push({
+      index,
+      startTime: msToSeconds(window[0]!.startMs),
+      endTime: msToSeconds(window.at(-1)!.endMs),
+      text: normalizeToolText(window.map((word) => word.text).join(" ")),
+    });
+  }
+
+  return matches;
+}
+
+function normalizedSearchTokens(value: string): string[] {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
 }
 
 export type FuzzySearchTranscriptInput = {
@@ -470,15 +524,17 @@ function transcriptWordEvidenceMatches(
     const windowTokens = new Set(window.map((word) => word.token || textTokens(word.text)[0] || "").filter(Boolean));
     const tokenOverlap = distinctQueryTokens.filter((token) => windowTokens.has(token));
     if (tokenOverlap.length === 0) continue;
+    const evidenceStartIndex = window.findIndex((word) => tokenOverlap.includes(word.token || textTokens(word.text)[0] || ""));
+    const alignedWindow = evidenceStartIndex > 0 ? window.slice(evidenceStartIndex) : window;
     const orderedBonus = distinctQueryTokens.reduce((score, token, tokenIndex) => {
       const foundIndex = window.findIndex((word) => (word.token || textTokens(word.text)[0]) === token);
       return foundIndex >= 0 && foundIndex <= tokenIndex * 6 + 12 ? score + 0.25 : score;
     }, 0);
     candidates.push({
-      startTime: msToSeconds(window[0]!.startMs),
-      endTime: msToSeconds(window.at(-1)!.endMs),
-      text: normalizeToolText(window.map((word) => word.text).join(" ")),
-      afterText: normalizeToolText(getTranscriptWindowFromContext(ctx, window[0]!.startMs, 20_000).text).slice(0, 500),
+      startTime: msToSeconds(alignedWindow[0]!.startMs),
+      endTime: msToSeconds(alignedWindow.at(-1)!.endMs),
+      text: normalizeToolText(alignedWindow.map((word) => word.text).join(" ")),
+      afterText: normalizeToolText(getTranscriptWindowFromContext(ctx, alignedWindow[0]!.startMs, 20_000).text).slice(0, 500),
       tokenOverlap,
       quality: evidenceQuality(tokenOverlap.length),
       score: tokenOverlap.length + orderedBonus,
@@ -1925,9 +1981,9 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, forc
     : [
         "Fulcrum workflow for broad spans:",
         "1. Call getEpubStructure and choose an internal EPUB node near the span midpoint by word position, not near either edge. The fulcrum should generally leave at least 30% of the EPUB word span on both sides.",
-        "2. Use that node's firstWords as source text. Prefer 6-12 distinctive opener prose words; ignore generic chapter numbers, titles, names alone, and repeated formulaic text.",
-        "3. Estimate the likely transcript neighborhood from the EPUB node's word-position ratio, then search near that neighborhood with rgSearchTranscript. If exact search misses, try shorter exact phrases or fuzzySearchTranscript.",
-        "4. Inspect the best match with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may be continuing the same scene, or after a rejected fulcrum. The proposed start must look like the opener boundary: the distinctive opener appears immediately after the start, and the preceding transcript does not already contain the same opener content.",
+        "2. Use that node's firstWords as source text. Prefer the first 4-8 distinctive opener prose words; drop generic chapter numbers, titles, standalone names, punctuation-only differences, and repeated formulaic text. If a longer phrase misses, shorten it immediately.",
+        "3. Estimate the likely transcript neighborhood from the EPUB node's word-position ratio, then search near that neighborhood with rgSearchTranscript. Search the first distinctive prose clause by itself before trying longer text; if exact search misses, try a shorter exact phrase or fuzzySearchTranscript.",
+        "4. Inspect the best match with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may be continuing the same scene, or after a rejected fulcrum. The proposed start must be the first matched opener word or the silence immediately before it; do not submit the start of a broad evidence window.",
         "5. Submit submitFulcrumSplit only after the transcript search and window inspection support that exact timestamp. If rejected, pick a different EPUB node or phrase and repeat the search; do not resubmit the same node/timestamp.",
       ];
   return [
@@ -2136,9 +2192,9 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         : "This span is too broad for a leaf plan. The submitLeafChapterPlan tool is intentionally unavailable; you must find a fulcrum split.",
       "Concrete fulcrum workflow for broad spans:",
       "1. Call getEpubStructure, compare node word-position ratios inside this span, and choose an internal EPUB node roughly near the span midpoint. Avoid boundaries that leave less than 30% of the EPUB word span on either side; they are poor fulcrums for divide-and-conquer.",
-      "2. Take opener prose from that node's firstWords. Build a search phrase from 6-12 distinctive words; drop generic chapter labels, standalone names, punctuation-only differences, and repeated boilerplate.",
-      "3. Estimate the likely timestamp neighborhood from the EPUB node position within the current span. Search that neighborhood with rgSearchTranscript first. If there is no strong exact hit, try shorter distinctive exact phrases, then fuzzySearchTranscript.",
-      "4. Inspect the best candidate with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may be continuing the same scene, or after a rejected fulcrum. Check both sides of the timestamp: the opener prose should begin immediately after the proposed start, and the text just before it should not already be continuing the same opener.",
+      "2. Take opener prose from that node's firstWords. Build a search phrase from the first 4-8 distinctive prose words; drop generic chapter labels, standalone names, punctuation-only differences, and repeated boilerplate. Do not include a chapter/part title unless the transcript search proves the narrator says it.",
+      "3. Estimate the likely timestamp neighborhood from the EPUB node position within the current span. Search that neighborhood with rgSearchTranscript first. Search the first distinctive prose clause by itself before trying longer text. If a long query misses, shorten it immediately; do not pivot to guessed timestamps.",
+      "4. Inspect the best candidate with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may be continuing the same scene, or after a rejected fulcrum. Check both sides of the timestamp: the proposed start should be the first matched opener word or the silence immediately before it, not the start of a broad evidence window.",
       "5. Only then call submitFulcrumSplit. If the judge rejects it, do not use the judge as the search engine and do not resubmit the same node/timestamp; choose a different EPUB node or phrase and run a fresh transcript search.",
       "Do not submit guessed timestamps or timestamps copied from estimated EPUB position. A broad-span fulcrum must be backed by a transcript search result from rgSearchTranscript or fuzzySearchTranscript.",
       "After any rejected fulcrum, run a fresh rgSearchTranscript or fuzzySearchTranscript query before trying another fulcrum.",
