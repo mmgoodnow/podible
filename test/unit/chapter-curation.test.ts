@@ -5,6 +5,7 @@ import {
   getEpubStructure,
   findEpubChapterEvidence,
   fuzzySearchTranscript,
+  fulcrumJudgeToolUseBehavior,
   estimateTimestampFromEpubPosition,
   getTranscriptWindow,
   rgSearchTranscript,
@@ -396,6 +397,35 @@ describe("chapter curation tools", () => {
       } as never,
     ]);
     expect(naturalJson.isFinalOutput).toBe(false);
+  });
+
+  test("fulcrumJudgeToolUseBehavior terminates on a structured judgment", () => {
+    const accepted = fulcrumJudgeToolUseBehavior(undefined, [
+      {
+        type: "function_output",
+        tool: { name: "submitFulcrumJudgment" },
+        output: {
+          accepted: false,
+          confidence: "high",
+          reason: "Candidate starts in the previous chapter.",
+          concerns: ["better candidate is 700s earlier"],
+          suggestedStartTime: 19830,
+          suggestedEpubNodeId: "part3.html",
+        },
+        runItem: {} as never,
+      } as never,
+    ]);
+    expect(accepted.isFinalOutput).toBe(true);
+
+    const malformed = fulcrumJudgeToolUseBehavior(undefined, [
+      {
+        type: "function_output",
+        tool: { name: "submitFulcrumJudgment" },
+        output: { accepted: false },
+        runItem: {} as never,
+      } as never,
+    ]);
+    expect(malformed.isFinalOutput).toBe(false);
   });
 
   test("validateFulcrumSplit accepts a transcript-backed internal boundary", async () => {

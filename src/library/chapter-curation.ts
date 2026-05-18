@@ -653,11 +653,20 @@ const submitFulcrumSplitSchema = z.object({
   evidence: z.string().trim().optional(),
   notes: z.string().trim().optional(),
 });
+const submitFulcrumJudgmentSchema = z.object({
+  accepted: z.boolean(),
+  confidence: z.enum(["low", "medium", "high"]),
+  reason: z.string().trim().min(1),
+  concerns: z.array(z.string().trim().min(1)).max(10),
+  suggestedStartTime: z.number().finite().nonnegative().nullable(),
+  suggestedEpubNodeId: z.string().trim().min(1).nullable(),
+});
 
 export type SubmittedChapter = z.infer<typeof submittedChapterSchema>;
 export type SubmitChapterPlanInput = z.infer<typeof submitChapterPlanSchema>;
 export type SubmitLeafChapterPlanInput = z.infer<typeof submitLeafChapterPlanSchema>;
 export type SubmitFulcrumSplitInput = z.infer<typeof submitFulcrumSplitSchema>;
+export type SubmitFulcrumJudgmentInput = z.infer<typeof submitFulcrumJudgmentSchema>;
 
 export type ChapterPlanAuditEntry = {
   index: number;
@@ -733,6 +742,8 @@ export type SubmitFulcrumSplitResult =
       audit: FulcrumValidationAudit | null;
       instruction: string;
     };
+
+export type SubmitFulcrumJudgmentResult = SubmitFulcrumJudgmentInput;
 
 export type RecursiveSpanDecision =
   | { kind: "leaf"; chapters: SubmittedChapter[]; result?: SubmitLeafChapterPlanResult }
@@ -1421,6 +1432,12 @@ function parseSpanDecisionOutput(output: unknown): RecursiveSpanDecision | null 
   return null;
 }
 
+function parseFulcrumJudgmentOutput(output: unknown): SubmitFulcrumJudgmentResult | null {
+  const value = typeof output === "string" ? safeJsonParse(output) : output;
+  const parsed = submitFulcrumJudgmentSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
 function safeJsonParse(value: string): unknown {
   try {
     return JSON.parse(value) as unknown;
@@ -1443,6 +1460,20 @@ export function recursiveSpanToolUseBehavior(_: unknown, toolResults: FunctionTo
     isFinalOutput: true,
     isInterrupted: undefined,
     finalOutput: JSON.stringify(parseSpanDecisionOutput(terminalResult.output)?.result ?? terminalResult.output),
+  };
+}
+
+export function fulcrumJudgeToolUseBehavior(_: unknown, toolResults: FunctionToolResult[]): ToolsToFinalOutputResult {
+  const terminalResult = toolResults.find(
+    (result) => result.type === "function_output" && result.tool.name === "submitFulcrumJudgment" && parseFulcrumJudgmentOutput(result.output)
+  );
+  if (!terminalResult || terminalResult.type !== "function_output") {
+    return { isFinalOutput: false, isInterrupted: undefined };
+  }
+  return {
+    isFinalOutput: true,
+    isInterrupted: undefined,
+    finalOutput: JSON.stringify(parseFulcrumJudgmentOutput(terminalResult.output) ?? terminalResult.output),
   };
 }
 
@@ -1611,6 +1642,123 @@ export function recursiveSpanAllowsLeaf(span: ChapterCurationSpan, forceLeaf: bo
   return forceLeaf || (spanNodeCount <= 8 && spanDurationSeconds <= 2 * 60 * 60);
 }
 
+function createFulcrumJudgeAgent(ctx: ChapterCurationContext): Agent {
+  return new Agent({
+    name: "FulcrumJudge",
+    model: ctx.settings.agents.model,
+    modelSettings: {
+      toolChoice: "required",
+      parallelToolCalls: false,
+    },
+    resetToolChoice: false,
+    instructions: [
+      "You are a strict reviewer for audiobook chapter split points.",
+      "Your job is to decide whether the proposed fulcrum timestamp is actually the start of the proposed EPUB node.",
+      "Reject a split when the transcript window is only generic overlap, when a listed candidate is clearly better, or when the window starts inside the previous chapter.",
+      "Accept only when distinctive title/prose evidence appears at or immediately after the proposed timestamp.",
+      "Do not invent a full chapter plan. Judge only this proposed split.",
+      "You must call submitFulcrumJudgment.",
+    ].join("\n"),
+    tools: [
+      tool({
+        name: "submitFulcrumJudgment",
+        description: "Submit the final judgment for this proposed fulcrum split.",
+        parameters: submitFulcrumJudgmentSchema,
+        strict: true,
+        execute: (input) => input,
+      }),
+    ],
+    toolUseBehavior: fulcrumJudgeToolUseBehavior,
+  });
+}
+
+function fulcrumJudgePrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, split: Extract<SubmitFulcrumSplitResult, { accepted: true }>): string {
+  return [
+    `Judge this proposed audiobook chapter fulcrum for "${ctx.book.title}" by ${ctx.book.author}.`,
+    "Return accepted=false if this timestamp is not clearly the start of the EPUB node.",
+    "Prefer rejecting over accepting a suspicious split; recursion can try another fulcrum.",
+    "",
+    JSON.stringify(
+      {
+        span,
+        proposed: {
+          epubNodeId: split.epubNodeId,
+          epubIndex: split.epubIndex,
+          title: split.title,
+          startTime: split.startTime,
+          notes: split.notes,
+        },
+        audit: split.audit,
+      },
+      null,
+      2
+    ),
+  ].join("\n");
+}
+
+async function judgeFulcrumSplit(
+  ctx: ChapterCurationContext,
+  span: ChapterCurationSpan,
+  split: Extract<SubmitFulcrumSplitResult, { accepted: true }>
+): Promise<SubmitFulcrumJudgmentResult | null> {
+  const apiKey = ctx.settings.agents.apiKey.trim();
+  if (!apiKey) return null;
+  const timeoutMs = Math.min(Math.max(5_000, ctx.settings.agents.timeoutMs), 90_000);
+  const abort = new AbortController();
+  const timeout = setTimeout(() => abort.abort(), timeoutMs);
+  const provider = new OpenAIProvider({ apiKey, useResponses: true });
+  try {
+    const runner = new Runner({
+      modelProvider: provider,
+      tracingDisabled: true,
+      traceIncludeSensitiveData: false,
+    });
+    const result = await runner.run(createFulcrumJudgeAgent(ctx), fulcrumJudgePrompt(ctx, span, split), {
+      maxTurns: 4,
+      signal: abort.signal,
+      toolExecution: { maxFunctionToolConcurrency: 1 },
+    });
+    const judgment = parseFulcrumJudgmentOutput(result.finalOutput);
+    const tracePath = writeChapterCurationTrace(ctx, `fulcrum-judge-${span.path}-${split.epubNodeId}`, {
+      span,
+      split,
+      judgment,
+      finalOutput: result.finalOutput,
+      newItems: result.newItems as unknown[],
+      rawResponses: result.rawResponses as unknown[],
+    });
+    logChapterCurationEvent(ctx, {
+      type: "fulcrum-judge-result",
+      message: `fulcrum judge span=${span.path} epub=${split.epubNodeId} accepted=${judgment?.accepted ?? "none"} confidence=${judgment?.confidence ?? "none"}`,
+      span,
+      split: {
+        epubNodeId: split.epubNodeId,
+        title: split.title,
+        startTime: split.startTime,
+      },
+      judgment,
+      tracePath,
+    });
+    return judgment;
+  } catch (error) {
+    logChapterCurationEvent(ctx, {
+      type: "fulcrum-judge-error",
+      message: `fulcrum judge span=${span.path} epub=${split.epubNodeId} error=${JSON.stringify((error as Error).message)}`,
+      span,
+      split: {
+        epubNodeId: split.epubNodeId,
+        title: split.title,
+        startTime: split.startTime,
+      },
+      error: serializeAgentError(error),
+    });
+    return null;
+  } finally {
+    clearTimeout(timeout);
+    await provider.close().catch(() => undefined);
+  }
+}
+
 function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: ChapterCurationSpan, forceLeaf: boolean): Agent {
   let invalidFulcrums = 0;
   let rejectedLeafRequiresEvidence = false;
@@ -1746,6 +1894,26 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
           }
           const result = await validateFulcrumSplit(ctx, span, input);
           if (!result.accepted) invalidFulcrums++;
+          if (result.accepted) {
+            const judgment = await judgeFulcrumSplit(ctx, span, result);
+            if (judgment && !judgment.accepted) {
+              invalidFulcrums++;
+              return {
+                accepted: false,
+                kind: "split",
+                errors: [
+                  `Fulcrum judge rejected this split: ${judgment.reason}`,
+                  ...judgment.concerns.map((concern) => `Judge concern: ${concern}`),
+                ],
+                warnings: [],
+                audit: result.audit,
+                instruction:
+                  judgment.suggestedStartTime !== null
+                    ? `Pick a stronger fulcrum. The judge suggested checking ${judgment.suggestedEpubNodeId ?? result.epubNodeId} near ${Math.round(judgment.suggestedStartTime)}s.`
+                    : "Pick a different fulcrum with stronger local transcript evidence.",
+              } satisfies SubmitFulcrumSplitResult;
+            }
+          }
           return result;
         },
       }),
