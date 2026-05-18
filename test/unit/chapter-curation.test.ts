@@ -477,6 +477,44 @@ describe("chapter curation tools", () => {
     expect(result.errors.join("\n")).toContain("too close");
   });
 
+  test("validateFulcrumSplit rejects accidental generic-token overlap far from better evidence", async () => {
+    const context = ctx({
+      durationMs: 1_000_000,
+      manifestation: manifestation({ duration_ms: 1_000_000 }),
+      epubEntries: [
+        epubEntry({ id: "front", title: "Prologue", cumulativeRatio: 0.2, cumulativeWords: 4 }),
+        epubEntry({
+          id: "part-3",
+          title: "Part III: Gold",
+          cumulativeRatio: 0.6,
+          cumulativeWords: 16,
+          words: [word("This"), word("is"), word("your"), word("slingblade"), word("scrape"), word("earth"), word("veins"), word("pitvipers")],
+        }),
+        epubEntry({ id: "chapter-after", title: "Chapter After", cumulativeRatio: 1, cumulativeWords: 24 }),
+      ],
+      transcript: {
+        version: "test",
+        text: "Part three gold this is your slingblade scrape earth veins pitvipers. This will kill keep going.",
+        words: [],
+        utterances: [
+          { startMs: 198_000, endMs: 205_000, text: "Part three gold this is your slingblade scrape earth veins pitvipers." },
+          { startMs: 500_000, endMs: 505_000, text: "This will kill keep going." },
+        ],
+      },
+    });
+
+    const result = await validateFulcrumSplit(context, createRootCurationSpan(context), {
+      spanPath: "root",
+      epubNodeId: "part-3",
+      title: "Part III: Gold",
+      startTime: 500,
+    });
+
+    expect(result.accepted).toBe(false);
+    if (result.accepted) throw new Error("expected rejection");
+    expect(result.errors.join("\n")).toContain("nearest transcript evidence candidate");
+  });
+
   test("validateLeafChapterPlan rejects broad non-forced spans so the agent keeps splitting", () => {
     const entries = Array.from({ length: 10 }, (_, index) =>
       epubEntry({

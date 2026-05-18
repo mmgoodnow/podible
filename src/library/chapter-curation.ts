@@ -1007,9 +1007,46 @@ function normalizeSpanChapters(chapters: SubmittedChapter[]): SubmittedChapter[]
   return out;
 }
 
-function distinctTokens(value: string): string[] {
+const evidenceStopTokens = new Set([
+  "about",
+  "after",
+  "again",
+  "also",
+  "been",
+  "being",
+  "could",
+  "does",
+  "from",
+  "have",
+  "into",
+  "just",
+  "keep",
+  "kept",
+  "less",
+  "more",
+  "only",
+  "over",
+  "should",
+  "that",
+  "their",
+  "them",
+  "then",
+  "there",
+  "they",
+  "this",
+  "through",
+  "under",
+  "very",
+  "will",
+  "with",
+  "would",
+  "your",
+]);
+
+function distinctiveEvidenceTokens(value: string): string[] {
   const out: string[] = [];
   for (const token of textTokens(value)) {
+    if (evidenceStopTokens.has(token)) continue;
     if (out.includes(token)) continue;
     out.push(token);
   }
@@ -1055,16 +1092,18 @@ export async function validateFulcrumSplit(
 
   const firstWords = entry ? summarizeFirstWords(entry, 28) : "";
   const titleTokens = new Set(textTokens(entry?.title ?? split.title));
-  const expectedTokens = distinctTokens(`${entry?.title ?? split.title} ${firstWords}`);
-  const proseTokens = distinctFirstWordTokens(firstWords).filter((token) => !titleTokens.has(token));
+  const expectedTokens = distinctiveEvidenceTokens(`${entry?.title ?? split.title} ${firstWords}`);
+  const proseTokens = distinctiveEvidenceTokens(firstWords).filter((token) => !titleTokens.has(token));
   const window = getTranscriptWindowFromContext(ctx, secondsToMs(split.startTime), 45_000);
-  const transcriptTokens = new Set(textTokens(window.text));
+  const transcriptTokens = new Set(distinctiveEvidenceTokens(window.text));
   const matchedTokens = expectedTokens.filter((token) => transcriptTokens.has(token));
   const proseMatchedTokens = proseTokens.filter((token) => transcriptTokens.has(token));
   const overlapRatio = expectedTokens.length === 0 ? 0 : matchedTokens.length / expectedTokens.length;
   const evidence = entry
     ? await findEpubChapterEvidence(ctx, { nodeIds: [entry.id], searchRadiusSeconds: Math.max(600, spanDurationSeconds(span) / 2), limitPerNode: 3 })
     : { nodes: [] };
+  const candidateMatches = evidence.nodes[0]?.matches ?? [];
+  const nearestCandidateDelta = candidateMatches.length === 0 ? null : Math.min(...candidateMatches.map((match) => Math.abs(match.startTime - split.startTime)));
   const audit: FulcrumValidationAudit = {
     epubNodeId: entry?.id ?? null,
     title: entry?.title ?? split.title,
@@ -1075,14 +1114,22 @@ export async function validateFulcrumSplit(
     proseMatchedTokens,
     overlapRatio,
     transcriptWindow: normalizeToolText(window.text).slice(0, 1_000),
-    candidates: evidence.nodes[0]?.matches ?? [],
+    candidates: candidateMatches,
   };
 
-  if (expectedTokens.length > 0 && matchedTokens.length < 4 && overlapRatio < 0.35) {
+  if (expectedTokens.length > 0 && matchedTokens.length < 3 && overlapRatio < 0.35) {
     errors.push("Fulcrum transcript window does not pass the fuzzy evidence threshold.");
   }
-  if (proseTokens.length > 0 && proseMatchedTokens.length === 0) {
+  if (proseTokens.length > 0 && proseMatchedTokens.length < Math.min(2, proseTokens.length)) {
     errors.push("Fulcrum evidence only matches title/metadata; at least one EPUB prose token must match.");
+  }
+  if (nearestCandidateDelta !== null && nearestCandidateDelta > 90) {
+    const nearest = candidateMatches.reduce((best, match) =>
+      Math.abs(match.startTime - split.startTime) < Math.abs(best.startTime - split.startTime) ? match : best
+    );
+    errors.push(
+      `Submitted fulcrum is ${Math.round(nearestCandidateDelta)}s from the nearest transcript evidence candidate; use the candidate near ${Math.round(nearest.startTime)}s or find stronger local evidence.`
+    );
   }
 
   if (errors.length > 0) {
