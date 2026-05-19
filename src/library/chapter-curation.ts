@@ -35,6 +35,8 @@ export type ChapterCurationContext = {
   embeddedChapters: ChapterCurationTiming[];
   debugEventLogPath?: string;
   debugTraceDir?: string;
+  debugReasoningSummary?: "auto" | "concise" | "detailed";
+  debugReasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 };
 
 export type ChapterCurationSpan = {
@@ -79,6 +81,30 @@ export type TranscriptSearchMatch = {
   before: TranscriptWindow;
   after: TranscriptWindow;
 };
+
+function chapterCurationModelSettings(
+  ctx: ChapterCurationContext,
+  base: {
+    toolChoice: "required";
+    parallelToolCalls: false;
+  },
+): {
+  toolChoice: "required";
+  parallelToolCalls: false;
+  reasoning?: {
+    summary?: "auto" | "concise" | "detailed";
+    effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  };
+} {
+  if (!ctx.debugReasoningSummary && !ctx.debugReasoningEffort) return base;
+  return {
+    ...base,
+    reasoning: {
+      ...(ctx.debugReasoningSummary ? { summary: ctx.debugReasoningSummary } : {}),
+      ...(ctx.debugReasoningEffort ? { effort: ctx.debugReasoningEffort } : {}),
+    },
+  };
+}
 
 function transcriptWords(ctx: Pick<ChapterCurationContext, "transcript">): Array<{ text: string; token: string; startMs: number; endMs: number }> {
   return [...ctx.transcript.words].sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
@@ -2017,10 +2043,10 @@ function createFulcrumJudgeAgent(ctx: ChapterCurationContext): Agent {
   return new Agent({
     name: "FulcrumJudge",
     model: ctx.settings.agents.model,
-    modelSettings: {
+    modelSettings: chapterCurationModelSettings(ctx, {
       toolChoice: "required",
       parallelToolCalls: false,
-    },
+    }),
     resetToolChoice: false,
     instructions: [
       "You are a strict reviewer for audiobook chapter split points.",
@@ -2178,10 +2204,10 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
   return new Agent({
     name: "SectionChapterCurator",
     model: ctx.settings.agents.model,
-    modelSettings: {
+    modelSettings: chapterCurationModelSettings(ctx, {
       toolChoice: "required",
       parallelToolCalls: false,
-    },
+    }),
     resetToolChoice: false,
     instructions: [
       "You curate audiobook chapter markers for one bounded span, not the whole book.",
@@ -2406,10 +2432,10 @@ export function createChapterCuratorAgent(ctx: ChapterCurationContext): Agent {
   return new Agent({
     name: "ChapterCurator",
     model: ctx.settings.agents.model,
-    modelSettings: {
+    modelSettings: chapterCurationModelSettings(ctx, {
       toolChoice: "required",
       parallelToolCalls: false,
-    },
+    }),
     resetToolChoice: false,
     instructions: [
       "You curate audiobook chapter markers from EPUB structure, embedded audio chapters, and transcript evidence.",
