@@ -210,7 +210,9 @@ export type EpubTextSearchResult = {
     wordRatioWithinNode: number;
     targetNodeDistance: number | null;
     targetWordOffset: number | null;
+    relationToTarget: "unknown" | "pre_target" | "opener" | "near_opener" | "interior" | "post_target";
     matchedTokens: string[];
+    orderedMatchRatio: number;
     text: string;
   }>;
 };
@@ -338,7 +340,7 @@ export function searchEpubText(
   ctx: Pick<ChapterCurationContext, "epubEntries">,
   input: { query: string; nodeIds?: string[]; targetNodeId?: string; limit?: number }
 ): EpubTextSearchResult {
-  const queryTokens = textTokens(input.query).filter((token) => token.length > 1);
+  const queryTokens = normalizedWordTokens(input.query).filter((token) => token.length > 1);
   const requestedIds = new Set(input.nodeIds?.map((id) => id.trim()).filter(Boolean));
   const targetIndex = input.targetNodeId ? ctx.epubEntries.findIndex((entry) => entry.id === input.targetNodeId) : -1;
   const limit = Math.max(1, Math.min(20, input.limit ?? 10));
@@ -351,14 +353,15 @@ export function searchEpubText(
     for (let offset = 0; offset < entry.words.length; offset++) {
       const window = entry.words.slice(offset, offset + windowSize);
       if (window.length === 0) continue;
-      const windowTokens = new Set(window.map((word) => word.token).filter(Boolean));
+      const windowWordTokens = window.map(epubWordToken).filter(Boolean);
+      const windowTokens = new Set(windowWordTokens);
       const matchedTokens = queryTokens.filter((token, index) => windowTokens.has(token) && queryTokens.indexOf(token) === index);
       if (matchedTokens.length < Math.min(3, queryTokens.length)) continue;
 
       let orderedMatches = 0;
       let searchFrom = 0;
       for (const token of queryTokens) {
-        const found = window.findIndex((word, wordIndex) => wordIndex >= searchFrom && word.token === token);
+        const found = windowWordTokens.findIndex((wordToken, wordIndex) => wordIndex >= searchFrom && wordToken === token);
         if (found < 0) continue;
         orderedMatches++;
         searchFrom = found + 1;
@@ -373,6 +376,7 @@ export function searchEpubText(
             : epubIndex < targetIndex
               ? offset - ctx.epubEntries.slice(epubIndex, targetIndex).reduce((sum, item) => sum + item.wordCount, 0)
               : ctx.epubEntries.slice(targetIndex, epubIndex).reduce((sum, item) => sum + item.wordCount, 0) + offset;
+      const orderedMatchRatio = orderedMatches / queryTokens.length;
       matches.push({
         epubNodeId: entry.id,
         epubIndex,
@@ -381,7 +385,9 @@ export function searchEpubText(
         wordRatioWithinNode: entry.words.length === 0 ? 0 : Math.round((offset / entry.words.length) * 1000) / 1000,
         targetNodeDistance: targetIndex < 0 ? null : epubIndex - targetIndex,
         targetWordOffset,
+        relationToTarget: classifyEpubTextMatch(targetIndex < 0 ? null : epubIndex - targetIndex, targetWordOffset),
         matchedTokens,
+        orderedMatchRatio: Math.round(orderedMatchRatio * 1000) / 1000,
         text: normalizeToolText(window.map((word) => word.text).join(" ")).slice(0, 500),
       });
     }
@@ -392,10 +398,47 @@ export function searchEpubText(
     const bTextScore = b.matchedTokens.length / queryTokens.length;
     const aDistance = a.targetNodeDistance === null ? 0 : Math.abs(a.targetNodeDistance);
     const bDistance = b.targetNodeDistance === null ? 0 : Math.abs(b.targetNodeDistance);
-    return bTextScore - aTextScore || aDistance - bDistance || a.epubIndex - b.epubIndex || a.wordOffset - b.wordOffset;
+    return (
+      bTextScore - aTextScore ||
+      b.orderedMatchRatio - a.orderedMatchRatio ||
+      epubTextRelationRank(a.relationToTarget) - epubTextRelationRank(b.relationToTarget) ||
+      aDistance - bDistance ||
+      a.epubIndex - b.epubIndex ||
+      a.wordOffset - b.wordOffset
+    );
   });
 
   return { query: input.query, queryTokens, matches: matches.slice(0, limit) };
+}
+
+function epubWordToken(word: EpubChapterEntry["words"][number]): string {
+  return normalizedWordTokens(word.token || word.text)[0] || "";
+}
+
+function classifyEpubTextMatch(targetNodeDistance: number | null, targetWordOffset: number | null): EpubTextSearchResult["matches"][number]["relationToTarget"] {
+  if (targetWordOffset === null) return "unknown";
+  if (targetNodeDistance !== null && targetNodeDistance > 0) return "post_target";
+  if (targetWordOffset < 0) return "pre_target";
+  if (targetWordOffset <= 8) return "opener";
+  if (targetWordOffset <= 50) return "near_opener";
+  return "interior";
+}
+
+function epubTextRelationRank(relation: EpubTextSearchResult["matches"][number]["relationToTarget"]): number {
+  switch (relation) {
+    case "opener":
+      return 0;
+    case "near_opener":
+      return 1;
+    case "interior":
+      return 2;
+    case "pre_target":
+      return 3;
+    case "post_target":
+      return 4;
+    case "unknown":
+      return 5;
+  }
 }
 
 function coefficientOfVariation(values: number[]): number | null {
@@ -623,7 +666,7 @@ function fixedPhraseWordMatches(
   for (let index = 0; index < words.length && matches.length < limit; index++) {
     const window = words.slice(index, index + queryTokens.length);
     if (window.length < queryTokens.length) break;
-    const ok = queryTokens.every((token, queryIndex) => window[queryIndex]?.token === token);
+    const ok = queryTokens.every((token, queryIndex) => transcriptWordSearchToken(window[queryIndex]) === token);
     if (!ok) continue;
     matches.push({
       index,
@@ -637,12 +680,20 @@ function fixedPhraseWordMatches(
 }
 
 function normalizedSearchTokens(value: string): string[] {
+  return normalizedWordTokens(value);
+}
+
+function normalizedWordTokens(value: string): string[] {
   return value
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
+    .match(/[a-z0-9]+(?:'[a-z0-9]+)?/g)
+    ?.map((token) => token.replace(/[^a-z0-9]+/g, ""))
+    .filter(Boolean) ?? [];
+}
+
+function transcriptWordSearchToken(word: { text: string; token?: string } | undefined): string {
+  if (!word) return "";
+  return normalizedWordTokens(word.token || word.text)[0] || "";
 }
 
 export type FuzzySearchTranscriptInput = {
@@ -1118,6 +1169,8 @@ function summarizeToolResultForEvent(result: unknown): unknown {
           startTime: item.startTime,
           wordOffset: item.wordOffset,
           targetWordOffset: item.targetWordOffset,
+          relationToTarget: item.relationToTarget,
+          orderedMatchRatio: item.orderedMatchRatio,
           text: typeof item.text === "string" ? eventPreview(item.text) : undefined,
         };
       }),
@@ -1240,11 +1293,7 @@ function chapterTitleKey(value: string): string {
 }
 
 function textTokens(value: string): string[] {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .split(/\s+/)
-    .filter((token) => token.length >= 4);
+  return normalizedWordTokens(value).filter((token) => token.length >= 4);
 }
 
 function distinctFirstWordTokens(value: string): string[] {
@@ -2294,7 +2343,7 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, forc
         "3. Build several searches from the same node text before moving on: first 4-8 distinctive opener words, the next distinctive clause, a shorter exact phrase, and one phrase from the next word window if needed. Drop generic chapter numbers, titles, standalone names, punctuation-only differences, and repeated formulaic text.",
         "4. Estimate the likely transcript neighborhood from the EPUB node's word-position ratio, then search near that neighborhood with rgSearchTranscript first. If a phrase misses, shorten it or try a different phrase from the same EPUB node; do not pivot to guessed timestamps.",
         "5. Inspect the best match with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may be continuing the same scene, or after a rejected fulcrum. The proposed start must be the first matched opener word or the silence immediately before it; do not submit the start of a broad evidence window.",
-        "6. If transcript context looks like pre-roll or interior prose, call searchEpubText with the transcript phrase and targetNodeId to verify whether that phrase is before, at, or after the target EPUB opener.",
+        "6. If transcript context looks like pre-roll or interior prose, call searchEpubText with the transcript phrase and targetNodeId. Trust relationToTarget: opener/near_opener is usable boundary evidence; interior means do not submit that timestamp as a chapter start; pre_target means move later to the target opener.",
         "7. Submit submitFulcrumSplit only after the transcript search and window inspection support that exact timestamp. If rejected, keep the same EPUB node and search earlier/different opener phrases or a wider same-node word window before switching to a different middle node.",
       ];
   return [
@@ -2531,7 +2580,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
       "3. Build several searches from the same node text before moving on: first 4-8 distinctive opener prose words, the next distinctive clause, a shorter exact phrase, and one phrase from the next word window if needed. Drop generic chapter labels, standalone names, punctuation-only differences, and repeated boilerplate. Do not include a chapter/part title unless the transcript search proves the narrator says it.",
       "4. Estimate the likely timestamp neighborhood from the EPUB node position within the current span. Search that neighborhood with rgSearchTranscript first. If a phrase misses, shorten it or try a different phrase from the same EPUB node; do not pivot to guessed timestamps.",
       "5. Inspect the best candidate with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may be continuing the same scene, or after a rejected fulcrum. Check both sides of the timestamp: the proposed start should be the first matched opener word or the silence immediately before it, not the start of a broad evidence window.",
-      "6. If transcript context looks like it may include pre-roll or interior prose, call searchEpubText with the transcript phrase and targetNodeId to verify whether the phrase occurs before, at, or after the target EPUB opener.",
+      "6. If transcript context looks like it may include pre-roll or interior prose, call searchEpubText with the transcript phrase and targetNodeId. Trust relationToTarget: opener/near_opener is usable boundary evidence; interior means do not submit that timestamp as a chapter start; pre_target means move later to the target opener.",
       "7. Only then call submitFulcrumSplit. If the judge rejects it, do not use the judge as the search engine and do not resubmit the same node/timestamp; keep the same EPUB node and search earlier/different opener phrases or a wider same-node word window before switching to a different middle node.",
       "Do not submit guessed timestamps or timestamps copied from estimated EPUB position. A broad-span fulcrum must be backed by a transcript search result from rgSearchTranscript or fuzzySearchTranscript.",
       "After any rejected fulcrum, run a fresh rgSearchTranscript or fuzzySearchTranscript query from the same EPUB node's opener text before trying another fulcrum.",
@@ -2595,7 +2644,8 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
       }),
       tool({
         name: "searchEpubText",
-        description: "Reverse-search EPUB text for a phrase taken from the transcript. Use targetNodeId to see whether a transcript phrase is before, inside, or after the intended EPUB node.",
+        description:
+          "Reverse-search normalized EPUB text for a phrase taken from the transcript. Use targetNodeId to see whether a transcript phrase is opener, near_opener, interior, pre_target, or post_target relative to the intended EPUB node.",
         parameters: searchEpubTextSchema,
         strict: true,
         execute: (input) => {
@@ -2735,7 +2785,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
                   warnings: [],
                 audit: result.audit,
                 instruction:
-                    "Do not use the judge as the search engine. Keep the same EPUB node first: call getEpubNodeText for opener or next-window text, search a different phrase from that node with rgSearchTranscript or fuzzySearchTranscript, use searchEpubText on transcript context if it may be pre-roll/interior prose, inspect with getTranscriptWindow, then submit only if the opener begins there.",
+                    "Do not use the judge as the search engine. Keep the same EPUB node first: call getEpubNodeText for opener or next-window text, search a different phrase from that node with rgSearchTranscript or fuzzySearchTranscript, use searchEpubText on transcript context if it may be pre-roll/interior prose, and only submit phrases classified as opener or near_opener.",
                 } satisfies SubmitFulcrumSplitResult;
               }
             }

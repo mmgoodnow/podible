@@ -261,6 +261,7 @@ describe("chapter curation tools", () => {
     expect(preRoll.matches[0]).toMatchObject({
       epubNodeId: "chapter-1",
       targetNodeDistance: -1,
+      relationToTarget: "pre_target",
     });
     expect(preRoll.matches[0]?.targetWordOffset).toBeLessThan(0);
     expect(opener.matches[0]).toMatchObject({
@@ -268,7 +269,40 @@ describe("chapter curation tools", () => {
       wordOffset: 0,
       targetNodeDistance: 0,
       targetWordOffset: 0,
+      relationToTarget: "opener",
     });
+  });
+
+  test("searchEpubText normalizes punctuation and classifies interior matches", () => {
+    const entryWords = [
+      ..."Chapter Two In order to have an army".split(/\s+/),
+      ...Array.from({ length: 60 }, (_, index) => `filler${index}`),
+      ..."I could use the little bastard's help after the ovens".split(/\s+/),
+    ].map(word);
+    const context = ctx({
+      epubEntries: [
+        epubEntry({
+          id: "chapter-2",
+          title: "Chapter 2",
+          href: "chapter2.xhtml",
+          words: entryWords,
+          wordCount: entryWords.length,
+          cumulativeWords: entryWords.length,
+          cumulativeRatio: 1,
+        }),
+      ],
+    });
+
+    const result = searchEpubText(context, {
+      query: "could use the little bastards help",
+      targetNodeId: "chapter-2",
+    });
+
+    expect(result.matches[0]).toMatchObject({
+      epubNodeId: "chapter-2",
+      relationToTarget: "interior",
+    });
+    expect(result.matches[0]?.matchedTokens).toContain("bastards");
   });
 
   test("getEmbeddedAudioChapters flags generic evenly-divided embedded markers", () => {
@@ -356,6 +390,29 @@ describe("chapter curation tools", () => {
     expect(result.matches[0]).toMatchObject({
       startTime: 10,
       text: "I vomit as I wake A second fist strikes my full stomach",
+    });
+  });
+
+  test("rgSearchTranscript fallback normalizes apostrophes and punctuation", async () => {
+    const context = ctx({
+      transcript: {
+        version: "test",
+        text: "I could use the little bastard's help.",
+        words: transcriptWith("I could use the little bastard's help", 10_000, 14_000).words,
+        utterances: [{ startMs: 10_000, endMs: 14_000, text: "I could use the little bastard's help." }],
+      },
+    });
+
+    const result = await rgSearchTranscript(context, {
+      pattern: "could use the little bastards help",
+      regex: false,
+      limit: 1,
+    });
+
+    expect(result.matches).toHaveLength(1);
+    expect(result.matches[0]).toMatchObject({
+      startTime: 10.25,
+      text: "could use the little bastard's help",
     });
   });
 
