@@ -199,6 +199,22 @@ export type EpubNodeTextResult = {
   }>;
 };
 
+export type EpubTextSearchResult = {
+  query: string;
+  queryTokens: string[];
+  matches: Array<{
+    epubNodeId: string;
+    epubIndex: number;
+    title: string;
+    wordOffset: number;
+    wordRatioWithinNode: number;
+    targetNodeDistance: number | null;
+    targetWordOffset: number | null;
+    matchedTokens: string[];
+    text: string;
+  }>;
+};
+
 const GENERIC_EPUB_OPENER_TOKENS = new Set([
   "chapter",
   "chapters",
@@ -316,6 +332,70 @@ export function getEpubNodeText(
     text,
     phraseVariants: epubPhraseVariants(entry, startWord, endWord),
   };
+}
+
+export function searchEpubText(
+  ctx: Pick<ChapterCurationContext, "epubEntries">,
+  input: { query: string; nodeIds?: string[]; targetNodeId?: string; limit?: number }
+): EpubTextSearchResult {
+  const queryTokens = textTokens(input.query).filter((token) => token.length > 1);
+  const requestedIds = new Set(input.nodeIds?.map((id) => id.trim()).filter(Boolean));
+  const targetIndex = input.targetNodeId ? ctx.epubEntries.findIndex((entry) => entry.id === input.targetNodeId) : -1;
+  const limit = Math.max(1, Math.min(20, input.limit ?? 10));
+  const matches: EpubTextSearchResult["matches"] = [];
+  if (queryTokens.length === 0) return { query: input.query, queryTokens, matches };
+
+  for (const [epubIndex, entry] of ctx.epubEntries.entries()) {
+    if (requestedIds.size > 0 && !requestedIds.has(entry.id)) continue;
+    const windowSize = Math.min(entry.words.length, Math.max(queryTokens.length + 6, Math.min(48, queryTokens.length * 3)));
+    for (let offset = 0; offset < entry.words.length; offset++) {
+      const window = entry.words.slice(offset, offset + windowSize);
+      if (window.length === 0) continue;
+      const windowTokens = new Set(window.map((word) => word.token).filter(Boolean));
+      const matchedTokens = queryTokens.filter((token, index) => windowTokens.has(token) && queryTokens.indexOf(token) === index);
+      if (matchedTokens.length < Math.min(3, queryTokens.length)) continue;
+
+      let orderedMatches = 0;
+      let searchFrom = 0;
+      for (const token of queryTokens) {
+        const found = window.findIndex((word, wordIndex) => wordIndex >= searchFrom && word.token === token);
+        if (found < 0) continue;
+        orderedMatches++;
+        searchFrom = found + 1;
+      }
+      if (orderedMatches < Math.min(3, queryTokens.length)) continue;
+
+      const targetWordOffset =
+        targetIndex < 0
+          ? null
+          : epubIndex === targetIndex
+            ? offset
+            : epubIndex < targetIndex
+              ? offset - ctx.epubEntries.slice(epubIndex, targetIndex).reduce((sum, item) => sum + item.wordCount, 0)
+              : ctx.epubEntries.slice(targetIndex, epubIndex).reduce((sum, item) => sum + item.wordCount, 0) + offset;
+      matches.push({
+        epubNodeId: entry.id,
+        epubIndex,
+        title: entry.title,
+        wordOffset: offset,
+        wordRatioWithinNode: entry.words.length === 0 ? 0 : Math.round((offset / entry.words.length) * 1000) / 1000,
+        targetNodeDistance: targetIndex < 0 ? null : epubIndex - targetIndex,
+        targetWordOffset,
+        matchedTokens,
+        text: normalizeToolText(window.map((word) => word.text).join(" ")).slice(0, 500),
+      });
+    }
+  }
+
+  matches.sort((a, b) => {
+    const aTextScore = a.matchedTokens.length / queryTokens.length;
+    const bTextScore = b.matchedTokens.length / queryTokens.length;
+    const aDistance = a.targetNodeDistance === null ? 0 : Math.abs(a.targetNodeDistance);
+    const bDistance = b.targetNodeDistance === null ? 0 : Math.abs(b.targetNodeDistance);
+    return bTextScore - aTextScore || aDistance - bDistance || a.epubIndex - b.epubIndex || a.wordOffset - b.wordOffset;
+  });
+
+  return { query: input.query, queryTokens, matches: matches.slice(0, limit) };
 }
 
 function coefficientOfVariation(values: number[]): number | null {
@@ -1017,6 +1097,93 @@ function logChapterCurationEvent(
     }
   }
   if (typeof event.message === "string") logChapterCurationProgress(ctx, event.message);
+}
+
+function eventPreview(value: string, limit = 180): string {
+  const text = normalizeToolText(value);
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
+function summarizeToolResultForEvent(result: unknown): unknown {
+  if (!result || typeof result !== "object") return result;
+  const record = result as Record<string, unknown>;
+  if (Array.isArray(record.matches)) {
+    return {
+      matches: record.matches.length,
+      firstMatches: record.matches.slice(0, 3).map((match) => {
+        const item = match as Record<string, unknown>;
+        return {
+          epubNodeId: item.epubNodeId,
+          title: item.title,
+          startTime: item.startTime,
+          wordOffset: item.wordOffset,
+          targetWordOffset: item.targetWordOffset,
+          text: typeof item.text === "string" ? eventPreview(item.text) : undefined,
+        };
+      }),
+    };
+  }
+  if (Array.isArray(record.nodes)) {
+    return {
+      nodes: record.nodes.length,
+      firstNodes: record.nodes.slice(0, 3).map((node) => {
+        const item = node as Record<string, unknown>;
+        return {
+          id: item.id,
+          title: item.title,
+          matches: Array.isArray(item.matches) ? item.matches.length : undefined,
+        };
+      }),
+    };
+  }
+  if (Array.isArray(record.chapters)) return { chapters: record.chapters.length, diagnostics: record.diagnostics };
+  if (Array.isArray(record.utterances)) return { startMs: record.startMs, endMs: record.endMs, utterances: record.utterances.length, text: typeof record.text === "string" ? eventPreview(record.text) : undefined };
+  if (Array.isArray(record.phraseVariants)) {
+    return {
+      id: record.id,
+      title: record.title,
+      startWord: record.startWord,
+      endWord: record.endWord,
+      text: typeof record.text === "string" ? eventPreview(record.text) : undefined,
+      phraseVariants: record.phraseVariants,
+    };
+  }
+  if ("accepted" in record) return { accepted: record.accepted, kind: record.kind, errors: record.errors, warnings: record.warnings, instruction: record.instruction };
+  if ("error" in record) return record;
+  return record;
+}
+
+function logSpanToolCall(ctx: ChapterCurationContext, span: ChapterCurationSpan, toolName: string, input: unknown): void {
+  logChapterCurationEvent(ctx, {
+    type: "span-tool-call",
+    message: `recursive span=${span.path} tool=${toolName} call`,
+    span,
+    toolName,
+    input,
+  });
+}
+
+function logSpanToolResult(ctx: ChapterCurationContext, span: ChapterCurationSpan, toolName: string, result: unknown): void {
+  logChapterCurationEvent(ctx, {
+    type: "span-tool-result",
+    message: `recursive span=${span.path} tool=${toolName} result`,
+    span,
+    toolName,
+    result: summarizeToolResultForEvent(result),
+  });
+}
+
+function logSpanToolError(ctx: ChapterCurationContext, span: ChapterCurationSpan, toolName: string, error: unknown): void {
+  logChapterCurationEvent(ctx, {
+    type: "span-tool-error",
+    message: `recursive span=${span.path} tool=${toolName} error=${JSON.stringify((error as Error).message ?? String(error))}`,
+    span,
+    toolName,
+    error: {
+      name: (error as Error).name,
+      message: (error as Error).message,
+    },
+  });
 }
 
 function writeChapterCurationTrace(
@@ -1892,6 +2059,12 @@ const getEpubNodeTextSchema = z.object({
   startWord: z.number().int().nonnegative().optional(),
   wordCount: z.number().int().positive().max(180).optional(),
 });
+const searchEpubTextSchema = z.object({
+  query: z.string().trim().min(1),
+  nodeIds: z.array(z.string().trim().min(1)).max(80).optional(),
+  targetNodeId: z.string().trim().min(1).optional(),
+  limit: z.number().int().positive().max(20).optional(),
+});
 const estimateTimestampFromEpubPositionSchema = z.object({
   epubNodeId: z.string(),
 });
@@ -2121,7 +2294,8 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, forc
         "3. Build several searches from the same node text before moving on: first 4-8 distinctive opener words, the next distinctive clause, a shorter exact phrase, and one phrase from the next word window if needed. Drop generic chapter numbers, titles, standalone names, punctuation-only differences, and repeated formulaic text.",
         "4. Estimate the likely transcript neighborhood from the EPUB node's word-position ratio, then search near that neighborhood with rgSearchTranscript first. If a phrase misses, shorten it or try a different phrase from the same EPUB node; do not pivot to guessed timestamps.",
         "5. Inspect the best match with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may be continuing the same scene, or after a rejected fulcrum. The proposed start must be the first matched opener word or the silence immediately before it; do not submit the start of a broad evidence window.",
-        "6. Submit submitFulcrumSplit only after the transcript search and window inspection support that exact timestamp. If rejected, keep the same EPUB node and search earlier/different opener phrases or a wider same-node word window before switching to a different middle node.",
+        "6. If transcript context looks like pre-roll or interior prose, call searchEpubText with the transcript phrase and targetNodeId to verify whether that phrase is before, at, or after the target EPUB opener.",
+        "7. Submit submitFulcrumSplit only after the transcript search and window inspection support that exact timestamp. If rejected, keep the same EPUB node and search earlier/different opener phrases or a wider same-node word window before switching to a different middle node.",
       ];
   return [
     `Curate chapter markers for span ${span.path} of "${ctx.book.title}" by ${ctx.book.author}.`,
@@ -2312,6 +2486,30 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
     };
   }
 
+  function runToolWithEvents<T>(toolName: string, input: unknown, fn: () => T): T {
+    logSpanToolCall(ctx, span, toolName, input);
+    try {
+      const result = fn();
+      if (result && typeof ((result as unknown as PromiseLike<unknown>).then) === "function") {
+        return (result as unknown as Promise<unknown>).then(
+          (value) => {
+            logSpanToolResult(ctx, span, toolName, value);
+            return value;
+          },
+          (error) => {
+            logSpanToolError(ctx, span, toolName, error);
+            throw error;
+          }
+        ) as T;
+      }
+      logSpanToolResult(ctx, span, toolName, result);
+      return result;
+    } catch (error) {
+      logSpanToolError(ctx, span, toolName, error);
+      throw error;
+    }
+  }
+
   return new Agent({
     name: "SectionChapterCurator",
     model: ctx.settings.agents.model,
@@ -2333,7 +2531,8 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
       "3. Build several searches from the same node text before moving on: first 4-8 distinctive opener prose words, the next distinctive clause, a shorter exact phrase, and one phrase from the next word window if needed. Drop generic chapter labels, standalone names, punctuation-only differences, and repeated boilerplate. Do not include a chapter/part title unless the transcript search proves the narrator says it.",
       "4. Estimate the likely timestamp neighborhood from the EPUB node position within the current span. Search that neighborhood with rgSearchTranscript first. If a phrase misses, shorten it or try a different phrase from the same EPUB node; do not pivot to guessed timestamps.",
       "5. Inspect the best candidate with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may be continuing the same scene, or after a rejected fulcrum. Check both sides of the timestamp: the proposed start should be the first matched opener word or the silence immediately before it, not the start of a broad evidence window.",
-      "6. Only then call submitFulcrumSplit. If the judge rejects it, do not use the judge as the search engine and do not resubmit the same node/timestamp; keep the same EPUB node and search earlier/different opener phrases or a wider same-node word window before switching to a different middle node.",
+      "6. If transcript context looks like it may include pre-roll or interior prose, call searchEpubText with the transcript phrase and targetNodeId to verify whether the phrase occurs before, at, or after the target EPUB opener.",
+      "7. Only then call submitFulcrumSplit. If the judge rejects it, do not use the judge as the search engine and do not resubmit the same node/timestamp; keep the same EPUB node and search earlier/different opener phrases or a wider same-node word window before switching to a different middle node.",
       "Do not submit guessed timestamps or timestamps copied from estimated EPUB position. A broad-span fulcrum must be backed by a transcript search result from rgSearchTranscript or fuzzySearchTranscript.",
       "After any rejected fulcrum, run a fresh rgSearchTranscript or fuzzySearchTranscript query from the same EPUB node's opener text before trying another fulcrum.",
       "All tool times and submitted startTime values are seconds, not milliseconds.",
@@ -2350,12 +2549,14 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         parameters: emptyToolSchema,
         strict: true,
         execute: () => {
-          const full = getEpubStructure(ctx);
-          const spanNodes = full.nodes.filter((node) => node.index >= span.epubStartIndex && node.index <= span.epubEndIndex);
-          return {
-            ...full,
-            nodes: allowLeaf ? spanNodes : spanNodes.filter((node) => isMiddleFulcrumEpubIndex(ctx, span, node.index)),
-          };
+          return runToolWithEvents("getEpubStructure", {}, () => {
+            const full = getEpubStructure(ctx);
+            const spanNodes = full.nodes.filter((node) => node.index >= span.epubStartIndex && node.index <= span.epubEndIndex);
+            return {
+              ...full,
+              nodes: allowLeaf ? spanNodes : spanNodes.filter((node) => isMiddleFulcrumEpubIndex(ctx, span, node.index)),
+            };
+          });
         },
       }),
       tool({
@@ -2364,11 +2565,13 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         parameters: emptyToolSchema,
         strict: true,
         execute: () => {
-          const result = getEmbeddedAudioChapters(ctx);
-          return {
-            ...result,
-            chapters: result.chapters.filter((chapter) => chapter.endTime >= span.startTime && chapter.startTime <= span.endTime),
-          };
+          return runToolWithEvents("getEmbeddedAudioChapters", {}, () => {
+            const result = getEmbeddedAudioChapters(ctx);
+            return {
+              ...result,
+              chapters: result.chapters.filter((chapter) => chapter.endTime >= span.startTime && chapter.startTime <= span.endTime),
+            };
+          });
         },
       }),
       tool({
@@ -2377,15 +2580,32 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         parameters: getEpubNodeTextSchema,
         strict: true,
         execute: (input) => {
-          markEvidenceToolUsed();
-          const entryIndex = ctx.epubEntries.findIndex((entry) => entry.id === input.epubNodeId);
-          if (entryIndex < span.epubStartIndex || entryIndex > span.epubEndIndex || (!allowLeaf && !isMiddleFulcrumEpubIndex(ctx, span, entryIndex))) {
-            return {
-              error: `EPUB node ${input.epubNodeId} is not eligible for this span.`,
-              spanPath: span.path,
-            };
-          }
-          return getEpubNodeText(ctx, input);
+          return runToolWithEvents("getEpubNodeText", input, () => {
+            markEvidenceToolUsed();
+            const entryIndex = ctx.epubEntries.findIndex((entry) => entry.id === input.epubNodeId);
+            if (entryIndex < span.epubStartIndex || entryIndex > span.epubEndIndex || (!allowLeaf && !isMiddleFulcrumEpubIndex(ctx, span, entryIndex))) {
+              return {
+                error: `EPUB node ${input.epubNodeId} is not eligible for this span.`,
+                spanPath: span.path,
+              };
+            }
+            return getEpubNodeText(ctx, input);
+          });
+        },
+      }),
+      tool({
+        name: "searchEpubText",
+        description: "Reverse-search EPUB text for a phrase taken from the transcript. Use targetNodeId to see whether a transcript phrase is before, inside, or after the intended EPUB node.",
+        parameters: searchEpubTextSchema,
+        strict: true,
+        execute: (input) => {
+          return runToolWithEvents("searchEpubText", input, () => {
+            markEvidenceToolUsed();
+            const allowedIds = new Set(spanEpubEntries(ctx, span).map((entry) => entry.id));
+            const nodeIds = (input.nodeIds?.length ? input.nodeIds : Array.from(allowedIds)).filter((id) => allowedIds.has(id));
+            const targetNodeId = input.targetNodeId && allowedIds.has(input.targetNodeId) ? input.targetNodeId : input.targetNodeId;
+            return searchEpubText(ctx, { ...input, nodeIds, targetNodeId });
+          });
         },
       }),
       tool({
@@ -2394,20 +2614,22 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         parameters: findEpubChapterEvidenceSchema,
         strict: true,
         execute: async (input) => {
-          markEvidenceToolUsed();
-          const allowedEntries = spanEpubEntries(ctx, span).filter((_, offset) => {
-            const index = span.epubStartIndex + offset;
-            return allowLeaf || isMiddleFulcrumEpubIndex(ctx, span, index);
+          return runToolWithEvents("findEpubChapterEvidence", input, async () => {
+            markEvidenceToolUsed();
+            const allowedEntries = spanEpubEntries(ctx, span).filter((_, offset) => {
+              const index = span.epubStartIndex + offset;
+              return allowLeaf || isMiddleFulcrumEpubIndex(ctx, span, index);
+            });
+            const allowedIds = new Set(allowedEntries.map((entry) => entry.id));
+            const nodeIds = (input.nodeIds?.length ? input.nodeIds : Array.from(allowedIds)).filter((id) => allowedIds.has(id));
+            const result = await findEpubChapterEvidence(ctx, { ...input, nodeIds });
+            return {
+              nodes: result.nodes.map((node) => ({
+                ...node,
+                matches: node.matches.filter((match) => match.endTime >= span.startTime - 300 && match.startTime <= span.endTime + 300),
+              })),
+            };
           });
-          const allowedIds = new Set(allowedEntries.map((entry) => entry.id));
-          const nodeIds = (input.nodeIds?.length ? input.nodeIds : Array.from(allowedIds)).filter((id) => allowedIds.has(id));
-          const result = await findEpubChapterEvidence(ctx, { ...input, nodeIds });
-          return {
-            nodes: result.nodes.map((node) => ({
-              ...node,
-              matches: node.matches.filter((match) => match.endTime >= span.startTime - 300 && match.startTime <= span.endTime + 300),
-            })),
-          };
         },
       }),
       tool({
@@ -2416,8 +2638,10 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         parameters: rgSearchTranscriptSchema,
         strict: true,
         execute: (input) => {
-          markTranscriptSearchToolUsed();
-          return rgSearchTranscript(ctx, { ...input, scope: spanScope(span, input.scope) });
+          return runToolWithEvents("rgSearchTranscript", input, () => {
+            markTranscriptSearchToolUsed();
+            return rgSearchTranscript(ctx, { ...input, scope: spanScope(span, input.scope) });
+          });
         },
       }),
       tool({
@@ -2426,8 +2650,10 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         parameters: fuzzySearchTranscriptSchema,
         strict: true,
         execute: (input) => {
-          markTranscriptSearchToolUsed();
-          return fuzzySearchTranscript(ctx, { ...input, scope: spanScope(span, input.scope) });
+          return runToolWithEvents("fuzzySearchTranscript", input, () => {
+            markTranscriptSearchToolUsed();
+            return fuzzySearchTranscript(ctx, { ...input, scope: spanScope(span, input.scope) });
+          });
         },
       }),
       tool({
@@ -2436,8 +2662,10 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         parameters: getTranscriptWindowSchema,
         strict: true,
         execute: (input) => {
-          markEvidenceToolUsed();
-          return getTranscriptWindow(ctx, { ...input, startTime: Math.min(span.endTime, Math.max(span.startTime, input.startTime)) });
+          return runToolWithEvents("getTranscriptWindow", input, () => {
+            markEvidenceToolUsed();
+            return getTranscriptWindow(ctx, { ...input, startTime: Math.min(span.endTime, Math.max(span.startTime, input.startTime)) });
+          });
         },
       }),
       tool({
@@ -2446,73 +2674,75 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         parameters: submitFulcrumSplitSchema,
         strict: true,
         execute: async (input) => {
-          if (rejectedFulcrumRequiresEvidence && evidenceCallsSinceRejectedFulcrum === 0) return rejectedFulcrumWithoutEvidence();
-          if (!allowLeaf && transcriptSearchesSinceFulcrumSubmit === 0) {
-            return {
-              accepted: false,
-              kind: "split",
-              errors: ["Broad-span fulcrums require a recent rgSearchTranscript or fuzzySearchTranscript result before submission."],
-              warnings: [],
-              audit: null,
-              instruction:
-                "Call getEpubNodeText for the target EPUB node, search distinctive opener phrases from that same node with rgSearchTranscript or fuzzySearchTranscript, inspect the result with getTranscriptWindow, then submit the evidenced timestamp.",
-            } satisfies SubmitFulcrumSplitResult;
-          }
-          transcriptSearchesSinceFulcrumSubmit = 0;
-          if (forceLeaf || (allowLeaf && invalidFulcrums >= 2)) {
-            return {
-              accepted: false,
-              kind: "split",
-              errors: ["Fulcrum splitting is no longer allowed for this span; submit a leaf plan."],
-              warnings: [],
-              audit: null,
-              instruction: "Call submitLeafChapterPlan for this span.",
-            } satisfies SubmitFulcrumSplitResult;
-          }
-          const rejectedKey = `${input.epubNodeId}:${Math.round(input.startTime)}`;
-          if (rejectedFulcrums.has(rejectedKey)) {
-            rejectedFulcrumRequiresEvidence = true;
-            evidenceCallsSinceRejectedFulcrum = 0;
-            return {
-              accepted: false,
-              kind: "split",
-              errors: [`Fulcrum ${input.epubNodeId} near ${Math.round(input.startTime)}s was already rejected for this span.`],
-              warnings: [],
-              audit: null,
-              instruction: "Stay on this EPUB node unless you have exhausted its opener text. Call getEpubNodeText for an earlier/different word window, search a different phrase from that node, and submit a materially different timestamp with stronger evidence.",
-            } satisfies SubmitFulcrumSplitResult;
-          }
-          const result = await validateFulcrumSplit(ctx, span, input);
-          if (!result.accepted) {
-            invalidFulcrums++;
-            rejectedFulcrums.add(rejectedKey);
-            rejectedFulcrumRequiresEvidence = true;
-            evidenceCallsSinceRejectedFulcrum = 0;
-          }
-          if (result.accepted) {
-            const judgment = await judgeFulcrumSplit(ctx, span, result);
-            if (judgment && !judgment.accepted) {
-              invalidFulcrums++;
-              rejectedFulcrums.add(rejectedKey);
+          return runToolWithEvents("submitFulcrumSplit", input, async () => {
+            if (rejectedFulcrumRequiresEvidence && evidenceCallsSinceRejectedFulcrum === 0) return rejectedFulcrumWithoutEvidence();
+            if (!allowLeaf && transcriptSearchesSinceFulcrumSubmit === 0) {
+              return {
+                accepted: false,
+                kind: "split",
+                errors: ["Broad-span fulcrums require a recent rgSearchTranscript or fuzzySearchTranscript result before submission."],
+                warnings: [],
+                audit: null,
+                instruction:
+                  "Call getEpubNodeText for the target EPUB node, search distinctive opener phrases from that same node with rgSearchTranscript or fuzzySearchTranscript, inspect the result with getTranscriptWindow, then submit the evidenced timestamp.",
+              } satisfies SubmitFulcrumSplitResult;
+            }
+            transcriptSearchesSinceFulcrumSubmit = 0;
+            if (forceLeaf || (allowLeaf && invalidFulcrums >= 2)) {
+              return {
+                accepted: false,
+                kind: "split",
+                errors: ["Fulcrum splitting is no longer allowed for this span; submit a leaf plan."],
+                warnings: [],
+                audit: null,
+                instruction: "Call submitLeafChapterPlan for this span.",
+              } satisfies SubmitFulcrumSplitResult;
+            }
+            const rejectedKey = `${input.epubNodeId}:${Math.round(input.startTime)}`;
+            if (rejectedFulcrums.has(rejectedKey)) {
               rejectedFulcrumRequiresEvidence = true;
               evidenceCallsSinceRejectedFulcrum = 0;
               return {
                 accepted: false,
                 kind: "split",
-                errors: [
-                  `Fulcrum judge rejected this split: ${judgment.reason}`,
-                  ...judgment.concerns.map((concern) => `Judge concern: ${concern}`),
-                ],
+                errors: [`Fulcrum ${input.epubNodeId} near ${Math.round(input.startTime)}s was already rejected for this span.`],
                 warnings: [],
-                audit: result.audit,
-                instruction:
-                  "Do not use the judge as the search engine. Keep the same EPUB node first: call getEpubNodeText for opener or next-window text, search a different phrase from that node with rgSearchTranscript or fuzzySearchTranscript, inspect with getTranscriptWindow, then submit only if the opener begins there.",
+                audit: null,
+                instruction: "Stay on this EPUB node unless you have exhausted its opener text. Call getEpubNodeText for an earlier/different word window, search a different phrase from that node, and submit a materially different timestamp with stronger evidence.",
               } satisfies SubmitFulcrumSplitResult;
             }
-          }
-          rejectedFulcrumRequiresEvidence = false;
-          evidenceCallsSinceRejectedFulcrum = 0;
-          return result;
+            const result = await validateFulcrumSplit(ctx, span, input);
+            if (!result.accepted) {
+              invalidFulcrums++;
+              rejectedFulcrums.add(rejectedKey);
+              rejectedFulcrumRequiresEvidence = true;
+              evidenceCallsSinceRejectedFulcrum = 0;
+            }
+            if (result.accepted) {
+              const judgment = await judgeFulcrumSplit(ctx, span, result);
+              if (judgment && !judgment.accepted) {
+                invalidFulcrums++;
+                rejectedFulcrums.add(rejectedKey);
+                rejectedFulcrumRequiresEvidence = true;
+                evidenceCallsSinceRejectedFulcrum = 0;
+                return {
+                  accepted: false,
+                  kind: "split",
+                  errors: [
+                    `Fulcrum judge rejected this split: ${judgment.reason}`,
+                    ...judgment.concerns.map((concern) => `Judge concern: ${concern}`),
+                  ],
+                  warnings: [],
+                audit: result.audit,
+                instruction:
+                    "Do not use the judge as the search engine. Keep the same EPUB node first: call getEpubNodeText for opener or next-window text, search a different phrase from that node with rgSearchTranscript or fuzzySearchTranscript, use searchEpubText on transcript context if it may be pre-roll/interior prose, inspect with getTranscriptWindow, then submit only if the opener begins there.",
+                } satisfies SubmitFulcrumSplitResult;
+              }
+            }
+            rejectedFulcrumRequiresEvidence = false;
+            evidenceCallsSinceRejectedFulcrum = 0;
+            return result;
+          });
         },
       }),
       ...(allowLeaf
@@ -2523,11 +2753,13 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
               parameters: submitLeafChapterPlanSchema,
               strict: true,
               execute: (input) => {
-                if (rejectedLeafRequiresEvidence && evidenceCallsSinceRejectedLeaf === 0) return rejectedLeafWithoutEvidence();
-                const result = validateLeafChapterPlan(ctx, span, input, { forceLeaf });
-                rejectedLeafRequiresEvidence = !result.accepted;
-                evidenceCallsSinceRejectedLeaf = 0;
-                return result;
+                return runToolWithEvents("submitLeafChapterPlan", input, () => {
+                  if (rejectedLeafRequiresEvidence && evidenceCallsSinceRejectedLeaf === 0) return rejectedLeafWithoutEvidence();
+                  const result = validateLeafChapterPlan(ctx, span, input, { forceLeaf });
+                  rejectedLeafRequiresEvidence = !result.accepted;
+                  evidenceCallsSinceRejectedLeaf = 0;
+                  return result;
+                });
               },
             }),
           ]

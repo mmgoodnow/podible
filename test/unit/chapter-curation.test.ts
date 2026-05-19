@@ -15,6 +15,7 @@ import {
   createRootCurationSpan,
   resolveRecursiveChapterSpans,
   recursiveSpanAllowsLeaf,
+  searchEpubText,
   submitChapterPlan,
   validateFulcrumSplit,
   validateLeafChapterPlan,
@@ -224,6 +225,50 @@ describe("chapter curation tools", () => {
     expect(result?.text).toBe("Chapter Two The mud is dark and cold beneath the laurel roots");
     expect(result?.phraseVariants.map((variant) => variant.text)).toContain("The mud is dark and cold");
     expect(result?.phraseVariants.every((variant) => variant.startWord >= 2)).toBe(true);
+  });
+
+  test("searchEpubText reverse-locates transcript phrases relative to a target node", () => {
+    const context = ctx({
+      epubEntries: [
+        epubEntry({
+          id: "chapter-1",
+          title: "Chapter 1",
+          href: "chapter1.xhtml",
+          words: "The prior scene will find me and I could use the little help"
+            .split(/\s+/)
+            .map(word),
+          wordCount: 12,
+          cumulativeWords: 12,
+          cumulativeRatio: 0.5,
+        }),
+        epubEntry({
+          id: "chapter-2",
+          title: "Chapter 2",
+          href: "chapter2.xhtml",
+          words: "In order to have an army I must be able to feed it"
+            .split(/\s+/)
+            .map(word),
+          wordCount: 12,
+          cumulativeWords: 24,
+          cumulativeRatio: 1,
+        }),
+      ],
+    });
+
+    const preRoll = searchEpubText(context, { query: "will find me and I could use", targetNodeId: "chapter-2" });
+    const opener = searchEpubText(context, { query: "In order to have an army", targetNodeId: "chapter-2" });
+
+    expect(preRoll.matches[0]).toMatchObject({
+      epubNodeId: "chapter-1",
+      targetNodeDistance: -1,
+    });
+    expect(preRoll.matches[0]?.targetWordOffset).toBeLessThan(0);
+    expect(opener.matches[0]).toMatchObject({
+      epubNodeId: "chapter-2",
+      wordOffset: 0,
+      targetNodeDistance: 0,
+      targetWordOffset: 0,
+    });
   });
 
   test("getEmbeddedAudioChapters flags generic evenly-divided embedded markers", () => {
