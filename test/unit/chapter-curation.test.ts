@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   getEmbeddedAudioChapters,
+  getEpubNodeText,
   getEpubStructure,
   findEpubChapterEvidence,
   findFulcrumCandidates,
@@ -192,6 +193,37 @@ describe("chapter curation tools", () => {
       endRatio: 1,
       firstWords: "The first real chapter",
     });
+  });
+
+  test("getEpubNodeText returns a bounded word window with same-node phrase variants", () => {
+    const context = ctx({
+      epubEntries: [
+        epubEntry({
+          id: "chapter-2",
+          title: "Chapter 2",
+          href: "chapter2.xhtml",
+          words: "Chapter Two The mud is dark and cold beneath the laurel roots and the passage narrows into black stone"
+            .split(/\s+/)
+            .map(word),
+          wordCount: 18,
+          cumulativeWords: 18,
+          cumulativeRatio: 1,
+        }),
+      ],
+    });
+
+    const result = getEpubNodeText(context, { epubNodeId: "chapter-2", startWord: 0, wordCount: 12 });
+
+    expect(result).toMatchObject({
+      id: "chapter-2",
+      title: "Chapter 2",
+      startWord: 0,
+      endWord: 12,
+      wordCount: 12,
+    });
+    expect(result?.text).toBe("Chapter Two The mud is dark and cold beneath the laurel roots");
+    expect(result?.phraseVariants.map((variant) => variant.text)).toContain("The mud is dark and cold");
+    expect(result?.phraseVariants.every((variant) => variant.startWord >= 2)).toBe(true);
   });
 
   test("getEmbeddedAudioChapters flags generic evenly-divided embedded markers", () => {

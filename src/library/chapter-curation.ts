@@ -183,6 +183,54 @@ export type EpubStructureResult = {
   nodes: EpubStructureNode[];
 };
 
+export type EpubNodeTextResult = {
+  id: string;
+  title: string;
+  index: number;
+  startWord: number;
+  endWord: number;
+  wordCount: number;
+  totalWords: number;
+  text: string;
+  phraseVariants: Array<{
+    startWord: number;
+    wordCount: number;
+    text: string;
+  }>;
+};
+
+const GENERIC_EPUB_OPENER_TOKENS = new Set([
+  "chapter",
+  "chapters",
+  "part",
+  "book",
+  "prologue",
+  "epilogue",
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "ten",
+  "eleven",
+  "twelve",
+  "thirteen",
+  "fourteen",
+  "fifteen",
+  "sixteen",
+  "seventeen",
+  "eighteen",
+  "nineteen",
+  "twenty",
+  "thirty",
+  "forty",
+  "fifty",
+]);
+
 const GENERIC_AUDIO_CHAPTER_TITLE_RE = [
   /^\s*chapter\s+[0-9a-z]+\s*$/i,
   /^\s*ch\.?\s*[0-9a-z]+\s*$/i,
@@ -210,6 +258,63 @@ export function getEpubStructure(ctx: Pick<ChapterCurationContext, "book" | "epu
       endRatio: inferEntryEndRatio(ctx.epubEntries, index),
       firstWords: summarizeFirstWords(entry),
     })),
+  };
+}
+
+function phraseVariant(words: EpubChapterEntry["words"], startWord: number, wordCount: number): EpubNodeTextResult["phraseVariants"][number] | null {
+  const text = words.slice(startWord, startWord + wordCount).map((word) => word.text).join(" ").trim();
+  return text ? { startWord, wordCount: text.split(/\s+/).length, text } : null;
+}
+
+function firstSearchableEpubWordOffset(entry: EpubChapterEntry, startWord: number, endWord: number): number {
+  const titleTokens = new Set(textTokens(entry.title));
+  let offset = startWord;
+  while (offset < endWord && offset - startWord < 8) {
+    const token = entry.words[offset]?.token;
+    if (!token || (!titleTokens.has(token) && !GENERIC_EPUB_OPENER_TOKENS.has(token))) break;
+    offset++;
+  }
+  return offset;
+}
+
+function epubPhraseVariants(entry: EpubChapterEntry, startWord: number, endWord: number): EpubNodeTextResult["phraseVariants"] {
+  const searchStartWord = firstSearchableEpubWordOffset(entry, startWord, endWord);
+  const offsets = [searchStartWord, searchStartWord + 4, searchStartWord + 8, searchStartWord + 16, searchStartWord + 32].filter((offset) => offset < endWord);
+  const variants: EpubNodeTextResult["phraseVariants"] = [];
+  const seen = new Set<string>();
+  for (const offset of offsets) {
+    for (const count of [6, 10]) {
+      const variant = phraseVariant(entry.words, offset, Math.min(count, endWord - offset));
+      const key = variant?.text.toLowerCase();
+      if (!variant || !key || seen.has(key)) continue;
+      seen.add(key);
+      variants.push(variant);
+    }
+  }
+  return variants.slice(0, 8);
+}
+
+export function getEpubNodeText(
+  ctx: Pick<ChapterCurationContext, "epubEntries">,
+  input: { epubNodeId: string; startWord?: number; wordCount?: number }
+): EpubNodeTextResult | null {
+  const index = ctx.epubEntries.findIndex((entry) => entry.id === input.epubNodeId);
+  const entry = ctx.epubEntries[index];
+  if (!entry) return null;
+  const startWord = Math.min(Math.max(0, Math.floor(input.startWord ?? 0)), entry.words.length);
+  const requestedWords = Math.min(180, Math.max(1, Math.floor(input.wordCount ?? 90)));
+  const endWord = Math.min(entry.words.length, startWord + requestedWords);
+  const text = entry.words.slice(startWord, endWord).map((word) => word.text).join(" ").trim();
+  return {
+    id: entry.id,
+    title: entry.title,
+    index,
+    startWord,
+    endWord,
+    wordCount: Math.max(0, endWord - startWord),
+    totalWords: entry.words.length,
+    text,
+    phraseVariants: epubPhraseVariants(entry, startWord, endWord),
   };
 }
 
@@ -1782,6 +1887,11 @@ const findFulcrumCandidatesSchema = z.object({
   searchRadiusSeconds: z.number().positive().max(7_200).optional(),
   limitPerNode: z.number().int().positive().max(5).optional(),
 });
+const getEpubNodeTextSchema = z.object({
+  epubNodeId: z.string().trim().min(1),
+  startWord: z.number().int().nonnegative().optional(),
+  wordCount: z.number().int().positive().max(180).optional(),
+});
 const estimateTimestampFromEpubPositionSchema = z.object({
   epubNodeId: z.string(),
 });
@@ -2004,13 +2114,14 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, forc
   const allowLeaf = recursiveSpanAllowsLeaf(span, forceLeaf);
   const fulcrumWorkflow = forceLeaf
     ? []
-    : [
+      : [
         "Fulcrum workflow for broad spans:",
         "1. Call getEpubStructure and choose an internal EPUB node near the span midpoint by word position, not near either edge. The fulcrum should generally leave at least 30% of the EPUB word span on both sides.",
-        "2. Use that node's firstWords as source text. Prefer the first 4-8 distinctive opener prose words; drop generic chapter numbers, titles, standalone names, punctuation-only differences, and repeated formulaic text. If a longer phrase misses, shorten it immediately.",
-        "3. Estimate the likely transcript neighborhood from the EPUB node's word-position ratio, then search near that neighborhood with rgSearchTranscript. Search the first distinctive prose clause by itself before trying longer text; if exact search misses, try a shorter exact phrase or fuzzySearchTranscript.",
-        "4. Inspect the best match with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may be continuing the same scene, or after a rejected fulcrum. The proposed start must be the first matched opener word or the silence immediately before it; do not submit the start of a broad evidence window.",
-        "5. Submit submitFulcrumSplit only after the transcript search and window inspection support that exact timestamp. If rejected, pick a different EPUB node or phrase and repeat the search; do not resubmit the same node/timestamp.",
+        "2. Call getEpubNodeText for that node's opener words. Treat this node as the active fulcrum target; do not switch nodes just because the first phrase misses or a submitted timestamp is rejected.",
+        "3. Build several searches from the same node text before moving on: first 4-8 distinctive opener words, the next distinctive clause, a shorter exact phrase, and one phrase from the next word window if needed. Drop generic chapter numbers, titles, standalone names, punctuation-only differences, and repeated formulaic text.",
+        "4. Estimate the likely transcript neighborhood from the EPUB node's word-position ratio, then search near that neighborhood with rgSearchTranscript first. If a phrase misses, shorten it or try a different phrase from the same EPUB node; do not pivot to guessed timestamps.",
+        "5. Inspect the best match with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may be continuing the same scene, or after a rejected fulcrum. The proposed start must be the first matched opener word or the silence immediately before it; do not submit the start of a broad evidence window.",
+        "6. Submit submitFulcrumSplit only after the transcript search and window inspection support that exact timestamp. If rejected, keep the same EPUB node and search earlier/different opener phrases or a wider same-node word window before switching to a different middle node.",
       ];
   return [
     `Curate chapter markers for span ${span.path} of "${ctx.book.title}" by ${ctx.book.author}.`,
@@ -2218,12 +2329,13 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
         : "This span is too broad for a leaf plan. The submitLeafChapterPlan tool is intentionally unavailable; you must find a fulcrum split.",
       "Concrete fulcrum workflow for broad spans:",
       "1. Call getEpubStructure, compare node word-position ratios inside this span, and choose an internal EPUB node roughly near the span midpoint. Avoid boundaries that leave less than 30% of the EPUB word span on either side; they are poor fulcrums for divide-and-conquer.",
-      "2. Take opener prose from that node's firstWords. Build a search phrase from the first 4-8 distinctive prose words; drop generic chapter labels, standalone names, punctuation-only differences, and repeated boilerplate. Do not include a chapter/part title unless the transcript search proves the narrator says it.",
-      "3. Estimate the likely timestamp neighborhood from the EPUB node position within the current span. Search that neighborhood with rgSearchTranscript first. Search the first distinctive prose clause by itself before trying longer text. If a long query misses, shorten it immediately; do not pivot to guessed timestamps.",
-      "4. Inspect the best candidate with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may be continuing the same scene, or after a rejected fulcrum. Check both sides of the timestamp: the proposed start should be the first matched opener word or the silence immediately before it, not the start of a broad evidence window.",
-      "5. Only then call submitFulcrumSplit. If the judge rejects it, do not use the judge as the search engine and do not resubmit the same node/timestamp; choose a different EPUB node or phrase and run a fresh transcript search.",
+      "2. Call getEpubNodeText for that node's opener words. Treat this node as the active fulcrum target; do not switch EPUB nodes just because the first phrase misses or a submitted timestamp is rejected.",
+      "3. Build several searches from the same node text before moving on: first 4-8 distinctive opener prose words, the next distinctive clause, a shorter exact phrase, and one phrase from the next word window if needed. Drop generic chapter labels, standalone names, punctuation-only differences, and repeated boilerplate. Do not include a chapter/part title unless the transcript search proves the narrator says it.",
+      "4. Estimate the likely timestamp neighborhood from the EPUB node position within the current span. Search that neighborhood with rgSearchTranscript first. If a phrase misses, shorten it or try a different phrase from the same EPUB node; do not pivot to guessed timestamps.",
+      "5. Inspect the best candidate with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may be continuing the same scene, or after a rejected fulcrum. Check both sides of the timestamp: the proposed start should be the first matched opener word or the silence immediately before it, not the start of a broad evidence window.",
+      "6. Only then call submitFulcrumSplit. If the judge rejects it, do not use the judge as the search engine and do not resubmit the same node/timestamp; keep the same EPUB node and search earlier/different opener phrases or a wider same-node word window before switching to a different middle node.",
       "Do not submit guessed timestamps or timestamps copied from estimated EPUB position. A broad-span fulcrum must be backed by a transcript search result from rgSearchTranscript or fuzzySearchTranscript.",
-      "After any rejected fulcrum, run a fresh rgSearchTranscript or fuzzySearchTranscript query before trying another fulcrum.",
+      "After any rejected fulcrum, run a fresh rgSearchTranscript or fuzzySearchTranscript query from the same EPUB node's opener text before trying another fulcrum.",
       "All tool times and submitted startTime values are seconds, not milliseconds.",
       forceLeaf ? "This span is forced leaf mode. You must call submitLeafChapterPlan, not submitFulcrumSplit." : "",
     ]
@@ -2257,6 +2369,23 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
             ...result,
             chapters: result.chapters.filter((chapter) => chapter.endTime >= span.startTime && chapter.startTime <= span.endTime),
           };
+        },
+      }),
+      tool({
+        name: "getEpubNodeText",
+        description: "Return a bounded EPUB word window and suggested exact-search phrase variants for one node. Use this to try different opener phrases from the same fulcrum chapter before switching nodes.",
+        parameters: getEpubNodeTextSchema,
+        strict: true,
+        execute: (input) => {
+          markEvidenceToolUsed();
+          const entryIndex = ctx.epubEntries.findIndex((entry) => entry.id === input.epubNodeId);
+          if (entryIndex < span.epubStartIndex || entryIndex > span.epubEndIndex || (!allowLeaf && !isMiddleFulcrumEpubIndex(ctx, span, entryIndex))) {
+            return {
+              error: `EPUB node ${input.epubNodeId} is not eligible for this span.`,
+              spanPath: span.path,
+            };
+          }
+          return getEpubNodeText(ctx, input);
         },
       }),
       tool({
@@ -2325,7 +2454,8 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
               errors: ["Broad-span fulcrums require a recent rgSearchTranscript or fuzzySearchTranscript result before submission."],
               warnings: [],
               audit: null,
-              instruction: "Search distinctive firstWords from the target EPUB node with rgSearchTranscript or fuzzySearchTranscript, inspect the result with getTranscriptWindow, then submit the evidenced timestamp.",
+              instruction:
+                "Call getEpubNodeText for the target EPUB node, search distinctive opener phrases from that same node with rgSearchTranscript or fuzzySearchTranscript, inspect the result with getTranscriptWindow, then submit the evidenced timestamp.",
             } satisfies SubmitFulcrumSplitResult;
           }
           transcriptSearchesSinceFulcrumSubmit = 0;
@@ -2349,7 +2479,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
               errors: [`Fulcrum ${input.epubNodeId} near ${Math.round(input.startTime)}s was already rejected for this span.`],
               warnings: [],
               audit: null,
-              instruction: "Pick a different EPUB node or a materially different timestamp with stronger transcript evidence.",
+              instruction: "Stay on this EPUB node unless you have exhausted its opener text. Call getEpubNodeText for an earlier/different word window, search a different phrase from that node, and submit a materially different timestamp with stronger evidence.",
             } satisfies SubmitFulcrumSplitResult;
           }
           const result = await validateFulcrumSplit(ctx, span, input);
@@ -2375,7 +2505,8 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
                 ],
                 warnings: [],
                 audit: result.audit,
-                instruction: "Pick a different fulcrum from fresh rgSearchTranscript or fuzzySearchTranscript evidence.",
+                instruction:
+                  "Do not use the judge as the search engine. Keep the same EPUB node first: call getEpubNodeText for opener or next-window text, search a different phrase from that node with rgSearchTranscript or fuzzySearchTranscript, inspect with getTranscriptWindow, then submit only if the opener begins there.",
               } satisfies SubmitFulcrumSplitResult;
             }
           }
