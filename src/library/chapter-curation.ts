@@ -1093,6 +1093,15 @@ const submitFulcrumSplitSchema = z.object({
 const submitFulcrumJudgmentSchema = z.object({
   accepted: z.boolean(),
   confidence: z.enum(["low", "medium", "high"]),
+  finding: z.enum([
+    "opener_at_timestamp",
+    "opener_offset_in_window",
+    "pre_target_context",
+    "interior_match",
+    "generic_overlap",
+    "insufficient_evidence",
+  ]),
+  openerEvidenceAtTimestamp: z.enum(["present", "offset", "absent", "unclear"]),
   reason: z.string().trim().min(1),
   concerns: z.array(z.string().trim().min(1)).max(10),
 });
@@ -2684,7 +2693,7 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, forc
         "2. Call researchEpubBoundary for that node. It pre-ranks rare opener phrases, searches them near the expected time, inspects transcript windows, and reverse-checks hits against the target EPUB node.",
         "3. If researchEpubBoundary returns no opener/near_opener candidate, call getEpubNodeText and manually try the opener words: first 4-8 distinctive opener words, the next distinctive clause, a shorter exact phrase, and one phrase from the next word window if needed. Drop generic chapter numbers, titles, standalone names, punctuation-only differences, and repeated formulaic text.",
         "4. Estimate the likely transcript neighborhood from the EPUB node's word-position ratio, then search near that neighborhood with rgSearchTranscript first for manual follow-up. If a phrase misses, shorten it or try a different phrase from the same EPUB node; do not pivot to guessed timestamps.",
-        "5. Inspect the best match with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may be continuing the same scene, or after a rejected fulcrum. The proposed start must be the first matched opener word or the silence immediately before it; do not submit the start of a broad evidence window.",
+        "5. Inspect the best match with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may include pre-target or interior transcript, or after a rejected fulcrum. The proposed start must be the first matched opener word or the silence immediately before it; do not submit the start of a broad evidence window.",
         "6. If transcript context looks like pre-roll or interior prose, call searchEpubText with the transcript phrase and targetNodeId. Trust relationToTarget: opener/near_opener is usable boundary evidence; interior means do not submit that timestamp as a chapter start; pre_target means move later to the target opener.",
         "7. Submit submitFulcrumSplit only after the transcript search and window inspection support that exact timestamp. If rejected, keep the same EPUB node and search earlier/different opener phrases or a wider same-node word window before switching to a different middle node.",
       ];
@@ -2736,10 +2745,12 @@ function createFulcrumJudgeAgent(ctx: ChapterCurationContext): Agent {
     instructions: [
       "You are a strict reviewer for audiobook chapter split points.",
       "Your job is to decide whether the proposed fulcrum timestamp is actually the start of the proposed EPUB node.",
-      "Reject a split when the transcript window is only generic overlap or when the window starts inside the previous chapter.",
+      "Judge only whether the submitted evidence proves this exact timestamp. You do not know scene boundaries, narrative continuity, or the true timestamp beyond the provided audit/window.",
+      "Reject a split when distinctive title/prose opener evidence is absent at the proposed timestamp, offset earlier/later in the window, generic, pre-target, or only an interior text match.",
       "Accept only when distinctive title/prose evidence appears at or immediately after the proposed timestamp.",
       "Do not invent a full chapter plan. Judge only this proposed split.",
-      "Do not recommend alternate timestamps or EPUB nodes. If the split is wrong, reject it and explain why.",
+      "Do not recommend alternate timestamps or EPUB nodes. If the split is not proven, classify the evidence problem and explain only what is visible in the supplied evidence.",
+      "Do not use scene-language such as 'inside a scene', 'mid-scene', or claims about ongoing narrative continuity. Prefer evidence terms: opener_at_timestamp, opener_offset_in_window, pre_target_context, interior_match, generic_overlap, or insufficient_evidence.",
       "You must call submitFulcrumJudgment.",
     ].join("\n"),
     tools: [
@@ -2761,6 +2772,7 @@ function fulcrumJudgePrompt(ctx: ChapterCurationContext, span: ChapterCurationSp
     "Return accepted=false if this timestamp is not clearly the start of the EPUB node.",
     "Prefer rejecting over accepting a suspicious split; the curator owns the next search.",
     "Do not suggest alternate timestamps or nodes.",
+    "Do not make claims about scenes or narrative continuity. You are only judging whether opener/title evidence is present at or immediately after the submitted timestamp.",
     "",
     JSON.stringify(
       {
@@ -2840,6 +2852,21 @@ async function judgeFulcrumSplit(
   } finally {
     clearTimeout(timeout);
     await provider.close().catch(() => undefined);
+  }
+}
+
+function rejectedFulcrumJudgeInstruction(judgment: SubmitFulcrumJudgmentResult): string {
+  switch (judgment.finding) {
+    case "opener_offset_in_window":
+    case "pre_target_context":
+      return "The judge only found that opener evidence was not at the submitted timestamp. Use transcript search/window evidence to identify the first opener word or silence immediately before it, then submit that evidenced timestamp.";
+    case "interior_match":
+    case "generic_overlap":
+      return "Do not resubmit nearby body-text overlap. Return to the target EPUB opener text, search a different distinctive opener phrase, and reverse-check transcript context with searchEpubText before submitting.";
+    case "insufficient_evidence":
+      return "Gather stronger evidence before another split: call researchEpubBoundary or search distinctive opener prose with rgSearchTranscript/fuzzySearchTranscript, inspect the window, and reverse-check the transcript phrase.";
+    case "opener_at_timestamp":
+      return "The judge rejected despite opener_at_timestamp classification. Reinspect the transcript window and submit only if the first opener word is at or immediately after the proposed timestamp.";
   }
 }
 
@@ -2930,7 +2957,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
       "2. Call researchEpubBoundary for that node. It pre-ranks rare opener phrases, searches them near the expected time, inspects transcript windows, and reverse-checks whether hits are opener/near_opener for the target EPUB node.",
       "3. If researchEpubBoundary returns a strong opener/near_opener candidate, use that exact timestamp or the silence immediately before the first matched opener word. If it returns no strong candidate, call getEpubNodeText and manually try different opener phrases from the same node before switching nodes.",
       "4. Estimate the likely timestamp neighborhood from the EPUB node position within the current span. Search that neighborhood with rgSearchTranscript first when doing manual follow-up. If a phrase misses, shorten it or try a different phrase from the same EPUB node; do not pivot to guessed timestamps.",
-      "5. Inspect the best candidate with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may be continuing the same scene, or after a rejected fulcrum. Check both sides of the timestamp: the proposed start should be the first matched opener word or the silence immediately before it, not the start of a broad evidence window.",
+      "5. Inspect the best candidate with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may include pre-target or interior transcript, or after a rejected fulcrum. Check both sides of the timestamp: the proposed start should be the first matched opener word or the silence immediately before it, not the start of a broad evidence window.",
       "6. If transcript context looks like it may include pre-roll or interior prose, call searchEpubText with the transcript phrase and targetNodeId. Trust relationToTarget: opener/near_opener is usable boundary evidence; interior means do not submit that timestamp as a chapter start; pre_target means move later to the target opener.",
       "7. Only then call submitFulcrumSplit. If the judge rejects it, do not use the judge as the search engine and do not resubmit the same node/timestamp; keep the same EPUB node and search earlier/different opener phrases or a wider same-node word window before switching to a different middle node.",
       "Do not submit guessed timestamps or timestamps copied from estimated EPUB position. A broad-span fulcrum must be backed by a transcript search result from rgSearchTranscript or fuzzySearchTranscript.",
@@ -3156,12 +3183,13 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
                   kind: "split",
                   errors: [
                     `Fulcrum judge rejected this split: ${judgment.reason}`,
-                    ...judgment.concerns.map((concern) => `Judge concern: ${concern}`),
+                    `Judge finding: ${judgment.finding}`,
+                    `Judge opener evidence at timestamp: ${judgment.openerEvidenceAtTimestamp}`,
+                    ...judgment.concerns.map((concern) => `Judge evidence note: ${concern}`),
                   ],
                   warnings: [],
-                audit: result.audit,
-                instruction:
-                    "Do not use the judge as the search engine. Keep the same EPUB node first: call getEpubNodeText for opener or next-window text, search a different phrase from that node with rgSearchTranscript or fuzzySearchTranscript, use searchEpubText on transcript context if it may be pre-roll/interior prose, and only submit phrases classified as opener or near_opener.",
+                  audit: result.audit,
+                  instruction: rejectedFulcrumJudgeInstruction(judgment),
                 } satisfies SubmitFulcrumSplitResult;
               }
             }
