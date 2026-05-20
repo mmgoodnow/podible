@@ -20,6 +20,7 @@ import {
   validateFulcrumSplit,
   validateLeafChapterPlan,
   type ChapterCurationContext,
+  type ChapterCurationSpan,
   type ChapterCurationTiming,
   type RecursiveSpanDecision,
 } from "../../src/library/chapter-curation";
@@ -983,6 +984,98 @@ describe("chapter curation tools", () => {
     );
 
     expect(result.accepted).toBe(true);
+  });
+
+  test("validateLeafChapterPlan trusts inherited parent split evidence for first leaf chapter", () => {
+    const context = ctx({
+      epubEntries: [
+        epubEntry({
+          id: "chapter-15",
+          title: "Chapter 15: The Testing",
+          href: "chapter15.xhtml",
+          words: "The Testing My test comes after two months of training my mind with Dancer".split(/\s+/).map(word),
+          cumulativeRatio: 0.5,
+          cumulativeWords: 12,
+        }),
+        epubEntry({
+          id: "chapter-16",
+          title: "Chapter 16: The Institute",
+          href: "chapter16.xhtml",
+          words: "The Institute is beyond Aegea night districts".split(/\s+/).map(word),
+          cumulativeRatio: 1,
+          cumulativeWords: 20,
+        }),
+      ],
+      transcript: {
+        version: "test",
+        text: "Paraphrased accepted opener. The Institute is beyond Aegea night districts.",
+        words: [],
+        utterances: [
+          { startMs: 15_000, endMs: 17_000, text: "Paraphrased accepted opener." },
+          { startMs: 20_000, endMs: 22_000, text: "The Institute is beyond Aegea night districts." },
+        ],
+      },
+    });
+    const span: ChapterCurationSpan = {
+      epubStartIndex: 0,
+      epubEndIndex: 1,
+      startTime: 15,
+      endTime: 30,
+      depth: 1,
+      path: "R",
+      startBoundary: {
+        epubNodeId: "chapter-15",
+        epubIndex: 0,
+        title: "Chapter 15: The Testing",
+        startTime: 15,
+        source: "parent_split",
+      },
+    };
+
+    const result = validateLeafChapterPlan(context, span, {
+      spanPath: "R",
+      strategy: "child leaf",
+      chapters: [
+        { title: "Chapter 15: The Testing", startTime: 15, epubNodeId: "chapter-15" },
+        { title: "Chapter 16: The Institute", startTime: 20, epubNodeId: "chapter-16" },
+      ],
+    });
+
+    expect(result.accepted).toBe(true);
+  });
+
+  test("validateLeafChapterPlan requires first leaf chapter to use inherited boundary", () => {
+    const context = ctx({
+      epubEntries: [
+        epubEntry({ id: "chapter-15", title: "Chapter 15: The Testing", cumulativeRatio: 0.5, cumulativeWords: 4 }),
+        epubEntry({ id: "chapter-16", title: "Chapter 16: The Institute", cumulativeRatio: 1, cumulativeWords: 8 }),
+      ],
+    });
+    const span: ChapterCurationSpan = {
+      epubStartIndex: 0,
+      epubEndIndex: 1,
+      startTime: 15,
+      endTime: 30,
+      depth: 1,
+      path: "R",
+      startBoundary: {
+        epubNodeId: "chapter-15",
+        epubIndex: 0,
+        title: "Chapter 15: The Testing",
+        startTime: 15,
+        source: "parent_split",
+      },
+    };
+
+    const result = validateLeafChapterPlan(context, span, {
+      spanPath: "R",
+      strategy: "bad child leaf",
+      chapters: [{ title: "Chapter 16: The Institute", startTime: 20, epubNodeId: "chapter-16" }],
+    });
+
+    expect(result.accepted).toBe(false);
+    if (result.accepted) throw new Error("expected inherited boundary rejection");
+    expect(result.errors.join("\n")).toContain("must use inherited accepted boundary");
   });
 
   test("recursiveSpanAllowsLeaf only permits leaf plans for small or forced spans", () => {

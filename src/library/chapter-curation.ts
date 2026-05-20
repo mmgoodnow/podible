@@ -39,6 +39,14 @@ export type ChapterCurationContext = {
   debugReasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 };
 
+export type ChapterCurationSpanBoundary = {
+  epubNodeId: string;
+  epubIndex: number;
+  title: string;
+  startTime: number;
+  source: "parent_split";
+};
+
 export type ChapterCurationSpan = {
   epubStartIndex: number;
   epubEndIndex: number;
@@ -46,6 +54,7 @@ export type ChapterCurationSpan = {
   endTime: number;
   depth: number;
   path: string;
+  startBoundary?: ChapterCurationSpanBoundary;
 };
 
 export type FulcrumValidationAudit = {
@@ -1423,27 +1432,40 @@ function spanDurationSeconds(span: ChapterCurationSpan): number {
   return Math.max(0, span.endTime - span.startTime);
 }
 
+const INHERITED_BOUNDARY_TOLERANCE_SECONDS = 2;
+
 function childSpanPath(parent: ChapterCurationSpan, side: "L" | "R"): string {
   return parent.path === "root" ? side : `${parent.path}${side}`;
 }
 
-function splitSpan(span: ChapterCurationSpan, splitIndex: number, splitTime: number): { left: ChapterCurationSpan; right: ChapterCurationSpan } {
+function splitSpan(
+  span: ChapterCurationSpan,
+  split: { epubIndex: number; epubNodeId: string; title: string; startTime: number }
+): { left: ChapterCurationSpan; right: ChapterCurationSpan } {
   return {
     left: {
       epubStartIndex: span.epubStartIndex,
-      epubEndIndex: splitIndex - 1,
+      epubEndIndex: split.epubIndex - 1,
       startTime: span.startTime,
-      endTime: splitTime,
+      endTime: split.startTime,
       depth: span.depth + 1,
       path: childSpanPath(span, "L"),
+      startBoundary: span.startBoundary,
     },
     right: {
-      epubStartIndex: splitIndex,
+      epubStartIndex: split.epubIndex,
       epubEndIndex: span.epubEndIndex,
-      startTime: splitTime,
+      startTime: split.startTime,
       endTime: span.endTime,
       depth: span.depth + 1,
       path: childSpanPath(span, "R"),
+      startBoundary: {
+        epubNodeId: split.epubNodeId,
+        epubIndex: split.epubIndex,
+        title: split.title,
+        startTime: split.startTime,
+        source: "parent_split",
+      },
     },
   };
 }
@@ -1890,6 +1912,24 @@ export function validateLeafChapterPlan(
   const errors: string[] = [];
   const warnings: string[] = [];
   if (plan.spanPath !== span.path) errors.push(`spanPath ${plan.spanPath} does not match current span ${span.path}`);
+  const inheritedStartBoundary = span.startBoundary;
+  if (inheritedStartBoundary) {
+    const firstChapter = plan.chapters[0];
+    if (!firstChapter) {
+      errors.push(`span starts at accepted boundary "${inheritedStartBoundary.title}" but the leaf plan has no chapters`);
+    } else {
+      if (firstChapter.epubNodeId !== inheritedStartBoundary.epubNodeId) {
+        errors.push(
+          `chapters[0] must use inherited accepted boundary "${inheritedStartBoundary.title}" (${inheritedStartBoundary.epubNodeId}) at the span start`
+        );
+      }
+      if (Math.abs(firstChapter.startTime - inheritedStartBoundary.startTime) > INHERITED_BOUNDARY_TOLERANCE_SECONDS) {
+        errors.push(
+          `chapters[0].startTime must use inherited accepted boundary ${inheritedStartBoundary.startTime}s for "${inheritedStartBoundary.title}"`
+        );
+      }
+    }
+  }
   let previousStartTime = span.startTime - 0.001;
   for (const [index, chapter] of plan.chapters.entries()) {
     if (chapter.startTime < span.startTime || chapter.startTime > span.endTime) {
@@ -1916,6 +1956,12 @@ export function validateLeafChapterPlan(
     if (chapterTitleKey(chapter.title) !== chapterTitleKey(heading.title)) {
       errors.push(`chapters[${index}] title "${chapter.title}" does not match claimed EPUB heading "${heading.title}"`);
     }
+    const isInheritedStartChapter =
+      index === 0 &&
+      inheritedStartBoundary !== undefined &&
+      chapter.epubNodeId === inheritedStartBoundary.epubNodeId &&
+      Math.abs(chapter.startTime - inheritedStartBoundary.startTime) <= INHERITED_BOUNDARY_TOLERANCE_SECONDS;
+    if (isInheritedStartChapter) continue;
     const evidenceTokens = distinctFirstWordTokens(heading.firstWords);
     if (evidenceTokens.length > 0) {
       const transcriptTokens = new Set(textTokens(audit[index]?.transcriptAfterStart ?? ""));
@@ -2274,7 +2320,7 @@ export async function resolveRecursiveChapterSpans(
       reports?.push({ ...span, forceLeaf: mustLeaf, outcome: "failed", errors: ["Span curator proposed a split when forced to submit a leaf."] });
       return null;
     }
-    const { left, right } = splitSpan(span, decision.split.epubIndex, decision.split.startTime);
+    const { left, right } = splitSpan(span, decision.split);
     logChapterCurationEvent(ctx, {
       type: "span-split-accepted",
       message: `recursive span=${span.path} split accepted=1 epub=${decision.split.epubNodeId} time=${Math.round(decision.split.startTime)}s left=${left.path} right=${right.path}`,
@@ -2334,6 +2380,13 @@ function spanScope(span: ChapterCurationSpan, inputScope?: TranscriptSearchScope
 function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, forceLeaf: boolean): string {
   const entries = spanEpubEntries(ctx, span);
   const allowLeaf = recursiveSpanAllowsLeaf(span, forceLeaf);
+  const inheritedBoundaryInstructions = span.startBoundary
+    ? [
+        `This span starts at an already accepted parent split: ${span.startBoundary.title} (${span.startBoundary.epubNodeId}) at ${span.startBoundary.startTime}s.`,
+        "For a leaf plan, the first chapter must normally be this inherited boundary at the span start; do not move it later unless you have evidence that the accepted parent split is wrong.",
+        "The validator will treat this inherited first boundary as already proven, so spend research effort on later chapter starts in the span.",
+      ]
+    : [];
   const fulcrumWorkflow = forceLeaf
     ? []
       : [
@@ -2361,6 +2414,7 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, forc
         : "This span is too broad for a leaf plan. You must call submitFulcrumSplit with a validated internal boundary.",
     "For a fulcrum, pick a high-confidence internal EPUB node boundary with transcript prose evidence near the timestamp.",
     allowLeaf ? "For a leaf, submit only chapter starts inside this span and include epubNodeId for every EPUB-backed chapter." : "",
+    ...inheritedBoundaryInstructions,
     "Prefer submitFulcrumSplit for spans with more than 8 EPUB nodes or more than 2 hours duration unless the whole span is already strongly evidenced.",
     ...fulcrumWorkflow,
     "All times are seconds.",
