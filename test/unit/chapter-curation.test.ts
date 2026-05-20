@@ -15,6 +15,7 @@ import {
   createRootCurationSpan,
   resolveRecursiveChapterSpans,
   recursiveSpanAllowsLeaf,
+  researchEpubBoundary,
   searchEpubText,
   submitChapterPlan,
   validateFulcrumSplit,
@@ -570,6 +571,36 @@ describe("chapter curation tools", () => {
     expect(result.candidates.every((candidate) => candidate.startTime !== 205)).toBe(true);
   });
 
+  test("researchEpubBoundary returns rare opener phrases with reverse-checked transcript hits", async () => {
+    const context = ctx({
+      durationMs: 120_000,
+      manifestation: manifestation({ duration_ms: 120_000 }),
+      epubEntries: [
+        epubEntry({
+          id: "chapter-target",
+          title: "Chapter Target",
+          href: "target.xhtml",
+          words: "The mud is dark and cold beneath the laurel ridge when Dancer opens the sealed door".split(/\s+/).map(word),
+          cumulativeRatio: 1,
+          cumulativeWords: 16,
+        }),
+      ],
+      transcript: transcriptWith("The mud is dark and cold beneath the laurel ridge when Dancer opens the sealed door", 50_000, 58_000),
+    });
+
+    const result = await researchEpubBoundary(context, {
+      epubNodeId: "chapter-target",
+      expectedTime: 52,
+      searchRadiusSeconds: 20,
+      phraseLimit: 5,
+      hitLimitPerPhrase: 3,
+    });
+
+    expect(result?.anchorPhrases.length).toBeGreaterThan(0);
+    expect(result?.bestCandidates.length).toBeGreaterThan(0);
+    expect(result?.bestCandidates[0]?.reverseEpubRelation).toBe("opener");
+  });
+
   test("estimateTimestampFromEpubPosition maps EPUB word position onto duration", () => {
     const result = estimateTimestampFromEpubPosition(ctx(), { epubNodeId: "chapter-1" });
     expect(result).toMatchObject({
@@ -1044,6 +1075,56 @@ describe("chapter curation tools", () => {
     expect(result.accepted).toBe(true);
   });
 
+  test("validateLeafChapterPlan accepts non-inherited leaf chapter with opener evidence", () => {
+    const context = ctx({
+      epubEntries: [
+        epubEntry({
+          id: "chapter-1",
+          title: "Chapter 1",
+          href: "chapter1.xhtml",
+          words: "Alpha Beta Gamma Delta Epsilon Zeta Eta Theta".split(/\s+/).map(word),
+          cumulativeRatio: 1,
+          cumulativeWords: 8,
+        }),
+      ],
+      transcript: transcriptWith("Alpha Beta Gamma Delta Epsilon Zeta Eta Theta", 10_000, 14_000),
+    });
+
+    const result = validateLeafChapterPlan(context, createRootCurationSpan(context), {
+      spanPath: "root",
+      strategy: "single evidenced chapter",
+      chapters: [{ title: "Chapter 1", startTime: 10, epubNodeId: "chapter-1" }],
+    });
+
+    expect(result.accepted).toBe(true);
+  });
+
+  test("validateLeafChapterPlan rejects weak reverse EPUB evidence for leaf chapter starts", () => {
+    const context = ctx({
+      epubEntries: [
+        epubEntry({
+          id: "chapter-1",
+          title: "Chapter 1",
+          href: "chapter1.xhtml",
+          words: "Alpha Beta Gamma Delta Epsilon Zeta Eta Theta Iota Kappa Lambda Mu".split(/\s+/).map(word),
+          cumulativeRatio: 1,
+          cumulativeWords: 12,
+        }),
+      ],
+      transcript: transcriptWith("Alpha Beta Gamma unrelated words drift away from opener evidence", 10_000, 14_000),
+    });
+
+    const result = validateLeafChapterPlan(context, createRootCurationSpan(context), {
+      spanPath: "root",
+      strategy: "weak reverse evidence",
+      chapters: [{ title: "Chapter 1", startTime: 10, epubNodeId: "chapter-1" }],
+    });
+
+    expect(result.accepted).toBe(false);
+    if (result.accepted) throw new Error("expected weak leaf evidence rejection");
+    expect(result.errors.join("\n")).toContain("lacks strong opener/near-opener EPUB evidence");
+  });
+
   test("validateLeafChapterPlan requires first leaf chapter to use inherited boundary", () => {
     const context = ctx({
       epubEntries: [
@@ -1109,6 +1190,32 @@ describe("chapter curation tools", () => {
       recursiveSpanAllowsLeaf(
         {
           epubStartIndex: 0,
+          epubEndIndex: 2,
+          startTime: 0,
+          endTime: 60,
+          depth: 0,
+          path: "root",
+        },
+        false
+      )
+    ).toBe(true);
+    expect(
+      recursiveSpanAllowsLeaf(
+        {
+          epubStartIndex: 0,
+          epubEndIndex: 3,
+          startTime: 0,
+          endTime: 60,
+          depth: 0,
+          path: "root",
+        },
+        false
+      )
+    ).toBe(false);
+    expect(
+      recursiveSpanAllowsLeaf(
+        {
+          epubStartIndex: 0,
           epubEndIndex: 8,
           startTime: 0,
           endTime: 3 * 60 * 60,
@@ -1135,8 +1242,9 @@ describe("chapter curation tools", () => {
       manifestation: manifestation({ duration_ms: 300_000 }),
       epubEntries: [
         epubEntry({ id: "front", title: "Prologue", cumulativeRatio: 0.2, cumulativeWords: 4 }),
-        epubEntry({ id: "chapter-1", title: "Chapter 1", cumulativeRatio: 0.6, cumulativeWords: 16 }),
-        epubEntry({ id: "chapter-2", title: "Chapter 2", cumulativeRatio: 1, cumulativeWords: 24 }),
+        epubEntry({ id: "chapter-1", title: "Chapter 1", cumulativeRatio: 0.5, cumulativeWords: 16 }),
+        epubEntry({ id: "chapter-2", title: "Chapter 2", cumulativeRatio: 0.8, cumulativeWords: 24 }),
+        epubEntry({ id: "chapter-3", title: "Chapter 3", cumulativeRatio: 1, cumulativeWords: 32 }),
       ],
     });
     const decisions: string[] = [];
@@ -1190,8 +1298,9 @@ describe("chapter curation tools", () => {
       manifestation: manifestation({ duration_ms: 300_000 }),
       epubEntries: [
         epubEntry({ id: "front", title: "Prologue", cumulativeRatio: 0.2, cumulativeWords: 4 }),
-        epubEntry({ id: "chapter-1", title: "Chapter 1", cumulativeRatio: 0.6, cumulativeWords: 16 }),
-        epubEntry({ id: "chapter-2", title: "Chapter 2", cumulativeRatio: 1, cumulativeWords: 24 }),
+        epubEntry({ id: "chapter-1", title: "Chapter 1", cumulativeRatio: 0.5, cumulativeWords: 16 }),
+        epubEntry({ id: "chapter-2", title: "Chapter 2", cumulativeRatio: 0.8, cumulativeWords: 24 }),
+        epubEntry({ id: "chapter-3", title: "Chapter 3", cumulativeRatio: 1, cumulativeWords: 32 }),
       ],
     });
     let active = 0;
