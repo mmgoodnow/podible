@@ -1149,7 +1149,7 @@ describe("chapter curation tools", () => {
     expect(result.accepted).toBe(true);
   });
 
-  test("validateLeafChapterPlan rejects weak reverse EPUB evidence for leaf chapter starts", () => {
+  test("validateLeafChapterPlan defers broad-window reverse evidence to the boundary judge", () => {
     const context = ctx({
       epubEntries: [
         epubEntry({
@@ -1166,13 +1166,11 @@ describe("chapter curation tools", () => {
 
     const result = validateLeafChapterPlan(context, createRootCurationSpan(context), {
       spanPath: "root",
-      strategy: "weak reverse evidence",
+      strategy: "boundary judge evidence",
       chapters: [{ title: "Chapter 1", startTime: 10, epubNodeId: "chapter-1" }],
     });
 
-    expect(result.accepted).toBe(false);
-    if (result.accepted) throw new Error("expected weak leaf evidence rejection");
-    expect(result.errors.join("\n")).toContain("lacks strong opener/near-opener EPUB evidence");
+    expect(result.accepted).toBe(true);
   });
 
   test("validateLeafChapterPlan requires first leaf chapter to use inherited boundary", () => {

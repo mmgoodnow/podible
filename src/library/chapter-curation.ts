@@ -249,11 +249,6 @@ export type EpubTextSearchResult = {
   }>;
 };
 
-type LeafBoundaryEvidence = Pick<
-  EpubTextSearchResult["matches"][number],
-  "relationToTarget" | "orderedMatchRatio"
->;
-
 const GENERIC_EPUB_OPENER_TOKENS = new Set([
   "chapter",
   "chapters",
@@ -1593,28 +1588,6 @@ function buildPlanAudit(ctx: Pick<ChapterCurationContext, "epubEntries" | "trans
   }));
 }
 
-function leafBoundaryEvidence(
-  ctx: Pick<ChapterCurationContext, "epubEntries">,
-  heading: NonNullable<ChapterPlanAuditEntry["claimedEpubHeading"]>,
-  transcriptAfterStartText: string
-): LeafBoundaryEvidence | null {
-  if (!transcriptAfterStartText.trim()) return null;
-  const result = searchEpubText(ctx, {
-    query: transcriptAfterStartText,
-    nodeIds: [heading.id],
-    targetNodeId: heading.id,
-    limit: 5,
-  });
-  return result.matches.find((match) => match.epubNodeId === heading.id) ?? null;
-}
-
-function hasStrongLeafBoundaryEvidence(evidence: LeafBoundaryEvidence | null, _evidenceTokenCount: number): boolean {
-  if (!evidence) return false;
-  if (evidence.relationToTarget !== "opener" && evidence.relationToTarget !== "near_opener") return false;
-  if (evidence.orderedMatchRatio < LEAF_BOUNDARY_MIN_ORDERED_MATCH_RATIO) return false;
-  return true;
-}
-
 function matchingBadEmbeddedBoundaryRatio(ctx: Pick<ChapterCurationContext, "durationMs" | "embeddedChapters">, chapters: SubmittedChapter[]): number {
   const embedded = getEmbeddedAudioChapters(ctx);
   const badEmbedded =
@@ -1680,7 +1653,6 @@ function spanDurationSeconds(span: ChapterCurationSpan): number {
 }
 
 const INHERITED_BOUNDARY_TOLERANCE_SECONDS = 2;
-const LEAF_BOUNDARY_MIN_ORDERED_MATCH_RATIO = 0.5;
 const MAX_AUTOMATIC_LEAF_EPUB_NODES = 3;
 
 function childSpanPath(parent: ChapterCurationSpan, side: "L" | "R"): string {
@@ -2346,13 +2318,6 @@ export function validateLeafChapterPlan(
       if (overlap.length < Math.min(2, evidenceTokens.length)) {
         errors.push(`chapters[${index}] has weak transcript evidence for claimed EPUB heading "${heading.title}"`);
       }
-      const boundaryEvidence = leafBoundaryEvidence(ctx, heading, audit[index]?.transcriptAfterStart ?? "");
-      if (!hasStrongLeafBoundaryEvidence(boundaryEvidence, evidenceTokens.length)) {
-        errors.push(
-          `chapters[${index}] lacks strong opener/near-opener EPUB evidence for claimed heading "${heading.title}" ` +
-            `(relation=${boundaryEvidence?.relationToTarget ?? "none"}, orderedMatchRatio=${boundaryEvidence?.orderedMatchRatio ?? 0})`
-        );
-      }
     }
   }
 
@@ -2831,7 +2796,7 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, forc
         : "This span is too broad for a leaf plan. You must call submitFulcrumSplit with a validated internal EPUB node start.",
     "For a fulcrum, pick a high-confidence internal EPUB node start with transcript opener evidence at the timestamp.",
     allowLeaf
-      ? "For a leaf, submit only chapter starts inside this span and include epubNodeId for every EPUB-backed chapter. Each non-inherited EPUB-backed start must reverse-search to opener/near_opener for that EPUB node."
+      ? "For a leaf, submit only chapter starts inside this span and include epubNodeId for every EPUB-backed chapter. Each non-inherited EPUB-backed start will be judged as a boundary claim: previous EPUB tail should match transcript before the timestamp, and target EPUB head should match transcript at or immediately after it."
       : "",
     spanAudioOnlyIntervals.length > 0
       ? "Some transcript time ranges in this span are classified as audio-only material with no EPUB node. Do not align EPUB chapter starts to those intervals unless opener evidence proves the EPUB text starts there."
