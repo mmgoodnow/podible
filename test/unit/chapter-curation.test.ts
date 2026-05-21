@@ -725,7 +725,7 @@ describe("chapter curation tools", () => {
         output: {
           accepted: false,
           confidence: "high",
-          finding: "pre_target_context",
+          finding: "window_starts_before_opener_evidence",
           openerEvidenceAtTimestamp: "offset",
           reason: "Candidate starts in the previous chapter.",
           concerns: ["better candidate is 700s earlier"],

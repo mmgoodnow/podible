@@ -1094,12 +1094,12 @@ const submitFulcrumJudgmentSchema = z.object({
   accepted: z.boolean(),
   confidence: z.enum(["low", "medium", "high"]),
   finding: z.enum([
-    "opener_at_timestamp",
-    "opener_offset_in_window",
-    "pre_target_context",
-    "interior_match",
-    "generic_overlap",
-    "insufficient_evidence",
+    "opener_evidence_at_timestamp",
+    "opener_evidence_offset_in_window",
+    "window_starts_before_opener_evidence",
+    "tool_classified_interior_match",
+    "generic_or_weak_overlap",
+    "submitted_evidence_insufficient",
   ]),
   openerEvidenceAtTimestamp: z.enum(["present", "offset", "absent", "unclear"]),
   reason: z.string().trim().min(1),
@@ -2750,7 +2750,8 @@ function createFulcrumJudgeAgent(ctx: ChapterCurationContext): Agent {
       "Accept only when distinctive title/prose evidence appears at or immediately after the proposed timestamp.",
       "Do not invent a full chapter plan. Judge only this proposed split.",
       "Do not recommend alternate timestamps or EPUB nodes. If the split is not proven, classify the evidence problem and explain only what is visible in the supplied evidence.",
-      "Do not use scene-language such as 'inside a scene', 'mid-scene', or claims about ongoing narrative continuity. Prefer evidence terms: opener_at_timestamp, opener_offset_in_window, pre_target_context, interior_match, generic_overlap, or insufficient_evidence.",
+      "The finding enum is an evidence classification from the submitted audit/window, not a ground-truth timestamp label. Use it only when the supplied evidence directly supports that classification.",
+      "Do not use scene-language such as 'inside a scene', 'mid-scene', or claims about ongoing narrative continuity. Prefer evidence terms: opener_evidence_at_timestamp, opener_evidence_offset_in_window, window_starts_before_opener_evidence, tool_classified_interior_match, generic_or_weak_overlap, or submitted_evidence_insufficient.",
       "You must call submitFulcrumJudgment.",
     ].join("\n"),
     tools: [
@@ -2773,6 +2774,7 @@ function fulcrumJudgePrompt(ctx: ChapterCurationContext, span: ChapterCurationSp
     "Prefer rejecting over accepting a suspicious split; the curator owns the next search.",
     "Do not suggest alternate timestamps or nodes.",
     "Do not make claims about scenes or narrative continuity. You are only judging whether opener/title evidence is present at or immediately after the submitted timestamp.",
+    "Treat the finding as an evidence classification from the supplied audit/window, not as ground truth about the true boundary.",
     "",
     JSON.stringify(
       {
@@ -2857,16 +2859,16 @@ async function judgeFulcrumSplit(
 
 function rejectedFulcrumJudgeInstruction(judgment: SubmitFulcrumJudgmentResult): string {
   switch (judgment.finding) {
-    case "opener_offset_in_window":
-    case "pre_target_context":
-      return "The judge only found that opener evidence was not at the submitted timestamp. Use transcript search/window evidence to identify the first opener word or silence immediately before it, then submit that evidenced timestamp.";
-    case "interior_match":
-    case "generic_overlap":
+    case "opener_evidence_offset_in_window":
+    case "window_starts_before_opener_evidence":
+      return "The judge only classified the submitted evidence as showing opener evidence away from the submitted timestamp. Verify any adjusted timestamp with your own transcript search/window evidence before resubmitting.";
+    case "tool_classified_interior_match":
+    case "generic_or_weak_overlap":
       return "Do not resubmit nearby body-text overlap. Return to the target EPUB opener text, search a different distinctive opener phrase, and reverse-check transcript context with searchEpubText before submitting.";
-    case "insufficient_evidence":
+    case "submitted_evidence_insufficient":
       return "Gather stronger evidence before another split: call researchEpubBoundary or search distinctive opener prose with rgSearchTranscript/fuzzySearchTranscript, inspect the window, and reverse-check the transcript phrase.";
-    case "opener_at_timestamp":
-      return "The judge rejected despite opener_at_timestamp classification. Reinspect the transcript window and submit only if the first opener word is at or immediately after the proposed timestamp.";
+    case "opener_evidence_at_timestamp":
+      return "The judge rejected despite opener_evidence_at_timestamp classification. Reinspect the transcript window and submit only if the first opener word is at or immediately after the proposed timestamp.";
   }
 }
 
