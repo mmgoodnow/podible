@@ -204,7 +204,11 @@ function traceDetailFor(traceDir: string | null, file: string | null): unknown {
   if (!fullPath.startsWith(traceDir + path.sep)) return null;
   const payload = readJsonFile(fullPath) as JsonRecord | null;
   if (!payload) return null;
-  const rawResponses = Array.isArray(payload.rawResponses) ? payload.rawResponses : [];
+  const rawResponses = Array.isArray(payload.rawResponses)
+    ? payload.rawResponses
+    : Array.isArray(payload.error?.state?.modelResponses)
+      ? payload.error.state.modelResponses
+      : [];
   const reasoningSummaries = rawResponses.flatMap((response: JsonRecord) =>
     Array.isArray(response.output)
       ? response.output.flatMap((item: JsonRecord) =>
