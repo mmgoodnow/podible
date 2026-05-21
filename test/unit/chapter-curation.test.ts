@@ -824,6 +824,106 @@ describe("chapter curation tools", () => {
     expect(result.audit.boundaryComparison.targetEpub.headText).toContain("Helldiver");
   });
 
+  test("validateFulcrumSplit splits boundary audit text with word timings inside an utterance", async () => {
+    const context = ctx({
+      durationMs: 600_000,
+      manifestation: manifestation({ duration_ms: 600_000 }),
+      epubEntries: [
+        epubEntry({
+          id: "chapter-1",
+          title: "Chapter 1",
+          cumulativeRatio: 0.5,
+          cumulativeWords: 8,
+          words: "hurry up and evolve".split(/\s+/).map(word),
+        }),
+        epubEntry({
+          id: "chapter-2",
+          title: "Chapter 2",
+          cumulativeRatio: 1,
+          cumulativeWords: 16,
+          words: "I pretend the matches came from one of the Minervans".split(/\s+/).map(word),
+        }),
+      ],
+      transcript: {
+        version: "test",
+        text: "hurry up and evolve I pretend the matches came from one of the Minervans",
+        utterances: [{ startMs: 178_000, endMs: 188_000, text: "hurry up and evolve I pretend the matches came from one of the Minervans" }],
+        words: [
+          { text: "hurry", token: "hurry", startMs: 178_000, endMs: 178_300 },
+          { text: "up", token: "up", startMs: 178_300, endMs: 178_500 },
+          { text: "and", token: "and", startMs: 178_500, endMs: 178_700 },
+          { text: "evolve", token: "evolve", startMs: 178_700, endMs: 179_000 },
+          { text: "I", token: "i", startMs: 180_000, endMs: 180_100 },
+          { text: "pretend", token: "pretend", startMs: 180_100, endMs: 180_400 },
+          { text: "the", token: "the", startMs: 180_400, endMs: 180_600 },
+          { text: "matches", token: "matches", startMs: 180_600, endMs: 181_000 },
+          { text: "came", token: "came", startMs: 181_000, endMs: 181_300 },
+          { text: "from", token: "from", startMs: 181_300, endMs: 181_600 },
+          { text: "one", token: "one", startMs: 181_600, endMs: 181_800 },
+          { text: "of", token: "of", startMs: 181_800, endMs: 182_000 },
+          { text: "the", token: "the", startMs: 182_000, endMs: 182_200 },
+          { text: "Minervans", token: "minervans", startMs: 182_200, endMs: 182_800 },
+        ],
+      },
+    });
+
+    const result = await validateFulcrumSplit(context, createRootCurationSpan(context), {
+      spanPath: "root",
+      epubNodeId: "chapter-2",
+      title: "Chapter 2",
+      startTime: 180,
+    });
+
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error(result.errors.join("\n"));
+    expect(result.audit.boundaryComparison.transcriptPrecision).toBe("word");
+    expect(result.audit.boundaryComparison.transcriptBefore).toContain("hurry up and evolve");
+    expect(result.audit.boundaryComparison.transcriptAfter.startsWith("I pretend the matches")).toBe(true);
+    expect(result.audit.boundaryComparison.transcriptAfter).not.toContain("hurry");
+  });
+
+  test("validateFulcrumSplit marks utterance precision when word timings are unavailable", async () => {
+    const context = ctx({
+      durationMs: 600_000,
+      manifestation: manifestation({ duration_ms: 600_000 }),
+      epubEntries: [
+        epubEntry({
+          id: "chapter-1",
+          title: "Chapter 1",
+          cumulativeRatio: 0.5,
+          cumulativeWords: 8,
+          words: "tail tail chapter twelve".split(/\s+/).map(word),
+        }),
+        epubEntry({
+          id: "chapter-2",
+          title: "Chapter 2",
+          cumulativeRatio: 1,
+          cumulativeWords: 16,
+          words: "head head head head".split(/\s+/).map(word),
+        }),
+      ],
+      transcript: {
+        version: "test",
+        text: "tail tail chapter twelve head head head head",
+        words: [],
+        utterances: [{ startMs: 180_000, endMs: 186_000, text: "tail tail chapter twelve head head head head" }],
+      },
+    });
+
+    const result = await validateFulcrumSplit(context, createRootCurationSpan(context), {
+      spanPath: "root",
+      epubNodeId: "chapter-2",
+      title: "Chapter 2",
+      startTime: 180,
+    });
+
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error(result.errors.join("\n"));
+    expect(result.audit.boundaryComparison.transcriptPrecision).toBe("utterance");
+    expect(result.audit.boundaryComparison.transcriptPrecisionNote).toContain("true boundary may fall inside");
+    expect(result.audit.boundaryComparison.transcriptAfter).toContain("tail tail chapter twelve head head");
+  });
+
   test("validateFulcrumSplit rejects title-only evidence", async () => {
     const context = ctx({
       durationMs: 600_000,
@@ -1315,6 +1415,8 @@ describe("chapter curation tools", () => {
               title: "Chapter 1",
               startTime: 120,
               boundaryComparison: {
+                transcriptPrecision: "utterance",
+                transcriptPrecisionNote: null,
                 previousEpub: { epubNodeId: null, title: null, tailText: "" },
                 targetEpub: { epubNodeId: "chapter-1", title: "Chapter 1", headText: "" },
                 transcriptBefore: "",
@@ -1380,6 +1482,8 @@ describe("chapter curation tools", () => {
                   title: "Chapter 1",
                   startTime: 120,
                   boundaryComparison: {
+                    transcriptPrecision: "utterance",
+                    transcriptPrecisionNote: null,
                     previousEpub: { epubNodeId: null, title: null, tailText: "" },
                     targetEpub: { epubNodeId: "chapter-1", title: "Chapter 1", headText: "" },
                     transcriptBefore: "",
@@ -1442,6 +1546,8 @@ describe("chapter curation tools", () => {
             title: "Chapter 1",
             startTime: 60,
             boundaryComparison: {
+              transcriptPrecision: "utterance",
+              transcriptPrecisionNote: null,
               previousEpub: { epubNodeId: null, title: null, tailText: "" },
               targetEpub: { epubNodeId: "chapter-1", title: "Chapter 1", headText: "" },
               transcriptBefore: "",

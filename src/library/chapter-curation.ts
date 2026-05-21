@@ -70,6 +70,8 @@ export type FulcrumValidationAudit = {
   title: string;
   startTime: number;
   boundaryComparison: {
+    transcriptPrecision: "word" | "utterance";
+    transcriptPrecisionNote: string | null;
     previousEpub: {
       epubNodeId: string | null;
       title: string | null;
@@ -1545,6 +1547,46 @@ function transcriptBeforeStart(ctx: Pick<ChapterCurationContext, "transcript">, 
     .join(" ");
 }
 
+function transcriptWordsBeforeStart(ctx: Pick<ChapterCurationContext, "transcript">, startMs: number, radiusMs: number): string | null {
+  const words = ctx.transcript.words
+    .filter((word) => Number.isFinite(word.startMs) && Number.isFinite(word.endMs) && word.endMs >= startMs - radiusMs && word.startMs < startMs)
+    .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+  if (words.length === 0) return null;
+  return words.map((word) => normalizeToolText(word.text)).filter(Boolean).join(" ");
+}
+
+function transcriptWordsAfterStart(ctx: Pick<ChapterCurationContext, "transcript">, startMs: number, radiusMs: number): string | null {
+  const words = ctx.transcript.words
+    .filter((word) => Number.isFinite(word.startMs) && Number.isFinite(word.endMs) && word.endMs >= startMs && word.startMs <= startMs + radiusMs)
+    .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+  if (words.length === 0) return null;
+  return words.map((word) => normalizeToolText(word.text)).filter(Boolean).join(" ");
+}
+
+function transcriptBoundaryText(ctx: Pick<ChapterCurationContext, "transcript">, startMs: number, radiusMs: number): {
+  before: string;
+  after: string;
+  precision: "word" | "utterance";
+  note: string | null;
+} {
+  const wordBefore = transcriptWordsBeforeStart(ctx, startMs, radiusMs);
+  const wordAfter = transcriptWordsAfterStart(ctx, startMs, radiusMs);
+  if (wordBefore !== null || wordAfter !== null) {
+    return {
+      before: normalizeToolText(wordBefore ?? ""),
+      after: normalizeToolText(wordAfter ?? ""),
+      precision: "word",
+      note: null,
+    };
+  }
+  return {
+    before: normalizeToolText(transcriptBeforeStart(ctx, startMs, radiusMs)),
+    after: normalizeToolText(transcriptAfterStart(ctx, startMs, radiusMs)),
+    precision: "utterance",
+    note: "Boundary context uses utterance timing; a true boundary may fall inside the displayed utterance. If one utterance contains previous EPUB tail followed by target EPUB head, its start timestamp may be the best available boundary.",
+  };
+}
+
 function nearestEmbeddedBoundary(
   embeddedChapters: ChapterCurationTiming[],
   startTime: number
@@ -2099,11 +2141,14 @@ function buildBoundaryComparisonAudit(
   const previous = input.epubIndex > 0 ? (ctx.epubEntries[input.epubIndex - 1] ?? null) : null;
   const startMs = secondsToMs(input.startTime);
   const transcriptWindow = input.transcriptWindow ?? getTranscriptWindowFromContext(ctx, startMs, 45_000);
+  const boundaryText = transcriptBoundaryText(ctx, startMs, 45_000);
   return {
     epubNodeId: entry?.id ?? null,
     title: entry?.title ?? input.title,
     startTime: input.startTime,
     boundaryComparison: {
+      transcriptPrecision: boundaryText.precision,
+      transcriptPrecisionNote: boundaryText.note,
       previousEpub: {
         epubNodeId: previous?.id ?? null,
         title: previous?.title ?? null,
@@ -2114,8 +2159,8 @@ function buildBoundaryComparisonAudit(
         title: entry?.title ?? input.title,
         headText: entry ? summarizeFirstWords(entry, 56) : "",
       },
-      transcriptBefore: normalizeToolText(transcriptBeforeStart(ctx, startMs, 45_000)).slice(-1_000),
-      transcriptAfter: normalizeToolText(transcriptAfterStart(ctx, startMs, 45_000)).slice(0, 1_000),
+      transcriptBefore: boundaryText.before.slice(-1_000),
+      transcriptAfter: boundaryText.after.slice(0, 1_000),
     },
     transcriptWindow: normalizeToolText(transcriptWindow.text).slice(0, 1_000),
     candidates: input.candidates ?? [],
@@ -2134,6 +2179,39 @@ function boundaryAfterEpubEvidence(ctx: ChapterCurationContext, audit: FulcrumVa
       limit: 5,
     }).matches.find((match) => match.epubNodeId === targetNodeId) ?? null
   );
+}
+
+function orderedSequenceIndex(tokens: string[], sequence: string[]): number {
+  if (sequence.length === 0 || tokens.length < sequence.length) return -1;
+  for (let index = 0; index <= tokens.length - sequence.length; index++) {
+    if (sequence.every((token, offset) => tokens[index + offset] === token)) return index;
+  }
+  return -1;
+}
+
+function boundaryHeadSequences(text: string): string[][] {
+  const tokens = normalizedWordTokens(text).filter((token) => token.length > 1);
+  const sequences: string[][] = [];
+  for (let offset = 0; offset <= Math.min(6, Math.max(0, tokens.length - 4)); offset++) {
+    const sequence = tokens.slice(offset, offset + 4);
+    if (sequence.length >= 3) sequences.push(sequence);
+  }
+  return sequences;
+}
+
+function hasMixedUtteranceBoundaryEvidence(audit: FulcrumValidationAudit): boolean {
+  if (audit.boundaryComparison.transcriptPrecision !== "utterance") return false;
+  const transcriptTokens = normalizedWordTokens(audit.boundaryComparison.transcriptAfter).filter((token) => token.length > 1);
+  if (transcriptTokens.length === 0) return false;
+  const previousTailTokens = normalizedWordTokens(audit.boundaryComparison.previousEpub.tailText).filter((token) => token.length > 1);
+  const previousSequence = previousTailTokens.slice(Math.max(0, previousTailTokens.length - 4));
+  if (previousSequence.length < 3) return false;
+  const previousIndex = orderedSequenceIndex(transcriptTokens, previousSequence);
+  if (previousIndex < 0) return false;
+  return boundaryHeadSequences(audit.boundaryComparison.targetEpub.headText).some((sequence) => {
+    const targetIndex = orderedSequenceIndex(transcriptTokens, sequence);
+    return targetIndex > previousIndex;
+  });
 }
 
 export async function validateFulcrumSplit(
@@ -2196,9 +2274,11 @@ export async function validateFulcrumSplit(
     candidates: candidateMatches,
   });
   const boundaryAfterEvidence = boundaryAfterEpubEvidence(ctx, audit);
+  const mixedUtteranceBoundaryEvidence = hasMixedUtteranceBoundaryEvidence(audit);
 
   if (
     entry &&
+    !mixedUtteranceBoundaryEvidence &&
     (!boundaryAfterEvidence ||
       (boundaryAfterEvidence.relationToTarget !== "opener" && boundaryAfterEvidence.relationToTarget !== "near_opener") ||
       boundaryAfterEvidence.orderedMatchRatio < 0.45)
@@ -2834,6 +2914,9 @@ function createChapterBoundaryJudgeAgent(ctx: ChapterCurationContext): Agent {
       "Your job is to decide whether the proposed timestamp is actually the start of the proposed EPUB node.",
       "Judge the boundary claim directly: node X starts at timestamp Y.",
       "Use audit.boundaryComparison first. Compare previousEpub.tailText to transcriptBefore, and targetEpub.headText to transcriptAfter.",
+      "Check audit.boundaryComparison.transcriptPrecision. If it is word, transcriptBefore/transcriptAfter are split by word timing and should be treated as precise boundary context.",
+      "If transcriptPrecision is utterance, the supplied before/after text is lower precision. A true boundary may fall inside a displayed utterance.",
+      "For utterance-level context, accept the utterance timestamp when one utterance contains previous EPUB tail followed by the target EPUB head, such as 'tail tail chapter twelve head head'.",
       "Transcript before the timestamp may match the previous EPUB node; that is positive boundary evidence, not evidence that the target opener is interior.",
       "Reject only when target EPUB opener/title evidence is absent at or immediately after the proposed timestamp, offset earlier/later, generic, pre-target, or clearly only an interior target-node match.",
       "Accept when transcriptBefore plausibly matches the previous EPUB tail and transcriptAfter begins with distinctive target EPUB opener prose/title at or immediately after the proposed timestamp.",
@@ -2864,6 +2947,7 @@ function chapterBoundaryJudgePrompt(ctx: ChapterCurationContext, span: ChapterCu
     "Do not suggest alternate timestamps or nodes.",
     "Do not make claims about scenes or narrative continuity. You are only judging whether this boundary comparison supports node X starting at timestamp Y.",
     "Primary evidence: audit.boundaryComparison. If transcriptBefore matches previousEpub.tailText and transcriptAfter matches targetEpub.headText, that supports acceptance.",
+    "Use audit.boundaryComparison.transcriptPrecision. Word precision is exact enough to split a boundary inside an ASR utterance. Utterance precision is lower precision; if one utterance includes previous EPUB tail followed by the target EPUB head, accepting that utterance start is allowed.",
     "Do not reject merely because transcriptBefore contains non-target prose; that is expected at a real boundary when it matches the previous EPUB node.",
     "Treat the finding as an evidence classification from the supplied audit/window, not as ground truth about the true boundary.",
     "",
