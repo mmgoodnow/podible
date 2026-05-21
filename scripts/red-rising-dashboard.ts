@@ -136,6 +136,38 @@ function readJsonFile(filePath: string | null): unknown {
   }
 }
 
+function summarizeResultFile(filePath: string | null): unknown {
+  if (!filePath || !existsSync(filePath)) return null;
+  const stat = statSync(filePath);
+  const value = readJsonFile(filePath) as JsonRecord | null;
+  if (!value || typeof value !== "object") return { fileBytes: stat.size };
+  const result = value.result && typeof value.result === "object" ? (value.result as JsonRecord) : null;
+  return {
+    fileBytes: stat.size,
+    accepted: typeof result?.accepted === "boolean" ? result.accepted : null,
+    chapters: Array.isArray(result?.chapters) ? result.chapters.length : null,
+    strategy: typeof result?.strategy === "string" ? result.strategy : null,
+    errors: Array.isArray(result?.errors) ? result.errors.slice(0, 8) : [],
+    recursiveReports: Array.isArray(value.recursiveReports) ? value.recursiveReports.length : null,
+    recursiveSpanTraces: Array.isArray(value.recursiveSpanTraces) ? value.recursiveSpanTraces.length : null,
+  };
+}
+
+function compactForDisplay(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") return value.length > 8_000 ? `${value.slice(0, 8_000)}\n... [truncated ${value.length - 8_000} chars]` : value;
+  if (typeof value !== "object" || value === null) return value;
+  if (depth >= 4) return Array.isArray(value) ? `[array length ${(value as unknown[]).length}]` : "[object truncated]";
+  if (Array.isArray(value)) {
+    const shown = value.slice(0, 20).map((item) => compactForDisplay(item, depth + 1));
+    return value.length > shown.length ? [...shown, `... [${value.length - shown.length} more items]`] : shown;
+  }
+  const entries = Object.entries(value as JsonRecord);
+  const compact: JsonRecord = {};
+  for (const [key, entryValue] of entries.slice(0, 40)) compact[key] = compactForDisplay(entryValue, depth + 1);
+  if (entries.length > 40) compact.__truncatedKeys = entries.length - 40;
+  return compact;
+}
+
 function traceFilesFor(traceDir: string | null): string[] {
   if (!traceDir || !existsSync(traceDir) || !statSync(traceDir).isDirectory()) return [];
   return readdirSync(traceDir)
@@ -149,46 +181,44 @@ function traceSummariesFor(traceDir: string | null): RunSummary["traceSummaries"
   return readdirSync(traceDir)
     .filter((name) => name.endsWith(".json"))
     .sort()
-    .slice(-30)
-    .flatMap((file) => {
-      const fullPath = path.join(traceDir, file);
-      const payload = readJsonFile(fullPath) as JsonRecord | null;
-      if (!payload) return [];
-      const rawResponses = Array.isArray(payload.rawResponses) ? payload.rawResponses : [];
-      const reasoningSummaries = rawResponses.flatMap((response: JsonRecord) =>
-        Array.isArray(response.output)
-          ? response.output.flatMap((item: JsonRecord) =>
-              item?.type === "reasoning" && Array.isArray(item.content)
-                ? item.content.map((content: JsonRecord) => String(content.text ?? "")).filter(Boolean)
-                : []
-            )
-          : []
-      );
-      const spanPath =
-        typeof payload.span?.path === "string"
-          ? payload.span.path
-          : typeof payload.split?.spanPath === "string"
-            ? payload.split.spanPath
-            : null;
-      const kind = file.includes("fulcrum-judge") ? "judge" : file.includes("span-") ? "curator" : "classifier";
-      const title =
-        kind === "judge"
-          ? `${payload.split?.epubNodeId ?? "judge"} @ ${payload.split?.startTime ?? ""}`
-          : kind === "curator"
-            ? `${spanPath ?? "span"}`
-            : "audible EPUB classifier";
-      return [
-        {
-          file,
-          kind,
-          spanPath,
-          title,
-          reasoningSummaries,
-          finalOutput: payload.finalOutput ?? payload.judgment ?? payload.selection ?? null,
-        },
-      ];
+    .slice(-160)
+    .map((file) => {
+      const spanPath = file.match(/-span-(.+?)-attempt-/)?.[1] ?? file.match(/fulcrum-judge-(.+?)-/)?.[1] ?? null;
+      const kind = file.includes("fulcrum-judge") ? "judge" : file.includes("-span-") ? "curator" : "classifier";
+      const title = kind === "classifier" ? "audible EPUB classifier" : (spanPath ?? kind);
+      return {
+        file,
+        kind,
+        spanPath,
+        title,
+        reasoningSummaries: [],
+        finalOutput: null,
+      };
     })
     .reverse();
+}
+
+function traceDetailFor(traceDir: string | null, file: string | null): unknown {
+  if (!traceDir || !file || path.basename(file) !== file) return null;
+  const fullPath = path.join(traceDir, file);
+  if (!fullPath.startsWith(traceDir + path.sep)) return null;
+  const payload = readJsonFile(fullPath) as JsonRecord | null;
+  if (!payload) return null;
+  const rawResponses = Array.isArray(payload.rawResponses) ? payload.rawResponses : [];
+  const reasoningSummaries = rawResponses.flatMap((response: JsonRecord) =>
+    Array.isArray(response.output)
+      ? response.output.flatMap((item: JsonRecord) =>
+          item?.type === "reasoning" && Array.isArray(item.content)
+            ? item.content.map((content: JsonRecord) => String(content.text ?? "")).filter(Boolean)
+            : []
+        )
+      : []
+  );
+  return {
+    file,
+    reasoningSummaries: reasoningSummaries.map((summary) => summary.length > 12_000 ? `${summary.slice(0, 12_000)}\n... [truncated ${summary.length - 12_000} chars]` : summary),
+    finalOutput: compactForDisplay(payload.finalOutput ?? payload.judgment ?? payload.selection ?? payload.error ?? null),
+  };
 }
 
 function secondsBetween(start: string | null, end: string | null): number | null {
@@ -209,7 +239,7 @@ function errorMessage(error: unknown): string {
   return error ? JSON.stringify(error) : "";
 }
 
-function summarizeRun(eventLog: string): RunSummary {
+function summarizeRun(eventLog: string, includeDetails = true): RunSummary {
   const events = readJsonl(eventLog);
   const eventLogMtimeMs = existsSync(eventLog) ? statSync(eventLog).mtimeMs : 0;
   const resultPath = artifactPathFor(eventLog, "result");
@@ -394,22 +424,22 @@ function summarizeRun(eventLog: string): RunSummary {
     rejectedNodes: [...rejectedNodes.entries()].map(([epubNodeId, count]) => ({ epubNodeId, count })).sort((a, b) => b.count - a.count).slice(0, 12),
     excludedNodes,
     audioOnlyIntervalDetails,
-    eventTail: events.slice(-80).map((event) => ({
+    eventTail: includeDetails ? events.slice(-80).map((event) => ({
       ts: typeof event.ts === "string" ? event.ts : null,
       type: String(event.type ?? ""),
       spanPath: typeof event.span?.path === "string" ? event.span.path : null,
       toolName: typeof event.toolName === "string" ? event.toolName : null,
       message: typeof event.message === "string" ? event.message : "",
-    })),
-    resultSummary: readJsonFile(resultPath),
-    traceFiles: traceFilesFor(traceDir),
-    judgeDecisions: judgeDecisions.slice(-80).reverse(),
-    treeSpans: allSpans.sort((a, b) => (a.depth ?? 0) - (b.depth ?? 0) || a.path.localeCompare(b.path)),
-    treeEdges,
-    boundaryMarkers: [...boundaryMarkers]
+    })) : [],
+    resultSummary: includeDetails ? summarizeResultFile(resultPath) : null,
+    traceFiles: includeDetails ? traceFilesFor(traceDir) : [],
+    judgeDecisions: includeDetails ? judgeDecisions.slice(-80).reverse() : [],
+    treeSpans: includeDetails ? allSpans.sort((a, b) => (a.depth ?? 0) - (b.depth ?? 0) || a.path.localeCompare(b.path)) : [],
+    treeEdges: includeDetails ? treeEdges : [],
+    boundaryMarkers: includeDetails ? [...boundaryMarkers]
       .sort((a, b) => a.startTime - b.startTime || a.title.localeCompare(b.title))
-      .filter((marker, index, markers) => index === 0 || marker.startTime !== markers[index - 1]!.startTime || marker.epubNodeId !== markers[index - 1]!.epubNodeId),
-    traceSummaries: traceSummariesFor(traceDir),
+      .filter((marker, index, markers) => index === 0 || marker.startTime !== markers[index - 1]!.startTime || marker.epubNodeId !== markers[index - 1]!.epubNodeId) : [],
+    traceSummaries: includeDetails ? traceSummariesFor(traceDir) : [],
   };
 }
 
@@ -457,6 +487,8 @@ function html(): string {
     .tree-node strong { display: block; font-size: 10px; line-height: 1.05; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .tree-node span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .tree-node .small { font-size: 9px; }
+    .tree-node.trace-link { cursor: pointer; }
+    .tree-node.trace-link:hover { filter: brightness(1.18); }
     .tree-node.leaf { border-color: rgba(139,214,147,0.55); }
     .tree-node.split { border-color: rgba(121,184,255,0.65); }
     .tree-node.error { border-color: rgba(255,139,139,0.7); }
@@ -470,6 +502,10 @@ function html(): string {
     .tick-label { position: absolute; top: 8px; transform: translateX(-50%); max-width: 130px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .tick-time { position: absolute; top: 94px; transform: translateX(-50%); font-size: 10px; color: var(--muted); }
     details { border-top: 1px solid var(--line); padding: 8px 0; }
+    details.section-details { border-top: 0; padding: 0; }
+    details.section-details > summary { list-style: none; }
+    details.section-details > summary::-webkit-details-marker { display: none; }
+    details.section-details > summary h2 { display: inline; }
     summary { cursor: pointer; }
     @media (max-width: 1000px) { .grid, .two { grid-template-columns: 1fr; } header { align-items: flex-start; flex-direction: column; } }
   </style>
@@ -477,7 +513,7 @@ function html(): string {
 <body>
   <header>
     <h1>Red Rising Curation Runs</h1>
-    <div class="muted small">Auto-refreshes every 2s. Reading <span class="mono">${caseDir}</span>.</div>
+    <div class="muted small">Auto-refreshes every 5s. Reading <span class="mono">${caseDir}</span>.</div>
   </header>
   <main>
     <section id="current"></section>
@@ -490,6 +526,7 @@ function html(): string {
     let selectedRunId = null;
     let latestRuns = [];
     let openTraceDetails = new Set();
+    let openSectionDetails = new Set();
     const fmt = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit", month: "short", day: "numeric" });
     const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
     const num = (value) => value == null ? "" : Number(value).toLocaleString();
@@ -549,6 +586,7 @@ function html(): string {
 
     function renderTree(run) {
       const byDepth = new Map();
+      const traceSpanPaths = new Set((run.traceSummaries || []).map((trace) => trace.spanPath).filter(Boolean));
       for (const span of run.treeSpans || []) {
         const depth = span.depth ?? 0;
         if (!byDepth.has(depth)) byDepth.set(depth, []);
@@ -565,7 +603,8 @@ function html(): string {
             const left = depth === 0 ? 0 : slot / slots * 100;
             const width = depth === 0 ? 100 : 100 / slots;
             const label = (s.path ?? "") + ": " + (s.nodeCount ?? "") + " nodes, " + Math.round(s.startTime ?? 0) + "-" + Math.round(s.endTime ?? 0) + "s, tools " + (s.toolCalls ?? 0) + ", rejects " + (s.judgeRejected ?? 0) + ", " + (s.terminal ?? "active");
-            return '<div class="tree-node ' + esc(s.terminal || "active") + '" title="' + esc(label) + '" style="left:calc(' + left + '% + 4px);width:calc(' + width + '% - 8px)"><strong><code>' + esc(s.path) + '</code></strong><span class="small muted">n ' + esc(s.nodeCount ?? "") + ' · ' + esc(Math.round(s.startTime ?? 0)) + '-' + esc(Math.round(s.endTime ?? 0)) + 's</span><span class="small">t ' + esc(s.toolCalls) + ' · r ' + esc(s.judgeRejected) + '</span><span class="small ' + (s.terminal === "error" ? "failed" : "") + '">' + esc(s.terminal ?? "active") + '</span></div>';
+            const hasTrace = traceSpanPaths.has(s.path);
+            return '<div class="tree-node ' + esc(s.terminal || "active") + (hasTrace ? ' trace-link' : '') + '" data-span-path="' + esc(s.path) + '" title="' + esc(label + (hasTrace ? " - click to open trace" : "")) + '" style="left:calc(' + left + '% + 4px);width:calc(' + width + '% - 8px)"><strong><code>' + esc(s.path) + '</code></strong><span class="small muted">n ' + esc(s.nodeCount ?? "") + ' · ' + esc(Math.round(s.startTime ?? 0)) + '-' + esc(Math.round(s.endTime ?? 0)) + 's</span><span class="small">t ' + esc(s.toolCalls) + ' · r ' + esc(s.judgeRejected) + '</span><span class="small ' + (s.terminal === "error" ? "failed" : "") + '">' + esc(s.terminal ?? "active") + '</span></div>';
           }).join("") +
           '</div>';
       }).join("");
@@ -597,12 +636,10 @@ function html(): string {
     }
 
     function renderTraceSummaries(run) {
-      if (!run.traceSummaries?.length) return '<div class="card section"><h2>Trace Summaries</h2><div class="muted">No trace summaries yet. Hidden chain-of-thought is not available; this panel shows stored reasoning summaries and outputs when present.</div></div>';
-      return '<div class="card section"><h2>Trace Summaries</h2><div class="muted small">Shows stored model reasoning summaries and final/tool outputs where present, not hidden chain-of-thought.</div>' +
-        run.traceSummaries.slice(0, 20).map((t) => '<details data-trace-file="' + esc(t.file) + '"' + (openTraceDetails.has(t.file) ? ' open' : '') + '><summary><code>' + esc(t.file) + '</code> <span class="muted">' + esc(t.kind) + ' ' + esc(t.title) + '</span></summary>' +
-          (t.reasoningSummaries.length ? '<h2>Reasoning Summary</h2><pre class="small">' + esc(t.reasoningSummaries.join("\\n\\n")) + '</pre>' : '<div class="muted small">No stored reasoning summary in this trace.</div>') +
-          '<h2>Final Output</h2><pre class="small">' + esc(JSON.stringify(t.finalOutput, null, 2)) + '</pre></details>').join("") +
-        '</div>';
+      if (!run.traceSummaries?.length) return '<div class="card section"><details class="section-details" data-section-details="trace-summaries"' + (openSectionDetails.has("trace-summaries") ? ' open' : '') + '><summary><h2>Trace Summaries</h2></summary><div class="muted">No trace summaries yet. Hidden chain-of-thought is not available; this panel shows stored reasoning summaries and outputs when present.</div></details></div>';
+      return '<div class="card section"><details class="section-details" data-section-details="trace-summaries"' + (openSectionDetails.has("trace-summaries") ? ' open' : '') + '><summary><h2>Trace Summaries</h2></summary><div class="muted small">Shows stored model reasoning summaries and final/tool outputs where present, not hidden chain-of-thought.</div>' +
+        run.traceSummaries.map((t) => '<details data-trace-file="' + esc(t.file) + '" data-trace-span-path="' + esc(t.spanPath ?? "") + '"' + (openTraceDetails.has(t.file) ? ' open' : '') + '><summary><code>' + esc(t.file) + '</code> <span class="muted">' + esc(t.kind) + ' ' + esc(t.title) + '</span></summary><div class="trace-detail-body muted small">Open to load trace detail.</div></details>').join("") +
+        '</details></div>';
     }
 
     function rememberOpenDetails() {
@@ -612,15 +649,66 @@ function html(): string {
         if (detail.open) openTraceDetails.add(file);
         else openTraceDetails.delete(file);
       });
+      document.querySelectorAll("details[data-section-details]").forEach((detail) => {
+        const section = detail.getAttribute("data-section-details");
+        if (!section) return;
+        if (detail.open) openSectionDetails.add(section);
+        else openSectionDetails.delete(section);
+      });
     }
 
     function attachPersistentDetails() {
+      document.querySelectorAll("details[data-section-details]").forEach((detail) => {
+        detail.addEventListener("toggle", () => {
+          const section = detail.getAttribute("data-section-details");
+          if (!section) return;
+          if (detail.open) openSectionDetails.add(section);
+          else openSectionDetails.delete(section);
+        });
+      });
       document.querySelectorAll("details[data-trace-file]").forEach((detail) => {
         detail.addEventListener("toggle", () => {
           const file = detail.getAttribute("data-trace-file");
           if (!file) return;
-          if (detail.open) openTraceDetails.add(file);
-          else openTraceDetails.delete(file);
+          if (detail.open) {
+            openTraceDetails.add(file);
+            loadTraceDetail(detail);
+          } else openTraceDetails.delete(file);
+        });
+      });
+      document.querySelectorAll("details[data-trace-file][open]").forEach((detail) => loadTraceDetail(detail));
+    }
+
+    async function loadTraceDetail(detail) {
+      const file = detail.getAttribute("data-trace-file");
+      const body = detail.querySelector(".trace-detail-body");
+      if (!file || !body || body.getAttribute("data-loaded") === "1") return;
+      body.textContent = "Loading trace detail...";
+      const response = await fetch("/api/trace?runId=" + encodeURIComponent(selectedRunId || "") + "&file=" + encodeURIComponent(file), { cache: "no-store" });
+      const data = await response.json();
+      const reasoning = data.reasoningSummaries?.length ? '<h2>Reasoning Summary</h2><pre class="small">' + esc(data.reasoningSummaries.join("\\n\\n")) + '</pre>' : '<div class="muted small">No stored reasoning summary in this trace.</div>';
+      body.className = "trace-detail-body";
+      body.setAttribute("data-loaded", "1");
+      body.innerHTML = reasoning + '<h2>Final Output</h2><pre class="small">' + esc(JSON.stringify(data.finalOutput ?? null, null, 2)) + '</pre>';
+    }
+
+    function attachTreeTraceLinks() {
+      document.querySelectorAll(".tree-node.trace-link[data-span-path]").forEach((node) => {
+        node.addEventListener("click", () => {
+          const spanPath = node.getAttribute("data-span-path");
+          if (!spanPath) return;
+          const trace = [...document.querySelectorAll('details[data-trace-span-path="' + CSS.escape(spanPath) + '"]')][0];
+          const section = document.querySelector('details[data-section-details="trace-summaries"]');
+          if (section) {
+            section.open = true;
+            openSectionDetails.add("trace-summaries");
+          }
+          if (trace) {
+            const file = trace.getAttribute("data-trace-file");
+            trace.open = true;
+            if (file) openTraceDetails.add(file);
+            trace.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
         });
       });
     }
@@ -651,7 +739,7 @@ function html(): string {
         renderRuler(run) +
         '<div class="two section"><div class="card"><h2>Failed Spans</h2>' + failedTable(run.failedSpans) + '</div><div class="card"><h2>Rejected Nodes</h2>' + rejectedTable(run.rejectedNodes) + '</div></div>' +
         intervalTable(run) +
-        '<div class="section card"><h2>Recent Judge Decisions</h2>' + judgeTable(run.judgeDecisions) + '</div>' +
+        '<div class="section card"><details class="section-details" data-section-details="recent-judge-decisions"' + (openSectionDetails.has("recent-judge-decisions") ? ' open' : '') + '><summary><h2>Recent Judge Decisions</h2></summary>' + judgeTable(run.judgeDecisions) + '</details></div>' +
         renderTraceSummaries(run) +
         '<div class="section card"><h2>Event Tail</h2>' + eventTailTable(run.eventTail) + '</div>' +
         '<div class="two section">' + resultPanel(run) + traceInventory(run) + '</div>';
@@ -665,7 +753,7 @@ function html(): string {
 
     async function refresh() {
       rememberOpenDetails();
-      const response = await fetch("/api/runs", { cache: "no-store" });
+      const response = await fetch("/api/runs?selectedRunId=" + encodeURIComponent(selectedRunId || ""), { cache: "no-store" });
       const data = await response.json();
       latestRuns = data.runs;
       if (!selectedRunId && latestRuns[0]) selectedRunId = latestRuns[0].id;
@@ -673,6 +761,7 @@ function html(): string {
       document.querySelector("#current").innerHTML = renderCurrent(selected);
       document.querySelector("#runs").innerHTML = renderRuns(latestRuns);
       attachPersistentDetails();
+      attachTreeTraceLinks();
       document.querySelectorAll(".run-row").forEach((row) => {
         row.addEventListener("click", () => {
           rememberOpenDetails();
@@ -681,11 +770,12 @@ function html(): string {
           document.querySelector("#current").innerHTML = renderCurrent(selected);
           document.querySelector("#runs").innerHTML = renderRuns(latestRuns);
           attachPersistentDetails();
+          attachTreeTraceLinks();
         });
       });
     }
     refresh();
-    setInterval(refresh, 2000);
+    setInterval(refresh, 5000);
   </script>
 </body>
 </html>`;
@@ -703,8 +793,18 @@ Bun.serve({
       return new Response(html(), { headers: { "content-type": "text/html; charset=utf-8" } });
     }
     if (url.pathname === "/api/runs") {
-      const runs = eventLogFiles().slice(0, 40).map(summarizeRun);
+      const selectedRunId = url.searchParams.get("selectedRunId");
+      const logs = eventLogFiles().slice(0, 40);
+      const detailedRunId = selectedRunId && logs.some((eventLog) => runIdFromEventLog(eventLog) === selectedRunId) ? selectedRunId : runIdFromEventLog(logs[0] ?? "");
+      const runs = logs.map((eventLog) => summarizeRun(eventLog, runIdFromEventLog(eventLog) === detailedRunId));
       return jsonResponse({ caseDir, runs });
+    }
+    if (url.pathname === "/api/trace") {
+      const runId = url.searchParams.get("runId");
+      const file = url.searchParams.get("file");
+      const eventLog = eventLogFiles().find((candidate) => runIdFromEventLog(candidate) === runId);
+      if (!eventLog) return new Response("run not found", { status: 404 });
+      return jsonResponse(traceDetailFor(artifactPathFor(eventLog, "trace"), file));
     }
     return new Response("not found", { status: 404 });
   },
