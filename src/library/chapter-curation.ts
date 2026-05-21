@@ -2302,15 +2302,6 @@ export async function validateFulcrumSplit(
   if (!isOnlyRemainingAssignedBoundary && (split.startTime - span.startTime < edgeMargin || span.endTime - split.startTime < edgeMargin)) {
     errors.push("Fulcrum startTime is too close to a span edge.");
   }
-  const broadSpanRequiresMiddleFulcrum = !recursiveSpanAllowsLeaf(span, false);
-  const splitEpubRatio = epubIndex >= 0 ? spanEpubLocalRatio(ctx, span, epubIndex) : null;
-  if (broadSpanRequiresMiddleFulcrum && splitEpubRatio !== null && (splitEpubRatio < 0.3 || splitEpubRatio > 0.7)) {
-    const leftPercent = Math.round(splitEpubRatio * 100);
-    const rightPercent = Math.round((1 - splitEpubRatio) * 100);
-    errors.push(
-      `Broad-span fulcrum must be roughly in the middle by EPUB word position; proposed split leaves ${leftPercent}% of EPUB words on the left and ${rightPercent}% on the right.`
-    );
-  }
 
   const window = getTranscriptWindowFromContext(ctx, secondsToMs(split.startTime), 45_000);
   const evidence = entry
@@ -2332,10 +2323,7 @@ export async function validateFulcrumSplit(
       errors,
       warnings,
       audit,
-      instruction:
-        broadSpanRequiresMiddleFulcrum && splitEpubRatio !== null && (splitEpubRatio < 0.3 || splitEpubRatio > 0.7)
-          ? "Pick an internal EPUB node closer to the span midpoint, ideally leaving 30-70% of the EPUB word span on each side, then search that node's opener prose in the transcript."
-          : "Pick a different internal fulcrum with stronger transcript/prose evidence, or submit a leaf plan for this span.",
+      instruction: "Pick a different internal fulcrum with stronger transcript/prose evidence, or submit a leaf plan for this span.",
     };
   }
 

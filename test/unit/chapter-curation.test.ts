@@ -1164,7 +1164,7 @@ describe("chapter curation tools", () => {
     if (!result.accepted) throw new Error(result.errors.join("\n"));
   });
 
-  test("validateFulcrumSplit rejects broad-span fulcrums near EPUB edges", async () => {
+  test("validateFulcrumSplit accepts non-middle assigned targets", async () => {
     const entries = Array.from({ length: 10 }, (_, index) =>
       epubEntry({
         id: `chapter-${index + 1}`,
@@ -1193,10 +1193,8 @@ describe("chapter curation tools", () => {
       startTime: 1_000,
     });
 
-    expect(result.accepted).toBe(false);
-    if (result.accepted) throw new Error("expected rejection");
-    expect(result.errors.join("\n")).toContain("roughly in the middle");
-    expect(result.instruction).toContain("closer to the span midpoint");
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error(result.errors.join("\n"));
   });
 
   test("validateFulcrumSplit defers accidental generic-token overlap to the boundary judge", async () => {
