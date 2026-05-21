@@ -2298,7 +2298,8 @@ export async function validateFulcrumSplit(
     errors.push("Fulcrum startTime must be inside the current span time range.");
   }
   const edgeMargin = Math.max(120, spanDurationSeconds(span) * 0.05);
-  if (split.startTime - span.startTime < edgeMargin || span.endTime - split.startTime < edgeMargin) {
+  const isOnlyRemainingAssignedBoundary = Boolean(options.targetBoundary && spanInternalBoundaryCount(span) === 1);
+  if (!isOnlyRemainingAssignedBoundary && (split.startTime - span.startTime < edgeMargin || span.endTime - split.startTime < edgeMargin)) {
     errors.push("Fulcrum startTime is too close to a span edge.");
   }
   const broadSpanRequiresMiddleFulcrum = !recursiveSpanAllowsLeaf(span, false);

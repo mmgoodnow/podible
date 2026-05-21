@@ -324,7 +324,7 @@ function summarizeRun(eventLog: string, includeDetails = true, liveCurationRun =
     if (type === "recursive-merge-accepted") status = "accepted";
     if (type === "recursive-result-null" || type === "recursive-merge-rejected") status = "failed";
     if (type === "span-split-accepted") metrics.splits++;
-    if (type === "span-leaf-accepted") metrics.leaves++;
+    if (type === "span-leaf-accepted" || type === "span-auto-leaf") metrics.leaves++;
     if (type === "span-error") metrics.spanErrors++;
     if (type === "span-tool-call") metrics.toolCalls++;
     if (type === "fulcrum-judge-result") {
@@ -358,7 +358,7 @@ function summarizeRun(eventLog: string, includeDetails = true, liveCurationRun =
       }
       if (type === "fulcrum-judge-result" && event.judgment?.accepted === false) span.judgeRejected++;
       if (type === "span-split-accepted") span.terminal = "split";
-      if (type === "span-leaf-accepted") span.terminal = "leaf";
+      if (type === "span-leaf-accepted" || type === "span-auto-leaf") span.terminal = "leaf";
       if (type === "span-error") {
         span.terminal = "error";
         failedSpans.push({
@@ -392,6 +392,18 @@ function summarizeRun(eventLog: string, includeDetails = true, liveCurationRun =
     }
     if (type === "span-leaf-accepted" && Array.isArray(event.result?.chapters)) {
       for (const chapter of event.result.chapters) {
+        if (typeof chapter.startTime !== "number") continue;
+        boundaryMarkers.push({
+          spanPath: typeof event.span?.path === "string" ? event.span.path : null,
+          epubNodeId: typeof chapter.epubNodeId === "string" ? chapter.epubNodeId : null,
+          title: String(chapter.title ?? chapter.epubNodeId ?? "chapter"),
+          startTime: chapter.startTime,
+          source: "leaf",
+        });
+      }
+    }
+    if (type === "span-auto-leaf" && Array.isArray(event.chapterPlan)) {
+      for (const chapter of event.chapterPlan) {
         if (typeof chapter.startTime !== "number") continue;
         boundaryMarkers.push({
           spanPath: typeof event.span?.path === "string" ? event.span.path : null,

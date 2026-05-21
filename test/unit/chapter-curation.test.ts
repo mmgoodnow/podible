@@ -1113,6 +1113,57 @@ describe("chapter curation tools", () => {
     expect(result.errors.join("\n")).toContain("too close");
   });
 
+  test("validateFulcrumSplit allows the only assigned boundary near a small span edge", async () => {
+    const context = ctx({
+      durationMs: 213_120,
+      manifestation: manifestation({ duration_ms: 213_120 }),
+      epubEntries: [
+        epubEntry({
+          id: "chapter-0",
+          title: "Chapter 0",
+          href: "chapter0.xhtml",
+          wordCount: 4,
+          cumulativeWords: 4,
+          cumulativeRatio: 0.4,
+          words: [word("Before"), word("the"), word("new"), word("part")],
+        }),
+        epubEntry({
+          id: "part-1",
+          title: "Part I: Slave",
+          href: "part1.xhtml",
+          wordCount: 6,
+          cumulativeWords: 10,
+          cumulativeRatio: 1,
+          words: [word("Part"), word("I"), word("Slave"), word("There"), word("is"), word("flower")],
+        }),
+      ],
+      transcript: transcriptWith("Before the new part Part 1 Slave There is flower", 0, 213_120),
+    });
+
+    const result = await validateFulcrumSplit(
+      context,
+      createRootCurationSpan(context),
+      {
+        spanPath: "root",
+        epubNodeId: "part-1",
+        title: "Part I: Slave",
+        startTime: 196.08,
+      },
+      {
+        targetBoundary: {
+          epubNodeId: "part-1",
+          epubIndex: 1,
+          title: "Part I: Slave",
+          expectedStartTime: 196.08,
+          localWordRatio: 0.4,
+        },
+      }
+    );
+
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error(result.errors.join("\n"));
+  });
+
   test("validateFulcrumSplit rejects broad-span fulcrums near EPUB edges", async () => {
     const entries = Array.from({ length: 10 }, (_, index) =>
       epubEntry({
