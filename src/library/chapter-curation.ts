@@ -3660,7 +3660,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
     }
     const recursiveReports: RecursiveCurationReport[] = [];
     const recursiveSpanTraces: RecursiveSpanTrace[] = [];
-    const recursiveMaxSpanConcurrency = 8;
+    const recursiveMaxSpanConcurrency = 24;
     logChapterCurationEvent(curationCtx, {
       type: "recursive-run-start",
       message: "recursive run start=1",
