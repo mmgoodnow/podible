@@ -450,10 +450,13 @@ function html(): string {
     .run-row:hover { background: #20252a; }
     .small { font-size: 12px; }
     .viz-scroll { overflow: auto; }
-    .tree { min-width: 980px; }
-    .tree-row { display: flex; gap: 8px; margin: 7px 0; align-items: stretch; }
-    .tree-depth { width: 64px; color: var(--muted); font-size: 12px; padding-top: 7px; flex: 0 0 auto; }
-    .tree-node { border: 1px solid var(--line); background: #14171a; border-radius: 6px; padding: 6px 7px; min-width: 74px; flex: 1 1 0; }
+    .tree { min-width: 980px; padding-left: 72px; }
+    .tree-row { position: relative; height: 64px; margin: 7px 0; }
+    .tree-depth { position: absolute; left: -72px; top: 8px; width: 64px; color: var(--muted); font-size: 12px; }
+    .tree-node { position: absolute; top: 0; bottom: 0; border: 1px solid var(--line); background: #14171a; border-radius: 6px; padding: 4px 5px; min-width: 0; overflow: hidden; font-size: 9px; line-height: 1.18; }
+    .tree-node strong { display: block; font-size: 10px; line-height: 1.05; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tree-node span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tree-node .small { font-size: 9px; }
     .tree-node.leaf { border-color: rgba(139,214,147,0.55); }
     .tree-node.split { border-color: rgba(121,184,255,0.65); }
     .tree-node.error { border-color: rgba(255,139,139,0.7); }
@@ -554,7 +557,16 @@ function html(): string {
       const rows = [...byDepth.entries()].sort((a, b) => a[0] - b[0]).map(([depth, spans]) => {
         spans.sort((a, b) => a.path.localeCompare(b.path));
         return '<div class="tree-row"><div class="tree-depth">depth ' + esc(depth) + '</div>' +
-          spans.map((s) => '<div class="tree-node ' + esc(s.terminal || "active") + '"><strong><code>' + esc(s.path) + '</code></strong><br><span class="small muted">' + esc(s.nodeCount ?? "") + ' nodes, ' + esc(Math.round(s.startTime ?? 0)) + '-' + esc(Math.round(s.endTime ?? 0)) + 's</span><br><span class="small">tools ' + esc(s.toolCalls) + ', rejects ' + esc(s.judgeRejected) + '</span><br><span class="small ' + (s.terminal === "error" ? "failed" : "") + '">' + esc(s.terminal ?? "active") + '</span></div>').join("") +
+          spans.map((s) => {
+            const bits = s.path === "root" ? "" : s.path;
+            let slot = 0;
+            for (const bit of bits) slot = slot * 2 + (bit === "R" ? 1 : 0);
+            const slots = Math.pow(2, depth);
+            const left = depth === 0 ? 0 : slot / slots * 100;
+            const width = depth === 0 ? 100 : 100 / slots;
+            const label = (s.path ?? "") + ": " + (s.nodeCount ?? "") + " nodes, " + Math.round(s.startTime ?? 0) + "-" + Math.round(s.endTime ?? 0) + "s, tools " + (s.toolCalls ?? 0) + ", rejects " + (s.judgeRejected ?? 0) + ", " + (s.terminal ?? "active");
+            return '<div class="tree-node ' + esc(s.terminal || "active") + '" title="' + esc(label) + '" style="left:calc(' + left + '% + 4px);width:calc(' + width + '% - 8px)"><strong><code>' + esc(s.path) + '</code></strong><span class="small muted">n ' + esc(s.nodeCount ?? "") + ' · ' + esc(Math.round(s.startTime ?? 0)) + '-' + esc(Math.round(s.endTime ?? 0)) + 's</span><span class="small">t ' + esc(s.toolCalls) + ' · r ' + esc(s.judgeRejected) + '</span><span class="small ' + (s.terminal === "error" ? "failed" : "") + '">' + esc(s.terminal ?? "active") + '</span></div>';
+          }).join("") +
           '</div>';
       }).join("");
       return '<div class="card section"><h2>Binary Tree Progress</h2><div class="viz-scroll"><div class="tree">' + (rows || '<div class="muted">No spans yet</div>') + '</div></div></div>';
@@ -573,9 +585,11 @@ function html(): string {
         return '<div class="tick failed-span" title="failed span ' + esc(f.path) + '" style="left:' + pct(span.startTime, total) + '%;width:' + Math.max(0.3, pct(span.endTime - span.startTime, total)) + '%"></div>';
       }).join("");
       const intervals = (run.audioOnlyIntervalDetails || []).map((i) => '<div class="tick audio-only" title="' + esc(i.kind + ': ' + i.notes) + '" style="left:' + pct(i.startTime, total) + '%;width:' + Math.max(0.3, pct(i.endTime - i.startTime, total)) + '%"></div>').join("");
-      const markers = (run.boundaryMarkers || []).map((m, index) => {
+      const labelPositions = [];
+      const markers = (run.boundaryMarkers || []).map((m) => {
         const left = pct(m.startTime, total);
-        const showLabel = index % 2 === 0 || m.source === "split";
+        const showLabel = m.source === "split" && labelPositions.every((position) => Math.abs(position - left) > 8);
+        if (showLabel) labelPositions.push(left);
         return '<div class="tick ' + esc(m.source) + '" title="' + esc(m.startTime + 's ' + m.title + ' (' + m.source + ')') + '" style="left:' + left + '%"></div>' +
           (showLabel ? '<div class="tick-label" style="left:' + left + '%">' + esc(m.title) + '</div><div class="tick-time" style="left:' + left + '%">' + esc(Math.round(m.startTime)) + 's</div>' : '');
       }).join("");
