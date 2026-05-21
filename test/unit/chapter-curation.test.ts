@@ -1062,7 +1062,7 @@ describe("chapter curation tools", () => {
     expect(result.audit.boundaryComparison.transcriptAfter).toContain("tail tail chapter twelve head head");
   });
 
-  test("validateFulcrumSplit rejects title-only evidence", async () => {
+  test("validateFulcrumSplit defers title-only evidence to the boundary judge", async () => {
     const context = ctx({
       durationMs: 600_000,
       manifestation: manifestation({ duration_ms: 600_000 }),
@@ -1085,9 +1085,10 @@ describe("chapter curation tools", () => {
       title: "Chapter 1: Helldiver Gold Mars",
       startTime: 180,
     });
-    expect(result.accepted).toBe(false);
-    if (result.accepted) throw new Error("expected rejection");
-    expect(result.errors.join("\n")).toContain("does not align to the opener");
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error(result.errors.join("\n"));
+    expect(result.audit.boundaryComparison.transcriptAfter).toContain("Chapter 1 Helldiver Gold Mars");
+    expect(result.audit.boundaryComparison.targetEpub.bodyHeadText).toBe("Helldiver The first thing you should know");
   });
 
   test("validateFulcrumSplit rejects timestamps too close to span edges", async () => {
@@ -1147,7 +1148,7 @@ describe("chapter curation tools", () => {
     expect(result.instruction).toContain("closer to the span midpoint");
   });
 
-  test("validateFulcrumSplit rejects accidental generic-token overlap far from better evidence", async () => {
+  test("validateFulcrumSplit defers accidental generic-token overlap to the boundary judge", async () => {
     const context = ctx({
       durationMs: 1_000_000,
       manifestation: manifestation({ duration_ms: 1_000_000 }),
@@ -1180,12 +1181,13 @@ describe("chapter curation tools", () => {
       startTime: 500,
     });
 
-    expect(result.accepted).toBe(false);
-    if (result.accepted) throw new Error("expected rejection");
-    expect(result.errors.join("\n")).toContain("does not align to the opener");
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error(result.errors.join("\n"));
+    expect(result.audit.boundaryComparison.transcriptAfter).toContain("This will kill keep going");
+    expect(result.audit.boundaryComparison.targetEpub.headText).toContain("slingblade");
   });
 
-  test("validateFulcrumSplit identifies pre-boundary context before stronger opener evidence", async () => {
+  test("validateFulcrumSplit defers pre-boundary context to the boundary judge", async () => {
     const openerWords = [
       "Northwoods",
       "agony",
@@ -1238,9 +1240,10 @@ describe("chapter curation tools", () => {
       startTime: 250,
     });
 
-    expect(result.accepted).toBe(false);
-    if (result.accepted) throw new Error("expected rejection");
-    expect(result.errors.join("\n")).toContain("does not align to the opener");
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error(result.errors.join("\n"));
+    expect(result.audit.boundaryComparison.transcriptAfter).toContain("The mud is dark and cold");
+    expect(result.audit.boundaryComparison.targetEpub.headText).toContain("Northwoods");
   });
 
   test("validateLeafChapterPlan rejects broad non-forced spans so the agent keeps splitting", () => {

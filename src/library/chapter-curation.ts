@@ -2263,66 +2263,6 @@ function buildBoundaryComparisonAudit(
   };
 }
 
-function boundaryAfterEpubEvidence(ctx: ChapterCurationContext, audit: FulcrumValidationAudit): EpubTextSearchResult["matches"][number] | null {
-  const targetNodeId = audit.epubNodeId;
-  const transcriptAfter = audit.boundaryComparison.transcriptAfter;
-  if (!targetNodeId || !transcriptAfter.trim()) return null;
-  return (
-    searchEpubText(ctx, {
-      query: transcriptAfter,
-      nodeIds: [targetNodeId],
-      targetNodeId,
-      limit: 5,
-    }).matches.find((match) => match.epubNodeId === targetNodeId) ?? null
-  );
-}
-
-function orderedSequenceIndex(tokens: string[], sequence: string[]): number {
-  if (sequence.length === 0 || tokens.length < sequence.length) return -1;
-  for (let index = 0; index <= tokens.length - sequence.length; index++) {
-    if (sequence.every((token, offset) => tokens[index + offset] === token)) return index;
-  }
-  return -1;
-}
-
-function boundaryHeadSequences(text: string): string[][] {
-  const tokens = normalizedWordTokens(text).filter((token) => token.length > 1);
-  const sequences: string[][] = [];
-  for (let offset = 0; offset <= Math.min(6, Math.max(0, tokens.length - 4)); offset++) {
-    const sequence = tokens.slice(offset, offset + 4);
-    if (sequence.length >= 3) sequences.push(sequence);
-  }
-  return sequences;
-}
-
-function hasMixedUtteranceBoundaryEvidence(audit: FulcrumValidationAudit): boolean {
-  if (audit.boundaryComparison.transcriptPrecision !== "utterance") return false;
-  const transcriptTokens = normalizedWordTokens(audit.boundaryComparison.transcriptAfter).filter((token) => token.length > 1);
-  if (transcriptTokens.length === 0) return false;
-  const previousTailTokens = normalizedWordTokens(audit.boundaryComparison.previousEpub.tailText).filter((token) => token.length > 1);
-  const previousSequence = previousTailTokens.slice(Math.max(0, previousTailTokens.length - 4));
-  if (previousSequence.length < 3) return false;
-  const previousIndex = orderedSequenceIndex(transcriptTokens, previousSequence);
-  if (previousIndex < 0) return false;
-  const targetHeadText = audit.boundaryComparison.targetEpub.bodyHeadText || audit.boundaryComparison.targetEpub.headText;
-  return boundaryHeadSequences(targetHeadText).some((sequence) => {
-    const targetIndex = orderedSequenceIndex(transcriptTokens, sequence);
-    return targetIndex > previousIndex;
-  });
-}
-
-function hasBodyOpenerAtBoundaryEvidence(audit: FulcrumValidationAudit): boolean {
-  const targetHeadText = audit.boundaryComparison.targetEpub.bodyHeadText || audit.boundaryComparison.targetEpub.headText;
-  const targetTokens = normalizedWordTokens(targetHeadText).filter((token) => token.length > 1);
-  const transcriptTokens = normalizedWordTokens(audit.boundaryComparison.transcriptAfter).filter((token) => token.length > 1);
-  if (targetTokens.length < 4 || transcriptTokens.length < 4) return false;
-  for (const sequence of boundaryHeadSequences(targetHeadText).slice(0, 3)) {
-    const index = orderedSequenceIndex(transcriptTokens.slice(0, 12), sequence);
-    if (index >= 0 && index <= 2) return true;
-  }
-  return false;
-}
-
 export async function validateFulcrumSplit(
   ctx: ChapterCurationContext,
   span: ChapterCurationSpan,
@@ -2378,7 +2318,6 @@ export async function validateFulcrumSplit(
     ? await findEpubChapterEvidence(ctx, { nodeIds: [entry.id], searchRadiusSeconds: Math.max(600, spanDurationSeconds(span) / 2), limitPerNode: 3 })
     : { nodes: [] };
   const candidateMatches = evidence.nodes[0]?.matches ?? [];
-  const nearestCandidateDelta = candidateMatches.length === 0 ? null : Math.min(...candidateMatches.map((match) => Math.abs(match.startTime - split.startTime)));
   const audit = buildBoundaryComparisonAudit(ctx, {
     epubIndex,
     title: entry?.title ?? split.title,
@@ -2386,26 +2325,6 @@ export async function validateFulcrumSplit(
     transcriptWindow: window,
     candidates: candidateMatches,
   });
-  const boundaryAfterEvidence = boundaryAfterEpubEvidence(ctx, audit);
-  const mixedUtteranceBoundaryEvidence = hasMixedUtteranceBoundaryEvidence(audit);
-  const bodyOpenerAtBoundaryEvidence = hasBodyOpenerAtBoundaryEvidence(audit);
-
-  if (
-    entry &&
-    !mixedUtteranceBoundaryEvidence &&
-    !bodyOpenerAtBoundaryEvidence &&
-    (!boundaryAfterEvidence ||
-      (boundaryAfterEvidence.relationToTarget !== "opener" && boundaryAfterEvidence.relationToTarget !== "near_opener") ||
-      boundaryAfterEvidence.orderedMatchRatio < 0.45)
-  ) {
-    errors.push(`Transcript after submitted timestamp does not align to the opener of ${entry.id}.`);
-  }
-  if (entry && candidateMatches.length === 0) {
-    errors.push(`No transcript evidence candidate found for ${entry.id}; search the EPUB opener prose before submitting.`);
-  }
-  if (nearestCandidateDelta !== null && nearestCandidateDelta > 90) {
-    errors.push(`Submitted fulcrum is ${Math.round(nearestCandidateDelta)}s from the nearest transcript evidence candidate; gather stronger candidate evidence before resubmitting.`);
-  }
 
   if (errors.length > 0) {
     return {
