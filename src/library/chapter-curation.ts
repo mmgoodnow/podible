@@ -1768,11 +1768,12 @@ function chooseTargetBoundary(ctx: Pick<ChapterCurationContext, "epubEntries">, 
     const entry = ctx.epubEntries[index];
     if (!entry) continue;
     const localNodeRatio = (index - span.epubStartIndex) / nodeCount;
+    const localTimePriorRatio = spanEpubLocalRatio(ctx, span, index) ?? localNodeRatio;
     candidates.push({
       epubNodeId: entry.id,
       epubIndex: index,
       title: entry.title,
-      expectedStartTime: span.startTime + spanDurationSeconds(span) * localNodeRatio,
+      expectedStartTime: span.startTime + spanDurationSeconds(span) * localTimePriorRatio,
       localNodeRatio: Math.round(localNodeRatio * 1000) / 1000,
     });
   }

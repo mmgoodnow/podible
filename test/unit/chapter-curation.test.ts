@@ -24,6 +24,7 @@ import {
   validateLeafChapterPlan,
   type ChapterCurationContext,
   type ChapterCurationSpan,
+  type ChapterCurationTargetBoundary,
   type ChapterCurationTiming,
   type RecursiveSpanDecision,
 } from "../../src/library/chapter-curation";
@@ -1639,17 +1640,19 @@ describe("chapter curation tools", () => {
         epubEntry({ id: "chapter-4", title: "Chapter 4", cumulativeRatio: 1, cumulativeWords: 100 }),
       ],
     });
-    const targets: string[] = [];
+    const targets: ChapterCurationTargetBoundary[] = [];
     await resolveRecursiveChapterSpans(
       context,
       async (_span, _forceLeaf, targetBoundary): Promise<RecursiveSpanDecision | null> => {
-        if (targetBoundary) targets.push(targetBoundary.epubNodeId);
+        if (targetBoundary) targets.push(targetBoundary);
         return null;
       },
       { maxCalls: 1 }
     );
 
-    expect(targets).toEqual(["chapter-2"]);
+    expect(targets.map((target) => target.epubNodeId)).toEqual(["chapter-2"]);
+    expect(targets[0]?.localNodeRatio).toBe(0.4);
+    expect(targets[0]?.expectedStartTime).toBe(276);
   });
 
   test("resolveRecursiveChapterSpans runs sibling spans concurrently within the configured limit", async () => {
