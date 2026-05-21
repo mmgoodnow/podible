@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 type JsonRecord = Record<string, any>;
 
@@ -99,6 +100,17 @@ function eventLogFiles(): string[] {
     .filter((name) => /^agent-events-m59-.*\.jsonl$/.test(name))
     .map((name) => path.join(caseDir, name))
     .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+}
+
+function hasLiveCurationRun(): boolean {
+  try {
+    const output = execFileSync("ps", ["-axo", "command="], { encoding: "utf8" });
+    return output
+      .split(/\n/)
+      .some((command) => command.includes("bun tmp/run-red-rising-curation.ts") || command.includes("bun run tmp/run-red-rising-curation.ts"));
+  } catch {
+    return false;
+  }
 }
 
 function readJsonl(filePath: string): JsonRecord[] {
@@ -243,7 +255,7 @@ function errorMessage(error: unknown): string {
   return error ? JSON.stringify(error) : "";
 }
 
-function summarizeRun(eventLog: string, includeDetails = true): RunSummary {
+function summarizeRun(eventLog: string, includeDetails = true, liveCurationRun = false): RunSummary {
   const events = readJsonl(eventLog);
   const eventLogMtimeMs = existsSync(eventLog) ? statSync(eventLog).mtimeMs : 0;
   const resultPath = artifactPathFor(eventLog, "result");
@@ -394,6 +406,9 @@ function summarizeRun(eventLog: string, includeDetails = true): RunSummary {
 
   const startedAt = typeof events[0]?.ts === "string" ? events[0].ts : null;
   const updatedAt = typeof events[events.length - 1]?.ts === "string" ? events[events.length - 1].ts : null;
+  if (status === "running" && !liveCurationRun) {
+    status = "interrupted";
+  }
   if (status === "running" && eventLogMtimeMs > 0 && Date.now() - eventLogMtimeMs > 180_000) {
     status = "interrupted";
   }
@@ -838,7 +853,8 @@ Bun.serve({
       const selectedRunId = url.searchParams.get("selectedRunId");
       const logs = eventLogFiles().slice(0, 40);
       const detailedRunId = selectedRunId && logs.some((eventLog) => runIdFromEventLog(eventLog) === selectedRunId) ? selectedRunId : runIdFromEventLog(logs[0] ?? "");
-      const runs = logs.map((eventLog) => summarizeRun(eventLog, runIdFromEventLog(eventLog) === detailedRunId));
+      const liveCurationRun = hasLiveCurationRun();
+      const runs = logs.map((eventLog) => summarizeRun(eventLog, runIdFromEventLog(eventLog) === detailedRunId, liveCurationRun));
       return jsonResponse({ caseDir, runs });
     }
     if (url.pathname === "/api/trace") {

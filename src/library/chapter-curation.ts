@@ -1234,6 +1234,17 @@ export type SubmitFulcrumSplitResult =
 
 export type SubmitFulcrumJudgmentResult = SubmitFulcrumJudgmentInput;
 
+type ChapterBoundaryJudgeProposal = {
+  kind: "fulcrum" | "leaf";
+  spanPath: string;
+  epubNodeId: string;
+  epubIndex: number;
+  title: string;
+  startTime: number;
+  notes: string | null;
+  audit: FulcrumValidationAudit;
+};
+
 export type FindFulcrumCandidatesInput = {
   nodeIds?: string[];
   candidateNodeCount?: number;
@@ -2102,6 +2113,57 @@ export function findFulcrumCandidates(
   };
 }
 
+function buildBoundaryComparisonAudit(
+  ctx: ChapterCurationContext,
+  input: {
+    epubIndex: number;
+    title: string;
+    startTime: number;
+    transcriptWindow?: TranscriptWindow;
+    candidates?: EpubChapterEvidenceResult["nodes"][number]["matches"];
+  }
+): FulcrumValidationAudit {
+  const entry = ctx.epubEntries[input.epubIndex] ?? null;
+  const previous = input.epubIndex > 0 ? (ctx.epubEntries[input.epubIndex - 1] ?? null) : null;
+  const startMs = secondsToMs(input.startTime);
+  const transcriptWindow = input.transcriptWindow ?? getTranscriptWindowFromContext(ctx, startMs, 45_000);
+  return {
+    epubNodeId: entry?.id ?? null,
+    title: entry?.title ?? input.title,
+    startTime: input.startTime,
+    boundaryComparison: {
+      previousEpub: {
+        epubNodeId: previous?.id ?? null,
+        title: previous?.title ?? null,
+        tailText: previous ? summarizeLastWords(previous, 56) : "",
+      },
+      targetEpub: {
+        epubNodeId: entry?.id ?? null,
+        title: entry?.title ?? input.title,
+        headText: entry ? summarizeFirstWords(entry, 56) : "",
+      },
+      transcriptBefore: normalizeToolText(transcriptBeforeStart(ctx, startMs, 45_000)).slice(-1_000),
+      transcriptAfter: normalizeToolText(transcriptAfterStart(ctx, startMs, 45_000)).slice(0, 1_000),
+    },
+    transcriptWindow: normalizeToolText(transcriptWindow.text).slice(0, 1_000),
+    candidates: input.candidates ?? [],
+  };
+}
+
+function boundaryAfterEpubEvidence(ctx: ChapterCurationContext, audit: FulcrumValidationAudit): EpubTextSearchResult["matches"][number] | null {
+  const targetNodeId = audit.epubNodeId;
+  const transcriptAfter = audit.boundaryComparison.transcriptAfter;
+  if (!targetNodeId || !transcriptAfter.trim()) return null;
+  return (
+    searchEpubText(ctx, {
+      query: transcriptAfter,
+      nodeIds: [targetNodeId],
+      targetNodeId,
+      limit: 5,
+    }).matches.find((match) => match.epubNodeId === targetNodeId) ?? null
+  );
+}
+
 export async function validateFulcrumSplit(
   ctx: ChapterCurationContext,
   span: ChapterCurationSpan,
@@ -2148,44 +2210,20 @@ export async function validateFulcrumSplit(
     );
   }
 
-  const firstWords = entry ? summarizeFirstWords(entry, 72) : "";
   const window = getTranscriptWindowFromContext(ctx, secondsToMs(split.startTime), 45_000);
   const evidence = entry
     ? await findEpubChapterEvidence(ctx, { nodeIds: [entry.id], searchRadiusSeconds: Math.max(600, spanDurationSeconds(span) / 2), limitPerNode: 3 })
     : { nodes: [] };
   const candidateMatches = evidence.nodes[0]?.matches ?? [];
   const nearestCandidateDelta = candidateMatches.length === 0 ? null : Math.min(...candidateMatches.map((match) => Math.abs(match.startTime - split.startTime)));
-  const transcriptAfter = normalizeToolText(transcriptAfterStart(ctx, secondsToMs(split.startTime), 45_000)).slice(0, 1_000);
-  const boundaryAfterEvidence =
-    entry && transcriptAfter.trim()
-      ? searchEpubText(ctx, {
-          query: transcriptAfter,
-          nodeIds: [entry.id],
-          targetNodeId: entry.id,
-          limit: 5,
-        }).matches.find((match) => match.epubNodeId === entry.id)
-      : null;
-  const audit: FulcrumValidationAudit = {
-    epubNodeId: entry?.id ?? null,
+  const audit = buildBoundaryComparisonAudit(ctx, {
+    epubIndex,
     title: entry?.title ?? split.title,
     startTime: split.startTime,
-    boundaryComparison: {
-      previousEpub: {
-        epubNodeId: epubIndex > 0 ? (ctx.epubEntries[epubIndex - 1]?.id ?? null) : null,
-        title: epubIndex > 0 ? (ctx.epubEntries[epubIndex - 1]?.title ?? null) : null,
-        tailText: epubIndex > 0 && ctx.epubEntries[epubIndex - 1] ? summarizeLastWords(ctx.epubEntries[epubIndex - 1]!, 56) : "",
-      },
-      targetEpub: {
-        epubNodeId: entry?.id ?? null,
-        title: entry?.title ?? split.title,
-        headText: entry ? summarizeFirstWords(entry, 56) : "",
-      },
-      transcriptBefore: normalizeToolText(transcriptBeforeStart(ctx, secondsToMs(split.startTime), 45_000)).slice(-1_000),
-      transcriptAfter,
-    },
-    transcriptWindow: normalizeToolText(window.text).slice(0, 1_000),
+    transcriptWindow: window,
     candidates: candidateMatches,
-  };
+  });
+  const boundaryAfterEvidence = boundaryAfterEpubEvidence(ctx, audit);
 
   if (
     entry &&
@@ -2817,9 +2855,9 @@ function recursiveSpanShouldForceLeaf(span: ChapterCurationSpan): boolean {
   return spanNodeCount <= MAX_AUTOMATIC_LEAF_EPUB_NODES && spanDurationSeconds <= 2 * 60 * 60;
 }
 
-function createFulcrumJudgeAgent(ctx: ChapterCurationContext): Agent {
+function createChapterBoundaryJudgeAgent(ctx: ChapterCurationContext): Agent {
   return new Agent({
-    name: "FulcrumJudge",
+    name: "ChapterBoundaryJudge",
     model: ctx.settings.agents.model,
     modelSettings: chapterCurationModelSettings(ctx, {
       toolChoice: "required",
@@ -2828,7 +2866,7 @@ function createFulcrumJudgeAgent(ctx: ChapterCurationContext): Agent {
     resetToolChoice: false,
     instructions: [
       "You are a strict reviewer for audiobook chapter split points.",
-      "Your job is to decide whether the proposed fulcrum timestamp is actually the start of the proposed EPUB node.",
+      "Your job is to decide whether the proposed timestamp is actually the start of the proposed EPUB node.",
       "Judge the boundary claim directly: node X starts at timestamp Y.",
       "Use audit.boundaryComparison first. Compare previousEpub.tailText to transcriptBefore, and targetEpub.headText to transcriptAfter.",
       "Transcript before the timestamp may match the previous EPUB node; that is positive boundary evidence, not evidence that the target opener is interior.",
@@ -2853,9 +2891,9 @@ function createFulcrumJudgeAgent(ctx: ChapterCurationContext): Agent {
   });
 }
 
-function fulcrumJudgePrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, split: Extract<SubmitFulcrumSplitResult, { accepted: true }>): string {
+function chapterBoundaryJudgePrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, proposal: ChapterBoundaryJudgeProposal): string {
   return [
-    `Judge this proposed audiobook chapter fulcrum for "${ctx.book.title}" by ${ctx.book.author}.`,
+    `Judge this proposed audiobook chapter boundary for "${ctx.book.title}" by ${ctx.book.author}.`,
     "Return accepted=false if this timestamp is not clearly the start of the EPUB node.",
     "Prefer rejecting over accepting a suspicious split; the curator owns the next search.",
     "Do not suggest alternate timestamps or nodes.",
@@ -2868,19 +2906,20 @@ function fulcrumJudgePrompt(ctx: ChapterCurationContext, span: ChapterCurationSp
       {
         span,
         proposed: {
-          epubNodeId: split.epubNodeId,
-          epubIndex: split.epubIndex,
-          title: split.title,
-          startTime: split.startTime,
-          notes: split.notes,
+          kind: proposal.kind,
+          epubNodeId: proposal.epubNodeId,
+          epubIndex: proposal.epubIndex,
+          title: proposal.title,
+          startTime: proposal.startTime,
+          notes: proposal.notes,
         },
         audit: {
-          epubNodeId: split.audit.epubNodeId,
-          title: split.audit.title,
-          startTime: split.audit.startTime,
-          boundaryComparison: split.audit.boundaryComparison,
-          transcriptWindow: split.audit.transcriptWindow,
-          evidenceCandidates: split.audit.candidates.map((candidate) => ({
+          epubNodeId: proposal.audit.epubNodeId,
+          title: proposal.audit.title,
+          startTime: proposal.audit.startTime,
+          boundaryComparison: proposal.audit.boundaryComparison,
+          transcriptWindow: proposal.audit.transcriptWindow,
+          evidenceCandidates: proposal.audit.candidates.map((candidate) => ({
             startTime: candidate.startTime,
             endTime: candidate.endTime,
             text: candidate.text,
@@ -2894,10 +2933,10 @@ function fulcrumJudgePrompt(ctx: ChapterCurationContext, span: ChapterCurationSp
   ].join("\n");
 }
 
-async function judgeFulcrumSplit(
+async function judgeChapterBoundary(
   ctx: ChapterCurationContext,
   span: ChapterCurationSpan,
-  split: Extract<SubmitFulcrumSplitResult, { accepted: true }>
+  proposal: ChapterBoundaryJudgeProposal
 ): Promise<SubmitFulcrumJudgmentResult | null> {
   const apiKey = ctx.settings.agents.apiKey.trim();
   if (!apiKey) return null;
@@ -2911,15 +2950,15 @@ async function judgeFulcrumSplit(
       tracingDisabled: true,
       traceIncludeSensitiveData: false,
     });
-    const result = await runner.run(createFulcrumJudgeAgent(ctx), fulcrumJudgePrompt(ctx, span, split), {
+    const result = await runner.run(createChapterBoundaryJudgeAgent(ctx), chapterBoundaryJudgePrompt(ctx, span, proposal), {
       maxTurns: 4,
       signal: abort.signal,
       toolExecution: { maxFunctionToolConcurrency: 1 },
     });
     const judgment = parseFulcrumJudgmentOutput(result.finalOutput);
-    const tracePath = writeChapterCurationTrace(ctx, `fulcrum-judge-${span.path}-${split.epubNodeId}`, {
+    const tracePath = writeChapterCurationTrace(ctx, `${proposal.kind}-judge-${span.path}-${proposal.epubNodeId}`, {
       span,
-      split,
+      proposal,
       judgment,
       finalOutput: result.finalOutput,
       newItems: result.newItems as unknown[],
@@ -2927,13 +2966,14 @@ async function judgeFulcrumSplit(
     });
     logChapterCurationEvent(ctx, {
       type: "fulcrum-judge-result",
-      message: `fulcrum judge span=${span.path} epub=${split.epubNodeId} accepted=${judgment?.accepted ?? "none"} confidence=${judgment?.confidence ?? "none"}`,
+      message: `${proposal.kind} judge span=${span.path} epub=${proposal.epubNodeId} accepted=${judgment?.accepted ?? "none"} confidence=${judgment?.confidence ?? "none"}`,
       span,
       split: {
-        epubNodeId: split.epubNodeId,
-        title: split.title,
-        startTime: split.startTime,
+        epubNodeId: proposal.epubNodeId,
+        title: proposal.title,
+        startTime: proposal.startTime,
       },
+      proposalKind: proposal.kind,
       judgment,
       tracePath,
     });
@@ -2941,13 +2981,14 @@ async function judgeFulcrumSplit(
   } catch (error) {
     logChapterCurationEvent(ctx, {
       type: "fulcrum-judge-error",
-      message: `fulcrum judge span=${span.path} epub=${split.epubNodeId} error=${JSON.stringify((error as Error).message)}`,
+      message: `${proposal.kind} judge span=${span.path} epub=${proposal.epubNodeId} error=${JSON.stringify((error as Error).message)}`,
       span,
       split: {
-        epubNodeId: split.epubNodeId,
-        title: split.title,
-        startTime: split.startTime,
+        epubNodeId: proposal.epubNodeId,
+        title: proposal.title,
+        startTime: proposal.startTime,
       },
+      proposalKind: proposal.kind,
       error: serializeAgentError(error),
     });
     return null;
@@ -2955,6 +2996,53 @@ async function judgeFulcrumSplit(
     clearTimeout(timeout);
     await provider.close().catch(() => undefined);
   }
+}
+
+async function judgeFulcrumSplit(
+  ctx: ChapterCurationContext,
+  span: ChapterCurationSpan,
+  split: Extract<SubmitFulcrumSplitResult, { accepted: true }>
+): Promise<SubmitFulcrumJudgmentResult | null> {
+  return judgeChapterBoundary(ctx, span, {
+    kind: "fulcrum",
+    spanPath: split.spanPath,
+    epubNodeId: split.epubNodeId,
+    epubIndex: split.epubIndex,
+    title: split.title,
+    startTime: split.startTime,
+    notes: split.notes,
+    audit: split.audit,
+  });
+}
+
+async function judgeLeafChapterPlan(
+  ctx: ChapterCurationContext,
+  span: ChapterCurationSpan,
+  result: Extract<SubmitLeafChapterPlanResult, { accepted: true }>
+): Promise<{ chapter: SubmittedChapter; judgment: SubmitFulcrumJudgmentResult } | null> {
+  for (const [index, chapter] of result.chapters.entries()) {
+    if (index === 0 || !chapter.epubNodeId) continue;
+    const epubIndex = ctx.epubEntries.findIndex((entry) => entry.id === chapter.epubNodeId);
+    if (epubIndex < 0) continue;
+    const audit = buildBoundaryComparisonAudit(ctx, {
+      epubIndex,
+      title: chapter.title,
+      startTime: chapter.startTime,
+      candidates: [],
+    });
+    const judgment = await judgeChapterBoundary(ctx, span, {
+      kind: "leaf",
+      spanPath: result.spanPath,
+      epubNodeId: chapter.epubNodeId,
+      epubIndex,
+      title: chapter.title,
+      startTime: chapter.startTime,
+      notes: result.notes,
+      audit,
+    });
+    if (judgment && !judgment.accepted) return { chapter, judgment };
+  }
+  return null;
 }
 
 function createAudibleEpubNodeSelectionAgent(ctx: ChapterCurationContext): Agent {
@@ -3467,10 +3555,30 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
               description: "Submit the final chapter plan for this span. Validation feedback is returned if rejected.",
               parameters: submitLeafChapterPlanSchema,
               strict: true,
-              execute: (input) => {
-                return runToolWithEvents("submitLeafChapterPlan", input, () => {
+              execute: async (input) => {
+                return runToolWithEvents("submitLeafChapterPlan", input, async () => {
                   if (rejectedLeafRequiresEvidence && evidenceCallsSinceRejectedLeaf === 0) return rejectedLeafWithoutEvidence();
                   const result = validateLeafChapterPlan(ctx, span, input, { forceLeaf });
+                  if (result.accepted) {
+                    const rejected = await judgeLeafChapterPlan(ctx, span, result);
+                    if (rejected) {
+                      rejectedLeafRequiresEvidence = true;
+                      evidenceCallsSinceRejectedLeaf = 0;
+                      return {
+                        accepted: false,
+                        kind: "leaf",
+                        errors: [
+                          `Leaf judge rejected ${rejected.chapter.title}: ${rejected.judgment.reason}`,
+                          `Judge finding: ${rejected.judgment.finding}`,
+                          `Judge opener evidence at timestamp: ${rejected.judgment.openerEvidenceAtTimestamp}`,
+                          ...rejected.judgment.concerns.map((concern) => `Judge evidence note: ${concern}`),
+                        ],
+                        warnings: result.warnings,
+                        audit: result.audit,
+                        instruction: rejectedFulcrumJudgeInstruction(rejected.judgment),
+                      } satisfies SubmitLeafChapterPlanResult;
+                    }
+                  }
                   rejectedLeafRequiresEvidence = !result.accepted;
                   evidenceCallsSinceRejectedLeaf = 0;
                   return result;
