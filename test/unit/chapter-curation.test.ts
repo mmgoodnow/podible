@@ -1376,11 +1376,12 @@ describe("chapter curation tools", () => {
   });
 
   test("resolveRecursiveChapterSpans returns a leaf-only plan", async () => {
-    const context = ctx();
-    const chapters = await resolveRecursiveChapterSpans(context, async () => ({
-      kind: "leaf",
-      chapters: [{ title: "Prologue", startTime: 0, epubNodeId: "front" }],
-    }));
+    const context = ctx({
+      epubEntries: [epubEntry({ id: "front", title: "Prologue", cumulativeRatio: 1, cumulativeWords: 4 })],
+    });
+    const chapters = await resolveRecursiveChapterSpans(context, async () => {
+      throw new Error("no agent should be spawned when no internal boundaries remain");
+    });
     expect(chapters).toEqual([{ title: "Prologue", startTime: 0, epubNodeId: "front" }]);
   });
 
@@ -1396,51 +1397,44 @@ describe("chapter curation tools", () => {
       ],
     });
     const decisions: string[] = [];
-    const chapters = await resolveRecursiveChapterSpans(context, async (span): Promise<RecursiveSpanDecision> => {
+    const startTimes: Record<string, number> = {
+      "chapter-1": 120,
+      "chapter-2": 220,
+      "chapter-3": 260,
+    };
+    const chapters = await resolveRecursiveChapterSpans(context, async (span, _forceLeaf, targetBoundary): Promise<RecursiveSpanDecision> => {
       decisions.push(span.path);
-      if (span.path === "root") {
-        return {
-          kind: "split",
-          split: {
-            accepted: true,
-            kind: "split",
-            spanPath: "root",
-            epubNodeId: "chapter-1",
-            epubIndex: 1,
-            title: "Chapter 1",
-            startTime: 120,
-            notes: null,
-            audit: {
-              epubNodeId: "chapter-1",
-              title: "Chapter 1",
-              startTime: 120,
-              boundaryComparison: {
-                transcriptPrecision: "utterance",
-                transcriptPrecisionNote: null,
-                previousEpub: { epubNodeId: null, title: null, tailText: "" },
-                targetEpub: { epubNodeId: "chapter-1", title: "Chapter 1", headText: "" },
-                transcriptBefore: "",
-                transcriptAfter: "",
-              },
-              transcriptWindow: "",
-              candidates: [],
-            },
-          },
-        };
-      }
       return {
-        kind: "leaf",
-        chapters:
-          span.path === "L"
-            ? [{ title: "Prologue", startTime: 0, epubNodeId: "front" }]
-            : [
-                { title: "Chapter 1", startTime: 120, epubNodeId: "chapter-1" },
-                { title: "Chapter 2", startTime: 220, epubNodeId: "chapter-2" },
-              ],
+        kind: "split",
+        split: {
+          accepted: true,
+          kind: "split",
+          spanPath: span.path,
+          epubNodeId: targetBoundary!.epubNodeId,
+          epubIndex: targetBoundary!.epubIndex,
+          title: targetBoundary!.title,
+          startTime: startTimes[targetBoundary!.epubNodeId]!,
+          notes: null,
+          audit: {
+            epubNodeId: targetBoundary!.epubNodeId,
+            title: targetBoundary!.title,
+            startTime: startTimes[targetBoundary!.epubNodeId]!,
+            boundaryComparison: {
+              transcriptPrecision: "utterance",
+              transcriptPrecisionNote: null,
+              previousEpub: { epubNodeId: null, title: null, tailText: "" },
+              targetEpub: { epubNodeId: targetBoundary!.epubNodeId, title: targetBoundary!.title, headText: "" },
+              transcriptBefore: "",
+              transcriptAfter: "",
+            },
+            transcriptWindow: "",
+            candidates: [],
+          },
+        },
       };
     });
     expect(decisions).toEqual(["root", "L", "R"]);
-    expect(chapters?.map((chapter) => chapter.title)).toEqual(["Prologue", "Chapter 1", "Chapter 2"]);
+    expect(chapters?.map((chapter) => chapter.title)).toEqual(["Prologue", "Chapter 1", "Chapter 2", "Chapter 3"]);
   });
 
   test("resolveRecursiveChapterSpans runs sibling spans concurrently within the configured limit", async () => {
@@ -1456,51 +1450,47 @@ describe("chapter curation tools", () => {
     });
     let active = 0;
     let maxActive = 0;
+    const startTimes: Record<string, number> = {
+      "chapter-1": 120,
+      "chapter-2": 220,
+      "chapter-3": 260,
+    };
     const chapters = await resolveRecursiveChapterSpans(
       context,
-      async (span): Promise<RecursiveSpanDecision> => {
+      async (span, _forceLeaf, targetBoundary): Promise<RecursiveSpanDecision> => {
         active++;
         maxActive = Math.max(maxActive, active);
         try {
           if (span.path !== "root") {
             await new Promise((resolve) => setTimeout(resolve, 10));
           }
-          if (span.path === "root") {
-            return {
-              kind: "split",
-              split: {
-                accepted: true,
-                kind: "split",
-                spanPath: "root",
-                epubNodeId: "chapter-1",
-                epubIndex: 1,
-                title: "Chapter 1",
-                startTime: 120,
-                notes: null,
-                audit: {
-                  epubNodeId: "chapter-1",
-                  title: "Chapter 1",
-                  startTime: 120,
-                  boundaryComparison: {
-                    transcriptPrecision: "utterance",
-                    transcriptPrecisionNote: null,
-                    previousEpub: { epubNodeId: null, title: null, tailText: "" },
-                    targetEpub: { epubNodeId: "chapter-1", title: "Chapter 1", headText: "" },
-                    transcriptBefore: "",
-                    transcriptAfter: "",
-                  },
-                  transcriptWindow: "",
-                  candidates: [],
-                },
-              },
-            };
-          }
           return {
-            kind: "leaf",
-            chapters:
-              span.path === "L"
-                ? [{ title: "Prologue", startTime: 0, epubNodeId: "front" }]
-                : [{ title: "Chapter 1", startTime: 120, epubNodeId: "chapter-1" }],
+            kind: "split",
+            split: {
+              accepted: true,
+              kind: "split",
+              spanPath: span.path,
+              epubNodeId: targetBoundary!.epubNodeId,
+              epubIndex: targetBoundary!.epubIndex,
+              title: targetBoundary!.title,
+              startTime: startTimes[targetBoundary!.epubNodeId]!,
+              notes: null,
+              audit: {
+                epubNodeId: targetBoundary!.epubNodeId,
+                title: targetBoundary!.title,
+                startTime: startTimes[targetBoundary!.epubNodeId]!,
+                boundaryComparison: {
+                  transcriptPrecision: "utterance",
+                  transcriptPrecisionNote: null,
+                  previousEpub: { epubNodeId: null, title: null, tailText: "" },
+                  targetEpub: { epubNodeId: targetBoundary!.epubNodeId, title: targetBoundary!.title, headText: "" },
+                  transcriptBefore: "",
+                  transcriptAfter: "",
+                },
+                transcriptWindow: "",
+                candidates: [],
+              },
+            },
           };
         } finally {
           active--;
@@ -1509,7 +1499,7 @@ describe("chapter curation tools", () => {
       { maxConcurrency: 2 }
     );
 
-    expect(chapters?.map((chapter) => chapter.title)).toEqual(["Prologue", "Chapter 1"]);
+    expect(chapters?.map((chapter) => chapter.title)).toEqual(["Prologue", "Chapter 1", "Chapter 2", "Chapter 3"]);
     expect(maxActive).toBe(2);
   });
 
