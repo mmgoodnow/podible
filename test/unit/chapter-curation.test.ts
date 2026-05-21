@@ -710,6 +710,37 @@ describe("chapter curation tools", () => {
     expect(result.audit[1]?.nearestEmbeddedBoundary?.startTime).toBe(0);
   });
 
+  test("submitChapterPlan can run structural validation without transcript token evidence", () => {
+    const context = ctx({
+      transcript: {
+        version: "test",
+        text: "Graphic Audio intro. Interior body only.",
+        words: [],
+        utterances: [
+          { startMs: 0, endMs: 2_000, text: "Graphic Audio intro." },
+          { startMs: 30_000, endMs: 32_000, text: "Interior body only." },
+        ],
+      },
+    });
+    const plan = {
+      manifestationId: 10,
+      strategy: "recursive merge",
+      chapters: [
+        { title: "Prologue", startTime: 0, epubNodeId: "front" },
+        { title: "Chapter 1", startTime: 30, epubNodeId: "chapter-1" },
+      ],
+    };
+
+    const strict = submitChapterPlan(context, plan);
+    expect(strict.accepted).toBe(false);
+    if (strict.accepted) throw new Error("expected transcript evidence rejection");
+    expect(strict.errors.join("\n")).toContain("weak transcript evidence");
+
+    const structural = submitChapterPlan(context, plan, { validateTranscriptEvidence: false });
+    expect(structural.accepted).toBe(true);
+    if (!structural.accepted) throw new Error(structural.errors.join("\n"));
+  });
+
   test("submitChapterPlan rejects plans copied from suspicious equal embedded divisions", () => {
     const result = submitChapterPlan(
       ctx({

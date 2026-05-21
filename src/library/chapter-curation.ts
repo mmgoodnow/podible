@@ -1241,6 +1241,10 @@ export type SubmitChapterPlanResult =
       instruction: string;
     };
 
+type SubmitChapterPlanOptions = {
+  validateTranscriptEvidence?: boolean;
+};
+
 export type SubmitLeafChapterPlanResult =
   | {
       accepted: true;
@@ -2457,7 +2461,7 @@ export function validateLeafChapterPlan(
   };
 }
 
-export function submitChapterPlan(ctx: ChapterCurationContext, input: unknown): SubmitChapterPlanResult {
+export function submitChapterPlan(ctx: ChapterCurationContext, input: unknown, options: SubmitChapterPlanOptions = {}): SubmitChapterPlanResult {
   const parsed = submitChapterPlanSchema.safeParse(input);
   if (!parsed.success) {
     return {
@@ -2537,12 +2541,14 @@ export function submitChapterPlan(ctx: ChapterCurationContext, input: unknown): 
     if (chapterTitleKey(chapter.title) !== chapterTitleKey(heading.title)) {
       errors.push(`chapters[${index}] title "${chapter.title}" does not match claimed EPUB heading "${heading.title}"`);
     }
-    const evidenceTokens = distinctFirstWordTokens(heading.firstWords);
-    if (evidenceTokens.length > 0) {
-      const transcriptTokens = new Set(textTokens(audit[index]?.transcriptAfterStart ?? ""));
-      const overlap = evidenceTokens.filter((token) => transcriptTokens.has(token));
-      if (overlap.length < Math.min(2, evidenceTokens.length)) {
-        errors.push(`chapters[${index}] has weak transcript evidence for claimed EPUB heading "${heading.title}"`);
+    if (options.validateTranscriptEvidence !== false) {
+      const evidenceTokens = distinctFirstWordTokens(heading.firstWords);
+      if (evidenceTokens.length > 0) {
+        const transcriptTokens = new Set(textTokens(audit[index]?.transcriptAfterStart ?? ""));
+        const overlap = evidenceTokens.filter((token) => transcriptTokens.has(token));
+        if (overlap.length < Math.min(2, evidenceTokens.length)) {
+          errors.push(`chapters[${index}] has weak transcript evidence for claimed EPUB heading "${heading.title}"`);
+        }
       }
     }
   }
@@ -4097,7 +4103,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
     if (recursiveChapters && recursiveChapters.length > 0) {
       logChapterCurationEvent(curationCtx, {
         type: "recursive-merge-start",
-        message: `recursive merge chapters=${recursiveChapters.length} validate=1`,
+        message: `recursive merge chapters=${recursiveChapters.length} validate=structural`,
         chapters: recursiveChapters.length,
         chapterPlan: summarizeSubmittedChapterObjects(recursiveChapters, 80),
       });
@@ -4106,7 +4112,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
         strategy: "Recursive fulcrum chapter curation",
         chapters: recursiveChapters,
         notes: "Merged from recursively curated span plans.",
-      });
+      }, { validateTranscriptEvidence: false });
       if (recursiveResult.accepted) {
         logChapterCurationEvent(curationCtx, {
           type: "recursive-merge-accepted",
