@@ -2311,6 +2311,18 @@ function hasMixedUtteranceBoundaryEvidence(audit: FulcrumValidationAudit): boole
   });
 }
 
+function hasBodyOpenerAtBoundaryEvidence(audit: FulcrumValidationAudit): boolean {
+  const targetHeadText = audit.boundaryComparison.targetEpub.bodyHeadText || audit.boundaryComparison.targetEpub.headText;
+  const targetTokens = normalizedWordTokens(targetHeadText).filter((token) => token.length > 1);
+  const transcriptTokens = normalizedWordTokens(audit.boundaryComparison.transcriptAfter).filter((token) => token.length > 1);
+  if (targetTokens.length < 4 || transcriptTokens.length < 4) return false;
+  for (const sequence of boundaryHeadSequences(targetHeadText).slice(0, 3)) {
+    const index = orderedSequenceIndex(transcriptTokens.slice(0, 12), sequence);
+    if (index >= 0 && index <= 2) return true;
+  }
+  return false;
+}
+
 export async function validateFulcrumSplit(
   ctx: ChapterCurationContext,
   span: ChapterCurationSpan,
@@ -2376,10 +2388,12 @@ export async function validateFulcrumSplit(
   });
   const boundaryAfterEvidence = boundaryAfterEpubEvidence(ctx, audit);
   const mixedUtteranceBoundaryEvidence = hasMixedUtteranceBoundaryEvidence(audit);
+  const bodyOpenerAtBoundaryEvidence = hasBodyOpenerAtBoundaryEvidence(audit);
 
   if (
     entry &&
     !mixedUtteranceBoundaryEvidence &&
+    !bodyOpenerAtBoundaryEvidence &&
     (!boundaryAfterEvidence ||
       (boundaryAfterEvidence.relationToTarget !== "opener" && boundaryAfterEvidence.relationToTarget !== "near_opener") ||
       boundaryAfterEvidence.orderedMatchRatio < 0.45)

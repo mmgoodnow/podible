@@ -887,6 +887,81 @@ describe("chapter curation tools", () => {
     expect(result.audit.boundaryComparison.transcriptAfter.startsWith("I passed this test")).toBe(true);
   });
 
+  test("validateFulcrumSplit accepts body opener prefix despite later ASR drift", async () => {
+    const context = ctx({
+      durationMs: 3_000_000,
+      manifestation: manifestation({ duration_ms: 3_000_000 }),
+      epubEntries: [
+        epubEntry({
+          id: "chapter-1",
+          title: "Chapter 1",
+          cumulativeRatio: 0.25,
+          cumulativeWords: 20,
+          words: "previous previous previous previous close".split(/\s+/).map(word),
+        }),
+        epubEntry({
+          id: "chapter-2",
+          title: "Chapter 2: The Township",
+          cumulativeRatio: 0.65,
+          cumulativeWords: 80,
+          words: [
+            { text: "The", token: "the", kind: "heading" },
+            { text: "Township", token: "township", kind: "heading" },
+            ..."My suit can t handle the heat down here The outer layer is nearly melted through Soon the second layer will go Then the scanner blinks silver and I ve got what I came for".split(
+              /\s+/
+            ).map((text) => ({ text, token: text.toLowerCase(), kind: "body" as const })),
+          ],
+        }),
+        epubEntry({ id: "chapter-3", title: "Chapter 3", cumulativeRatio: 1, cumulativeWords: 120 }),
+      ],
+      transcript: {
+        version: "test",
+        text: "previous previous previous close My suit can't handle the heat down here The outer layer is nearly melting through Soon the second layer will go Then the scanner blinks silver and I've got what I came for extra ASR words that drift away from the exact EPUB opener",
+        utterances: [
+          { startMs: 1_170_000, endMs: 1_181_000, text: "previous previous previous close" },
+          {
+            startMs: 1_182_080,
+            endMs: 1_196_000,
+            text: "My suit can't handle the heat down here. The outer layer is nearly melting through. Soon, the second layer will go. Then, the scanner blinks silver, and I've got what I came for. Extra ASR words that drift away from the exact EPUB opener.",
+          },
+        ],
+        words: [
+          { text: "previous", token: "previous", startMs: 1_170_000, endMs: 1_170_200 },
+          { text: "previous", token: "previous", startMs: 1_170_200, endMs: 1_170_400 },
+          { text: "previous", token: "previous", startMs: 1_170_400, endMs: 1_170_600 },
+          { text: "close", token: "close", startMs: 1_170_600, endMs: 1_170_800 },
+          { text: "My", token: "my", startMs: 1_182_080, endMs: 1_182_200 },
+          { text: "suit", token: "suit", startMs: 1_182_200, endMs: 1_182_400 },
+          { text: "can't", token: "cant", startMs: 1_182_400, endMs: 1_182_700 },
+          { text: "handle", token: "handle", startMs: 1_182_700, endMs: 1_183_000 },
+          { text: "the", token: "the", startMs: 1_183_000, endMs: 1_183_200 },
+          { text: "heat", token: "heat", startMs: 1_183_200, endMs: 1_183_500 },
+          { text: "down", token: "down", startMs: 1_183_500, endMs: 1_183_800 },
+          { text: "here", token: "here", startMs: 1_183_800, endMs: 1_184_000 },
+          { text: "The", token: "the", startMs: 1_184_560, endMs: 1_184_700 },
+          { text: "outer", token: "outer", startMs: 1_184_700, endMs: 1_185_000 },
+          { text: "layer", token: "layer", startMs: 1_185_000, endMs: 1_185_300 },
+          { text: "is", token: "is", startMs: 1_185_300, endMs: 1_185_500 },
+          { text: "nearly", token: "nearly", startMs: 1_185_500, endMs: 1_185_800 },
+          { text: "melting", token: "melting", startMs: 1_185_800, endMs: 1_186_100 },
+          { text: "through", token: "through", startMs: 1_186_100, endMs: 1_186_400 },
+        ],
+      },
+    });
+
+    const result = await validateFulcrumSplit(context, createRootCurationSpan(context), {
+      spanPath: "root",
+      epubNodeId: "chapter-2",
+      title: "Chapter 2: The Township",
+      startTime: 1182.08,
+    });
+
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error(result.errors.join("\n"));
+    expect(result.audit.boundaryComparison.targetEpub.optionalHeadingText).toBe("The Township");
+    expect(result.audit.boundaryComparison.targetEpub.bodyHeadText?.startsWith("My suit")).toBe(true);
+  });
+
   test("validateFulcrumSplit splits boundary audit text with word timings inside an utterance", async () => {
     const context = ctx({
       durationMs: 600_000,
