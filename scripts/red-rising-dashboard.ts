@@ -483,6 +483,11 @@ function html(): string {
     .run-row { cursor: pointer; }
     .run-row:hover { background: #20252a; }
     .small { font-size: 12px; }
+    .header-controls { display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
+    .toggle { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; user-select: none; }
+    .toggle input { margin: 0; }
+    button { background: #20252a; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 12px; cursor: pointer; }
+    button:hover { border-color: var(--accent); }
     .viz-scroll { overflow: auto; }
     .tree { min-width: 980px; padding-left: 72px; }
     .tree-row { position: relative; height: 64px; margin: 7px 0; }
@@ -517,7 +522,11 @@ function html(): string {
 <body>
   <header>
     <h1>Red Rising Curation Runs</h1>
-    <div class="muted small">Auto-refreshes every 5s. Reading <span class="mono">${caseDir}</span>.</div>
+    <div class="header-controls">
+      <div class="muted small">Reading <span class="mono">${caseDir}</span>.</div>
+      <label class="toggle"><input id="auto-refresh-toggle" type="checkbox"> Auto-refresh 5s</label>
+      <button id="manual-refresh" type="button">Refresh</button>
+    </div>
   </header>
   <main>
     <section id="current"></section>
@@ -531,6 +540,8 @@ function html(): string {
     let latestRuns = [];
     let openTraceDetails = new Set();
     let openSectionDetails = new Set();
+    let refreshTimer = null;
+    const autoRefreshStorageKey = "red-rising-dashboard:auto-refresh";
     const fmt = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit", month: "short", day: "numeric" });
     const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
     const num = (value) => value == null ? "" : Number(value).toLocaleString();
@@ -717,6 +728,28 @@ function html(): string {
       });
     }
 
+    function autoRefreshEnabled() {
+      try {
+        return window.localStorage.getItem(autoRefreshStorageKey) !== "0";
+      } catch {
+        return true;
+      }
+    }
+
+    function setAutoRefreshEnabled(enabled) {
+      try {
+        window.localStorage.setItem(autoRefreshStorageKey, enabled ? "1" : "0");
+      } catch {
+      }
+      const toggle = document.querySelector("#auto-refresh-toggle");
+      if (toggle) toggle.checked = enabled;
+      if (refreshTimer) {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+      }
+      if (enabled) refreshTimer = setInterval(refresh, 5000);
+    }
+
     function intervalTable(run) {
       const intervals = run.audioOnlyIntervalDetails || [];
       if (!intervals.length && !run.excludedNodes.length) return "";
@@ -778,8 +811,13 @@ function html(): string {
         });
       });
     }
+    document.querySelector("#auto-refresh-toggle").checked = autoRefreshEnabled();
+    document.querySelector("#auto-refresh-toggle").addEventListener("change", (event) => {
+      setAutoRefreshEnabled(event.target.checked);
+    });
+    document.querySelector("#manual-refresh").addEventListener("click", () => refresh());
     refresh();
-    setInterval(refresh, 5000);
+    setAutoRefreshEnabled(autoRefreshEnabled());
   </script>
 </body>
 </html>`;
