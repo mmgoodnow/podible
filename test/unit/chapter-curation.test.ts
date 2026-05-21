@@ -354,8 +354,8 @@ describe("chapter curation tools", () => {
     expect(result.matches[0]).toMatchObject({
       epubNodeId: "chapter-2",
       relationToTarget: "interior",
-      orderedMatchRatio: 1,
     });
+    expect(Object.keys(result.matches[0] ?? {})).not.toContain(["ordered", "Match", "Ratio"].join(""));
   });
 
   test("getEmbeddedAudioChapters flags generic evenly-divided embedded markers", () => {

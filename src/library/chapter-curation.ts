@@ -299,7 +299,6 @@ export type EpubTextSearchResult = {
     targetNodeDistance: number | null;
     targetWordOffset: number | null;
     relationToTarget: "unknown" | "pre_target" | "opener" | "near_opener" | "interior" | "post_target";
-    orderedMatchRatio: number;
     text: string;
   }>;
 };
@@ -431,7 +430,7 @@ export function searchEpubText(
   const requestedIds = new Set(input.nodeIds?.map((id) => id.trim()).filter(Boolean));
   const targetIndex = input.targetNodeId ? ctx.epubEntries.findIndex((entry) => entry.id === input.targetNodeId) : -1;
   const limit = Math.max(1, Math.min(20, input.limit ?? 10));
-  const matches: Array<EpubTextSearchResult["matches"][number] & { matchCount: number }> = [];
+  const matches: Array<EpubTextSearchResult["matches"][number] & { matchCount: number; sequenceScore: number }> = [];
   if (queryTokens.length === 0) return { query: input.query, matches };
 
   for (const [epubIndex, entry] of ctx.epubEntries.entries()) {
@@ -463,7 +462,7 @@ export function searchEpubText(
             : epubIndex < targetIndex
               ? offset - ctx.epubEntries.slice(epubIndex, targetIndex).reduce((sum, item) => sum + item.wordCount, 0)
               : ctx.epubEntries.slice(targetIndex, epubIndex).reduce((sum, item) => sum + item.wordCount, 0) + offset;
-      const orderedMatchRatio = orderedMatches / queryTokens.length;
+      const sequenceScore = orderedMatches / queryTokens.length;
       matches.push({
         epubNodeId: entry.id,
         epubIndex,
@@ -474,7 +473,7 @@ export function searchEpubText(
         targetWordOffset,
         relationToTarget: classifyEpubTextMatch(targetIndex < 0 ? null : epubIndex - targetIndex, targetWordOffset),
         matchCount: matchedQueryTerms.length,
-        orderedMatchRatio: Math.round(orderedMatchRatio * 1000) / 1000,
+        sequenceScore: Math.round(sequenceScore * 1000) / 1000,
         text: normalizeToolText(window.map((word) => word.text).join(" ")).slice(0, 500),
       });
     }
@@ -487,7 +486,7 @@ export function searchEpubText(
     const bDistance = b.targetNodeDistance === null ? 0 : Math.abs(b.targetNodeDistance);
     return (
       bTextScore - aTextScore ||
-      b.orderedMatchRatio - a.orderedMatchRatio ||
+      b.sequenceScore - a.sequenceScore ||
       epubTextRelationRank(a.relationToTarget) - epubTextRelationRank(b.relationToTarget) ||
       aDistance - bDistance ||
       a.epubIndex - b.epubIndex ||
@@ -495,7 +494,10 @@ export function searchEpubText(
     );
   });
 
-  return { query: input.query, matches: matches.slice(0, limit).map(({ matchCount: _matchCount, ...match }) => match) };
+  return {
+    query: input.query,
+    matches: matches.slice(0, limit).map(({ matchCount: _matchCount, sequenceScore: _sequenceScore, ...match }) => match),
+  };
 }
 
 function epubWordToken(word: EpubChapterEntry["words"][number]): string {
@@ -1033,7 +1035,6 @@ export async function researchEpubBoundary(
         }).matches.find((candidate) => candidate.epubNodeId === entry.id);
         const distanceFromExpectedSeconds = Math.round((match.startTime - expectedStartTime) * 1000) / 1000;
         const relationRank = reverse ? epubTextRelationRank(reverse.relationToTarget) : 6;
-        const orderedMatchRatio = reverse?.orderedMatchRatio ?? 0;
         const distancePenalty = Math.min(1, Math.abs(distanceFromExpectedSeconds) / Math.max(1, baseRadius * 2));
         const phraseOffsetPenalty = Math.min(1.5, phrase.startWord / 40);
         hits.push({
@@ -1046,12 +1047,11 @@ export async function researchEpubBoundary(
           transcriptText: normalizeToolText(match.text).slice(0, 500),
           transcriptWindow: normalizeToolText(window.text).slice(0, 900),
           reverseEpubRelation: reverse?.relationToTarget ?? "none",
-          orderedMatchRatio,
           boundaryUse:
             phrase.startWord <= 12 && (reverse?.relationToTarget === "opener" || reverse?.relationToTarget === "near_opener")
               ? "candidate_start"
               : "supporting_context",
-          score: phrase.score * 4 + orderedMatchRatio * 6 + Math.max(0, 5 - relationRank) - distancePenalty - phraseOffsetPenalty,
+          score: phrase.score * 4 + Math.max(0, 5 - relationRank) - distancePenalty - phraseOffsetPenalty,
         });
       }
       if (hits.some((hit) => hit.phrase === phrase.text && (hit.reverseEpubRelation === "opener" || hit.reverseEpubRelation === "near_opener"))) break;
@@ -1332,7 +1332,6 @@ export type EpubBoundaryResearchHit = {
   transcriptText: string;
   transcriptWindow: string;
   reverseEpubRelation: EpubTextSearchResult["matches"][number]["relationToTarget"] | "none";
-  orderedMatchRatio: number;
   boundaryUse: "candidate_start" | "supporting_context";
 };
 
@@ -1447,7 +1446,6 @@ function summarizeToolResultForEvent(result: unknown): unknown {
           wordOffset: item.wordOffset,
           targetWordOffset: item.targetWordOffset,
           relationToTarget: item.relationToTarget,
-          orderedMatchRatio: item.orderedMatchRatio,
           text: typeof item.text === "string" ? eventPreview(item.text) : undefined,
         };
       }),
