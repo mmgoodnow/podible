@@ -2752,9 +2752,10 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, forc
         "4. Estimate the likely transcript neighborhood from the EPUB node's word-position ratio, then search near that neighborhood with rgSearchTranscript first for manual follow-up. If a phrase misses, shorten it or try a different phrase from the same EPUB node; do not pivot to guessed timestamps.",
         "5. Inspect the best match with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may include pre-target or interior transcript, or after a rejected fulcrum. The proposed start must be the first matched opener word or the silence immediately before it; do not submit the start of a broad evidence window.",
         "6. If transcript context looks like pre-roll or interior prose, call searchEpubText with the transcript phrase and targetNodeId. Trust relationToTarget: opener/near_opener is usable boundary evidence; interior means do not submit that timestamp as a chapter start; pre_target means move later to the target opener.",
-        "7. Treat submitFulcrumSplit as a final evidence-backed claim, not a probe. Call it only when you can already prove the chosen EPUB node opener begins at that exact timestamp or immediately after it.",
-        "8. Before submitFulcrumSplit, have this proof in hand: target EPUB node opener text, the transcript search hit that found that opener, a transcript window showing the opener at/just after the proposed start, and reverse EPUB evidence that the transcript phrase is opener/near_opener for the target node. Put that proof in the evidence/notes fields.",
-        "9. If you do not have that proof yet, keep researching instead of submitting. If rejected, keep the same EPUB node and search earlier/different opener phrases or a wider same-node word window before switching to a different middle node.",
+        "7. Treat submitFulcrumSplit as a final evidence-backed claim, not a probe. The call asserts that startTime is the audiobook start of epubNodeId. It is never an arbitrary scene, sentence, dialogue turn, or later distinctive phrase inside that node.",
+        "8. Call submitFulcrumSplit only when you can already prove the chosen EPUB node opener begins at that exact timestamp or immediately after it. Distinctive later prose helps locate the area, but it is not valid split evidence unless reverse EPUB search says opener/near_opener.",
+        "9. Before submitFulcrumSplit, have this proof in hand: target EPUB node opener text, the transcript search hit that found that opener, a transcript window showing the opener at/just after the proposed start, and reverse EPUB evidence that the transcript phrase is opener/near_opener for the target node. Put that proof in the evidence/notes fields.",
+        "10. If you do not have that proof yet, keep researching instead of submitting. If rejected, keep the same EPUB node and search earlier/different opener phrases or a wider same-node word window before switching to a different middle node.",
       ];
   return [
     `Curate chapter markers for span ${span.path} of "${ctx.book.title}" by ${ctx.book.author}.`,
@@ -2771,8 +2772,8 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, forc
       ? "You are forced to submit a leaf chapter plan for this span. Do not call submitFulcrumSplit."
     : allowLeaf
         ? "This span is small enough for a leaf plan. SubmitLeafChapterPlan is the expected outcome."
-        : "This span is too broad for a leaf plan. You must call submitFulcrumSplit with a validated internal boundary.",
-    "For a fulcrum, pick a high-confidence internal EPUB node boundary with transcript prose evidence near the timestamp.",
+        : "This span is too broad for a leaf plan. You must call submitFulcrumSplit with a validated internal EPUB node start.",
+    "For a fulcrum, pick a high-confidence internal EPUB node start with transcript opener evidence at the timestamp.",
     allowLeaf
       ? "For a leaf, submit only chapter starts inside this span and include epubNodeId for every EPUB-backed chapter. Each non-inherited EPUB-backed start must reverse-search to opener/near_opener for that EPUB node."
       : "",
@@ -3170,7 +3171,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
     instructions: [
       "You curate audiobook chapter markers for one bounded span, not the whole book.",
       "You must either submit a leaf chapter plan or propose one validated fulcrum split.",
-      "Use submitFulcrumSplit when the span is broad and you can identify a strong internal boundary.",
+      "Use submitFulcrumSplit when the span is broad and you can identify the audiobook start of an internal EPUB node.",
       allowLeaf
         ? "Use submitLeafChapterPlan when the span is small enough or already well evidenced. For each non-inherited EPUB-backed chapter start, verify transcript text at the proposed start reverse-searches to opener/near_opener for that EPUB node."
         : "This span is too broad for a leaf plan. The submitLeafChapterPlan tool is intentionally unavailable; you must find a fulcrum split.",
@@ -3181,9 +3182,10 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
       "4. Estimate the likely timestamp neighborhood from the EPUB node position within the current span. Search that neighborhood with rgSearchTranscript first when doing manual follow-up. If a phrase misses, shorten it or try a different phrase from the same EPUB node; do not pivot to guessed timestamps.",
       "5. Inspect the best candidate with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may include pre-target or interior transcript, or after a rejected fulcrum. Check both sides of the timestamp: the proposed start should be the first matched opener word or the silence immediately before it, not the start of a broad evidence window.",
       "6. If transcript context looks like it may include pre-roll or interior prose, call searchEpubText with the transcript phrase and targetNodeId. Trust relationToTarget: opener/near_opener is usable boundary evidence; interior means do not submit that timestamp as a chapter start; pre_target means move later to the target opener.",
-      "7. Treat submitFulcrumSplit as a final evidence-backed claim, not a probing tool. Call it only when you can already prove the chosen EPUB node opener begins at that exact timestamp or immediately after it.",
-      "8. Before submitFulcrumSplit, have this proof in hand: target EPUB node opener text, the transcript search hit that found that opener, a transcript window showing the opener at/just after the proposed start, and reverse EPUB evidence that the transcript phrase is opener/near_opener for the target node. Put that proof in the evidence/notes fields.",
-      "9. If you do not have that proof yet, keep researching instead of submitting. If the judge rejects it, do not use the judge as the search engine and do not resubmit the same node/timestamp; keep the same EPUB node and search earlier/different opener phrases or a wider same-node word window before switching to a different middle node.",
+      "7. Treat submitFulcrumSplit as a final evidence-backed claim, not a probing tool. The call asserts that startTime is the audiobook start of epubNodeId. It is never an arbitrary scene, sentence, dialogue turn, or later distinctive phrase inside that node.",
+      "8. Call submitFulcrumSplit only when you can already prove the chosen EPUB node opener begins at that exact timestamp or immediately after it. Distinctive later prose helps locate the area, but it is not valid split evidence unless reverse EPUB search says opener/near_opener.",
+      "9. Before submitFulcrumSplit, have this proof in hand: target EPUB node opener text, the transcript search hit that found that opener, a transcript window showing the opener at/just after the proposed start, and reverse EPUB evidence that the transcript phrase is opener/near_opener for the target node. Put that proof in the evidence/notes fields.",
+      "10. If you do not have that proof yet, keep researching instead of submitting. If the judge rejects it, do not use the judge as the search engine and do not resubmit the same node/timestamp; keep the same EPUB node and search earlier/different opener phrases or a wider same-node word window before switching to a different middle node.",
       "Do not submit guessed timestamps or timestamps copied from estimated EPUB position. A broad-span fulcrum must be backed by a transcript search result from rgSearchTranscript or fuzzySearchTranscript.",
       "After any rejected fulcrum, run a fresh rgSearchTranscript or fuzzySearchTranscript query from the same EPUB node's opener text before trying another fulcrum.",
       "All tool times and submitted startTime values are seconds, not milliseconds.",
@@ -3348,7 +3350,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
       tool({
         name: "submitFulcrumSplit",
         description:
-          "Submit a final, evidence-backed internal split boundary for this span. Use only after you already have opener text, transcript-search hit, inspected transcript window, and reverse EPUB opener/near_opener proof for the exact timestamp.",
+          "Submit a final, evidence-backed EPUB node start for this span. This asserts startTime is the audiobook start of epubNodeId, not an arbitrary interior phrase. Use only after opener text, transcript-search hit, inspected transcript window, and reverse EPUB opener/near_opener proof for the exact timestamp.",
         parameters: submitFulcrumSplitSchema,
         strict: true,
         execute: async (input) => {
