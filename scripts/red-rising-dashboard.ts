@@ -486,6 +486,7 @@ function html(): string {
   <script>
     let selectedRunId = null;
     let latestRuns = [];
+    let openTraceDetails = new Set();
     const fmt = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit", month: "short", day: "numeric" });
     const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
     const num = (value) => value == null ? "" : Number(value).toLocaleString();
@@ -584,10 +585,30 @@ function html(): string {
     function renderTraceSummaries(run) {
       if (!run.traceSummaries?.length) return '<div class="card section"><h2>Trace Summaries</h2><div class="muted">No trace summaries yet. Hidden chain-of-thought is not available; this panel shows stored reasoning summaries and outputs when present.</div></div>';
       return '<div class="card section"><h2>Trace Summaries</h2><div class="muted small">Shows stored model reasoning summaries and final/tool outputs where present, not hidden chain-of-thought.</div>' +
-        run.traceSummaries.slice(0, 20).map((t) => '<details><summary><code>' + esc(t.file) + '</code> <span class="muted">' + esc(t.kind) + ' ' + esc(t.title) + '</span></summary>' +
+        run.traceSummaries.slice(0, 20).map((t) => '<details data-trace-file="' + esc(t.file) + '"' + (openTraceDetails.has(t.file) ? ' open' : '') + '><summary><code>' + esc(t.file) + '</code> <span class="muted">' + esc(t.kind) + ' ' + esc(t.title) + '</span></summary>' +
           (t.reasoningSummaries.length ? '<h2>Reasoning Summary</h2><pre class="small">' + esc(t.reasoningSummaries.join("\\n\\n")) + '</pre>' : '<div class="muted small">No stored reasoning summary in this trace.</div>') +
           '<h2>Final Output</h2><pre class="small">' + esc(JSON.stringify(t.finalOutput, null, 2)) + '</pre></details>').join("") +
         '</div>';
+    }
+
+    function rememberOpenDetails() {
+      document.querySelectorAll("details[data-trace-file]").forEach((detail) => {
+        const file = detail.getAttribute("data-trace-file");
+        if (!file) return;
+        if (detail.open) openTraceDetails.add(file);
+        else openTraceDetails.delete(file);
+      });
+    }
+
+    function attachPersistentDetails() {
+      document.querySelectorAll("details[data-trace-file]").forEach((detail) => {
+        detail.addEventListener("toggle", () => {
+          const file = detail.getAttribute("data-trace-file");
+          if (!file) return;
+          if (detail.open) openTraceDetails.add(file);
+          else openTraceDetails.delete(file);
+        });
+      });
     }
 
     function intervalTable(run) {
@@ -629,6 +650,7 @@ function html(): string {
     }
 
     async function refresh() {
+      rememberOpenDetails();
       const response = await fetch("/api/runs", { cache: "no-store" });
       const data = await response.json();
       latestRuns = data.runs;
@@ -636,12 +658,15 @@ function html(): string {
       const selected = latestRuns.find((run) => run.id === selectedRunId) || latestRuns[0];
       document.querySelector("#current").innerHTML = renderCurrent(selected);
       document.querySelector("#runs").innerHTML = renderRuns(latestRuns);
+      attachPersistentDetails();
       document.querySelectorAll(".run-row").forEach((row) => {
         row.addEventListener("click", () => {
+          rememberOpenDetails();
           selectedRunId = row.getAttribute("data-run-id");
           const selected = latestRuns.find((run) => run.id === selectedRunId) || latestRuns[0];
           document.querySelector("#current").innerHTML = renderCurrent(selected);
           document.querySelector("#runs").innerHTML = renderRuns(latestRuns);
+          attachPersistentDetails();
         });
       });
     }
