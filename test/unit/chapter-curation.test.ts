@@ -824,6 +824,69 @@ describe("chapter curation tools", () => {
     expect(result.audit.boundaryComparison.targetEpub.headText).toContain("Helldiver");
   });
 
+  test("validateFulcrumSplit treats unspoken EPUB chapter titles as optional", async () => {
+    const context = ctx({
+      durationMs: 600_000,
+      manifestation: manifestation({ duration_ms: 600_000 }),
+      epubEntries: [
+        epubEntry({
+          id: "chapter-1",
+          title: "Chapter 1",
+          cumulativeRatio: 0.45,
+          cumulativeWords: 8,
+          words: "tail tail tail tail".split(/\s+/).map(word),
+        }),
+        epubEntry({
+          id: "chapter-2",
+          title: "Chapter 2: Antonia",
+          cumulativeRatio: 0.75,
+          cumulativeWords: 20,
+          words: "Antonia I passed this test The interminable war with House Minerva is done".split(/\s+/).map(word),
+        }),
+        epubEntry({ id: "chapter-3", title: "Chapter 3", cumulativeRatio: 1, cumulativeWords: 28 }),
+      ],
+      transcript: {
+        version: "test",
+        text: "tail tail tail tail I passed this test The interminable war with House Minerva is done",
+        utterances: [
+          { startMs: 170_000, endMs: 174_000, text: "tail tail tail tail" },
+          { startMs: 180_000, endMs: 186_000, text: "I passed this test The interminable war with House Minerva is done" },
+        ],
+        words: [
+          { text: "tail", token: "tail", startMs: 170_000, endMs: 170_200 },
+          { text: "tail", token: "tail", startMs: 170_200, endMs: 170_400 },
+          { text: "tail", token: "tail", startMs: 170_400, endMs: 170_600 },
+          { text: "tail", token: "tail", startMs: 170_600, endMs: 170_800 },
+          { text: "I", token: "i", startMs: 180_000, endMs: 180_100 },
+          { text: "passed", token: "passed", startMs: 180_100, endMs: 180_400 },
+          { text: "this", token: "this", startMs: 180_400, endMs: 180_600 },
+          { text: "test", token: "test", startMs: 180_600, endMs: 180_900 },
+          { text: "The", token: "the", startMs: 180_900, endMs: 181_100 },
+          { text: "interminable", token: "interminable", startMs: 181_100, endMs: 181_600 },
+          { text: "war", token: "war", startMs: 181_600, endMs: 181_800 },
+          { text: "with", token: "with", startMs: 181_800, endMs: 182_000 },
+          { text: "House", token: "house", startMs: 182_000, endMs: 182_300 },
+          { text: "Minerva", token: "minerva", startMs: 182_300, endMs: 182_800 },
+          { text: "is", token: "is", startMs: 182_800, endMs: 183_000 },
+          { text: "done", token: "done", startMs: 183_000, endMs: 183_300 },
+        ],
+      },
+    });
+
+    const result = await validateFulcrumSplit(context, createRootCurationSpan(context), {
+      spanPath: "root",
+      epubNodeId: "chapter-2",
+      title: "Chapter 2: Antonia",
+      startTime: 180,
+    });
+
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error(result.errors.join("\n"));
+    expect(result.audit.boundaryComparison.targetEpub.optionalHeadingText).toBe("Antonia");
+    expect(result.audit.boundaryComparison.targetEpub.bodyHeadText?.startsWith("I passed this test")).toBe(true);
+    expect(result.audit.boundaryComparison.transcriptAfter.startsWith("I passed this test")).toBe(true);
+  });
+
   test("validateFulcrumSplit splits boundary audit text with word timings inside an utterance", async () => {
     const context = ctx({
       durationMs: 600_000,

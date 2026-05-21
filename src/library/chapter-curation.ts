@@ -89,6 +89,9 @@ export type FulcrumValidationAudit = {
       epubNodeId: string | null;
       title: string;
       headText: string;
+      bodyHeadText?: string;
+      optionalHeadingText?: string;
+      headingMayBeUnspoken?: boolean;
     };
     transcriptBefore: string;
     transcriptAfter: string;
@@ -188,6 +191,40 @@ export function getTranscriptWindowFromContext(
 
 export function summarizeFirstWords(entry: EpubChapterEntry, limit = 40): string {
   return entry.words.slice(0, limit).map((word) => word.text).join(" ").trim();
+}
+
+function isStructuralTitleToken(token: string): boolean {
+  return (
+    token === "chapter" ||
+    token === "part" ||
+    token === "book" ||
+    token === "section" ||
+    /^\d+$/.test(token) ||
+    /^(?:i|ii|iii|iv|v|vi|vii|viii|ix|x|xi|xii|xiii|xiv|xv|xvi|xvii|xviii|xix|xx)$/.test(token)
+  );
+}
+
+function entryTitlePrefixWordCount(entry: EpubChapterEntry): number {
+  const wordTokens = entry.words.map((word) => normalizedWordTokens(word.text)[0] ?? "");
+  const titleTokens = normalizedWordTokens(entry.title).filter((token) => !isStructuralTitleToken(token));
+  const maxPrefix = Math.min(8, wordTokens.length, titleTokens.length);
+  for (let length = maxPrefix; length > 0; length--) {
+    const titleSuffix = titleTokens.slice(titleTokens.length - length);
+    const wordPrefix = wordTokens.slice(0, length);
+    if (titleSuffix.every((token, index) => token === wordPrefix[index])) return length;
+  }
+  return 0;
+}
+
+function summarizeFirstBodyWords(entry: EpubChapterEntry, limit = 40): string {
+  const start = entryTitlePrefixWordCount(entry);
+  return entry.words.slice(start, start + limit).map((word) => word.text).join(" ").trim();
+}
+
+function summarizeOptionalHeadingText(entry: EpubChapterEntry): string {
+  const prefixWordCount = entryTitlePrefixWordCount(entry);
+  if (prefixWordCount <= 0) return "";
+  return entry.words.slice(0, prefixWordCount).map((word) => word.text).join(" ").trim();
 }
 
 export function summarizeLastWords(entry: EpubChapterEntry, limit = 40): string {
@@ -2206,6 +2243,9 @@ function buildBoundaryComparisonAudit(
         epubNodeId: entry?.id ?? null,
         title: entry?.title ?? input.title,
         headText: entry ? summarizeFirstWords(entry, 56) : "",
+        bodyHeadText: entry ? summarizeFirstBodyWords(entry, 56) : "",
+        optionalHeadingText: entry ? summarizeOptionalHeadingText(entry) : "",
+        headingMayBeUnspoken: true,
       },
       transcriptBefore: boundaryText.before.slice(-1_000),
       transcriptAfter: boundaryText.after.slice(0, 1_000),
@@ -2256,7 +2296,8 @@ function hasMixedUtteranceBoundaryEvidence(audit: FulcrumValidationAudit): boole
   if (previousSequence.length < 3) return false;
   const previousIndex = orderedSequenceIndex(transcriptTokens, previousSequence);
   if (previousIndex < 0) return false;
-  return boundaryHeadSequences(audit.boundaryComparison.targetEpub.headText).some((sequence) => {
+  const targetHeadText = audit.boundaryComparison.targetEpub.bodyHeadText || audit.boundaryComparison.targetEpub.headText;
+  return boundaryHeadSequences(targetHeadText).some((sequence) => {
     const targetIndex = orderedSequenceIndex(transcriptTokens, sequence);
     return targetIndex > previousIndex;
   });
@@ -2994,13 +3035,14 @@ function createChapterBoundaryJudgeAgent(ctx: ChapterCurationContext): Agent {
       "You are a strict reviewer for audiobook chapter split points.",
       "Your job is to decide whether the proposed timestamp is actually the start of the proposed EPUB node.",
       "Judge the boundary claim directly: node X starts at timestamp Y.",
-      "Use audit.boundaryComparison first. Compare previousEpub.tailText to transcriptBefore, and targetEpub.headText to transcriptAfter.",
+      "Use audit.boundaryComparison first. Compare previousEpub.tailText to transcriptBefore, and targetEpub.bodyHeadText or targetEpub.headText to transcriptAfter.",
+      "EPUB chapter headings/titles are often printed but not spoken in audiobook transcripts. If targetEpub.optionalHeadingText is absent but targetEpub.bodyHeadText begins at the timestamp, that is strong opener evidence.",
       "Check audit.boundaryComparison.transcriptPrecision. If it is word, transcriptBefore/transcriptAfter are split by word timing and should be treated as precise boundary context.",
       "If transcriptPrecision is utterance, the supplied before/after text is lower precision. A true boundary may fall inside a displayed utterance.",
       "For utterance-level context, accept the utterance timestamp when one utterance contains previous EPUB tail followed by the target EPUB head, such as 'tail tail chapter twelve head head'.",
       "Transcript before the timestamp may match the previous EPUB node; that is positive boundary evidence, not evidence that the target opener is interior.",
-      "Reject only when target EPUB opener/title evidence is absent at or immediately after the proposed timestamp, offset earlier/later, generic, pre-target, or clearly only an interior target-node match.",
-      "Accept when transcriptBefore plausibly matches the previous EPUB tail and transcriptAfter begins with distinctive target EPUB opener prose/title at or immediately after the proposed timestamp.",
+      "Reject only when target EPUB body opener evidence is absent at or immediately after the proposed timestamp, offset earlier/later, generic, pre-target, or clearly only an interior target-node match.",
+      "Accept when transcriptBefore plausibly matches the previous EPUB tail and transcriptAfter begins with distinctive target EPUB body opener prose at or immediately after the proposed timestamp, even if the printed title/heading is omitted.",
       "Do not invent a full chapter plan. Judge only this proposed split.",
       "Do not recommend alternate timestamps or EPUB nodes. If the split is not proven, classify the evidence problem and explain only what is visible in the supplied evidence.",
       "The finding enum is an evidence classification from the submitted audit/window, not a ground-truth timestamp label. Use it only when the supplied evidence directly supports that classification.",
@@ -3027,7 +3069,8 @@ function chapterBoundaryJudgePrompt(ctx: ChapterCurationContext, span: ChapterCu
     "Prefer rejecting over accepting a suspicious split; the curator owns the next search.",
     "Do not suggest alternate timestamps or nodes.",
     "Do not make claims about scenes or narrative continuity. You are only judging whether this boundary comparison supports node X starting at timestamp Y.",
-    "Primary evidence: audit.boundaryComparison. If transcriptBefore matches previousEpub.tailText and transcriptAfter matches targetEpub.headText, that supports acceptance.",
+    "Primary evidence: audit.boundaryComparison. If transcriptBefore matches previousEpub.tailText and transcriptAfter matches targetEpub.bodyHeadText or targetEpub.headText, that supports acceptance.",
+    "Printed EPUB headings are optional audio evidence. Do not reject merely because targetEpub.optionalHeadingText is absent from the ASR transcript when targetEpub.bodyHeadText begins at the proposed timestamp.",
     "Use audit.boundaryComparison.transcriptPrecision. Word precision is exact enough to split a boundary inside an ASR utterance. Utterance precision is lower precision; if one utterance includes previous EPUB tail followed by the target EPUB head, accepting that utterance start is allowed.",
     "Do not reject merely because transcriptBefore contains non-target prose; that is expected at a real boundary when it matches the previous EPUB node.",
     "Treat the finding as an evidence classification from the supplied audit/window, not as ground truth about the true boundary.",
