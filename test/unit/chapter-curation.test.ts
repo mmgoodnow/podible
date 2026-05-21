@@ -354,8 +354,8 @@ describe("chapter curation tools", () => {
     expect(result.matches[0]).toMatchObject({
       epubNodeId: "chapter-2",
       relationToTarget: "interior",
+      orderedMatchRatio: 1,
     });
-    expect(result.matches[0]?.matchedTokens).toContain("bastards");
   });
 
   test("getEmbeddedAudioChapters flags generic evenly-divided embedded markers", () => {
@@ -497,7 +497,6 @@ describe("chapter curation tools", () => {
       startTime: 30,
       quality: "medium",
     });
-    expect(result.nodes[0]?.matches[0]?.tokenOverlap).toEqual(["first", "real"]);
   });
 
   test("findEpubChapterEvidence reports the first opener word instead of pre-boundary context", async () => {
@@ -580,7 +579,6 @@ describe("chapter curation tools", () => {
     expect(result.candidates[0]?.startTime).toBeGreaterThanOrEqual(205);
     expect(result.candidates[0]?.ratioDistance).toBeLessThan(0.05);
     expect(result.candidates[0]?.boundaryScore).toBeGreaterThanOrEqual(0.35);
-    expect(result.candidates[0]?.preStartTokenOverlap).toEqual([]);
   });
 
   test("findFulcrumCandidates rejects windows that continue opener tokens from pre-roll", () => {
@@ -823,7 +821,7 @@ describe("chapter curation tools", () => {
     expect(result.accepted).toBe(true);
     if (!result.accepted) throw new Error(result.errors.join("\n"));
     expect(result.epubIndex).toBe(1);
-    expect(result.audit.proseMatchedTokens.length).toBeGreaterThan(0);
+    expect(result.audit.boundaryComparison.targetEpub.headText).toContain("Helldiver");
   });
 
   test("validateFulcrumSplit rejects title-only evidence", async () => {
@@ -851,7 +849,7 @@ describe("chapter curation tools", () => {
     });
     expect(result.accepted).toBe(false);
     if (result.accepted) throw new Error("expected rejection");
-    expect(result.errors.join("\n")).toContain("prose token");
+    expect(result.errors.join("\n")).toContain("does not align to the opener");
   });
 
   test("validateFulcrumSplit rejects timestamps too close to span edges", async () => {
@@ -946,7 +944,7 @@ describe("chapter curation tools", () => {
 
     expect(result.accepted).toBe(false);
     if (result.accepted) throw new Error("expected rejection");
-    expect(result.errors.join("\n")).toContain("nearest transcript evidence candidate");
+    expect(result.errors.join("\n")).toContain("does not align to the opener");
   });
 
   test("validateFulcrumSplit identifies pre-boundary context before stronger opener evidence", async () => {
@@ -1004,8 +1002,7 @@ describe("chapter curation tools", () => {
 
     expect(result.accepted).toBe(false);
     if (result.accepted) throw new Error("expected rejection");
-    expect(result.errors.join("\n")).toContain("pre-boundary context");
-    expect(result.instruction).toContain("later prose candidate");
+    expect(result.errors.join("\n")).toContain("does not align to the opener");
   });
 
   test("validateLeafChapterPlan rejects broad non-forced spans so the agent keeps splitting", () => {
@@ -1319,11 +1316,12 @@ describe("chapter curation tools", () => {
               epubNodeId: "chapter-1",
               title: "Chapter 1",
               startTime: 120,
-              expectedTokens: [],
-              proseTokens: [],
-              matchedTokens: [],
-              proseMatchedTokens: [],
-              overlapRatio: 1,
+              boundaryComparison: {
+                previousEpub: { epubNodeId: null, title: null, tailText: "" },
+                targetEpub: { epubNodeId: "chapter-1", title: "Chapter 1", headText: "" },
+                transcriptBefore: "",
+                transcriptAfter: "",
+              },
               transcriptWindow: "",
               candidates: [],
             },
@@ -1383,11 +1381,12 @@ describe("chapter curation tools", () => {
                   epubNodeId: "chapter-1",
                   title: "Chapter 1",
                   startTime: 120,
-                  expectedTokens: [],
-                  proseTokens: [],
-                  matchedTokens: [],
-                  proseMatchedTokens: [],
-                  overlapRatio: 1,
+                  boundaryComparison: {
+                    previousEpub: { epubNodeId: null, title: null, tailText: "" },
+                    targetEpub: { epubNodeId: "chapter-1", title: "Chapter 1", headText: "" },
+                    transcriptBefore: "",
+                    transcriptAfter: "",
+                  },
                   transcriptWindow: "",
                   candidates: [],
                 },
@@ -1444,11 +1443,12 @@ describe("chapter curation tools", () => {
             epubNodeId: "chapter-1",
             title: "Chapter 1",
             startTime: 60,
-            expectedTokens: [],
-            proseTokens: [],
-            matchedTokens: [],
-            proseMatchedTokens: [],
-            overlapRatio: 1,
+            boundaryComparison: {
+              previousEpub: { epubNodeId: null, title: null, tailText: "" },
+              targetEpub: { epubNodeId: "chapter-1", title: "Chapter 1", headText: "" },
+              transcriptBefore: "",
+              transcriptAfter: "",
+            },
             transcriptWindow: "",
             candidates: [],
           },

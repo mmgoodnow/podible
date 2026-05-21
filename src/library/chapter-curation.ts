@@ -69,11 +69,20 @@ export type FulcrumValidationAudit = {
   epubNodeId: string | null;
   title: string;
   startTime: number;
-  expectedTokens: string[];
-  proseTokens: string[];
-  matchedTokens: string[];
-  proseMatchedTokens: string[];
-  overlapRatio: number;
+  boundaryComparison: {
+    previousEpub: {
+      epubNodeId: string | null;
+      title: string | null;
+      tailText: string;
+    };
+    targetEpub: {
+      epubNodeId: string | null;
+      title: string;
+      headText: string;
+    };
+    transcriptBefore: string;
+    transcriptAfter: string;
+  };
   transcriptWindow: string;
   candidates: EpubChapterEvidenceResult["nodes"][number]["matches"];
 };
@@ -171,6 +180,10 @@ export function summarizeFirstWords(entry: EpubChapterEntry, limit = 40): string
   return entry.words.slice(0, limit).map((word) => word.text).join(" ").trim();
 }
 
+export function summarizeLastWords(entry: EpubChapterEntry, limit = 40): string {
+  return entry.words.slice(Math.max(0, entry.words.length - limit)).map((word) => word.text).join(" ").trim();
+}
+
 export function inferEntryStartRatio(entries: EpubChapterEntry[], index: number): number {
   if (index <= 0) return 0;
   const previous = entries[index - 1];
@@ -222,7 +235,6 @@ export type EpubNodeTextResult = {
 
 export type EpubTextSearchResult = {
   query: string;
-  queryTokens: string[];
   matches: Array<{
     epubNodeId: string;
     epubIndex: number;
@@ -232,7 +244,6 @@ export type EpubTextSearchResult = {
     targetNodeDistance: number | null;
     targetWordOffset: number | null;
     relationToTarget: "unknown" | "pre_target" | "opener" | "near_opener" | "interior" | "post_target";
-    matchedTokens: string[];
     orderedMatchRatio: number;
     text: string;
   }>;
@@ -240,7 +251,7 @@ export type EpubTextSearchResult = {
 
 type LeafBoundaryEvidence = Pick<
   EpubTextSearchResult["matches"][number],
-  "relationToTarget" | "orderedMatchRatio" | "matchedTokens"
+  "relationToTarget" | "orderedMatchRatio"
 >;
 
 const GENERIC_EPUB_OPENER_TOKENS = new Set([
@@ -370,8 +381,8 @@ export function searchEpubText(
   const requestedIds = new Set(input.nodeIds?.map((id) => id.trim()).filter(Boolean));
   const targetIndex = input.targetNodeId ? ctx.epubEntries.findIndex((entry) => entry.id === input.targetNodeId) : -1;
   const limit = Math.max(1, Math.min(20, input.limit ?? 10));
-  const matches: EpubTextSearchResult["matches"] = [];
-  if (queryTokens.length === 0) return { query: input.query, queryTokens, matches };
+  const matches: Array<EpubTextSearchResult["matches"][number] & { matchCount: number }> = [];
+  if (queryTokens.length === 0) return { query: input.query, matches };
 
   for (const [epubIndex, entry] of ctx.epubEntries.entries()) {
     if (requestedIds.size > 0 && !requestedIds.has(entry.id)) continue;
@@ -381,8 +392,8 @@ export function searchEpubText(
       if (window.length === 0) continue;
       const windowWordTokens = window.map(epubWordToken).filter(Boolean);
       const windowTokens = new Set(windowWordTokens);
-      const matchedTokens = queryTokens.filter((token, index) => windowTokens.has(token) && queryTokens.indexOf(token) === index);
-      if (matchedTokens.length < Math.min(3, queryTokens.length)) continue;
+      const matchedQueryTerms = queryTokens.filter((token, index) => windowTokens.has(token) && queryTokens.indexOf(token) === index);
+      if (matchedQueryTerms.length < Math.min(3, queryTokens.length)) continue;
 
       let orderedMatches = 0;
       let searchFrom = 0;
@@ -412,7 +423,7 @@ export function searchEpubText(
         targetNodeDistance: targetIndex < 0 ? null : epubIndex - targetIndex,
         targetWordOffset,
         relationToTarget: classifyEpubTextMatch(targetIndex < 0 ? null : epubIndex - targetIndex, targetWordOffset),
-        matchedTokens,
+        matchCount: matchedQueryTerms.length,
         orderedMatchRatio: Math.round(orderedMatchRatio * 1000) / 1000,
         text: normalizeToolText(window.map((word) => word.text).join(" ")).slice(0, 500),
       });
@@ -420,8 +431,8 @@ export function searchEpubText(
   }
 
   matches.sort((a, b) => {
-    const aTextScore = a.matchedTokens.length / queryTokens.length;
-    const bTextScore = b.matchedTokens.length / queryTokens.length;
+    const aTextScore = a.matchCount / queryTokens.length;
+    const bTextScore = b.matchCount / queryTokens.length;
     const aDistance = a.targetNodeDistance === null ? 0 : Math.abs(a.targetNodeDistance);
     const bDistance = b.targetNodeDistance === null ? 0 : Math.abs(b.targetNodeDistance);
     return (
@@ -434,7 +445,7 @@ export function searchEpubText(
     );
   });
 
-  return { query: input.query, queryTokens, matches: matches.slice(0, limit) };
+  return { query: input.query, matches: matches.slice(0, limit).map(({ matchCount: _matchCount, ...match }) => match) };
 }
 
 function epubWordToken(word: EpubChapterEntry["words"][number]): string {
@@ -769,7 +780,6 @@ export type EpubChapterEvidenceMatch = {
   endTime: number;
   text: string;
   afterText: string;
-  tokenOverlap: string[];
   quality: "none" | "weak" | "medium" | "strong";
 };
 
@@ -795,7 +805,7 @@ function transcriptWordEvidenceMatches(
   queryTokens: string[],
   scope: TranscriptSearchScope,
   limit: number
-): EpubChapterEvidenceMatch[] {
+): Array<EpubChapterEvidenceMatch & { score: number }> {
   const distinctQueryTokens = queryTokens.filter((token, index) => token.length >= 4 && queryTokens.indexOf(token) === index);
   if (distinctQueryTokens.length === 0) return [];
   const startMs = secondsToMs(scope.startTime ?? 0);
@@ -810,9 +820,9 @@ function transcriptWordEvidenceMatches(
     const window = words.slice(index, index + windowSize);
     if (window.length === 0) continue;
     const windowTokens = new Set(window.map((word) => word.token || textTokens(word.text)[0] || "").filter(Boolean));
-    const tokenOverlap = distinctQueryTokens.filter((token) => windowTokens.has(token));
-    if (tokenOverlap.length === 0) continue;
-    const evidenceStartIndex = window.findIndex((word) => tokenOverlap.includes(word.token || textTokens(word.text)[0] || ""));
+    const matchedQueryTerms = distinctQueryTokens.filter((token) => windowTokens.has(token));
+    if (matchedQueryTerms.length === 0) continue;
+    const evidenceStartIndex = window.findIndex((word) => matchedQueryTerms.includes(word.token || textTokens(word.text)[0] || ""));
     const alignedWindow = evidenceStartIndex > 0 ? window.slice(evidenceStartIndex) : window;
     const orderedBonus = distinctQueryTokens.reduce((score, token, tokenIndex) => {
       const foundIndex = window.findIndex((word) => (word.token || textTokens(word.text)[0]) === token);
@@ -823,9 +833,8 @@ function transcriptWordEvidenceMatches(
       endTime: msToSeconds(alignedWindow.at(-1)!.endMs),
       text: normalizeToolText(alignedWindow.map((word) => word.text).join(" ")),
       afterText: normalizeToolText(getTranscriptWindowFromContext(ctx, alignedWindow[0]!.startMs, 20_000).text).slice(0, 500),
-      tokenOverlap,
-      quality: evidenceQuality(tokenOverlap.length),
-      score: tokenOverlap.length + orderedBonus,
+      quality: evidenceQuality(matchedQueryTerms.length),
+      score: matchedQueryTerms.length + orderedBonus,
     });
   }
 
@@ -836,7 +845,7 @@ function transcriptWordEvidenceMatches(
     if (deduped.length >= limit) break;
   }
 
-  return deduped.map(({ score: _score, ...match }) => match);
+  return deduped;
 }
 
 export async function findEpubChapterEvidence(
@@ -890,14 +899,14 @@ export async function findEpubChapterEvidence(
       ...matches.map((match) => {
         const candidateText = `${match.text} ${match.after.text}`;
         const candidateTokens = new Set(textTokens(candidateText));
-        const tokenOverlap = queryTokens.filter((token) => candidateTokens.has(token));
+        const matchedQueryTerms = queryTokens.filter((token) => candidateTokens.has(token));
         return {
           startTime: match.startTime,
           endTime: match.endTime,
           text: normalizeToolText(match.text),
           afterText: normalizeToolText(match.after.text).slice(0, 500),
-          tokenOverlap,
-          quality: evidenceQuality(tokenOverlap.length),
+          quality: evidenceQuality(matchedQueryTerms.length),
+          score: matchedQueryTerms.length,
         };
       }),
     ];
@@ -907,9 +916,10 @@ export async function findEpubChapterEvidence(
       estimatedStartTime: estimate.estimatedStartTime,
       query,
       matches: matchResults
-        .sort((a, b) => b.tokenOverlap.length - a.tokenOverlap.length || a.startTime - b.startTime)
+        .sort((a, b) => (b.score ?? 0) - (a.score ?? 0) || a.startTime - b.startTime)
         .filter((match, index, array) => array.findIndex((candidate) => Math.abs(candidate.startTime - match.startTime) < 30) === index)
-        .slice(0, limitPerNode),
+        .slice(0, limitPerNode)
+        .map(({ score: _score, ...match }) => match),
     });
   }
   return { nodes };
@@ -987,7 +997,6 @@ export async function researchEpubBoundary(
           transcriptWindow: normalizeToolText(window.text).slice(0, 900),
           reverseEpubRelation: reverse?.relationToTarget ?? "none",
           orderedMatchRatio,
-          matchedTokens: reverse?.matchedTokens ?? [],
           boundaryUse:
             phrase.startWord <= 12 && (reverse?.relationToTarget === "opener" || reverse?.relationToTarget === "near_opener")
               ? "candidate_start"
@@ -1263,7 +1272,6 @@ export type EpubBoundaryResearchHit = {
   transcriptWindow: string;
   reverseEpubRelation: EpubTextSearchResult["matches"][number]["relationToTarget"] | "none";
   orderedMatchRatio: number;
-  matchedTokens: string[];
   boundaryUse: "candidate_start" | "supporting_context";
 };
 
@@ -1291,9 +1299,7 @@ export type FulcrumCandidate = {
   ratioDistance: number;
   openerTokenOffset: number;
   preStartGapSeconds: number | null;
-  preStartTokenOverlap: string[];
   query: string;
-  matchedTokens: string[];
   transcriptWindow: string;
 };
 
@@ -1525,6 +1531,14 @@ function transcriptAfterStart(ctx: Pick<ChapterCurationContext, "transcript">, s
     .join(" ");
 }
 
+function transcriptBeforeStart(ctx: Pick<ChapterCurationContext, "transcript">, startMs: number, radiusMs: number): string {
+  return transcriptUtterances(ctx)
+    .filter((utterance) => utterance.endMs >= startMs - radiusMs && utterance.startMs < startMs)
+    .map((utterance) => normalizeToolText(utterance.text))
+    .filter(Boolean)
+    .join(" ");
+}
+
 function nearestEmbeddedBoundary(
   embeddedChapters: ChapterCurationTiming[],
   startTime: number
@@ -1583,11 +1597,11 @@ function leafBoundaryEvidence(
   return result.matches.find((match) => match.epubNodeId === heading.id) ?? null;
 }
 
-function hasStrongLeafBoundaryEvidence(evidence: LeafBoundaryEvidence | null, evidenceTokenCount: number): boolean {
+function hasStrongLeafBoundaryEvidence(evidence: LeafBoundaryEvidence | null, _evidenceTokenCount: number): boolean {
   if (!evidence) return false;
   if (evidence.relationToTarget !== "opener" && evidence.relationToTarget !== "near_opener") return false;
   if (evidence.orderedMatchRatio < LEAF_BOUNDARY_MIN_ORDERED_MATCH_RATIO) return false;
-  return evidence.matchedTokens.length >= Math.min(3, evidenceTokenCount);
+  return true;
 }
 
 function matchingBadEmbeddedBoundaryRatio(ctx: Pick<ChapterCurationContext, "durationMs" | "embeddedChapters">, chapters: SubmittedChapter[]): number {
@@ -1955,8 +1969,8 @@ function scoreFulcrumCandidateWindow(
     const window = words.slice(index, index + windowSize);
     if (window.length === 0) continue;
     const windowTokens = new Set(window.map((word) => word.token));
-    const matchedTokens = queryTokens.filter((token) => windowTokens.has(token));
-    if (matchedTokens.length < Math.min(3, queryTokens.length)) continue;
+    const matchedQueryTerms = queryTokens.filter((token) => windowTokens.has(token));
+    if (matchedQueryTerms.length < Math.min(3, queryTokens.length)) continue;
     const openerTokenOffset = window.findIndex((word) => anchorTokens.includes(word.token));
     if (openerTokenOffset < 0 || openerTokenOffset > 4) continue;
     const anchorWindowTokens = new Set(window.slice(0, Math.min(12, window.length)).map((word) => word.token));
@@ -1974,7 +1988,7 @@ function scoreFulcrumCandidateWindow(
     const audioLocalRatio = localRatio(startTime, span.startTime, span.endTime);
     const ratioDistance = Math.abs(audioLocalRatio - expectedLocalRatio);
     const positionScore = Math.max(0, 1 - ratioDistance / 0.12);
-    const textScore = matchedTokens.length / queryTokens.length + orderedMatches / queryTokens.length;
+    const textScore = matchedQueryTerms.length / queryTokens.length + orderedMatches / queryTokens.length;
     const preStartTokens = new Set(candidatePreStartTokens(ctx, startTime));
     const preStartTokenOverlap = queryTokens.filter((token) => preStartTokens.has(token));
     const preStartGapSeconds = candidatePreStartGapSeconds(ctx, startTime);
@@ -1997,9 +2011,7 @@ function scoreFulcrumCandidateWindow(
       ratioDistance: Math.round(ratioDistance * 1000) / 1000,
       openerTokenOffset,
       preStartGapSeconds: preStartGapSeconds === null ? null : Math.round(preStartGapSeconds * 1000) / 1000,
-      preStartTokenOverlap,
       query: queryTokens.join(" "),
-      matchedTokens,
       transcriptWindow: normalizeToolText(window.map((word) => word.text).join(" ")).slice(0, 700),
     };
     if (!best || candidate.score > best.score || (candidate.score === best.score && candidate.ratioDistance < best.ratioDistance)) best = candidate;
@@ -2044,7 +2056,8 @@ export function findFulcrumCandidates(
       const expectedLocalRatio = localRatio(entryStartRatio(ctx.epubEntries, epubIndex), spanEpubStart, spanEpubEnd);
       const ratioDistance = Math.abs(audioLocalRatio - expectedLocalRatio);
       const positionScore = Math.max(0, 1 - ratioDistance / 0.12);
-      const textScore = match.tokenOverlap.length / Math.max(1, queryTokens.length);
+      const matchTokens = queryTokens.filter((token) => new Set(textTokens(`${match.text} ${match.afterText}`)).has(token));
+      const textScore = matchTokens.length / Math.max(1, queryTokens.length);
       const preStartTokens = new Set(candidatePreStartTokens(ctx, match.startTime));
       const anchorTokens = queryTokens.slice(0, Math.min(6, queryTokens.length));
       const preStartTokenOverlap = queryTokens.filter((token) => preStartTokens.has(token));
@@ -2052,7 +2065,7 @@ export function findFulcrumCandidates(
       const continuousPreRollPenalty = preStartGapSeconds !== null && preStartGapSeconds < 1.5 ? 0.35 : preStartGapSeconds !== null && preStartGapSeconds < 3 ? 0.2 : 0;
       const boundaryScore = Math.max(
         0,
-        match.tokenOverlap.filter((token) => anchorTokens.includes(token)).length / Math.max(1, anchorTokens.length) -
+        matchTokens.filter((token) => anchorTokens.includes(token)).length / Math.max(1, anchorTokens.length) -
           Math.min(1, preStartTokenOverlap.length / Math.max(1, anchorTokens.length)) -
           continuousPreRollPenalty
       );
@@ -2070,9 +2083,7 @@ export function findFulcrumCandidates(
         ratioDistance: Math.round(ratioDistance * 1000) / 1000,
         openerTokenOffset: 0,
         preStartGapSeconds: preStartGapSeconds === null ? null : Math.round(preStartGapSeconds * 1000) / 1000,
-        preStartTokenOverlap,
         query: queryTokens.join(" "),
-        matchedTokens: match.tokenOverlap,
         transcriptWindow: match.afterText,
       } satisfies FulcrumCandidate;
     }).filter((candidate) => candidate.boundaryScore >= 0.35);
@@ -2138,45 +2149,54 @@ export async function validateFulcrumSplit(
   }
 
   const firstWords = entry ? summarizeFirstWords(entry, 72) : "";
-  const titleTokens = new Set(textTokens(entry?.title ?? split.title));
-  const expectedTokens = distinctiveEvidenceTokens(`${entry?.title ?? split.title} ${firstWords}`);
-  const proseTokens = distinctiveEvidenceTokens(firstWords).filter((token) => !titleTokens.has(token));
   const window = getTranscriptWindowFromContext(ctx, secondsToMs(split.startTime), 45_000);
-  const transcriptTokens = new Set(distinctiveEvidenceTokens(window.text));
-  const matchedTokens = expectedTokens.filter((token) => transcriptTokens.has(token));
-  const proseMatchedTokens = proseTokens.filter((token) => transcriptTokens.has(token));
-  const overlapRatio = expectedTokens.length === 0 ? 0 : matchedTokens.length / expectedTokens.length;
   const evidence = entry
     ? await findEpubChapterEvidence(ctx, { nodeIds: [entry.id], searchRadiusSeconds: Math.max(600, spanDurationSeconds(span) / 2), limitPerNode: 3 })
     : { nodes: [] };
   const candidateMatches = evidence.nodes[0]?.matches ?? [];
   const nearestCandidateDelta = candidateMatches.length === 0 ? null : Math.min(...candidateMatches.map((match) => Math.abs(match.startTime - split.startTime)));
-  const laterProseCandidate = candidateMatches
-    .filter((match) => match.startTime > split.startTime && match.startTime - split.startTime <= 180 && match.tokenOverlap.length >= 3)
-    .sort((a, b) => b.tokenOverlap.length - a.tokenOverlap.length || a.startTime - b.startTime)[0];
+  const transcriptAfter = normalizeToolText(transcriptAfterStart(ctx, secondsToMs(split.startTime), 45_000)).slice(0, 1_000);
+  const boundaryAfterEvidence =
+    entry && transcriptAfter.trim()
+      ? searchEpubText(ctx, {
+          query: transcriptAfter,
+          nodeIds: [entry.id],
+          targetNodeId: entry.id,
+          limit: 5,
+        }).matches.find((match) => match.epubNodeId === entry.id)
+      : null;
   const audit: FulcrumValidationAudit = {
     epubNodeId: entry?.id ?? null,
     title: entry?.title ?? split.title,
     startTime: split.startTime,
-    expectedTokens,
-    proseTokens,
-    matchedTokens,
-    proseMatchedTokens,
-    overlapRatio,
+    boundaryComparison: {
+      previousEpub: {
+        epubNodeId: epubIndex > 0 ? (ctx.epubEntries[epubIndex - 1]?.id ?? null) : null,
+        title: epubIndex > 0 ? (ctx.epubEntries[epubIndex - 1]?.title ?? null) : null,
+        tailText: epubIndex > 0 && ctx.epubEntries[epubIndex - 1] ? summarizeLastWords(ctx.epubEntries[epubIndex - 1]!, 56) : "",
+      },
+      targetEpub: {
+        epubNodeId: entry?.id ?? null,
+        title: entry?.title ?? split.title,
+        headText: entry ? summarizeFirstWords(entry, 56) : "",
+      },
+      transcriptBefore: normalizeToolText(transcriptBeforeStart(ctx, secondsToMs(split.startTime), 45_000)).slice(-1_000),
+      transcriptAfter,
+    },
     transcriptWindow: normalizeToolText(window.text).slice(0, 1_000),
     candidates: candidateMatches,
   };
 
-  if (expectedTokens.length > 0 && matchedTokens.length < 3 && overlapRatio < 0.35) {
-    errors.push("Fulcrum transcript window does not pass the fuzzy evidence threshold.");
+  if (
+    entry &&
+    (!boundaryAfterEvidence ||
+      (boundaryAfterEvidence.relationToTarget !== "opener" && boundaryAfterEvidence.relationToTarget !== "near_opener") ||
+      boundaryAfterEvidence.orderedMatchRatio < 0.45)
+  ) {
+    errors.push(`Transcript after submitted timestamp does not align to the opener of ${entry.id}.`);
   }
-  if (proseTokens.length > 0 && proseMatchedTokens.length < Math.min(2, proseTokens.length)) {
-    errors.push("Fulcrum evidence only matches title/metadata; at least one EPUB prose token must match.");
-  }
-  if (laterProseCandidate && proseMatchedTokens.length < Math.min(2, proseTokens.length)) {
-    errors.push(
-      `Submitted timestamp appears to anchor pre-boundary context before the EPUB opener; stronger ${entry?.id ?? "node"} prose evidence starts ${Math.round(laterProseCandidate.startTime - split.startTime)}s later at ${Math.round(laterProseCandidate.startTime)}s.`
-    );
+  if (entry && candidateMatches.length === 0) {
+    errors.push(`No transcript evidence candidate found for ${entry.id}; search the EPUB opener prose before submitting.`);
   }
   if (nearestCandidateDelta !== null && nearestCandidateDelta > 90) {
     errors.push(`Submitted fulcrum is ${Math.round(nearestCandidateDelta)}s from the nearest transcript evidence candidate; gather stronger candidate evidence before resubmitting.`);
@@ -2192,9 +2212,7 @@ export async function validateFulcrumSplit(
       instruction:
         broadSpanRequiresMiddleFulcrum && splitEpubRatio !== null && (splitEpubRatio < 0.3 || splitEpubRatio > 0.7)
           ? "Pick an internal EPUB node closer to the span midpoint, ideally leaving 30-70% of the EPUB word span on each side, then search that node's opener prose in the transcript."
-          : laterProseCandidate
-            ? "The submitted phrase looks like context before the target EPUB opener. Inspect the later prose candidate with getTranscriptWindow and submit only if the opener begins exactly there; otherwise pick a different internal EPUB node."
-            : "Pick a different internal fulcrum with stronger transcript/prose evidence, or submit a leaf plan for this span.",
+          : "Pick a different internal fulcrum with stronger transcript/prose evidence, or submit a leaf plan for this span.",
     };
   }
 
@@ -2811,9 +2829,11 @@ function createFulcrumJudgeAgent(ctx: ChapterCurationContext): Agent {
     instructions: [
       "You are a strict reviewer for audiobook chapter split points.",
       "Your job is to decide whether the proposed fulcrum timestamp is actually the start of the proposed EPUB node.",
-      "Judge only whether the submitted evidence proves this exact timestamp. You do not know scene boundaries, narrative continuity, or the true timestamp beyond the provided audit/window.",
-      "Reject a split when distinctive title/prose opener evidence is absent at the proposed timestamp, offset earlier/later in the window, generic, pre-target, or only an interior text match.",
-      "Accept only when distinctive title/prose evidence appears at or immediately after the proposed timestamp.",
+      "Judge the boundary claim directly: node X starts at timestamp Y.",
+      "Use audit.boundaryComparison first. Compare previousEpub.tailText to transcriptBefore, and targetEpub.headText to transcriptAfter.",
+      "Transcript before the timestamp may match the previous EPUB node; that is positive boundary evidence, not evidence that the target opener is interior.",
+      "Reject only when target EPUB opener/title evidence is absent at or immediately after the proposed timestamp, offset earlier/later, generic, pre-target, or clearly only an interior target-node match.",
+      "Accept when transcriptBefore plausibly matches the previous EPUB tail and transcriptAfter begins with distinctive target EPUB opener prose/title at or immediately after the proposed timestamp.",
       "Do not invent a full chapter plan. Judge only this proposed split.",
       "Do not recommend alternate timestamps or EPUB nodes. If the split is not proven, classify the evidence problem and explain only what is visible in the supplied evidence.",
       "The finding enum is an evidence classification from the submitted audit/window, not a ground-truth timestamp label. Use it only when the supplied evidence directly supports that classification.",
@@ -2839,7 +2859,9 @@ function fulcrumJudgePrompt(ctx: ChapterCurationContext, span: ChapterCurationSp
     "Return accepted=false if this timestamp is not clearly the start of the EPUB node.",
     "Prefer rejecting over accepting a suspicious split; the curator owns the next search.",
     "Do not suggest alternate timestamps or nodes.",
-    "Do not make claims about scenes or narrative continuity. You are only judging whether opener/title evidence is present at or immediately after the submitted timestamp.",
+    "Do not make claims about scenes or narrative continuity. You are only judging whether this boundary comparison supports node X starting at timestamp Y.",
+    "Primary evidence: audit.boundaryComparison. If transcriptBefore matches previousEpub.tailText and transcriptAfter matches targetEpub.headText, that supports acceptance.",
+    "Do not reject merely because transcriptBefore contains non-target prose; that is expected at a real boundary when it matches the previous EPUB node.",
     "Treat the finding as an evidence classification from the supplied audit/window, not as ground truth about the true boundary.",
     "",
     JSON.stringify(
@@ -2852,7 +2874,19 @@ function fulcrumJudgePrompt(ctx: ChapterCurationContext, span: ChapterCurationSp
           startTime: split.startTime,
           notes: split.notes,
         },
-        audit: split.audit,
+        audit: {
+          epubNodeId: split.audit.epubNodeId,
+          title: split.audit.title,
+          startTime: split.audit.startTime,
+          boundaryComparison: split.audit.boundaryComparison,
+          transcriptWindow: split.audit.transcriptWindow,
+          evidenceCandidates: split.audit.candidates.map((candidate) => ({
+            startTime: candidate.startTime,
+            endTime: candidate.endTime,
+            text: candidate.text,
+            quality: candidate.quality,
+          })),
+        },
       },
       null,
       2
