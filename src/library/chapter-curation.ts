@@ -3653,12 +3653,13 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
     }
     const recursiveReports: RecursiveCurationReport[] = [];
     const recursiveSpanTraces: RecursiveSpanTrace[] = [];
+    const recursiveMaxSpanConcurrency = 8;
     logChapterCurationEvent(curationCtx, {
       type: "recursive-run-start",
       message: "recursive run start=1",
       model: curationCtx.settings.agents.model,
       timeoutMs: curationCtx.settings.agents.timeoutMs,
-      maxSpanConcurrency: 4,
+      maxSpanConcurrency: recursiveMaxSpanConcurrency,
       durationSeconds: curationCtx.durationMs / 1000,
       epubEntries: curationCtx.epubEntries.length,
       originalEpubEntries: ctx.epubEntries.length,
@@ -3695,7 +3696,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
             const spanResult = await runner.run(createRecursiveSpanCuratorAgent(curationCtx, span, forceLeaf), spanPrompt(curationCtx, span, forceLeaf), {
               maxTurns: forceLeaf ? 24 : 64,
               signal: abort.signal,
-              toolExecution: { maxFunctionToolConcurrency: 4 },
+              toolExecution: { maxFunctionToolConcurrency: recursiveMaxSpanConcurrency },
             });
             const decision = parseSpanDecisionOutput(spanResult.finalOutput);
             const elapsedMs = Date.now() - startedAt;
@@ -3792,7 +3793,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
         }
         return null;
       },
-      { maxCalls: 64, maxConcurrency: 4, reports: recursiveReports }
+      { maxCalls: 64, maxConcurrency: recursiveMaxSpanConcurrency, reports: recursiveReports }
     );
     if (recursiveChapters && recursiveChapters.length > 0) {
       logChapterCurationEvent(curationCtx, {
