@@ -24,6 +24,13 @@ export type ChapterCurationContainer = {
   files: AssetFileRow[];
 };
 
+export type AudioOnlyInterval = {
+  startTime: number;
+  endTime: number;
+  kind: "publisher_intro" | "credits" | "recap" | "part_bumper" | "back_matter" | "other";
+  notes: string;
+};
+
 export type ChapterCurationContext = {
   book: BookRow;
   manifestation: ManifestationRow;
@@ -33,6 +40,7 @@ export type ChapterCurationContext = {
   epubEntries: EpubChapterEntry[];
   transcript: StoredTranscriptPayload;
   embeddedChapters: ChapterCurationTiming[];
+  audioOnlyIntervals?: AudioOnlyInterval[];
   debugEventLogPath?: string;
   debugTraceDir?: string;
   debugReasoningSummary?: "auto" | "concise" | "detailed";
@@ -75,6 +83,7 @@ export type TranscriptWindow = {
   endMs: number;
   utterances: StoredTranscriptUtterance[];
   text: string;
+  audioOnlyIntervals?: AudioOnlyInterval[];
 };
 
 export type TranscriptSearchScope = {
@@ -136,7 +145,7 @@ export function transcriptUtterances(ctx: Pick<ChapterCurationContext, "transcri
 }
 
 export function getTranscriptWindowFromContext(
-  ctx: Pick<ChapterCurationContext, "transcript" | "durationMs">,
+  ctx: Pick<ChapterCurationContext, "transcript" | "durationMs" | "audioOnlyIntervals">,
   startMs: number,
   radiusMs: number
 ): TranscriptWindow {
@@ -152,6 +161,9 @@ export function getTranscriptWindowFromContext(
     endMs: windowEnd,
     utterances,
     text: utterances.map((utterance) => normalizeToolText(utterance.text)).filter(Boolean).join(" "),
+    audioOnlyIntervals: (ctx.audioOnlyIntervals ?? []).filter(
+      (interval) => secondsToMs(interval.endTime) >= windowStart && secondsToMs(interval.startTime) <= windowEnd
+    ),
   };
 }
 
@@ -1105,12 +1117,36 @@ const submitFulcrumJudgmentSchema = z.object({
   reason: z.string().trim().min(1),
   concerns: z.array(z.string().trim().min(1)).max(10),
 });
+const audibleEpubNodeSelectionSchema = z.object({
+  audibleNodeIds: z.array(z.string().trim().min(1)).min(1).max(300),
+  excludedNodes: z
+    .array(
+      z.object({
+        epubNodeId: z.string().trim().min(1),
+        reason: z.enum(["copyright", "dedication", "toc", "acknowledgments", "cover", "front_matter", "back_matter", "not_in_audio", "other"]),
+        notes: z.string().trim().min(1),
+      })
+    )
+    .max(300),
+  audioOnlyIntervals: z
+    .array(
+      z.object({
+        startTime: z.number().finite().nonnegative(),
+        endTime: z.number().finite().nonnegative(),
+        kind: z.enum(["publisher_intro", "credits", "recap", "part_bumper", "back_matter", "other"]),
+        notes: z.string().trim().min(1),
+      })
+    )
+    .max(40),
+  notes: z.string().trim().optional(),
+});
 
 export type SubmittedChapter = z.infer<typeof submittedChapterSchema>;
 export type SubmitChapterPlanInput = z.infer<typeof submitChapterPlanSchema>;
 export type SubmitLeafChapterPlanInput = z.infer<typeof submitLeafChapterPlanSchema>;
 export type SubmitFulcrumSplitInput = z.infer<typeof submitFulcrumSplitSchema>;
 export type SubmitFulcrumJudgmentInput = z.infer<typeof submitFulcrumJudgmentSchema>;
+export type AudibleEpubNodeSelection = z.infer<typeof audibleEpubNodeSelectionSchema>;
 
 export type ChapterPlanAuditEntry = {
   index: number;
@@ -2501,6 +2537,12 @@ function parseFulcrumJudgmentOutput(output: unknown): SubmitFulcrumJudgmentResul
   return parsed.success ? parsed.data : null;
 }
 
+function parseAudibleEpubNodeSelectionOutput(output: unknown): AudibleEpubNodeSelection | null {
+  const value = typeof output === "string" ? safeJsonParse(output) : output;
+  const parsed = audibleEpubNodeSelectionSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
 function safeJsonParse(value: string): unknown {
   try {
     return JSON.parse(value) as unknown;
@@ -2537,6 +2579,20 @@ export function fulcrumJudgeToolUseBehavior(_: unknown, toolResults: FunctionToo
     isFinalOutput: true,
     isInterrupted: undefined,
     finalOutput: JSON.stringify(parseFulcrumJudgmentOutput(terminalResult.output) ?? terminalResult.output),
+  };
+}
+
+export function audibleEpubNodeSelectionToolUseBehavior(_: unknown, toolResults: FunctionToolResult[]): ToolsToFinalOutputResult {
+  const terminalResult = toolResults.find(
+    (result) => result.type === "function_output" && result.tool.name === "submitAudibleEpubNodeSelection" && parseAudibleEpubNodeSelectionOutput(result.output)
+  );
+  if (!terminalResult || terminalResult.type !== "function_output") {
+    return { isFinalOutput: false, isInterrupted: undefined };
+  }
+  return {
+    isFinalOutput: true,
+    isInterrupted: undefined,
+    finalOutput: JSON.stringify(parseAudibleEpubNodeSelectionOutput(terminalResult.output) ?? terminalResult.output),
   };
 }
 
@@ -2678,6 +2734,7 @@ function spanScope(span: ChapterCurationSpan, inputScope?: TranscriptSearchScope
 function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, forceLeaf: boolean): string {
   const entries = spanEpubEntries(ctx, span);
   const allowLeaf = recursiveSpanAllowsLeaf(span, forceLeaf);
+  const spanAudioOnlyIntervals = (ctx.audioOnlyIntervals ?? []).filter((interval) => interval.endTime >= span.startTime && interval.startTime <= span.endTime);
   const inheritedBoundaryInstructions = span.startBoundary
     ? [
         `This span starts at an already accepted parent split: ${span.startBoundary.title} (${span.startBoundary.epubNodeId}) at ${span.startBoundary.startTime}s.`,
@@ -2705,6 +2762,9 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, forc
     `spanTimeSeconds: ${span.startTime}..${span.endTime}`,
     `spanEpubIndexes: ${span.epubStartIndex}..${span.epubEndIndex}`,
     `spanEpubNodeCount: ${entries.length}`,
+    spanAudioOnlyIntervals.length > 0
+      ? `audioOnlyIntervalsInSpan: ${JSON.stringify(spanAudioOnlyIntervals)}`
+      : "audioOnlyIntervalsInSpan: []",
     forceLeaf
       ? "You are forced to submit a leaf chapter plan for this span. Do not call submitFulcrumSplit."
     : allowLeaf
@@ -2713,6 +2773,9 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, forc
     "For a fulcrum, pick a high-confidence internal EPUB node boundary with transcript prose evidence near the timestamp.",
     allowLeaf
       ? "For a leaf, submit only chapter starts inside this span and include epubNodeId for every EPUB-backed chapter. Each non-inherited EPUB-backed start must reverse-search to opener/near_opener for that EPUB node."
+      : "",
+    spanAudioOnlyIntervals.length > 0
+      ? "Some transcript time ranges in this span are classified as audio-only material with no EPUB node. Do not align EPUB chapter starts to those intervals unless opener evidence proves the EPUB text starts there."
       : "",
     ...inheritedBoundaryInstructions,
     "Prefer submitFulcrumSplit for spans with more than 8 EPUB nodes or more than 2 hours duration unless the whole span is already strongly evidenced.",
@@ -2854,6 +2917,161 @@ async function judgeFulcrumSplit(
   } finally {
     clearTimeout(timeout);
     await provider.close().catch(() => undefined);
+  }
+}
+
+function createAudibleEpubNodeSelectionAgent(ctx: ChapterCurationContext): Agent {
+  return new Agent({
+    name: "AudibleEpubNodeClassifier",
+    model: ctx.settings.agents.model,
+    modelSettings: chapterCurationModelSettings(ctx, {
+      toolChoice: "required",
+      parallelToolCalls: false,
+    }),
+    resetToolChoice: false,
+    instructions: [
+      "You classify which EPUB spine nodes are plausible audiobook chapter material before timestamp curation.",
+      "Your job is only to include or exclude EPUB nodes. Do not decide timestamps and do not create a chapter plan.",
+      "Exclude obvious non-audio front/back matter such as copyright pages, dedications, acknowledgments, tables of contents, cover/nav pages, ads, indexes, and about-the-author pages when they are not plausibly spoken in the audiobook.",
+      "Keep prologues, part headings, chapter nodes, epilogues, and any uncertain narrative node. False exclusions are worse than false inclusions.",
+      "Use the transcript beginning and ending excerpts to identify audiobook credits/preamble and whether EPUB front/back matter is likely represented.",
+      "For multi-asset audiobooks, classify audio-only intervals around asset starts, asset ends, and joins, such as publisher intros, end credits, recaps, and part bumpers that have no EPUB node.",
+      "Keep audio-only intervals narrow and evidence-based. They are annotations for later tools, not chapter timestamps.",
+      "If a provided audio excerpt visibly contains credits, publisher branding, part bumpers, previews, or promotional material that is not an EPUB node, include an audioOnlyIntervals entry with an approximate startTime/endTime from the excerpt range instead of only mentioning it in notes.",
+      "You must call submitAudibleEpubNodeSelection.",
+    ].join("\n"),
+    tools: [
+      tool({
+        name: "submitAudibleEpubNodeSelection",
+        description: "Submit the EPUB node ids that should be used for recursive audiobook chapter curation.",
+        parameters: audibleEpubNodeSelectionSchema,
+        strict: true,
+        execute: (input) => input,
+      }),
+    ],
+    toolUseBehavior: audibleEpubNodeSelectionToolUseBehavior,
+  });
+}
+
+function orderedCurationContainers(ctx: Pick<ChapterCurationContext, "containers">): ChapterCurationContainer[] {
+  return [...ctx.containers].sort((a, b) => a.asset.sequence_in_manifestation - b.asset.sequence_in_manifestation || a.asset.id - b.asset.id);
+}
+
+function containerDurationMs(container: ChapterCurationContainer): number {
+  return container.asset.duration_ms ?? container.files.reduce((sum, file) => sum + file.duration_ms, 0);
+}
+
+function audioAssetBoundaryExcerpts(ctx: ChapterCurationContext): Array<Record<string, unknown>> {
+  const containers = orderedCurationContainers(ctx).filter((container) => container.asset.kind !== "ebook");
+  const excerpts: Array<Record<string, unknown>> = [];
+  let offsetMs = 0;
+  for (const [index, container] of containers.entries()) {
+    const durationMs = containerDurationMs(container);
+    const startTime = msToSeconds(offsetMs);
+    const endTime = msToSeconds(offsetMs + durationMs);
+    excerpts.push({
+      assetId: container.asset.id,
+      sequence: container.asset.sequence_in_manifestation,
+      position: "asset_start",
+      startTime,
+      excerptStartTime: msToSeconds(offsetMs),
+      excerptEndTime: msToSeconds(Math.min(ctx.durationMs, offsetMs + 90_000)),
+      excerpt: getTranscriptWindowFromContext(ctx, offsetMs + 45_000, 45_000).text.slice(0, 1_500),
+    });
+    excerpts.push({
+      assetId: container.asset.id,
+      sequence: container.asset.sequence_in_manifestation,
+      position: "asset_end",
+      endTime,
+      excerptStartTime: msToSeconds(Math.max(0, offsetMs + durationMs - 90_000)),
+      excerptEndTime: endTime,
+      excerpt: getTranscriptWindowFromContext(ctx, Math.max(offsetMs, offsetMs + durationMs - 45_000), 45_000).text.slice(-1_500),
+    });
+    if (index > 0) {
+      excerpts.push({
+        assetId: container.asset.id,
+        sequence: container.asset.sequence_in_manifestation,
+        position: "asset_join",
+        joinTime: startTime,
+        excerptStartTime: msToSeconds(Math.max(0, offsetMs - 90_000)),
+        excerptEndTime: msToSeconds(Math.min(ctx.durationMs, offsetMs + 90_000)),
+        excerpt: getTranscriptWindowFromContext(ctx, offsetMs, 90_000).text.slice(0, 2_500),
+      });
+    }
+    offsetMs += durationMs;
+  }
+  return excerpts;
+}
+
+function audibleEpubNodeSelectionPrompt(ctx: ChapterCurationContext): string {
+  const startExcerpt = getTranscriptWindowFromContext(ctx, 150_000, 150_000).text.slice(0, 4_000);
+  const endCenter = Math.max(0, ctx.durationMs - 150_000);
+  const endExcerpt = getTranscriptWindowFromContext(ctx, endCenter, 150_000).text.slice(-4_000);
+  return [
+    `Classify EPUB nodes for "${ctx.book.title}" by ${ctx.book.author}.`,
+    "Return only nodes that are plausible audiobook chapter material for recursive timestamp curation.",
+    "Keep uncertain narrative nodes; exclude only nodes that look like non-audio front/back matter or navigation.",
+    "",
+    JSON.stringify(
+      {
+        audioTranscriptBeginning: startExcerpt,
+        audioTranscriptEnding: endExcerpt,
+        audioAssetBoundaryExcerpts: audioAssetBoundaryExcerpts(ctx),
+        epubNodes: ctx.epubEntries.map((entry, index) => ({
+          index,
+          id: entry.id,
+          title: entry.title,
+          href: entry.href,
+          wordCount: entry.wordCount,
+          firstWords: summarizeFirstWords(entry, 50),
+        })),
+      },
+      null,
+      2
+    ),
+  ].join("\n");
+}
+
+export function applyAudibleEpubNodeSelection(ctx: ChapterCurationContext, selection: AudibleEpubNodeSelection | null): ChapterCurationContext {
+  if (!selection) return ctx;
+  const requestedIds = new Set(selection.audibleNodeIds);
+  const selectedEntries = ctx.epubEntries.filter((entry) => requestedIds.has(entry.id));
+  const audioOnlyIntervals = selection.audioOnlyIntervals
+    .filter((interval) => interval.endTime >= interval.startTime && interval.endTime <= msToSeconds(ctx.durationMs))
+    .sort((a, b) => a.startTime - b.startTime || a.endTime - b.endTime);
+  if (selectedEntries.length === 0) return audioOnlyIntervals.length > 0 ? { ...ctx, audioOnlyIntervals } : ctx;
+  if (selectedEntries.length === ctx.epubEntries.length) return audioOnlyIntervals.length > 0 ? { ...ctx, audioOnlyIntervals } : ctx;
+  return { ...ctx, epubEntries: selectedEntries, audioOnlyIntervals };
+}
+
+async function classifyAudibleEpubNodes(ctx: ChapterCurationContext, runner: Runner, signal: AbortSignal): Promise<AudibleEpubNodeSelection | null> {
+  try {
+    const result = await runner.run(createAudibleEpubNodeSelectionAgent(ctx), audibleEpubNodeSelectionPrompt(ctx), {
+      maxTurns: 4,
+      signal,
+      toolExecution: { maxFunctionToolConcurrency: 1 },
+    });
+    const selection = parseAudibleEpubNodeSelectionOutput(result.finalOutput);
+    const tracePath = writeChapterCurationTrace(ctx, "audible-epub-node-selection", {
+      selection,
+      finalOutput: result.finalOutput,
+      newItems: result.newItems as unknown[],
+      rawResponses: result.rawResponses as unknown[],
+    });
+    logChapterCurationEvent(ctx, {
+      type: "audible-epub-node-selection",
+      message: `audible epub nodes selected=${selection?.audibleNodeIds.length ?? 0} excluded=${selection?.excludedNodes.length ?? 0}`,
+      selection,
+      tracePath,
+    });
+    return selection;
+  } catch (error) {
+    logChapterCurationEvent(ctx, {
+      type: "audible-epub-node-selection-error",
+      message: `audible epub node selection error=${JSON.stringify((error as Error).message)}`,
+      error: serializeAgentError(error),
+    });
+    return null;
   }
 }
 
@@ -3414,24 +3632,45 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
       tracingDisabled: true,
       traceIncludeSensitiveData: false,
     });
+    const audibleNodeSelection = await classifyAudibleEpubNodes(ctx, runner, abort.signal);
+    const curationCtx = applyAudibleEpubNodeSelection(ctx, audibleNodeSelection);
+    if (curationCtx.epubEntries.length !== ctx.epubEntries.length) {
+      logChapterCurationEvent(ctx, {
+        type: "audible-epub-node-filter-applied",
+        message: `audible epub node filter applied original=${ctx.epubEntries.length} curated=${curationCtx.epubEntries.length}`,
+        originalEpubEntries: ctx.epubEntries.length,
+        curatedEpubEntries: curationCtx.epubEntries.length,
+        selectedNodeIds: curationCtx.epubEntries.map((entry) => entry.id),
+        excludedNodes: audibleNodeSelection?.excludedNodes ?? [],
+      });
+    }
+    if ((curationCtx.audioOnlyIntervals ?? []).length > 0) {
+      logChapterCurationEvent(ctx, {
+        type: "audio-only-intervals-applied",
+        message: `audio only intervals applied count=${curationCtx.audioOnlyIntervals?.length ?? 0}`,
+        audioOnlyIntervals: curationCtx.audioOnlyIntervals ?? [],
+      });
+    }
     const recursiveReports: RecursiveCurationReport[] = [];
     const recursiveSpanTraces: RecursiveSpanTrace[] = [];
-    logChapterCurationEvent(ctx, {
+    logChapterCurationEvent(curationCtx, {
       type: "recursive-run-start",
       message: "recursive run start=1",
-      model: ctx.settings.agents.model,
-      timeoutMs: ctx.settings.agents.timeoutMs,
+      model: curationCtx.settings.agents.model,
+      timeoutMs: curationCtx.settings.agents.timeoutMs,
       maxSpanConcurrency: 4,
-      durationSeconds: ctx.durationMs / 1000,
-      epubEntries: ctx.epubEntries.length,
-      transcriptUtterances: ctx.transcript.utterances?.length ?? 0,
-      embeddedChapters: ctx.embeddedChapters.length,
+      durationSeconds: curationCtx.durationMs / 1000,
+      epubEntries: curationCtx.epubEntries.length,
+      originalEpubEntries: ctx.epubEntries.length,
+      audioOnlyIntervals: curationCtx.audioOnlyIntervals?.length ?? 0,
+      transcriptUtterances: curationCtx.transcript.utterances?.length ?? 0,
+      embeddedChapters: curationCtx.embeddedChapters.length,
     });
     const recursiveChapters = await resolveRecursiveChapterSpans(
-      ctx,
+      curationCtx,
       async (span, forceLeaf) => {
         const spanNodeCount = span.epubEndIndex - span.epubStartIndex + 1;
-        logChapterCurationEvent(ctx, {
+        logChapterCurationEvent(curationCtx, {
           type: "span-start",
           message: `recursive span=${span.path} depth=${span.depth} epub=${span.epubStartIndex}-${span.epubEndIndex} nodes=${spanNodeCount} time=${Math.round(span.startTime)}-${Math.round(span.endTime)}s force_leaf=${forceLeaf} start=1`,
           span,
@@ -3442,7 +3681,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
         const delays = [0, 15_000, 45_000];
         for (let attempt = 0; attempt < delays.length; attempt++) {
           if (delays[attempt]! > 0) {
-            logChapterCurationEvent(ctx, {
+            logChapterCurationEvent(curationCtx, {
               type: "span-retry-sleep",
               message: `recursive span=${span.path} retry=${attempt} sleep_ms=${delays[attempt]}`,
               span,
@@ -3453,7 +3692,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
             await sleep(delays[attempt]!);
           }
           try {
-            const spanResult = await runner.run(createRecursiveSpanCuratorAgent(ctx, span, forceLeaf), spanPrompt(ctx, span, forceLeaf), {
+            const spanResult = await runner.run(createRecursiveSpanCuratorAgent(curationCtx, span, forceLeaf), spanPrompt(curationCtx, span, forceLeaf), {
               maxTurns: forceLeaf ? 24 : 64,
               signal: abort.signal,
               toolExecution: { maxFunctionToolConcurrency: 4 },
@@ -3469,7 +3708,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
               newItems: spanResult.newItems as unknown[],
               rawResponses: spanResult.rawResponses as unknown[],
             };
-            const tracePath = writeChapterCurationTrace(ctx, `span-${span.path}-attempt-${attempt + 1}-${decision?.kind ?? "none"}`, tracePayload);
+            const tracePath = writeChapterCurationTrace(curationCtx, `span-${span.path}-attempt-${attempt + 1}-${decision?.kind ?? "none"}`, tracePayload);
             recursiveSpanTraces.push({
               path: span.path,
               depth: span.depth,
@@ -3478,7 +3717,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
               newItems: spanResult.newItems as unknown[],
               rawResponses: spanResult.rawResponses as unknown[],
             });
-            logChapterCurationEvent(ctx, {
+            logChapterCurationEvent(curationCtx, {
               type: "span-agent-result",
               message: `recursive span=${span.path} elapsed_ms=${elapsedMs} attempt=${attempt + 1} decision=${decision?.kind ?? "none"}${
                 decision?.kind === "leaf" ? ` chapters=${decision.chapters.length}` : ""
@@ -3514,7 +3753,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
             const message = (error as Error).message;
             const elapsedMs = Date.now() - startedAt;
             const serializedError = serializeAgentError(error);
-            const tracePath = writeChapterCurationTrace(ctx, `span-${span.path}-attempt-${attempt + 1}-error`, {
+            const tracePath = writeChapterCurationTrace(curationCtx, `span-${span.path}-attempt-${attempt + 1}-error`, {
               span,
               forceLeaf,
               attempt: attempt + 1,
@@ -3530,7 +3769,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
               rawResponses: [],
               error: serializedError,
             });
-            logChapterCurationEvent(ctx, {
+            logChapterCurationEvent(curationCtx, {
               type: "span-error",
               message: `recursive span=${span.path} elapsed_ms=${elapsedMs} attempt=${attempt + 1} error=${JSON.stringify(message)}`,
               span,
@@ -3556,20 +3795,20 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
       { maxCalls: 64, maxConcurrency: 4, reports: recursiveReports }
     );
     if (recursiveChapters && recursiveChapters.length > 0) {
-      logChapterCurationEvent(ctx, {
+      logChapterCurationEvent(curationCtx, {
         type: "recursive-merge-start",
         message: `recursive merge chapters=${recursiveChapters.length} validate=1`,
         chapters: recursiveChapters.length,
         chapterPlan: summarizeSubmittedChapterObjects(recursiveChapters, 80),
       });
-      const recursiveResult = submitChapterPlan(ctx, {
-        manifestationId: ctx.manifestation.id,
+      const recursiveResult = submitChapterPlan(curationCtx, {
+        manifestationId: curationCtx.manifestation.id,
         strategy: "Recursive fulcrum chapter curation",
         chapters: recursiveChapters,
         notes: "Merged from recursively curated span plans.",
       });
       if (recursiveResult.accepted) {
-        logChapterCurationEvent(ctx, {
+        logChapterCurationEvent(curationCtx, {
           type: "recursive-merge-accepted",
           message: `recursive merge accepted=1 chapters=${recursiveResult.chapters.length}`,
           chapters: recursiveResult.chapters.length,
@@ -3584,7 +3823,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
           recursiveSpanTraces,
         };
       }
-      logChapterCurationEvent(ctx, {
+      logChapterCurationEvent(curationCtx, {
         type: "recursive-merge-rejected",
         message: `recursive merge accepted=0 chapters=${recursiveChapters.length} errors=${JSON.stringify(recursiveResult.errors.slice(0, 5))}`,
         chapters: recursiveChapters.length,
@@ -3593,14 +3832,14 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
         audit: recursiveResult.audit,
       });
       recursiveReports.push({
-        ...createRootCurationSpan(ctx),
+        ...createRootCurationSpan(curationCtx),
         forceLeaf: false,
         outcome: "failed",
         errors: recursiveResult.errors,
         chapters: recursiveChapters.length,
       });
     } else {
-      logChapterCurationEvent(ctx, {
+      logChapterCurationEvent(curationCtx, {
         type: "recursive-result-null",
         message: "recursive result=null",
         reports: recursiveReports,

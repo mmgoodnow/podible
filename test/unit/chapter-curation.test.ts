@@ -4,6 +4,7 @@ import {
   getEmbeddedAudioChapters,
   getEpubNodeText,
   getEpubStructure,
+  getTranscriptWindowFromContext,
   findEpubChapterEvidence,
   findFulcrumCandidates,
   fuzzySearchTranscript,
@@ -12,6 +13,7 @@ import {
   getTranscriptWindow,
   rgSearchTranscript,
   chapterCuratorToolUseBehavior,
+  applyAudibleEpubNodeSelection,
   createRootCurationSpan,
   resolveRecursiveChapterSpans,
   recursiveSpanAllowsLeaf,
@@ -196,6 +198,55 @@ describe("chapter curation tools", () => {
       endRatio: 1,
       firstWords: "The first real chapter",
     });
+  });
+
+  test("applyAudibleEpubNodeSelection filters non-audio EPUB front matter", () => {
+    const context = ctx({
+      epubEntries: [
+        epubEntry({ id: "copyright", title: "Copyright Page", wordCount: 100, cumulativeWords: 100, cumulativeRatio: 0.05 }),
+        epubEntry({ id: "toc", title: "Contents", wordCount: 200, cumulativeWords: 300, cumulativeRatio: 0.15 }),
+        epubEntry({ id: "prologue", title: "Prologue", wordCount: 500, cumulativeWords: 800, cumulativeRatio: 0.4 }),
+        epubEntry({ id: "chapter-1", title: "Chapter 1", wordCount: 1200, cumulativeWords: 2000, cumulativeRatio: 1 }),
+      ],
+    });
+
+    const filtered = applyAudibleEpubNodeSelection(context, {
+      audibleNodeIds: ["prologue", "chapter-1"],
+      excludedNodes: [
+        { epubNodeId: "copyright", reason: "copyright", notes: "Not represented in the audiobook." },
+        { epubNodeId: "toc", reason: "toc", notes: "Navigation table of contents." },
+      ],
+      audioOnlyIntervals: [],
+    });
+
+    expect(filtered.epubEntries.map((entry) => entry.id)).toEqual(["prologue", "chapter-1"]);
+    expect(createRootCurationSpan(filtered)).toMatchObject({
+      epubStartIndex: 0,
+      epubEndIndex: 1,
+    });
+  });
+
+  test("applyAudibleEpubNodeSelection falls back when classifier excludes everything", () => {
+    const context = ctx();
+
+    const filtered = applyAudibleEpubNodeSelection(context, {
+      audibleNodeIds: ["missing"],
+      excludedNodes: [{ epubNodeId: "front", reason: "front_matter", notes: "Bad classifier output." }],
+      audioOnlyIntervals: [{ startTime: 60, endTime: 75, kind: "part_bumper", notes: "Part 2 intro." }],
+    });
+
+    expect(filtered.epubEntries).toBe(context.epubEntries);
+    expect(filtered.audioOnlyIntervals).toEqual([{ startTime: 60, endTime: 75, kind: "part_bumper", notes: "Part 2 intro." }]);
+  });
+
+  test("getTranscriptWindowFromContext annotates overlapping audio-only intervals", () => {
+    const context = ctx({
+      audioOnlyIntervals: [{ startTime: 58, endTime: 65, kind: "part_bumper", notes: "Part 2 intro." }],
+    });
+
+    const result = getTranscriptWindowFromContext(context, 60_000, 5_000);
+
+    expect(result.audioOnlyIntervals).toEqual([{ startTime: 58, endTime: 65, kind: "part_bumper", notes: "Part 2 intro." }]);
   });
 
   test("getEpubNodeText returns a bounded word window with same-node phrase variants", () => {
