@@ -70,7 +70,7 @@ export type ChapterCurationTargetBoundary = {
   epubIndex: number;
   title: string;
   expectedStartTime: number;
-  localWordRatio: number;
+  localNodeRatio: number;
 };
 
 export type FulcrumValidationAudit = {
@@ -1763,22 +1763,21 @@ function automaticLeafChapters(ctx: Pick<ChapterCurationContext, "epubEntries">,
 
 function chooseTargetBoundary(ctx: Pick<ChapterCurationContext, "epubEntries">, span: ChapterCurationSpan): ChapterCurationTargetBoundary | null {
   const candidates: ChapterCurationTargetBoundary[] = [];
+  const nodeCount = Math.max(1, span.epubEndIndex - span.epubStartIndex + 1);
   for (let index = span.epubStartIndex + 1; index <= span.epubEndIndex; index++) {
     const entry = ctx.epubEntries[index];
-    const localWordRatio = spanEpubLocalRatio(ctx, span, index);
-    if (!entry || localWordRatio === null) continue;
+    if (!entry) continue;
+    const localNodeRatio = (index - span.epubStartIndex) / nodeCount;
     candidates.push({
       epubNodeId: entry.id,
       epubIndex: index,
       title: entry.title,
-      expectedStartTime: span.startTime + spanDurationSeconds(span) * localWordRatio,
-      localWordRatio: Math.round(localWordRatio * 1000) / 1000,
+      expectedStartTime: span.startTime + spanDurationSeconds(span) * localNodeRatio,
+      localNodeRatio: Math.round(localNodeRatio * 1000) / 1000,
     });
   }
   if (candidates.length === 0) return null;
-  const middleCandidates = candidates.filter((candidate) => candidate.localWordRatio >= 0.3 && candidate.localWordRatio <= 0.7);
-  const pool = middleCandidates.length > 0 ? middleCandidates : candidates;
-  return pool.sort((a, b) => Math.abs(a.localWordRatio - 0.5) - Math.abs(b.localWordRatio - 0.5) || a.epubIndex - b.epubIndex)[0] ?? null;
+  return candidates.sort((a, b) => Math.abs(a.localNodeRatio - 0.5) - Math.abs(b.localNodeRatio - 0.5) || a.epubIndex - b.epubIndex)[0] ?? null;
 }
 
 function spanDurationSeconds(span: ChapterCurationSpan): number {

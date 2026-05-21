@@ -1155,7 +1155,7 @@ describe("chapter curation tools", () => {
           epubIndex: 1,
           title: "Part I: Slave",
           expectedStartTime: 196.08,
-          localWordRatio: 0.4,
+          localNodeRatio: 0.5,
         },
       }
     );
@@ -1625,6 +1625,31 @@ describe("chapter curation tools", () => {
     });
     expect(decisions).toEqual(["root", "L", "R"]);
     expect(chapters?.map((chapter) => chapter.title)).toEqual(["Prologue", "Chapter 1", "Chapter 2", "Chapter 3"]);
+  });
+
+  test("resolveRecursiveChapterSpans chooses target boundaries by node count, not word count", async () => {
+    const context = ctx({
+      durationMs: 300_000,
+      manifestation: manifestation({ duration_ms: 300_000 }),
+      epubEntries: [
+        epubEntry({ id: "front", title: "Front", cumulativeRatio: 0.9, cumulativeWords: 90 }),
+        epubEntry({ id: "chapter-1", title: "Chapter 1", cumulativeRatio: 0.92, cumulativeWords: 92 }),
+        epubEntry({ id: "chapter-2", title: "Chapter 2", cumulativeRatio: 0.94, cumulativeWords: 94 }),
+        epubEntry({ id: "chapter-3", title: "Chapter 3", cumulativeRatio: 0.96, cumulativeWords: 96 }),
+        epubEntry({ id: "chapter-4", title: "Chapter 4", cumulativeRatio: 1, cumulativeWords: 100 }),
+      ],
+    });
+    const targets: string[] = [];
+    await resolveRecursiveChapterSpans(
+      context,
+      async (_span, _forceLeaf, targetBoundary): Promise<RecursiveSpanDecision | null> => {
+        if (targetBoundary) targets.push(targetBoundary.epubNodeId);
+        return null;
+      },
+      { maxCalls: 1 }
+    );
+
+    expect(targets).toEqual(["chapter-2"]);
   });
 
   test("resolveRecursiveChapterSpans runs sibling spans concurrently within the configured limit", async () => {
