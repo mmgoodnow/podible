@@ -107,6 +107,8 @@ describe("chapter analysis", () => {
       expect(entries[0]?.title).toBe("Opening");
       expect(entries[1]?.title).toBe("Ending");
       expect(entries[0]?.wordCount).toBeGreaterThan(6);
+      expect(entries[0]?.words[0]).toMatchObject({ text: "Opening", kind: "heading" });
+      expect(entries[0]?.words[1]).toMatchObject({ text: "Alpha", kind: "body" });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -209,9 +209,12 @@ type StoredTranscriptPayload = {
   rawWords?: StoredTranscriptWord[];
 };
 
+type EpubTextKind = "heading" | "body";
+
 type EpubWord = {
   text: string;
   token: string;
+  kind?: EpubTextKind;
 };
 
 export type EpubChapterEntry = {
@@ -341,14 +344,19 @@ export function normalizeTranscriptionLanguage(value: string | null | undefined)
   return null;
 }
 
-function tokenizeChapterWords(value: string): EpubWord[] {
+type EpubTextSegment = {
+  kind: EpubTextKind;
+  text: string;
+};
+
+function tokenizeChapterWords(value: string, kind?: EpubTextKind): EpubWord[] {
   const out: EpubWord[] = [];
   const matches = value.matchAll(/\b[\p{L}][\p{L}\p{N}'-]*\b/gu);
   for (const match of matches) {
     const text = match[0] ?? "";
     const token = normalizeToken(text);
     if (!token) continue;
-    out.push({ text, token });
+    out.push({ text, token, kind });
   }
   return out;
 }
@@ -365,14 +373,38 @@ function decodeHtmlEntities(value: string): string {
     .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)));
 }
 
-function stripHtmlToText(html: string): string {
-  return decodeHtmlEntities(
-    html
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/\s+/g, " ")
-  ).trim();
+function extractHtmlTextSegments(html: string): EpubTextSegment[] {
+  const cleaned = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ");
+  const segments: EpubTextSegment[] = [];
+  let headingDepth = 0;
+
+  for (const match of cleaned.matchAll(/<[^>]+>|[^<]+/g)) {
+    const value = match[0] ?? "";
+    if (value.startsWith("<")) {
+      const tagMatch = value.match(/^<\s*(\/?)\s*([a-zA-Z][\w:-]*)\b/);
+      if (!tagMatch) continue;
+      const closing = tagMatch[1] === "/";
+      const tag = tagMatch[2]!.toLowerCase().replace(/^.*:/, "");
+      if (/^h[1-6]$/.test(tag)) {
+        headingDepth = Math.max(0, headingDepth + (closing ? -1 : 1));
+      }
+      continue;
+    }
+
+    const text = decodeHtmlEntities(value).replace(/\s+/g, " ").trim();
+    if (!text) continue;
+    const kind: EpubTextKind = headingDepth > 0 ? "heading" : "body";
+    const previous = segments[segments.length - 1];
+    if (previous?.kind === kind) {
+      previous.text = `${previous.text} ${text}`.replace(/\s+/g, " ").trim();
+    } else {
+      segments.push({ kind, text });
+    }
+  }
+
+  return segments;
 }
 
 function flattenToc(nodes: Array<{ label?: string; href?: string; children?: unknown[] }>, out: Array<{ label: string; href: string }>): void {
@@ -427,8 +459,9 @@ export async function loadEpubEntries(epubPath: string): Promise<EpubChapterEntr
     for (const [index, id] of orderedIds.entries()) {
       const chapter = await epub.loadChapter(id).catch(() => null);
       if (!chapter || typeof chapter.html !== "string") continue;
-      const text = stripHtmlToText(chapter.html);
-      const words = tokenizeChapterWords(text);
+      const segments = extractHtmlTextSegments(chapter.html);
+      const text = segments.map((segment) => segment.text).join(" ").replace(/\s+/g, " ").trim();
+      const words = segments.flatMap((segment) => tokenizeChapterWords(segment.text, segment.kind));
       const tokens = words.map((word) => word.token);
       if (tokens.length === 0) continue;
       cumulativeWords += tokens.length;

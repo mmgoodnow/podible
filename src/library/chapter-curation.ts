@@ -217,11 +217,19 @@ function entryTitlePrefixWordCount(entry: EpubChapterEntry): number {
 }
 
 function summarizeFirstBodyWords(entry: EpubChapterEntry, limit = 40): string {
-  const start = entryTitlePrefixWordCount(entry);
+  const firstBodyIndex = entry.words.findIndex((word) => word.kind === "body");
+  const start = firstBodyIndex >= 0 ? firstBodyIndex : entryTitlePrefixWordCount(entry);
   return entry.words.slice(start, start + limit).map((word) => word.text).join(" ").trim();
 }
 
 function summarizeOptionalHeadingText(entry: EpubChapterEntry): string {
+  const headingWords: string[] = [];
+  for (const word of entry.words) {
+    if (word.kind !== "heading") break;
+    headingWords.push(word.text);
+  }
+  if (headingWords.length > 0) return headingWords.join(" ").trim();
+
   const prefixWordCount = entryTitlePrefixWordCount(entry);
   if (prefixWordCount <= 0) return "";
   return entry.words.slice(0, prefixWordCount).map((word) => word.text).join(" ").trim();
