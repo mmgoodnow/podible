@@ -19,6 +19,14 @@ type SpanSummary = {
   terminal: string | null;
 };
 
+type BoundaryMarker = {
+  spanPath: string | null;
+  epubNodeId: string | null;
+  title: string;
+  startTime: number;
+  source: "split" | "leaf";
+};
+
 type RunSummary = {
   id: string;
   eventLog: string;
@@ -26,8 +34,9 @@ type RunSummary = {
   traceDir: string | null;
   startedAt: string | null;
   updatedAt: string | null;
-  status: "running" | "accepted" | "failed" | "partial";
+  status: "running" | "accepted" | "failed" | "interrupted" | "partial";
   durationSeconds: number | null;
+  audiobookDurationSeconds: number | null;
   model: string | null;
   epubEntries: number | null;
   originalEpubEntries: number | null;
@@ -66,6 +75,17 @@ type RunSummary = {
     finding: string | null;
     reason: string;
     concerns: string[];
+  }>;
+  treeSpans: SpanSummary[];
+  treeEdges: Array<{ parent: string; left: string; right: string; epubNodeId: string | null; startTime: number | null }>;
+  boundaryMarkers: BoundaryMarker[];
+  traceSummaries: Array<{
+    file: string;
+    kind: string;
+    spanPath: string | null;
+    title: string;
+    reasoningSummaries: string[];
+    finalOutput: unknown;
   }>;
 };
 
@@ -124,6 +144,53 @@ function traceFilesFor(traceDir: string | null): string[] {
     .slice(-80);
 }
 
+function traceSummariesFor(traceDir: string | null): RunSummary["traceSummaries"] {
+  if (!traceDir || !existsSync(traceDir) || !statSync(traceDir).isDirectory()) return [];
+  return readdirSync(traceDir)
+    .filter((name) => name.endsWith(".json"))
+    .sort()
+    .slice(-30)
+    .flatMap((file) => {
+      const fullPath = path.join(traceDir, file);
+      const payload = readJsonFile(fullPath) as JsonRecord | null;
+      if (!payload) return [];
+      const rawResponses = Array.isArray(payload.rawResponses) ? payload.rawResponses : [];
+      const reasoningSummaries = rawResponses.flatMap((response: JsonRecord) =>
+        Array.isArray(response.output)
+          ? response.output.flatMap((item: JsonRecord) =>
+              item?.type === "reasoning" && Array.isArray(item.content)
+                ? item.content.map((content: JsonRecord) => String(content.text ?? "")).filter(Boolean)
+                : []
+            )
+          : []
+      );
+      const spanPath =
+        typeof payload.span?.path === "string"
+          ? payload.span.path
+          : typeof payload.split?.spanPath === "string"
+            ? payload.split.spanPath
+            : null;
+      const kind = file.includes("fulcrum-judge") ? "judge" : file.includes("span-") ? "curator" : "classifier";
+      const title =
+        kind === "judge"
+          ? `${payload.split?.epubNodeId ?? "judge"} @ ${payload.split?.startTime ?? ""}`
+          : kind === "curator"
+            ? `${spanPath ?? "span"}`
+            : "audible EPUB classifier";
+      return [
+        {
+          file,
+          kind,
+          spanPath,
+          title,
+          reasoningSummaries,
+          finalOutput: payload.finalOutput ?? payload.judgment ?? payload.selection ?? null,
+        },
+      ];
+    })
+    .reverse();
+}
+
 function secondsBetween(start: string | null, end: string | null): number | null {
   if (!start || !end) return null;
   const delta = new Date(end).getTime() - new Date(start).getTime();
@@ -144,6 +211,7 @@ function errorMessage(error: unknown): string {
 
 function summarizeRun(eventLog: string): RunSummary {
   const events = readJsonl(eventLog);
+  const eventLogMtimeMs = existsSync(eventLog) ? statSync(eventLog).mtimeMs : 0;
   const resultPath = artifactPathFor(eventLog, "result");
   const traceDir = artifactPathFor(eventLog, "trace");
   const spans = new Map<string, SpanSummary>();
@@ -154,11 +222,14 @@ function summarizeRun(eventLog: string): RunSummary {
   let model: string | null = null;
   let epubEntries: number | null = null;
   let originalEpubEntries: number | null = null;
+  let audiobookDurationSeconds: number | null = null;
   let audioOnlyIntervals = 0;
   let audibleExcludedNodes = 0;
   let excludedNodes: RunSummary["excludedNodes"] = [];
   let audioOnlyIntervalDetails: RunSummary["audioOnlyIntervalDetails"] = [];
   const judgeDecisions: RunSummary["judgeDecisions"] = [];
+  const treeEdges: RunSummary["treeEdges"] = [];
+  const boundaryMarkers: BoundaryMarker[] = [];
 
   const ensureSpan = (event: JsonRecord): SpanSummary | null => {
     const span = event.span as JsonRecord | undefined;
@@ -191,6 +262,7 @@ function summarizeRun(eventLog: string): RunSummary {
       epubEntries = typeof event.epubEntries === "number" ? event.epubEntries : epubEntries;
       originalEpubEntries = typeof event.originalEpubEntries === "number" ? event.originalEpubEntries : originalEpubEntries;
       audioOnlyIntervals = typeof event.audioOnlyIntervals === "number" ? event.audioOnlyIntervals : audioOnlyIntervals;
+      audiobookDurationSeconds = typeof event.durationSeconds === "number" ? event.durationSeconds : audiobookDurationSeconds;
     }
     if (type === "audible-epub-node-selection" && event.selection) {
       const selection = event.selection as JsonRecord;
@@ -252,10 +324,45 @@ function summarizeRun(eventLog: string): RunSummary {
         });
       }
     }
+    if (type === "span-split-accepted") {
+      if (typeof event.span?.path === "string" && typeof event.left?.path === "string" && typeof event.right?.path === "string") {
+        treeEdges.push({
+          parent: event.span.path,
+          left: event.left.path,
+          right: event.right.path,
+          epubNodeId: typeof event.split?.epubNodeId === "string" ? event.split.epubNodeId : null,
+          startTime: typeof event.split?.startTime === "number" ? event.split.startTime : null,
+        });
+      }
+      if (typeof event.split?.startTime === "number") {
+        boundaryMarkers.push({
+          spanPath: typeof event.span?.path === "string" ? event.span.path : null,
+          epubNodeId: typeof event.split?.epubNodeId === "string" ? event.split.epubNodeId : null,
+          title: String(event.split?.title ?? event.split?.epubNodeId ?? "split"),
+          startTime: event.split.startTime,
+          source: "split",
+        });
+      }
+    }
+    if (type === "span-leaf-accepted" && Array.isArray(event.result?.chapters)) {
+      for (const chapter of event.result.chapters) {
+        if (typeof chapter.startTime !== "number") continue;
+        boundaryMarkers.push({
+          spanPath: typeof event.span?.path === "string" ? event.span.path : null,
+          epubNodeId: typeof chapter.epubNodeId === "string" ? chapter.epubNodeId : null,
+          title: String(chapter.title ?? chapter.epubNodeId ?? "chapter"),
+          startTime: chapter.startTime,
+          source: "leaf",
+        });
+      }
+    }
   }
 
   const startedAt = typeof events[0]?.ts === "string" ? events[0].ts : null;
   const updatedAt = typeof events[events.length - 1]?.ts === "string" ? events[events.length - 1].ts : null;
+  if (status === "running" && eventLogMtimeMs > 0 && Date.now() - eventLogMtimeMs > 180_000) {
+    status = "interrupted";
+  }
   const allSpans = [...spans.values()];
   const activeSpans = allSpans
     .filter((span) => !span.terminal)
@@ -274,6 +381,7 @@ function summarizeRun(eventLog: string): RunSummary {
     updatedAt,
     status,
     durationSeconds: secondsBetween(startedAt, updatedAt),
+    audiobookDurationSeconds,
     model,
     epubEntries,
     originalEpubEntries,
@@ -296,6 +404,12 @@ function summarizeRun(eventLog: string): RunSummary {
     resultSummary: readJsonFile(resultPath),
     traceFiles: traceFilesFor(traceDir),
     judgeDecisions: judgeDecisions.slice(-80).reverse(),
+    treeSpans: allSpans.sort((a, b) => (a.depth ?? 0) - (b.depth ?? 0) || a.path.localeCompare(b.path)),
+    treeEdges,
+    boundaryMarkers: [...boundaryMarkers]
+      .sort((a, b) => a.startTime - b.startTime || a.title.localeCompare(b.title))
+      .filter((marker, index, markers) => index === 0 || marker.startTime !== markers[index - 1]!.startTime || marker.epubNodeId !== markers[index - 1]!.epubNodeId),
+    traceSummaries: traceSummariesFor(traceDir),
   };
 }
 
@@ -323,6 +437,7 @@ function html(): string {
     .accepted { color: var(--ok); }
     .failed { color: var(--bad); }
     .running { color: var(--warn); }
+    .interrupted { color: var(--warn); }
     .partial { color: var(--muted); }
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -334,6 +449,25 @@ function html(): string {
     .run-row { cursor: pointer; }
     .run-row:hover { background: #20252a; }
     .small { font-size: 12px; }
+    .viz-scroll { overflow: auto; }
+    .tree { min-width: 980px; }
+    .tree-row { display: flex; gap: 8px; margin: 7px 0; align-items: stretch; }
+    .tree-depth { width: 64px; color: var(--muted); font-size: 12px; padding-top: 7px; flex: 0 0 auto; }
+    .tree-node { border: 1px solid var(--line); background: #14171a; border-radius: 6px; padding: 6px 7px; min-width: 74px; flex: 1 1 0; }
+    .tree-node.leaf { border-color: rgba(139,214,147,0.55); }
+    .tree-node.split { border-color: rgba(121,184,255,0.65); }
+    .tree-node.error { border-color: rgba(255,139,139,0.7); }
+    .tree-node.active { border-color: rgba(255,209,102,0.65); }
+    .ruler { position: relative; height: 132px; border: 1px solid var(--line); border-radius: 8px; background: linear-gradient(90deg, #15191d, #111315); overflow: hidden; }
+    .ruler-line { position: absolute; left: 10px; right: 10px; top: 62px; height: 2px; background: var(--line); }
+    .tick { position: absolute; top: 32px; width: 1px; height: 58px; background: var(--accent); }
+    .tick.leaf { background: var(--ok); }
+    .tick.audio-only { background: var(--warn); width: auto; opacity: 0.18; top: 0; bottom: 0; height: auto; }
+    .tick.failed-span { background: var(--bad); width: auto; opacity: 0.14; top: 0; bottom: 0; height: auto; }
+    .tick-label { position: absolute; top: 8px; transform: translateX(-50%); max-width: 130px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tick-time { position: absolute; top: 94px; transform: translateX(-50%); font-size: 10px; color: var(--muted); }
+    details { border-top: 1px solid var(--line); padding: 8px 0; }
+    summary { cursor: pointer; }
     @media (max-width: 1000px) { .grid, .two { grid-template-columns: 1fr; } header { align-items: flex-start; flex-direction: column; } }
   </style>
 </head>
@@ -350,6 +484,8 @@ function html(): string {
     </section>
   </main>
   <script>
+    let selectedRunId = null;
+    let latestRuns = [];
     const fmt = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit", month: "short", day: "numeric" });
     const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
     const num = (value) => value == null ? "" : Number(value).toLocaleString();
@@ -407,6 +543,53 @@ function html(): string {
       return '<div class="card"><h2>Result JSON</h2><div class="muted small"><code>' + esc(run.resultPath ?? "") + '</code></div><pre class="small">' + esc(summary) + '</pre></div>';
     }
 
+    function renderTree(run) {
+      const byDepth = new Map();
+      for (const span of run.treeSpans || []) {
+        const depth = span.depth ?? 0;
+        if (!byDepth.has(depth)) byDepth.set(depth, []);
+        byDepth.get(depth).push(span);
+      }
+      const rows = [...byDepth.entries()].sort((a, b) => a[0] - b[0]).map(([depth, spans]) => {
+        spans.sort((a, b) => a.path.localeCompare(b.path));
+        return '<div class="tree-row"><div class="tree-depth">depth ' + esc(depth) + '</div>' +
+          spans.map((s) => '<div class="tree-node ' + esc(s.terminal || "active") + '"><strong><code>' + esc(s.path) + '</code></strong><br><span class="small muted">' + esc(s.nodeCount ?? "") + ' nodes, ' + esc(Math.round(s.startTime ?? 0)) + '-' + esc(Math.round(s.endTime ?? 0)) + 's</span><br><span class="small">tools ' + esc(s.toolCalls) + ', rejects ' + esc(s.judgeRejected) + '</span><br><span class="small ' + (s.terminal === "error" ? "failed" : "") + '">' + esc(s.terminal ?? "active") + '</span></div>').join("") +
+          '</div>';
+      }).join("");
+      return '<div class="card section"><h2>Binary Tree Progress</h2><div class="viz-scroll"><div class="tree">' + (rows || '<div class="muted">No spans yet</div>') + '</div></div></div>';
+    }
+
+    function pct(value, total) {
+      if (!total || !Number.isFinite(value)) return 0;
+      return Math.max(0, Math.min(100, value / total * 100));
+    }
+
+    function renderRuler(run) {
+      const total = run.audiobookDurationSeconds || 1;
+      const failed = (run.failedSpans || []).map((f) => {
+        const span = (run.treeSpans || []).find((s) => s.path === f.path);
+        if (!span || span.startTime == null || span.endTime == null) return "";
+        return '<div class="tick failed-span" title="failed span ' + esc(f.path) + '" style="left:' + pct(span.startTime, total) + '%;width:' + Math.max(0.3, pct(span.endTime - span.startTime, total)) + '%"></div>';
+      }).join("");
+      const intervals = (run.audioOnlyIntervalDetails || []).map((i) => '<div class="tick audio-only" title="' + esc(i.kind + ': ' + i.notes) + '" style="left:' + pct(i.startTime, total) + '%;width:' + Math.max(0.3, pct(i.endTime - i.startTime, total)) + '%"></div>').join("");
+      const markers = (run.boundaryMarkers || []).map((m, index) => {
+        const left = pct(m.startTime, total);
+        const showLabel = index % 2 === 0 || m.source === "split";
+        return '<div class="tick ' + esc(m.source) + '" title="' + esc(m.startTime + 's ' + m.title + ' (' + m.source + ')') + '" style="left:' + left + '%"></div>' +
+          (showLabel ? '<div class="tick-label" style="left:' + left + '%">' + esc(m.title) + '</div><div class="tick-time" style="left:' + left + '%">' + esc(Math.round(m.startTime)) + 's</div>' : '');
+      }).join("");
+      return '<div class="card section"><h2>EPUB/Audio Boundary Ruler</h2><div class="ruler"><div class="ruler-line"></div>' + failed + intervals + markers + '</div><div class="muted small">Blue ticks are accepted fulcrum splits, green ticks are accepted leaf chapter starts, yellow bands are audio-only intervals, red bands are failed spans.</div></div>';
+    }
+
+    function renderTraceSummaries(run) {
+      if (!run.traceSummaries?.length) return '<div class="card section"><h2>Trace Summaries</h2><div class="muted">No trace summaries yet. Hidden chain-of-thought is not available; this panel shows stored reasoning summaries and outputs when present.</div></div>';
+      return '<div class="card section"><h2>Trace Summaries</h2><div class="muted small">Shows stored model reasoning summaries and final/tool outputs where present, not hidden chain-of-thought.</div>' +
+        run.traceSummaries.slice(0, 20).map((t) => '<details><summary><code>' + esc(t.file) + '</code> <span class="muted">' + esc(t.kind) + ' ' + esc(t.title) + '</span></summary>' +
+          (t.reasoningSummaries.length ? '<h2>Reasoning Summary</h2><pre class="small">' + esc(t.reasoningSummaries.join("\\n\\n")) + '</pre>' : '<div class="muted small">No stored reasoning summary in this trace.</div>') +
+          '<h2>Final Output</h2><pre class="small">' + esc(JSON.stringify(t.finalOutput, null, 2)) + '</pre></details>').join("") +
+        '</div>';
+    }
+
     function intervalTable(run) {
       const intervals = run.audioOnlyIntervalDetails || [];
       if (!intervals.length && !run.excludedNodes.length) return "";
@@ -429,24 +612,38 @@ function html(): string {
         metric("Elapsed", dur(run.durationSeconds)) +
         '</div>' +
         '<div class="two section"><div class="card"><h2>Active Spans</h2>' + spanTable(run.activeSpans) + '</div><div class="card"><h2>Churn Spans</h2>' + spanTable(run.churnSpans) + '</div></div>' +
+        renderTree(run) +
+        renderRuler(run) +
         '<div class="two section"><div class="card"><h2>Failed Spans</h2>' + failedTable(run.failedSpans) + '</div><div class="card"><h2>Rejected Nodes</h2>' + rejectedTable(run.rejectedNodes) + '</div></div>' +
         intervalTable(run) +
         '<div class="section card"><h2>Recent Judge Decisions</h2>' + judgeTable(run.judgeDecisions) + '</div>' +
+        renderTraceSummaries(run) +
         '<div class="section card"><h2>Event Tail</h2>' + eventTailTable(run.eventTail) + '</div>' +
         '<div class="two section">' + resultPanel(run) + traceInventory(run) + '</div>';
     }
 
     function renderRuns(runs) {
       return '<table><thead><tr><th>Run</th><th>Status</th><th>Started</th><th>Elapsed</th><th>Splits</th><th>Leaves</th><th>Errors</th><th>Judge +/-</th><th>Tools</th><th>EPUB</th><th>Files</th></tr></thead><tbody>' +
-        runs.map((r) => '<tr class="run-row"><td><code>' + esc(r.id) + '</code></td><td>' + status(r.status) + '</td><td>' + esc(time(r.startedAt)) + '</td><td>' + esc(dur(r.durationSeconds)) + '</td><td>' + esc(r.metrics.splits) + '</td><td>' + esc(r.metrics.leaves) + '</td><td>' + esc(r.metrics.spanErrors) + '</td><td><span class="accepted">' + esc(r.metrics.judgeAccepted) + '</span> / <span class="failed">' + esc(r.metrics.judgeRejected) + '</span></td><td>' + esc(r.metrics.toolCalls) + '</td><td>' + esc(r.epubEntries ?? "") + (r.originalEpubEntries ? ' / ' + esc(r.originalEpubEntries) : '') + '</td><td><code>' + esc(r.eventLog.split("/").pop()) + '</code></td></tr>').join("") +
+        runs.map((r) => '<tr class="run-row" data-run-id="' + esc(r.id) + '"><td><code>' + esc(r.id) + '</code>' + (r.id === selectedRunId ? ' <span class="muted small">selected</span>' : '') + '</td><td>' + status(r.status) + '</td><td>' + esc(time(r.startedAt)) + '</td><td>' + esc(dur(r.durationSeconds)) + '</td><td>' + esc(r.metrics.splits) + '</td><td>' + esc(r.metrics.leaves) + '</td><td>' + esc(r.metrics.spanErrors) + '</td><td><span class="accepted">' + esc(r.metrics.judgeAccepted) + '</span> / <span class="failed">' + esc(r.metrics.judgeRejected) + '</span></td><td>' + esc(r.metrics.toolCalls) + '</td><td>' + esc(r.epubEntries ?? "") + (r.originalEpubEntries ? ' / ' + esc(r.originalEpubEntries) : '') + '</td><td><code>' + esc(r.eventLog.split("/").pop()) + '</code></td></tr>').join("") +
         '</tbody></table>';
     }
 
     async function refresh() {
       const response = await fetch("/api/runs", { cache: "no-store" });
       const data = await response.json();
-      document.querySelector("#current").innerHTML = renderCurrent(data.runs[0]);
-      document.querySelector("#runs").innerHTML = renderRuns(data.runs);
+      latestRuns = data.runs;
+      if (!selectedRunId && latestRuns[0]) selectedRunId = latestRuns[0].id;
+      const selected = latestRuns.find((run) => run.id === selectedRunId) || latestRuns[0];
+      document.querySelector("#current").innerHTML = renderCurrent(selected);
+      document.querySelector("#runs").innerHTML = renderRuns(latestRuns);
+      document.querySelectorAll(".run-row").forEach((row) => {
+        row.addEventListener("click", () => {
+          selectedRunId = row.getAttribute("data-run-id");
+          const selected = latestRuns.find((run) => run.id === selectedRunId) || latestRuns[0];
+          document.querySelector("#current").innerHTML = renderCurrent(selected);
+          document.querySelector("#runs").innerHTML = renderRuns(latestRuns);
+        });
+      });
     }
     refresh();
     setInterval(refresh, 2000);
