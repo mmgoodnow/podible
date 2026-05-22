@@ -1344,7 +1344,7 @@ export type RecursiveCurationReport = {
   epubEndIndex: number;
   startTime: number;
   endTime: number;
-  outcome: "leaf" | "partial_leaf" | "split" | "failed" | "limit";
+  outcome: "leaf" | "partial_leaf" | "split" | "failed";
   errors?: string[];
   chapters?: number;
   chapterPlan?: SubmittedChapter[];
@@ -2542,12 +2542,10 @@ export function audibleEpubNodeSelectionToolUseBehavior(_: unknown, toolResults:
 export async function resolveRecursiveChapterSpans(
   ctx: ChapterCurationContext,
   decide: (span: ChapterCurationSpan, targetBoundary: ChapterCurationTargetBoundary) => Promise<RecursiveSpanDecision | null>,
-  options: { maxCalls?: number; maxConcurrency?: number; reports?: RecursiveCurationReport[] } = {}
+  options: { maxConcurrency?: number; reports?: RecursiveCurationReport[] } = {}
 ): Promise<SubmittedChapter[] | null> {
-  const maxCalls = options.maxCalls ?? 24;
   const maxConcurrency = Math.max(1, options.maxConcurrency ?? 4);
   const reports = options.reports;
-  let calls = 0;
   let activeDecisions = 0;
   const waiters: Array<() => void> = [];
 
@@ -2591,21 +2589,10 @@ export async function resolveRecursiveChapterSpans(
       reports?.push({ ...span, outcome: "leaf", chapters: chapters.length, chapterPlan: chapters });
       return chapters;
     }
-    if (calls >= maxCalls) {
-      logChapterCurationEvent(ctx, {
-        type: "span-limit",
-        message: `recursive span=${span.path} limit=max_calls`,
-        span,
-        maxCalls,
-      });
-      reports?.push({ ...span, outcome: "limit", errors: ["Recursive curation call limit reached."] });
-      return partialLeaf("max_calls", ["Recursive curation call limit reached."]);
-    }
     const targetBoundary = chooseTargetBoundary(ctx, span);
     if (!targetBoundary) {
       return partialLeaf("no_target_boundary", ["Span has unresolved boundaries but no target boundary could be chosen."]);
     }
-    calls++;
     const decision = await withDecisionSlot(() => decide(span, targetBoundary));
     if (!decision) {
       logChapterCurationEvent(ctx, {
@@ -3834,10 +3821,10 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
         }
         return null;
       },
-      { maxCalls: 64, maxConcurrency: recursiveMaxSpanConcurrency, reports: recursiveReports }
+      { maxConcurrency: recursiveMaxSpanConcurrency, reports: recursiveReports }
     );
     if (recursiveChapters && recursiveChapters.length > 0) {
-      const hasPartialLeaves = recursiveReports.some((report) => report.outcome === "partial_leaf" || report.outcome === "limit");
+      const hasPartialLeaves = recursiveReports.some((report) => report.outcome === "partial_leaf");
       logChapterCurationEvent(curationCtx, {
         type: "recursive-merge-start",
         message: `recursive merge chapters=${recursiveChapters.length} validate=structural`,

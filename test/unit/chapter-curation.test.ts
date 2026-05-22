@@ -1411,8 +1411,7 @@ describe("chapter curation tools", () => {
       async (_span, targetBoundary): Promise<RecursiveSpanDecision | null> => {
         targets.push(targetBoundary);
         return null;
-      },
-      { maxCalls: 1 }
+      }
     );
 
     expect(targets.map((target) => target.epubNodeId)).toEqual(["chapter-2"]);
@@ -1493,46 +1492,4 @@ describe("chapter curation tools", () => {
     expect(reports[0]?.outcome).toBe("partial_leaf");
   });
 
-  test("resolveRecursiveChapterSpans respects call limits", async () => {
-    const context = ctx({
-      epubEntries: [
-        epubEntry({ id: "front", title: "Prologue", cumulativeRatio: 0.2, cumulativeWords: 4 }),
-        epubEntry({ id: "chapter-1", title: "Chapter 1", cumulativeRatio: 0.6, cumulativeWords: 16 }),
-        epubEntry({ id: "chapter-2", title: "Chapter 2", cumulativeRatio: 1, cumulativeWords: 24 }),
-      ],
-    });
-    const chapters = await resolveRecursiveChapterSpans(
-      context,
-      async () => ({
-        kind: "split",
-        split: {
-          accepted: true,
-          kind: "split",
-          spanPath: "root",
-          epubNodeId: "chapter-1",
-          epubIndex: 1,
-          title: "Chapter 1",
-          startTime: 60,
-          notes: null,
-          audit: {
-            epubNodeId: "chapter-1",
-            title: "Chapter 1",
-            startTime: 60,
-            boundaryComparison: {
-              transcriptPrecision: "utterance",
-              transcriptPrecisionNote: null,
-              previousEpub: { epubNodeId: null, title: null, tailText: "" },
-              targetEpub: { epubNodeId: "chapter-1", title: "Chapter 1", headText: "" },
-              transcriptBefore: "",
-              transcriptAfter: "",
-            },
-            transcriptWindow: "",
-            candidates: [],
-          },
-        },
-      }),
-      { maxCalls: 1 }
-    );
-    expect(chapters?.map((chapter) => chapter.title)).toEqual(["Prologue", "Chapter 1"]);
-  });
 });

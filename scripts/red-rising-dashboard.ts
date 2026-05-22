@@ -28,8 +28,26 @@ type BoundaryMarker = {
   source: "split" | "leaf";
 };
 
+type CaseConfig = {
+  slug: string;
+  label: string;
+  dir: string;
+  eventPrefix: string;
+  resultPrefix: string;
+  tracePrefix: string;
+};
+
+type EventLogRef = {
+  caseConfig: CaseConfig;
+  eventLog: string;
+};
+
 type RunSummary = {
   id: string;
+  runId: string;
+  caseSlug: string;
+  caseLabel: string;
+  caseDir: string;
   eventLog: string;
   resultPath: string | null;
   traceDir: string | null;
@@ -91,15 +109,51 @@ type RunSummary = {
 };
 
 const repoRoot = path.resolve(import.meta.dir, "..");
-const caseDir = path.join(repoRoot, "tmp/chapter-cases/red-rising/prod");
+const redRisingCaseDir = path.join(repoRoot, "tmp/chapter-cases/red-rising/prod");
+const corpusRoot = path.join(repoRoot, "tmp/chapter-cases/corpus");
 const port = Number(process.env.PORT ?? 7331);
 
-function eventLogFiles(): string[] {
-  if (!existsSync(caseDir)) return [];
-  return readdirSync(caseDir)
-    .filter((name) => /^agent-events-m59-.*\.jsonl$/.test(name))
-    .map((name) => path.join(caseDir, name))
-    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+function titleCaseSlug(slug: string): string {
+  return slug.split("-").filter(Boolean).map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`).join(" ");
+}
+
+function caseConfigs(): CaseConfig[] {
+  const configs: CaseConfig[] = [
+    {
+      slug: "red-rising",
+      label: "Red Rising",
+      dir: redRisingCaseDir,
+      eventPrefix: "agent-events-m59-",
+      resultPrefix: "agent-result-m59-",
+      tracePrefix: "agent-traces-m59-",
+    },
+  ];
+  if (existsSync(corpusRoot)) {
+    for (const name of readdirSync(corpusRoot).sort()) {
+      const dir = path.join(corpusRoot, name);
+      if (!statSync(dir).isDirectory()) continue;
+      configs.push({
+        slug: name,
+        label: titleCaseSlug(name),
+        dir,
+        eventPrefix: "agent-events-",
+        resultPrefix: "agent-result-",
+        tracePrefix: "agent-traces-",
+      });
+    }
+  }
+  return configs;
+}
+
+function eventLogRefs(): EventLogRef[] {
+  return caseConfigs()
+    .flatMap((caseConfig) => {
+      if (!existsSync(caseConfig.dir)) return [];
+      return readdirSync(caseConfig.dir)
+        .filter((name) => name.startsWith(caseConfig.eventPrefix) && name.endsWith(".jsonl"))
+        .map((name) => ({ caseConfig, eventLog: path.join(caseConfig.dir, name) }));
+    })
+    .sort((a, b) => statSync(b.eventLog).mtimeMs - statSync(a.eventLog).mtimeMs);
 }
 
 function hasLiveCurationRun(): boolean {
@@ -107,7 +161,13 @@ function hasLiveCurationRun(): boolean {
     const output = execFileSync("ps", ["-axo", "command="], { encoding: "utf8" });
     return output
       .split(/\n/)
-      .some((command) => command.includes("bun tmp/run-red-rising-curation.ts") || command.includes("bun run tmp/run-red-rising-curation.ts"));
+      .some(
+        (command) =>
+          command.includes("bun tmp/run-red-rising-curation.ts") ||
+          command.includes("bun run tmp/run-red-rising-curation.ts") ||
+          command.includes("bun tmp/run-corpus-curation.ts") ||
+          command.includes("bun run tmp/run-corpus-curation.ts")
+      );
   } catch {
     return false;
   }
@@ -128,14 +188,20 @@ function readJsonl(filePath: string): JsonRecord[] {
     });
 }
 
-function runIdFromEventLog(filePath: string): string {
-  return path.basename(filePath).replace(/^agent-events-m59-/, "").replace(/\.jsonl$/, "");
+function runIdFromEventLog(ref: EventLogRef): string {
+  return path.basename(ref.eventLog).replace(ref.caseConfig.eventPrefix, "").replace(/\.jsonl$/, "");
 }
 
-function artifactPathFor(eventLog: string, kind: "result" | "trace"): string | null {
-  const id = runIdFromEventLog(eventLog);
+function dashboardRunId(ref: EventLogRef): string {
+  return `${ref.caseConfig.slug}::${runIdFromEventLog(ref)}`;
+}
+
+function artifactPathFor(ref: EventLogRef, kind: "result" | "trace"): string | null {
+  const id = runIdFromEventLog(ref);
   const candidate =
-    kind === "result" ? path.join(caseDir, `agent-result-m59-${id}.json`) : path.join(caseDir, `agent-traces-m59-${id}`);
+    kind === "result"
+      ? path.join(ref.caseConfig.dir, `${ref.caseConfig.resultPrefix}${id}.json`)
+      : path.join(ref.caseConfig.dir, `${ref.caseConfig.tracePrefix}${id}`);
   return existsSync(candidate) ? candidate : null;
 }
 
@@ -255,11 +321,11 @@ function errorMessage(error: unknown): string {
   return error ? JSON.stringify(error) : "";
 }
 
-function summarizeRun(eventLog: string, includeDetails = true, liveCurationRun = false): RunSummary {
-  const events = readJsonl(eventLog);
-  const eventLogMtimeMs = existsSync(eventLog) ? statSync(eventLog).mtimeMs : 0;
-  const resultPath = artifactPathFor(eventLog, "result");
-  const traceDir = artifactPathFor(eventLog, "trace");
+function summarizeRun(ref: EventLogRef, includeDetails = true, liveCurationRun = false): RunSummary {
+  const events = readJsonl(ref.eventLog);
+  const eventLogMtimeMs = existsSync(ref.eventLog) ? statSync(ref.eventLog).mtimeMs : 0;
+  const resultPath = artifactPathFor(ref, "result");
+  const traceDir = artifactPathFor(ref, "trace");
   const spans = new Map<string, SpanSummary>();
   const rejectedNodes = new Map<string, number>();
   const failedSpans: RunSummary["failedSpans"] = [];
@@ -434,8 +500,12 @@ function summarizeRun(eventLog: string, includeDetails = true, liveCurationRun =
     .slice(0, 12);
 
   return {
-    id: runIdFromEventLog(eventLog),
-    eventLog,
+    id: dashboardRunId(ref),
+    runId: runIdFromEventLog(ref),
+    caseSlug: ref.caseConfig.slug,
+    caseLabel: ref.caseConfig.label,
+    caseDir: ref.caseConfig.dir,
+    eventLog: ref.eventLog,
     resultPath,
     traceDir,
     startedAt,
@@ -548,9 +618,9 @@ function html(): string {
 </head>
 <body>
   <header>
-    <h1>Red Rising Curation Runs</h1>
+    <h1>Audiobook Curation Runs</h1>
     <div class="header-controls">
-      <div class="muted small">Reading <span class="mono">${caseDir}</span>.</div>
+      <div class="muted small">Reading Red Rising and corpus case directories.</div>
       <label class="toggle"><input id="auto-refresh-toggle" type="checkbox"> Auto-refresh 5s</label>
       <button id="manual-refresh" type="button">Refresh</button>
     </div>
@@ -789,7 +859,7 @@ function html(): string {
 
     function renderCurrent(run) {
       if (!run) return '<div class="card">No runs found.</div>';
-      return '<div class="card"><h2>Current Run ' + status(run.status) + '</h2><div class="muted small"><code>' + esc(run.id) + '</code> started ' + esc(time(run.startedAt)) + ', updated ' + esc(time(run.updatedAt)) + '<br>event log <code>' + esc(run.eventLog) + '</code></div></div>' +
+      return '<div class="card"><h2>' + esc(run.caseLabel) + ' Run ' + status(run.status) + '</h2><div class="muted small"><code>' + esc(run.runId) + '</code> started ' + esc(time(run.startedAt)) + ', updated ' + esc(time(run.updatedAt)) + '<br>case <code>' + esc(run.caseDir) + '</code><br>event log <code>' + esc(run.eventLog) + '</code></div></div>' +
         '<div class="grid section">' +
         metric("Splits", run.metrics.splits) +
         metric("Leaves", run.metrics.leaves) +
@@ -810,8 +880,8 @@ function html(): string {
     }
 
     function renderRuns(runs) {
-      return '<table><thead><tr><th>Run</th><th>Status</th><th>Started</th><th>Elapsed</th><th>Splits</th><th>Leaves</th><th>Errors</th><th>Judge +/-</th><th>Tools</th><th>EPUB</th><th>Files</th></tr></thead><tbody>' +
-        runs.map((r) => '<tr class="run-row" data-run-id="' + esc(r.id) + '"><td><code>' + esc(r.id) + '</code>' + (r.id === selectedRunId ? ' <span class="muted small">selected</span>' : '') + '</td><td>' + status(r.status) + '</td><td>' + esc(time(r.startedAt)) + '</td><td>' + esc(dur(r.durationSeconds)) + '</td><td>' + esc(r.metrics.splits) + '</td><td>' + esc(r.metrics.leaves) + '</td><td>' + esc(r.metrics.spanErrors) + '</td><td><span class="accepted">' + esc(r.metrics.judgeAccepted) + '</span> / <span class="failed">' + esc(r.metrics.judgeRejected) + '</span></td><td>' + esc(r.metrics.toolCalls) + '</td><td>' + esc(r.epubEntries ?? "") + (r.originalEpubEntries ? ' / ' + esc(r.originalEpubEntries) : '') + '</td><td><code>' + esc(r.eventLog.split("/").pop()) + '</code></td></tr>').join("") +
+      return '<table><thead><tr><th>Book</th><th>Run</th><th>Status</th><th>Started</th><th>Elapsed</th><th>Splits</th><th>Leaves</th><th>Errors</th><th>Judge +/-</th><th>Tools</th><th>EPUB</th><th>Files</th></tr></thead><tbody>' +
+        runs.map((r) => '<tr class="run-row" data-run-id="' + esc(r.id) + '"><td>' + esc(r.caseLabel) + '</td><td><code>' + esc(r.runId) + '</code>' + (r.id === selectedRunId ? ' <span class="muted small">selected</span>' : '') + '</td><td>' + status(r.status) + '</td><td>' + esc(time(r.startedAt)) + '</td><td>' + esc(dur(r.durationSeconds)) + '</td><td>' + esc(r.metrics.splits) + '</td><td>' + esc(r.metrics.leaves) + '</td><td>' + esc(r.metrics.spanErrors) + '</td><td><span class="accepted">' + esc(r.metrics.judgeAccepted) + '</span> / <span class="failed">' + esc(r.metrics.judgeRejected) + '</span></td><td>' + esc(r.metrics.toolCalls) + '</td><td>' + esc(r.epubEntries ?? "") + (r.originalEpubEntries ? ' / ' + esc(r.originalEpubEntries) : '') + '</td><td><code>' + esc(r.eventLog.split("/").pop()) + '</code></td></tr>').join("") +
         '</tbody></table>';
     }
 
@@ -863,21 +933,21 @@ Bun.serve({
     }
     if (url.pathname === "/api/runs") {
       const selectedRunId = url.searchParams.get("selectedRunId");
-      const logs = eventLogFiles().slice(0, 40);
-      const detailedRunId = selectedRunId && logs.some((eventLog) => runIdFromEventLog(eventLog) === selectedRunId) ? selectedRunId : runIdFromEventLog(logs[0] ?? "");
+      const logs = eventLogRefs().slice(0, 80);
+      const detailedRunId = selectedRunId && logs.some((ref) => dashboardRunId(ref) === selectedRunId) ? selectedRunId : logs[0] ? dashboardRunId(logs[0]) : "";
       const liveCurationRun = hasLiveCurationRun();
-      const runs = logs.map((eventLog) => summarizeRun(eventLog, runIdFromEventLog(eventLog) === detailedRunId, liveCurationRun));
-      return jsonResponse({ caseDir, runs });
+      const runs = logs.map((ref) => summarizeRun(ref, dashboardRunId(ref) === detailedRunId, liveCurationRun));
+      return jsonResponse({ caseDirs: caseConfigs().map((config) => config.dir), runs });
     }
     if (url.pathname === "/api/trace") {
       const runId = url.searchParams.get("runId");
       const file = url.searchParams.get("file");
-      const eventLog = eventLogFiles().find((candidate) => runIdFromEventLog(candidate) === runId);
-      if (!eventLog) return new Response("run not found", { status: 404 });
-      return jsonResponse(traceDetailFor(artifactPathFor(eventLog, "trace"), file));
+      const ref = eventLogRefs().find((candidate) => dashboardRunId(candidate) === runId);
+      if (!ref) return new Response("run not found", { status: 404 });
+      return jsonResponse(traceDetailFor(artifactPathFor(ref, "trace"), file));
     }
     return new Response("not found", { status: 404 });
   },
 });
 
-console.log(`Red Rising curation dashboard: http://localhost:${port}/red-rising`);
+console.log(`Audiobook curation dashboard: http://localhost:${port}/red-rising`);
