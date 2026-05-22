@@ -1300,7 +1300,7 @@ export class BooksRepo {
     return (this.db.query("SELECT * FROM chapter_analysis WHERE asset_id = ?").get(assetId) as ChapterAnalysisRow | null) ?? null;
   }
 
-  /** Book IDs that have a succeeded transcript, no chapters_json, and an epub sibling, with no active job. */
+  /** Book IDs that have a succeeded transcript, no chapters_json, and an epub sibling. */
   listBookIdsNeedingCuration(): number[] {
     const rows = this.db
       .query<{ book_id: number }, []>(
@@ -1314,12 +1314,6 @@ export class BooksRepo {
              WHERE epub.book_id = a.book_id
                AND epub.kind = 'ebook'
                AND epub.mime = 'application/epub+zip'
-           )
-           AND NOT EXISTS (
-             SELECT 1 FROM jobs j
-             WHERE j.asset_id = a.id
-               AND j.type = 'chapter_analysis'
-               AND j.status IN ('queued', 'running')
            )`
       )
       .all();
