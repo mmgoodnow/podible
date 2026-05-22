@@ -1,7 +1,13 @@
 import { Agent, OpenAIProvider, Runner, tool } from "@openai/agents";
-import { getGlobalTraceProvider } from "@openai/agents-core";
+import { BatchTraceProcessor, setTraceProcessors } from "@openai/agents-core";
+import { OpenAITracingExporter } from "@openai/agents-openai";
 
-getGlobalTraceProvider().setDisabled(true);
+let tracingInitializedForKey: string | null = null;
+function ensureTracingInitialized(apiKey: string): void {
+  if (tracingInitializedForKey === apiKey) return;
+  tracingInitializedForKey = apiKey;
+  setTraceProcessors([new BatchTraceProcessor(new OpenAITracingExporter({ apiKey }))]);
+}
 import { z } from "zod";
 
 import type { EpubChapterEntry } from "./chapter-analysis";
@@ -447,6 +453,7 @@ export async function judgeChapterBoundary(
 ): Promise<SubmitFulcrumJudgmentResult | null> {
   const apiKey = ctx.settings.agents.apiKey.trim();
   if (!apiKey) return null;
+  ensureTracingInitialized(apiKey);
   const timeoutMs = Math.min(Math.max(5_000, ctx.settings.agents.timeoutMs), 90_000);
   const abort = new AbortController();
   const timeout = setTimeout(() => abort.abort(), timeoutMs);
@@ -1223,6 +1230,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
     });
     return { result: null, finalOutput: null, newItems: [], rawResponses: [], recursiveReports: [], recursiveSpanTraces: [] };
   }
+  ensureTracingInitialized(apiKey);
   const abort = new AbortController();
   const timeout = setTimeout(() => abort.abort(), Math.max(5_000, ctx.settings.agents.timeoutMs));
   const provider = new OpenAIProvider({ apiKey, useResponses: true });
