@@ -5,7 +5,6 @@ import {
   getEpubNodeText,
   getEpubStructure,
   getTranscriptWindowFromContext,
-  findEpubChapterEvidence,
   findFulcrumCandidates,
   fuzzySearchTranscript,
   fulcrumJudgeToolUseBehavior,
@@ -15,7 +14,6 @@ import {
   applyAudibleEpubNodeSelection,
   createRootCurationSpan,
   resolveRecursiveChapterSpans,
-  recursiveSpanAllowsLeaf,
   researchEpubBoundary,
   searchEpubText,
   submitChapterPlan,
@@ -479,70 +477,6 @@ describe("chapter curation tools", () => {
       index: 1,
       text: "Once upon a time.",
     });
-  });
-
-  test("findEpubChapterEvidence returns transcript anchors for EPUB nodes", async () => {
-    const result = await findEpubChapterEvidence(ctx(), {
-      nodeIds: ["chapter-1"],
-      searchRadiusSeconds: 120,
-      limitPerNode: 2,
-    });
-    expect(result.nodes).toHaveLength(1);
-    expect(result.nodes[0]).toMatchObject({
-      epubNodeId: "chapter-1",
-      title: "Chapter 1",
-      query: "first real",
-    });
-    expect(result.nodes[0]?.matches[0]).toMatchObject({
-      startTime: 30,
-      quality: "medium",
-    });
-  });
-
-  test("findEpubChapterEvidence reports the first opener word instead of pre-boundary context", async () => {
-    const context = ctx({
-      epubEntries: [
-        epubEntry({
-          id: "chapter-19",
-          title: "Chapter 19: The Passage",
-          words: [
-            word("The"),
-            word("Passage"),
-            word("I"),
-            word("vomit"),
-            word("as"),
-            word("I"),
-            word("wake"),
-            word("A"),
-            word("second"),
-            word("fist"),
-          ],
-        }),
-      ],
-      transcript: {
-        version: "test",
-        text: "The locket closes. I vomit as I wake. A second fist strikes.",
-        words: [
-          ...transcriptWith("The locket closes", 8_000, 9_000).words,
-          ...transcriptWith("I vomit as I wake A second fist strikes", 10_000, 13_000).words,
-        ],
-        utterances: [
-          { startMs: 8_000, endMs: 9_000, text: "The locket closes." },
-          { startMs: 10_000, endMs: 13_000, text: "I vomit as I wake. A second fist strikes." },
-        ],
-      },
-    });
-
-    const result = await findEpubChapterEvidence(context, {
-      nodeIds: ["chapter-19"],
-      searchRadiusSeconds: 120,
-      limitPerNode: 1,
-    });
-
-    expect(result.nodes[0]?.matches[0]).toMatchObject({
-      startTime: 10.25,
-    });
-    expect(result.nodes[0]?.matches[0]?.text.startsWith("vomit")).toBe(true);
   });
 
   test("findFulcrumCandidates searches middle EPUB opener prose and ranks by position", () => {
@@ -1491,74 +1425,6 @@ describe("chapter curation tools", () => {
     expect(result.errors.join("\n")).toContain("must use inherited accepted boundary");
   });
 
-  test("recursiveSpanAllowsLeaf only permits leaf plans for small or forced spans", () => {
-    expect(
-      recursiveSpanAllowsLeaf(
-        {
-          epubStartIndex: 0,
-          epubEndIndex: 8,
-          startTime: 0,
-          endTime: 60,
-          depth: 0,
-          path: "root",
-        },
-        false
-      )
-    ).toBe(false);
-    expect(
-      recursiveSpanAllowsLeaf(
-        {
-          epubStartIndex: 0,
-          epubEndIndex: 3,
-          startTime: 0,
-          endTime: 3 * 60 * 60,
-          depth: 0,
-          path: "root",
-        },
-        false
-      )
-    ).toBe(false);
-    expect(
-      recursiveSpanAllowsLeaf(
-        {
-          epubStartIndex: 0,
-          epubEndIndex: 2,
-          startTime: 0,
-          endTime: 60,
-          depth: 0,
-          path: "root",
-        },
-        false
-      )
-    ).toBe(true);
-    expect(
-      recursiveSpanAllowsLeaf(
-        {
-          epubStartIndex: 0,
-          epubEndIndex: 3,
-          startTime: 0,
-          endTime: 60,
-          depth: 0,
-          path: "root",
-        },
-        false
-      )
-    ).toBe(false);
-    expect(
-      recursiveSpanAllowsLeaf(
-        {
-          epubStartIndex: 0,
-          epubEndIndex: 8,
-          startTime: 0,
-          endTime: 3 * 60 * 60,
-          depth: 0,
-          path: "root",
-        },
-        true
-      )
-    ).toBe(true);
-  });
-
   test("resolveRecursiveChapterSpans returns a leaf-only plan", async () => {
     const context = ctx({
       epubEntries: [epubEntry({ id: "front", title: "Prologue", cumulativeRatio: 1, cumulativeWords: 4 })],
@@ -1586,7 +1452,7 @@ describe("chapter curation tools", () => {
       "chapter-2": 220,
       "chapter-3": 260,
     };
-    const chapters = await resolveRecursiveChapterSpans(context, async (span, _forceLeaf, targetBoundary): Promise<RecursiveSpanDecision> => {
+    const chapters = await resolveRecursiveChapterSpans(context, async (span, targetBoundary): Promise<RecursiveSpanDecision> => {
       decisions.push(span.path);
       return {
         kind: "split",
@@ -1636,8 +1502,8 @@ describe("chapter curation tools", () => {
     const targets: ChapterCurationTargetBoundary[] = [];
     await resolveRecursiveChapterSpans(
       context,
-      async (_span, _forceLeaf, targetBoundary): Promise<RecursiveSpanDecision | null> => {
-        if (targetBoundary) targets.push(targetBoundary);
+      async (_span, targetBoundary): Promise<RecursiveSpanDecision | null> => {
+        targets.push(targetBoundary);
         return null;
       },
       { maxCalls: 1 }
@@ -1668,7 +1534,7 @@ describe("chapter curation tools", () => {
     };
     const chapters = await resolveRecursiveChapterSpans(
       context,
-      async (span, _forceLeaf, targetBoundary): Promise<RecursiveSpanDecision> => {
+      async (span, targetBoundary): Promise<RecursiveSpanDecision> => {
         active++;
         maxActive = Math.max(maxActive, active);
         try {
