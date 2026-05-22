@@ -602,10 +602,10 @@ function html(): string {
     button { background: #20252a; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 12px; cursor: pointer; }
     button:hover { border-color: var(--accent); }
     .viz-scroll { overflow: auto; }
-    .tree { display: grid; gap: 6px; min-width: 760px; }
-    .tree-row { display: grid; grid-template-columns: minmax(0, 1fr); }
-    .tree-node { border: 1px solid var(--line); background: #14171a; border-radius: 6px; padding: 7px 9px; min-width: 0; overflow: hidden; font-size: 12px; line-height: 1.25; display: grid; grid-template-columns: 82px minmax(140px, 1fr) minmax(86px, auto) minmax(80px, auto) minmax(72px, auto); gap: 10px; align-items: center; }
-    .tree-node strong { display: block; font-size: 12px; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tree { position: relative; min-width: 1120px; min-height: 720px; }
+    .tree-depth-label { position: absolute; top: 0; color: var(--muted); font-size: 11px; transform: translateY(-100%); padding-bottom: 5px; }
+    .tree-node { position: absolute; border: 1px solid var(--line); background: #14171a; border-radius: 6px; padding: 6px 7px; min-width: 0; overflow: hidden; font-size: 12px; line-height: 1.2; display: block; }
+    .tree-node strong { display: block; font-size: 12px; line-height: 1.1; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .tree-node span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .tree-node .small { font-size: 11px; }
     .tree-node.trace-link { cursor: pointer; }
@@ -740,23 +740,36 @@ function html(): string {
       const spans = (run.treeSpans || [])
         .filter((span) => span.lastEvent !== "span-auto-leaf" || span.toolCalls || span.judgeRejected)
         .sort((a, b) => (a.path === "root" ? "" : a.path).localeCompare(b.path === "root" ? "" : b.path));
+      const maxDepth = Math.max(0, ...spans.map((span) => span.depth ?? 0));
+      const columnWidth = 158;
+      const columnGap = 14;
+      const treeWidth = (maxDepth + 1) * columnWidth + maxDepth * columnGap;
+      const deepestSlots = Math.pow(2, Math.min(maxDepth, 7));
+      const treeHeight = Math.max(720, deepestSlots * 38);
+      const labels = Array.from({ length: maxDepth + 1 }, (_, depth) => '<div class="tree-depth-label" style="left:' + (depth * (columnWidth + columnGap)) + 'px;width:' + columnWidth + 'px">depth ' + depth + '</div>').join("");
       const rows = spans.map((s) => {
         const depth = s.depth ?? 0;
         const label = (s.path ?? "") + ": " + (s.nodeCount ?? "") + " nodes, " + Math.round(s.startTime ?? 0) + "-" + Math.round(s.endTime ?? 0) + "s, tools " + (s.toolCalls ?? 0) + ", rejects " + (s.judgeRejected ?? 0) + ", " + (s.terminal ?? "active");
         const trace = (run.traceSummaries || []).find((candidate) => candidate.spanPath === s.path);
         const hasTrace = traceSpanPaths.has(s.path);
         const outcome = s.terminal || "active";
-        const depthPad = Math.min(depth * 22, 154);
-        return '<div class="tree-row" style="padding-left:' + depthPad + 'px">' +
-          '<div class="tree-node ' + esc(outcome) + (hasTrace ? ' trace-link' : '') + (selectedTraceSpanPath === s.path ? ' selected' : '') + '" data-span-path="' + esc(s.path) + '" data-trace-file="' + esc(trace?.file ?? "") + '" title="' + esc(label + (hasTrace ? " - click to open trace" : "")) + '">' +
+        const bits = s.path === "root" ? "" : s.path;
+        let slot = 0;
+        for (const bit of bits) slot = slot * 2 + (bit === "R" ? 1 : 0);
+        const slots = Math.pow(2, depth);
+        const top = depth === 0 ? 0 : slot / slots * 100;
+        const height = depth === 0 ? 100 : 100 / slots;
+        const left = depth * (columnWidth + columnGap);
+        const pixelHeight = Math.max(30, treeHeight * height / 100 - 8);
+        const compact = pixelHeight < 50;
+        return '<div class="tree-node ' + esc(outcome) + (hasTrace ? ' trace-link' : '') + (selectedTraceSpanPath === s.path ? ' selected' : '') + '" data-span-path="' + esc(s.path) + '" data-trace-file="' + esc(trace?.file ?? "") + '" title="' + esc(label + (hasTrace ? " - click to open trace" : "")) + '" style="left:' + left + 'px;top:calc(' + top + '% + 4px);height:' + pixelHeight + 'px;width:' + columnWidth + 'px">' +
           '<strong><code>' + esc(s.path) + '</code></strong>' +
-          '<span class="small muted">depth ' + esc(depth) + ' · n ' + esc(s.nodeCount ?? "") + ' · ' + esc(Math.round(s.startTime ?? 0)) + '-' + esc(Math.round(s.endTime ?? 0)) + 's</span>' +
-          '<span class="small">tools ' + esc(s.toolCalls) + '</span>' +
-          '<span class="small">rejects ' + esc(s.judgeRejected) + '</span>' +
-          '<span class="outcome ' + esc(outcome) + '">' + esc(outcome) + '</span>' +
-          '</div></div>';
+          (compact ? '' : '<span class="small muted">n ' + esc(s.nodeCount ?? "") + ' · ' + esc(Math.round(s.startTime ?? 0)) + '-' + esc(Math.round(s.endTime ?? 0)) + 's</span>') +
+          '<span class="small">t ' + esc(s.toolCalls) + ' · r ' + esc(s.judgeRejected) + '</span>' +
+          (compact ? '' : '<span class="outcome ' + esc(outcome) + '">' + esc(outcome) + '</span>') +
+          '</div>';
       }).join("");
-      return '<div class="card section" id="tree"><h2>Binary Tree Progress</h2><div class="viz-scroll"><div class="tree">' + (rows || '<div class="muted">No spans yet</div>') + '</div></div></div>';
+      return '<div class="card section" id="tree"><h2>Binary Tree Progress</h2><div class="viz-scroll"><div class="tree" style="width:' + treeWidth + 'px;height:' + treeHeight + 'px;margin-top:18px">' + labels + (rows || '<div class="muted">No spans yet</div>') + '</div></div></div>';
     }
 
     function pct(value, total) {
