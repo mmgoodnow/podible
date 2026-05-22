@@ -23,6 +23,7 @@ const PRUNE_EMPTY_MANIFESTATIONS_MIGRATION_ID = 17;
 const RELEASE_SEARCHES_MIGRATION_ID = 18;
 const DOMAIN_DECISION_NOTES_MIGRATION_ID = 19;
 const MANIFESTATION_CHAPTER_ANALYSIS_MIGRATION_ID = 20;
+const DROP_TRANSCRIPT_FINGERPRINT_MIGRATION_ID = 21;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -112,7 +113,6 @@ CREATE TABLE IF NOT EXISTS chapter_analysis (
   source TEXT NOT NULL,
   algorithm_version TEXT NOT NULL,
   fingerprint TEXT NOT NULL,
-  transcript_fingerprint TEXT NULL,
   chapters_json TEXT NULL,
   debug_json TEXT NULL,
   resolved_boundary_count INTEGER NOT NULL DEFAULT 0,
@@ -707,6 +707,12 @@ ALTER TABLE manifestation_chapter_analysis RENAME TO chapter_analysis;
 `);
 }
 
+function applyDropTranscriptFingerprintMigration(db: Database): void {
+  if (hasColumn(db, "chapter_analysis", "transcript_fingerprint")) {
+    db.exec("ALTER TABLE chapter_analysis DROP COLUMN transcript_fingerprint");
+  }
+}
+
 function applyDomainDecisionNotesMigration(db: Database): void {
   if (!hasColumn(db, "manifestations", "selection_note")) {
     db.exec("ALTER TABLE manifestations ADD COLUMN selection_note TEXT NULL");
@@ -805,5 +811,8 @@ export function runMigrations(db: Database): void {
   });
   apply(MANIFESTATION_CHAPTER_ANALYSIS_MIGRATION_ID, () => {
     applyManifestationChapterAnalysisMigration(db);
+  });
+  apply(DROP_TRANSCRIPT_FINGERPRINT_MIGRATION_ID, () => {
+    applyDropTranscriptFingerprintMigration(db);
   });
 }
