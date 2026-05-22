@@ -491,6 +491,7 @@ function summarizeRun(ref: EventLogRef, includeDetails = true, liveCurationRun =
     status = "interrupted";
   }
   const allSpans = [...spans.values()];
+  const treeSpans = allSpans.filter((span) => span.lastEvent !== "span-auto-leaf" || span.toolCalls > 0 || span.judgeRejected > 0);
   const activeSpans = allSpans
     .filter((span) => !span.terminal)
     .sort((a, b) => (b.toolCalls - a.toolCalls) || String(b.lastAt ?? "").localeCompare(String(a.lastAt ?? "")))
@@ -535,7 +536,7 @@ function summarizeRun(ref: EventLogRef, includeDetails = true, liveCurationRun =
     resultSummary: includeDetails ? summarizeResultFile(resultPath) : null,
     traceFiles: includeDetails ? traceFilesFor(traceDir) : [],
     judgeDecisions: includeDetails ? judgeDecisions.slice(-80).reverse() : [],
-    treeSpans: includeDetails ? allSpans.sort((a, b) => (a.depth ?? 0) - (b.depth ?? 0) || a.path.localeCompare(b.path)) : [],
+    treeSpans: includeDetails ? treeSpans.sort((a, b) => (a.depth ?? 0) - (b.depth ?? 0) || a.path.localeCompare(b.path)) : [],
     treeEdges: includeDetails ? treeEdges : [],
     boundaryMarkers: includeDetails ? [...boundaryMarkers]
       .sort((a, b) => a.startTime - b.startTime || a.title.localeCompare(b.title))
@@ -700,6 +701,7 @@ function html(): string {
       const byDepth = new Map();
       const traceSpanPaths = new Set((run.traceSummaries || []).map((trace) => trace.spanPath).filter(Boolean));
       for (const span of run.treeSpans || []) {
+        if (span.lastEvent === "span-auto-leaf" && !span.toolCalls && !span.judgeRejected) continue;
         const depth = span.depth ?? 0;
         if (!byDepth.has(depth)) byDepth.set(depth, []);
         byDepth.get(depth).push(span);
