@@ -1152,6 +1152,134 @@ describe("podible http", () => {
     }
   });
 
+  test("allows existing non-admin user to log in when owner token is expired", async () => {
+    // Build an expired JWT so checkPlexUserAccess short-circuits with a throw.
+    const expiredJwt = [
+      Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "JWT" })).toString("base64url"),
+      Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) - 3600 })).toString("base64url"),
+      "fake-sig",
+    ].join(".");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.origin === "https://plex.tv" && url.pathname === "/api/v2/pins" && init?.method === "POST") {
+        return new Response(JSON.stringify({ id: 123, code: "PINCODE123" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.origin === "https://plex.tv" && url.pathname === "/api/v2/pins/123") {
+        return new Response(JSON.stringify({ id: 123, code: "PINCODE123", authToken: "non-admin-token" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.origin === "https://plex.tv" && url.pathname === "/api/v2/user") {
+        return new Response(
+          JSON.stringify({ id: "existing-non-admin", username: "alice", title: "Alice" }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      // /api/users should NOT be called because the token is expired
+      throw new Error(`Unexpected external fetch in test: ${url.toString()}`);
+    }) as typeof fetch;
+
+    try {
+      const db = new Database(":memory:");
+      runMigrations(db);
+      const repo = new BooksRepo(db);
+      const settings = repo.ensureSettings();
+      repo.updateSettings({
+        ...settings,
+        auth: {
+          ...settings.auth,
+          mode: "plex",
+          plex: { ...settings.auth.plex, ownerToken: expiredJwt, machineId: "family-server" },
+        },
+      });
+      repo.upsertUser({ provider: "plex", providerUserId: "owner-user", username: "owner", displayName: "Owner", isAdmin: true });
+      repo.upsertUser({ provider: "plex", providerUserId: "existing-non-admin", username: "alice", displayName: "Alice", isAdmin: false });
+
+      const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+      const start = await fetchHandler(new Request("http://app.test/login/plex/start", { method: "POST" }));
+      expect(start.status).toBe(200);
+
+      const complete = await fetchHandler(new Request("http://app.test/login/plex/complete?pinId=123"));
+      expect(complete.status).toBe(200);
+      const body = await complete.text();
+      expect(body.includes("Sign-in complete.")).toBe(true);
+
+      db.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("denies unknown user with re-link message when owner token is expired", async () => {
+    const expiredJwt = [
+      Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "JWT" })).toString("base64url"),
+      Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) - 3600 })).toString("base64url"),
+      "fake-sig",
+    ].join(".");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.origin === "https://plex.tv" && url.pathname === "/api/v2/pins" && init?.method === "POST") {
+        return new Response(JSON.stringify({ id: 123, code: "PINCODE123" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.origin === "https://plex.tv" && url.pathname === "/api/v2/pins/123") {
+        return new Response(JSON.stringify({ id: 123, code: "PINCODE123", authToken: "new-user-token" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.origin === "https://plex.tv" && url.pathname === "/api/v2/user") {
+        return new Response(
+          JSON.stringify({ id: "brand-new-user", username: "newbie", title: "Newbie" }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      throw new Error(`Unexpected external fetch in test: ${url.toString()}`);
+    }) as typeof fetch;
+
+    try {
+      const db = new Database(":memory:");
+      runMigrations(db);
+      const repo = new BooksRepo(db);
+      const settings = repo.ensureSettings();
+      repo.updateSettings({
+        ...settings,
+        auth: {
+          ...settings.auth,
+          mode: "plex",
+          plex: { ...settings.auth.plex, ownerToken: expiredJwt, machineId: "family-server" },
+        },
+      });
+      repo.upsertUser({ provider: "plex", providerUserId: "owner-user", username: "owner", displayName: "Owner", isAdmin: true });
+
+      const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+      const start = await fetchHandler(new Request("http://app.test/login/plex/start", { method: "POST" }));
+      expect(start.status).toBe(200);
+
+      const complete = await fetchHandler(new Request("http://app.test/login/plex/complete?pinId=123"));
+      expect(complete.status).toBe(400);
+      expect(complete.headers.get("set-cookie")).toBeNull();
+      const body = await complete.text();
+      expect(body.includes("owner token has expired")).toBe(true);
+      expect(body.includes("admin needs to re-link")).toBe(true);
+      expect(repo.listUsers("plex")).toHaveLength(1); // only admin, new user not added
+
+      db.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("does not grant admin or rpc access to non-admin browser sessions", async () => {
     const db = new Database(":memory:");
     runMigrations(db);

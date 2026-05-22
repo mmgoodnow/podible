@@ -182,11 +182,24 @@ async function resolvePlexLoginStatus(
         denialReason = "An admin needs to choose which Plex server controls Podible access first.";
       }
     } else {
-      const hasServerAccess =
-        plexUser.id === (existingPlexUsers.find((user) => user.is_admin === 1)?.provider_user_id ?? "")
-          ? true
-          : await checkPlexUserAccess(settings, plexUser.id);
-      allowed = hasServerAccess;
+      const isAdmin =
+        plexUser.id === (existingPlexUsers.find((user) => user.is_admin === 1)?.provider_user_id ?? "");
+      if (isAdmin) {
+        allowed = true;
+      } else {
+        try {
+          allowed = await checkPlexUserAccess(settings, plexUser.id);
+        } catch (err) {
+          // Owner token has expired or was rejected — fall back to the
+          // "no owner token" behaviour: allow already-known users and block
+          // unknown ones with a helpful re-link prompt.
+          console.log(`[plex] checkPlexUserAccess failed (${(err as Error).message}), falling back to existing-user check`);
+          allowed = Boolean(existingPlexUser);
+          if (!allowed) {
+            denialReason = "The Plex owner token has expired. An admin needs to re-link Plex before new users can sign in.";
+          }
+        }
+      }
     }
 
     if (!allowed) {
