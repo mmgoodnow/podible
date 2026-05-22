@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chapter Curation Algorithm</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+      color: #1a1a1a;
+      background: #f7f7f5;
+    }
+
+    .layout {
+      display: flex;
+      min-height: 100vh;
+    }
+
+    nav {
+      width: 240px;
+      flex-shrink: 0;
+      background: #fff;
+      border-right: 1px solid #e5e5e5;
+      padding: 32px 0;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+    }
+
+    nav h2 {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #999;
+      padding: 0 20px 8px;
+    }
+
+    nav a {
+      display: block;
+      padding: 5px 20px;
+      color: #444;
+      text-decoration: none;
+      font-size: 13.5px;
+      border-left: 2px solid transparent;
+    }
+
+    nav a:hover { color: #000; background: #f5f5f3; }
+    nav a.sub { padding-left: 34px; font-size: 13px; color: #666; }
+
+    main {
+      flex: 1;
+      padding: 48px 56px;
+      max-width: 900px;
+    }
+
+    h1 { font-size: 28px; font-weight: 700; margin-bottom: 6px; }
+    .subtitle { color: #666; font-size: 14px; margin-bottom: 48px; }
+
+    h2 {
+      font-size: 20px;
+      font-weight: 700;
+      margin: 48px 0 16px;
+      padding-top: 8px;
+      border-top: 1px solid #e5e5e5;
+    }
+
+    h3 {
+      font-size: 15px;
+      font-weight: 700;
+      margin: 28px 0 10px;
+      color: #111;
+    }
+
+    h4 {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #666;
+      margin: 20px 0 8px;
+    }
+
+    p { margin-bottom: 12px; color: #333; }
+
+    ul, ol { margin: 0 0 12px 20px; color: #333; }
+    li { margin-bottom: 4px; }
+
+    code {
+      font-family: "SF Mono", "Fira Code", Menlo, monospace;
+      font-size: 12.5px;
+      background: #f0f0ed;
+      padding: 1px 5px;
+      border-radius: 4px;
+      color: #c0392b;
+    }
+
+    .agent-card {
+      background: #fff;
+      border: 1px solid #e5e5e5;
+      border-radius: 10px;
+      padding: 24px;
+      margin: 20px 0;
+    }
+
+    .agent-card h3 {
+      margin-top: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 20px;
+      letter-spacing: 0.03em;
+    }
+
+    .badge-classifier { background: #e8f5e9; color: #2e7d32; }
+    .badge-curator    { background: #e3f2fd; color: #1565c0; }
+    .badge-judge      { background: #fce4ec; color: #c62828; }
+
+    .tool-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13.5px;
+      margin: 12px 0 20px;
+    }
+
+    .tool-table th {
+      text-align: left;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #888;
+      padding: 6px 12px;
+      border-bottom: 1px solid #e5e5e5;
+    }
+
+    .tool-table td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #f0f0f0;
+      vertical-align: top;
+    }
+
+    .tool-table tr:last-child td { border-bottom: none; }
+    .tool-table td:first-child { font-family: "SF Mono", "Fira Code", Menlo, monospace; font-size: 12px; color: #c0392b; white-space: nowrap; }
+
+    .callout {
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      border-radius: 8px;
+      padding: 14px 18px;
+      margin: 16px 0;
+      font-size: 14px;
+      color: #78350f;
+    }
+
+    .callout.info {
+      background: #eff6ff;
+      border-color: #bfdbfe;
+      color: #1e3a8a;
+    }
+
+    .flow {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin: 16px 0;
+    }
+
+    .flow-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 10px 14px;
+      background: #fff;
+      border: 1px solid #e5e5e5;
+      border-radius: 8px;
+      font-size: 13.5px;
+    }
+
+    .flow-num {
+      font-size: 11px;
+      font-weight: 700;
+      color: #999;
+      min-width: 20px;
+      padding-top: 2px;
+    }
+
+    .pipeline-step {
+      background: #fff;
+      border: 1px solid #e5e5e5;
+      border-radius: 8px;
+      padding: 14px 18px;
+      margin: 8px 0;
+      font-size: 13.5px;
+    }
+
+    .pipeline-step strong { color: #111; }
+    .pipeline-step .cond { font-size: 12.5px; color: #888; margin-top: 2px; }
+
+    .arrow {
+      text-align: center;
+      color: #ccc;
+      font-size: 18px;
+      line-height: 1;
+      margin: 2px 0;
+    }
+
+    .section-file {
+      font-size: 12px;
+      color: #888;
+      font-family: "SF Mono", "Fira Code", Menlo, monospace;
+      margin-left: auto;
+      font-weight: 400;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin: 12px 0;
+    }
+
+    .stat-box {
+      background: #fff;
+      border: 1px solid #e5e5e5;
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+
+    .stat-box .label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+    .stat-box .value { font-size: 20px; font-weight: 700; color: #111; }
+    .stat-box .desc { font-size: 12px; color: #666; margin-top: 2px; }
+  </style>
+</head>
+<body>
+<div class="layout">
+
+  <nav>
+    <h2>Contents</h2>
+    <a href="#goal">Goal</a>
+    <a href="#pipeline">Pipeline integration</a>
+    <a href="#algorithm">Algorithm overview</a>
+    <a class="sub" href="#phase1">Phase 1 — Node classification</a>
+    <a class="sub" href="#phase2">Phase 2 — Recursive splitting</a>
+    <a class="sub" href="#phase3">Phase 3 — Output</a>
+    <a href="#agents">Agents</a>
+    <a class="sub" href="#agent-classifier">AudibleEpubNodeClassifier</a>
+    <a class="sub" href="#agent-curator">SectionChapterCurator</a>
+    <a class="sub" href="#agent-judge">ChapterBoundaryJudge</a>
+    <a href="#span-tree">Span tree mechanics</a>
+    <a href="#deterministic">Deterministic fast path</a>
+    <a href="#storage">Storage</a>
+    <a href="#files">Source files</a>
+  </nav>
+
+  <main>
+    <h1>Chapter Curation Algorithm</h1>
+    <p class="subtitle">Recursive agentic boundary search for audiobook chapters</p>
+
+    <!-- ─────────────────────────────────────────── GOAL -->
+    <h2 id="goal">Goal</h2>
+
+    <p>
+      Given an audiobook that has both an EPUB and one or more audio assets, produce a list of
+      <strong>chapter start timestamps</strong> — one per EPUB spine node that is actually read aloud — expressed
+      in seconds from the beginning of the combined audio.
+    </p>
+    <p>
+      The core challenge is that audiobook narrators do not always read chapter headings, ASR sometimes drops words,
+      and multi-file audiobooks require combining transcripts with proper time offsets. A simple text-search approach
+      fails often enough that the task is delegated to LLM agents that can reason about evidence quality and retry
+      with different strategies.
+    </p>
+
+    <div class="two-col">
+      <div class="stat-box">
+        <div class="label">Input</div>
+        <div class="value">EPUB + audio</div>
+        <div class="desc">Spine nodes &amp; Whisper transcript utterances</div>
+      </div>
+      <div class="stat-box">
+        <div class="label">Output</div>
+        <div class="value">chapters_json</div>
+        <div class="desc"><code>[{title, startTime}]</code> stored on the first audio asset's <code>chapter_analysis</code> row</div>
+      </div>
+    </div>
+
+    <!-- ─────────────────────────────────────────── PIPELINE -->
+    <h2 id="pipeline">Pipeline integration</h2>
+
+    <p>
+      Curation is triggered automatically as part of the <code>chapter_analysis</code> background job, which runs
+      once per audio asset after its Whisper transcription completes.
+    </p>
+
+    <div class="flow">
+      <div class="pipeline-step">
+        <strong>Audio asset ingested</strong>
+        <div class="cond">→ <code>chapter_analysis</code> job enqueued</div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="pipeline-step">
+        <strong>ffprobe &amp; file scan</strong>
+        <div class="cond">Duration, embedded chapters extracted</div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="pipeline-step">
+        <strong>Whisper transcription</strong>
+        <div class="cond">Stored as <code>asset_transcripts</code> row</div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="pipeline-step">
+        <strong>Prerequisite check</strong>
+        <div class="cond">Only runs from the <em>first</em> audio container's job; requires an EPUB sibling and all containers transcribed</div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="pipeline-step">
+        <strong>Agentic curation</strong>
+        <div class="cond">Runs <code>runRecursiveAgenticChapterCurationDetailed</code></div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="pipeline-step">
+        <strong>Store <code>chapters_json</code></strong>
+        <div class="cond">Written to first audio asset's <code>chapter_analysis.chapters_json</code></div>
+      </div>
+    </div>
+
+    <div class="callout info">
+      At server startup, <code>queuePendingCurationJobs</code> sweeps for books that are already fully transcribed
+      but have no <code>chapters_json</code> and re-enqueues them. This handles books that were ingested before
+      curation was available.
+    </div>
+
+    <!-- ─────────────────────────────────────────── ALGORITHM -->
+    <h2 id="algorithm">Algorithm overview</h2>
+
+    <p>The algorithm runs in three sequential phases:</p>
+
+    <!-- Phase 1 -->
+    <h3 id="phase1">Phase 1 — EPUB node classification</h3>
+
+    <p>
+      The <strong>AudibleEpubNodeClassifier</strong> agent reviews all EPUB spine nodes and the transcript start/end
+      excerpts and filters out nodes that are not spoken in the audio (copyright pages, dedications, table of
+      contents, about-the-author, etc.). It also annotates any <em>audio-only intervals</em> — spans of audio
+      (publisher intros, end credits, part bumpers) that have no corresponding EPUB node.
+    </p>
+    <p>
+      The filtered node list becomes the working set for Phase 2. False exclusions are penalised more than false
+      inclusions, so the agent errs toward keeping uncertain nodes.
+    </p>
+
+    <!-- Phase 2 -->
+    <h3 id="phase2">Phase 2 — Recursive binary splitting</h3>
+
+    <p>
+      The algorithm builds a binary <em>span tree</em> over the filtered EPUB nodes and the audio timeline.
+      Each span covers a contiguous range of EPUB nodes and a corresponding time range. The root span covers all
+      nodes from <code>t=0</code> to the total audio duration.
+    </p>
+    <p>
+      At each non-leaf span the algorithm:
+    </p>
+    <ol>
+      <li>Picks a <strong>target boundary</strong> — the EPUB node whose start timestamp is most uncertain, ranked by proximity to the midpoint of the span's node range.</li>
+      <li>Attempts a <strong>deterministic fast path</strong> (see below) before calling the agent.</li>
+      <li>If deterministic fails, runs the <strong>SectionChapterCurator</strong> agent to find the timestamp.</li>
+      <li>The curator's proposed timestamp is validated by the <strong>ChapterBoundaryJudge</strong> agent.</li>
+      <li>If accepted, the span is split at that timestamp: the left child covers nodes before the boundary, the right child covers nodes from the boundary onward.</li>
+      <li>Left and right children are resolved concurrently (up to 24 spans in-flight at once).</li>
+      <li>If the agent fails or the boundary is rejected, the span becomes a <em>partial leaf</em> and its nodes are divided proportionally by EPUB word count.</li>
+    </ol>
+
+    <div class="callout">
+      The target boundary is always the node closest to the <strong>midpoint</strong> of the span (by node index).
+      This minimises the worst-case tree depth — a binary search pattern — so a book with N chapters needs at most
+      log₂(N) levels of recursion.
+    </div>
+
+    <!-- Phase 3 -->
+    <h3 id="phase3">Phase 3 — Output assembly</h3>
+
+    <p>
+      Leaf spans each contribute one chapter entry: the boundary's confirmed timestamp (or the span's inherited
+      start time if no boundary was found). The full list is deduplicated, sorted, and serialised as
+      <code>[{title: string, startTime: number}]</code> in seconds.
+    </p>
+
+    <!-- ─────────────────────────────────────────── AGENTS -->
+    <h2 id="agents">Agents</h2>
+
+    <p>Three agents are used, all backed by the <strong>OpenAI Agents SDK</strong> with the model configured in
+    Podible settings (defaulting to a GPT-4-class model). Tracing is sent to the OpenAI platform using the same
+    API key.</p>
+
+    <!-- Classifier -->
+    <div class="agent-card" id="agent-classifier">
+      <h3>AudibleEpubNodeClassifier <span class="badge badge-classifier">Phase 1</span></h3>
+      <p>
+        One-shot agent. Reviews EPUB spine nodes and transcript excerpts to decide which nodes are plausible
+        audiobook chapter material. Runs once per book, before the recursive split phase begins.
+      </p>
+
+      <h4>System prompt goals</h4>
+      <ul>
+        <li>Exclude obvious non-audio front/back matter (copyright, dedication, ToC, nav, ads, index, about-author).</li>
+        <li>Keep all uncertain narrative nodes — false exclusions are worse than false inclusions.</li>
+        <li>Identify audio-only intervals (publisher intros, credits, part bumpers) not covered by any EPUB node.</li>
+      </ul>
+
+      <h4>Per-call prompt contents</h4>
+      <ul>
+        <li>Book title and author</li>
+        <li>First ~4,000 chars of transcript</li>
+        <li>Last ~4,000 chars of transcript</li>
+        <li>Boundary excerpts around each asset start, end, and join point (for multi-asset books)</li>
+        <li>All EPUB spine nodes: id, title, href, word count, first 50 words</li>
+      </ul>
+
+      <h4>Tool surface</h4>
+      <table class="tool-table">
+        <thead><tr><th>Tool</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>submitAudibleEpubNodeSelection</td>
+            <td>Terminal tool. Submits the list of included node IDs and any audio-only intervals.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="font-size:13px;color:#666">Max turns: 4</p>
+    </div>
+
+    <!-- Curator -->
+    <div class="agent-card" id="agent-curator">
+      <h3>SectionChapterCurator <span class="badge badge-curator">Phase 2</span></h3>
+      <p>
+        One agent instance per span, instantiated fresh for each boundary search. Its sole job is to find the
+        timestamp where one specific assigned EPUB node begins in the audio. It has access to both the EPUB text
+        and the transcript and must gather evidence before submitting.
+      </p>
+
+      <h4>System prompt goals (10-step workflow)</h4>
+      <ol>
+        <li>Use <code>targetBoundaryContext</code> from the prompt as the starting EPUB opener context.</li>
+        <li>Call <code>researchEpubBoundary</code> first — it searches the assigned node automatically.</li>
+        <li>If research returns a strong opener/near_opener, use that timestamp.</li>
+        <li>Otherwise call <code>getEpubNodeText</code> and try different opener phrases from the same node.</li>
+        <li>Estimate likely position from EPUB word-count ratio; search nearby with <code>rgSearchTranscript</code>.</li>
+        <li>Inspect the best candidate with <code>getTranscriptWindow</code> (radiusSeconds=45 after a rejection).</li>
+        <li>If context looks like pre-target or interior prose, call <code>searchEpubText</code> to classify the phrase.</li>
+        <li><code>submitBoundarySplit</code> is a final evidence-backed claim — not a guess.</li>
+        <li>Only submit once opener evidence is confirmed; include proof in evidence/notes fields.</li>
+        <li>After any rejection, run a fresh transcript search before retrying.</li>
+      </ol>
+
+      <h4>Per-call prompt contents</h4>
+      <ul>
+        <li>Book title and author</li>
+        <li>Current span: time range, EPUB node range, path in tree</li>
+        <li>Target boundary: EPUB node id, title, expected timestamp, first/last words</li>
+        <li>Neighbouring node context (previous tail text, next head text)</li>
+        <li>Embedded audio chapter markers (if present in the audio file)</li>
+        <li>Any audio-only intervals identified by the classifier</li>
+      </ul>
+
+      <h4>Tool surface</h4>
+      <table class="tool-table">
+        <thead><tr><th>Tool</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>researchEpubBoundary</td>
+            <td>All-in-one research tool. Generates opener phrase variants from the assigned EPUB node, searches the transcript in a radius around the expected time, returns hits, windows, and reverse classification (opener / near_opener / interior / pre_target / post_target).</td>
+          </tr>
+          <tr>
+            <td>getEpubNodeText</td>
+            <td>Returns full or windowed text of the assigned EPUB node plus exact-search phrase variants. Locked to the target node — cannot retrieve other nodes.</td>
+          </tr>
+          <tr>
+            <td>searchEpubText</td>
+            <td>Reverse-search: given a transcript phrase, classifies where it falls relative to the target node (opener, near_opener, interior, pre_target, post_target).</td>
+          </tr>
+          <tr>
+            <td>rgSearchTranscript</td>
+            <td>Ripgrep search over transcript utterances within this span. Accepts a time scope (seconds).</td>
+          </tr>
+          <tr>
+            <td>fuzzySearchTranscript</td>
+            <td>Fuzzy search over transcript utterances within this span. Useful when ASR has transcription errors.</td>
+          </tr>
+          <tr>
+            <td>getTranscriptWindow</td>
+            <td>Returns transcript utterances around a specific timestamp within this span. Used to inspect a candidate before submitting.</td>
+          </tr>
+          <tr>
+            <td>submitBoundarySplit</td>
+            <td>Terminal tool. Submits the confirmed start timestamp for the assigned EPUB node. Triggers judge validation.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="font-size:13px;color:#666">
+        Max turns: 64 &nbsp;·&nbsp;
+        On max-turns error, advances to the next-closest target boundary candidate and retries with a fallback model.
+      </p>
+    </div>
+
+    <!-- Judge -->
+    <div class="agent-card" id="agent-judge">
+      <h3>ChapterBoundaryJudge <span class="badge badge-judge">Phase 2</span></h3>
+      <p>
+        Called once per curator submission. Reviews the proposed timestamp against a pre-built boundary comparison
+        object (transcript before/after, EPUB tail/head text, precision metadata) and accepts or rejects.
+        Does <em>not</em> suggest alternatives — only accepts or rejects.
+      </p>
+
+      <h4>System prompt goals</h4>
+      <ul>
+        <li>Compare <code>previousEpub.tailText</code> to <code>transcriptBefore</code> and <code>targetEpub.bodyHeadText</code> to <code>transcriptAfter</code>.</li>
+        <li>Accept when <code>transcriptBefore</code> matches the previous EPUB tail and <code>transcriptAfter</code> begins with the target body opener, even if the printed heading is absent from ASR.</li>
+        <li>Reject when opener evidence is absent, offset, generic, interior, or only a near-match.</li>
+        <li>Handle word-precision vs utterance-precision timestamps differently (utterance-precision means the boundary may fall inside a displayed utterance).</li>
+        <li>Use structured evidence terms in rejection reasons, not narrative terms.</li>
+      </ul>
+
+      <h4>Per-call prompt contents</h4>
+      <ul>
+        <li>Book title and author</li>
+        <li>The curator's proposed <code>epubNodeId</code>, <code>title</code>, <code>startTime</code>, and notes</li>
+        <li>Boundary comparison: previous EPUB tail text, target EPUB head/body text, optional heading text</li>
+        <li>Transcript window before and after the proposed timestamp</li>
+        <li>Evidence candidates with quality scores</li>
+        <li>Transcript precision (<code>word</code> or <code>utterance</code>) and nearest clean boundary times</li>
+      </ul>
+
+      <h4>Tool surface</h4>
+      <table class="tool-table">
+        <thead><tr><th>Tool</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>submitBoundaryJudgment</td>
+            <td>Terminal tool. Submits <code>accepted: true/false</code>, an evidence classification, and optional notes.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="font-size:13px;color:#666">Max turns: single-turn (no iterative tool use)</p>
+    </div>
+
+    <!-- ─────────────────────────────────────────── SPAN TREE -->
+    <h2 id="span-tree">Span tree mechanics</h2>
+
+    <h3>Span data structure</h3>
+    <p>Each span carries:</p>
+    <ul>
+      <li><code>epubStartIndex</code> / <code>epubEndIndex</code> — index range into the filtered EPUB node array</li>
+      <li><code>startTime</code> / <code>endTime</code> — time range in seconds</li>
+      <li><code>depth</code> — tree depth (root = 0)</li>
+      <li><code>path</code> — human-readable path: <code>root</code>, <code>L</code>, <code>R</code>, <code>LL</code>, <code>LR</code>, …</li>
+      <li><code>startBoundary</code> — the confirmed split that created this span's left edge (if any)</li>
+    </ul>
+
+    <h3>Target boundary selection</h3>
+    <p>
+      Candidate boundaries are all EPUB nodes strictly between <code>epubStartIndex</code> and
+      <code>epubEndIndex</code>. They are ranked by how close they are to the <strong>midpoint of the node index range</strong>,
+      with ties broken by index order. The closest-to-midpoint node is selected first, giving a balanced binary
+      search pattern.
+    </p>
+
+    <h3>Leaf conditions</h3>
+    <ul>
+      <li><strong>Auto-leaf:</strong> Span has only one EPUB node (no internal boundaries). Contributes one chapter at the span's start time.</li>
+      <li><strong>Partial leaf:</strong> Span has internal boundaries but curation failed (no decision, wrong target, or agent error). All internal nodes get timestamps proportional to their EPUB word-count position within the span.</li>
+    </ul>
+
+    <h3>Concurrency</h3>
+    <p>
+      Left and right child spans are resolved concurrently using <code>Promise.all</code>. A semaphore caps
+      active agent calls at 24 to avoid rate-limit errors. With a balanced tree this means many spans at the
+      same depth run in parallel.
+    </p>
+
+    <!-- ─────────────────────────────────────────── DETERMINISTIC FAST PATH -->
+    <h2 id="deterministic">Deterministic fast path</h2>
+
+    <p>Before invoking the curator agent, the algorithm tries to resolve a boundary without an LLM call:</p>
+
+    <ol>
+      <li>
+        <strong>Embedded audio chapters:</strong> If the audio file itself contains chapter markers (e.g. from
+        an Audible M4B), and the embedded marker can be matched to the target EPUB node with high confidence,
+        that timestamp is used directly.
+      </li>
+      <li>
+        <strong>Inherited boundary tolerance:</strong> If the target boundary's expected timestamp is within
+        2 seconds of an already-confirmed boundary from a sibling span, the confirmed timestamp is inherited
+        rather than re-searched.
+      </li>
+      <li>
+        <strong>Spoken heading search:</strong> A quick ripgrep + fuzzy search for the target node's heading
+        text near the expected position. If a high-confidence match is found and it passes a lightweight
+        plausibility check (not mid-sentence, not interior prose), it is used without calling the agent.
+      </li>
+    </ol>
+
+    <div class="callout info">
+      The deterministic path is tried first on every span. For books with reliable embedded chapters or
+      clear spoken headings, curation may complete with zero or very few agent calls.
+    </div>
+
+    <!-- ─────────────────────────────────────────── STORAGE -->
+    <h2 id="storage">Storage</h2>
+
+    <p>
+      Results are stored on the <strong>first audio asset's</strong> <code>chapter_analysis</code> row in the
+      SQLite database:
+    </p>
+    <ul>
+      <li><code>chapters_json</code> — JSON array of <code>{title: string, startTime: number}</code> objects, times in seconds from the start of the combined audio.</li>
+      <li><code>status</code> — set to <code>succeeded</code> after curation completes (or <code>failed</code> on error).</li>
+    </ul>
+
+    <p>
+      The <code>buildTranscriptProposedChapterTimings</code> function in <code>media.ts</code> reads this row
+      and converts it into <code>ChapterTiming[]</code> objects (with <code>startMs</code>/<code>endMs</code>)
+      for use by the media layer and the app's chapter display.
+    </p>
+
+    <p>Debug trace files for each span are written to the library root during a curation run, allowing
+    post-hoc inspection of agent inputs, tool calls, and decisions.</p>
+
+    <!-- ─────────────────────────────────────────── FILES -->
+    <h2 id="files">Source files</h2>
+
+    <table class="tool-table">
+      <thead><tr><th>File</th><th>Contents</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>src/library/chapter-curation-runner.ts</td>
+          <td>Agent definitions, per-span curator agent, recursive run entry point, tracing setup.</td>
+        </tr>
+        <tr>
+          <td>src/library/chapter-curation-validation.ts</td>
+          <td>Span tree logic: <code>resolveRecursiveChapterSpans</code>, <code>rankTargetBoundaries</code>, <code>splitSpan</code>, leaf handling, tool-use behavior guards.</td>
+        </tr>
+        <tr>
+          <td>src/library/chapter-curation-tools.ts</td>
+          <td>Tool implementations: transcript search, EPUB text retrieval, boundary research, fuzzy search, evidence classification.</td>
+        </tr>
+        <tr>
+          <td>src/library/chapter-analysis.ts</td>
+          <td>Job pipeline: prerequisite checks, <code>tryAgenticCuration</code>, <code>queuePendingCurationJobs</code>, storage.</td>
+        </tr>
+        <tr>
+          <td>src/library/media.ts</td>
+          <td><code>buildTranscriptProposedChapterTimings</code> — reads <code>chapters_json</code> and converts to <code>ChapterTiming[]</code>.</td>
+        </tr>
+        <tr>
+          <td>src/repo.ts</td>
+          <td><code>listBookIdsNeedingCuration</code>, <code>getChapterAnalysis</code>, <code>upsertChapterAnalysis</code>.</td>
+        </tr>
+      </tbody>
+    </table>
+
+  </main>
+</div>
+</body>
+</html>
