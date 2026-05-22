@@ -1719,7 +1719,7 @@ function automaticLeafChapters(ctx: Pick<ChapterCurationContext, "epubEntries">,
   return [{ title: entry.title, startTime: span.startTime, epubNodeId: entry.id }];
 }
 
-function chooseTargetBoundary(ctx: Pick<ChapterCurationContext, "epubEntries">, span: ChapterCurationSpan): ChapterCurationTargetBoundary | null {
+function rankTargetBoundaries(ctx: Pick<ChapterCurationContext, "epubEntries">, span: ChapterCurationSpan): ChapterCurationTargetBoundary[] {
   const candidates: ChapterCurationTargetBoundary[] = [];
   const nodeCount = Math.max(1, span.epubEndIndex - span.epubStartIndex + 1);
   for (let index = span.epubStartIndex + 1; index <= span.epubEndIndex; index++) {
@@ -1735,8 +1735,11 @@ function chooseTargetBoundary(ctx: Pick<ChapterCurationContext, "epubEntries">, 
       localNodeRatio: Math.round(localNodeRatio * 1000) / 1000,
     });
   }
-  if (candidates.length === 0) return null;
-  return candidates.sort((a, b) => Math.abs(a.localNodeRatio - 0.5) - Math.abs(b.localNodeRatio - 0.5) || a.epubIndex - b.epubIndex)[0] ?? null;
+  return candidates.sort((a, b) => Math.abs(a.localNodeRatio - 0.5) - Math.abs(b.localNodeRatio - 0.5) || a.epubIndex - b.epubIndex);
+}
+
+function chooseTargetBoundary(ctx: Pick<ChapterCurationContext, "epubEntries">, span: ChapterCurationSpan): ChapterCurationTargetBoundary | null {
+  return rankTargetBoundaries(ctx, span)[0] ?? null;
 }
 
 function spanDurationSeconds(span: ChapterCurationSpan): number {
@@ -3696,6 +3699,11 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
         const configuredCuratorModel = curationCtx.settings.agents.model;
         const attemptModels = Array.from(new Set([primaryCuratorModel, configuredCuratorModel].filter(Boolean)));
         const attempts = attemptModels.map((model, index) => ({ model, delayMs: index === 0 ? 0 : 15_000 }));
+        // Pre-rank all candidate target boundaries so we can advance to the next one on max-turns failures.
+        const rankedTargets = rankTargetBoundaries(curationCtx, span);
+        let targetBoundaryIndex = rankedTargets.findIndex((t) => t.epubNodeId === targetBoundary.epubNodeId);
+        if (targetBoundaryIndex < 0) targetBoundaryIndex = 0;
+        let currentTargetBoundary = targetBoundary;
         for (let attempt = 0; attempt < attempts.length; attempt++) {
           const attemptConfig = attempts[attempt]!;
           if (attemptConfig.delayMs > 0) {
@@ -3712,14 +3720,15 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
           if (attempt > 0) {
             logChapterCurationEvent(curationCtx, {
               type: "span-retry-model-upgrade",
-              message: `recursive span=${span.path} retry=${attempt} model=${attemptConfig.model}`,
+              message: `recursive span=${span.path} retry=${attempt} model=${attemptConfig.model} target=${currentTargetBoundary.epubNodeId}`,
               span,
               attempt,
               model: attemptConfig.model,
+              targetBoundary: currentTargetBoundary,
             });
           }
           try {
-            const spanResult = await runner.run(createRecursiveSpanCuratorAgent(curationCtx, span, targetBoundary, attemptConfig.model), spanPrompt(curationCtx, span, targetBoundary), {
+            const spanResult = await runner.run(createRecursiveSpanCuratorAgent(curationCtx, span, currentTargetBoundary, attemptConfig.model), spanPrompt(curationCtx, span, currentTargetBoundary), {
               maxTurns: 64,
               signal: abort.signal,
               toolExecution: { maxFunctionToolConcurrency: recursiveMaxSpanConcurrency },
@@ -3734,7 +3743,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
             const elapsedMs = Date.now() - startedAt;
             const tracePayload = {
               span,
-              targetBoundary,
+              targetBoundary: currentTargetBoundary,
               attempt: attempt + 1,
               elapsedMs,
               finalOutput: spanResult.finalOutput,
@@ -3745,7 +3754,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
             recursiveSpanTraces.push({
               path: span.path,
               depth: span.depth,
-              targetBoundary,
+              targetBoundary: currentTargetBoundary,
               finalOutput: spanResult.finalOutput,
               newItems: spanResult.newItems as unknown[],
               rawResponses: spanResult.rawResponses as unknown[],
@@ -3799,6 +3808,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
               rawResponses: [],
               error: serializedError,
             });
+            const isMaxTurns = maxTurnsAgentError(error);
             logChapterCurationEvent(curationCtx, {
               type: "span-error",
               message: `recursive span=${span.path} elapsed_ms=${elapsedMs} attempt=${attempt + 1} model=${attemptConfig.model} error=${JSON.stringify(message)}`,
@@ -3806,11 +3816,32 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
               attempt: attempt + 1,
               elapsedMs,
               model: attemptConfig.model,
-              retryable: retryableAgentError(error) || maxTurnsAgentError(error),
+              retryable: retryableAgentError(error) || isMaxTurns,
               tracePath,
               error: serializedError,
             });
-            if (attempt < attempts.length - 1 && (retryableAgentError(error) || maxTurnsAgentError(error))) continue;
+            if (attempt < attempts.length - 1 && (retryableAgentError(error) || isMaxTurns)) {
+              // On max-turns failures, advance to the next-ranked target boundary so the retry
+              // targets a different (usually adjacent) chapter. This minimizes the failing section
+              // to the smallest possible span rather than burning another attempt on the same hard target.
+              if (isMaxTurns) {
+                const nextIndex = targetBoundaryIndex + 1;
+                const nextTarget = rankedTargets[nextIndex];
+                if (nextTarget) {
+                  logChapterCurationEvent(curationCtx, {
+                    type: "span-retry-advance-target",
+                    message: `recursive span=${span.path} retry=${attempt + 1} max_turns=1 advancing target from ${currentTargetBoundary.epubNodeId} to ${nextTarget.epubNodeId}`,
+                    span,
+                    attempt: attempt + 1,
+                    previousTargetBoundary: currentTargetBoundary,
+                    nextTargetBoundary: nextTarget,
+                  });
+                  targetBoundaryIndex = nextIndex;
+                  currentTargetBoundary = nextTarget;
+                }
+              }
+              continue;
+            }
             recursiveReports.push({
               ...span,
               outcome: "failed",
