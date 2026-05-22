@@ -768,9 +768,7 @@ function html(): string {
         const compact = pixelHeight < 50;
         return '<div class="tree-node ' + esc(outcome) + (hasTrace ? ' trace-link' : '') + (selectedTraceSpanPath === s.path ? ' selected' : '') + '" data-span-path="' + esc(s.path) + '" data-trace-file="' + esc(trace?.file ?? "") + '" title="' + esc(label + (hasTrace ? " - click to open trace" : "")) + '" style="left:' + left + 'px;top:calc(' + top + '% + 4px);height:' + pixelHeight + 'px;width:' + columnWidth + 'px">' +
           '<strong><code>' + esc(s.path) + '</code></strong>' +
-          (compact ? '' : '<span class="small muted">n ' + esc(s.nodeCount ?? "") + ' · ' + esc(Math.round(s.startTime ?? 0)) + '-' + esc(Math.round(s.endTime ?? 0)) + 's</span>') +
-          '<span class="small">t ' + esc(s.toolCalls) + ' · r ' + esc(s.judgeRejected) + '</span>' +
-          (compact ? '' : '<span class="outcome ' + esc(outcome) + '">' + esc(outcome) + '</span>') +
+          '<span class="small">n ' + esc(s.nodeCount ?? "") + ' · t ' + esc(s.toolCalls) + ' · r ' + esc(s.judgeRejected) + '</span>' +
           '</div>';
       }).join("");
       return '<div class="card section" id="tree"><h2>Binary Tree Progress</h2><div class="viz-scroll"><div class="tree" style="width:' + treeWidth + 'px;height:' + treeHeight + 'px;margin-top:18px">' + labels + (rows || '<div class="muted">No spans yet</div>') + '</div></div></div>';
