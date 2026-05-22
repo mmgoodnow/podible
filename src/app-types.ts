@@ -15,7 +15,7 @@ export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancell
 export type ChapterAnalysisStatus = "pending" | "succeeded" | "failed";
 export type AssetTranscriptStatus = "pending" | "succeeded" | "failed";
 
-export type AssetKind = "single" | "multi" | "ebook";
+export type AssetKind = "single" | "multi";
 
 export type AuthMode = "plex";
 export type AuthProvider = "plex" | "local";

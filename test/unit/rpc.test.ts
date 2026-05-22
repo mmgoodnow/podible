@@ -253,7 +253,7 @@ describe("json-rpc handler", () => {
     const importedEbookManifestation = repo.addManifestation({ bookId: imported.id, kind: "ebook" });
     repo.addAsset({
       bookId: imported.id,
-      kind: "ebook",
+      kind: "single",
       mime: "application/epub+zip",
       totalSize: 100,
       sourceReleaseId: importedEbook.id,
@@ -420,7 +420,7 @@ describe("json-rpc handler", () => {
     const ebookManifestation = repo.addManifestation({ bookId: book.id, kind: "ebook" });
     repo.addAsset({
       bookId: book.id,
-      kind: "ebook",
+      kind: "single",
       mime: "application/epub+zip",
       totalSize: 123,
       sourceReleaseId: release.id,
@@ -1396,7 +1396,7 @@ describe("json-rpc handler", () => {
       const manifestation = repo.addManifestation({ bookId: book.id, kind: "ebook" });
       repo.addAsset({
         bookId: book.id,
-        kind: "ebook",
+        kind: "single",
         mime: "application/epub+zip",
         totalSize: 123,
         sourceReleaseId: ebookRelease.id,
@@ -1572,7 +1572,7 @@ describe("json-rpc handler", () => {
     expect(imported.result.release.status).toBe("imported");
     const assets = repo.listAssetsByBook(book.id);
     expect(assets.length).toBe(1);
-    expect(assets[0].kind).toBe("ebook");
+    expect(assets[0].kind).toBe("single");
     const files = repo.getAssetFiles(assets[0].id);
     expect(files.length).toBe(1);
     expect(path.basename(files[0].path)).toContain("Box Set.pdf");

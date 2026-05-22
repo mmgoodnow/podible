@@ -25,6 +25,7 @@ const DOMAIN_DECISION_NOTES_MIGRATION_ID = 19;
 const MANIFESTATION_CHAPTER_ANALYSIS_MIGRATION_ID = 20;
 const DROP_TRANSCRIPT_FINGERPRINT_MIGRATION_ID = 21;
 const MANIFESTATION_TRANSCRIPTS_MIGRATION_ID = 22;
+const DROP_ASSET_EBOOK_KIND_MIGRATION_ID = 23;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -65,7 +66,7 @@ CREATE TABLE IF NOT EXISTS releases (
 CREATE TABLE IF NOT EXISTS assets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   book_id INTEGER NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('single', 'multi', 'ebook')),
+  kind TEXT NOT NULL CHECK (kind IN ('single', 'multi')),
   mime TEXT NOT NULL,
   total_size INTEGER NOT NULL,
   duration_ms INTEGER NULL,
@@ -731,6 +732,42 @@ DROP TABLE IF EXISTS asset_transcripts;
 `);
 }
 
+function applyDropAssetEbookKindMigration(db: Database): void {
+  // SQLite can't drop CHECK constraints in-place; recreate the assets table
+  // with kind restricted to ('single', 'multi'). Ebook assets existed only
+  // because kind was the sole way to distinguish audio from ebook containers;
+  // now manifestation.kind carries that signal. Migrate existing ebook-kind
+  // assets to 'single' (they always have exactly one file).
+  db.exec(`
+    CREATE TABLE assets_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      book_id INTEGER NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('single', 'multi')),
+      mime TEXT NOT NULL,
+      total_size INTEGER NOT NULL,
+      duration_ms INTEGER NULL,
+      source_release_id INTEGER NULL,
+      import_note TEXT NULL,
+      manifestation_id INTEGER NULL REFERENCES manifestations(id) ON DELETE CASCADE,
+      sequence_in_manifestation INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+      FOREIGN KEY (source_release_id) REFERENCES releases(id) ON DELETE SET NULL
+    );
+    INSERT INTO assets_new SELECT
+      id, book_id,
+      CASE WHEN kind = 'ebook' THEN 'single' ELSE kind END,
+      mime, total_size, duration_ms, source_release_id, import_note,
+      manifestation_id, sequence_in_manifestation, created_at, updated_at
+    FROM assets;
+    DROP TABLE assets;
+    ALTER TABLE assets_new RENAME TO assets;
+    CREATE INDEX IF NOT EXISTS idx_assets_book_created ON assets(book_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_assets_manifestation ON assets(manifestation_id, sequence_in_manifestation);
+  `);
+}
+
 function applyDomainDecisionNotesMigration(db: Database): void {
   if (!hasColumn(db, "manifestations", "selection_note")) {
     db.exec("ALTER TABLE manifestations ADD COLUMN selection_note TEXT NULL");
@@ -835,5 +872,8 @@ export function runMigrations(db: Database): void {
   });
   apply(MANIFESTATION_TRANSCRIPTS_MIGRATION_ID, () => {
     applyManifestationTranscriptsMigration(db);
+  });
+  apply(DROP_ASSET_EBOOK_KIND_MIGRATION_ID, () => {
+    applyDropAssetEbookKindMigration(db);
   });
 }

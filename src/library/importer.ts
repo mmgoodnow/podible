@@ -193,7 +193,7 @@ function pickEbookCandidate(files: FileInfo[]): { kind: AssetKind; files: FileIn
   const epub = files.find((file) => file.ext === ".epub");
   if (epub) {
     return {
-      kind: "ebook",
+      kind: "single",
       files: [epub],
       mime: "application/epub+zip",
     };
@@ -201,7 +201,7 @@ function pickEbookCandidate(files: FileInfo[]): { kind: AssetKind; files: FileIn
   const pdf = files.find((file) => file.ext === ".pdf");
   if (pdf) {
     return {
-      kind: "ebook",
+      kind: "single",
       files: [pdf],
       mime: "application/pdf",
     };

@@ -188,7 +188,7 @@ export const releaseRowSchema = z.object({
 export const assetRowSchema = z.object({
   id: positiveIntSchema,
   book_id: positiveIntSchema,
-  kind: z.enum(["single", "multi", "ebook"]),
+  kind: z.enum(["single", "multi"]),
   mime: z.string(),
   total_size: z.number().int().nonnegative(),
   duration_ms: z.number().int().nullable(),

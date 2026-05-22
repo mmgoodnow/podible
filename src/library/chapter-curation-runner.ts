@@ -583,7 +583,7 @@ function containerDurationMs(container: ChapterCurationContext["containers"][num
 }
 
 function audioAssetBoundaryExcerpts(ctx: ChapterCurationContext): Array<Record<string, unknown>> {
-  const containers = orderedCurationContainers(ctx).filter((container) => container.asset.kind !== "ebook");
+  const containers = orderedCurationContainers(ctx);
   const excerpts: Array<Record<string, unknown>> = [];
   let offsetMs = 0;
   for (const [index, container] of containers.entries()) {

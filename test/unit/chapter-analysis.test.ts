@@ -436,7 +436,7 @@ describe("chapter analysis", () => {
       });
       const ebookAsset = repo.addAsset({
         bookId: book.id,
-        kind: "ebook",
+        kind: "single",
         mime: "application/epub+zip",
         totalSize: 100,
         manifestationId: ebookManifestation.id,

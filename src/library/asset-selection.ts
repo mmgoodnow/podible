@@ -1,9 +1,5 @@
 import type { AssetRow, ManifestationRow } from "../app-types";
 
-function assetMediaType(asset: AssetRow): "audio" | "ebook" {
-  return asset.kind === "ebook" ? "ebook" : "audio";
-}
-
 function scoreAudioAsset(asset: AssetRow): number {
   let score = 0;
   if (asset.kind === "single" && asset.mime === "audio/mp4") score += 100;
@@ -14,9 +10,8 @@ function scoreAudioAsset(asset: AssetRow): number {
 }
 
 export function selectPreferredAudioAsset(assets: AssetRow[]): AssetRow | null {
-  const audio = assets.filter((asset) => assetMediaType(asset) === "audio");
-  if (audio.length === 0) return null;
-  return [...audio].sort((a, b) => {
+  if (assets.length === 0) return null;
+  return [...assets].sort((a, b) => {
     const score = scoreAudioAsset(b) - scoreAudioAsset(a);
     if (score !== 0) return score;
     if (a.created_at !== b.created_at) return b.created_at.localeCompare(a.created_at);

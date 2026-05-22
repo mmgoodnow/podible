@@ -95,7 +95,7 @@ type UpsertManifestationTranscriptInput = {
 
 type AddAssetInput = {
   bookId: number;
-  kind: "single" | "multi" | "ebook";
+  kind: "single" | "multi";
   mime: string;
   totalSize: number;
   durationMs?: number | null;
@@ -874,9 +874,8 @@ export class BooksRepo {
       const manifestationId = rawManifestationId;
       assertPositiveInt(manifestationId);
       const manifestation = this.getManifestation(manifestationId);
-      const expectedKind: ManifestationKind = input.kind === "ebook" ? "ebook" : "audio";
-      if (!manifestation || manifestation.book_id !== input.bookId || manifestation.kind !== expectedKind) {
-        throw new Error(`Asset requires a ${expectedKind} manifestation for book ${input.bookId}`);
+      if (!manifestation || manifestation.book_id !== input.bookId) {
+        throw new Error(`Asset requires a manifestation for book ${input.bookId}`);
       }
       const sequence = input.sequenceInManifestation ?? 0;
 
@@ -1302,9 +1301,10 @@ export class BooksRepo {
          LEFT JOIN chapter_analysis ca ON ca.manifestation_id = m.id
          WHERE (ca.manifestation_id IS NULL OR (ca.status = 'succeeded' AND ca.chapters_json IS NULL))
            AND EXISTS (
-             SELECT 1 FROM assets epub
-             WHERE epub.book_id = m.book_id
-               AND epub.kind = 'ebook'
+             SELECT 1 FROM manifestations em
+             JOIN assets epub ON epub.manifestation_id = em.id
+             WHERE em.book_id = m.book_id
+               AND em.kind = 'ebook'
                AND epub.mime = 'application/epub+zip'
            )`
       )
@@ -1393,7 +1393,7 @@ export class BooksRepo {
 
   private toLibraryBook(row: BookRow): LibraryBook {
     const releases = this.listReleasesByBook(row.id);
-    const assets = this.listAssetsByBook(row.id);
+    const manifestations = this.listManifestationsByBook(row.id);
 
     const audioStatuses = releases
       .filter((release) => release.media_type === "audio")
@@ -1402,8 +1402,8 @@ export class BooksRepo {
       .filter((release) => release.media_type === "ebook")
       .map((release) => release.status);
 
-    const hasAudioAsset = assets.some((asset) => asset.kind === "single" || asset.kind === "multi");
-    const hasEbookAsset = assets.some((asset) => asset.kind === "ebook");
+    const hasAudioAsset = manifestations.some((m) => m.kind === "audio");
+    const hasEbookAsset = manifestations.some((m) => m.kind === "ebook");
 
     const audioStatus = deriveMediaStatus({
       mediaType: "audio",

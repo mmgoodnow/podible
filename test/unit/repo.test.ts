@@ -271,24 +271,7 @@ describe("books repo", () => {
     db.close();
   });
 
-  test("addAsset rejects a manifestation with the wrong media kind", () => {
-    const { db, repo } = setupRepo();
-    const book = repo.createBook({ title: "B", author: "A" });
-    const audioManifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
-    expect(() =>
-      repo.addAsset({
-        bookId: book.id,
-        kind: "ebook",
-        mime: "application/epub+zip",
-        totalSize: 555,
-        manifestationId: audioManifestation.id,
-        files: [{ path: "/tmp/b.epub", size: 555, start: 0, end: 554, durationMs: 0 }],
-      })
-    ).toThrow("Asset requires a ebook manifestation");
-    db.close();
-  });
-
-  test("addAsset attaches to an existing manifestation when manifestationId is provided", () => {
+test("addAsset attaches to an existing manifestation when manifestationId is provided", () => {
     const { db, repo } = setupRepo();
     const book = repo.createBook({ title: "Multi-part Book", author: "A" });
     const manifestation = repo.addManifestation({

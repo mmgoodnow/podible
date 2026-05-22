@@ -190,7 +190,7 @@ export async function scanLibraryRoot(repo: BooksRepo, libraryRoot: string): Pro
         });
         repo.addAsset({
           bookId: book.id,
-          kind: "ebook",
+          kind: "single",
           mime: ebook.ext === ".pdf" ? "application/pdf" : "application/epub+zip",
           totalSize: ebook.size,
           durationMs: null,

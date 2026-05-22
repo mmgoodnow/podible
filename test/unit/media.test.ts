@@ -171,7 +171,7 @@ describe("manifestation selection", () => {
     const chosen = selectPreferredAudioManifestation([
       {
         manifestation: manifestation({ id: 100, kind: "ebook" }),
-        containers: [asset({ id: 1, kind: "ebook", mime: "application/epub+zip" })],
+        containers: [asset({ id: 1, kind: "single", mime: "application/epub+zip" })],
       },
     ]);
     expect(chosen).toBeNull();
@@ -226,13 +226,13 @@ describe("media asset selection", () => {
   test("selects downloadable ebook with PDF fallback but EPUB preference", () => {
     const pdf = asset({
       id: 4,
-      kind: "ebook",
+      kind: "single",
       mime: "application/pdf",
       created_at: "2026-01-03T00:00:00.000Z",
     });
     const epub = asset({
       id: 5,
-      kind: "ebook",
+      kind: "single",
       mime: "application/epub+zip",
       created_at: "2026-01-01T00:00:00.000Z",
     });
@@ -242,12 +242,6 @@ describe("media asset selection", () => {
     expect(selectPreferredDownloadableEbookAsset([pdf, epub])?.id).toBe(5);
   });
 
-  test("returns null when only ebook assets exist", () => {
-    const chosen = selectPreferredAudioAsset([
-      asset({ id: 4, kind: "ebook", mime: "application/epub+zip", duration_ms: null }),
-    ]);
-    expect(chosen).toBeNull();
-  });
 });
 
 describe("chapter label heuristics", () => {

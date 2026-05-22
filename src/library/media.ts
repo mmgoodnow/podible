@@ -58,7 +58,7 @@ export function streamExtension(asset: AssetRow): string {
 }
 
 export function streamExtensionForManifestation(containers: Array<{ asset: AssetRow }>): string {
-  const primary = containers.find((container) => container.asset.kind !== "ebook")?.asset;
+  const primary = containers[0]?.asset;
   return primary ? streamExtension(primary) : "bin";
 }
 
@@ -71,7 +71,7 @@ export function manifestationDurationMs(
   containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>
 ): number | null {
   if (manifestation.duration_ms !== null) return manifestation.duration_ms;
-  const audioContainers = containers.filter((container) => container.asset.kind !== "ebook");
+  const audioContainers = containers;
   if (audioContainers.length === 0) return null;
   return audioContainers.reduce((sum, container) => sum + containerDurationMs(container.asset, container.files), 0);
 }
@@ -103,7 +103,6 @@ function flattenAudioFiles(containers: Array<{ asset: AssetRow; files: AssetFile
 }
 
 async function buildFallbackChapterTimings(asset: AssetRow, files: AssetFileRow[]): Promise<ChapterTiming[] | null> {
-  if (asset.kind === "ebook") return null;
   if (asset.kind === "single") {
     const file = files[0];
     if (!file) return null;
@@ -198,7 +197,6 @@ export function applyTranscriptLabels(timings: ChapterTiming[], utterances: Stor
 async function buildChapterTimings(repo: BooksRepo, asset: AssetRow, files: AssetFileRow[]): Promise<ChapterTiming[] | null> {
   const timings = await buildFallbackChapterTimings(asset, files);
   if (!timings || timings.length === 0) return timings;
-  if (asset.kind === "ebook") return timings;
   const manifestationId = asset.manifestation_id;
   const transcript = manifestationId != null ? await loadStoredManifestationTranscriptPayload(repo, manifestationId).catch(() => null) : null;
   const utterances =
@@ -212,7 +210,7 @@ async function buildChapterTimings(repo: BooksRepo, asset: AssetRow, files: Asse
 }
 
 async function buildManifestationFallbackChapterTimings(containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>): Promise<ChapterTiming[] | null> {
-  const audioContainers = containers.filter((container) => container.asset.kind !== "ebook");
+  const audioContainers = containers;
   if (audioContainers.length === 0) return null;
 
   const out: ChapterTiming[] = [];
@@ -260,7 +258,7 @@ async function buildTranscriptProposedChapterTimings(
   manifestation: ManifestationRow,
   containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>
 ): Promise<ChapterTiming[] | null> {
-  const audioContainers = containers.filter((container) => container.asset.kind !== "ebook");
+  const audioContainers = containers;
   if (audioContainers.length === 0) return null;
 
   const totalDurationMs =
@@ -305,7 +303,7 @@ async function buildManifestationChapterTimings(
   manifestation: ManifestationRow,
   containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>
 ): Promise<ChapterTiming[] | null> {
-  const audioContainers = containers.filter((container) => container.asset.kind !== "ebook");
+  const audioContainers = containers;
   if (audioContainers.length === 0) return null;
   const proposed = await buildTranscriptProposedChapterTimings(repo, manifestation, audioContainers);
   if (proposed) return proposed;
@@ -565,10 +563,6 @@ export async function streamAudioAsset(
   files: AssetFileRow[],
   coverPath?: string | null
 ): Promise<Response> {
-  if (asset.kind === "ebook") {
-    return new Response("Not found", { status: 404 });
-  }
-
   if (asset.kind === "single") {
     const file = files[0];
     if (!file) return new Response("Not found", { status: 404 });
@@ -593,7 +587,7 @@ export async function streamAudioManifestation(
   coverPath?: string | null
 ): Promise<Response> {
   if (manifestation.kind !== "audio") return new Response("Not found", { status: 404 });
-  const audioContainers = containers.filter((container) => container.asset.kind !== "ebook");
+  const audioContainers = containers;
   if (audioContainers.length === 0) return new Response("Not found", { status: 404 });
   if (audioContainers.length === 1) {
     const container = audioContainers[0]!;

@@ -111,7 +111,7 @@ export function createEbookRoutes(repo: BooksRepo): Hono<HttpEnv> {
   app.get("/:assetId", async (c) => {
     const assetId = parseId(c.req.param("assetId"));
     const target = repo.getAssetWithFiles(assetId);
-    if (!target || target.asset.kind !== "ebook") {
+    if (!target || (target.asset.mime !== "application/epub+zip" && target.asset.mime !== "application/pdf")) {
       return c.notFound();
     }
     const first = target.files[0];

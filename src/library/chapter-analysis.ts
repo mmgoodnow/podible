@@ -511,17 +511,17 @@ function selectPreferredAudioAssetsForBook(repo: BooksRepo, bookId: number): Ass
     containers: repo.listAssetsByManifestation(manifestation.id),
   }));
   const chosen = selectPreferredAudioManifestation(candidates);
-  return chosen?.containers.filter((asset) => asset.kind !== "ebook") ?? [];
+  return chosen?.containers ?? [];
 }
 
 function selectAudioAssetsForManifestation(repo: BooksRepo, bookId: number, manifestationId: number): AssetRow[] {
   const manifestation = repo.getManifestation(manifestationId);
   if (!manifestation || manifestation.book_id !== bookId || manifestation.kind !== "audio") return [];
-  return repo.listAssetsByManifestation(manifestationId).filter((asset) => asset.kind !== "ebook");
+  return repo.listAssetsByManifestation(manifestationId);
 }
 
 export function selectPreferredEpubAsset(assets: AssetRow[]): AssetRow | null {
-  const ebooks = assets.filter((asset) => asset.kind === "ebook" && asset.mime === "application/epub+zip");
+  const ebooks = assets.filter((asset) => asset.mime === "application/epub+zip");
   if (ebooks.length === 0) return null;
   return [...ebooks].sort((a, b) => {
     if (a.created_at !== b.created_at) return b.created_at.localeCompare(a.created_at);
@@ -531,7 +531,7 @@ export function selectPreferredEpubAsset(assets: AssetRow[]): AssetRow | null {
 
 export function selectPreferredDownloadableEbookAsset(assets: AssetRow[]): AssetRow | null {
   const ebooks = assets.filter(
-    (asset) => asset.kind === "ebook" && (asset.mime === "application/epub+zip" || asset.mime === "application/pdf")
+    (asset) => asset.mime === "application/epub+zip" || asset.mime === "application/pdf"
   );
   if (ebooks.length === 0) return null;
   return [...ebooks].sort((a, b) => {
@@ -709,7 +709,6 @@ export function extractGlossaryTerms(entries: EpubChapterEntry[], ordinaryWords 
 const CHUNK_BOUNDARY_SNAP_WINDOW_MS = 60_000;
 
 async function collectAssetChapterBoundariesMs(asset: AssetRow, files: AssetFileRow[]): Promise<number[]> {
-  if (asset.kind === "ebook") return [];
   const boundaries = new Set<number>();
   if (asset.kind === "single") {
     const file = files[0];
@@ -1658,7 +1657,7 @@ export async function processChapterAnalysisJob(
     return "done";
   }
 
-  const audioContainers = manifestationData.containers.filter((c) => c.asset.kind !== "ebook");
+  const audioContainers = manifestationData.containers;
   if (audioContainers.length === 0) {
     ctx.repo.markJobSucceeded(job.id);
     return "done";
@@ -1711,7 +1710,7 @@ export async function processChapterAnalysisJob(
 
   // Load the epub once for glossary building.
   const ebookAsset = payload.ebookAssetId ? ctx.repo.getAssetWithFiles(payload.ebookAssetId) : null;
-  const ebookFile = ebookAsset?.asset.kind === "ebook" && ebookAsset.asset.mime === "application/epub+zip" ? ebookAsset.files[0] : null;
+  const ebookFile = ebookAsset?.asset.mime === "application/epub+zip" ? ebookAsset.files[0] : null;
   const glossary = allCached ? [] : await loadGlossary(ctx, resolvedDeps, ebookFile?.path ?? null);
 
   let totalChunkCount = 0;

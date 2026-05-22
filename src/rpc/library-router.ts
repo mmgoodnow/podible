@@ -411,9 +411,10 @@ export const libraryRouter = defineRouter({
           return releases.find((candidate) => candidate.id === params.releaseId) ?? null;
         }
 
+        const isEbookMime = (mime: string) => mime === "application/epub+zip" || mime === "application/pdf";
         const mediaAsset = assets.find((asset) => {
-          if (params.mediaType === "ebook") return asset.kind === "ebook";
-          return asset.kind !== "ebook";
+          if (params.mediaType === "ebook") return isEbookMime(asset.mime);
+          return !isEbookMime(asset.mime);
         });
         if (mediaAsset?.source_release_id) {
           const fromAsset = releases.find((candidate) => candidate.id === mediaAsset.source_release_id);
@@ -433,8 +434,9 @@ export const libraryRouter = defineRouter({
           releaseId: params.releaseId,
         });
       }
+      const isEbookMime = (mime: string) => mime === "application/epub+zip" || mime === "application/pdf";
       const wrongAssets = assets.filter((asset) => asset.source_release_id === release.id).filter((asset) =>
-        params.mediaType === "ebook" ? asset.kind === "ebook" : asset.kind !== "ebook"
+        params.mediaType === "ebook" ? isEbookMime(asset.mime) : !isEbookMime(asset.mime)
       ).filter((asset) => params.manifestationId === undefined || asset.manifestation_id === params.manifestationId);
       const wrongAssetFiles = wrongAssets.flatMap((asset) => ctx.repo.getAssetFiles(asset.id));
       const rejectedSourcePaths = wrongAssetFiles.map((file) => file.source_path ?? file.path);

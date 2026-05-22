@@ -259,9 +259,10 @@ describe("books e2e", () => {
       });
       expect(snatchEbook.result.idempotent).toBe(false);
 
+      const isEbookMime = (mime: string) => mime === "application/epub+zip" || mime === "application/pdf";
       await eventually(
         () => repo.listAssetsByBook(book.id),
-        (assets) => assets.some((asset) => asset.kind !== "ebook") && assets.some((asset) => asset.kind === "ebook"),
+        (assets) => assets.some((asset) => !isEbookMime(asset.mime)) && assets.some((asset) => isEbookMime(asset.mime)),
         "audio+ebook assets"
       );
 
@@ -272,8 +273,8 @@ describe("books e2e", () => {
       );
       expect(assetsRes.status).toBe(200);
       const assetsJson = (await assetsRes.json()) as any;
-      const audioAsset = assetsJson.assets.find((asset: any) => asset.kind !== "ebook");
-      const ebookAsset = assetsJson.assets.find((asset: any) => asset.kind === "ebook");
+      const audioAsset = assetsJson.assets.find((asset: any) => !isEbookMime(asset.mime));
+      const ebookAsset = assetsJson.assets.find((asset: any) => isEbookMime(asset.mime));
       expect(audioAsset).toBeTruthy();
       expect(ebookAsset).toBeTruthy();
 
@@ -325,7 +326,7 @@ describe("books e2e", () => {
 
       await eventually(
         () => repo.listAssetsByBook(book2.id),
-        (assets) => assets.some((asset) => asset.kind === "ebook"),
+        (assets) => assets.some((asset) => isEbookMime(asset.mime)),
         "reconcile import"
       );
     } finally {
