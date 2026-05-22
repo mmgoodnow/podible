@@ -165,8 +165,12 @@ function hasLiveCurationRun(): boolean {
         (command) =>
           command.includes("bun tmp/run-red-rising-curation.ts") ||
           command.includes("bun run tmp/run-red-rising-curation.ts") ||
+          command.includes("bun scripts/run-red-rising-curation.ts") ||
+          command.includes("bun run scripts/run-red-rising-curation.ts") ||
           command.includes("bun tmp/run-corpus-curation.ts") ||
-          command.includes("bun run tmp/run-corpus-curation.ts")
+          command.includes("bun run tmp/run-corpus-curation.ts") ||
+          command.includes("bun scripts/run-corpus-curation.ts") ||
+          command.includes("bun run scripts/run-corpus-curation.ts")
       );
   } catch {
     return false;

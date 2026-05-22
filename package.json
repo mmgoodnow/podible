@@ -10,6 +10,8 @@
     "summarize-curation-run": "bun run scripts/summarize-curation-run.ts",
     "propose-chapters": "bun run scripts/propose-chapters.ts",
     "replay-chapter-analysis": "bun run scripts/replay-chapter-analysis.ts",
+    "run-red-rising-curation": "bun run scripts/run-red-rising-curation.ts",
+    "run-corpus-curation": "bun run scripts/run-corpus-curation.ts",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit"
   },
