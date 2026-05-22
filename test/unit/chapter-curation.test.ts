@@ -14,6 +14,7 @@ import {
   rgSearchTranscript,
   applyAudibleEpubNodeSelection,
   createRootCurationSpan,
+  rankTargetBoundaries,
   resolveRecursiveChapterSpans,
   researchEpubBoundary,
   searchEpubText,
@@ -1490,6 +1491,57 @@ describe("chapter curation tools", () => {
     const chapters = await resolveRecursiveChapterSpans(ctx(), async () => null, { reports: reports as never });
     expect(chapters?.[0]?.title).toBe("Prologue");
     expect(reports[0]?.outcome).toBe("partial_leaf");
+  });
+
+  test("rankTargetBoundaries ranks by closeness to span midpoint, not word count", () => {
+    const context = ctx({
+      durationMs: 500_000,
+      manifestation: manifestation({ duration_ms: 500_000 }),
+      epubEntries: [
+        epubEntry({ id: "ch-0", title: "Chapter 0", cumulativeRatio: 0.1, cumulativeWords: 10 }),
+        epubEntry({ id: "ch-1", title: "Chapter 1", cumulativeRatio: 0.2, cumulativeWords: 20 }),
+        epubEntry({ id: "ch-2", title: "Chapter 2", cumulativeRatio: 0.5, cumulativeWords: 50 }),
+        epubEntry({ id: "ch-3", title: "Chapter 3", cumulativeRatio: 0.8, cumulativeWords: 80 }),
+        epubEntry({ id: "ch-4", title: "Chapter 4", cumulativeRatio: 1.0, cumulativeWords: 100 }),
+      ],
+    });
+    const span = createRootCurationSpan(context);
+    const ranked = rankTargetBoundaries(context, span);
+
+    // ch-2 is at local node ratio 0.4 (2/5), ch-3 at 0.6 — both equidistant from 0.5 by node count;
+    // ch-2 wins on epubIndex tiebreak. ch-1 (0.2) and ch-3 (0.6) are next, then ch-4 (0.8).
+    expect(ranked.map((t) => t.epubNodeId)).toEqual(["ch-2", "ch-3", "ch-1", "ch-4"]);
+    expect(ranked[0]?.localNodeRatio).toBe(0.4);
+  });
+
+  test("rankTargetBoundaries next entry is a valid fallback when primary target fails", () => {
+    // Verifies that on max-turns the retry loop can pick rankedTargets[1] as an adjacent
+    // boundary that still meaningfully splits the span.
+    const context = ctx({
+      durationMs: 500_000,
+      manifestation: manifestation({ duration_ms: 500_000 }),
+      epubEntries: [
+        epubEntry({ id: "ch-0", title: "Chapter 0", cumulativeRatio: 0.2, cumulativeWords: 20 }),
+        epubEntry({ id: "ch-1", title: "Chapter 1", cumulativeRatio: 0.4, cumulativeWords: 40 }),
+        epubEntry({ id: "ch-2", title: "Chapter 2", cumulativeRatio: 0.6, cumulativeWords: 60 }),
+        epubEntry({ id: "ch-3", title: "Chapter 3", cumulativeRatio: 0.8, cumulativeWords: 80 }),
+        epubEntry({ id: "ch-4", title: "Chapter 4", cumulativeRatio: 1.0, cumulativeWords: 100 }),
+      ],
+    });
+    const span = createRootCurationSpan(context);
+    const ranked = rankTargetBoundaries(context, span);
+
+    // Primary target is the midpoint node; fallback is its nearest neighbor.
+    const primary = ranked[0]!;
+    const fallback = ranked[1]!;
+    expect(primary.epubNodeId).toBe("ch-2");
+    // Fallback is a real internal boundary — distinct from primary and still splits the span.
+    expect(fallback.epubNodeId).not.toBe(primary.epubNodeId);
+    expect(fallback.epubIndex).toBeGreaterThan(span.epubStartIndex);
+    expect(fallback.epubIndex).toBeLessThanOrEqual(span.epubEndIndex);
+    // Fallback expected time is plausible (within the span).
+    expect(fallback.expectedStartTime).toBeGreaterThan(span.startTime);
+    expect(fallback.expectedStartTime).toBeLessThan(span.endTime);
   });
 
 });

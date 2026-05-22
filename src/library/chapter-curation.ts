@@ -1719,7 +1719,7 @@ function automaticLeafChapters(ctx: Pick<ChapterCurationContext, "epubEntries">,
   return [{ title: entry.title, startTime: span.startTime, epubNodeId: entry.id }];
 }
 
-function rankTargetBoundaries(ctx: Pick<ChapterCurationContext, "epubEntries">, span: ChapterCurationSpan): ChapterCurationTargetBoundary[] {
+export function rankTargetBoundaries(ctx: Pick<ChapterCurationContext, "epubEntries">, span: ChapterCurationSpan): ChapterCurationTargetBoundary[] {
   const candidates: ChapterCurationTargetBoundary[] = [];
   const nodeCount = Math.max(1, span.epubEndIndex - span.epubStartIndex + 1);
   for (let index = span.epubStartIndex + 1; index <= span.epubEndIndex; index++) {
