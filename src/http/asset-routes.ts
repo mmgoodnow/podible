@@ -1,9 +1,7 @@
 import { Hono } from "hono";
 
 import {
-  buildChapters,
   buildManifestationChapters,
-  streamAudioAsset,
   streamAudioManifestation,
   streamExtension,
 } from "../library/media";
@@ -38,15 +36,6 @@ export function createStreamRoutes(repo: BooksRepo): Hono<HttpEnv> {
     const book = repo.getBookRow(target.manifestation.book_id);
     return streamAudioManifestation(c.req.raw, repo, target.manifestation, target.containers, book?.cover_path);
   });
-  app.get("/:idPart", async (c) => {
-    const assetId = parseId((c.req.param("idPart").split(".")[0] ?? ""));
-    const target = repo.getAssetWithFiles(assetId);
-    if (!target) {
-      return c.notFound();
-    }
-    const book = repo.getBookByAsset(assetId);
-    return streamAudioAsset(c.req.raw, repo, target.asset, target.files, book?.cover_path);
-  });
   return app;
 }
 
@@ -60,18 +49,6 @@ export function createChaptersRoutes(repo: BooksRepo): Hono<HttpEnv> {
       return c.json({ error: "not_found" }, 404);
     }
     const chapters = await buildManifestationChapters(repo, target.manifestation, target.containers);
-    if (!chapters) {
-      return c.json({ error: "not_found" }, 404);
-    }
-    return jsonResponse(c.req.raw, chapters);
-  });
-  app.get("/:idPart", async (c) => {
-    const assetId = parseId(c.req.param("idPart").replace(/\.json$/i, ""));
-    const target = repo.getAssetWithFiles(assetId);
-    if (!target) {
-      return c.json({ error: "not_found" }, 404);
-    }
-    const chapters = await buildChapters(repo, target.asset, target.files);
     if (!chapters) {
       return c.json({ error: "not_found" }, 404);
     }

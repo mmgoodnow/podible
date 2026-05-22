@@ -1050,18 +1050,6 @@ export class BooksRepo {
     return { asset, files };
   }
 
-  getBookByAsset(assetId: number): BookRow | null {
-    assertPositiveInt(assetId);
-    return (this.db
-      .query(
-        `SELECT b.*
-         FROM books b
-         INNER JOIN assets a ON a.book_id = b.id
-         WHERE a.id = ?`
-      )
-      .get(assetId) as BookRow | null) ?? null;
-  }
-
   listAssetsByBook(bookId: number): AssetRow[] {
     assertPositiveInt(bookId);
     return this.db

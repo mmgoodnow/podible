@@ -278,7 +278,7 @@ describe("books e2e", () => {
       expect(ebookAsset).toBeTruthy();
 
       const streamRes = await fetchHandler(
-        new Request(`http://localhost/stream/${audioAsset.id}.mp3`, {
+        new Request(`http://localhost/stream/m/${audioAsset.manifestation_id}.mp3`, {
           headers: { cookie: adminCookie },
         })
       );

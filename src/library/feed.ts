@@ -41,21 +41,20 @@ export function buildRssFeed(request: Request, repo: BooksRepo, feedTitle: strin
 ${items
   .map(({ book, manifestation, containers }) => {
     const primary = containers[0]!;
-    const asset = primary.asset;
     const description = itemDescription(book.description, book.descriptionHtml, book.title, book.author);
     const ext = streamExtensionForManifestation(containers);
     const enclosure = `${origin}/stream/m/${manifestation.id}.${ext}`;
     const chapters = `${origin}/chapters/m/${manifestation.id}.json`;
     const pubDate = new Date(book.addedAt).toUTCString();
     const coverTag = book.coverUrl ? `<itunes:image href="${origin}${book.coverUrl}" />` : "";
-    const durationMs = manifestation.duration_ms ?? asset.duration_ms ?? 0;
-    const totalSize = manifestation.total_size || asset.total_size;
+    const durationMs = manifestation.duration_ms ?? primary.asset.duration_ms ?? 0;
+    const totalSize = manifestation.total_size || primary.asset.total_size;
     return `<item>
-<guid isPermaLink="false">book-${book.id}-asset-${asset.id}</guid>
+<guid isPermaLink="false">book-${book.id}-manifestation-${manifestation.id}</guid>
 <title>${escapeXml(book.title)}</title>
 <itunes:author>${escapeXml(book.author)}</itunes:author>
 <itunes:subtitle>${escapeXml(description.subtitle)}</itunes:subtitle>
-<enclosure url="${enclosure}" length="${totalSize}" type="${asset.mime}" />
+<enclosure url="${enclosure}" length="${totalSize}" type="${primary.asset.mime}" />
 <link>${enclosure}</link>
 <pubDate>${pubDate}</pubDate>
 <description>${description.html ? `<![CDATA[${description.html.replace(/]]>/g, "]]]]><![CDATA[>")}]]>` : escapeXml(description.plain)}</description>
@@ -82,14 +81,13 @@ export function buildJsonFeed(request: Request, repo: BooksRepo, feedTitle: stri
   const origin = requestOrigin(request);
   const items = preferredAudioManifestationsForBooks(repo).map(({ book, manifestation, containers }) => {
     const primary = containers[0]!;
-    const asset = primary.asset;
     const description = itemDescription(book.description, book.descriptionHtml, book.title, book.author);
     const ext = streamExtensionForManifestation(containers);
     const streamUrl = `${origin}/stream/m/${manifestation.id}.${ext}`;
-    const durationMs = manifestation.duration_ms ?? asset.duration_ms ?? 0;
-    const totalSize = manifestation.total_size || asset.total_size;
+    const durationMs = manifestation.duration_ms ?? primary.asset.duration_ms ?? 0;
+    const totalSize = manifestation.total_size || primary.asset.total_size;
     return {
-      id: `book-${book.id}-asset-${asset.id}`,
+      id: `book-${book.id}-manifestation-${manifestation.id}`,
       title: book.title,
       content_text: description.plain,
       ...(description.html ? { content_html: description.html } : {}),
@@ -100,7 +98,7 @@ export function buildJsonFeed(request: Request, repo: BooksRepo, feedTitle: stri
       attachments: [
         {
           url: streamUrl,
-          mime_type: asset.mime,
+          mime_type: primary.asset.mime,
           title: `${book.title}.${ext}`,
           size_in_bytes: totalSize,
           duration_in_seconds: Math.round(durationMs / 1000),
