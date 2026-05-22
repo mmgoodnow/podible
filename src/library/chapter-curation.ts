@@ -45,6 +45,8 @@ export type ChapterCurationContext = {
   debugTraceDir?: string;
   debugReasoningSummary?: "auto" | "concise" | "detailed";
   debugReasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  debugCuratorModel?: string;
+  debugJudgeModel?: string;
 };
 
 export type ChapterCurationSpanBoundary = {
@@ -2776,7 +2778,7 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, targ
 function createChapterBoundaryJudgeAgent(ctx: ChapterCurationContext): Agent {
   return new Agent({
     name: "ChapterBoundaryJudge",
-    model: ctx.settings.agents.model,
+    model: ctx.debugJudgeModel?.trim() || ctx.settings.agents.model,
     modelSettings: chapterCurationModelSettings(ctx, {
       toolChoice: "required",
       parallelToolCalls: false,
@@ -3193,7 +3195,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
 
   return new Agent({
     name: "SectionChapterCurator",
-    model: ctx.settings.agents.model,
+    model: ctx.debugCuratorModel?.trim() || ctx.settings.agents.model,
     modelSettings: chapterCurationModelSettings(ctx, {
       toolChoice: "required",
       parallelToolCalls: false,
@@ -3472,6 +3474,8 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
       type: "recursive-run-start",
       message: "recursive run start=1",
       model: curationCtx.settings.agents.model,
+      curatorModel: curationCtx.debugCuratorModel?.trim() || curationCtx.settings.agents.model,
+      judgeModel: curationCtx.debugJudgeModel?.trim() || curationCtx.settings.agents.model,
       timeoutMs: curationCtx.settings.agents.timeoutMs,
       maxSpanConcurrency: recursiveMaxSpanConcurrency,
       durationSeconds: curationCtx.durationMs / 1000,
