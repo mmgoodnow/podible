@@ -1486,11 +1486,11 @@ describe("chapter curation tools", () => {
     expect(maxActive).toBe(2);
   });
 
-  test("resolveRecursiveChapterSpans does not recurse after a failed decision", async () => {
+  test("resolveRecursiveChapterSpans returns a partial leaf after a failed decision", async () => {
     const reports: Array<{ outcome: string }> = [];
     const chapters = await resolveRecursiveChapterSpans(ctx(), async () => null, { reports: reports as never });
-    expect(chapters).toBeNull();
-    expect(reports[0]?.outcome).toBe("failed");
+    expect(chapters?.[0]?.title).toBe("Prologue");
+    expect(reports[0]?.outcome).toBe("partial_leaf");
   });
 
   test("resolveRecursiveChapterSpans respects call limits", async () => {
@@ -1533,6 +1533,6 @@ describe("chapter curation tools", () => {
       }),
       { maxCalls: 1 }
     );
-    expect(chapters).toBeNull();
+    expect(chapters?.map((chapter) => chapter.title)).toEqual(["Prologue", "Chapter 1"]);
   });
 });
