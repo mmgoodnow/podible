@@ -591,9 +591,6 @@ function html(): string {
     .run-button:hover, .run-button.selected { border-color: var(--accent); background: #171c21; }
     .run-button strong { display: block; font-size: 12px; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .run-meta { display: flex; gap: 8px; flex-wrap: wrap; color: var(--muted); font-size: 11px; }
-    .nav-list { display: grid; gap: 6px; }
-    .nav-link { display: block; text-decoration: none; color: var(--text); background: #111417; border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; font-size: 12px; }
-    .nav-link:hover { border-color: var(--accent); }
     .param-list { display: grid; gap: 7px; }
     .param { display: grid; gap: 2px; min-width: 0; }
     .param .label { color: var(--muted); font-size: 11px; }
@@ -605,20 +602,26 @@ function html(): string {
     button { background: #20252a; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 12px; cursor: pointer; }
     button:hover { border-color: var(--accent); }
     .viz-scroll { overflow: auto; }
-    .tree { min-width: 980px; padding-left: 72px; }
-    .tree-row { position: relative; height: 64px; margin: 7px 0; }
-    .tree-depth { position: absolute; left: -72px; top: 8px; width: 64px; color: var(--muted); font-size: 12px; }
-    .tree-node { position: absolute; top: 0; bottom: 0; border: 1px solid var(--line); background: #14171a; border-radius: 6px; padding: 4px 5px; min-width: 0; overflow: hidden; font-size: 9px; line-height: 1.18; }
-    .tree-node strong { display: block; font-size: 10px; line-height: 1.05; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tree { display: grid; gap: 6px; min-width: 760px; }
+    .tree-row { display: grid; grid-template-columns: minmax(0, 1fr); }
+    .tree-node { border: 1px solid var(--line); background: #14171a; border-radius: 6px; padding: 7px 9px; min-width: 0; overflow: hidden; font-size: 12px; line-height: 1.25; display: grid; grid-template-columns: 82px minmax(140px, 1fr) minmax(86px, auto) minmax(80px, auto) minmax(72px, auto); gap: 10px; align-items: center; }
+    .tree-node strong { display: block; font-size: 12px; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .tree-node span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .tree-node .small { font-size: 9px; }
+    .tree-node .small { font-size: 11px; }
     .tree-node.trace-link { cursor: pointer; }
     .tree-node.trace-link:hover { filter: brightness(1.18); }
     .tree-node.selected { outline: 2px solid var(--accent); outline-offset: -2px; }
     .tree-node.leaf { border-color: rgba(139,214,147,0.55); }
     .tree-node.split { border-color: rgba(121,184,255,0.65); }
     .tree-node.error { border-color: rgba(255,139,139,0.7); }
+    .tree-node.partial { border-color: rgba(169,176,186,0.65); }
     .tree-node.active { border-color: rgba(255,209,102,0.65); }
+    .outcome { display: inline-flex; justify-content: center; border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; font-size: 11px; width: max-content; }
+    .outcome.split { border-color: rgba(121,184,255,0.65); color: var(--accent); }
+    .outcome.leaf { border-color: rgba(139,214,147,0.55); color: var(--ok); }
+    .outcome.partial { border-color: rgba(169,176,186,0.65); color: var(--muted); }
+    .outcome.error { border-color: rgba(255,139,139,0.7); color: var(--bad); }
+    .outcome.active { border-color: rgba(255,209,102,0.65); color: var(--warn); }
     .ruler { position: relative; height: 132px; border: 1px solid var(--line); border-radius: 8px; background: linear-gradient(90deg, #15191d, #111315); overflow: hidden; }
     .ruler-line { position: absolute; left: 10px; right: 10px; top: 62px; height: 2px; background: var(--line); }
     .tick { position: absolute; top: 32px; width: 1px; height: 58px; background: var(--accent); }
@@ -635,6 +638,7 @@ function html(): string {
     summary { cursor: pointer; }
     .trace-panel { min-height: 128px; }
     .trace-panel pre { max-height: 520px; }
+    .trace-output { background: #101316; border: 1px solid var(--line); border-radius: 6px; padding: 10px; font-size: 12px; line-height: 1.38; }
     @media (max-width: 1000px) { body { overflow: auto; } .app { display: block; height: auto; } aside { max-height: none; } .grid, .two { grid-template-columns: 1fr; } header { align-items: flex-start; flex-direction: column; } }
   </style>
 </head>
@@ -655,16 +659,6 @@ function html(): string {
       <section class="sidebar-section">
         <h2>Previous Runs</h2>
         <div id="runs"></div>
-      </section>
-      <section class="sidebar-section">
-        <h2>View</h2>
-        <div class="nav-list">
-          <a class="nav-link" href="#tree" data-scroll-target="tree">Binary Tree</a>
-          <a class="nav-link" href="#ruler" data-scroll-target="ruler">Boundary Ruler</a>
-          <a class="nav-link" href="#active-spans" data-scroll-target="active-spans">Active Spans</a>
-          <a class="nav-link" href="#filters" data-scroll-target="filters">Audio/EPUB Filters</a>
-          <a class="nav-link" href="#event-tail" data-scroll-target="event-tail">Event Tail</a>
-        </div>
       </section>
     </aside>
     <div class="content">
@@ -742,30 +736,25 @@ function html(): string {
     }
 
     function renderTree(run) {
-      const byDepth = new Map();
       const traceSpanPaths = new Set((run.traceSummaries || []).map((trace) => trace.spanPath).filter(Boolean));
-      for (const span of run.treeSpans || []) {
-        if (span.lastEvent === "span-auto-leaf" && !span.toolCalls && !span.judgeRejected) continue;
-        const depth = span.depth ?? 0;
-        if (!byDepth.has(depth)) byDepth.set(depth, []);
-        byDepth.get(depth).push(span);
-      }
-      const rows = [...byDepth.entries()].sort((a, b) => a[0] - b[0]).map(([depth, spans]) => {
-        spans.sort((a, b) => a.path.localeCompare(b.path));
-        return '<div class="tree-row"><div class="tree-depth">depth ' + esc(depth) + '</div>' +
-          spans.map((s) => {
-            const bits = s.path === "root" ? "" : s.path;
-            let slot = 0;
-            for (const bit of bits) slot = slot * 2 + (bit === "R" ? 1 : 0);
-            const slots = Math.pow(2, depth);
-            const left = depth === 0 ? 0 : slot / slots * 100;
-            const width = depth === 0 ? 100 : 100 / slots;
-            const label = (s.path ?? "") + ": " + (s.nodeCount ?? "") + " nodes, " + Math.round(s.startTime ?? 0) + "-" + Math.round(s.endTime ?? 0) + "s, tools " + (s.toolCalls ?? 0) + ", rejects " + (s.judgeRejected ?? 0) + ", " + (s.terminal ?? "active");
-            const trace = (run.traceSummaries || []).find((candidate) => candidate.spanPath === s.path);
-            const hasTrace = traceSpanPaths.has(s.path);
-            return '<div class="tree-node ' + esc(s.terminal || "active") + (hasTrace ? ' trace-link' : '') + (selectedTraceSpanPath === s.path ? ' selected' : '') + '" data-span-path="' + esc(s.path) + '" data-trace-file="' + esc(trace?.file ?? "") + '" title="' + esc(label + (hasTrace ? " - click to open trace" : "")) + '" style="left:calc(' + left + '% + 4px);width:calc(' + width + '% - 8px)"><strong><code>' + esc(s.path) + '</code></strong><span class="small muted">n ' + esc(s.nodeCount ?? "") + ' · ' + esc(Math.round(s.startTime ?? 0)) + '-' + esc(Math.round(s.endTime ?? 0)) + 's</span><span class="small">t ' + esc(s.toolCalls) + ' · r ' + esc(s.judgeRejected) + '</span><span class="small ' + (s.terminal === "error" ? "failed" : "") + '">' + esc(s.terminal ?? "active") + '</span></div>';
-          }).join("") +
-          '</div>';
+      const spans = (run.treeSpans || [])
+        .filter((span) => span.lastEvent !== "span-auto-leaf" || span.toolCalls || span.judgeRejected)
+        .sort((a, b) => (a.path === "root" ? "" : a.path).localeCompare(b.path === "root" ? "" : b.path));
+      const rows = spans.map((s) => {
+        const depth = s.depth ?? 0;
+        const label = (s.path ?? "") + ": " + (s.nodeCount ?? "") + " nodes, " + Math.round(s.startTime ?? 0) + "-" + Math.round(s.endTime ?? 0) + "s, tools " + (s.toolCalls ?? 0) + ", rejects " + (s.judgeRejected ?? 0) + ", " + (s.terminal ?? "active");
+        const trace = (run.traceSummaries || []).find((candidate) => candidate.spanPath === s.path);
+        const hasTrace = traceSpanPaths.has(s.path);
+        const outcome = s.terminal || "active";
+        const depthPad = Math.min(depth * 22, 154);
+        return '<div class="tree-row" style="padding-left:' + depthPad + 'px">' +
+          '<div class="tree-node ' + esc(outcome) + (hasTrace ? ' trace-link' : '') + (selectedTraceSpanPath === s.path ? ' selected' : '') + '" data-span-path="' + esc(s.path) + '" data-trace-file="' + esc(trace?.file ?? "") + '" title="' + esc(label + (hasTrace ? " - click to open trace" : "")) + '">' +
+          '<strong><code>' + esc(s.path) + '</code></strong>' +
+          '<span class="small muted">depth ' + esc(depth) + ' · n ' + esc(s.nodeCount ?? "") + ' · ' + esc(Math.round(s.startTime ?? 0)) + '-' + esc(Math.round(s.endTime ?? 0)) + 's</span>' +
+          '<span class="small">tools ' + esc(s.toolCalls) + '</span>' +
+          '<span class="small">rejects ' + esc(s.judgeRejected) + '</span>' +
+          '<span class="outcome ' + esc(outcome) + '">' + esc(outcome) + '</span>' +
+          '</div></div>';
       }).join("");
       return '<div class="card section" id="tree"><h2>Binary Tree Progress</h2><div class="viz-scroll"><div class="tree">' + (rows || '<div class="muted">No spans yet</div>') + '</div></div></div>';
     }
@@ -857,7 +846,28 @@ function html(): string {
       const reasoning = data.reasoningSummaries?.length ? '<h2>Reasoning Summary</h2><pre class="small">' + esc(data.reasoningSummaries.join("\\n\\n")) + '</pre>' : '<div class="muted small">No stored reasoning summary in this trace.</div>';
       body.className = "trace-detail-body";
       body.setAttribute("data-loaded", "1");
-      body.innerHTML = reasoning + '<h2>Final Output</h2><pre class="small">' + esc(JSON.stringify(data.finalOutput ?? null, null, 2)) + '</pre>';
+      body.innerHTML = reasoning + renderFinalOutput(data.finalOutput);
+    }
+
+    function normalizeTraceOutput(value) {
+      let current = value;
+      for (let i = 0; i < 3; i++) {
+        if (typeof current !== "string") break;
+        const trimmed = current.trim();
+        if (!trimmed || !/^[\\[{"]/.test(trimmed)) break;
+        try {
+          current = JSON.parse(trimmed);
+        } catch {
+          break;
+        }
+      }
+      return current;
+    }
+
+    function renderFinalOutput(value) {
+      const normalized = normalizeTraceOutput(value);
+      const text = typeof normalized === "string" ? normalized : JSON.stringify(normalized ?? null, null, 2);
+      return '<h2>Final Output</h2><pre class="trace-output">' + esc(text) + '</pre>';
     }
 
     async function loadSelectedTracePanel() {
@@ -871,7 +881,7 @@ function html(): string {
       const data = await response.json();
       const reasoning = data.reasoningSummaries?.length ? '<h2>Reasoning Summary</h2><pre class="small">' + esc(data.reasoningSummaries.join("\\n\\n")) + '</pre>' : '<div class="muted small">No stored reasoning summary in this trace.</div>';
       body.className = "";
-      body.innerHTML = reasoning + '<h2>Final Output</h2><pre class="small">' + esc(JSON.stringify(data.finalOutput ?? null, null, 2)) + '</pre>';
+      body.innerHTML = reasoning + renderFinalOutput(data.finalOutput);
     }
 
     function attachTreeTraceLinks() {
@@ -888,17 +898,6 @@ function html(): string {
           attachTreeTraceLinks();
           loadSelectedTracePanel();
           document.querySelector("#trace-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
-        });
-      });
-    }
-
-    function attachSidebarNav() {
-      document.querySelectorAll("[data-scroll-target]").forEach((link) => {
-        link.addEventListener("click", (event) => {
-          event.preventDefault();
-          const target = link.getAttribute("data-scroll-target");
-          if (!target) return;
-          document.getElementById(target)?.scrollIntoView({ behavior: "smooth", block: "start" });
         });
       });
     }
@@ -975,6 +974,20 @@ function html(): string {
         '</div>';
     }
 
+    function attachRunButtons() {
+      document.querySelectorAll(".run-button").forEach((row) => {
+        row.addEventListener("click", () => {
+          const nextRunId = row.getAttribute("data-run-id");
+          if (!nextRunId || nextRunId === selectedRunId) return;
+          rememberOpenDetails();
+          selectedRunId = nextRunId;
+          selectedTraceFile = null;
+          selectedTraceSpanPath = null;
+          refresh();
+        });
+      });
+    }
+
     async function refresh() {
       rememberOpenDetails();
       const response = await fetch("/api/runs?selectedRunId=" + encodeURIComponent(selectedRunId || ""), { cache: "no-store" });
@@ -992,24 +1005,8 @@ function html(): string {
       document.querySelector("#runs").innerHTML = renderRuns(latestRuns);
       attachPersistentDetails();
       attachTreeTraceLinks();
-      attachSidebarNav();
+      attachRunButtons();
       loadSelectedTracePanel();
-      document.querySelectorAll(".run-button").forEach((row) => {
-        row.addEventListener("click", () => {
-          rememberOpenDetails();
-          selectedRunId = row.getAttribute("data-run-id");
-          selectedTraceFile = null;
-          selectedTraceSpanPath = null;
-          const selected = latestRuns.find((run) => run.id === selectedRunId) || latestRuns[0];
-          document.querySelector("#main-title").innerHTML = selected ? esc(selected.caseLabel) + " " + status(selected.status) : "Run";
-          document.querySelector("#run-details").innerHTML = renderRunDetails(selected);
-          document.querySelector("#current").innerHTML = renderCurrent(selected);
-          document.querySelector("#runs").innerHTML = renderRuns(latestRuns);
-          attachPersistentDetails();
-          attachTreeTraceLinks();
-          attachSidebarNav();
-        });
-      });
     }
     document.querySelector("#auto-refresh-toggle").checked = autoRefreshEnabled();
     document.querySelector("#auto-refresh-toggle").addEventListener("change", (event) => {
