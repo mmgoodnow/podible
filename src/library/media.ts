@@ -266,19 +266,14 @@ async function buildTranscriptProposedChapterTimings(
     manifestation.duration_ms ??
     audioContainers.reduce((sum, container) => sum + containerDurationMs(container.asset, container.files), 0);
 
-  // Collect chapters_json from each container's chapter_analysis row.
-  // For single-container books there is one row; multi-container books
-  // concatenate per-container chapter lists in asset order.
-  const allChapters: Array<{ title: string; startTime: number }> = [];
-  for (const container of audioContainers) {
-    const analysis = repo.getChapterAnalysis(container.asset.id);
-    if (!analysis?.chapters_json) return null;
-    const parsed = JSON.parse(analysis.chapters_json) as Array<{ title: string; startTime: number }>;
-    if (!Array.isArray(parsed) || parsed.length === 0) return null;
-    allChapters.push(...parsed);
-  }
-
-  if (allChapters.length === 0) return null;
+  // chapters_json for a manifestation is stored on the first audio container's
+  // chapter_analysis row. The list covers the full combined duration for
+  // multi-container manifestations.
+  const firstContainer = audioContainers[0]!;
+  const analysis = repo.getChapterAnalysis(firstContainer.asset.id);
+  if (!analysis?.chapters_json) return null;
+  const allChapters = JSON.parse(analysis.chapters_json) as Array<{ title: string; startTime: number }>;
+  if (!Array.isArray(allChapters) || allChapters.length === 0) return null;
 
   return allChapters.map((chapter, index) => {
     const startMs = Math.round(chapter.startTime * 1000);

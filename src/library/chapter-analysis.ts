@@ -16,6 +16,8 @@ import type { AppSettings, AssetFileRow, AssetRow, AssetTranscriptRow, BookRow, 
 import { readFfprobeChapters } from "../media/probe-cache";
 import type { BooksRepo } from "../repo";
 import { selectPreferredAudioManifestation } from "./asset-selection";
+import { runRecursiveAgenticChapterCurationDetailed } from "./chapter-curation";
+import type { ChapterCurationTiming } from "./chapter-curation";
 
 const CHAPTER_ANALYSIS_SOURCE = "whisper_transcript";
 const CHAPTER_ANALYSIS_ALGORITHM_VERSION = "2026-04-22-atempo-2x-v1";
@@ -282,6 +284,7 @@ type ChapterAnalysisDeps = {
   loadEpubEntries: typeof loadEpubEntries;
   extractChunkClip: typeof extractChunkClip;
   transcribeChunk: typeof transcribeChunk;
+  runAgenticCuration: typeof runRecursiveAgenticChapterCurationDetailed;
 };
 
 type ExtractChunkArgs = {
@@ -1545,6 +1548,149 @@ export async function requestBookTranscription(
   return { ...base, status: base.status === "running" ? "running" : "pending", jobId: base.jobId ?? job.id };
 }
 
+type AgenticCurationResult = {
+  chaptersJson: string;
+  resolvedBoundaryCount: number;
+  totalBoundaryCount: number;
+  debugInfo: Record<string, unknown>;
+};
+
+async function buildEmbeddedChaptersForContainers(
+  containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>
+): Promise<ChapterCurationTiming[]> {
+  const out: ChapterCurationTiming[] = [];
+  let timeCursor = 0;
+  for (const [containerIndex, container] of containers.entries()) {
+    const containerDurationMs = container.asset.duration_ms ?? container.files.reduce((sum, file) => sum + file.duration_ms, 0);
+    if (container.asset.kind === "single") {
+      const file = container.files[0];
+      if (file) {
+        const stat = await fsPromises.stat(file.path).catch(() => null);
+        const chapters = stat ? readFfprobeChapters(file.path, Number(stat.mtimeMs)) : null;
+        if (chapters && chapters.length > 0) {
+          for (const [chapterIndex, chapter] of chapters.entries()) {
+            out.push({
+              id: `c${containerIndex}-${chapter.id ?? `ch${chapterIndex}`}`,
+              title: chapter.title,
+              startMs: timeCursor + chapter.startMs,
+              endMs: timeCursor + chapter.endMs,
+            });
+          }
+          timeCursor += containerDurationMs;
+          continue;
+        }
+      }
+    }
+    // Multi-file container or single-file with no embedded chapters: one entry per file.
+    let fileCursor = timeCursor;
+    for (const [fileIndex, file] of container.files.entries()) {
+      out.push({
+        id: `c${containerIndex}-f${fileIndex}`,
+        title: file.title ?? `Part ${containerIndex + 1}`,
+        startMs: fileCursor,
+        endMs: fileCursor + file.duration_ms,
+      });
+      fileCursor += file.duration_ms;
+    }
+    timeCursor += containerDurationMs;
+  }
+  return out;
+}
+
+async function tryAgenticCuration(
+  ctx: ChapterAnalysisContext,
+  target: { asset: AssetRow; files: AssetFileRow[] },
+  payload: { assetId?: number; ebookAssetId?: number },
+  settings: AppSettings,
+  transcriptFingerprint: string,
+  runCuration: typeof runRecursiveAgenticChapterCurationDetailed
+): Promise<AgenticCurationResult | null> {
+  if (!settings.agents.apiKey.trim()) return null;
+  if (!payload.ebookAssetId) return null;
+
+  // Only run curation from the first audio container of the manifestation.
+  const manifestationId = target.asset.manifestation_id;
+  if (manifestationId === null) return null;
+  const manifestationData = ctx.repo.getManifestationWithContainers(manifestationId);
+  if (!manifestationData) return null;
+  const audioContainers = manifestationData.containers.filter((c) => c.asset.kind !== "ebook");
+  if (audioContainers.length === 0) return null;
+  if (audioContainers[0]!.asset.id !== target.asset.id) return null;
+
+  // All containers must have succeeded transcription.
+  const allTranscribed = audioContainers.every((container) => {
+    const row = ctx.repo.getAssetTranscript(container.asset.id);
+    return row?.status === "succeeded";
+  });
+  if (!allTranscribed) return null;
+
+  const ebookAsset = ctx.repo.getAssetWithFiles(payload.ebookAssetId);
+  const ebookFile = ebookAsset?.files[0];
+  if (!ebookFile) return null;
+
+  const book = ctx.repo.getBookRow(target.asset.book_id);
+  if (!book) return null;
+
+  let epubEntries: EpubChapterEntry[];
+  try {
+    epubEntries = await loadEpubEntries(ebookFile.path);
+  } catch {
+    return null;
+  }
+
+  const transcript = await loadStoredManifestationTranscriptPayload(ctx.repo, audioContainers);
+  if (!transcript) return null;
+
+  const embeddedChapters = await buildEmbeddedChaptersForContainers(audioContainers);
+
+  const totalDurationMs = manifestationData.manifestation.duration_ms ?? audioContainers.reduce((sum, c) => sum + (c.asset.duration_ms ?? 0), 0);
+
+  try {
+    const result = await runCuration({
+      book,
+      manifestation: manifestationData.manifestation,
+      containers: audioContainers,
+      settings,
+      durationMs: totalDurationMs,
+      epubEntries,
+      transcript,
+      embeddedChapters,
+    });
+
+    const reports = result.recursiveReports ?? [];
+    const resolvedBoundaryCount = reports.filter((r) => r.outcome === "split").length;
+    const totalBoundaryCount = reports.filter((r) => r.outcome === "split" || r.outcome === "failed").length;
+
+    if (!result.result?.accepted || !result.result.chapters || result.result.chapters.length === 0) {
+      return null;
+    }
+
+    const chapters = result.result.chapters.map((chapter) => ({
+      title: chapter.title,
+      startTime: chapter.startTime,
+    }));
+
+    return {
+      chaptersJson: JSON.stringify(chapters),
+      resolvedBoundaryCount,
+      totalBoundaryCount,
+      debugInfo: {
+        curation: {
+          accepted: result.result.accepted,
+          chapterCount: chapters.length,
+          resolvedBoundaryCount,
+          totalBoundaryCount,
+          transcriptFingerprint,
+        },
+      },
+    };
+  } catch (error) {
+    // Curation failure is non-fatal: transcript job still succeeds.
+    console.warn(`[chapter-analysis] curation failed for asset ${target.asset.id}: ${(error as Error).message}`);
+    return null;
+  }
+}
+
 export async function processChapterAnalysisJob(
   ctx: ChapterAnalysisContext,
   job: JobRow,
@@ -1554,6 +1700,7 @@ export async function processChapterAnalysisJob(
     loadEpubEntries,
     extractChunkClip,
     transcribeChunk,
+    runAgenticCuration: runRecursiveAgenticChapterCurationDetailed,
     ...deps,
   };
   const jobStartedAt = performance.now();
@@ -1661,6 +1808,13 @@ export async function processChapterAnalysisJob(
         error: null,
       });
     }
+    // Run agentic chapter curation if prerequisites are satisfied:
+    // - API key configured
+    // - EPUB asset provided in job payload
+    // - This asset is the first audio container in its manifestation
+    // - All other audio containers in the manifestation are already transcribed
+    const curationResult = await tryAgenticCuration(ctx, target, payload, settings, transcriptFingerprint, resolvedDeps.runAgenticCuration);
+
     ctx.repo.upsertChapterAnalysis({
       assetId: target.asset.id,
       status: "succeeded",
@@ -1668,23 +1822,24 @@ export async function processChapterAnalysisJob(
       algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
       fingerprint: transcriptFingerprint,
       transcriptFingerprint,
-      chaptersJson: null,
+      chaptersJson: curationResult?.chaptersJson ?? null,
       debugJson: JSON.stringify({
         transcriptSource,
         chunkCount: plans.length,
         chunkWordCounts,
         transcriptWordCount: transcriptWords.length,
         model: TIMESTAMP_TRANSCRIPTION_MODEL,
+        ...(curationResult?.debugInfo ?? {}),
       }),
-      resolvedBoundaryCount: 0,
-      totalBoundaryCount: 0,
+      resolvedBoundaryCount: curationResult?.resolvedBoundaryCount ?? 0,
+      totalBoundaryCount: curationResult?.totalBoundaryCount ?? 0,
       error: null,
     });
     ctx.repo.markJobSucceeded(job.id);
     const totalJobMs = Math.round((performance.now() - jobStartedAt) * 100) / 100;
     log(
       ctx,
-      `[chapter-analysis] job=${job.id} asset=${target.asset.id} chunks=${plans.length} words=${transcriptWords.length} source=${transcriptSource} success=1 total_ms=${totalJobMs}`
+      `[chapter-analysis] job=${job.id} asset=${target.asset.id} chunks=${plans.length} words=${transcriptWords.length} source=${transcriptSource} chapters=${curationResult?.chaptersJson ? "yes" : "no"} success=1 total_ms=${totalJobMs}`
     );
     return "done";
   } catch (error) {
