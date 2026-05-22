@@ -1300,6 +1300,32 @@ export class BooksRepo {
     return (this.db.query("SELECT * FROM chapter_analysis WHERE asset_id = ?").get(assetId) as ChapterAnalysisRow | null) ?? null;
   }
 
+  /** Book IDs that have a succeeded transcript, no chapters_json, and an epub sibling, with no active job. */
+  listBookIdsNeedingCuration(): number[] {
+    const rows = this.db
+      .query<{ book_id: number }, []>(
+        `SELECT DISTINCT a.book_id
+         FROM assets a
+         JOIN asset_transcripts t ON t.asset_id = a.id AND t.status = 'succeeded'
+         JOIN chapter_analysis ca ON ca.asset_id = a.id AND ca.status = 'succeeded' AND ca.chapters_json IS NULL
+         WHERE a.kind != 'ebook'
+           AND EXISTS (
+             SELECT 1 FROM assets epub
+             WHERE epub.book_id = a.book_id
+               AND epub.kind = 'ebook'
+               AND epub.mime = 'application/epub+zip'
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM jobs j
+             WHERE j.asset_id = a.id
+               AND j.type = 'chapter_analysis'
+               AND j.status IN ('queued', 'running')
+           )`
+      )
+      .all();
+    return rows.map((r) => r.book_id);
+  }
+
   getAssetTranscript(assetId: number): AssetTranscriptRow | null {
     assertPositiveInt(assetId);
     return (this.db.query("SELECT * FROM asset_transcripts WHERE asset_id = ?").get(assetId) as AssetTranscriptRow | null) ?? null;

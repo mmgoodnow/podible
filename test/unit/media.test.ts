@@ -378,15 +378,11 @@ describe("manifestation media", () => {
     }
   });
 
-  test("uses EPUB and stored transcript to build major manifestation chapter markers", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "podible-chapter-marker-media-"));
+  test("uses stored chapters_json from chapter_analysis to build manifestation chapters", async () => {
     const { db, repo } = setupRepo();
     try {
-      const epubPath = path.join(root, "book.epub");
-      await createChapterMarkerEpub(epubPath);
       const book = repo.createBook({ title: "A Darker Shade of Magic", author: "V. E. Schwab" });
       const audioManifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
-      const ebookManifestation = repo.addManifestation({ bookId: book.id, kind: "ebook" });
       const audio = repo.addAsset({
         bookId: book.id,
         kind: "multi",
@@ -400,33 +396,24 @@ describe("manifestation media", () => {
           { path: "/tmp/audio-2.mp3", size: 10, start: 20, end: 29, durationMs: 1_000_000, title: "003" },
         ],
       });
-      repo.addAsset({
-        bookId: book.id,
-        kind: "ebook",
-        mime: "application/epub+zip",
-        totalSize: 100,
-        manifestationId: ebookManifestation.id,
-        files: [{ path: epubPath, size: 100, start: 0, end: 99, durationMs: 0, title: "EPUB" }],
-      });
-      repo.upsertAssetTranscript({
+      repo.upsertChapterAnalysis({
         assetId: audio.id,
         status: "succeeded",
         source: "test",
         algorithmVersion: "test",
         fingerprint: "test",
-        transcriptJson: JSON.stringify({
-          version: "1.5.0",
-          text: "",
-          words: [],
-          utterances: [
-            { startMs: 0, endMs: 1000, text: "This is audible." },
-            { startMs: 120_000, endMs: 122_000, text: "Kell wore a very peculiar coat." },
-            { startMs: 1_000_000, endMs: 1_001_000, text: "Two." },
-            { startMs: 1_001_000, endMs: 1_002_000, text: "Red Royal." },
-            { startMs: 2_000_000, endMs: 2_001_000, text: "Three. Grey Thief." },
-            { startMs: 2_900_000, endMs: 2_901_000, text: "This concludes A Darker Shade of Magic." },
-          ],
-        }),
+        transcriptFingerprint: "test",
+        chaptersJson: JSON.stringify([
+          { startTime: 0, title: "Opening credits" },
+          { startTime: 120, title: "I: The Traveler" },
+          { startTime: 1000, title: "II: Red Royal" },
+          { startTime: 2000, title: "III: Grey Thief" },
+          { startTime: 2900, title: "Closing credits" },
+        ]),
+        debugJson: null,
+        resolvedBoundaryCount: 4,
+        totalBoundaryCount: 4,
+        error: null,
       });
 
       const target = repo.getManifestationWithContainers(audioManifestation.id);
@@ -441,7 +428,6 @@ describe("manifestation media", () => {
       ]);
     } finally {
       db.close();
-      await rm(root, { recursive: true, force: true });
     }
   });
 

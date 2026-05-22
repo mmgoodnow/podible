@@ -12,24 +12,17 @@ export type TranscriptWord = {
   text: string;
 };
 
-export type RawAudioChapter = {
+type RawAudioChapter = {
   startMs: number;
   endMs?: number;
   title?: string;
 };
 
-export type ProposedChapter = {
+type ProposedChapter = {
   startTime: number;
   title: string;
   confidence: "high" | "medium" | "low";
   reason: string;
-};
-
-export type ChapterProposalReport = {
-  epubHeadings: string[];
-  embeddedChapterCount: number;
-  transcriptUtteranceCount: number;
-  chapters: ProposedChapter[];
 };
 
 type Heading = {
@@ -487,7 +480,7 @@ function collectHeadingCandidates(entries: EpubChapterEntry[]): HeadingCandidate
   });
 }
 
-export function selectMajorEpubHeadings(entries: EpubChapterEntry[]): Heading[] {
+function selectMajorEpubHeadings(entries: EpubChapterEntry[]): Heading[] {
   return collectHeadingCandidates(entries)
     .filter((candidate) => candidate.include)
     .map((candidate) => candidate.heading);
@@ -1114,105 +1107,5 @@ function resolveHeadingCandidate(
     confidence,
     reason,
     matchedWindow,
-  };
-}
-
-export function proposeChapterMarkers(input: {
-  epubEntries: EpubChapterEntry[];
-  transcriptUtterances: TranscriptUtterance[];
-  embeddedChapters: RawAudioChapter[];
-}): ChapterProposalReport {
-  const candidates = collectHeadingCandidates(input.epubEntries).filter((candidate) => candidate.include);
-  const headings = candidates.map((candidate) => candidate.heading);
-  const embedded = [...input.embeddedChapters].sort((a, b) => a.startMs - b.startMs);
-  const utterances = [...input.transcriptUtterances].sort((a, b) => a.startMs - b.startMs);
-  const chapters: ProposedChapter[] = [];
-  if (embeddedChaptersLookUserFacing(embedded)) {
-    return {
-      epubHeadings: headings.map((heading) => heading.title),
-      embeddedChapterCount: embedded.length,
-      transcriptUtteranceCount: utterances.length,
-      chapters: chaptersFromUserFacingEmbedded(embedded),
-    };
-  }
-  const maxOrdinalHeading = Math.max(0, ...headings.map((heading) => heading.ordinal ?? 0));
-  const firstOrdinalIndex = headings.findIndex((heading) => heading.ordinal !== null);
-  const preferCoarseTranscriptHeadings = maxOrdinalHeading > 0 && embedded.length <= maxOrdinalHeading && firstOrdinalIndex > 0;
-
-  let previousMs = -1;
-  const firstEmbeddedAfterIntro = embedded.find((chapter) => chapter.startMs > 30_000)?.startMs ?? Number.POSITIVE_INFINITY;
-  const firstStoryMs = firstStoryUtteranceMs(utterances, firstEmbeddedAfterIntro);
-  const startsWithOpeningCredit = utterances.some((utterance) => utterance.startMs <= 5_000 && isOpeningCreditUtterance(utterance.text));
-  const hasOpeningGap = firstStoryMs !== null && (firstStoryMs > 30_000 || startsWithOpeningCredit);
-  const trustEmbeddedGenericOrdinals = !embeddedChaptersLookEvenlyDivided(embedded);
-  const sequenceChapters = buildGenericEmbeddedSequenceChapters(input.epubEntries, embedded, utterances, firstStoryMs, hasOpeningGap);
-  if (sequenceChapters) {
-    const sequenceLastStoryStartMs = sequenceChapters.at(-1)?.startTime ? sequenceChapters.at(-1)!.startTime * 1000 : 0;
-    const sequenceClosingMs = findClosingCreditsMs(utterances, sequenceLastStoryStartMs);
-    if (sequenceClosingMs !== null) {
-      sequenceChapters.push({
-        startTime: sequenceClosingMs / 1000,
-        title: "Closing credits",
-        confidence: "high",
-        reason: "Matched standard audiobook closing-credit phrase in transcript.",
-      });
-    }
-    return {
-      epubHeadings: headings.map((heading) => heading.title),
-      embeddedChapterCount: embedded.length,
-      transcriptUtteranceCount: utterances.length,
-      chapters: sequenceChapters,
-    };
-  }
-  if (hasOpeningGap) {
-    chapters.push({
-      startTime: 0,
-      title: "Opening credits",
-      confidence: "medium",
-      reason: "Audio starts with an intro and first story utterance is delayed.",
-    });
-  }
-
-  for (const [index, candidate] of candidates.entries()) {
-    const { heading } = candidate;
-    if (chapters.some((chapter) => chapter.title === "Opening credits") && candidate.features.openingCoveredPrelude) continue;
-    const matched = resolveHeadingCandidate(candidate, {
-      index,
-      headings,
-      embedded,
-      utterances,
-      previousMs,
-      firstStoryMs,
-      preferCoarseTranscriptHeadings,
-      trustEmbeddedGenericOrdinals,
-    });
-    if (!matched) continue;
-    chapters.push({
-      startTime: matched.startMs / 1000,
-      title: heading.title,
-      confidence: matched.confidence,
-      reason: matched.reason,
-    });
-    previousMs = matched.startMs;
-  }
-
-  chapters.splice(0, chapters.length, ...fillSkippedGenericChapterHeadings(chapters, headings, embedded));
-
-  const lastStoryStartMs = chapters.at(-1)?.startTime ? chapters.at(-1)!.startTime * 1000 : 0;
-  const closingMs = findClosingCreditsMs(utterances, lastStoryStartMs);
-  if (closingMs !== null) {
-    chapters.push({
-      startTime: closingMs / 1000,
-      title: "Closing credits",
-      confidence: "high",
-      reason: "Matched standard audiobook closing-credit phrase in transcript.",
-    });
-  }
-
-  return {
-    epubHeadings: headings.map((heading) => heading.title),
-    embeddedChapterCount: embedded.length,
-    transcriptUtteranceCount: utterances.length,
-    chapters,
   };
 }

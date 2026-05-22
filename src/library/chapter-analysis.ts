@@ -16,6 +16,8 @@ import type { AppSettings, AssetFileRow, AssetRow, AssetTranscriptRow, BookRow, 
 import { readFfprobeChapters } from "../media/probe-cache";
 import type { BooksRepo } from "../repo";
 import { selectPreferredAudioManifestation } from "./asset-selection";
+import { runRecursiveAgenticChapterCurationDetailed } from "./chapter-curation";
+import type { ChapterCurationTiming } from "./chapter-curation";
 
 const CHAPTER_ANALYSIS_SOURCE = "whisper_transcript";
 const CHAPTER_ANALYSIS_ALGORITHM_VERSION = "2026-04-22-atempo-2x-v1";
@@ -209,9 +211,12 @@ type StoredTranscriptPayload = {
   rawWords?: StoredTranscriptWord[];
 };
 
+type EpubTextKind = "heading" | "body";
+
 type EpubWord = {
   text: string;
   token: string;
+  kind?: EpubTextKind;
 };
 
 export type EpubChapterEntry = {
@@ -279,6 +284,7 @@ type ChapterAnalysisDeps = {
   loadEpubEntries: typeof loadEpubEntries;
   extractChunkClip: typeof extractChunkClip;
   transcribeChunk: typeof transcribeChunk;
+  runAgenticCuration: typeof runRecursiveAgenticChapterCurationDetailed;
 };
 
 type ExtractChunkArgs = {
@@ -341,14 +347,19 @@ export function normalizeTranscriptionLanguage(value: string | null | undefined)
   return null;
 }
 
-function tokenizeChapterWords(value: string): EpubWord[] {
+type EpubTextSegment = {
+  kind: EpubTextKind;
+  text: string;
+};
+
+function tokenizeChapterWords(value: string, kind?: EpubTextKind): EpubWord[] {
   const out: EpubWord[] = [];
   const matches = value.matchAll(/\b[\p{L}][\p{L}\p{N}'-]*\b/gu);
   for (const match of matches) {
     const text = match[0] ?? "";
     const token = normalizeToken(text);
     if (!token) continue;
-    out.push({ text, token });
+    out.push({ text, token, kind });
   }
   return out;
 }
@@ -365,14 +376,38 @@ function decodeHtmlEntities(value: string): string {
     .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)));
 }
 
-function stripHtmlToText(html: string): string {
-  return decodeHtmlEntities(
-    html
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/\s+/g, " ")
-  ).trim();
+function extractHtmlTextSegments(html: string): EpubTextSegment[] {
+  const cleaned = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ");
+  const segments: EpubTextSegment[] = [];
+  let headingDepth = 0;
+
+  for (const match of cleaned.matchAll(/<[^>]+>|[^<]+/g)) {
+    const value = match[0] ?? "";
+    if (value.startsWith("<")) {
+      const tagMatch = value.match(/^<\s*(\/?)\s*([a-zA-Z][\w:-]*)\b/);
+      if (!tagMatch) continue;
+      const closing = tagMatch[1] === "/";
+      const tag = tagMatch[2]!.toLowerCase().replace(/^.*:/, "");
+      if (/^h[1-6]$/.test(tag)) {
+        headingDepth = Math.max(0, headingDepth + (closing ? -1 : 1));
+      }
+      continue;
+    }
+
+    const text = decodeHtmlEntities(value).replace(/\s+/g, " ").trim();
+    if (!text) continue;
+    const kind: EpubTextKind = headingDepth > 0 ? "heading" : "body";
+    const previous = segments[segments.length - 1];
+    if (previous?.kind === kind) {
+      previous.text = `${previous.text} ${text}`.replace(/\s+/g, " ").trim();
+    } else {
+      segments.push({ kind, text });
+    }
+  }
+
+  return segments;
 }
 
 function flattenToc(nodes: Array<{ label?: string; href?: string; children?: unknown[] }>, out: Array<{ label: string; href: string }>): void {
@@ -427,8 +462,9 @@ export async function loadEpubEntries(epubPath: string): Promise<EpubChapterEntr
     for (const [index, id] of orderedIds.entries()) {
       const chapter = await epub.loadChapter(id).catch(() => null);
       if (!chapter || typeof chapter.html !== "string") continue;
-      const text = stripHtmlToText(chapter.html);
-      const words = tokenizeChapterWords(text);
+      const segments = extractHtmlTextSegments(chapter.html);
+      const text = segments.map((segment) => segment.text).join(" ").replace(/\s+/g, " ").trim();
+      const words = segments.flatMap((segment) => tokenizeChapterWords(segment.text, segment.kind));
       const tokens = words.map((word) => word.token);
       if (tokens.length === 0) continue;
       cumulativeWords += tokens.length;
@@ -1370,6 +1406,19 @@ async function queueChapterAnalysisForAudioAssets(repo: BooksRepo, bookId: numbe
   return first;
 }
 
+/**
+ * Enqueue curation jobs for books that already have a succeeded transcript but
+ * no chapters_json. Called once at server startup so existing books get curated
+ * without manual intervention.
+ */
+export async function queuePendingCurationJobs(repo: BooksRepo): Promise<number> {
+  const bookIds = repo.listBookIdsNeedingCuration();
+  for (const bookId of bookIds) {
+    await queueChapterAnalysisForBook(repo, bookId);
+  }
+  return bookIds.length;
+}
+
 export type TranscriptRequestStatus =
   | "current"
   | "stale"
@@ -1512,6 +1561,149 @@ export async function requestBookTranscription(
   return { ...base, status: base.status === "running" ? "running" : "pending", jobId: base.jobId ?? job.id };
 }
 
+type AgenticCurationResult = {
+  chaptersJson: string;
+  resolvedBoundaryCount: number;
+  totalBoundaryCount: number;
+  debugInfo: Record<string, unknown>;
+};
+
+async function buildEmbeddedChaptersForContainers(
+  containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>
+): Promise<ChapterCurationTiming[]> {
+  const out: ChapterCurationTiming[] = [];
+  let timeCursor = 0;
+  for (const [containerIndex, container] of containers.entries()) {
+    const containerDurationMs = container.asset.duration_ms ?? container.files.reduce((sum, file) => sum + file.duration_ms, 0);
+    if (container.asset.kind === "single") {
+      const file = container.files[0];
+      if (file) {
+        const stat = await fsPromises.stat(file.path).catch(() => null);
+        const chapters = stat ? readFfprobeChapters(file.path, Number(stat.mtimeMs)) : null;
+        if (chapters && chapters.length > 0) {
+          for (const [chapterIndex, chapter] of chapters.entries()) {
+            out.push({
+              id: `c${containerIndex}-${chapter.id ?? `ch${chapterIndex}`}`,
+              title: chapter.title,
+              startMs: timeCursor + chapter.startMs,
+              endMs: timeCursor + chapter.endMs,
+            });
+          }
+          timeCursor += containerDurationMs;
+          continue;
+        }
+      }
+    }
+    // Multi-file container or single-file with no embedded chapters: one entry per file.
+    let fileCursor = timeCursor;
+    for (const [fileIndex, file] of container.files.entries()) {
+      out.push({
+        id: `c${containerIndex}-f${fileIndex}`,
+        title: file.title ?? `Part ${containerIndex + 1}`,
+        startMs: fileCursor,
+        endMs: fileCursor + file.duration_ms,
+      });
+      fileCursor += file.duration_ms;
+    }
+    timeCursor += containerDurationMs;
+  }
+  return out;
+}
+
+async function tryAgenticCuration(
+  ctx: ChapterAnalysisContext,
+  target: { asset: AssetRow; files: AssetFileRow[] },
+  payload: { assetId?: number; ebookAssetId?: number },
+  settings: AppSettings,
+  transcriptFingerprint: string,
+  runCuration: typeof runRecursiveAgenticChapterCurationDetailed
+): Promise<AgenticCurationResult | null> {
+  if (!settings.agents.apiKey.trim()) return null;
+  if (!payload.ebookAssetId) return null;
+
+  // Only run curation from the first audio container of the manifestation.
+  const manifestationId = target.asset.manifestation_id;
+  if (manifestationId === null) return null;
+  const manifestationData = ctx.repo.getManifestationWithContainers(manifestationId);
+  if (!manifestationData) return null;
+  const audioContainers = manifestationData.containers.filter((c) => c.asset.kind !== "ebook");
+  if (audioContainers.length === 0) return null;
+  if (audioContainers[0]!.asset.id !== target.asset.id) return null;
+
+  // All containers must have succeeded transcription.
+  const allTranscribed = audioContainers.every((container) => {
+    const row = ctx.repo.getAssetTranscript(container.asset.id);
+    return row?.status === "succeeded";
+  });
+  if (!allTranscribed) return null;
+
+  const ebookAsset = ctx.repo.getAssetWithFiles(payload.ebookAssetId);
+  const ebookFile = ebookAsset?.files[0];
+  if (!ebookFile) return null;
+
+  const book = ctx.repo.getBookRow(target.asset.book_id);
+  if (!book) return null;
+
+  let epubEntries: EpubChapterEntry[];
+  try {
+    epubEntries = await loadEpubEntries(ebookFile.path);
+  } catch {
+    return null;
+  }
+
+  const transcript = await loadStoredManifestationTranscriptPayload(ctx.repo, audioContainers);
+  if (!transcript) return null;
+
+  const embeddedChapters = await buildEmbeddedChaptersForContainers(audioContainers);
+
+  const totalDurationMs = manifestationData.manifestation.duration_ms ?? audioContainers.reduce((sum, c) => sum + (c.asset.duration_ms ?? 0), 0);
+
+  try {
+    const result = await runCuration({
+      book,
+      manifestation: manifestationData.manifestation,
+      containers: audioContainers,
+      settings,
+      durationMs: totalDurationMs,
+      epubEntries,
+      transcript,
+      embeddedChapters,
+    });
+
+    const reports = result.recursiveReports ?? [];
+    const resolvedBoundaryCount = reports.filter((r) => r.outcome === "split").length;
+    const totalBoundaryCount = reports.filter((r) => r.outcome === "split" || r.outcome === "failed").length;
+
+    if (!result.result?.accepted || !result.result.chapters || result.result.chapters.length === 0) {
+      return null;
+    }
+
+    const chapters = result.result.chapters.map((chapter) => ({
+      title: chapter.title,
+      startTime: chapter.startTime,
+    }));
+
+    return {
+      chaptersJson: JSON.stringify(chapters),
+      resolvedBoundaryCount,
+      totalBoundaryCount,
+      debugInfo: {
+        curation: {
+          accepted: result.result.accepted,
+          chapterCount: chapters.length,
+          resolvedBoundaryCount,
+          totalBoundaryCount,
+          transcriptFingerprint,
+        },
+      },
+    };
+  } catch (error) {
+    // Curation failure is non-fatal: transcript job still succeeds.
+    console.warn(`[chapter-analysis] curation failed for asset ${target.asset.id}: ${(error as Error).message}`);
+    return null;
+  }
+}
+
 export async function processChapterAnalysisJob(
   ctx: ChapterAnalysisContext,
   job: JobRow,
@@ -1521,6 +1713,7 @@ export async function processChapterAnalysisJob(
     loadEpubEntries,
     extractChunkClip,
     transcribeChunk,
+    runAgenticCuration: runRecursiveAgenticChapterCurationDetailed,
     ...deps,
   };
   const jobStartedAt = performance.now();
@@ -1628,6 +1821,13 @@ export async function processChapterAnalysisJob(
         error: null,
       });
     }
+    // Run agentic chapter curation if prerequisites are satisfied:
+    // - API key configured
+    // - EPUB asset provided in job payload
+    // - This asset is the first audio container in its manifestation
+    // - All other audio containers in the manifestation are already transcribed
+    const curationResult = await tryAgenticCuration(ctx, target, payload, settings, transcriptFingerprint, resolvedDeps.runAgenticCuration);
+
     ctx.repo.upsertChapterAnalysis({
       assetId: target.asset.id,
       status: "succeeded",
@@ -1635,23 +1835,24 @@ export async function processChapterAnalysisJob(
       algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
       fingerprint: transcriptFingerprint,
       transcriptFingerprint,
-      chaptersJson: null,
+      chaptersJson: curationResult?.chaptersJson ?? null,
       debugJson: JSON.stringify({
         transcriptSource,
         chunkCount: plans.length,
         chunkWordCounts,
         transcriptWordCount: transcriptWords.length,
         model: TIMESTAMP_TRANSCRIPTION_MODEL,
+        ...(curationResult?.debugInfo ?? {}),
       }),
-      resolvedBoundaryCount: 0,
-      totalBoundaryCount: 0,
+      resolvedBoundaryCount: curationResult?.resolvedBoundaryCount ?? 0,
+      totalBoundaryCount: curationResult?.totalBoundaryCount ?? 0,
       error: null,
     });
     ctx.repo.markJobSucceeded(job.id);
     const totalJobMs = Math.round((performance.now() - jobStartedAt) * 100) / 100;
     log(
       ctx,
-      `[chapter-analysis] job=${job.id} asset=${target.asset.id} chunks=${plans.length} words=${transcriptWords.length} source=${transcriptSource} success=1 total_ms=${totalJobMs}`
+      `[chapter-analysis] job=${job.id} asset=${target.asset.id} chunks=${plans.length} words=${transcriptWords.length} source=${transcriptSource} chapters=${curationResult?.chaptersJson ? "yes" : "no"} success=1 total_ms=${totalJobMs}`
     );
     return "done";
   } catch (error) {
