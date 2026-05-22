@@ -1241,10 +1241,6 @@ export type SubmitChapterPlanResult =
       instruction: string;
     };
 
-type SubmitChapterPlanOptions = {
-  validateTranscriptEvidence?: boolean;
-};
-
 export type SubmitLeafChapterPlanResult =
   | {
       accepted: true;
@@ -2410,20 +2406,6 @@ export function validateLeafChapterPlan(
     if (chapterTitleKey(chapter.title) !== chapterTitleKey(heading.title)) {
       errors.push(`chapters[${index}] title "${chapter.title}" does not match claimed EPUB heading "${heading.title}"`);
     }
-    const isInheritedStartChapter =
-      index === 0 &&
-      inheritedStartBoundary !== undefined &&
-      chapter.epubNodeId === inheritedStartBoundary.epubNodeId &&
-      Math.abs(chapter.startTime - inheritedStartBoundary.startTime) <= INHERITED_BOUNDARY_TOLERANCE_SECONDS;
-    if (isInheritedStartChapter) continue;
-    const evidenceTokens = distinctFirstWordTokens(heading.firstWords);
-    if (evidenceTokens.length > 0) {
-      const transcriptTokens = new Set(textTokens(audit[index]?.transcriptAfterStart ?? ""));
-      const overlap = evidenceTokens.filter((token) => transcriptTokens.has(token));
-      if (overlap.length < Math.min(2, evidenceTokens.length)) {
-        errors.push(`chapters[${index}] has weak transcript evidence for claimed EPUB heading "${heading.title}"`);
-      }
-    }
   }
 
   const spanNodeCount = span.epubEndIndex - span.epubStartIndex + 1;
@@ -2461,7 +2443,7 @@ export function validateLeafChapterPlan(
   };
 }
 
-export function submitChapterPlan(ctx: ChapterCurationContext, input: unknown, options: SubmitChapterPlanOptions = {}): SubmitChapterPlanResult {
+export function submitChapterPlan(ctx: ChapterCurationContext, input: unknown): SubmitChapterPlanResult {
   const parsed = submitChapterPlanSchema.safeParse(input);
   if (!parsed.success) {
     return {
@@ -2540,16 +2522,6 @@ export function submitChapterPlan(ctx: ChapterCurationContext, input: unknown, o
     }
     if (chapterTitleKey(chapter.title) !== chapterTitleKey(heading.title)) {
       errors.push(`chapters[${index}] title "${chapter.title}" does not match claimed EPUB heading "${heading.title}"`);
-    }
-    if (options.validateTranscriptEvidence !== false) {
-      const evidenceTokens = distinctFirstWordTokens(heading.firstWords);
-      if (evidenceTokens.length > 0) {
-        const transcriptTokens = new Set(textTokens(audit[index]?.transcriptAfterStart ?? ""));
-        const overlap = evidenceTokens.filter((token) => transcriptTokens.has(token));
-        if (overlap.length < Math.min(2, evidenceTokens.length)) {
-          errors.push(`chapters[${index}] has weak transcript evidence for claimed EPUB heading "${heading.title}"`);
-        }
-      }
     }
   }
   const badEmbeddedRatio = matchingBadEmbeddedBoundaryRatio(ctx, plan.chapters);
@@ -2630,20 +2602,6 @@ const getTranscriptWindowSchema = z.object({
   startTime: z.number(),
   radiusSeconds: z.number().positive().max(300).optional(),
 });
-
-function parseSubmitToolOutput(output: unknown): SubmitChapterPlanResult | null {
-  if (!output) return null;
-  if (typeof output === "string") {
-    try {
-      const parsed = JSON.parse(output) as unknown;
-      return typeof parsed === "object" && parsed !== null && "accepted" in parsed ? (parsed as SubmitChapterPlanResult) : null;
-    } catch {
-      return null;
-    }
-  }
-  if (typeof output === "object" && "accepted" in output) return output as SubmitChapterPlanResult;
-  return null;
-}
 
 function parseSpanDecisionOutput(output: unknown): RecursiveSpanDecision | null {
   const value = typeof output === "string" ? safeJsonParse(output) : output;
@@ -2855,22 +2813,6 @@ export async function resolveRecursiveChapterSpans(
   }
 
   return visit(createRootCurationSpan(ctx), false);
-}
-
-export function chapterCuratorToolUseBehavior(_: unknown, toolResults: FunctionToolResult[]): ToolsToFinalOutputResult {
-  const submitResult = toolResults.find((result) => result.type === "function_output" && result.tool.name === "submitChapterPlan");
-  if (!submitResult || submitResult.type !== "function_output") {
-    return { isFinalOutput: false, isInterrupted: undefined };
-  }
-  const parsed = parseSubmitToolOutput(submitResult.output);
-  if (parsed?.accepted) {
-    return {
-      isFinalOutput: true,
-      isInterrupted: undefined,
-      finalOutput: JSON.stringify(parsed),
-    };
-  }
-  return { isFinalOutput: false, isInterrupted: undefined };
 }
 
 function spanScope(span: ChapterCurationSpan, inputScope?: TranscriptSearchScope): TranscriptSearchScope {
@@ -3745,163 +3687,6 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
   });
 }
 
-export function createChapterCuratorAgent(ctx: ChapterCurationContext): Agent {
-  let rejectedSubmitRequiresEvidence = false;
-  let evidenceCallsSinceRejectedSubmit = 0;
-  let submitAttempts = 0;
-
-  function markEvidenceToolUsed(): void {
-    if (rejectedSubmitRequiresEvidence) evidenceCallsSinceRejectedSubmit++;
-  }
-
-  function rejectSubmitUntilEvidence(): SubmitChapterPlanResult {
-    return {
-      accepted: false,
-      errors: [
-        "submitChapterPlan was called again before gathering new transcript evidence after the previous rejection.",
-        "Call rgSearchTranscript, fuzzySearchTranscript, or getTranscriptWindow for the rejected chapters before resubmitting.",
-      ],
-      warnings: [],
-      audit: [],
-      instruction:
-        "Do not call submitChapterPlan again yet. Your next tool call must gather transcript evidence for the rejected chapter starts.",
-    };
-  }
-
-  return new Agent({
-    name: "ChapterCurator",
-    model: ctx.settings.agents.model,
-    modelSettings: chapterCurationModelSettings(ctx, {
-      toolChoice: "required",
-      parallelToolCalls: false,
-    }),
-    resetToolChoice: false,
-    instructions: [
-      "You curate audiobook chapter markers from EPUB structure, embedded audio chapters, and transcript evidence.",
-      "You must use tools to inspect the available evidence. Embedded audio chapters are evidence, not truth; equal divisions and generic labels are suspicious.",
-      "Use submitChapterPlan sparingly. It is the final validation gate, not a search or brainstorming tool.",
-      "Before your first submitChapterPlan call, inspect EPUB structure, embedded audio chapters, and transcript evidence with rgSearchTranscript, fuzzySearchTranscript, or getTranscriptWindow.",
-      "For EPUB-rich books, build the plan from transcript evidence. Estimate tools and embedded boundaries are only priors; they are not enough evidence for an EPUB-heading claim.",
-      "Use findEpubChapterEvidence to gather candidate transcript anchors for many EPUB chapters at once before manually searching individual failures.",
-      "All tool inputs and submitted chapter startTime values are seconds, not milliseconds. Example: 3 minutes 10 seconds is 190, not 190000.",
-      "If you claim an epubNodeId for a chapter, verify the proposed start against transcript text near that timestamp or by searching for distinctive words from that EPUB node.",
-      "If submitChapterPlan rejects a chapter for weak transcript evidence, do not resubmit the same timestamp/title. First call rgSearchTranscript, fuzzySearchTranscript, or getTranscriptWindow to find better evidence for that chapter.",
-      "If submitChapterPlan rejects a plan as too coarse, do not fall back to part boundaries. Add supported EPUB-level chapter markers and validate them with transcript evidence.",
-      "Never call submitChapterPlan twice in a row after a rejection. The next tool call after a rejected submit must be rgSearchTranscript, fuzzySearchTranscript, or getTranscriptWindow.",
-      "Do not make no-op, compliance, last-resort, or best-effort retries. If you cannot fix a rejected plan with new evidence, gather more evidence instead of resubmitting.",
-      "Aim for at most three submitChapterPlan calls total: one initial plan and up to two evidence-driven revisions.",
-      "Do not invent chapters that are not supported by either EPUB structure or transcript context.",
-      "When you have a plan, call submitChapterPlan. If submitChapterPlan rejects it, use the audit feedback and call submitChapterPlan again.",
-      "Never provide a natural-language final answer instead of submitChapterPlan.",
-      ctx.settings.agents.editionPreference ? `Global edition preference, for context only: ${ctx.settings.agents.editionPreference}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n"),
-    tools: [
-      tool({
-        name: "getEpubStructure",
-        description: "Return ordered EPUB headings, word counts, cumulative ratios, and first words for each EPUB node.",
-        parameters: emptyToolSchema,
-        strict: true,
-        execute: () => getEpubStructure(ctx),
-      }),
-      tool({
-        name: "getEmbeddedAudioChapters",
-        description: "Return embedded audio chapter boundaries and diagnostics about whether they appear trustworthy.",
-        parameters: emptyToolSchema,
-        strict: true,
-        execute: () => getEmbeddedAudioChapters(ctx),
-      }),
-      tool({
-        name: "rgSearchTranscript",
-        description:
-          "Search transcript utterances with ripgrep. Time scopes are in seconds, not milliseconds. Use regex=false for literal phrases and regex=true for regular expressions.",
-        parameters: rgSearchTranscriptSchema,
-        strict: true,
-        execute: (input) => {
-          markEvidenceToolUsed();
-          return rgSearchTranscript(ctx, input);
-        },
-      }),
-      tool({
-        name: "fuzzySearchTranscript",
-        description: "Fuzzy-search transcript utterances for approximate chapter-heading or first-words matches. Time scopes are in seconds, not milliseconds.",
-        parameters: fuzzySearchTranscriptSchema,
-        strict: true,
-        execute: (input) => {
-          markEvidenceToolUsed();
-          return fuzzySearchTranscript(ctx, input);
-        },
-      }),
-      tool({
-        name: "findEpubChapterEvidence",
-        description:
-          "Batch fuzzy-search transcript evidence for EPUB chapter nodes. Use this before submitting EPUB-rich plans so each epubNodeId has candidate transcript anchors. Times are seconds.",
-        parameters: findEpubChapterEvidenceSchema,
-        strict: true,
-        execute: (input) => {
-          markEvidenceToolUsed();
-          return findEpubChapterEvidence(ctx, input);
-        },
-      }),
-      tool({
-        name: "estimateTimestampFromEpubPosition",
-        description: "Estimate the audio timestamp for an EPUB node from its cumulative word position and total audio duration.",
-        parameters: estimateTimestampFromEpubPositionSchema,
-        strict: true,
-        execute: (input) => estimateTimestampFromEpubPosition(ctx, input),
-      }),
-      tool({
-        name: "getTranscriptWindow",
-        description: "Return transcript utterances around a timestamp. startTime is seconds, not milliseconds.",
-        parameters: getTranscriptWindowSchema,
-        strict: true,
-        execute: (input) => {
-          markEvidenceToolUsed();
-          return getTranscriptWindow(ctx, input);
-        },
-      }),
-      tool({
-        name: "submitChapterPlan",
-        description: "Submit the final chapter plan. Validation feedback is returned if the plan needs revision.",
-        parameters: submitChapterPlanSchema,
-        strict: true,
-        execute: (input) => {
-          submitAttempts++;
-          if (rejectedSubmitRequiresEvidence && evidenceCallsSinceRejectedSubmit === 0) return rejectSubmitUntilEvidence();
-          if (submitAttempts > 6 && evidenceCallsSinceRejectedSubmit === 0) return rejectSubmitUntilEvidence();
-          const result = submitChapterPlan(ctx, input);
-          rejectedSubmitRequiresEvidence = !result.accepted;
-          evidenceCallsSinceRejectedSubmit = 0;
-          return result;
-        },
-      }),
-    ],
-    toolUseBehavior: chapterCuratorToolUseBehavior,
-  });
-}
-
-export function chapterCuratorPrompt(ctx: ChapterCurationContext): string {
-  return [
-    `Curate chapter markers for "${ctx.book.title}" by ${ctx.book.author}.`,
-    `manifestationId: ${ctx.manifestation.id}`,
-    `durationSeconds: ${msToSeconds(ctx.durationMs)}`,
-    `epubNodeCount: ${ctx.epubEntries.length}`,
-    `transcriptUtteranceCount: ${ctx.transcript.utterances?.length ?? 0}`,
-    `embeddedChapterCount: ${ctx.embeddedChapters.length}`,
-    "",
-    "Find a chapter plan that is useful for listening. Prefer real narrative sections over front/back matter unless the front/back matter is audibly distinct and useful.",
-    "All times you pass to tools or submit in the final plan must be seconds. Do not use milliseconds.",
-    "Workflow requirement:",
-    "1. Inspect EPUB structure and embedded audio chapters.",
-    "2. Gather transcript evidence before submitting a plan. For an EPUB-rich book, use findEpubChapterEvidence for candidate anchors, then search/window-check individual uncertain starts.",
-    "3. Submit one evidence-backed plan.",
-    "4. If rejected, your next tool call must be transcript search/window evidence, not another submit. Fix rejected chapters before resubmitting.",
-    "5. Never make no-op, compliance, last-resort, or best-effort retry submissions. Repeated invalid submissions waste the turn budget and fail the task.",
-    "Return only by calling submitChapterPlan.",
-  ].join("\n");
-}
-
 export async function runAgenticChapterCuration(ctx: ChapterCurationContext): Promise<SubmitChapterPlanResult | null> {
   const detailed = await runAgenticChapterCurationDetailed(ctx);
   return detailed.result;
@@ -4112,7 +3897,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
         strategy: "Recursive fulcrum chapter curation",
         chapters: recursiveChapters,
         notes: "Merged from recursively curated span plans.",
-      }, { validateTranscriptEvidence: false });
+      });
       if (recursiveResult.accepted) {
         logChapterCurationEvent(curationCtx, {
           type: "recursive-merge-accepted",
@@ -4167,55 +3952,5 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
 }
 
 export async function runAgenticChapterCurationDetailed(ctx: ChapterCurationContext): Promise<ChapterCurationDetailedResult> {
-  const recursive = await runRecursiveAgenticChapterCurationDetailed(ctx);
-  if (recursive.result) return recursive;
-
-  const apiKey = ctx.settings.agents.apiKey.trim();
-  if (!apiKey) return recursive;
-  const abort = new AbortController();
-  const timeout = setTimeout(() => abort.abort(), Math.max(5_000, ctx.settings.agents.timeoutMs));
-  const provider = new OpenAIProvider({ apiKey, useResponses: true });
-  try {
-    const runner = new Runner({
-      modelProvider: provider,
-      tracingDisabled: true,
-      traceIncludeSensitiveData: false,
-    });
-    logChapterCurationEvent(ctx, {
-      type: "global-fallback-start",
-      message: "recursive result=null fallback=global",
-    });
-    logChapterCurationEvent(ctx, {
-      type: "global-fallback-agent-start",
-      message: "global fallback start=1",
-    });
-    const result = await runner.run(createChapterCuratorAgent(ctx), chapterCuratorPrompt(ctx), {
-      maxTurns: 64,
-      signal: abort.signal,
-      toolExecution: { maxFunctionToolConcurrency: 4 },
-    });
-    const parsedResult = parseSubmitToolOutput(result.finalOutput);
-    const tracePath = writeChapterCurationTrace(ctx, "global-fallback", {
-      finalOutput: result.finalOutput,
-      newItems: result.newItems as unknown[],
-      rawResponses: result.rawResponses as unknown[],
-    });
-    logChapterCurationEvent(ctx, {
-      type: "global-fallback-agent-result",
-      message: `global fallback done=1 result=${parsedResult?.accepted ? "accepted" : "none"}`,
-      tracePath,
-      finalOutput: result.finalOutput,
-    });
-    return {
-      result: parsedResult,
-      finalOutput: result.finalOutput,
-      newItems: result.newItems as unknown[],
-      rawResponses: result.rawResponses as unknown[],
-      recursiveReports: recursive.recursiveReports,
-      recursiveSpanTraces: recursive.recursiveSpanTraces,
-    };
-  } finally {
-    clearTimeout(timeout);
-    await provider.close().catch(() => undefined);
-  }
+  return runRecursiveAgenticChapterCurationDetailed(ctx);
 }

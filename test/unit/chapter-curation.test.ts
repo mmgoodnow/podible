@@ -12,7 +12,6 @@ import {
   estimateTimestampFromEpubPosition,
   getTranscriptWindow,
   rgSearchTranscript,
-  chapterCuratorToolUseBehavior,
   applyAudibleEpubNodeSelection,
   createRootCurationSpan,
   resolveRecursiveChapterSpans,
@@ -710,7 +709,7 @@ describe("chapter curation tools", () => {
     expect(result.audit[1]?.nearestEmbeddedBoundary?.startTime).toBe(0);
   });
 
-  test("submitChapterPlan can run structural validation without transcript token evidence", () => {
+  test("submitChapterPlan accepts structural plans without transcript token evidence", () => {
     const context = ctx({
       transcript: {
         version: "test",
@@ -731,14 +730,9 @@ describe("chapter curation tools", () => {
       ],
     };
 
-    const strict = submitChapterPlan(context, plan);
-    expect(strict.accepted).toBe(false);
-    if (strict.accepted) throw new Error("expected transcript evidence rejection");
-    expect(strict.errors.join("\n")).toContain("weak transcript evidence");
-
-    const structural = submitChapterPlan(context, plan, { validateTranscriptEvidence: false });
-    expect(structural.accepted).toBe(true);
-    if (!structural.accepted) throw new Error(structural.errors.join("\n"));
+    const result = submitChapterPlan(context, plan);
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error(result.errors.join("\n"));
   });
 
   test("submitChapterPlan rejects plans copied from suspicious equal embedded divisions", () => {
@@ -764,38 +758,6 @@ describe("chapter curation tools", () => {
     expect(result.accepted).toBe(false);
     if (result.accepted) throw new Error("expected rejection");
     expect(result.errors.join("\n")).toContain("suspicious evenly-divided");
-  });
-
-  test("chapterCuratorToolUseBehavior only terminates on accepted submitChapterPlan output", () => {
-    const rejected = chapterCuratorToolUseBehavior(undefined, [
-      {
-        type: "function_output",
-        tool: { name: "submitChapterPlan" },
-        output: { accepted: false, errors: ["bad"], warnings: [], audit: [], instruction: "retry" },
-        runItem: {} as never,
-      } as never,
-    ]);
-    expect(rejected.isFinalOutput).toBe(false);
-
-    const accepted = chapterCuratorToolUseBehavior(undefined, [
-      {
-        type: "function_output",
-        tool: { name: "submitChapterPlan" },
-        output: { accepted: true, strategy: "test", notes: null, chapters: [], warnings: [], audit: [] },
-        runItem: {} as never,
-      } as never,
-    ]);
-    expect(accepted.isFinalOutput).toBe(true);
-
-    const naturalJson = chapterCuratorToolUseBehavior(undefined, [
-      {
-        type: "function_output",
-        tool: { name: "submitChapterPlan" },
-        output: JSON.stringify({ chapters: [{ title: "Chapter 1", startTime: 0 }] }),
-        runItem: {} as never,
-      } as never,
-    ]);
-    expect(naturalJson.isFinalOutput).toBe(false);
   });
 
   test("fulcrumJudgeToolUseBehavior terminates on a structured judgment", () => {
