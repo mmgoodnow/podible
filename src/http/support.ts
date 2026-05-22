@@ -227,10 +227,11 @@ async function resolvePlexLoginStatus(
           plex: {
             ...settings.auth.plex,
             ownerToken: plexToken,
+            ownerClientIdentifier: attempt.client_identifier,
           },
         },
       });
-      console.log(`[plex] ${hadOwnerToken ? "refreshed" : "captured"} owner token from user id=${plexUser.id}`);
+      console.log(`[plex] ${hadOwnerToken ? "refreshed" : "captured"} owner token from user id=${plexUser.id} clientId=${attempt.client_identifier}`);
     }
 
     const user = repo.upsertUser({

@@ -41,6 +41,7 @@ export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
       plex: {
         productName: "Podible",
         ownerToken: "",
+        ownerClientIdentifier: "",
         machineId: "",
       },
     },
@@ -165,6 +166,10 @@ export function parseSettings(value: string): AppSettings {
           typeof parsedAuthPlex.ownerToken === "string"
             ? parsedAuthPlex.ownerToken
             : defaults.auth.plex.ownerToken,
+        ownerClientIdentifier:
+          typeof parsedAuthPlex.ownerClientIdentifier === "string"
+            ? parsedAuthPlex.ownerClientIdentifier
+            : defaults.auth.plex.ownerClientIdentifier,
         machineId:
           typeof parsedAuthPlex.machineId === "string"
             ? parsedAuthPlex.machineId

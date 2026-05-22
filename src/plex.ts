@@ -242,9 +242,10 @@ export async function fetchPlexServerDevices(settings: AppSettings, plexToken = 
 export async function pingPlexOwnerToken(settings: AppSettings): Promise<boolean> {
   const ownerToken = settings.auth.plex.ownerToken;
   if (!ownerToken) return false;
+  const clientId = settings.auth.plex.ownerClientIdentifier || settingsClientIdentifier(settings);
   try {
     const response = await fetch("https://plex.tv/api/v2/ping", {
-      headers: plexHeaders(settings.auth.plex.productName, settingsClientIdentifier(settings), {
+      headers: plexHeaders(settings.auth.plex.productName, clientId, {
         "X-Plex-Token": ownerToken,
       }),
     });
@@ -294,8 +295,9 @@ export async function checkPlexUserAccess(settings: AppSettings, userId: string)
   if (decodePlexTokenExpiry(ownerToken).expired) {
     throw new Error("Plex owner token has expired — an admin needs to re-link Plex");
   }
+  const clientId = settings.auth.plex.ownerClientIdentifier || settingsClientIdentifier(settings);
   const response = await fetch("https://plex.tv/api/users", {
-    headers: plexHeaders(settings.auth.plex.productName, settingsClientIdentifier(settings), {
+    headers: plexHeaders(settings.auth.plex.productName, clientId, {
       "X-Plex-Token": ownerToken,
     }),
   });

@@ -66,6 +66,7 @@ export type AppSettings = {
     plex: {
       productName: string;
       ownerToken: string;
+      ownerClientIdentifier: string;
       machineId: string;
     };
   };

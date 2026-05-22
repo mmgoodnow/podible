@@ -91,6 +91,7 @@ export const appSettingsSchema: z.ZodType<AppSettings> = z.object({
     plex: z.object({
       productName: z.string(),
       ownerToken: z.string(),
+      ownerClientIdentifier: z.string(),
       machineId: z.string(),
     }),
   }),
