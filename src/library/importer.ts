@@ -6,7 +6,7 @@ import { normalizeAudioExt } from "../media/metadata";
 import { computeEpubWordCount } from "./chapter-analysis";
 
 import type { BooksRepo } from "../repo";
-import type { MediaType, ReleaseRow } from "../app-types";
+import type { AssetKind, MediaType, ReleaseRow } from "../app-types";
 
 /**
  * Release importer that materializes downloader output as library assets.
@@ -16,7 +16,7 @@ import type { MediaType, ReleaseRow } from "../app-types";
  * immutable asset + asset_file rows.
  */
 type ImportResult = {
-  assetIds: number[];
+  assetId: number;
   linkedFiles: string[];
 };
 
@@ -158,13 +158,14 @@ async function ensureHardlink(sourcePath: string, destinationPath: string): Prom
   throw new Error(`Could not allocate unique import path for ${destinationPath}`);
 }
 
-function pickAudioCandidates(files: FileInfo[]): { files: FileInfo[]; mime: string } | null {
+function pickAudioCandidates(files: FileInfo[]): { kind: AssetKind; files: FileInfo[]; mime: string } | null {
   const m4 = files.filter((file) => [".m4b", ".m4a", ".mp4"].includes(file.ext));
   if (m4.length > 0) {
     const chosen = [...m4].sort((a, b) => b.size - a.size)[0];
     if (!chosen) return null;
     const ext = normalizeAudioExt(chosen.ext);
     return {
+      kind: "single",
       files: [chosen],
       mime: ext === "m4a" ? "audio/mp4" : "audio/mpeg",
     };
@@ -173,21 +174,42 @@ function pickAudioCandidates(files: FileInfo[]): { files: FileInfo[]; mime: stri
   const mp3s = files.filter((file) => file.ext === ".mp3").sort((a, b) => a.sourcePath.localeCompare(b.sourcePath));
   if (mp3s.length === 0) return null;
 
+  if (mp3s.length === 1) {
+    return {
+      kind: "single",
+      files: mp3s,
+      mime: "audio/mpeg",
+    };
+  }
+
   return {
+    kind: "multi",
     files: mp3s,
     mime: "audio/mpeg",
   };
 }
 
-function pickEbookCandidate(files: FileInfo[]): { files: FileInfo[]; mime: string } | null {
+function pickEbookCandidate(files: FileInfo[]): { kind: AssetKind; files: FileInfo[]; mime: string } | null {
   const epub = files.find((file) => file.ext === ".epub");
-  if (epub) return { files: [epub], mime: "application/epub+zip" };
+  if (epub) {
+    return {
+      kind: "ebook",
+      files: [epub],
+      mime: "application/epub+zip",
+    };
+  }
   const pdf = files.find((file) => file.ext === ".pdf");
-  if (pdf) return { files: [pdf], mime: "application/pdf" };
+  if (pdf) {
+    return {
+      kind: "ebook",
+      files: [pdf],
+      mime: "application/pdf",
+    };
+  }
   return null;
 }
 
-function chooseFilesForMedia(mediaType: MediaType, files: FileInfo[]): { files: FileInfo[]; mime: string } {
+function chooseFilesForMedia(mediaType: MediaType, files: FileInfo[]): { kind: AssetKind; files: FileInfo[]; mime: string } {
   if (mediaType === "audio") {
     const picked = pickAudioCandidates(files);
     if (!picked) throw new Error("No supported audio files found for import");
@@ -225,23 +247,28 @@ export async function importReleaseFromPath(
   const root = path.join(libraryRoot, authorDir, titleDir);
   const linkedFiles: string[] = [];
 
-  const multiFile = selected.files.length > 1;
+  let cursor = 0;
   let durationMsTotal = 0;
-  const assetIds: number[] = [];
 
-  const manifestationId =
-    options.manifestationId ??
-    repo.addManifestation({
-      bookId: book.id,
-      kind: release.media_type === "ebook" ? "ebook" : "audio",
-    }).id;
-
-  const baseSequence = options.sequenceInManifestation ?? 0;
+  const assetFiles: Array<{
+    path: string;
+    sourcePath: string;
+    size: number;
+    start: number;
+    end: number;
+    durationMs: number;
+    title?: string | null;
+  }> = [];
 
   for (const [index, file] of selected.files.entries()) {
-    const targetPath = multiFile
-      ? path.join(root, titleDir, path.basename(file.sourcePath))
-      : path.join(root, `${titleDir}${file.ext}`);
+    const targetPath = (() => {
+      if (selected.kind === "multi") {
+        const multiDir = path.join(root, titleDir);
+        return path.join(multiDir, path.basename(file.sourcePath));
+      }
+      const ext = file.ext;
+      return path.join(root, `${titleDir}${ext}`);
+    })();
 
     const linkedPath = await ensureHardlink(file.sourcePath, targetPath);
     linkedFiles.push(linkedPath);
@@ -251,32 +278,41 @@ export async function importReleaseFromPath(
         ? getDurationSeconds(linkedPath, file.mtimeMs) ?? 0
         : 0;
     const durationMs = Math.max(0, Math.round(durationSeconds * 1000));
+    const start = cursor;
+    const end = Math.max(start, start + file.size - 1);
+    cursor += file.size;
     durationMsTotal += durationMs;
 
-    const asset = repo.addAsset({
-      bookId: book.id,
-      kind: release.media_type === "ebook" ? "ebook" : "single",
-      mime: selected.mime,
-      totalSize: file.size,
-      durationMs: release.media_type === "audio" ? durationMs : null,
-      sourceReleaseId: release.id,
-      manifestationId,
-      sequenceInManifestation: baseSequence + index,
-      importNote: options.importNote ?? null,
-      files: [
-        {
-          path: linkedPath,
-          sourcePath: file.sourcePath,
-          size: file.size,
-          start: 0,
-          end: Math.max(0, file.size - 1),
-          durationMs,
-          title: multiFile ? `Part ${index + 1}` : null,
-        },
-      ],
+    assetFiles.push({
+      path: linkedPath,
+      sourcePath: file.sourcePath,
+      size: file.size,
+      start,
+      end,
+      durationMs,
+      title: selected.kind === "multi" ? `Part ${index + 1}` : null,
     });
-    assetIds.push(asset.id);
   }
+
+  const totalSize = assetFiles.reduce((sum, item) => sum + item.size, 0);
+  const manifestationId =
+    options.manifestationId ??
+    repo.addManifestation({
+      bookId: book.id,
+      kind: release.media_type === "ebook" ? "ebook" : "audio",
+    }).id;
+  const asset = repo.addAsset({
+    bookId: book.id,
+    kind: selected.kind,
+    mime: selected.mime,
+    totalSize,
+    durationMs: release.media_type === "audio" ? durationMsTotal : null,
+    sourceReleaseId: release.id,
+    manifestationId,
+    sequenceInManifestation: options.sequenceInManifestation ?? undefined,
+    importNote: options.importNote ?? null,
+    files: assetFiles,
+  });
 
   // Prefer first cover found in target root for /covers endpoint.
   const coverCandidates = [".jpg", ".jpeg", ".png"];
@@ -301,7 +337,7 @@ export async function importReleaseFromPath(
   }
 
   return {
-    assetIds,
+    assetId: asset.id,
     linkedFiles,
   };
 }
