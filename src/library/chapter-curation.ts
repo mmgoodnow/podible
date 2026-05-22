@@ -3581,6 +3581,107 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
   });
 }
 
+async function tryDeterministicFulcrumSplit(
+  ctx: ChapterCurationContext,
+  span: ChapterCurationSpan,
+  targetBoundary: ChapterCurationTargetBoundary
+): Promise<RecursiveSpanDecision | null> {
+  const research = await researchEpubBoundary(ctx, {
+    epubNodeId: targetBoundary.epubNodeId,
+    expectedTime: targetBoundary.expectedStartTime,
+    scope: { startTime: span.startTime, endTime: span.endTime },
+    searchRadiusSeconds: Math.max(180, Math.min(1_200, spanDurationSeconds(span) / 2)),
+    phraseLimit: 8,
+    hitLimitPerPhrase: 5,
+  });
+  const candidate = research?.bestCandidates.find(
+    (hit) =>
+      hit.boundaryUse === "candidate_start" &&
+      (hit.reverseEpubRelation === "opener" || hit.reverseEpubRelation === "near_opener") &&
+      hit.phraseStartWord <= 2 &&
+      hit.startTime > span.startTime &&
+      hit.startTime < span.endTime
+  );
+  logChapterCurationEvent(ctx, {
+    type: "deterministic-boundary-research",
+    message: `deterministic boundary span=${span.path} target=${targetBoundary.epubNodeId} candidates=${research?.bestCandidates.length ?? 0}${
+      candidate ? ` selected=${Math.round(candidate.startTime)}s` : ""
+    }`,
+    span,
+    targetBoundary,
+    candidate,
+    research: research
+      ? {
+          epubNodeId: research.epubNodeId,
+          title: research.title,
+          expectedStartTime: research.expectedStartTime,
+          searchScope: research.searchScope,
+          bestCandidates: research.bestCandidates.slice(0, 3),
+        }
+      : null,
+  });
+  if (!research || !candidate) return null;
+
+  const validated = await validateFulcrumSplit(
+    ctx,
+    span,
+    {
+      spanPath: span.path,
+      epubNodeId: targetBoundary.epubNodeId,
+      title: targetBoundary.title,
+      startTime: candidate.startTime,
+      evidence: [
+        "Deterministic strong opener candidate from researchEpubBoundary.",
+        `Anchor phrase "${candidate.phrase}" starts at word ${candidate.phraseStartWord} and reverse EPUB relation is ${candidate.reverseEpubRelation}.`,
+        `Transcript text: ${candidate.transcriptText}`,
+      ].join(" "),
+      notes: "Deterministic short-circuit accepted only because the candidate is an opener/near_opener at the target node start.",
+    },
+    { targetBoundary }
+  );
+  if (!validated.accepted) {
+    logChapterCurationEvent(ctx, {
+      type: "deterministic-boundary-rejected",
+      message: `deterministic boundary span=${span.path} target=${targetBoundary.epubNodeId} validation=0`,
+      span,
+      targetBoundary,
+      result: validated,
+    });
+    return null;
+  }
+
+  const judgment = await judgeFulcrumSplit(ctx, span, validated);
+  if (!judgment?.accepted) {
+    logChapterCurationEvent(ctx, {
+      type: "deterministic-boundary-rejected",
+      message: `deterministic boundary span=${span.path} target=${targetBoundary.epubNodeId} judge=0`,
+      span,
+      targetBoundary,
+      result: validated,
+      judgment,
+    });
+    return null;
+  }
+
+  const accepted: Extract<SubmitFulcrumSplitResult, { accepted: true }> = {
+    ...validated,
+    notes: [validated.notes, "Accepted by deterministic pre-agent short-circuit."].filter(Boolean).join(" "),
+  };
+  logChapterCurationEvent(ctx, {
+    type: "deterministic-boundary-accepted",
+    message: `deterministic boundary span=${span.path} target=${targetBoundary.epubNodeId} accepted=1 time=${Math.round(candidate.startTime)}s`,
+    span,
+    targetBoundary,
+    result: accepted,
+    judgment,
+  });
+  return {
+    kind: "split",
+    split: accepted,
+    result: accepted,
+  };
+}
+
 export async function runAgenticChapterCuration(ctx: ChapterCurationContext): Promise<SubmitChapterPlanResult | null> {
   const detailed = await runAgenticChapterCurationDetailed(ctx);
   return detailed.result;
@@ -3662,6 +3763,28 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
           targetBoundary,
         });
         const startedAt = Date.now();
+        const deterministicDecision = await tryDeterministicFulcrumSplit(curationCtx, span, targetBoundary);
+        if (deterministicDecision) {
+          const elapsedMs = Date.now() - startedAt;
+          logChapterCurationEvent(curationCtx, {
+            type: "span-agent-result",
+            message: `recursive span=${span.path} elapsed_ms=${elapsedMs} attempt=0 decision=split deterministic=1 split_epub=${deterministicDecision.split.epubNodeId} split_time=${Math.round(deterministicDecision.split.startTime)}s`,
+            span,
+            attempt: 0,
+            elapsedMs,
+            decisionKind: "split",
+            deterministic: true,
+            decision: {
+              kind: "split",
+              epubNodeId: deterministicDecision.split.epubNodeId,
+              epubIndex: deterministicDecision.split.epubIndex,
+              title: deterministicDecision.split.title,
+              startTime: deterministicDecision.split.startTime,
+              result: deterministicDecision.result,
+            },
+          });
+          return deterministicDecision;
+        }
         const delays = [0, 15_000, 45_000];
         for (let attempt = 0; attempt < delays.length; attempt++) {
           if (delays[attempt]! > 0) {
