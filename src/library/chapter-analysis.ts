@@ -1406,6 +1406,19 @@ async function queueChapterAnalysisForAudioAssets(repo: BooksRepo, bookId: numbe
   return first;
 }
 
+/**
+ * Enqueue curation jobs for books that already have a succeeded transcript but
+ * no chapters_json. Called once at server startup so existing books get curated
+ * without manual intervention.
+ */
+export async function queuePendingCurationJobs(repo: BooksRepo): Promise<number> {
+  const bookIds = repo.listBookIdsNeedingCuration();
+  for (const bookId of bookIds) {
+    await queueChapterAnalysisForBook(repo, bookId);
+  }
+  return bookIds.length;
+}
+
 export type TranscriptRequestStatus =
   | "current"
   | "stale"

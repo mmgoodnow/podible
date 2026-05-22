@@ -1,6 +1,7 @@
 import { ensureConfigDir, booksDbPath, port } from "./src/config";
 import { openDatabase } from "./src/db";
 import { createPodibleFetchHandler } from "./src/http";
+import { queuePendingCurationJobs } from "./src/library/chapter-analysis";
 import { pingPlexOwnerToken } from "./src/plex";
 import { BooksRepo } from "./src/repo";
 import { runWorker } from "./src/worker";
@@ -17,6 +18,11 @@ void runWorker({
   repo,
   getSettings: () => repo.getSettings(),
   onLog: (message) => console.log(message),
+});
+
+// Enqueue curation for any book that already has a transcript but no chapters yet.
+void queuePendingCurationJobs(repo).then((count) => {
+  if (count > 0) console.log(`[chapter-analysis] queued curation for ${count} already-transcribed book(s)`);
 });
 
 // Keep the Plex owner token alive so shared-user lookups don't 401 a week
