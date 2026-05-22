@@ -748,7 +748,7 @@ describe("chapter curation tools", () => {
     const accepted = fulcrumJudgeToolUseBehavior(undefined, [
       {
         type: "function_output",
-        tool: { name: "submitFulcrumJudgment" },
+        tool: { name: "submitBoundaryJudgment" },
         output: {
           accepted: false,
           confidence: "high",
@@ -765,7 +765,7 @@ describe("chapter curation tools", () => {
     const malformed = fulcrumJudgeToolUseBehavior(undefined, [
       {
         type: "function_output",
-        tool: { name: "submitFulcrumJudgment" },
+        tool: { name: "submitBoundaryJudgment" },
         output: { accepted: false },
         runItem: {} as never,
       } as never,

@@ -472,9 +472,10 @@ describe("chapter analysis", () => {
           }),
           runAgenticCuration: async () => ({
             result: {
-              accepted: true,
+              accepted: true as const,
+              strategy: "test",
+              notes: null,
               chapters: curatedChapters,
-              errors: [],
               warnings: [],
               audit: [],
             },

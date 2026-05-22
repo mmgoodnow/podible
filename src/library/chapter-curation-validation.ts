@@ -599,7 +599,7 @@ export async function validateFulcrumSplit(
       errors: parsed.error.issues.map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`),
       warnings: [],
       audit: null,
-      instruction: "Revise the split so it matches the submitFulcrumSplit schema.",
+      instruction: "Revise the submission to match the submitBoundarySplit schema.",
     };
   }
 
@@ -616,15 +616,15 @@ export async function validateFulcrumSplit(
     errors.push(`epubNodeId ${split.epubNodeId} is not inside the current span`);
   }
   if (epubIndex <= span.epubStartIndex || epubIndex > span.epubEndIndex) {
-    errors.push("Fulcrum must leave non-empty EPUB ranges on both sides of the split.");
+    errors.push("The split must leave non-empty EPUB ranges on both sides.");
   }
   if (split.startTime <= span.startTime || split.startTime >= span.endTime) {
-    errors.push("Fulcrum startTime must be inside the current span time range.");
+    errors.push("startTime must be inside the current span time range.");
   }
   const edgeMargin = Math.max(120, spanDurationSeconds(span) * 0.05);
   const isOnlyRemainingAssignedBoundary = Boolean(options.targetBoundary && spanInternalBoundaryCount(span) === 1);
   if (!isOnlyRemainingAssignedBoundary && (split.startTime - span.startTime < edgeMargin || span.endTime - split.startTime < edgeMargin)) {
-    errors.push("Fulcrum startTime is too close to a span edge.");
+    errors.push("startTime is too close to the span boundary — the split must leave a meaningful region on each side.");
   }
 
   const window = getTranscriptWindowFromContext(ctx, secondsToMs(split.startTime), 45_000);
@@ -643,7 +643,7 @@ export async function validateFulcrumSplit(
       errors,
       warnings,
       audit,
-      instruction: "Pick a different internal fulcrum with stronger transcript/prose evidence for the assigned target boundary.",
+      instruction: "Find the assigned target boundary with stronger transcript evidence and submit a corrected startTime.",
     };
   }
 
@@ -817,7 +817,7 @@ export function recursiveSpanToolUseBehavior(_: unknown, toolResults: FunctionTo
   const terminalResult = toolResults.find(
     (result) =>
       result.type === "function_output" &&
-      result.tool.name === "submitFulcrumSplit" &&
+      result.tool.name === "submitBoundarySplit" &&
       parseSpanDecisionOutput(result.output)
   );
   if (!terminalResult || terminalResult.type !== "function_output") {
@@ -832,7 +832,7 @@ export function recursiveSpanToolUseBehavior(_: unknown, toolResults: FunctionTo
 
 export function fulcrumJudgeToolUseBehavior(_: unknown, toolResults: FunctionToolResult[]): ToolsToFinalOutputResult {
   const terminalResult = toolResults.find(
-    (result) => result.type === "function_output" && result.tool.name === "submitFulcrumJudgment" && parseFulcrumJudgmentOutput(result.output)
+    (result) => result.type === "function_output" && result.tool.name === "submitBoundaryJudgment" && parseFulcrumJudgmentOutput(result.output)
   );
   if (!terminalResult || terminalResult.type !== "function_output") {
     return { isFinalOutput: false, isInterrupted: undefined };
