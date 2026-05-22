@@ -1,4 +1,7 @@
 import { Agent, OpenAIProvider, Runner, tool } from "@openai/agents";
+import { getGlobalTraceProvider } from "@openai/agents-core";
+
+getGlobalTraceProvider().setDisabled(true);
 import { z } from "zod";
 
 import type { EpubChapterEntry } from "./chapter-analysis";
