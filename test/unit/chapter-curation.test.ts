@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  assessEmbeddedAudioChaptersForCuration,
   getEmbeddedAudioChapters,
   getEpubNodeText,
   getEpubStructure,
@@ -388,6 +389,55 @@ describe("chapter curation tools", () => {
     expect(result.diagnostics.labelQuality).toBe("named");
     expect(result.diagnostics.durationPattern).toBe("varied");
     expect(result.diagnostics.boundaryDensity).toBe("plausible");
+  });
+
+  test("assessEmbeddedAudioChaptersForCuration identifies short-circuit candidates", () => {
+    const result = assessEmbeddedAudioChaptersForCuration(
+      ctx({
+        durationMs: 7_200_000,
+        epubEntries: [
+          epubEntry({ id: "prologue", title: "Prologue", wordCount: 100, cumulativeWords: 100, cumulativeRatio: 0.33 }),
+          epubEntry({ id: "crossing", title: "The Crossing", wordCount: 100, cumulativeWords: 200, cumulativeRatio: 0.66 }),
+          epubEntry({ id: "epilogue", title: "Epilogue", wordCount: 100, cumulativeWords: 300, cumulativeRatio: 1 }),
+        ],
+        embeddedChapters: [
+          { id: "ch0", title: "Prologue", startMs: 0, endMs: 120_000 },
+          { id: "ch1", title: "The Crossing", startMs: 120_000, endMs: 2_600_000 },
+          { id: "ch2", title: "Epilogue", startMs: 2_600_000, endMs: 7_200_000 },
+        ],
+      })
+    );
+
+    expect(result).toMatchObject({
+      action: "short_circuit_candidate",
+      confidence: "high",
+      matchedEpubNodeIds: ["prologue", "crossing", "epilogue"],
+    });
+  });
+
+  test("assessEmbeddedAudioChaptersForCuration treats generic varied markers as priors", () => {
+    const result = assessEmbeddedAudioChaptersForCuration(
+      ctx({
+        durationMs: 7_200_000,
+        epubEntries: Array.from({ length: 4 }, (_, index) =>
+          epubEntry({
+            id: `chapter-${index + 1}`,
+            title: `Chapter ${index + 1}`,
+            wordCount: 100,
+            cumulativeWords: (index + 1) * 100,
+            cumulativeRatio: (index + 1) / 4,
+          })
+        ),
+        embeddedChapters: [
+          { id: "ch0", title: "Chapter 1", startMs: 0, endMs: 1_000_000 },
+          { id: "ch1", title: "Chapter 2", startMs: 1_000_000, endMs: 2_700_000 },
+          { id: "ch2", title: "Chapter 3", startMs: 2_700_000, endMs: 5_100_000 },
+          { id: "ch3", title: "Chapter 4", startMs: 5_100_000, endMs: 7_200_000 },
+        ],
+      })
+    );
+
+    expect(result.action).toBe("seed_boundaries");
   });
 
   test("rgSearchTranscript searches timestamped transcript utterances without shell access", async () => {

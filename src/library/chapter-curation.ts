@@ -573,6 +573,13 @@ export type EmbeddedAudioChaptersResult = {
   diagnostics: EmbeddedAudioChapterDiagnostics;
 };
 
+export type EmbeddedAudioChapterCurationAssessment = {
+  action: "ignore" | "seed_boundaries" | "short_circuit_candidate";
+  confidence: "low" | "medium" | "high";
+  reason: string;
+  matchedEpubNodeIds: string[];
+};
+
 export function getEmbeddedAudioChapters(ctx: Pick<ChapterCurationContext, "durationMs" | "embeddedChapters">): EmbeddedAudioChaptersResult {
   const sorted = [...ctx.embeddedChapters].sort((a, b) => a.startMs - b.startMs);
   const titles = sorted.map((chapter) => normalizeToolText(chapter.title)).filter(Boolean);
@@ -623,6 +630,67 @@ export function getEmbeddedAudioChapters(ctx: Pick<ChapterCurationContext, "dura
       averageDurationMs: durations.length === 0 ? null : durations.reduce((sum, duration) => sum + duration, 0) / durations.length,
       durationCoefficientOfVariation: durationCv,
     },
+  };
+}
+
+function normalizedTitleKey(value: string): string {
+  return normalizeToolText(value).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+export function assessEmbeddedAudioChaptersForCuration(
+  ctx: Pick<ChapterCurationContext, "durationMs" | "embeddedChapters" | "epubEntries">
+): EmbeddedAudioChapterCurationAssessment {
+  const embedded = getEmbeddedAudioChapters(ctx);
+  const diagnostics = embedded.diagnostics;
+  if (diagnostics.count === 0) {
+    return {
+      action: "ignore",
+      confidence: "high",
+      reason: "No embedded audio chapter markers are available.",
+      matchedEpubNodeIds: [],
+    };
+  }
+
+  const epubTitleToIds = new Map<string, string[]>();
+  for (const entry of ctx.epubEntries) {
+    const key = normalizedTitleKey(entry.title);
+    if (!key) continue;
+    const ids = epubTitleToIds.get(key) ?? [];
+    ids.push(entry.id);
+    epubTitleToIds.set(key, ids);
+  }
+  const matchedEpubNodeIds = embedded.chapters
+    .flatMap((chapter) => epubTitleToIds.get(normalizedTitleKey(chapter.title)) ?? [])
+    .filter((id, index, ids) => ids.indexOf(id) === index);
+  const countDelta = Math.abs(diagnostics.count - ctx.epubEntries.length);
+  const closeCount = countDelta <= Math.max(2, Math.ceil(ctx.epubEntries.length * 0.1));
+
+  if (diagnostics.labelQuality === "named" && diagnostics.boundaryDensity === "plausible" && diagnostics.durationPattern === "varied" && closeCount) {
+    return {
+      action: "short_circuit_candidate",
+      confidence: matchedEpubNodeIds.length >= Math.min(3, ctx.epubEntries.length) ? "high" : "medium",
+      reason:
+        "Embedded audio markers have named, varied, plausible boundaries and roughly match the curated EPUB node count; they are worth validating before recursive transcript search.",
+      matchedEpubNodeIds,
+    };
+  }
+
+  if (diagnostics.labelQuality === "generic" && diagnostics.boundaryDensity === "plausible" && diagnostics.durationPattern === "varied" && closeCount) {
+    return {
+      action: "seed_boundaries",
+      confidence: "medium",
+      reason:
+        "Embedded audio markers are generic but varied and close to the EPUB node count, so they may be useful as boundary priors but should not replace transcript validation.",
+      matchedEpubNodeIds,
+    };
+  }
+
+  return {
+    action: "ignore",
+    confidence:
+      diagnostics.durationPattern === "suspiciously_even" || diagnostics.boundaryDensity === "sparse" || diagnostics.boundaryDensity === "dense" ? "high" : "medium",
+    reason: `Embedded audio markers are not trustworthy enough for a pre-pass (labels=${diagnostics.labelQuality}, durations=${diagnostics.durationPattern}, density=${diagnostics.boundaryDensity}, countDelta=${countDelta}).`,
+    matchedEpubNodeIds,
   };
 }
 
@@ -3468,6 +3536,13 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
         audioOnlyIntervals: curationCtx.audioOnlyIntervals ?? [],
       });
     }
+    const embeddedAssessment = assessEmbeddedAudioChaptersForCuration(curationCtx);
+    logChapterCurationEvent(curationCtx, {
+      type: "embedded-audio-prepass",
+      message: `embedded audio prepass action=${embeddedAssessment.action} confidence=${embeddedAssessment.confidence}`,
+      diagnostics: getEmbeddedAudioChapters(curationCtx).diagnostics,
+      assessment: embeddedAssessment,
+    });
     const recursiveReports: RecursiveCurationReport[] = [];
     const recursiveSpanTraces: RecursiveSpanTrace[] = [];
     const recursiveMaxSpanConcurrency = 24;
