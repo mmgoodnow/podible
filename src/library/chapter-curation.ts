@@ -1437,6 +1437,149 @@ function writeChapterCurationTrace(
   }
 }
 
+type AgentUsageSummary = {
+  requests: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  uncachedInputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+};
+
+type AgentUsagePrice = {
+  inputUsdPerMillion: number;
+  cachedInputUsdPerMillion: number;
+  outputUsdPerMillion: number;
+  source: string;
+};
+
+const openAiTokenPrices: Array<{ prefix: string; price: AgentUsagePrice }> = [
+  {
+    prefix: "gpt-5.4-mini",
+    price: {
+      inputUsdPerMillion: 0.75,
+      cachedInputUsdPerMillion: 0.075,
+      outputUsdPerMillion: 4.5,
+      source: "OpenAI API pricing, standard text tokens, checked 2026-05-22",
+    },
+  },
+  {
+    prefix: "gpt-5.4-nano",
+    price: {
+      inputUsdPerMillion: 0.2,
+      cachedInputUsdPerMillion: 0.02,
+      outputUsdPerMillion: 1.25,
+      source: "OpenAI API pricing, standard text tokens, checked 2026-05-22",
+    },
+  },
+  {
+    prefix: "gpt-5.4",
+    price: {
+      inputUsdPerMillion: 2.5,
+      cachedInputUsdPerMillion: 0.25,
+      outputUsdPerMillion: 15,
+      source: "OpenAI API pricing, standard text tokens, checked 2026-05-22",
+    },
+  },
+];
+
+function numberFromRecord(record: unknown, keys: string[]): number {
+  if (!record || typeof record !== "object") return 0;
+  const values = record as Record<string, unknown>;
+  for (const key of keys) {
+    const value = values[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return 0;
+}
+
+function usageDetailsTotal(details: unknown, keys: string[]): number {
+  if (!Array.isArray(details)) return 0;
+  return details.reduce((sum, item) => sum + numberFromRecord(item, keys), 0);
+}
+
+function summarizeAgentRawResponseUsage(rawResponses: unknown[]): AgentUsageSummary {
+  const summary: AgentUsageSummary = {
+    requests: 0,
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    uncachedInputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 0,
+  };
+  for (const response of rawResponses) {
+    if (!response || typeof response !== "object") continue;
+    const usage = (response as Record<string, unknown>).usage;
+    if (!usage || typeof usage !== "object") continue;
+    const usageRecord = usage as Record<string, unknown>;
+    summary.requests += numberFromRecord(usageRecord, ["requests"]);
+    summary.inputTokens += numberFromRecord(usageRecord, ["inputTokens", "input_tokens"]);
+    summary.outputTokens += numberFromRecord(usageRecord, ["outputTokens", "output_tokens"]);
+    summary.totalTokens += numberFromRecord(usageRecord, ["totalTokens", "total_tokens"]);
+    summary.cachedInputTokens += usageDetailsTotal(usageRecord.inputTokensDetails, ["cached_tokens", "cachedTokens"]);
+    summary.reasoningTokens += usageDetailsTotal(usageRecord.outputTokensDetails, ["reasoning_tokens", "reasoningTokens"]);
+  }
+  summary.uncachedInputTokens = Math.max(0, summary.inputTokens - summary.cachedInputTokens);
+  if (summary.requests === 0 && summary.totalTokens > 0) summary.requests = rawResponses.length;
+  return summary;
+}
+
+function serializedErrorRawResponses(error: unknown): unknown[] {
+  if (!error || typeof error !== "object") return [];
+  const state = (error as Record<string, unknown>).state;
+  if (!state || typeof state !== "object") return [];
+  const modelResponses = (state as Record<string, unknown>).modelResponses;
+  return Array.isArray(modelResponses) ? modelResponses : [];
+}
+
+function openAiPriceForModel(model: string): AgentUsagePrice | null {
+  const normalized = model.trim();
+  const match = openAiTokenPrices.find((entry) => normalized === entry.prefix || normalized.startsWith(`${entry.prefix}-`));
+  return match?.price ?? null;
+}
+
+function estimateOpenAiUsageCostUsd(model: string, usage: AgentUsageSummary): { amountUsd: number; price: AgentUsagePrice } | null {
+  const price = openAiPriceForModel(model);
+  if (!price) return null;
+  const amountUsd =
+    (usage.uncachedInputTokens / 1_000_000) * price.inputUsdPerMillion +
+    (usage.cachedInputTokens / 1_000_000) * price.cachedInputUsdPerMillion +
+    (usage.outputTokens / 1_000_000) * price.outputUsdPerMillion;
+  return {
+    amountUsd: Math.round(amountUsd * 1_000_000) / 1_000_000,
+    price,
+  };
+}
+
+function logAgentUsageEvent(
+  ctx: ChapterCurationContext,
+  input: {
+    role: "audible-node-selection" | "curator" | "judge";
+    model: string;
+    rawResponses?: unknown[];
+    serializedError?: unknown;
+    span?: ChapterCurationSpan;
+  }
+): void {
+  const rawResponses = input.rawResponses ?? serializedErrorRawResponses(input.serializedError);
+  const usage = summarizeAgentRawResponseUsage(rawResponses);
+  if (usage.totalTokens <= 0 && usage.inputTokens <= 0 && usage.outputTokens <= 0) return;
+  const cost = estimateOpenAiUsageCostUsd(input.model, usage);
+  logChapterCurationEvent(ctx, {
+    type: "agent-usage",
+    message: `agent usage role=${input.role} model=${input.model} requests=${usage.requests} tokens=${usage.totalTokens}${
+      cost ? ` cost_usd=${cost.amountUsd}` : ""
+    }`,
+    span: input.span,
+    role: input.role,
+    model: input.model,
+    usage,
+    cost,
+  });
+}
+
 function summarizeSubmittedChapters(chapters: SubmittedChapter[], limit = 12): string {
   const shown = chapters.slice(0, limit).map((chapter) => `${Math.round(chapter.startTime)}s:${chapter.title}`).join(" | ");
   return chapters.length > limit ? `${shown} | ... +${chapters.length - limit}` : shown;
@@ -2881,6 +3024,12 @@ async function judgeChapterBoundary(
       signal: abort.signal,
       toolExecution: { maxFunctionToolConcurrency: 1 },
     });
+    logAgentUsageEvent(ctx, {
+      role: "judge",
+      model: ctx.debugJudgeModel?.trim() || ctx.settings.agents.model,
+      rawResponses: result.rawResponses as unknown[],
+      span,
+    });
     const judgment = parseFulcrumJudgmentOutput(result.finalOutput);
     const tracePath = writeChapterCurationTrace(ctx, `${proposal.kind}-judge-${span.path}-${proposal.epubNodeId}`, {
       span,
@@ -2905,6 +3054,12 @@ async function judgeChapterBoundary(
     });
     return judgment;
   } catch (error) {
+    logAgentUsageEvent(ctx, {
+      role: "judge",
+      model: ctx.debugJudgeModel?.trim() || ctx.settings.agents.model,
+      serializedError: serializeAgentError(error),
+      span,
+    });
     logChapterCurationEvent(ctx, {
       type: "fulcrum-judge-error",
       message: `${proposal.kind} judge span=${span.path} epub=${proposal.epubNodeId} error=${JSON.stringify((error as Error).message)}`,
@@ -3102,6 +3257,11 @@ async function classifyAudibleEpubNodes(ctx: ChapterCurationContext, runner: Run
       signal,
       toolExecution: { maxFunctionToolConcurrency: 1 },
     });
+    logAgentUsageEvent(ctx, {
+      role: "audible-node-selection",
+      model: ctx.settings.agents.model,
+      rawResponses: result.rawResponses as unknown[],
+    });
     const selection = parseAudibleEpubNodeSelectionOutput(result.finalOutput);
     const tracePath = writeChapterCurationTrace(ctx, "audible-epub-node-selection", {
       selection,
@@ -3117,6 +3277,11 @@ async function classifyAudibleEpubNodes(ctx: ChapterCurationContext, runner: Run
     });
     return selection;
   } catch (error) {
+    logAgentUsageEvent(ctx, {
+      role: "audible-node-selection",
+      model: ctx.settings.agents.model,
+      serializedError: serializeAgentError(error),
+    });
     logChapterCurationEvent(ctx, {
       type: "audible-epub-node-selection-error",
       message: `audible epub node selection error=${JSON.stringify((error as Error).message)}`,
@@ -3515,6 +3680,12 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
               signal: abort.signal,
               toolExecution: { maxFunctionToolConcurrency: recursiveMaxSpanConcurrency },
             });
+            logAgentUsageEvent(curationCtx, {
+              role: "curator",
+              model: curationCtx.debugCuratorModel?.trim() || curationCtx.settings.agents.model,
+              rawResponses: spanResult.rawResponses as unknown[],
+              span,
+            });
             const decision = parseSpanDecisionOutput(spanResult.finalOutput);
             const elapsedMs = Date.now() - startedAt;
             const tracePayload = {
@@ -3562,6 +3733,12 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
             const message = (error as Error).message;
             const elapsedMs = Date.now() - startedAt;
             const serializedError = serializeAgentError(error);
+            logAgentUsageEvent(curationCtx, {
+              role: "curator",
+              model: curationCtx.debugCuratorModel?.trim() || curationCtx.settings.agents.model,
+              serializedError,
+              span,
+            });
             const tracePath = writeChapterCurationTrace(curationCtx, `span-${span.path}-attempt-${attempt + 1}-error`, {
               span,
               attempt: attempt + 1,
