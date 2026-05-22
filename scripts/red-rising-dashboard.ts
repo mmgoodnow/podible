@@ -425,6 +425,7 @@ function summarizeRun(ref: EventLogRef, includeDetails = true, liveCurationRun =
       if (type === "fulcrum-judge-result" && event.judgment?.accepted === false) span.judgeRejected++;
       if (type === "span-split-accepted") span.terminal = "split";
       if (type === "span-leaf-accepted" || type === "span-auto-leaf") span.terminal = "leaf";
+      if (type === "span-partial-leaf") span.terminal = "partial";
       if (type === "span-error") {
         span.terminal = "error";
         failedSpans.push({
@@ -551,15 +552,20 @@ function html(): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Red Rising Curation Runs</title>
+  <title>Audiobook Curation Runs</title>
   <style>
     :root { color-scheme: dark; --bg: #111315; --panel: #191c1f; --line: #30363d; --text: #eceff3; --muted: #a9b0ba; --bad: #ff8b8b; --ok: #8bd693; --warn: #ffd166; --accent: #79b8ff; }
     * { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    header { position: sticky; top: 0; z-index: 2; background: rgba(17,19,21,0.94); border-bottom: 1px solid var(--line); padding: 14px 20px; display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow: hidden; }
+    .app { display: grid; grid-template-columns: 340px minmax(0, 1fr); height: 100vh; }
+    aside { border-right: 1px solid var(--line); background: #15181b; min-height: 0; overflow: auto; }
+    .sidebar-head { position: sticky; top: 0; z-index: 2; background: rgba(21,24,27,0.96); border-bottom: 1px solid var(--line); padding: 14px; }
+    .sidebar-section { padding: 14px; border-bottom: 1px solid var(--line); }
+    .content { min-width: 0; min-height: 0; overflow: auto; }
+    header { position: sticky; top: 0; z-index: 2; background: rgba(17,19,21,0.94); border-bottom: 1px solid var(--line); padding: 14px 18px; display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
     h1 { margin: 0; font-size: 18px; font-weight: 650; }
     h2 { margin: 0 0 10px; font-size: 15px; font-weight: 650; }
-    main { padding: 18px 20px 40px; max-width: 1600px; margin: 0 auto; }
+    main { padding: 16px 18px 36px; max-width: none; margin: 0; }
     .muted { color: var(--muted); }
     .grid { display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); gap: 10px; }
     .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
@@ -580,6 +586,18 @@ function html(): string {
     .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
     .run-row { cursor: pointer; }
     .run-row:hover { background: #20252a; }
+    .run-list { display: grid; gap: 8px; }
+    .run-button { width: 100%; text-align: left; background: #111417; border: 1px solid var(--line); border-radius: 8px; padding: 9px; color: var(--text); cursor: pointer; }
+    .run-button:hover, .run-button.selected { border-color: var(--accent); background: #171c21; }
+    .run-button strong { display: block; font-size: 12px; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .run-meta { display: flex; gap: 8px; flex-wrap: wrap; color: var(--muted); font-size: 11px; }
+    .nav-list { display: grid; gap: 6px; }
+    .nav-link { display: block; text-decoration: none; color: var(--text); background: #111417; border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; font-size: 12px; }
+    .nav-link:hover { border-color: var(--accent); }
+    .param-list { display: grid; gap: 7px; }
+    .param { display: grid; gap: 2px; min-width: 0; }
+    .param .label { color: var(--muted); font-size: 11px; }
+    .param .value { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
     .small { font-size: 12px; }
     .header-controls { display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
     .toggle { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; user-select: none; }
@@ -596,6 +614,7 @@ function html(): string {
     .tree-node .small { font-size: 9px; }
     .tree-node.trace-link { cursor: pointer; }
     .tree-node.trace-link:hover { filter: brightness(1.18); }
+    .tree-node.selected { outline: 2px solid var(--accent); outline-offset: -2px; }
     .tree-node.leaf { border-color: rgba(139,214,147,0.55); }
     .tree-node.split { border-color: rgba(121,184,255,0.65); }
     .tree-node.error { border-color: rgba(255,139,139,0.7); }
@@ -614,27 +633,52 @@ function html(): string {
     details.section-details > summary::-webkit-details-marker { display: none; }
     details.section-details > summary h2 { display: inline; }
     summary { cursor: pointer; }
-    @media (max-width: 1000px) { .grid, .two { grid-template-columns: 1fr; } header { align-items: flex-start; flex-direction: column; } }
+    .trace-panel { min-height: 128px; }
+    .trace-panel pre { max-height: 520px; }
+    @media (max-width: 1000px) { body { overflow: auto; } .app { display: block; height: auto; } aside { max-height: none; } .grid, .two { grid-template-columns: 1fr; } header { align-items: flex-start; flex-direction: column; } }
   </style>
 </head>
 <body>
-  <header>
-    <h1>Audiobook Curation Runs</h1>
-    <div class="header-controls">
-      <div class="muted small">Reading Red Rising and corpus case directories.</div>
-      <label class="toggle"><input id="auto-refresh-toggle" type="checkbox"> Auto-refresh 5s</label>
-      <button id="manual-refresh" type="button">Refresh</button>
+  <div class="app">
+    <aside>
+      <div class="sidebar-head">
+        <h1>Audiobook Curation</h1>
+        <div class="header-controls section">
+          <label class="toggle"><input id="auto-refresh-toggle" type="checkbox"> Auto-refresh 5s</label>
+          <button id="manual-refresh" type="button">Refresh</button>
+        </div>
+      </div>
+      <section class="sidebar-section">
+        <h2>Current Run</h2>
+        <div id="run-details"></div>
+      </section>
+      <section class="sidebar-section">
+        <h2>Previous Runs</h2>
+        <div id="runs"></div>
+      </section>
+      <section class="sidebar-section">
+        <h2>View</h2>
+        <div class="nav-list">
+          <a class="nav-link" href="#tree" data-scroll-target="tree">Binary Tree</a>
+          <a class="nav-link" href="#ruler" data-scroll-target="ruler">Boundary Ruler</a>
+          <a class="nav-link" href="#active-spans" data-scroll-target="active-spans">Active Spans</a>
+          <a class="nav-link" href="#filters" data-scroll-target="filters">Audio/EPUB Filters</a>
+          <a class="nav-link" href="#event-tail" data-scroll-target="event-tail">Event Tail</a>
+        </div>
+      </section>
+    </aside>
+    <div class="content">
+      <header>
+        <h1 id="main-title">Run</h1>
+        <div class="muted small">Tree blocks with traces are clickable.</div>
+      </header>
+      <main id="current"></main>
     </div>
-  </header>
-  <main>
-    <section id="current"></section>
-    <section class="section card">
-      <h2>Previous Runs</h2>
-      <div id="runs"></div>
-    </section>
-  </main>
+  </div>
   <script>
     let selectedRunId = null;
+    let selectedTraceFile = null;
+    let selectedTraceSpanPath = null;
     let latestRuns = [];
     let openTraceDetails = new Set();
     let openSectionDetails = new Set();
@@ -717,12 +761,13 @@ function html(): string {
             const left = depth === 0 ? 0 : slot / slots * 100;
             const width = depth === 0 ? 100 : 100 / slots;
             const label = (s.path ?? "") + ": " + (s.nodeCount ?? "") + " nodes, " + Math.round(s.startTime ?? 0) + "-" + Math.round(s.endTime ?? 0) + "s, tools " + (s.toolCalls ?? 0) + ", rejects " + (s.judgeRejected ?? 0) + ", " + (s.terminal ?? "active");
+            const trace = (run.traceSummaries || []).find((candidate) => candidate.spanPath === s.path);
             const hasTrace = traceSpanPaths.has(s.path);
-            return '<div class="tree-node ' + esc(s.terminal || "active") + (hasTrace ? ' trace-link' : '') + '" data-span-path="' + esc(s.path) + '" title="' + esc(label + (hasTrace ? " - click to open trace" : "")) + '" style="left:calc(' + left + '% + 4px);width:calc(' + width + '% - 8px)"><strong><code>' + esc(s.path) + '</code></strong><span class="small muted">n ' + esc(s.nodeCount ?? "") + ' · ' + esc(Math.round(s.startTime ?? 0)) + '-' + esc(Math.round(s.endTime ?? 0)) + 's</span><span class="small">t ' + esc(s.toolCalls) + ' · r ' + esc(s.judgeRejected) + '</span><span class="small ' + (s.terminal === "error" ? "failed" : "") + '">' + esc(s.terminal ?? "active") + '</span></div>';
+            return '<div class="tree-node ' + esc(s.terminal || "active") + (hasTrace ? ' trace-link' : '') + (selectedTraceSpanPath === s.path ? ' selected' : '') + '" data-span-path="' + esc(s.path) + '" data-trace-file="' + esc(trace?.file ?? "") + '" title="' + esc(label + (hasTrace ? " - click to open trace" : "")) + '" style="left:calc(' + left + '% + 4px);width:calc(' + width + '% - 8px)"><strong><code>' + esc(s.path) + '</code></strong><span class="small muted">n ' + esc(s.nodeCount ?? "") + ' · ' + esc(Math.round(s.startTime ?? 0)) + '-' + esc(Math.round(s.endTime ?? 0)) + 's</span><span class="small">t ' + esc(s.toolCalls) + ' · r ' + esc(s.judgeRejected) + '</span><span class="small ' + (s.terminal === "error" ? "failed" : "") + '">' + esc(s.terminal ?? "active") + '</span></div>';
           }).join("") +
           '</div>';
       }).join("");
-      return '<div class="card section"><h2>Binary Tree Progress</h2><div class="viz-scroll"><div class="tree">' + (rows || '<div class="muted">No spans yet</div>') + '</div></div></div>';
+      return '<div class="card section" id="tree"><h2>Binary Tree Progress</h2><div class="viz-scroll"><div class="tree">' + (rows || '<div class="muted">No spans yet</div>') + '</div></div></div>';
     }
 
     function pct(value, total) {
@@ -746,7 +791,7 @@ function html(): string {
         return '<div class="tick ' + esc(m.source) + '" title="' + esc(m.startTime + 's ' + m.title + ' (' + m.source + ')') + '" style="left:' + left + '%"></div>' +
           (showLabel ? '<div class="tick-label" style="left:' + left + '%">' + esc(m.title) + '</div><div class="tick-time" style="left:' + left + '%">' + esc(Math.round(m.startTime)) + 's</div>' : '');
       }).join("");
-      return '<div class="card section"><h2>EPUB/Audio Boundary Ruler</h2><div class="ruler"><div class="ruler-line"></div>' + failed + intervals + markers + '</div><div class="muted small">Blue ticks are accepted fulcrum splits, green ticks are accepted leaf chapter starts, yellow bands are audio-only intervals, red bands are failed spans.</div></div>';
+      return '<div class="card section" id="ruler"><h2>EPUB/Audio Boundary Ruler</h2><div class="ruler"><div class="ruler-line"></div>' + failed + intervals + markers + '</div><div class="muted small">Blue ticks are accepted fulcrum splits, green ticks are accepted leaf chapter starts, yellow bands are audio-only intervals, red bands are failed spans.</div></div>';
     }
 
     function renderTraceSummaries(run) {
@@ -754,6 +799,15 @@ function html(): string {
       return '<div class="card section"><details class="section-details" data-section-details="trace-summaries"' + (openSectionDetails.has("trace-summaries") ? ' open' : '') + '><summary><h2>Trace Summaries</h2></summary><div class="muted small">Shows stored model reasoning summaries and final/tool outputs where present, not hidden chain-of-thought.</div>' +
         run.traceSummaries.map((t) => '<details data-trace-file="' + esc(t.file) + '" data-trace-span-path="' + esc(t.spanPath ?? "") + '"' + (openTraceDetails.has(t.file) ? ' open' : '') + '><summary><code>' + esc(t.file) + '</code> <span class="muted">' + esc(t.kind) + ' ' + esc(t.title) + '</span></summary><div class="trace-detail-body muted small">Open to load trace detail.</div></details>').join("") +
         '</details></div>';
+    }
+
+    function renderTracePanel(run) {
+      const traces = run.traceSummaries || [];
+      const trace = selectedTraceFile ? traces.find((candidate) => candidate.file === selectedTraceFile) : null;
+      if (!trace) {
+        return '<div class="card section trace-panel" id="trace-panel"><h2>Thinking Trace</h2><div class="muted">Click a binary-tree span with recorded trace data.</div></div>';
+      }
+      return '<div class="card section trace-panel" id="trace-panel" data-trace-file="' + esc(trace.file) + '"><h2>Thinking Trace <code>' + esc(trace.spanPath ?? "") + '</code></h2><div class="muted small"><code>' + esc(trace.file) + '</code></div><div id="trace-detail-body" class="muted small">Loading trace detail...</div></div>';
     }
 
     function rememberOpenDetails() {
@@ -806,23 +860,45 @@ function html(): string {
       body.innerHTML = reasoning + '<h2>Final Output</h2><pre class="small">' + esc(JSON.stringify(data.finalOutput ?? null, null, 2)) + '</pre>';
     }
 
+    async function loadSelectedTracePanel() {
+      const panel = document.querySelector("#trace-panel[data-trace-file]");
+      const body = document.querySelector("#trace-detail-body");
+      if (!panel || !body) return;
+      const file = panel.getAttribute("data-trace-file");
+      if (!file) return;
+      body.textContent = "Loading trace detail...";
+      const response = await fetch("/api/trace?runId=" + encodeURIComponent(selectedRunId || "") + "&file=" + encodeURIComponent(file), { cache: "no-store" });
+      const data = await response.json();
+      const reasoning = data.reasoningSummaries?.length ? '<h2>Reasoning Summary</h2><pre class="small">' + esc(data.reasoningSummaries.join("\\n\\n")) + '</pre>' : '<div class="muted small">No stored reasoning summary in this trace.</div>';
+      body.className = "";
+      body.innerHTML = reasoning + '<h2>Final Output</h2><pre class="small">' + esc(JSON.stringify(data.finalOutput ?? null, null, 2)) + '</pre>';
+    }
+
     function attachTreeTraceLinks() {
       document.querySelectorAll(".tree-node.trace-link[data-span-path]").forEach((node) => {
         node.addEventListener("click", () => {
           const spanPath = node.getAttribute("data-span-path");
+          const traceFile = node.getAttribute("data-trace-file");
           if (!spanPath) return;
-          const trace = [...document.querySelectorAll('details[data-trace-span-path="' + CSS.escape(spanPath) + '"]')][0];
-          const section = document.querySelector('details[data-section-details="trace-summaries"]');
-          if (section) {
-            section.open = true;
-            openSectionDetails.add("trace-summaries");
-          }
-          if (trace) {
-            const file = trace.getAttribute("data-trace-file");
-            trace.open = true;
-            if (file) openTraceDetails.add(file);
-            trace.scrollIntoView({ behavior: "smooth", block: "start" });
-          }
+          if (!traceFile) return;
+          selectedTraceSpanPath = spanPath;
+          selectedTraceFile = traceFile;
+          const selected = latestRuns.find((run) => run.id === selectedRunId) || latestRuns[0];
+          document.querySelector("#current").innerHTML = renderCurrent(selected);
+          attachTreeTraceLinks();
+          loadSelectedTracePanel();
+          document.querySelector("#trace-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+      });
+    }
+
+    function attachSidebarNav() {
+      document.querySelectorAll("[data-scroll-target]").forEach((link) => {
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          const target = link.getAttribute("data-scroll-target");
+          if (!target) return;
+          document.getElementById(target)?.scrollIntoView({ behavior: "smooth", block: "start" });
         });
       });
     }
@@ -852,7 +928,7 @@ function html(): string {
     function intervalTable(run) {
       const intervals = run.audioOnlyIntervalDetails || [];
       if (!intervals.length && !run.excludedNodes.length) return "";
-      return '<div class="two section"><div class="card"><h2>Audio-Only Intervals</h2>' +
+      return '<div class="two section" id="filters"><div class="card"><h2>Audio-Only Intervals</h2>' +
         (intervals.length ? '<table><thead><tr><th>Time</th><th>Kind</th><th>Notes</th></tr></thead><tbody>' + intervals.map((i) => '<tr><td><code>' + esc(i.startTime) + '-' + esc(i.endTime) + 's</code></td><td>' + esc(i.kind) + '</td><td>' + esc(i.notes) + '</td></tr>').join("") + '</tbody></table>' : '<div class="muted">None</div>') +
         '</div><div class="card"><h2>Excluded EPUB Nodes</h2>' +
         (run.excludedNodes.length ? '<table><thead><tr><th>Node</th><th>Reason</th><th>Notes</th></tr></thead><tbody>' + run.excludedNodes.map((n) => '<tr><td><code>' + esc(n.epubNodeId) + '</code></td><td>' + esc(n.reason) + '</td><td>' + esc(n.notes) + '</td></tr>').join("") + '</tbody></table>' : '<div class="muted">None</div>') +
@@ -861,30 +937,42 @@ function html(): string {
 
     function renderCurrent(run) {
       if (!run) return '<div class="card">No runs found.</div>';
-      return '<div class="card"><h2>' + esc(run.caseLabel) + ' Run ' + status(run.status) + '</h2><div class="muted small"><code>' + esc(run.runId) + '</code> started ' + esc(time(run.startedAt)) + ', updated ' + esc(time(run.updatedAt)) + '<br>case <code>' + esc(run.caseDir) + '</code><br>event log <code>' + esc(run.eventLog) + '</code></div></div>' +
-        '<div class="grid section">' +
-        metric("Splits", run.metrics.splits) +
-        metric("Leaves", run.metrics.leaves) +
-        metric("Span Errors", run.metrics.spanErrors, run.metrics.spanErrors ? "failed" : "") +
-        metric("Judge Rejects", run.metrics.judgeRejected, run.metrics.judgeRejected ? "failed" : "") +
-        metric("Tool Calls", run.metrics.toolCalls) +
-        metric("Elapsed", dur(run.durationSeconds)) +
-        '</div>' +
-        '<div class="two section"><div class="card"><h2>Active Spans</h2>' + spanTable(run.activeSpans) + '</div><div class="card"><h2>Churn Spans</h2>' + spanTable(run.churnSpans) + '</div></div>' +
-        renderTree(run) +
+      return renderTree(run) +
+        renderTracePanel(run) +
         renderRuler(run) +
-        '<div class="two section"><div class="card"><h2>Failed Spans</h2>' + failedTable(run.failedSpans) + '</div><div class="card"><h2>Rejected Nodes</h2>' + rejectedTable(run.rejectedNodes) + '</div></div>' +
+        '<div class="grid section">' +
+        metric("Tool Calls", num(run.metrics.toolCalls)) +
+        metric("Elapsed", dur(run.durationSeconds)) +
+        metric("Span Errors", num(run.metrics.spanErrors), run.metrics.spanErrors ? "failed" : "") +
+        metric("Judge Rejects", num(run.metrics.judgeRejected), run.metrics.judgeRejected ? "failed" : "") +
+        '</div>' +
+        '<div class="section card" id="active-spans"><h2>Active Spans</h2>' + spanTable(run.activeSpans) + '</div>' +
         intervalTable(run) +
-        '<div class="section card"><details class="section-details" data-section-details="recent-judge-decisions"' + (openSectionDetails.has("recent-judge-decisions") ? ' open' : '') + '><summary><h2>Recent Judge Decisions</h2></summary>' + judgeTable(run.judgeDecisions) + '</details></div>' +
-        renderTraceSummaries(run) +
-        '<div class="section card"><h2>Event Tail</h2>' + eventTailTable(run.eventTail) + '</div>' +
-        '<div class="two section">' + resultPanel(run) + traceInventory(run) + '</div>';
+        '<div class="section card" id="event-tail"><details class="section-details" data-section-details="event-tail"' + (openSectionDetails.has("event-tail") ? ' open' : '') + '><summary><h2>Event Tail</h2></summary>' + eventTailTable(run.eventTail) + '</details></div>';
     }
 
     function renderRuns(runs) {
-      return '<table><thead><tr><th>Book</th><th>Run</th><th>Status</th><th>Started</th><th>Elapsed</th><th>Splits</th><th>Leaves</th><th>Errors</th><th>Judge +/-</th><th>Tools</th><th>EPUB</th><th>Files</th></tr></thead><tbody>' +
-        runs.map((r) => '<tr class="run-row" data-run-id="' + esc(r.id) + '"><td>' + esc(r.caseLabel) + '</td><td><code>' + esc(r.runId) + '</code>' + (r.id === selectedRunId ? ' <span class="muted small">selected</span>' : '') + '</td><td>' + status(r.status) + '</td><td>' + esc(time(r.startedAt)) + '</td><td>' + esc(dur(r.durationSeconds)) + '</td><td>' + esc(r.metrics.splits) + '</td><td>' + esc(r.metrics.leaves) + '</td><td>' + esc(r.metrics.spanErrors) + '</td><td><span class="accepted">' + esc(r.metrics.judgeAccepted) + '</span> / <span class="failed">' + esc(r.metrics.judgeRejected) + '</span></td><td>' + esc(r.metrics.toolCalls) + '</td><td>' + esc(r.epubEntries ?? "") + (r.originalEpubEntries ? ' / ' + esc(r.originalEpubEntries) : '') + '</td><td><code>' + esc(r.eventLog.split("/").pop()) + '</code></td></tr>').join("") +
-        '</tbody></table>';
+      return '<div class="run-list">' +
+        runs.map((r) => '<button class="run-button' + (r.id === selectedRunId ? ' selected' : '') + '" type="button" data-run-id="' + esc(r.id) + '"><strong>' + esc(r.caseLabel) + '</strong><div class="run-meta"><span>' + status(r.status) + '</span><span>' + esc(time(r.startedAt)) + '</span><span>' + esc(dur(r.durationSeconds)) + '</span></div><div class="run-meta"><span>s ' + esc(r.metrics.splits) + '</span><span>l ' + esc(r.metrics.leaves) + '</span><span>t ' + esc(num(r.metrics.toolCalls)) + '</span></div></button>').join("") +
+        '</div>';
+    }
+
+    function renderRunDetails(run) {
+      if (!run) return '<div class="muted">No run selected.</div>';
+      return '<div class="param-list">' +
+        '<div class="param"><span class="label">Book</span><span class="value">' + esc(run.caseLabel) + '</span></div>' +
+        '<div class="param"><span class="label">Status</span><span class="value">' + status(run.status) + '</span></div>' +
+        '<div class="param"><span class="label">Run</span><span class="value">' + esc(run.runId) + '</span></div>' +
+        '<div class="param"><span class="label">Started</span><span class="value">' + esc(time(run.startedAt)) + '</span></div>' +
+        '<div class="param"><span class="label">Updated</span><span class="value">' + esc(time(run.updatedAt)) + '</span></div>' +
+        '<div class="param"><span class="label">Model</span><span class="value">' + esc(run.model ?? "") + '</span></div>' +
+        '<div class="param"><span class="label">EPUB nodes</span><span class="value">' + esc(run.epubEntries ?? "") + (run.originalEpubEntries ? ' / ' + esc(run.originalEpubEntries) : '') + '</span></div>' +
+        '<div class="param"><span class="label">Splits / Leaves</span><span class="value">' + esc(run.metrics.splits) + ' / ' + esc(run.metrics.leaves) + '</span></div>' +
+        '<details><summary class="small muted">Files</summary>' +
+        '<div class="param"><span class="label">Case directory</span><span class="value">' + esc(run.caseDir) + '</span></div>' +
+        '<div class="param"><span class="label">Event log</span><span class="value">' + esc(run.eventLog) + '</span></div>' +
+        '</details>' +
+        '</div>';
     }
 
     async function refresh() {
@@ -894,19 +982,32 @@ function html(): string {
       latestRuns = data.runs;
       if (!selectedRunId && latestRuns[0]) selectedRunId = latestRuns[0].id;
       const selected = latestRuns.find((run) => run.id === selectedRunId) || latestRuns[0];
+      if (selectedTraceFile && selected && !(selected.traceSummaries || []).some((trace) => trace.file === selectedTraceFile)) {
+        selectedTraceFile = null;
+        selectedTraceSpanPath = null;
+      }
+      document.querySelector("#main-title").innerHTML = selected ? esc(selected.caseLabel) + " " + status(selected.status) : "Run";
+      document.querySelector("#run-details").innerHTML = renderRunDetails(selected);
       document.querySelector("#current").innerHTML = renderCurrent(selected);
       document.querySelector("#runs").innerHTML = renderRuns(latestRuns);
       attachPersistentDetails();
       attachTreeTraceLinks();
-      document.querySelectorAll(".run-row").forEach((row) => {
+      attachSidebarNav();
+      loadSelectedTracePanel();
+      document.querySelectorAll(".run-button").forEach((row) => {
         row.addEventListener("click", () => {
           rememberOpenDetails();
           selectedRunId = row.getAttribute("data-run-id");
+          selectedTraceFile = null;
+          selectedTraceSpanPath = null;
           const selected = latestRuns.find((run) => run.id === selectedRunId) || latestRuns[0];
+          document.querySelector("#main-title").innerHTML = selected ? esc(selected.caseLabel) + " " + status(selected.status) : "Run";
+          document.querySelector("#run-details").innerHTML = renderRunDetails(selected);
           document.querySelector("#current").innerHTML = renderCurrent(selected);
           document.querySelector("#runs").innerHTML = renderRuns(latestRuns);
           attachPersistentDetails();
           attachTreeTraceLinks();
+          attachSidebarNav();
         });
       });
     }
