@@ -60,7 +60,7 @@ export const importRouter = defineRouter({
     }),
     resultSchema: z.object({
       release: releaseRowSchema,
-      assetId: positiveIntSchema,
+      assetIds: z.array(positiveIntSchema),
       linkedFiles: z.array(z.string()),
     }),
     async handler(ctx, params) {
@@ -90,7 +90,7 @@ export const importRouter = defineRouter({
         const finalRelease = ctx.repo.setReleaseStatus(release.id, "imported", null);
         return {
           release: finalRelease,
-          assetId: imported.assetId,
+          assetIds: imported.assetIds,
           linkedFiles: imported.linkedFiles,
         };
       } catch (error) {

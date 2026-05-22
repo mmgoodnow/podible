@@ -1480,7 +1480,8 @@ describe("json-rpc handler", () => {
 
     expect(result.result.release.book_id).toBe(book.id);
     expect(result.result.release.status).toBe("imported");
-    expect(result.result.assetId).toBeGreaterThan(0);
+    expect(result.result.assetIds.length).toBeGreaterThan(0);
+    expect(result.result.assetIds[0]).toBeGreaterThan(0);
 
     const assets = repo.listAssetsByBook(book.id);
     expect(assets.length).toBe(1);
