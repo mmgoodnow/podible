@@ -1130,13 +1130,6 @@ const submitChapterPlanSchema = z.object({
   notes: z.string().trim().optional(),
 });
 
-const submitLeafChapterPlanSchema = z.object({
-  spanPath: z.string().trim().min(1),
-  strategy: z.string().trim().min(1),
-  chapters: z.array(submittedChapterSchema).min(1).max(80),
-  notes: z.string().trim().optional(),
-});
-
 const submitFulcrumSplitSchema = z.object({
   spanPath: z.string().trim().min(1),
   epubNodeId: z.string().trim().min(1),
@@ -1186,7 +1179,6 @@ const audibleEpubNodeSelectionSchema = z.object({
 
 export type SubmittedChapter = z.infer<typeof submittedChapterSchema>;
 export type SubmitChapterPlanInput = z.infer<typeof submitChapterPlanSchema>;
-export type SubmitLeafChapterPlanInput = z.infer<typeof submitLeafChapterPlanSchema>;
 export type SubmitFulcrumSplitInput = z.infer<typeof submitFulcrumSplitSchema>;
 export type SubmitFulcrumJudgmentInput = z.infer<typeof submitFulcrumJudgmentSchema>;
 export type AudibleEpubNodeSelection = z.infer<typeof audibleEpubNodeSelectionSchema>;
@@ -1225,26 +1217,6 @@ export type SubmitChapterPlanResult =
       instruction: string;
     };
 
-export type SubmitLeafChapterPlanResult =
-  | {
-      accepted: true;
-      kind: "leaf";
-      spanPath: string;
-      strategy: string;
-      notes: string | null;
-      chapters: SubmittedChapter[];
-      warnings: string[];
-      audit: ChapterPlanAuditEntry[];
-    }
-  | {
-      accepted: false;
-      kind: "leaf";
-      errors: string[];
-      warnings: string[];
-      audit: ChapterPlanAuditEntry[];
-      instruction: string;
-    };
-
 export type SubmitFulcrumSplitResult =
   | {
       accepted: true;
@@ -1269,7 +1241,7 @@ export type SubmitFulcrumSplitResult =
 export type SubmitFulcrumJudgmentResult = SubmitFulcrumJudgmentInput;
 
 type ChapterBoundaryJudgeProposal = {
-  kind: "fulcrum" | "leaf";
+  kind: "fulcrum";
   spanPath: string;
   epubNodeId: string;
   epubIndex: number;
@@ -2165,7 +2137,7 @@ export async function validateFulcrumSplit(
       errors,
       warnings,
       audit,
-      instruction: "Pick a different internal fulcrum with stronger transcript/prose evidence, or submit a leaf plan for this span.",
+      instruction: "Pick a different internal fulcrum with stronger transcript/prose evidence for the assigned target boundary.",
     };
   }
 
@@ -2178,109 +2150,6 @@ export async function validateFulcrumSplit(
     title: entry!.title,
     startTime: split.startTime,
     notes: split.notes ?? null,
-    audit,
-  };
-}
-
-export function validateLeafChapterPlan(
-  ctx: ChapterCurationContext,
-  span: ChapterCurationSpan,
-  input: unknown,
-  options: { forceLeaf?: boolean } = {}
-): SubmitLeafChapterPlanResult {
-  const parsed = submitLeafChapterPlanSchema.safeParse(input);
-  if (!parsed.success) {
-    return {
-      accepted: false,
-      kind: "leaf",
-      errors: parsed.error.issues.map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`),
-      warnings: [],
-      audit: [],
-      instruction: "Revise the leaf chapter plan so it matches the submitLeafChapterPlan schema.",
-    };
-  }
-
-  const plan = parsed.data;
-  const errors: string[] = [];
-  const warnings: string[] = [];
-  if (plan.spanPath !== span.path) errors.push(`spanPath ${plan.spanPath} does not match current span ${span.path}`);
-  const inheritedStartBoundary = span.startBoundary;
-  if (inheritedStartBoundary) {
-    const firstChapter = plan.chapters[0];
-    if (!firstChapter) {
-      errors.push(`span starts at accepted boundary "${inheritedStartBoundary.title}" but the leaf plan has no chapters`);
-    } else {
-      if (firstChapter.epubNodeId !== inheritedStartBoundary.epubNodeId) {
-        errors.push(
-          `chapters[0] must use inherited accepted boundary "${inheritedStartBoundary.title}" (${inheritedStartBoundary.epubNodeId}) at the span start`
-        );
-      }
-      if (Math.abs(firstChapter.startTime - inheritedStartBoundary.startTime) > INHERITED_BOUNDARY_TOLERANCE_SECONDS) {
-        errors.push(
-          `chapters[0].startTime must use inherited accepted boundary ${inheritedStartBoundary.startTime}s for "${inheritedStartBoundary.title}"`
-        );
-      }
-    }
-  }
-  let previousStartTime = span.startTime - 0.001;
-  for (const [index, chapter] of plan.chapters.entries()) {
-    if (chapter.startTime < span.startTime || chapter.startTime > span.endTime) {
-      errors.push(`chapters[${index}].startTime is outside the current span`);
-    }
-    if (chapter.startTime <= previousStartTime) {
-      errors.push(`chapters[${index}].startTime must be strictly greater than the previous chapter`);
-    }
-    previousStartTime = chapter.startTime;
-    if (chapter.epubNodeId) {
-      const epubIndex = ctx.epubEntries.findIndex((entry) => entry.id === chapter.epubNodeId);
-      if (!spanContainsEpubIndex(span, epubIndex)) errors.push(`chapters[${index}].epubNodeId is outside the current span`);
-    }
-  }
-
-  const audit = buildPlanAudit(ctx, plan.chapters);
-  for (const [index, chapter] of plan.chapters.entries()) {
-    if (!chapter.epubNodeId) continue;
-    const heading = audit[index]?.claimedEpubHeading;
-    if (!heading) {
-      errors.push(`chapters[${index}].epubNodeId does not match an EPUB node`);
-      continue;
-    }
-    if (chapterTitleKey(chapter.title) !== chapterTitleKey(heading.title)) {
-      errors.push(`chapters[${index}] title "${chapter.title}" does not match claimed EPUB heading "${heading.title}"`);
-    }
-  }
-
-  const spanNodeCount = span.epubEndIndex - span.epubStartIndex + 1;
-  const claimedIndexes = claimedEpubIndexes(ctx.epubEntries, plan.chapters).filter((index) => spanContainsEpubIndex(span, index));
-  const spanDurationSeconds = span.endTime - span.startTime;
-  if (!options.forceLeaf && (spanNodeCount > MAX_AUTOMATIC_LEAF_EPUB_NODES || spanDurationSeconds > 2 * 60 * 60)) {
-    errors.push(
-      `Span is too broad for a leaf plan (${spanNodeCount} EPUB node(s), ${Math.round(spanDurationSeconds / 60)} min); propose a validated fulcrum split instead.`
-    );
-  }
-  if (spanNodeCount >= 4 && claimedIndexes.length < Math.ceil(spanNodeCount * 0.5)) {
-    warnings.push(`Leaf covers ${claimedIndexes.length}/${spanNodeCount} EPUB node(s) in this span.`);
-  }
-
-  if (errors.length > 0) {
-    return {
-      accepted: false,
-      kind: "leaf",
-      errors,
-      warnings,
-      audit,
-      instruction: "Revise this leaf plan with stronger transcript evidence or propose a validated fulcrum split instead.",
-    };
-  }
-
-  return {
-    accepted: true,
-    kind: "leaf",
-    spanPath: span.path,
-    strategy: plan.strategy,
-    notes: plan.notes ?? null,
-    chapters: plan.chapters,
-    warnings,
     audit,
   };
 }
@@ -2677,8 +2546,7 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, targ
   const inheritedBoundaryInstructions = span.startBoundary
     ? [
         `This span starts at an already accepted parent split: ${span.startBoundary.title} (${span.startBoundary.epubNodeId}) at ${span.startBoundary.startTime}s.`,
-        "For a leaf plan, the first chapter must normally be this inherited boundary at the span start; do not move it later unless you have evidence that the accepted parent split is wrong.",
-        "The validator will treat this inherited first boundary as already proven, so spend research effort on later chapter starts in the span.",
+        "Treat that inherited first boundary as already proven; spend research effort only on the assigned target boundary.",
       ]
     : [];
   const fulcrumWorkflow = [
@@ -2897,36 +2765,6 @@ async function judgeFulcrumSplit(
     notes: split.notes,
     audit: split.audit,
   });
-}
-
-async function judgeLeafChapterPlan(
-  ctx: ChapterCurationContext,
-  span: ChapterCurationSpan,
-  result: Extract<SubmitLeafChapterPlanResult, { accepted: true }>
-): Promise<{ chapter: SubmittedChapter; judgment: SubmitFulcrumJudgmentResult } | null> {
-  for (const [index, chapter] of result.chapters.entries()) {
-    if (index === 0 || !chapter.epubNodeId) continue;
-    const epubIndex = ctx.epubEntries.findIndex((entry) => entry.id === chapter.epubNodeId);
-    if (epubIndex < 0) continue;
-    const audit = buildBoundaryComparisonAudit(ctx, {
-      epubIndex,
-      title: chapter.title,
-      startTime: chapter.startTime,
-      candidates: [],
-    });
-    const judgment = await judgeChapterBoundary(ctx, span, {
-      kind: "leaf",
-      spanPath: result.spanPath,
-      epubNodeId: chapter.epubNodeId,
-      epubIndex,
-      title: chapter.title,
-      startTime: chapter.startTime,
-      notes: result.notes,
-      audit,
-    });
-    if (judgment && !judgment.accepted) return { chapter, judgment };
-  }
-  return null;
 }
 
 function createAudibleEpubNodeSelectionAgent(ctx: ChapterCurationContext): Agent {
