@@ -196,7 +196,6 @@ export type ChapterAnalysisRow = {
   source: string;
   algorithm_version: string;
   fingerprint: string;
-  transcript_fingerprint: string | null;
   chapters_json: string | null;
   debug_json: string | null;
   resolved_boundary_count: number;

@@ -461,7 +461,6 @@ describe("json-rpc handler", () => {
       source: "epub_ai",
       algorithmVersion: "test",
       fingerprint: "fp",
-      transcriptFingerprint: "tfp",
       chaptersJson: JSON.stringify({
         version: "1.2.0",
         chapters: [{ id: "ch0", title: "Chapter 1", startMs: 0, endMs: 1000 }],

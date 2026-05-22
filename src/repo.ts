@@ -76,7 +76,6 @@ type UpsertChapterAnalysisInput = {
   source: string;
   algorithmVersion: string;
   fingerprint: string;
-  transcriptFingerprint?: string | null;
   chaptersJson?: string | null;
   debugJson?: string | null;
   resolvedBoundaryCount?: number;
@@ -1380,15 +1379,14 @@ export class BooksRepo {
       .query(
         `INSERT INTO chapter_analysis (
            manifestation_id, status, source, algorithm_version, fingerprint,
-           transcript_fingerprint, chapters_json, debug_json, resolved_boundary_count, total_boundary_count, error, updated_at
+           chapters_json, debug_json, resolved_boundary_count, total_boundary_count, error, updated_at
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(manifestation_id) DO UPDATE SET
            status = excluded.status,
            source = excluded.source,
            algorithm_version = excluded.algorithm_version,
            fingerprint = excluded.fingerprint,
-           transcript_fingerprint = excluded.transcript_fingerprint,
            chapters_json = excluded.chapters_json,
            debug_json = excluded.debug_json,
            resolved_boundary_count = excluded.resolved_boundary_count,
@@ -1403,7 +1401,6 @@ export class BooksRepo {
         input.source,
         input.algorithmVersion,
         input.fingerprint,
-        input.transcriptFingerprint ?? null,
         input.chaptersJson ?? null,
         input.debugJson ?? null,
         input.resolvedBoundaryCount ?? 0,

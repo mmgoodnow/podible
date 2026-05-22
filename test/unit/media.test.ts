@@ -402,7 +402,6 @@ describe("manifestation media", () => {
         source: "test",
         algorithmVersion: "test",
         fingerprint: "test",
-        transcriptFingerprint: "test",
         chaptersJson: JSON.stringify([
           { startTime: 0, title: "Opening credits" },
           { startTime: 120, title: "I: The Traveler" },

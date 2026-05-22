@@ -1286,6 +1286,13 @@ async function computeTranscriptFingerprint(asset: AssetRow, files: AssetFileRow
   return hash.digest("hex");
 }
 
+async function computeManifestationFingerprint(containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>): Promise<string> {
+  const perAsset = await Promise.all(containers.map((c) => computeTranscriptFingerprint(c.asset, c.files)));
+  return createHash("sha1")
+    .update(containers.map((c, i) => `${c.asset.id}:${perAsset[i]}`).join("|"))
+    .digest("hex");
+}
+
 async function loadGlossary(ctx: ChapterAnalysisContext, deps: ChapterAnalysisDeps, epubPath: string | null): Promise<string[]> {
   if (!epubPath) return [];
   try {
@@ -1436,10 +1443,8 @@ async function buildTranscriptStatus(
   bookId: number,
   options: { apiKeyConfigured: boolean; manifestationId?: number | null }
 ): Promise<{
-  audioAssets: AssetRow[];
+  hasAudio: boolean;
   epubAsset: AssetRow | null;
-  transcripts: AssetTranscriptRow[];
-  currentFingerprint: string | null;
   base: TranscriptRequestResult;
 }> {
   const audioAssets =
@@ -1449,83 +1454,61 @@ async function buildTranscriptStatus(
   const epubAsset = selectPreferredEpubAsset(repo.listAssetsByBook(bookId));
   if (audioAssets.length === 0) {
     return {
-      audioAssets: [],
+      hasAudio: false,
       epubAsset,
-      transcripts: [],
-      currentFingerprint: null,
       base: { status: "missing_audio", fingerprint: null, currentFingerprint: null, jobId: null, error: null },
     };
   }
 
-  const manifestationId = audioAssets[0]?.manifestation_id ?? null;
-  const existingJob = manifestationId !== null ? repo.findQueuedOrRunningJobByManifestation("chapter_analysis", manifestationId) : null;
-  const entries = await Promise.all(
-    audioAssets.map(async (audioAsset) => {
-      const files = repo.getAssetFiles(audioAsset.id);
-      let currentFingerprint: string | null;
-      try {
-        currentFingerprint = await computeTranscriptFingerprint(audioAsset, files);
-      } catch {
-        currentFingerprint = null;
-      }
-      return {
-        audioAsset,
-        transcript: repo.getAssetTranscript(audioAsset.id),
-        currentFingerprint,
-      };
-    })
-  );
-  const transcripts = entries.map((entry) => entry.transcript).filter((transcript): transcript is AssetTranscriptRow => transcript !== null);
+  const manifestationId = audioAssets[0]!.manifestation_id!;
+  const existingJob = repo.findQueuedOrRunningJobByManifestation("chapter_analysis", manifestationId);
+  const analysisRow = repo.getChapterAnalysis(manifestationId);
+
+  // Compute the live combined fingerprint (one stat() per file, all containers in parallel).
+  const containers = audioAssets.map((asset) => ({ asset, files: repo.getAssetFiles(asset.id) }));
+  let currentFingerprint: string | null;
+  try {
+    currentFingerprint = await computeManifestationFingerprint(containers);
+  } catch {
+    currentFingerprint = null;
+  }
+
+  const storedFingerprint = analysisRow?.fingerprint ?? null;
   const runningJob = existingJob?.status === "running" ? existingJob : null;
   const pendingJob = existingJob ?? null;
-  const combinedCurrentFingerprint =
-    entries.every((entry) => entry.currentFingerprint !== null)
-      ? createHash("sha1")
-          .update(entries.map((entry) => `${entry.audioAsset.id}:${entry.currentFingerprint}`).join("|"))
-          .digest("hex")
-      : null;
-  const combinedStoredFingerprint =
-    entries.every((entry) => entry.transcript?.fingerprint)
-      ? createHash("sha1")
-          .update(entries.map((entry) => `${entry.audioAsset.id}:${entry.transcript!.fingerprint}`).join("|"))
-          .digest("hex")
-      : null;
 
   let status: TranscriptRequestStatus;
   if (runningJob) {
     status = "running";
   } else if (pendingJob) {
     status = "pending";
-  } else if (
-    entries.every(
-      (entry) =>
-        entry.currentFingerprint !== null &&
-        entry.transcript?.status === "succeeded" &&
-        entry.transcript.fingerprint === entry.currentFingerprint
-    )
-  ) {
+  } else if (currentFingerprint !== null && analysisRow?.status === "succeeded" && storedFingerprint === currentFingerprint) {
     status = "current";
-  } else if (entries.some((entry) => entry.transcript?.status === "failed" && entry.transcript.fingerprint === entry.currentFingerprint)) {
+  } else if (analysisRow?.status === "failed" && storedFingerprint === currentFingerprint) {
     status = "failed";
-  } else if (entries.some((entry) => entry.transcript?.status === "succeeded")) {
+  } else if (analysisRow?.status === "succeeded") {
     status = "stale";
   } else if (!options.apiKeyConfigured) {
     status = "missing_config";
   } else {
-    status = entries.some((entry) => entry.transcript?.status === "failed") ? "failed" : "stale";
+    status = analysisRow?.status === "failed" ? "failed" : "stale";
   }
 
+  // Surface any per-asset error message for display (only needed when failed).
+  const error =
+    status === "failed"
+      ? (analysisRow?.error ?? audioAssets.map((a) => repo.getAssetTranscript(a.id)?.error).find(Boolean) ?? null)
+      : null;
+
   return {
-    audioAssets,
+    hasAudio: true,
     epubAsset,
-    transcripts,
-    currentFingerprint: combinedCurrentFingerprint,
     base: {
       status,
-      fingerprint: combinedStoredFingerprint,
-      currentFingerprint: combinedCurrentFingerprint,
+      fingerprint: storedFingerprint,
+      currentFingerprint,
       jobId: runningJob?.id ?? pendingJob?.id ?? null,
-      error: entries.find((entry) => entry.transcript?.error)?.transcript?.error ?? null,
+      error,
     },
   };
 }
@@ -1544,8 +1527,8 @@ export async function requestBookTranscription(
   bookId: number,
   options: { apiKeyConfigured: boolean; manifestationId?: number | null }
 ): Promise<TranscriptRequestResult> {
-  const { audioAssets, base } = await buildTranscriptStatus(repo, bookId, options);
-  if (audioAssets.length === 0) return base;
+  const { hasAudio, base } = await buildTranscriptStatus(repo, bookId, options);
+  if (!hasAudio) return base;
   if (base.status === "current") return base;
   if (base.status === "missing_config") return base;
 
@@ -1765,7 +1748,6 @@ export async function processChapterAnalysisJob(
     source: CHAPTER_ANALYSIS_SOURCE,
     algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
     fingerprint: combinedFingerprint,
-    transcriptFingerprint: combinedFingerprint,
     chaptersJson: null,
     debugJson: null,
     resolvedBoundaryCount: 0,
@@ -1852,8 +1834,7 @@ export async function processChapterAnalysisJob(
       source: CHAPTER_ANALYSIS_SOURCE,
       algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
       fingerprint: combinedFingerprint,
-      transcriptFingerprint: combinedFingerprint,
-      chaptersJson: curationResult?.chaptersJson ?? null,
+        chaptersJson: curationResult?.chaptersJson ?? null,
       debugJson: JSON.stringify({
         transcriptSource,
         chunkCount: totalChunkCount,
@@ -1896,8 +1877,7 @@ export async function processChapterAnalysisJob(
       source: CHAPTER_ANALYSIS_SOURCE,
       algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
       fingerprint: combinedFingerprint,
-      transcriptFingerprint: combinedFingerprint,
-      chaptersJson: null,
+        chaptersJson: null,
       debugJson: JSON.stringify({ error: message }),
       resolvedBoundaryCount: 0,
       totalBoundaryCount: 0,
