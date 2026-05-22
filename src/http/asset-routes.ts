@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 
-import { ensureStoredTranscriptFile, loadStoredManifestationTranscriptPayload } from "../library/chapter-analysis";
 import {
   buildChapters,
   buildManifestationChapters,
@@ -86,27 +85,14 @@ export function createTranscriptsRoutes(repo: BooksRepo): Hono<HttpEnv> {
   app.use("*", requireAuthenticatedRequest);
   app.get("/m/:idPart", async (c) => {
     const manifestationId = parseId(c.req.param("idPart").replace(/\.json$/i, ""));
-    const target = repo.getManifestationWithContainers(manifestationId);
-    if (!target) {
+    if (!repo.getManifestationWithContainers(manifestationId)) {
       return c.json({ error: "not_found" }, 404);
     }
-    const payload = await loadStoredManifestationTranscriptPayload(repo, target.containers);
-    if (!payload) {
+    const row = repo.getManifestationTranscript(manifestationId);
+    if (!row || row.status !== "succeeded" || !row.transcript_path) {
       return c.json({ error: "not_found" }, 404);
     }
-    return jsonResponse(c.req.raw, payload);
-  });
-  app.get("/:idPart", async (c) => {
-    const assetId = parseId(c.req.param("idPart").replace(/\.json$/i, ""));
-    const asset = repo.getAsset(assetId);
-    if (!asset || asset.kind === "ebook") {
-      return c.json({ error: "not_found" }, 404);
-    }
-    const transcriptPath = await ensureStoredTranscriptFile(repo, assetId);
-    if (!transcriptPath) {
-      return c.json({ error: "not_found" }, 404);
-    }
-    const file = Bun.file(transcriptPath);
+    const file = Bun.file(row.transcript_path);
     if (!(await file.exists())) {
       return c.json({ error: "not_found" }, 404);
     }

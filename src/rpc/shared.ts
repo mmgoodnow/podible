@@ -252,7 +252,7 @@ export function buildLibraryPlayback(repo: BooksRepo, request: Request, bookId: 
       editionNote: candidate.manifestation.edition_note,
       streamUrl: `${origin}/stream/m/${candidate.manifestation.id}.${streamExtensionForManifestation(containers)}`,
       chaptersUrl: `${origin}/chapters/m/${candidate.manifestation.id}.json`,
-      transcriptUrl: hasStoredManifestationTranscriptPayload(repo, containers)
+      transcriptUrl: hasStoredManifestationTranscriptPayload(repo, candidate.manifestation.id)
         ? `${origin}/transcripts/m/${candidate.manifestation.id}.json`
         : null,
       mimeType: primaryAudio.mime,

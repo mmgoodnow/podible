@@ -468,17 +468,12 @@ describe("json-rpc handler", () => {
       resolvedBoundaryCount: 1,
       totalBoundaryCount: 1,
     });
-    repo.upsertAssetTranscript({
-      assetId: audioAsset.id,
+    repo.upsertManifestationTranscript({
+      manifestationId: audioManifestation.id,
       status: "succeeded",
       source: "whisper",
       algorithmVersion: "test",
       fingerprint: "tfp",
-      transcriptJson: JSON.stringify({
-        version: "1.2.0",
-        text: "hello world",
-        words: [{ startMs: 0, endMs: 500, text: "hello", token: "hello" }],
-      }),
     });
     repo.createJob({ type: "acquire", bookId: book.id });
     repo.setJsonState("probe_cache_v1", [{ file: assetPath, mtimeMs: 123, data: null, error: "boom" }]);

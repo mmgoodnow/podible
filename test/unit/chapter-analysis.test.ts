@@ -12,7 +12,7 @@ import {
   extractGlossaryTerms,
   getBookTranscriptStatus,
   loadEpubEntries,
-  loadStoredTranscriptPayload,
+  loadStoredManifestationTranscriptPayload,
   mergeChunkSegments,
   normalizeTranscriptionLanguage,
   parseWhisperResponse,
@@ -356,7 +356,7 @@ describe("chapter analysis", () => {
         }
       );
 
-      const transcript = await loadStoredTranscriptPayload(repo, asset.id);
+      const transcript = await loadStoredManifestationTranscriptPayload(repo, manifestation.id);
       expect(transcript?.text).toBe("The spice");
       expect(transcript?.words).toEqual([
         { startMs: 0, endMs: 500, text: "The", token: "the" },

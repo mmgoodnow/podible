@@ -204,14 +204,13 @@ export type ChapterAnalysisRow = {
   updated_at: string;
 };
 
-export type AssetTranscriptRow = {
-  asset_id: number;
+export type ManifestationTranscriptRow = {
+  manifestation_id: number;
   status: AssetTranscriptStatus;
   source: string;
   algorithm_version: string;
   fingerprint: string;
   transcript_path: string | null;
-  transcript_json: string | null;
   error: string | null;
   updated_at: string;
 };

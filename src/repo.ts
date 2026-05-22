@@ -10,7 +10,7 @@ import type {
   AuthProvider,
   AuthCodeRow,
   AssetFileRow,
-  AssetTranscriptRow,
+  ManifestationTranscriptRow,
   AssetTranscriptStatus,
   AssetRow,
   BookRow,
@@ -83,14 +83,13 @@ type UpsertChapterAnalysisInput = {
   error?: string | null;
 };
 
-type UpsertAssetTranscriptInput = {
-  assetId: number;
+type UpsertManifestationTranscriptInput = {
+  manifestationId: number;
   status: AssetTranscriptStatus;
   source: string;
   algorithmVersion: string;
   fingerprint: string;
   transcriptPath?: string | null;
-  transcriptJson?: string | null;
   error?: string | null;
 };
 
@@ -645,21 +644,14 @@ export class BooksRepo {
       .all(bookId, bookId) as Array<{ path: string }>;
     const transcriptPaths = this.db
       .query(
-        `SELECT DISTINCT at.transcript_path AS path
-         FROM asset_transcripts at
-         INNER JOIN assets a ON a.id = at.asset_id
-         WHERE a.book_id = ?
-           AND at.transcript_path IS NOT NULL
-           AND at.transcript_path <> ''
-           AND NOT EXISTS (
-             SELECT 1
-             FROM asset_transcripts at2
-             INNER JOIN assets a2 ON a2.id = at2.asset_id
-             WHERE at2.transcript_path = at.transcript_path
-               AND a2.book_id <> ?
-           )`
+        `SELECT DISTINCT mt.transcript_path AS path
+         FROM manifestation_transcripts mt
+         INNER JOIN manifestations m ON m.id = mt.manifestation_id
+         WHERE m.book_id = ?
+           AND mt.transcript_path IS NOT NULL
+           AND mt.transcript_path <> ''`
       )
-      .all(bookId, bookId) as Array<{ path: string }>;
+      .all(bookId) as Array<{ path: string }>;
 
     const book = this.getBookRow(bookId);
     let coverPath: string | null = null;
@@ -694,7 +686,7 @@ export class BooksRepo {
       .query("SELECT DISTINCT path FROM asset_files WHERE path IS NOT NULL AND path <> ''")
       .all() as Array<{ path: string }>;
     const transcriptPaths = this.db
-      .query("SELECT DISTINCT transcript_path FROM asset_transcripts WHERE transcript_path IS NOT NULL AND transcript_path <> ''")
+      .query("SELECT DISTINCT transcript_path FROM manifestation_transcripts WHERE transcript_path IS NOT NULL AND transcript_path <> ''")
       .all() as Array<{ transcript_path: string }>;
     const coverPaths = this.db
       .query("SELECT DISTINCT cover_path FROM books WHERE cover_path IS NOT NULL AND cover_path <> ''")
@@ -740,7 +732,7 @@ export class BooksRepo {
           | "jobs"
           | "torrent_cache"
           | "chapter_analysis"
-          | "asset_transcripts"
+          | "manifestation_transcripts"
           | "users"
           | "sessions"
           | "plex_login_attempts"
@@ -758,7 +750,7 @@ export class BooksRepo {
         jobs: countRow("jobs"),
         torrentCache: countRow("torrent_cache"),
         chapterAnalysis: countRow("chapter_analysis"),
-        assetTranscripts: countRow("asset_transcripts"),
+        assetTranscripts: countRow("manifestation_transcripts"),
         users: countRow("users"),
         sessions: countRow("sessions"),
         plexLoginAttempts: countRow("plex_login_attempts"),
@@ -775,7 +767,7 @@ export class BooksRepo {
       this.db.query("DELETE FROM sessions").run();
       this.db.query("DELETE FROM users").run();
       this.db.query("DELETE FROM app_state").run();
-      this.db.query("DELETE FROM asset_transcripts").run();
+      this.db.query("DELETE FROM manifestation_transcripts").run();
       this.db.query("DELETE FROM chapter_analysis").run();
       this.db.query("DELETE FROM torrent_cache").run();
       this.db.query("DELETE FROM jobs").run();
@@ -785,7 +777,7 @@ export class BooksRepo {
       this.db.query("DELETE FROM books").run();
       this.db
         .query(
-          "DELETE FROM sqlite_sequence WHERE name IN ('books', 'releases', 'assets', 'asset_files', 'jobs', 'chapter_analysis', 'asset_transcripts', 'users', 'sessions')"
+          "DELETE FROM sqlite_sequence WHERE name IN ('books', 'releases', 'assets', 'asset_files', 'jobs', 'chapter_analysis', 'users', 'sessions')"
         )
         .run();
 
@@ -1312,14 +1304,13 @@ export class BooksRepo {
     return (this.db.query("SELECT * FROM chapter_analysis WHERE manifestation_id = ?").get(manifestationId) as ChapterAnalysisRow | null) ?? null;
   }
 
-  /** Book IDs where all audio assets are transcribed but no chapters_json exists yet, and an epub sibling is present. */
+  /** Book IDs where the manifestation transcript succeeded but no chapters_json exists yet, and an epub sibling is present. */
   listBookIdsNeedingCuration(): number[] {
     const rows = this.db
       .query<{ book_id: number }, []>(
         `SELECT DISTINCT m.book_id
          FROM manifestations m
-         JOIN assets a ON a.manifestation_id = m.id AND a.kind != 'ebook'
-         JOIN asset_transcripts t ON t.asset_id = a.id AND t.status = 'succeeded'
+         JOIN manifestation_transcripts mt ON mt.manifestation_id = m.id AND mt.status = 'succeeded'
          LEFT JOIN chapter_analysis ca ON ca.manifestation_id = m.id
          WHERE (ca.manifestation_id IS NULL OR (ca.status = 'succeeded' AND ca.chapters_json IS NULL))
            AND EXISTS (
@@ -1333,43 +1324,45 @@ export class BooksRepo {
     return rows.map((r) => r.book_id);
   }
 
-  getAssetTranscript(assetId: number): AssetTranscriptRow | null {
-    assertPositiveInt(assetId);
-    return (this.db.query("SELECT * FROM asset_transcripts WHERE asset_id = ?").get(assetId) as AssetTranscriptRow | null) ?? null;
+  getManifestationTranscript(manifestationId: number): ManifestationTranscriptRow | null {
+    assertPositiveInt(manifestationId);
+    return (
+      (this.db
+        .query("SELECT * FROM manifestation_transcripts WHERE manifestation_id = ?")
+        .get(manifestationId) as ManifestationTranscriptRow | null) ?? null
+    );
   }
 
-  upsertAssetTranscript(input: UpsertAssetTranscriptInput): AssetTranscriptRow {
-    assertPositiveInt(input.assetId);
+  upsertManifestationTranscript(input: UpsertManifestationTranscriptInput): ManifestationTranscriptRow {
+    assertPositiveInt(input.manifestationId);
     const now = nowIso();
     return this.db
       .query(
-        `INSERT INTO asset_transcripts (
-           asset_id, status, source, algorithm_version, fingerprint,
-           transcript_path, transcript_json, error, updated_at
+        `INSERT INTO manifestation_transcripts (
+           manifestation_id, status, source, algorithm_version, fingerprint,
+           transcript_path, error, updated_at
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(asset_id) DO UPDATE SET
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(manifestation_id) DO UPDATE SET
            status = excluded.status,
            source = excluded.source,
            algorithm_version = excluded.algorithm_version,
            fingerprint = excluded.fingerprint,
            transcript_path = excluded.transcript_path,
-           transcript_json = excluded.transcript_json,
            error = excluded.error,
            updated_at = excluded.updated_at
          RETURNING *`
       )
       .get(
-        input.assetId,
+        input.manifestationId,
         input.status,
         input.source,
         input.algorithmVersion,
         input.fingerprint,
         input.transcriptPath ?? null,
-        input.transcriptJson ?? null,
         input.error ?? null,
         now
-      ) as AssetTranscriptRow;
+      ) as ManifestationTranscriptRow;
   }
 
   upsertChapterAnalysis(input: UpsertChapterAnalysisInput): ChapterAnalysisRow {

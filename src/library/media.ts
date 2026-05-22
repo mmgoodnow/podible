@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { parseRange, segmentsForRange, streamSegmentsWithXingPatch } from "../streaming/range";
 import { buildId3ChaptersTag } from "../streaming/id3";
-import { loadStoredTranscriptPayload } from "./chapter-analysis";
+import { loadStoredManifestationTranscriptPayload } from "./chapter-analysis";
 import type { StoredTranscriptUtterance } from "./chapter-analysis";
 import { wordsToTranscriptUtterances } from "./chapter-markers";
 import { readFfprobeChapters } from "../media/probe-cache";
@@ -199,7 +199,8 @@ async function buildChapterTimings(repo: BooksRepo, asset: AssetRow, files: Asse
   const timings = await buildFallbackChapterTimings(asset, files);
   if (!timings || timings.length === 0) return timings;
   if (asset.kind === "ebook") return timings;
-  const transcript = await loadStoredTranscriptPayload(repo, asset.id).catch(() => null);
+  const manifestationId = asset.manifestation_id;
+  const transcript = manifestationId != null ? await loadStoredManifestationTranscriptPayload(repo, manifestationId).catch(() => null) : null;
   const utterances =
     transcript?.utterances && transcript.utterances.length > 0
       ? transcript.utterances

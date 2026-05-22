@@ -656,7 +656,7 @@ export async function renderBookPage(
   const ebook = selectPreferredDownloadableEbookAsset(assets);
   const chapters = audioChoice && audioContainers.length > 0 ? await buildManifestationChapters(repo, audioChoice.manifestation, audioContainers) : null;
   const transcriptUrl =
-    audioChoice && hasStoredManifestationTranscriptPayload(repo, audioContainers)
+    audioChoice && hasStoredManifestationTranscriptPayload(repo, audioChoice.manifestation.id)
       ? addApiKey(`/transcripts/m/${audioChoice.manifestation.id}.json`, apiKey)
       : null;
   const streamUrl = audioChoice ? addApiKey(`/stream/m/${audioChoice.manifestation.id}.${streamExtensionForManifestation(audioContainers)}`, apiKey) : null;

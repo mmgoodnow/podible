@@ -24,6 +24,7 @@ const RELEASE_SEARCHES_MIGRATION_ID = 18;
 const DOMAIN_DECISION_NOTES_MIGRATION_ID = 19;
 const MANIFESTATION_CHAPTER_ANALYSIS_MIGRATION_ID = 20;
 const DROP_TRANSCRIPT_FINGERPRINT_MIGRATION_ID = 21;
+const MANIFESTATION_TRANSCRIPTS_MIGRATION_ID = 22;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -122,17 +123,16 @@ CREATE TABLE IF NOT EXISTS chapter_analysis (
   FOREIGN KEY (manifestation_id) REFERENCES manifestations(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS asset_transcripts (
-  asset_id INTEGER PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS manifestation_transcripts (
+  manifestation_id INTEGER PRIMARY KEY,
   status TEXT NOT NULL CHECK (status IN ('pending', 'succeeded', 'failed')),
   source TEXT NOT NULL,
   algorithm_version TEXT NOT NULL,
   fingerprint TEXT NOT NULL,
   transcript_path TEXT NULL,
-  transcript_json TEXT NULL,
   error TEXT NULL,
   updated_at TEXT NOT NULL,
-  FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
+  FOREIGN KEY (manifestation_id) REFERENCES manifestations(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -713,6 +713,24 @@ function applyDropTranscriptFingerprintMigration(db: Database): void {
   }
 }
 
+function applyManifestationTranscriptsMigration(db: Database): void {
+  db.exec(`
+CREATE TABLE IF NOT EXISTS manifestation_transcripts (
+  manifestation_id INTEGER PRIMARY KEY,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'succeeded', 'failed')),
+  source TEXT NOT NULL,
+  algorithm_version TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  transcript_path TEXT NULL,
+  error TEXT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (manifestation_id) REFERENCES manifestations(id) ON DELETE CASCADE
+);
+-- Drop old per-asset transcript table; existing transcripts will be re-run at manifestation level.
+DROP TABLE IF EXISTS asset_transcripts;
+`);
+}
+
 function applyDomainDecisionNotesMigration(db: Database): void {
   if (!hasColumn(db, "manifestations", "selection_note")) {
     db.exec("ALTER TABLE manifestations ADD COLUMN selection_note TEXT NULL");
@@ -814,5 +832,8 @@ export function runMigrations(db: Database): void {
   });
   apply(DROP_TRANSCRIPT_FINGERPRINT_MIGRATION_ID, () => {
     applyDropTranscriptFingerprintMigration(db);
+  });
+  apply(MANIFESTATION_TRANSCRIPTS_MIGRATION_ID, () => {
+    applyManifestationTranscriptsMigration(db);
   });
 }

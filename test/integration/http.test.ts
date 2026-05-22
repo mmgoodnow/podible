@@ -255,17 +255,13 @@ describe("podible http", () => {
         },
       ],
     });
-    repo.upsertAssetTranscript({
-      assetId: standardAudio.id,
+    repo.upsertManifestationTranscript({
+      manifestationId: standardManifestation.id,
       status: "succeeded",
       source: "whisper_transcript",
       algorithmVersion: "test",
       fingerprint: "test",
-      transcriptJson: JSON.stringify({
-        version: "test",
-        text: "arrakis dune desert planet",
-        words: [{ startMs: 0, endMs: 100, text: "arrakis", token: "arrakis" }],
-      }),
+      transcriptPath: path.join(isolatedDataDir, "dune-transcript.json"),
     });
     const graphicAudio = repo.addManifestation({
       bookId: book.id,
@@ -1795,7 +1791,7 @@ describe("podible http", () => {
     db.close();
   });
 
-  test("serves stored transcript json for audio assets", async () => {
+  test("serves stored transcript json for manifestations", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -1808,7 +1804,7 @@ describe("podible http", () => {
 
     const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
     const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
-    const audio = repo.addAsset({
+    repo.addAsset({
       bookId: book.id,
       kind: "single",
       mime: "audio/mpeg",
@@ -1826,26 +1822,31 @@ describe("podible http", () => {
         },
       ],
     });
-    repo.upsertAssetTranscript({
-      assetId: audio.id,
-      status: "succeeded",
-      source: "full_transcript_epub",
-      algorithmVersion: "test",
-      fingerprint: "fp",
-      transcriptJson: JSON.stringify({
+    const transcriptFilePath = path.join(isolatedDataDir, "transcript-route.json");
+    await Bun.write(
+      transcriptFilePath,
+      JSON.stringify({
         version: "1.2.0",
         text: "fear is the mind killer",
         words: [
           { startMs: 0, endMs: 300, text: "fear", token: "fear" },
           { startMs: 301, endMs: 500, text: "is", token: "is" },
         ],
-      }),
+      })
+    );
+    repo.upsertManifestationTranscript({
+      manifestationId: manifestation.id,
+      status: "succeeded",
+      source: "full_transcript_epub",
+      algorithmVersion: "test",
+      fingerprint: "fp",
+      transcriptPath: transcriptFilePath,
     });
 
     const fetchHandler = createPodibleFetchHandler(repo, Date.now());
     const userCookie = createBrowserSessionCookie(repo, { username: "reader" });
     const response = await fetchHandler(
-      new Request(`http://localhost/transcripts/${audio.id}.json`, {
+      new Request(`http://localhost/transcripts/m/${manifestation.id}.json`, {
         headers: { cookie: userCookie },
       })
     );
@@ -1854,12 +1855,9 @@ describe("podible http", () => {
     const payload = (await response.json()) as any;
     expect(payload.text).toBe("fear is the mind killer");
     expect(payload.words[0].text).toBe("fear");
-    const transcriptRow = repo.getAssetTranscript(audio.id);
-    expect(transcriptRow?.transcript_path).toBeTruthy();
-    expect(transcriptRow?.transcript_json).toBeNull();
 
     const missing = await fetchHandler(
-      new Request("http://localhost/transcripts/999.json", {
+      new Request("http://localhost/transcripts/m/999.json", {
         headers: { cookie: userCookie },
       })
     );
@@ -1919,31 +1917,29 @@ describe("podible http", () => {
         },
       ],
     });
-    repo.upsertAssetTranscript({
-      assetId: partOne.id,
+    const manifestationTranscriptPath = path.join(isolatedDataDir, "red-rising-transcript.json");
+    await Bun.write(
+      manifestationTranscriptPath,
+      JSON.stringify({
+        version: "test",
+        text: "part one\n\npart two",
+        words: [
+          { startMs: 0, endMs: 100, text: "part", token: "part" },
+          { startMs: 1_000, endMs: 1_100, text: "two", token: "two" },
+        ],
+        utterances: [
+          { startMs: 0, endMs: 100, text: "part one" },
+          { startMs: 1_000, endMs: 1_100, text: "part two" },
+        ],
+      })
+    );
+    repo.upsertManifestationTranscript({
+      manifestationId: manifestation.id,
       status: "succeeded",
       source: "whisper_transcript",
       algorithmVersion: "test",
-      fingerprint: "part-one",
-      transcriptJson: JSON.stringify({
-        version: "test",
-        text: "part one",
-        words: [{ startMs: 0, endMs: 100, text: "part", token: "part" }],
-        utterances: [{ startMs: 0, endMs: 100, text: "part one" }],
-      }),
-    });
-    repo.upsertAssetTranscript({
-      assetId: partTwo.id,
-      status: "succeeded",
-      source: "whisper_transcript",
-      algorithmVersion: "test",
-      fingerprint: "part-two",
-      transcriptJson: JSON.stringify({
-        version: "test",
-        text: "part two",
-        words: [{ startMs: 0, endMs: 100, text: "two", token: "two" }],
-        utterances: [{ startMs: 0, endMs: 100, text: "part two" }],
-      }),
+      fingerprint: "combined",
+      transcriptPath: manifestationTranscriptPath,
     });
 
     const fetchHandler = createPodibleFetchHandler(repo, Date.now());
@@ -1984,7 +1980,7 @@ describe("podible http", () => {
 
     const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
     const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
-    const audio = repo.addAsset({
+    repo.addAsset({
       bookId: book.id,
       kind: "single",
       mime: "audio/mpeg",
@@ -2002,26 +1998,31 @@ describe("podible http", () => {
         },
       ],
     });
-    repo.upsertAssetTranscript({
-      assetId: audio.id,
-      status: "succeeded",
-      source: "full_transcript_epub",
-      algorithmVersion: "test",
-      fingerprint: "fp-br",
-      transcriptJson: JSON.stringify({
+    const transcriptFilePath2 = path.join(isolatedDataDir, "transcript-route-br.json");
+    await Bun.write(
+      transcriptFilePath2,
+      JSON.stringify({
         version: "1.2.0",
         text: "fear is the mind killer",
         words: [
           { startMs: 0, endMs: 300, text: "fear", token: "fear" },
           { startMs: 301, endMs: 500, text: "is", token: "is" },
         ],
-      }),
+      })
+    );
+    repo.upsertManifestationTranscript({
+      manifestationId: manifestation.id,
+      status: "succeeded",
+      source: "full_transcript_epub",
+      algorithmVersion: "test",
+      fingerprint: "fp-br",
+      transcriptPath: transcriptFilePath2,
     });
 
     const fetchHandler = createPodibleFetchHandler(repo, Date.now());
     const userCookie = createBrowserSessionCookie(repo, { username: "reader" });
     const response = await fetchHandler(
-      new Request(`http://localhost/transcripts/${audio.id}.json`, {
+      new Request(`http://localhost/transcripts/m/${manifestation.id}.json`, {
         headers: { "Accept-Encoding": "br", cookie: userCookie },
       })
     );
@@ -2029,8 +2030,7 @@ describe("podible http", () => {
     expect(response.headers.get("content-encoding")).toBeNull();
     const payload = (await response.json()) as any;
     expect(payload.text).toBe("fear is the mind killer");
-    expect(repo.getAssetTranscript(audio.id)?.transcript_path).toBeTruthy();
-    expect(repo.getAssetTranscript(audio.id)?.transcript_json).toBeNull();
+    expect(repo.getManifestationTranscript(manifestation.id)?.transcript_path).toBeTruthy();
 
     db.close();
   });
