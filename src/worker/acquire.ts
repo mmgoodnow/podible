@@ -68,6 +68,7 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
         },
         {
           repo: ctx.repo,
+          modelProvider: ctx.modelProvider,
         }
       );
       if (decision.error) {

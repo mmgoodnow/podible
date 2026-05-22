@@ -5,6 +5,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import type { Model, ModelProvider, ModelRequest, ModelResponse } from "@openai/agents-core";
+import { Usage } from "@openai/agents-core";
 
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
@@ -21,6 +23,48 @@ function makeTorrentBytes(name: string): Uint8Array {
   const nameLen = Buffer.byteLength(name);
   const content = `d8:announce15:http://tracker/4:infod4:name${nameLen}:${name}12:piece lengthi16384e6:lengthi10e6:pieces20:12345678901234567890ee`;
   return new Uint8Array(Buffer.from(content, "ascii"));
+}
+
+/** Build an internal ModelResponse with a plain text assistant message. */
+function textModelResponse(text: string): ModelResponse {
+  return {
+    usage: new Usage(),
+    output: [
+      {
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text }],
+      },
+    ],
+  };
+}
+
+/**
+ * A fake ModelProvider that drives tests with a scripted sequence of ModelResponses.
+ * Captures each ModelRequest for assertion.
+ */
+class FakeModelProvider implements ModelProvider {
+  readonly requests: ModelRequest[] = [];
+  private readonly responses: ModelResponse[];
+
+  constructor(responses: ModelResponse[]) {
+    this.responses = [...responses];
+  }
+
+  getModel(_modelName?: string): Model {
+    return {
+      getResponse: async (request: ModelRequest): Promise<ModelResponse> => {
+        this.requests.push(request);
+        const response = this.responses.shift();
+        if (!response) throw new Error("FakeModelProvider: no more scripted responses");
+        return response;
+      },
+      getStreamedResponse: async function* () {
+        throw new Error("FakeModelProvider: streaming not supported");
+      },
+    };
+  }
 }
 
 describe("worker acquire auto-acquire retries", () => {
@@ -227,29 +271,22 @@ describe("worker acquire auto-acquire retries", () => {
       payload: { bookId: book.id, media: ["audio"], forceAgent: true },
     });
 
+    const fakeProvider = new FakeModelProvider([
+      textModelResponse(JSON.stringify({
+        selections: [
+          {
+            manifestation: { label: "GraphicAudio dramatization", editionNote: "full cast" },
+            parts: [0, 1],
+          },
+        ],
+        confidence: 0.88,
+        reason: "The preferred GraphicAudio edition is split across two parts.",
+      })),
+    ]);
+
     const originalFetch = globalThis.fetch;
-    const openAiBodies: unknown[] = [];
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
       const url = String(input);
-      if (url === "https://api.openai.com/v1/responses") {
-        const body = JSON.parse(String(init?.body ?? "{}"));
-        openAiBodies.push(body);
-        return new Response(
-          JSON.stringify({
-            output_text: JSON.stringify({
-              selections: [
-                {
-                  manifestation: { label: "GraphicAudio dramatization", editionNote: "full cast" },
-                  parts: [0, 1],
-                },
-              ],
-              confidence: 0.88,
-              reason: "The preferred GraphicAudio edition is split across two parts.",
-            }),
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        );
-      }
       if (url === "http://rtorrent.mock/RPC2") {
         const body = String(init?.body ?? "");
         const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
@@ -271,6 +308,7 @@ describe("worker acquire auto-acquire retries", () => {
         repo,
         getSettings: () => repo.getSettings(),
         onLog: (line) => logs.push(line),
+        modelProvider: fakeProvider,
       }, acquireJob);
 
       const manifestations = repo.listManifestationsByBook(book.id);
@@ -291,7 +329,7 @@ describe("worker acquire auto-acquire retries", () => {
         { manifestationId: manifestations[0]?.id, sequenceInManifestation: 0, preferAgentImport: true },
         { manifestationId: manifestations[0]?.id, sequenceInManifestation: 1, preferAgentImport: true },
       ]);
-      expect(JSON.stringify(openAiBodies)).toContain("prefer GraphicAudio");
+      expect(JSON.stringify(fakeProvider.requests[0]?.input)).toContain("prefer GraphicAudio");
       expect(logs.some((line) => line.includes("parts=2"))).toBe(true);
     } finally {
       globalThis.fetch = originalFetch;

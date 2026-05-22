@@ -38,6 +38,7 @@ function textModelResponse(text: string): ModelResponse {
     usage: new Usage(),
     output: [
       {
+        type: "message",
         role: "assistant",
         status: "completed",
         content: [{ type: "output_text", text }],
