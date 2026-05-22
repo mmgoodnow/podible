@@ -22,6 +22,7 @@ const MANIFESTATIONS_MIGRATION_ID = 16;
 const PRUNE_EMPTY_MANIFESTATIONS_MIGRATION_ID = 17;
 const RELEASE_SEARCHES_MIGRATION_ID = 18;
 const DOMAIN_DECISION_NOTES_MIGRATION_ID = 19;
+const MANIFESTATION_CHAPTER_ANALYSIS_MIGRATION_ID = 20;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -106,7 +107,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 
 CREATE TABLE IF NOT EXISTS chapter_analysis (
-  asset_id INTEGER PRIMARY KEY,
+  manifestation_id INTEGER PRIMARY KEY,
   status TEXT NOT NULL CHECK (status IN ('pending', 'succeeded', 'failed')),
   source TEXT NOT NULL,
   algorithm_version TEXT NOT NULL,
@@ -118,7 +119,7 @@ CREATE TABLE IF NOT EXISTS chapter_analysis (
   total_boundary_count INTEGER NOT NULL DEFAULT 0,
   error TEXT NULL,
   updated_at TEXT NOT NULL,
-  FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
+  FOREIGN KEY (manifestation_id) REFERENCES manifestations(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS asset_transcripts (
@@ -378,7 +379,7 @@ ALTER TABLE jobs_new RENAME TO jobs;
 CREATE INDEX IF NOT EXISTS idx_jobs_status_next_created ON jobs(status, next_run_at, created_at);
 
 CREATE TABLE IF NOT EXISTS chapter_analysis (
-  asset_id INTEGER PRIMARY KEY,
+  manifestation_id INTEGER PRIMARY KEY,
   status TEXT NOT NULL CHECK (status IN ('pending', 'succeeded', 'failed')),
   source TEXT NOT NULL,
   algorithm_version TEXT NOT NULL,
@@ -390,7 +391,7 @@ CREATE TABLE IF NOT EXISTS chapter_analysis (
   total_boundary_count INTEGER NOT NULL DEFAULT 0,
   error TEXT NULL,
   updated_at TEXT NOT NULL,
-  FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
+  FOREIGN KEY (manifestation_id) REFERENCES manifestations(id) ON DELETE CASCADE
 );
 `);
 }
@@ -651,6 +652,61 @@ CREATE INDEX IF NOT EXISTS idx_release_searches_book_user ON release_searches(bo
 `);
 }
 
+function applyManifestationChapterAnalysisMigration(db: Database): void {
+  // If chapter_analysis already has manifestation_id (fresh DB from updated base schema), nothing to do.
+  if (hasColumn(db, "chapter_analysis", "manifestation_id")) return;
+
+  db.exec(`
+CREATE TABLE IF NOT EXISTS manifestation_chapter_analysis (
+  manifestation_id INTEGER PRIMARY KEY,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'succeeded', 'failed')),
+  source TEXT NOT NULL,
+  algorithm_version TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  transcript_fingerprint TEXT NULL,
+  chapters_json TEXT NULL,
+  debug_json TEXT NULL,
+  resolved_boundary_count INTEGER NOT NULL DEFAULT 0,
+  total_boundary_count INTEGER NOT NULL DEFAULT 0,
+  error TEXT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (manifestation_id) REFERENCES manifestations(id) ON DELETE CASCADE
+);
+
+-- Migrate existing chapter_analysis data: copy from first audio asset per manifestation.
+INSERT OR IGNORE INTO manifestation_chapter_analysis (
+  manifestation_id, status, source, algorithm_version, fingerprint,
+  transcript_fingerprint, chapters_json, debug_json,
+  resolved_boundary_count, total_boundary_count, error, updated_at
+)
+SELECT
+  a.manifestation_id,
+  ca.status,
+  ca.source,
+  ca.algorithm_version,
+  ca.fingerprint,
+  ca.transcript_fingerprint,
+  ca.chapters_json,
+  ca.debug_json,
+  ca.resolved_boundary_count,
+  ca.total_boundary_count,
+  ca.error,
+  ca.updated_at
+FROM chapter_analysis ca
+JOIN assets a ON a.id = ca.asset_id
+WHERE a.manifestation_id IS NOT NULL
+  AND a.sequence_in_manifestation = (
+    SELECT MIN(a2.sequence_in_manifestation)
+    FROM assets a2
+    WHERE a2.manifestation_id = a.manifestation_id
+      AND a2.kind != 'ebook'
+  );
+
+DROP TABLE IF EXISTS chapter_analysis;
+ALTER TABLE manifestation_chapter_analysis RENAME TO chapter_analysis;
+`);
+}
+
 function applyDomainDecisionNotesMigration(db: Database): void {
   if (!hasColumn(db, "manifestations", "selection_note")) {
     db.exec("ALTER TABLE manifestations ADD COLUMN selection_note TEXT NULL");
@@ -746,5 +802,8 @@ export function runMigrations(db: Database): void {
   });
   apply(DOMAIN_DECISION_NOTES_MIGRATION_ID, () => {
     applyDomainDecisionNotesMigration(db);
+  });
+  apply(MANIFESTATION_CHAPTER_ANALYSIS_MIGRATION_ID, () => {
+    applyManifestationChapterAnalysisMigration(db);
   });
 }

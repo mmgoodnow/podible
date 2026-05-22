@@ -71,7 +71,7 @@ type CreateJobInput = {
 };
 
 type UpsertChapterAnalysisInput = {
-  assetId: number;
+  manifestationId: number;
   status: ChapterAnalysisStatus;
   source: string;
   algorithmVersion: string;
@@ -1295,23 +1295,24 @@ export class BooksRepo {
     };
   }
 
-  getChapterAnalysis(assetId: number): ChapterAnalysisRow | null {
-    assertPositiveInt(assetId);
-    return (this.db.query("SELECT * FROM chapter_analysis WHERE asset_id = ?").get(assetId) as ChapterAnalysisRow | null) ?? null;
+  getChapterAnalysis(manifestationId: number): ChapterAnalysisRow | null {
+    assertPositiveInt(manifestationId);
+    return (this.db.query("SELECT * FROM chapter_analysis WHERE manifestation_id = ?").get(manifestationId) as ChapterAnalysisRow | null) ?? null;
   }
 
-  /** Book IDs that have a succeeded transcript, no chapters_json, and an epub sibling. */
+  /** Book IDs where all audio assets are transcribed but no chapters_json exists yet, and an epub sibling is present. */
   listBookIdsNeedingCuration(): number[] {
     const rows = this.db
       .query<{ book_id: number }, []>(
-        `SELECT DISTINCT a.book_id
-         FROM assets a
+        `SELECT DISTINCT m.book_id
+         FROM manifestations m
+         JOIN assets a ON a.manifestation_id = m.id AND a.kind != 'ebook'
          JOIN asset_transcripts t ON t.asset_id = a.id AND t.status = 'succeeded'
-         JOIN chapter_analysis ca ON ca.asset_id = a.id AND ca.status = 'succeeded' AND ca.chapters_json IS NULL
-         WHERE a.kind != 'ebook'
+         LEFT JOIN chapter_analysis ca ON ca.manifestation_id = m.id
+         WHERE (ca.manifestation_id IS NULL OR (ca.status = 'succeeded' AND ca.chapters_json IS NULL))
            AND EXISTS (
              SELECT 1 FROM assets epub
-             WHERE epub.book_id = a.book_id
+             WHERE epub.book_id = m.book_id
                AND epub.kind = 'ebook'
                AND epub.mime = 'application/epub+zip'
            )`
@@ -1360,16 +1361,16 @@ export class BooksRepo {
   }
 
   upsertChapterAnalysis(input: UpsertChapterAnalysisInput): ChapterAnalysisRow {
-    assertPositiveInt(input.assetId);
+    assertPositiveInt(input.manifestationId);
     const now = nowIso();
     return this.db
       .query(
         `INSERT INTO chapter_analysis (
-           asset_id, status, source, algorithm_version, fingerprint,
+           manifestation_id, status, source, algorithm_version, fingerprint,
            transcript_fingerprint, chapters_json, debug_json, resolved_boundary_count, total_boundary_count, error, updated_at
          )
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(asset_id) DO UPDATE SET
+         ON CONFLICT(manifestation_id) DO UPDATE SET
            status = excluded.status,
            source = excluded.source,
            algorithm_version = excluded.algorithm_version,
@@ -1384,7 +1385,7 @@ export class BooksRepo {
          RETURNING *`
       )
       .get(
-        input.assetId,
+        input.manifestationId,
         input.status,
         input.source,
         input.algorithmVersion,

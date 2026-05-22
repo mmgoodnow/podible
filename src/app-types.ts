@@ -190,7 +190,7 @@ export type JobRow = {
 };
 
 export type ChapterAnalysisRow = {
-  asset_id: number;
+  manifestation_id: number;
   status: ChapterAnalysisStatus;
   source: string;
   algorithm_version: string;

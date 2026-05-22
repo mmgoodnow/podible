@@ -266,11 +266,7 @@ async function buildTranscriptProposedChapterTimings(
     manifestation.duration_ms ??
     audioContainers.reduce((sum, container) => sum + containerDurationMs(container.asset, container.files), 0);
 
-  // chapters_json for a manifestation is stored on the first audio container's
-  // chapter_analysis row. The list covers the full combined duration for
-  // multi-container manifestations.
-  const firstContainer = audioContainers[0]!;
-  const analysis = repo.getChapterAnalysis(firstContainer.asset.id);
+  const analysis = repo.getChapterAnalysis(manifestation.id);
   if (!analysis?.chapters_json) return null;
   const allChapters = JSON.parse(analysis.chapters_json) as Array<{ title: string; startTime: number }>;
   if (!Array.isArray(allChapters) || allChapters.length === 0) return null;

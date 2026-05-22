@@ -397,7 +397,7 @@ describe("manifestation media", () => {
         ],
       });
       repo.upsertChapterAnalysis({
-        assetId: audio.id,
+        manifestationId: audioManifestation.id,
         status: "succeeded",
         source: "test",
         algorithmVersion: "test",

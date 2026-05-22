@@ -1562,6 +1562,7 @@ export async function requestBookTranscription(
 }
 
 type AgenticCurationResult = {
+  manifestationId: number;
   chaptersJson: string;
   resolvedBoundaryCount: number;
   totalBoundaryCount: number;
@@ -1684,6 +1685,7 @@ async function tryAgenticCuration(
     }));
 
     return {
+      manifestationId,
       chaptersJson: JSON.stringify(chapters),
       resolvedBoundaryCount,
       totalBoundaryCount,
@@ -1756,8 +1758,14 @@ export async function processChapterAnalysisJob(
     return "done";
   }
 
+  const manifestationId = target.asset.manifestation_id;
+  if (manifestationId === null) {
+    ctx.repo.markJobSucceeded(job.id);
+    return "done";
+  }
+
   ctx.repo.upsertChapterAnalysis({
-    assetId: target.asset.id,
+    manifestationId,
     status: "pending",
     source: CHAPTER_ANALYSIS_SOURCE,
     algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
@@ -1829,7 +1837,7 @@ export async function processChapterAnalysisJob(
     const curationResult = await tryAgenticCuration(ctx, target, payload, settings, transcriptFingerprint, resolvedDeps.runAgenticCuration);
 
     ctx.repo.upsertChapterAnalysis({
-      assetId: target.asset.id,
+      manifestationId: curationResult?.manifestationId ?? manifestationId,
       status: "succeeded",
       source: CHAPTER_ANALYSIS_SOURCE,
       algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
@@ -1871,7 +1879,7 @@ export async function processChapterAnalysisJob(
       });
     }
     ctx.repo.upsertChapterAnalysis({
-      assetId: target.asset.id,
+      manifestationId,
       status: "failed",
       source: CHAPTER_ANALYSIS_SOURCE,
       algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,

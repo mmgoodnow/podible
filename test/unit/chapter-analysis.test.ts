@@ -365,7 +365,7 @@ describe("chapter analysis", () => {
         { startMs: 0, endMs: 1200, text: "The spice" },
       ]);
       expect(transcript?.chunks?.length).toBe(1);
-      expect(repo.getChapterAnalysis(asset.id)?.chapters_json).toBeNull();
+      expect(repo.getChapterAnalysis(manifestation.id)?.chapters_json).toBeNull();
       expect(await buildChapters(repo, asset, repo.getAssetFiles(asset.id))).toBeNull();
     } finally {
       db.close();
@@ -487,7 +487,7 @@ describe("chapter analysis", () => {
         }
       );
 
-      const analysis = repo.getChapterAnalysis(asset.id);
+      const analysis = repo.getChapterAnalysis(audioManifestation.id);
       expect(analysis?.status).toBe("succeeded");
       expect(analysis?.chapters_json).not.toBeNull();
       const stored = JSON.parse(analysis!.chapters_json!);
@@ -548,7 +548,7 @@ describe("chapter analysis", () => {
       );
 
       expect(curationCalled).toBe(false);
-      expect(repo.getChapterAnalysis(asset.id)?.chapters_json).toBeNull();
+      expect(repo.getChapterAnalysis(manifestation.id)?.chapters_json).toBeNull();
     } finally {
       db.close();
       await rm(root, { recursive: true, force: true });

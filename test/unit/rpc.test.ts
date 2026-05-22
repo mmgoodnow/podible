@@ -456,7 +456,7 @@ describe("json-rpc handler", () => {
       ],
     });
     repo.upsertChapterAnalysis({
-      assetId: audioAsset.id,
+      manifestationId: audioManifestation.id,
       status: "succeeded",
       source: "epub_ai",
       algorithmVersion: "test",
