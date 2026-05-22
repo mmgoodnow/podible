@@ -1127,6 +1127,19 @@ export class BooksRepo {
     return null;
   }
 
+  findQueuedOrRunningJobByManifestation(type: JobType, manifestationId: number): JobRow | null {
+    const rows = this.listJobsByType(type).filter((job) => job.status === "queued" || job.status === "running");
+    for (const row of rows) {
+      try {
+        const payload = row.payload_json ? (JSON.parse(row.payload_json) as Record<string, unknown>) : {};
+        if (Number(payload.manifestationId) === manifestationId) return row;
+      } catch {
+        // ignore malformed payloads
+      }
+    }
+    return null;
+  }
+
   getJob(jobId: number): JobRow | null {
     assertPositiveInt(jobId);
     return (this.db.query("SELECT * FROM jobs WHERE id = ?").get(jobId) as JobRow | null) ?? null;

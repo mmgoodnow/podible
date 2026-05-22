@@ -12,7 +12,7 @@ import type { TranscriptionVerbose } from "openai/resources/audio/transcriptions
 import { promises as fsPromises } from "node:fs";
 
 import { configDir, ensureConfigDirSync } from "../config";
-import type { AppSettings, AssetFileRow, AssetRow, AssetTranscriptRow, BookRow, JobRow } from "../app-types";
+import type { AppSettings, AssetFileRow, AssetRow, AssetTranscriptRow, BookRow, JobRow, ManifestationRow } from "../app-types";
 import { readFfprobeChapters } from "../media/probe-cache";
 import type { BooksRepo } from "../repo";
 import { selectPreferredAudioManifestation } from "./asset-selection";
@@ -1370,8 +1370,11 @@ async function transcribeAssetWithDeps(
 }
 
 export async function queueChapterAnalysisForBook(repo: BooksRepo, bookId: number): Promise<JobRow | null> {
-  const audioAssets = selectPreferredAudioAssetsForBook(repo, bookId);
-  return queueChapterAnalysisForAudioAssets(repo, bookId, audioAssets);
+  const manifestations = repo.listManifestationsByBook(bookId);
+  const candidates = manifestations.map((m) => ({ manifestation: m, containers: repo.listAssetsByManifestation(m.id) }));
+  const chosen = selectPreferredAudioManifestation(candidates);
+  if (!chosen) return null;
+  return queueChapterAnalysisForManifestationRow(repo, bookId, chosen.manifestation.id);
 }
 
 export async function queueChapterAnalysisForManifestation(
@@ -1380,30 +1383,22 @@ export async function queueChapterAnalysisForManifestation(
   manifestationId: number
 ): Promise<JobRow | null> {
   const audioAssets = selectAudioAssetsForManifestation(repo, bookId, manifestationId);
-  return queueChapterAnalysisForAudioAssets(repo, bookId, audioAssets);
+  if (audioAssets.length === 0) return null;
+  return queueChapterAnalysisForManifestationRow(repo, bookId, manifestationId);
 }
 
-async function queueChapterAnalysisForAudioAssets(repo: BooksRepo, bookId: number, audioAssets: AssetRow[]): Promise<JobRow | null> {
-  if (audioAssets.length === 0) return null;
+async function queueChapterAnalysisForManifestationRow(repo: BooksRepo, bookId: number, manifestationId: number): Promise<JobRow | null> {
+  const existing = repo.findQueuedOrRunningJobByManifestation("chapter_analysis", manifestationId);
+  if (existing) return existing;
   const epubAsset = selectPreferredEpubAsset(repo.listAssetsByBook(bookId));
-  let first: JobRow | null = null;
-  for (const audioAsset of audioAssets) {
-    const existing = repo.findQueuedOrRunningJobByAsset("chapter_analysis", audioAsset.id);
-    if (existing) {
-      first ??= existing;
-      continue;
-    }
-    const job = repo.createJob({
-      type: "chapter_analysis",
-      bookId,
-      payload: {
-        assetId: audioAsset.id,
-        ...(epubAsset ? { ebookAssetId: epubAsset.id } : {}),
-      },
-    });
-    first ??= job;
-  }
-  return first;
+  return repo.createJob({
+    type: "chapter_analysis",
+    bookId,
+    payload: {
+      manifestationId,
+      ...(epubAsset ? { ebookAssetId: epubAsset.id } : {}),
+    },
+  });
 }
 
 /**
@@ -1462,6 +1457,8 @@ async function buildTranscriptStatus(
     };
   }
 
+  const manifestationId = audioAssets[0]?.manifestation_id ?? null;
+  const existingJob = manifestationId !== null ? repo.findQueuedOrRunningJobByManifestation("chapter_analysis", manifestationId) : null;
   const entries = await Promise.all(
     audioAssets.map(async (audioAsset) => {
       const files = repo.getAssetFiles(audioAsset.id);
@@ -1474,14 +1471,13 @@ async function buildTranscriptStatus(
       return {
         audioAsset,
         transcript: repo.getAssetTranscript(audioAsset.id),
-        existingJob: repo.findQueuedOrRunningJobByAsset("chapter_analysis", audioAsset.id),
         currentFingerprint,
       };
     })
   );
   const transcripts = entries.map((entry) => entry.transcript).filter((transcript): transcript is AssetTranscriptRow => transcript !== null);
-  const runningJob = entries.find((entry) => entry.existingJob?.status === "running")?.existingJob ?? null;
-  const pendingJob = entries.find((entry) => entry.existingJob)?.existingJob ?? null;
+  const runningJob = existingJob?.status === "running" ? existingJob : null;
+  const pendingJob = existingJob ?? null;
   const combinedCurrentFingerprint =
     entries.every((entry) => entry.currentFingerprint !== null)
       ? createHash("sha1")
@@ -1613,36 +1609,23 @@ async function buildEmbeddedChaptersForContainers(
 
 async function tryAgenticCuration(
   ctx: ChapterAnalysisContext,
-  target: { asset: AssetRow; files: AssetFileRow[] },
-  payload: { assetId?: number; ebookAssetId?: number },
+  manifestation: ManifestationRow,
+  audioContainers: Array<{ asset: AssetRow; files: AssetFileRow[] }>,
+  payload: { manifestationId?: number; ebookAssetId?: number },
   settings: AppSettings,
-  transcriptFingerprint: string,
+  combinedFingerprint: string,
   runCuration: typeof runRecursiveAgenticChapterCurationDetailed
 ): Promise<AgenticCurationResult | null> {
   if (!settings.agents.apiKey.trim()) return null;
   if (!payload.ebookAssetId) return null;
-
-  // Only run curation from the first audio container of the manifestation.
-  const manifestationId = target.asset.manifestation_id;
-  if (manifestationId === null) return null;
-  const manifestationData = ctx.repo.getManifestationWithContainers(manifestationId);
-  if (!manifestationData) return null;
-  const audioContainers = manifestationData.containers.filter((c) => c.asset.kind !== "ebook");
   if (audioContainers.length === 0) return null;
-  if (audioContainers[0]!.asset.id !== target.asset.id) return null;
-
-  // All containers must have succeeded transcription.
-  const allTranscribed = audioContainers.every((container) => {
-    const row = ctx.repo.getAssetTranscript(container.asset.id);
-    return row?.status === "succeeded";
-  });
-  if (!allTranscribed) return null;
 
   const ebookAsset = ctx.repo.getAssetWithFiles(payload.ebookAssetId);
   const ebookFile = ebookAsset?.files[0];
   if (!ebookFile) return null;
 
-  const book = ctx.repo.getBookRow(target.asset.book_id);
+  const bookId = audioContainers[0]!.asset.book_id;
+  const book = ctx.repo.getBookRow(bookId);
   if (!book) return null;
 
   let epubEntries: EpubChapterEntry[];
@@ -1657,12 +1640,12 @@ async function tryAgenticCuration(
 
   const embeddedChapters = await buildEmbeddedChaptersForContainers(audioContainers);
 
-  const totalDurationMs = manifestationData.manifestation.duration_ms ?? audioContainers.reduce((sum, c) => sum + (c.asset.duration_ms ?? 0), 0);
+  const totalDurationMs = manifestation.duration_ms ?? audioContainers.reduce((sum, c) => sum + (c.asset.duration_ms ?? 0), 0);
 
   try {
     const result = await runCuration({
       book,
-      manifestation: manifestationData.manifestation,
+      manifestation,
       containers: audioContainers,
       settings,
       durationMs: totalDurationMs,
@@ -1685,7 +1668,7 @@ async function tryAgenticCuration(
     }));
 
     return {
-      manifestationId,
+      manifestationId: manifestation.id,
       chaptersJson: JSON.stringify(chapters),
       resolvedBoundaryCount,
       totalBoundaryCount,
@@ -1695,13 +1678,13 @@ async function tryAgenticCuration(
           chapterCount: chapters.length,
           resolvedBoundaryCount,
           totalBoundaryCount,
-          transcriptFingerprint,
+          combinedFingerprint,
         },
       },
     };
   } catch (error) {
     // Curation failure is non-fatal: transcript job still succeeds.
-    console.warn(`[chapter-analysis] curation failed for asset ${target.asset.id}: ${(error as Error).message}`);
+    console.warn(`[chapter-analysis] curation failed for manifestation ${manifestation.id}: ${(error as Error).message}`);
     return null;
   }
 }
@@ -1719,58 +1702,70 @@ export async function processChapterAnalysisJob(
     ...deps,
   };
   const jobStartedAt = performance.now();
-  const payload = job.payload_json ? (JSON.parse(job.payload_json) as { assetId?: number; ebookAssetId?: number }) : {};
-  if (!payload.assetId) {
+  const payload = job.payload_json ? (JSON.parse(job.payload_json) as { manifestationId?: number; ebookAssetId?: number }) : {};
+  if (!payload.manifestationId) {
     ctx.repo.markJobSucceeded(job.id);
     return "done";
   }
 
-  const target = ctx.repo.getAssetWithFiles(payload.assetId);
-  if (!target || target.asset.kind === "ebook") {
+  const manifestationId = payload.manifestationId;
+  const manifestationData = ctx.repo.getManifestationWithContainers(manifestationId);
+  if (!manifestationData) {
     ctx.repo.markJobSucceeded(job.id);
     return "done";
   }
 
-  const preferredAudio = selectPreferredAudioAssetsForBook(ctx.repo, target.asset.book_id);
-  if (!preferredAudio.some((asset) => asset.id === target.asset.id)) {
+  const audioContainers = manifestationData.containers.filter((c) => c.asset.kind !== "ebook");
+  if (audioContainers.length === 0) {
     ctx.repo.markJobSucceeded(job.id);
     return "done";
   }
 
-  const book = ctx.repo.getBookByAsset(target.asset.id);
-  const durationMs = target.asset.duration_ms ?? 0;
-  if (!book || durationMs <= 0) {
+  // Verify this manifestation is still the preferred one for its book.
+  const preferredAudio = selectPreferredAudioAssetsForBook(ctx.repo, job.book_id ?? audioContainers[0]!.asset.book_id);
+  if (!preferredAudio.some((asset) => asset.manifestation_id === manifestationId)) {
     ctx.repo.markJobSucceeded(job.id);
     return "done";
   }
 
-  const transcriptFingerprint = await computeTranscriptFingerprint(target.asset, target.files);
-  const existingTranscriptRow = ctx.repo.getAssetTranscript(target.asset.id);
-  const existingTranscriptPayload = await readStoredTranscriptPayload(ctx.repo, existingTranscriptRow);
-  const hasCachedTranscript =
-    Boolean(existingTranscriptPayload) &&
-    existingTranscriptRow?.status === "succeeded" &&
-    existingTranscriptRow?.fingerprint === transcriptFingerprint;
+  const bookId = audioContainers[0]!.asset.book_id;
+  const book = ctx.repo.getBookRow(bookId);
+  if (!book) {
+    ctx.repo.markJobSucceeded(job.id);
+    return "done";
+  }
+
+  // Check whether all containers already have cached transcripts.
+  const containerStates = await Promise.all(
+    audioContainers.map(async (container) => {
+      const fingerprint = await computeTranscriptFingerprint(container.asset, container.files);
+      const existingRow = ctx.repo.getAssetTranscript(container.asset.id);
+      const existingPayload = await readStoredTranscriptPayload(ctx.repo, existingRow);
+      const hasCached =
+        Boolean(existingPayload) && existingRow?.status === "succeeded" && existingRow?.fingerprint === fingerprint;
+      return { container, fingerprint, existingRow, existingPayload, hasCached };
+    })
+  );
 
   const settings = ctx.getSettings();
-  if (!hasCachedTranscript && !settings.agents.apiKey.trim()) {
+  const allCached = containerStates.every((s) => s.hasCached);
+  if (!allCached && !settings.agents.apiKey.trim()) {
     ctx.repo.markJobSucceeded(job.id);
     return "done";
   }
 
-  const manifestationId = target.asset.manifestation_id;
-  if (manifestationId === null) {
-    ctx.repo.markJobSucceeded(job.id);
-    return "done";
-  }
+  // Use a combined fingerprint (all container fingerprints joined) for the chapter_analysis row.
+  const combinedFingerprint = createHash("sha1")
+    .update(containerStates.map((s) => `${s.container.asset.id}:${s.fingerprint}`).join("|"))
+    .digest("hex");
 
   ctx.repo.upsertChapterAnalysis({
     manifestationId,
     status: "pending",
     source: CHAPTER_ANALYSIS_SOURCE,
     algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
-    fingerprint: transcriptFingerprint,
-    transcriptFingerprint,
+    fingerprint: combinedFingerprint,
+    transcriptFingerprint: combinedFingerprint,
     chaptersJson: null,
     debugJson: null,
     resolvedBoundaryCount: 0,
@@ -1778,77 +1773,91 @@ export async function processChapterAnalysisJob(
     error: null,
   });
 
-  try {
-    let transcriptWords: TranscriptWord[];
-    let plans: TranscriptChunkPlan[] = [];
-    let chunkWordCounts: number[] = [];
-    let transcriptSource: "new" | "cached" = "cached";
-    let transcriptPayload: StoredTranscriptPayload | null = existingTranscriptPayload;
+  // Load the epub once for glossary building.
+  const ebookAsset = payload.ebookAssetId ? ctx.repo.getAssetWithFiles(payload.ebookAssetId) : null;
+  const ebookFile = ebookAsset?.asset.kind === "ebook" && ebookAsset.asset.mime === "application/epub+zip" ? ebookAsset.files[0] : null;
+  const glossary = allCached ? [] : await loadGlossary(ctx, resolvedDeps, ebookFile?.path ?? null);
 
-    if (hasCachedTranscript && existingTranscriptPayload) {
-      transcriptWords = transcriptWordsFromStoredPayload(existingTranscriptPayload);
-    } else {
+  let totalChunkCount = 0;
+  let totalWordCount = 0;
+  let transcriptSource: "new" | "cached" = allCached ? "cached" : "new";
+
+  try {
+    // Transcribe each container sequentially (they share the job's concurrency slot).
+    for (const state of containerStates) {
+      const { container, fingerprint, existingRow, existingPayload, hasCached } = state;
+
+      if (hasCached && existingPayload) {
+        totalWordCount += transcriptWordsFromStoredPayload(existingPayload).length;
+        continue;
+      }
+
       ctx.repo.upsertAssetTranscript({
-        assetId: target.asset.id,
+        assetId: container.asset.id,
         status: "pending",
         source: CHAPTER_ANALYSIS_SOURCE,
         algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
-        fingerprint: transcriptFingerprint,
+        fingerprint,
         transcriptJson: null,
         error: null,
       });
-      const ebookAsset = payload.ebookAssetId ? ctx.repo.getAssetWithFiles(payload.ebookAssetId) : null;
-      const ebookFile = ebookAsset?.asset.kind === "ebook" && ebookAsset.asset.mime === "application/epub+zip" ? ebookAsset.files[0] : null;
-      const glossary = await loadGlossary(ctx, resolvedDeps, ebookFile?.path ?? null);
-      const transcript = await transcribeAssetWithDeps(ctx, target.asset, target.files, book, settings, resolvedDeps, job, glossary);
-      transcriptWords = transcript.transcriptWords;
-      plans = transcript.plans;
-      chunkWordCounts = transcript.chunkWordCounts;
-      transcriptSource = "new";
-      transcriptPayload = storedTranscriptPayload(transcriptWords, plans, transcript.transcriptSegments);
-    }
 
-    if (!transcriptPayload) {
-      throw new Error("Transcript payload was not available");
-    }
-    let transcriptPath = existingTranscriptRow?.transcript_path ?? null;
-    if (transcriptSource === "new" || !transcriptPath) {
-      const transcriptJson = JSON.stringify(transcriptPayload);
-      transcriptPath = await persistTranscriptArtifact(target.asset.id, transcriptFingerprint, transcriptJson);
-      if (existingTranscriptRow?.transcript_path && existingTranscriptRow.transcript_path !== transcriptPath) {
-        await rm(existingTranscriptRow.transcript_path, { force: true });
+      const transcript = await transcribeAssetWithDeps(
+        ctx,
+        container.asset,
+        container.files,
+        book,
+        settings,
+        resolvedDeps,
+        job,
+        glossary
+      );
+
+      totalChunkCount += transcript.plans.length;
+      totalWordCount += transcript.transcriptWords.length;
+      transcriptSource = "new";
+
+      const payload2 = storedTranscriptPayload(transcript.transcriptWords, transcript.plans, transcript.transcriptSegments);
+      const transcriptJson = JSON.stringify(payload2);
+      const transcriptPath = await persistTranscriptArtifact(container.asset.id, fingerprint, transcriptJson);
+      if (existingRow?.transcript_path && existingRow.transcript_path !== transcriptPath) {
+        await rm(existingRow.transcript_path, { force: true });
       }
       ctx.repo.upsertAssetTranscript({
-        assetId: target.asset.id,
+        assetId: container.asset.id,
         status: "succeeded",
         source: CHAPTER_ANALYSIS_SOURCE,
         algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
-        fingerprint: transcriptFingerprint,
+        fingerprint,
         transcriptPath,
         transcriptJson: null,
         error: null,
       });
     }
-    // Run agentic chapter curation if prerequisites are satisfied:
-    // - API key configured
-    // - EPUB asset provided in job payload
-    // - This asset is the first audio container in its manifestation
-    // - All other audio containers in the manifestation are already transcribed
-    const curationResult = await tryAgenticCuration(ctx, target, payload, settings, transcriptFingerprint, resolvedDeps.runAgenticCuration);
+
+    // Run agentic chapter curation once for the whole manifestation.
+    const curationResult = await tryAgenticCuration(
+      ctx,
+      manifestationData.manifestation,
+      audioContainers,
+      payload,
+      settings,
+      combinedFingerprint,
+      resolvedDeps.runAgenticCuration
+    );
 
     ctx.repo.upsertChapterAnalysis({
-      manifestationId: curationResult?.manifestationId ?? manifestationId,
+      manifestationId,
       status: "succeeded",
       source: CHAPTER_ANALYSIS_SOURCE,
       algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
-      fingerprint: transcriptFingerprint,
-      transcriptFingerprint,
+      fingerprint: combinedFingerprint,
+      transcriptFingerprint: combinedFingerprint,
       chaptersJson: curationResult?.chaptersJson ?? null,
       debugJson: JSON.stringify({
         transcriptSource,
-        chunkCount: plans.length,
-        chunkWordCounts,
-        transcriptWordCount: transcriptWords.length,
+        chunkCount: totalChunkCount,
+        transcriptWordCount: totalWordCount,
         model: TIMESTAMP_TRANSCRIPTION_MODEL,
         ...(curationResult?.debugInfo ?? {}),
       }),
@@ -1860,31 +1869,34 @@ export async function processChapterAnalysisJob(
     const totalJobMs = Math.round((performance.now() - jobStartedAt) * 100) / 100;
     log(
       ctx,
-      `[chapter-analysis] job=${job.id} asset=${target.asset.id} chunks=${plans.length} words=${transcriptWords.length} source=${transcriptSource} chapters=${curationResult?.chaptersJson ? "yes" : "no"} success=1 total_ms=${totalJobMs}`
+      `[chapter-analysis] job=${job.id} manifestation=${manifestationId} containers=${audioContainers.length} chunks=${totalChunkCount} words=${totalWordCount} source=${transcriptSource} chapters=${curationResult?.chaptersJson ? "yes" : "no"} success=1 total_ms=${totalJobMs}`
     );
     return "done";
   } catch (error) {
     const message = (error as Error).message;
-    const transcript = ctx.repo.getAssetTranscript(target.asset.id);
-    if (!transcript || transcript.fingerprint !== transcriptFingerprint || transcript.status !== "succeeded") {
-      ctx.repo.upsertAssetTranscript({
-        assetId: target.asset.id,
-        status: "failed",
-        source: CHAPTER_ANALYSIS_SOURCE,
-        algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
-        fingerprint: transcriptFingerprint,
-        transcriptPath: transcript?.transcript_path ?? null,
-        transcriptJson: transcript?.transcript_json ?? null,
-        error: message,
-      });
+    // Mark any in-progress transcripts as failed.
+    for (const state of containerStates) {
+      const transcript = ctx.repo.getAssetTranscript(state.container.asset.id);
+      if (!transcript || transcript.fingerprint !== state.fingerprint || transcript.status !== "succeeded") {
+        ctx.repo.upsertAssetTranscript({
+          assetId: state.container.asset.id,
+          status: "failed",
+          source: CHAPTER_ANALYSIS_SOURCE,
+          algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
+          fingerprint: state.fingerprint,
+          transcriptPath: transcript?.transcript_path ?? null,
+          transcriptJson: transcript?.transcript_json ?? null,
+          error: message,
+        });
+      }
     }
     ctx.repo.upsertChapterAnalysis({
       manifestationId,
       status: "failed",
       source: CHAPTER_ANALYSIS_SOURCE,
       algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
-      fingerprint: transcriptFingerprint,
-      transcriptFingerprint,
+      fingerprint: combinedFingerprint,
+      transcriptFingerprint: combinedFingerprint,
       chaptersJson: null,
       debugJson: JSON.stringify({ error: message }),
       resolvedBoundaryCount: 0,

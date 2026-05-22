@@ -30,6 +30,37 @@ function agentSettings(overrides?: Partial<ReturnType<typeof defaultSettings>["a
   };
 }
 
+/** Build a Responses API response body with a plain text message output. */
+function textResponse(id: string, text: string): string {
+  return JSON.stringify({
+    id,
+    output: [
+      {
+        type: "message",
+        id: `msg_${id}`,
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text }],
+      },
+    ],
+  });
+}
+
+/** Build a Responses API response body with a function_call output (no text). */
+function functionCallResponse(id: string, calls: Array<{ callId: string; name: string; arguments: string }>): string {
+  return JSON.stringify({
+    id,
+    output: calls.map((c) => ({
+      type: "function_call",
+      id: `fc_${c.callId}`,
+      call_id: c.callId,
+      name: c.name,
+      arguments: c.arguments,
+      status: "completed",
+    })),
+  });
+}
+
 describe("agent decisions", () => {
   test("search selection is deterministic by default", async () => {
     const settings = defaultSettings();
@@ -85,13 +116,11 @@ describe("agent decisions", () => {
         throw new Error(`Unexpected url: ${url}`);
       }
       return new Response(
-        JSON.stringify({
-          output_text: JSON.stringify({
-            selections: [{ manifestation: { label: null, editionNote: null }, parts: [1] }],
-            confidence: 0.73,
-            reason: "Candidate two better matches requested edition",
-          }),
-        }),
+        textResponse("resp_1", JSON.stringify({
+          selections: [{ manifestation: { label: null, editionNote: null }, parts: [1] }],
+          confidence: 0.73,
+          reason: "Candidate two better matches requested edition",
+        })),
         { status: 200, headers: { "Content-Type": "application/json" } }
       );
     }) as typeof fetch;
@@ -159,18 +188,16 @@ describe("agent decisions", () => {
       const body = JSON.parse(String(init?.body ?? "{}"));
       expect(JSON.stringify(body)).toContain("prefer GraphicAudio");
       return new Response(
-        JSON.stringify({
-          output_text: JSON.stringify({
-            selections: [
-              {
-                manifestation: { label: "GraphicAudio dramatization", editionNote: "full cast" },
-                parts: [1, 2],
-              },
-            ],
-            confidence: 0.82,
-            reason: "GraphicAudio is split across two releases and matches the global preference.",
-          }),
-        }),
+        textResponse("resp_1", JSON.stringify({
+          selections: [
+            {
+              manifestation: { label: "GraphicAudio dramatization", editionNote: "full cast" },
+              parts: [1, 2],
+            },
+          ],
+          confidence: 0.82,
+          reason: "GraphicAudio is split across two releases and matches the global preference.",
+        })),
         { status: 200, headers: { "Content-Type": "application/json" } }
       );
     }) as typeof fetch;
@@ -269,32 +296,18 @@ describe("agent decisions", () => {
         openAiBodies.push(body);
         if (!body.previous_response_id) {
           return new Response(
-            JSON.stringify({
-              id: "resp_1",
-              output: [
-                {
-                  type: "function_call",
-                  id: "fc_1",
-                  call_id: "call_1",
-                  name: "inspect",
-                  arguments: JSON.stringify({ index: 1 }),
-                  status: "completed",
-                },
-              ],
-              output_text: "",
-            }),
+            functionCallResponse("resp_1", [
+              { callId: "call_1", name: "inspect", arguments: JSON.stringify({ index: 1 }) },
+            ]),
             { status: 200, headers: { "Content-Type": "application/json" } }
           );
         }
         return new Response(
-          JSON.stringify({
-            id: "resp_2",
-            output_text: JSON.stringify({
-              selections: [{ manifestation: { label: null, editionNote: null }, parts: [1] }],
-              confidence: 0.71,
-              reason: "Inspected candidate 1 and verified the torrent contains Twilight files.",
-            }),
-          }),
+          textResponse("resp_2", JSON.stringify({
+            selections: [{ manifestation: { label: null, editionNote: null }, parts: [1] }],
+            confidence: 0.71,
+            reason: "Inspected candidate 1 and verified the torrent contains Twilight files.",
+          })),
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
       }
@@ -566,13 +579,11 @@ describe("agent decisions", () => {
         throw new Error(`Unexpected url: ${url}`);
       }
       return new Response(
-        JSON.stringify({
-          output_text: JSON.stringify({
-            selectedIndices: [],
-            confidence: 0.9,
-            reason: "Only previously rejected file is present; no alternative importable files.",
-          }),
-        }),
+        textResponse("resp_1", JSON.stringify({
+          selectedIndices: [],
+          confidence: 0.9,
+          reason: "Only previously rejected file is present; no alternative importable files.",
+        })),
         { status: 200, headers: { "Content-Type": "application/json" } }
       );
     }) as typeof fetch;
@@ -610,13 +621,11 @@ describe("agent decisions", () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () =>
       new Response(
-        JSON.stringify({
-          output_text: JSON.stringify({
-            selectedIndices: [0],
-            confidence: 0.6,
-            reason: "Select the EPUB file.",
-          }),
-        }),
+        textResponse("resp_1", JSON.stringify({
+          selectedIndices: [0],
+          confidence: 0.6,
+          reason: "Select the EPUB file.",
+        })),
         { status: 200, headers: { "Content-Type": "application/json" } }
       )) as unknown as typeof fetch;
 

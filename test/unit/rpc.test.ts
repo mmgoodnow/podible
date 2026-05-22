@@ -938,8 +938,8 @@ describe("json-rpc handler", () => {
     expect(result.result.status).toBe("pending");
     const jobs = repo.listJobsByType("chapter_analysis");
     expect(jobs.length).toBe(1);
-    expect(JSON.parse(jobs[0]!.payload_json ?? "{}").assetId).toBe(alternateAsset.id);
-    expect(JSON.parse(jobs[0]!.payload_json ?? "{}").assetId).not.toBe(preferredAsset.id);
+    expect(JSON.parse(jobs[0]!.payload_json ?? "{}").manifestationId).toBe(alternate.id);
+    expect(JSON.parse(jobs[0]!.payload_json ?? "{}").manifestationId).not.toBe(preferred.id);
 
     const status = await callRpc(
       repo,

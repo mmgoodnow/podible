@@ -47,11 +47,10 @@ export function jobLockKeys(repo: BooksRepo, job: JobRow): string[] {
   }
 
   if (job.type === "chapter_analysis") {
-    const payload = parseJson<{ assetId?: number }>(job.payload_json) ?? {};
-    const assetId = payload.assetId ?? null;
-    if (!assetId) return [];
-    const asset = repo.getAsset(assetId);
-    return unique([`asset:${assetId}`, mediaLaneKey(asset?.book_id ?? job.book_id ?? null, "audio")]);
+    const payload = parseJson<{ manifestationId?: number }>(job.payload_json) ?? {};
+    const manifestationId = payload.manifestationId ?? null;
+    if (!manifestationId) return [];
+    return unique([`manifestation:${manifestationId}`, mediaLaneKey(job.book_id, "audio")]);
   }
 
   return [];

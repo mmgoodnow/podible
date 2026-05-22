@@ -148,12 +148,12 @@ describe("chapter analysis", () => {
     }
   });
 
-  test("queues one transcript job per preferred manifestation container", async () => {
+  test("queues one transcript job per preferred manifestation (not per container)", async () => {
     const { db, repo } = setupRepo();
     try {
       const book = repo.createBook({ title: "Red Rising", author: "Pierce Brown" });
       const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio", label: "GraphicAudio dramatization" });
-      const partOne = repo.addAsset({
+      repo.addAsset({
         bookId: book.id,
         kind: "single",
         mime: "audio/mpeg",
@@ -163,7 +163,7 @@ describe("chapter analysis", () => {
         sequenceInManifestation: 0,
         files: [{ path: "/tmp/red-rising-1.mp3", size: 100, start: 0, end: 99, durationMs: 1000, title: "Part 1" }],
       });
-      const partTwo = repo.addAsset({
+      repo.addAsset({
         bookId: book.id,
         kind: "single",
         mime: "audio/mpeg",
@@ -178,8 +178,9 @@ describe("chapter analysis", () => {
       await queueChapterAnalysisForBook(repo, book.id);
 
       const jobs = repo.listJobsByType("chapter_analysis");
-      expect(jobs.length).toBe(2);
-      expect(jobs.map((job) => JSON.parse(job.payload_json ?? "{}").assetId).sort()).toEqual([partOne.id, partTwo.id].sort());
+      // One job for the whole manifestation, deduped on second call.
+      expect(jobs.length).toBe(1);
+      expect(JSON.parse(jobs[0]!.payload_json ?? "{}").manifestationId).toBe(manifestation.id);
     } finally {
       db.close();
     }
@@ -327,7 +328,7 @@ describe("chapter analysis", () => {
       const job = repo.createJob({
         type: "chapter_analysis",
         bookId: book.id,
-        payload: { assetId: asset.id },
+        payload: { manifestationId: manifestation.id },
       });
 
       await processChapterAnalysisJob(
@@ -445,7 +446,7 @@ describe("chapter analysis", () => {
       const job = repo.createJob({
         type: "chapter_analysis",
         bookId: book.id,
-        payload: { assetId: asset.id, ebookAssetId: ebookAsset.id },
+        payload: { manifestationId: audioManifestation.id, ebookAssetId: ebookAsset.id },
       });
 
       const curatedChapters = [
@@ -523,7 +524,7 @@ describe("chapter analysis", () => {
       const job = repo.createJob({
         type: "chapter_analysis",
         bookId: book.id,
-        payload: { assetId: asset.id }, // no ebookAssetId
+        payload: { manifestationId: manifestation.id }, // no ebookAssetId
       });
 
       let curationCalled = false;
