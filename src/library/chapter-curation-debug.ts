@@ -123,6 +123,7 @@ function summarizeToolResultForEvent(result: unknown): unknown {
       endMs: record.endMs,
       utterances: record.utterances.length,
       text: typeof record.text === "string" ? eventPreview(record.text) : undefined,
+      boundaryWords: record.boundaryWords,
     };
   }
   if (Array.isArray(record.phraseVariants)) {

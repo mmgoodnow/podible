@@ -995,6 +995,65 @@ describe("chapter curation tools", () => {
     expect(result.audit.boundaryComparison.transcriptBefore).toContain("hurry up and evolve");
     expect(result.audit.boundaryComparison.transcriptAfter.startsWith("I pretend the matches")).toBe(true);
     expect(result.audit.boundaryComparison.transcriptAfter).not.toContain("hurry");
+    expect(result.audit.boundaryComparison.boundaryWords?.containing).toEqual([]);
+    expect(result.audit.boundaryComparison.boundaryWords?.nearestCleanBoundaryTimes).toContain(180);
+  });
+
+  test("validateFulcrumSplit exposes containing words when a proposed split lands inside a word", async () => {
+    const context = ctx({
+      durationMs: 600_000,
+      manifestation: manifestation({ duration_ms: 600_000 }),
+      epubEntries: [
+        epubEntry({
+          id: "chapter-1",
+          title: "Chapter 1",
+          cumulativeRatio: 0.5,
+          cumulativeWords: 4,
+          words: "hurry up and evolve".split(/\s+/).map(word),
+        }),
+        epubEntry({
+          id: "chapter-2",
+          title: "Chapter 2",
+          cumulativeRatio: 1,
+          cumulativeWords: 10,
+          words: "For Eo I do not react".split(/\s+/).map(word),
+        }),
+      ],
+      transcript: {
+        version: "test",
+        text: "hurry up and evolve For Eo I do not react",
+        utterances: [{ startMs: 178_000, endMs: 182_500, text: "hurry up and evolve For Eo I do not react" }],
+        words: [
+          { text: "hurry", token: "hurry", startMs: 178_000, endMs: 178_300 },
+          { text: "up", token: "up", startMs: 178_300, endMs: 178_500 },
+          { text: "and", token: "and", startMs: 178_500, endMs: 178_700 },
+          { text: "evolve", token: "evolve", startMs: 178_700, endMs: 179_000 },
+          { text: "For", token: "for", startMs: 180_000, endMs: 180_800 },
+          { text: "Eo", token: "eo", startMs: 180_800, endMs: 181_000 },
+          { text: "I", token: "i", startMs: 181_000, endMs: 181_100 },
+          { text: "do", token: "do", startMs: 181_100, endMs: 181_300 },
+          { text: "not", token: "not", startMs: 181_300, endMs: 181_500 },
+          { text: "react", token: "react", startMs: 181_500, endMs: 182_000 },
+        ],
+      },
+    });
+
+    const result = await validateFulcrumSplit(context, createRootCurationSpan(context), {
+      spanPath: "root",
+      epubNodeId: "chapter-2",
+      title: "Chapter 2",
+      startTime: 180.4,
+    });
+
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error(result.errors.join("\n"));
+    expect(result.audit.boundaryComparison.transcriptPrecision).toBe("word");
+    expect(result.audit.boundaryComparison.transcriptBefore.endsWith("hurry up and evolve")).toBe(true);
+    expect(result.audit.boundaryComparison.transcriptAfter.startsWith("Eo I do not react")).toBe(true);
+    expect(result.audit.boundaryComparison.transcriptBefore).not.toContain("For");
+    expect(result.audit.boundaryComparison.transcriptAfter).not.toContain("For");
+    expect(result.audit.boundaryComparison.boundaryWords?.containing).toEqual([{ text: "For", startTime: 180, endTime: 180.8 }]);
+    expect(result.audit.boundaryComparison.boundaryWords?.nearestCleanBoundaryTimes).toEqual(expect.arrayContaining([180, 180.8]));
   });
 
   test("validateFulcrumSplit marks utterance precision when word timings are unavailable", async () => {

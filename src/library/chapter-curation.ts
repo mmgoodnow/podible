@@ -104,6 +104,7 @@ export type FulcrumValidationAudit = {
     };
     transcriptBefore: string;
     transcriptAfter: string;
+    boundaryWords?: TranscriptBoundaryWords;
   };
   transcriptWindow: string;
   candidates: BoundaryEvidenceCandidate[];
@@ -115,6 +116,14 @@ export type TranscriptWindow = {
   utterances: StoredTranscriptUtterance[];
   text: string;
   audioOnlyIntervals?: AudioOnlyInterval[];
+  boundaryWords?: TranscriptBoundaryWords;
+};
+
+export type TranscriptBoundaryWords = {
+  before: Array<{ text: string; startTime: number; endTime: number }>;
+  containing: Array<{ text: string; startTime: number; endTime: number }>;
+  after: Array<{ text: string; startTime: number; endTime: number }>;
+  nearestCleanBoundaryTimes: number[];
 };
 
 export type TranscriptSearchScope = {
@@ -195,6 +204,7 @@ export function getTranscriptWindowFromContext(
     audioOnlyIntervals: (ctx.audioOnlyIntervals ?? []).filter(
       (interval) => secondsToMs(interval.endTime) >= windowStart && secondsToMs(interval.startTime) <= windowEnd
     ),
+    boundaryWords: transcriptBoundaryWords(ctx, startMs),
   };
 }
 
@@ -1422,9 +1432,37 @@ function transcriptBeforeStart(ctx: Pick<ChapterCurationContext, "transcript">, 
     .join(" ");
 }
 
+function transcriptBoundaryWords(ctx: Pick<ChapterCurationContext, "transcript">, startMs: number, limit = 8): TranscriptBoundaryWords | undefined {
+  const timedWords = ctx.transcript.words
+    .filter((word) => Number.isFinite(word.startMs) && Number.isFinite(word.endMs))
+    .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+  if (timedWords.length === 0) return undefined;
+  const compact = (word: { text: string; startMs: number; endMs: number }) => ({
+    text: normalizeToolText(word.text),
+    startTime: msToSeconds(word.startMs),
+    endTime: msToSeconds(word.endMs),
+  });
+  const before = timedWords.filter((word) => word.endMs <= startMs).slice(-limit).map(compact);
+  const containing = timedWords.filter((word) => word.startMs < startMs && word.endMs > startMs).map(compact);
+  const after = timedWords.filter((word) => word.startMs >= startMs).slice(0, limit).map(compact);
+  const nearestCleanBoundaryTimes = Array.from(
+    new Set(
+      [...before.slice(-1).map((word) => word.endTime), ...containing.flatMap((word) => [word.startTime, word.endTime]), ...after.slice(0, 1).map((word) => word.startTime)]
+        .filter((time) => Number.isFinite(time))
+        .map((time) => Math.round(time * 1000) / 1000)
+    )
+  ).sort((a, b) => Math.abs(a - msToSeconds(startMs)) - Math.abs(b - msToSeconds(startMs)));
+  return {
+    before,
+    containing,
+    after,
+    nearestCleanBoundaryTimes,
+  };
+}
+
 function transcriptWordsBeforeStart(ctx: Pick<ChapterCurationContext, "transcript">, startMs: number, radiusMs: number): string | null {
   const words = ctx.transcript.words
-    .filter((word) => Number.isFinite(word.startMs) && Number.isFinite(word.endMs) && word.endMs >= startMs - radiusMs && word.startMs < startMs)
+    .filter((word) => Number.isFinite(word.startMs) && Number.isFinite(word.endMs) && word.endMs >= startMs - radiusMs && word.endMs <= startMs)
     .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
   if (words.length === 0) return null;
   return words.map((word) => normalizeToolText(word.text)).filter(Boolean).join(" ");
@@ -1432,7 +1470,7 @@ function transcriptWordsBeforeStart(ctx: Pick<ChapterCurationContext, "transcrip
 
 function transcriptWordsAfterStart(ctx: Pick<ChapterCurationContext, "transcript">, startMs: number, radiusMs: number): string | null {
   const words = ctx.transcript.words
-    .filter((word) => Number.isFinite(word.startMs) && Number.isFinite(word.endMs) && word.endMs >= startMs && word.startMs <= startMs + radiusMs)
+    .filter((word) => Number.isFinite(word.startMs) && Number.isFinite(word.endMs) && word.startMs >= startMs && word.startMs <= startMs + radiusMs)
     .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
   if (words.length === 0) return null;
   return words.map((word) => normalizeToolText(word.text)).filter(Boolean).join(" ");
@@ -1443,6 +1481,7 @@ function transcriptBoundaryText(ctx: Pick<ChapterCurationContext, "transcript">,
   after: string;
   precision: "word" | "utterance";
   note: string | null;
+  boundaryWords?: TranscriptBoundaryWords;
 } {
   const wordBefore = transcriptWordsBeforeStart(ctx, startMs, radiusMs);
   const wordAfter = transcriptWordsAfterStart(ctx, startMs, radiusMs);
@@ -1452,6 +1491,7 @@ function transcriptBoundaryText(ctx: Pick<ChapterCurationContext, "transcript">,
       after: normalizeToolText(wordAfter ?? ""),
       precision: "word",
       note: null,
+      boundaryWords: transcriptBoundaryWords(ctx, startMs),
     };
   }
   return {
@@ -2073,6 +2113,7 @@ function buildBoundaryComparisonAudit(
       },
       transcriptBefore: boundaryText.before.slice(-1_000),
       transcriptAfter: boundaryText.after.slice(0, 1_000),
+      boundaryWords: boundaryText.boundaryWords,
     },
     transcriptWindow: normalizeToolText(transcriptWindow.text).slice(0, 1_000),
     candidates: input.candidates ?? [],
@@ -2289,8 +2330,13 @@ const researchEpubBoundarySchema = z.object({
   phraseLimit: z.number().int().positive().max(12).optional(),
   hitLimitPerPhrase: z.number().int().positive().max(5).optional(),
 });
+const assignedResearchEpubBoundarySchema = z.object({});
 const getEpubNodeTextSchema = z.object({
   epubNodeId: z.string().trim().min(1),
+  startWord: z.number().int().nonnegative().optional(),
+  wordCount: z.number().int().positive().max(180).optional(),
+});
+const assignedGetEpubNodeTextSchema = z.object({
   startWord: z.number().int().nonnegative().optional(),
   wordCount: z.number().int().positive().max(180).optional(),
 });
@@ -2300,12 +2346,21 @@ const searchEpubTextSchema = z.object({
   targetNodeId: z.string().trim().min(1).optional(),
   limit: z.number().int().positive().max(20).optional(),
 });
+const assignedSearchEpubTextSchema = z.object({
+  query: z.string().trim().min(1),
+  limit: z.number().int().positive().max(20).optional(),
+});
 const estimateTimestampFromEpubPositionSchema = z.object({
   epubNodeId: z.string(),
 });
 const getTranscriptWindowSchema = z.object({
   startTime: z.number(),
   radiusSeconds: z.number().positive().max(300).optional(),
+});
+const assignedSubmitFulcrumSplitSchema = z.object({
+  startTime: z.number().finite().nonnegative(),
+  evidence: z.string().trim().optional(),
+  notes: z.string().trim().optional(),
 });
 
 function parseSpanDecisionOutput(output: unknown): RecursiveSpanDecision | null {
@@ -2553,15 +2608,15 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, targ
         "Single-target boundary workflow:",
         "1. Your only goal is to find the audiobook start timestamp for the assigned target EPUB node. Do not switch to another chapter, even after rejection.",
         "2. Use the targetBoundaryContext below as your initial EPUB structure/opener context. Do not call getEpubStructure; that context is already provided.",
-        "3. Call researchEpubBoundary for the target node. It pre-ranks rare opener phrases, searches them near the expected time, inspects transcript windows, and reverse-checks hits against the target EPUB node.",
+        "3. Call researchEpubBoundary. It researches only the assigned target node: rare opener phrases, nearby transcript hits, transcript windows, and opener/near_opener reverse checks.",
         "4. If researchEpubBoundary returns no opener/near_opener candidate, call getEpubNodeText and manually try the opener words: first 4-8 distinctive opener words, the next distinctive clause, a shorter exact phrase, and one phrase from the next word window if needed. Drop generic chapter numbers, titles, standalone names, punctuation-only differences, and repeated formulaic text.",
         "5. Estimate the likely transcript neighborhood from the EPUB node's word-position ratio, then search near that neighborhood with rgSearchTranscript first for manual follow-up. If a phrase misses, shorten it or try a different phrase from the same EPUB node; do not pivot to guessed timestamps.",
         "6. Inspect the best match with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may include pre-target or interior transcript, or after a rejected fulcrum. The proposed start must be the first matched opener word or the silence immediately before it; do not submit the start of a broad evidence window.",
-        "7. If transcript context looks like pre-roll or interior prose, call searchEpubText with the transcript phrase and targetNodeId. Trust relationToTarget: opener/near_opener is usable boundary evidence; interior means do not submit that timestamp as a chapter start; pre_target means move later to the target opener.",
-        "8. Treat submitFulcrumSplit as a final evidence-backed claim, not a probe. The call asserts that startTime is the audiobook start of epubNodeId. It is never an arbitrary scene, sentence, dialogue turn, or later distinctive phrase inside that node.",
+        "7. If transcript context looks like pre-roll or interior prose, call searchEpubText with the transcript phrase. Trust relationToTarget: opener/near_opener is usable boundary evidence; interior means do not submit that timestamp as a chapter start; pre_target means move later to the target opener.",
+        "8. Treat submitFulcrumSplit as a final evidence-backed claim, not a probe. The call asserts that startTime is the audiobook start of the assigned EPUB node. It is never an arbitrary scene, sentence, dialogue turn, or later distinctive phrase inside that node.",
         "9. Call submitFulcrumSplit only when you can already prove the chosen EPUB node opener begins at that exact timestamp or immediately after it. Distinctive later prose helps locate the area, but it is not valid split evidence unless reverse EPUB search says opener/near_opener.",
         "10. Before submitFulcrumSplit, have this proof in hand: target EPUB node opener text, the transcript search hit that found that opener, a transcript window showing the opener at/just after the proposed start, and reverse EPUB evidence that the transcript phrase is opener/near_opener for the target node. Put that proof in the evidence/notes fields.",
-        "11. If you do not have that proof yet, keep researching instead of submitting. If rejected, keep the same EPUB node and search earlier/different opener phrases or a wider same-node word window before switching to a different middle node.",
+        "11. If you do not have that proof yet, keep researching instead of submitting. If rejected, keep the same EPUB node and search earlier/different opener phrases or a wider same-node word window.",
       ];
   return [
     `Curate chapter markers for span ${span.path} of "${ctx.book.title}" by ${ctx.book.author}.`,
@@ -2573,7 +2628,7 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, targ
     `spanEpubNodeCount: ${entries.length}`,
     `targetBoundary: ${JSON.stringify(targetBoundary)}`,
     `targetBoundaryContext: ${JSON.stringify(targetBoundaryPromptContext(ctx, span, targetBoundary))}`,
-    `Your singular goal is to prove where ${targetBoundary.epubNodeId} (${targetBoundary.title}) starts in the transcript. submitFulcrumSplit must use this exact epubNodeId.`,
+    `Your singular goal is to prove where ${targetBoundary.epubNodeId} (${targetBoundary.title}) starts in the transcript. submitFulcrumSplit only needs the timestamp and evidence notes.`,
     spanAudioOnlyIntervals.length > 0
       ? `audioOnlyIntervalsInSpan: ${JSON.stringify(spanAudioOnlyIntervals)}`
       : "audioOnlyIntervalsInSpan: []",
@@ -2605,6 +2660,7 @@ function createChapterBoundaryJudgeAgent(ctx: ChapterCurationContext): Agent {
       "Use audit.boundaryComparison first. Compare previousEpub.tailText to transcriptBefore, and targetEpub.bodyHeadText or targetEpub.headText to transcriptAfter.",
       "EPUB chapter headings/titles are often printed but not spoken in audiobook transcripts. If targetEpub.optionalHeadingText is absent but targetEpub.bodyHeadText begins at the timestamp, that is strong opener evidence.",
       "Check audit.boundaryComparison.transcriptPrecision. If it is word, transcriptBefore/transcriptAfter are split by word timing and should be treated as precise boundary context.",
+      "If audit.boundaryComparison.boundaryWords.containing is non-empty, the timestamp falls inside a word. Prefer a nearestCleanBoundaryTimes value unless the containing word itself is the first target opener word.",
       "If transcriptPrecision is utterance, the supplied before/after text is lower precision. A true boundary may fall inside a displayed utterance.",
       "For utterance-level context, accept the utterance timestamp when one utterance contains previous EPUB tail followed by the target EPUB head, such as 'tail tail chapter twelve head head'.",
       "Transcript before the timestamp may match the previous EPUB node; that is positive boundary evidence, not evidence that the target opener is interior.",
@@ -2638,7 +2694,7 @@ function chapterBoundaryJudgePrompt(ctx: ChapterCurationContext, span: ChapterCu
     "Do not make claims about scenes or narrative continuity. You are only judging whether this boundary comparison supports node X starting at timestamp Y.",
     "Primary evidence: audit.boundaryComparison. If transcriptBefore matches previousEpub.tailText and transcriptAfter matches targetEpub.bodyHeadText or targetEpub.headText, that supports acceptance.",
     "Printed EPUB headings are optional audio evidence. Do not reject merely because targetEpub.optionalHeadingText is absent from the ASR transcript when targetEpub.bodyHeadText begins at the proposed timestamp.",
-    "Use audit.boundaryComparison.transcriptPrecision. Word precision is exact enough to split a boundary inside an ASR utterance. Utterance precision is lower precision; if one utterance includes previous EPUB tail followed by the target EPUB head, accepting that utterance start is allowed.",
+    "Use audit.boundaryComparison.transcriptPrecision. Word precision is exact enough to split a boundary inside an ASR utterance. If boundaryWords.containing is non-empty, prefer a nearestCleanBoundaryTimes value unless the containing word itself is the first target opener word. Utterance precision is lower precision; if one utterance includes previous EPUB tail followed by the target EPUB head, accepting that utterance start is allowed.",
     "Do not reject merely because transcriptBefore contains non-target prose; that is expected at a real boundary when it matches the previous EPUB node.",
     "Treat the finding as an evidence classification from the supplied audit/window, not as ground truth about the true boundary.",
     "",
@@ -2936,15 +2992,20 @@ function rejectedFulcrumJudgeInstruction(judgment: SubmitFulcrumJudgmentResult):
   switch (judgment.finding) {
     case "opener_evidence_offset_in_window":
     case "window_starts_before_opener_evidence":
-      return "The judge only classified the submitted evidence as showing opener evidence away from the submitted timestamp. Verify any adjusted timestamp with your own transcript search/window evidence before resubmitting.";
+      return "Use boundaryWords/nearestCleanBoundaryTimes, then search or inspect the adjusted opener boundary before resubmitting.";
     case "tool_classified_interior_match":
     case "generic_or_weak_overlap":
-      return "Do not resubmit nearby body-text overlap. Return to the target EPUB opener text, search a different distinctive opener phrase, and reverse-check transcript context with searchEpubText before submitting.";
+      return "Do not resubmit nearby body-text overlap. Search a different target opener phrase and reverse-check it.";
     case "submitted_evidence_insufficient":
-      return "Gather stronger evidence before another split: call researchEpubBoundary or search distinctive opener prose with rgSearchTranscript/fuzzySearchTranscript, inspect the window, and reverse-check the transcript phrase.";
+      return "Get stronger opener evidence with researchEpubBoundary or transcript search plus searchEpubText.";
     case "opener_evidence_at_timestamp":
-      return "The judge rejected despite opener_evidence_at_timestamp classification. Reinspect the transcript window and submit only if the first opener word is at or immediately after the proposed timestamp.";
+      return "Reinspect boundaryWords. Submit only if the target opener starts at or immediately after startTime.";
   }
+}
+
+function conciseFulcrumJudgmentMessage(judgment: SubmitFulcrumJudgmentResult): string {
+  const concern = judgment.concerns[0] ? ` ${judgment.concerns[0]}` : "";
+  return `${judgment.finding}; openerEvidenceAtTimestamp=${judgment.openerEvidenceAtTimestamp}.${concern}`;
 }
 
 function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: ChapterCurationSpan, targetBoundary: ChapterCurationTargetBoundary): Agent {
@@ -3014,15 +3075,15 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
       "Submit a fulcrum split for the assigned target boundary, even if one child span will have no remaining unsolved boundaries.",
       "Concrete single-boundary workflow:",
       "1. Use the targetBoundaryContext in the prompt as your initial EPUB structure/opener context. Do not choose a different EPUB node.",
-      "2. Call researchEpubBoundary for that target node. It pre-ranks rare opener phrases, searches them near the expected time, inspects transcript windows, and reverse-checks whether hits are opener/near_opener for the target EPUB node.",
+      "2. Call researchEpubBoundary. It researches only the assigned target node: rare opener phrases, nearby transcript hits, transcript windows, and opener/near_opener reverse checks.",
       "3. If researchEpubBoundary returns a strong opener/near_opener candidate, use that exact timestamp or the silence immediately before the first matched opener word. If it returns no strong candidate, call getEpubNodeText and manually try different opener phrases from the same node.",
       "4. Estimate the likely timestamp neighborhood from the EPUB node position within the current span. Search that neighborhood with rgSearchTranscript first when doing manual follow-up. If a phrase misses, shorten it or try a different phrase from the same EPUB node; do not pivot to guessed timestamps.",
       "5. Inspect the best candidate with getTranscriptWindow. Use radiusSeconds=45 when the boundary is ambiguous, when nearby context may include pre-target or interior transcript, or after a rejected fulcrum. Check both sides of the timestamp: the proposed start should be the first matched opener word or the silence immediately before it, not the start of a broad evidence window.",
-      "6. If transcript context looks like it may include pre-roll or interior prose, call searchEpubText with the transcript phrase and targetNodeId. Trust relationToTarget: opener/near_opener is usable boundary evidence; interior means do not submit that timestamp as a chapter start; pre_target means move later to the target opener.",
-      "7. Treat submitFulcrumSplit as a final evidence-backed claim, not a probing tool. The call asserts that startTime is the audiobook start of epubNodeId. It is never an arbitrary scene, sentence, dialogue turn, or later distinctive phrase inside that node.",
+      "6. If transcript context looks like it may include pre-roll or interior prose, call searchEpubText with the transcript phrase. Trust relationToTarget: opener/near_opener is usable boundary evidence; interior means do not submit that timestamp as a chapter start; pre_target means move later to the target opener.",
+      "7. Treat submitFulcrumSplit as a final evidence-backed claim, not a probing tool. The call asserts that startTime is the audiobook start of the assigned EPUB node. It is never an arbitrary scene, sentence, dialogue turn, or later distinctive phrase inside that node.",
       "8. Call submitFulcrumSplit only when you can already prove the chosen EPUB node opener begins at that exact timestamp or immediately after it. Distinctive later prose helps locate the area, but it is not valid split evidence unless reverse EPUB search says opener/near_opener.",
       "9. Before submitFulcrumSplit, have this proof in hand: target EPUB node opener text, the transcript search hit that found that opener, a transcript window showing the opener at/just after the proposed start, and reverse EPUB evidence that the transcript phrase is opener/near_opener for the target node. Put that proof in the evidence/notes fields.",
-      "10. If you do not have that proof yet, keep researching instead of submitting. If the judge rejects it, do not use the judge as the search engine and do not resubmit the same node/timestamp; keep the same EPUB node and search earlier/different opener phrases or a wider same-node word window before switching to a different middle node.",
+      "10. If you do not have that proof yet, keep researching instead of submitting. If the judge rejects it, do not use the judge as the search engine and do not resubmit the same node/timestamp; keep the same EPUB node and search earlier/different opener phrases or a wider same-node word window.",
       "Do not submit guessed timestamps or timestamps copied from estimated EPUB position. A broad-span fulcrum must be backed by a transcript search result from rgSearchTranscript or fuzzySearchTranscript.",
       "After any rejected fulcrum, run a fresh rgSearchTranscript or fuzzySearchTranscript query from the same EPUB node's opener text before trying another fulcrum.",
       "All tool times and submitted startTime values are seconds, not milliseconds.",
@@ -3032,73 +3093,58 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
     tools: [
       tool({
         name: "getEpubNodeText",
-        description: "Return a bounded EPUB word window and suggested exact-search phrase variants for one node. Use this to try different opener phrases from the same fulcrum chapter before switching nodes.",
-        parameters: getEpubNodeTextSchema,
+        description: "Return target EPUB text and exact-search phrase variants. Optional startWord/wordCount select a target-node window.",
+        parameters: assignedGetEpubNodeTextSchema,
         strict: true,
         execute: (input) => {
-          return runToolWithEvents("getEpubNodeText", input, () => {
+          const toolInput = { ...input, epubNodeId: targetBoundary.epubNodeId };
+          return runToolWithEvents("getEpubNodeText", toolInput, () => {
             markEvidenceToolUsed();
-            const entryIndex = ctx.epubEntries.findIndex((entry) => entry.id === input.epubNodeId);
-            if (input.epubNodeId !== targetBoundary.epubNodeId) {
-              return {
-                error: `This span is assigned to ${targetBoundary.epubNodeId}; do not inspect ${input.epubNodeId}.`,
-                spanPath: span.path,
-                targetBoundary,
-              };
-            }
+            const entryIndex = ctx.epubEntries.findIndex((entry) => entry.id === targetBoundary.epubNodeId);
             if (entryIndex < span.epubStartIndex || entryIndex > span.epubEndIndex) {
               return {
-                error: `EPUB node ${input.epubNodeId} is not eligible for this span.`,
+                error: `EPUB node ${targetBoundary.epubNodeId} is not eligible for this span.`,
                 spanPath: span.path,
               };
             }
-            return getEpubNodeText(ctx, input);
+            return getEpubNodeText(ctx, toolInput);
           });
         },
       }),
       tool({
         name: "researchEpubBoundary",
-        description:
-          "Pre-research one target EPUB boundary: ranked rare opener phrases, transcript hits near the expected time, transcript windows, and reverse EPUB opener/near_opener classifications. Use this after choosing a middle fulcrum node.",
-        parameters: researchEpubBoundarySchema,
+        description: "Research the assigned target boundary: opener phrases, nearby transcript hits, windows, and reverse EPUB opener/near_opener checks.",
+        parameters: assignedResearchEpubBoundarySchema,
         strict: true,
-        execute: async (input) => {
-          return runToolWithEvents("researchEpubBoundary", input, async () => {
+        execute: async () => {
+          const toolInput = {
+            epubNodeId: targetBoundary.epubNodeId,
+            expectedTime: targetBoundary.expectedStartTime,
+            scope: { startTime: span.startTime, endTime: span.endTime },
+            searchRadiusSeconds: Math.max(600, Math.min(7_200, spanDurationSeconds(span) / 4)),
+          };
+          return runToolWithEvents("researchEpubBoundary", toolInput, async () => {
             markTranscriptSearchToolUsed();
-            const entryIndex = ctx.epubEntries.findIndex((entry) => entry.id === input.epubNodeId);
-            if (input.epubNodeId !== targetBoundary.epubNodeId) {
-              return {
-                error: `This span is assigned to ${targetBoundary.epubNodeId}; research that node only.`,
-                spanPath: span.path,
-                targetBoundary,
-              };
-            }
+            const entryIndex = ctx.epubEntries.findIndex((entry) => entry.id === targetBoundary.epubNodeId);
             if (entryIndex < span.epubStartIndex || entryIndex > span.epubEndIndex) {
               return {
-                error: `EPUB node ${input.epubNodeId} is not eligible for this span.`,
+                error: `EPUB node ${targetBoundary.epubNodeId} is not eligible for this span.`,
                 spanPath: span.path,
               };
             }
-            return researchEpubBoundary(ctx, {
-              ...input,
-              scope: { startTime: span.startTime, endTime: span.endTime },
-              searchRadiusSeconds: input.searchRadiusSeconds ?? Math.max(600, Math.min(7_200, spanDurationSeconds(span) / 4)),
-            });
+            return researchEpubBoundary(ctx, toolInput);
           });
         },
       }),
       tool({
         name: "searchEpubText",
-        description:
-          "Reverse-search normalized EPUB text for a phrase taken from the transcript. Use targetNodeId to see whether a transcript phrase is opener, near_opener, interior, pre_target, or post_target relative to the intended EPUB node.",
-        parameters: searchEpubTextSchema,
+        description: "Reverse-search target EPUB text for a transcript phrase and classify it as opener, near_opener, interior, pre_target, or post_target.",
+        parameters: assignedSearchEpubTextSchema,
         strict: true,
         execute: (input) => {
           return runToolWithEvents("searchEpubText", input, () => {
             markEvidenceToolUsed();
-            const effectiveAllowedIds = new Set([targetBoundary.epubNodeId]);
-            const nodeIds = (input.nodeIds?.length ? input.nodeIds : Array.from(effectiveAllowedIds)).filter((id) => effectiveAllowedIds.has(id));
-            return searchEpubText(ctx, { ...input, nodeIds, targetNodeId: targetBoundary.epubNodeId });
+            return searchEpubText(ctx, { ...input, nodeIds: [targetBoundary.epubNodeId], targetNodeId: targetBoundary.epubNodeId });
           });
         },
       }),
@@ -3140,23 +3186,20 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
       }),
       tool({
         name: "submitFulcrumSplit",
-        description:
-          "Submit a final, evidence-backed EPUB node start for this span. This asserts startTime is the audiobook start of epubNodeId, not an arbitrary interior phrase. Use only after opener text, transcript-search hit, inspected transcript window, and reverse EPUB opener/near_opener proof for the exact timestamp.",
-        parameters: submitFulcrumSplitSchema,
+        description: "Submit the final startTime for the assigned target EPUB node after opener evidence is in hand.",
+        parameters: assignedSubmitFulcrumSplitSchema,
         strict: true,
         execute: async (input) => {
-          return runToolWithEvents("submitFulcrumSplit", input, async () => {
+          const splitInput = {
+            spanPath: span.path,
+            epubNodeId: targetBoundary.epubNodeId,
+            title: targetBoundary.title,
+            startTime: input.startTime,
+            evidence: input.evidence,
+            notes: input.notes,
+          };
+          return runToolWithEvents("submitFulcrumSplit", splitInput, async () => {
             if (rejectedFulcrumRequiresEvidence && evidenceCallsSinceRejectedFulcrum === 0) return rejectedFulcrumWithoutEvidence();
-            if (input.epubNodeId !== targetBoundary.epubNodeId) {
-              return {
-                accepted: false,
-                kind: "split",
-                errors: [`This span is assigned to prove ${targetBoundary.epubNodeId}; do not submit ${input.epubNodeId}.`],
-                warnings: [],
-                audit: null,
-                instruction: `Continue researching ${targetBoundary.epubNodeId}. Search that node's opener text and submit only that epubNodeId.`,
-              } satisfies SubmitFulcrumSplitResult;
-            }
             if (transcriptSearchesSinceFulcrumSubmit === 0) {
               return {
                 accepted: false,
@@ -3169,20 +3212,20 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
               } satisfies SubmitFulcrumSplitResult;
             }
             transcriptSearchesSinceFulcrumSubmit = 0;
-            const rejectedKey = `${input.epubNodeId}:${Math.round(input.startTime)}`;
+            const rejectedKey = `${splitInput.epubNodeId}:${Math.round(splitInput.startTime)}`;
             if (rejectedFulcrums.has(rejectedKey)) {
               rejectedFulcrumRequiresEvidence = true;
               evidenceCallsSinceRejectedFulcrum = 0;
               return {
                 accepted: false,
                 kind: "split",
-                errors: [`Fulcrum ${input.epubNodeId} near ${Math.round(input.startTime)}s was already rejected for this span.`],
+                errors: [`Fulcrum ${splitInput.epubNodeId} near ${Math.round(splitInput.startTime)}s was already rejected for this span.`],
                 warnings: [],
                 audit: null,
                 instruction: "Stay on this EPUB node unless you have exhausted its opener text. Call getEpubNodeText for an earlier/different word window, search a different phrase from that node, and submit a materially different timestamp with stronger evidence.",
               } satisfies SubmitFulcrumSplitResult;
             }
-            const result = await validateFulcrumSplit(ctx, span, input, { targetBoundary });
+            const result = await validateFulcrumSplit(ctx, span, splitInput, { targetBoundary });
             if (!result.accepted) {
               invalidFulcrums++;
               rejectedFulcrums.add(rejectedKey);
@@ -3199,12 +3242,7 @@ function createRecursiveSpanCuratorAgent(ctx: ChapterCurationContext, span: Chap
                 return {
                   accepted: false,
                   kind: "split",
-                  errors: [
-                    `Fulcrum judge rejected this split: ${judgment.reason}`,
-                    `Judge finding: ${judgment.finding}`,
-                    `Judge opener evidence at timestamp: ${judgment.openerEvidenceAtTimestamp}`,
-                    ...judgment.concerns.map((concern) => `Judge evidence note: ${concern}`),
-                  ],
+                  errors: [conciseFulcrumJudgmentMessage(judgment)],
                   warnings: [],
                   audit: result.audit,
                   instruction: rejectedFulcrumJudgeInstruction(judgment),
