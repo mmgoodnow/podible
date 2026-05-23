@@ -1,10 +1,12 @@
 import { BooksRepo } from "../repo";
 import type { AppSettings, SessionWithUserRow } from "../app-types";
+import { manifestationDurationMs, preferredAudioManifestationsForBooks } from "../library/media";
 
 import { addApiKey, escapeHtml, messageMarkup, renderAppPage } from "./common";
-import { renderAdminDownloadsPageScript, renderAdminJobsPageScript, renderAdminSettingsPageScript } from "./admin-page-client";
+import { renderAdminOpsPageScript, renderAdminSettingsPageScript } from "./admin-page-client";
 import { decodePlexTokenExpiry } from "../plex";
 import { formatProcessUptime, type BuildInfo } from "../build-info";
+import { formatBookStatusLine, formatMinutes } from "./page-helpers";
 
 type PlexServerView = {
   machineId: string;
@@ -127,9 +129,6 @@ export function renderAdminSettingsPage(
         <div class="settings-actions">
           <div class="settings-actions-left">
             <button id="settings-save-btn" type="button">Save Settings</button>
-            <form method="post" action="${escapeHtml(addApiKey("/admin/refresh", apiKey))}" style="margin: 0;">
-              <button type="submit">Refresh Library</button>
-            </form>
           </div>
           <button id="wipe-db-btn" type="button" style="background: var(--danger); color: var(--danger-contrast); border: 1px solid var(--danger-border);">Wipe Entire Database</button>
         </div>
@@ -175,64 +174,22 @@ export function renderAdminUsersPage(
   return adminPage("Admin Users", body, settings, currentUser, apiKey, "", options);
 }
 
-export function renderAdminDownloadsPage(settings: AppSettings, currentUser: SessionWithUserRow | null, options: AdminPageOptions = {}): Response {
-  const apiKey = options.apiKey ?? null;
-  const body = `
-    <section class="hero"><h1>Downloads</h1><p>Recent download jobs with release status and transfer progress.</p></section>
-    <section class="card admin-only-card">
-      ${adminTitle("Recent Downloads")}
-      <div class="row"><button id="downloads-refresh-btn" type="button">Refresh Downloads</button></div>
-      <p id="downloads-status" class="muted"></p>
-      <div class="table-wrap"><table>
-        <thead><tr><th>Job</th><th>Release</th><th>Media</th><th>Status</th><th>Progress</th><th>Transfer</th><th>Error</th></tr></thead>
-        <tbody id="downloads-table-body"><tr><td colspan="7">Loading...</td></tr></tbody>
-      </table></div>
-    </section>`;
-  return adminPage("Admin Downloads", body, settings, currentUser, apiKey, renderAdminDownloadsPageScript(), options);
-}
-
-export function renderAdminJobsPage(settings: AppSettings, currentUser: SessionWithUserRow | null, options: AdminPageOptions = {}): Response {
-  const apiKey = options.apiKey ?? null;
-  const body = `
-    <section class="hero"><h1>Jobs</h1><p>Review and retry background work.</p></section>
-    <section class="card admin-only-card">
-      ${adminTitle("Recent Jobs")}
-      <div class="row">
-        <label for="jobs-limit">Limit</label>
-        <input id="jobs-limit" type="number" min="1" max="200" value="25" style="min-width: 90px;" />
-        <label for="jobs-type">Type</label>
-        <select id="jobs-type">
-          <option value="">all</option>
-          <option value="full_library_refresh">full library refresh</option>
-          <option value="acquire">acquire</option>
-          <option value="download">download</option>
-          <option value="import">import</option>
-          <option value="reconcile">reconcile</option>
-          <option value="chapter_analysis">chapter analysis</option>
-        </select>
-        <button id="jobs-refresh-btn" type="button">Refresh Jobs</button>
-      </div>
-      <p id="jobs-status" class="muted"></p>
-      <div class="table-wrap"><table>
-        <thead><tr><th>ID</th><th>Type</th><th>Status</th><th>Book</th><th>Release</th><th>Attempts</th><th>Updated</th><th>Action</th><th>Error</th></tr></thead>
-        <tbody id="jobs-table-body"><tr><td colspan="9">Loading...</td></tr></tbody>
-      </table></div>
-    </section>`;
-  return adminPage("Admin Jobs", body, settings, currentUser, apiKey, renderAdminJobsPageScript(), options);
-}
-
-export function renderAdminContentPage(
+export function renderAdminOpsPage(
   repo: BooksRepo,
   settings: AppSettings,
   currentUser: SessionWithUserRow | null,
   options: AdminPageOptions = {}
 ): Response {
   const apiKey = options.apiKey ?? null;
-  const rows = repo.listAdminContentOps();
-  const failed = rows.filter((row) => row.transcript_status === "failed" || row.chapter_status === "failed").length;
-  const withChapters = rows.filter((row) => row.has_chapters === 1).length;
-  const tableRows = rows.length
-    ? rows
+  const inProgress = repo.listInProgressBooks().slice(0, 8);
+  const recentBooks = repo.listAllBooks().filter((book) => book.status === "imported").slice(0, 8);
+  const needsAttention = repo.listAllBooks().filter((book) => book.status === "error").slice(0, 8);
+  const playableByBookId = new Map(preferredAudioManifestationsForBooks(repo).map((entry) => [entry.book.id, entry]));
+  const contentRows = repo.listAdminContentOps();
+  const failedContent = contentRows.filter((row) => row.transcript_status === "failed" || row.chapter_status === "failed").length;
+  const withChapters = contentRows.filter((row) => row.has_chapters === 1).length;
+  const contentTableRows = contentRows.length
+    ? contentRows
         .map((row) => {
           const transcript = [row.transcript_status, row.transcript_error].filter(Boolean).join(": ") || "not requested";
           const chapter = [
@@ -255,18 +212,110 @@ export function renderAdminContentPage(
     : `<tr><td colspan="5">No content operations yet.</td></tr>`;
   const body = `
     <section class="hero">
-      <h1>Content Ops</h1>
-      <p>Transcription, chapter analysis, and curation state across audio editions.</p>
-      <div class="stats"><span class="pill">${rows.length} audio editions</span><span class="pill">${withChapters} with chapters</span><span class="pill">${failed} failed</span></div>
+      <h1>Ops</h1>
+      <p>Operational status, recovery queues, downloads, and content pipeline state.</p>
+      <div class="stats">
+        <span class="pill">${inProgress.length} in progress</span>
+        <span class="pill">${needsAttention.length} need attention</span>
+        <span class="pill">${failedContent} content issues</span>
+      </div>
+      <div class="actions" style="margin-top: 14px;">
+        <form method="post" action="${escapeHtml(addApiKey("/admin/refresh", apiKey))}">
+          <button type="submit">Refresh library</button>
+        </form>
+      </div>
+      ${messageMarkup(options.notice, options.error)}
     </section>
-    <section class="card admin-only-card">
-      ${adminTitle("Transcription / Chapter Analysis")}
-      <div class="table-wrap"><table>
-        <thead><tr><th>Book</th><th>Edition</th><th>Transcript</th><th>Chapter Analysis</th><th>Updated</th></tr></thead>
-        <tbody>${tableRows}</tbody>
-      </table></div>
-    </section>`;
-  return adminPage("Admin Content Ops", body, settings, currentUser, apiKey, "", options);
+    <div class="admin-grid">
+      <section class="card span-4 admin-only-card">
+        ${adminTitle("In Progress")}
+        ${
+          inProgress.length > 0
+            ? `<div class="section-list">${inProgress
+                .map(
+                  (book) => `<div>
+                    <strong><a href="${escapeHtml(addApiKey(`/book/${book.id}`, apiKey))}">${escapeHtml(book.title)}</a></strong>
+                    <div class="muted">${escapeHtml(book.author)} - ${escapeHtml(formatBookStatusLine(book))}</div>
+                  </div>`
+                )
+                .join("")}</div>`
+            : `<div class="empty">No active work right now.</div>`
+        }
+      </section>
+      <section class="card span-4 admin-only-card">
+        ${adminTitle("Needs Attention")}
+        ${
+          needsAttention.length > 0
+            ? `<div class="section-list">${needsAttention
+                .map(
+                  (book) => `<div>
+                    <strong><a href="${escapeHtml(addApiKey(`/book/${book.id}`, apiKey))}">${escapeHtml(book.title)}</a></strong>
+                    <div class="muted">${escapeHtml(book.author)} - ${escapeHtml(formatBookStatusLine(book))}</div>
+                  </div>`
+                )
+                .join("")}</div>`
+            : `<div class="empty">Nothing needs attention right now.</div>`
+        }
+      </section>
+      <section class="card span-4 admin-only-card">
+        ${adminTitle("Recently Ready")}
+        ${
+          recentBooks.length > 0
+            ? `<div class="section-list">${recentBooks
+                .map((book) => {
+                  const playable = playableByBookId.get(book.id);
+                  const audioDurationMs = playable ? manifestationDurationMs(playable.manifestation, playable.containers) : null;
+                  return `<div>
+                    <strong><a href="${escapeHtml(addApiKey(`/book/${book.id}`, apiKey))}">${escapeHtml(book.title)}</a></strong>
+                    <div class="muted">${escapeHtml(book.author)} - ready${audioDurationMs ? ` - ${formatMinutes(audioDurationMs)}` : ""}</div>
+                  </div>`;
+                })
+                .join("")}</div>`
+            : `<div class="empty">No recently finished books yet.</div>`
+        }
+      </section>
+      <section class="card span-12 admin-only-card">
+        ${adminTitle("Recent Jobs")}
+        <div class="row">
+          <label for="jobs-limit">Limit</label>
+          <input id="jobs-limit" type="number" min="1" max="200" value="25" style="min-width: 90px;" />
+          <label for="jobs-type">Type</label>
+          <select id="jobs-type">
+            <option value="">all</option>
+            <option value="full_library_refresh">full library refresh</option>
+            <option value="acquire">acquire</option>
+            <option value="download">download</option>
+            <option value="import">import</option>
+            <option value="reconcile">reconcile</option>
+            <option value="chapter_analysis">chapter analysis</option>
+          </select>
+          <button id="jobs-refresh-btn" type="button">Refresh Jobs</button>
+        </div>
+        <p id="jobs-status" class="muted"></p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>ID</th><th>Type</th><th>Status</th><th>Book</th><th>Release</th><th>Attempts</th><th>Updated</th><th>Action</th><th>Error</th></tr></thead>
+          <tbody id="jobs-table-body"><tr><td colspan="9">Loading...</td></tr></tbody>
+        </table></div>
+      </section>
+      <section class="card span-12 admin-only-card">
+        ${adminTitle("Recent Downloads")}
+        <div class="row"><button id="downloads-refresh-btn" type="button">Refresh Downloads</button></div>
+        <p id="downloads-status" class="muted"></p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Job</th><th>Release</th><th>Media</th><th>Status</th><th>Progress</th><th>Transfer</th><th>Error</th></tr></thead>
+          <tbody id="downloads-table-body"><tr><td colspan="7">Loading...</td></tr></tbody>
+        </table></div>
+      </section>
+      <section class="card span-12 admin-only-card">
+        ${adminTitle("Transcription / Chapter Analysis")}
+        <p class="muted">${contentRows.length} audio edition${contentRows.length === 1 ? "" : "s"} - ${withChapters} with chapters - ${failedContent} failed</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Book</th><th>Edition</th><th>Transcript</th><th>Chapter Analysis</th><th>Updated</th></tr></thead>
+          <tbody>${contentTableRows}</tbody>
+        </table></div>
+      </section>
+    </div>`;
+  return adminPage("Admin Ops", body, settings, currentUser, apiKey, renderAdminOpsPageScript(), options);
 }
 
 export function renderAdminDbPage(

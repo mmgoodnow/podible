@@ -106,7 +106,7 @@ describe("podible http", () => {
     expect(admin.status).toBe(303);
     expect(admin.headers.get("location")).toBe("/admin/settings");
 
-    const adminPages = ["/admin/settings", "/admin/users", "/admin/jobs", "/admin/downloads", "/admin/content", "/admin/curation", "/admin/db"];
+    const adminPages = ["/admin/settings", "/admin/users", "/admin/ops", "/admin/curation", "/admin/db"];
     for (const path of adminPages) {
       const response = await fetchHandler(
         new Request(`http://localhost${path}`, {
@@ -118,12 +118,20 @@ describe("podible http", () => {
       expect(pageBody.includes('class="admin-subnav"')).toBe(false);
       expect(pageBody.includes('href="/admin/settings"')).toBe(true);
       expect(pageBody.includes('href="/admin/users"')).toBe(true);
-      expect(pageBody.includes('href="/admin/jobs"')).toBe(true);
-      expect(pageBody.includes('href="/admin/downloads"')).toBe(true);
-      expect(pageBody.includes('href="/admin/content"')).toBe(true);
+      expect(pageBody.includes('href="/admin/ops"')).toBe(true);
       expect(pageBody.includes('href="/admin/curation"')).toBe(true);
       expect(pageBody.includes('href="/admin/db"')).toBe(true);
       expect(pageBody.includes('href="/admin"')).toBe(false);
+    }
+
+    for (const path of ["/admin/jobs", "/admin/downloads", "/admin/content"]) {
+      const response = await fetchHandler(
+        new Request(`http://localhost${path}`, {
+          headers: { cookie: adminCookie },
+        })
+      );
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe("/admin/ops");
     }
 
     const settingsPage = await fetchHandler(
@@ -134,14 +142,14 @@ describe("podible http", () => {
     const settingsBody = await settingsPage.text();
     expect(settingsBody.includes("site-nav")).toBe(true);
     expect(settingsBody.includes("Admin:")).toBe(true);
-    expect(settingsBody.includes("Content")).toBe(true);
+    expect(settingsBody.includes("Ops")).toBe(true);
     expect(settingsBody.includes("DB")).toBe(true);
     expect(settingsBody.includes("Commit:")).toBe(true);
     expect(settingsBody.includes("1234567")).toBe(true);
     expect(settingsBody.includes("Test commit subject")).toBe(true);
     expect(settingsBody.includes("Uptime:")).toBe(true);
     expect(settingsBody.includes("settings-editor")).toBe(true);
-    expect(settingsBody.includes("Refresh Library")).toBe(true);
+    expect(settingsBody.includes("Refresh Library")).toBe(false);
     expect(settingsBody.includes("wipe-db-btn")).toBe(true);
     expect(settingsBody.includes("Manual Search + Snatch")).toBe(false);
     expect(settingsBody.includes("Snatch Checked as One Edition")).toBe(false);
@@ -149,6 +157,17 @@ describe("podible http", () => {
     expect(settingsBody.includes("Feed Preview")).toBe(false);
     expect(settingsBody.includes("Recent Library")).toBe(false);
     expect(settingsBody.includes("Open Library Search")).toBe(false);
+
+    const opsPage = await fetchHandler(
+      new Request("http://localhost/admin/ops", {
+        headers: { cookie: adminCookie },
+      })
+    );
+    const opsBody = await opsPage.text();
+    expect(opsBody.includes("Recent Jobs")).toBe(true);
+    expect(opsBody.includes("Recent Downloads")).toBe(true);
+    expect(opsBody.includes("Transcription / Chapter Analysis")).toBe(true);
+    expect(opsBody.includes("Refresh library")).toBe(true);
 
     const curationApi = await fetchHandler(
       new Request("http://localhost/admin/curation/api/runs", {
@@ -503,7 +522,7 @@ describe("podible http", () => {
     db.close();
   });
 
-  test("serves activity page and restricts library refresh to admins", async () => {
+  test("surfaces user activity on home and keeps refresh in admin ops", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -550,18 +569,26 @@ describe("podible http", () => {
     const fetchHandler = createPodibleFetchHandler(repo, Date.now());
     const userCookie = createBrowserSessionCookie(repo, { username: "reader" });
 
+    const home = await fetchHandler(
+      new Request("http://localhost/", {
+        headers: { cookie: userCookie },
+      })
+    );
+    expect(home.status).toBe(200);
+    const homeBody = await home.text();
+    expect(homeBody.includes("Still working")).toBe(true);
+    expect(homeBody.includes("Needs attention")).toBe(true);
+    expect(homeBody.includes("Ready now")).toBe(true);
+    expect(homeBody.includes("Refresh library")).toBe(false);
+    expect(homeBody.includes("Broken Book")).toBe(true);
+
     const activity = await fetchHandler(
       new Request("http://localhost/activity", {
         headers: { cookie: userCookie },
       })
     );
-    expect(activity.status).toBe(200);
-    const activityBody = await activity.text();
-    expect(activityBody.includes("Books in progress")).toBe(true);
-    expect(activityBody.includes("Recently ready")).toBe(true);
-    expect(activityBody.includes("Needs attention")).toBe(true);
-    expect(activityBody.includes("Refresh library")).toBe(false);
-    expect(activityBody.includes("Broken Book")).toBe(true);
+    expect(activity.status).toBe(303);
+    expect(activity.headers.get("location")).toBe("/");
 
     const rejected = await fetchHandler(
       new Request("http://localhost/activity/refresh", {
@@ -573,28 +600,32 @@ describe("podible http", () => {
     expect(repo.listJobsByType("full_library_refresh").length).toBe(0);
 
     const adminCookie = createBrowserSessionCookie(repo, { isAdmin: true, username: "admin" });
-    const adminActivity = await fetchHandler(
-      new Request("http://localhost/activity", {
+    const adminOps = await fetchHandler(
+      new Request("http://localhost/admin/ops", {
         headers: { cookie: adminCookie },
       })
     );
-    expect(adminActivity.status).toBe(200);
-    expect((await adminActivity.text()).includes("Refresh library")).toBe(true);
+    expect(adminOps.status).toBe(200);
+    const adminOpsBody = await adminOps.text();
+    expect(adminOpsBody.includes("Refresh library")).toBe(true);
+    expect(adminOpsBody.includes("Recent Jobs")).toBe(true);
+    expect(adminOpsBody.includes("Recent Downloads")).toBe(true);
+    expect(adminOpsBody.includes("Transcription / Chapter Analysis")).toBe(true);
 
     const refreshed = await fetchHandler(
-      new Request("http://localhost/activity/refresh", {
+      new Request("http://localhost/admin/refresh", {
         method: "POST",
         headers: { cookie: adminCookie },
       })
     );
     expect(refreshed.status).toBe(303);
-    expect(refreshed.headers.get("location")).toContain("/activity?notice=");
+    expect(refreshed.headers.get("location")).toContain("/admin/ops?notice=");
     expect(repo.listJobsByType("full_library_refresh").length).toBe(1);
 
     db.close();
   });
 
-  test("queues a refresh job from the admin page", async () => {
+  test("queues a refresh job from admin ops", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -614,7 +645,7 @@ describe("podible http", () => {
       })
     );
     expect(refreshed.status).toBe(303);
-    expect(refreshed.headers.get("location")).toContain("/admin/settings?notice=");
+    expect(refreshed.headers.get("location")).toContain("/admin/ops?notice=");
     expect(repo.listJobsByType("full_library_refresh").length).toBe(1);
 
     db.close();

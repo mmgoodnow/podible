@@ -5,11 +5,9 @@ import { Hono } from "hono";
 import { fetchPlexServerDevices } from "../plex";
 import { BooksRepo } from "../repo";
 import {
-  renderAdminContentPage,
   renderAdminCurationPage,
   renderAdminDbPage,
-  renderAdminDownloadsPage,
-  renderAdminJobsPage,
+  renderAdminOpsPage,
   renderAdminSettingsPage,
   renderAdminUsersPage,
 } from "./admin-page";
@@ -128,7 +126,7 @@ export function createAdminRoutes(repo: BooksRepo, startTime: number, buildInfo:
 
   app.post("/refresh", (c) => {
     const job = repo.createJob({ type: "full_library_refresh" });
-    return c.redirect(`/admin/settings?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`, 303);
+    return c.redirect(`/admin/ops?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`, 303);
   });
 
   app.get("/", (c) => c.redirect("/admin/settings", 303));
@@ -149,11 +147,20 @@ export function createAdminRoutes(repo: BooksRepo, startTime: number, buildInfo:
 
   app.get("/users", (c) => renderAdminUsersPage(repo, repo.getSettings(), getCurrentSession(c), { apiKey: null, ...adminRuntime }));
 
-  app.get("/jobs", (c) => renderAdminJobsPage(repo.getSettings(), getCurrentSession(c), { apiKey: null, ...adminRuntime }));
+  app.get("/ops", (c) =>
+    renderAdminOpsPage(repo, repo.getSettings(), getCurrentSession(c), {
+      apiKey: null,
+      notice: c.req.query("notice"),
+      error: c.req.query("error"),
+      ...adminRuntime,
+    })
+  );
 
-  app.get("/downloads", (c) => renderAdminDownloadsPage(repo.getSettings(), getCurrentSession(c), { apiKey: null, ...adminRuntime }));
+  app.get("/jobs", (c) => c.redirect("/admin/ops", 303));
 
-  app.get("/content", (c) => renderAdminContentPage(repo, repo.getSettings(), getCurrentSession(c), { apiKey: null, ...adminRuntime }));
+  app.get("/downloads", (c) => c.redirect("/admin/ops", 303));
+
+  app.get("/content", (c) => c.redirect("/admin/ops", 303));
 
   app.get("/curation", (c) => renderAdminCurationPage(repo.getSettings(), getCurrentSession(c), { apiKey: null, ...adminRuntime }));
 

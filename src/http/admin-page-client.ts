@@ -409,21 +409,13 @@ ${renderSettingsBootstrapScript()}
     </script>`;
 }
 
-export function renderAdminDownloadsPageScript(): string {
+export function renderAdminOpsPageScript(): string {
   return `<script>
       (function () {
 ${renderAdminRuntimeScript()}
 ${renderDownloadsScript()}
-${renderDownloadsBootstrapScript()}
-      })();
-    </script>`;
-}
-
-export function renderAdminJobsPageScript(): string {
-  return `<script>
-      (function () {
-${renderAdminRuntimeScript()}
 ${renderJobsScript()}
+${renderDownloadsBootstrapScript()}
 ${renderJobsBootstrapScript()}
       })();
     </script>`;

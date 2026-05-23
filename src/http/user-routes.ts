@@ -3,7 +3,6 @@ import { Hono } from "hono";
 import { searchOpenLibrary } from "../library/openlibrary";
 import { BooksRepo } from "../repo";
 import { triggerAutoAcquire } from "../library/service";
-import { renderActivityPage } from "./activity-page";
 import { createBookFromOpenLibrary, renderAddPage } from "./add-page";
 import { parseRequestedEditionId, renderBookPage } from "./book-page";
 import { renderLandingPage } from "./landing-page";
@@ -128,18 +127,11 @@ export function createBookRoutes(repo: BooksRepo): Hono<HttpEnv> {
 export function createActivityRoutes(repo: BooksRepo): Hono<HttpEnv> {
   const app = new Hono<HttpEnv>();
   app.use("*", requireAuthenticatedPageSession);
-  app.get("/", (c) =>
-    renderActivityPage(repo, repo.getSettings(), {
-      notice: c.req.query("notice"),
-      error: c.req.query("error"),
-      currentUser: getCurrentSession(c),
-      apiKey: null,
-    })
-  );
+  app.get("/", (c) => c.redirect("/", 303));
 
   app.post("/refresh", requireAdminSession, (c) => {
     const job = repo.createJob({ type: "full_library_refresh" });
-    return c.redirect(`/activity?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`, 303);
+    return c.redirect(`/admin/ops?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`, 303);
   });
 
   return app;

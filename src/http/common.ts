@@ -60,9 +60,7 @@ function renderAppPage(
     ? `<span class="muted">Admin:</span>
       <a href="${escapeHtml(addApiKey("/admin/settings", apiKey))}">Settings</a>
       <a href="${escapeHtml(addApiKey("/admin/users", apiKey))}">Users</a>
-      <a href="${escapeHtml(addApiKey("/admin/jobs", apiKey))}">Jobs</a>
-      <a href="${escapeHtml(addApiKey("/admin/downloads", apiKey))}">Downloads</a>
-      <a href="${escapeHtml(addApiKey("/admin/content", apiKey))}">Content</a>
+      <a href="${escapeHtml(addApiKey("/admin/ops", apiKey))}">Ops</a>
       <a href="${escapeHtml(addApiKey("/admin/curation", apiKey))}">Curation</a>
       <a href="${escapeHtml(addApiKey("/admin/db", apiKey))}">DB</a>`
     : "";
@@ -71,7 +69,6 @@ function renderAppPage(
       <a href="${escapeHtml(addApiKey("/", apiKey))}">Home</a>
       <a href="${escapeHtml(addApiKey("/library", apiKey))}">Library</a>
       <a href="${escapeHtml(addApiKey("/add", apiKey))}">Add</a>
-      <a href="${escapeHtml(addApiKey("/activity", apiKey))}">Activity</a>
       ${adminNav}
       ${accountNav}
       ${themeToggle}
