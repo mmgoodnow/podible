@@ -86,6 +86,14 @@ describe("podible http", () => {
     expect(adminRedirect.status).toBe(303);
     expect(adminRedirect.headers.get("location")).toBe("/login?redirectTo=%2Fadmin");
 
+    const userCookie = createBrowserSessionCookie(repo, { username: "reader" });
+    const userAdmin = await fetchHandler(
+      new Request("http://localhost/admin/jobs", {
+        headers: { cookie: userCookie },
+      })
+    );
+    expect(userAdmin.status).toBe(403);
+
     const adminCookie = createBrowserSessionCookie(repo, { isAdmin: true, username: "admin" });
     const admin = await fetchHandler(
       new Request("http://localhost/admin", {
@@ -96,17 +104,63 @@ describe("podible http", () => {
     const adminBody = await admin.text();
     expect(adminBody.includes("site-nav")).toBe(true);
     expect(adminBody.includes("Admin")).toBe(true);
-    expect(adminBody.includes("Manual Search + Snatch")).toBe(true);
-    expect(adminBody.includes("Snatch Checked as One Edition")).toBe(true);
-    expect(adminBody.includes("Users")).toBe(true);
-    expect(adminBody.includes("admin")).toBe(true);
-    expect(adminBody.includes("manual-import-btn")).toBe(true);
-    expect(adminBody.includes("settings-editor")).toBe(true);
-    expect(adminBody.includes("Refresh Library")).toBe(true);
-    expect(adminBody.includes("wipe-db-btn")).toBe(true);
+    expect(adminBody.includes("Content Ops")).toBe(true);
+    expect(adminBody.includes("DB Explorer")).toBe(true);
+    expect(adminBody.includes("Manual Search + Snatch")).toBe(false);
+    expect(adminBody.includes("Snatch Checked as One Edition")).toBe(false);
+    expect(adminBody.includes("manual-import-btn")).toBe(false);
+    expect(adminBody.includes('id="settings-editor"')).toBe(false);
+    expect(adminBody.includes("wipe-db-btn")).toBe(false);
     expect(adminBody.includes("Feed Preview")).toBe(false);
     expect(adminBody.includes("Recent Library")).toBe(false);
     expect(adminBody.includes("Open Library Search")).toBe(false);
+
+    const adminPages = ["/admin/settings", "/admin/users", "/admin/jobs", "/admin/downloads", "/admin/content", "/admin/curation", "/admin/db"];
+    for (const path of adminPages) {
+      const response = await fetchHandler(
+        new Request(`http://localhost${path}`, {
+          headers: { cookie: adminCookie },
+        })
+      );
+      expect(response.status).toBe(200);
+    }
+
+    const settingsPage = await fetchHandler(
+      new Request("http://localhost/admin/settings", {
+        headers: { cookie: adminCookie },
+      })
+    );
+    const settingsBody = await settingsPage.text();
+    expect(settingsBody.includes("settings-editor")).toBe(true);
+    expect(settingsBody.includes("Refresh Library")).toBe(true);
+    expect(settingsBody.includes("wipe-db-btn")).toBe(true);
+
+    const curationApi = await fetchHandler(
+      new Request("http://localhost/admin/curation/api/runs", {
+        headers: { cookie: adminCookie },
+      })
+    );
+    expect(curationApi.status).toBe(200);
+    const curationPayload = await curationApi.json() as any;
+    expect(Array.isArray(curationPayload.runs)).toBe(true);
+
+    const dbPage = await fetchHandler(
+      new Request("http://localhost/admin/db?table=books&limit=5", {
+        headers: { cookie: adminCookie },
+      })
+    );
+    expect(dbPage.status).toBe(200);
+    const dbBody = await dbPage.text();
+    expect(dbBody.includes("DB Explorer")).toBe(true);
+    expect(dbBody.includes("No SQL editor")).toBe(true);
+    expect(dbBody.includes("<textarea")).toBe(false);
+
+    const rejectedDbPage = await fetchHandler(
+      new Request("http://localhost/admin/db?table=sqlite_master", {
+        headers: { cookie: adminCookie },
+      })
+    );
+    expect(rejectedDbPage.status).toBe(400);
 
     db.close();
   });
@@ -313,9 +367,9 @@ describe("podible http", () => {
     expect(detailBody.includes("Available now")).toBe(true);
     expect(detailBody.includes("data-transcript-panel")).toBe(true);
     expect(detailBody.includes(`/transcripts/m/${standardAudio.manifestation_id}.json`)).toBe(true);
-    expect(detailBody.includes("Artwork")).toBe(true);
-    expect(detailBody.includes("Load alternate covers")).toBe(true);
-    expect(detailBody.includes("data-cover-panel")).toBe(true);
+    expect(detailBody.includes("Artwork")).toBe(false);
+    expect(detailBody.includes("Load alternate covers")).toBe(false);
+    expect(detailBody.includes("data-cover-panel")).toBe(false);
     // Stored transcript payloads surface the manifestation-level transcript URL.
     expect(detailBody.includes("Out of date")).toBe(true);
     expect(detailBody.includes("Find audio")).toBe(true);
@@ -323,15 +377,17 @@ describe("podible http", () => {
     expect(detailBody.includes("Audio edition")).toBe(true);
     expect(detailBody.includes("GraphicAudio dramatization")).toBe(true);
     expect(detailBody.includes(`/stream/m/${standardAudio.manifestation_id}.`)).toBe(true);
-    expect(detailBody.includes("Something wrong?")).toBe(true);
-    expect(detailBody.includes("Report wrong audio")).toBe(true);
-    expect(detailBody.includes("data-report-import-issue")).toBe(true);
-    expect(detailBody.includes("Find a specific edition")).toBe(true);
-    expect(detailBody.includes("data-release-search-panel")).toBe(true);
-    expect(detailBody.includes("library.searchReleases")).toBe(true);
-    expect(detailBody.includes("library.createManifestationFromSearch")).toBe(true);
+    expect(detailBody.includes("Something wrong?")).toBe(false);
+    expect(detailBody.includes("Report wrong audio")).toBe(false);
+    expect(detailBody.includes("data-report-import-issue")).toBe(false);
+    expect(detailBody.includes("Find a specific edition")).toBe(false);
+    expect(detailBody.includes("data-release-search-panel")).toBe(false);
+    expect(detailBody.includes("library.searchReleases")).toBe(false);
+    expect(detailBody.includes("library.createManifestationFromSearch")).toBe(false);
+    expect(detailBody.includes("Manual Import")).toBe(false);
+    expect(detailBody.includes("Admin only")).toBe(false);
     expect(detailBody.includes("snatch.create")).toBe(false);
-    expect(detailBody.includes("Admin: Manifestations")).toBe(false);
+    expect(detailBody.includes("Manifestations")).toBe(false);
 
     const adminCookie = createBrowserSessionCookie(repo, { isAdmin: true, username: "admin" });
     const adminDetail = await fetchHandler(
@@ -341,7 +397,15 @@ describe("podible http", () => {
     );
     expect(adminDetail.status).toBe(200);
     const adminDetailBody = await adminDetail.text();
-    expect(adminDetailBody.includes("Admin: Manifestations")).toBe(true);
+    expect(adminDetailBody.includes("Admin only")).toBe(true);
+    expect(adminDetailBody.includes("Manifestations")).toBe(true);
+    expect(adminDetailBody.includes("Something wrong?")).toBe(true);
+    expect(adminDetailBody.includes("Find a specific edition")).toBe(true);
+    expect(adminDetailBody.includes("Manual Import")).toBe(true);
+    expect(adminDetailBody.includes("data-manual-import-panel")).toBe(true);
+    expect(adminDetailBody.includes("Artwork")).toBe(true);
+    expect(adminDetailBody.includes("data-cover-panel")).toBe(true);
+    expect(adminDetailBody.includes('id="manual-import-book-id"')).toBe(false);
     expect(adminDetailBody.includes("GraphicAudio dramatization")).toBe(true);
     expect(adminDetailBody.includes(`Asset ${standardAudio.id}`)).toBe(true);
     expect(adminDetailBody.includes("Dune Standard Audio")).toBe(true);
@@ -533,7 +597,7 @@ describe("podible http", () => {
       })
     );
     expect(refreshed.status).toBe(303);
-    expect(refreshed.headers.get("location")).toContain("/admin?notice=");
+    expect(refreshed.headers.get("location")).toContain("/admin/settings?notice=");
     expect(repo.listJobsByType("full_library_refresh").length).toBe(1);
 
     db.close();
@@ -1026,7 +1090,7 @@ describe("podible http", () => {
       const adminCookie = "podible_session=admin-session";
 
       const page = await fetchHandler(
-        new Request("http://app.test/admin", {
+        new Request("http://app.test/admin/settings", {
           headers: { cookie: adminCookie },
         })
       );
@@ -1038,7 +1102,7 @@ describe("podible http", () => {
       expect(plexResourcesFetches).toBe(1);
 
       const cachedPage = await fetchHandler(
-        new Request("http://app.test/admin", {
+        new Request("http://app.test/admin/settings", {
           headers: { cookie: adminCookie },
         })
       );

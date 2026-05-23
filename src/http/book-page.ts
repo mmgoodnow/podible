@@ -6,6 +6,7 @@ import type { AppSettings, AssetFileRow, AssetRow, ManifestationRow, ReleaseRow,
 import type { TranscriptRequestResult } from "../library/chapter-analysis";
 
 import { addApiKey, escapeHtml, messageMarkup, renderAppPage } from "./common";
+import { renderManualImportPageScript } from "./admin-page-client";
 import { coverMarkup, describeBookState, formatBookStatusLine, formatMediaStatus, formatMinutes } from "./page-helpers";
 
 type BookAudioCandidate = {
@@ -123,8 +124,8 @@ function renderReportIssueSection(bookId: number, audioChoice: BookAudioCandidat
   }
   if (buttons.length === 0) return "";
   return `
-      <section class="card span-12" data-report-import-panel data-book-id="${bookId}">
-        <h2>Something wrong?</h2>
+      <section class="card span-12 admin-only-card" data-report-import-panel data-book-id="${bookId}">
+        <div class="section-title-row"><h2>Something wrong?</h2><span class="admin-only-pill">Admin only</span></div>
         <p class="muted">Report a bad import to preserve the current edition, try an alternate import with the agent, and escalate to an agent reacquire if import cannot be recovered.</p>
         <div class="actions" style="margin-top: 12px;">${buttons.join("")}</div>
         <p class="muted" data-report-import-status style="margin-top: 8px;"></p>
@@ -134,8 +135,8 @@ function renderReportIssueSection(bookId: number, audioChoice: BookAudioCandidat
 function renderManualReleaseSearchSection(bookId: number, bookTitle: string, bookAuthor: string): string {
   const defaultQuery = [bookTitle, bookAuthor].map((part) => part.trim()).filter(Boolean).join(" ");
   return `
-      <section class="card span-12" data-release-search-panel data-book-id="${bookId}">
-        <h2>Find a specific edition</h2>
+      <section class="card span-12 admin-only-card" data-release-search-panel data-book-id="${bookId}">
+        <div class="section-title-row"><h2>Find a specific edition</h2><span class="admin-only-pill">Admin only</span></div>
         <p class="muted">Search indexer releases for this book, select one or more ordered results, and snatch them as a new edition.</p>
         <div class="release-search-controls">
           <select data-release-search-media aria-label="Media type">
@@ -163,6 +164,30 @@ function renderManualReleaseSearchSection(bookId: number, bookTitle: string, boo
               </tr>
             </thead>
             <tbody data-release-search-results><tr><td colspan="5">No search yet.</td></tr></tbody>
+          </table>
+        </div>
+      </section>`;
+}
+
+function renderManualImportSection(bookId: number): string {
+  return `
+      <section class="card span-12 admin-only-card" data-manual-import-panel data-book-id="${bookId}">
+        <div class="section-title-row"><h2>Manual Import</h2><span class="admin-only-pill">Admin only</span></div>
+        <p class="muted">Inspect a local file or folder and import selected files into this book.</p>
+        <div class="release-search-controls">
+          <select id="manual-import-media" aria-label="Media type">
+            <option value="audio">audio</option>
+            <option value="ebook">ebook</option>
+          </select>
+          <input id="manual-import-path" type="text" placeholder="Absolute path to file or folder" />
+          <button id="manual-import-inspect-btn" type="button">Inspect</button>
+          <button id="manual-import-btn" type="button">Import</button>
+        </div>
+        <p id="manual-import-status" class="muted" style="margin-top: 8px;"></p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Use</th><th>Path</th><th>Type</th><th>Size</th></tr></thead>
+            <tbody id="manual-import-files-body"><tr><td colspan="4">No inspection yet.</td></tr></tbody>
           </table>
         </div>
       </section>`;
@@ -214,8 +239,8 @@ function renderAdminManifestationSection(
     })
     .join("");
   return `
-      <section class="card span-12">
-        <h2>Admin: Manifestations</h2>
+      <section class="card span-12 admin-only-card">
+        <div class="section-title-row"><h2>Manifestations</h2><span class="admin-only-pill">Admin only</span></div>
         <p class="muted">Diagnostic view of editions, containers, source releases, and imported files.</p>
         ${rows || `<div class="empty">No manifestations.</div>`}
       </section>`;
@@ -735,17 +760,22 @@ export async function renderBookPage(
         ${transcriptStatus?.status === "missing_config" ? `<p class="muted" style="margin-top:8px;">Transcription requires an OpenAI API key in Settings.</p>` : ""}
         ${transcriptStatus?.status === "failed" && transcriptStatus.error ? `<p class="muted" style="margin-top:8px;">Last error: ${escapeHtml(transcriptStatus.error)}</p>` : ""}
       </section>
-      ${renderReportIssueSection(book.id, audioChoice, ebook)}
+      ${
+        isAdmin
+          ? `${renderReportIssueSection(book.id, audioChoice, ebook)}
       ${renderManualReleaseSearchSection(book.id, book.title, book.author)}
-      <section class="card span-12" data-cover-panel data-book-id="${book.id}">
-        <h2>Artwork</h2>
+      ${renderManualImportSection(book.id)}
+      <section class="card span-12 admin-only-card" data-cover-panel data-book-id="${book.id}">
+        <div class="section-title-row"><h2>Artwork</h2><span class="admin-only-pill">Admin only</span></div>
         <p class="muted">Try alternate Open Library covers for this book.</p>
         <div class="actions" style="margin-top: 12px;">
           <button type="button" data-cover-load>Load alternate covers</button>
         </div>
         <p class="muted" data-cover-status style="margin-top: 8px;"></p>
         <div class="cover-candidates" data-cover-results></div>
-      </section>
+      </section>`
+          : ""
+      }
       <section class="card span-12">
         <h2>Chapter preview</h2>
         ${
@@ -834,9 +864,10 @@ export async function renderBookPage(
       }
     </style>
     ${audio ? renderTranscriptRuntimeScript(book.id, selectedManifestationId, transcriptUrl ?? "") : ""}
-    ${renderReportIssueRuntimeScript(book.id)}
-    ${renderManualReleaseSearchRuntimeScript(book.id)}
-    ${renderCoverRuntimeScript(book.id)}`;
+    ${isAdmin ? renderReportIssueRuntimeScript(book.id) : ""}
+    ${isAdmin ? renderManualReleaseSearchRuntimeScript(book.id) : ""}
+    ${isAdmin ? renderManualImportPageScript() : ""}
+    ${isAdmin ? renderCoverRuntimeScript(book.id) : ""}`;
   return renderAppPage(
     book.title,
     body,

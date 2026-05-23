@@ -1286,6 +1286,94 @@ export class BooksRepo {
     };
   }
 
+  listAdminContentOps(): Array<{
+    book_id: number;
+    title: string;
+    author: string;
+    manifestation_id: number;
+    kind: string;
+    transcript_status: string | null;
+    transcript_error: string | null;
+    chapter_status: string | null;
+    has_chapters: number;
+    resolved_boundary_count: number | null;
+    total_boundary_count: number | null;
+    chapter_error: string | null;
+    updated_at: string | null;
+  }> {
+    return this.db
+      .query(
+        `SELECT
+           b.id AS book_id,
+           b.title,
+           b.author,
+           m.id AS manifestation_id,
+           m.kind,
+           mt.status AS transcript_status,
+           mt.error AS transcript_error,
+           ca.status AS chapter_status,
+           CASE WHEN ca.chapters_json IS NOT NULL THEN 1 ELSE 0 END AS has_chapters,
+           ca.resolved_boundary_count,
+           ca.total_boundary_count,
+           ca.error AS chapter_error,
+           COALESCE(ca.updated_at, mt.updated_at, m.updated_at) AS updated_at
+         FROM manifestations m
+         JOIN books b ON b.id = m.book_id
+         LEFT JOIN manifestation_transcripts mt ON mt.manifestation_id = m.id
+         LEFT JOIN chapter_analysis ca ON ca.manifestation_id = m.id
+         WHERE m.kind = 'audio'
+            OR mt.manifestation_id IS NOT NULL
+            OR ca.manifestation_id IS NOT NULL
+         ORDER BY updated_at DESC, b.id DESC, m.id DESC
+         LIMIT 200`
+      )
+      .all() as Array<{
+        book_id: number;
+        title: string;
+        author: string;
+        manifestation_id: number;
+        kind: string;
+        transcript_status: string | null;
+        transcript_error: string | null;
+        chapter_status: string | null;
+        has_chapters: number;
+        resolved_boundary_count: number | null;
+        total_boundary_count: number | null;
+        chapter_error: string | null;
+        updated_at: string | null;
+      }>;
+  }
+
+  adminDbTableNames(): string[] {
+    const rows = this.db
+      .query(
+        `SELECT name
+         FROM sqlite_master
+         WHERE type = 'table'
+           AND name NOT LIKE 'sqlite_%'
+         ORDER BY name`
+      )
+      .all() as Array<{ name: string }>;
+    return rows.map((row) => row.name);
+  }
+
+  adminDbTablePage(table: string, limit: number, offset: number): {
+    columns: string[];
+    rows: Array<Record<string, unknown>>;
+    total: number;
+  } {
+    if (!this.adminDbTableNames().includes(table)) {
+      throw new Error(`Unknown table: ${table}`);
+    }
+    const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
+    const safeOffset = Math.max(Math.trunc(offset), 0);
+    const quoted = `"${table.replace(/"/g, '""')}"`;
+    const columns = (this.db.query(`PRAGMA table_info(${quoted})`).all() as Array<{ name: string }>).map((row) => row.name);
+    const total = ((this.db.query(`SELECT COUNT(*) AS count FROM ${quoted}`).get() as { count: number } | null)?.count ?? 0);
+    const rows = this.db.query(`SELECT * FROM ${quoted} LIMIT ? OFFSET ?`).all(safeLimit, safeOffset) as Array<Record<string, unknown>>;
+    return { columns, rows, total };
+  }
+
   getChapterAnalysis(manifestationId: number): ChapterAnalysisRow | null {
     assertPositiveInt(manifestationId);
     return (this.db.query("SELECT * FROM chapter_analysis WHERE manifestation_id = ?").get(manifestationId) as ChapterAnalysisRow | null) ?? null;

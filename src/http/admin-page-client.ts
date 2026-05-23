@@ -1,4 +1,4 @@
-function renderAdminRuntimeScript(): string {
+export function renderAdminRuntimeScript(): string {
   return `
         function withAuth(path) {
           var url = new URL(path, window.location.origin);
@@ -267,7 +267,7 @@ function renderManualSearchScript(): string {
   `;
 }
 
-function renderManualImportScript(): string {
+export function renderManualImportScript(): string {
   return `
         async function inspectManualImport() {
           const status = document.getElementById("manual-import-status");
@@ -285,11 +285,14 @@ function renderManualImportScript(): string {
               body.innerHTML = '<tr><td colspan="4">No files found.</td></tr>';
             } else {
               body.innerHTML = files.map(function (file) {
+                const filePath = file.path || file.sourcePath || "";
+                const fileKind = file.kind || file.ext || "";
+                const fileSize = typeof file.sizeBytes === "number" ? file.sizeBytes : file.size;
                 return '<tr>' +
-                  '<td><input type="checkbox" data-import-path="' + escapeHtml(file.path) + '" checked /></td>' +
-                  '<td>' + escapeHtml(file.path) + '</td>' +
-                  '<td>' + escapeHtml(file.kind || '') + '</td>' +
-                  '<td>' + escapeHtml(formatBytes(file.sizeBytes)) + '</td>' +
+                  '<td><input type="checkbox" data-import-path="' + escapeHtml(filePath) + '" checked /></td>' +
+                  '<td>' + escapeHtml(filePath) + '</td>' +
+                  '<td>' + escapeHtml(fileKind || '') + '</td>' +
+                  '<td>' + escapeHtml(formatBytes(fileSize)) + '</td>' +
                 '</tr>';
               }).join('');
             }
@@ -301,7 +304,9 @@ function renderManualImportScript(): string {
 
         async function runManualImport() {
           const status = document.getElementById("manual-import-status");
-          const bookId = Number(document.getElementById("manual-import-book-id").value || 0);
+          const panel = document.querySelector("[data-manual-import-panel]");
+          const bookIdInput = document.getElementById("manual-import-book-id");
+          const bookId = Number(panel?.getAttribute("data-book-id") || bookIdInput?.value || 0);
           const mediaType = document.getElementById("manual-import-media").value;
           const path = document.getElementById("manual-import-path").value.trim();
           const selectedPaths = Array.from(document.querySelectorAll("[data-import-path]:checked")).map(function (input) {
@@ -322,7 +327,39 @@ function renderManualImportScript(): string {
   `;
 }
 
-function renderAdminBootstrapScript(): string {
+function renderSettingsBootstrapScript(): string {
+  return `
+        document.getElementById("settings-save-btn")?.addEventListener("click", saveSettings);
+        document.getElementById("wipe-db-btn")?.addEventListener("click", wipeDatabase);
+  `;
+}
+
+function renderManualImportBootstrapScript(): string {
+  return `
+        document.getElementById("manual-import-inspect-btn")?.addEventListener("click", inspectManualImport);
+        document.getElementById("manual-import-btn")?.addEventListener("click", runManualImport);
+  `;
+}
+
+function renderDownloadsBootstrapScript(): string {
+  return `
+        document.getElementById("downloads-refresh-btn")?.addEventListener("click", refreshDownloads);
+        refreshDownloads();
+  `;
+}
+
+function renderJobsBootstrapScript(): string {
+  return `
+        document.getElementById("jobs-refresh-btn")?.addEventListener("click", refreshJobs);
+        document.getElementById("jobs-table-body")?.addEventListener("click", function (event) {
+          const button = event.target.closest("[data-job-retry]");
+          if (button) retryJob(Number(button.getAttribute("data-job-retry")));
+        });
+        refreshJobs();
+  `;
+}
+
+function renderLegacyAdminBootstrapScript(): string {
   return `
         document.getElementById("settings-save-btn")?.addEventListener("click", saveSettings);
         document.getElementById("wipe-db-btn")?.addEventListener("click", wipeDatabase);
@@ -357,7 +394,47 @@ ${renderDownloadsScript()}
 ${renderJobsScript()}
 ${renderManualSearchScript()}
 ${renderManualImportScript()}
-${renderAdminBootstrapScript()}
+${renderLegacyAdminBootstrapScript()}
+      })();
+    </script>`;
+}
+
+export function renderAdminSettingsPageScript(): string {
+  return `<script>
+      (function () {
+${renderAdminRuntimeScript()}
+${renderSettingsScript()}
+${renderSettingsBootstrapScript()}
+      })();
+    </script>`;
+}
+
+export function renderAdminDownloadsPageScript(): string {
+  return `<script>
+      (function () {
+${renderAdminRuntimeScript()}
+${renderDownloadsScript()}
+${renderDownloadsBootstrapScript()}
+      })();
+    </script>`;
+}
+
+export function renderAdminJobsPageScript(): string {
+  return `<script>
+      (function () {
+${renderAdminRuntimeScript()}
+${renderJobsScript()}
+${renderJobsBootstrapScript()}
+      })();
+    </script>`;
+}
+
+export function renderManualImportPageScript(): string {
+  return `<script>
+      (function () {
+${renderAdminRuntimeScript()}
+${renderManualImportScript()}
+${renderManualImportBootstrapScript()}
       })();
     </script>`;
 }

@@ -263,9 +263,51 @@ function renderAppPage(
       .detail-cover-fallback { display: flex; align-items: center; justify-content: center; background: var(--accent-soft); color: var(--accent); font-size: 42px; font-weight: 700; }
       .section-list { display: grid; gap: 8px; }
       .chapter-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+      .table-wrap {
+        overflow: auto;
+        min-width: 0;
+        border: 1px solid var(--line-soft);
+        border-radius: 12px;
+        background: var(--surface);
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 640px;
+      }
+      th, td { border: 1px solid var(--line-soft); padding: 6px 7px; text-align: left; font-size: 13px; vertical-align: top; }
+      th { background: var(--accent-soft); }
+      code { background: var(--code-bg); padding: 2px 4px; border-radius: 4px; }
+      .admin-only-card {
+        border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
+        background: color-mix(in srgb, var(--paper) 86%, var(--accent-soft));
+      }
+      .section-title-row {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+      }
+      .section-title-row h2 { margin: 0; }
+      .admin-only-pill {
+        display: inline-flex;
+        align-items: center;
+        width: max-content;
+        border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+        border-radius: 999px;
+        padding: 2px 7px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 11px;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-weight: 650;
+      }
       @media (max-width: 900px) {
         .span-8, .span-6, .span-4 { grid-column: span 12; }
         .detail-grid { grid-template-columns: 1fr; }
+        table { min-width: 560px; }
       }
     </style>
   </head>
