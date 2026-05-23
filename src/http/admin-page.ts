@@ -4,6 +4,7 @@ import type { AppSettings, SessionWithUserRow } from "../app-types";
 import { addApiKey, escapeHtml, messageMarkup, renderAppPage } from "./common";
 import { renderAdminDownloadsPageScript, renderAdminJobsPageScript, renderAdminSettingsPageScript } from "./admin-page-client";
 import { decodePlexTokenExpiry } from "../plex";
+import { formatProcessUptime, type BuildInfo } from "../build-info";
 
 type PlexServerView = {
   machineId: string;
@@ -17,6 +18,8 @@ type AdminPageOptions = {
   apiKey?: string | null;
   notice?: string | null;
   error?: string | null;
+  buildInfo?: BuildInfo | null;
+  startTime?: number;
 };
 
 function plexOwnerTokenStatus(token: string): string {
@@ -45,6 +48,8 @@ function adminPageStyles(): string {
     .settings-actions-left { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .settings-editor { width: 100%; min-height: 620px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
     .admin-grid input, .admin-grid select { min-width: 180px; }
+    .build-info { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: -4px 0 16px; color: var(--muted); font-size: 12px; }
+    .build-info code { color: inherit; }
     .status-cell { max-width: 360px; overflow-wrap: anywhere; }
     pre { margin: 0; padding: 8px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--surface); overflow: auto; }
     @media (max-width: 900px) { .admin-grid .span-4, .admin-grid .span-6, .admin-grid .span-8 { grid-column: span 12; } }
@@ -71,15 +76,30 @@ function adminSubnav(apiKey: string | null): string {
     .join("")}</div>`;
 }
 
+function renderBuildInfo(buildInfo: BuildInfo | null | undefined, startTime: number | undefined): string {
+  const sha = buildInfo?.sha ? buildInfo.sha.slice(0, 7) : "unknown";
+  const message = buildInfo?.message ? ` - ${buildInfo.message}` : "";
+  const uptimeSeconds = startTime ? (Date.now() - startTime) / 1000 : process.uptime();
+  return `<div class="build-info">Commit: <code>${escapeHtml(sha)}</code>${escapeHtml(message)} · Uptime: ${escapeHtml(formatProcessUptime(uptimeSeconds))}</div>`;
+}
+
 function adminPage(
   title: string,
   body: string,
   settings: AppSettings,
   currentUser: SessionWithUserRow | null,
   apiKey: string | null,
-  script = ""
+  script = "",
+  options: Pick<AdminPageOptions, "buildInfo" | "startTime"> = {}
 ): Response {
-  return renderAppPage(title, `${adminPageStyles()}${adminSubnav(apiKey)}${body}${script}`, settings, currentUser, "", apiKey);
+  return renderAppPage(
+    title,
+    `${adminPageStyles()}${adminSubnav(apiKey)}${renderBuildInfo(options.buildInfo, options.startTime)}${body}${script}`,
+    settings,
+    currentUser,
+    "",
+    apiKey
+  );
 }
 
 export function renderAdminPage(
@@ -125,7 +145,7 @@ export function renderAdminPage(
         )
         .join("")}
     </div>`;
-  return adminPage("Admin", body, settings, currentUser, apiKey);
+  return adminPage("Admin", body, settings, currentUser, apiKey, "", options);
 }
 
 export function renderAdminSettingsPage(
@@ -184,7 +204,7 @@ export function renderAdminSettingsPage(
         <textarea id="settings-editor" class="settings-editor" spellcheck="false">${settingsJson}</textarea>
       </section>
     </div>`;
-  return adminPage("Admin Settings", body, settings, currentUser, apiKey, renderAdminSettingsPageScript());
+  return adminPage("Admin Settings", body, settings, currentUser, apiKey, renderAdminSettingsPageScript(), options);
 }
 
 export function renderAdminUsersPage(
@@ -218,7 +238,7 @@ export function renderAdminUsersPage(
         <tbody>${userRows}</tbody>
       </table></div>
     </section>`;
-  return adminPage("Admin Users", body, settings, currentUser, apiKey);
+  return adminPage("Admin Users", body, settings, currentUser, apiKey, "", options);
 }
 
 export function renderAdminDownloadsPage(settings: AppSettings, currentUser: SessionWithUserRow | null, options: AdminPageOptions = {}): Response {
@@ -234,7 +254,7 @@ export function renderAdminDownloadsPage(settings: AppSettings, currentUser: Ses
         <tbody id="downloads-table-body"><tr><td colspan="7">Loading...</td></tr></tbody>
       </table></div>
     </section>`;
-  return adminPage("Admin Downloads", body, settings, currentUser, apiKey, renderAdminDownloadsPageScript());
+  return adminPage("Admin Downloads", body, settings, currentUser, apiKey, renderAdminDownloadsPageScript(), options);
 }
 
 export function renderAdminJobsPage(settings: AppSettings, currentUser: SessionWithUserRow | null, options: AdminPageOptions = {}): Response {
@@ -264,7 +284,7 @@ export function renderAdminJobsPage(settings: AppSettings, currentUser: SessionW
         <tbody id="jobs-table-body"><tr><td colspan="9">Loading...</td></tr></tbody>
       </table></div>
     </section>`;
-  return adminPage("Admin Jobs", body, settings, currentUser, apiKey, renderAdminJobsPageScript());
+  return adminPage("Admin Jobs", body, settings, currentUser, apiKey, renderAdminJobsPageScript(), options);
 }
 
 export function renderAdminContentPage(
@@ -312,14 +332,14 @@ export function renderAdminContentPage(
         <tbody>${tableRows}</tbody>
       </table></div>
     </section>`;
-  return adminPage("Admin Content Ops", body, settings, currentUser, apiKey);
+  return adminPage("Admin Content Ops", body, settings, currentUser, apiKey, "", options);
 }
 
 export function renderAdminDbPage(
   repo: BooksRepo,
   settings: AppSettings,
   currentUser: SessionWithUserRow | null,
-  input: { table?: string | null; limit?: number; offset?: number; apiKey?: string | null; error?: string | null } = {}
+  input: AdminPageOptions & { table?: string | null; limit?: number; offset?: number } = {}
 ): Response {
   const apiKey = input.apiKey ?? null;
   const tables = repo.adminDbTableNames();
@@ -366,7 +386,7 @@ export function renderAdminDbPage(
         <tbody>${rows}</tbody>
       </table></div>
     </section>`;
-  return adminPage("Admin DB Explorer", body, settings, currentUser, apiKey);
+  return adminPage("Admin DB Explorer", body, settings, currentUser, apiKey, "", input);
 }
 
 export function renderAdminCurationPage(settings: AppSettings, currentUser: SessionWithUserRow | null, options: AdminPageOptions = {}): Response {
@@ -471,7 +491,7 @@ export function renderAdminCurationPage(settings: AppSettings, currentUser: Sess
         timer = setInterval(refresh, 5000);
       })();
     </script>`;
-  return adminPage("Admin Curation", body, settings, currentUser, apiKey);
+  return adminPage("Admin Curation", body, settings, currentUser, apiKey, "", options);
 }
 
 function formatDbValue(value: unknown): string {

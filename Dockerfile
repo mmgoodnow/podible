@@ -9,6 +9,12 @@ RUN apt-get update \
 COPY package.json bun.lock ./
 RUN bun install --production
 
+ARG GIT_SHA
+ARG GIT_COMMIT_MESSAGE
+
+ENV GIT_COMMIT_SHA=$GIT_SHA
+ENV GIT_COMMIT_MESSAGE=$GIT_COMMIT_MESSAGE
+
 COPY server.ts ./
 COPY src ./src
 COPY podible.png ./

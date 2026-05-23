@@ -18,6 +18,7 @@ import { curationRunsResponse, curationTraceResponse } from "./curation-dashboar
 import { getCurrentSession, requireAdminSession, type HttpEnv } from "./middleware";
 import { formString } from "./route-helpers";
 import type { AppSettings } from "../app-types";
+import type { BuildInfo } from "../build-info";
 
 type PlexServerView = {
   machineId: string;
@@ -95,8 +96,9 @@ async function loadPlexServersForSettings(
   return { plexServers, plexError };
 }
 
-export function createAdminRoutes(repo: BooksRepo): Hono<HttpEnv> {
+export function createAdminRoutes(repo: BooksRepo, startTime: number, buildInfo: BuildInfo | null): Hono<HttpEnv> {
   const app = new Hono<HttpEnv>();
+  const adminRuntime = { startTime, buildInfo };
 
   app.use("*", requireAdminSession);
 
@@ -135,6 +137,7 @@ export function createAdminRoutes(repo: BooksRepo): Hono<HttpEnv> {
       notice: c.req.query("notice"),
       error: c.req.query("error"),
       apiKey: null,
+      ...adminRuntime,
     })
   );
 
@@ -148,18 +151,19 @@ export function createAdminRoutes(repo: BooksRepo): Hono<HttpEnv> {
       error: c.req.query("error"),
       plexNotice: c.req.query("plex_notice"),
       plexError,
+      ...adminRuntime,
     });
   });
 
-  app.get("/users", (c) => renderAdminUsersPage(repo, repo.getSettings(), getCurrentSession(c), { apiKey: null }));
+  app.get("/users", (c) => renderAdminUsersPage(repo, repo.getSettings(), getCurrentSession(c), { apiKey: null, ...adminRuntime }));
 
-  app.get("/jobs", (c) => renderAdminJobsPage(repo.getSettings(), getCurrentSession(c), { apiKey: null }));
+  app.get("/jobs", (c) => renderAdminJobsPage(repo.getSettings(), getCurrentSession(c), { apiKey: null, ...adminRuntime }));
 
-  app.get("/downloads", (c) => renderAdminDownloadsPage(repo.getSettings(), getCurrentSession(c), { apiKey: null }));
+  app.get("/downloads", (c) => renderAdminDownloadsPage(repo.getSettings(), getCurrentSession(c), { apiKey: null, ...adminRuntime }));
 
-  app.get("/content", (c) => renderAdminContentPage(repo, repo.getSettings(), getCurrentSession(c), { apiKey: null }));
+  app.get("/content", (c) => renderAdminContentPage(repo, repo.getSettings(), getCurrentSession(c), { apiKey: null, ...adminRuntime }));
 
-  app.get("/curation", (c) => renderAdminCurationPage(repo.getSettings(), getCurrentSession(c), { apiKey: null }));
+  app.get("/curation", (c) => renderAdminCurationPage(repo.getSettings(), getCurrentSession(c), { apiKey: null, ...adminRuntime }));
 
   app.get("/curation/api/runs", (c) => jsonResponse(curationRunsResponse(c.req.query("selectedRunId") ?? null)));
 
@@ -175,6 +179,7 @@ export function createAdminRoutes(repo: BooksRepo): Hono<HttpEnv> {
       limit: Number(c.req.query("limit") ?? 25),
       offset: Number(c.req.query("offset") ?? 0),
       apiKey: null,
+      ...adminRuntime,
     });
   });
 

@@ -71,7 +71,10 @@ describe("podible http", () => {
       torznab: [],
     });
 
-    const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now(), {
+      sha: "123456789abcdef",
+      message: "Test commit subject",
+    });
     const home = await fetchHandler(new Request("http://localhost/"));
     expect(home.status).toBe(200);
     expect(home.headers.get("content-type")).toContain("text/html");
@@ -106,6 +109,10 @@ describe("podible http", () => {
     expect(adminBody.includes("Admin")).toBe(true);
     expect(adminBody.includes("Content Ops")).toBe(true);
     expect(adminBody.includes("DB Explorer")).toBe(true);
+    expect(adminBody.includes("Commit:")).toBe(true);
+    expect(adminBody.includes("1234567")).toBe(true);
+    expect(adminBody.includes("Test commit subject")).toBe(true);
+    expect(adminBody.includes("Uptime:")).toBe(true);
     expect(adminBody.includes("Manual Search + Snatch")).toBe(false);
     expect(adminBody.includes("Snatch Checked as One Edition")).toBe(false);
     expect(adminBody.includes("manual-import-btn")).toBe(false);

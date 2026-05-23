@@ -2,7 +2,11 @@ version: "3.8"
 
 services:
   podible:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-}
+        GIT_COMMIT_MESSAGE: ${GIT_COMMIT_MESSAGE:-}
     restart: unless-stopped
     ports:
       - "80:80"
