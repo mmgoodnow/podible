@@ -379,9 +379,9 @@ describe("podible http", () => {
     expect(detailBody.includes("Available now")).toBe(true);
     expect(detailBody.includes("data-transcript-panel")).toBe(true);
     expect(detailBody.includes(`/transcripts/m/${standardAudio.manifestation_id}.json`)).toBe(true);
-    expect(detailBody.includes("Artwork")).toBe(false);
-    expect(detailBody.includes("Load alternate covers")).toBe(false);
-    expect(detailBody.includes("data-cover-panel")).toBe(false);
+    expect(detailBody.includes("Artwork")).toBe(true);
+    expect(detailBody.includes("Load alternate covers")).toBe(true);
+    expect(detailBody.includes("data-cover-panel")).toBe(true);
     // Stored transcript payloads surface the manifestation-level transcript URL.
     expect(detailBody.includes("Out of date")).toBe(true);
     expect(detailBody.includes("Find audio")).toBe(true);
@@ -389,9 +389,9 @@ describe("podible http", () => {
     expect(detailBody.includes("Audio edition")).toBe(true);
     expect(detailBody.includes("GraphicAudio dramatization")).toBe(true);
     expect(detailBody.includes(`/stream/m/${standardAudio.manifestation_id}.`)).toBe(true);
-    expect(detailBody.includes("Something wrong?")).toBe(false);
-    expect(detailBody.includes("Report wrong audio")).toBe(false);
-    expect(detailBody.includes("data-report-import-issue")).toBe(false);
+    expect(detailBody.includes("Something wrong?")).toBe(true);
+    expect(detailBody.includes("Report wrong audio")).toBe(true);
+    expect(detailBody.includes("data-report-import-issue")).toBe(true);
     expect(detailBody.includes("Find a specific edition")).toBe(false);
     expect(detailBody.includes("data-release-search-panel")).toBe(false);
     expect(detailBody.includes("library.searchReleases")).toBe(false);
@@ -417,6 +417,8 @@ describe("podible http", () => {
     expect(adminDetailBody.includes("data-manual-import-panel")).toBe(true);
     expect(adminDetailBody.includes("Artwork")).toBe(true);
     expect(adminDetailBody.includes("data-cover-panel")).toBe(true);
+    expect(adminDetailBody.includes("Something wrong?</h2><span class=\"admin-only-pill\">Admin only")).toBe(false);
+    expect(adminDetailBody.includes("Artwork</h2><span class=\"admin-only-pill\">Admin only")).toBe(false);
     expect(adminDetailBody.includes('id="manual-import-book-id"')).toBe(false);
     expect(adminDetailBody.includes("GraphicAudio dramatization")).toBe(true);
     expect(adminDetailBody.includes(`Asset ${standardAudio.id}`)).toBe(true);
