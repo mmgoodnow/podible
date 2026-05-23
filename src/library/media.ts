@@ -227,7 +227,7 @@ async function buildManifestationFallbackChapterTimings(containers: Array<{ asse
         : [
             {
               id: "container",
-              title: container.files[0]?.title ?? `Part ${containerIndex + 1}`,
+              title: audioContainers.length > 1 ? `Part ${containerIndex + 1}` : (container.files[0]?.title ?? ""),
               startMs: 0,
               endMs: durationMs,
               startOffset: 0,

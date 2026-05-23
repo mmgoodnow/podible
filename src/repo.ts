@@ -1297,9 +1297,9 @@ export class BooksRepo {
       .query<{ book_id: number }, []>(
         `SELECT DISTINCT m.book_id
          FROM manifestations m
-         JOIN manifestation_transcripts mt ON mt.manifestation_id = m.id AND mt.status = 'succeeded'
          LEFT JOIN chapter_analysis ca ON ca.manifestation_id = m.id
-         WHERE (ca.manifestation_id IS NULL OR (ca.status = 'succeeded' AND ca.chapters_json IS NULL))
+         WHERE ca.status = 'succeeded'
+           AND ca.chapters_json IS NULL
            AND EXISTS (
              SELECT 1 FROM manifestations em
              JOIN assets epub ON epub.manifestation_id = em.id

@@ -738,6 +738,9 @@ function applyDropAssetEbookKindMigration(db: Database): void {
   // because kind was the sole way to distinguish audio from ebook containers;
   // now manifestation.kind carries that signal. Migrate existing ebook-kind
   // assets to 'single' (they always have exactly one file).
+  // Disable foreign keys so that DROP TABLE assets doesn't cascade-delete
+  // asset_files rows (which reference assets via ON DELETE CASCADE).
+  db.exec("PRAGMA foreign_keys = OFF");
   db.exec(`
     CREATE TABLE assets_new (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -766,6 +769,7 @@ function applyDropAssetEbookKindMigration(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_assets_book_created ON assets(book_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_assets_manifestation ON assets(manifestation_id, sequence_in_manifestation);
   `);
+  db.exec("PRAGMA foreign_keys = ON");
 }
 
 function applyDomainDecisionNotesMigration(db: Database): void {
