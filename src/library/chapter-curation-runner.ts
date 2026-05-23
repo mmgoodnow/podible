@@ -10,6 +10,7 @@ function ensureTracingInitialized(apiKey: string): void {
 }
 import { z } from "zod";
 
+import type { AppSettings } from "../app-types";
 import type { EpubChapterEntry } from "./chapter-analysis";
 import {
   type ChapterCurationContext,
@@ -116,6 +117,23 @@ function serializeAgentError(error: unknown): unknown {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Per-request timeout budget. Each LLM request gets its own abort signal so a
+// slow request can't be starved by time already spent elsewhere in the run.
+// Mirrors the per-request pattern in judgeChapterBoundary.
+function perRequestTimeoutMs(settings: AppSettings): number {
+  return Math.min(Math.max(5_000, settings.agents.timeoutMs), 90_000);
+}
+
+async function withRequestTimeout<T>(timeoutMs: number, fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const abort = new AbortController();
+  const timeout = setTimeout(() => abort.abort(), timeoutMs);
+  try {
+    return await fn(abort.signal);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function retryableAgentError(error: unknown): boolean {
@@ -1231,8 +1249,7 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
     return { result: null, finalOutput: null, newItems: [], rawResponses: [], recursiveReports: [], recursiveSpanTraces: [] };
   }
   ensureTracingInitialized(apiKey);
-  const abort = new AbortController();
-  const timeout = setTimeout(() => abort.abort(), Math.max(5_000, ctx.settings.agents.timeoutMs));
+  const requestTimeoutMs = perRequestTimeoutMs(ctx.settings);
   const provider = new OpenAIProvider({ apiKey, useResponses: true });
   try {
     const runner = new Runner({
@@ -1240,7 +1257,9 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
       tracingDisabled: true,
       traceIncludeSensitiveData: false,
     });
-    const audibleNodeSelection = await classifyAudibleEpubNodes(ctx, runner, abort.signal);
+    const audibleNodeSelection = await withRequestTimeout(requestTimeoutMs, (signal) =>
+      classifyAudibleEpubNodes(ctx, runner, signal)
+    );
     const curationCtx = applyAudibleEpubNodeSelection(ctx, audibleNodeSelection);
     if (curationCtx.epubEntries.length !== ctx.epubEntries.length) {
       logChapterCurationEvent(ctx, {
@@ -1351,11 +1370,13 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
             });
           }
           try {
-            const spanResult = await runner.run(createRecursiveSpanCuratorAgent(curationCtx, span, currentTargetBoundary, attemptConfig.model), spanPrompt(curationCtx, span, currentTargetBoundary), {
-              maxTurns: 64,
-              signal: abort.signal,
-              toolExecution: { maxFunctionToolConcurrency: recursiveMaxSpanConcurrency },
-            });
+            const spanResult = await withRequestTimeout(requestTimeoutMs, (signal) =>
+              runner.run(createRecursiveSpanCuratorAgent(curationCtx, span, currentTargetBoundary, attemptConfig.model), spanPrompt(curationCtx, span, currentTargetBoundary), {
+                maxTurns: 64,
+                signal,
+                toolExecution: { maxFunctionToolConcurrency: recursiveMaxSpanConcurrency },
+              })
+            );
             logAgentUsageEvent(curationCtx, {
               role: "curator",
               model: attemptConfig.model,
@@ -1541,7 +1562,6 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
       recursiveSpanTraces,
     };
   } finally {
-    clearTimeout(timeout);
     await provider.close().catch(() => undefined);
   }
 }
