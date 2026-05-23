@@ -7,6 +7,7 @@ import {
   getEpubStructure,
   getTranscriptWindowFromContext,
   findFulcrumCandidates,
+  findSpokenHeadingBoundaryCandidate,
   fuzzySearchTranscript,
   fulcrumJudgeToolUseBehavior,
   estimateTimestampFromEpubPosition,
@@ -139,6 +140,23 @@ function transcriptWith(text: string, startMs: number, endMs: number): StoredTra
     text,
     words: text.split(/\s+/).map((text, index) => ({ text, token: text.toLowerCase().replace(/[^a-z0-9]+/g, ""), startMs: startMs + index * 250, endMs: startMs + index * 250 + 200 })),
     utterances: [{ startMs, endMs, text }],
+  };
+}
+
+function transcriptFromUtterances(utterances: Array<{ startMs: number; endMs: number; text: string }>): StoredTranscriptPayload {
+  const words = utterances.flatMap((utterance) =>
+    utterance.text.split(/\s+/).map((text, index) => ({
+      text,
+      token: text.toLowerCase().replace(/[^a-z0-9]+/g, ""),
+      startMs: utterance.startMs + index * 250,
+      endMs: utterance.startMs + index * 250 + 200,
+    }))
+  );
+  return {
+    version: "test",
+    text: utterances.map((utterance) => utterance.text).join(" "),
+    words,
+    utterances,
   };
 }
 
@@ -1491,6 +1509,72 @@ describe("chapter curation tools", () => {
     const chapters = await resolveRecursiveChapterSpans(ctx(), async () => null, { reports: reports as never });
     expect(chapters?.[0]?.title).toBe("Prologue");
     expect(reports[0]?.outcome).toBe("partial_leaf");
+  });
+
+  test("findSpokenHeadingBoundaryCandidate accepts a spoken heading followed by the target opener", async () => {
+    const context = ctx({
+      durationMs: 120_000,
+      manifestation: manifestation({ duration_ms: 120_000 }),
+      epubEntries: [
+        epubEntry({ id: "previous", title: "Previous", cumulativeRatio: 0.5, cumulativeWords: 6 }),
+        epubEntry({
+          id: "chapter-target",
+          title: "The Golden Son",
+          cumulativeRatio: 1,
+          cumulativeWords: 16,
+          words: "Dawn breaks over the city as ships gather in the bay".split(/\s+/).map(word),
+        }),
+      ],
+      transcript: transcriptFromUtterances([{ startMs: 80_000, endMs: 87_000, text: "The Golden Son. Dawn breaks over the city as ships gather in the bay." }]),
+    });
+    const span = createRootCurationSpan(context);
+    const targetBoundary: ChapterCurationTargetBoundary = {
+      epubNodeId: "chapter-target",
+      epubIndex: 1,
+      title: "The Golden Son",
+      expectedStartTime: 80,
+      localNodeRatio: 0.5,
+    };
+
+    const candidate = await findSpokenHeadingBoundaryCandidate(context, span, targetBoundary);
+
+    expect(candidate).not.toBeNull();
+    expect(candidate?.source).toBe("spoken_heading");
+    expect(candidate?.startTime).toBe(80);
+    expect(candidate?.bodyMatchCount ?? 0).toBeGreaterThanOrEqual(3);
+  });
+
+  test("findSpokenHeadingBoundaryCandidate ignores body-text title mentions not followed by the target opener", async () => {
+    const context = ctx({
+      durationMs: 120_000,
+      manifestation: manifestation({ duration_ms: 120_000 }),
+      epubEntries: [
+        epubEntry({ id: "previous", title: "Previous", cumulativeRatio: 0.5, cumulativeWords: 6 }),
+        epubEntry({
+          id: "chapter-target",
+          title: "The Golden Son",
+          cumulativeRatio: 1,
+          cumulativeWords: 16,
+          words: "Dawn breaks over the city as ships gather in the bay".split(/\s+/).map(word),
+        }),
+      ],
+      transcript: transcriptFromUtterances([
+        { startMs: 50_000, endMs: 56_000, text: "Dawn breaks over the city as ships gather in the bay." },
+        { startMs: 80_000, endMs: 87_000, text: "He remembered the phrase The Golden Son from an old song, then kept walking." },
+      ]),
+    });
+    const span = createRootCurationSpan(context);
+    const targetBoundary: ChapterCurationTargetBoundary = {
+      epubNodeId: "chapter-target",
+      epubIndex: 1,
+      title: "The Golden Son",
+      expectedStartTime: 80,
+      localNodeRatio: 0.5,
+    };
+
+    const candidate = await findSpokenHeadingBoundaryCandidate(context, span, targetBoundary);
+
+    expect(candidate).toBeNull();
   });
 
   test("rankTargetBoundaries ranks by closeness to span midpoint, not word count", () => {

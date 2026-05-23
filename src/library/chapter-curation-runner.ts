@@ -152,6 +152,37 @@ function orderedTokenMatchCount(needle: string[], haystack: string[]): number {
   return count;
 }
 
+function contiguousTokenSequenceIndex(haystack: string[], needle: string[]): number {
+  if (needle.length === 0 || haystack.length < needle.length) return -1;
+  for (let index = 0; index <= haystack.length - needle.length; index++) {
+    let matches = true;
+    for (let offset = 0; offset < needle.length; offset++) {
+      if (haystack[index + offset] !== needle[offset]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return index;
+  }
+  return -1;
+}
+
+function immediateBodyMatchAfterHeading(windowText: string, headingText: string, bodyTokens: string[]): number {
+  if (bodyTokens.length === 0) return 0;
+  const windowTokens = normalizedWordTokens(windowText);
+  const headingTokens = normalizedWordTokens(headingText);
+  const headingIndex = contiguousTokenSequenceIndex(windowTokens, headingTokens);
+  if (headingIndex < 0) return 0;
+
+  const afterHeading = windowTokens
+    .slice(headingIndex + headingTokens.length)
+    .filter((token) => token.length >= 4)
+    .slice(0, Math.max(16, bodyTokens.length * 2));
+  const firstBodyIndex = afterHeading.indexOf(bodyTokens[0]!);
+  if (firstBodyIndex < 0 || firstBodyIndex > 6) return 0;
+  return orderedTokenMatchCount(bodyTokens, afterHeading);
+}
+
 function titleNumberWord(value: number): string | null {
   const small = [
     "zero",
@@ -1050,7 +1081,7 @@ export async function findSpokenHeadingBoundaryCandidate(
     for (const match of matches) {
       if (match.startTime <= span.startTime || match.startTime >= span.endTime) continue;
       const window = getTranscriptWindow(ctx, { startTime: match.startTime, radiusSeconds: 60 });
-      const matchCount = orderedTokenMatchCount(bodyTokens, textTokens(window.text));
+      const matchCount = immediateBodyMatchAfterHeading(window.text, variant, bodyTokens);
       const required = Math.min(3, bodyTokens.length);
       if (required > 0 && matchCount < required) continue;
       candidates.push({

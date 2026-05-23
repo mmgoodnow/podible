@@ -606,7 +606,7 @@ function html(): string {
     button { background: #20252a; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 12px; cursor: pointer; }
     button:hover { border-color: var(--accent); }
     .viz-scroll { overflow: auto; }
-    .tree { position: relative; min-width: 1120px; min-height: 720px; }
+    .tree { position: relative; min-width: 0; min-height: 720px; }
     .tree-depth-label { position: absolute; top: 0; color: var(--muted); font-size: 11px; transform: translateY(-100%); padding-bottom: 5px; }
     .tree-node { position: absolute; border: 1px solid var(--line); background: #14171a; border-radius: 6px; padding: 6px 7px; min-width: 0; overflow: hidden; font-size: 12px; line-height: 1.2; display: block; }
     .tree-node strong { display: block; font-size: 12px; line-height: 1.1; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -745,15 +745,15 @@ function html(): string {
         .filter((span) => span.lastEvent !== "span-auto-leaf" || span.toolCalls || span.judgeRejected)
         .sort((a, b) => (a.path === "root" ? "" : a.path).localeCompare(b.path === "root" ? "" : b.path));
       const maxDepth = Math.max(0, ...spans.map((span) => span.depth ?? 0));
-      const columnWidth = 158;
-      const columnGap = 14;
+      const columnWidth = 144;
+      const columnGap = 12;
       const treeWidth = (maxDepth + 1) * columnWidth + maxDepth * columnGap;
       const deepestSlots = Math.pow(2, Math.min(maxDepth, 7));
       const treeHeight = Math.max(720, deepestSlots * 38);
       const labels = Array.from({ length: maxDepth + 1 }, (_, depth) => '<div class="tree-depth-label" style="left:' + (depth * (columnWidth + columnGap)) + 'px;width:' + columnWidth + 'px">depth ' + depth + '</div>').join("");
       const rows = spans.map((s) => {
         const depth = s.depth ?? 0;
-        const label = (s.path ?? "") + ": " + (s.nodeCount ?? "") + " nodes, " + Math.round(s.startTime ?? 0) + "-" + Math.round(s.endTime ?? 0) + "s, tools " + (s.toolCalls ?? 0) + ", rejects " + (s.judgeRejected ?? 0) + ", " + (s.terminal ?? "active");
+        const label = (s.path ?? "") + ": " + (s.nodeCount ?? "") + " nodes, tools " + (s.toolCalls ?? 0) + ", rejects " + (s.judgeRejected ?? 0) + ", " + (s.terminal ?? "active");
         const trace = (run.traceSummaries || []).find((candidate) => candidate.spanPath === s.path);
         const hasTrace = traceSpanPaths.has(s.path);
         const outcome = s.terminal || "active";
