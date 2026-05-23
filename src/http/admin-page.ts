@@ -20,7 +20,6 @@ type AdminPageOptions = {
   error?: string | null;
   buildInfo?: BuildInfo | null;
   startTime?: number;
-  activePath?: string;
 };
 
 function plexOwnerTokenStatus(token: string): string {
@@ -40,14 +39,6 @@ function adminPageStyles(): string {
   return `<style>
     .admin-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px; align-items: start; }
     .admin-grid > * { min-width: 0; }
-    .admin-card-link { display: grid; gap: 6px; color: inherit; text-decoration: none; min-height: 126px; }
-    .admin-card-link:hover { text-decoration: none; background: var(--surface-hover); }
-    .admin-card-link h2 { margin: 0; }
-    .admin-card-link p { margin: 0; }
-    .admin-subnav { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-end; margin: 0 0 10px; padding: 0 0 8px; border-bottom: 1px solid var(--line); font-size: 14px; }
-    .admin-subnav a { color: var(--muted); text-decoration: none; padding: 0 0 5px; border-bottom: 2px solid transparent; }
-    .admin-subnav a:hover { color: var(--accent); text-decoration: none; border-bottom-color: var(--line); }
-    .admin-subnav a[aria-current="page"] { color: var(--text); border-bottom-color: var(--accent); }
     .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .settings-actions { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; }
     .settings-actions-left { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -65,25 +56,6 @@ function adminTitle(title: string): string {
   return `<div class="section-title-row"><h2>${escapeHtml(title)}</h2><span class="admin-only-pill">Admin only</span></div>`;
 }
 
-function adminSubnav(apiKey: string | null, activePath = "/admin"): string {
-  const links = [
-    ["/admin", "Hub"],
-    ["/admin/settings", "Settings"],
-    ["/admin/users", "Users"],
-    ["/admin/jobs", "Jobs"],
-    ["/admin/downloads", "Downloads"],
-    ["/admin/content", "Content Ops"],
-    ["/admin/curation", "Curation"],
-    ["/admin/db", "DB"],
-  ];
-  return `<nav class="admin-subnav" aria-label="Admin sections">${links
-    .map(([href, label]) => {
-      const isCurrent = href === activePath;
-      return `<a href="${escapeHtml(addApiKey(href, apiKey))}"${isCurrent ? ` aria-current="page"` : ""}>${escapeHtml(label)}</a>`;
-    })
-    .join("")}</nav>`;
-}
-
 function renderBuildInfo(buildInfo: BuildInfo | null | undefined, startTime: number | undefined): string {
   const sha = buildInfo?.sha ? buildInfo.sha.slice(0, 7) : "unknown";
   const message = buildInfo?.message ? ` - ${buildInfo.message}` : "";
@@ -98,62 +70,16 @@ function adminPage(
   currentUser: SessionWithUserRow | null,
   apiKey: string | null,
   script = "",
-  options: Pick<AdminPageOptions, "buildInfo" | "startTime" | "activePath"> = {}
+  options: Pick<AdminPageOptions, "buildInfo" | "startTime"> = {}
 ): Response {
   return renderAppPage(
     title,
-    `${adminPageStyles()}${adminSubnav(apiKey, options.activePath)}${renderBuildInfo(options.buildInfo, options.startTime)}${body}${script}`,
+    `${adminPageStyles()}${renderBuildInfo(options.buildInfo, options.startTime)}${body}${script}`,
     settings,
     currentUser,
     "",
     apiKey
   );
-}
-
-export function renderAdminPage(
-  repo: BooksRepo,
-  settings: AppSettings,
-  currentUser: SessionWithUserRow | null = null,
-  options: AdminPageOptions = {}
-): Response {
-  const health = repo.getHealthSummary();
-  const contentRows = repo.listAdminContentOps();
-  const activeJobs = (health.jobs.queued ?? 0) + (health.jobs.running ?? 0);
-  const failedJobs = health.jobs.failed ?? 0;
-  const failedContent = contentRows.filter((row) => row.transcript_status === "failed" || row.chapter_status === "failed").length;
-  const apiKey = options.apiKey ?? null;
-  const cards = [
-    ["/admin/settings", "Settings", "Edit app settings, Plex access control, refresh the library, and handle dev reset operations."],
-    ["/admin/users", "Users", "Inspect browser and app users with their admin status."],
-    ["/admin/jobs", "Jobs", "Review recent jobs, filter by type, and retry failed work."],
-    ["/admin/downloads", "Downloads", "Inspect recent download jobs and live transfer progress."],
-    ["/admin/content", "Content Ops", "Track transcription, chapter analysis, and curation readiness."],
-    ["/admin/curation", "Curation", "Browse agentic chapter-curation runs, trees, rulers, and traces."],
-    ["/admin/db", "DB Explorer", "Read-only table browsing for lightweight database inspection."],
-  ];
-  const body = `
-    <section class="hero">
-      <h1>Admin</h1>
-      <p>Focused admin tools for operations, recovery, and diagnostics.</p>
-      <div class="stats">
-        <span class="pill">${activeJobs} active jobs</span>
-        <span class="pill">${failedJobs} failed jobs</span>
-        <span class="pill">${failedContent} content issues</span>
-      </div>
-      ${messageMarkup(options.notice, options.error)}
-    </section>
-    <div class="admin-grid">
-      ${cards
-        .map(
-          ([href, label, description]) => `<a class="card admin-card-link span-4 admin-only-card" href="${escapeHtml(addApiKey(href, apiKey))}">
-            <span class="admin-only-pill">Admin only</span>
-            <h2>${escapeHtml(label)}</h2>
-            <p class="muted">${escapeHtml(description)}</p>
-          </a>`
-        )
-        .join("")}
-    </div>`;
-  return adminPage("Admin", body, settings, currentUser, apiKey, "", options);
 }
 
 export function renderAdminSettingsPage(

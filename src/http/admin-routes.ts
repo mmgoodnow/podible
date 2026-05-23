@@ -10,7 +10,6 @@ import {
   renderAdminDbPage,
   renderAdminDownloadsPage,
   renderAdminJobsPage,
-  renderAdminPage,
   renderAdminSettingsPage,
   renderAdminUsersPage,
 } from "./admin-page";
@@ -132,15 +131,7 @@ export function createAdminRoutes(repo: BooksRepo, startTime: number, buildInfo:
     return c.redirect(`/admin/settings?notice=${encodeURIComponent(`Queued library refresh job ${job.id}.`)}`, 303);
   });
 
-  app.get("/", (c) =>
-    renderAdminPage(repo, repo.getSettings(), getCurrentSession(c), {
-      notice: c.req.query("notice"),
-      error: c.req.query("error"),
-      apiKey: null,
-      activePath: "/admin",
-      ...adminRuntime,
-    })
-  );
+  app.get("/", (c) => c.redirect("/admin/settings", 303));
 
   app.get("/settings", async (c) => {
     const settings = repo.getSettings();
@@ -152,20 +143,19 @@ export function createAdminRoutes(repo: BooksRepo, startTime: number, buildInfo:
       error: c.req.query("error"),
       plexNotice: c.req.query("plex_notice"),
       plexError,
-      activePath: "/admin/settings",
       ...adminRuntime,
     });
   });
 
-  app.get("/users", (c) => renderAdminUsersPage(repo, repo.getSettings(), getCurrentSession(c), { apiKey: null, activePath: "/admin/users", ...adminRuntime }));
+  app.get("/users", (c) => renderAdminUsersPage(repo, repo.getSettings(), getCurrentSession(c), { apiKey: null, ...adminRuntime }));
 
-  app.get("/jobs", (c) => renderAdminJobsPage(repo.getSettings(), getCurrentSession(c), { apiKey: null, activePath: "/admin/jobs", ...adminRuntime }));
+  app.get("/jobs", (c) => renderAdminJobsPage(repo.getSettings(), getCurrentSession(c), { apiKey: null, ...adminRuntime }));
 
-  app.get("/downloads", (c) => renderAdminDownloadsPage(repo.getSettings(), getCurrentSession(c), { apiKey: null, activePath: "/admin/downloads", ...adminRuntime }));
+  app.get("/downloads", (c) => renderAdminDownloadsPage(repo.getSettings(), getCurrentSession(c), { apiKey: null, ...adminRuntime }));
 
-  app.get("/content", (c) => renderAdminContentPage(repo, repo.getSettings(), getCurrentSession(c), { apiKey: null, activePath: "/admin/content", ...adminRuntime }));
+  app.get("/content", (c) => renderAdminContentPage(repo, repo.getSettings(), getCurrentSession(c), { apiKey: null, ...adminRuntime }));
 
-  app.get("/curation", (c) => renderAdminCurationPage(repo.getSettings(), getCurrentSession(c), { apiKey: null, activePath: "/admin/curation", ...adminRuntime }));
+  app.get("/curation", (c) => renderAdminCurationPage(repo.getSettings(), getCurrentSession(c), { apiKey: null, ...adminRuntime }));
 
   app.get("/curation/api/runs", (c) => jsonResponse(curationRunsResponse(c.req.query("selectedRunId") ?? null)));
 
@@ -181,7 +171,6 @@ export function createAdminRoutes(repo: BooksRepo, startTime: number, buildInfo:
       limit: Number(c.req.query("limit") ?? 25),
       offset: Number(c.req.query("offset") ?? 0),
       apiKey: null,
-      activePath: "/admin/db",
       ...adminRuntime,
     });
   });

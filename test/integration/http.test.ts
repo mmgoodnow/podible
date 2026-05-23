@@ -103,27 +103,8 @@ describe("podible http", () => {
         headers: { cookie: adminCookie },
       })
     );
-    expect(admin.status).toBe(200);
-    const adminBody = await admin.text();
-    expect(adminBody.includes("site-nav")).toBe(true);
-    expect(adminBody.includes("Admin")).toBe(true);
-    expect(adminBody.includes("Content Ops")).toBe(true);
-    expect(adminBody.includes("DB Explorer")).toBe(true);
-    expect(adminBody.includes('class="admin-subnav"')).toBe(true);
-    expect(adminBody.includes('href="/admin" aria-current="page"')).toBe(true);
-    expect(adminBody.includes('class="button-link" href="/admin/settings"')).toBe(false);
-    expect(adminBody.includes("Commit:")).toBe(true);
-    expect(adminBody.includes("1234567")).toBe(true);
-    expect(adminBody.includes("Test commit subject")).toBe(true);
-    expect(adminBody.includes("Uptime:")).toBe(true);
-    expect(adminBody.includes("Manual Search + Snatch")).toBe(false);
-    expect(adminBody.includes("Snatch Checked as One Edition")).toBe(false);
-    expect(adminBody.includes("manual-import-btn")).toBe(false);
-    expect(adminBody.includes('id="settings-editor"')).toBe(false);
-    expect(adminBody.includes("wipe-db-btn")).toBe(false);
-    expect(adminBody.includes("Feed Preview")).toBe(false);
-    expect(adminBody.includes("Recent Library")).toBe(false);
-    expect(adminBody.includes("Open Library Search")).toBe(false);
+    expect(admin.status).toBe(303);
+    expect(admin.headers.get("location")).toBe("/admin/settings");
 
     const adminPages = ["/admin/settings", "/admin/users", "/admin/jobs", "/admin/downloads", "/admin/content", "/admin/curation", "/admin/db"];
     for (const path of adminPages) {
@@ -134,7 +115,15 @@ describe("podible http", () => {
       );
       expect(response.status).toBe(200);
       const pageBody = await response.text();
-      expect(pageBody.includes(`href="${path}" aria-current="page"`)).toBe(true);
+      expect(pageBody.includes('class="admin-subnav"')).toBe(false);
+      expect(pageBody.includes('href="/admin/settings"')).toBe(true);
+      expect(pageBody.includes('href="/admin/users"')).toBe(true);
+      expect(pageBody.includes('href="/admin/jobs"')).toBe(true);
+      expect(pageBody.includes('href="/admin/downloads"')).toBe(true);
+      expect(pageBody.includes('href="/admin/content"')).toBe(true);
+      expect(pageBody.includes('href="/admin/curation"')).toBe(true);
+      expect(pageBody.includes('href="/admin/db"')).toBe(true);
+      expect(pageBody.includes('href="/admin"')).toBe(false);
     }
 
     const settingsPage = await fetchHandler(
@@ -143,9 +132,23 @@ describe("podible http", () => {
       })
     );
     const settingsBody = await settingsPage.text();
+    expect(settingsBody.includes("site-nav")).toBe(true);
+    expect(settingsBody.includes("Admin:")).toBe(true);
+    expect(settingsBody.includes("Content")).toBe(true);
+    expect(settingsBody.includes("DB")).toBe(true);
+    expect(settingsBody.includes("Commit:")).toBe(true);
+    expect(settingsBody.includes("1234567")).toBe(true);
+    expect(settingsBody.includes("Test commit subject")).toBe(true);
+    expect(settingsBody.includes("Uptime:")).toBe(true);
     expect(settingsBody.includes("settings-editor")).toBe(true);
     expect(settingsBody.includes("Refresh Library")).toBe(true);
     expect(settingsBody.includes("wipe-db-btn")).toBe(true);
+    expect(settingsBody.includes("Manual Search + Snatch")).toBe(false);
+    expect(settingsBody.includes("Snatch Checked as One Edition")).toBe(false);
+    expect(settingsBody.includes("manual-import-btn")).toBe(false);
+    expect(settingsBody.includes("Feed Preview")).toBe(false);
+    expect(settingsBody.includes("Recent Library")).toBe(false);
+    expect(settingsBody.includes("Open Library Search")).toBe(false);
 
     const curationApi = await fetchHandler(
       new Request("http://localhost/admin/curation/api/runs", {
