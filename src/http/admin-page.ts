@@ -20,6 +20,7 @@ type AdminPageOptions = {
   error?: string | null;
   buildInfo?: BuildInfo | null;
   startTime?: number;
+  activePath?: string;
 };
 
 function plexOwnerTokenStatus(token: string): string {
@@ -43,6 +44,10 @@ function adminPageStyles(): string {
     .admin-card-link:hover { text-decoration: none; background: var(--surface-hover); }
     .admin-card-link h2 { margin: 0; }
     .admin-card-link p { margin: 0; }
+    .admin-subnav { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-end; margin: 0 0 10px; padding: 0 0 8px; border-bottom: 1px solid var(--line); font-size: 14px; }
+    .admin-subnav a { color: var(--muted); text-decoration: none; padding: 0 0 5px; border-bottom: 2px solid transparent; }
+    .admin-subnav a:hover { color: var(--accent); text-decoration: none; border-bottom-color: var(--line); }
+    .admin-subnav a[aria-current="page"] { color: var(--text); border-bottom-color: var(--accent); }
     .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .settings-actions { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; }
     .settings-actions-left { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -60,7 +65,7 @@ function adminTitle(title: string): string {
   return `<div class="section-title-row"><h2>${escapeHtml(title)}</h2><span class="admin-only-pill">Admin only</span></div>`;
 }
 
-function adminSubnav(apiKey: string | null): string {
+function adminSubnav(apiKey: string | null, activePath = "/admin"): string {
   const links = [
     ["/admin", "Hub"],
     ["/admin/settings", "Settings"],
@@ -71,9 +76,12 @@ function adminSubnav(apiKey: string | null): string {
     ["/admin/curation", "Curation"],
     ["/admin/db", "DB"],
   ];
-  return `<div class="actions" style="margin-bottom: 14px;">${links
-    .map(([href, label]) => `<a class="button-link" href="${escapeHtml(addApiKey(href, apiKey))}">${escapeHtml(label)}</a>`)
-    .join("")}</div>`;
+  return `<nav class="admin-subnav" aria-label="Admin sections">${links
+    .map(([href, label]) => {
+      const isCurrent = href === activePath;
+      return `<a href="${escapeHtml(addApiKey(href, apiKey))}"${isCurrent ? ` aria-current="page"` : ""}>${escapeHtml(label)}</a>`;
+    })
+    .join("")}</nav>`;
 }
 
 function renderBuildInfo(buildInfo: BuildInfo | null | undefined, startTime: number | undefined): string {
@@ -90,11 +98,11 @@ function adminPage(
   currentUser: SessionWithUserRow | null,
   apiKey: string | null,
   script = "",
-  options: Pick<AdminPageOptions, "buildInfo" | "startTime"> = {}
+  options: Pick<AdminPageOptions, "buildInfo" | "startTime" | "activePath"> = {}
 ): Response {
   return renderAppPage(
     title,
-    `${adminPageStyles()}${adminSubnav(apiKey)}${renderBuildInfo(options.buildInfo, options.startTime)}${body}${script}`,
+    `${adminPageStyles()}${adminSubnav(apiKey, options.activePath)}${renderBuildInfo(options.buildInfo, options.startTime)}${body}${script}`,
     settings,
     currentUser,
     "",

@@ -109,6 +109,9 @@ describe("podible http", () => {
     expect(adminBody.includes("Admin")).toBe(true);
     expect(adminBody.includes("Content Ops")).toBe(true);
     expect(adminBody.includes("DB Explorer")).toBe(true);
+    expect(adminBody.includes('class="admin-subnav"')).toBe(true);
+    expect(adminBody.includes('href="/admin" aria-current="page"')).toBe(true);
+    expect(adminBody.includes('class="button-link" href="/admin/settings"')).toBe(false);
     expect(adminBody.includes("Commit:")).toBe(true);
     expect(adminBody.includes("1234567")).toBe(true);
     expect(adminBody.includes("Test commit subject")).toBe(true);
@@ -130,6 +133,8 @@ describe("podible http", () => {
         })
       );
       expect(response.status).toBe(200);
+      const pageBody = await response.text();
+      expect(pageBody.includes(`href="${path}" aria-current="page"`)).toBe(true);
     }
 
     const settingsPage = await fetchHandler(
