@@ -12,6 +12,7 @@ services:
       - "80:80"
     volumes:
       - ./books:/books:ro
+      - ./data:/config
     environment:
       - PORT=80
     command: ["bun", "run", "server.ts", "/books"]

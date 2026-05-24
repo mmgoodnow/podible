@@ -1,6 +1,8 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
+import { configDir } from "../config";
+
 type JsonRecord = Record<string, any>;
 
 type CaseConfig = {
@@ -34,6 +36,9 @@ type SpanSummary = {
 const repoRoot = path.resolve(import.meta.dir, "../..");
 const redRisingCaseDir = path.join(repoRoot, "tmp/chapter-cases/red-rising/prod");
 const corpusRoot = path.join(repoRoot, "tmp/chapter-cases/corpus");
+const liveCurationRoot = process.env.CURATION_DASHBOARD_DIR
+  ? path.resolve(process.env.CURATION_DASHBOARD_DIR)
+  : path.join(configDir, "chapter-curation-runs");
 
 function titleCaseSlug(slug: string): string {
   return slug
@@ -44,7 +49,22 @@ function titleCaseSlug(slug: string): string {
 }
 
 function caseConfigs(): CaseConfig[] {
-  const configs: CaseConfig[] = [
+  const configs: CaseConfig[] = [];
+  if (existsSync(liveCurationRoot)) {
+    for (const name of readdirSync(liveCurationRoot).sort()) {
+      const dir = path.join(liveCurationRoot, name);
+      if (!statSync(dir).isDirectory()) continue;
+      configs.push({
+        slug: `live-${name}`,
+        label: `Live ${titleCaseSlug(name)}`,
+        dir,
+        eventPrefix: "agent-events-",
+        resultPrefix: "agent-result-",
+        tracePrefix: "agent-traces-",
+      });
+    }
+  }
+  configs.push(
     {
       slug: "red-rising",
       label: "Red Rising",
@@ -53,7 +73,7 @@ function caseConfigs(): CaseConfig[] {
       resultPrefix: "agent-result-m59-",
       tracePrefix: "agent-traces-m59-",
     },
-  ];
+  );
   if (existsSync(corpusRoot)) {
     for (const name of readdirSync(corpusRoot).sort()) {
       const dir = path.join(corpusRoot, name);

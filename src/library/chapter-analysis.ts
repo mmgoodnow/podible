@@ -15,6 +15,7 @@ import { configDir, ensureConfigDirSync } from "../config";
 import type { AppSettings, AssetFileRow, AssetRow, BookRow, JobRow, ManifestationRow } from "../app-types";
 import { readFfprobeChapters } from "../media/probe-cache";
 import type { BooksRepo } from "../repo";
+import { slugify } from "../utils/strings";
 import { selectPreferredAudioManifestation } from "./asset-selection";
 import { runRecursiveAgenticChapterCurationDetailed } from "./chapter-curation";
 import type { ChapterCurationTiming } from "./chapter-curation";
@@ -1583,6 +1584,11 @@ async function tryAgenticCuration(
   const embeddedChapters = await buildEmbeddedChaptersForContainers(audioContainers);
 
   const totalDurationMs = manifestation.duration_ms ?? audioContainers.reduce((sum, c) => sum + (c.asset.duration_ms ?? 0), 0);
+  const runId = new Date().toISOString();
+  const curationRunDir = path.join(configDir, "chapter-curation-runs", slugify(`${book.author}-${book.title}`) || `book-${book.id}`);
+  const debugEventLogPath = path.join(curationRunDir, `agent-events-${runId}.jsonl`);
+  const debugTraceDir = path.join(curationRunDir, `agent-traces-${runId}`);
+  await mkdir(curationRunDir, { recursive: true });
 
   try {
     const result = await runCuration({
@@ -1594,6 +1600,8 @@ async function tryAgenticCuration(
       epubEntries,
       transcript,
       embeddedChapters,
+      debugEventLogPath,
+      debugTraceDir,
     });
 
     const reports = result.recursiveReports ?? [];
