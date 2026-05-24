@@ -151,7 +151,9 @@ export const libraryRouter = defineRouter({
     async handler(ctx, params) {
       let result: { bookId: number; acquisitionJobId: number };
       try {
-        result = await createOrReuseBookFromOpenLibrary(ctx.repo, params.openLibraryKey.trim());
+        result = await createOrReuseBookFromOpenLibrary(ctx.repo, params.openLibraryKey.trim(), {
+          addedByUserId: ctx.session?.user_id ?? null,
+        });
       } catch (error) {
         if (error instanceof Error && error.message === "Open Library match not found") {
           throw new RpcError(-32000, "Open Library match not found", { error: "not_found" });

@@ -36,6 +36,7 @@ import type {
 type CreateBookInput = {
   title: string;
   author: string;
+  addedByUserId?: number | null;
 };
 
 type CreateReleaseInput = {
@@ -481,9 +482,9 @@ export class BooksRepo {
     const now = nowIso();
     const row = this.db
       .query(
-        "INSERT INTO books (title, author, added_at, updated_at) VALUES (?, ?, ?, ?) RETURNING *"
+        "INSERT INTO books (title, author, added_by_user_id, added_at, updated_at) VALUES (?, ?, ?, ?, ?) RETURNING *"
       )
-      .get(input.title, input.author, now, now) as BookRow;
+      .get(input.title, input.author, input.addedByUserId ?? null, now, now) as BookRow;
     return row;
   }
 
@@ -1517,6 +1518,7 @@ export class BooksRepo {
       coverUrl: row.cover_path ? `/covers/${row.id}.jpg` : null,
       durationMs: row.duration_ms,
       wordCount: row.word_count,
+      addedByUserId: row.added_by_user_id,
       addedAt: row.added_at,
       updatedAt: row.updated_at,
       publishedAt: row.published_at,

@@ -94,6 +94,7 @@ export type BookRow = {
   cover_path: string | null;
   duration_ms: number | null;
   word_count: number | null;
+  added_by_user_id: number | null;
   added_at: string;
   updated_at: string;
   published_at: string | null;
@@ -302,6 +303,7 @@ export type LibraryBook = {
   coverUrl: string | null;
   durationMs: number | null;
   wordCount: number | null;
+  addedByUserId: number | null;
   addedAt: string;
   updatedAt: string;
   publishedAt: string | null;

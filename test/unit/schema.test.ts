@@ -27,6 +27,7 @@ describe("schema migrations", () => {
     expect(tableExists(db, "torrent_cache")).toBe(true);
 
     expect(indexExists(db, "idx_books_added_at")).toBe(true);
+    expect(indexExists(db, "idx_books_added_by_user")).toBe(true);
     expect(indexExists(db, "idx_releases_book_status")).toBe(true);
     expect(indexExists(db, "idx_releases_book_media")).toBe(true);
     expect(indexExists(db, "idx_releases_info_hash")).toBe(true);

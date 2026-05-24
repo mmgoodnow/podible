@@ -26,6 +26,7 @@ const MANIFESTATION_CHAPTER_ANALYSIS_MIGRATION_ID = 20;
 const DROP_TRANSCRIPT_FINGERPRINT_MIGRATION_ID = 21;
 const MANIFESTATION_TRANSCRIPTS_MIGRATION_ID = 22;
 const DROP_ASSET_EBOOK_KIND_MIGRATION_ID = 23;
+const BOOK_ADDED_BY_USER_MIGRATION_ID = 24;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -37,6 +38,7 @@ CREATE TABLE IF NOT EXISTS books (
   cover_path TEXT NULL,
   duration_ms INTEGER NULL,
   word_count INTEGER NULL,
+  added_by_user_id INTEGER NULL,
   added_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   published_at TEXT NULL,
@@ -772,6 +774,13 @@ function applyDropAssetEbookKindMigration(db: Database): void {
   db.exec("PRAGMA foreign_keys = ON");
 }
 
+function applyBookAddedByUserMigration(db: Database): void {
+  if (!hasColumn(db, "books", "added_by_user_id")) {
+    db.exec("ALTER TABLE books ADD COLUMN added_by_user_id INTEGER NULL");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_books_added_by_user ON books(added_by_user_id)");
+}
+
 function applyDomainDecisionNotesMigration(db: Database): void {
   if (!hasColumn(db, "manifestations", "selection_note")) {
     db.exec("ALTER TABLE manifestations ADD COLUMN selection_note TEXT NULL");
@@ -879,5 +888,8 @@ export function runMigrations(db: Database): void {
   });
   apply(DROP_ASSET_EBOOK_KIND_MIGRATION_ID, () => {
     applyDropAssetEbookKindMigration(db);
+  });
+  apply(BOOK_ADDED_BY_USER_MIGRATION_ID, () => {
+    applyBookAddedByUserMigration(db);
   });
 }

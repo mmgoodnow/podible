@@ -80,7 +80,9 @@ export function createAddRoutes(repo: BooksRepo): Hono<HttpEnv> {
       return new Response(await addResponse.text(), { status: 400, headers: addResponse.headers });
     }
     try {
-      const bookId = await createBookFromOpenLibrary(repo, openLibraryKey);
+      const bookId = await createBookFromOpenLibrary(repo, openLibraryKey, {
+        addedByUserId: currentSession?.user_id ?? null,
+      });
       return c.redirect(`/book/${bookId}`, 303);
     } catch (error) {
       const addResponse = renderAddPage(settings, {

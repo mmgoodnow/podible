@@ -127,6 +127,7 @@ export const libraryBookSchema = z.object({
   coverUrl: z.string().nullable(),
   durationMs: z.number().int().nullable(),
   wordCount: z.number().int().nullable(),
+  addedByUserId: z.number().int().positive().nullable(),
   addedAt: z.string(),
   updatedAt: z.string(),
   publishedAt: z.string().nullable(),

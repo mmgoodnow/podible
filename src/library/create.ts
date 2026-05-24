@@ -6,7 +6,8 @@ import { triggerAutoAcquire } from "./service";
 
 export async function createOrReuseBookFromOpenLibrary(
   repo: BooksRepo,
-  openLibraryKey: string
+  openLibraryKey: string,
+  options: { addedByUserId?: number | null } = {}
 ): Promise<{ bookId: number; acquisitionJobId: number }> {
   const resolved = await resolveOpenLibraryCandidate({ openLibraryKey });
   if (!resolved) {
@@ -24,6 +25,7 @@ export async function createOrReuseBookFromOpenLibrary(
       repo.createBook({
         title: resolved.title,
         author: resolved.author,
+        addedByUserId: options.addedByUserId ?? null,
       });
 
     repo.updateBookMetadata(book.id, {

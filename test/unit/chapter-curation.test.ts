@@ -43,6 +43,7 @@ function book(overrides: Partial<BookRow> = {}): BookRow {
     cover_path: null,
     duration_ms: null,
     word_count: null,
+    added_by_user_id: null,
     added_at: "2026-01-01T00:00:00.000Z",
     updated_at: "2026-01-01T00:00:00.000Z",
     published_at: null,

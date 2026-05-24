@@ -751,6 +751,8 @@ describe("podible http", () => {
       expect(created.status).toBe(303);
       const location = created.headers.get("location");
       expect(location).toBe("/book/1");
+      const alice = repo.listUsers().find((user) => user.username === "alice");
+      expect(repo.getBookRow(1)?.added_by_user_id).toBe(alice?.id);
 
       const detail = await fetchHandler(
         new Request(`http://localhost${location}`, {
@@ -1561,12 +1563,14 @@ describe("podible http", () => {
 
       const fetchHandler = createPodibleFetchHandler(repo, Date.now());
       const userCookie = createBrowserSessionCookie(repo, { username: "reader" });
+      const reader = repo.listUsers().find((user) => user.username === "reader");
       const created = await rpc(fetchHandler, "library.create", { openLibraryKey: "/works/OL82563W" }, 1, {
         cookie: userCookie,
       });
 
       expect(created.result.book.title).toBe("To Kill a Mockingbird");
       expect(created.result.book.author).toBe("Harper Lee");
+      expect(created.result.book.addedByUserId).toBe(reader?.id);
       expect(created.result.book.identifiers.openlibrary).toBe("/works/OL82563W");
 
       db.close();

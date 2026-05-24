@@ -71,7 +71,11 @@ export function renderAddPage(
   return renderAppPage("Add", body, settings, options.currentUser ?? null, "", apiKey);
 }
 
-export async function createBookFromOpenLibrary(repo: BooksRepo, openLibraryKey: string): Promise<number> {
-  const result = await createOrReuseBookFromOpenLibrary(repo, openLibraryKey);
+export async function createBookFromOpenLibrary(
+  repo: BooksRepo,
+  openLibraryKey: string,
+  options: { addedByUserId?: number | null } = {}
+): Promise<number> {
+  const result = await createOrReuseBookFromOpenLibrary(repo, openLibraryKey, options);
   return result.bookId;
 }
