@@ -1,5 +1,5 @@
 import { BooksRepo } from "../repo";
-import type { AppSettings, SessionWithUserRow } from "../app-types";
+import type { AppSettings, DownloadView, JobRow, JobType, SessionWithUserRow } from "../app-types";
 import { manifestationDurationMs, preferredAudioManifestationsForBooks } from "../library/media";
 
 import { addApiKey, escapeHtml, messageMarkup, renderAppPage } from "./common";
@@ -42,6 +42,15 @@ function adminPageStyles(): string {
     .admin-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px; align-items: start; }
     .admin-grid > * { min-width: 0; }
     .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .ops-kpis { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 10px; margin-top: 14px; }
+    .ops-kpi { border: 1px solid var(--line-soft); border-radius: 8px; padding: 10px; background: var(--surface); }
+    .ops-kpi strong { display: block; font-size: 22px; line-height: 1.1; }
+    .ops-list { display: grid; gap: 0; }
+    .ops-item { padding: 10px 0; border-top: 1px solid var(--line-soft); }
+    .ops-item:first-child { border-top: 0; padding-top: 0; }
+    .ops-item strong { display: block; }
+    details.ops-details { margin-top: 10px; }
+    details.ops-details summary { cursor: pointer; color: var(--accent); }
     .settings-actions { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; }
     .settings-actions-left { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .settings-editor { width: 100%; min-height: 620px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
@@ -50,12 +59,64 @@ function adminPageStyles(): string {
     .build-info code { color: inherit; }
     .status-cell { max-width: 360px; overflow-wrap: anywhere; }
     pre { margin: 0; padding: 8px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--surface); overflow: auto; }
-    @media (max-width: 900px) { .admin-grid .span-4, .admin-grid .span-6, .admin-grid .span-8 { grid-column: span 12; } }
+    @media (max-width: 900px) { .admin-grid .span-4, .admin-grid .span-6, .admin-grid .span-8, .ops-kpis { grid-column: span 12; grid-template-columns: 1fr 1fr; } }
   </style>`;
 }
 
 function adminTitle(title: string): string {
   return `<div class="section-title-row"><h2>${escapeHtml(title)}</h2><span class="admin-only-pill">Admin only</span></div>`;
+}
+
+const OPS_JOB_TYPES: JobType[] = ["full_library_refresh", "acquire", "download", "import", "reconcile", "chapter_analysis"];
+
+function jobTarget(job: JobRow): string {
+  return [job.book_id ? `book ${job.book_id}` : null, job.release_id ? `release ${job.release_id}` : null].filter(Boolean).join(" / ") || "no target";
+}
+
+function renderOpsList(items: string[], empty: string): string {
+  if (items.length === 0) return `<div class="empty">${escapeHtml(empty)}</div>`;
+  return `<div class="ops-list">${items.join("")}</div>`;
+}
+
+function renderOpsItem(title: string, detail: string, href?: string | null): string {
+  const titleMarkup = href ? `<a href="${escapeHtml(href)}">${escapeHtml(title)}</a>` : escapeHtml(title);
+  return `<div class="ops-item"><strong>${titleMarkup}</strong><div class="muted">${escapeHtml(detail)}</div></div>`;
+}
+
+function renderJobOpsItem(job: JobRow): string {
+  const detail = [
+    job.status,
+    jobTarget(job),
+    `attempts ${job.attempt_count}/${job.max_attempts}`,
+    job.error ? `error: ${job.error}` : null,
+  ]
+    .filter(Boolean)
+    .join(" - ");
+  return renderOpsItem(`${job.type} job ${job.id}`, detail, job.book_id ? `/book/${job.book_id}` : null);
+}
+
+function renderDownloadOpsItem(download: DownloadView): string {
+  const status = download.release_status || download.job_status || "unknown";
+  const detail = [
+    status,
+    download.media_type || null,
+    download.book_id ? `book ${download.book_id}` : null,
+    download.release_error || download.job_error ? `error: ${download.release_error || download.job_error}` : null,
+  ]
+    .filter(Boolean)
+    .join(" - ");
+  return renderOpsItem(`download job ${download.job_id}`, detail, download.book_id ? `/book/${download.book_id}` : null);
+}
+
+function renderStatusKpi(label: string, value: number, detail: string): string {
+  return `<div class="ops-kpi"><strong>${value}</strong><span>${escapeHtml(label)}</span><div class="muted">${escapeHtml(detail)}</div></div>`;
+}
+
+function renderStatusCounts(label: string, counts: Record<string, number>): string {
+  const text = ["running", "queued", "failed", "succeeded"]
+    .map((status) => `${status} ${counts[status] ?? 0}`)
+    .join(" - ");
+  return renderStatusKpi(label, Object.values(counts).reduce((sum, count) => sum + Number(count), 0), text);
 }
 
 function renderBuildInfo(buildInfo: BuildInfo | null | undefined, startTime: number | undefined): string {
@@ -185,39 +246,71 @@ export function renderAdminOpsPage(
   const recentBooks = repo.listAllBooks().filter((book) => book.status === "imported").slice(0, 8);
   const needsAttention = repo.listAllBooks().filter((book) => book.status === "error").slice(0, 8);
   const playableByBookId = new Map(preferredAudioManifestationsForBooks(repo).map((entry) => [entry.book.id, entry]));
+  const health = repo.getHealthSummary();
+  const recentJobs = repo.listRecentJobs(40);
+  const activeJobs = recentJobs.filter((job) => job.status === "queued" || job.status === "running");
+  const failedJobs = recentJobs.filter((job) => job.status === "failed");
+  const recentDownloads = repo.listDownloads().slice(0, 40);
+  const activeDownloads = recentDownloads.filter((download) => download.job_status === "queued" || download.job_status === "running" || download.release_status === "downloading");
+  const failedDownloads = recentDownloads.filter((download) => download.job_status === "failed" || download.release_status === "failed");
   const contentRows = repo.listAdminContentOps();
-  const failedContent = contentRows.filter((row) => row.transcript_status === "failed" || row.chapter_status === "failed").length;
+  const failedContentRows = contentRows.filter((row) => row.transcript_status === "failed" || row.chapter_status === "failed");
+  const pendingContentRows = contentRows.filter((row) => row.transcript_status === "pending" || row.chapter_status === "pending");
+  const failedContent = failedContentRows.length;
   const withChapters = contentRows.filter((row) => row.has_chapters === 1).length;
-  const contentTableRows = contentRows.length
-    ? contentRows
-        .map((row) => {
-          const transcript = [row.transcript_status, row.transcript_error].filter(Boolean).join(": ") || "not requested";
-          const chapter = [
-            row.chapter_status,
-            row.has_chapters ? "chapters ready" : null,
-            row.resolved_boundary_count !== null && row.total_boundary_count !== null ? `${row.resolved_boundary_count}/${row.total_boundary_count} boundaries` : null,
-            row.chapter_error,
-          ]
-            .filter(Boolean)
-            .join(" - ") || "not requested";
-          return `<tr>
-            <td><a href="${escapeHtml(addApiKey(`/book/${row.book_id}`, apiKey))}">${escapeHtml(row.title)}</a><div class="muted">${escapeHtml(row.author)}</div></td>
-            <td>${row.manifestation_id}</td>
-            <td class="status-cell">${escapeHtml(transcript)}</td>
-            <td class="status-cell">${escapeHtml(chapter)}</td>
-            <td>${escapeHtml(row.updated_at || "")}</td>
-          </tr>`;
-        })
-        .join("")
-    : `<tr><td colspan="5">No content operations yet.</td></tr>`;
+  const attentionItems = [
+    ...failedJobs.slice(0, 5).map(renderJobOpsItem),
+    ...failedDownloads.slice(0, 5).map(renderDownloadOpsItem),
+    ...failedContentRows.slice(0, 5).map((row) =>
+      renderOpsItem(
+        row.title,
+        [
+          row.transcript_status === "failed" ? `transcript failed: ${row.transcript_error || "unknown"}` : null,
+          row.chapter_status === "failed" ? `chapters failed: ${row.chapter_error || "unknown"}` : null,
+          `edition ${row.manifestation_id}`,
+        ]
+          .filter(Boolean)
+          .join(" - "),
+        `/book/${row.book_id}`
+      )
+    ),
+  ];
+  const activeItems = [
+    ...activeJobs.slice(0, 6).map(renderJobOpsItem),
+    ...activeDownloads.slice(0, 4).map(renderDownloadOpsItem),
+    ...pendingContentRows.slice(0, 4).map((row) =>
+      renderOpsItem(
+        row.title,
+        [
+          row.transcript_status === "pending" ? "transcript pending" : null,
+          row.chapter_status === "pending" ? "chapter analysis pending" : null,
+          `edition ${row.manifestation_id}`,
+        ]
+          .filter(Boolean)
+          .join(" - "),
+        `/book/${row.book_id}`
+      )
+    ),
+  ];
+  const recentReadyItems = recentBooks.map((book) => {
+    const playable = playableByBookId.get(book.id);
+    const audioDurationMs = playable ? manifestationDurationMs(playable.manifestation, playable.containers) : null;
+    return renderOpsItem(book.title, `${book.author} - ready${audioDurationMs ? ` - ${formatMinutes(audioDurationMs)}` : ""}`, `/book/${book.id}`);
+  });
+  const contentSummaryItems = [
+    renderOpsItem("Failed", `${failedContentRows.length} editions need recovery`),
+    renderOpsItem("Pending", `${pendingContentRows.length} editions are queued or running`),
+    renderOpsItem("Ready", `${withChapters} editions have chapters`),
+  ];
   const body = `
     <section class="hero">
       <h1>Ops</h1>
-      <p>Operational status, recovery queues, downloads, and content pipeline state.</p>
-      <div class="stats">
-        <span class="pill">${inProgress.length} in progress</span>
-        <span class="pill">${needsAttention.length} need attention</span>
-        <span class="pill">${failedContent} content issues</span>
+      <p>Operational triage, recovery queues, downloads, and content pipeline state.</p>
+      <div class="ops-kpis">
+        ${renderStatusKpi("Need attention", needsAttention.length + failedJobs.length + failedDownloads.length + failedContent, `${needsAttention.length} books - ${failedJobs.length} jobs - ${failedDownloads.length} downloads - ${failedContent} content`)}
+        ${renderStatusKpi("Active work", activeJobs.length + activeDownloads.length + pendingContentRows.length, `${activeJobs.length} jobs - ${activeDownloads.length} downloads - ${pendingContentRows.length} content`)}
+        ${renderStatusCounts("Jobs", health.jobs)}
+        ${renderStatusCounts("Releases", health.releases)}
       </div>
       <div class="actions" style="margin-top: 14px;">
         <form method="post" action="${escapeHtml(addApiKey("/admin/refresh", apiKey))}">
@@ -227,92 +320,64 @@ export function renderAdminOpsPage(
       ${messageMarkup(options.notice, options.error)}
     </section>
     <div class="admin-grid">
-      <section class="card span-4 admin-only-card">
-        ${adminTitle("In Progress")}
-        ${
-          inProgress.length > 0
-            ? `<div class="section-list">${inProgress
-                .map(
-                  (book) => `<div>
-                    <strong><a href="${escapeHtml(addApiKey(`/book/${book.id}`, apiKey))}">${escapeHtml(book.title)}</a></strong>
-                    <div class="muted">${escapeHtml(book.author)} - ${escapeHtml(formatBookStatusLine(book))}</div>
-                  </div>`
-                )
-                .join("")}</div>`
-            : `<div class="empty">No active work right now.</div>`
-        }
+      <section class="card span-6 admin-only-card">
+        ${adminTitle("Triage")}
+        ${renderOpsList(
+          [
+            ...needsAttention.map((book) => renderOpsItem(book.title, `${book.author} - ${formatBookStatusLine(book)}`, `/book/${book.id}`)),
+            ...attentionItems,
+          ].slice(0, 12),
+          "Nothing needs attention right now."
+        )}
       </section>
-      <section class="card span-4 admin-only-card">
-        ${adminTitle("Needs Attention")}
-        ${
-          needsAttention.length > 0
-            ? `<div class="section-list">${needsAttention
-                .map(
-                  (book) => `<div>
-                    <strong><a href="${escapeHtml(addApiKey(`/book/${book.id}`, apiKey))}">${escapeHtml(book.title)}</a></strong>
-                    <div class="muted">${escapeHtml(book.author)} - ${escapeHtml(formatBookStatusLine(book))}</div>
-                  </div>`
-                )
-                .join("")}</div>`
-            : `<div class="empty">Nothing needs attention right now.</div>`
-        }
+      <section class="card span-6 admin-only-card">
+        ${adminTitle("Active Work")}
+        ${renderOpsList(
+          [
+            ...inProgress.map((book) => renderOpsItem(book.title, `${book.author} - ${formatBookStatusLine(book)}`, `/book/${book.id}`)),
+            ...activeItems,
+          ].slice(0, 12),
+          "No active work right now."
+        )}
       </section>
-      <section class="card span-4 admin-only-card">
+      <section class="card span-6 admin-only-card">
         ${adminTitle("Recently Ready")}
-        ${
-          recentBooks.length > 0
-            ? `<div class="section-list">${recentBooks
-                .map((book) => {
-                  const playable = playableByBookId.get(book.id);
-                  const audioDurationMs = playable ? manifestationDurationMs(playable.manifestation, playable.containers) : null;
-                  return `<div>
-                    <strong><a href="${escapeHtml(addApiKey(`/book/${book.id}`, apiKey))}">${escapeHtml(book.title)}</a></strong>
-                    <div class="muted">${escapeHtml(book.author)} - ready${audioDurationMs ? ` - ${formatMinutes(audioDurationMs)}` : ""}</div>
-                  </div>`;
-                })
-                .join("")}</div>`
-            : `<div class="empty">No recently finished books yet.</div>`
-        }
+        ${renderOpsList(recentReadyItems, "No recently finished books yet.")}
       </section>
-      <section class="card span-12 admin-only-card">
-        ${adminTitle("Recent Jobs")}
-        <div class="row">
-          <label for="jobs-limit">Limit</label>
-          <input id="jobs-limit" type="number" min="1" max="200" value="25" style="min-width: 90px;" />
-          <label for="jobs-type">Type</label>
-          <select id="jobs-type">
-            <option value="">all</option>
-            <option value="full_library_refresh">full library refresh</option>
-            <option value="acquire">acquire</option>
-            <option value="download">download</option>
-            <option value="import">import</option>
-            <option value="reconcile">reconcile</option>
-            <option value="chapter_analysis">chapter analysis</option>
-          </select>
-          <button id="jobs-refresh-btn" type="button">Refresh Jobs</button>
-        </div>
-        <p id="jobs-status" class="muted"></p>
-        <div class="table-wrap"><table>
-          <thead><tr><th>ID</th><th>Type</th><th>Status</th><th>Book</th><th>Release</th><th>Attempts</th><th>Updated</th><th>Action</th><th>Error</th></tr></thead>
-          <tbody id="jobs-table-body"><tr><td colspan="9">Loading...</td></tr></tbody>
-        </table></div>
-      </section>
-      <section class="card span-12 admin-only-card">
-        ${adminTitle("Recent Downloads")}
-        <div class="row"><button id="downloads-refresh-btn" type="button">Refresh Downloads</button></div>
-        <p id="downloads-status" class="muted"></p>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Job</th><th>Release</th><th>Media</th><th>Status</th><th>Progress</th><th>Transfer</th><th>Error</th></tr></thead>
-          <tbody id="downloads-table-body"><tr><td colspan="7">Loading...</td></tr></tbody>
-        </table></div>
-      </section>
-      <section class="card span-12 admin-only-card">
-        ${adminTitle("Transcription / Chapter Analysis")}
+      <section class="card span-6 admin-only-card">
+        ${adminTitle("Content Pipeline")}
         <p class="muted">${contentRows.length} audio edition${contentRows.length === 1 ? "" : "s"} - ${withChapters} with chapters - ${failedContent} failed</p>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Book</th><th>Edition</th><th>Transcript</th><th>Chapter Analysis</th><th>Updated</th></tr></thead>
-          <tbody>${contentTableRows}</tbody>
-        </table></div>
+        ${renderOpsList(contentSummaryItems, "No content operations yet.")}
+      </section>
+      <section class="card span-12 admin-only-card">
+        ${adminTitle("Raw Queues")}
+        <details class="ops-details">
+          <summary>Jobs table</summary>
+          <div class="row" style="margin-top: 10px;">
+            <label for="jobs-limit">Limit</label>
+            <input id="jobs-limit" type="number" min="1" max="200" value="25" style="min-width: 90px;" />
+            <label for="jobs-type">Type</label>
+            <select id="jobs-type">
+              <option value="">all</option>
+              ${OPS_JOB_TYPES.map((type) => `<option value="${escapeHtml(type)}">${escapeHtml(type.replace(/_/g, " "))}</option>`).join("")}
+            </select>
+            <button id="jobs-refresh-btn" type="button">Refresh Jobs</button>
+          </div>
+          <p id="jobs-status" class="muted"></p>
+          <div class="table-wrap"><table>
+            <thead><tr><th>ID</th><th>Type</th><th>Status</th><th>Book</th><th>Release</th><th>Attempts</th><th>Updated</th><th>Action</th><th>Error</th></tr></thead>
+            <tbody id="jobs-table-body"><tr><td colspan="9">Loading...</td></tr></tbody>
+          </table></div>
+        </details>
+        <details class="ops-details">
+          <summary>Downloads table</summary>
+          <div class="row" style="margin-top: 10px;"><button id="downloads-refresh-btn" type="button">Refresh Downloads</button></div>
+          <p id="downloads-status" class="muted"></p>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Job</th><th>Release</th><th>Media</th><th>Status</th><th>Progress</th><th>Transfer</th><th>Error</th></tr></thead>
+            <tbody id="downloads-table-body"><tr><td colspan="7">Loading...</td></tr></tbody>
+          </table></div>
+        </details>
       </section>
     </div>`;
   return adminPage("Admin Ops", body, settings, currentUser, apiKey, renderAdminOpsPageScript(), options);

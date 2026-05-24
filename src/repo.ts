@@ -1129,6 +1129,12 @@ export class BooksRepo {
       .all(type) as JobRow[];
   }
 
+  listRecentJobs(limit = 25): JobRow[] {
+    return this.db
+      .query("SELECT * FROM jobs ORDER BY id DESC LIMIT ?")
+      .all(Math.max(1, Math.trunc(limit))) as JobRow[];
+  }
+
   markJobSucceeded(jobId: number): JobRow {
     const now = nowIso();
     return this.db

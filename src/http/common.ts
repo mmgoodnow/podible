@@ -51,14 +51,12 @@ function renderAppPage(
   const showAdminNav = Boolean(apiKey) || (currentUser?.is_admin ?? 0) === 1;
   const themeToggle = `<button type="button" class="theme-toggle" id="theme-toggle">Dark mode</button>`;
   const accountNav = currentUser
-    ? `<span class="muted">Signed in as ${escapeHtml(displayUserName(currentUser))}</span>
-       <form method="post" action="${escapeHtml(addApiKey("/logout", apiKey))}" class="nav-signout-form">
+    ? `<form method="post" action="${escapeHtml(addApiKey("/logout", apiKey))}" class="nav-signout-form" aria-label="Account for ${escapeHtml(displayUserName(currentUser))}">
          <button type="submit" class="nav-signout-button">Sign out</button>
        </form>`
     : `<a href="${escapeHtml(addApiKey("/login", apiKey))}">Sign in</a>`;
   const adminNav = showAdminNav
-    ? `<span class="muted">Admin:</span>
-      <a href="${escapeHtml(addApiKey("/admin/settings", apiKey))}">Settings</a>
+    ? `<a href="${escapeHtml(addApiKey("/admin/settings", apiKey))}">Settings</a>
       <a href="${escapeHtml(addApiKey("/admin/users", apiKey))}">Users</a>
       <a href="${escapeHtml(addApiKey("/admin/ops", apiKey))}">Ops</a>
       <a href="${escapeHtml(addApiKey("/admin/curation", apiKey))}">Curation</a>

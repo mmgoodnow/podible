@@ -141,7 +141,7 @@ describe("podible http", () => {
     );
     const settingsBody = await settingsPage.text();
     expect(settingsBody.includes("site-nav")).toBe(true);
-    expect(settingsBody.includes("Admin:")).toBe(true);
+    expect(settingsBody.includes("Admin:")).toBe(false);
     expect(settingsBody.includes("Ops")).toBe(true);
     expect(settingsBody.includes("DB")).toBe(true);
     expect(settingsBody.includes("Commit:")).toBe(true);
@@ -164,9 +164,12 @@ describe("podible http", () => {
       })
     );
     const opsBody = await opsPage.text();
-    expect(opsBody.includes("Recent Jobs")).toBe(true);
-    expect(opsBody.includes("Recent Downloads")).toBe(true);
-    expect(opsBody.includes("Transcription / Chapter Analysis")).toBe(true);
+    expect(opsBody.includes("Triage")).toBe(true);
+    expect(opsBody.includes("Active Work")).toBe(true);
+    expect(opsBody.includes("Content Pipeline")).toBe(true);
+    expect(opsBody.includes("Raw Queues")).toBe(true);
+    expect(opsBody.includes("Jobs table")).toBe(true);
+    expect(opsBody.includes("Downloads table")).toBe(true);
     expect(opsBody.includes("Refresh library")).toBe(true);
 
     const curationApi = await fetchHandler(
@@ -608,9 +611,10 @@ describe("podible http", () => {
     expect(adminOps.status).toBe(200);
     const adminOpsBody = await adminOps.text();
     expect(adminOpsBody.includes("Refresh library")).toBe(true);
-    expect(adminOpsBody.includes("Recent Jobs")).toBe(true);
-    expect(adminOpsBody.includes("Recent Downloads")).toBe(true);
-    expect(adminOpsBody.includes("Transcription / Chapter Analysis")).toBe(true);
+    expect(adminOpsBody.includes("Triage")).toBe(true);
+    expect(adminOpsBody.includes("Active Work")).toBe(true);
+    expect(adminOpsBody.includes("Content Pipeline")).toBe(true);
+    expect(adminOpsBody.includes("Raw Queues")).toBe(true);
 
     const refreshed = await fetchHandler(
       new Request("http://localhost/admin/refresh", {
@@ -825,7 +829,8 @@ describe("podible http", () => {
     );
     expect(authed.status).toBe(200);
     const authedBody = await authed.text();
-    expect(authedBody.includes("Signed in as Alice")).toBe(true);
+    expect(authedBody.includes("Signed in as Alice")).toBe(false);
+    expect(authedBody.includes("Sign out")).toBe(true);
     expect(authedBody.includes("Dune")).toBe(true);
 
     const logout = await fetchHandler(
@@ -1006,7 +1011,8 @@ describe("podible http", () => {
       );
       expect(authed.status).toBe(200);
       const authedBody = await authed.text();
-      expect(authedBody.includes("Signed in as Alice")).toBe(true);
+      expect(authedBody.includes("Signed in as Alice")).toBe(false);
+      expect(authedBody.includes("Sign out")).toBe(true);
       expect(authedBody.includes("Dune")).toBe(true);
       expect(repo.listUsers("plex")[0]?.is_admin).toBe(1);
       expect(repo.getSettings().auth.plex.ownerToken).toBe("plex-jwt-token");
