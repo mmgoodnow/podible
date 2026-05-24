@@ -304,6 +304,12 @@ export type LibraryBook = {
   durationMs: number | null;
   wordCount: number | null;
   addedByUserId: number | null;
+  addedByUser: {
+    id: number;
+    username: string;
+    displayName: string | null;
+    thumbUrl: string | null;
+  } | null;
   addedAt: string;
   updatedAt: string;
   publishedAt: string | null;

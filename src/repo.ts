@@ -1489,6 +1489,7 @@ export class BooksRepo {
   private toLibraryBook(row: BookRow): LibraryBook {
     const releases = this.listReleasesByBook(row.id);
     const manifestations = this.listManifestationsByBook(row.id);
+    const addedByUser = row.added_by_user_id ? this.getUserById(row.added_by_user_id) : null;
 
     const audioStatuses = releases
       .filter((release) => release.media_type === "audio")
@@ -1519,6 +1520,14 @@ export class BooksRepo {
       durationMs: row.duration_ms,
       wordCount: row.word_count,
       addedByUserId: row.added_by_user_id,
+      addedByUser: addedByUser
+        ? {
+            id: addedByUser.id,
+            username: addedByUser.username,
+            displayName: addedByUser.display_name,
+            thumbUrl: addedByUser.thumb_url,
+          }
+        : null,
       addedAt: row.added_at,
       updatedAt: row.updated_at,
       publishedAt: row.published_at,

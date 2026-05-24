@@ -128,6 +128,14 @@ export const libraryBookSchema = z.object({
   durationMs: z.number().int().nullable(),
   wordCount: z.number().int().nullable(),
   addedByUserId: z.number().int().positive().nullable(),
+  addedByUser: z
+    .object({
+      id: positiveIntSchema,
+      username: z.string(),
+      displayName: z.string().nullable(),
+      thumbUrl: z.string().nullable(),
+    })
+    .nullable(),
   addedAt: z.string(),
   updatedAt: z.string(),
   publishedAt: z.string().nullable(),

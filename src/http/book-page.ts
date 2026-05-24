@@ -1,7 +1,7 @@
 import { buildManifestationChapters, manifestationDurationMs, selectPreferredAudioManifestation, streamExtensionForManifestation } from "../library/media";
 import { getBookTranscriptStatus, hasStoredManifestationTranscriptPayload, selectPreferredDownloadableEbookAsset } from "../library/chapter-analysis";
 import { BooksRepo } from "../repo";
-import type { AppSettings, AssetFileRow, AssetRow, ManifestationRow, ReleaseRow, SessionWithUserRow } from "../app-types";
+import type { AppSettings, AssetFileRow, AssetRow, LibraryBook, ManifestationRow, ReleaseRow, SessionWithUserRow } from "../app-types";
 
 import type { TranscriptRequestResult } from "../library/chapter-analysis";
 
@@ -34,6 +34,12 @@ function describeTranscriptStatus(status: TranscriptRequestResult | null): strin
     default:
       return "Not ready yet";
   }
+}
+
+function displayAddedByUser(book: LibraryBook): string | null {
+  const user = book.addedByUser;
+  if (!user) return null;
+  return user.displayName?.trim() || user.username;
 }
 
 function canRequestTranscription(status: TranscriptRequestResult | null): boolean {
@@ -710,6 +716,7 @@ export async function renderBookPage(
   const releases = allReleases.slice(0, 8);
   const isAdmin = Boolean(apiKey) || (flash.currentUser?.is_admin ?? 0) === 1;
   const stateSummary = describeBookState(book);
+  const addedByUser = displayAddedByUser(book);
   const body = `
     <section class="hero">
       <div class="detail-grid">
@@ -717,6 +724,7 @@ export async function renderBookPage(
         <div>
           <h1>${escapeHtml(book.title)}</h1>
           <p class="muted">${escapeHtml(book.author)}</p>
+          ${addedByUser ? `<p class="muted">Added by ${escapeHtml(addedByUser)}</p>` : ""}
           <div class="stats">
             <span class="pill">${escapeHtml(stateSummary)}</span>
             <span class="pill">${escapeHtml(formatMediaStatus("Audio", book.audioStatus))}</span>

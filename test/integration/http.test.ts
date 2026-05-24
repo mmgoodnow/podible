@@ -763,6 +763,7 @@ describe("podible http", () => {
       const detailBody = await detail.text();
       expect(detailBody.includes("Hyperion")).toBe(true);
       expect(detailBody.includes("Dan Simmons")).toBe(true);
+      expect(detailBody.includes("Added by alice")).toBe(true);
 
       db.close();
     } finally {
@@ -1571,6 +1572,12 @@ describe("podible http", () => {
       expect(created.result.book.title).toBe("To Kill a Mockingbird");
       expect(created.result.book.author).toBe("Harper Lee");
       expect(created.result.book.addedByUserId).toBe(reader?.id);
+      expect(created.result.book.addedByUser).toEqual({
+        id: reader?.id,
+        username: "reader",
+        displayName: "reader",
+        thumbUrl: null,
+      });
       expect(created.result.book.identifiers.openlibrary).toBe("/works/OL82563W");
 
       db.close();
