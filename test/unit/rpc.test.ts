@@ -1179,7 +1179,7 @@ describe("json-rpc handler", () => {
     db.close();
   });
 
-  test("library.delete cascades DB rows and removes asset+cover files", async () => {
+  test("library.delete allows non-admin users and cascades DB rows and asset+cover files", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -1221,12 +1221,16 @@ describe("json-rpc handler", () => {
       ],
     });
 
-    const result = await callRpc(repo, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "library.delete",
-      params: { bookId: book.id },
-    });
+    const result = await callRpc(
+      repo,
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "library.delete",
+        params: { bookId: book.id },
+      },
+      "user"
+    );
     expect(result.result.deletedBookId).toBe(book.id);
     expect(result.result.deletedAssetFileCount).toBe(1);
     expect(repo.getBook(book.id)).toBeNull();

@@ -568,7 +568,7 @@ export const libraryRouter = defineRouter({
   }),
 
   delete: defineMethod({
-    auth: "admin",
+    auth: "user",
     summary: "Delete a book, cascading DB rows and imported files/covers.",
     paramsSchema: emptyParamsSchema.extend({
       bookId: positiveIntSchema,
