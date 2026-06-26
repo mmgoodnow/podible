@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -199,6 +199,35 @@ describe("podible http", () => {
     );
     expect(rejectedDbPage.status).toBe(400);
 
+    db.close();
+  });
+
+  test("serves ebook downloads with unicode filenames", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    repo.ensureSettings();
+    const book = repo.createBook({ title: "Carl's Doomsday Scenario", author: "Matt Dinniman" });
+    const manifestation = repo.addManifestation({ bookId: book.id, kind: "ebook" });
+    const ebookPath = path.join(isolatedDataDir, "Carl’s Doomsday Scenario.epub");
+    await writeFile(ebookPath, "epub bytes");
+    const asset = repo.addAsset({
+      bookId: book.id,
+      kind: "single",
+      mime: "application/epub+zip",
+      totalSize: 10,
+      manifestationId: manifestation.id,
+      files: [{ path: ebookPath, size: 10, start: 0, end: 9, durationMs: 0, title: null }],
+    });
+
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+    const cookie = createBrowserSessionCookie(repo, { username: "reader" });
+    const response = await fetchHandler(new Request(`http://localhost/ebook/${asset.id}`, { headers: { cookie } }));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-disposition")).toContain("filename*=");
+    expect(response.headers.get("content-disposition")).toContain("Carl%E2%80%99s%20Doomsday%20Scenario.epub");
+    expect(await response.text()).toBe("epub bytes");
     db.close();
   });
 

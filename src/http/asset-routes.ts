@@ -9,6 +9,15 @@ import { BooksRepo } from "../repo";
 import { requireAuthenticatedRequest, type HttpEnv } from "./middleware";
 import { jsonResponse, parseId } from "./route-helpers";
 
+function contentDispositionAttachment(filename: string): string {
+  const fallback = filename
+    .normalize("NFKD")
+    .replace(/[^\x20-\x7E]+/g, "")
+    .replace(/[\\"]/g, "_")
+    .trim() || "download";
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
 export function createAssetsIndexRoutes(repo: BooksRepo): Hono<HttpEnv> {
   const app = new Hono<HttpEnv>();
   app.use("*", requireAuthenticatedRequest);
@@ -125,7 +134,7 @@ export function createEbookRoutes(repo: BooksRepo): Hono<HttpEnv> {
     return new Response(file, {
       headers: {
         "Content-Type": target.asset.mime,
-        "Content-Disposition": `attachment; filename="${first.path.split("/").pop() ?? `book-${assetId}`}"`,
+        "Content-Disposition": contentDispositionAttachment(first.path.split("/").pop() ?? `book-${assetId}`),
       },
     });
   });
