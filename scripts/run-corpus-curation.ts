@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { execFileSync } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -24,6 +25,25 @@ const errorPath = path.join(caseDir, `${mode}-agent-error-${runId}.json`);
 const baseModel = process.env.CORPUS_MODEL?.trim() || "gpt-5.4-mini";
 const curatorModel = process.env.CORPUS_CURATOR_MODEL?.trim() || "gpt-5.4-nano";
 const judgeModel = process.env.CORPUS_JUDGE_MODEL?.trim() || baseModel;
+
+function gitString(args: string[]): string | null {
+  try {
+    return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function gitProvenance(): { commit: string | null; branch: string | null; dirty: boolean | null } {
+  const commit = gitString(["rev-parse", "HEAD"]);
+  const branch = gitString(["branch", "--show-current"]);
+  const status = gitString(["status", "--porcelain"]);
+  return {
+    commit,
+    branch,
+    dirty: status === null ? null : status.length > 0,
+  };
+}
 
 function titleFromPath(filePath: string, fallback: string): string {
   const base = path.basename(filePath || "").replace(/\.[^.]+$/, "").trim();
@@ -94,6 +114,7 @@ async function main(): Promise<void> {
   try {
     const runCuration = mode === "node" ? runNodeParallelAgenticChapterCurationDetailed : runRecursiveAgenticChapterCurationDetailed;
     const startedAt = Date.now();
+    const git = gitProvenance();
     const detailed = await runCuration({
       book: {
         id: Number(metadata.book_id),
@@ -126,8 +147,8 @@ async function main(): Promise<void> {
       debugJudgeModel: judgeModel,
     });
     const elapsedMs = Date.now() - startedAt;
-    await writeFile(resultPath, `${JSON.stringify({ ...detailed, mode, elapsedMs, debugModels: { model: baseModel, curatorModel, judgeModel } }, null, 2)}\n`, "utf8");
-    console.log(JSON.stringify({ ok: true, slug, mode, accepted: detailed.result?.accepted ?? false, chapters: detailed.result?.accepted ? detailed.result.chapters.length : 0, elapsedMs, resultPath, eventLogPath, traceDir, model: baseModel, curatorModel, judgeModel }, null, 2));
+    await writeFile(resultPath, `${JSON.stringify({ ...detailed, mode, elapsedMs, debugModels: { model: baseModel, curatorModel, judgeModel }, git }, null, 2)}\n`, "utf8");
+    console.log(JSON.stringify({ ok: true, slug, mode, accepted: detailed.result?.accepted ?? false, chapters: detailed.result?.accepted ? detailed.result.chapters.length : 0, elapsedMs, resultPath, eventLogPath, traceDir, model: baseModel, curatorModel, judgeModel, git }, null, 2));
   } catch (error) {
     const payload = {
       name: (error as Error).name,

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -39,6 +40,12 @@ type ModeSummary = {
   mode: "recursive" | "node";
   resultPath: string | null;
   eventLogPath: string | null;
+  artifactSelection: {
+    currentCommit: string | null;
+    artifactCommit: string | null;
+    artifactDirty: boolean | null;
+    currentCleanArtifact: boolean;
+  };
   accepted: boolean | null;
   chapters: number | null;
   elapsedMs: number | null;
@@ -124,6 +131,16 @@ function readEvents(filePath: string | null): JsonRecord[] {
     });
 }
 
+function gitString(args: string[]): string | null {
+  try {
+    return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+const currentGitCommit = gitString(["rev-parse", "HEAD"]);
+
 function round(value: number, digits = 3): number {
   const scale = 10 ** digits;
   return Math.round(value * scale) / scale;
@@ -206,11 +223,15 @@ function summarizeEvents(eventLogPath: string | null): EventSummary {
   return summary;
 }
 
-function latestMatchingFile(caseDir: string, pattern: RegExp): string | null {
-  const matches = readdirSync(caseDir)
+function matchingFiles(caseDir: string, pattern: RegExp): string[] {
+  return readdirSync(caseDir)
     .filter((name) => pattern.test(name))
     .map((name) => path.join(caseDir, name))
     .sort((a, b) => a.localeCompare(b));
+}
+
+function latestMatchingFile(caseDir: string, pattern: RegExp): string | null {
+  const matches = matchingFiles(caseDir, pattern);
   return matches.at(-1) ?? null;
 }
 
@@ -236,9 +257,19 @@ function latestEventLog(caseDir: string, mode: "recursive" | "node"): string | n
 }
 
 function latestResult(caseDir: string, mode: "recursive" | "node"): string | null {
-  return mode === "node"
-    ? latestMatchingFile(caseDir, /^node-agent-result-.*\.json$/)
-    : latestMatchingFile(caseDir, /^(?:recursive-)?agent-result-.*\.json$/);
+  const matches =
+    mode === "node"
+      ? matchingFiles(caseDir, /^node-agent-result-.*\.json$/)
+      : matchingFiles(caseDir, /^(?:recursive-)?agent-result-.*\.json$/);
+  if (matches.length === 0) return null;
+  if (currentGitCommit) {
+    const currentClean = matches.filter((filePath) => {
+      const result = readJson(filePath);
+      return result?.git?.commit === currentGitCommit && result.git.dirty === false;
+    });
+    if (currentClean.length > 0) return currentClean.at(-1)!;
+  }
+  return matches.at(-1)!;
 }
 
 function monotonicErrors(chapters: SubmittedChapter[]): number {
@@ -376,6 +407,12 @@ async function summarizeMode(caseDir: string, mode: "recursive" | "node"): Promi
     mode,
     resultPath,
     eventLogPath,
+    artifactSelection: {
+      currentCommit: currentGitCommit,
+      artifactCommit: typeof result?.git?.commit === "string" ? result.git.commit : null,
+      artifactDirty: typeof result?.git?.dirty === "boolean" ? result.git.dirty : null,
+      currentCleanArtifact: Boolean(currentGitCommit && result?.git?.commit === currentGitCommit && result.git.dirty === false),
+    },
     accepted,
     chapters,
     elapsedMs: typeof result?.elapsedMs === "number" ? result.elapsedMs : null,
@@ -455,7 +492,12 @@ function modeStatus(summary: ModeSummary | null): string {
   if (!summary) return "missing";
   const accepted = summary.nodeReplay?.acceptedAfterReplay ?? summary.accepted;
   const chapters = summary.nodeReplay?.chapters ?? summary.chapters;
-  return `${accepted ? "accepted" : "failed"} / ${fmt(chapters)} ch / ${fmt(summary.wallSeconds ?? (summary.elapsedMs ? summary.elapsedMs / 1000 : null))}s`;
+  const provenance = summary.artifactSelection.currentCleanArtifact
+    ? ""
+    : summary.artifactSelection.artifactCommit
+      ? " / stale-or-dirty"
+      : " / unversioned";
+  return `${accepted ? "accepted" : "failed"} / ${fmt(chapters)} ch / ${fmt(summary.wallSeconds ?? (summary.elapsedMs ? summary.elapsedMs / 1000 : null))}s${provenance}`;
 }
 
 function nodeReportStatus(summary: ModeSummary | null): string {
@@ -511,6 +553,8 @@ function renderMarkdown(cases: CaseSummary[], generatedAt: string): string {
   lines.push("- `Node reports` is the original run output before current-code replay; failed/dropped rows are unresolved evidence gaps even when the merged plan is structurally valid.");
   lines.push("- `Node source` counts boundary decisions accepted by deterministic pre-agent research versus accepted by the node agent fallback.");
   lines.push("- `Node diagnostic` is emitted only by failed node runs and is a hint to inspect corpus/data quality; it does not accept chapters or relax validation.");
+  lines.push("- `stale-or-dirty` means the selected artifact was not produced cleanly from the current git commit; rerun that corpus case before treating it as current proof.");
+  lines.push("- `unversioned` means the artifact predates git provenance tracking; rerun that corpus case before treating it as current proof.");
   lines.push("- Positive Δ seconds/requests/tokens/cost means node-parallel used more than recursive for that saved run; negative means it used less.");
   lines.push("- This is not sufficient to prove chapter quality. Add committed answer keys or a judge-scored audit before making accuracy claims.");
   lines.push("");
