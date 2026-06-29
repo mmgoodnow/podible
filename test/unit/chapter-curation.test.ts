@@ -816,6 +816,42 @@ describe("chapter curation tools", () => {
     expect(result?.bestCandidates[0]?.reverseEpubRelation).toBe("opener");
   });
 
+  test("researchEpubBoundary keeps early opener phrases after ASR-fragile proper nouns", async () => {
+    const context = ctx({
+      durationMs: 240_000,
+      manifestation: manifestation({ duration_ms: 240_000 }),
+      epubEntries: [
+        epubEntry({
+          id: "chapter-27",
+          title: "Chapter Twenty-Seven",
+          href: "chapter27.xhtml",
+          words:
+            "Chapter Twenty-Seven I walk with Ofglen along the summer street It's warm humid this would have been sundress and sandals weather once in each of our baskets are strawberries"
+              .split(/\s+/)
+              .map((text, index) => ({ ...word(text), kind: index < 2 ? "heading" : "body" })),
+          cumulativeRatio: 1,
+          cumulativeWords: 28,
+        }),
+      ],
+      transcript: transcriptWith(
+        "Chapter Twenty-Seven I walk with Ove Glenn along the summer street. It's warm, humid. This would have been sundress and sandals weather once.",
+        90_000,
+        102_000
+      ),
+    });
+
+    const result = await researchEpubBoundary(context, {
+      epubNodeId: "chapter-27",
+      expectedTime: 95,
+      searchRadiusSeconds: 30,
+      phraseLimit: 8,
+      hitLimitPerPhrase: 3,
+    });
+
+    expect(result?.anchorPhrases.some((phrase) => phrase.text.includes("along the summer street"))).toBe(true);
+    expect(result?.bestCandidates.some((candidate) => candidate.reverseEpubRelation === "opener" || candidate.reverseEpubRelation === "near_opener")).toBe(true);
+  });
+
   test("chooseResearchBoundaryCandidate only widens near-opener fallback for opening nodes", () => {
     const research: ResearchEpubBoundaryResult = {
       epubNodeId: "prologue",

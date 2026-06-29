@@ -389,7 +389,7 @@ function firstSearchableEpubWordOffset(entry: EpubChapterEntry, startWord: numbe
   const titleTokens = new Set(textTokens(entry.title));
   let offset = startWord;
   while (offset < endWord && offset - startWord < 8) {
-    const token = entry.words[offset]?.token;
+    const token = entry.words[offset] ? epubWordToken(entry.words[offset]!) : "";
     if (!token || (!titleTokens.has(token) && !GENERIC_EPUB_OPENER_TOKENS.has(token))) break;
     offset++;
   }
@@ -1295,6 +1295,12 @@ function generateEpubBoundaryAnchorPhrases(
   limit: number
 ): EpubBoundaryAnchorPhrase[] {
   const words = entry.words.slice(0, 120);
+  const firstSearchableWord = firstSearchableEpubWordOffset(entry, 0, words.length);
+  const earlyOpenerOffsets = new Set(
+    [firstSearchableWord, firstSearchableWord + 2, firstSearchableWord + 4, firstSearchableWord + 6, firstSearchableWord + 8, firstSearchableWord + 12].filter(
+      (offset) => offset >= 0 && offset < Math.min(words.length, 32)
+    )
+  );
   const entryTokens = normalizedEpubEntryTokens(entry);
   const corpusTokens = ctx.epubEntries.flatMap(normalizedEpubEntryTokens);
   const corpusTokenCounts = epubCorpusTokenCounts(ctx.epubEntries);
@@ -1323,8 +1329,10 @@ function generateEpubBoundaryAnchorPhrases(
         distinctiveTokens.reduce((sum, token) => sum + 1 / Math.sqrt(corpusTokenCounts.get(token) ?? 1), 0) /
         Math.max(1, distinctiveTokens.length);
       const openerBonus = startWord <= 8 ? 0.25 : startWord <= 24 ? 0.1 : 0;
+      const openerSeedBonus = earlyOpenerOffsets.has(startWord) ? 1.25 : 0;
       const occurrencePenalty = Math.max(0, epubOccurrences - 1) * 0.2;
-      const score = rarityScore + distinctiveTokens.length / 12 + openerBonus - genericTokenRatio * 0.25 - properNounRatio * 0.2 - occurrencePenalty;
+      const score =
+        rarityScore + distinctiveTokens.length / 12 + openerBonus + openerSeedBonus - genericTokenRatio * 0.25 - properNounRatio * 0.2 - occurrencePenalty;
       phrases.push({
         text: normalizeToolText(window.map((word) => word.text).join(" ")),
         startWord,
