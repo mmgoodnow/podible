@@ -34,6 +34,7 @@ import {
   searchEpubText,
   secondsToMs,
   summarizeFirstWords,
+  transcriptUtterances,
 } from "./chapter-curation-tools";
 import {
   type AudibleEpubNodeSelection,
@@ -1341,7 +1342,7 @@ export function createNodeBoundaryCuratorAgent(
 
 type DeterministicBoundaryCandidate = {
   startTime: number;
-  source: "research_opener" | "spoken_heading" | "near_opener_fallback";
+  source: "research_opener" | "spoken_heading" | "near_opener_fallback" | "supporting_context_backtrack";
   phrase: string;
   phraseStartWord: number | null;
   reverseEpubRelation: EpubBoundaryResearchHit["reverseEpubRelation"];
@@ -1455,6 +1456,53 @@ export function chooseResearchBoundaryCandidate(
     transcriptText: fallback.transcriptText,
     transcriptWindow: fallback.transcriptWindow,
   };
+}
+
+function chooseSupportingContextBacktrackCandidate(
+  ctx: ChapterCurationContext,
+  research: ResearchEpubBoundaryResult | null,
+  span: ChapterCurationSpan
+): DeterministicBoundaryCandidate | null {
+  if (!research) return null;
+  const supportingHits = research.bestCandidates
+    .filter(
+      (hit) =>
+        hit.boundaryUse === "supporting_context" &&
+        (hit.reverseEpubRelation === "opener" || hit.reverseEpubRelation === "near_opener") &&
+        hit.phraseStartWord <= 80 &&
+        hit.startTime > span.startTime &&
+        hit.startTime < span.endTime
+    )
+    .sort((a, b) => a.phraseStartWord - b.phraseStartWord || Math.abs(a.distanceFromExpectedSeconds) - Math.abs(b.distanceFromExpectedSeconds));
+
+  for (const hit of supportingHits) {
+    const windowStartMs = secondsToMs(Math.max(span.startTime, hit.startTime - 90));
+    const windowEndMs = secondsToMs(hit.startTime + 5);
+    const utterances = transcriptUtterances(ctx).filter((utterance) => utterance.endMs >= windowStartMs && utterance.startMs <= windowEndMs);
+    for (const utterance of utterances) {
+      const text = normalizeToolText(utterance.text);
+      if (normalizedWordTokens(text).length < 4) continue;
+      const reverse = searchEpubText(ctx, {
+        query: text,
+        nodeIds: [research.epubNodeId],
+        targetNodeId: research.epubNodeId,
+        limit: 3,
+      }).matches.find((candidate) => candidate.epubNodeId === research.epubNodeId);
+      if (!reverse || (reverse.relationToTarget !== "opener" && reverse.relationToTarget !== "near_opener")) continue;
+      const transcriptWindow = getTranscriptWindowFromContext(ctx, utterance.startMs, secondsToMs(45));
+      return {
+        startTime: msToSeconds(utterance.startMs),
+        source: "supporting_context_backtrack",
+        phrase: text,
+        phraseStartWord: hit.phraseStartWord,
+        reverseEpubRelation: reverse.relationToTarget,
+        transcriptText: text.slice(0, 500),
+        transcriptWindow: normalizeToolText(transcriptWindow.text).slice(0, 900),
+      };
+    }
+  }
+
+  return null;
 }
 
 function openingAudioOnlyEndTime(ctx: ChapterCurationContext, span: ChapterCurationSpan): number {
@@ -1702,7 +1750,10 @@ async function tryDeterministicNodeBoundary(
     phraseLimit: 8,
     hitLimitPerPhrase: 5,
   });
-  const candidate = headingCandidate ?? chooseResearchBoundaryCandidate(research, span, { allowOpeningNearOpenerFallback: isOpeningNode });
+  const candidate =
+    headingCandidate ??
+    chooseResearchBoundaryCandidate(research, span, { allowOpeningNearOpenerFallback: isOpeningNode }) ??
+    chooseSupportingContextBacktrackCandidate(ctx, research, span);
   logChapterCurationEvent(ctx, {
     type: "deterministic-node-boundary-research",
     message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} candidates=${research?.bestCandidates.length ?? 0}${
@@ -1738,6 +1789,8 @@ async function tryDeterministicNodeBoundary(
           ? "Deterministic opening-node fallback: the true opener is absent from transcript evidence, but the earliest clear same-node near-opener proves the first audible EPUB node."
           : candidate.source === "spoken_heading"
             ? "Deterministic spoken-heading candidate: transcript contains the target heading/title cue followed by target body opener text."
+            : candidate.source === "supporting_context_backtrack"
+              ? "Deterministic supporting-context backtrack: research found target-node prose later in the opener, then backtracked to the first utterance that reverse-matches this EPUB node."
             : candidate.source === "near_opener_fallback"
               ? "Deterministic near-opener fallback: the printed heading/opening words may be omitted in ASR, but research found the earliest target near-opener body phrase."
               : "Deterministic strong opener candidate from researchEpubBoundary.",
