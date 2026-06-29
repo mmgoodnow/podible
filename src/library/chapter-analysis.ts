@@ -340,12 +340,12 @@ function normalizeToken(value: string): string {
 
 export function normalizeTranscriptionLanguage(value: string | null | undefined): string | null {
   const trimmed = value?.trim().toLowerCase() ?? "";
-  if (!trimmed) return null;
+  if (!trimmed) return "en";
   if (/^[a-z]{2}$/u.test(trimmed)) return trimmed;
   const localeMatch = trimmed.match(/^([a-z]{2})[-_][a-z0-9]+$/u);
   if (localeMatch?.[1]) return localeMatch[1];
-  if (/^[a-z]{3}$/u.test(trimmed)) return ISO_639_2_TO_1.get(trimmed) ?? null;
-  return null;
+  if (/^[a-z]{3}$/u.test(trimmed)) return ISO_639_2_TO_1.get(trimmed) ?? "en";
+  return "en";
 }
 
 type EpubTextSegment = {

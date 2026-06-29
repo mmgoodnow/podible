@@ -203,8 +203,9 @@ describe("chapter analysis", () => {
   test("normalizes transcription language tags for OpenAI", () => {
     expect(normalizeTranscriptionLanguage("eng")).toBe("en");
     expect(normalizeTranscriptionLanguage("en-US")).toBe("en");
-    expect(normalizeTranscriptionLanguage("zzzz")).toBeNull();
-    expect(normalizeTranscriptionLanguage("")).toBeNull();
+    expect(normalizeTranscriptionLanguage("zzzz")).toBe("en");
+    expect(normalizeTranscriptionLanguage("")).toBe("en");
+    expect(normalizeTranscriptionLanguage(null)).toBe("en");
   });
 
   test("plans overlapping transcription chunks", () => {
