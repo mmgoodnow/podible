@@ -30,7 +30,14 @@ const TIMESTAMP_TRANSCRIPTION_MODEL = "whisper-1";
 // timestamps it returns are in the sped-up frame, so we multiply them back by
 // this factor to recover real-audio timestamps.
 const TRANSCRIPTION_SPEED_MULTIPLIER = 2;
-const CHAPTER_ANALYSIS_TRANSCRIPTION_CONCURRENCY = 2;
+const CHAPTER_ANALYSIS_TRANSCRIPTION_CONCURRENCY = positiveIntegerEnv("PODIBLE_TRANSCRIPTION_OPENAI_CONCURRENCY", 8, {
+  min: 1,
+  max: 64,
+});
+const CHAPTER_ANALYSIS_EXTRACT_CONCURRENCY = positiveIntegerEnv("PODIBLE_TRANSCRIPTION_EXTRACT_CONCURRENCY", 4, {
+  min: 1,
+  max: 16,
+});
 const CHUNK_MS = 30 * 60_000;
 const CHUNK_OVERLAP_MS = 30_000;
 const TRANSCRIPTION_TIMEOUT_MS = 5 * 60_000;
@@ -39,6 +46,17 @@ const ORDINARY_WORDS_PATH = "/usr/share/dict/words";
 const MAX_FRONT_MATTER_SKIP = 8;
 const MAX_SECTION_DIVIDER_WORDS = 120;
 const TRANSCRIPTS_DIR = path.join(configDir, "transcripts");
+
+function positiveIntegerEnv(name: string, fallback: number, bounds: { min: number; max: number }): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return fallback;
+  const integer = Math.trunc(value);
+  if (integer < bounds.min) return bounds.min;
+  if (integer > bounds.max) return bounds.max;
+  return integer;
+}
 
 const ISO_639_2_TO_1 = new Map<string, string>([
   ["deu", "de"],
@@ -1286,19 +1304,24 @@ async function transcribeAssetWithDeps(
 
   const workDir = await mkdtemp(path.join(os.tmpdir(), "podible-transcript-"));
   const prompt = promptForChunk(book, glossary);
-  const limitChunkWork = createAsyncLimiter(CHAPTER_ANALYSIS_TRANSCRIPTION_CONCURRENCY);
+  const limitExtract = createAsyncLimiter(CHAPTER_ANALYSIS_EXTRACT_CONCURRENCY);
+  const limitTranscribe = createAsyncLimiter(CHAPTER_ANALYSIS_TRANSCRIPTION_CONCURRENCY);
   try {
+    log(
+      ctx,
+      `[chapter-analysis] job=${job.id} asset=${asset.id} chunks=${plans.length} extract_concurrency=${CHAPTER_ANALYSIS_EXTRACT_CONCURRENCY} transcribe_concurrency=${CHAPTER_ANALYSIS_TRANSCRIPTION_CONCURRENCY}`
+    );
     const persistedChunks = await Promise.all(
-      plans.map((plan) =>
-        limitChunkWork(async () => {
-          const clipName = `asset-${asset.id}-chunk-${plan.index}-attempt-${job.attempt_count}`;
-          let clipPath: string | null = null;
-          try {
+      plans.map(async (plan) => {
+        const clipName = `asset-${asset.id}-chunk-${plan.index}-attempt-${job.attempt_count}`;
+        let clipPath: string | null = null;
+        try {
+          clipPath = await limitExtract(async () => {
             log(
               ctx,
               `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=extract start_ms=${plan.startMs} duration_ms=${plan.durationMs}`
             );
-            clipPath = await deps.extractChunkClip({
+            return deps.extractChunkClip({
               asset,
               files,
               startMs: plan.startMs,
@@ -1306,22 +1329,24 @@ async function transcribeAssetWithDeps(
               tempDir: workDir,
               clipName,
             });
+          });
+          const transcribed = await limitTranscribe(async () => {
             log(
               ctx,
               `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=transcribe clip=${JSON.stringify(clipPath)}`
             );
-            const transcribed = await deps.transcribeChunk(settings, clipPath, prompt, book);
-            const persisted = await persistTranscriptChunk(workDir, plan, transcribed);
-            log(
-              ctx,
-              `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=done words=${transcribed.words.length} segments=${transcribed.segments.length}`
-            );
-            return persisted;
-          } finally {
-            if (clipPath) await rm(clipPath, { force: true }).catch(() => undefined);
-          }
-        })
-      )
+            return deps.transcribeChunk(settings, clipPath!, prompt, book);
+          });
+          const persisted = await persistTranscriptChunk(workDir, plan, transcribed);
+          log(
+            ctx,
+            `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=done words=${transcribed.words.length} segments=${transcribed.segments.length}`
+          );
+          return persisted;
+        } finally {
+          if (clipPath) await rm(clipPath, { force: true }).catch(() => undefined);
+        }
+      })
     );
     const merged = await mergePersistedTranscriptChunks(persistedChunks);
     if (merged.words.length === 0) throw new Error("Whole-book transcription did not produce usable word timestamps");
