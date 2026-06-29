@@ -1414,9 +1414,10 @@ export async function findSpokenHeadingBoundaryCandidate(
 export function chooseResearchBoundaryCandidate(
   research: ResearchEpubBoundaryResult | null,
   span: ChapterCurationSpan,
-  options: { allowOpeningNearOpenerFallback?: boolean } = {}
+  options: { allowOpeningNearOpenerFallback?: boolean; includeFallback?: boolean } = {}
 ): DeterministicBoundaryCandidate | null {
   if (!research) return null;
+  const includeFallback = options.includeFallback ?? true;
   const strict = research.bestCandidates.find(
     (hit) =>
       hit.boundaryUse === "candidate_start" &&
@@ -1436,6 +1437,7 @@ export function chooseResearchBoundaryCandidate(
       transcriptWindow: strict.transcriptWindow,
     };
   }
+  if (!includeFallback) return null;
   const fallback = research.bestCandidates
     .filter(
       (hit) =>
@@ -1467,7 +1469,7 @@ function chooseSupportingContextBacktrackCandidate(
   const supportingHits = research.bestCandidates
     .filter(
       (hit) =>
-        hit.boundaryUse === "supporting_context" &&
+        (hit.boundaryUse === "supporting_context" || (hit.boundaryUse === "candidate_start" && hit.phraseStartWord > 2)) &&
         (hit.reverseEpubRelation === "opener" || hit.reverseEpubRelation === "near_opener") &&
         hit.phraseStartWord <= 80 &&
         hit.startTime > span.startTime &&
@@ -1752,8 +1754,9 @@ async function tryDeterministicNodeBoundary(
   });
   const candidate =
     headingCandidate ??
-    chooseResearchBoundaryCandidate(research, span, { allowOpeningNearOpenerFallback: isOpeningNode }) ??
-    chooseSupportingContextBacktrackCandidate(ctx, research, span);
+    chooseResearchBoundaryCandidate(research, span, { allowOpeningNearOpenerFallback: isOpeningNode, includeFallback: false }) ??
+    chooseSupportingContextBacktrackCandidate(ctx, research, span) ??
+    chooseResearchBoundaryCandidate(research, span, { allowOpeningNearOpenerFallback: isOpeningNode });
   logChapterCurationEvent(ctx, {
     type: "deterministic-node-boundary-research",
     message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} candidates=${research?.bestCandidates.length ?? 0}${
