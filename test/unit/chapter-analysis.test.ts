@@ -375,6 +375,88 @@ describe("chapter analysis", () => {
     }
   });
 
+  test("reuses completed transcript chunks when a later chunk retry fails", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "podible-transcript-retry-"));
+    const { db, repo } = setupRepo();
+    try {
+      await mkdir(root, { recursive: true });
+      const audioPath = path.join(root, "audio.mp3");
+      await writeFile(audioPath, "fake audio bytes");
+      const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+      const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
+      const asset = repo.addAsset({
+        bookId: book.id,
+        kind: "single",
+        mime: "audio/mpeg",
+        totalSize: 16,
+        durationMs: 31 * 60_000,
+        manifestationId: manifestation.id,
+        files: [{ path: audioPath, size: 16, start: 0, end: 15, durationMs: 31 * 60_000, title: "Audio" }],
+      });
+      const job = repo.createJob({
+        type: "chapter_analysis",
+        bookId: book.id,
+        payload: { manifestationId: manifestation.id },
+      });
+
+      const transcribedChunks: number[] = [];
+      let failSecondChunk = true;
+      const logs: string[] = [];
+      const deps = {
+        extractChunkClip: async (args: { clipName: string }) => path.join(root, `${args.clipName}.mp3`),
+        transcribeChunk: async (_settings: unknown, clipPath: string) => {
+          const chunkIndex = Number(clipPath.match(/chunk-(\d+)-attempt/u)?.[1] ?? -1);
+          transcribedChunks.push(chunkIndex);
+          if (chunkIndex === 1 && failSecondChunk) {
+            await new Promise((resolve) => setTimeout(resolve, 25));
+            throw new Error("simulated chunk failure");
+          }
+          return {
+            words: [{ startMs: 20_000, endMs: 20_500, raw: `chunk-${chunkIndex}`, token: `chunk${chunkIndex}` }],
+            segments: [{ startMs: 20_000, endMs: 20_500, text: `chunk ${chunkIndex}` }],
+          };
+        },
+      };
+
+      await expect(
+        processChapterAnalysisJob(
+          {
+            repo,
+            getSettings: () => defaultSettings({ agents: { apiKey: "test-key", timeoutMs: 1000 } }),
+            onLog: (message) => logs.push(message),
+          },
+          job,
+          deps
+        )
+      ).rejects.toThrow("simulated chunk failure");
+      expect(transcribedChunks).toEqual(expect.arrayContaining([0, 1]));
+
+      failSecondChunk = false;
+      transcribedChunks.length = 0;
+      await processChapterAnalysisJob(
+        {
+          repo,
+          getSettings: () => defaultSettings({ agents: { apiKey: "test-key", timeoutMs: 1000 } }),
+          onLog: (message) => logs.push(message),
+        },
+        job,
+        deps
+      );
+
+      expect(transcribedChunks).toEqual([1]);
+      expect(logs.some((message) => message.includes("chunk=1/2 stage=cache_hit"))).toBe(true);
+      const transcript = await loadStoredManifestationTranscriptPayload(repo, manifestation.id);
+      expect(transcript?.chunks?.length).toBe(2);
+      expect(transcript?.text).toContain("chunk-0");
+      expect(transcript?.text).toContain("chunk-1");
+      expect(repo.getChapterAnalysis(manifestation.id)?.status).toBe("succeeded");
+      expect(asset.id).toBeGreaterThan(0);
+    } finally {
+      db.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("requestBookTranscription is idempotent and reports current/pending states", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "podible-transcript-status-"));
     const { db, repo } = setupRepo();

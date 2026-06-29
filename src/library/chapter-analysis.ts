@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createReadStream, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -280,6 +280,7 @@ type PersistedTranscriptChunk = TranscriptChunkPlan & {
   path: string;
   wordCount: number;
   segmentCount: number;
+  source: "cache" | "new";
 };
 
 type GlossaryTermStats = {
@@ -978,13 +979,16 @@ function dedupeTranscriptWords(words: TranscriptWord[]): TranscriptWord[] {
 }
 
 async function persistTranscriptChunk(
-  workDir: string,
+  outputDir: string,
   chunk: TranscriptChunkPlan,
   transcribed: TranscribedChunk
 ): Promise<PersistedTranscriptChunk> {
-  const chunkPath = path.join(workDir, `chunk-${String(chunk.index).padStart(4, "0")}.json`);
-  await writeFile(chunkPath, JSON.stringify({ ...chunk, words: transcribed.words, segments: transcribed.segments }));
-  return { ...chunk, path: chunkPath, wordCount: transcribed.words.length, segmentCount: transcribed.segments.length };
+  await mkdir(outputDir, { recursive: true });
+  const chunkPath = transcriptChunkCachePath(outputDir, chunk);
+  const tmpPath = `${chunkPath}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tmpPath, JSON.stringify({ ...chunk, words: transcribed.words, segments: transcribed.segments }));
+  await rename(tmpPath, chunkPath);
+  return { ...chunk, path: chunkPath, wordCount: transcribed.words.length, segmentCount: transcribed.segments.length, source: "new" };
 }
 
 async function readPersistedTranscriptChunk(chunk: PersistedTranscriptChunk): Promise<TranscribedChunk> {
@@ -996,6 +1000,58 @@ async function readPersistedTranscriptChunk(chunk: PersistedTranscriptChunk): Pr
     words: Array.isArray(parsed.words) ? parsed.words : [],
     segments: Array.isArray(parsed.segments) ? parsed.segments : [],
   };
+}
+
+function safeArtifactSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]+/g, "_");
+}
+
+function transcriptChunkCacheDir(assetFingerprint: string): string {
+  return path.join(TRANSCRIPTS_DIR, "chunks", safeArtifactSegment(assetFingerprint));
+}
+
+function transcriptChunkCachePath(cacheDir: string, chunk: TranscriptChunkPlan): string {
+  return path.join(
+    cacheDir,
+    [
+      "chunk",
+      String(chunk.index).padStart(4, "0"),
+      chunk.startMs,
+      chunk.durationMs,
+      chunk.trimStartMs,
+      chunk.trimEndMs,
+    ].join("-") + ".json"
+  );
+}
+
+async function loadCachedTranscriptChunk(cacheDir: string, chunk: TranscriptChunkPlan): Promise<PersistedTranscriptChunk | null> {
+  const chunkPath = transcriptChunkCachePath(cacheDir, chunk);
+  try {
+    const parsed = JSON.parse(await Bun.file(chunkPath).text()) as TranscriptChunkPlan & {
+      words?: TranscriptWord[];
+      segments?: TranscriptSegment[];
+    };
+    if (
+      parsed.index !== chunk.index ||
+      parsed.startMs !== chunk.startMs ||
+      parsed.durationMs !== chunk.durationMs ||
+      parsed.trimStartMs !== chunk.trimStartMs ||
+      parsed.trimEndMs !== chunk.trimEndMs ||
+      !Array.isArray(parsed.words) ||
+      !Array.isArray(parsed.segments)
+    ) {
+      return null;
+    }
+    return {
+      ...chunk,
+      path: chunkPath,
+      wordCount: parsed.words.length,
+      segmentCount: parsed.segments.length,
+      source: "cache",
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function mergeChunkSegments(
@@ -1129,8 +1185,7 @@ function transcriptWordsFromStoredPayload(payload: StoredTranscriptPayload): Tra
 }
 
 function transcriptArtifactPath(manifestationId: number, fingerprint: string): string {
-  const safeFingerprint = fingerprint.replace(/[^a-zA-Z0-9._-]+/g, "_");
-  return path.join(TRANSCRIPTS_DIR, `m${manifestationId}-${safeFingerprint}.json`);
+  return path.join(TRANSCRIPTS_DIR, `m${manifestationId}-${safeArtifactSegment(fingerprint)}.json`);
 }
 
 async function persistTranscriptArtifact(manifestationId: number, fingerprint: string, transcriptJson: string): Promise<string> {
@@ -1303,6 +1358,8 @@ async function transcribeAssetWithDeps(
   if (plans.length === 0) throw new Error("No audio chunks available for transcription");
 
   const workDir = await mkdtemp(path.join(os.tmpdir(), "podible-transcript-"));
+  const assetFingerprint = await computeTranscriptFingerprint(asset, files);
+  const chunkCacheDir = transcriptChunkCacheDir(assetFingerprint);
   const prompt = promptForChunk(book, glossary);
   const limitExtract = createAsyncLimiter(CHAPTER_ANALYSIS_EXTRACT_CONCURRENCY);
   const limitTranscribe = createAsyncLimiter(CHAPTER_ANALYSIS_TRANSCRIPTION_CONCURRENCY);
@@ -1313,6 +1370,14 @@ async function transcribeAssetWithDeps(
     );
     const persistedChunks = await Promise.all(
       plans.map(async (plan) => {
+        const cached = await loadCachedTranscriptChunk(chunkCacheDir, plan);
+        if (cached) {
+          log(
+            ctx,
+            `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=cache_hit words=${cached.wordCount} segments=${cached.segmentCount}`
+          );
+          return cached;
+        }
         const clipName = `asset-${asset.id}-chunk-${plan.index}-attempt-${job.attempt_count}`;
         let clipPath: string | null = null;
         try {
@@ -1337,7 +1402,7 @@ async function transcribeAssetWithDeps(
             );
             return deps.transcribeChunk(settings, clipPath!, prompt, book);
           });
-          const persisted = await persistTranscriptChunk(workDir, plan, transcribed);
+          const persisted = await persistTranscriptChunk(chunkCacheDir, plan, transcribed);
           log(
             ctx,
             `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=done words=${transcribed.words.length} segments=${transcribed.segments.length}`
