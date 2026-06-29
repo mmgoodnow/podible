@@ -118,4 +118,5 @@ export {
   chooseResearchBoundaryCandidate,
   chooseSupportingContextBacktrackCandidate,
   findOpeningInteriorStartCandidate,
+  findPartialOpenerBoundaryCandidate,
 } from "./chapter-curation-runner";

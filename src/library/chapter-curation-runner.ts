@@ -1549,7 +1549,7 @@ export function createNodeBoundaryCuratorAgent(
 
 export type DeterministicBoundaryCandidate = {
   startTime: number;
-  source: "research_opener" | "spoken_heading" | "near_opener_fallback" | "supporting_context_backtrack" | "opening_interior_start";
+  source: "research_opener" | "spoken_heading" | "partial_opener" | "near_opener_fallback" | "supporting_context_backtrack" | "opening_interior_start";
   phrase: string;
   phraseStartWord: number | null;
   reverseEpubRelation: EpubBoundaryResearchHit["reverseEpubRelation"];
@@ -1767,6 +1767,53 @@ export function findOpeningInteriorStartCandidate(
   return null;
 }
 
+export function findPartialOpenerBoundaryCandidate(
+  ctx: ChapterCurationContext,
+  span: ChapterCurationSpan,
+  targetBoundary: ChapterCurationTargetBoundary
+): DeterministicBoundaryCandidate | null {
+  const entry = ctx.epubEntries[targetBoundary.epubIndex];
+  if (!entry || entry.id !== targetBoundary.epubNodeId) return null;
+  const openerTokens = distinctiveOpenerTokens(entry);
+  if (openerTokens.length === 0) return null;
+
+  const searchRadiusSeconds = Math.max(180, Math.min(1_200, spanDurationSeconds(span) / 2));
+  const searchStartMs = secondsToMs(Math.max(span.startTime, targetBoundary.expectedStartTime - searchRadiusSeconds));
+  const searchEndMs = secondsToMs(Math.min(span.endTime, targetBoundary.expectedStartTime + searchRadiusSeconds));
+  const candidates: DeterministicBoundaryCandidate[] = [];
+
+  for (const utterance of transcriptUtterances(ctx)) {
+    if (utterance.endMs < searchStartMs || utterance.startMs > searchEndMs) continue;
+    const text = normalizeToolText(utterance.text);
+    if (!hasOpenerTokenEvidence(text, openerTokens)) continue;
+
+    const reverse = searchEpubText(ctx, {
+      query: text,
+      targetNodeId: entry.id,
+      limit: 5,
+    }).matches[0];
+    if (!reverse || reverse.epubNodeId !== entry.id) continue;
+    if (reverse.targetNodeDistance !== 0 || reverse.targetWordOffset === null) continue;
+    if (reverse.relationToTarget !== "opener" && reverse.relationToTarget !== "near_opener") continue;
+
+    const phraseStartWord = firstOrderedQueryTokenOffset(entry, text);
+    if (phraseStartWord === null || phraseStartWord > 32) continue;
+    const transcriptWindow = getTranscriptWindowFromContext(ctx, utterance.startMs, secondsToMs(45));
+    candidates.push({
+      startTime: msToSeconds(utterance.startMs),
+      source: "partial_opener",
+      phrase: text,
+      phraseStartWord,
+      reverseEpubRelation: phraseStartWord <= 8 ? "opener" : "near_opener",
+      transcriptText: text.slice(0, 500),
+      transcriptWindow: normalizeToolText(transcriptWindow.text).slice(0, 900),
+      bodyMatchCount: textTokens(text).filter((token) => openerTokens.includes(token)).length,
+    });
+  }
+
+  return candidates.sort((a, b) => (a.phraseStartWord ?? 999) - (b.phraseStartWord ?? 999) || Math.abs(a.startTime - targetBoundary.expectedStartTime) - Math.abs(b.startTime - targetBoundary.expectedStartTime))[0] ?? null;
+}
+
 function firstOrderedQueryTokenOffset(entry: EpubChapterEntry, query: string): number | null {
   const entryTokens = entry.words.map((word) => normalizedWordTokens(word.token || word.text)[0] || "");
   const queryTokens = normalizedWordTokens(query).filter((token) => token.length > 1);
@@ -1815,7 +1862,7 @@ export function canSkipDeterministicBoundaryJudge(
   candidate: DeterministicBoundaryCandidate,
   validated: Extract<SubmitNodeBoundaryResult, { accepted: true }>
 ): boolean {
-  if (candidate.source !== "research_opener" && candidate.source !== "spoken_heading") return false;
+  if (candidate.source !== "research_opener" && candidate.source !== "spoken_heading" && candidate.source !== "partial_opener") return false;
   if (candidate.reverseEpubRelation !== "opener" && candidate.reverseEpubRelation !== "near_opener") return false;
   if (candidate.phraseStartWord !== null && candidate.phraseStartWord > 2) return false;
   if (validated.audit.boundaryComparison.transcriptPrecision !== "word") return false;
@@ -2138,6 +2185,7 @@ async function tryDeterministicNodeBoundary(
   const candidate =
     headingCandidate ??
     chooseResearchBoundaryCandidate(research, span, { allowOpeningNearOpenerFallback: isOpeningNode, includeFallback: false }) ??
+    findPartialOpenerBoundaryCandidate(ctx, span, targetBoundary) ??
     chooseSupportingContextBacktrackCandidate(ctx, research, span) ??
     findOpeningInteriorStartCandidate(ctx, span, targetBoundary) ??
     chooseResearchBoundaryCandidate(research, span, { allowOpeningNearOpenerFallback: isOpeningNode });
@@ -2176,6 +2224,8 @@ async function tryDeterministicNodeBoundary(
           ? "Deterministic opening-node fallback: the true opener is absent from transcript evidence, but the earliest clear same-node near-opener proves the first audible EPUB node."
           : candidate.source === "spoken_heading"
           ? "Deterministic spoken-heading candidate: transcript contains the target heading/title cue followed by target body opener text."
+          : candidate.source === "partial_opener"
+            ? "Deterministic partial-opener candidate: early transcript text reverse-matches the target EPUB opener despite ASR omissions or drift."
           : candidate.source === "supporting_context_backtrack"
             ? "Deterministic supporting-context backtrack: research found target-node prose later in the opener, then backtracked to the first utterance that reverse-matches this EPUB node."
             : candidate.source === "opening_interior_start"

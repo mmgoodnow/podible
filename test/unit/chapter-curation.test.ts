@@ -11,6 +11,7 @@ import {
   findFulcrumCandidates,
   findSpokenHeadingBoundaryCandidate,
   findOpeningInteriorStartCandidate,
+  findPartialOpenerBoundaryCandidate,
   chooseSupportingContextBacktrackCandidate,
   fuzzySearchTranscript,
   fulcrumJudgeToolUseBehavior,
@@ -1148,6 +1149,66 @@ describe("chapter curation tools", () => {
         localNodeRatio: 0,
       })
     ).toBeNull();
+  });
+
+  test("findPartialOpenerBoundaryCandidate tolerates ASR omissions inside opener text", async () => {
+    const context = ctx({
+      durationMs: 60_000_000,
+      manifestation: manifestation({ duration_ms: 60_000_000 }),
+      epubEntries: [
+        epubEntry({
+          id: "chapter-36",
+          title: "Chapter 36",
+          cumulativeRatio: 0.7,
+          cumulativeWords: 14,
+          words: "Chapter 36 He is a man not a boy I think it is the first time I have seen someone fully transform".split(/\s+/).map(word),
+        }),
+        epubEntry({
+          id: "chapter-37",
+          title: "Chapter 37: South",
+          cumulativeRatio: 1,
+          cumulativeWords: 48,
+          words: "South Shit on a pike I yelp as Mustang puts salve on my back in the warroom She flicks my back with a finger"
+            .split(/\s+/)
+            .map((text, index) => ({ ...word(text), kind: index === 0 ? "heading" : "body" })),
+        }),
+      ],
+      transcript: transcriptFromUtterances([
+        { startMs: 44_850_000, endMs: 44_852_000, text: "I think it is the first time I have seen someone fully transform." },
+        { startMs: 44_870_035, endMs: 44_872_675, text: "Shit on a pike! Mustang puts" },
+      ]),
+    });
+    const span = createRootCurationSpan(context);
+    const targetBoundary: ChapterCurationTargetBoundary = {
+      epubNodeId: "chapter-37",
+      epubIndex: 1,
+      title: "Chapter 37: South",
+      expectedStartTime: 44_852,
+      localNodeRatio: 0.7,
+    };
+    const candidate = findPartialOpenerBoundaryCandidate(context, span, targetBoundary);
+
+    expect(candidate).toMatchObject({
+      source: "partial_opener",
+      startTime: 44870.035,
+      reverseEpubRelation: "opener",
+    });
+
+    if (!candidate) throw new Error("expected partial opener candidate");
+    const validated = await validateNodeBoundary(
+      context,
+      {
+        spanPath: span.path,
+        epubNodeId: targetBoundary.epubNodeId,
+        title: targetBoundary.title,
+        startTime: candidate.startTime,
+        evidence: "Test evidence.",
+      },
+      { span, targetBoundary }
+    );
+
+    expect(validated.accepted).toBe(true);
+    if (validated.accepted) expect(canSkipDeterministicBoundaryJudge(context, targetBoundary, candidate, validated)).toBe(true);
   });
 
   test("estimateTimestampFromEpubPosition maps EPUB word position onto duration", () => {
