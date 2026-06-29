@@ -29,6 +29,7 @@ import {
   type ChapterCurationSpan,
   type ChapterCurationTargetBoundary,
   type ChapterCurationTiming,
+  type NodeBoundaryCurationReport,
   type NodeBoundaryDecision,
   type RecursiveSpanDecision,
 } from "../../src/library/chapter-curation";
@@ -1514,6 +1515,55 @@ describe("chapter curation tools", () => {
       "chapter-2:failed",
       "chapter-3:accepted",
     ]);
+  });
+
+  test("resolveNodeBoundaryChapters drops bare structural markers that would break monotonic chapter order", async () => {
+    const context = ctx({
+      durationMs: 60_000_000,
+      manifestation: manifestation({ duration_ms: 60_000_000 }),
+      epubEntries: [
+        epubEntry({ id: "part-6", title: "VI", cumulativeRatio: 0.67, cumulativeWords: 67 }),
+        epubEntry({ id: "chapter-14", title: "XIV: The Final Door", cumulativeRatio: 0.68, cumulativeWords: 68 }),
+      ],
+    });
+    const reports: NodeBoundaryCurationReport[] = [];
+    const starts: Record<string, number> = {
+      "part-6": 39_873.3,
+      "chapter-14": 39_150.06,
+    };
+    const chapters = await resolveNodeBoundaryChapters(
+      context,
+      async (targetBoundary): Promise<NodeBoundaryDecision> => ({
+        accepted: true,
+        kind: "node_boundary",
+        spanPath: "root",
+        epubNodeId: targetBoundary.epubNodeId,
+        epubIndex: targetBoundary.epubIndex,
+        title: targetBoundary.title,
+        startTime: starts[targetBoundary.epubNodeId]!,
+        notes: null,
+        audit: {
+          epubNodeId: targetBoundary.epubNodeId,
+          title: targetBoundary.title,
+          startTime: starts[targetBoundary.epubNodeId]!,
+          boundaryComparison: {
+            transcriptPrecision: "utterance",
+            transcriptPrecisionNote: null,
+            previousEpub: { epubNodeId: null, title: null, tailText: "" },
+            targetEpub: { epubNodeId: targetBoundary.epubNodeId, title: targetBoundary.title, headText: "" },
+            transcriptBefore: "",
+            transcriptAfter: "",
+          },
+          transcriptWindow: "",
+          candidates: [],
+        },
+      }),
+      { maxConcurrency: 1, reports }
+    );
+
+    expect(chapters).toEqual([{ title: "XIV: The Final Door", startTime: 39_150.06, epubNodeId: "chapter-14" }]);
+    expect(reports.map((report) => `${report.epubNodeId}:${report.outcome}`)).toEqual(["part-6:dropped", "chapter-14:accepted"]);
+    expect(reports[0]?.errors?.[0]).toContain("more specific EPUB title XIV: The Final Door");
   });
 
   test("resolveRecursiveChapterSpans returns a leaf-only plan", async () => {

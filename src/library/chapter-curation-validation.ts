@@ -129,7 +129,7 @@ export type NodeBoundaryCurationReport = {
   epubIndex: number;
   title: string;
   expectedStartTime: number;
-  outcome: "accepted" | "failed";
+  outcome: "accepted" | "failed" | "dropped";
   startTime?: number;
   errors?: string[];
   warnings?: string[];
@@ -268,6 +268,12 @@ function isStructuralTitleToken(token: string): boolean {
     /^\d+$/.test(token) ||
     /^(?:i|ii|iii|iv|v|vi|vii|viii|ix|x|xi|xii|xiii|xiv|xv|xvi|xvii|xviii|xix|xx)$/.test(token)
   );
+}
+
+function chapterTitleSpecificityScore(value: string): number {
+  const tokens = normalizedWordTokens(value);
+  const meaningful = tokens.filter((token) => !isStructuralTitleToken(token));
+  return meaningful.length * 10 + (value.includes(":") || value.includes("—") || value.includes("-") ? 5 : 0) + Math.min(4, value.length / 20);
 }
 
 function entryTitlePrefixWordCount(entry: EpubChapterEntry): number {
@@ -1094,11 +1100,48 @@ export async function resolveNodeBoundaryChapters(
   );
 
   const chapters: SubmittedChapter[] = [];
+  const chapterDecisions: NodeBoundaryDecision[] = [];
+  function markReportDropped(decision: NodeBoundaryDecision, reason: string): void {
+    const report = reports?.find((item) => item.epubNodeId === decision.epubNodeId && item.outcome === "accepted");
+    if (report) {
+      report.outcome = "dropped";
+      report.errors = [...(report.errors ?? []), reason];
+      return;
+    }
+    reports?.push({
+      epubNodeId: decision.epubNodeId,
+      epubIndex: decision.epubIndex,
+      title: decision.title,
+      expectedStartTime: nodeBoundaryTargets(ctx).find((target) => target.epubNodeId === decision.epubNodeId)?.expectedStartTime ?? decision.startTime,
+      outcome: "dropped",
+      startTime: decision.startTime,
+      errors: [reason],
+    });
+  }
   for (const decision of decisions
     .filter((decision): decision is NodeBoundaryDecision => Boolean(decision))
     .sort((a, b) => a.epubIndex - b.epubIndex || a.startTime - b.startTime)) {
     const previous = chapters.at(-1);
     if (previous && Math.abs(previous.startTime - decision.startTime) <= 30) {
+      const previousDecision = chapterDecisions.at(-1);
+      if (previousDecision && chapterTitleSpecificityScore(decision.title) > chapterTitleSpecificityScore(previous.title)) {
+        markReportDropped(previousDecision, `Dropped duplicate/nearby boundary in favor of more specific EPUB title ${decision.title}.`);
+        chapters[chapters.length - 1] = { title: decision.title, startTime: decision.startTime, epubNodeId: decision.epubNodeId };
+        chapterDecisions[chapterDecisions.length - 1] = decision;
+      } else {
+        markReportDropped(decision, `Dropped duplicate/nearby boundary after ${previous.title}.`);
+      }
+      continue;
+    }
+    if (previous && decision.startTime <= previous.startTime) {
+      const previousDecision = chapterDecisions.at(-1);
+      if (previousDecision && chapterTitleSpecificityScore(decision.title) > chapterTitleSpecificityScore(previous.title)) {
+        markReportDropped(previousDecision, `Dropped non-monotonic boundary in favor of more specific EPUB title ${decision.title}.`);
+        chapters[chapters.length - 1] = { title: decision.title, startTime: decision.startTime, epubNodeId: decision.epubNodeId };
+        chapterDecisions[chapterDecisions.length - 1] = decision;
+      } else {
+        markReportDropped(decision, `Dropped non-monotonic boundary after ${previous.title}.`);
+      }
       continue;
     }
     chapters.push({
@@ -1106,6 +1149,7 @@ export async function resolveNodeBoundaryChapters(
       startTime: decision.startTime,
       epubNodeId: decision.epubNodeId,
     });
+    chapterDecisions.push(decision);
   }
   return chapters.length > 0 ? chapters : null;
 }
