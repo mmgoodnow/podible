@@ -3,18 +3,24 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { loadEpubEntries, type StoredTranscriptPayload } from "../src/library/chapter-analysis";
-import { runRecursiveAgenticChapterCurationDetailed, type ChapterCurationTiming } from "../src/library/chapter-curation";
+import {
+  runNodeParallelAgenticChapterCurationDetailed,
+  runRecursiveAgenticChapterCurationDetailed,
+  type ChapterCurationTiming,
+} from "../src/library/chapter-curation";
 import { defaultSettings } from "../src/settings";
 
 const slug = process.env.CORPUS_SLUG?.trim() || process.argv[2];
 if (!slug) throw new Error("Usage: CORPUS_SLUG=<slug> bun scripts/run-corpus-curation.ts");
+const mode = (process.env.CORPUS_MODE?.trim() || "recursive") as "recursive" | "node";
+if (mode !== "recursive" && mode !== "node") throw new Error("CORPUS_MODE must be recursive or node");
 
 const caseDir = path.resolve("tmp/chapter-cases/corpus", slug);
 const runId = new Date().toISOString().replace(/[:.]/g, "-");
-const eventLogPath = path.join(caseDir, `agent-events-${runId}.jsonl`);
-const traceDir = path.join(caseDir, `agent-traces-${runId}`);
-const resultPath = path.join(caseDir, `agent-result-${runId}.json`);
-const errorPath = path.join(caseDir, `agent-error-${runId}.json`);
+const eventLogPath = path.join(caseDir, `${mode}-agent-events-${runId}.jsonl`);
+const traceDir = path.join(caseDir, `${mode}-agent-traces-${runId}`);
+const resultPath = path.join(caseDir, `${mode}-agent-result-${runId}.json`);
+const errorPath = path.join(caseDir, `${mode}-agent-error-${runId}.json`);
 const baseModel = process.env.CORPUS_MODEL?.trim() || "gpt-5.4-mini";
 const curatorModel = process.env.CORPUS_CURATOR_MODEL?.trim() || "gpt-5.4-nano";
 const judgeModel = process.env.CORPUS_JUDGE_MODEL?.trim() || baseModel;
@@ -86,7 +92,9 @@ async function main(): Promise<void> {
   ];
 
   try {
-    const detailed = await runRecursiveAgenticChapterCurationDetailed({
+    const runCuration = mode === "node" ? runNodeParallelAgenticChapterCurationDetailed : runRecursiveAgenticChapterCurationDetailed;
+    const startedAt = Date.now();
+    const detailed = await runCuration({
       book: {
         id: Number(metadata.book_id),
         title: String(metadata.title),
@@ -117,8 +125,9 @@ async function main(): Promise<void> {
       debugCuratorModel: curatorModel,
       debugJudgeModel: judgeModel,
     });
-    await writeFile(resultPath, `${JSON.stringify({ ...detailed, debugModels: { model: baseModel, curatorModel, judgeModel } }, null, 2)}\n`, "utf8");
-    console.log(JSON.stringify({ ok: true, slug, accepted: detailed.result?.accepted ?? false, resultPath, eventLogPath, traceDir, model: baseModel, curatorModel, judgeModel }, null, 2));
+    const elapsedMs = Date.now() - startedAt;
+    await writeFile(resultPath, `${JSON.stringify({ ...detailed, mode, elapsedMs, debugModels: { model: baseModel, curatorModel, judgeModel } }, null, 2)}\n`, "utf8");
+    console.log(JSON.stringify({ ok: true, slug, mode, accepted: detailed.result?.accepted ?? false, chapters: detailed.result?.accepted ? detailed.result.chapters.length : 0, elapsedMs, resultPath, eventLogPath, traceDir, model: baseModel, curatorModel, judgeModel }, null, 2));
   } catch (error) {
     const payload = {
       name: (error as Error).name,
@@ -126,7 +135,7 @@ async function main(): Promise<void> {
       stack: (error as Error).stack,
     };
     await writeFile(errorPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-    console.error(JSON.stringify({ ok: false, slug, errorPath, eventLogPath, traceDir, error: payload }, null, 2));
+    console.error(JSON.stringify({ ok: false, slug, mode, errorPath, eventLogPath, traceDir, error: payload }, null, 2));
     process.exitCode = 1;
   }
 }

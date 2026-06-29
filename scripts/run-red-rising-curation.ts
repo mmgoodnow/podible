@@ -4,7 +4,11 @@ import path from "node:path";
 
 import type { AssetFileRow, AssetRow, BookRow, ManifestationRow } from "../src/app-types";
 import { loadEpubEntries, type StoredTranscriptPayload } from "../src/library/chapter-analysis";
-import { runRecursiveAgenticChapterCurationDetailed, type ChapterCurationTiming } from "../src/library/chapter-curation";
+import {
+  runNodeParallelAgenticChapterCurationDetailed,
+  runRecursiveAgenticChapterCurationDetailed,
+  type ChapterCurationTiming,
+} from "../src/library/chapter-curation";
 import { defaultSettings } from "../src/settings";
 
 type Metadata = {
@@ -20,10 +24,12 @@ type Metadata = {
 
 const caseDir = path.resolve("tmp/chapter-cases/red-rising/prod");
 const runId = new Date().toISOString().replace(/[:.]/g, "-");
-const eventLogPath = path.join(caseDir, `agent-events-m59-${runId}.jsonl`);
-const traceDir = path.join(caseDir, `agent-traces-m59-${runId}`);
-const resultPath = path.join(caseDir, `agent-result-m59-${runId}.json`);
-const errorPath = path.join(caseDir, `agent-error-m59-${runId}.json`);
+const mode = (process.env.RED_RISING_MODE?.trim() || "recursive") as "recursive" | "node";
+if (mode !== "recursive" && mode !== "node") throw new Error("RED_RISING_MODE must be recursive or node");
+const eventLogPath = path.join(caseDir, `${mode}-agent-events-m59-${runId}.jsonl`);
+const traceDir = path.join(caseDir, `${mode}-agent-traces-m59-${runId}`);
+const resultPath = path.join(caseDir, `${mode}-agent-result-m59-${runId}.json`);
+const errorPath = path.join(caseDir, `${mode}-agent-error-m59-${runId}.json`);
 const baseModel = process.env.RED_RISING_MODEL?.trim() || "gpt-5.4-mini";
 const curatorModel = process.env.RED_RISING_CURATOR_MODEL?.trim() || baseModel;
 const judgeModel = process.env.RED_RISING_JUDGE_MODEL?.trim() || baseModel;
@@ -108,7 +114,9 @@ async function main(): Promise<void> {
   ];
 
   try {
-    const result = await runRecursiveAgenticChapterCurationDetailed({
+    const runCuration = mode === "node" ? runNodeParallelAgenticChapterCurationDetailed : runRecursiveAgenticChapterCurationDetailed;
+    const startedAt = Date.now();
+    const result = await runCuration({
       book: metadata.book,
       manifestation,
       containers,
@@ -130,8 +138,9 @@ async function main(): Promise<void> {
       debugCuratorModel: curatorModel,
       debugJudgeModel: judgeModel,
     });
-    const output = { ok: true, resultPath, eventLogPath, traceDir, accepted: result.result?.accepted ?? false, model: baseModel, curatorModel, judgeModel };
-    await writeFile(resultPath, `${JSON.stringify({ ...result, debugModels: { model: baseModel, curatorModel, judgeModel } }, null, 2)}\n`, "utf8");
+    const elapsedMs = Date.now() - startedAt;
+    const output = { ok: true, mode, resultPath, eventLogPath, traceDir, accepted: result.result?.accepted ?? false, chapters: result.result?.accepted ? result.result.chapters.length : 0, elapsedMs, model: baseModel, curatorModel, judgeModel };
+    await writeFile(resultPath, `${JSON.stringify({ ...result, mode, elapsedMs, debugModels: { model: baseModel, curatorModel, judgeModel } }, null, 2)}\n`, "utf8");
     console.log(JSON.stringify(output, null, 2));
   } catch (error) {
     const payload = {
@@ -140,7 +149,7 @@ async function main(): Promise<void> {
       stack: (error as Error).stack,
     };
     await writeFile(errorPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-    console.error(JSON.stringify({ ok: false, errorPath, eventLogPath, traceDir, error: payload }, null, 2));
+    console.error(JSON.stringify({ ok: false, mode, errorPath, eventLogPath, traceDir, error: payload }, null, 2));
     process.exitCode = 1;
   }
 }
