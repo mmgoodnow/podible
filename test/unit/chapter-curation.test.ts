@@ -22,6 +22,7 @@ import {
   applyEmbeddedAudioChapterNodeScope,
   applyTranscriptEndpointEpubNodeScope,
   buildNodeBoundaryPreflightDiagnostic,
+  canSkipDeterministicBoundaryJudge,
   chooseResearchBoundaryCandidate,
   createRootCurationSpan,
   rankTargetBoundaries,
@@ -1822,6 +1823,84 @@ describe("chapter curation tools", () => {
 
     expect(result.accepted).toBe(true);
     if (result.accepted) expect(result.audit.boundaryComparison.transcriptAfter).toContain("female lead Stella");
+  });
+
+  test("canSkipDeterministicBoundaryJudge allows clean strict opener evidence", async () => {
+    const context = ctx({
+      epubEntries: [
+        epubEntry({
+          id: "chapter-1",
+          title: "Chapter 1",
+          words: "The first real chapter begins".split(/\s+/).map(word),
+          wordCount: 5,
+          cumulativeWords: 5,
+          cumulativeRatio: 1,
+        }),
+      ],
+      transcript: transcriptWith("The first real chapter begins.", 30_000, 32_000),
+    });
+    const targetBoundary = nodeBoundaryTargets(context).find((target) => target.epubNodeId === "chapter-1")!;
+    const result = await validateNodeBoundary(
+      context,
+      {
+        spanPath: "root",
+        epubNodeId: "chapter-1",
+        title: "Chapter 1",
+        startTime: 30,
+      },
+      { span: createRootCurationSpan(context), targetBoundary }
+    );
+
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) return;
+    expect(
+      canSkipDeterministicBoundaryJudge(
+        context,
+        targetBoundary,
+        {
+          startTime: 30,
+          source: "research_opener",
+          phrase: "The first real chapter",
+          phraseStartWord: 0,
+          reverseEpubRelation: "opener",
+          transcriptText: "The first real chapter begins.",
+        },
+        result
+      )
+    ).toBe(true);
+  });
+
+  test("canSkipDeterministicBoundaryJudge keeps fallback evidence on the judge path", async () => {
+    const context = ctx();
+    const targetBoundary = nodeBoundaryTargets(context).find((target) => target.epubNodeId === "chapter-1")!;
+    const result = await validateNodeBoundary(
+      context,
+      {
+        spanPath: "root",
+        epubNodeId: "chapter-1",
+        title: "Chapter 1",
+        startTime: 30,
+      },
+      { span: createRootCurationSpan(context), targetBoundary }
+    );
+
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) return;
+    expect(
+      canSkipDeterministicBoundaryJudge(
+        context,
+        targetBoundary,
+        {
+          startTime: 30,
+          source: "near_opener_fallback",
+          phrase: "The first real chapter",
+          phraseStartWord: 12,
+          reverseEpubRelation: "near_opener",
+          transcriptText: "The first real chapter begins.",
+        },
+        result
+      )
+    ).toBe(false);
   });
 
   test("nodeBoundaryTargets are built from the curated audible EPUB node list", () => {

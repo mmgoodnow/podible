@@ -47,6 +47,7 @@ import {
   type SubmitFulcrumJudgmentResult,
   type SubmitFulcrumSplitResult,
   type SubmitChapterPlanResult,
+  type SubmitNodeBoundaryResult,
   type SubmittedChapter,
   applyAudibleEpubNodeSelection,
   applyEmbeddedAudioChapterNodeScope,
@@ -1546,7 +1547,7 @@ export function createNodeBoundaryCuratorAgent(
   });
 }
 
-type DeterministicBoundaryCandidate = {
+export type DeterministicBoundaryCandidate = {
   startTime: number;
   source: "research_opener" | "spoken_heading" | "near_opener_fallback" | "supporting_context_backtrack";
   phrase: string;
@@ -1734,6 +1735,22 @@ function hasOpenerTokenEvidence(text: string, openerTokens: string[]): boolean {
   const textTokenSet = new Set(textTokens(text));
   const matched = openerTokens.filter((token) => textTokenSet.has(token));
   return matched.length >= Math.min(3, Math.max(2, Math.ceil(openerTokens.length / 2)));
+}
+
+export function canSkipDeterministicBoundaryJudge(
+  ctx: ChapterCurationContext,
+  targetBoundary: ChapterCurationTargetBoundary,
+  candidate: DeterministicBoundaryCandidate,
+  validated: Extract<SubmitNodeBoundaryResult, { accepted: true }>
+): boolean {
+  if (candidate.source !== "research_opener" && candidate.source !== "spoken_heading") return false;
+  if (candidate.reverseEpubRelation !== "opener" && candidate.reverseEpubRelation !== "near_opener") return false;
+  if (candidate.phraseStartWord !== null && candidate.phraseStartWord > 2) return false;
+  if (validated.audit.boundaryComparison.transcriptPrecision !== "word") return false;
+  if ((validated.audit.boundaryComparison.boundaryWords?.containing ?? []).length > 0) return false;
+  const entry = ctx.epubEntries[targetBoundary.epubIndex];
+  if (!entry || entry.id !== targetBoundary.epubNodeId) return false;
+  return hasOpenerTokenEvidence(validated.audit.boundaryComparison.transcriptAfter, distinctiveOpenerTokens(entry));
 }
 
 function openingAudioOnlyEndTime(ctx: ChapterCurationContext, span: ChapterCurationSpan): number {
@@ -2094,7 +2111,19 @@ async function tryDeterministicNodeBoundary(
     return null;
   }
 
-  if (!openingFallback) {
+  const skipJudge = !openingFallback && canSkipDeterministicBoundaryJudge(ctx, targetBoundary, candidate, validated);
+  if (skipJudge) {
+    logChapterCurationEvent(ctx, {
+      type: "deterministic-node-boundary-judge-skipped",
+      message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} judge=skipped reason=clean_word_opener`,
+      span,
+      targetBoundary,
+      result: validated,
+      candidate,
+    });
+  }
+
+  if (!openingFallback && !skipJudge) {
     const judgment = await judgeChapterBoundary(ctx, span, {
       kind: "node_boundary",
       spanPath: validated.spanPath,

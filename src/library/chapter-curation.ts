@@ -101,6 +101,7 @@ export type { ChapterCurationDetailedResult } from "./chapter-curation-runner";
 
 export {
   buildNodeBoundaryPreflightDiagnostic,
+  canSkipDeterministicBoundaryJudge,
   runNodeParallelAgenticChapterCurationDetailed,
   runRecursiveAgenticChapterCurationDetailed,
   runAgenticChapterCuration,
