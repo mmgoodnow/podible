@@ -1,0 +1,31 @@
+{
+  "slug": "game-on",
+  "expectedCount": 40,
+  "orderingSummary": [
+    "Author’s Note",
+    "Trigger Warnings",
+    "Chapter 1 through Chapter 37",
+    "Epilogue",
+    "Front/back matter exists around the curated run, but is not part of the 40-marker answer key."
+  ],
+  "ambiguousSpots": [
+    {
+      "nodeId": "c7A.xhtml",
+      "chapter": "Chapter 2",
+      "issue": "Transcript opener gap makes the start harder to see directly.",
+      "rationale": "The embedded EPUB marker still points at the correct boundary, even though the transcript evidence is less explicit."
+    },
+    {
+      "nodeId": "cKM.xhtml",
+      "chapter": "Chapter 6",
+      "issue": "Same opener-gap problem as Chapter 2.",
+      "rationale": "Treat the EPUB marker as correct even when the transcript opener is not cleanly exposed."
+    }
+  ],
+  "currentNodeOutput": {
+    "acceptedCount": 38,
+    "qualitativeMatch": false,
+    "note": "The accepted boundaries are in the right overall order, but the current output is missing the two ambiguous chapter starts."
+  },
+  "rationale": "This case is mostly straightforward once the front matter is separated out; the only real judgment calls are the two opener-gap boundaries."
+}

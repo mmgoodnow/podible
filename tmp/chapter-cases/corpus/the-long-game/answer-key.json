@@ -1,0 +1,22 @@
+{
+  "slug": "the-long-game",
+  "expectedCount": 40,
+  "orderingSummary": [
+    "Chapter One through Chapter Thirty-Nine",
+    "Epilogue",
+    "The answer key follows the curated narrative order rather than the raw track numbering style."
+  ],
+  "ambiguousSpots": [
+    {
+      "nodeId": null,
+      "chapter": null,
+      "issue": "No material ambiguity surfaced in the latest accepted run."
+    }
+  ],
+  "currentNodeOutput": {
+    "acceptedCount": 40,
+    "qualitativeMatch": true,
+    "note": "The current node output matches the answer key qualitatively and by count."
+  },
+  "rationale": "The boundary pattern is regular enough that the curated starts land cleanly, with no special-case opener gaps to defend."
+}

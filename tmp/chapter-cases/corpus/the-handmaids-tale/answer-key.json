@@ -1,0 +1,23 @@
+{
+  "slug": "the-handmaids-tale",
+  "expectedCount": 52,
+  "orderingSummary": [
+    "Chapter One",
+    "Section markers in the published order: II - Shopping, III - Night, IV - Waiting Room, V - Nap, VI - Household, VII - Night",
+    "Chapter Two through Chapter Forty-Six",
+    "Historical Notes"
+  ],
+  "ambiguousSpots": [
+    {
+      "nodeId": "publisher-intro / track-1",
+      "chapter": "Opening material before Chapter One",
+      "issue": "The first track is non-chapter front matter, so it should not be counted as a narrated chapter start."
+    }
+  ],
+  "currentNodeOutput": {
+    "acceptedCount": 52,
+    "qualitativeMatch": true,
+    "note": "The current output matches the curated chapter ordering and count."
+  },
+  "rationale": "This corpus is structurally regular: once the intro track is excluded, the remaining chapter and section markers line up cleanly."
+}
