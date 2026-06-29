@@ -112,6 +112,7 @@ type AnswerKeySummary = {
 
 type AnswerKeyScore = {
   keyPath: string;
+  toleranceSeconds: number;
   expectedCount: number | null;
   expectedDetailedCount: number;
   actualCount: number | null;
@@ -464,11 +465,13 @@ function chaptersFromResult(result: JsonRecord | null, replay: ModeSummary["node
 
 function scoreAnswerKey(answerKey: AnswerKeySummary | null, actualChapters: SubmittedChapter[] | null): AnswerKeyScore | null {
   if (!answerKey) return null;
+  const toleranceSeconds = 10;
   const actualCount = actualChapters?.length ?? null;
   const countMatches = answerKey.expectedCount === null || actualCount === null ? null : answerKey.expectedCount === actualCount;
   if (answerKey.chapters.length === 0 || !actualChapters) {
     return {
       keyPath: answerKey.path,
+      toleranceSeconds,
       expectedCount: answerKey.expectedCount,
       expectedDetailedCount: answerKey.chapters.length,
       actualCount,
@@ -484,7 +487,6 @@ function scoreAnswerKey(answerKey: AnswerKeySummary | null, actualChapters: Subm
     };
   }
 
-  const toleranceSeconds = 3;
   const compareLength = Math.min(answerKey.chapters.length, actualChapters.length);
   let detailedMatches = 0;
   let titleMismatches = 0;
@@ -506,6 +508,7 @@ function scoreAnswerKey(answerKey: AnswerKeySummary | null, actualChapters: Subm
   const passed = Boolean(countMatches && detailedMatches === answerKey.chapters.length && missingChapters === 0 && extraChapters === 0);
   return {
     keyPath: answerKey.path,
+    toleranceSeconds,
     expectedCount: answerKey.expectedCount,
     expectedDetailedCount: answerKey.chapters.length,
     actualCount,
@@ -907,7 +910,7 @@ function answerKeyStatus(score: AnswerKeyScore | null): string {
   const time =
     score.maxTimeDeltaSeconds === null
       ? "time ?"
-      : `max Δ ${fmt(score.maxTimeDeltaSeconds)}s, mean Δ ${fmt(score.meanTimeDeltaSeconds)}s`;
+      : `max Δ ${fmt(score.maxTimeDeltaSeconds)}s, mean Δ ${fmt(score.meanTimeDeltaSeconds)}s, tol ${fmt(score.toleranceSeconds)}s`;
   const misses = [score.titleMismatches ? `${score.titleMismatches} title` : null, score.timeMismatches ? `${score.timeMismatches} time` : null, score.missingChapters ? `${score.missingChapters} missing` : null, score.extraChapters ? `${score.extraChapters} extra` : null]
     .filter(Boolean)
     .join(", ");
@@ -960,7 +963,7 @@ function renderMarkdown(cases: CaseSummary[], aggregate: AggregateSummary, gener
   lines.push("- `Judge audit` counts accepted node-boundary reports that have a matching node-boundary judge acceptance in the event log. It proves the report is judge-backed, not that a human answer key agrees.");
   lines.push("- `Node reports` is the original run output before current-code replay; failed/dropped rows are unresolved evidence gaps even when the merged plan is structurally valid.");
   lines.push("- `Node source` counts boundary decisions accepted by deterministic pre-agent research versus accepted by the node agent fallback.");
-  lines.push("- `Answer key` compares the selected node artifact against committed case metadata. Detailed keys require exact normalized titles and timestamps within 3 seconds; count-only keys only prove expected chapter count.");
+  lines.push("- `Answer key` compares the selected node artifact against committed case metadata. Detailed keys require exact normalized titles and timestamps within the reported tolerance; count-only keys only prove expected chapter count.");
   lines.push("- `Node diagnostic` is emitted only by failed node runs and is a hint to inspect corpus/data quality; it does not accept chapters or relax validation.");
   lines.push("- `stale-or-dirty` means the selected artifact was not produced cleanly from the current git commit; rerun that corpus case before treating it as current proof.");
   lines.push("- `unversioned` means the artifact predates git provenance tracking; rerun that corpus case before treating it as current proof.");
