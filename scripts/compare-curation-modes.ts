@@ -252,7 +252,11 @@ function monotonicErrors(chapters: SubmittedChapter[]): number {
 async function replayNodeReports(caseDir: string, result: JsonRecord): Promise<ModeSummary["nodeReplay"]> {
   const originalReports = Array.isArray(result.nodeBoundaryReports) ? (result.nodeBoundaryReports as NodeBoundaryCurationReport[]) : [];
   if (originalReports.length === 0) return undefined;
-  const acceptedById = new Map(originalReports.filter((report) => report.outcome === "accepted").map((report) => [report.epubNodeId, report]));
+  const acceptedById = new Map(
+    originalReports
+      .filter((report) => (report.outcome === "accepted" || report.outcome === "dropped") && typeof report.startTime === "number")
+      .map((report) => [report.epubNodeId, report])
+  );
   const reportIds = new Set(originalReports.map((report) => report.epubNodeId));
   const epubEntries = (await loadEpubEntries(path.join(caseDir, "book.epub"))).filter((entry) => reportIds.has(entry.id));
   const replayReports: NodeBoundaryCurationReport[] = [];
