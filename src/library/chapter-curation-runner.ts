@@ -2174,6 +2174,14 @@ async function tryDeterministicNodeBoundary(
       result: validated,
     });
   }
+
+  if (headingCandidate) {
+    const acceptedHeading = await validateDeterministicNodeBoundaryCandidate(ctx, span, targetBoundary, headingCandidate, {
+      eventSuffix: "heading=1",
+    });
+    if (acceptedHeading) return acceptedHeading;
+  }
+
   const research = await researchEpubBoundary(ctx, {
     epubNodeId: targetBoundary.epubNodeId,
     expectedTime: targetBoundary.expectedStartTime,
@@ -2210,7 +2218,19 @@ async function tryDeterministicNodeBoundary(
   });
   if (!candidate) return null;
 
-  const openingFallback = isOpeningNode && candidate.source === "near_opener_fallback";
+  return validateDeterministicNodeBoundaryCandidate(ctx, span, targetBoundary, candidate, {
+    eventSuffix: null,
+  });
+}
+
+async function validateDeterministicNodeBoundaryCandidate(
+  ctx: ChapterCurationContext,
+  span: ChapterCurationSpan,
+  targetBoundary: ChapterCurationTargetBoundary,
+  candidate: DeterministicBoundaryCandidate,
+  options: { eventSuffix: string | null }
+): Promise<NodeBoundaryDecision | null> {
+  const openingFallback = targetBoundary.epubIndex === 0 && candidate.source === "near_opener_fallback";
   const startTime = openingFallback ? openingAudioOnlyEndTime(ctx, span) : candidate.startTime;
   const validated = await validateNodeBoundary(
     ctx,
@@ -2245,10 +2265,13 @@ async function tryDeterministicNodeBoundary(
   if (!validated.accepted) {
     logChapterCurationEvent(ctx, {
       type: "deterministic-node-boundary-rejected",
-      message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} validation=0`,
+      message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId}${
+        options.eventSuffix ? ` ${options.eventSuffix}` : ""
+      } validation=0`,
       span,
       targetBoundary,
       result: validated,
+      candidate,
     });
     return null;
   }
@@ -2262,7 +2285,9 @@ async function tryDeterministicNodeBoundary(
   if (skipJudge) {
     logChapterCurationEvent(ctx, {
       type: "deterministic-node-boundary-judge-skipped",
-      message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} judge=skipped reason=${skipJudgeReason}`,
+      message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId}${
+        options.eventSuffix ? ` ${options.eventSuffix}` : ""
+      } judge=skipped reason=${skipJudgeReason}`,
       span,
       targetBoundary,
       result: validated,
@@ -2284,7 +2309,9 @@ async function tryDeterministicNodeBoundary(
     if (!judgment?.accepted) {
       logChapterCurationEvent(ctx, {
         type: "deterministic-node-boundary-rejected",
-        message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} judge=0`,
+        message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId}${
+          options.eventSuffix ? ` ${options.eventSuffix}` : ""
+        } judge=0`,
         span,
         targetBoundary,
         result: validated,
@@ -2300,7 +2327,9 @@ async function tryDeterministicNodeBoundary(
   };
   logChapterCurationEvent(ctx, {
     type: "deterministic-node-boundary-accepted",
-    message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} accepted=1 time=${Math.round(accepted.startTime)}s`,
+    message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId}${
+      options.eventSuffix ? ` ${options.eventSuffix}` : ""
+    } accepted=1 time=${Math.round(accepted.startTime)}s`,
     span,
     targetBoundary,
     result: accepted,
