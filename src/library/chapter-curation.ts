@@ -87,7 +87,6 @@ export {
   resolveRecursiveChapterSpans,
   rankTargetBoundaries,
   nodeBoundaryTargets,
-  isShortHeadingOnlyEntry,
   createRootCurationSpan,
   applyAudibleEpubNodeSelection,
   applyEmbeddedAudioChapterNodeScope,

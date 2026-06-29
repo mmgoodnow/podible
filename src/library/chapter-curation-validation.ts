@@ -329,7 +329,7 @@ function spokenTitleVariants(title: string): string[][] {
   return variants.filter((variant, index, all) => all.findIndex((candidate) => candidate.join("\u0000") === variant.join("\u0000")) === index);
 }
 
-export function isShortHeadingOnlyEntry(entry: EpubChapterEntry): boolean {
+function isShortHeadingOnlyEntry(entry: EpubChapterEntry): boolean {
   const titleTokens = normalizedWordTokens(entry.title);
   if (titleTokens.length < 2 || titleTokens.length > 5) return false;
   const meaningful = titleTokens.filter((token) => !isStructuralTitleToken(token));

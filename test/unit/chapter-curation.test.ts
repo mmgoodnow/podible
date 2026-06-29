@@ -13,7 +13,6 @@ import {
   chooseSupportingContextBacktrackCandidate,
   fuzzySearchTranscript,
   fulcrumJudgeToolUseBehavior,
-  isShortHeadingOnlyEntry,
   nodeBoundaryToolUseBehavior,
   estimateTimestampFromEpubPosition,
   getTranscriptWindow,
@@ -2215,33 +2214,6 @@ describe("chapter curation tools", () => {
     expect(candidate?.source).toBe("spoken_heading");
     expect(candidate?.phrase).toBe("three night");
     expect(candidate?.startTime).toBe(80);
-  });
-
-  test("isShortHeadingOnlyEntry identifies recoverable interstitial heading markers", () => {
-    expect(
-      isShortHeadingOnlyEntry(
-        epubEntry({
-          id: "section-target",
-          title: "XV - Night",
-          words: [
-            { ...word("XV"), kind: "heading" },
-            { ...word("NIGHT"), kind: "heading" },
-          ],
-        })
-      )
-    ).toBe(true);
-
-    expect(
-      isShortHeadingOnlyEntry(
-        epubEntry({
-          id: "chapter-target",
-          title: "Chapter Fifteen",
-          words: "Chapter Fifteen I return to the room and close the door behind me"
-            .split(/\s+/)
-            .map((text, index) => ({ ...word(text), kind: index < 2 ? "heading" : "body" })),
-        })
-      )
-    ).toBe(false);
   });
 
   test("findSpokenHeadingBoundaryCandidate ignores body-text title mentions not followed by the target opener", async () => {
