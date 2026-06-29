@@ -105,6 +105,49 @@ type CaseSummary = {
   };
 };
 
+type AggregateSummary = {
+  cases: {
+    total: number;
+    runnable: number;
+    paired: number;
+  };
+  artifacts: {
+    recursive: number;
+    node: number;
+    currentCleanRecursive: number;
+    currentCleanNode: number;
+    staleOrUnversionedRecursive: string[];
+    staleOrUnversionedNode: string[];
+  };
+  acceptance: {
+    recursiveAccepted: number;
+    nodeAcceptedAfterReplay: number;
+    nodeReplayValid: number;
+    nodeReplayInvalid: number;
+  };
+  pairedDeltas: {
+    cases: number;
+    nodeAcceptedMinusRecursive: number;
+    nodeChaptersMinusRecursive: number;
+    nodeWallSecondsSaved: number;
+    nodeRequestsSaved: number;
+    nodeTokensSaved: number;
+    nodeCostUsdSaved: number;
+    recursiveWallSeconds: number;
+    nodeWallSeconds: number;
+    wallSpeedup: number | null;
+    recursiveRequests: number;
+    nodeRequests: number;
+    requestReductionRatio: number | null;
+    recursiveTokens: number;
+    nodeTokens: number;
+    tokenReductionRatio: number | null;
+    recursiveCostUsd: number;
+    nodeCostUsd: number;
+    costReductionRatio: number | null;
+  };
+};
+
 function usage(): never {
   console.error("Usage: bun run scripts/compare-curation-modes.ts [tmp/chapter-cases/corpus]");
   process.exit(1);
@@ -493,6 +536,70 @@ function fmt(value: unknown): string {
   return String(value);
 }
 
+function modeSeconds(summary: ModeSummary | null): number | null {
+  if (!summary) return null;
+  return summary.wallSeconds ?? (typeof summary.elapsedMs === "number" ? summary.elapsedMs / 1000 : null);
+}
+
+function ratio(numerator: number, denominator: number): number | null {
+  return denominator > 0 ? round(numerator / denominator, 3) : null;
+}
+
+function aggregateCases(cases: CaseSummary[]): AggregateSummary {
+  const pairedCases = cases.filter((item) => item.node && item.recursive);
+  const comparablePairs = pairedCases.filter((item) => modeSeconds(item.node) !== null && modeSeconds(item.recursive) !== null);
+  const recursiveWallSeconds = comparablePairs.reduce((sum, item) => sum + (modeSeconds(item.recursive) ?? 0), 0);
+  const nodeWallSeconds = comparablePairs.reduce((sum, item) => sum + (modeSeconds(item.node) ?? 0), 0);
+  const recursiveRequests = comparablePairs.reduce((sum, item) => sum + (item.recursive?.requests ?? 0), 0);
+  const nodeRequests = comparablePairs.reduce((sum, item) => sum + (item.node?.requests ?? 0), 0);
+  const recursiveTokens = comparablePairs.reduce((sum, item) => sum + (item.recursive?.tokens ?? 0), 0);
+  const nodeTokens = comparablePairs.reduce((sum, item) => sum + (item.node?.tokens ?? 0), 0);
+  const recursiveCostUsd = comparablePairs.reduce((sum, item) => sum + (item.recursive?.costUsd ?? 0), 0);
+  const nodeCostUsd = comparablePairs.reduce((sum, item) => sum + (item.node?.costUsd ?? 0), 0);
+  return {
+    cases: {
+      total: cases.length,
+      runnable: cases.filter((item) => item.runnable).length,
+      paired: pairedCases.length,
+    },
+    artifacts: {
+      recursive: cases.filter((item) => item.recursive).length,
+      node: cases.filter((item) => item.node).length,
+      currentCleanRecursive: cases.filter((item) => item.recursive?.artifactSelection.currentCleanArtifact).length,
+      currentCleanNode: cases.filter((item) => item.node?.artifactSelection.currentCleanArtifact).length,
+      staleOrUnversionedRecursive: cases.filter((item) => item.recursive && !item.recursive.artifactSelection.currentCleanArtifact).map((item) => item.slug),
+      staleOrUnversionedNode: cases.filter((item) => item.node && !item.node.artifactSelection.currentCleanArtifact).map((item) => item.slug),
+    },
+    acceptance: {
+      recursiveAccepted: cases.filter((item) => item.recursive?.accepted).length,
+      nodeAcceptedAfterReplay: cases.filter((item) => item.node && (item.node.nodeReplay?.acceptedAfterReplay ?? item.node.accepted)).length,
+      nodeReplayValid: cases.filter((item) => item.node?.nodeReplay?.acceptedAfterReplay).length,
+      nodeReplayInvalid: cases.filter((item) => item.node?.nodeReplay && !item.node.nodeReplay.acceptedAfterReplay).length,
+    },
+    pairedDeltas: {
+      cases: comparablePairs.length,
+      nodeAcceptedMinusRecursive: comparablePairs.reduce((sum, item) => sum + (item.comparison.nodeAcceptedMinusRecursive ?? 0), 0),
+      nodeChaptersMinusRecursive: comparablePairs.reduce((sum, item) => sum + (item.comparison.nodeChaptersMinusRecursive ?? 0), 0),
+      nodeWallSecondsSaved: round(recursiveWallSeconds - nodeWallSeconds, 3),
+      nodeRequestsSaved: recursiveRequests - nodeRequests,
+      nodeTokensSaved: recursiveTokens - nodeTokens,
+      nodeCostUsdSaved: roundMoney(recursiveCostUsd - nodeCostUsd),
+      recursiveWallSeconds: round(recursiveWallSeconds, 3),
+      nodeWallSeconds: round(nodeWallSeconds, 3),
+      wallSpeedup: ratio(recursiveWallSeconds, nodeWallSeconds),
+      recursiveRequests,
+      nodeRequests,
+      requestReductionRatio: ratio(recursiveRequests - nodeRequests, recursiveRequests),
+      recursiveTokens,
+      nodeTokens,
+      tokenReductionRatio: ratio(recursiveTokens - nodeTokens, recursiveTokens),
+      recursiveCostUsd: roundMoney(recursiveCostUsd),
+      nodeCostUsd: roundMoney(nodeCostUsd),
+      costReductionRatio: ratio(recursiveCostUsd - nodeCostUsd, recursiveCostUsd),
+    },
+  };
+}
+
 function modeStatus(summary: ModeSummary | null): string {
   if (!summary) return "missing";
   const accepted = summary.nodeReplay?.acceptedAfterReplay ?? summary.accepted;
@@ -525,11 +632,13 @@ function nodeDiagnosticStatus(summary: ModeSummary | null): string {
   return `${diagnostic.kind} (failed window overlap ${overlap}, first opener ${first})`;
 }
 
-function renderMarkdown(cases: CaseSummary[], generatedAt: string): string {
+function renderMarkdown(cases: CaseSummary[], aggregate: AggregateSummary, generatedAt: string): string {
   const runnable = cases.filter((item) => item.runnable).length;
   const paired = cases.filter((item) => item.recursive && item.node).length;
   const nodeAccepted = cases.filter((item) => item.node && (item.node.nodeReplay?.acceptedAfterReplay ?? item.node.accepted)).length;
   const recursiveAccepted = cases.filter((item) => item.recursive?.accepted).length;
+  const staleNodeList = aggregate.artifacts.staleOrUnversionedNode.length === 0 ? "none" : aggregate.artifacts.staleOrUnversionedNode.join(", ");
+  const staleRecursiveList = aggregate.artifacts.staleOrUnversionedRecursive.length === 0 ? "none" : aggregate.artifacts.staleOrUnversionedRecursive.join(", ");
   const lines = [
     "# Chapter Curation Mode Comparison",
     "",
@@ -539,6 +648,15 @@ function renderMarkdown(cases: CaseSummary[], generatedAt: string): string {
     "",
     `Cases: ${cases.length} total, ${runnable} runnable with local EPUB+transcript, ${paired} have both recursive and node artifacts.`,
     `Accepted artifacts: recursive ${recursiveAccepted}/${cases.filter((item) => item.recursive).length}, node ${nodeAccepted}/${cases.filter((item) => item.node).length} after current-code node replay.`,
+    "",
+    "## Aggregate",
+    "",
+    `- Current-clean node artifacts: ${aggregate.artifacts.currentCleanNode}/${aggregate.artifacts.node}. Stale or unversioned node artifacts: ${staleNodeList}.`,
+    `- Current-clean recursive artifacts: ${aggregate.artifacts.currentCleanRecursive}/${aggregate.artifacts.recursive}. Stale or unversioned recursive artifacts: ${staleRecursiveList}.`,
+    `- Node replay validity: ${aggregate.acceptance.nodeReplayValid} valid, ${aggregate.acceptance.nodeReplayInvalid} invalid.`,
+    `- Paired operational comparison (${aggregate.pairedDeltas.cases} cases): node saved ${fmt(aggregate.pairedDeltas.nodeWallSecondsSaved)} seconds, ${fmt(aggregate.pairedDeltas.nodeRequestsSaved)} requests, ${fmt(aggregate.pairedDeltas.nodeTokensSaved)} tokens, and $${fmt(aggregate.pairedDeltas.nodeCostUsdSaved)}.`,
+    `- Paired speedup: ${fmt(aggregate.pairedDeltas.wallSpeedup)}x wall-clock (${fmt(aggregate.pairedDeltas.recursiveWallSeconds)}s recursive vs ${fmt(aggregate.pairedDeltas.nodeWallSeconds)}s node).`,
+    `- Paired reductions: ${fmt(aggregate.pairedDeltas.requestReductionRatio === null ? null : aggregate.pairedDeltas.requestReductionRatio * 100)}% requests, ${fmt(aggregate.pairedDeltas.tokenReductionRatio === null ? null : aggregate.pairedDeltas.tokenReductionRatio * 100)}% tokens, ${fmt(aggregate.pairedDeltas.costReductionRatio === null ? null : aggregate.pairedDeltas.costReductionRatio * 100)}% cost.`,
     "",
     "| Case | Recursive | Node | Node reports | Node source | Node replay | Node diagnostic | Δ seconds | Δ requests | Δ tokens | Δ cost |",
     "| --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |",
@@ -575,9 +693,11 @@ async function main(): Promise<void> {
     .sort((a, b) => path.basename(a).localeCompare(path.basename(b)));
   const generatedAt = new Date().toISOString();
   const cases = await Promise.all(caseDirs.map((caseDir) => summarizeCase(caseDir)));
+  const aggregate = aggregateCases(cases);
   const output = {
     generatedAt,
     corpusRoot,
+    aggregate,
     cases,
   };
   const runId = generatedAt.replace(/[:.]/g, "-");
@@ -585,7 +705,7 @@ async function main(): Promise<void> {
   const markdownPath = path.join(corpusRoot, `curation-comparison-${runId}.md`);
   await mkdir(corpusRoot, { recursive: true });
   await writeFile(jsonPath, `${JSON.stringify(output, null, 2)}\n`, "utf8");
-  await writeFile(markdownPath, renderMarkdown(cases, generatedAt), "utf8");
+  await writeFile(markdownPath, renderMarkdown(cases, aggregate, generatedAt), "utf8");
   console.log(JSON.stringify({ ok: true, cases: cases.length, jsonPath, markdownPath }, null, 2));
 }
 
