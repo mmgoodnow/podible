@@ -11,6 +11,7 @@
     "replay-chapter-analysis": "bun run scripts/replay-chapter-analysis.ts",
     "run-red-rising-curation": "bun run scripts/run-red-rising-curation.ts",
     "run-corpus-curation": "bun run scripts/run-corpus-curation.ts",
+    "export-prod-corpus-case": "bun run scripts/export-prod-corpus-case.ts",
     "compare-curation-modes": "bun run scripts/compare-curation-modes.ts",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit"
