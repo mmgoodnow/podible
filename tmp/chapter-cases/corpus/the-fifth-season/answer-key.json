@@ -1,0 +1,34 @@
+{
+  "slug": "the-fifth-season",
+  "expectedChapters": [
+    { "title": "Prologue: you are here", "startTime": 0 },
+    { "title": "1: you, at the end", "startTime": 1762.626 },
+    { "title": "2: Damaya, in winters past", "startTime": 2985.482 },
+    { "title": "3: you're on your way", "startTime": 5048.528 },
+    { "title": "4: Syenite, cut and polished", "startTime": 7309.177 },
+    { "title": "5: you are not alone", "startTime": 9206.619 },
+    { "title": "6: Damaya, grinding to a halt", "startTime": 9954.069 },
+    { "title": "7: you plus one is two", "startTime": 12633.652 },
+    { "title": "8: Syenite on the highroad", "startTime": 13900.579 },
+    { "title": "9: Syenite among the enemy", "startTime": 18505.7 },
+    { "title": "10: you walk beside the beast", "startTime": 20967.479 },
+    { "title": "11: Damaya at the fulcrum of it all", "startTime": 23306.379 },
+    { "title": "12: Syenite finds a new toy", "startTime": 25866.936 },
+    { "title": "13: you're on the trail", "startTime": 28328.576 },
+    { "title": "14: Syenite breaks her toys", "startTime": 29733.337 },
+    { "title": "15: you're among friends", "startTime": 32213.832 },
+    { "title": "16: Syenite on the hidden land", "startTime": 33887.805 },
+    { "title": "17: Damaya, in finality", "startTime": 36428.486 },
+    { "title": "18: you discover wonders down below", "startTime": 40895.355 },
+    { "title": "19: Syenite on the lookout", "startTime": 42409.853 },
+    { "title": "20: Syenite, stretched and snapped back", "startTime": 44639.851 },
+    { "title": "21: you're getting the band back together", "startTime": 47921.946 },
+    { "title": "22: Syenite, fractured", "startTime": 51064.302 },
+    { "title": "23: you're all you need", "startTime": 54860.579 }
+  ],
+  "notes": [
+    "The raw audio chapter starts and transcript chapter announcements support 24 narrated starts: prologue plus chapters 1-23.",
+    "The local book.epub in this case appears to be for The Stone Sky while metadata/transcript/raw chapters are for The Fifth Season, so this key is grounded in transcript and raw chapter evidence rather than EPUB structure.",
+    "Several transcript title announcements are mistranscribed, especially Syenite/Damaya titles, but the raw chapter starts align with the visible title announcements."
+  ]
+}
