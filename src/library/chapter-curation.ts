@@ -113,4 +113,5 @@ export {
   findEmbeddedNodeBoundaryCandidate,
   embeddedNodeBoundaryHasTranscriptEvidence,
   chooseResearchBoundaryCandidate,
+  chooseSupportingContextBacktrackCandidate,
 } from "./chapter-curation-runner";

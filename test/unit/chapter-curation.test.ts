@@ -10,6 +10,7 @@ import {
   findEmbeddedNodeBoundaryCandidate,
   findFulcrumCandidates,
   findSpokenHeadingBoundaryCandidate,
+  chooseSupportingContextBacktrackCandidate,
   fuzzySearchTranscript,
   fulcrumJudgeToolUseBehavior,
   nodeBoundaryToolUseBehavior,
@@ -848,6 +849,75 @@ describe("chapter curation tools", () => {
       source: "near_opener_fallback",
       phraseStartWord: 53,
       reverseEpubRelation: "near_opener",
+    });
+  });
+
+  test("chooseSupportingContextBacktrackCandidate requires overlap with the target opener", () => {
+    const context = ctx({
+      durationMs: 3_600_000,
+      manifestation: manifestation({ duration_ms: 3_600_000 }),
+      epubEntries: [
+        epubEntry({
+          id: "chapter-target",
+          title: "Chapter Target",
+          cumulativeRatio: 1,
+          cumulativeWords: 40,
+          words: "Chapter Target I go back along the dimmed hall and up the muffled stairs stealthily to my room"
+            .split(/\s+/)
+            .map((text, index) => ({ ...word(text), kind: index < 2 ? "heading" : "body" })),
+        }),
+      ],
+      transcript: transcriptFromUtterances([
+        { startMs: 950_000, endMs: 954_000, text: "I go to him and place my lips closed against his." },
+        { startMs: 960_000, endMs: 966_000, text: "I go back along the dimmed hall and up the muffled stairs." },
+      ]),
+    });
+    const span = createRootCurationSpan(context);
+
+    const weakResearch: ResearchEpubBoundaryResult = {
+      epubNodeId: "chapter-target",
+      epubIndex: 0,
+      title: "Chapter Target",
+      expectedStartTime: 900,
+      searchScope: { startTime: 0, endTime: 3_600 },
+      anchorPhrases: [],
+      bestCandidates: [
+        {
+          phrase: "place my lips closed against his",
+          phraseStartWord: 48,
+          phraseWordCount: 6,
+          startTime: 952,
+          endTime: 954,
+          distanceFromExpectedSeconds: 52,
+          transcriptText: "place my lips closed against his",
+          transcriptWindow: "I go to him and place my lips closed against his.",
+          reverseEpubRelation: "opener",
+          boundaryUse: "supporting_context",
+        },
+      ],
+    };
+
+    expect(chooseSupportingContextBacktrackCandidate(context, weakResearch, span)).toBeNull();
+
+    const strongResearch: ResearchEpubBoundaryResult = {
+      ...weakResearch,
+      bestCandidates: [
+        {
+          ...weakResearch.bestCandidates[0]!,
+          phrase: "muffled stairs",
+          phraseStartWord: 18,
+          startTime: 964,
+          endTime: 966,
+          transcriptText: "muffled stairs",
+          transcriptWindow: "I go back along the dimmed hall and up the muffled stairs.",
+        },
+      ],
+    };
+
+    expect(chooseSupportingContextBacktrackCandidate(context, strongResearch, span)).toMatchObject({
+      source: "supporting_context_backtrack",
+      startTime: 960,
+      phrase: "I go back along the dimmed hall and up the muffled stairs.",
     });
   });
 

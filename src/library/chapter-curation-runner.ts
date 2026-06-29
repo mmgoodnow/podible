@@ -1622,12 +1622,16 @@ export function chooseResearchBoundaryCandidate(
   };
 }
 
-function chooseSupportingContextBacktrackCandidate(
+export function chooseSupportingContextBacktrackCandidate(
   ctx: ChapterCurationContext,
   research: ResearchEpubBoundaryResult | null,
   span: ChapterCurationSpan
 ): DeterministicBoundaryCandidate | null {
   if (!research) return null;
+  const entry = ctx.epubEntries[research.epubIndex];
+  if (!entry) return null;
+  const openerTokens = distinctiveOpenerTokens(entry);
+  if (openerTokens.length === 0) return null;
   const supportingHits = research.bestCandidates
     .filter(
       (hit) =>
@@ -1646,6 +1650,7 @@ function chooseSupportingContextBacktrackCandidate(
     for (const utterance of utterances) {
       const text = normalizeToolText(utterance.text);
       if (normalizedWordTokens(text).length < 4) continue;
+      if (!hasOpenerTokenEvidence(text, openerTokens)) continue;
       const reverse = searchEpubText(ctx, {
         query: text,
         nodeIds: [research.epubNodeId],
@@ -1667,6 +1672,23 @@ function chooseSupportingContextBacktrackCandidate(
   }
 
   return null;
+}
+
+function distinctiveOpenerTokens(entry: EpubChapterEntry): string[] {
+  const tokens = textTokens(summarizeFirstBodyWords(entry, 40));
+  const distinct: string[] = [];
+  for (const token of tokens) {
+    if (isStructuralTitleToken(token) || distinct.includes(token)) continue;
+    distinct.push(token);
+    if (distinct.length >= 8) break;
+  }
+  return distinct;
+}
+
+function hasOpenerTokenEvidence(text: string, openerTokens: string[]): boolean {
+  const textTokenSet = new Set(textTokens(text));
+  const matched = openerTokens.filter((token) => textTokenSet.has(token));
+  return matched.length >= Math.min(3, Math.max(2, Math.ceil(openerTokens.length / 2)));
 }
 
 function openingAudioOnlyEndTime(ctx: ChapterCurationContext, span: ChapterCurationSpan): number {
