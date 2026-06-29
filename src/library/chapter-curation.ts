@@ -102,6 +102,7 @@ export type { ChapterCurationDetailedResult } from "./chapter-curation-runner";
 export {
   buildNodeBoundaryPreflightDiagnostic,
   canSkipDeterministicBoundaryJudge,
+  canSkipOpeningInteriorStartJudge,
   runNodeParallelAgenticChapterCurationDetailed,
   runRecursiveAgenticChapterCurationDetailed,
   runAgenticChapterCuration,
@@ -116,4 +117,5 @@ export {
   embeddedNodeBoundaryHasTranscriptEvidence,
   chooseResearchBoundaryCandidate,
   chooseSupportingContextBacktrackCandidate,
+  findOpeningInteriorStartCandidate,
 } from "./chapter-curation-runner";

@@ -10,6 +10,7 @@ import {
   findEmbeddedNodeBoundaryCandidate,
   findFulcrumCandidates,
   findSpokenHeadingBoundaryCandidate,
+  findOpeningInteriorStartCandidate,
   chooseSupportingContextBacktrackCandidate,
   fuzzySearchTranscript,
   fulcrumJudgeToolUseBehavior,
@@ -23,6 +24,7 @@ import {
   applyTranscriptEndpointEpubNodeScope,
   buildNodeBoundaryPreflightDiagnostic,
   canSkipDeterministicBoundaryJudge,
+  canSkipOpeningInteriorStartJudge,
   chooseResearchBoundaryCandidate,
   createRootCurationSpan,
   rankTargetBoundaries,
@@ -1043,6 +1045,109 @@ describe("chapter curation tools", () => {
       startTime: 960,
       phrase: "I go back along the dimmed hall and up the muffled stairs.",
     });
+  });
+
+  test("findOpeningInteriorStartCandidate accepts first-node audio that starts inside the EPUB opener", async () => {
+    const context = ctx({
+      durationMs: 720_000,
+      manifestation: manifestation({ duration_ms: 720_000 }),
+      epubEntries: [
+        epubEntry({
+          id: "chapter-one",
+          title: "Chapter One",
+          cumulativeRatio: 0.5,
+          cumulativeWords: 42,
+          words:
+            "Chapter One July Shane had never wanted anything so badly in his life as the winning stride waiting just beyond the trail exit while the crowd gathered beneath the summer banners and every runner breathed hard against the morning heat remembering every mile that led them there while coaches shouted from the ropes and cameras waited beyond the finish line Shane tried to ignore it as he focused on the trail exit just ahead"
+              .split(/\s+/)
+              .map((text, index) => ({ ...word(text), kind: index < 2 ? "heading" : "body" })),
+        }),
+        epubEntry({
+          id: "chapter-two",
+          title: "Chapter Two",
+          cumulativeRatio: 1,
+          cumulativeWords: 54,
+          words: "Chapter Two Ilya crossed the finish line with an easy smile and a handful of impossible promises".split(/\s+/).map(word),
+        }),
+      ],
+      transcript: transcriptFromUtterances([
+        { startMs: 0, endMs: 1_800, text: "This is Honourable." },
+        { startMs: 62_320, endMs: 67_160, text: "Shane tried to ignore it as he focused on the trail exit just ahead." },
+        { startMs: 68_040, endMs: 74_200, text: "Suddenly Ilya was right beside him drenched in sweat." },
+      ]),
+    });
+    const span = createRootCurationSpan(context);
+    const candidate = findOpeningInteriorStartCandidate(context, span, {
+      epubNodeId: "chapter-one",
+      epubIndex: 0,
+      title: "Chapter One",
+      expectedStartTime: 0,
+      localNodeRatio: 0,
+    });
+
+    expect(candidate).toMatchObject({
+      source: "opening_interior_start",
+      startTime: 62.32,
+      reverseEpubRelation: "interior",
+    });
+
+    if (!candidate) throw new Error("expected opening interior candidate");
+    const targetBoundary: ChapterCurationTargetBoundary = {
+      epubNodeId: "chapter-one",
+      epubIndex: 0,
+      title: "Chapter One",
+      expectedStartTime: 0,
+      localNodeRatio: 0,
+    };
+    const validated = await validateNodeBoundary(
+      context,
+      {
+        spanPath: span.path,
+        epubNodeId: targetBoundary.epubNodeId,
+        title: targetBoundary.title,
+        startTime: candidate.startTime,
+        evidence: "Test evidence.",
+      },
+      { span, targetBoundary }
+    );
+
+    expect(validated.accepted).toBe(true);
+    if (validated.accepted) expect(canSkipOpeningInteriorStartJudge(targetBoundary, candidate, validated)).toBe(true);
+  });
+
+  test("findOpeningInteriorStartCandidate rejects early transcript that belongs to another EPUB node", () => {
+    const context = ctx({
+      durationMs: 720_000,
+      manifestation: manifestation({ duration_ms: 720_000 }),
+      epubEntries: [
+        epubEntry({
+          id: "chapter-one",
+          title: "Chapter One",
+          cumulativeRatio: 0.5,
+          cumulativeWords: 12,
+          words: "Chapter One July Shane waited quietly near the trail exit and watched the empty road".split(/\s+/).map(word),
+        }),
+        epubEntry({
+          id: "chapter-two",
+          title: "Chapter Two",
+          cumulativeRatio: 1,
+          cumulativeWords: 28,
+          words: "Chapter Two Ilya crossed the finish line with an easy smile and a handful of impossible promises".split(/\s+/).map(word),
+        }),
+      ],
+      transcript: transcriptFromUtterances([{ startMs: 62_320, endMs: 67_160, text: "Ilya crossed the finish line with an easy smile." }]),
+    });
+    const span = createRootCurationSpan(context);
+
+    expect(
+      findOpeningInteriorStartCandidate(context, span, {
+        epubNodeId: "chapter-one",
+        epubIndex: 0,
+        title: "Chapter One",
+        expectedStartTime: 0,
+        localNodeRatio: 0,
+      })
+    ).toBeNull();
   });
 
   test("estimateTimestampFromEpubPosition maps EPUB word position onto duration", () => {
