@@ -13,6 +13,10 @@ import {
 
 type JsonRecord = Record<string, any>;
 
+const boundaryDiagnosticStopTokens = new Set(
+  "about after again among before being between because cannot could does done from have into just like more most much only over should some than that their them then there they this through under very were what when where which while will with within without would your".split(" ")
+);
+
 type EventSummary = {
   eventLog: string | null;
   wallSeconds: number | null;
@@ -64,6 +68,12 @@ type ModeSummary = {
     coverage: number;
     monotonicErrors: number;
     acceptedAfterReplay: boolean;
+  };
+  nodeFailureDiagnostic?: {
+    kind: string;
+    message: string;
+    failedExpectedWindowOverlap: number | null;
+    firstCuratedNodeOpeningOverlap: number | null;
   };
 };
 
@@ -121,6 +131,22 @@ function round(value: number, digits = 3): number {
 
 function roundMoney(value: number): number {
   return round(value, 6);
+}
+
+function diagnosticTokens(value: string): string[] {
+  return (
+    value
+      .toLowerCase()
+      .match(/[a-z0-9]+(?:'[a-z0-9]+)?/g)
+      ?.map((token) => token.replace(/[^a-z0-9]+/g, ""))
+      .filter((token) => token.length >= 4 && !boundaryDiagnosticStopTokens.has(token)) ?? []
+  );
+}
+
+function overlapRatio(sampleTokens: string[], candidateTokens: Set<string>): number {
+  if (sampleTokens.length === 0) return 0;
+  const hits = sampleTokens.filter((token) => candidateTokens.has(token)).length;
+  return round(hits / sampleTokens.length, 3);
 }
 
 function timestampSeconds(start: string | null, end: string | null): number | null {
@@ -279,6 +305,61 @@ async function replayNodeReports(caseDir: string, result: JsonRecord): Promise<M
   };
 }
 
+async function buildNodeFailureDiagnostic(caseDir: string, reports: NodeBoundaryCurationReport[]): Promise<ModeSummary["nodeFailureDiagnostic"]> {
+  const failedReports = reports.filter((report) => report.outcome === "failed");
+  const acceptedReports = reports.filter((report) => report.outcome === "accepted" || report.outcome === "dropped");
+  if (reports.length === 0 || failedReports.length === 0) return undefined;
+  const transcript = readJson(path.join(caseDir, "transcript.json"));
+  const utterances = Array.isArray(transcript?.utterances) ? (transcript.utterances as Array<{ startMs?: unknown; endMs?: unknown; text?: unknown }>) : [];
+  if (utterances.length === 0) return undefined;
+  const entries = await loadEpubEntries(path.join(caseDir, "book.epub"));
+  const failedOverlaps = failedReports.flatMap((report) => {
+    const entry = entries.find((candidate) => candidate.id === report.epubNodeId);
+    if (!entry) return [];
+    const sampleTokens = diagnosticTokens(entry.words.slice(0, 160).map((word) => word.text).join(" "));
+    const startMs = Math.max(0, Math.round((report.expectedStartTime - 900) * 1000));
+    const endMs = Math.round((report.expectedStartTime + 900) * 1000);
+    const windowTokens = new Set(
+      diagnosticTokens(
+        utterances
+          .filter((utterance) => typeof utterance.startMs === "number" && typeof utterance.endMs === "number" && utterance.endMs >= startMs && utterance.startMs <= endMs)
+          .map((utterance) => String(utterance.text ?? ""))
+          .join(" ")
+      )
+    );
+    return [{ report, overlap: overlapRatio(sampleTokens, windowTokens) }];
+  });
+  if (failedOverlaps.length === 0) return undefined;
+  const failedExpectedWindowOverlap = round(failedOverlaps.reduce((sum, item) => sum + item.overlap, 0) / failedOverlaps.length, 3);
+  const firstEntry = entries.find((entry) => reports.some((report) => report.epubNodeId === entry.id));
+  const firstCuratedNodeOpeningOverlap = firstEntry
+    ? overlapRatio(
+        diagnosticTokens(firstEntry.words.slice(0, 160).map((word) => word.text).join(" ")),
+        new Set(
+          diagnosticTokens(
+            utterances
+              .slice(0, 80)
+              .map((utterance) => String(utterance.text ?? ""))
+              .join(" ")
+          )
+        )
+      )
+    : null;
+  const allBoundariesFailed = reports.length > 0 && acceptedReports.length === 0;
+  const lowExpectedWindowOverlap = failedExpectedWindowOverlap < 0.45;
+  const kind = allBoundariesFailed ? "all_boundaries_failed" : lowExpectedWindowOverlap ? "low_expected_window_overlap" : "none";
+  if (kind === "none") return undefined;
+  return {
+    kind,
+    message:
+      kind === "all_boundaries_failed"
+        ? "No curated EPUB node could be aligned. Check for a wrong EPUB/audio pairing before tuning the chapter algorithm."
+        : "Failed EPUB nodes have weak opener overlap near their expected transcript windows. Check for translated audio, wrong edition, or wrong EPUB/audio pairing.",
+    failedExpectedWindowOverlap,
+    firstCuratedNodeOpeningOverlap,
+  };
+}
+
 async function summarizeMode(caseDir: string, mode: "recursive" | "node"): Promise<ModeSummary | null> {
   const resultPath = latestResult(caseDir, mode);
   const result = resultPath ? readJson(resultPath) : null;
@@ -312,6 +393,17 @@ async function summarizeMode(caseDir: string, mode: "recursive" | "node"): Promi
       dropped: reports.filter((report) => report.outcome === "dropped").length,
     };
     summary.nodeReplay = await replayNodeReports(caseDir, result);
+    if (result.nodeBoundaryFailureDiagnostic && typeof result.nodeBoundaryFailureDiagnostic === "object") {
+      const diagnostic = result.nodeBoundaryFailureDiagnostic as JsonRecord;
+      summary.nodeFailureDiagnostic = {
+        kind: typeof diagnostic.kind === "string" ? diagnostic.kind : "unknown",
+        message: typeof diagnostic.message === "string" ? diagnostic.message : "",
+        failedExpectedWindowOverlap: typeof diagnostic.failedExpectedWindowOverlap === "number" ? diagnostic.failedExpectedWindowOverlap : null,
+        firstCuratedNodeOpeningOverlap: typeof diagnostic.firstCuratedNodeOpeningOverlap === "number" ? diagnostic.firstCuratedNodeOpeningOverlap : null,
+      };
+    } else if (!(summary.nodeReplay?.acceptedAfterReplay ?? summary.accepted)) {
+      summary.nodeFailureDiagnostic = await buildNodeFailureDiagnostic(caseDir, reports);
+    }
   }
   return summary;
 }
@@ -374,6 +466,14 @@ function nodeSourceStatus(summary: ModeSummary | null): string {
   return `${sources.deterministicAccepted} det, ${sources.agentAccepted} agent, ${sources.failed} failed`;
 }
 
+function nodeDiagnosticStatus(summary: ModeSummary | null): string {
+  const diagnostic = summary?.nodeFailureDiagnostic;
+  if (!diagnostic || diagnostic.kind === "none") return "-";
+  const overlap = diagnostic.failedExpectedWindowOverlap === null ? "?" : `${Math.round(diagnostic.failedExpectedWindowOverlap * 100)}%`;
+  const first = diagnostic.firstCuratedNodeOpeningOverlap === null ? "?" : `${Math.round(diagnostic.firstCuratedNodeOpeningOverlap * 100)}%`;
+  return `${diagnostic.kind} (failed window overlap ${overlap}, first opener ${first})`;
+}
+
 function renderMarkdown(cases: CaseSummary[], generatedAt: string): string {
   const runnable = cases.filter((item) => item.runnable).length;
   const paired = cases.filter((item) => item.recursive && item.node).length;
@@ -389,15 +489,15 @@ function renderMarkdown(cases: CaseSummary[], generatedAt: string): string {
     `Cases: ${cases.length} total, ${runnable} runnable with local EPUB+transcript, ${paired} have both recursive and node artifacts.`,
     `Accepted artifacts: recursive ${recursiveAccepted}/${cases.filter((item) => item.recursive).length}, node ${nodeAccepted}/${cases.filter((item) => item.node).length} after current-code node replay.`,
     "",
-    "| Case | Recursive | Node | Node reports | Node source | Node replay | Δ seconds | Δ requests | Δ tokens | Δ cost |",
-    "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |",
+    "| Case | Recursive | Node | Node reports | Node source | Node replay | Node diagnostic | Δ seconds | Δ requests | Δ tokens | Δ cost |",
+    "| --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |",
   ];
   for (const item of cases) {
     const replay = item.node?.nodeReplay
     ? `${item.node.nodeReplay.acceptedAfterReplay ? "valid" : "invalid"} / ${item.node.nodeReplay.chapters} ch / ${item.node.nodeReplay.failedReports} failed / ${item.node.nodeReplay.droppedReports} dropped / ${Math.round(item.node.nodeReplay.coverage * 100)}% coverage`
       : "-";
     lines.push(
-      `| ${item.slug} | ${modeStatus(item.recursive)} | ${modeStatus(item.node)} | ${nodeReportStatus(item.node)} | ${nodeSourceStatus(item.node)} | ${replay} | ${fmt(item.comparison.nodeWallSecondsMinusRecursive)} | ${fmt(item.comparison.nodeRequestsMinusRecursive)} | ${fmt(item.comparison.nodeTokensMinusRecursive)} | ${fmt(item.comparison.nodeCostUsdMinusRecursive)} |`
+      `| ${item.slug} | ${modeStatus(item.recursive)} | ${modeStatus(item.node)} | ${nodeReportStatus(item.node)} | ${nodeSourceStatus(item.node)} | ${replay} | ${nodeDiagnosticStatus(item.node)} | ${fmt(item.comparison.nodeWallSecondsMinusRecursive)} | ${fmt(item.comparison.nodeRequestsMinusRecursive)} | ${fmt(item.comparison.nodeTokensMinusRecursive)} | ${fmt(item.comparison.nodeCostUsdMinusRecursive)} |`
     );
   }
   lines.push("");
@@ -406,6 +506,7 @@ function renderMarkdown(cases: CaseSummary[], generatedAt: string): string {
   lines.push("- `Node replay` re-merges saved node boundary reports through the current merge implementation, so it can validate fixes without spending more API calls.");
   lines.push("- `Node reports` is the original run output before current-code replay; failed/dropped rows are unresolved evidence gaps even when the merged plan is structurally valid.");
   lines.push("- `Node source` counts boundary decisions accepted by deterministic pre-agent research versus accepted by the node agent fallback.");
+  lines.push("- `Node diagnostic` is emitted only by failed node runs and is a hint to inspect corpus/data quality; it does not accept chapters or relax validation.");
   lines.push("- Positive Δ seconds/requests/tokens/cost means node-parallel used more than recursive for that saved run; negative means it used less.");
   lines.push("- This is not sufficient to prove chapter quality. Add committed answer keys or a judge-scored audit before making accuracy claims.");
   lines.push("");

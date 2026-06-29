@@ -87,8 +87,25 @@ export type ChapterCurationDetailedResult = {
   rawResponses: unknown[];
   nodeBoundaryReports?: NodeBoundaryCurationReport[];
   nodeBoundaryTraces?: RecursiveSpanTrace[];
+  nodeBoundaryFailureDiagnostic?: NodeBoundaryFailureDiagnostic;
   recursiveReports?: RecursiveCurationReport[];
   recursiveSpanTraces?: RecursiveSpanTrace[];
+};
+
+export type NodeBoundaryFailureDiagnostic = {
+  kind: "low_expected_window_overlap" | "all_boundaries_failed" | "none";
+  message: string;
+  totalReports: number;
+  failedReports: number;
+  acceptedReports: number;
+  failedExpectedWindowOverlap: number | null;
+  firstCuratedNodeOpeningOverlap: number | null;
+  worstFailedNodes: Array<{
+    epubNodeId: string;
+    title: string;
+    expectedStartTime: number;
+    overlap: number;
+  }>;
 };
 
 function chapterCurationModelSettings(
@@ -148,6 +165,139 @@ function normalizedWordTokens(value: string): string[] {
 
 function textTokens(value: string): string[] {
   return normalizedWordTokens(value).filter((token) => token.length >= 4);
+}
+
+const boundaryDiagnosticStopTokens = new Set(
+  [
+    "about",
+    "after",
+    "again",
+    "among",
+    "before",
+    "being",
+    "between",
+    "because",
+    "cannot",
+    "could",
+    "does",
+    "done",
+    "from",
+    "have",
+    "into",
+    "just",
+    "like",
+    "more",
+    "most",
+    "much",
+    "only",
+    "over",
+    "should",
+    "some",
+    "than",
+    "that",
+    "their",
+    "them",
+    "then",
+    "there",
+    "they",
+    "this",
+    "through",
+    "under",
+    "very",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "while",
+    "will",
+    "with",
+    "within",
+    "without",
+    "would",
+    "your",
+  ]
+);
+
+function diagnosticTokens(value: string): string[] {
+  return textTokens(value).filter((token) => !boundaryDiagnosticStopTokens.has(token));
+}
+
+function entryOpeningDiagnosticTokens(entry: EpubChapterEntry, wordCount = 160): string[] {
+  return diagnosticTokens(entry.words.slice(0, wordCount).map((word) => word.text).join(" "));
+}
+
+function transcriptExpectedWindowTokens(ctx: ChapterCurationContext, expectedStartTime: number): Set<string> {
+  const startMs = secondsToMs(expectedStartTime - 900);
+  const endMs = secondsToMs(expectedStartTime + 900);
+  return new Set(
+    diagnosticTokens(
+      transcriptUtterances(ctx)
+        .filter((utterance) => utterance.endMs >= startMs && utterance.startMs <= endMs)
+        .map((utterance) => utterance.text)
+        .join(" ")
+    )
+  );
+}
+
+function overlapRatio(sampleTokens: string[], candidateTokens: Set<string>): number {
+  if (sampleTokens.length === 0) return 0;
+  const hits = sampleTokens.filter((token) => candidateTokens.has(token)).length;
+  return Math.round((hits / sampleTokens.length) * 1_000) / 1_000;
+}
+
+function buildNodeBoundaryFailureDiagnostic(ctx: ChapterCurationContext, reports: NodeBoundaryCurationReport[]): NodeBoundaryFailureDiagnostic {
+  const failedReports = reports.filter((report) => report.outcome === "failed");
+  const acceptedReports = reports.filter((report) => report.outcome === "accepted" || report.outcome === "dropped");
+  const failedOverlaps = failedReports.flatMap((report) => {
+    const entry = ctx.epubEntries.find((candidate) => candidate.id === report.epubNodeId);
+    if (!entry) return [];
+    return [{ report, overlap: overlapRatio(entryOpeningDiagnosticTokens(entry), transcriptExpectedWindowTokens(ctx, report.expectedStartTime)) }];
+  });
+  const failedExpectedWindowOverlap =
+    failedOverlaps.length === 0 ? null : Math.round((failedOverlaps.reduce((sum, item) => sum + item.overlap, 0) / failedOverlaps.length) * 1_000) / 1_000;
+  const firstEntry = ctx.epubEntries[0];
+  const firstCuratedNodeOpeningOverlap = firstEntry
+    ? overlapRatio(
+        entryOpeningDiagnosticTokens(firstEntry),
+        new Set(
+          diagnosticTokens(
+            transcriptUtterances(ctx)
+              .slice(0, 80)
+              .map((utterance) => utterance.text)
+              .join(" ")
+          )
+        )
+      )
+    : null;
+  const worstFailedNodes = failedOverlaps
+    .sort((a, b) => a.overlap - b.overlap)
+    .slice(0, 5)
+    .map(({ report, overlap }) => ({
+      epubNodeId: report.epubNodeId,
+      title: report.title,
+      expectedStartTime: report.expectedStartTime,
+      overlap,
+    }));
+  const allBoundariesFailed = reports.length > 0 && acceptedReports.length === 0;
+  const lowExpectedWindowOverlap = failedExpectedWindowOverlap !== null && failedExpectedWindowOverlap < 0.45;
+  const kind: NodeBoundaryFailureDiagnostic["kind"] = allBoundariesFailed ? "all_boundaries_failed" : lowExpectedWindowOverlap ? "low_expected_window_overlap" : "none";
+  const message =
+    kind === "all_boundaries_failed"
+      ? "No curated EPUB node could be aligned. Check for a wrong EPUB/audio pairing before tuning the chapter algorithm."
+      : kind === "low_expected_window_overlap"
+        ? "Failed EPUB nodes have weak opener overlap near their expected transcript windows. Check for translated audio, wrong edition, or wrong EPUB/audio pairing."
+        : "No corpus-level mismatch signal detected.";
+  return {
+    kind,
+    message,
+    totalReports: reports.length,
+    failedReports: failedReports.length,
+    acceptedReports: acceptedReports.length,
+    failedExpectedWindowOverlap,
+    firstCuratedNodeOpeningOverlap,
+    worstFailedNodes,
+  };
 }
 
 function orderedTokenMatchCount(needle: string[], haystack: string[]): number {
@@ -2483,6 +2633,7 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
       const failedReports = nodeBoundaryReports.filter((report) => report.outcome === "failed").length;
       const coverage = nodeBoundaryReports.length === 0 ? 0 : resolvedReports / nodeBoundaryReports.length;
       if (coverage < minNodeBoundaryCoverage) {
+        const nodeBoundaryFailureDiagnostic = buildNodeBoundaryFailureDiagnostic(curationCtx, nodeBoundaryReports);
         logChapterCurationEvent(curationCtx, {
           type: "node-parallel-merge-rejected",
           message: `node parallel merge accepted=0 reason=low_coverage chapters=${nodeChapters.length} coverage=${coverage.toFixed(3)} failed=${failedReports}`,
@@ -2492,6 +2643,7 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
           resolvedReports,
           failedReports,
           nodeBoundaryReports,
+          nodeBoundaryFailureDiagnostic,
         });
         return {
           result: null,
@@ -2500,6 +2652,7 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
           rawResponses: [],
           nodeBoundaryReports,
           nodeBoundaryTraces,
+          nodeBoundaryFailureDiagnostic,
         };
       }
       logChapterCurationEvent(curationCtx, {
@@ -2542,11 +2695,22 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
         nodeBoundaryReports,
       });
     } else {
+      const nodeBoundaryFailureDiagnostic = buildNodeBoundaryFailureDiagnostic(curationCtx, nodeBoundaryReports);
       logChapterCurationEvent(curationCtx, {
         type: "node-parallel-result-null",
         message: "node parallel result=null",
         nodeBoundaryReports,
+        nodeBoundaryFailureDiagnostic,
       });
+      return {
+        result: null,
+        finalOutput: null,
+        newItems: [],
+        rawResponses: [],
+        nodeBoundaryReports,
+        nodeBoundaryTraces,
+        nodeBoundaryFailureDiagnostic,
+      };
     }
 
     return {
