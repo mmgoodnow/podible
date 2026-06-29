@@ -1,23 +1,274 @@
 {
   "slug": "the-handmaids-tale",
-  "expectedCount": 52,
-  "orderingSummary": [
-    "Chapter One",
-    "Section markers in the published order: II - Shopping, III - Night, IV - Waiting Room, V - Nap, VI - Household, VII - Night",
-    "Chapter Two through Chapter Forty-Six",
-    "Historical Notes"
-  ],
-  "ambiguousSpots": [
+  "bookTitle": "The Handmaid's Tale",
+  "author": "Margaret Atwood",
+  "expectedChapterCount": 52,
+  "expectedChapters": [
     {
-      "nodeId": "publisher-intro / track-1",
-      "chapter": "Opening material before Chapter One",
-      "issue": "The first track is non-chapter front matter, so it should not be counted as a narrated chapter start."
+      "index": 1,
+      "title": "Chapter One",
+      "startTime": 300.36
+    },
+    {
+      "index": 2,
+      "title": "II - Shopping",
+      "startTime": 542.76
+    },
+    {
+      "index": 3,
+      "title": "Chapter Two",
+      "startTime": 548.16
+    },
+    {
+      "index": 4,
+      "title": "Chapter Three",
+      "startTime": 1373.88
+    },
+    {
+      "index": 5,
+      "title": "Chapter Four",
+      "startTime": 2124.48
+    },
+    {
+      "index": 6,
+      "title": "Chapter Five",
+      "startTime": 3008.24
+    },
+    {
+      "index": 7,
+      "title": "Chapter Six",
+      "startTime": 4002.72
+    },
+    {
+      "index": 8,
+      "title": "III - Night",
+      "startTime": 4601.72
+    },
+    {
+      "index": 9,
+      "title": "Chapter Seven",
+      "startTime": 4606.08
+    },
+    {
+      "index": 10,
+      "title": "IV - Waiting Room",
+      "startTime": 5074.36
+    },
+    {
+      "index": 11,
+      "title": "Chapter Eight",
+      "startTime": 5092.96
+    },
+    {
+      "index": 12,
+      "title": "Chapter Nine",
+      "startTime": 6124.04
+    },
+    {
+      "index": 13,
+      "title": "Chapter Ten",
+      "startTime": 6664.08
+    },
+    {
+      "index": 14,
+      "title": "Chapter Eleven",
+      "startTime": 7269.32
+    },
+    {
+      "index": 15,
+      "title": "Chapter Twelve",
+      "startTime": 7694.44
+    },
+    {
+      "index": 16,
+      "title": "V - Nap",
+      "startTime": 8631.68
+    },
+    {
+      "index": 17,
+      "title": "VI - Household",
+      "startTime": 9449.52
+    },
+    {
+      "index": 18,
+      "title": "Chapter Fourteen",
+      "startTime": 9450.08
+    },
+    {
+      "index": 19,
+      "title": "Chapter Fifteen",
+      "startTime": 10602.52
+    },
+    {
+      "index": 20,
+      "title": "Chapter Sixteen",
+      "startTime": 11609.56
+    },
+    {
+      "index": 21,
+      "title": "Chapter Seventeen",
+      "startTime": 12065.68
+    },
+    {
+      "index": 22,
+      "title": "VII - Night",
+      "startTime": 12643.4
+    },
+    {
+      "index": 23,
+      "title": "Chapter Eighteen",
+      "startTime": 12666.8
+    },
+    {
+      "index": 24,
+      "title": "Chapter Nineteen",
+      "startTime": 13268.36
+    },
+    {
+      "index": 25,
+      "title": "Chapter Twenty",
+      "startTime": 14432.92
+    },
+    {
+      "index": 26,
+      "title": "Chapter Twenty-One",
+      "startTime": 15455.2
+    },
+    {
+      "index": 27,
+      "title": "Chapter Twenty-Two",
+      "startTime": 16265.12
+    },
+    {
+      "index": 28,
+      "title": "Chapter Twenty-Three",
+      "startTime": 17204.76
+    },
+    {
+      "index": 29,
+      "title": "Chapter Twenty-Four",
+      "startTime": 18277.68
+    },
+    {
+      "index": 30,
+      "title": "Chapter Twenty-Five",
+      "startTime": 18970.76
+    },
+    {
+      "index": 31,
+      "title": "Chapter Twenty-Six",
+      "startTime": 20423.68
+    },
+    {
+      "index": 32,
+      "title": "Chapter Twenty-Seven",
+      "startTime": 20984.28
+    },
+    {
+      "index": 33,
+      "title": "Chapter Twenty-Eight",
+      "startTime": 21933.6
+    },
+    {
+      "index": 34,
+      "title": "Chapter Twenty-Nine",
+      "startTime": 23729.76
+    },
+    {
+      "index": 35,
+      "title": "Chapter Thirty",
+      "startTime": 24624.52
+    },
+    {
+      "index": 36,
+      "title": "Chapter Thirty-One",
+      "startTime": 25394.72
+    },
+    {
+      "index": 37,
+      "title": "Chapter Thirty-Two",
+      "startTime": 26636.76
+    },
+    {
+      "index": 38,
+      "title": "Chapter Thirty-Three",
+      "startTime": 27401.88
+    },
+    {
+      "index": 39,
+      "title": "Chapter Thirty-Four",
+      "startTime": 28213.16
+    },
+    {
+      "index": 40,
+      "title": "Chapter Thirty-Five",
+      "startTime": 29057.68
+    },
+    {
+      "index": 41,
+      "title": "Chapter Thirty-Six",
+      "startTime": 29860.48
+    },
+    {
+      "index": 42,
+      "title": "Chapter Thirty-Seven",
+      "startTime": 30620.32
+    },
+    {
+      "index": 43,
+      "title": "Chapter Thirty-Eight",
+      "startTime": 31611.16
+    },
+    {
+      "index": 44,
+      "title": "Chapter Thirty-Nine",
+      "startTime": 32890.48
+    },
+    {
+      "index": 45,
+      "title": "Chapter Forty",
+      "startTime": 33537.76
+    },
+    {
+      "index": 46,
+      "title": "Chapter Forty-One",
+      "startTime": 34265.04
+    },
+    {
+      "index": 47,
+      "title": "Chapter Forty-Two",
+      "startTime": 35037.28
+    },
+    {
+      "index": 48,
+      "title": "Chapter Forty-Three",
+      "startTime": 35743.44
+    },
+    {
+      "index": 49,
+      "title": "Chapter Forty-Four",
+      "startTime": 36469.96
+    },
+    {
+      "index": 50,
+      "title": "Chapter Forty-Five",
+      "startTime": 37047.96
+    },
+    {
+      "index": 51,
+      "title": "Chapter Forty-Six",
+      "startTime": 37351.6
+    },
+    {
+      "index": 52,
+      "title": "Historical Notes",
+      "startTime": 37998.16
     }
   ],
-  "currentNodeOutput": {
-    "acceptedCount": 52,
-    "qualitativeMatch": true,
-    "note": "The current output matches the curated chapter ordering and count."
-  },
-  "rationale": "This corpus is structurally regular: once the intro track is excluded, the remaining chapter and section markers line up cleanly."
+  "notes": [
+    "Detailed key replaces the older count-only key.",
+    "The first non-chapter audio track is excluded; the key begins at Chapter One.",
+    "Section dividers such as II - Shopping and VII - Night are preserved when they are audible/narrative boundaries.",
+    "Timestamps come from the accepted node run and are consistent with the generic track-style raw audio boundaries plus transcript chapter announcements."
+  ]
 }

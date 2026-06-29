@@ -1,5 +1,11 @@
 {
   "slug": "the-anthropocene-reviewed",
+  "sourceArtifacts": [
+    "metadata.json",
+    "transcript.json",
+    "raw-chapters.json",
+    "book.epub"
+  ],
   "expectedChapters": [
     { "title": "Introduction", "startTime": 25.48 },
     { "title": "“You’ll Never Walk Alone”", "startTime": 1080.24 },

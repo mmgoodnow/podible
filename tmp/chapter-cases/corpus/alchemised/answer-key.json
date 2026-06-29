@@ -1,0 +1,440 @@
+{
+  "slug": "alchemised",
+  "bookTitle": "Alchemised",
+  "author": "SenLinYu",
+  "expectedChapterCount": 85,
+  "expectedChapters": [
+    {
+      "index": 1,
+      "title": "Dedication",
+      "startTime": 35.896961
+    },
+    {
+      "index": 2,
+      "title": "Author's Note",
+      "startTime": 42.444943
+    },
+    {
+      "index": 3,
+      "title": "Prologue",
+      "startTime": 92.611882
+    },
+    {
+      "index": 4,
+      "title": "Chapter 1",
+      "startTime": 232.150839
+    },
+    {
+      "index": 5,
+      "title": "Chapter 2",
+      "startTime": 1813.986803
+    },
+    {
+      "index": 6,
+      "title": "Chapter 3",
+      "startTime": 4467.190794
+    },
+    {
+      "index": 7,
+      "title": "Chapter 4",
+      "startTime": 7785.78576
+    },
+    {
+      "index": 8,
+      "title": "Chapter 5",
+      "startTime": 9062.046757
+    },
+    {
+      "index": 9,
+      "title": "Chapter 6",
+      "startTime": 11288.700726
+    },
+    {
+      "index": 10,
+      "title": "Chapter 7",
+      "startTime": 12583.351701
+    },
+    {
+      "index": 11,
+      "title": "Chapter 8",
+      "startTime": 13609.162676
+    },
+    {
+      "index": 12,
+      "title": "Chapter 9",
+      "startTime": 15706.10966
+    },
+    {
+      "index": 13,
+      "title": "Chapter 10",
+      "startTime": 16500.324626
+    },
+    {
+      "index": 14,
+      "title": "Chapter 11",
+      "startTime": 18540.197596
+    },
+    {
+      "index": 15,
+      "title": "Chapter 12",
+      "startTime": 20169.587574
+    },
+    {
+      "index": 16,
+      "title": "Chapter 13",
+      "startTime": 21685.339546
+    },
+    {
+      "index": 17,
+      "title": "Chapter 14",
+      "startTime": 24576.36254
+    },
+    {
+      "index": 18,
+      "title": "Chapter 15",
+      "startTime": 25193.316508
+    },
+    {
+      "index": 19,
+      "title": "Chapter 16",
+      "startTime": 26286.697506
+    },
+    {
+      "index": 20,
+      "title": "Chapter 17",
+      "startTime": 27604.429478
+    },
+    {
+      "index": 21,
+      "title": "Chapter 18",
+      "startTime": 29218.680454
+    },
+    {
+      "index": 22,
+      "title": "Chapter 19",
+      "startTime": 30312.572426
+    },
+    {
+      "index": 23,
+      "title": "Chapter 20",
+      "startTime": 31937.643401
+    },
+    {
+      "index": 24,
+      "title": "Chapter 21",
+      "startTime": 33288.069388
+    },
+    {
+      "index": 25,
+      "title": "Part Two",
+      "startTime": 34484.035374
+    },
+    {
+      "index": 26,
+      "title": "Chapter 22: Four Years Prior: Solstice Eve, 1785 PD",
+      "startTime": 34502.767347
+    },
+    {
+      "index": 27,
+      "title": "Chapter 23: Februa 1786",
+      "startTime": 36003.734331
+    },
+    {
+      "index": 28,
+      "title": "Chapter 24: Februa 1786",
+      "startTime": 38131.657324
+    },
+    {
+      "index": 29,
+      "title": "Chapter 25: Februa 1786",
+      "startTime": 39817.47229
+    },
+    {
+      "index": 30,
+      "title": "Chapter 26: Februa 1786",
+      "startTime": 41215.870249
+    },
+    {
+      "index": 31,
+      "title": "Chapter 27: Februa 1786",
+      "startTime": 42077.887211
+    },
+    {
+      "index": 32,
+      "title": "Chapter 28: Martius 1786",
+      "startTime": 42889.377188
+    },
+    {
+      "index": 33,
+      "title": "Chapter 29: Martius 1786",
+      "startTime": 44888.197188
+    },
+    {
+      "index": 34,
+      "title": "Chapter 30: Aprilis 1786",
+      "startTime": 45462.426168
+    },
+    {
+      "index": 35,
+      "title": "Chapter 31: Aprilis 1786",
+      "startTime": 47358.103129
+    },
+    {
+      "index": 36,
+      "title": "Chapter 32: Maius 1786",
+      "startTime": 48999.70712
+    },
+    {
+      "index": 37,
+      "title": "Chapter 33: Junius 1786",
+      "startTime": 50875.786077
+    },
+    {
+      "index": 38,
+      "title": "Chapter 34: Julius 1786",
+      "startTime": 52505.455057
+    },
+    {
+      "index": 39,
+      "title": "Chapter 35: Julius 1786",
+      "startTime": 54475.017052
+    },
+    {
+      "index": 40,
+      "title": "Chapter 36: Julius 1786",
+      "startTime": 55946.233016
+    },
+    {
+      "index": 41,
+      "title": "Chapter 37: Julius 1786",
+      "startTime": 56974.598005
+    },
+    {
+      "index": 42,
+      "title": "Chapter 38: Julius 1786",
+      "startTime": 57975.74898
+    },
+    {
+      "index": 43,
+      "title": "Chapter 39: Julius 1786",
+      "startTime": 59084.36195
+    },
+    {
+      "index": 44,
+      "title": "Chapter 40: Septembris 1786",
+      "startTime": 60158.283946
+    },
+    {
+      "index": 45,
+      "title": "Chapter 41: Octobris 1786",
+      "startTime": 61271.819909
+    },
+    {
+      "index": 46,
+      "title": "Chapter 42: Octobris 1786",
+      "startTime": 62295.586893
+    },
+    {
+      "index": 47,
+      "title": "Chapter 43: Octobris 1786",
+      "startTime": 63718.783855
+    },
+    {
+      "index": 48,
+      "title": "Chapter 44: Decembris 1786",
+      "startTime": 65125.819819
+    },
+    {
+      "index": 49,
+      "title": "Chapter 45: Decembris 1786",
+      "startTime": 67291.451791
+    },
+    {
+      "index": 50,
+      "title": "Chapter 46: Decembris 1786",
+      "startTime": 68863.349751
+    },
+    {
+      "index": 51,
+      "title": "Chapter 47: Janua 1787",
+      "startTime": 70618.359728
+    },
+    {
+      "index": 52,
+      "title": "Chapter 48: Janua 1787",
+      "startTime": 72990.695692
+    },
+    {
+      "index": 53,
+      "title": "Chapter 49: Februa 1787",
+      "startTime": 74869.050658
+    },
+    {
+      "index": 54,
+      "title": "Chapter 50: Aprilis 1787",
+      "startTime": 78006.948617
+    },
+    {
+      "index": 55,
+      "title": "Chapter 51: Aprilis 1787",
+      "startTime": 81481.582585
+    },
+    {
+      "index": 56,
+      "title": "Chapter 52: Aprilis 1787",
+      "startTime": 84119.83356
+    },
+    {
+      "index": 57,
+      "title": "Chapter 53: Aprilis 1787",
+      "startTime": 85540.151519
+    },
+    {
+      "index": 58,
+      "title": "Chapter 54: Aprilis 1787",
+      "startTime": 87772.656508
+    },
+    {
+      "index": 59,
+      "title": "Chapter 55: Aprilis 1787",
+      "startTime": 88703.126485
+    },
+    {
+      "index": 60,
+      "title": "Chapter 56: Maius 1787",
+      "startTime": 89911.074467
+    },
+    {
+      "index": 61,
+      "title": "Chapter 57: Maius 1787",
+      "startTime": 91191.09746
+    },
+    {
+      "index": 62,
+      "title": "Chapter 58: Junius 1787",
+      "startTime": 92318.611429
+    },
+    {
+      "index": 63,
+      "title": "Chapter 59: Junius 1787",
+      "startTime": 93483.741406
+    },
+    {
+      "index": 64,
+      "title": "Chapter 60: Junius 1787",
+      "startTime": 95417.77737
+    },
+    {
+      "index": 65,
+      "title": "Chapter 61: Julius 1787",
+      "startTime": 97498.563356
+    },
+    {
+      "index": 66,
+      "title": "Chapter 62: Augustus 1787",
+      "startTime": 98983.246349
+    },
+    {
+      "index": 67,
+      "title": "Chapter 63: Augustus 1787",
+      "startTime": 100853.984308
+    },
+    {
+      "index": 68,
+      "title": "Chapter 64: Augustus 1787",
+      "startTime": 103554.929297
+    },
+    {
+      "index": 69,
+      "title": "Chapter 65: Augustus 1787",
+      "startTime": 105911.104263
+    },
+    {
+      "index": 70,
+      "title": "Part Three",
+      "startTime": 108615.671247
+    },
+    {
+      "index": 71,
+      "title": "Chapter 66: Maius 1789",
+      "startTime": 108633.444218
+    },
+    {
+      "index": 72,
+      "title": "Chapter 67: Maius 1789",
+      "startTime": 110381.409206
+    },
+    {
+      "index": 73,
+      "title": "Chapter 68: Maius 1789",
+      "startTime": 111588.19619
+    },
+    {
+      "index": 74,
+      "title": "Chapter 69: Junius 1789",
+      "startTime": 113162.880181
+    },
+    {
+      "index": 75,
+      "title": "Chapter 70: Julius 1789",
+      "startTime": 114766.403175
+    },
+    {
+      "index": 76,
+      "title": "Chapter 71: Julius 1789",
+      "startTime": 116331.892154
+    },
+    {
+      "index": 77,
+      "title": "Chapter 72: Julius 1789",
+      "startTime": 118244.473152
+    },
+    {
+      "index": 78,
+      "title": "Chapter 73: Julius 1789",
+      "startTime": 119878.693152
+    },
+    {
+      "index": 79,
+      "title": "Chapter 74: Julius 1789",
+      "startTime": 121346.05415
+    },
+    {
+      "index": 80,
+      "title": "Chapter 75: Julius 1789",
+      "startTime": 122987.14712
+    },
+    {
+      "index": 81,
+      "title": "Chapter 76: Julius 1789",
+      "startTime": 123939.304082
+    },
+    {
+      "index": 82,
+      "title": "Chapter 77: Janua 1790",
+      "startTime": 126956.133061
+    },
+    {
+      "index": 83,
+      "title": "Chapter 78: Four Years Later",
+      "startTime": 128535.136054
+    },
+    {
+      "index": 84,
+      "title": "Epilogue: Julius 1808",
+      "startTime": 129138.576054
+    },
+    {
+      "index": 85,
+      "title": "Content Notes from the Author",
+      "startTime": 130302.267029
+    }
+  ],
+  "notes": [
+    "Initial key is grounded in meaningful embedded audiobook chapter markers cross-checked against EPUB node presence and transcript announcements.",
+    "Opening Credits and End Credits are excluded as publisher boilerplate.",
+    "The embedded Part One marker is excluded because the EPUB export does not expose it as a standalone chapter node; the node-curation target is audible EPUB nodes.",
+    "Dedication, Author’s Note, Prologue, Chapters 1-78, Epilogue, and Content Notes from the Author are included.",
+    "Prod chapter_analysis for this manifestation was not used as ground truth because it starts at Copyright and misses early story nodes."
+  ]
+}

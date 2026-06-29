@@ -1,22 +1,213 @@
 {
   "slug": "the-long-game",
-  "expectedCount": 40,
-  "orderingSummary": [
-    "Chapter One through Chapter Thirty-Nine",
-    "Epilogue",
-    "The answer key follows the curated narrative order rather than the raw track numbering style."
-  ],
-  "ambiguousSpots": [
+  "bookTitle": "The Long Game",
+  "author": "Rachel Reid",
+  "expectedChapterCount": 40,
+  "expectedChapters": [
     {
-      "nodeId": null,
-      "chapter": null,
-      "issue": "No material ambiguity surfaced in the latest accepted run."
+      "index": 1,
+      "title": "Chapter One",
+      "startTime": 62.32
+    },
+    {
+      "index": 2,
+      "title": "Chapter Two",
+      "startTime": 844.28
+    },
+    {
+      "index": 3,
+      "title": "Chapter Three",
+      "startTime": 2966.4
+    },
+    {
+      "index": 4,
+      "title": "Chapter Four",
+      "startTime": 4476.64
+    },
+    {
+      "index": 5,
+      "title": "Chapter Five",
+      "startTime": 5573.16
+    },
+    {
+      "index": 6,
+      "title": "Chapter Six",
+      "startTime": 7430.52
+    },
+    {
+      "index": 7,
+      "title": "Chapter Seven",
+      "startTime": 7919.16
+    },
+    {
+      "index": 8,
+      "title": "Chapter Eight",
+      "startTime": 8760.84
+    },
+    {
+      "index": 9,
+      "title": "Chapter Nine",
+      "startTime": 10019.96
+    },
+    {
+      "index": 10,
+      "title": "Chapter Ten",
+      "startTime": 11344.72
+    },
+    {
+      "index": 11,
+      "title": "Chapter Eleven",
+      "startTime": 12197.6
+    },
+    {
+      "index": 12,
+      "title": "Chapter Twelve",
+      "startTime": 13517.2
+    },
+    {
+      "index": 13,
+      "title": "Chapter Thirteen",
+      "startTime": 15576.16
+    },
+    {
+      "index": 14,
+      "title": "Chapter Fourteen",
+      "startTime": 17473.16
+    },
+    {
+      "index": 15,
+      "title": "Chapter Fifteen",
+      "startTime": 18406.88
+    },
+    {
+      "index": 16,
+      "title": "Chapter Sixteen",
+      "startTime": 19779
+    },
+    {
+      "index": 17,
+      "title": "Chapter Seventeen",
+      "startTime": 21057.28
+    },
+    {
+      "index": 18,
+      "title": "Chapter Eighteen",
+      "startTime": 21412.36
+    },
+    {
+      "index": 19,
+      "title": "Chapter Nineteen",
+      "startTime": 22060.76
+    },
+    {
+      "index": 20,
+      "title": "Chapter Twenty",
+      "startTime": 22634.96
+    },
+    {
+      "index": 21,
+      "title": "Chapter Twenty-One",
+      "startTime": 23521.44
+    },
+    {
+      "index": 22,
+      "title": "Chapter Twenty-Two",
+      "startTime": 25418.16
+    },
+    {
+      "index": 23,
+      "title": "Chapter Twenty-Three",
+      "startTime": 26501.04
+    },
+    {
+      "index": 24,
+      "title": "Chapter Twenty-Four",
+      "startTime": 27873.54
+    },
+    {
+      "index": 25,
+      "title": "Chapter Twenty-Five",
+      "startTime": 29083.12
+    },
+    {
+      "index": 26,
+      "title": "Chapter Twenty-Six",
+      "startTime": 30474.68
+    },
+    {
+      "index": 27,
+      "title": "Chapter Twenty-Seven",
+      "startTime": 31321.12
+    },
+    {
+      "index": 28,
+      "title": "Chapter Twenty-Eight",
+      "startTime": 33518.8
+    },
+    {
+      "index": 29,
+      "title": "Chapter Twenty-Nine",
+      "startTime": 33946.96
+    },
+    {
+      "index": 30,
+      "title": "Chapter Thirty",
+      "startTime": 35559.32
+    },
+    {
+      "index": 31,
+      "title": "Chapter Thirty-One",
+      "startTime": 36423.04
+    },
+    {
+      "index": 32,
+      "title": "Chapter Thirty-Two",
+      "startTime": 37621.4
+    },
+    {
+      "index": 33,
+      "title": "Chapter Thirty-Three",
+      "startTime": 39225.12
+    },
+    {
+      "index": 34,
+      "title": "Chapter Thirty-Four",
+      "startTime": 40046.32
+    },
+    {
+      "index": 35,
+      "title": "Chapter Thirty-Five",
+      "startTime": 40739.124
+    },
+    {
+      "index": 36,
+      "title": "Chapter Thirty-Six",
+      "startTime": 41866.204
+    },
+    {
+      "index": 37,
+      "title": "Chapter Thirty-Seven",
+      "startTime": 43332.484
+    },
+    {
+      "index": 38,
+      "title": "Chapter Thirty-Eight",
+      "startTime": 44616.964
+    },
+    {
+      "index": 39,
+      "title": "Chapter Thirty-Nine",
+      "startTime": 44971.284
+    },
+    {
+      "index": 40,
+      "title": "Epilogue",
+      "startTime": 46143.844
     }
   ],
-  "currentNodeOutput": {
-    "acceptedCount": 40,
-    "qualitativeMatch": true,
-    "note": "The current node output matches the answer key qualitatively and by count."
-  },
-  "rationale": "The boundary pattern is regular enough that the curated starts land cleanly, with no special-case opener gaps to defend."
+  "notes": [
+    "Detailed key replaces the older count-only key.",
+    "The key follows the regular narrated order: Chapter One through Chapter Thirty-Nine, then Epilogue.",
+    "Timestamps come from the accepted node run and align with transcript chapter announcements after excluding short non-story opening markers."
+  ]
 }

@@ -6,6 +6,8 @@
     "asset-files.json",
     "metadata.json",
     "transcript.json",
+    "raw-chapters.json",
+    "book.epub",
     "node-agent-result-2026-06-29T08-32-11-729Z.json"
   ],
   "expectedChapterCount": 53,

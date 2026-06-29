@@ -1,31 +1,214 @@
 {
   "slug": "game-on",
-  "expectedCount": 40,
-  "orderingSummary": [
-    "Author’s Note",
-    "Trigger Warnings",
-    "Chapter 1 through Chapter 37",
-    "Epilogue",
-    "Front/back matter exists around the curated run, but is not part of the 40-marker answer key."
-  ],
-  "ambiguousSpots": [
+  "bookTitle": "Game On",
+  "author": "Navessa Allen",
+  "expectedChapterCount": 40,
+  "expectedChapters": [
     {
-      "nodeId": "c7A.xhtml",
-      "chapter": "Chapter 2",
-      "issue": "Transcript opener gap makes the start harder to see directly.",
-      "rationale": "The embedded EPUB marker still points at the correct boundary, even though the transcript evidence is less explicit."
+      "index": 1,
+      "title": "Author’s Note",
+      "startTime": 27.48
     },
     {
-      "nodeId": "cKM.xhtml",
-      "chapter": "Chapter 6",
-      "issue": "Same opener-gap problem as Chapter 2.",
-      "rationale": "Treat the EPUB marker as correct even when the transcript opener is not cleanly exposed."
+      "index": 2,
+      "title": "Trigger Warnings",
+      "startTime": 50.618
+    },
+    {
+      "index": 3,
+      "title": "1",
+      "startTime": 117.584
+    },
+    {
+      "index": 4,
+      "title": "2",
+      "startTime": 511.905
+    },
+    {
+      "index": 5,
+      "title": "3",
+      "startTime": 1652.4
+    },
+    {
+      "index": 6,
+      "title": "4",
+      "startTime": 2138.648
+    },
+    {
+      "index": 7,
+      "title": "5",
+      "startTime": 3132.578
+    },
+    {
+      "index": 8,
+      "title": "6",
+      "startTime": 4446.316
+    },
+    {
+      "index": 9,
+      "title": "7",
+      "startTime": 5870.12
+    },
+    {
+      "index": 10,
+      "title": "8",
+      "startTime": 7231.246
+    },
+    {
+      "index": 11,
+      "title": "9",
+      "startTime": 8720.36
+    },
+    {
+      "index": 12,
+      "title": "10",
+      "startTime": 9977.236
+    },
+    {
+      "index": 13,
+      "title": "11",
+      "startTime": 11167.537
+    },
+    {
+      "index": 14,
+      "title": "12",
+      "startTime": 12137.527
+    },
+    {
+      "index": 15,
+      "title": "13",
+      "startTime": 13236.248
+    },
+    {
+      "index": 16,
+      "title": "14",
+      "startTime": 13830.8
+    },
+    {
+      "index": 17,
+      "title": "15",
+      "startTime": 14816.52
+    },
+    {
+      "index": 18,
+      "title": "16",
+      "startTime": 16447.543
+    },
+    {
+      "index": 19,
+      "title": "17",
+      "startTime": 17638.935
+    },
+    {
+      "index": 20,
+      "title": "18",
+      "startTime": 18922.92
+    },
+    {
+      "index": 21,
+      "title": "19",
+      "startTime": 19309.378
+    },
+    {
+      "index": 22,
+      "title": "20",
+      "startTime": 19902.16
+    },
+    {
+      "index": 23,
+      "title": "21",
+      "startTime": 21225.291
+    },
+    {
+      "index": 24,
+      "title": "22",
+      "startTime": 22272.754
+    },
+    {
+      "index": 25,
+      "title": "23",
+      "startTime": 23544.766
+    },
+    {
+      "index": 26,
+      "title": "24",
+      "startTime": 24554.508
+    },
+    {
+      "index": 27,
+      "title": "25",
+      "startTime": 25603.051
+    },
+    {
+      "index": 28,
+      "title": "26",
+      "startTime": 26593.521
+    },
+    {
+      "index": 29,
+      "title": "27",
+      "startTime": 27331.091
+    },
+    {
+      "index": 30,
+      "title": "28",
+      "startTime": 28462.355
+    },
+    {
+      "index": 31,
+      "title": "29",
+      "startTime": 29593.091
+    },
+    {
+      "index": 32,
+      "title": "30",
+      "startTime": 30617.63
+    },
+    {
+      "index": 33,
+      "title": "31",
+      "startTime": 31247.378
+    },
+    {
+      "index": 34,
+      "title": "32",
+      "startTime": 32505.551
+    },
+    {
+      "index": 35,
+      "title": "33",
+      "startTime": 33724.854
+    },
+    {
+      "index": 36,
+      "title": "34",
+      "startTime": 35254.531
+    },
+    {
+      "index": 37,
+      "title": "35",
+      "startTime": 36874.891
+    },
+    {
+      "index": 38,
+      "title": "36",
+      "startTime": 37997.011
+    },
+    {
+      "index": 39,
+      "title": "37",
+      "startTime": 38367.291
+    },
+    {
+      "index": 40,
+      "title": "Epilogue",
+      "startTime": 39305.607
     }
   ],
-  "currentNodeOutput": {
-    "acceptedCount": 38,
-    "qualitativeMatch": false,
-    "note": "The accepted boundaries are in the right overall order, but the current output is missing the two ambiguous chapter starts."
-  },
-  "rationale": "This case is mostly straightforward once the front matter is separated out; the only real judgment calls are the two opener-gap boundaries."
+  "notes": [
+    "Detailed key replaces the older count-only key.",
+    "Chapter starts are grounded in the accepted 40-boundary node run and cross-checked against meaningful embedded audiobook chapter markers.",
+    "Chapter 2 and Chapter 6 intentionally use embedded-marker boundaries despite transcript opener gaps; resumed transcript text is inside the target EPUB node.",
+    "Opening intro/dedication and trailing back matter are excluded; Author’s Note, Trigger Warnings, chapters 1-37, and Epilogue are included."
+  ]
 }

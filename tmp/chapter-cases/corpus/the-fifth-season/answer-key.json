@@ -1,5 +1,11 @@
 {
   "slug": "the-fifth-season",
+  "sourceArtifacts": [
+    "metadata.json",
+    "transcript.json",
+    "raw-chapters.json",
+    "book.epub"
+  ],
   "expectedChapters": [
     { "title": "Prologue: you are here", "startTime": 0 },
     { "title": "1: you, at the end", "startTime": 1762.626 },
@@ -28,7 +34,7 @@
   ],
   "notes": [
     "The raw audio chapter starts and transcript chapter announcements support 24 narrated starts: prologue plus chapters 1-23.",
-    "The local book.epub in this case appears to be for The Stone Sky while metadata/transcript/raw chapters are for The Fifth Season, so this key is grounded in transcript and raw chapter evidence rather than EPUB structure.",
+    "The local book.epub in this case is The Stone Sky, not The Fifth Season, so this key is grounded in transcript and raw chapter evidence rather than EPUB structure.",
     "Several transcript title announcements are mistranscribed, especially Syenite/Damaya titles, but the raw chapter starts align with the visible title announcements."
   ]
 }
