@@ -1,0 +1,87 @@
+{
+  "expectedChapters": [
+    {
+      "title": "28: Decision",
+      "startTime": 397.6
+    },
+    {
+      "title": "Interlude 4: Rysn",
+      "startTime": 3144.16
+    },
+    {
+      "title": "Interlude 5: Axies the Collector",
+      "startTime": 4090.48
+    },
+    {
+      "title": "Interlude 6: A Work of Art",
+      "startTime": 4880.88
+    },
+    {
+      "title": "29: Errorgance",
+      "startTime": 6191.4
+    },
+    {
+      "title": "30: Darkness Unseen",
+      "startTime": 8414.04
+    },
+    {
+      "title": "31: Beneath the Skin",
+      "startTime": 9583.12
+    },
+    {
+      "title": "32: Side Carry",
+      "startTime": 10253
+    },
+    {
+      "title": "33: Cymatics",
+      "startTime": 11819.28
+    },
+    {
+      "title": "34: Stormwall",
+      "startTime": 13992.72
+    },
+    {
+      "title": "35: A Light by Which to See",
+      "startTime": 14691.64
+    },
+    {
+      "title": "36: The Lesson",
+      "startTime": 15437.84
+    },
+    {
+      "title": "37: Sides",
+      "startTime": 17419.12
+    },
+    {
+      "title": "38: Envisager",
+      "startTime": 19312.2
+    },
+    {
+      "title": "39: Burned Into Her",
+      "startTime": 20026.36
+    },
+    {
+      "title": "40: Eyes of Red and Blue",
+      "startTime": 21456.92
+    },
+    {
+      "title": "41: Of Alds and Milp",
+      "startTime": 23253.52
+    },
+    {
+      "title": "42: Beggars and Barmaids",
+      "startTime": 23967.64
+    },
+    {
+      "title": "43: The Wretch",
+      "startTime": 25905
+    }
+  ],
+  "notes": "GraphicAudio Part 3 manifestation. The raw audio tags are coarse Chapter 1-7 file sections, so this key uses transcript-to-EPUB opener evidence for the logical book chapters instead of the container chapter tags.",
+  "evidence": [
+    "book.epub contents page and spine place this audio span at chapter 28, interludes 4-6, and chapters 29-43.",
+    "transcript.json opener searches found distinctive EPUB opening text for interludes 4-6 and chapters 29-43.",
+    "raw-chapters.json generic Chapter 1-7 marks split through logical chapters and should not be used as expected logical chapter titles."
+  ],
+  "uncertainty": "The first chapter 28 boundary is the least certain because repeated GraphicAudio branding precedes the first clear post-intro narrative text; later boundaries are backed by stronger EPUB opener matches."
+}

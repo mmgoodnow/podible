@@ -1,0 +1,79 @@
+{
+  "expectedChapters": [
+    {
+      "title": "44: The Weeping",
+      "startTime": 134.000363
+    },
+    {
+      "title": "45: Shadesmar",
+      "startTime": 1719
+    },
+    {
+      "title": "46: Child of Tanavast",
+      "startTime": 4497
+    },
+    {
+      "title": "47: Stormblessings",
+      "startTime": 6892
+    },
+    {
+      "title": "48: Strawberry",
+      "startTime": 8627
+    },
+    {
+      "title": "49: To Care",
+      "startTime": 9888.000045
+    },
+    {
+      "title": "50: Backbreaker Powder",
+      "startTime": 11110.000385
+    },
+    {
+      "title": "51: Sas Nahn",
+      "startTime": 11604
+    },
+    {
+      "title": "Interlude 7: Baxil",
+      "startTime": 12262.000363
+    },
+    {
+      "title": "Interlude 8: Geranid",
+      "startTime": 12691.000113
+    },
+    {
+      "title": "Interlude 9: Death Wears White",
+      "startTime": 13210
+    },
+    {
+      "title": "52: A Highway to the Sun",
+      "startTime": 14130.000136
+    },
+    {
+      "title": "53: Dunny",
+      "startTime": 16479.000204
+    },
+    {
+      "title": "54: Gibletish",
+      "startTime": 17342.000317
+    },
+    {
+      "title": "55: An Emerald Broam",
+      "startTime": 19193.000431
+    },
+    {
+      "title": "56: That Storming Book",
+      "startTime": 21178.000113
+    },
+    {
+      "title": "57: Wandersail",
+      "startTime": 22829.000249
+    }
+  ],
+  "notes": "GraphicAudio Part 4 manifestation. Expected list excludes publisher intro, outro, and the zero-duration Part Four divider; raw audio chapter tags provide stable title boundaries and transcript opener checks confirm later boundaries within a few seconds.",
+  "evidence": [
+    "raw-chapters.json names chapters 44-57 plus interludes 7-9 with matching boundaries.",
+    "transcript.json begins with repeated Part 4 branding and ends with production credits.",
+    "book.epub contents page places these chapters across late Part Three and early Part Four."
+  ],
+  "uncertainty": "Chapter 44 has repeated GraphicAudio bumper audio before clear transcript prose, so its timestamp follows the explicit raw audio chapter marker rather than a clean transcript opener."
+}
