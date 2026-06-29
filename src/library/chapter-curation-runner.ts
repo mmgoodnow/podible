@@ -58,6 +58,7 @@ import {
   nodeBoundaryToolUseBehavior,
   rankTargetBoundaries,
   resolveNodeBoundaryChapters,
+  isShortHeadingOnlyEntry,
   recursiveSpanToolUseBehavior,
   resolveRecursiveChapterSpans,
   spanDurationSeconds,
@@ -2662,6 +2663,18 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
             decision: deterministicDecision,
           });
           return deterministicDecision;
+        }
+        const targetEntry = curationCtx.epubEntries[targetBoundary.epubIndex];
+        if (targetEntry && isShortHeadingOnlyEntry(targetEntry)) {
+          const elapsedMs = Date.now() - startedAt;
+          logChapterCurationEvent(curationCtx, {
+            type: "node-boundary-short-heading-deferred",
+            message: `node boundary epub=${targetBoundary.epubNodeId} elapsed_ms=${elapsedMs} short_heading=1 deferred_to_recovery_or_skip=1`,
+            span: rootSpan,
+            targetBoundary,
+            elapsedMs,
+          });
+          return null;
         }
         const attemptModels = Array.from(new Set([primaryCuratorModel, configuredCuratorModel].filter(Boolean)));
         const attempts = attemptModels.map((model, index) => ({ model, delayMs: index === 0 ? 0 : 5_000 }));
