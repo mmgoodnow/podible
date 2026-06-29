@@ -30,7 +30,7 @@ const TIMESTAMP_TRANSCRIPTION_MODEL = "whisper-1";
 // timestamps it returns are in the sped-up frame, so we multiply them back by
 // this factor to recover real-audio timestamps.
 const TRANSCRIPTION_SPEED_MULTIPLIER = 2;
-const CHAPTER_ANALYSIS_TRANSCRIPTION_CONCURRENCY = positiveIntegerEnv("PODIBLE_TRANSCRIPTION_OPENAI_CONCURRENCY", 8, {
+const CHAPTER_ANALYSIS_TRANSCRIPTION_CONCURRENCY = positiveIntegerEnv("PODIBLE_TRANSCRIPTION_OPENAI_CONCURRENCY", 64, {
   min: 1,
   max: 64,
 });
