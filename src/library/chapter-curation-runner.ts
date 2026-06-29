@@ -37,6 +37,8 @@ import {
 import {
   type AudibleEpubNodeSelection,
   type ChapterBoundaryJudgeProposal,
+  type NodeBoundaryCurationReport,
+  type NodeBoundaryDecision,
   type RecursiveCurationReport,
   type RecursiveSpanDecision,
   type RecursiveSpanTrace,
@@ -49,7 +51,9 @@ import {
   automaticLeafChapters,
   createRootCurationSpan,
   fulcrumJudgeToolUseBehavior,
+  nodeBoundaryToolUseBehavior,
   rankTargetBoundaries,
+  resolveNodeBoundaryChapters,
   recursiveSpanToolUseBehavior,
   resolveRecursiveChapterSpans,
   spanDurationSeconds,
@@ -59,6 +63,8 @@ import {
   audibleEpubNodeSelectionSchema,
   summarizeSubmittedChapterObjects,
   validateFulcrumSplit,
+  validateNodeBoundary,
+  parseNodeBoundaryOutput,
   parseSpanDecisionOutput,
   parseFulcrumJudgmentOutput,
   parseAudibleEpubNodeSelectionOutput,
@@ -77,6 +83,8 @@ export type ChapterCurationDetailedResult = {
   finalOutput: unknown;
   newItems: unknown[];
   rawResponses: unknown[];
+  nodeBoundaryReports?: NodeBoundaryCurationReport[];
+  nodeBoundaryTraces?: RecursiveSpanTrace[];
   recursiveReports?: RecursiveCurationReport[];
   recursiveSpanTraces?: RecursiveSpanTrace[];
 };
@@ -396,6 +404,65 @@ function spanPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, targ
     ...boundaryWorkflow,
     "All times are seconds.",
   ].filter(Boolean).join("\n");
+}
+
+function nodeBoundaryPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, targetBoundary: ChapterCurationTargetBoundary): string {
+  const entry = ctx.epubEntries[targetBoundary.epubIndex] ?? null;
+  const previousEntry = ctx.epubEntries[targetBoundary.epubIndex - 1] ?? null;
+  const nextEntry = ctx.epubEntries[targetBoundary.epubIndex + 1] ?? null;
+  const targetText = getEpubNodeText(ctx, { epubNodeId: targetBoundary.epubNodeId, startWord: 0, wordCount: 120 });
+  const nearbyAudioOnlyIntervals = (ctx.audioOnlyIntervals ?? []).filter(
+    (interval) => Math.abs(interval.startTime - targetBoundary.expectedStartTime) < 1_200 || Math.abs(interval.endTime - targetBoundary.expectedStartTime) < 1_200
+  );
+  return [
+    `Find the audiobook start timestamp for one curated audible EPUB node in "${ctx.book.title}" by ${ctx.book.author}.`,
+    `manifestationId: ${ctx.manifestation.id}`,
+    `spanPath: ${span.path}`,
+    `durationSeconds: ${Math.round(msToSeconds(ctx.durationMs) * 1000) / 1000}`,
+    `targetBoundary: ${JSON.stringify(targetBoundary)}`,
+    `targetBoundaryContext: ${JSON.stringify({
+      previousNode: previousEntry
+        ? {
+            id: previousEntry.id,
+            title: previousEntry.title,
+            tailText: previousEntry.words.slice(Math.max(0, previousEntry.words.length - 56)).map((word) => word.text).join(" "),
+          }
+        : null,
+      targetNode: entry
+        ? {
+            id: entry.id,
+            title: entry.title,
+            href: entry.href,
+            index: targetBoundary.epubIndex,
+            wordCount: entry.wordCount,
+            startRatio: inferEntryStartRatio(ctx.epubEntries, targetBoundary.epubIndex),
+            endRatio: inferEntryEndRatio(ctx.epubEntries, targetBoundary.epubIndex),
+            firstWords: summarizeFirstWords(entry, 90),
+            openerText: targetText?.text ?? "",
+            phraseVariants: targetText?.phraseVariants ?? [],
+          }
+        : null,
+      nextNode: nextEntry
+        ? {
+            id: nextEntry.id,
+            title: nextEntry.title,
+            firstWords: summarizeFirstWords(nextEntry, 36),
+          }
+        : null,
+    })}`,
+    `audioOnlyIntervalsNearExpectedTime: ${JSON.stringify(nearbyAudioOnlyIntervals)}`,
+    "The EPUB list has already been filtered to narrated/audible nodes. Copyright, cover, TOC, and other non-narrated entries should not appear here unless the classifier was uncertain.",
+    "Your only goal is this one node. Do not switch to a different node.",
+    "Workflow:",
+    "1. Call researchEpubBoundary first. It searches this assigned node's opener phrases and reverse-checks transcript hits against the EPUB.",
+    "2. If researchEpubBoundary finds an opener/near_opener candidate, inspect it with getTranscriptWindow and submit that first opener word or the silence immediately before it.",
+    "3. If no candidate is good enough, call getEpubNodeText for a different target-node word window and search distinctive phrases with rgSearchTranscript or fuzzySearchTranscript.",
+    "4. Use searchEpubText to reject transcript hits that are interior prose rather than the target opener.",
+    "5. Do not submit EPUB ratio estimates without transcript evidence.",
+    "6. For the first narrated node, do not assume 0s if audioOnlyIntervals indicate credits/preamble. Find where the target opener actually begins.",
+    "7. submitNodeBoundary is final; call it only when you can prove this exact EPUB node begins at or immediately after startTime.",
+    "All times are seconds.",
+  ].join("\n");
 }
 
 function createChapterBoundaryJudgeAgent(ctx: ChapterCurationContext): Agent {
@@ -775,6 +842,11 @@ const assignedSubmitFulcrumSplitSchema = z.object({
   evidence: z.string().trim().optional(),
   notes: z.string().trim().optional(),
 });
+const assignedSubmitNodeBoundarySchema = z.object({
+  startTime: z.number().finite().nonnegative(),
+  evidence: z.string().trim().optional(),
+  notes: z.string().trim().optional(),
+});
 
 export function createRecursiveSpanCuratorAgent(
   ctx: ChapterCurationContext,
@@ -1026,6 +1098,242 @@ export function createRecursiveSpanCuratorAgent(
       }),
     ],
     toolUseBehavior: recursiveSpanToolUseBehavior,
+  });
+}
+
+export function createNodeBoundaryCuratorAgent(
+  ctx: ChapterCurationContext,
+  span: ChapterCurationSpan,
+  targetBoundary: ChapterCurationTargetBoundary,
+  modelOverride?: string
+): Agent {
+  let rejectedBoundaryRequiresEvidence = false;
+  let evidenceCallsSinceRejectedBoundary = 0;
+  let transcriptSearchesSinceBoundarySubmit = 0;
+  const rejectedBoundaries = new Set<string>();
+
+  function markEvidenceToolUsed(): void {
+    if (rejectedBoundaryRequiresEvidence) evidenceCallsSinceRejectedBoundary++;
+  }
+
+  function markTranscriptSearchToolUsed(): void {
+    markEvidenceToolUsed();
+    transcriptSearchesSinceBoundarySubmit++;
+  }
+
+  function runToolWithEvents<T>(toolName: string, input: unknown, fn: () => T): T {
+    logSpanToolCall(ctx, span, toolName, input);
+    try {
+      const result = fn();
+      if (result && typeof ((result as unknown as PromiseLike<unknown>).then) === "function") {
+        return (result as unknown as Promise<unknown>).then(
+          (value) => {
+            logSpanToolResult(ctx, span, toolName, value);
+            return value;
+          },
+          (error) => {
+            logSpanToolError(ctx, span, toolName, error);
+            throw error;
+          }
+        ) as T;
+      }
+      logSpanToolResult(ctx, span, toolName, result);
+      return result;
+    } catch (error) {
+      logSpanToolError(ctx, span, toolName, error);
+      throw error;
+    }
+  }
+
+  return new Agent({
+    name: "NodeChapterCurator",
+    model: modelOverride?.trim() || ctx.debugCuratorModel?.trim() || ctx.settings.agents.model,
+    modelSettings: chapterCurationModelSettings(ctx, {
+      toolChoice: "required",
+      parallelToolCalls: false,
+    }),
+    resetToolChoice: false,
+    instructions: [
+      "You find the start timestamp of one assigned audible EPUB chapter node in an audiobook transcript.",
+      `Your only goal is to locate where ${targetBoundary.epubNodeId} (${targetBoundary.title}) begins in the audio. Do not switch to a different node.`,
+      "The EPUB nodes have already been filtered to narrated/audible nodes by a separate classifier.",
+      "Workflow:",
+      "1. Use targetBoundaryContext in the prompt. Do not ask for the full EPUB structure.",
+      "2. Call researchEpubBoundary first. It searches only the assigned node.",
+      "3. If it finds an opener/near_opener candidate, inspect with getTranscriptWindow and submit the earliest target opener time.",
+      "4. If it fails, call getEpubNodeText for a different target-node window and search distinctive phrases with rgSearchTranscript or fuzzySearchTranscript.",
+      "5. Use searchEpubText to reject interior transcript hits.",
+      "6. Do not submit estimates from EPUB position alone. A transcript search result is required before submitting.",
+      "7. submitNodeBoundary is final and must assert the assigned EPUB node begins at startTime.",
+      "All times are seconds.",
+    ].join("\n"),
+    tools: [
+      tool({
+        name: "getEpubNodeText",
+        description: "Return target EPUB text and exact-search phrase variants. Optional startWord/wordCount select a target-node window.",
+        parameters: assignedGetEpubNodeTextSchema,
+        strict: true,
+        execute: (input) => {
+          const toolInput = { ...input, epubNodeId: targetBoundary.epubNodeId };
+          return runToolWithEvents("getEpubNodeText", toolInput, () => {
+            markEvidenceToolUsed();
+            return getEpubNodeText(ctx, toolInput);
+          });
+        },
+      }),
+      tool({
+        name: "researchEpubBoundary",
+        description: "Research the assigned target boundary: opener phrases, nearby transcript hits, windows, and reverse EPUB opener/near_opener checks.",
+        parameters: assignedResearchEpubBoundarySchema,
+        strict: true,
+        execute: async () => {
+          const toolInput = {
+            epubNodeId: targetBoundary.epubNodeId,
+            expectedTime: targetBoundary.expectedStartTime,
+            scope: { startTime: span.startTime, endTime: span.endTime },
+            searchRadiusSeconds: Math.max(600, Math.min(7_200, spanDurationSeconds(span) / 4)),
+          };
+          return runToolWithEvents("researchEpubBoundary", toolInput, async () => {
+            markTranscriptSearchToolUsed();
+            return researchEpubBoundary(ctx, toolInput);
+          });
+        },
+      }),
+      tool({
+        name: "searchEpubText",
+        description: "Reverse-search target EPUB text for a transcript phrase and classify it as opener, near_opener, interior, pre_target, or post_target.",
+        parameters: assignedSearchEpubTextSchema,
+        strict: true,
+        execute: (input) => {
+          return runToolWithEvents("searchEpubText", input, () => {
+            markEvidenceToolUsed();
+            return searchEpubText(ctx, { ...input, nodeIds: [targetBoundary.epubNodeId], targetNodeId: targetBoundary.epubNodeId });
+          });
+        },
+      }),
+      tool({
+        name: "rgSearchTranscript",
+        description: "Search transcript utterances with ripgrep inside this task span. Time scopes are seconds.",
+        parameters: rgSearchTranscriptSchema,
+        strict: true,
+        execute: (input) => {
+          return runToolWithEvents("rgSearchTranscript", input, () => {
+            markTranscriptSearchToolUsed();
+            return rgSearchTranscript(ctx, { ...input, scope: spanScope(span, input.scope) });
+          });
+        },
+      }),
+      tool({
+        name: "fuzzySearchTranscript",
+        description: "Fuzzy-search transcript utterances inside this task span. Time scopes are seconds.",
+        parameters: fuzzySearchTranscriptSchema,
+        strict: true,
+        execute: (input) => {
+          return runToolWithEvents("fuzzySearchTranscript", input, () => {
+            markTranscriptSearchToolUsed();
+            return fuzzySearchTranscript(ctx, { ...input, scope: spanScope(span, input.scope) });
+          });
+        },
+      }),
+      tool({
+        name: "getTranscriptWindow",
+        description: "Return transcript utterances around a timestamp inside this task span. startTime is seconds.",
+        parameters: getTranscriptWindowSchema,
+        strict: true,
+        execute: (input) => {
+          return runToolWithEvents("getTranscriptWindow", input, () => {
+            markEvidenceToolUsed();
+            return getTranscriptWindow(ctx, { ...input, startTime: Math.min(span.endTime, Math.max(span.startTime, input.startTime)) });
+          });
+        },
+      }),
+      tool({
+        name: "submitNodeBoundary",
+        description: "Submit the start timestamp for the assigned audible EPUB node once you have opener evidence.",
+        parameters: assignedSubmitNodeBoundarySchema,
+        strict: true,
+        execute: async (input) => {
+          const boundaryInput = {
+            spanPath: span.path,
+            epubNodeId: targetBoundary.epubNodeId,
+            title: targetBoundary.title,
+            startTime: input.startTime,
+            evidence: input.evidence,
+            notes: input.notes,
+          };
+          return runToolWithEvents("submitNodeBoundary", boundaryInput, async () => {
+            if (rejectedBoundaryRequiresEvidence && evidenceCallsSinceRejectedBoundary === 0) {
+              return {
+                accepted: false,
+                kind: "node_boundary",
+                errors: ["submitNodeBoundary was called again without gathering new transcript evidence after the previous rejection."],
+                warnings: [],
+                audit: null,
+                instruction: "Search a different opener phrase, inspect the match with getTranscriptWindow, then submit a materially different timestamp.",
+              };
+            }
+            if (transcriptSearchesSinceBoundarySubmit === 0) {
+              return {
+                accepted: false,
+                kind: "node_boundary",
+                errors: ["A transcript search result is required before submitting a boundary."],
+                warnings: [],
+                audit: null,
+                instruction: "Call researchEpubBoundary or search a distinctive opener phrase before submitting.",
+              };
+            }
+            transcriptSearchesSinceBoundarySubmit = 0;
+            const rejectedKey = `${boundaryInput.epubNodeId}:${Math.round(boundaryInput.startTime)}`;
+            if (rejectedBoundaries.has(rejectedKey)) {
+              rejectedBoundaryRequiresEvidence = true;
+              evidenceCallsSinceRejectedBoundary = 0;
+              return {
+                accepted: false,
+                kind: "node_boundary",
+                errors: [`${boundaryInput.epubNodeId} near ${Math.round(boundaryInput.startTime)}s was already rejected for this task.`],
+                warnings: [],
+                audit: null,
+                instruction: "Stay on this EPUB node. Search a different opener phrase and submit a materially different timestamp.",
+              };
+            }
+            const result = await validateNodeBoundary(ctx, boundaryInput, { span, targetBoundary });
+            if (!result.accepted) {
+              rejectedBoundaries.add(rejectedKey);
+              rejectedBoundaryRequiresEvidence = true;
+              evidenceCallsSinceRejectedBoundary = 0;
+              return result;
+            }
+            const judgment = await judgeChapterBoundary(ctx, span, {
+              kind: "node_boundary",
+              spanPath: result.spanPath,
+              epubNodeId: result.epubNodeId,
+              epubIndex: result.epubIndex,
+              title: result.title,
+              startTime: result.startTime,
+              notes: result.notes,
+              audit: result.audit,
+            });
+            if (judgment && !judgment.accepted) {
+              rejectedBoundaries.add(rejectedKey);
+              rejectedBoundaryRequiresEvidence = true;
+              evidenceCallsSinceRejectedBoundary = 0;
+              return {
+                accepted: false,
+                kind: "node_boundary",
+                errors: [conciseFulcrumJudgmentMessage(judgment)],
+                warnings: [],
+                audit: result.audit,
+                instruction: rejectedFulcrumJudgeInstruction(judgment),
+              };
+            }
+            rejectedBoundaryRequiresEvidence = false;
+            evidenceCallsSinceRejectedBoundary = 0;
+            return result;
+          });
+        },
+      }),
+    ],
+    toolUseBehavior: nodeBoundaryToolUseBehavior,
   });
 }
 
@@ -1570,6 +1878,241 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
       rawResponses: [],
       recursiveReports,
       recursiveSpanTraces,
+    };
+  } finally {
+    await provider.close().catch(() => undefined);
+  }
+}
+
+export async function runNodeParallelAgenticChapterCurationDetailed(ctx: ChapterCurationContext): Promise<ChapterCurationDetailedResult> {
+  const apiKey = ctx.settings.agents.apiKey.trim();
+  if (!apiKey) {
+    logChapterCurationEvent(ctx, {
+      type: "node-parallel-run-skipped",
+      message: "node parallel run skipped=no_api_key",
+    });
+    return { result: null, finalOutput: null, newItems: [], rawResponses: [], nodeBoundaryReports: [], nodeBoundaryTraces: [] };
+  }
+  ensureTracingInitialized(apiKey);
+  const provider = new OpenAIProvider({ apiKey, useResponses: true });
+  try {
+    const runner = new Runner({
+      modelProvider: provider,
+      tracingDisabled: true,
+      traceIncludeSensitiveData: false,
+    });
+    const audibleNodeSelection = await classifyAudibleEpubNodes(ctx, runner);
+    const curationCtx = applyAudibleEpubNodeSelection(ctx, audibleNodeSelection);
+    if (curationCtx.epubEntries.length !== ctx.epubEntries.length) {
+      logChapterCurationEvent(ctx, {
+        type: "audible-epub-node-filter-applied",
+        message: `audible epub node filter applied original=${ctx.epubEntries.length} curated=${curationCtx.epubEntries.length}`,
+        originalEpubEntries: ctx.epubEntries.length,
+        curatedEpubEntries: curationCtx.epubEntries.length,
+        selectedNodeIds: curationCtx.epubEntries.map((entry) => entry.id),
+        excludedNodes: audibleNodeSelection?.excludedNodes ?? [],
+      });
+    }
+    if ((curationCtx.audioOnlyIntervals ?? []).length > 0) {
+      logChapterCurationEvent(ctx, {
+        type: "audio-only-intervals-applied",
+        message: `audio only intervals applied count=${curationCtx.audioOnlyIntervals?.length ?? 0}`,
+        audioOnlyIntervals: curationCtx.audioOnlyIntervals ?? [],
+      });
+    }
+
+    const embeddedAssessment = assessEmbeddedAudioChaptersForCuration(curationCtx);
+    const rootSpan = createRootCurationSpan(curationCtx);
+    const nodeBoundaryReports: NodeBoundaryCurationReport[] = [];
+    const nodeBoundaryTraces: RecursiveSpanTrace[] = [];
+    const nodeBoundaryMaxConcurrency = Math.max(1, Number(process.env.PODIBLE_CHAPTER_NODE_CONCURRENCY ?? 12));
+    const nodeBoundaryMaxTurns = Math.max(4, Number(process.env.PODIBLE_CHAPTER_NODE_MAX_TURNS ?? 16));
+    logChapterCurationEvent(curationCtx, {
+      type: "node-parallel-run-start",
+      message: `node parallel run start=1 nodes=${curationCtx.epubEntries.length}`,
+      model: curationCtx.settings.agents.model,
+      curatorModel: curationCtx.debugCuratorModel?.trim() || curationCtx.settings.agents.model,
+      judgeModel: curationCtx.debugJudgeModel?.trim() || curationCtx.settings.agents.model,
+      maxNodeConcurrency: nodeBoundaryMaxConcurrency,
+      maxNodeTurns: nodeBoundaryMaxTurns,
+      durationSeconds: curationCtx.durationMs / 1000,
+      epubEntries: curationCtx.epubEntries.length,
+      originalEpubEntries: ctx.epubEntries.length,
+      audioOnlyIntervals: curationCtx.audioOnlyIntervals?.length ?? 0,
+      transcriptUtterances: curationCtx.transcript.utterances?.length ?? 0,
+      embeddedChapters: curationCtx.embeddedChapters.length,
+      embeddedAssessment,
+    });
+
+    const nodeChapters = await resolveNodeBoundaryChapters(
+      curationCtx,
+      async (targetBoundary): Promise<NodeBoundaryDecision | null> => {
+        const startedAt = Date.now();
+        logChapterCurationEvent(curationCtx, {
+          type: "node-boundary-start",
+          message: `node boundary epub=${targetBoundary.epubNodeId} index=${targetBoundary.epubIndex} expected=${Math.round(targetBoundary.expectedStartTime)}s start=1`,
+          span: rootSpan,
+          targetBoundary,
+        });
+        const primaryCuratorModel = curationCtx.debugCuratorModel?.trim() || curationCtx.settings.agents.model;
+        const configuredCuratorModel = curationCtx.settings.agents.model;
+        const attemptModels = Array.from(new Set([primaryCuratorModel, configuredCuratorModel].filter(Boolean)));
+        const attempts = attemptModels.map((model, index) => ({ model, delayMs: index === 0 ? 0 : 5_000 }));
+        for (let attempt = 0; attempt < attempts.length; attempt++) {
+          const attemptConfig = attempts[attempt]!;
+          if (attemptConfig.delayMs > 0) await sleep(attemptConfig.delayMs);
+          try {
+            const result = await runner.run(
+              createNodeBoundaryCuratorAgent(curationCtx, rootSpan, targetBoundary, attemptConfig.model),
+              nodeBoundaryPrompt(curationCtx, rootSpan, targetBoundary),
+              {
+                maxTurns: nodeBoundaryMaxTurns,
+                toolExecution: { maxFunctionToolConcurrency: 1 },
+              }
+            );
+            logAgentUsageEvent(curationCtx, {
+              role: "node-boundary-curator",
+              model: attemptConfig.model,
+              rawResponses: result.rawResponses as unknown[],
+              span: rootSpan,
+            });
+            const decision = parseNodeBoundaryOutput(result.finalOutput);
+            const elapsedMs = Date.now() - startedAt;
+            const tracePayload = {
+              span: rootSpan,
+              targetBoundary,
+              attempt: attempt + 1,
+              elapsedMs,
+              finalOutput: result.finalOutput,
+              newItems: result.newItems as unknown[],
+              rawResponses: result.rawResponses as unknown[],
+            };
+            const tracePath = writeChapterCurationTrace(curationCtx, `node-${targetBoundary.epubIndex}-${targetBoundary.epubNodeId}-attempt-${attempt + 1}`, tracePayload);
+            nodeBoundaryTraces.push({
+              path: rootSpan.path,
+              depth: rootSpan.depth,
+              targetBoundary,
+              finalOutput: result.finalOutput,
+              newItems: result.newItems as unknown[],
+              rawResponses: result.rawResponses as unknown[],
+            });
+            logChapterCurationEvent(curationCtx, {
+              type: "node-boundary-result",
+              message: `node boundary epub=${targetBoundary.epubNodeId} elapsed_ms=${elapsedMs} attempt=${attempt + 1} accepted=${decision ? 1 : 0}${
+                decision ? ` time=${Math.round(decision.startTime)}s` : ""
+              } model=${attemptConfig.model}`,
+              span: rootSpan,
+              targetBoundary,
+              attempt: attempt + 1,
+              elapsedMs,
+              model: attemptConfig.model,
+              decision,
+              tracePath,
+            });
+            if (decision) return decision;
+            if (attempt < attempts.length - 1) continue;
+            return null;
+          } catch (error) {
+            const elapsedMs = Date.now() - startedAt;
+            const serializedError = serializeAgentError(error);
+            logAgentUsageEvent(curationCtx, {
+              role: "node-boundary-curator",
+              model: attemptConfig.model,
+              serializedError,
+              span: rootSpan,
+            });
+            const tracePath = writeChapterCurationTrace(curationCtx, `node-${targetBoundary.epubIndex}-${targetBoundary.epubNodeId}-attempt-${attempt + 1}-error`, {
+              span: rootSpan,
+              targetBoundary,
+              attempt: attempt + 1,
+              elapsedMs,
+              error: serializedError,
+            });
+            nodeBoundaryTraces.push({
+              path: rootSpan.path,
+              depth: rootSpan.depth,
+              targetBoundary,
+              finalOutput: null,
+              newItems: [],
+              rawResponses: [],
+              error: serializedError,
+            });
+            logChapterCurationEvent(curationCtx, {
+              type: "node-boundary-error",
+              message: `node boundary epub=${targetBoundary.epubNodeId} elapsed_ms=${elapsedMs} attempt=${attempt + 1} model=${attemptConfig.model} error=${JSON.stringify((error as Error).message)}`,
+              span: rootSpan,
+              targetBoundary,
+              attempt: attempt + 1,
+              elapsedMs,
+              model: attemptConfig.model,
+              retryable: retryableAgentError(error) || maxTurnsAgentError(error),
+              tracePath,
+              error: serializedError,
+            });
+            if (attempt < attempts.length - 1 && (retryableAgentError(error) || maxTurnsAgentError(error))) continue;
+            return null;
+          }
+        }
+        return null;
+      },
+      { maxConcurrency: nodeBoundaryMaxConcurrency, reports: nodeBoundaryReports }
+    );
+
+    if (nodeChapters && nodeChapters.length > 0) {
+      logChapterCurationEvent(curationCtx, {
+        type: "node-parallel-merge-start",
+        message: `node parallel merge chapters=${nodeChapters.length} validate=structural`,
+        chapters: nodeChapters.length,
+        chapterPlan: summarizeSubmittedChapterObjects(nodeChapters, 80),
+        nodeBoundaryReports,
+      });
+      const nodeResult = submitChapterPlan(curationCtx, {
+        manifestationId: curationCtx.manifestation.id,
+        strategy: "Node-parallel chapter boundary curation",
+        chapters: nodeChapters,
+        notes: "Merged from one independently curated boundary task per audible EPUB node after the non-narrated EPUB-node pre-pass.",
+      });
+      if (nodeResult.accepted) {
+        logChapterCurationEvent(curationCtx, {
+          type: "node-parallel-merge-accepted",
+          message: `node parallel merge accepted=1 chapters=${nodeResult.chapters.length}`,
+          chapters: nodeResult.chapters.length,
+          result: nodeResult,
+          nodeBoundaryReports,
+        });
+        return {
+          result: nodeResult,
+          finalOutput: nodeResult,
+          newItems: [],
+          rawResponses: [],
+          nodeBoundaryReports,
+          nodeBoundaryTraces,
+        };
+      }
+      logChapterCurationEvent(curationCtx, {
+        type: "node-parallel-merge-rejected",
+        message: `node parallel merge accepted=0 chapters=${nodeChapters.length} errors=${JSON.stringify(nodeResult.errors.slice(0, 5))}`,
+        chapters: nodeChapters.length,
+        errors: nodeResult.errors,
+        warnings: nodeResult.warnings,
+        audit: nodeResult.audit,
+        nodeBoundaryReports,
+      });
+    } else {
+      logChapterCurationEvent(curationCtx, {
+        type: "node-parallel-result-null",
+        message: "node parallel result=null",
+        nodeBoundaryReports,
+      });
+    }
+
+    return {
+      result: null,
+      finalOutput: null,
+      newItems: [],
+      rawResponses: [],
+      nodeBoundaryReports,
+      nodeBoundaryTraces,
     };
   } finally {
     await provider.close().catch(() => undefined);

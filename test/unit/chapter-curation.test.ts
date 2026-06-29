@@ -10,21 +10,26 @@ import {
   findSpokenHeadingBoundaryCandidate,
   fuzzySearchTranscript,
   fulcrumJudgeToolUseBehavior,
+  nodeBoundaryToolUseBehavior,
   estimateTimestampFromEpubPosition,
   getTranscriptWindow,
+  nodeBoundaryTargets,
   rgSearchTranscript,
   applyAudibleEpubNodeSelection,
   createRootCurationSpan,
   rankTargetBoundaries,
+  resolveNodeBoundaryChapters,
   resolveRecursiveChapterSpans,
   researchEpubBoundary,
   searchEpubText,
   submitChapterPlan,
+  validateNodeBoundary,
   validateFulcrumSplit,
   type ChapterCurationContext,
   type ChapterCurationSpan,
   type ChapterCurationTargetBoundary,
   type ChapterCurationTiming,
+  type NodeBoundaryDecision,
   type RecursiveSpanDecision,
 } from "../../src/library/chapter-curation";
 import type { AppSettings, AssetFileRow, AssetRow, BookRow, ManifestationRow } from "../../src/app-types";
@@ -1349,6 +1354,166 @@ describe("chapter curation tools", () => {
     if (!result.accepted) throw new Error(result.errors.join("\n"));
     expect(result.audit.boundaryComparison.transcriptAfter).toContain("The mud is dark and cold");
     expect(result.audit.boundaryComparison.targetEpub.headText).toContain("Northwoods");
+  });
+
+  test("validateNodeBoundary accepts the first narrated EPUB node after an audio-only preamble", async () => {
+    const context = ctx({
+      durationMs: 120_000,
+      manifestation: manifestation({ duration_ms: 120_000 }),
+      audioOnlyIntervals: [{ startTime: 0, endTime: 20, kind: "credits", notes: "opening credits" }],
+      epubEntries: [
+        epubEntry({
+          id: "chapter-1",
+          title: "Chapter 1",
+          cumulativeRatio: 0.5,
+          cumulativeWords: 8,
+          words: "The first narrated words begin after the credits".split(/\s+/).map(word),
+        }),
+        epubEntry({ id: "chapter-2", title: "Chapter 2", cumulativeRatio: 1, cumulativeWords: 16 }),
+      ],
+      transcript: transcriptFromUtterances([
+        { startMs: 0, endMs: 20_000, text: "Audible hopes you have enjoyed this program." },
+        { startMs: 20_000, endMs: 27_000, text: "The first narrated words begin after the credits." },
+      ]),
+    });
+
+    const result = await validateNodeBoundary(context, {
+      spanPath: "root",
+      epubNodeId: "chapter-1",
+      title: "Chapter 1",
+      startTime: 20,
+    });
+
+    expect(result.accepted).toBe(true);
+    if (result.accepted) {
+      expect(result.epubIndex).toBe(0);
+      expect(result.audit.boundaryComparison.transcriptAfter).toContain("The first narrated words");
+    }
+  });
+
+  test("validateNodeBoundary rejects boundaries placed inside audio-only intervals", async () => {
+    const context = ctx({
+      durationMs: 120_000,
+      manifestation: manifestation({ duration_ms: 120_000 }),
+      audioOnlyIntervals: [{ startTime: 0, endTime: 20, kind: "credits", notes: "opening credits" }],
+      epubEntries: [epubEntry({ id: "chapter-1", title: "Chapter 1", cumulativeRatio: 1, cumulativeWords: 8 })],
+    });
+
+    const result = await validateNodeBoundary(context, {
+      spanPath: "root",
+      epubNodeId: "chapter-1",
+      title: "Chapter 1",
+      startTime: 10,
+    });
+
+    expect(result.accepted).toBe(false);
+    if (!result.accepted) expect(result.errors.join(" ")).toContain("audio-only interval");
+  });
+
+  test("nodeBoundaryTargets are built from the curated audible EPUB node list", () => {
+    const context = ctx({
+      durationMs: 100_000,
+      manifestation: manifestation({ duration_ms: 100_000 }),
+      epubEntries: [
+        epubEntry({ id: "copyright", title: "Copyright", cumulativeRatio: 0.05, cumulativeWords: 5 }),
+        epubEntry({ id: "chapter-1", title: "Chapter 1", cumulativeRatio: 0.5, cumulativeWords: 50 }),
+        epubEntry({ id: "chapter-2", title: "Chapter 2", cumulativeRatio: 1, cumulativeWords: 100 }),
+      ],
+    });
+    const filtered = applyAudibleEpubNodeSelection(context, {
+      audibleNodeIds: ["chapter-1", "chapter-2"],
+      excludedNodes: [{ epubNodeId: "copyright", reason: "copyright", notes: "not narrated" }],
+      audioOnlyIntervals: [],
+    });
+
+    expect(nodeBoundaryTargets(filtered).map((target) => target.epubNodeId)).toEqual(["chapter-1", "chapter-2"]);
+  });
+
+  test("nodeBoundaryToolUseBehavior terminates on a structured node boundary", () => {
+    const result = nodeBoundaryToolUseBehavior(null, [
+      {
+        type: "function_output",
+        tool: { name: "submitNodeBoundary" },
+        output: JSON.stringify({
+          accepted: true,
+          kind: "node_boundary",
+          spanPath: "root",
+          epubNodeId: "chapter-1",
+          epubIndex: 0,
+          title: "Chapter 1",
+          startTime: 20,
+          notes: null,
+          audit: {
+            epubNodeId: "chapter-1",
+            title: "Chapter 1",
+            startTime: 20,
+            boundaryComparison: {
+              transcriptPrecision: "utterance",
+              transcriptPrecisionNote: null,
+              previousEpub: { epubNodeId: null, title: null, tailText: "" },
+              targetEpub: { epubNodeId: "chapter-1", title: "Chapter 1", headText: "" },
+              transcriptBefore: "",
+              transcriptAfter: "",
+            },
+            transcriptWindow: "",
+            candidates: [],
+          },
+        }),
+      } as never,
+    ]);
+    expect(result.isFinalOutput).toBe(true);
+  });
+
+  test("resolveNodeBoundaryChapters isolates failed node tasks and keeps accepted neighbors", async () => {
+    const context = ctx({
+      durationMs: 300_000,
+      manifestation: manifestation({ duration_ms: 300_000 }),
+      epubEntries: [
+        epubEntry({ id: "chapter-1", title: "Chapter 1", cumulativeRatio: 0.33, cumulativeWords: 10 }),
+        epubEntry({ id: "chapter-2", title: "Chapter 2", cumulativeRatio: 0.66, cumulativeWords: 20 }),
+        epubEntry({ id: "chapter-3", title: "Chapter 3", cumulativeRatio: 1, cumulativeWords: 30 }),
+      ],
+    });
+    const reports: Array<{ outcome: string; epubNodeId: string }> = [];
+    const chapters = await resolveNodeBoundaryChapters(
+      context,
+      async (targetBoundary): Promise<NodeBoundaryDecision | null> => {
+        if (targetBoundary.epubNodeId === "chapter-2") return null;
+        return {
+          accepted: true,
+          kind: "node_boundary",
+          spanPath: "root",
+          epubNodeId: targetBoundary.epubNodeId,
+          epubIndex: targetBoundary.epubIndex,
+          title: targetBoundary.title,
+          startTime: targetBoundary.epubIndex * 100,
+          notes: null,
+          audit: {
+            epubNodeId: targetBoundary.epubNodeId,
+            title: targetBoundary.title,
+            startTime: targetBoundary.epubIndex * 100,
+            boundaryComparison: {
+              transcriptPrecision: "utterance",
+              transcriptPrecisionNote: null,
+              previousEpub: { epubNodeId: null, title: null, tailText: "" },
+              targetEpub: { epubNodeId: targetBoundary.epubNodeId, title: targetBoundary.title, headText: "" },
+              transcriptBefore: "",
+              transcriptAfter: "",
+            },
+            transcriptWindow: "",
+            candidates: [],
+          },
+        };
+      },
+      { maxConcurrency: 3, reports: reports as never }
+    );
+
+    expect(chapters?.map((chapter) => chapter.epubNodeId)).toEqual(["chapter-1", "chapter-3"]);
+    expect(reports.map((report) => `${report.epubNodeId}:${report.outcome}`)).toEqual([
+      "chapter-1:accepted",
+      "chapter-2:failed",
+      "chapter-3:accepted",
+    ]);
   });
 
   test("resolveRecursiveChapterSpans returns a leaf-only plan", async () => {

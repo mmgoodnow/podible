@@ -27,6 +27,7 @@ import {
 export type SubmittedChapter = z.infer<typeof submittedChapterSchema>;
 export type SubmitChapterPlanInput = z.infer<typeof submitChapterPlanSchema>;
 export type SubmitFulcrumSplitInput = z.infer<typeof submitFulcrumSplitSchema>;
+export type SubmitNodeBoundaryInput = z.infer<typeof submitNodeBoundarySchema>;
 export type SubmitFulcrumJudgmentInput = z.infer<typeof submitFulcrumJudgmentSchema>;
 export type AudibleEpubNodeSelection = z.infer<typeof audibleEpubNodeSelectionSchema>;
 
@@ -88,7 +89,7 @@ export type SubmitFulcrumSplitResult =
 export type SubmitFulcrumJudgmentResult = SubmitFulcrumJudgmentInput;
 
 export type ChapterBoundaryJudgeProposal = {
-  kind: "fulcrum";
+  kind: "fulcrum" | "node_boundary";
   spanPath: string;
   epubNodeId: string;
   epubIndex: number;
@@ -99,6 +100,41 @@ export type ChapterBoundaryJudgeProposal = {
 };
 
 export type RecursiveSpanDecision = { kind: "split"; split: Extract<SubmitFulcrumSplitResult, { accepted: true }>; result?: SubmitFulcrumSplitResult };
+
+export type SubmitNodeBoundaryResult =
+  | {
+      accepted: true;
+      kind: "node_boundary";
+      spanPath: string;
+      epubNodeId: string;
+      epubIndex: number;
+      title: string;
+      startTime: number;
+      notes: string | null;
+      audit: FulcrumValidationAudit;
+    }
+  | {
+      accepted: false;
+      kind: "node_boundary";
+      errors: string[];
+      warnings: string[];
+      audit: FulcrumValidationAudit | null;
+      instruction: string;
+    };
+
+export type NodeBoundaryDecision = Extract<SubmitNodeBoundaryResult, { accepted: true }>;
+
+export type NodeBoundaryCurationReport = {
+  epubNodeId: string;
+  epubIndex: number;
+  title: string;
+  expectedStartTime: number;
+  outcome: "accepted" | "failed";
+  startTime?: number;
+  errors?: string[];
+  warnings?: string[];
+  deterministic?: boolean;
+};
 
 export type RecursiveCurationReport = {
   path: string;
@@ -143,6 +179,15 @@ const submitChapterPlanSchema = z.object({
 
 const submitFulcrumSplitSchema = z.object({
   spanPath: z.string().trim().min(1),
+  epubNodeId: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+  startTime: z.number().finite().nonnegative(),
+  evidence: z.string().trim().optional(),
+  notes: z.string().trim().optional(),
+});
+
+const submitNodeBoundarySchema = z.object({
+  spanPath: z.string().trim().min(1).optional(),
   epubNodeId: z.string().trim().min(1),
   title: z.string().trim().min(1),
   startTime: z.number().finite().nonnegative(),
@@ -472,6 +517,18 @@ export function rankTargetBoundaries(ctx: Pick<ChapterCurationContext, "epubEntr
   return candidates.sort((a, b) => Math.abs(a.localNodeRatio - 0.5) - Math.abs(b.localNodeRatio - 0.5) || a.epubIndex - b.epubIndex);
 }
 
+export function nodeBoundaryTargets(ctx: Pick<ChapterCurationContext, "epubEntries" | "durationMs">): ChapterCurationTargetBoundary[] {
+  const durationSeconds = msToSeconds(ctx.durationMs);
+  const nodeCount = Math.max(1, ctx.epubEntries.length);
+  return ctx.epubEntries.map((entry, index) => ({
+    epubNodeId: entry.id,
+    epubIndex: index,
+    title: entry.title,
+    expectedStartTime: Math.round(durationSeconds * inferEntryStartRatio(ctx.epubEntries, index) * 1000) / 1000,
+    localNodeRatio: Math.round((index / nodeCount) * 1000) / 1000,
+  }));
+}
+
 function chooseTargetBoundary(ctx: Pick<ChapterCurationContext, "epubEntries">, span: ChapterCurationSpan): ChapterCurationTargetBoundary | null {
   return rankTargetBoundaries(ctx, span)[0] ?? null;
 }
@@ -660,6 +717,98 @@ export async function validateFulcrumSplit(
   };
 }
 
+export async function validateNodeBoundary(
+  ctx: ChapterCurationContext,
+  input: unknown,
+  options: { span?: ChapterCurationSpan; targetBoundary?: ChapterCurationTargetBoundary } = {}
+): Promise<SubmitNodeBoundaryResult> {
+  const parsed = submitNodeBoundarySchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      accepted: false,
+      kind: "node_boundary",
+      errors: parsed.error.issues.map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`),
+      warnings: [],
+      audit: null,
+      instruction: "Revise the submission to match the submitNodeBoundary schema.",
+    };
+  }
+
+  const boundary = parsed.data;
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const span = options.span;
+  if (span && boundary.spanPath && boundary.spanPath !== span.path) {
+    errors.push(`spanPath ${boundary.spanPath} does not match current span ${span.path}`);
+  }
+  const epubIndex = ctx.epubEntries.findIndex((entry) => entry.id === boundary.epubNodeId);
+  const entry = epubIndex >= 0 ? ctx.epubEntries[epubIndex] : null;
+  if (options.targetBoundary && boundary.epubNodeId !== options.targetBoundary.epubNodeId) {
+    errors.push(`This task is assigned to prove ${options.targetBoundary.epubNodeId}; do not submit ${boundary.epubNodeId}.`);
+  }
+  if (!entry) {
+    errors.push(`epubNodeId ${boundary.epubNodeId} is not in the curated audible EPUB node set`);
+  }
+  if (span && (!entry || !spanContainsEpubIndex(span, epubIndex))) {
+    errors.push(`epubNodeId ${boundary.epubNodeId} is not inside the current span`);
+  }
+  const durationSeconds = msToSeconds(ctx.durationMs);
+  if (boundary.startTime < 0 || boundary.startTime >= durationSeconds) {
+    errors.push("startTime must be inside the manifestation duration.");
+  }
+  if (span && (boundary.startTime < span.startTime || boundary.startTime > span.endTime)) {
+    errors.push("startTime must be inside the current span time range.");
+  }
+  const enclosingAudioOnlyInterval = (ctx.audioOnlyIntervals ?? []).find(
+    (interval) => boundary.startTime > interval.startTime + 0.25 && boundary.startTime < interval.endTime - 0.25
+  );
+  if (enclosingAudioOnlyInterval) {
+    const secondsFromNearestEdge = Math.min(
+      Math.abs(boundary.startTime - enclosingAudioOnlyInterval.startTime),
+      Math.abs(enclosingAudioOnlyInterval.endTime - boundary.startTime)
+    );
+    if (secondsFromNearestEdge > 5) {
+      errors.push(`startTime is inside audio-only interval ${enclosingAudioOnlyInterval.kind}; EPUB text should begin outside that interval.`);
+    } else {
+      warnings.push(`startTime is very close to audio-only interval ${enclosingAudioOnlyInterval.kind}; verify the boundary is not credits/preamble.`);
+    }
+  }
+
+  const audit =
+    epubIndex >= 0
+      ? buildBoundaryComparisonAudit(ctx, {
+          epubIndex,
+          title: entry?.title ?? boundary.title,
+          startTime: boundary.startTime,
+          transcriptWindow: getTranscriptWindowFromContext(ctx, secondsToMs(boundary.startTime), 45_000),
+          candidates: [],
+        })
+      : null;
+
+  if (errors.length > 0) {
+    return {
+      accepted: false,
+      kind: "node_boundary",
+      errors,
+      warnings,
+      audit,
+      instruction: "Find the assigned audible EPUB node boundary with stronger transcript evidence and submit a corrected startTime.",
+    };
+  }
+
+  return {
+    accepted: true,
+    kind: "node_boundary",
+    spanPath: boundary.spanPath ?? span?.path ?? "root",
+    epubNodeId: entry!.id,
+    epubIndex,
+    title: entry!.title,
+    startTime: boundary.startTime,
+    notes: boundary.notes ?? null,
+    audit: audit!,
+  };
+}
+
 function summarizeSubmittedChapters(chapters: SubmittedChapter[], limit = 12): string {
   const shown = chapters.slice(0, limit).map((chapter) => `${Math.round(chapter.startTime)}s:${chapter.title}`).join(" | ");
   return chapters.length > limit ? `${shown} | ... +${chapters.length - limit}` : shown;
@@ -793,6 +942,15 @@ function parseSpanDecisionOutput(output: unknown): RecursiveSpanDecision | null 
   return null;
 }
 
+function parseNodeBoundaryOutput(output: unknown): NodeBoundaryDecision | null {
+  const value = typeof output === "string" ? safeJsonParse(output) : output;
+  if (!value || typeof value !== "object") return null;
+  const record = value as { accepted?: unknown; kind?: unknown; epubNodeId?: unknown };
+  if (record.accepted !== true) return null;
+  if (record.kind === "node_boundary" && typeof record.epubNodeId === "string") return record as NodeBoundaryDecision;
+  return null;
+}
+
 function parseFulcrumJudgmentOutput(output: unknown): SubmitFulcrumJudgmentResult | null {
   const value = typeof output === "string" ? safeJsonParse(output) : output;
   const parsed = submitFulcrumJudgmentSchema.safeParse(value);
@@ -844,6 +1002,20 @@ export function fulcrumJudgeToolUseBehavior(_: unknown, toolResults: FunctionToo
   };
 }
 
+export function nodeBoundaryToolUseBehavior(_: unknown, toolResults: FunctionToolResult[]): ToolsToFinalOutputResult {
+  const terminalResult = toolResults.find(
+    (result) => result.type === "function_output" && result.tool.name === "submitNodeBoundary" && parseNodeBoundaryOutput(result.output)
+  );
+  if (!terminalResult || terminalResult.type !== "function_output") {
+    return { isFinalOutput: false, isInterrupted: undefined };
+  }
+  return {
+    isFinalOutput: true,
+    isInterrupted: undefined,
+    finalOutput: JSON.stringify(parseNodeBoundaryOutput(terminalResult.output) ?? terminalResult.output),
+  };
+}
+
 export function audibleEpubNodeSelectionToolUseBehavior(_: unknown, toolResults: FunctionToolResult[]): ToolsToFinalOutputResult {
   const terminalResult = toolResults.find(
     (result) => result.type === "function_output" && result.tool.name === "submitAudibleEpubNodeSelection" && parseAudibleEpubNodeSelectionOutput(result.output)
@@ -856,6 +1028,86 @@ export function audibleEpubNodeSelectionToolUseBehavior(_: unknown, toolResults:
     isInterrupted: undefined,
     finalOutput: JSON.stringify(parseAudibleEpubNodeSelectionOutput(terminalResult.output) ?? terminalResult.output),
   };
+}
+
+export async function resolveNodeBoundaryChapters(
+  ctx: ChapterCurationContext,
+  decide: (targetBoundary: ChapterCurationTargetBoundary) => Promise<NodeBoundaryDecision | null>,
+  options: { maxConcurrency?: number; reports?: NodeBoundaryCurationReport[] } = {}
+): Promise<SubmittedChapter[] | null> {
+  const targets = nodeBoundaryTargets(ctx);
+  if (targets.length === 0) return null;
+  const maxConcurrency = Math.max(1, options.maxConcurrency ?? 8);
+  const reports = options.reports;
+  let activeDecisions = 0;
+  const waiters: Array<() => void> = [];
+
+  async function withDecisionSlot<T>(fn: () => Promise<T>): Promise<T> {
+    if (activeDecisions >= maxConcurrency) {
+      await new Promise<void>((resolve) => waiters.push(resolve));
+    }
+    activeDecisions++;
+    try {
+      return await fn();
+    } finally {
+      activeDecisions--;
+      waiters.shift()?.();
+    }
+  }
+
+  const decisions = await Promise.all(
+    targets.map(async (target) => {
+      try {
+        const decision = await withDecisionSlot(() => decide(target));
+        if (!decision) {
+          reports?.push({
+            epubNodeId: target.epubNodeId,
+            epubIndex: target.epubIndex,
+            title: target.title,
+            expectedStartTime: target.expectedStartTime,
+            outcome: "failed",
+            errors: ["No accepted boundary decision."],
+          });
+          return null;
+        }
+        reports?.push({
+          epubNodeId: target.epubNodeId,
+          epubIndex: target.epubIndex,
+          title: target.title,
+          expectedStartTime: target.expectedStartTime,
+          outcome: "accepted",
+          startTime: decision.startTime,
+        });
+        return decision;
+      } catch (error) {
+        reports?.push({
+          epubNodeId: target.epubNodeId,
+          epubIndex: target.epubIndex,
+          title: target.title,
+          expectedStartTime: target.expectedStartTime,
+          outcome: "failed",
+          errors: [(error as Error).message],
+        });
+        return null;
+      }
+    })
+  );
+
+  const chapters: SubmittedChapter[] = [];
+  for (const decision of decisions
+    .filter((decision): decision is NodeBoundaryDecision => Boolean(decision))
+    .sort((a, b) => a.epubIndex - b.epubIndex || a.startTime - b.startTime)) {
+    const previous = chapters.at(-1);
+    if (previous && Math.abs(previous.startTime - decision.startTime) <= 30) {
+      continue;
+    }
+    chapters.push({
+      title: decision.title,
+      startTime: decision.startTime,
+      epubNodeId: decision.epubNodeId,
+    });
+  }
+  return chapters.length > 0 ? chapters : null;
 }
 
 export async function resolveRecursiveChapterSpans(
@@ -987,4 +1239,4 @@ import {
 
 // Export Zod schemas needed by runner
 export { submitFulcrumSplitSchema, audibleEpubNodeSelectionSchema as audibleEpubNodeSelectionSchemaExport };
-export { parseSpanDecisionOutput, parseFulcrumJudgmentOutput, parseAudibleEpubNodeSelectionOutput };
+export { parseSpanDecisionOutput, parseNodeBoundaryOutput, parseFulcrumJudgmentOutput, parseAudibleEpubNodeSelectionOutput };

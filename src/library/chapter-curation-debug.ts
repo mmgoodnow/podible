@@ -263,7 +263,7 @@ function estimateOpenAiUsageCostUsd(model: string, usage: AgentUsageSummary): { 
 export function logAgentUsageEvent(
   ctx: DebugContext,
   input: {
-    role: "audible-node-selection" | "curator" | "judge";
+    role: "audible-node-selection" | "curator" | "node-boundary-curator" | "judge";
     model: string;
     rawResponses?: unknown[];
     serializedError?: unknown;
