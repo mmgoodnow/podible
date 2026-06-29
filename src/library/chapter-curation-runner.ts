@@ -386,9 +386,11 @@ function immediateBodyMatchAfterHeading(windowText: string, headingText: string,
     .slice(headingIndex + headingTokens.length)
     .filter((token) => token.length >= 4)
     .slice(0, Math.max(16, bodyTokens.length * 2));
-  const firstBodyIndex = afterHeading.indexOf(bodyTokens[0]!);
-  if (firstBodyIndex < 0 || firstBodyIndex > 6) return 0;
-  return orderedTokenMatchCount(bodyTokens, afterHeading);
+  const matched = orderedTokenMatchCount(bodyTokens, afterHeading);
+  if (matched < Math.min(3, bodyTokens.length)) return 0;
+  const firstMatchedIndex = afterHeading.findIndex((token) => bodyTokens.includes(token));
+  if (firstMatchedIndex < 0 || firstMatchedIndex > 10) return 0;
+  return matched;
 }
 
 function titleNumberWord(value: number): string | null {

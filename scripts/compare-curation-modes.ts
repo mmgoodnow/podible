@@ -99,11 +99,40 @@ type ModeSummary = {
   };
 };
 
+type AnswerKeyChapter = {
+  title: string;
+  startTime: number | null;
+};
+
+type AnswerKeySummary = {
+  path: string;
+  expectedCount: number | null;
+  chapters: AnswerKeyChapter[];
+};
+
+type AnswerKeyScore = {
+  keyPath: string;
+  expectedCount: number | null;
+  expectedDetailedCount: number;
+  actualCount: number | null;
+  countMatches: boolean | null;
+  detailedMatches: number | null;
+  titleMismatches: number | null;
+  timeMismatches: number | null;
+  missingChapters: number | null;
+  extraChapters: number | null;
+  maxTimeDeltaSeconds: number | null;
+  meanTimeDeltaSeconds: number | null;
+  passed: boolean | null;
+};
+
 type CaseSummary = {
   slug: string;
   title: string | null;
   author: string | null;
   runnable: boolean;
+  answerKey: AnswerKeySummary | null;
+  answerKeyScore: AnswerKeyScore | null;
   recursive: ModeSummary | null;
   node: ModeSummary | null;
   comparison: {
@@ -145,6 +174,13 @@ type AggregateSummary = {
     acceptedReports: number;
     judgeBackedAcceptedReports: number;
     coverage: number | null;
+  };
+  answerKeys: {
+    casesWithKeys: number;
+    casesWithDetailedKeys: number;
+    casesPassingKeys: number;
+    casesFailingKeys: number;
+    casesCountOnly: number;
   };
   pairedDeltas: {
     cases: number;
@@ -347,6 +383,142 @@ function latestResult(caseDir: string, mode: "recursive" | "node"): string | nul
     if (currentClean.length > 0) return currentClean.at(-1)!;
   }
   return matches.at(-1)!;
+}
+
+function normalizeChapterTitle(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[“”]/g, "\"")
+    .replace(/[‘’]/g, "'")
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseAnswerKeyJson(filePath: string): AnswerKeySummary | null {
+  const data = readJson(filePath);
+  if (!data) return null;
+  const rawChapters = Array.isArray(data.expectedChapters)
+    ? data.expectedChapters
+    : Array.isArray(data.chapters)
+      ? data.chapters
+      : [];
+  const chapters: AnswerKeyChapter[] = rawChapters.flatMap((chapter: JsonRecord) => {
+    const title = typeof chapter.title === "string" ? chapter.title : typeof chapter.name === "string" ? chapter.name : null;
+    if (!title) return [];
+    const startTime =
+      typeof chapter.startTime === "number"
+        ? chapter.startTime
+        : typeof chapter.start === "number"
+          ? chapter.start
+          : typeof chapter.startSeconds === "number"
+            ? chapter.startSeconds
+            : null;
+    return [{ title, startTime }];
+  });
+  const expectedCount =
+    typeof data.expectedChapterCount === "number"
+      ? data.expectedChapterCount
+      : typeof data.expectedCount === "number"
+        ? data.expectedCount
+        : chapters.length > 0
+          ? chapters.length
+          : null;
+  return { path: filePath, expectedCount, chapters };
+}
+
+function parseAnswerKeyMarkdown(filePath: string): AnswerKeySummary | null {
+  const text = readFileSync(filePath, "utf8");
+  const expectedCountMatch = text.match(/Expected chapter count:\s*([0-9]+)/i);
+  const chapters: AnswerKeyChapter[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const match = line.match(/^\s*-\s+`([^`]+)`\s+@\s+`?([0-9]+(?:\.[0-9]+)?)`?/);
+    if (!match) continue;
+    chapters.push({ title: match[1]!, startTime: Number(match[2]) });
+  }
+  const expectedCount = expectedCountMatch ? Number(expectedCountMatch[1]) : chapters.length > 0 ? chapters.length : null;
+  return expectedCount === null && chapters.length === 0 ? null : { path: filePath, expectedCount, chapters };
+}
+
+function loadAnswerKey(caseDir: string): AnswerKeySummary | null {
+  const candidates = ["expected-chapters.json", "answer-key.json", "answer-key.md"].map((name) => path.join(caseDir, name));
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
+    const parsed = candidate.endsWith(".md") ? parseAnswerKeyMarkdown(candidate) : parseAnswerKeyJson(candidate);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
+function chaptersFromResult(result: JsonRecord | null, replay: ModeSummary["nodeReplay"]): SubmittedChapter[] | null {
+  if (Array.isArray(result?.result?.chapters)) {
+    return result.result.chapters.flatMap((chapter: JsonRecord) => {
+      if (typeof chapter.title !== "string" || typeof chapter.startTime !== "number") return [];
+      return [{ title: chapter.title, startTime: chapter.startTime, epubNodeId: typeof chapter.epubNodeId === "string" ? chapter.epubNodeId : undefined }];
+    });
+  }
+  if (replay?.chapters === 0) return [];
+  return null;
+}
+
+function scoreAnswerKey(answerKey: AnswerKeySummary | null, actualChapters: SubmittedChapter[] | null): AnswerKeyScore | null {
+  if (!answerKey) return null;
+  const actualCount = actualChapters?.length ?? null;
+  const countMatches = answerKey.expectedCount === null || actualCount === null ? null : answerKey.expectedCount === actualCount;
+  if (answerKey.chapters.length === 0 || !actualChapters) {
+    return {
+      keyPath: answerKey.path,
+      expectedCount: answerKey.expectedCount,
+      expectedDetailedCount: answerKey.chapters.length,
+      actualCount,
+      countMatches,
+      detailedMatches: null,
+      titleMismatches: null,
+      timeMismatches: null,
+      missingChapters: null,
+      extraChapters: null,
+      maxTimeDeltaSeconds: null,
+      meanTimeDeltaSeconds: null,
+      passed: countMatches,
+    };
+  }
+
+  const toleranceSeconds = 3;
+  const compareLength = Math.min(answerKey.chapters.length, actualChapters.length);
+  let detailedMatches = 0;
+  let titleMismatches = 0;
+  let timeMismatches = 0;
+  const deltas: number[] = [];
+  for (let index = 0; index < compareLength; index++) {
+    const expected = answerKey.chapters[index]!;
+    const actual = actualChapters[index]!;
+    const titleMatches = normalizeChapterTitle(expected.title) === normalizeChapterTitle(actual.title);
+    const delta = expected.startTime === null ? null : Math.abs(actual.startTime - expected.startTime);
+    const timeMatches = delta === null || delta <= toleranceSeconds;
+    if (delta !== null) deltas.push(delta);
+    if (titleMatches && timeMatches) detailedMatches++;
+    if (!titleMatches) titleMismatches++;
+    if (!timeMatches) timeMismatches++;
+  }
+  const missingChapters = Math.max(0, answerKey.chapters.length - actualChapters.length);
+  const extraChapters = Math.max(0, actualChapters.length - answerKey.chapters.length);
+  const passed = Boolean(countMatches && detailedMatches === answerKey.chapters.length && missingChapters === 0 && extraChapters === 0);
+  return {
+    keyPath: answerKey.path,
+    expectedCount: answerKey.expectedCount,
+    expectedDetailedCount: answerKey.chapters.length,
+    actualCount,
+    countMatches,
+    detailedMatches,
+    titleMismatches,
+    timeMismatches,
+    missingChapters,
+    extraChapters,
+    maxTimeDeltaSeconds: deltas.length > 0 ? round(Math.max(...deltas), 3) : null,
+    meanTimeDeltaSeconds: deltas.length > 0 ? round(deltas.reduce((sum, delta) => sum + delta, 0) / deltas.length, 3) : null,
+    passed,
+  };
 }
 
 function monotonicErrors(chapters: SubmittedChapter[]): number {
@@ -568,11 +740,16 @@ async function summarizeCase(caseDir: string): Promise<CaseSummary> {
   const runnable = existsSync(path.join(caseDir, "book.epub")) && existsSync(path.join(caseDir, "transcript.json"));
   const recursive = await summarizeMode(caseDir, "recursive");
   const node = await summarizeMode(caseDir, "node");
+  const answerKey = loadAnswerKey(caseDir);
+  const nodeResult = node?.resultPath ? readJson(node.resultPath) : null;
+  const answerKeyScore = scoreAnswerKey(answerKey, chaptersFromResult(nodeResult, node?.nodeReplay));
   return {
     slug: path.basename(caseDir),
     title: typeof metadata?.title === "string" ? metadata.title : null,
     author: typeof metadata?.author === "string" ? metadata.author : null,
     runnable,
+    answerKey,
+    answerKeyScore,
     recursive,
     node,
     comparison: {
@@ -617,6 +794,8 @@ function aggregateCases(cases: CaseSummary[]): AggregateSummary {
   const nodeAuditCases = cases.filter((item) => item.node?.nodeJudgedAudit);
   const acceptedReports = nodeAuditCases.reduce((sum, item) => sum + (item.node?.nodeJudgedAudit?.acceptedReports ?? 0), 0);
   const judgeBackedAcceptedReports = nodeAuditCases.reduce((sum, item) => sum + (item.node?.nodeJudgedAudit?.judgeAccepted ?? 0), 0);
+  const answerKeyCases = cases.filter((item) => item.answerKeyScore);
+  const detailedAnswerKeyCases = answerKeyCases.filter((item) => (item.answerKeyScore?.expectedDetailedCount ?? 0) > 0);
   return {
     cases: {
       total: cases.length,
@@ -644,6 +823,13 @@ function aggregateCases(cases: CaseSummary[]): AggregateSummary {
       acceptedReports,
       judgeBackedAcceptedReports,
       coverage: acceptedReports === 0 ? null : round(judgeBackedAcceptedReports / acceptedReports, 3),
+    },
+    answerKeys: {
+      casesWithKeys: answerKeyCases.length,
+      casesWithDetailedKeys: detailedAnswerKeyCases.length,
+      casesPassingKeys: answerKeyCases.filter((item) => item.answerKeyScore?.passed === true).length,
+      casesFailingKeys: answerKeyCases.filter((item) => item.answerKeyScore?.passed === false).length,
+      casesCountOnly: answerKeyCases.filter((item) => (item.answerKeyScore?.expectedDetailedCount ?? 0) === 0).length,
     },
     pairedDeltas: {
       cases: comparablePairs.length,
@@ -708,6 +894,26 @@ function nodeDiagnosticStatus(summary: ModeSummary | null): string {
   return `${diagnostic.kind} (failed window overlap ${overlap}, first opener ${first})`;
 }
 
+function answerKeyStatus(score: AnswerKeyScore | null): string {
+  if (!score) return "-";
+  const count = score.countMatches === null ? "count ?" : score.countMatches ? `count ${score.actualCount}/${score.expectedCount}` : `count ${score.actualCount} != ${score.expectedCount}`;
+  if (score.expectedDetailedCount === 0) {
+    return `${score.passed ? "pass" : "fail"} / ${count} / count-only`;
+  }
+  if (score.detailedMatches === null) {
+    return `${score.passed ? "pass" : "fail"} / ${count} / detailed key unavailable for selected artifact`;
+  }
+  const detail = `${score.detailedMatches}/${score.expectedDetailedCount} exact`;
+  const time =
+    score.maxTimeDeltaSeconds === null
+      ? "time ?"
+      : `max Δ ${fmt(score.maxTimeDeltaSeconds)}s, mean Δ ${fmt(score.meanTimeDeltaSeconds)}s`;
+  const misses = [score.titleMismatches ? `${score.titleMismatches} title` : null, score.timeMismatches ? `${score.timeMismatches} time` : null, score.missingChapters ? `${score.missingChapters} missing` : null, score.extraChapters ? `${score.extraChapters} extra` : null]
+    .filter(Boolean)
+    .join(", ");
+  return `${score.passed ? "pass" : "fail"} / ${count} / ${detail} / ${time}${misses ? ` / ${misses}` : ""}`;
+}
+
 function renderMarkdown(cases: CaseSummary[], aggregate: AggregateSummary, generatedAt: string): string {
   const runnable = cases.filter((item) => item.runnable).length;
   const paired = cases.filter((item) => item.recursive && item.node).length;
@@ -720,7 +926,7 @@ function renderMarkdown(cases: CaseSummary[], aggregate: AggregateSummary, gener
     "",
     `Generated: ${generatedAt}`,
     "",
-    "Accuracy against human answer keys is not scored here because no committed answer keys are present. This report compares repeatable operational signals and judged boundary evidence: acceptance, monotonic validity, judge-backed accepted node boundaries, chapter count, node failures/drops, latency, requests, tokens, and cost.",
+    "This report compares node-parallel curation against recursive divide-and-conquer using operational signals, judge-backed boundary evidence, and any committed answer keys available for a case.",
     "",
     `Cases: ${cases.length} total, ${runnable} runnable with local EPUB+transcript, ${paired} have both recursive and node artifacts.`,
     `Accepted artifacts: recursive ${recursiveAccepted}/${cases.filter((item) => item.recursive).length}, node ${nodeAccepted}/${cases.filter((item) => item.node).length} after current-code node replay.`,
@@ -731,19 +937,20 @@ function renderMarkdown(cases: CaseSummary[], aggregate: AggregateSummary, gener
     `- Current-clean recursive artifacts: ${aggregate.artifacts.currentCleanRecursive}/${aggregate.artifacts.recursive}. Stale or unversioned recursive artifacts: ${staleRecursiveList}.`,
     `- Node replay validity: ${aggregate.acceptance.nodeReplayValid} valid, ${aggregate.acceptance.nodeReplayInvalid} invalid.`,
     `- Node judged boundary coverage: ${aggregate.nodeJudgedAudit.judgeBackedAcceptedReports}/${aggregate.nodeJudgedAudit.acceptedReports} accepted node reports judge-backed (${fmt(aggregate.nodeJudgedAudit.coverage === null ? null : aggregate.nodeJudgedAudit.coverage * 100)}%); ${aggregate.nodeJudgedAudit.casesFullyJudgeBacked}/${aggregate.nodeJudgedAudit.casesWithNodeReports} node cases fully judge-backed.`,
+    `- Answer-key coverage: ${aggregate.answerKeys.casesWithKeys}/${cases.length} cases have answer keys (${aggregate.answerKeys.casesWithDetailedKeys} detailed, ${aggregate.answerKeys.casesCountOnly} count-only); node passes ${aggregate.answerKeys.casesPassingKeys}/${aggregate.answerKeys.casesWithKeys} scored keys and fails ${aggregate.answerKeys.casesFailingKeys}.`,
     `- Paired operational comparison (${aggregate.pairedDeltas.cases} cases): node saved ${fmt(aggregate.pairedDeltas.nodeWallSecondsSaved)} seconds, ${fmt(aggregate.pairedDeltas.nodeRequestsSaved)} requests, ${fmt(aggregate.pairedDeltas.nodeTokensSaved)} tokens, and $${fmt(aggregate.pairedDeltas.nodeCostUsdSaved)}.`,
     `- Paired speedup: ${fmt(aggregate.pairedDeltas.wallSpeedup)}x wall-clock (${fmt(aggregate.pairedDeltas.recursiveWallSeconds)}s recursive vs ${fmt(aggregate.pairedDeltas.nodeWallSeconds)}s node).`,
     `- Paired reductions: ${fmt(aggregate.pairedDeltas.requestReductionRatio === null ? null : aggregate.pairedDeltas.requestReductionRatio * 100)}% requests, ${fmt(aggregate.pairedDeltas.tokenReductionRatio === null ? null : aggregate.pairedDeltas.tokenReductionRatio * 100)}% tokens, ${fmt(aggregate.pairedDeltas.costReductionRatio === null ? null : aggregate.pairedDeltas.costReductionRatio * 100)}% cost.`,
     "",
-    "| Case | Recursive | Node | Node reports | Judge audit | Node source | Node replay | Node diagnostic | Δ seconds | Δ requests | Δ tokens | Δ cost |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |",
+    "| Case | Recursive | Node | Answer key | Node reports | Judge audit | Node source | Node replay | Node diagnostic | Δ seconds | Δ requests | Δ tokens | Δ cost |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |",
   ];
   for (const item of cases) {
     const replay = item.node?.nodeReplay
     ? `${item.node.nodeReplay.acceptedAfterReplay ? "valid" : "invalid"} / ${item.node.nodeReplay.chapters} ch / ${item.node.nodeReplay.failedReports} failed / ${item.node.nodeReplay.droppedReports} dropped / ${item.node.nodeReplay.skippedReports} skipped / ${Math.round(item.node.nodeReplay.coverage * 100)}% coverage`
       : "-";
     lines.push(
-      `| ${item.slug} | ${modeStatus(item.recursive)} | ${modeStatus(item.node)} | ${nodeReportStatus(item.node)} | ${nodeJudgedAuditStatus(item.node)} | ${nodeSourceStatus(item.node)} | ${replay} | ${nodeDiagnosticStatus(item.node)} | ${fmt(item.comparison.nodeWallSecondsMinusRecursive)} | ${fmt(item.comparison.nodeRequestsMinusRecursive)} | ${fmt(item.comparison.nodeTokensMinusRecursive)} | ${fmt(item.comparison.nodeCostUsdMinusRecursive)} |`
+      `| ${item.slug} | ${modeStatus(item.recursive)} | ${modeStatus(item.node)} | ${answerKeyStatus(item.answerKeyScore)} | ${nodeReportStatus(item.node)} | ${nodeJudgedAuditStatus(item.node)} | ${nodeSourceStatus(item.node)} | ${replay} | ${nodeDiagnosticStatus(item.node)} | ${fmt(item.comparison.nodeWallSecondsMinusRecursive)} | ${fmt(item.comparison.nodeRequestsMinusRecursive)} | ${fmt(item.comparison.nodeTokensMinusRecursive)} | ${fmt(item.comparison.nodeCostUsdMinusRecursive)} |`
     );
   }
   lines.push("");
@@ -753,11 +960,12 @@ function renderMarkdown(cases: CaseSummary[], aggregate: AggregateSummary, gener
   lines.push("- `Judge audit` counts accepted node-boundary reports that have a matching node-boundary judge acceptance in the event log. It proves the report is judge-backed, not that a human answer key agrees.");
   lines.push("- `Node reports` is the original run output before current-code replay; failed/dropped rows are unresolved evidence gaps even when the merged plan is structurally valid.");
   lines.push("- `Node source` counts boundary decisions accepted by deterministic pre-agent research versus accepted by the node agent fallback.");
+  lines.push("- `Answer key` compares the selected node artifact against committed case metadata. Detailed keys require exact normalized titles and timestamps within 3 seconds; count-only keys only prove expected chapter count.");
   lines.push("- `Node diagnostic` is emitted only by failed node runs and is a hint to inspect corpus/data quality; it does not accept chapters or relax validation.");
   lines.push("- `stale-or-dirty` means the selected artifact was not produced cleanly from the current git commit; rerun that corpus case before treating it as current proof.");
   lines.push("- `unversioned` means the artifact predates git provenance tracking; rerun that corpus case before treating it as current proof.");
   lines.push("- Positive Δ seconds/requests/tokens/cost means node-parallel used more than recursive for that saved run; negative means it used less.");
-  lines.push("- Judge-backed coverage is stronger than operational acceptance, but still not the same as human answer-key accuracy. Add committed answer keys before making full accuracy claims.");
+  lines.push("- Judge-backed coverage is stronger than operational acceptance, but detailed answer-key pass/fail is the stronger correctness signal when a detailed key exists.");
   lines.push("");
   return `${lines.join("\n")}\n`;
 }

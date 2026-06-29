@@ -2658,6 +2658,57 @@ describe("chapter curation tools", () => {
     expect(candidate?.startTime).toBe(80);
   });
 
+  test("findSpokenHeadingBoundaryCandidate accepts a part heading when transcript splits a compound opener word", async () => {
+    const context = ctx({
+      durationMs: 120_000,
+      manifestation: manifestation({ duration_ms: 120_000 }),
+      epubEntries: [
+        epubEntry({ id: "previous", title: "Previous", cumulativeRatio: 0.5, cumulativeWords: 20 }),
+        epubEntry({
+          id: "part-target",
+          title: "Part IV: Reaper",
+          cumulativeRatio: 1,
+          cumulativeWords: 34,
+          words: [
+            { ...word("Part"), kind: "heading" },
+            { ...word("IV"), kind: "heading" },
+            { ...word("Reaper"), kind: "heading" },
+            { ...word("The"), kind: "body" },
+            { ...word("Elderwomen"), kind: "body" },
+            { ...word("of"), kind: "body" },
+            { ...word("Lykos"), kind: "body" },
+            { ...word("says"), kind: "body" },
+            { ...word("that"), kind: "body" },
+            { ...word("when"), kind: "body" },
+            { ...word("a"), kind: "body" },
+            { ...word("man"), kind: "body" },
+            { ...word("is"), kind: "body" },
+            { ...word("bitten"), kind: "body" },
+          ],
+        }),
+      ],
+      transcript: transcriptFromUtterances([
+        { startMs: 80_000, endMs: 90_000, text: "Part 4. Reaper. The elder women of Lycos say that when a man is bitten." },
+      ]),
+    });
+    const span = createRootCurationSpan(context);
+    const targetBoundary: ChapterCurationTargetBoundary = {
+      epubNodeId: "part-target",
+      epubIndex: 1,
+      title: "Part IV: Reaper",
+      expectedStartTime: 80,
+      localNodeRatio: 0.5,
+    };
+
+    const candidate = await findSpokenHeadingBoundaryCandidate(context, span, targetBoundary);
+
+    expect(candidate).not.toBeNull();
+    expect(candidate?.source).toBe("spoken_heading");
+    expect(candidate?.phrase).toBe("part 4");
+    expect(candidate?.startTime).toBe(80);
+    expect(candidate?.bodyMatchCount ?? 0).toBeGreaterThanOrEqual(3);
+  });
+
   test("findSpokenHeadingBoundaryCandidate ignores body-text title mentions not followed by the target opener", async () => {
     const context = ctx({
       durationMs: 120_000,
