@@ -1482,7 +1482,8 @@ export function createNodeBoundaryCuratorAgent(
                 instruction: "Search a different opener phrase, inspect the match with getTranscriptWindow, then submit a materially different timestamp.",
               };
             }
-            if (transcriptSearchesSinceBoundarySubmit === 0) {
+            const hasPostRejectionEvidence = rejectedBoundaryRequiresEvidence && evidenceCallsSinceRejectedBoundary > 0;
+            if (transcriptSearchesSinceBoundarySubmit === 0 && !hasPostRejectionEvidence) {
               return {
                 accepted: false,
                 kind: "node_boundary",
