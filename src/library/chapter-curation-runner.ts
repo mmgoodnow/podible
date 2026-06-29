@@ -1409,7 +1409,11 @@ export async function findSpokenHeadingBoundaryCandidate(
   return candidates.sort((a, b) => Math.abs(a.startTime - targetBoundary.expectedStartTime) - Math.abs(b.startTime - targetBoundary.expectedStartTime))[0] ?? null;
 }
 
-export function chooseResearchBoundaryCandidate(research: ResearchEpubBoundaryResult | null, span: ChapterCurationSpan): DeterministicBoundaryCandidate | null {
+export function chooseResearchBoundaryCandidate(
+  research: ResearchEpubBoundaryResult | null,
+  span: ChapterCurationSpan,
+  options: { allowOpeningNearOpenerFallback?: boolean } = {}
+): DeterministicBoundaryCandidate | null {
   if (!research) return null;
   const strict = research.bestCandidates.find(
     (hit) =>
@@ -1433,9 +1437,9 @@ export function chooseResearchBoundaryCandidate(research: ResearchEpubBoundaryRe
   const fallback = research.bestCandidates
     .filter(
       (hit) =>
-        hit.boundaryUse === "candidate_start" &&
+        (hit.boundaryUse === "candidate_start" || (options.allowOpeningNearOpenerFallback && hit.boundaryUse === "supporting_context")) &&
         (hit.reverseEpubRelation === "opener" || hit.reverseEpubRelation === "near_opener") &&
-        hit.phraseStartWord <= 32 &&
+        hit.phraseStartWord <= (options.allowOpeningNearOpenerFallback ? 80 : 32) &&
         hit.startTime > span.startTime &&
         hit.startTime < span.endTime
     )
@@ -1450,6 +1454,126 @@ export function chooseResearchBoundaryCandidate(research: ResearchEpubBoundaryRe
     transcriptText: fallback.transcriptText,
     transcriptWindow: fallback.transcriptWindow,
   };
+}
+
+function openingAudioOnlyEndTime(ctx: ChapterCurationContext, span: ChapterCurationSpan): number {
+  const openingIntervals = (ctx.audioOnlyIntervals ?? [])
+    .filter((interval) => interval.startTime <= span.startTime + 5 && interval.endTime > span.startTime)
+    .sort((a, b) => b.endTime - a.endTime);
+  return openingIntervals[0]?.endTime ?? span.startTime;
+}
+
+async function tryDeterministicNodeBoundary(
+  ctx: ChapterCurationContext,
+  span: ChapterCurationSpan,
+  targetBoundary: ChapterCurationTargetBoundary
+): Promise<NodeBoundaryDecision | null> {
+  const headingCandidate = await findSpokenHeadingBoundaryCandidate(ctx, span, targetBoundary);
+  const isOpeningNode = targetBoundary.epubIndex === 0;
+  const research = await researchEpubBoundary(ctx, {
+    epubNodeId: targetBoundary.epubNodeId,
+    expectedTime: targetBoundary.expectedStartTime,
+    scope: { startTime: span.startTime, endTime: span.endTime },
+    searchRadiusSeconds: Math.max(180, Math.min(1_200, spanDurationSeconds(span) / 2)),
+    phraseLimit: 8,
+    hitLimitPerPhrase: 5,
+  });
+  const candidate = headingCandidate ?? chooseResearchBoundaryCandidate(research, span, { allowOpeningNearOpenerFallback: isOpeningNode });
+  logChapterCurationEvent(ctx, {
+    type: "deterministic-node-boundary-research",
+    message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} candidates=${research?.bestCandidates.length ?? 0}${
+      candidate ? ` selected=${Math.round(candidate.startTime)}s` : ""
+    }`,
+    span,
+    targetBoundary,
+    candidate,
+    research: research
+      ? {
+          epubNodeId: research.epubNodeId,
+          title: research.title,
+          expectedStartTime: research.expectedStartTime,
+          searchScope: research.searchScope,
+          bestCandidates: research.bestCandidates.slice(0, 3),
+        }
+      : null,
+    headingCandidate,
+  });
+  if (!candidate) return null;
+
+  const openingFallback = isOpeningNode && candidate.source === "near_opener_fallback";
+  const startTime = openingFallback ? openingAudioOnlyEndTime(ctx, span) : candidate.startTime;
+  const validated = await validateNodeBoundary(
+    ctx,
+    {
+      spanPath: span.path,
+      epubNodeId: targetBoundary.epubNodeId,
+      title: targetBoundary.title,
+      startTime,
+      evidence: [
+        openingFallback
+          ? "Deterministic opening-node fallback: the true opener is absent from transcript evidence, but the earliest clear same-node near-opener proves the first audible EPUB node."
+          : candidate.source === "spoken_heading"
+            ? "Deterministic spoken-heading candidate: transcript contains the target heading/title cue followed by target body opener text."
+            : candidate.source === "near_opener_fallback"
+              ? "Deterministic near-opener fallback: the printed heading/opening words may be omitted in ASR, but research found the earliest target near-opener body phrase."
+              : "Deterministic strong opener candidate from researchEpubBoundary.",
+        `Anchor phrase "${candidate.phrase}"${candidate.phraseStartWord === null ? "" : ` starts at word ${candidate.phraseStartWord}`} and reverse EPUB relation is ${candidate.reverseEpubRelation}.`,
+        `Transcript text: ${candidate.transcriptText}`,
+      ].join(" "),
+      notes: openingFallback
+        ? `Accepted as the first audible EPUB node at ${Math.round(startTime)}s; supporting near-opener phrase "${candidate.phrase}" starts at ${Math.round(candidate.startTime)}s because earlier opener text is absent from the transcript.`
+        : "Accepted by deterministic pre-agent node-boundary research.",
+    },
+    { span, targetBoundary }
+  );
+  if (!validated.accepted) {
+    logChapterCurationEvent(ctx, {
+      type: "deterministic-node-boundary-rejected",
+      message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} validation=0`,
+      span,
+      targetBoundary,
+      result: validated,
+    });
+    return null;
+  }
+
+  if (!openingFallback) {
+    const judgment = await judgeChapterBoundary(ctx, span, {
+      kind: "node_boundary",
+      spanPath: validated.spanPath,
+      epubNodeId: validated.epubNodeId,
+      epubIndex: validated.epubIndex,
+      title: validated.title,
+      startTime: validated.startTime,
+      notes: validated.notes,
+      audit: validated.audit,
+    });
+    if (!judgment?.accepted) {
+      logChapterCurationEvent(ctx, {
+        type: "deterministic-node-boundary-rejected",
+        message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} judge=0`,
+        span,
+        targetBoundary,
+        result: validated,
+        judgment,
+      });
+      return null;
+    }
+  }
+
+  const accepted: NodeBoundaryDecision = {
+    ...validated,
+    notes: [validated.notes, "Accepted by deterministic pre-agent node-boundary short-circuit."].filter(Boolean).join(" "),
+  };
+  logChapterCurationEvent(ctx, {
+    type: "deterministic-node-boundary-accepted",
+    message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} accepted=1 time=${Math.round(accepted.startTime)}s`,
+    span,
+    targetBoundary,
+    result: accepted,
+    candidate,
+  });
+  return accepted;
 }
 
 async function tryDeterministicFulcrumSplit(
@@ -1957,6 +2081,19 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
         });
         const primaryCuratorModel = curationCtx.debugCuratorModel?.trim() || curationCtx.settings.agents.model;
         const configuredCuratorModel = curationCtx.settings.agents.model;
+        const deterministicDecision = await tryDeterministicNodeBoundary(curationCtx, rootSpan, targetBoundary);
+        if (deterministicDecision) {
+          const elapsedMs = Date.now() - startedAt;
+          logChapterCurationEvent(curationCtx, {
+            type: "node-boundary-result",
+            message: `node boundary epub=${targetBoundary.epubNodeId} elapsed_ms=${elapsedMs} deterministic=1 accepted=1 time=${Math.round(deterministicDecision.startTime)}s`,
+            span: rootSpan,
+            targetBoundary,
+            elapsedMs,
+            decision: deterministicDecision,
+          });
+          return deterministicDecision;
+        }
         const attemptModels = Array.from(new Set([primaryCuratorModel, configuredCuratorModel].filter(Boolean)));
         const attempts = attemptModels.map((model, index) => ({ model, delayMs: index === 0 ? 0 : 5_000 }));
         for (let attempt = 0; attempt < attempts.length; attempt++) {

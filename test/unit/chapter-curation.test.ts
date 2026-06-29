@@ -16,6 +16,7 @@ import {
   nodeBoundaryTargets,
   rgSearchTranscript,
   applyAudibleEpubNodeSelection,
+  chooseResearchBoundaryCandidate,
   createRootCurationSpan,
   rankTargetBoundaries,
   resolveNodeBoundaryChapters,
@@ -31,6 +32,7 @@ import {
   type ChapterCurationTiming,
   type NodeBoundaryCurationReport,
   type NodeBoundaryDecision,
+  type ResearchEpubBoundaryResult,
   type RecursiveSpanDecision,
 } from "../../src/library/chapter-curation";
 import type { AppSettings, AssetFileRow, AssetRow, BookRow, ManifestationRow } from "../../src/app-types";
@@ -657,6 +659,42 @@ describe("chapter curation tools", () => {
     expect(result?.anchorPhrases.length).toBeGreaterThan(0);
     expect(result?.bestCandidates.length).toBeGreaterThan(0);
     expect(result?.bestCandidates[0]?.reverseEpubRelation).toBe("opener");
+  });
+
+  test("chooseResearchBoundaryCandidate only widens near-opener fallback for opening nodes", () => {
+    const research: ResearchEpubBoundaryResult = {
+      epubNodeId: "prologue",
+      epubIndex: 0,
+      title: "Prologue",
+      expectedStartTime: 0,
+      searchScope: { startTime: 0, endTime: 3_600 },
+      anchorPhrases: [],
+      bestCandidates: [
+        {
+          phrase: "giant gymnosperms while stratocumulus towered nine kilometers high",
+          phraseStartWord: 53,
+          phraseWordCount: 8,
+          startTime: 60,
+          endTime: 68,
+          distanceFromExpectedSeconds: 60,
+          transcriptText: "The forest of giant gymnosperms while stratocumulus towered nine kilometers high",
+          transcriptWindow: "The forest of giant gymnosperms while stratocumulus towered nine kilometers high in a violent sky.",
+          reverseEpubRelation: "near_opener",
+          boundaryUse: "supporting_context",
+        },
+      ],
+    };
+    const span = createRootCurationSpan(ctx({ durationMs: 3_600_000 }));
+
+    expect(chooseResearchBoundaryCandidate(research, span)).toBeNull();
+
+    const openingCandidate = chooseResearchBoundaryCandidate(research, span, { allowOpeningNearOpenerFallback: true });
+    expect(openingCandidate).toMatchObject({
+      startTime: 60,
+      source: "near_opener_fallback",
+      phraseStartWord: 53,
+      reverseEpubRelation: "near_opener",
+    });
   });
 
   test("estimateTimestampFromEpubPosition maps EPUB word position onto duration", () => {
