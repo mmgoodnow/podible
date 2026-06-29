@@ -1,0 +1,215 @@
+{
+  "slug": "a-darker-shade-of-magic",
+  "bookTitle": "A Darker Shade of Magic",
+  "author": "V.E. Schwab",
+  "sourceArtifacts": [
+    "agent-result-2026-05-22T05-24-50-703Z.json",
+    "book.epub",
+    "transcript.json",
+    "raw-chapters.json"
+  ],
+  "expectedChapterCount": 49,
+  "expectedChapters": [
+    {
+      "title": "I: The Traveler",
+      "startTime": 0
+    },
+    {
+      "title": "II",
+      "startTime": 1019.2
+    },
+    {
+      "title": "III",
+      "startTime": 1757.26
+    },
+    {
+      "title": "II: Red Royal",
+      "startTime": 2948.1
+    },
+    {
+      "title": "II",
+      "startTime": 3528.21
+    },
+    {
+      "title": "III",
+      "startTime": 4025.05
+    },
+    {
+      "title": "III: Grey Thief",
+      "startTime": 5328.51
+    },
+    {
+      "title": "II",
+      "startTime": 5661.91
+    },
+    {
+      "title": "III",
+      "startTime": 6511.31
+    },
+    {
+      "title": "IV: White Throne",
+      "startTime": 6866.15
+    },
+    {
+      "title": "II",
+      "startTime": 7970.39
+    },
+    {
+      "title": "III",
+      "startTime": 9189.51
+    },
+    {
+      "title": "IV",
+      "startTime": 9724.59
+    },
+    {
+      "title": "V",
+      "startTime": 10217.47
+    },
+    {
+      "title": "V: Black Stone",
+      "startTime": 10830.15
+    },
+    {
+      "title": "II",
+      "startTime": 11152.71
+    },
+    {
+      "title": "III",
+      "startTime": 11365.95
+    },
+    {
+      "title": "IV",
+      "startTime": 11580.39
+    },
+    {
+      "title": "V",
+      "startTime": 12561.55
+    },
+    {
+      "title": "VI: Thieves Meet",
+      "startTime": 12941.83
+    },
+    {
+      "title": "II",
+      "startTime": 13150.91
+    },
+    {
+      "title": "III",
+      "startTime": 13757.31
+    },
+    {
+      "title": "IV",
+      "startTime": 14968.39
+    },
+    {
+      "title": "VII: The Follower",
+      "startTime": 15563.43
+    },
+    {
+      "title": "II",
+      "startTime": 16503.43
+    },
+    {
+      "title": "VIII: An Arrangement",
+      "startTime": 18452.31
+    },
+    {
+      "title": "II",
+      "startTime": 20637.47
+    },
+    {
+      "title": "IX: Festival & Fire",
+      "startTime": 21560.43
+    },
+    {
+      "title": "II",
+      "startTime": 23341.47
+    },
+    {
+      "title": "III",
+      "startTime": 23848.95
+    },
+    {
+      "title": "IV",
+      "startTime": 24442.75
+    },
+    {
+      "title": "X: One White Rook",
+      "startTime": 25192.47
+    },
+    {
+      "title": "II",
+      "startTime": 25650.51
+    },
+    {
+      "title": "III",
+      "startTime": 26913.07
+    },
+    {
+      "title": "IV",
+      "startTime": 27176.71
+    },
+    {
+      "title": "V",
+      "startTime": 27990.99
+    },
+    {
+      "title": "VI",
+      "startTime": 28826.43
+    },
+    {
+      "title": "XI: Masquerade",
+      "startTime": 29466.39
+    },
+    {
+      "title": "II",
+      "startTime": 30327.43
+    },
+    {
+      "title": "III",
+      "startTime": 30973.27
+    },
+    {
+      "title": "IV",
+      "startTime": 31575.75
+    },
+    {
+      "title": "V",
+      "startTime": 32430.47
+    },
+    {
+      "title": "XII: Sanctuary & Sacrifice",
+      "startTime": 32834.47
+    },
+    {
+      "title": "II",
+      "startTime": 33334.59
+    },
+    {
+      "title": "III",
+      "startTime": 34606.99
+    },
+    {
+      "title": "IV",
+      "startTime": 35134.51
+    },
+    {
+      "title": "V",
+      "startTime": 35420.98
+    },
+    {
+      "title": "VI",
+      "startTime": 36007.82
+    },
+    {
+      "title": "XIII: The Waiting King",
+      "startTime": 36348.54
+    }
+  ],
+  "notes": [
+    "Answer key reconstructed from the accepted manually-reviewed recursive curation artifact because the latest node-agent artifact is empty.",
+    "This case exercises nested roman subchapters and generic embedded M4B chapter labels.",
+    "Raw embedded chapters are generic and used only for timing corroboration, not titles."
+  ]
+}

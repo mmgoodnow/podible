@@ -1,0 +1,51 @@
+{
+  "slug": "hyperion",
+  "bookTitle": "Hyperion",
+  "author": "Dan Simmons",
+  "sourceArtifacts": [
+    "node-agent-result-2026-06-29T20-34-40-972Z.json",
+    "book.epub",
+    "transcript.json",
+    "raw-chapters.json"
+  ],
+  "expectedChapterCount": 8,
+  "expectedChapters": [
+    {
+      "title": "Prologue",
+      "startTime": 60
+    },
+    {
+      "title": "Chapter 1",
+      "startTime": 914.48
+    },
+    {
+      "title": "Chapter 2",
+      "startTime": 15730.6
+    },
+    {
+      "title": "Chapter 3",
+      "startTime": 27147.68
+    },
+    {
+      "title": "Chapter 4",
+      "startTime": 36858.402
+    },
+    {
+      "title": "Chapter 5",
+      "startTime": 48482.162
+    },
+    {
+      "title": "Chapter 6",
+      "startTime": 63890.402
+    },
+    {
+      "title": "Epilogue",
+      "startTime": 73961.322
+    }
+  ],
+  "notes": [
+    "Answer key reconstructed from the latest accepted node-parallel curation artifact.",
+    "This case intentionally keeps the coarse audiobook-facing tale structure rather than every inline all-caps subheading.",
+    "Useful coverage case for meaningful inner headings and long uneven spans."
+  ]
+}

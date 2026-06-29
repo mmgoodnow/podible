@@ -1,0 +1,215 @@
+{
+  "slug": "red-rising",
+  "bookTitle": "Red Rising",
+  "author": "Pierce Brown",
+  "sourceArtifacts": [
+    "node-agent-result-2026-06-29T21-49-05-992Z.json",
+    "book.epub",
+    "transcript.json",
+    "raw-chapters.json"
+  ],
+  "expectedChapterCount": 49,
+  "expectedChapters": [
+    {
+      "title": "Prologue",
+      "startTime": 39.72
+    },
+    {
+      "title": "Part I: Slave",
+      "startTime": 190.96
+    },
+    {
+      "title": "Chapter 1: Helldiver",
+      "startTime": 213.12
+    },
+    {
+      "title": "Chapter 2: The Township",
+      "startTime": 1182.08
+    },
+    {
+      "title": "Chapter 3: The Laurel",
+      "startTime": 2658.28
+    },
+    {
+      "title": "Chapter 4: The Gift",
+      "startTime": 3909.32
+    },
+    {
+      "title": "Chapter 5: The First Song",
+      "startTime": 5077.04
+    },
+    {
+      "title": "Chapter 6: The Martyr",
+      "startTime": 6304.08
+    },
+    {
+      "title": "Part II: Reborn",
+      "startTime": 7454.28
+    },
+    {
+      "title": "Chapter 7: Other Things",
+      "startTime": 7469.36
+    },
+    {
+      "title": "Chapter 8: Dancer",
+      "startTime": 8102.2
+    },
+    {
+      "title": "Chapter 9: The Lie",
+      "startTime": 9365.96
+    },
+    {
+      "title": "Chapter 10: The Carver",
+      "startTime": 9997.72
+    },
+    {
+      "title": "Chapter 11: The Carved",
+      "startTime": 11252.32
+    },
+    {
+      "title": "Chapter 12: Change",
+      "startTime": 11622.12
+    },
+    {
+      "title": "Chapter 13: Bad Things",
+      "startTime": 13478.6
+    },
+    {
+      "title": "Chapter 14: Andromedus",
+      "startTime": 14407.84
+    },
+    {
+      "title": "Chapter 15: The Testing",
+      "startTime": 15001.76
+    },
+    {
+      "title": "Chapter 16: The Institute",
+      "startTime": 15915.84
+    },
+    {
+      "title": "Chapter 17: The Draft",
+      "startTime": 17651.52
+    },
+    {
+      "title": "Chapter 18: Classmates",
+      "startTime": 18296
+    },
+    {
+      "title": "Chapter 19: The Passage",
+      "startTime": 19052.88
+    },
+    {
+      "title": "Part III: Gold",
+      "startTime": 19841.56
+    },
+    {
+      "title": "Chapter 20: The House Mars",
+      "startTime": 19867.36
+    },
+    {
+      "title": "Chapter 21: Our Dominion",
+      "startTime": 21649.48
+    },
+    {
+      "title": "Chapter 22: The Tribes",
+      "startTime": 23245.96
+    },
+    {
+      "title": "Chapter 23: Fracture",
+      "startTime": 24857.44
+    },
+    {
+      "title": "Chapter 24: Titus's War",
+      "startTime": 26141.08
+    },
+    {
+      "title": "Chapter 25: Tribal War",
+      "startTime": 27567.075
+    },
+    {
+      "title": "Chapter 26: Mustang",
+      "startTime": 28314.555
+    },
+    {
+      "title": "Chapter 27: The House of Rage",
+      "startTime": 29993.475
+    },
+    {
+      "title": "Chapter 28: My Brother",
+      "startTime": 31093.195
+    },
+    {
+      "title": "Chapter 29: Unity",
+      "startTime": 31725.315
+    },
+    {
+      "title": "Chapter 30: House Diana",
+      "startTime": 32845.955
+    },
+    {
+      "title": "Chapter 31: The Fall of Mustang",
+      "startTime": 34582.955
+    },
+    {
+      "title": "Chapter 32: Antonia",
+      "startTime": 35772.755
+    },
+    {
+      "title": "Chapter 33: Apologies",
+      "startTime": 37541.355
+    },
+    {
+      "title": "Part IV: Reaper",
+      "startTime": 38228.515
+    },
+    {
+      "title": "Chapter 34: The Northwoods",
+      "startTime": 38256.155
+    },
+    {
+      "title": "Chapter 35: Oathbreakers",
+      "startTime": 41052.315
+    },
+    {
+      "title": "Chapter 36: A Second Test",
+      "startTime": 42370.635
+    },
+    {
+      "title": "Chapter 37: South",
+      "startTime": 44470.035
+    },
+    {
+      "title": "Chapter 38: The Fall of Apollo",
+      "startTime": 46041.675
+    },
+    {
+      "title": "Chapter 39: The Proctor's Bounty",
+      "startTime": 48305.975
+    },
+    {
+      "title": "Chapter 40: Paradigm",
+      "startTime": 48957.355
+    },
+    {
+      "title": "Chapter 41: The Jackal",
+      "startTime": 50392.595
+    },
+    {
+      "title": "Chapter 42: War on Heaven",
+      "startTime": 52089.955
+    },
+    {
+      "title": "Chapter 43: The Last Test",
+      "startTime": 53416.435
+    },
+    {
+      "title": "Chapter 44: The Beginning",
+      "startTime": 55246.915
+    }
+  ],
+  "notes": [
+    "Answer key reconstructed from the latest accepted node-parallel curation artifact.",
+    "This case exercises part headings plus chapter headings, with body openers often carrying the real audio boundary evidence.",
+    "Expected count includes Prologue, part headings, and Chapters 1-44."
+  ]
+}
