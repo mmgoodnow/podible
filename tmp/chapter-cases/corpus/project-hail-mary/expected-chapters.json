@@ -43,6 +43,8 @@
   ],
   "notes": [
     "The source set includes an intro/dedication track and a trailing outro track; the curated answer key begins with the first story chapter.",
-    "The audiobook metadata is mechanically labeled, so chapter numbering is the durable signal."
+    "The EPUB navigation has exactly 30 numbered story chapters, matching the curated count.",
+    "Most starts are corroborated by spoken transcript chapter announcements; chapters 8 and 30 enter directly into story text near the listed boundaries, so their titles are EPUB/sequence-derived rather than audibly announced.",
+    "The audiobook metadata is mechanically labeled, so chapter numbering plus transcript/EPUB order is the durable signal."
   ]
 }

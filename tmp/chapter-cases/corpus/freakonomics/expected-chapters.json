@@ -11,17 +11,19 @@
   "expectedChapterCount": 9,
   "expectedChapters": [
     { "index": 1, "title": "An Explanatory Note", "startTime": 120 },
-    { "index": 2, "title": "Introduction", "startTime": 532.72 },
-    { "index": 3, "title": "1", "startTime": 2133.44 },
-    { "index": 4, "title": "2", "startTime": 5910.32 },
-    { "index": 5, "title": "3", "startTime": 9780.8 },
-    { "index": 6, "title": "4", "startTime": 13150 },
-    { "index": 7, "title": "5", "startTime": 16860.72 },
-    { "index": 8, "title": "6", "startTime": 20514.32 },
-    { "index": 9, "title": "Epilogue", "startTime": 22927 }
+    { "index": 2, "title": "Introduction: The Hidden Side of Everything", "startTime": 532.72 },
+    { "index": 3, "title": "Chapter 1: What Do Schoolteachers and Sumo Wrestlers Have in Common?", "startTime": 2189.84 },
+    { "index": 4, "title": "Chapter 2: How Is the Ku Klux Klan Like a Group of Real-Estate Agents?", "startTime": 5910.32 },
+    { "index": 5, "title": "Chapter 3: Why Do Drug Dealers Still Live with Their Moms?", "startTime": 9780.8 },
+    { "index": 6, "title": "Chapter 4: Where Have All the Criminals Gone?", "startTime": 13150 },
+    { "index": 7, "title": "Chapter 5: What Makes a Perfect Parent?", "startTime": 16860.72 },
+    { "index": 8, "title": "Chapter 6: Perfect Parenting, Part II; or: Would a Roshanda by Any Other Name Smell as Sweet?", "startTime": 20514.32 },
+    { "index": 9, "title": "Epilogue: Two Paths to Harvard", "startTime": 22927 }
   ],
   "notes": [
-    "The audiobook is a single M4B with no embedded chapter map to trust, so the answer key follows the accepted node output.",
-    "Chapter labels are intentionally short; the useful signal is the ordering and timing."
+    "The audiobook is a single M4B with generic embedded chapter markers; do not use those markers as the answer key.",
+    "The detailed titles come from EPUB headings corroborated by transcript announcements at the listed starts.",
+    "The first numbered chapter starts at the spoken 'chapter one' announcement near 2189.84s; the earlier 2133.44s occurrence is only a teaser phrase inside the introduction.",
+    "The revised/expanded edition preface and bonus-material EPUB sections are not separate audiobook chapter starts in this transcript."
   ]
 }

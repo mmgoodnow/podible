@@ -13,7 +13,7 @@
     { "index": 1, "title": "Author’s Note", "startTime": 3.5 },
     { "index": 2, "title": "Prologue", "startTime": 347.4 },
     { "index": 3, "title": "Part One: “Of Blacke Cholor, without Boyling”", "startTime": 1475.56 },
-    { "index": 4, "title": "“A monster more insatiablethan the guillotine”", "startTime": 3036.8 },
+    { "index": 4, "title": "“A monster more insatiable than the guillotine”", "startTime": 3036.8 },
     { "index": 5, "title": "Farber’s Gauntlet", "startTime": 4928.44 },
     { "index": 6, "title": "A Private Plague", "startTime": 5707.44 },
     { "index": 7, "title": "Onkos", "startTime": 7207 },
@@ -50,7 +50,7 @@
     { "index": 38, "title": "Part Five: “A Distorted Version of Our Normal Selves”", "startTime": 48859.941 },
     { "index": 39, "title": "“A unitary cause”", "startTime": 48908.421 },
     { "index": 40, "title": "Under the Lamps of Viruses", "startTime": 51013.301 },
-    { "index": 41, "title": "“The hunting of the sarc”", "startTime": 52350.381 },
+    { "index": 41, "title": "“The hunting of the snark”", "startTime": 52350.381 },
     { "index": 42, "title": "The Wind in the Trees", "startTime": 53421.857 },
     { "index": 43, "title": "A Risky Prediction", "startTime": 54398.977 },
     { "index": 44, "title": "The Hallmarks of Cancer", "startTime": 56799.737 },
@@ -58,14 +58,15 @@
     { "index": 46, "title": "“No one had labored in vain”", "startTime": 58241.133 },
     { "index": 47, "title": "New Drugs for Old Cancers", "startTime": 59817.173 },
     { "index": 48, "title": "A City of Strings", "startTime": 60952.173 },
-    { "index": 49, "title": "Drugs  Bodies  and Proof", "startTime": 62814.573 },
+    { "index": 49, "title": "Drugs, Bodies, and Proof", "startTime": 62814.573 },
     { "index": 50, "title": "A Four Minute Mile", "startTime": 63907.529 },
     { "index": 51, "title": "The Red Queen’s Race", "startTime": 65708.249 },
     { "index": 52, "title": "Thirteen Mountains", "startTime": 66869.409 },
     { "index": 53, "title": "Atossa’s War", "startTime": 68922.045 }
   ],
   "notes": [
-    "This source is heavily segmented into part files, but the useful answer key is the 53 curated chapter headings and their order.",
-    "A few headings preserve the audiobook's spacing and punctuation quirks exactly as surfaced in the current output."
+    "This source is heavily segmented into part files, but the useful answer key is the 53 audiobook/transcript chapter starts and their order.",
+    "The EPUB TOC has additional headings that are not surfaced as separate transcript boundaries in this audiobook; searched omitted examples include 'A suppuration of blood', 'Dyeing and Dying', 'Poisoning the Atmosphere', 'These new friends of chemotherapy', and 'Halsted's Ashes'.",
+    "Corrected obvious transcript/TOC cleanup issues where the boundary evidence was strong: added the missing space in 'insatiable than', restored 'snark', and normalized 'Drugs, Bodies, and Proof'."
   ]
 }
