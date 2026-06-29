@@ -8,9 +8,10 @@
     "dev-login": "bun run scripts/dev-login.ts",
     "red-rising-dashboard": "bun run scripts/red-rising-dashboard.ts",
     "summarize-curation-run": "bun run scripts/summarize-curation-run.ts",
-"replay-chapter-analysis": "bun run scripts/replay-chapter-analysis.ts",
+    "replay-chapter-analysis": "bun run scripts/replay-chapter-analysis.ts",
     "run-red-rising-curation": "bun run scripts/run-red-rising-curation.ts",
     "run-corpus-curation": "bun run scripts/run-corpus-curation.ts",
+    "compare-curation-modes": "bun run scripts/compare-curation-modes.ts",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit"
   },
