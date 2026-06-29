@@ -1737,6 +1737,88 @@ describe("chapter curation tools", () => {
     ]);
   });
 
+  test("resolveNodeBoundaryChapters recovers title-only part headings from words before the next boundary", async () => {
+    const context = ctx({
+      durationMs: 600_000,
+      manifestation: manifestation({ duration_ms: 600_000 }),
+      epubEntries: [
+        epubEntry({
+          id: "part-3",
+          title: "III - Night",
+          cumulativeRatio: 0.5,
+          cumulativeWords: 10,
+          words: [
+            { ...word("III"), kind: "heading" },
+            { ...word("Night"), kind: "heading" },
+          ],
+        }),
+        epubEntry({
+          id: "chapter-7",
+          title: "Chapter Seven",
+          cumulativeRatio: 1,
+          cumulativeWords: 30,
+          words: [
+            { ...word("Chapter"), kind: "heading" },
+            { ...word("Seven"), kind: "heading" },
+            { ...word("We"), kind: "body" },
+            { ...word("wake"), kind: "body" },
+          ],
+        }),
+      ],
+    });
+    const reports: NodeBoundaryCurationReport[] = [];
+    const chapters = await resolveNodeBoundaryChapters(
+      context,
+      async (targetBoundary): Promise<NodeBoundaryDecision | null> => {
+        if (targetBoundary.epubNodeId === "part-3") return null;
+        return {
+          accepted: true,
+          kind: "node_boundary",
+          spanPath: "root",
+          epubNodeId: targetBoundary.epubNodeId,
+          epubIndex: targetBoundary.epubIndex,
+          title: targetBoundary.title,
+          startTime: 106,
+          notes: null,
+          audit: {
+            epubNodeId: targetBoundary.epubNodeId,
+            title: targetBoundary.title,
+            startTime: 106,
+            boundaryComparison: {
+              transcriptPrecision: "word",
+              transcriptPrecisionNote: null,
+              previousEpub: { epubNodeId: "part-3", title: "III - Night", tailText: "" },
+              targetEpub: { epubNodeId: targetBoundary.epubNodeId, title: targetBoundary.title, headText: "Chapter Seven We wake" },
+              transcriptBefore: "3 Night",
+              transcriptAfter: "Chapter Seven We wake",
+              boundaryWords: {
+                before: [
+                  { text: "3", startTime: 101, endTime: 101.4 },
+                  { text: "Night", startTime: 102, endTime: 102.4 },
+                ],
+                containing: [],
+                after: [{ text: "Chapter", startTime: 106, endTime: 106.4 }],
+                nearestCleanBoundaryTimes: [101, 106],
+              },
+            },
+            transcriptWindow: "Three Night Chapter Seven We wake",
+            candidates: [],
+          },
+        };
+      },
+      { maxConcurrency: 2, reports }
+    );
+
+    expect(chapters).toEqual([
+      { title: "III - Night", startTime: 101, epubNodeId: "part-3" },
+      { title: "Chapter Seven", startTime: 106, epubNodeId: "chapter-7" },
+    ]);
+    expect(reports.map((report) => `${report.epubNodeId}:${report.outcome}:${report.deterministic ?? false}`)).toEqual([
+      "part-3:accepted:true",
+      "chapter-7:accepted:false",
+    ]);
+  });
+
   test("resolveNodeBoundaryChapters drops bare structural markers that would break monotonic chapter order", async () => {
     const context = ctx({
       durationMs: 60_000_000,
@@ -2026,6 +2108,42 @@ describe("chapter curation tools", () => {
     expect(candidate?.source).toBe("spoken_heading");
     expect(candidate?.startTime).toBe(80);
     expect(candidate?.bodyMatchCount ?? 0).toBeGreaterThanOrEqual(3);
+  });
+
+  test("findSpokenHeadingBoundaryCandidate accepts roman title-only section headings spoken as words", async () => {
+    const context = ctx({
+      durationMs: 120_000,
+      manifestation: manifestation({ duration_ms: 120_000 }),
+      epubEntries: [
+        epubEntry({ id: "previous", title: "Previous", cumulativeRatio: 0.5, cumulativeWords: 20 }),
+        epubEntry({
+          id: "section-target",
+          title: "III - Night",
+          cumulativeRatio: 1,
+          cumulativeWords: 22,
+          words: [
+            { ...word("III"), kind: "heading" },
+            { ...word("NIGHT"), kind: "heading" },
+          ],
+        }),
+      ],
+      transcript: transcriptFromUtterances([{ startMs: 80_000, endMs: 82_000, text: "Three. Night. Chapter Seven." }]),
+    });
+    const span = createRootCurationSpan(context);
+    const targetBoundary: ChapterCurationTargetBoundary = {
+      epubNodeId: "section-target",
+      epubIndex: 1,
+      title: "III - Night",
+      expectedStartTime: 80,
+      localNodeRatio: 0.5,
+    };
+
+    const candidate = await findSpokenHeadingBoundaryCandidate(context, span, targetBoundary);
+
+    expect(candidate).not.toBeNull();
+    expect(candidate?.source).toBe("spoken_heading");
+    expect(candidate?.phrase).toBe("three night");
+    expect(candidate?.startTime).toBe(80);
   });
 
   test("findSpokenHeadingBoundaryCandidate ignores body-text title mentions not followed by the target opener", async () => {

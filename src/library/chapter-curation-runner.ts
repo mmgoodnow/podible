@@ -461,11 +461,20 @@ function spokenHeadingVariants(entry: EpubChapterEntry): string[] {
     variants.add(tokens.join(" "));
     const structural = tokens.find((token) => token === "chapter" || token === "part" || token === "book" || token === "section");
     const numberToken = tokens.find((token) => /^\d+$/.test(token) || romanNumeralValue(token) !== null);
-    if (!structural || !numberToken) continue;
-    const numeric = /^\d+$/.test(numberToken) ? Number(numberToken) : romanNumeralValue(numberToken);
-    const word = numeric === null ? null : titleNumberWord(numeric);
-    if (word) variants.add(`${structural} ${word}`);
-    if (numeric !== null) variants.add(`${structural} ${numeric}`);
+    if (structural && numberToken) {
+      const numeric = /^\d+$/.test(numberToken) ? Number(numberToken) : romanNumeralValue(numberToken);
+      const word = numeric === null ? null : titleNumberWord(numeric);
+      if (word) variants.add(`${structural} ${word}`);
+      if (numeric !== null) variants.add(`${structural} ${numeric}`);
+    }
+
+    const leadingNumber = tokens[0];
+    const leadingNumeric = leadingNumber && (/^\d+$/.test(leadingNumber) ? Number(leadingNumber) : romanNumeralValue(leadingNumber));
+    const leadingNumberWord = typeof leadingNumeric === "number" ? titleNumberWord(leadingNumeric) : null;
+    if (leadingNumberWord && tokens.length >= 2 && !isStructuralTitleToken(tokens[1]!)) {
+      variants.add([leadingNumberWord, ...tokens.slice(1)].join(" "));
+      variants.add([String(leadingNumeric), ...tokens.slice(1)].join(" "));
+    }
   }
   return [...variants].filter((variant) => variant.split(/\s+/).length >= 2);
 }
@@ -1521,7 +1530,8 @@ export async function findSpokenHeadingBoundaryCandidate(
     startTime: Math.max(scope.startTime, targetBoundary.expectedStartTime - searchRadius),
     endTime: Math.min(scope.endTime, targetBoundary.expectedStartTime + searchRadius),
   };
-  const bodyTokens = textTokens(summarizeFirstBodyWords(entry, 32)).slice(0, 10);
+  const hasBodyLikeWords = entry.words.some((word) => word.kind !== "heading");
+  const bodyTokens = hasBodyLikeWords ? textTokens(summarizeFirstBodyWords(entry, 32)).slice(0, 10) : [];
   const candidates: DeterministicBoundaryCandidate[] = [];
   for (const variant of variants.slice(0, 6)) {
     const exact = await rgSearchTranscript(ctx, {
