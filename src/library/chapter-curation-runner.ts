@@ -13,6 +13,7 @@ import { z } from "zod";
 import type { EpubChapterEntry } from "./chapter-analysis";
 import {
   type ChapterCurationContext,
+  type ChapterCurationTiming,
   type ChapterCurationSpan,
   type ChapterCurationTargetBoundary,
   type EpubBoundaryResearchHit,
@@ -1463,11 +1464,234 @@ function openingAudioOnlyEndTime(ctx: ChapterCurationContext, span: ChapterCurat
   return openingIntervals[0]?.endTime ?? span.startTime;
 }
 
+const ROMAN_NUMERALS: Record<string, number> = {
+  i: 1,
+  ii: 2,
+  iii: 3,
+  iv: 4,
+  v: 5,
+  vi: 6,
+  vii: 7,
+  viii: 8,
+  ix: 9,
+  x: 10,
+  xi: 11,
+  xii: 12,
+  xiii: 13,
+  xiv: 14,
+  xv: 15,
+  xvi: 16,
+  xvii: 17,
+  xviii: 18,
+  xix: 19,
+  xx: 20,
+};
+
+function curationTitleKey(value: string): string {
+  return normalizeToolText(value).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+function standaloneTitleNumber(value: string): number | null {
+  const key = curationTitleKey(value);
+  if (/^\d+$/.test(key)) return Number(key);
+  return ROMAN_NUMERALS[key] ?? null;
+}
+
+function embeddedTitleHasChapterNumber(embeddedTitle: string, chapterNumber: number): boolean {
+  const key = curationTitleKey(embeddedTitle);
+  return new RegExp(`(?:^|\\b)(?:chapter\\s+)?${chapterNumber}(?:\\b|$)`, "u").test(key);
+}
+
+function embeddedTitleMatchesEpubNode(entry: EpubChapterEntry, embeddedTitle: string): boolean {
+  const entryKey = curationTitleKey(entry.title);
+  const embeddedKey = curationTitleKey(embeddedTitle);
+  if (!entryKey || !embeddedKey) return false;
+  if (entryKey.length >= 3 && (entryKey === embeddedKey || embeddedKey.includes(entryKey))) return true;
+
+  const chapterNumber = standaloneTitleNumber(entry.title);
+  if (chapterNumber !== null && embeddedTitleHasChapterNumber(embeddedTitle, chapterNumber)) return true;
+
+  return false;
+}
+
+const CHAPTER_EVIDENCE_STOPWORDS = new Set([
+  "the",
+  "and",
+  "but",
+  "for",
+  "with",
+  "that",
+  "this",
+  "was",
+  "were",
+  "are",
+  "you",
+  "your",
+  "have",
+  "had",
+  "not",
+  "from",
+  "into",
+  "out",
+  "chapter",
+  "part",
+  "book",
+]);
+
+function evidenceTokens(value: string): string[] {
+  return curationTitleKey(value)
+    .split(/\s+/)
+    .filter((token) => token.length >= 3)
+    .filter((token) => !CHAPTER_EVIDENCE_STOPWORDS.has(token))
+    .filter((token) => !/^\d+$/.test(token))
+    .slice(0, 32);
+}
+
+function firstDistinctiveEpubTokens(entry: EpubChapterEntry): string[] {
+  const tokens: string[] = [];
+  for (const word of entry.words) {
+    for (const token of evidenceTokens(word.text)) {
+      if (!tokens.includes(token)) tokens.push(token);
+      if (tokens.length >= 10) return tokens;
+    }
+  }
+  return tokens;
+}
+
+export function embeddedNodeBoundaryHasTranscriptEvidence(
+  ctx: Pick<ChapterCurationContext, "epubEntries" | "transcript" | "durationMs" | "audioOnlyIntervals">,
+  targetBoundary: ChapterCurationTargetBoundary,
+  embeddedCandidate: ChapterCurationTiming
+): boolean {
+  const entry = ctx.epubEntries[targetBoundary.epubIndex];
+  if (!entry || entry.id !== targetBoundary.epubNodeId) return false;
+  const window = getTranscriptWindowFromContext(ctx, embeddedCandidate.startMs, 60_000);
+  const transcriptTokens = new Set(evidenceTokens(window.text));
+  const titleTokens = evidenceTokens(embeddedCandidate.title);
+  const epubTokens = firstDistinctiveEpubTokens(entry);
+  const titleMatches = titleTokens.filter((token) => transcriptTokens.has(token));
+  const epubMatches = epubTokens.filter((token) => transcriptTokens.has(token));
+  return epubMatches.length >= 3 || (titleMatches.length >= 1 && epubMatches.length >= 2);
+}
+
+export function findEmbeddedNodeBoundaryCandidate(
+  ctx: Pick<ChapterCurationContext, "epubEntries" | "embeddedChapters">,
+  targetBoundary: ChapterCurationTargetBoundary
+): ChapterCurationTiming | null {
+  const entry = ctx.epubEntries[targetBoundary.epubIndex];
+  if (!entry || entry.id !== targetBoundary.epubNodeId) return null;
+  const matches = ctx.embeddedChapters
+    .filter((chapter) => embeddedTitleMatchesEpubNode(entry, chapter.title))
+    .map((chapter) => ({
+      chapter,
+      distance: Math.abs(msToSeconds(chapter.startMs) - targetBoundary.expectedStartTime),
+    }))
+    .sort((a, b) => a.distance - b.distance);
+  return matches[0]?.chapter ?? null;
+}
+
 async function tryDeterministicNodeBoundary(
   ctx: ChapterCurationContext,
   span: ChapterCurationSpan,
   targetBoundary: ChapterCurationTargetBoundary
 ): Promise<NodeBoundaryDecision | null> {
+  const embeddedAssessment = assessEmbeddedAudioChaptersForCuration(ctx);
+  const embeddedCandidate =
+    embeddedAssessment.action === "short_circuit_candidate" || embeddedAssessment.action === "seed_boundaries"
+      ? findEmbeddedNodeBoundaryCandidate(ctx, targetBoundary)
+      : null;
+  if (embeddedCandidate) {
+    const startTime = msToSeconds(embeddedCandidate.startMs);
+    const hasDeterministicEvidence = embeddedNodeBoundaryHasTranscriptEvidence(ctx, targetBoundary, embeddedCandidate);
+    const validated = await validateNodeBoundary(
+      ctx,
+      {
+        spanPath: span.path,
+        epubNodeId: targetBoundary.epubNodeId,
+        title: targetBoundary.title,
+        startTime,
+        evidence: `Embedded audio marker "${embeddedCandidate.title}" at ${Math.round(startTime)}s matches EPUB node "${targetBoundary.title}" and passed transcript validation.`,
+        notes: "Accepted from useful embedded audio marker after node-boundary validation.",
+      },
+      { span, targetBoundary }
+    );
+    if (validated.accepted) {
+      const isHighConfidenceEmbeddedMarker =
+        embeddedAssessment.action === "short_circuit_candidate" && embeddedAssessment.confidence === "high";
+      if (isHighConfidenceEmbeddedMarker || hasDeterministicEvidence) {
+        const accepted: NodeBoundaryDecision = {
+          ...validated,
+          notes: [
+            validated.notes,
+            isHighConfidenceEmbeddedMarker
+              ? "Accepted by high-confidence named embedded audio marker set."
+              : "Accepted by embedded audio marker plus deterministic transcript evidence.",
+          ]
+            .filter(Boolean)
+            .join(" "),
+        };
+        logChapterCurationEvent(ctx, {
+          type: "deterministic-node-boundary-accepted",
+          message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} embedded=1${
+            hasDeterministicEvidence ? " transcript=1" : ""
+          } accepted=1 time=${Math.round(accepted.startTime)}s`,
+          span,
+          targetBoundary,
+          result: accepted,
+          embeddedCandidate,
+          embeddedAssessment,
+        });
+        return accepted;
+      }
+      const judgment = await judgeChapterBoundary(ctx, span, {
+        kind: "node_boundary",
+        spanPath: validated.spanPath,
+        epubNodeId: validated.epubNodeId,
+        epubIndex: validated.epubIndex,
+        title: validated.title,
+        startTime: validated.startTime,
+        notes: validated.notes,
+        audit: validated.audit,
+      });
+      if (judgment?.accepted) {
+        const accepted: NodeBoundaryDecision = {
+          ...validated,
+          notes: [validated.notes, "Accepted by embedded audio marker pre-agent short-circuit."].filter(Boolean).join(" "),
+        };
+        logChapterCurationEvent(ctx, {
+          type: "deterministic-node-boundary-accepted",
+          message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} embedded=1 accepted=1 time=${Math.round(accepted.startTime)}s`,
+          span,
+          targetBoundary,
+          result: accepted,
+          embeddedCandidate,
+          embeddedAssessment,
+        });
+        return accepted;
+      }
+      logChapterCurationEvent(ctx, {
+        type: "deterministic-node-boundary-rejected",
+        message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} embedded=1 judge=0`,
+        span,
+        targetBoundary,
+        result: validated,
+        judgment,
+        embeddedCandidate,
+        embeddedAssessment,
+      });
+    } else {
+      logChapterCurationEvent(ctx, {
+        type: "deterministic-node-boundary-rejected",
+        message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} embedded=1 validation=0`,
+        span,
+        targetBoundary,
+        result: validated,
+        embeddedCandidate,
+        embeddedAssessment,
+      });
+    }
+  }
+
   const headingCandidate = await findSpokenHeadingBoundaryCandidate(ctx, span, targetBoundary);
   const isOpeningNode = targetBoundary.epubIndex === 0;
   const research = await researchEpubBoundary(ctx, {

@@ -648,6 +648,17 @@ function buildBoundaryComparisonAudit(
   };
 }
 
+function hasTargetOpenerEvidence(audit: FulcrumValidationAudit | null): boolean {
+  if (!audit) return false;
+  const targetText = audit.boundaryComparison.targetEpub.bodyHeadText || audit.boundaryComparison.targetEpub.headText;
+  const targetTokens = textTokens(targetText).filter((token) => !isStructuralTitleToken(token)).slice(0, 24);
+  if (targetTokens.length === 0) return false;
+  const afterTokens = new Set(textTokens(audit.boundaryComparison.transcriptAfter));
+  const matched = targetTokens.filter((token) => afterTokens.has(token));
+  const openerMatched = targetTokens.slice(0, Math.min(8, targetTokens.length)).some((token) => afterTokens.has(token));
+  return openerMatched && (matched.length >= 4 || matched.length / Math.max(1, targetTokens.length) >= 0.35);
+}
+
 export async function validateFulcrumSplit(
   ctx: ChapterCurationContext,
   span: ChapterCurationSpan,
@@ -765,21 +776,6 @@ export async function validateNodeBoundary(
   if (span && (boundary.startTime < span.startTime || boundary.startTime > span.endTime)) {
     errors.push("startTime must be inside the current span time range.");
   }
-  const enclosingAudioOnlyInterval = (ctx.audioOnlyIntervals ?? []).find(
-    (interval) => boundary.startTime > interval.startTime + 0.25 && boundary.startTime < interval.endTime - 0.25
-  );
-  if (enclosingAudioOnlyInterval) {
-    const secondsFromNearestEdge = Math.min(
-      Math.abs(boundary.startTime - enclosingAudioOnlyInterval.startTime),
-      Math.abs(enclosingAudioOnlyInterval.endTime - boundary.startTime)
-    );
-    if (secondsFromNearestEdge > 5) {
-      errors.push(`startTime is inside audio-only interval ${enclosingAudioOnlyInterval.kind}; EPUB text should begin outside that interval.`);
-    } else {
-      warnings.push(`startTime is very close to audio-only interval ${enclosingAudioOnlyInterval.kind}; verify the boundary is not credits/preamble.`);
-    }
-  }
-
   const audit =
     epubIndex >= 0
       ? buildBoundaryComparisonAudit(ctx, {
@@ -790,6 +786,25 @@ export async function validateNodeBoundary(
           candidates: [],
         })
       : null;
+  const enclosingAudioOnlyInterval = (ctx.audioOnlyIntervals ?? []).find(
+    (interval) => boundary.startTime > interval.startTime + 0.25 && boundary.startTime < interval.endTime - 0.25
+  );
+  if (enclosingAudioOnlyInterval) {
+    const secondsFromNearestEdge = Math.min(
+      Math.abs(boundary.startTime - enclosingAudioOnlyInterval.startTime),
+      Math.abs(enclosingAudioOnlyInterval.endTime - boundary.startTime)
+    );
+    if (secondsFromNearestEdge > 5) {
+      const message = `startTime is inside audio-only interval ${enclosingAudioOnlyInterval.kind}; EPUB text should begin outside that interval.`;
+      if (hasTargetOpenerEvidence(audit)) {
+        warnings.push(`${message} Transcript opener evidence is strong, so treating the interval as suspect.`);
+      } else {
+        errors.push(message);
+      }
+    } else {
+      warnings.push(`startTime is very close to audio-only interval ${enclosingAudioOnlyInterval.kind}; verify the boundary is not credits/preamble.`);
+    }
+  }
 
   if (errors.length > 0) {
     return {

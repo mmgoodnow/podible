@@ -108,5 +108,7 @@ export {
   judgeChapterBoundary,
   judgeFulcrumSplit,
   findSpokenHeadingBoundaryCandidate,
+  findEmbeddedNodeBoundaryCandidate,
+  embeddedNodeBoundaryHasTranscriptEvidence,
   chooseResearchBoundaryCandidate,
 } from "./chapter-curation-runner";

@@ -6,6 +6,8 @@ import {
   getEpubNodeText,
   getEpubStructure,
   getTranscriptWindowFromContext,
+  embeddedNodeBoundaryHasTranscriptEvidence,
+  findEmbeddedNodeBoundaryCandidate,
   findFulcrumCandidates,
   findSpokenHeadingBoundaryCandidate,
   fuzzySearchTranscript,
@@ -442,6 +444,37 @@ describe("chapter curation tools", () => {
     });
   });
 
+  test("assessEmbeddedAudioChaptersForCuration tolerates extra named front and back matter markers", () => {
+    const result = assessEmbeddedAudioChaptersForCuration(
+      ctx({
+        durationMs: 3_600_000,
+        epubEntries: Array.from({ length: 20 }, (_, index) =>
+          epubEntry({
+            id: `chapter-${index + 1}`,
+            title: `Chapter ${index + 1}`,
+            text: `Chapter ${index + 1} opener text`,
+            wordCount: 100,
+            cumulativeWords: (index + 1) * 100,
+            cumulativeRatio: (index + 1) / 20,
+          })
+        ),
+        embeddedChapters: [
+          { id: "intro", title: "Intro", startMs: 0, endMs: 30_000 },
+          { id: "note", title: "Author's Note", startMs: 30_000, endMs: 90_000 },
+          ...Array.from({ length: 20 }, (_, index) => ({
+            id: `raw-${index + 1}`,
+            title: `Chapter ${index + 1}`,
+            startMs: 90_000 + index * 170_000,
+            endMs: 90_000 + (index + 1) * 170_000,
+          })),
+          { id: "credits", title: "Closing Credits", startMs: 3_500_000, endMs: 3_600_000 },
+        ],
+      })
+    );
+
+    expect(result.action).toBe("seed_boundaries");
+  });
+
   test("assessEmbeddedAudioChaptersForCuration treats generic varied markers as priors", () => {
     const result = assessEmbeddedAudioChaptersForCuration(
       ctx({
@@ -465,6 +498,60 @@ describe("chapter curation tools", () => {
     );
 
     expect(result.action).toBe("seed_boundaries");
+  });
+
+  test("findEmbeddedNodeBoundaryCandidate matches useful embedded Chapter N markers to numeric EPUB titles", () => {
+    const context = ctx({
+      epubEntries: [
+        epubEntry({ id: "chapter1.xhtml", title: "1", text: "Tyler The opener", cumulativeWords: 0, wordCount: 100 }),
+        epubEntry({ id: "chapter2.xhtml", title: "2", text: "Stella The shop was quiet", cumulativeWords: 100, wordCount: 100 }),
+      ],
+      embeddedChapters: [
+        { id: "raw-0", title: "Chapter 1: Tyler", startMs: 117_584, endMs: 511_905 },
+        { id: "raw-1", title: "Chapter 2: Stella", startMs: 511_905, endMs: 1_650_170 },
+      ],
+    });
+
+    const candidate = findEmbeddedNodeBoundaryCandidate(context, {
+      epubNodeId: "chapter2.xhtml",
+      epubIndex: 1,
+      title: "2",
+      expectedStartTime: 620,
+      localNodeRatio: 0.5,
+    });
+
+    expect(candidate?.title).toBe("Chapter 2: Stella");
+    expect(candidate?.startMs).toBe(511_905);
+  });
+
+  test("embeddedNodeBoundaryHasTranscriptEvidence accepts spoken heading plus EPUB opener", () => {
+    const context = ctx({
+      durationMs: 2_000_000,
+      epubEntries: [
+        epubEntry({
+          id: "chapter2.xhtml",
+          title: "2",
+          words: ["Stella", "The", "shop", "was", "quiet", "this", "early", "in", "the", "day"].map(word),
+          cumulativeWords: 100,
+          wordCount: 100,
+        }),
+      ],
+      transcript: transcriptFromUtterances([
+        {
+          startMs: 511_900,
+          endMs: 520_000,
+          text: "Chapter 2, Stella. The shop was quiet this early in the day without the buzz of tattoo guns.",
+        },
+      ]),
+    });
+
+    expect(
+      embeddedNodeBoundaryHasTranscriptEvidence(
+        context,
+        { epubNodeId: "chapter2.xhtml", epubIndex: 0, title: "2", expectedStartTime: 620, localNodeRatio: 0.5 },
+        { id: "raw-1", title: "Chapter 2: Stella", startMs: 511_905, endMs: 1_650_170 }
+      )
+    ).toBe(true);
   });
 
   test("rgSearchTranscript searches timestamped transcript utterances without shell access", async () => {
@@ -1447,6 +1534,34 @@ describe("chapter curation tools", () => {
 
     expect(result.accepted).toBe(false);
     if (!result.accepted) expect(result.errors.join(" ")).toContain("audio-only interval");
+  });
+
+  test("validateNodeBoundary accepts opener evidence inside a mistaken audio-only interval", async () => {
+    const context = ctx({
+      durationMs: 120_000,
+      manifestation: manifestation({ duration_ms: 120_000 }),
+      audioOnlyIntervals: [{ startTime: 0, endTime: 60, kind: "publisher_intro", notes: "over-broad intro annotation" }],
+      epubEntries: [
+        epubEntry({
+          id: "author-note",
+          title: "Author’s Note",
+          cumulativeRatio: 1,
+          cumulativeWords: 12,
+          words: "Author s Note The female lead Stella has chronic gastritis and this note explains why".split(/\s+/).map(word),
+        }),
+      ],
+      transcript: transcriptFromUtterances([{ startMs: 24_000, endMs: 34_000, text: "Author's note. The female lead Stella has chronic gastritis and this note explains why." }]),
+    });
+
+    const result = await validateNodeBoundary(context, {
+      spanPath: "root",
+      epubNodeId: "author-note",
+      title: "Author’s Note",
+      startTime: 24,
+    });
+
+    expect(result.accepted).toBe(true);
+    if (result.accepted) expect(result.audit.boundaryComparison.transcriptAfter).toContain("female lead Stella");
   });
 
   test("nodeBoundaryTargets are built from the curated audible EPUB node list", () => {

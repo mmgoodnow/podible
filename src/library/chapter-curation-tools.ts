@@ -668,12 +668,12 @@ export function assessEmbeddedAudioChaptersForCuration(
     .flatMap((chapter) => epubTitleToIds.get(normalizedTitleKey(chapter.title)) ?? [])
     .filter((id, index, ids) => ids.indexOf(id) === index);
   const countDelta = Math.abs(diagnostics.count - ctx.epubEntries.length);
-  const closeCount = countDelta <= Math.max(2, Math.ceil(ctx.epubEntries.length * 0.1));
+  const closeCount = countDelta <= Math.max(8, Math.ceil(ctx.epubEntries.length * 0.2));
 
   if (diagnostics.labelQuality === "named" && diagnostics.boundaryDensity === "plausible" && diagnostics.durationPattern === "varied" && closeCount) {
     return {
       action: "short_circuit_candidate",
-      confidence: matchedEpubNodeIds.length >= Math.min(3, ctx.epubEntries.length) ? "high" : "medium",
+      confidence: "high",
       reason:
         "Embedded audio markers have named, varied, plausible boundaries and roughly match the curated EPUB node count; they are worth validating before recursive transcript search.",
       matchedEpubNodeIds,
