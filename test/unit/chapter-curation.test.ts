@@ -1604,6 +1604,54 @@ describe("chapter curation tools", () => {
     expect(reports[0]?.errors?.[0]).toContain("more specific EPUB title XIV: The Final Door");
   });
 
+  test("resolveNodeBoundaryChapters keeps valid adjacent part and chapter boundaries", async () => {
+    const context = ctx({
+      durationMs: 60_000_000,
+      manifestation: manifestation({ duration_ms: 60_000_000 }),
+      epubEntries: [
+        epubEntry({ id: "part-1", title: "Part One: Of Blacke Cholor", cumulativeRatio: 0.1, cumulativeWords: 10 }),
+        epubEntry({ id: "chapter-1", title: "A suppuration of blood", cumulativeRatio: 0.2, cumulativeWords: 20 }),
+      ],
+    });
+    const starts: Record<string, number> = {
+      "part-1": 1475.56,
+      "chapter-1": 1492.68,
+    };
+    const reports: NodeBoundaryCurationReport[] = [];
+    const chapters = await resolveNodeBoundaryChapters(
+      context,
+      async (targetBoundary): Promise<NodeBoundaryDecision> => ({
+        accepted: true,
+        kind: "node_boundary",
+        spanPath: "root",
+        epubNodeId: targetBoundary.epubNodeId,
+        epubIndex: targetBoundary.epubIndex,
+        title: targetBoundary.title,
+        startTime: starts[targetBoundary.epubNodeId]!,
+        notes: null,
+        audit: {
+          epubNodeId: targetBoundary.epubNodeId,
+          title: targetBoundary.title,
+          startTime: starts[targetBoundary.epubNodeId]!,
+          boundaryComparison: {
+            transcriptPrecision: "utterance",
+            transcriptPrecisionNote: null,
+            previousEpub: { epubNodeId: null, title: null, tailText: "" },
+            targetEpub: { epubNodeId: targetBoundary.epubNodeId, title: targetBoundary.title, headText: "" },
+            transcriptBefore: "",
+            transcriptAfter: "",
+          },
+          transcriptWindow: "",
+          candidates: [],
+        },
+      }),
+      { maxConcurrency: 1, reports }
+    );
+
+    expect(chapters?.map((chapter) => chapter.epubNodeId)).toEqual(["part-1", "chapter-1"]);
+    expect(reports.map((report) => `${report.epubNodeId}:${report.outcome}`)).toEqual(["part-1:accepted", "chapter-1:accepted"]);
+  });
+
   test("resolveRecursiveChapterSpans returns a leaf-only plan", async () => {
     const context = ctx({
       epubEntries: [epubEntry({ id: "front", title: "Prologue", cumulativeRatio: 1, cumulativeWords: 4 })],

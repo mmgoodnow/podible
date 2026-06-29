@@ -23,6 +23,12 @@ type EventSummary = {
     byRole: Record<string, { requests: number; tokens: number; costUsd: number }>;
   };
   tools: Record<string, number>;
+  nodeBoundaries: {
+    started: number;
+    deterministicAccepted: number;
+    agentAccepted: number;
+    failed: number;
+  };
 };
 
 type ModeSummary = {
@@ -38,6 +44,12 @@ type ModeSummary = {
   costUsd: number;
   tools: Record<string, number>;
   accuracy: "not_scored";
+  nodeBoundarySources?: {
+    started: number;
+    deterministicAccepted: number;
+    agentAccepted: number;
+    failed: number;
+  };
   nodeReports?: {
     total: number;
     accepted: number;
@@ -127,6 +139,7 @@ function summarizeEvents(eventLogPath: string | null): EventSummary {
     wallSeconds: timestampSeconds(firstTs, lastTs),
     usage: { requests: 0, tokens: 0, costUsd: 0, byRole: {} },
     tools: {},
+    nodeBoundaries: { started: 0, deterministicAccepted: 0, agentAccepted: 0, failed: 0 },
   };
 
   for (const event of events) {
@@ -148,6 +161,16 @@ function summarizeEvents(eventLogPath: string | null): EventSummary {
     if (event.type === "span-tool-call" || event.type === "agent-tool-call") {
       const toolName = typeof event.toolName === "string" ? event.toolName : "unknown";
       summary.tools[toolName] = (summary.tools[toolName] ?? 0) + 1;
+    }
+
+    if (event.type === "node-boundary-start") summary.nodeBoundaries.started += 1;
+    if (event.type === "node-boundary-result") {
+      const message = typeof event.message === "string" ? event.message : "";
+      const accepted = event.decision?.accepted === true || message.includes("accepted=1");
+      const deterministic = message.includes("deterministic=1");
+      if (accepted && deterministic) summary.nodeBoundaries.deterministicAccepted += 1;
+      else if (accepted) summary.nodeBoundaries.agentAccepted += 1;
+      else summary.nodeBoundaries.failed += 1;
     }
   }
 
@@ -277,6 +300,7 @@ async function summarizeMode(caseDir: string, mode: "recursive" | "node"): Promi
   };
 
   if (mode === "node" && result) {
+    summary.nodeBoundarySources = events.nodeBoundaries;
     const reports = Array.isArray(result.nodeBoundaryReports) ? (result.nodeBoundaryReports as NodeBoundaryCurationReport[]) : [];
     summary.nodeReports = {
       total: reports.length,
@@ -335,6 +359,18 @@ function modeStatus(summary: ModeSummary | null): string {
   return `${accepted ? "accepted" : "failed"} / ${fmt(chapters)} ch / ${fmt(summary.wallSeconds ?? (summary.elapsedMs ? summary.elapsedMs / 1000 : null))}s`;
 }
 
+function nodeReportStatus(summary: ModeSummary | null): string {
+  const reports = summary?.nodeReports;
+  if (!reports) return "-";
+  return `${reports.accepted}/${reports.total} accepted, ${reports.failed} failed, ${reports.dropped} dropped`;
+}
+
+function nodeSourceStatus(summary: ModeSummary | null): string {
+  const sources = summary?.nodeBoundarySources;
+  if (!sources) return "-";
+  return `${sources.deterministicAccepted} det, ${sources.agentAccepted} agent, ${sources.failed} failed`;
+}
+
 function renderMarkdown(cases: CaseSummary[], generatedAt: string): string {
   const runnable = cases.filter((item) => item.runnable).length;
   const paired = cases.filter((item) => item.recursive && item.node).length;
@@ -350,21 +386,23 @@ function renderMarkdown(cases: CaseSummary[], generatedAt: string): string {
     `Cases: ${cases.length} total, ${runnable} runnable with local EPUB+transcript, ${paired} have both recursive and node artifacts.`,
     `Accepted artifacts: recursive ${recursiveAccepted}/${cases.filter((item) => item.recursive).length}, node ${nodeAccepted}/${cases.filter((item) => item.node).length} after current-code node replay.`,
     "",
-    "| Case | Recursive | Node | Node replay | Δ seconds | Δ requests | Δ tokens | Δ cost |",
-    "| --- | --- | --- | --- | ---: | ---: | ---: | ---: |",
+    "| Case | Recursive | Node | Node reports | Node source | Node replay | Δ seconds | Δ requests | Δ tokens | Δ cost |",
+    "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |",
   ];
   for (const item of cases) {
     const replay = item.node?.nodeReplay
       ? `${item.node.nodeReplay.acceptedAfterReplay ? "valid" : "invalid"} / ${item.node.nodeReplay.chapters} ch / ${item.node.nodeReplay.failedReports} failed / ${item.node.nodeReplay.droppedReports} dropped`
       : "-";
     lines.push(
-      `| ${item.slug} | ${modeStatus(item.recursive)} | ${modeStatus(item.node)} | ${replay} | ${fmt(item.comparison.nodeWallSecondsMinusRecursive)} | ${fmt(item.comparison.nodeRequestsMinusRecursive)} | ${fmt(item.comparison.nodeTokensMinusRecursive)} | ${fmt(item.comparison.nodeCostUsdMinusRecursive)} |`
+      `| ${item.slug} | ${modeStatus(item.recursive)} | ${modeStatus(item.node)} | ${nodeReportStatus(item.node)} | ${nodeSourceStatus(item.node)} | ${replay} | ${fmt(item.comparison.nodeWallSecondsMinusRecursive)} | ${fmt(item.comparison.nodeRequestsMinusRecursive)} | ${fmt(item.comparison.nodeTokensMinusRecursive)} | ${fmt(item.comparison.nodeCostUsdMinusRecursive)} |`
     );
   }
   lines.push("");
   lines.push("## Interpretation");
   lines.push("");
   lines.push("- `Node replay` re-merges saved node boundary reports through the current merge implementation, so it can validate fixes without spending more API calls.");
+  lines.push("- `Node reports` is the original run output before current-code replay; failed/dropped rows are unresolved evidence gaps even when the merged plan is structurally valid.");
+  lines.push("- `Node source` counts boundary decisions accepted by deterministic pre-agent research versus accepted by the node agent fallback.");
   lines.push("- Positive Δ seconds/requests/tokens/cost means node-parallel used more than recursive for that saved run; negative means it used less.");
   lines.push("- This is not sufficient to prove chapter quality. Add committed answer keys or a judge-scored audit before making accuracy claims.");
   lines.push("");

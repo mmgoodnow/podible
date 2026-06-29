@@ -1041,6 +1041,7 @@ export async function resolveNodeBoundaryChapters(
   decide: (targetBoundary: ChapterCurationTargetBoundary) => Promise<NodeBoundaryDecision | null>,
   options: { maxConcurrency?: number; reports?: NodeBoundaryCurationReport[] } = {}
 ): Promise<SubmittedChapter[] | null> {
+  const duplicateBoundaryWindowSeconds = 5;
   const targets = nodeBoundaryTargets(ctx);
   if (targets.length === 0) return null;
   const maxConcurrency = Math.max(1, options.maxConcurrency ?? 8);
@@ -1122,7 +1123,7 @@ export async function resolveNodeBoundaryChapters(
     .filter((decision): decision is NodeBoundaryDecision => Boolean(decision))
     .sort((a, b) => a.epubIndex - b.epubIndex || a.startTime - b.startTime)) {
     const previous = chapters.at(-1);
-    if (previous && Math.abs(previous.startTime - decision.startTime) <= 30) {
+    if (previous && Math.abs(previous.startTime - decision.startTime) <= duplicateBoundaryWindowSeconds) {
       const previousDecision = chapterDecisions.at(-1);
       if (previousDecision && chapterTitleSpecificityScore(decision.title) > chapterTitleSpecificityScore(previous.title)) {
         markReportDropped(previousDecision, `Dropped duplicate/nearby boundary in favor of more specific EPUB title ${decision.title}.`);
