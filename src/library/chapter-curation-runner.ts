@@ -652,6 +652,7 @@ function createAudibleEpubNodeSelectionAgent(ctx: ChapterCurationContext): Agent
       "You classify which EPUB spine nodes are plausible audiobook chapter material before timestamp curation.",
       "Your job is only to include or exclude EPUB nodes. Do not decide timestamps and do not create a chapter plan.",
       "Exclude obvious non-audio front/back matter such as copyright pages, dedications, acknowledgments, tables of contents, cover/nav pages, ads, indexes, and about-the-author pages when they are not plausibly spoken in the audiobook.",
+      "Treat edition-specific prefaces, revised/expanded edition notes, bonus essays, and print-only update notes as exclude-by-default unless the transcript beginning/ending excerpts directly show that specific node is narrated.",
       "Keep prologues, part headings, chapter nodes, epilogues, and any uncertain narrative node. False exclusions are worse than false inclusions.",
       "Use the transcript beginning and ending excerpts to identify audiobook credits/preamble and whether EPUB front/back matter is likely represented.",
       "For multi-asset audiobooks, classify audio-only intervals around asset starts, asset ends, and joins, such as publisher intros, end credits, recaps, and part bumpers that have no EPUB node.",
