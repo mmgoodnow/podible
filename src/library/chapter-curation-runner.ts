@@ -2193,9 +2193,9 @@ async function tryDeterministicNodeBoundary(
   const candidate =
     headingCandidate ??
     chooseResearchBoundaryCandidate(research, span, { allowOpeningNearOpenerFallback: isOpeningNode, includeFallback: false }) ??
+    findOpeningInteriorStartCandidate(ctx, span, targetBoundary) ??
     findPartialOpenerBoundaryCandidate(ctx, span, targetBoundary) ??
     chooseSupportingContextBacktrackCandidate(ctx, research, span) ??
-    findOpeningInteriorStartCandidate(ctx, span, targetBoundary) ??
     chooseResearchBoundaryCandidate(research, span, { allowOpeningNearOpenerFallback: isOpeningNode });
   logChapterCurationEvent(ctx, {
     type: "deterministic-node-boundary-research",
