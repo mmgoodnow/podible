@@ -1291,6 +1291,61 @@ export function applyAudibleEpubNodeSelection(ctx: ChapterCurationContext, selec
   return { ...ctx, epubEntries: selectedEntries, audioOnlyIntervals };
 }
 
+function embeddedScopeTitleKey(value: string): string {
+  return normalizeToolText(value).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+function embeddedScopeTitleMatches(entry: EpubChapterEntry, embeddedTitle: string): boolean {
+  const entryKey = embeddedScopeTitleKey(entry.title);
+  const embeddedKey = embeddedScopeTitleKey(embeddedTitle);
+  if (!entryKey || !embeddedKey) return false;
+  if (entryKey.length >= 3 && (entryKey === embeddedKey || embeddedKey.includes(entryKey))) return true;
+
+  const structuralKinds = ["interlude", "part"];
+  for (const kind of structuralKinds) {
+    if (embeddedKey.includes(kind) !== entryKey.includes(kind)) return false;
+  }
+
+  const entryNumber = entryKey.match(/(?:^|\b)(?:chapter\s+)?(\d+)(?:\b|$)/u)?.[1];
+  if (!entryNumber) return false;
+  return new RegExp(`(?:^|\\b)(?:chapter\\s+)?${entryNumber}(?:\\b|$)`, "u").test(embeddedKey);
+}
+
+function localizeEpubRatios(entries: EpubChapterEntry[]): EpubChapterEntry[] {
+  const totalWords = entries.reduce((sum, entry) => sum + Math.max(0, entry.wordCount), 0);
+  if (totalWords <= 0) return entries;
+  let cumulativeWords = 0;
+  return entries.map((entry) => {
+    cumulativeWords += Math.max(0, entry.wordCount);
+    return {
+      ...entry,
+      cumulativeWords,
+      cumulativeRatio: cumulativeWords / totalWords,
+    };
+  });
+}
+
+export function applyEmbeddedAudioChapterNodeScope(ctx: ChapterCurationContext): ChapterCurationContext {
+  const embedded = getEmbeddedAudioChapters(ctx);
+  const diagnostics = embedded.diagnostics;
+  if (diagnostics.labelQuality !== "named" || diagnostics.durationPattern !== "varied" || diagnostics.boundaryDensity !== "plausible") return ctx;
+
+  const matchedIds = new Set<string>();
+  for (const entry of ctx.epubEntries) {
+    if (embedded.chapters.some((chapter) => embeddedScopeTitleMatches(entry, chapter.title))) matchedIds.add(entry.id);
+  }
+  const matchedEntries = ctx.epubEntries.filter((entry) => matchedIds.has(entry.id));
+  if (matchedEntries.length < 3 || matchedEntries.length === ctx.epubEntries.length) return ctx;
+
+  const matchedRatio = matchedEntries.length / Math.max(1, ctx.epubEntries.length);
+  if (matchedRatio > 0.8) return ctx;
+
+  return {
+    ...ctx,
+    epubEntries: localizeEpubRatios(matchedEntries),
+  };
+}
+
 // logChapterCurationEvent is needed in resolveRecursiveChapterSpans; import it lazily to avoid circular dependency
 // by importing from chapter-curation-debug directly
 import {

@@ -89,6 +89,7 @@ export {
   nodeBoundaryTargets,
   createRootCurationSpan,
   applyAudibleEpubNodeSelection,
+  applyEmbeddedAudioChapterNodeScope,
   recursiveSpanToolUseBehavior,
   nodeBoundaryToolUseBehavior,
   fulcrumJudgeToolUseBehavior,

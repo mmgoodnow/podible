@@ -18,6 +18,7 @@ import {
   nodeBoundaryTargets,
   rgSearchTranscript,
   applyAudibleEpubNodeSelection,
+  applyEmbeddedAudioChapterNodeScope,
   chooseResearchBoundaryCandidate,
   createRootCurationSpan,
   rankTargetBoundaries,
@@ -265,6 +266,37 @@ describe("chapter curation tools", () => {
 
     expect(filtered.epubEntries).toBe(context.epubEntries);
     expect(filtered.audioOnlyIntervals).toEqual([{ startTime: 60, endTime: 75, kind: "part_bumper", notes: "Part 2 intro." }]);
+  });
+
+  test("applyEmbeddedAudioChapterNodeScope narrows partial audio parts and rebases EPUB ratios", () => {
+    const entries = Array.from({ length: 10 }, (_, index) =>
+      epubEntry({
+        id: `chapter-${index + 1}`,
+        title: `${index + 1}: Chapter ${index + 1}`,
+        wordCount: 100,
+        cumulativeWords: (index + 1) * 100,
+        cumulativeRatio: (index + 1) / 10,
+      })
+    );
+    const context = ctx({
+      durationMs: 14_400_000,
+      manifestation: manifestation({ duration_ms: 14_400_000 }),
+      epubEntries: entries,
+      embeddedChapters: [
+        { id: "intro", title: "Intro", startMs: 0, endMs: 60_000 },
+        { id: "ch4", title: "4: Chapter 4", startMs: 60_000, endMs: 3_600_000 },
+        { id: "ch5", title: "5: Chapter 5", startMs: 3_600_000, endMs: 7_000_000 },
+        { id: "ch6", title: "6: Chapter 6", startMs: 7_000_000, endMs: 11_000_000 },
+        { id: "ch7", title: "7: Chapter 7", startMs: 11_000_000, endMs: 14_400_000 },
+        { id: "interlude-8", title: "Interlude 8: Side Story", startMs: 14_400_000, endMs: 14_400_000 },
+      ],
+    });
+
+    const scoped = applyEmbeddedAudioChapterNodeScope(context);
+
+    expect(scoped.epubEntries.map((entry) => entry.id)).toEqual(["chapter-4", "chapter-5", "chapter-6", "chapter-7"]);
+    expect(scoped.epubEntries.map((entry) => entry.cumulativeRatio)).toEqual([0.25, 0.5, 0.75, 1]);
+    expect(nodeBoundaryTargets(scoped).map((target) => target.expectedStartTime)).toEqual([0, 3600, 7200, 10800]);
   });
 
   test("getTranscriptWindowFromContext annotates overlapping audio-only intervals", () => {

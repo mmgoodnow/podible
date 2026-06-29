@@ -49,6 +49,7 @@ import {
   type SubmitChapterPlanResult,
   type SubmittedChapter,
   applyAudibleEpubNodeSelection,
+  applyEmbeddedAudioChapterNodeScope,
   audibleEpubNodeSelectionToolUseBehavior,
   automaticLeafChapters,
   createRootCurationSpan,
@@ -1708,6 +1709,11 @@ function embeddedTitleMatchesEpubNode(entry: EpubChapterEntry, embeddedTitle: st
   if (!entryKey || !embeddedKey) return false;
   if (entryKey.length >= 3 && (entryKey === embeddedKey || embeddedKey.includes(entryKey))) return true;
 
+  const structuralKinds = ["interlude", "part"];
+  for (const kind of structuralKinds) {
+    if (embeddedKey.includes(kind) !== entryKey.includes(kind)) return false;
+  }
+
   const chapterNumber = standaloneTitleNumber(entry.title);
   if (chapterNumber !== null && embeddedTitleHasChapterNumber(embeddedTitle, chapterNumber)) return true;
 
@@ -2136,15 +2142,30 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
     // here surfaces late (between turns) and turns legitimate slow spans into
     // partial-leaf gaps that fail structural validation.
     const audibleNodeSelection = await classifyAudibleEpubNodes(ctx, runner);
-    const curationCtx = applyAudibleEpubNodeSelection(ctx, audibleNodeSelection);
-    if (curationCtx.epubEntries.length !== ctx.epubEntries.length) {
+    const audibleCurationCtx = applyAudibleEpubNodeSelection(ctx, audibleNodeSelection);
+    const embeddedCurationCtx = applyEmbeddedAudioChapterNodeScope({
+      ...ctx,
+      audioOnlyIntervals: audibleCurationCtx.audioOnlyIntervals,
+    });
+    const curationCtx = embeddedCurationCtx.epubEntries.length !== ctx.epubEntries.length ? embeddedCurationCtx : audibleCurationCtx;
+    if (audibleCurationCtx.epubEntries.length !== ctx.epubEntries.length) {
       logChapterCurationEvent(ctx, {
         type: "audible-epub-node-filter-applied",
-        message: `audible epub node filter applied original=${ctx.epubEntries.length} curated=${curationCtx.epubEntries.length}`,
+        message: `audible epub node filter applied original=${ctx.epubEntries.length} curated=${audibleCurationCtx.epubEntries.length}`,
+        originalEpubEntries: ctx.epubEntries.length,
+        curatedEpubEntries: audibleCurationCtx.epubEntries.length,
+        selectedNodeIds: audibleCurationCtx.epubEntries.map((entry) => entry.id),
+        excludedNodes: audibleNodeSelection?.excludedNodes ?? [],
+      });
+    }
+    if (curationCtx.epubEntries.length !== ctx.epubEntries.length && curationCtx === embeddedCurationCtx) {
+      logChapterCurationEvent(curationCtx, {
+        type: "embedded-audio-node-scope-applied",
+        message: `embedded audio node scope applied original=${ctx.epubEntries.length} curated=${curationCtx.epubEntries.length}`,
         originalEpubEntries: ctx.epubEntries.length,
         curatedEpubEntries: curationCtx.epubEntries.length,
         selectedNodeIds: curationCtx.epubEntries.map((entry) => entry.id),
-        excludedNodes: audibleNodeSelection?.excludedNodes ?? [],
+        diagnostics: getEmbeddedAudioChapters(ctx).diagnostics,
       });
     }
     if ((curationCtx.audioOnlyIntervals ?? []).length > 0) {
@@ -2457,15 +2478,30 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
       traceIncludeSensitiveData: false,
     });
     const audibleNodeSelection = await classifyAudibleEpubNodes(ctx, runner);
-    const curationCtx = applyAudibleEpubNodeSelection(ctx, audibleNodeSelection);
-    if (curationCtx.epubEntries.length !== ctx.epubEntries.length) {
+    const audibleCurationCtx = applyAudibleEpubNodeSelection(ctx, audibleNodeSelection);
+    const embeddedCurationCtx = applyEmbeddedAudioChapterNodeScope({
+      ...ctx,
+      audioOnlyIntervals: audibleCurationCtx.audioOnlyIntervals,
+    });
+    const curationCtx = embeddedCurationCtx.epubEntries.length !== ctx.epubEntries.length ? embeddedCurationCtx : audibleCurationCtx;
+    if (audibleCurationCtx.epubEntries.length !== ctx.epubEntries.length) {
       logChapterCurationEvent(ctx, {
         type: "audible-epub-node-filter-applied",
-        message: `audible epub node filter applied original=${ctx.epubEntries.length} curated=${curationCtx.epubEntries.length}`,
+        message: `audible epub node filter applied original=${ctx.epubEntries.length} curated=${audibleCurationCtx.epubEntries.length}`,
+        originalEpubEntries: ctx.epubEntries.length,
+        curatedEpubEntries: audibleCurationCtx.epubEntries.length,
+        selectedNodeIds: audibleCurationCtx.epubEntries.map((entry) => entry.id),
+        excludedNodes: audibleNodeSelection?.excludedNodes ?? [],
+      });
+    }
+    if (curationCtx.epubEntries.length !== ctx.epubEntries.length && curationCtx === embeddedCurationCtx) {
+      logChapterCurationEvent(curationCtx, {
+        type: "embedded-audio-node-scope-applied",
+        message: `embedded audio node scope applied original=${ctx.epubEntries.length} curated=${curationCtx.epubEntries.length}`,
         originalEpubEntries: ctx.epubEntries.length,
         curatedEpubEntries: curationCtx.epubEntries.length,
         selectedNodeIds: curationCtx.epubEntries.map((entry) => entry.id),
-        excludedNodes: audibleNodeSelection?.excludedNodes ?? [],
+        diagnostics: getEmbeddedAudioChapters(ctx).diagnostics,
       });
     }
     if ((curationCtx.audioOnlyIntervals ?? []).length > 0) {
