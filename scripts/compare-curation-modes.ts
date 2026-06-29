@@ -61,6 +61,7 @@ type ModeSummary = {
     acceptedReports: number;
     failedReports: number;
     droppedReports: number;
+    coverage: number;
     monotonicErrors: number;
     acceptedAfterReplay: boolean;
   };
@@ -266,13 +267,15 @@ async function replayNodeReports(caseDir: string, result: JsonRecord): Promise<M
   const acceptedReports = replayReports.filter((report) => report.outcome === "accepted").length;
   const failedReports = replayReports.filter((report) => report.outcome === "failed").length;
   const droppedReports = replayReports.filter((report) => report.outcome === "dropped").length;
+  const coverage = replayReports.length === 0 ? 0 : (acceptedReports + droppedReports) / replayReports.length;
   return {
     chapters: replayed.length,
     acceptedReports,
     failedReports,
     droppedReports,
+    coverage: round(coverage, 3),
     monotonicErrors: monotonicErrors(replayed),
-    acceptedAfterReplay: replayed.length > 0 && monotonicErrors(replayed) === 0,
+    acceptedAfterReplay: replayed.length > 0 && monotonicErrors(replayed) === 0 && coverage >= 0.9,
   };
 }
 
@@ -391,7 +394,7 @@ function renderMarkdown(cases: CaseSummary[], generatedAt: string): string {
   ];
   for (const item of cases) {
     const replay = item.node?.nodeReplay
-      ? `${item.node.nodeReplay.acceptedAfterReplay ? "valid" : "invalid"} / ${item.node.nodeReplay.chapters} ch / ${item.node.nodeReplay.failedReports} failed / ${item.node.nodeReplay.droppedReports} dropped`
+    ? `${item.node.nodeReplay.acceptedAfterReplay ? "valid" : "invalid"} / ${item.node.nodeReplay.chapters} ch / ${item.node.nodeReplay.failedReports} failed / ${item.node.nodeReplay.droppedReports} dropped / ${Math.round(item.node.nodeReplay.coverage * 100)}% coverage`
       : "-";
     lines.push(
       `| ${item.slug} | ${modeStatus(item.recursive)} | ${modeStatus(item.node)} | ${nodeReportStatus(item.node)} | ${nodeSourceStatus(item.node)} | ${replay} | ${fmt(item.comparison.nodeWallSecondsMinusRecursive)} | ${fmt(item.comparison.nodeRequestsMinusRecursive)} | ${fmt(item.comparison.nodeTokensMinusRecursive)} | ${fmt(item.comparison.nodeCostUsdMinusRecursive)} |`

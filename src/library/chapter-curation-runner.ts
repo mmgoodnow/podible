@@ -2276,6 +2276,7 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
     const nodeBoundaryTraces: RecursiveSpanTrace[] = [];
     const nodeBoundaryMaxConcurrency = Math.max(1, Number(process.env.PODIBLE_CHAPTER_NODE_CONCURRENCY ?? 12));
     const nodeBoundaryMaxTurns = Math.max(4, Number(process.env.PODIBLE_CHAPTER_NODE_MAX_TURNS ?? 16));
+    const minNodeBoundaryCoverage = Math.max(0, Math.min(1, Number(process.env.PODIBLE_CHAPTER_NODE_MIN_COVERAGE ?? 0.9)));
     logChapterCurationEvent(curationCtx, {
       type: "node-parallel-run-start",
       message: `node parallel run start=1 nodes=${curationCtx.epubEntries.length}`,
@@ -2284,6 +2285,7 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
       judgeModel: curationCtx.debugJudgeModel?.trim() || curationCtx.settings.agents.model,
       maxNodeConcurrency: nodeBoundaryMaxConcurrency,
       maxNodeTurns: nodeBoundaryMaxTurns,
+      minNodeBoundaryCoverage,
       durationSeconds: curationCtx.durationMs / 1000,
       epubEntries: curationCtx.epubEntries.length,
       originalEpubEntries: ctx.epubEntries.length,
@@ -2421,6 +2423,29 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
     );
 
     if (nodeChapters && nodeChapters.length > 0) {
+      const resolvedReports = nodeBoundaryReports.filter((report) => report.outcome === "accepted" || report.outcome === "dropped").length;
+      const failedReports = nodeBoundaryReports.filter((report) => report.outcome === "failed").length;
+      const coverage = nodeBoundaryReports.length === 0 ? 0 : resolvedReports / nodeBoundaryReports.length;
+      if (coverage < minNodeBoundaryCoverage) {
+        logChapterCurationEvent(curationCtx, {
+          type: "node-parallel-merge-rejected",
+          message: `node parallel merge accepted=0 reason=low_coverage chapters=${nodeChapters.length} coverage=${coverage.toFixed(3)} failed=${failedReports}`,
+          chapters: nodeChapters.length,
+          coverage,
+          minNodeBoundaryCoverage,
+          resolvedReports,
+          failedReports,
+          nodeBoundaryReports,
+        });
+        return {
+          result: null,
+          finalOutput: null,
+          newItems: [],
+          rawResponses: [],
+          nodeBoundaryReports,
+          nodeBoundaryTraces,
+        };
+      }
       logChapterCurationEvent(curationCtx, {
         type: "node-parallel-merge-start",
         message: `node parallel merge chapters=${nodeChapters.length} validate=structural`,
