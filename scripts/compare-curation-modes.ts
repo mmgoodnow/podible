@@ -34,6 +34,11 @@ type EventSummary = {
     agentAccepted: number;
     failed: number;
   };
+  nodeBoundaryJudgments: {
+    accepted: number;
+    rejected: number;
+    acceptedNodeIds: string[];
+  };
 };
 
 type ModeSummary = {
@@ -67,6 +72,14 @@ type ModeSummary = {
     failed: number;
     dropped: number;
     skipped: number;
+  };
+  nodeJudgedAudit?: {
+    acceptedReports: number;
+    judgeAccepted: number;
+    judgeRejected: number;
+    missingJudgeAcceptance: number;
+    coverage: number;
+    acceptedNodeIdsWithoutJudge: string[];
   };
   nodeReplay?: {
     chapters: number;
@@ -124,6 +137,14 @@ type AggregateSummary = {
     nodeAcceptedAfterReplay: number;
     nodeReplayValid: number;
     nodeReplayInvalid: number;
+  };
+  nodeJudgedAudit: {
+    casesWithNodeReports: number;
+    casesFullyJudgeBacked: number;
+    casesMissingJudgeAcceptance: number;
+    acceptedReports: number;
+    judgeBackedAcceptedReports: number;
+    coverage: number | null;
   };
   pairedDeltas: {
     cases: number;
@@ -229,7 +250,9 @@ function summarizeEvents(eventLogPath: string | null): EventSummary {
     usage: { requests: 0, tokens: 0, costUsd: 0, byRole: {} },
     tools: {},
     nodeBoundaries: { started: 0, deterministicAccepted: 0, agentAccepted: 0, failed: 0 },
+    nodeBoundaryJudgments: { accepted: 0, rejected: 0, acceptedNodeIds: [] },
   };
+  const acceptedNodeJudgmentIds = new Set<string>();
 
   for (const event of events) {
     if (event.type === "agent-usage") {
@@ -261,10 +284,19 @@ function summarizeEvents(eventLogPath: string | null): EventSummary {
       else if (accepted) summary.nodeBoundaries.agentAccepted += 1;
       else summary.nodeBoundaries.failed += 1;
     }
+    if (event.type === "fulcrum-judge-result" && event.proposalKind === "node_boundary") {
+      if (event.judgment?.accepted === true) {
+        summary.nodeBoundaryJudgments.accepted += 1;
+        if (typeof event.split?.epubNodeId === "string") acceptedNodeJudgmentIds.add(event.split.epubNodeId);
+      } else if (event.judgment?.accepted === false) {
+        summary.nodeBoundaryJudgments.rejected += 1;
+      }
+    }
   }
 
   summary.usage.costUsd = roundMoney(summary.usage.costUsd);
   for (const roleSummary of Object.values(summary.usage.byRole)) roleSummary.costUsd = roundMoney(roleSummary.costUsd);
+  summary.nodeBoundaryJudgments.acceptedNodeIds = Array.from(acceptedNodeJudgmentIds).sort();
   return summary;
 }
 
@@ -328,6 +360,8 @@ function monotonicErrors(chapters: SubmittedChapter[]): number {
 async function replayNodeReports(caseDir: string, result: JsonRecord): Promise<ModeSummary["nodeReplay"]> {
   const originalReports = Array.isArray(result.nodeBoundaryReports) ? (result.nodeBoundaryReports as NodeBoundaryCurationReport[]) : [];
   if (originalReports.length === 0) return undefined;
+  const metadata = readJson(path.join(caseDir, "metadata.json"));
+  const transcript = readJson(path.join(caseDir, "transcript.json"));
   const acceptedById = new Map(
     originalReports
       .filter((report) => (report.outcome === "accepted" || report.outcome === "dropped") && typeof report.startTime === "number")
@@ -336,8 +370,21 @@ async function replayNodeReports(caseDir: string, result: JsonRecord): Promise<M
   const reportIds = new Set(originalReports.map((report) => report.epubNodeId));
   const epubEntries = (await loadEpubEntries(path.join(caseDir, "book.epub"))).filter((entry) => reportIds.has(entry.id));
   const replayReports: NodeBoundaryCurationReport[] = [];
+  const durationMs = Number(result.durationMs ?? 0) || Number(metadata?.audio_duration_ms ?? 0);
   const chapters = await resolveNodeBoundaryChapters(
-    { durationMs: Number(result.durationMs ?? 0) || Number(readJson(path.join(caseDir, "metadata.json"))?.audio_duration_ms ?? 0), epubEntries },
+    {
+      durationMs,
+      epubEntries,
+      transcript:
+        transcript && typeof transcript === "object"
+          ? (transcript as any)
+          : {
+              text: "",
+              words: [],
+              utterances: [],
+              chunks: [],
+            },
+    },
     async (target): Promise<NodeBoundaryDecision | null> => {
       const report = acceptedById.get(target.epubNodeId);
       if (!report || typeof report.startTime !== "number") return null;
@@ -481,6 +528,17 @@ async function summarizeMode(caseDir: string, mode: "recursive" | "node"): Promi
       dropped: reports.filter((report) => report.outcome === "dropped").length,
       skipped: reports.filter((report) => report.outcome === "skipped").length,
     };
+    const acceptedReportIds = reports.filter((report) => report.outcome === "accepted").map((report) => report.epubNodeId);
+    const judgeAcceptedIds = new Set(events.nodeBoundaryJudgments.acceptedNodeIds);
+    const acceptedNodeIdsWithoutJudge = acceptedReportIds.filter((id) => !judgeAcceptedIds.has(id));
+    summary.nodeJudgedAudit = {
+      acceptedReports: acceptedReportIds.length,
+      judgeAccepted: acceptedReportIds.length - acceptedNodeIdsWithoutJudge.length,
+      judgeRejected: events.nodeBoundaryJudgments.rejected,
+      missingJudgeAcceptance: acceptedNodeIdsWithoutJudge.length,
+      coverage: acceptedReportIds.length === 0 ? 1 : round((acceptedReportIds.length - acceptedNodeIdsWithoutJudge.length) / acceptedReportIds.length, 3),
+      acceptedNodeIdsWithoutJudge,
+    };
     summary.nodeReplay = await replayNodeReports(caseDir, result);
     if (result.nodeBoundaryFailureDiagnostic && typeof result.nodeBoundaryFailureDiagnostic === "object") {
       const diagnostic = result.nodeBoundaryFailureDiagnostic as JsonRecord;
@@ -556,6 +614,9 @@ function aggregateCases(cases: CaseSummary[]): AggregateSummary {
   const nodeTokens = comparablePairs.reduce((sum, item) => sum + (item.node?.tokens ?? 0), 0);
   const recursiveCostUsd = comparablePairs.reduce((sum, item) => sum + (item.recursive?.costUsd ?? 0), 0);
   const nodeCostUsd = comparablePairs.reduce((sum, item) => sum + (item.node?.costUsd ?? 0), 0);
+  const nodeAuditCases = cases.filter((item) => item.node?.nodeJudgedAudit);
+  const acceptedReports = nodeAuditCases.reduce((sum, item) => sum + (item.node?.nodeJudgedAudit?.acceptedReports ?? 0), 0);
+  const judgeBackedAcceptedReports = nodeAuditCases.reduce((sum, item) => sum + (item.node?.nodeJudgedAudit?.judgeAccepted ?? 0), 0);
   return {
     cases: {
       total: cases.length,
@@ -575,6 +636,14 @@ function aggregateCases(cases: CaseSummary[]): AggregateSummary {
       nodeAcceptedAfterReplay: cases.filter((item) => item.node && (item.node.nodeReplay?.acceptedAfterReplay ?? item.node.accepted)).length,
       nodeReplayValid: cases.filter((item) => item.node?.nodeReplay?.acceptedAfterReplay).length,
       nodeReplayInvalid: cases.filter((item) => item.node?.nodeReplay && !item.node.nodeReplay.acceptedAfterReplay).length,
+    },
+    nodeJudgedAudit: {
+      casesWithNodeReports: nodeAuditCases.length,
+      casesFullyJudgeBacked: nodeAuditCases.filter((item) => (item.node?.nodeJudgedAudit?.missingJudgeAcceptance ?? 0) === 0).length,
+      casesMissingJudgeAcceptance: nodeAuditCases.filter((item) => (item.node?.nodeJudgedAudit?.missingJudgeAcceptance ?? 0) > 0).length,
+      acceptedReports,
+      judgeBackedAcceptedReports,
+      coverage: acceptedReports === 0 ? null : round(judgeBackedAcceptedReports / acceptedReports, 3),
     },
     pairedDeltas: {
       cases: comparablePairs.length,
@@ -618,6 +687,13 @@ function nodeReportStatus(summary: ModeSummary | null): string {
   return `${reports.accepted}/${reports.total} accepted, ${reports.failed} failed, ${reports.dropped} dropped, ${reports.skipped} skipped`;
 }
 
+function nodeJudgedAuditStatus(summary: ModeSummary | null): string {
+  const audit = summary?.nodeJudgedAudit;
+  if (!audit) return "-";
+  const missing = audit.acceptedNodeIdsWithoutJudge.length > 0 ? `, missing ${audit.acceptedNodeIdsWithoutJudge.join(" ")}` : "";
+  return `${audit.judgeAccepted}/${audit.acceptedReports} judge-backed, ${audit.judgeRejected} rejected, ${Math.round(audit.coverage * 100)}%${missing}`;
+}
+
 function nodeSourceStatus(summary: ModeSummary | null): string {
   const sources = summary?.nodeBoundarySources;
   if (!sources) return "-";
@@ -644,7 +720,7 @@ function renderMarkdown(cases: CaseSummary[], aggregate: AggregateSummary, gener
     "",
     `Generated: ${generatedAt}`,
     "",
-    "Accuracy is not scored here because no committed answer keys are present. This report compares repeatable operational signals only: acceptance, monotonic validity, chapter count, node failures/drops, latency, requests, tokens, and cost.",
+    "Accuracy against human answer keys is not scored here because no committed answer keys are present. This report compares repeatable operational signals and judged boundary evidence: acceptance, monotonic validity, judge-backed accepted node boundaries, chapter count, node failures/drops, latency, requests, tokens, and cost.",
     "",
     `Cases: ${cases.length} total, ${runnable} runnable with local EPUB+transcript, ${paired} have both recursive and node artifacts.`,
     `Accepted artifacts: recursive ${recursiveAccepted}/${cases.filter((item) => item.recursive).length}, node ${nodeAccepted}/${cases.filter((item) => item.node).length} after current-code node replay.`,
@@ -654,32 +730,34 @@ function renderMarkdown(cases: CaseSummary[], aggregate: AggregateSummary, gener
     `- Current-clean node artifacts: ${aggregate.artifacts.currentCleanNode}/${aggregate.artifacts.node}. Stale or unversioned node artifacts: ${staleNodeList}.`,
     `- Current-clean recursive artifacts: ${aggregate.artifacts.currentCleanRecursive}/${aggregate.artifacts.recursive}. Stale or unversioned recursive artifacts: ${staleRecursiveList}.`,
     `- Node replay validity: ${aggregate.acceptance.nodeReplayValid} valid, ${aggregate.acceptance.nodeReplayInvalid} invalid.`,
+    `- Node judged boundary coverage: ${aggregate.nodeJudgedAudit.judgeBackedAcceptedReports}/${aggregate.nodeJudgedAudit.acceptedReports} accepted node reports judge-backed (${fmt(aggregate.nodeJudgedAudit.coverage === null ? null : aggregate.nodeJudgedAudit.coverage * 100)}%); ${aggregate.nodeJudgedAudit.casesFullyJudgeBacked}/${aggregate.nodeJudgedAudit.casesWithNodeReports} node cases fully judge-backed.`,
     `- Paired operational comparison (${aggregate.pairedDeltas.cases} cases): node saved ${fmt(aggregate.pairedDeltas.nodeWallSecondsSaved)} seconds, ${fmt(aggregate.pairedDeltas.nodeRequestsSaved)} requests, ${fmt(aggregate.pairedDeltas.nodeTokensSaved)} tokens, and $${fmt(aggregate.pairedDeltas.nodeCostUsdSaved)}.`,
     `- Paired speedup: ${fmt(aggregate.pairedDeltas.wallSpeedup)}x wall-clock (${fmt(aggregate.pairedDeltas.recursiveWallSeconds)}s recursive vs ${fmt(aggregate.pairedDeltas.nodeWallSeconds)}s node).`,
     `- Paired reductions: ${fmt(aggregate.pairedDeltas.requestReductionRatio === null ? null : aggregate.pairedDeltas.requestReductionRatio * 100)}% requests, ${fmt(aggregate.pairedDeltas.tokenReductionRatio === null ? null : aggregate.pairedDeltas.tokenReductionRatio * 100)}% tokens, ${fmt(aggregate.pairedDeltas.costReductionRatio === null ? null : aggregate.pairedDeltas.costReductionRatio * 100)}% cost.`,
     "",
-    "| Case | Recursive | Node | Node reports | Node source | Node replay | Node diagnostic | Δ seconds | Δ requests | Δ tokens | Δ cost |",
-    "| --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |",
+    "| Case | Recursive | Node | Node reports | Judge audit | Node source | Node replay | Node diagnostic | Δ seconds | Δ requests | Δ tokens | Δ cost |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |",
   ];
   for (const item of cases) {
     const replay = item.node?.nodeReplay
     ? `${item.node.nodeReplay.acceptedAfterReplay ? "valid" : "invalid"} / ${item.node.nodeReplay.chapters} ch / ${item.node.nodeReplay.failedReports} failed / ${item.node.nodeReplay.droppedReports} dropped / ${item.node.nodeReplay.skippedReports} skipped / ${Math.round(item.node.nodeReplay.coverage * 100)}% coverage`
       : "-";
     lines.push(
-      `| ${item.slug} | ${modeStatus(item.recursive)} | ${modeStatus(item.node)} | ${nodeReportStatus(item.node)} | ${nodeSourceStatus(item.node)} | ${replay} | ${nodeDiagnosticStatus(item.node)} | ${fmt(item.comparison.nodeWallSecondsMinusRecursive)} | ${fmt(item.comparison.nodeRequestsMinusRecursive)} | ${fmt(item.comparison.nodeTokensMinusRecursive)} | ${fmt(item.comparison.nodeCostUsdMinusRecursive)} |`
+      `| ${item.slug} | ${modeStatus(item.recursive)} | ${modeStatus(item.node)} | ${nodeReportStatus(item.node)} | ${nodeJudgedAuditStatus(item.node)} | ${nodeSourceStatus(item.node)} | ${replay} | ${nodeDiagnosticStatus(item.node)} | ${fmt(item.comparison.nodeWallSecondsMinusRecursive)} | ${fmt(item.comparison.nodeRequestsMinusRecursive)} | ${fmt(item.comparison.nodeTokensMinusRecursive)} | ${fmt(item.comparison.nodeCostUsdMinusRecursive)} |`
     );
   }
   lines.push("");
   lines.push("## Interpretation");
   lines.push("");
   lines.push("- `Node replay` re-merges saved node boundary reports through the current merge implementation, so it can validate fixes without spending more API calls.");
+  lines.push("- `Judge audit` counts accepted node-boundary reports that have a matching node-boundary judge acceptance in the event log. It proves the report is judge-backed, not that a human answer key agrees.");
   lines.push("- `Node reports` is the original run output before current-code replay; failed/dropped rows are unresolved evidence gaps even when the merged plan is structurally valid.");
   lines.push("- `Node source` counts boundary decisions accepted by deterministic pre-agent research versus accepted by the node agent fallback.");
   lines.push("- `Node diagnostic` is emitted only by failed node runs and is a hint to inspect corpus/data quality; it does not accept chapters or relax validation.");
   lines.push("- `stale-or-dirty` means the selected artifact was not produced cleanly from the current git commit; rerun that corpus case before treating it as current proof.");
   lines.push("- `unversioned` means the artifact predates git provenance tracking; rerun that corpus case before treating it as current proof.");
   lines.push("- Positive Δ seconds/requests/tokens/cost means node-parallel used more than recursive for that saved run; negative means it used less.");
-  lines.push("- This is not sufficient to prove chapter quality. Add committed answer keys or a judge-scored audit before making accuracy claims.");
+  lines.push("- Judge-backed coverage is stronger than operational acceptance, but still not the same as human answer-key accuracy. Add committed answer keys before making full accuracy claims.");
   lines.push("");
   return `${lines.join("\n")}\n`;
 }
