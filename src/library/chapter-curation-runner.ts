@@ -50,6 +50,7 @@ import {
   type SubmittedChapter,
   applyAudibleEpubNodeSelection,
   applyEmbeddedAudioChapterNodeScope,
+  applyTranscriptEndpointEpubNodeScope,
   audibleEpubNodeSelectionToolUseBehavior,
   automaticLeafChapters,
   createRootCurationSpan,
@@ -1659,6 +1660,10 @@ function chooseSupportingContextBacktrackCandidate(
 }
 
 function openingAudioOnlyEndTime(ctx: ChapterCurationContext, span: ChapterCurationSpan): number {
+  const startEntry = ctx.epubEntries[span.epubStartIndex];
+  const hintedStartTime = startEntry ? ctx.chapterStartTimeHints?.[startEntry.id] : undefined;
+  if (hintedStartTime !== undefined) return Math.max(span.startTime, hintedStartTime);
+
   const openingIntervals = (ctx.audioOnlyIntervals ?? [])
     .filter((interval) => interval.startTime <= span.startTime + 5 && interval.endTime > span.startTime)
     .sort((a, b) => b.endTime - a.endTime);
@@ -1900,6 +1905,45 @@ async function tryDeterministicNodeBoundary(
 
   const headingCandidate = await findSpokenHeadingBoundaryCandidate(ctx, span, targetBoundary);
   const isOpeningNode = targetBoundary.epubIndex === 0;
+  const hintedOpeningStartTime = isOpeningNode ? ctx.chapterStartTimeHints?.[targetBoundary.epubNodeId] : undefined;
+  if (hintedOpeningStartTime !== undefined) {
+    const validated = await validateNodeBoundary(
+      ctx,
+      {
+        spanPath: span.path,
+        epubNodeId: targetBoundary.epubNodeId,
+        title: targetBoundary.title,
+        startTime: hintedOpeningStartTime,
+        evidence:
+          "Deterministic transcript-endpoint hint: endpoint scoping found early non-boilerplate transcript text inside this EPUB node, so this is the first available narrated boundary for the scoped manifestation.",
+        notes: "Accepted by transcript endpoint scoping for the first scoped EPUB node.",
+      },
+      { span, targetBoundary }
+    );
+    if (validated.accepted) {
+      const accepted: NodeBoundaryDecision = {
+        ...validated,
+        notes: [validated.notes, "Accepted by deterministic pre-agent endpoint hint."].filter(Boolean).join(" "),
+      };
+      logChapterCurationEvent(ctx, {
+        type: "deterministic-node-boundary-accepted",
+        message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} endpoint_hint=1 accepted=1 time=${Math.round(
+          accepted.startTime
+        )}s`,
+        span,
+        targetBoundary,
+        result: accepted,
+      });
+      return accepted;
+    }
+    logChapterCurationEvent(ctx, {
+      type: "deterministic-node-boundary-rejected",
+      message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} endpoint_hint=1 validation=0`,
+      span,
+      targetBoundary,
+      result: validated,
+    });
+  }
   const research = await researchEpubBoundary(ctx, {
     epubNodeId: targetBoundary.epubNodeId,
     expectedTime: targetBoundary.expectedStartTime,
@@ -2147,7 +2191,9 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
       ...ctx,
       audioOnlyIntervals: audibleCurationCtx.audioOnlyIntervals,
     });
-    const curationCtx = embeddedCurationCtx.epubEntries.length !== ctx.epubEntries.length ? embeddedCurationCtx : audibleCurationCtx;
+    const endpointCurationCtx =
+      embeddedCurationCtx.epubEntries.length !== ctx.epubEntries.length ? embeddedCurationCtx : applyTranscriptEndpointEpubNodeScope(audibleCurationCtx);
+    const curationCtx = endpointCurationCtx.epubEntries.length !== ctx.epubEntries.length ? endpointCurationCtx : audibleCurationCtx;
     if (audibleCurationCtx.epubEntries.length !== ctx.epubEntries.length) {
       logChapterCurationEvent(ctx, {
         type: "audible-epub-node-filter-applied",
@@ -2166,6 +2212,15 @@ export async function runRecursiveAgenticChapterCurationDetailed(ctx: ChapterCur
         curatedEpubEntries: curationCtx.epubEntries.length,
         selectedNodeIds: curationCtx.epubEntries.map((entry) => entry.id),
         diagnostics: getEmbeddedAudioChapters(ctx).diagnostics,
+      });
+    }
+    if (curationCtx.epubEntries.length !== audibleCurationCtx.epubEntries.length && curationCtx === endpointCurationCtx && curationCtx !== embeddedCurationCtx) {
+      logChapterCurationEvent(curationCtx, {
+        type: "transcript-endpoint-node-scope-applied",
+        message: `transcript endpoint node scope applied original=${audibleCurationCtx.epubEntries.length} curated=${curationCtx.epubEntries.length}`,
+        originalEpubEntries: audibleCurationCtx.epubEntries.length,
+        curatedEpubEntries: curationCtx.epubEntries.length,
+        selectedNodeIds: curationCtx.epubEntries.map((entry) => entry.id),
       });
     }
     if ((curationCtx.audioOnlyIntervals ?? []).length > 0) {
@@ -2483,7 +2538,9 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
       ...ctx,
       audioOnlyIntervals: audibleCurationCtx.audioOnlyIntervals,
     });
-    const curationCtx = embeddedCurationCtx.epubEntries.length !== ctx.epubEntries.length ? embeddedCurationCtx : audibleCurationCtx;
+    const endpointCurationCtx =
+      embeddedCurationCtx.epubEntries.length !== ctx.epubEntries.length ? embeddedCurationCtx : applyTranscriptEndpointEpubNodeScope(audibleCurationCtx);
+    const curationCtx = endpointCurationCtx.epubEntries.length !== ctx.epubEntries.length ? endpointCurationCtx : audibleCurationCtx;
     if (audibleCurationCtx.epubEntries.length !== ctx.epubEntries.length) {
       logChapterCurationEvent(ctx, {
         type: "audible-epub-node-filter-applied",
@@ -2502,6 +2559,15 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
         curatedEpubEntries: curationCtx.epubEntries.length,
         selectedNodeIds: curationCtx.epubEntries.map((entry) => entry.id),
         diagnostics: getEmbeddedAudioChapters(ctx).diagnostics,
+      });
+    }
+    if (curationCtx.epubEntries.length !== audibleCurationCtx.epubEntries.length && curationCtx === endpointCurationCtx && curationCtx !== embeddedCurationCtx) {
+      logChapterCurationEvent(curationCtx, {
+        type: "transcript-endpoint-node-scope-applied",
+        message: `transcript endpoint node scope applied original=${audibleCurationCtx.epubEntries.length} curated=${curationCtx.epubEntries.length}`,
+        originalEpubEntries: audibleCurationCtx.epubEntries.length,
+        curatedEpubEntries: curationCtx.epubEntries.length,
+        selectedNodeIds: curationCtx.epubEntries.map((entry) => entry.id),
       });
     }
     if ((curationCtx.audioOnlyIntervals ?? []).length > 0) {

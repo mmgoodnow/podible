@@ -523,14 +523,18 @@ export function rankTargetBoundaries(ctx: Pick<ChapterCurationContext, "epubEntr
   return candidates.sort((a, b) => Math.abs(a.localNodeRatio - 0.5) - Math.abs(b.localNodeRatio - 0.5) || a.epubIndex - b.epubIndex);
 }
 
-export function nodeBoundaryTargets(ctx: Pick<ChapterCurationContext, "epubEntries" | "durationMs">): ChapterCurationTargetBoundary[] {
+export function nodeBoundaryTargets(
+  ctx: Pick<ChapterCurationContext, "epubEntries" | "durationMs" | "chapterStartTimeHints">
+): ChapterCurationTargetBoundary[] {
   const durationSeconds = msToSeconds(ctx.durationMs);
   const nodeCount = Math.max(1, ctx.epubEntries.length);
   return ctx.epubEntries.map((entry, index) => ({
     epubNodeId: entry.id,
     epubIndex: index,
     title: entry.title,
-    expectedStartTime: Math.round(durationSeconds * inferEntryStartRatio(ctx.epubEntries, index) * 1000) / 1000,
+    expectedStartTime:
+      ctx.chapterStartTimeHints?.[entry.id] ??
+      Math.round(durationSeconds * inferEntryStartRatio(ctx.epubEntries, index) * 1000) / 1000,
     localNodeRatio: Math.round((index / nodeCount) * 1000) / 1000,
   }));
 }
@@ -1343,6 +1347,98 @@ export function applyEmbeddedAudioChapterNodeScope(ctx: ChapterCurationContext):
   return {
     ...ctx,
     epubEntries: localizeEpubRatios(matchedEntries),
+  };
+}
+
+const TRANSCRIPT_ENDPOINT_BOILERPLATE =
+  /\b(?:graphic\s+audio|movie\s+in\s+your\s+mind|presents|all\s+rights\s+reserved|copyright|newsletter|facebook|twitter|graphicaudio|1-800|www\.|downloads?|podcasts?|loyalty|android|apple|listen\s+on\s+the\s+go)\b/iu;
+
+function normalizedEndpointWords(value: string): string[] {
+  return normalizeToolText(value)
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((word) => word.length > 0);
+}
+
+function endpointPhraseVariants(text: string): string[] {
+  const words = normalizedEndpointWords(text);
+  const variants: string[] = [];
+  for (const start of [0, 2, 4]) {
+    for (const count of [12, 10, 8, 6]) {
+      const phrase = words.slice(start, start + count).join(" ");
+      if (phrase.length >= 24) variants.push(phrase);
+    }
+  }
+  return variants;
+}
+
+type EndpointUtteranceCandidate = { text: string; startTime: number; endTime: number };
+
+function firstEndpointUtterances(ctx: ChapterCurationContext): EndpointUtteranceCandidate[] {
+  const openingAudioOnlyEndMs = secondsToMs(
+    Math.max(0, ...(ctx.audioOnlyIntervals ?? []).filter((interval) => interval.startTime <= 5).map((interval) => interval.endTime))
+  );
+  return transcriptUtterances(ctx)
+    .filter((item) => item.endMs >= openingAudioOnlyEndMs && !TRANSCRIPT_ENDPOINT_BOILERPLATE.test(item.text))
+    .slice(0, 40)
+    .map((item) => ({ text: item.text, startTime: msToSeconds(item.startMs), endTime: msToSeconds(item.endMs) }));
+}
+
+function lastEndpointUtterances(ctx: ChapterCurationContext): EndpointUtteranceCandidate[] {
+  return [...transcriptUtterances(ctx)]
+    .reverse()
+    .filter((item) => !TRANSCRIPT_ENDPOINT_BOILERPLATE.test(item.text))
+    .slice(0, 80)
+    .map((item) => ({ text: item.text, startTime: msToSeconds(item.startMs), endTime: msToSeconds(item.endMs) }));
+}
+
+function findEndpointEntryIndex(entries: EpubChapterEntry[], text: string): number | null {
+  const normalizedEntries = entries.map((entry) => normalizeToolText(entry.text).toLowerCase());
+  for (const phrase of endpointPhraseVariants(text)) {
+    const matches = normalizedEntries
+      .map((entryText, index) => (entryText.includes(phrase) ? index : -1))
+      .filter((index) => index >= 0);
+    if (matches.length === 1) return matches[0]!;
+  }
+  return null;
+}
+
+export function applyTranscriptEndpointEpubNodeScope(ctx: ChapterCurationContext): ChapterCurationContext {
+  const startCandidate = firstEndpointUtterances(ctx).reduce<{ index: number; utterance: EndpointUtteranceCandidate } | null>(
+    (found, utterance) =>
+      found ??
+      (() => {
+        const index = findEndpointEntryIndex(ctx.epubEntries, utterance.text);
+        return index === null ? null : { index, utterance };
+      })(),
+    null
+  );
+  const endCandidate = lastEndpointUtterances(ctx).reduce<{ index: number; utterance: EndpointUtteranceCandidate } | null>(
+    (found, utterance) =>
+      found ??
+      (() => {
+        const index = findEndpointEntryIndex(ctx.epubEntries, utterance.text);
+        return index === null ? null : { index, utterance };
+      })(),
+    null
+  );
+  const startIndex = startCandidate?.index ?? null;
+  const endIndex = endCandidate?.index ?? null;
+  if (startIndex === null || endIndex === null || endIndex < startIndex) return ctx;
+
+  const scopedEntries = ctx.epubEntries.slice(startIndex, endIndex + 1);
+  if (scopedEntries.length < 3 || scopedEntries.length === ctx.epubEntries.length) return ctx;
+
+  const scopedRatio = scopedEntries.length / Math.max(1, ctx.epubEntries.length);
+  if (scopedRatio > 0.8) return ctx;
+
+  return {
+    ...ctx,
+    epubEntries: localizeEpubRatios(scopedEntries),
+    chapterStartTimeHints: {
+      ...(ctx.chapterStartTimeHints ?? {}),
+      [scopedEntries[0]!.id]: startCandidate!.utterance.startTime,
+    },
   };
 }
 

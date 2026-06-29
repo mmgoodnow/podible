@@ -39,6 +39,7 @@ export type ChapterCurationContext = {
   transcript: StoredTranscriptPayload;
   embeddedChapters: ChapterCurationTiming[];
   audioOnlyIntervals?: AudioOnlyInterval[];
+  chapterStartTimeHints?: Record<string, number>;
   debugEventLogPath?: string;
   debugTraceDir?: string;
   debugReasoningSummary?: "auto" | "concise" | "detailed";

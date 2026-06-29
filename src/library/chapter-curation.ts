@@ -90,6 +90,7 @@ export {
   createRootCurationSpan,
   applyAudibleEpubNodeSelection,
   applyEmbeddedAudioChapterNodeScope,
+  applyTranscriptEndpointEpubNodeScope,
   recursiveSpanToolUseBehavior,
   nodeBoundaryToolUseBehavior,
   fulcrumJudgeToolUseBehavior,

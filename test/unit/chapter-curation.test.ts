@@ -19,6 +19,7 @@ import {
   rgSearchTranscript,
   applyAudibleEpubNodeSelection,
   applyEmbeddedAudioChapterNodeScope,
+  applyTranscriptEndpointEpubNodeScope,
   chooseResearchBoundaryCandidate,
   createRootCurationSpan,
   rankTargetBoundaries,
@@ -297,6 +298,40 @@ describe("chapter curation tools", () => {
     expect(scoped.epubEntries.map((entry) => entry.id)).toEqual(["chapter-4", "chapter-5", "chapter-6", "chapter-7"]);
     expect(scoped.epubEntries.map((entry) => entry.cumulativeRatio)).toEqual([0.25, 0.5, 0.75, 1]);
     expect(nodeBoundaryTargets(scoped).map((target) => target.expectedStartTime)).toEqual([0, 3600, 7200, 10800]);
+  });
+
+  test("applyTranscriptEndpointEpubNodeScope narrows generic partial audio by transcript endpoints", () => {
+    const entries = Array.from({ length: 8 }, (_, index) =>
+      epubEntry({
+        id: `chapter-${index + 1}`,
+        title: `Chapter ${index + 1}`,
+        wordCount: 100,
+        cumulativeWords: (index + 1) * 100,
+        cumulativeRatio: (index + 1) / 8,
+        words:
+          index === 2
+            ? "Opening unique phrase begins this partial audio section with enough searchable words".split(" ").map(word)
+            : index === 5
+              ? "Closing unique phrase ends this partial audio section with enough searchable words".split(" ").map(word)
+              : [`Ordinary`, `chapter`, `${index + 1}`, `words`].map(word),
+      })
+    );
+    const context = ctx({
+      epubEntries: entries,
+      transcript: transcriptFromUtterances([
+        { startMs: 0, endMs: 10_000, text: "Graphic Audio presents this book." },
+        { startMs: 12_000, endMs: 20_000, text: "Opening unique phrase begins this partial audio section with enough searchable words." },
+        { startMs: 100_000, endMs: 110_000, text: "Closing unique phrase ends this partial audio section with enough searchable words." },
+        { startMs: 115_000, endMs: 120_000, text: "Visit www.graphicaudio.net for downloads." },
+      ]),
+    });
+
+    const scoped = applyTranscriptEndpointEpubNodeScope(context);
+
+    expect(scoped.epubEntries.map((entry) => entry.id)).toEqual(["chapter-3", "chapter-4", "chapter-5", "chapter-6"]);
+    expect(scoped.epubEntries.map((entry) => entry.cumulativeRatio)).toEqual([0.25, 0.5, 0.75, 1]);
+    expect(scoped.chapterStartTimeHints).toEqual({ "chapter-3": 12 });
+    expect(nodeBoundaryTargets(scoped)[0]?.expectedStartTime).toBe(12);
   });
 
   test("getTranscriptWindowFromContext annotates overlapping audio-only intervals", () => {
