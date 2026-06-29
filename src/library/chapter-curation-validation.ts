@@ -271,64 +271,6 @@ function isStructuralTitleToken(token: string): boolean {
   );
 }
 
-function romanNumeralValue(value: string): number | null {
-  const normalized = value.toLowerCase();
-  if (!/^(?:i|ii|iii|iv|v|vi|vii|viii|ix|x|xi|xii|xiii|xiv|xv|xvi|xvii|xviii|xix|xx)$/.test(normalized)) return null;
-  const values: Record<string, number> = { i: 1, v: 5, x: 10 };
-  let total = 0;
-  let previous = 0;
-  for (const char of [...normalized].reverse()) {
-    const valueForChar = values[char] ?? 0;
-    if (valueForChar < previous) total -= valueForChar;
-    else {
-      total += valueForChar;
-      previous = valueForChar;
-    }
-  }
-  return total || null;
-}
-
-function titleNumberWord(value: number): string | null {
-  const words = [
-    "zero",
-    "one",
-    "two",
-    "three",
-    "four",
-    "five",
-    "six",
-    "seven",
-    "eight",
-    "nine",
-    "ten",
-    "eleven",
-    "twelve",
-    "thirteen",
-    "fourteen",
-    "fifteen",
-    "sixteen",
-    "seventeen",
-    "eighteen",
-    "nineteen",
-    "twenty",
-  ];
-  return words[value] ?? null;
-}
-
-function spokenTitleVariants(title: string): string[][] {
-  const tokens = normalizedWordTokens(title);
-  const variants: string[][] = [];
-  if (tokens.length >= 2) variants.push(tokens);
-  const leading = tokens[0];
-  const leadingNumeric = leading && (/^\d+$/.test(leading) ? Number(leading) : romanNumeralValue(leading));
-  const leadingWord = typeof leadingNumeric === "number" ? titleNumberWord(leadingNumeric) : null;
-  if (leadingWord && tokens.length >= 2 && !isStructuralTitleToken(tokens[1]!)) {
-    variants.push([leadingWord, ...tokens.slice(1)]);
-    variants.push([String(leadingNumeric), ...tokens.slice(1)]);
-  }
-  return variants.filter((variant, index, all) => all.findIndex((candidate) => candidate.join("\u0000") === variant.join("\u0000")) === index);
-}
-
 export function isShortHeadingOnlyEntry(entry: EpubChapterEntry): boolean {
   const titleTokens = normalizedWordTokens(entry.title);
   if (titleTokens.length < 2 || titleTokens.length > 5) return false;
@@ -1200,7 +1142,7 @@ export async function resolveNodeBoundaryChapters(
     })
   );
 
-  const resolvedDecisions = recoverAdjacentHeadingOnlyNodeBoundaries(ctx, targets, decisions, reports);
+  const resolvedDecisions = [...decisions];
   markUnrecoveredHeadingOnlyNodeBoundariesSkipped(ctx, targets, resolvedDecisions, reports);
 
   const chapters: SubmittedChapter[] = [];
@@ -1312,49 +1254,6 @@ function shouldKeepAdjacentDistinctEpubBoundaries(
   return Boolean((previousEntry && isShortHeadingOnlyEntry(previousEntry)) || (currentEntry && isShortHeadingOnlyEntry(currentEntry)));
 }
 
-function recoverAdjacentHeadingOnlyNodeBoundaries(
-  ctx: ChapterCurationContext,
-  targets: ChapterCurationTargetBoundary[],
-  decisions: Array<NodeBoundaryDecision | null>,
-  reports: NodeBoundaryCurationReport[] | undefined
-): Array<NodeBoundaryDecision | null> {
-  const resolved = [...decisions];
-  for (const [index, decision] of decisions.entries()) {
-    if (decision) continue;
-    const target = targets[index];
-    if (!target) continue;
-    const entry = ctx.epubEntries[target.epubIndex];
-    if (!entry || !isShortHeadingOnlyEntry(entry)) continue;
-    const nextDecision = decisions
-      .filter((candidate): candidate is NodeBoundaryDecision => Boolean(candidate))
-      .filter((candidate) => candidate.epubIndex > target.epubIndex)
-      .sort((a, b) => a.epubIndex - b.epubIndex || a.startTime - b.startTime)[0];
-    const recovered = nextDecision ? recoverHeadingFromWordsBeforeNextBoundary(target, entry, nextDecision) : null;
-    if (!recovered) continue;
-    resolved[index] = recovered;
-    const report = reports?.find((item) => item.epubNodeId === target.epubNodeId && item.outcome === "failed");
-    if (report) {
-      report.outcome = "accepted";
-      report.startTime = recovered.startTime;
-      report.errors = undefined;
-      report.warnings = [...(report.warnings ?? []), "Recovered from spoken heading immediately before the next accepted EPUB boundary."];
-      report.deterministic = true;
-    } else {
-      reports?.push({
-        epubNodeId: target.epubNodeId,
-        epubIndex: target.epubIndex,
-        title: target.title,
-        expectedStartTime: target.expectedStartTime,
-        outcome: "accepted",
-        startTime: recovered.startTime,
-        deterministic: true,
-        warnings: ["Recovered from spoken heading immediately before the next accepted EPUB boundary."],
-      });
-    }
-  }
-  return resolved;
-}
-
 function markUnrecoveredHeadingOnlyNodeBoundariesSkipped(
   ctx: ChapterCurationContext,
   targets: ChapterCurationTargetBoundary[],
@@ -1378,50 +1277,6 @@ function markUnrecoveredHeadingOnlyNodeBoundariesSkipped(
     ];
     report.deterministic = true;
   }
-}
-
-function recoverHeadingFromWordsBeforeNextBoundary(
-  target: ChapterCurationTargetBoundary,
-  entry: EpubChapterEntry,
-  nextDecision: NodeBoundaryDecision
-): NodeBoundaryDecision | null {
-  const beforeWords = nextDecision.audit.boundaryComparison.boundaryWords?.before ?? [];
-  const recentWords = beforeWords.filter((word) => word.startTime >= nextDecision.startTime - 90 && word.endTime <= nextDecision.startTime + 1);
-  const match = findSpokenTitleInBoundaryWords(spokenTitleVariants(entry.title), recentWords);
-  if (!match) return null;
-  return {
-    accepted: true,
-    kind: "node_boundary",
-    spanPath: nextDecision.spanPath,
-    epubNodeId: target.epubNodeId,
-    epubIndex: target.epubIndex,
-    title: target.title,
-    startTime: match.startTime,
-    notes: "Recovered from a spoken heading immediately before the next accepted EPUB boundary.",
-    audit: {
-      ...nextDecision.audit,
-      epubNodeId: target.epubNodeId,
-      title: target.title,
-      startTime: match.startTime,
-    },
-  };
-}
-
-function findSpokenTitleInBoundaryWords(
-  variants: string[][],
-  words: TranscriptBoundaryWords["before"]
-): { startTime: number } | null {
-  const wordTokens = words.map((word) => normalizedWordTokens(word.text)[0] ?? "");
-  for (const variant of variants) {
-    if (variant.length === 0) continue;
-    for (let index = 0; index <= wordTokens.length - variant.length; index++) {
-      const candidate = wordTokens.slice(index, index + variant.length);
-      if (candidate.every((token, offset) => token === variant[offset])) {
-        return { startTime: words[index]?.startTime ?? 0 };
-      }
-    }
-  }
-  return null;
 }
 
 export async function resolveRecursiveChapterSpans(
