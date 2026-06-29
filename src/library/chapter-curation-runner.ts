@@ -689,6 +689,7 @@ function createChapterBoundaryJudgeAgent(ctx: ChapterCurationContext): Agent {
       "Start with audit.boundaryComparison. Compare previousEpub.tailText to transcriptBefore, and targetEpub.bodyHeadText or targetEpub.headText to transcriptAfter.",
       "EPUB chapter headings are often printed but not read aloud. If targetEpub.optionalHeadingText is absent from the transcript but targetEpub.bodyHeadText begins right at the timestamp, that is strong opener evidence.",
       "ASR sometimes drops the printed heading and the first few opener words. If the notes identify a near-opener fallback, accept when transcriptAfter starts with the earliest clear target body phrase and transcriptBefore plausibly matches the previous EPUB tail.",
+      "For the first EPUB node only, previousEpub is absent. If notes identify an opening interior-start candidate, accept when transcriptBefore is empty or only opening credits/boilerplate and transcriptAfter starts with distinctive prose from inside the target EPUB node. This means the audiobook/ASR omitted earlier printed opener text; it is still the first available narrated boundary.",
       "Check transcriptPrecision. If it is word, the before/after split is exact and should be treated as precise. If it is utterance, a real boundary may fall inside a displayed utterance — accept the utterance start if it contains previous tail then target head.",
       "If boundaryWords.containing is non-empty, the timestamp falls mid-word. Prefer a nearestCleanBoundaryTimes value unless the containing word is itself the first opener word.",
       "Transcript before the timestamp matching the previous EPUB node is positive evidence — not a sign the target opener is interior.",
@@ -718,6 +719,7 @@ function chapterBoundaryJudgePrompt(ctx: ChapterCurationContext, span: ChapterCu
     "Primary evidence: audit.boundaryComparison. transcriptBefore matching previousEpub.tailText and transcriptAfter matching targetEpub.bodyHeadText or targetEpub.headText supports acceptance.",
     "Printed EPUB headings are often absent from ASR. Do not reject merely because optionalHeadingText is missing when bodyHeadText begins at the proposed timestamp.",
     "If notes identify a near-opener fallback, accept the first audible target body phrase when the heading is absent from ASR and transcriptBefore supports the previous EPUB tail.",
+    "If this is the first EPUB node and notes identify an opening interior-start candidate, previousEpub will be absent. Accept when transcriptBefore is empty or only opening credits/boilerplate and transcriptAfter starts with distinctive prose from inside targetEpub, even if earlier printed opener words are missing from ASR/audio.",
     "transcriptPrecision=word is exact; boundaryWords.containing non-empty means the timestamp is mid-word — prefer nearestCleanBoundaryTimes unless that word is the first opener. transcriptPrecision=utterance is lower precision; accepting an utterance start is valid when it contains previous tail followed by target head.",
     "transcriptBefore matching the previous EPUB node is positive evidence, not a problem.",
     "Treat finding as an evidence classification, not ground truth about where the boundary truly is.",
@@ -743,6 +745,7 @@ function chapterBoundaryJudgePrompt(ctx: ChapterCurationContext, span: ChapterCu
             startTime: candidate.startTime,
             endTime: candidate.endTime,
             text: candidate.text,
+            afterText: candidate.afterText,
             quality: candidate.quality,
           })),
         },
@@ -2234,7 +2237,19 @@ async function validateDeterministicNodeBoundaryCandidate(
         ? `Accepted as the first audible EPUB node at ${Math.round(startTime)}s; supporting near-opener phrase "${candidate.phrase}" starts at ${Math.round(candidate.startTime)}s because earlier opener text is absent from the transcript.`
         : "Accepted by deterministic pre-agent node-boundary research.",
     },
-    { span, targetBoundary }
+    {
+      span,
+      targetBoundary,
+      candidates: [
+        {
+          startTime: candidate.startTime,
+          endTime: candidate.startTime,
+          text: `Deterministic candidate source=${candidate.source}; reverseEpubRelation=${candidate.reverseEpubRelation}; phrase="${candidate.phrase}"; transcript="${candidate.transcriptText}"`,
+          afterText: candidate.transcriptWindow ?? "",
+          quality: candidate.reverseEpubRelation === "opener" || candidate.source === "opening_interior_start" ? "strong" : "medium",
+        },
+      ],
+    }
   );
   if (!validated.accepted) {
     logChapterCurationEvent(ctx, {

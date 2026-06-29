@@ -706,8 +706,8 @@ function buildBoundaryComparisonAudit(
       targetEpub: {
         epubNodeId: entry?.id ?? null,
         title: entry?.title ?? input.title,
-        headText: entry ? summarizeFirstWords(entry, 56) : "",
-        bodyHeadText: entry ? summarizeFirstBodyWords(entry, 56) : "",
+        headText: entry ? summarizeFirstWords(entry, 96) : "",
+        bodyHeadText: entry ? summarizeFirstBodyWords(entry, 96) : "",
         optionalHeadingText: entry ? summarizeOptionalHeadingText(entry) : "",
         headingMayBeUnspoken: true,
       },
@@ -809,7 +809,7 @@ export async function validateFulcrumSplit(
 export async function validateNodeBoundary(
   ctx: ChapterCurationContext,
   input: unknown,
-  options: { span?: ChapterCurationSpan; targetBoundary?: ChapterCurationTargetBoundary } = {}
+  options: { span?: ChapterCurationSpan; targetBoundary?: ChapterCurationTargetBoundary; candidates?: BoundaryEvidenceCandidate[] } = {}
 ): Promise<SubmitNodeBoundaryResult> {
   const parsed = submitNodeBoundarySchema.safeParse(input);
   if (!parsed.success) {
@@ -855,7 +855,7 @@ export async function validateNodeBoundary(
           title: entry?.title ?? boundary.title,
           startTime: boundary.startTime,
           transcriptWindow: getTranscriptWindowFromContext(ctx, secondsToMs(boundary.startTime), 45_000),
-          candidates: [],
+          candidates: options.candidates ?? [],
         })
       : null;
   const enclosingAudioOnlyInterval = (ctx.audioOnlyIntervals ?? []).find(
