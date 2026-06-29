@@ -28,7 +28,7 @@ const judgeModel = process.env.CORPUS_JUDGE_MODEL?.trim() || baseModel;
 
 function gitString(args: string[]): string | null {
   try {
-    return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null;
+    return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
   } catch {
     return null;
   }
