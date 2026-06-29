@@ -1,0 +1,48 @@
+{
+  "bookTitle": "Project Hail Mary",
+  "author": "Andy Weir",
+  "manifestationShape": "multi-MP3",
+  "sourceArtifacts": [
+    "asset-files.json",
+    "metadata.json",
+    "transcript.json",
+    "node-agent-result-2026-06-29T20-36-18-616Z.json"
+  ],
+  "expectedChapterCount": 30,
+  "expectedChapters": [
+    { "index": 1, "title": "Chapter 1", "startTime": 22 },
+    { "index": 2, "title": "Chapter 2", "startTime": 2225.48 },
+    { "index": 3, "title": "Chapter 3", "startTime": 3947.12 },
+    { "index": 4, "title": "Chapter 4", "startTime": 6188.92 },
+    { "index": 5, "title": "Chapter 5", "startTime": 8649.04 },
+    { "index": 6, "title": "Chapter 6", "startTime": 11838.8 },
+    { "index": 7, "title": "Chapter 7", "startTime": 14489.6 },
+    { "index": 8, "title": "Chapter 8", "startTime": 16298.28 },
+    { "index": 9, "title": "Chapter 9", "startTime": 18485.56 },
+    { "index": 10, "title": "Chapter 10", "startTime": 20245.4 },
+    { "index": 11, "title": "Chapter 11", "startTime": 22365.96 },
+    { "index": 12, "title": "Chapter 12", "startTime": 23932.92 },
+    { "index": 13, "title": "Chapter 13", "startTime": 25677.24 },
+    { "index": 14, "title": "Chapter 14", "startTime": 27632.28 },
+    { "index": 15, "title": "Chapter 15", "startTime": 30037.32 },
+    { "index": 16, "title": "Chapter 16", "startTime": 31466.84 },
+    { "index": 17, "title": "Chapter 17", "startTime": 33416.84 },
+    { "index": 18, "title": "Chapter 18", "startTime": 35345.4 },
+    { "index": 19, "title": "Chapter 19", "startTime": 37209.213 },
+    { "index": 20, "title": "Chapter 20", "startTime": 39389.173 },
+    { "index": 21, "title": "Chapter 21", "startTime": 41370.773 },
+    { "index": 22, "title": "Chapter 22", "startTime": 43907.653 },
+    { "index": 23, "title": "Chapter 23", "startTime": 46303.693 },
+    { "index": 24, "title": "Chapter 24", "startTime": 48030.053 },
+    { "index": 25, "title": "Chapter 25", "startTime": 49703.173 },
+    { "index": 26, "title": "Chapter 26", "startTime": 52079.813 },
+    { "index": 27, "title": "Chapter 27", "startTime": 53369.733 },
+    { "index": 28, "title": "Chapter 28", "startTime": 53982.933 },
+    { "index": 29, "title": "Chapter 29", "startTime": 55174.373 },
+    { "index": 30, "title": "Chapter 30", "startTime": 57372.213 }
+  ],
+  "notes": [
+    "The source set includes an intro/dedication track and a trailing outro track; the curated answer key begins with the first story chapter.",
+    "The audiobook metadata is mechanically labeled, so chapter numbering is the durable signal."
+  ]
+}

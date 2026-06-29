@@ -1,0 +1,27 @@
+{
+  "bookTitle": "Freakonomics",
+  "author": "Steven D. Levitt",
+  "manifestationShape": "single M4B",
+  "sourceArtifacts": [
+    "asset-files.json",
+    "metadata.json",
+    "transcript.json",
+    "node-agent-result-2026-06-29T21-33-24-636Z.json"
+  ],
+  "expectedChapterCount": 9,
+  "expectedChapters": [
+    { "index": 1, "title": "An Explanatory Note", "startTime": 120 },
+    { "index": 2, "title": "Introduction", "startTime": 532.72 },
+    { "index": 3, "title": "1", "startTime": 2133.44 },
+    { "index": 4, "title": "2", "startTime": 5910.32 },
+    { "index": 5, "title": "3", "startTime": 9780.8 },
+    { "index": 6, "title": "4", "startTime": 13150 },
+    { "index": 7, "title": "5", "startTime": 16860.72 },
+    { "index": 8, "title": "6", "startTime": 20514.32 },
+    { "index": 9, "title": "Epilogue", "startTime": 22927 }
+  ],
+  "notes": [
+    "The audiobook is a single M4B with no embedded chapter map to trust, so the answer key follows the accepted node output.",
+    "Chapter labels are intentionally short; the useful signal is the ordering and timing."
+  ]
+}
