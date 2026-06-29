@@ -1,0 +1,57 @@
+# A Darker Shade of Magic answer key
+
+- Author: V.E. Schwab
+- Expected chapter count: 49
+- Chapter sequence:
+  - `I: The Traveler` @ `0.00`
+  - `II` @ `1019.20`
+  - `III` @ `1757.26`
+  - `II: Red Royal` @ `2948.10`
+  - `II` @ `3528.21`
+  - `III` @ `4025.05`
+  - `III: Grey Thief` @ `5328.51`
+  - `II` @ `5661.91`
+  - `III` @ `6511.31`
+  - `IV: White Throne` @ `6866.15`
+  - `II` @ `7970.39`
+  - `III` @ `9189.51`
+  - `IV` @ `9724.59`
+  - `V` @ `10217.47`
+  - `V: Black Stone` @ `10830.15`
+  - `II` @ `11152.71`
+  - `III` @ `11365.95`
+  - `IV` @ `11580.39`
+  - `V` @ `12561.55`
+  - `VI: Thieves Meet` @ `12941.83`
+  - `II` @ `13150.91`
+  - `III` @ `13757.31`
+  - `IV` @ `14968.39`
+  - `VII: The Follower` @ `15563.43`
+  - `II` @ `16503.43`
+  - `VIII: An Arrangement` @ `18452.31`
+  - `II` @ `20637.47`
+  - `IX: Festival & Fire` @ `21560.43`
+  - `II` @ `23341.47`
+  - `III` @ `23848.95`
+  - `IV` @ `24442.75`
+  - `X: One White Rook` @ `25192.47`
+  - `II` @ `25650.51`
+  - `III` @ `26913.07`
+  - `IV` @ `27176.71`
+  - `V` @ `27990.99`
+  - `VI` @ `28826.43`
+  - `XI: Masquerade` @ `29466.39`
+  - `II` @ `30327.43`
+  - `III` @ `30973.27`
+  - `IV` @ `31575.75`
+  - `V` @ `32430.47`
+  - `XII: Sanctuary & Sacrifice` @ `32834.47`
+  - `II` @ `33334.59`
+  - `III` @ `34606.99`
+  - `IV` @ `35134.51`
+  - `V` @ `35420.98`
+  - `VI` @ `36007.82`
+  - `XIII: The Waiting King` @ `36348.54`
+- Ambiguities:
+  - Repeated roman-numeral headings are intentional and should not be deduped.
+  - Section-title chapters should stay attached to their chapter number, not split out.

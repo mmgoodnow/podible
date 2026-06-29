@@ -1,0 +1,57 @@
+# Red Rising answer key
+
+- Author: Pierce Brown
+- Expected chapter count: 49
+- Chapter sequence:
+  - `Prologue` @ `39.72`
+  - `Part I: Slave` @ `190.96`
+  - `Chapter 1: Helldiver` @ `213.12`
+  - `Chapter 2: The Township` @ `1182.08`
+  - `Chapter 3: The Laurel` @ `2658.28`
+  - `Chapter 4: The Gift` @ `3909.32`
+  - `Chapter 5: The First Song` @ `5077.04`
+  - `Chapter 6: The Martyr` @ `6304.08`
+  - `Part II: Reborn` @ `7454.28`
+  - `Chapter 7: Other Things` @ `7469.36`
+  - `Chapter 8: Dancer` @ `8102.20`
+  - `Chapter 9: The Lie` @ `9365.96`
+  - `Chapter 10: The Carver` @ `10002.12`
+  - `Chapter 11: The Carved` @ `11252.32`
+  - `Chapter 12: Change` @ `11622.12`
+  - `Chapter 13: Bad Things` @ `13478.60`
+  - `Chapter 14: Andromedus` @ `14404.48`
+  - `Chapter 15: The Testing` @ `15001.76`
+  - `Chapter 16: The Institute` @ `15915.84`
+  - `Chapter 17: The Draft` @ `17651.52`
+  - `Chapter 18: Classmates` @ `18296.00`
+  - `Chapter 19: The Passage` @ `19052.88`
+  - `Part III: Gold` @ `19841.56`
+  - `Chapter 20: The House Mars` @ `19873.52`
+  - `Chapter 21: Our Dominion` @ `21649.48`
+  - `Chapter 22: The Tribes` @ `23245.96`
+  - `Chapter 23: Fracture` @ `24857.44`
+  - `Chapter 24: Titus's War` @ `26144.40`
+  - `Chapter 25: Tribal War` @ `27567.08`
+  - `Chapter 26: Mustang` @ `28317.68`
+  - `Chapter 27: The House of Rage` @ `29993.48`
+  - `Chapter 28: My Brother` @ `31097.60`
+  - `Chapter 29: Unity` @ `31725.32`
+  - `Chapter 30: House Diana` @ `32845.96`
+  - `Chapter 31: The Fall of Mustang` @ `34582.96`
+  - `Chapter 32: Antonia` @ `35772.76`
+  - `Chapter 33: Apologies` @ `37541.36`
+  - `Part IV: Reaper` @ `38232.28`
+  - `Chapter 34: The Northwoods` @ `38256.16`
+  - `Chapter 35: Oathbreakers` @ `41052.32`
+  - `Chapter 36: A Second Test` @ `42370.64`
+  - `Chapter 37: South` @ `44470.04`
+  - `Chapter 38: The Fall of Apollo` @ `46044.84`
+  - `Chapter 39: The Proctor's Bounty` @ `48305.98`
+  - `Chapter 40: Paradigm` @ `48963.12`
+  - `Chapter 41: The Jackal` @ `50392.60`
+  - `Chapter 42: War on Heaven` @ `52089.96`
+  - `Chapter 43: The Last Test` @ `53416.44`
+  - `Chapter 44: The Beginning` @ `55246.92`
+- Ambiguities:
+  - Part headings are real chapter entries and should remain in the sequence.
+  - The chapter numbering resets only for the part headings, not the numbered chapters.
