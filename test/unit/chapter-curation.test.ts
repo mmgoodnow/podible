@@ -21,6 +21,7 @@ import {
   applyAudibleEpubNodeSelection,
   applyEmbeddedAudioChapterNodeScope,
   applyTranscriptEndpointEpubNodeScope,
+  buildNodeBoundaryPreflightDiagnostic,
   chooseResearchBoundaryCandidate,
   createRootCurationSpan,
   rankTargetBoundaries,
@@ -211,6 +212,92 @@ function ctx(overrides: Partial<ChapterCurationContext> = {}): ChapterCurationCo
 }
 
 describe("chapter curation tools", () => {
+  test("buildNodeBoundaryPreflightDiagnostic rejects obvious EPUB transcript mismatches", () => {
+    const result = buildNodeBoundaryPreflightDiagnostic(
+      ctx({
+        epubEntries: [
+          epubEntry({
+            id: "stone-sky-1",
+            title: "Chapter 1",
+            words: "Crystal obelisk fragments shimmered above the ruined stillness of Syl Anagist".split(" ").map(word),
+            wordCount: 10,
+            cumulativeWords: 10,
+            cumulativeRatio: 0.33,
+          }),
+          epubEntry({
+            id: "stone-sky-2",
+            title: "Chapter 2",
+            words: "Moonlit orogenes crossed vitrified roads beneath an impossible fractured continent".split(" ").map(word),
+            wordCount: 9,
+            cumulativeWords: 19,
+            cumulativeRatio: 0.66,
+          }),
+          epubEntry({
+            id: "stone-sky-3",
+            title: "Chapter 3",
+            words: "Ancient tuners listened for the silver hum of distant stone eaters".split(" ").map(word),
+            wordCount: 10,
+            cumulativeWords: 29,
+            cumulativeRatio: 1,
+          }),
+        ],
+        transcript: transcriptFromUtterances([
+          {
+            startMs: 0,
+            endMs: 20_000,
+            text: "This is Rumble. There is a thing she will think over and over in the days to come as the village shakes and the road burns.",
+          },
+        ]),
+      })
+    );
+
+    expect(result.kind).toBe("preflight_mismatch");
+    expect(result.bestEarlyCuratedNodeOpeningOverlap).toBeLessThan(0.3);
+  });
+
+  test("buildNodeBoundaryPreflightDiagnostic allows matching EPUB transcript openings", () => {
+    const result = buildNodeBoundaryPreflightDiagnostic(
+      ctx({
+        epubEntries: [
+          epubEntry({
+            id: "chapter-1",
+            title: "Chapter 1",
+            words: "Crystal obelisk fragments shimmered above the ruined stillness of Syl Anagist".split(" ").map(word),
+            wordCount: 10,
+            cumulativeWords: 10,
+            cumulativeRatio: 0.33,
+          }),
+          epubEntry({
+            id: "chapter-2",
+            title: "Chapter 2",
+            words: "Moonlit orogenes crossed vitrified roads beneath an impossible fractured continent".split(" ").map(word),
+            wordCount: 9,
+            cumulativeWords: 19,
+            cumulativeRatio: 0.66,
+          }),
+          epubEntry({
+            id: "chapter-3",
+            title: "Chapter 3",
+            words: "Ancient tuners listened for the silver hum of distant stone eaters".split(" ").map(word),
+            wordCount: 10,
+            cumulativeWords: 29,
+            cumulativeRatio: 1,
+          }),
+        ],
+        transcript: transcriptFromUtterances([
+          {
+            startMs: 0,
+            endMs: 20_000,
+            text: "Opening credits. Crystal obelisk fragments shimmered above the ruined stillness of Syl Anagist as the first chapter begins.",
+          },
+        ]),
+      })
+    );
+
+    expect(result.kind).toBe("none");
+    expect(result.bestEarlyCuratedNodeOpeningOverlap).toBeGreaterThanOrEqual(0.3);
+  });
+
   test("getEpubStructure exposes ordered EPUB nodes with rough position data", () => {
     const result = getEpubStructure(ctx());
     expect(result.book.title).toBe("Test Book");

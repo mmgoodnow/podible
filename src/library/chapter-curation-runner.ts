@@ -96,7 +96,7 @@ export type ChapterCurationDetailedResult = {
 };
 
 export type NodeBoundaryFailureDiagnostic = {
-  kind: "low_expected_window_overlap" | "all_boundaries_failed" | "none";
+  kind: "preflight_mismatch" | "low_expected_window_overlap" | "all_boundaries_failed" | "none";
   message: string;
   totalReports: number;
   failedReports: number;
@@ -104,6 +104,12 @@ export type NodeBoundaryFailureDiagnostic = {
   skippedReports: number;
   failedExpectedWindowOverlap: number | null;
   firstCuratedNodeOpeningOverlap: number | null;
+  bestEarlyCuratedNodeOpeningOverlap?: number | null;
+  earlyCuratedNodeOpeningOverlaps?: Array<{
+    epubNodeId: string;
+    title: string;
+    overlap: number;
+  }>;
   worstFailedNodes: Array<{
     epubNodeId: string;
     title: string;
@@ -248,6 +254,41 @@ function overlapRatio(sampleTokens: string[], candidateTokens: Set<string>): num
   if (sampleTokens.length === 0) return 0;
   const hits = sampleTokens.filter((token) => candidateTokens.has(token)).length;
   return Math.round((hits / sampleTokens.length) * 1_000) / 1_000;
+}
+
+export function buildNodeBoundaryPreflightDiagnostic(ctx: ChapterCurationContext): NodeBoundaryFailureDiagnostic {
+  const earlyTranscriptTokens = new Set(
+    diagnosticTokens(
+      transcriptUtterances(ctx)
+        .slice(0, 80)
+        .map((utterance) => utterance.text)
+        .join(" ")
+    )
+  );
+  const earlyCuratedNodeOpeningOverlaps = ctx.epubEntries.slice(0, Math.min(3, ctx.epubEntries.length)).map((entry) => ({
+    epubNodeId: entry.id,
+    title: entry.title,
+    overlap: overlapRatio(entryOpeningDiagnosticTokens(entry), earlyTranscriptTokens),
+  }));
+  const firstCuratedNodeOpeningOverlap = earlyCuratedNodeOpeningOverlaps[0]?.overlap ?? null;
+  const bestEarlyCuratedNodeOpeningOverlap =
+    earlyCuratedNodeOpeningOverlaps.length === 0 ? null : Math.max(...earlyCuratedNodeOpeningOverlaps.map((item) => item.overlap));
+  const mismatch = ctx.epubEntries.length >= 3 && bestEarlyCuratedNodeOpeningOverlap !== null && bestEarlyCuratedNodeOpeningOverlap < 0.3;
+  return {
+    kind: mismatch ? "preflight_mismatch" : "none",
+    message: mismatch
+      ? "Early EPUB node openings have weak overlap with the transcript opening. Check for wrong EPUB/audio pairing before running chapter curation."
+      : "No EPUB/transcript opening mismatch detected.",
+    totalReports: 0,
+    failedReports: 0,
+    acceptedReports: 0,
+    skippedReports: 0,
+    failedExpectedWindowOverlap: null,
+    firstCuratedNodeOpeningOverlap,
+    bestEarlyCuratedNodeOpeningOverlap,
+    earlyCuratedNodeOpeningOverlaps,
+    worstFailedNodes: [],
+  };
 }
 
 function buildNodeBoundaryFailureDiagnostic(ctx: ChapterCurationContext, reports: NodeBoundaryCurationReport[]): NodeBoundaryFailureDiagnostic {
@@ -2612,6 +2653,24 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
         message: `audio only intervals applied count=${curationCtx.audioOnlyIntervals?.length ?? 0}`,
         audioOnlyIntervals: curationCtx.audioOnlyIntervals ?? [],
       });
+    }
+
+    const preflightDiagnostic = buildNodeBoundaryPreflightDiagnostic(curationCtx);
+    if (preflightDiagnostic.kind === "preflight_mismatch") {
+      logChapterCurationEvent(curationCtx, {
+        type: "node-parallel-preflight-rejected",
+        message: `node parallel preflight accepted=0 reason=epub_transcript_opening_mismatch best_overlap=${preflightDiagnostic.bestEarlyCuratedNodeOpeningOverlap ?? "unknown"}`,
+        nodeBoundaryFailureDiagnostic: preflightDiagnostic,
+      });
+      return {
+        result: null,
+        finalOutput: null,
+        newItems: [],
+        rawResponses: [],
+        nodeBoundaryReports: [],
+        nodeBoundaryTraces: [],
+        nodeBoundaryFailureDiagnostic: preflightDiagnostic,
+      };
     }
 
     const embeddedAssessment = assessEmbeddedAudioChaptersForCuration(curationCtx);
