@@ -1856,39 +1856,6 @@ function hasOpenerTokenEvidence(text: string, openerTokens: string[]): boolean {
   return matched.length >= Math.min(3, Math.max(2, Math.ceil(openerTokens.length / 2)));
 }
 
-export function canSkipDeterministicBoundaryJudge(
-  ctx: ChapterCurationContext,
-  targetBoundary: ChapterCurationTargetBoundary,
-  candidate: DeterministicBoundaryCandidate,
-  validated: Extract<SubmitNodeBoundaryResult, { accepted: true }>
-): boolean {
-  if (candidate.source !== "research_opener" && candidate.source !== "spoken_heading" && candidate.source !== "partial_opener") return false;
-  if (candidate.reverseEpubRelation !== "opener" && candidate.reverseEpubRelation !== "near_opener") return false;
-  if (candidate.phraseStartWord !== null && candidate.phraseStartWord > 2) return false;
-  if (validated.audit.boundaryComparison.transcriptPrecision !== "word") return false;
-  if ((validated.audit.boundaryComparison.boundaryWords?.containing ?? []).length > 0) return false;
-  const entry = ctx.epubEntries[targetBoundary.epubIndex];
-  if (!entry || entry.id !== targetBoundary.epubNodeId) return false;
-  return hasOpenerTokenEvidence(validated.audit.boundaryComparison.transcriptAfter, distinctiveOpenerTokens(entry));
-}
-
-export function canSkipOpeningInteriorStartJudge(
-  targetBoundary: ChapterCurationTargetBoundary,
-  candidate: DeterministicBoundaryCandidate,
-  validated: Extract<SubmitNodeBoundaryResult, { accepted: true }>
-): boolean {
-  if (targetBoundary.epubIndex !== 0 || candidate.source !== "opening_interior_start") return false;
-  if (candidate.phraseStartWord === null || candidate.phraseStartWord > 160) return false;
-  if (candidate.reverseEpubRelation !== "opener" && candidate.reverseEpubRelation !== "near_opener" && candidate.reverseEpubRelation !== "interior") return false;
-  if (validated.audit.boundaryComparison.transcriptPrecision !== "word") return false;
-  if ((validated.audit.boundaryComparison.boundaryWords?.containing ?? []).length > 0) return false;
-
-  const transcriptTokens = new Set(textTokens(validated.audit.boundaryComparison.transcriptAfter));
-  const phraseTokens = textTokens(candidate.phrase).filter((token, index, tokens) => tokens.indexOf(token) === index);
-  const matches = phraseTokens.filter((token) => transcriptTokens.has(token));
-  return matches.length >= Math.min(4, phraseTokens.length);
-}
-
 function openingAudioOnlyEndTime(ctx: ChapterCurationContext, span: ChapterCurationSpan): number {
   const startEntry = ctx.epubEntries[span.epubStartIndex];
   const hintedStartTime = startEntry ? ctx.chapterStartTimeHints?.[startEntry.id] : undefined;
@@ -2059,31 +2026,6 @@ async function tryDeterministicNodeBoundary(
     if (validated.accepted) {
       const isHighConfidenceEmbeddedMarker =
         embeddedAssessment.action === "short_circuit_candidate" && embeddedAssessment.confidence === "high";
-      if (isHighConfidenceEmbeddedMarker || hasDeterministicEvidence) {
-        const accepted: NodeBoundaryDecision = {
-          ...validated,
-          notes: [
-            validated.notes,
-            isHighConfidenceEmbeddedMarker
-              ? "Accepted by high-confidence named embedded audio marker set."
-              : "Accepted by embedded audio marker plus deterministic transcript evidence.",
-          ]
-            .filter(Boolean)
-            .join(" "),
-        };
-        logChapterCurationEvent(ctx, {
-          type: "deterministic-node-boundary-accepted",
-          message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} embedded=1${
-            hasDeterministicEvidence ? " transcript=1" : ""
-          } accepted=1 time=${Math.round(accepted.startTime)}s`,
-          span,
-          targetBoundary,
-          result: accepted,
-          embeddedCandidate,
-          embeddedAssessment,
-        });
-        return accepted;
-      }
       const judgment = await judgeChapterBoundary(ctx, span, {
         kind: "node_boundary",
         spanPath: validated.spanPath,
@@ -2097,11 +2039,22 @@ async function tryDeterministicNodeBoundary(
       if (judgment?.accepted) {
         const accepted: NodeBoundaryDecision = {
           ...validated,
-          notes: [validated.notes, "Accepted by embedded audio marker pre-agent short-circuit."].filter(Boolean).join(" "),
+          notes: [
+            validated.notes,
+            isHighConfidenceEmbeddedMarker
+              ? "Accepted by high-confidence named embedded audio marker set after judge validation."
+              : hasDeterministicEvidence
+                ? "Accepted by embedded audio marker plus deterministic transcript evidence after judge validation."
+                : "Accepted by embedded audio marker after judge validation.",
+          ]
+            .filter(Boolean)
+            .join(" "),
         };
         logChapterCurationEvent(ctx, {
           type: "deterministic-node-boundary-accepted",
-          message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} embedded=1 accepted=1 time=${Math.round(accepted.startTime)}s`,
+          message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} embedded=1${
+            hasDeterministicEvidence ? " transcript=1" : ""
+          } judge=1 accepted=1 time=${Math.round(accepted.startTime)}s`,
           span,
           targetBoundary,
           result: accepted,
@@ -2150,21 +2103,41 @@ async function tryDeterministicNodeBoundary(
       },
       { span, targetBoundary }
     );
-    if (validated.accepted) {
-      const accepted: NodeBoundaryDecision = {
-        ...validated,
-        notes: [validated.notes, "Accepted by deterministic pre-agent endpoint hint."].filter(Boolean).join(" "),
-      };
+      if (validated.accepted) {
+      const judgment = await judgeChapterBoundary(ctx, span, {
+        kind: "node_boundary",
+        spanPath: validated.spanPath,
+        epubNodeId: validated.epubNodeId,
+        epubIndex: validated.epubIndex,
+        title: validated.title,
+        startTime: validated.startTime,
+        notes: validated.notes,
+        audit: validated.audit,
+      });
+      if (judgment?.accepted) {
+        const accepted: NodeBoundaryDecision = {
+          ...validated,
+          notes: [validated.notes, "Accepted by deterministic pre-agent endpoint hint after judge validation."].filter(Boolean).join(" "),
+        };
+        logChapterCurationEvent(ctx, {
+          type: "deterministic-node-boundary-accepted",
+          message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} endpoint_hint=1 judge=1 accepted=1 time=${Math.round(
+            accepted.startTime
+          )}s`,
+          span,
+          targetBoundary,
+          result: accepted,
+        });
+        return accepted;
+      }
       logChapterCurationEvent(ctx, {
-        type: "deterministic-node-boundary-accepted",
-        message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} endpoint_hint=1 accepted=1 time=${Math.round(
-          accepted.startTime
-        )}s`,
+        type: "deterministic-node-boundary-rejected",
+        message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId} endpoint_hint=1 judge=0`,
         span,
         targetBoundary,
-        result: accepted,
+        result: validated,
+        judgment,
       });
-      return accepted;
     }
     logChapterCurationEvent(ctx, {
       type: "deterministic-node-boundary-rejected",
@@ -2276,60 +2249,40 @@ async function validateDeterministicNodeBoundaryCandidate(
     return null;
   }
 
-  const skipJudgeReason = canSkipDeterministicBoundaryJudge(ctx, targetBoundary, candidate, validated)
-    ? "clean_word_opener"
-    : canSkipOpeningInteriorStartJudge(targetBoundary, candidate, validated)
-      ? "first_node_interior_start"
-      : null;
-  const skipJudge = !openingFallback && skipJudgeReason !== null;
-  if (skipJudge) {
+  const judgment = await judgeChapterBoundary(ctx, span, {
+    kind: "node_boundary",
+    spanPath: validated.spanPath,
+    epubNodeId: validated.epubNodeId,
+    epubIndex: validated.epubIndex,
+    title: validated.title,
+    startTime: validated.startTime,
+    notes: validated.notes,
+    audit: validated.audit,
+  });
+  if (!judgment?.accepted) {
     logChapterCurationEvent(ctx, {
-      type: "deterministic-node-boundary-judge-skipped",
+      type: "deterministic-node-boundary-rejected",
       message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId}${
         options.eventSuffix ? ` ${options.eventSuffix}` : ""
-      } judge=skipped reason=${skipJudgeReason}`,
+      } judge=0`,
       span,
       targetBoundary,
       result: validated,
+      judgment,
       candidate,
     });
-  }
-
-  if (!openingFallback && !skipJudge) {
-    const judgment = await judgeChapterBoundary(ctx, span, {
-      kind: "node_boundary",
-      spanPath: validated.spanPath,
-      epubNodeId: validated.epubNodeId,
-      epubIndex: validated.epubIndex,
-      title: validated.title,
-      startTime: validated.startTime,
-      notes: validated.notes,
-      audit: validated.audit,
-    });
-    if (!judgment?.accepted) {
-      logChapterCurationEvent(ctx, {
-        type: "deterministic-node-boundary-rejected",
-        message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId}${
-          options.eventSuffix ? ` ${options.eventSuffix}` : ""
-        } judge=0`,
-        span,
-        targetBoundary,
-        result: validated,
-        judgment,
-      });
-      return null;
-    }
+    return null;
   }
 
   const accepted: NodeBoundaryDecision = {
     ...validated,
-    notes: [validated.notes, "Accepted by deterministic pre-agent node-boundary short-circuit."].filter(Boolean).join(" "),
+    notes: [validated.notes, "Accepted by deterministic pre-agent node-boundary candidate after judge validation."].filter(Boolean).join(" "),
   };
   logChapterCurationEvent(ctx, {
     type: "deterministic-node-boundary-accepted",
     message: `deterministic node boundary span=${span.path} target=${targetBoundary.epubNodeId}${
       options.eventSuffix ? ` ${options.eventSuffix}` : ""
-    } accepted=1 time=${Math.round(accepted.startTime)}s`,
+    } judge=1 accepted=1 time=${Math.round(accepted.startTime)}s`,
     span,
     targetBoundary,
     result: accepted,

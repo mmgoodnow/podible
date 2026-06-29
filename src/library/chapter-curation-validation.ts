@@ -1152,6 +1152,19 @@ export async function resolveNodeBoundaryChapters(
   const decisions = await Promise.all(
     targets.map(async (target) => {
       try {
+        const supplementalSkipReason = skipLikelyUnnarratedSupplementalNodeReason(ctx, target);
+        if (supplementalSkipReason) {
+          reports?.push({
+            epubNodeId: target.epubNodeId,
+            epubIndex: target.epubIndex,
+            title: target.title,
+            expectedStartTime: target.expectedStartTime,
+            outcome: "skipped",
+            warnings: [supplementalSkipReason],
+            deterministic: true,
+          });
+          return null;
+        }
         const decision = await withDecisionSlot(() => decide(target));
         if (!decision) {
           reports?.push({
@@ -1252,6 +1265,38 @@ export async function resolveNodeBoundaryChapters(
     chapterDecisions.push(decision);
   }
   return chapters.length > 0 ? chapters : null;
+}
+
+function skipLikelyUnnarratedSupplementalNodeReason(ctx: ChapterCurationContext, target: ChapterCurationTargetBoundary): string | null {
+  const entry = ctx.epubEntries[target.epubIndex];
+  if (!entry || entry.id !== target.epubNodeId) return null;
+  if (!isSupplementalFrontBackMatterTitle(entry.title)) return null;
+
+  const openerTokens = Array.from(new Set(textTokens(summarizeFirstBodyWords(entry, 64)))).slice(0, 24);
+  if (openerTokens.length < 4) return null;
+
+  const centerMs = secondsToMs(target.expectedStartTime);
+  const radiusMs = 300_000;
+  const windowTokens = new Set(
+    textTokens(
+      transcriptUtterances(ctx)
+        .filter((utterance) => utterance.endMs >= centerMs - radiusMs && utterance.startMs <= centerMs + radiusMs)
+        .map((utterance) => utterance.text)
+        .join(" ")
+    )
+  );
+  if (windowTokens.size === 0) return null;
+
+  const overlap = openerTokens.filter((token) => windowTokens.has(token)).length / openerTokens.length;
+  if (overlap >= 0.18) return null;
+
+  return `Skipped likely non-narrated supplemental EPUB node; opener token overlap near expected audio position was ${Math.round(overlap * 100)}%.`;
+}
+
+function isSupplementalFrontBackMatterTitle(title: string): boolean {
+  const key = chapterTitleKey(title);
+  if (/\b(chapter|prologue|epilogue|part|book|volume)\b/.test(key)) return false;
+  return /\b(preface|foreword|afterword|acknowledg(?:e)?ments?|appendix|bibliography|index|explanatory note|edition note|revised|expanded edition|about the author|about author)\b/.test(key);
 }
 
 function shouldKeepAdjacentDistinctEpubBoundaries(

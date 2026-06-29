@@ -24,8 +24,6 @@ import {
   applyEmbeddedAudioChapterNodeScope,
   applyTranscriptEndpointEpubNodeScope,
   buildNodeBoundaryPreflightDiagnostic,
-  canSkipDeterministicBoundaryJudge,
-  canSkipOpeningInteriorStartJudge,
   chooseResearchBoundaryCandidate,
   createRootCurationSpan,
   rankTargetBoundaries,
@@ -1113,7 +1111,7 @@ describe("chapter curation tools", () => {
     );
 
     expect(validated.accepted).toBe(true);
-    if (validated.accepted) expect(canSkipOpeningInteriorStartJudge(targetBoundary, candidate, validated)).toBe(true);
+    expect(validated.accepted).toBe(true);
   });
 
   test("findOpeningInteriorStartCandidate rejects early transcript that belongs to another EPUB node", () => {
@@ -1208,7 +1206,7 @@ describe("chapter curation tools", () => {
     );
 
     expect(validated.accepted).toBe(true);
-    if (validated.accepted) expect(canSkipDeterministicBoundaryJudge(context, targetBoundary, candidate, validated)).toBe(true);
+    expect(validated.accepted).toBe(true);
   });
 
   test("estimateTimestampFromEpubPosition maps EPUB word position onto duration", () => {
@@ -1991,84 +1989,6 @@ describe("chapter curation tools", () => {
     if (result.accepted) expect(result.audit.boundaryComparison.transcriptAfter).toContain("female lead Stella");
   });
 
-  test("canSkipDeterministicBoundaryJudge allows clean strict opener evidence", async () => {
-    const context = ctx({
-      epubEntries: [
-        epubEntry({
-          id: "chapter-1",
-          title: "Chapter 1",
-          words: "The first real chapter begins".split(/\s+/).map(word),
-          wordCount: 5,
-          cumulativeWords: 5,
-          cumulativeRatio: 1,
-        }),
-      ],
-      transcript: transcriptWith("The first real chapter begins.", 30_000, 32_000),
-    });
-    const targetBoundary = nodeBoundaryTargets(context).find((target) => target.epubNodeId === "chapter-1")!;
-    const result = await validateNodeBoundary(
-      context,
-      {
-        spanPath: "root",
-        epubNodeId: "chapter-1",
-        title: "Chapter 1",
-        startTime: 30,
-      },
-      { span: createRootCurationSpan(context), targetBoundary }
-    );
-
-    expect(result.accepted).toBe(true);
-    if (!result.accepted) return;
-    expect(
-      canSkipDeterministicBoundaryJudge(
-        context,
-        targetBoundary,
-        {
-          startTime: 30,
-          source: "research_opener",
-          phrase: "The first real chapter",
-          phraseStartWord: 0,
-          reverseEpubRelation: "opener",
-          transcriptText: "The first real chapter begins.",
-        },
-        result
-      )
-    ).toBe(true);
-  });
-
-  test("canSkipDeterministicBoundaryJudge keeps fallback evidence on the judge path", async () => {
-    const context = ctx();
-    const targetBoundary = nodeBoundaryTargets(context).find((target) => target.epubNodeId === "chapter-1")!;
-    const result = await validateNodeBoundary(
-      context,
-      {
-        spanPath: "root",
-        epubNodeId: "chapter-1",
-        title: "Chapter 1",
-        startTime: 30,
-      },
-      { span: createRootCurationSpan(context), targetBoundary }
-    );
-
-    expect(result.accepted).toBe(true);
-    if (!result.accepted) return;
-    expect(
-      canSkipDeterministicBoundaryJudge(
-        context,
-        targetBoundary,
-        {
-          startTime: 30,
-          source: "near_opener_fallback",
-          phrase: "The first real chapter",
-          phraseStartWord: 12,
-          reverseEpubRelation: "near_opener",
-          transcriptText: "The first real chapter begins.",
-        },
-        result
-      )
-    ).toBe(false);
-  });
-
   test("nodeBoundaryTargets are built from the curated audible EPUB node list", () => {
     const context = ctx({
       durationMs: 100_000,
@@ -2375,6 +2295,92 @@ describe("chapter curation tools", () => {
       "part-8:skipped:true",
       "chapter-19:accepted:false",
     ]);
+  });
+
+  test("resolveNodeBoundaryChapters skips likely non-narrated supplemental nodes before agent work", async () => {
+    const context = ctx({
+      durationMs: 900_000,
+      manifestation: manifestation({ duration_ms: 900_000 }),
+      transcript: transcriptFromUtterances([
+        {
+          startMs: 0,
+          endMs: 10_000,
+          text: "Opening note begins with words that are actually narrated.",
+        },
+        {
+          startMs: 300_000,
+          endMs: 315_000,
+          text: "Introduction The hidden side of everything starts here with crime statistics.",
+        },
+      ]),
+      epubEntries: [
+        epubEntry({
+          id: "note",
+          title: "An Explanatory Note",
+          cumulativeRatio: 0.2,
+          cumulativeWords: 20,
+          words: "Opening note begins with words that are actually narrated".split(" ").map(word),
+        }),
+        epubEntry({
+          id: "preface",
+          title: "Preface to the Revised and Expanded Edition",
+          cumulativeRatio: 0.4,
+          cumulativeWords: 40,
+          words: "As we were writing this revised edition we added print only context".split(" ").map(word),
+        }),
+        epubEntry({
+          id: "intro",
+          title: "Introduction",
+          cumulativeRatio: 1,
+          cumulativeWords: 100,
+          words: "Introduction The hidden side of everything starts here with crime statistics".split(" ").map(word),
+        }),
+      ],
+    });
+    const reports: NodeBoundaryCurationReport[] = [];
+    const asked: string[] = [];
+    const chapters = await resolveNodeBoundaryChapters(
+      context,
+      async (targetBoundary): Promise<NodeBoundaryDecision | null> => {
+        asked.push(targetBoundary.epubNodeId);
+        if (targetBoundary.epubNodeId === "preface") throw new Error("preface should be skipped before decision work");
+        return {
+          accepted: true,
+          kind: "node_boundary",
+          spanPath: "root",
+          epubNodeId: targetBoundary.epubNodeId,
+          epubIndex: targetBoundary.epubIndex,
+          title: targetBoundary.title,
+          startTime: targetBoundary.epubIndex * 300,
+          notes: null,
+          audit: {
+            epubNodeId: targetBoundary.epubNodeId,
+            title: targetBoundary.title,
+            startTime: targetBoundary.epubIndex * 300,
+            boundaryComparison: {
+              transcriptPrecision: "utterance",
+              transcriptPrecisionNote: null,
+              previousEpub: { epubNodeId: null, title: null, tailText: "" },
+              targetEpub: { epubNodeId: targetBoundary.epubNodeId, title: targetBoundary.title, headText: "" },
+              transcriptBefore: "",
+              transcriptAfter: "",
+            },
+            transcriptWindow: "",
+            candidates: [],
+          },
+        };
+      },
+      { maxConcurrency: 2, reports }
+    );
+
+    expect(asked).toEqual(["note", "intro"]);
+    expect(chapters?.map((chapter) => chapter.epubNodeId)).toEqual(["note", "intro"]);
+    expect(reports.map((report) => `${report.epubNodeId}:${report.outcome}:${report.deterministic ?? false}`).sort()).toEqual([
+      "intro:accepted:false",
+      "note:accepted:false",
+      "preface:skipped:true",
+    ]);
+    expect(reports.find((report) => report.epubNodeId === "preface")?.warnings?.[0]).toContain("likely non-narrated supplemental");
   });
 
   test("resolveNodeBoundaryChapters keeps valid adjacent part and chapter boundaries", async () => {
