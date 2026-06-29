@@ -129,7 +129,7 @@ export type NodeBoundaryCurationReport = {
   epubIndex: number;
   title: string;
   expectedStartTime: number;
-  outcome: "accepted" | "failed" | "dropped";
+  outcome: "accepted" | "failed" | "dropped" | "skipped";
   startTime?: number;
   errors?: string[];
   warnings?: string[];
@@ -1188,6 +1188,7 @@ export async function resolveNodeBoundaryChapters(
   );
 
   const resolvedDecisions = recoverAdjacentHeadingOnlyNodeBoundaries(ctx, targets, decisions, reports);
+  markUnrecoveredHeadingOnlyNodeBoundariesSkipped(ctx, targets, resolvedDecisions, reports);
 
   const chapters: SubmittedChapter[] = [];
   const chapterDecisions: NodeBoundaryDecision[] = [];
@@ -1307,6 +1308,31 @@ function recoverAdjacentHeadingOnlyNodeBoundaries(
     }
   }
   return resolved;
+}
+
+function markUnrecoveredHeadingOnlyNodeBoundariesSkipped(
+  ctx: ChapterCurationContext,
+  targets: ChapterCurationTargetBoundary[],
+  decisions: Array<NodeBoundaryDecision | null>,
+  reports: NodeBoundaryCurationReport[] | undefined
+): void {
+  if (!reports) return;
+  for (const [index, decision] of decisions.entries()) {
+    if (decision) continue;
+    const target = targets[index];
+    if (!target) continue;
+    const entry = ctx.epubEntries[target.epubIndex];
+    if (!entry || !isShortHeadingOnlyEntry(entry)) continue;
+    const report = reports.find((item) => item.epubNodeId === target.epubNodeId && item.outcome === "failed");
+    if (!report) continue;
+    report.outcome = "skipped";
+    report.errors = undefined;
+    report.warnings = [
+      ...(report.warnings ?? []),
+      "Skipped heading-only EPUB divider because no transcript-backed boundary was accepted.",
+    ];
+    report.deterministic = true;
+  }
 }
 
 function recoverHeadingFromWordsBeforeNextBoundary(

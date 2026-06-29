@@ -66,12 +66,14 @@ type ModeSummary = {
     accepted: number;
     failed: number;
     dropped: number;
+    skipped: number;
   };
   nodeReplay?: {
     chapters: number;
     acceptedReports: number;
     failedReports: number;
     droppedReports: number;
+    skippedReports: number;
     coverage: number;
     monotonicErrors: number;
     acceptedAfterReplay: boolean;
@@ -328,12 +330,14 @@ async function replayNodeReports(caseDir: string, result: JsonRecord): Promise<M
   const acceptedReports = replayReports.filter((report) => report.outcome === "accepted").length;
   const failedReports = replayReports.filter((report) => report.outcome === "failed").length;
   const droppedReports = replayReports.filter((report) => report.outcome === "dropped").length;
-  const coverage = replayReports.length === 0 ? 0 : (acceptedReports + droppedReports) / replayReports.length;
+  const skippedReports = replayReports.filter((report) => report.outcome === "skipped").length;
+  const coverage = replayReports.length === 0 ? 0 : (acceptedReports + droppedReports + skippedReports) / replayReports.length;
   return {
     chapters: replayed.length,
     acceptedReports,
     failedReports,
     droppedReports,
+    skippedReports,
     coverage: round(coverage, 3),
     monotonicErrors: monotonicErrors(replayed),
     acceptedAfterReplay: replayed.length > 0 && monotonicErrors(replayed) === 0 && coverage >= 0.9,
@@ -342,7 +346,7 @@ async function replayNodeReports(caseDir: string, result: JsonRecord): Promise<M
 
 async function buildNodeFailureDiagnostic(caseDir: string, reports: NodeBoundaryCurationReport[]): Promise<ModeSummary["nodeFailureDiagnostic"]> {
   const failedReports = reports.filter((report) => report.outcome === "failed");
-  const acceptedReports = reports.filter((report) => report.outcome === "accepted" || report.outcome === "dropped");
+  const resolvedReports = reports.filter((report) => report.outcome === "accepted" || report.outcome === "dropped" || report.outcome === "skipped");
   if (reports.length === 0 || failedReports.length === 0) return undefined;
   const transcript = readJson(path.join(caseDir, "transcript.json"));
   const utterances = Array.isArray(transcript?.utterances) ? (transcript.utterances as Array<{ startMs?: unknown; endMs?: unknown; text?: unknown }>) : [];
@@ -380,7 +384,7 @@ async function buildNodeFailureDiagnostic(caseDir: string, reports: NodeBoundary
         )
       )
     : null;
-  const allBoundariesFailed = reports.length > 0 && acceptedReports.length === 0;
+  const allBoundariesFailed = reports.length > 0 && resolvedReports.length === 0;
   const lowExpectedWindowOverlap = failedExpectedWindowOverlap < 0.45;
   const kind = allBoundariesFailed ? "all_boundaries_failed" : lowExpectedWindowOverlap ? "low_expected_window_overlap" : "none";
   if (kind === "none") return undefined;
@@ -432,6 +436,7 @@ async function summarizeMode(caseDir: string, mode: "recursive" | "node"): Promi
       accepted: reports.filter((report) => report.outcome === "accepted").length,
       failed: reports.filter((report) => report.outcome === "failed").length,
       dropped: reports.filter((report) => report.outcome === "dropped").length,
+      skipped: reports.filter((report) => report.outcome === "skipped").length,
     };
     summary.nodeReplay = await replayNodeReports(caseDir, result);
     if (result.nodeBoundaryFailureDiagnostic && typeof result.nodeBoundaryFailureDiagnostic === "object") {
@@ -503,7 +508,7 @@ function modeStatus(summary: ModeSummary | null): string {
 function nodeReportStatus(summary: ModeSummary | null): string {
   const reports = summary?.nodeReports;
   if (!reports) return "-";
-  return `${reports.accepted}/${reports.total} accepted, ${reports.failed} failed, ${reports.dropped} dropped`;
+  return `${reports.accepted}/${reports.total} accepted, ${reports.failed} failed, ${reports.dropped} dropped, ${reports.skipped} skipped`;
 }
 
 function nodeSourceStatus(summary: ModeSummary | null): string {
@@ -540,7 +545,7 @@ function renderMarkdown(cases: CaseSummary[], generatedAt: string): string {
   ];
   for (const item of cases) {
     const replay = item.node?.nodeReplay
-    ? `${item.node.nodeReplay.acceptedAfterReplay ? "valid" : "invalid"} / ${item.node.nodeReplay.chapters} ch / ${item.node.nodeReplay.failedReports} failed / ${item.node.nodeReplay.droppedReports} dropped / ${Math.round(item.node.nodeReplay.coverage * 100)}% coverage`
+    ? `${item.node.nodeReplay.acceptedAfterReplay ? "valid" : "invalid"} / ${item.node.nodeReplay.chapters} ch / ${item.node.nodeReplay.failedReports} failed / ${item.node.nodeReplay.droppedReports} dropped / ${item.node.nodeReplay.skippedReports} skipped / ${Math.round(item.node.nodeReplay.coverage * 100)}% coverage`
       : "-";
     lines.push(
       `| ${item.slug} | ${modeStatus(item.recursive)} | ${modeStatus(item.node)} | ${nodeReportStatus(item.node)} | ${nodeSourceStatus(item.node)} | ${replay} | ${nodeDiagnosticStatus(item.node)} | ${fmt(item.comparison.nodeWallSecondsMinusRecursive)} | ${fmt(item.comparison.nodeRequestsMinusRecursive)} | ${fmt(item.comparison.nodeTokensMinusRecursive)} | ${fmt(item.comparison.nodeCostUsdMinusRecursive)} |`

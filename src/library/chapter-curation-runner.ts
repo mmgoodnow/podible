@@ -100,6 +100,7 @@ export type NodeBoundaryFailureDiagnostic = {
   totalReports: number;
   failedReports: number;
   acceptedReports: number;
+  skippedReports: number;
   failedExpectedWindowOverlap: number | null;
   firstCuratedNodeOpeningOverlap: number | null;
   worstFailedNodes: Array<{
@@ -251,6 +252,7 @@ function overlapRatio(sampleTokens: string[], candidateTokens: Set<string>): num
 function buildNodeBoundaryFailureDiagnostic(ctx: ChapterCurationContext, reports: NodeBoundaryCurationReport[]): NodeBoundaryFailureDiagnostic {
   const failedReports = reports.filter((report) => report.outcome === "failed");
   const acceptedReports = reports.filter((report) => report.outcome === "accepted" || report.outcome === "dropped");
+  const skippedReports = reports.filter((report) => report.outcome === "skipped");
   const failedOverlaps = failedReports.flatMap((report) => {
     const entry = ctx.epubEntries.find((candidate) => candidate.id === report.epubNodeId);
     if (!entry) return [];
@@ -296,6 +298,7 @@ function buildNodeBoundaryFailureDiagnostic(ctx: ChapterCurationContext, reports
     totalReports: reports.length,
     failedReports: failedReports.length,
     acceptedReports: acceptedReports.length,
+    skippedReports: skippedReports.length,
     failedExpectedWindowOverlap,
     firstCuratedNodeOpeningOverlap,
     worstFailedNodes,
@@ -2763,7 +2766,7 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
     );
 
     if (nodeChapters && nodeChapters.length > 0) {
-      const resolvedReports = nodeBoundaryReports.filter((report) => report.outcome === "accepted" || report.outcome === "dropped").length;
+      const resolvedReports = nodeBoundaryReports.filter((report) => report.outcome === "accepted" || report.outcome === "dropped" || report.outcome === "skipped").length;
       const failedReports = nodeBoundaryReports.filter((report) => report.outcome === "failed").length;
       const coverage = nodeBoundaryReports.length === 0 ? 0 : resolvedReports / nodeBoundaryReports.length;
       if (coverage < minNodeBoundaryCoverage) {

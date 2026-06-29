@@ -1938,6 +1938,77 @@ describe("chapter curation tools", () => {
     expect(reports[0]?.errors?.[0]).toContain("more specific EPUB title XIV: The Final Door");
   });
 
+  test("resolveNodeBoundaryChapters skips unresolved heading-only dividers", async () => {
+    const context = ctx({
+      durationMs: 600_000,
+      manifestation: manifestation({ duration_ms: 600_000 }),
+      epubEntries: [
+        epubEntry({
+          id: "part-8",
+          title: "VIII - Birth Day",
+          cumulativeRatio: 0.5,
+          cumulativeWords: 10,
+          words: [
+            { ...word("VIII"), kind: "heading" },
+            { ...word("Birth"), kind: "heading" },
+            { ...word("Day"), kind: "heading" },
+          ],
+        }),
+        epubEntry({
+          id: "chapter-19",
+          title: "Chapter Nineteen",
+          cumulativeRatio: 1,
+          cumulativeWords: 30,
+          words: [
+            { ...word("Chapter"), kind: "heading" },
+            { ...word("Nineteen"), kind: "heading" },
+            { ...word("I"), kind: "body" },
+            { ...word("wake"), kind: "body" },
+          ],
+        }),
+      ],
+    });
+    const reports: NodeBoundaryCurationReport[] = [];
+    const chapters = await resolveNodeBoundaryChapters(
+      context,
+      async (targetBoundary): Promise<NodeBoundaryDecision | null> => {
+        if (targetBoundary.epubNodeId === "part-8") return null;
+        return {
+          accepted: true,
+          kind: "node_boundary",
+          spanPath: "root",
+          epubNodeId: targetBoundary.epubNodeId,
+          epubIndex: targetBoundary.epubIndex,
+          title: targetBoundary.title,
+          startTime: 120,
+          notes: null,
+          audit: {
+            epubNodeId: targetBoundary.epubNodeId,
+            title: targetBoundary.title,
+            startTime: 120,
+            boundaryComparison: {
+              transcriptPrecision: "utterance",
+              transcriptPrecisionNote: null,
+              previousEpub: { epubNodeId: "part-8", title: "VIII - Birth Day", tailText: "" },
+              targetEpub: { epubNodeId: targetBoundary.epubNodeId, title: targetBoundary.title, headText: "Chapter Nineteen I wake" },
+              transcriptBefore: "",
+              transcriptAfter: "Chapter Nineteen I wake",
+            },
+            transcriptWindow: "Chapter Nineteen I wake",
+            candidates: [],
+          },
+        };
+      },
+      { maxConcurrency: 2, reports }
+    );
+
+    expect(chapters).toEqual([{ title: "Chapter Nineteen", startTime: 120, epubNodeId: "chapter-19" }]);
+    expect(reports.map((report) => `${report.epubNodeId}:${report.outcome}:${report.deterministic ?? false}`)).toEqual([
+      "part-8:skipped:true",
+      "chapter-19:accepted:false",
+    ]);
+  });
+
   test("resolveNodeBoundaryChapters keeps valid adjacent part and chapter boundaries", async () => {
     const context = ctx({
       durationMs: 60_000_000,
