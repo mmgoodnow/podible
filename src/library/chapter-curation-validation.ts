@@ -202,6 +202,7 @@ export const submitFulcrumJudgmentSchema = z.object({
     "opener_evidence_at_timestamp",
     "opener_evidence_offset_in_window",
     "window_starts_before_opener_evidence",
+    "embedded_marker_transcript_gap",
     "tool_classified_interior_match",
     "generic_or_weak_overlap",
     "submitted_evidence_insufficient",
@@ -648,8 +649,8 @@ function buildBoundaryComparisonAudit(
       targetEpub: {
         epubNodeId: entry?.id ?? null,
         title: entry?.title ?? input.title,
-        headText: entry ? summarizeFirstWords(entry, 96) : "",
-        bodyHeadText: entry ? summarizeFirstBodyWords(entry, 96) : "",
+        headText: entry ? summarizeFirstWords(entry, 260) : "",
+        bodyHeadText: entry ? summarizeFirstBodyWords(entry, 260) : "",
         optionalHeadingText: entry ? summarizeOptionalHeadingText(entry) : "",
         headingMayBeUnspoken: true,
       },

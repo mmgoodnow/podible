@@ -691,6 +691,7 @@ function createChapterBoundaryJudgeAgent(ctx: ChapterCurationContext): Agent {
       "Start with audit.boundaryComparison. Compare previousEpub.tailText to transcriptBefore, and targetEpub.bodyHeadText or targetEpub.headText to transcriptAfter.",
       "EPUB chapter headings are often printed but not read aloud. If targetEpub.optionalHeadingText is absent from the transcript but targetEpub.bodyHeadText begins right at the timestamp, that is strong opener evidence.",
       "ASR sometimes drops the printed heading and the first few opener words. If the notes identify a near-opener fallback, accept when transcriptAfter starts with the earliest clear target body phrase and transcriptBefore plausibly matches the previous EPUB tail.",
+      "For high-confidence named embedded audio markers, ASR can have a transcript gap after the previous node tail. If notes identify an embedded audio marker, transcriptBefore matches previousEpub.tailText, boundaryWords.after starts tens of seconds later, and those after-words appear inside targetEpub.bodyHeadText/headText rather than previousEpub.tailText, accept the embedded marker as the best chapter boundary. Use finding=embedded_marker_transcript_gap.",
       "For the first EPUB node only, previousEpub is absent. If notes identify an opening interior-start candidate, accept when transcriptBefore is empty or only opening credits/boilerplate and transcriptAfter starts with distinctive prose from inside the target EPUB node. This means the audiobook/ASR omitted earlier printed opener text; it is still the first available narrated boundary.",
       "Check transcriptPrecision. If it is word, the before/after split is exact and should be treated as precise. If it is utterance, a real boundary may fall inside a displayed utterance — accept the utterance start if it contains previous tail then target head.",
       "If boundaryWords.containing is non-empty, the timestamp falls mid-word. Prefer a nearestCleanBoundaryTimes value unless the containing word is itself the first opener word.",
@@ -698,7 +699,7 @@ function createChapterBoundaryJudgeAgent(ctx: ChapterCurationContext): Agent {
       "Accept when transcriptBefore plausibly matches the previous EPUB tail and transcriptAfter begins with distinctive target body opener prose, even if the printed heading is absent.",
       "Reject when target body opener evidence is absent, offset, generic, pre-target, or only an interior match.",
       "Do not suggest alternate timestamps or nodes. Do not invent a chapter plan. Judge only this proposed boundary.",
-      "Describe problems using evidence terms — opener_evidence_at_timestamp, opener_evidence_offset_in_window, window_starts_before_opener_evidence, tool_classified_interior_match, generic_or_weak_overlap, submitted_evidence_insufficient — not narrative terms like 'mid-scene'.",
+      "Describe problems using evidence terms — opener_evidence_at_timestamp, opener_evidence_offset_in_window, window_starts_before_opener_evidence, embedded_marker_transcript_gap, tool_classified_interior_match, generic_or_weak_overlap, submitted_evidence_insufficient — not narrative terms like 'mid-scene'.",
       "You must call submitBoundaryJudgment.",
     ].join("\n"),
     tools: [
@@ -721,6 +722,7 @@ function chapterBoundaryJudgePrompt(ctx: ChapterCurationContext, span: ChapterCu
     "Primary evidence: audit.boundaryComparison. transcriptBefore matching previousEpub.tailText and transcriptAfter matching targetEpub.bodyHeadText or targetEpub.headText supports acceptance.",
     "Printed EPUB headings are often absent from ASR. Do not reject merely because optionalHeadingText is missing when bodyHeadText begins at the proposed timestamp.",
     "If notes identify a near-opener fallback, accept the first audible target body phrase when the heading is absent from ASR and transcriptBefore supports the previous EPUB tail.",
+    "If notes identify a high-confidence named embedded audio marker, handle transcript gaps differently: accept when transcriptBefore matches previousEpub.tailText, boundaryWords.after starts tens of seconds later due to an ASR/audio gap, and those after-words appear inside targetEpub.bodyHeadText/headText rather than previousEpub.tailText. This is not the same as a random interior title mention; use finding=embedded_marker_transcript_gap.",
     "If this is the first EPUB node and notes identify an opening interior-start candidate, previousEpub will be absent. Accept when transcriptBefore is empty or only opening credits/boilerplate and transcriptAfter starts with distinctive prose from inside targetEpub, even if earlier printed opener words are missing from ASR/audio.",
     "transcriptPrecision=word is exact; boundaryWords.containing non-empty means the timestamp is mid-word — prefer nearestCleanBoundaryTimes unless that word is the first opener. transcriptPrecision=utterance is lower precision; accepting an utterance start is valid when it contains previous tail followed by target head.",
     "transcriptBefore matching the previous EPUB node is positive evidence, not a problem.",
@@ -1010,6 +1012,7 @@ function rejectedFulcrumJudgeInstruction(judgment: SubmitFulcrumJudgmentResult):
   switch (judgment.finding) {
     case "opener_evidence_offset_in_window":
     case "window_starts_before_opener_evidence":
+    case "embedded_marker_transcript_gap":
       return "Check boundaryWords/nearestCleanBoundaryTimes for a cleaner boundary, then inspect and resubmit.";
     case "tool_classified_interior_match":
     case "generic_or_weak_overlap":
@@ -2017,6 +2020,8 @@ async function tryDeterministicNodeBoundary(
   if (embeddedCandidate) {
     const startTime = msToSeconds(embeddedCandidate.startMs);
     const hasDeterministicEvidence = embeddedNodeBoundaryHasTranscriptEvidence(ctx, targetBoundary, embeddedCandidate);
+    const isHighConfidenceEmbeddedMarker =
+      embeddedAssessment.action === "short_circuit_candidate" && embeddedAssessment.confidence === "high";
     const validated = await validateNodeBoundary(
       ctx,
       {
@@ -2025,13 +2030,13 @@ async function tryDeterministicNodeBoundary(
         title: targetBoundary.title,
         startTime,
         evidence: `Embedded audio marker "${embeddedCandidate.title}" at ${Math.round(startTime)}s matches EPUB node "${targetBoundary.title}" and passed transcript validation.`,
-        notes: "Accepted from useful embedded audio marker after node-boundary validation.",
+        notes: isHighConfidenceEmbeddedMarker
+          ? `High-confidence named embedded audio marker "${embeddedCandidate.title}" matches this EPUB node. If transcriptBefore corroborates the previous EPUB tail and boundaryWords.after resumes later inside the target EPUB node, accept the marker as an embedded-marker transcript-gap boundary.`
+          : `Embedded audio marker "${embeddedCandidate.title}" matches this EPUB node.`,
       },
       { span, targetBoundary }
     );
     if (validated.accepted) {
-      const isHighConfidenceEmbeddedMarker =
-        embeddedAssessment.action === "short_circuit_candidate" && embeddedAssessment.confidence === "high";
       const judgment = await judgeChapterBoundary(ctx, span, {
         kind: "node_boundary",
         spanPath: validated.spanPath,
