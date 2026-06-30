@@ -1022,6 +1022,7 @@ export async function resolveNodeBoundaryChapters(
   );
 
   const resolvedDecisions = [...decisions];
+  recoverSpokenHeadingOnlyNodeBoundaries(ctx, targets, resolvedDecisions, reports);
   markUnrecoveredHeadingOnlyNodeBoundariesSkipped(ctx, targets, resolvedDecisions, reports);
 
   const chapters: SubmittedChapter[] = [];
@@ -1086,6 +1087,104 @@ export async function resolveNodeBoundaryChapters(
     chapterDecisions.push(decision);
   }
   return chapters.length > 0 ? chapters : null;
+}
+
+function recoverSpokenHeadingOnlyNodeBoundaries(
+  ctx: ChapterCurationContext,
+  targets: ChapterCurationTargetBoundary[],
+  decisions: Array<NodeBoundaryDecision | null>,
+  reports: NodeBoundaryCurationReport[] | undefined
+): void {
+  for (const [index, decision] of decisions.entries()) {
+    if (decision) continue;
+    const target = targets[index];
+    const nextDecision = decisions[index + 1];
+    if (!target || !nextDecision || nextDecision.epubIndex !== target.epubIndex + 1) continue;
+    const entry = ctx.epubEntries[target.epubIndex];
+    if (!entry || !isShortHeadingOnlyEntry(entry)) continue;
+
+    const recoveredStartTime = spokenHeadingStartTimeBeforeBoundary(entry, nextDecision);
+    if (recoveredStartTime == null || recoveredStartTime >= nextDecision.startTime) continue;
+
+    decisions[index] = {
+      accepted: true,
+      kind: "node_boundary",
+      spanPath: nextDecision.spanPath,
+      epubNodeId: target.epubNodeId,
+      epubIndex: target.epubIndex,
+      title: target.title,
+      startTime: recoveredStartTime,
+      notes: "Recovered spoken heading-only EPUB divider immediately before the next accepted boundary.",
+      audit: nextDecision.audit,
+    };
+
+    const report = reports?.find((item) => item.epubNodeId === target.epubNodeId && item.outcome === "failed");
+    if (report) {
+      report.outcome = "accepted";
+      report.startTime = recoveredStartTime;
+      report.errors = undefined;
+      report.warnings = [
+        ...(report.warnings ?? []),
+        "Recovered spoken heading-only EPUB divider immediately before the next accepted boundary.",
+      ];
+      report.deterministic = true;
+    }
+  }
+}
+
+function spokenHeadingStartTimeBeforeBoundary(entry: EpubChapterEntry, nextDecision: NodeBoundaryDecision): number | null {
+  const boundary = nextDecision.audit.boundaryComparison;
+  const beforeText = boundary.transcriptBefore ?? "";
+  const headingTokens = normalizedWordTokens(entry.title);
+  if (headingTokens.length === 0) return null;
+
+  const beforeTokens = new Set(normalizedWordTokens(beforeText));
+  const matched = headingTokens.filter((token) => beforeTokens.has(token) || headingTokenAliases(token).some((alias) => beforeTokens.has(alias)));
+  const meaningful = headingTokens.filter((token) => !isStructuralTitleToken(token));
+  if (meaningful.length > 0 && !meaningful.every((token) => beforeTokens.has(token) || headingTokenAliases(token).some((alias) => beforeTokens.has(alias)))) {
+    return null;
+  }
+  if (matched.length < Math.min(2, headingTokens.length)) return null;
+
+  const beforeWords = boundary.boundaryWords?.before ?? [];
+  const matchingWordStarts = beforeWords
+    .filter((word) => {
+      const token = normalizedWordTokens(word.text)[0];
+      if (!token) return false;
+      return headingTokens.some((headingToken) => token === headingToken || headingTokenAliases(headingToken).includes(token));
+    })
+    .map((word) => word.startTime)
+    .filter((time) => Number.isFinite(time) && time >= 0);
+  if (matchingWordStarts.length > 0) return Math.min(...matchingWordStarts);
+
+  return Math.max(0, nextDecision.startTime - 0.5);
+}
+
+function headingTokenAliases(token: string): string[] {
+  const romanToArabic: Record<string, string> = {
+    i: "1",
+    ii: "2",
+    iii: "3",
+    iv: "4",
+    v: "5",
+    vi: "6",
+    vii: "7",
+    viii: "8",
+    ix: "9",
+    x: "10",
+    xi: "11",
+    xii: "12",
+    xiii: "13",
+    xiv: "14",
+    xv: "15",
+    xvi: "16",
+    xvii: "17",
+    xviii: "18",
+    xix: "19",
+    xx: "20",
+  };
+  const alias = romanToArabic[token];
+  return alias ? [alias] : [];
 }
 
 function skipLikelyUnnarratedSupplementalNodeReason(ctx: ChapterCurationContext, target: ChapterCurationTargetBoundary): string | null {

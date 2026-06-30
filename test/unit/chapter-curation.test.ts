@@ -2094,7 +2094,7 @@ describe("chapter curation tools", () => {
     ]);
   });
 
-  test("resolveNodeBoundaryChapters skips title-only part headings without accepted decisions", async () => {
+  test("resolveNodeBoundaryChapters recovers spoken title-only part headings from adjacent accepted boundaries", async () => {
     const context = ctx({
       durationMs: 600_000,
       manifestation: manifestation({ duration_ms: 600_000 }),
@@ -2166,9 +2166,12 @@ describe("chapter curation tools", () => {
       { maxConcurrency: 2, reports }
     );
 
-    expect(chapters).toEqual([{ title: "Chapter Seven", startTime: 106, epubNodeId: "chapter-7" }]);
+    expect(chapters).toEqual([
+      { title: "III - Night", startTime: 101, epubNodeId: "part-3" },
+      { title: "Chapter Seven", startTime: 106, epubNodeId: "chapter-7" },
+    ]);
     expect(reports.map((report) => `${report.epubNodeId}:${report.outcome}:${report.deterministic ?? false}`)).toEqual([
-      "part-3:skipped:true",
+      "part-3:accepted:true",
       "chapter-7:accepted:false",
     ]);
   });
