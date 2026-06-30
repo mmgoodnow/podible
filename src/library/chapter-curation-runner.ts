@@ -932,6 +932,8 @@ function audibleEpubNodeSelectionPrompt(ctx: ChapterCurationContext): string {
     `Classify EPUB nodes for "${ctx.book.title}" by ${ctx.book.author}.`,
     "Return only nodes that are plausible audiobook chapter material for recursive timestamp curation.",
     "Keep uncertain narrative nodes; exclude only nodes that look like non-audio front/back matter or navigation.",
+    "Do not exclude prose-like end matter solely because it is titled Postscript, Afterword, Epilogue, Coda, or similar. If the transcript ending contains its opener/title, or if the audio continues with book prose after the prior narrative node, keep it as audiobook chapter material.",
+    "It is better to keep a plausible narrated prose node and let boundary validation fail later than to exclude a genuinely narrated chapter-like node during this pre-pass.",
     "",
     JSON.stringify(
       {
