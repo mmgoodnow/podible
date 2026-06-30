@@ -4,6 +4,7 @@ import path from "node:path";
 import { getDurationSeconds } from "../media/probe-cache";
 import { normalizeAudioExt } from "../media/metadata";
 import { computeEpubWordCount } from "./chapter-analysis";
+import { inferLanguageFromReleaseTitles } from "./language";
 
 import type { BooksRepo } from "../repo";
 import type { AssetKind, MediaType, ReleaseRow } from "../app-types";
@@ -300,6 +301,7 @@ export async function importReleaseFromPath(
     repo.addManifestation({
       bookId: book.id,
       kind: release.media_type === "ebook" ? "ebook" : "audio",
+      language: inferLanguageFromReleaseTitles([release.title]),
     }).id;
   const asset = repo.addAsset({
     bookId: book.id,

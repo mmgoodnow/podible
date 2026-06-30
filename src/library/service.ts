@@ -3,6 +3,7 @@ import { RtorrentClient } from "../rtorrent";
 import { getOrFetchCachedTorrentBytes, torrentCacheKeyFor } from "./torrent-cache";
 import { infoHashFromTorrentBytes, normalizeInfoHash } from "./torrent";
 import { searchTorznab } from "./torznab";
+import { inferLanguageFromReleaseTitles, normalizeManifestationLanguageCode } from "./language";
 import type { TorznabResult } from "./torznab";
 import type { AppSettings, MediaType, ReleaseRow } from "../app-types";
 
@@ -23,6 +24,7 @@ export type SnatchRequest = {
   manifestationId?: number | null;
   sequenceInManifestation?: number | null;
   selectionNote?: string | null;
+  manifestationLanguage?: string | null;
 };
 
 export type SnatchGroupRequest = {
@@ -33,6 +35,7 @@ export type SnatchGroupRequest = {
     label: string | null;
     editionNote: string | null;
     selectionNote?: string | null;
+    language?: string | null;
   };
   parts: Array<{
     provider: string;
@@ -202,6 +205,7 @@ export async function runSnatch(
       bookId: request.bookId,
       kind: request.mediaType === "ebook" ? "ebook" : "audio",
       selectionNote: request.selectionNote ?? null,
+      language: normalizeManifestationLanguageCode(request.manifestationLanguage) ?? inferLanguageFromReleaseTitles([request.title]),
     }).id;
   }
   snatchLog(
@@ -293,6 +297,7 @@ export async function runSnatch(
       bookId: request.bookId,
       kind: request.mediaType === "ebook" ? "ebook" : "audio",
       selectionNote: request.selectionNote ?? null,
+      language: normalizeManifestationLanguageCode(request.manifestationLanguage) ?? inferLanguageFromReleaseTitles([request.title]),
     }).id;
     sequenceInManifestation = 0;
   }
@@ -344,6 +349,9 @@ export async function runSnatchGroup(
     request.manifestation.label !== null ||
     request.manifestation.editionNote !== null ||
     request.manifestation.selectionNote != null;
+  const language =
+    normalizeManifestationLanguageCode(request.manifestation.language) ??
+    inferLanguageFromReleaseTitles(request.parts.map((part) => part.title));
   const manifestationId = needsExplicitManifestation
     ? repo.addManifestation({
         bookId: request.bookId,
@@ -351,6 +359,7 @@ export async function runSnatchGroup(
         label: request.manifestation.label,
         editionNote: request.manifestation.editionNote,
         selectionNote: request.manifestation.selectionNote ?? null,
+        language,
       }).id
     : null;
   const results: SnatchResult[] = [];
@@ -370,6 +379,7 @@ export async function runSnatchGroup(
           infoHash: part.infoHash ?? null,
           manifestationId,
           sequenceInManifestation: needsExplicitManifestation ? index : null,
+          manifestationLanguage: language,
         },
         runtime
       )

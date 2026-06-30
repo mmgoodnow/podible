@@ -251,6 +251,7 @@ export const searchSelectionDecisionSchema = z.object({
       manifestation: z.object({
         label: z.string().nullable(),
         editionNote: z.string().nullable(),
+        language: z.string().nullable(),
       }),
       parts: z.array(torznabResultSchema),
     })

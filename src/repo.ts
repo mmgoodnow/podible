@@ -124,6 +124,7 @@ type AddManifestationInput = {
   label?: string | null;
   editionNote?: string | null;
   selectionNote?: string | null;
+  language?: string | null;
   durationMs?: number | null;
   totalSize?: number;
   preferredScore?: number;
@@ -935,10 +936,11 @@ export class BooksRepo {
   addManifestation(input: AddManifestationInput): ManifestationRow {
     assertPositiveInt(input.bookId);
     const now = nowIso();
+    const language = input.language?.trim().toLowerCase() || null;
     return this.db
       .query(
-        `INSERT INTO manifestations (book_id, kind, label, edition_note, selection_note, duration_ms, total_size, preferred_score, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO manifestations (book_id, kind, label, edition_note, selection_note, language, duration_ms, total_size, preferred_score, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING *`
       )
       .get(
@@ -947,6 +949,7 @@ export class BooksRepo {
         input.label ?? null,
         input.editionNote ?? null,
         input.selectionNote?.trim() || null,
+        language,
         input.durationMs ?? null,
         input.totalSize ?? 0,
         input.preferredScore ?? 0,

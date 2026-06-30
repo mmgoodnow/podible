@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { ImportInspectionFile } from "./importer";
 import type { BooksRepo } from "../repo";
 import { rankSearchResults } from "./service";
+import { inferLanguageFromReleaseTitles, normalizeManifestationLanguageCode } from "./language";
 import type { TorznabResult } from "./torznab";
 import { getOrFetchCachedTorrentBytes, inspectTorrentFiles } from "./torrent-cache";
 import { normalizeInfoHash } from "./torrent";
@@ -33,6 +34,7 @@ type SearchSelection = {
   manifestation: {
     label: string | null;
     editionNote: string | null;
+    language: string | null;
   };
   parts: TorznabResult[];
 };
@@ -82,6 +84,7 @@ type SearchAgentOutput = {
       label?: string | null;
       editionNote?: string | null;
       edition_note?: string | null;
+      language?: string | null;
     } | null;
     parts?: number[];
   }>;
@@ -246,7 +249,10 @@ function isRejectedCandidate(
 }
 
 function searchSelectionFromIndex(result: TorznabResult): SearchSelection {
-  return { manifestation: { label: null, editionNote: null }, parts: [result] };
+  return {
+    manifestation: { label: null, editionNote: null, language: inferLanguageFromReleaseTitles([result.title]) },
+    parts: [result],
+  };
 }
 
 function parseSearchAgentSelections(output: SearchAgentOutput, ranked: ReturnType<typeof rankSearchResults>): SearchSelection[] {
@@ -277,8 +283,11 @@ function parseSearchAgentSelections(output: SearchAgentOutput, ranked: ReturnTyp
     const label = typeof manifestation?.label === "string" && manifestation.label.trim() ? manifestation.label.trim() : null;
     const rawEditionNote = manifestation?.editionNote ?? manifestation?.edition_note;
     const editionNote = typeof rawEditionNote === "string" && rawEditionNote.trim() ? rawEditionNote.trim() : null;
+    const language =
+      normalizeManifestationLanguageCode(manifestation?.language) ??
+      inferLanguageFromReleaseTitles(selectedParts.map((part) => part.title));
     selections.push({
-      manifestation: { label, editionNote },
+      manifestation: { label, editionNote, language },
       parts: selectedParts,
     });
   }
@@ -441,7 +450,10 @@ function buildSearchAgentPrompt(trigger: DecisionTrigger, input: SearchSelection
   lines.push("`selections` is an array. Use an empty array when no safe candidate exists.");
   lines.push("For normal single-release acquisitions, return one selection with one candidate index in `parts`.");
   lines.push("If the preferred edition is split across multiple releases, return one selection whose ordered `parts` array contains each release index.");
-  lines.push("Each selection may include `manifestation.label` and `manifestation.editionNote`; use null when there is no meaningful edition label.");
+  lines.push(
+    "Each selection may include `manifestation.label`, `manifestation.editionNote`, and `manifestation.language`; use null when there is no meaningful edition label or clear language."
+  );
+  lines.push("Set `manifestation.language` to a conservative ISO 639-1 code only when the release title or inspected file list clearly indicates it, such as ENG -> en or SPA -> es.");
   return lines.join("\n");
 }
 
@@ -509,6 +521,7 @@ const searchAgentSystemInstructions = [
   "Return strict JSON only with keys: selections, confidence, reason.",
   "selections must be an array. Use an empty array when no candidate is safe.",
   "Each selection must have ordered candidate indices in parts.",
+  "Each selection may include manifestation.language as an ISO 639-1 language code when release metadata clearly indicates it; otherwise use null.",
   "confidence must be a number from 0 to 1.",
 ].join(" ");
 

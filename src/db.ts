@@ -27,6 +27,7 @@ const DROP_TRANSCRIPT_FINGERPRINT_MIGRATION_ID = 21;
 const MANIFESTATION_TRANSCRIPTS_MIGRATION_ID = 22;
 const DROP_ASSET_EBOOK_KIND_MIGRATION_ID = 23;
 const BOOK_ADDED_BY_USER_MIGRATION_ID = 24;
+const MANIFESTATION_LANGUAGE_MIGRATION_ID = 25;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -559,6 +560,7 @@ CREATE TABLE IF NOT EXISTS manifestations (
   label TEXT NULL,
   edition_note TEXT NULL,
   selection_note TEXT NULL,
+  language TEXT NULL,
   duration_ms INTEGER NULL,
   total_size INTEGER NOT NULL,
   preferred_score INTEGER NOT NULL DEFAULT 0,
@@ -597,8 +599,8 @@ CREATE INDEX IF NOT EXISTS idx_assets_manifestation_seq
       updated_at: string;
     }>;
   const insertManifestation = db.prepare(
-    `INSERT INTO manifestations (book_id, kind, label, edition_note, selection_note, duration_ms, total_size, preferred_score, created_at, updated_at)
-     VALUES (?, ?, NULL, NULL, NULL, ?, ?, 0, ?, ?)
+    `INSERT INTO manifestations (book_id, kind, label, edition_note, selection_note, language, duration_ms, total_size, preferred_score, created_at, updated_at)
+     VALUES (?, ?, NULL, NULL, NULL, NULL, ?, ?, 0, ?, ?)
      RETURNING id`
   );
   const linkAsset = db.prepare(
@@ -790,6 +792,12 @@ function applyDomainDecisionNotesMigration(db: Database): void {
   }
 }
 
+function applyManifestationLanguageMigration(db: Database): void {
+  if (!hasColumn(db, "manifestations", "language")) {
+    db.exec("ALTER TABLE manifestations ADD COLUMN language TEXT NULL");
+  }
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
@@ -891,5 +899,8 @@ export function runMigrations(db: Database): void {
   });
   apply(BOOK_ADDED_BY_USER_MIGRATION_ID, () => {
     applyBookAddedByUserMigration(db);
+  });
+  apply(MANIFESTATION_LANGUAGE_MIGRATION_ID, () => {
+    applyManifestationLanguageMigration(db);
   });
 }

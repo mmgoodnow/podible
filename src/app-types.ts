@@ -155,6 +155,7 @@ export type ManifestationRow = {
   label: string | null;
   edition_note: string | null;
   selection_note: string | null;
+  language: string | null;
   duration_ms: number | null;
   total_size: number;
   preferred_score: number;

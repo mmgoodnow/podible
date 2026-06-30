@@ -77,6 +77,7 @@ function manifestation(overrides: Partial<ManifestationRow> = {}): Manifestation
     label: null,
     edition_note: null,
     selection_note: null,
+    language: null,
     duration_ms: 120_000,
     total_size: 1000,
     preferred_score: 0,

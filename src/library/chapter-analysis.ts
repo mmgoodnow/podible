@@ -367,6 +367,14 @@ export function normalizeTranscriptionLanguage(value: string | null | undefined)
   return "en";
 }
 
+export function transcriptionLanguageForBook(
+  book: Pick<BookRow, "language">,
+  manifestation?: Pick<ManifestationRow, "language"> | null
+): string | null {
+  void book;
+  return normalizeTranscriptionLanguage(manifestation?.language || "en");
+}
+
 type EpubTextSegment = {
   kind: EpubTextKind;
   text: string;
@@ -901,9 +909,9 @@ export async function extractChunkClip(args: ExtractChunkArgs): Promise<string> 
   return clipPath;
 }
 
-function promptForChunk(book: BookRow, glossary: string[]): string {
+function promptForChunk(book: BookRow, glossary: string[], manifestation?: Pick<ManifestationRow, "language"> | null): string {
   const promptParts = [`${book.title} by ${book.author}.`];
-  const transcriptionLanguage = normalizeTranscriptionLanguage(book.language);
+  const transcriptionLanguage = transcriptionLanguageForBook(book, manifestation);
   if (transcriptionLanguage) {
     promptParts.push(`Language: ${transcriptionLanguage}.`);
   }
@@ -918,13 +926,14 @@ export async function transcribeChunk(
   settings: AppSettings,
   clipPath: string,
   prompt: string,
-  book: BookRow
+  book: BookRow,
+  manifestation?: Pick<ManifestationRow, "language"> | null
 ): Promise<TranscribedChunk> {
   const apiKey = settings.agents.apiKey.trim();
   if (!apiKey) throw new Error("OpenAI API key not configured");
   const requestTimeoutMs = Math.max(TRANSCRIPTION_TIMEOUT_MS, Math.trunc(settings.agents.timeoutMs || 30_000));
   const client = new OpenAI({ apiKey, timeout: requestTimeoutMs });
-  const transcriptionLanguage = normalizeTranscriptionLanguage(book.language);
+  const transcriptionLanguage = transcriptionLanguageForBook(book, manifestation);
   const response = (await client.audio.transcriptions.create(
     {
       file: createReadStream(clipPath),
@@ -1341,6 +1350,7 @@ async function transcribeAssetWithDeps(
   asset: AssetRow,
   files: AssetFileRow[],
   book: BookRow,
+  manifestation: ManifestationRow,
   settings: AppSettings,
   deps: ChapterAnalysisDeps,
   job: JobRow,
@@ -1360,7 +1370,7 @@ async function transcribeAssetWithDeps(
   const workDir = await mkdtemp(path.join(os.tmpdir(), "podible-transcript-"));
   const assetFingerprint = await computeTranscriptFingerprint(asset, files);
   const chunkCacheDir = transcriptChunkCacheDir(assetFingerprint);
-  const prompt = promptForChunk(book, glossary);
+  const prompt = promptForChunk(book, glossary, manifestation);
   const limitExtract = createAsyncLimiter(CHAPTER_ANALYSIS_EXTRACT_CONCURRENCY);
   const limitTranscribe = createAsyncLimiter(CHAPTER_ANALYSIS_TRANSCRIPTION_CONCURRENCY);
   try {
@@ -1400,7 +1410,7 @@ async function transcribeAssetWithDeps(
               ctx,
               `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=transcribe clip=${JSON.stringify(clipPath)}`
             );
-            return deps.transcribeChunk(settings, clipPath!, prompt, book);
+            return deps.transcribeChunk(settings, clipPath!, prompt, book, manifestation);
           });
           const persisted = await persistTranscriptChunk(chunkCacheDir, plan, transcribed);
           log(
@@ -1841,6 +1851,7 @@ export async function processChapterAnalysisJob(
           container.asset,
           container.files,
           book,
+          manifestationData.manifestation,
           settings,
           resolvedDeps,
           job,

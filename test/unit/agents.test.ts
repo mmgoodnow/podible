@@ -253,6 +253,7 @@ describe("agent decisions", () => {
     expect(decision.selections[0]?.manifestation).toEqual({
       label: "GraphicAudio dramatization",
       editionNote: "full cast",
+      language: null,
     });
     expect(decision.selections[0]?.parts.map((part) => part.url)).toEqual([
       "https://example.com/ga-part-1.torrent",

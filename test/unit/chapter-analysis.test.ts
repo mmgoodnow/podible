@@ -19,6 +19,7 @@ import {
   processChapterAnalysisJob,
   queueChapterAnalysisForBook,
   requestBookTranscription,
+  transcriptionLanguageForBook,
 } from "../../src/library/chapter-analysis";
 import { buildChapters } from "../../src/library/media";
 import { BooksRepo } from "../../src/repo";
@@ -206,6 +207,12 @@ describe("chapter analysis", () => {
     expect(normalizeTranscriptionLanguage("zzzz")).toBe("en");
     expect(normalizeTranscriptionLanguage("")).toBe("en");
     expect(normalizeTranscriptionLanguage(null)).toBe("en");
+  });
+
+  test("prefers manifestation language over polluted book language for transcription", () => {
+    expect(transcriptionLanguageForBook({ language: "spa" })).toBe("en");
+    expect(transcriptionLanguageForBook({ language: "spa" }, { language: "en" })).toBe("en");
+    expect(transcriptionLanguageForBook({ language: "eng" }, { language: "es" })).toBe("es");
   });
 
   test("plans overlapping transcription chunks", () => {
