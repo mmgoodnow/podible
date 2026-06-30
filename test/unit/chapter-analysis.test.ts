@@ -457,6 +457,81 @@ describe("chapter analysis", () => {
     }
   });
 
+  test("failed rerun preserves the last successful chapter artifact", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "podible-chapter-rerun-"));
+    const { db, repo } = setupRepo();
+    try {
+      await mkdir(root, { recursive: true });
+      const audioPath = path.join(root, "audio.mp3");
+      await writeFile(audioPath, "fake audio bytes");
+      const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+      const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
+      const asset = repo.addAsset({
+        bookId: book.id,
+        kind: "single",
+        mime: "audio/mpeg",
+        totalSize: 16,
+        durationMs: 90_000,
+        manifestationId: manifestation.id,
+        files: [{ path: audioPath, size: 16, start: 0, end: 15, durationMs: 90_000, title: "Audio" }],
+      });
+      const fingerprint = "test-fingerprint";
+      const chaptersJson = JSON.stringify([{ title: "Chapter 1", startTime: 0 }]);
+      repo.upsertChapterAnalysis({
+        manifestationId: manifestation.id,
+        status: "succeeded",
+        source: "whisper_transcript",
+        algorithmVersion: "test-version",
+        fingerprint,
+        chaptersJson,
+        debugJson: JSON.stringify({ previous: true }),
+        resolvedBoundaryCount: 1,
+        totalBoundaryCount: 1,
+        error: null,
+      });
+      repo.upsertManifestationTranscript({
+        manifestationId: manifestation.id,
+        status: "failed",
+        source: "whisper_transcript",
+        algorithmVersion: "test-version",
+        fingerprint,
+        error: "old failure",
+      });
+      const job = repo.createJob({
+        type: "chapter_analysis",
+        bookId: book.id,
+        payload: { manifestationId: manifestation.id },
+      });
+
+      await expect(
+        processChapterAnalysisJob(
+          {
+            repo,
+            getSettings: () => defaultSettings({ agents: { apiKey: "test-key", timeoutMs: 1000 } }),
+            onLog: () => undefined,
+          },
+          job,
+          {
+            extractChunkClip: async () => audioPath,
+            transcribeChunk: async () => {
+              throw new Error("rerun failed");
+            },
+          }
+        )
+      ).rejects.toThrow("rerun failed");
+
+      const analysis = repo.getChapterAnalysis(manifestation.id);
+      expect(analysis?.status).toBe("succeeded");
+      expect(analysis?.chapters_json).toBe(chaptersJson);
+      expect(analysis?.resolved_boundary_count).toBe(1);
+      expect(repo.getJob(job.id)?.id).toBe(job.id);
+      expect(asset.id).toBeGreaterThan(0);
+    } finally {
+      db.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("requestBookTranscription is idempotent and reports current/pending states", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "podible-transcript-status-"));
     const { db, repo } = setupRepo();

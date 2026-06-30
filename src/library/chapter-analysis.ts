@@ -1793,18 +1793,21 @@ export async function processChapterAnalysisJob(
     return "done";
   }
 
-  ctx.repo.upsertChapterAnalysis({
-    manifestationId,
-    status: "pending",
-    source: CHAPTER_ANALYSIS_SOURCE,
-    algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
-    fingerprint: combinedFingerprint,
-    chaptersJson: null,
-    debugJson: null,
-    resolvedBoundaryCount: 0,
-    totalBoundaryCount: 0,
-    error: null,
-  });
+  const existingAnalysisRow = ctx.repo.getChapterAnalysis(manifestationId);
+  if (!existingAnalysisRow) {
+    ctx.repo.upsertChapterAnalysis({
+      manifestationId,
+      status: "pending",
+      source: CHAPTER_ANALYSIS_SOURCE,
+      algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
+      fingerprint: combinedFingerprint,
+      chaptersJson: null,
+      debugJson: null,
+      resolvedBoundaryCount: 0,
+      totalBoundaryCount: 0,
+      error: null,
+    });
+  }
 
   // Load the epub once for glossary building.
   const ebookAsset = payload.ebookAssetId ? ctx.repo.getAssetWithFiles(payload.ebookAssetId) : null;
@@ -1921,18 +1924,21 @@ export async function processChapterAnalysisJob(
         error: message,
       });
     }
-    ctx.repo.upsertChapterAnalysis({
-      manifestationId,
-      status: "failed",
-      source: CHAPTER_ANALYSIS_SOURCE,
-      algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
-      fingerprint: combinedFingerprint,
-      chaptersJson: null,
-      debugJson: JSON.stringify({ error: message }),
-      resolvedBoundaryCount: 0,
-      totalBoundaryCount: 0,
-      error: message,
-    });
+    const currentAnalysis = ctx.repo.getChapterAnalysis(manifestationId);
+    if (!currentAnalysis || currentAnalysis.status !== "succeeded") {
+      ctx.repo.upsertChapterAnalysis({
+        manifestationId,
+        status: "failed",
+        source: CHAPTER_ANALYSIS_SOURCE,
+        algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
+        fingerprint: combinedFingerprint,
+        chaptersJson: null,
+        debugJson: JSON.stringify({ error: message }),
+        resolvedBoundaryCount: 0,
+        totalBoundaryCount: 0,
+        error: message,
+      });
+    }
     throw error;
   }
 }
