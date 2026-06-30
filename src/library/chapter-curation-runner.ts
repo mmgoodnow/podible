@@ -3117,5 +3117,5 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
 }
 
 export async function runAgenticChapterCurationDetailed(ctx: ChapterCurationContext): Promise<ChapterCurationDetailedResult> {
-  return runRecursiveAgenticChapterCurationDetailed(ctx);
+  return runNodeParallelAgenticChapterCurationDetailed(ctx);
 }

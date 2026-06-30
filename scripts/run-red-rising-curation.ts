@@ -6,7 +6,6 @@ import type { AssetFileRow, AssetRow, BookRow, ManifestationRow } from "../src/a
 import { loadEpubEntries, type StoredTranscriptPayload } from "../src/library/chapter-analysis";
 import {
   runNodeParallelAgenticChapterCurationDetailed,
-  runRecursiveAgenticChapterCurationDetailed,
   type ChapterCurationTiming,
 } from "../src/library/chapter-curation";
 import { defaultSettings } from "../src/settings";
@@ -24,8 +23,7 @@ type Metadata = {
 
 const caseDir = path.resolve("tmp/chapter-cases/red-rising/prod");
 const runId = new Date().toISOString().replace(/[:.]/g, "-");
-const mode = (process.env.RED_RISING_MODE?.trim() || "recursive") as "recursive" | "node";
-if (mode !== "recursive" && mode !== "node") throw new Error("RED_RISING_MODE must be recursive or node");
+const mode = "node";
 const eventLogPath = path.join(caseDir, `${mode}-agent-events-m59-${runId}.jsonl`);
 const traceDir = path.join(caseDir, `${mode}-agent-traces-m59-${runId}`);
 const resultPath = path.join(caseDir, `${mode}-agent-result-m59-${runId}.json`);
@@ -114,9 +112,8 @@ async function main(): Promise<void> {
   ];
 
   try {
-    const runCuration = mode === "node" ? runNodeParallelAgenticChapterCurationDetailed : runRecursiveAgenticChapterCurationDetailed;
     const startedAt = Date.now();
-    const result = await runCuration({
+    const result = await runNodeParallelAgenticChapterCurationDetailed({
       book: metadata.book,
       manifestation,
       containers,

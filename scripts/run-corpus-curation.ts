@@ -6,15 +6,13 @@ import path from "node:path";
 import { loadEpubEntries, type StoredTranscriptPayload } from "../src/library/chapter-analysis";
 import {
   runNodeParallelAgenticChapterCurationDetailed,
-  runRecursiveAgenticChapterCurationDetailed,
   type ChapterCurationTiming,
 } from "../src/library/chapter-curation";
 import { defaultSettings } from "../src/settings";
 
 const slug = process.env.CORPUS_SLUG?.trim() || process.argv[2];
 if (!slug) throw new Error("Usage: CORPUS_SLUG=<slug> bun scripts/run-corpus-curation.ts");
-const mode = (process.env.CORPUS_MODE?.trim() || "recursive") as "recursive" | "node";
-if (mode !== "recursive" && mode !== "node") throw new Error("CORPUS_MODE must be recursive or node");
+const mode = "node";
 
 const caseDir = path.resolve("tmp/chapter-cases/corpus", slug);
 const runId = new Date().toISOString().replace(/[:.]/g, "-");
@@ -112,10 +110,9 @@ async function main(): Promise<void> {
   ];
 
   try {
-    const runCuration = mode === "node" ? runNodeParallelAgenticChapterCurationDetailed : runRecursiveAgenticChapterCurationDetailed;
     const startedAt = Date.now();
     const git = gitProvenance();
-    const detailed = await runCuration({
+    const detailed = await runNodeParallelAgenticChapterCurationDetailed({
       book: {
         id: Number(metadata.book_id),
         title: String(metadata.title),

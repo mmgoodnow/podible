@@ -17,7 +17,7 @@ import { readFfprobeChapters } from "../media/probe-cache";
 import type { BooksRepo } from "../repo";
 import { slugify } from "../utils/strings";
 import { selectPreferredAudioManifestation } from "./asset-selection";
-import { runRecursiveAgenticChapterCurationDetailed } from "./chapter-curation";
+import { runAgenticChapterCurationDetailed } from "./chapter-curation";
 import type { ChapterCurationTiming } from "./chapter-curation";
 
 const CHAPTER_ANALYSIS_SOURCE = "whisper_transcript";
@@ -304,7 +304,7 @@ type ChapterAnalysisDeps = {
   loadEpubEntries: typeof loadEpubEntries;
   extractChunkClip: typeof extractChunkClip;
   transcribeChunk: typeof transcribeChunk;
-  runAgenticCuration: typeof runRecursiveAgenticChapterCurationDetailed;
+  runAgenticCuration: typeof runAgenticChapterCurationDetailed;
 };
 
 type ExtractChunkArgs = {
@@ -1647,7 +1647,7 @@ async function tryAgenticCuration(
   payload: { manifestationId?: number; ebookAssetId?: number },
   settings: AppSettings,
   combinedFingerprint: string,
-  runCuration: typeof runRecursiveAgenticChapterCurationDetailed
+  runCuration: typeof runAgenticChapterCurationDetailed
 ): Promise<AgenticCurationResult | null> {
   if (!settings.agents.apiKey.trim()) return null;
   if (!payload.ebookAssetId) return null;
@@ -1694,9 +1694,9 @@ async function tryAgenticCuration(
       debugTraceDir,
     });
 
-    const reports = result.recursiveReports ?? [];
-    const resolvedBoundaryCount = reports.filter((r) => r.outcome === "split").length;
-    const totalBoundaryCount = reports.filter((r) => r.outcome === "split" || r.outcome === "failed").length;
+    const reports = result.nodeBoundaryReports ?? [];
+    const resolvedBoundaryCount = reports.filter((r) => r.outcome === "accepted").length;
+    const totalBoundaryCount = reports.filter((r) => r.outcome === "accepted" || r.outcome === "failed").length;
 
     if (!result.result?.accepted || !result.result.chapters || result.result.chapters.length === 0) {
       return null;
@@ -1738,7 +1738,7 @@ export async function processChapterAnalysisJob(
     loadEpubEntries,
     extractChunkClip,
     transcribeChunk,
-    runAgenticCuration: runRecursiveAgenticChapterCurationDetailed,
+    runAgenticCuration: runAgenticChapterCurationDetailed,
     ...deps,
   };
   const jobStartedAt = performance.now();

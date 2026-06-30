@@ -641,7 +641,7 @@ describe("chapter analysis", () => {
             finalOutput: null,
             newItems: [],
             rawResponses: [],
-            recursiveReports: [{ path: "root", depth: 0, epubStartIndex: 0, epubEndIndex: 1, startTime: 0, endTime: 90, outcome: "split" }],
+            nodeBoundaryReports: [{ epubNodeId: "part-one", epubIndex: 1, title: "Part One", expectedStartTime: 10, outcome: "accepted" }],
           }),
         }
       );

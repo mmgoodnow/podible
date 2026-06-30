@@ -28,7 +28,6 @@ import {
   createRootCurationSpan,
   rankTargetBoundaries,
   resolveNodeBoundaryChapters,
-  resolveRecursiveChapterSpans,
   researchEpubBoundary,
   searchEpubText,
   submitChapterPlan,
@@ -41,7 +40,6 @@ import {
   type NodeBoundaryCurationReport,
   type NodeBoundaryDecision,
   type ResearchEpubBoundaryResult,
-  type RecursiveSpanDecision,
 } from "../../src/library/chapter-curation";
 import type { AppSettings, AssetFileRow, AssetRow, BookRow, ManifestationRow } from "../../src/app-types";
 import type { EpubChapterEntry, StoredTranscriptPayload } from "../../src/library/chapter-analysis";
@@ -2426,167 +2424,6 @@ describe("chapter curation tools", () => {
 
     expect(chapters?.map((chapter) => chapter.epubNodeId)).toEqual(["part-1", "chapter-1"]);
     expect(reports.map((report) => `${report.epubNodeId}:${report.outcome}`)).toEqual(["part-1:accepted", "chapter-1:accepted"]);
-  });
-
-  test("resolveRecursiveChapterSpans returns a leaf-only plan", async () => {
-    const context = ctx({
-      epubEntries: [epubEntry({ id: "front", title: "Prologue", cumulativeRatio: 1, cumulativeWords: 4 })],
-    });
-    const chapters = await resolveRecursiveChapterSpans(context, async () => {
-      throw new Error("no agent should be spawned when no internal boundaries remain");
-    });
-    expect(chapters).toEqual([{ title: "Prologue", startTime: 0, epubNodeId: "front" }]);
-  });
-
-  test("resolveRecursiveChapterSpans splits and merges child leaves in order", async () => {
-    const context = ctx({
-      durationMs: 300_000,
-      manifestation: manifestation({ duration_ms: 300_000 }),
-      epubEntries: [
-        epubEntry({ id: "front", title: "Prologue", cumulativeRatio: 0.2, cumulativeWords: 4 }),
-        epubEntry({ id: "chapter-1", title: "Chapter 1", cumulativeRatio: 0.5, cumulativeWords: 16 }),
-        epubEntry({ id: "chapter-2", title: "Chapter 2", cumulativeRatio: 0.8, cumulativeWords: 24 }),
-        epubEntry({ id: "chapter-3", title: "Chapter 3", cumulativeRatio: 1, cumulativeWords: 32 }),
-      ],
-    });
-    const decisions: string[] = [];
-    const startTimes: Record<string, number> = {
-      "chapter-1": 120,
-      "chapter-2": 220,
-      "chapter-3": 260,
-    };
-    const chapters = await resolveRecursiveChapterSpans(context, async (span, targetBoundary): Promise<RecursiveSpanDecision> => {
-      decisions.push(span.path);
-      return {
-        kind: "split",
-        split: {
-          accepted: true,
-          kind: "split",
-          spanPath: span.path,
-          epubNodeId: targetBoundary!.epubNodeId,
-          epubIndex: targetBoundary!.epubIndex,
-          title: targetBoundary!.title,
-          startTime: startTimes[targetBoundary!.epubNodeId]!,
-          notes: null,
-          audit: {
-            epubNodeId: targetBoundary!.epubNodeId,
-            title: targetBoundary!.title,
-            startTime: startTimes[targetBoundary!.epubNodeId]!,
-            boundaryComparison: {
-              transcriptPrecision: "utterance",
-              transcriptPrecisionNote: null,
-              previousEpub: { epubNodeId: null, title: null, tailText: "" },
-              targetEpub: { epubNodeId: targetBoundary!.epubNodeId, title: targetBoundary!.title, headText: "" },
-              transcriptBefore: "",
-              transcriptAfter: "",
-            },
-            transcriptWindow: "",
-            candidates: [],
-          },
-        },
-      };
-    });
-    expect(decisions).toEqual(["root", "L", "R"]);
-    expect(chapters?.map((chapter) => chapter.title)).toEqual(["Prologue", "Chapter 1", "Chapter 2", "Chapter 3"]);
-  });
-
-  test("resolveRecursiveChapterSpans chooses target boundaries by node count, not word count", async () => {
-    const context = ctx({
-      durationMs: 300_000,
-      manifestation: manifestation({ duration_ms: 300_000 }),
-      epubEntries: [
-        epubEntry({ id: "front", title: "Front", cumulativeRatio: 0.9, cumulativeWords: 90 }),
-        epubEntry({ id: "chapter-1", title: "Chapter 1", cumulativeRatio: 0.92, cumulativeWords: 92 }),
-        epubEntry({ id: "chapter-2", title: "Chapter 2", cumulativeRatio: 0.94, cumulativeWords: 94 }),
-        epubEntry({ id: "chapter-3", title: "Chapter 3", cumulativeRatio: 0.96, cumulativeWords: 96 }),
-        epubEntry({ id: "chapter-4", title: "Chapter 4", cumulativeRatio: 1, cumulativeWords: 100 }),
-      ],
-    });
-    const targets: ChapterCurationTargetBoundary[] = [];
-    await resolveRecursiveChapterSpans(
-      context,
-      async (_span, targetBoundary): Promise<RecursiveSpanDecision | null> => {
-        targets.push(targetBoundary);
-        return null;
-      }
-    );
-
-    expect(targets.map((target) => target.epubNodeId)).toEqual(["chapter-2"]);
-    expect(targets[0]?.localNodeRatio).toBe(0.4);
-    expect(targets[0]?.expectedStartTime).toBe(276);
-  });
-
-  test("resolveRecursiveChapterSpans runs sibling spans concurrently within the configured limit", async () => {
-    const context = ctx({
-      durationMs: 300_000,
-      manifestation: manifestation({ duration_ms: 300_000 }),
-      epubEntries: [
-        epubEntry({ id: "front", title: "Prologue", cumulativeRatio: 0.2, cumulativeWords: 4 }),
-        epubEntry({ id: "chapter-1", title: "Chapter 1", cumulativeRatio: 0.5, cumulativeWords: 16 }),
-        epubEntry({ id: "chapter-2", title: "Chapter 2", cumulativeRatio: 0.8, cumulativeWords: 24 }),
-        epubEntry({ id: "chapter-3", title: "Chapter 3", cumulativeRatio: 1, cumulativeWords: 32 }),
-      ],
-    });
-    let active = 0;
-    let maxActive = 0;
-    const startTimes: Record<string, number> = {
-      "chapter-1": 120,
-      "chapter-2": 220,
-      "chapter-3": 260,
-    };
-    const chapters = await resolveRecursiveChapterSpans(
-      context,
-      async (span, targetBoundary): Promise<RecursiveSpanDecision> => {
-        active++;
-        maxActive = Math.max(maxActive, active);
-        try {
-          if (span.path !== "root") {
-            await new Promise((resolve) => setTimeout(resolve, 10));
-          }
-          return {
-            kind: "split",
-            split: {
-              accepted: true,
-              kind: "split",
-              spanPath: span.path,
-              epubNodeId: targetBoundary!.epubNodeId,
-              epubIndex: targetBoundary!.epubIndex,
-              title: targetBoundary!.title,
-              startTime: startTimes[targetBoundary!.epubNodeId]!,
-              notes: null,
-              audit: {
-                epubNodeId: targetBoundary!.epubNodeId,
-                title: targetBoundary!.title,
-                startTime: startTimes[targetBoundary!.epubNodeId]!,
-                boundaryComparison: {
-                  transcriptPrecision: "utterance",
-                  transcriptPrecisionNote: null,
-                  previousEpub: { epubNodeId: null, title: null, tailText: "" },
-                  targetEpub: { epubNodeId: targetBoundary!.epubNodeId, title: targetBoundary!.title, headText: "" },
-                  transcriptBefore: "",
-                  transcriptAfter: "",
-                },
-                transcriptWindow: "",
-                candidates: [],
-              },
-            },
-          };
-        } finally {
-          active--;
-        }
-      },
-      { maxConcurrency: 2 }
-    );
-
-    expect(chapters?.map((chapter) => chapter.title)).toEqual(["Prologue", "Chapter 1", "Chapter 2", "Chapter 3"]);
-    expect(maxActive).toBe(2);
-  });
-
-  test("resolveRecursiveChapterSpans returns a partial leaf after a failed decision", async () => {
-    const reports: Array<{ outcome: string }> = [];
-    const chapters = await resolveRecursiveChapterSpans(ctx(), async () => null, { reports: reports as never });
-    expect(chapters?.[0]?.title).toBe("Prologue");
-    expect(reports[0]?.outcome).toBe("partial_leaf");
   });
 
   test("findSpokenHeadingBoundaryCandidate accepts a spoken heading followed by the target opener", async () => {
