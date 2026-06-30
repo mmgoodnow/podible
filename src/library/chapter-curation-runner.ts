@@ -870,6 +870,7 @@ function createAudibleEpubNodeSelectionAgent(ctx: ChapterCurationContext): Agent
       "Exclude obvious non-audio front/back matter such as copyright pages, dedications, acknowledgments, tables of contents, cover/nav pages, ads, indexes, and about-the-author pages when they are not plausibly spoken in the audiobook.",
       "Treat edition-specific prefaces, revised/expanded edition notes, bonus essays, and print-only update notes as exclude-by-default unless the transcript beginning/ending excerpts directly show that specific node is narrated.",
       "Keep prologues, part headings, chapter nodes, epilogues, and any uncertain narrative node. False exclusions are worse than false inclusions.",
+      "Exclude epigraphs, opening quotes, and other front-matter motto pages from the curated chapter-node list unless they are clearly the book's actual named chapter structure. If they are narrated before the first real chapter, fold that audio into the first real chapter marker instead of creating a separate epigraph chapter.",
       "Use the transcript beginning and ending excerpts to identify audiobook credits/preamble and whether EPUB front/back matter is likely represented.",
       "For multi-asset audiobooks, classify audio-only intervals around asset starts, asset ends, and joins, such as publisher intros, end credits, recaps, and part bumpers that have no EPUB node.",
       "Keep audio-only intervals narrow and evidence-based. They are annotations for later tools, not chapter timestamps.",
