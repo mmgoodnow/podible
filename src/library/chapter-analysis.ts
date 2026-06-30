@@ -452,6 +452,33 @@ function flattenToc(nodes: Array<{ label?: string; href?: string; children?: unk
   }
 }
 
+function normalizeTitleWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function titleTokenSet(value: string): Set<string> {
+  return new Set(
+    value
+      .split(/\s+/)
+      .map((token) => normalizeToken(token))
+      .filter(Boolean)
+  );
+}
+
+function chooseEpubEntryTitle(tocTitle: string | null, segments: EpubTextSegment[], fallback: string): string {
+  const normalizedTocTitle = tocTitle ? normalizeTitleWhitespace(tocTitle) : "";
+  const headingTitle = segments.find((segment) => segment.kind === "heading" && segment.text.trim())?.text ?? "";
+  const normalizedHeadingTitle = normalizeTitleWhitespace(headingTitle);
+  if (!normalizedHeadingTitle) return normalizedTocTitle || fallback;
+  if (!normalizedTocTitle) return normalizedHeadingTitle;
+
+  const tocTokens = titleTokenSet(normalizedTocTitle);
+  const headingTokens = titleTokenSet(normalizedHeadingTitle);
+  if (tocTokens.size === 0) return normalizedHeadingTitle;
+  const overlap = Array.from(tocTokens).filter((token) => headingTokens.has(token)).length / tocTokens.size;
+  return overlap >= 0.6 ? normalizedHeadingTitle : normalizedTocTitle;
+}
+
 export async function loadEpubEntries(epubPath: string): Promise<EpubChapterEntry[]> {
   const resourceDir = await mkdtemp(path.join(os.tmpdir(), "podible-epub-"));
   const epub = await initEpubFile(epubPath, resourceDir);
@@ -496,9 +523,10 @@ export async function loadEpubEntries(epubPath: string): Promise<EpubChapterEntr
       const tokens = words.map((word) => word.token);
       if (tokens.length === 0) continue;
       cumulativeWords += tokens.length;
+      const fallbackTitle = `Chapter ${index + 1}`;
       entries.push({
         id,
-        title: titleById.get(id) || `Chapter ${index + 1}`,
+        title: chooseEpubEntryTitle(titleById.get(id) ?? null, segments, fallbackTitle),
         href: hrefById.get(id) ?? id,
         text,
         words,

@@ -83,6 +83,7 @@ type ModeSummary = {
   };
   nodeReplay?: {
     chapters: number;
+    replayedChapters?: SubmittedChapter[];
     acceptedReports: number;
     failedReports: number;
     droppedReports: number;
@@ -453,6 +454,9 @@ function loadAnswerKey(caseDir: string): AnswerKeySummary | null {
 }
 
 function chaptersFromResult(result: JsonRecord | null, replay: ModeSummary["nodeReplay"]): SubmittedChapter[] | null {
+  if (Array.isArray(replay?.replayedChapters)) {
+    return replay.replayedChapters;
+  }
   if (Array.isArray(result?.result?.chapters)) {
     return result.result.chapters.flatMap((chapter: JsonRecord) => {
       if (typeof chapter.title !== "string" || typeof chapter.startTime !== "number") return [];
@@ -599,6 +603,7 @@ async function replayNodeReports(caseDir: string, result: JsonRecord): Promise<M
   const coverage = replayReports.length === 0 ? 0 : (acceptedReports + droppedReports + skippedReports) / replayReports.length;
   return {
     chapters: replayed.length,
+    replayedChapters: replayed,
     acceptedReports,
     failedReports,
     droppedReports,
