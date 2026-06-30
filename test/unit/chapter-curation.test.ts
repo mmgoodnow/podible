@@ -1906,7 +1906,7 @@ describe("chapter curation tools", () => {
     expect(result.audit.boundaryComparison.targetEpub.headText).toContain("Northwoods");
   });
 
-  test("validateNodeBoundary includes extended after-context for spoken heading gaps", async () => {
+  test("validateNodeBoundary keeps spoken-heading audit narrow while transcript tool can fetch surrounding prose", async () => {
     const context = ctx({
       durationMs: 300_000,
       manifestation: manifestation({ duration_ms: 300_000 }),
@@ -1944,7 +1944,8 @@ describe("chapter curation tools", () => {
     if (!result.accepted) throw new Error(result.errors.join("\n"));
     expect(result.audit.boundaryComparison.transcriptAfter).toContain("Seven");
     expect(result.audit.boundaryComparison.transcriptAfter).not.toContain("slow pursuit");
-    expect(result.audit.boundaryComparison.extendedTranscriptAfter).toContain("slow pursuit");
+    const widerWindow = getTranscriptWindow(context, { startTime: 100, radiusSeconds: 120 });
+    expect(widerWindow.text).toContain("slow pursuit");
   });
 
   test("validateNodeBoundary accepts the first narrated EPUB node after an audio-only preamble", async () => {

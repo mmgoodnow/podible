@@ -661,7 +661,7 @@ function nodeBoundaryPrompt(ctx: ChapterCurationContext, span: ChapterCurationSp
   ].join("\n");
 }
 
-function createChapterBoundaryJudgeAgent(ctx: ChapterCurationContext): Agent {
+function createChapterBoundaryJudgeAgent(ctx: ChapterCurationContext, span: ChapterCurationSpan): Agent {
   return new Agent({
     name: "ChapterBoundaryJudge",
     model: ctx.debugJudgeModel?.trim() || ctx.settings.agents.model,
@@ -677,7 +677,7 @@ function createChapterBoundaryJudgeAgent(ctx: ChapterCurationContext): Agent {
       "EPUB chapter headings are often printed but not read aloud. If targetEpub.optionalHeadingText is absent from the transcript but targetEpub.bodyHeadText begins right at the timestamp, that is strong opener evidence.",
       "ASR sometimes drops the printed heading and the first few opener words. If the notes identify a near-opener fallback, accept when transcriptAfter starts with the earliest clear target body phrase and transcriptBefore plausibly matches the previous EPUB tail.",
       "For high-confidence named embedded audio markers, ASR can have a transcript gap after the previous node tail. If notes identify an embedded audio marker, transcriptBefore matches previousEpub.tailText, boundaryWords.after starts tens of seconds later, and those after-words appear inside targetEpub.bodyHeadText/headText rather than previousEpub.tailText, accept the embedded marker as the best chapter boundary. Use finding=embedded_marker_transcript_gap.",
-      "For short structural headings such as roman numerals or bare numbers, judge the surrounding prose, not the heading alone. Accept when transcriptBefore matches the previous EPUB tail, boundaryWords.after or transcriptAfter contains the spoken heading cue, and extendedTranscriptAfter shows prose that belongs to targetEpub.headText/bodyHeadText rather than previousEpub.tailText. Use finding=spoken_heading_with_surrounding_prose.",
+      "For short structural headings such as roman numerals or bare numbers, judge the surrounding prose, not the heading alone. If boundaryWords.after or transcriptAfter contains only the spoken heading cue, call getTranscriptWindow with radiusSeconds around 120 before judging. Accept when the wider window shows previous EPUB tail before the cue and target EPUB prose after the cue. Use finding=spoken_heading_with_surrounding_prose.",
       "For the first EPUB node only, previousEpub is absent. If notes identify an opening interior-start candidate, accept when transcriptBefore is empty or only opening credits/boilerplate and transcriptAfter starts with distinctive prose from inside the target EPUB node. This means the audiobook/ASR omitted earlier printed opener text; it is still the first available narrated boundary.",
       "Check transcriptPrecision. If it is word, the before/after split is exact and should be treated as precise. If it is utterance, a real boundary may fall inside a displayed utterance — accept the utterance start if it contains previous tail then target head.",
       "If boundaryWords.containing is non-empty, the timestamp falls mid-word. Prefer a nearestCleanBoundaryTimes value unless the containing word is itself the first opener word.",
@@ -689,6 +689,17 @@ function createChapterBoundaryJudgeAgent(ctx: ChapterCurationContext): Agent {
       "You must call submitBoundaryJudgment.",
     ].join("\n"),
     tools: [
+      tool({
+        name: "getTranscriptWindow",
+        description: "Return wider transcript context around the proposed boundary. Use this before judging spoken heading cues or transcript gaps.",
+        parameters: getTranscriptWindowSchema,
+        strict: true,
+        execute: (input) => {
+          const clampedStart = Math.min(span.endTime, Math.max(span.startTime, input.startTime));
+          const radiusSeconds = Math.min(input.radiusSeconds ?? 120, 180);
+          return getTranscriptWindow(ctx, { startTime: clampedStart, radiusSeconds });
+        },
+      }),
       tool({
         name: "submitBoundaryJudgment",
         description: "Submit your acceptance or rejection of the proposed chapter boundary.",
@@ -709,7 +720,7 @@ function chapterBoundaryJudgePrompt(ctx: ChapterCurationContext, span: ChapterCu
     "Printed EPUB headings are often absent from ASR. Do not reject merely because optionalHeadingText is missing when bodyHeadText begins at the proposed timestamp.",
     "If notes identify a near-opener fallback, accept the first audible target body phrase when the heading is absent from ASR and transcriptBefore supports the previous EPUB tail.",
     "If notes identify a high-confidence named embedded audio marker, handle transcript gaps differently: accept when transcriptBefore matches previousEpub.tailText, boundaryWords.after starts tens of seconds later due to an ASR/audio gap, and those after-words appear inside targetEpub.bodyHeadText/headText rather than previousEpub.tailText. This is not the same as a random interior title mention; use finding=embedded_marker_transcript_gap.",
-    "For short structural headings such as roman numerals or bare numbers, judge surrounding prose instead of the heading alone. Accept when transcriptBefore matches previousEpub.tailText, boundaryWords.after or transcriptAfter contains the spoken heading cue, and extendedTranscriptAfter contains target-node prose rather than previous-node prose. This covers ASR gaps between a spoken chapter number and the first transcribed target sentence; use finding=spoken_heading_with_surrounding_prose.",
+    "For short structural headings such as roman numerals or bare numbers, judge surrounding prose instead of the heading alone. If audit.boundaryComparison only shows the spoken heading cue and not target prose after it, call getTranscriptWindow around proposed.startTime with radiusSeconds around 120. Accept when the wider window shows previous-node prose before the cue and target-node prose after the cue; use finding=spoken_heading_with_surrounding_prose.",
     "If this is the first EPUB node and notes identify an opening interior-start candidate, previousEpub will be absent. Accept when transcriptBefore is empty or only opening credits/boilerplate and transcriptAfter starts with distinctive prose from inside targetEpub, even if earlier printed opener words are missing from ASR/audio.",
     "transcriptPrecision=word is exact; boundaryWords.containing non-empty means the timestamp is mid-word — prefer nearestCleanBoundaryTimes unless that word is the first opener. transcriptPrecision=utterance is lower precision; accepting an utterance start is valid when it contains previous tail followed by target head.",
     "transcriptBefore matching the previous EPUB node is positive evidence, not a problem.",
@@ -765,8 +776,8 @@ export async function judgeChapterBoundary(
       tracingDisabled: true,
       traceIncludeSensitiveData: false,
     });
-    const result = await runner.run(createChapterBoundaryJudgeAgent(ctx), chapterBoundaryJudgePrompt(ctx, span, proposal), {
-      maxTurns: 4,
+    const result = await runner.run(createChapterBoundaryJudgeAgent(ctx, span), chapterBoundaryJudgePrompt(ctx, span, proposal), {
+      maxTurns: 6,
       signal: abort.signal,
       toolExecution: { maxFunctionToolConcurrency: 1 },
     });

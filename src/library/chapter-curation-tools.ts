@@ -96,7 +96,6 @@ export type FulcrumValidationAudit = {
     };
     transcriptBefore: string;
     transcriptAfter: string;
-    extendedTranscriptAfter?: string;
     boundaryWords?: TranscriptBoundaryWords;
   };
   transcriptWindow: string;
