@@ -145,7 +145,7 @@ export function logSpanToolCall(ctx: DebugContext, span: unknown, toolName: stri
   const spanPath = typeof span === "object" && span && typeof (span as { path?: unknown }).path === "string" ? (span as { path: string }).path : "?";
   logChapterCurationEvent(ctx, {
     type: "span-tool-call",
-    message: `recursive span=${spanPath} tool=${toolName} call`,
+    message: `chapter span=${spanPath} tool=${toolName} call`,
     span,
     toolName,
     input,
@@ -156,7 +156,7 @@ export function logSpanToolResult(ctx: DebugContext, span: unknown, toolName: st
   const spanPath = typeof span === "object" && span && typeof (span as { path?: unknown }).path === "string" ? (span as { path: string }).path : "?";
   logChapterCurationEvent(ctx, {
     type: "span-tool-result",
-    message: `recursive span=${spanPath} tool=${toolName} result`,
+    message: `chapter span=${spanPath} tool=${toolName} result`,
     span,
     toolName,
     result: summarizeToolResultForEvent(result),
@@ -167,7 +167,7 @@ export function logSpanToolError(ctx: DebugContext, span: unknown, toolName: str
   const spanPath = typeof span === "object" && span && typeof (span as { path?: unknown }).path === "string" ? (span as { path: string }).path : "?";
   logChapterCurationEvent(ctx, {
     type: "span-tool-error",
-    message: `recursive span=${spanPath} tool=${toolName} error=${JSON.stringify((error as Error).message ?? String(error))}`,
+    message: `chapter span=${spanPath} tool=${toolName} error=${JSON.stringify((error as Error).message ?? String(error))}`,
     span,
     toolName,
     error: {

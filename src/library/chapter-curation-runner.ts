@@ -1019,7 +1019,9 @@ export function createNodeBoundaryCuratorAgent(
   let rejectedBoundaryRequiresEvidence = false;
   let evidenceCallsSinceRejectedBoundary = 0;
   let transcriptSearchesSinceBoundarySubmit = 0;
+  let rejectedBoundaryCount = 0;
   const rejectedBoundaries = new Set<string>();
+  const maxRejectedBoundarySubmissions = Math.max(1, Number(process.env.PODIBLE_CHAPTER_NODE_MAX_REJECTIONS ?? 4));
 
   function markEvidenceToolUsed(): void {
     if (rejectedBoundaryRequiresEvidence) evidenceCallsSinceRejectedBoundary++;
@@ -1051,6 +1053,15 @@ export function createNodeBoundaryCuratorAgent(
     } catch (error) {
       logSpanToolError(ctx, span, toolName, error);
       throw error;
+    }
+  }
+
+  function recordRejectedBoundary(reason: string): void {
+    rejectedBoundaryCount++;
+    if (rejectedBoundaryCount >= maxRejectedBoundarySubmissions) {
+      throw new Error(
+        `Node boundary ${targetBoundary.epubNodeId} stopped after ${rejectedBoundaryCount} rejected submissions. Last rejection: ${reason}`
+      );
     }
   }
 
@@ -1211,6 +1222,7 @@ export function createNodeBoundaryCuratorAgent(
               rejectedBoundaries.add(rejectedKey);
               rejectedBoundaryRequiresEvidence = true;
               evidenceCallsSinceRejectedBoundary = 0;
+              recordRejectedBoundary(result.errors[0] ?? "validation rejected boundary");
               return result;
             }
             const judgment = await judgeChapterBoundary(ctx, span, {
@@ -1227,6 +1239,7 @@ export function createNodeBoundaryCuratorAgent(
               rejectedBoundaries.add(rejectedKey);
               rejectedBoundaryRequiresEvidence = true;
               evidenceCallsSinceRejectedBoundary = 0;
+              recordRejectedBoundary(conciseFulcrumJudgmentMessage(judgment));
               return {
                 accepted: false,
                 kind: "node_boundary",
