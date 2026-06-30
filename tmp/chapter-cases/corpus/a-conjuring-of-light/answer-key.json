@@ -1,0 +1,652 @@
+{
+  "slug": "a-conjuring-of-light",
+  "bookTitle": "A Conjuring of Light",
+  "author": "V.E. Schwab",
+  "manifestationShape": "single M4B with generic embedded markers",
+  "sourceArtifacts": [
+    "asset-files.json",
+    "metadata.json",
+    "transcript.json",
+    "raw-chapters.json",
+    "book.epub"
+  ],
+  "expectedChapterCount": 126,
+  "expectedChapters": [
+    {
+      "index": 1,
+      "title": "I",
+      "startTime": 0
+    },
+    {
+      "index": 2,
+      "title": "II",
+      "startTime": 216.456
+    },
+    {
+      "index": 3,
+      "title": "III",
+      "startTime": 925.733
+    },
+    {
+      "index": 4,
+      "title": "IV",
+      "startTime": 1191.369
+    },
+    {
+      "index": 5,
+      "title": "V",
+      "startTime": 2042.566
+    },
+    {
+      "index": 6,
+      "title": "VI",
+      "startTime": 2512.909
+    },
+    {
+      "index": 7,
+      "title": "VII",
+      "startTime": 3533.566
+    },
+    {
+      "index": 8,
+      "title": "VIII",
+      "startTime": 4285.985
+    },
+    {
+      "index": 9,
+      "title": "IX",
+      "startTime": 4525.058
+    },
+    {
+      "index": 10,
+      "title": "X",
+      "startTime": 4724.146
+    },
+    {
+      "index": 11,
+      "title": "XI",
+      "startTime": 5097.29
+    },
+    {
+      "index": 12,
+      "title": "I",
+      "startTime": 5667.898
+    },
+    {
+      "index": 13,
+      "title": "II",
+      "startTime": 6396.4
+    },
+    {
+      "index": 14,
+      "title": "III",
+      "startTime": 7543.002
+    },
+    {
+      "index": 15,
+      "title": "IV",
+      "startTime": 7839.381
+    },
+    {
+      "index": 16,
+      "title": "V",
+      "startTime": 8041.534
+    },
+    {
+      "index": 17,
+      "title": "VI",
+      "startTime": 8867.979
+    },
+    {
+      "index": 18,
+      "title": "VII",
+      "startTime": 9535.924
+    },
+    {
+      "index": 19,
+      "title": "I",
+      "startTime": 10476.843
+    },
+    {
+      "index": 20,
+      "title": "II",
+      "startTime": 11345.223
+    },
+    {
+      "index": 21,
+      "title": "III",
+      "startTime": 11868.554
+    },
+    {
+      "index": 22,
+      "title": "IV",
+      "startTime": 12156.667
+    },
+    {
+      "index": 23,
+      "title": "V",
+      "startTime": 12617.769
+    },
+    {
+      "index": 24,
+      "title": "VI",
+      "startTime": 13406.365
+    },
+    {
+      "index": 25,
+      "title": "I",
+      "startTime": 14571.868
+    },
+    {
+      "index": 26,
+      "title": "II",
+      "startTime": 14932.474
+    },
+    {
+      "index": 27,
+      "title": "III",
+      "startTime": 16012.387
+    },
+    {
+      "index": 28,
+      "title": "IV",
+      "startTime": 16815.798
+    },
+    {
+      "index": 29,
+      "title": "V",
+      "startTime": 17368.34
+    },
+    {
+      "index": 30,
+      "title": "VI",
+      "startTime": 17888.885
+    },
+    {
+      "index": 31,
+      "title": "VII",
+      "startTime": 18312.045
+    },
+    {
+      "index": 32,
+      "title": "VIII",
+      "startTime": 18943.442
+    },
+    {
+      "index": 33,
+      "title": "IX",
+      "startTime": 19956.575
+    },
+    {
+      "index": 34,
+      "title": "I",
+      "startTime": 21502.281
+    },
+    {
+      "index": 35,
+      "title": "II",
+      "startTime": 22444.036
+    },
+    {
+      "index": 36,
+      "title": "III",
+      "startTime": 23253.762
+    },
+    {
+      "index": 37,
+      "title": "IV",
+      "startTime": 23466.736
+    },
+    {
+      "index": 38,
+      "title": "V",
+      "startTime": 24218.134
+    },
+    {
+      "index": 39,
+      "title": "VI",
+      "startTime": 24514.699
+    },
+    {
+      "index": 40,
+      "title": "VII",
+      "startTime": 24722.61
+    },
+    {
+      "index": 41,
+      "title": "VIII",
+      "startTime": 25311.515
+    },
+    {
+      "index": 42,
+      "title": "IX",
+      "startTime": 25786.734
+    },
+    {
+      "index": 43,
+      "title": "I",
+      "startTime": 25868.933
+    },
+    {
+      "index": 44,
+      "title": "II",
+      "startTime": 26278.022
+    },
+    {
+      "index": 45,
+      "title": "III",
+      "startTime": 27489.918
+    },
+    {
+      "index": 46,
+      "title": "IV",
+      "startTime": 27889.069
+    },
+    {
+      "index": 47,
+      "title": "V",
+      "startTime": 28304.242
+    },
+    {
+      "index": 48,
+      "title": "VI",
+      "startTime": 28696.566
+    },
+    {
+      "index": 49,
+      "title": "VII",
+      "startTime": 29265.873
+    },
+    {
+      "index": 50,
+      "title": "VIII",
+      "startTime": 30011.605
+    },
+    {
+      "index": 51,
+      "title": "IX",
+      "startTime": 30936.549
+    },
+    {
+      "index": 52,
+      "title": "I",
+      "startTime": 31721.523
+    },
+    {
+      "index": 53,
+      "title": "II",
+      "startTime": 32129.219
+    },
+    {
+      "index": 54,
+      "title": "III",
+      "startTime": 32485.691
+    },
+    {
+      "index": 55,
+      "title": "IV",
+      "startTime": 32754.439
+    },
+    {
+      "index": 56,
+      "title": "V",
+      "startTime": 33734.275
+    },
+    {
+      "index": 57,
+      "title": "VI",
+      "startTime": 34234.99
+    },
+    {
+      "index": 58,
+      "title": "VII",
+      "startTime": 35233.819
+    },
+    {
+      "index": 59,
+      "title": "VIII",
+      "startTime": 35611.98
+    },
+    {
+      "index": 60,
+      "title": "I",
+      "startTime": 36386.829
+    },
+    {
+      "index": 61,
+      "title": "II",
+      "startTime": 37270.86
+    },
+    {
+      "index": 62,
+      "title": "III",
+      "startTime": 37869.052
+    },
+    {
+      "index": 63,
+      "title": "IV",
+      "startTime": 38733.531
+    },
+    {
+      "index": 64,
+      "title": "V",
+      "startTime": 39116.8
+    },
+    {
+      "index": 65,
+      "title": "VI",
+      "startTime": 39925.179
+    },
+    {
+      "index": 66,
+      "title": "VII",
+      "startTime": 40731.329
+    },
+    {
+      "index": 67,
+      "title": "VIII",
+      "startTime": 41110.233
+    },
+    {
+      "index": 68,
+      "title": "IX",
+      "startTime": 41320.048
+    },
+    {
+      "index": 69,
+      "title": "I",
+      "startTime": 41530.932
+    },
+    {
+      "index": 70,
+      "title": "II",
+      "startTime": 41880.624
+    },
+    {
+      "index": 71,
+      "title": "III",
+      "startTime": 42182.669
+    },
+    {
+      "index": 72,
+      "title": "IV",
+      "startTime": 43254.781
+    },
+    {
+      "index": 73,
+      "title": "V",
+      "startTime": 44224.586
+    },
+    {
+      "index": 74,
+      "title": "VI",
+      "startTime": 44629.681
+    },
+    {
+      "index": 75,
+      "title": "VII",
+      "startTime": 45228.431
+    },
+    {
+      "index": 76,
+      "title": "I",
+      "startTime": 45422.457
+    },
+    {
+      "index": 77,
+      "title": "II",
+      "startTime": 45859.038
+    },
+    {
+      "index": 78,
+      "title": "III",
+      "startTime": 46123.699
+    },
+    {
+      "index": 79,
+      "title": "IV",
+      "startTime": 47114.82
+    },
+    {
+      "index": 80,
+      "title": "V",
+      "startTime": 47853.679
+    },
+    {
+      "index": 81,
+      "title": "VI",
+      "startTime": 48575.402
+    },
+    {
+      "index": 82,
+      "title": "VII",
+      "startTime": 49504.571
+    },
+    {
+      "index": 83,
+      "title": "I",
+      "startTime": 49863.877
+    },
+    {
+      "index": 84,
+      "title": "II",
+      "startTime": 50279.793
+    },
+    {
+      "index": 85,
+      "title": "III",
+      "startTime": 51152.77
+    },
+    {
+      "index": 86,
+      "title": "IV",
+      "startTime": 51418.685
+    },
+    {
+      "index": 87,
+      "title": "V",
+      "startTime": 51669.461
+    },
+    {
+      "index": 88,
+      "title": "VI",
+      "startTime": 52087.002
+    },
+    {
+      "index": 89,
+      "title": "VII",
+      "startTime": 52405.951
+    },
+    {
+      "index": 90,
+      "title": "VIII",
+      "startTime": 52558.135
+    },
+    {
+      "index": 91,
+      "title": "I",
+      "startTime": 52732.517
+    },
+    {
+      "index": 92,
+      "title": "II",
+      "startTime": 52954.685
+    },
+    {
+      "index": 93,
+      "title": "III",
+      "startTime": 53619.287
+    },
+    {
+      "index": 94,
+      "title": "IV",
+      "startTime": 54376.025
+    },
+    {
+      "index": 95,
+      "title": "V",
+      "startTime": 54879.712
+    },
+    {
+      "index": 96,
+      "title": "VI",
+      "startTime": 55349.08
+    },
+    {
+      "index": 97,
+      "title": "VII",
+      "startTime": 55576.45
+    },
+    {
+      "index": 98,
+      "title": "VIII",
+      "startTime": 56378.839
+    },
+    {
+      "index": 99,
+      "title": "I",
+      "startTime": 56773.439
+    },
+    {
+      "index": 100,
+      "title": "II",
+      "startTime": 57275.361
+    },
+    {
+      "index": 101,
+      "title": "III",
+      "startTime": 57555.673
+    },
+    {
+      "index": 102,
+      "title": "IV",
+      "startTime": 57883.445
+    },
+    {
+      "index": 103,
+      "title": "V",
+      "startTime": 58118.571
+    },
+    {
+      "index": 104,
+      "title": "VI",
+      "startTime": 59034.598
+    },
+    {
+      "index": 105,
+      "title": "VII",
+      "startTime": 59308.408
+    },
+    {
+      "index": 106,
+      "title": "VIII",
+      "startTime": 59768.813
+    },
+    {
+      "index": 107,
+      "title": "IX",
+      "startTime": 60136.199
+    },
+    {
+      "index": 108,
+      "title": "X",
+      "startTime": 60537.022
+    },
+    {
+      "index": 109,
+      "title": "I",
+      "startTime": 60804.934
+    },
+    {
+      "index": 110,
+      "title": "II",
+      "startTime": 61050.972
+    },
+    {
+      "index": 111,
+      "title": "III",
+      "startTime": 61678.84
+    },
+    {
+      "index": 112,
+      "title": "IV",
+      "startTime": 61975.87
+    },
+    {
+      "index": 113,
+      "title": "V",
+      "startTime": 62503.473
+    },
+    {
+      "index": 114,
+      "title": "VI",
+      "startTime": 63071.666
+    },
+    {
+      "index": 115,
+      "title": "VII",
+      "startTime": 63219.67
+    },
+    {
+      "index": 116,
+      "title": "VIII",
+      "startTime": 63343.432
+    },
+    {
+      "index": 117,
+      "title": "I",
+      "startTime": 63470.77
+    },
+    {
+      "index": 118,
+      "title": "II",
+      "startTime": 64227.323
+    },
+    {
+      "index": 119,
+      "title": "III",
+      "startTime": 64817.992
+    },
+    {
+      "index": 120,
+      "title": "IV",
+      "startTime": 65520.86
+    },
+    {
+      "index": 121,
+      "title": "V",
+      "startTime": 65953.123
+    },
+    {
+      "index": 122,
+      "title": "VI",
+      "startTime": 66400.339
+    },
+    {
+      "index": 123,
+      "title": "VII",
+      "startTime": 67432.559
+    },
+    {
+      "index": 124,
+      "title": "VIII",
+      "startTime": 67966.85
+    },
+    {
+      "index": 125,
+      "title": "IX",
+      "startTime": 68163.616
+    },
+    {
+      "index": 126,
+      "title": "X",
+      "startTime": 68302.982
+    }
+  ],
+  "notes": [
+    "The EPUB entries from the first narrated section through the final story section line up 1:1 with the 126 embedded audio markers.",
+    "The embedded audio labels are generic numeric strings, so titles come from the EPUB structure while timings come from the embedded audio starts.",
+    "Front matter before the first narrated EPUB section and back matter after the final story section are excluded from the expected audiobook chapter set.",
+    "The transcript begins with a short language-poisoned opener (\"Esto es audible\") but immediately continues with English book text; this appears to be ASR language poisoning rather than wrong-language audio."
+  ]
+}
