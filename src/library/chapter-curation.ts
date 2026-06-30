@@ -73,7 +73,7 @@ export type {
   SubmitFulcrumJudgmentResult,
   NodeBoundaryDecision,
   NodeBoundaryCurationReport,
-  RecursiveSpanTrace,
+  ChapterCurationAgentTrace,
   ChapterBoundaryJudgeProposal,
 } from "./chapter-curation-validation";
 

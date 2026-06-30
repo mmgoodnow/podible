@@ -99,8 +99,6 @@ export type ChapterBoundaryJudgeProposal = {
   audit: FulcrumValidationAudit;
 };
 
-export type RecursiveSpanDecision = { kind: "split"; split: Extract<SubmitFulcrumSplitResult, { accepted: true }>; result?: SubmitFulcrumSplitResult };
-
 export type SubmitNodeBoundaryResult =
   | {
       accepted: true;
@@ -136,25 +134,7 @@ export type NodeBoundaryCurationReport = {
   deterministic?: boolean;
 };
 
-export type RecursiveCurationReport = {
-  path: string;
-  depth: number;
-  epubStartIndex: number;
-  epubEndIndex: number;
-  startTime: number;
-  endTime: number;
-  outcome: "leaf" | "partial_leaf" | "split" | "failed";
-  errors?: string[];
-  chapters?: number;
-  chapterPlan?: SubmittedChapter[];
-  split?: {
-    epubNodeId: string;
-    title: string;
-    startTime: number;
-  };
-};
-
-export type RecursiveSpanTrace = {
+export type ChapterCurationAgentTrace = {
   path: string;
   depth: number;
   targetBoundary?: ChapterCurationTargetBoundary;
@@ -500,21 +480,6 @@ export function spanInternalBoundaryCount(span: ChapterCurationSpan): number {
   return Math.max(0, span.epubEndIndex - span.epubStartIndex);
 }
 
-export function automaticLeafChapters(ctx: Pick<ChapterCurationContext, "epubEntries">, span: ChapterCurationSpan): SubmittedChapter[] {
-  if (span.startBoundary) {
-    return [
-      {
-        title: span.startBoundary.title,
-        startTime: span.startBoundary.startTime,
-        epubNodeId: span.startBoundary.epubNodeId,
-      },
-    ];
-  }
-  const entry = ctx.epubEntries[span.epubStartIndex];
-  if (!entry) return [];
-  return [{ title: entry.title, startTime: span.startTime, epubNodeId: entry.id }];
-}
-
 export function rankTargetBoundaries(ctx: Pick<ChapterCurationContext, "epubEntries">, span: ChapterCurationSpan): ChapterCurationTargetBoundary[] {
   const candidates: ChapterCurationTargetBoundary[] = [];
   const nodeCount = Math.max(1, span.epubEndIndex - span.epubStartIndex + 1);
@@ -550,67 +515,8 @@ export function nodeBoundaryTargets(
   }));
 }
 
-function chooseTargetBoundary(ctx: Pick<ChapterCurationContext, "epubEntries">, span: ChapterCurationSpan): ChapterCurationTargetBoundary | null {
-  return rankTargetBoundaries(ctx, span)[0] ?? null;
-}
-
 export function spanDurationSeconds(span: ChapterCurationSpan): number {
   return Math.max(0, span.endTime - span.startTime);
-}
-
-const INHERITED_BOUNDARY_TOLERANCE_SECONDS = 2;
-const MAX_AUTOMATIC_LEAF_EPUB_NODES = 3;
-
-function childSpanPath(parent: ChapterCurationSpan, side: "L" | "R"): string {
-  return parent.path === "root" ? side : `${parent.path}${side}`;
-}
-
-function splitSpan(
-  span: ChapterCurationSpan,
-  split: { epubIndex: number; epubNodeId: string; title: string; startTime: number }
-): { left: ChapterCurationSpan; right: ChapterCurationSpan } {
-  return {
-    left: {
-      epubStartIndex: span.epubStartIndex,
-      epubEndIndex: split.epubIndex - 1,
-      startTime: span.startTime,
-      endTime: split.startTime,
-      depth: span.depth + 1,
-      path: childSpanPath(span, "L"),
-      startBoundary: span.startBoundary,
-    },
-    right: {
-      epubStartIndex: split.epubIndex,
-      epubEndIndex: span.epubEndIndex,
-      startTime: split.startTime,
-      endTime: span.endTime,
-      depth: span.depth + 1,
-      path: childSpanPath(span, "R"),
-      startBoundary: {
-        epubNodeId: split.epubNodeId,
-        epubIndex: split.epubIndex,
-        title: split.title,
-        startTime: split.startTime,
-        source: "parent_split",
-      },
-    },
-  };
-}
-
-function normalizeSpanChapters(chapters: SubmittedChapter[]): SubmittedChapter[] {
-  const sorted = [...chapters].sort((a, b) => a.startTime - b.startTime || chapterTitleKey(a.title).localeCompare(chapterTitleKey(b.title)));
-  const out: SubmittedChapter[] = [];
-  for (const chapter of sorted) {
-    const previous = out.at(-1);
-    if (previous && Math.abs(previous.startTime - chapter.startTime) <= 30) {
-      const previousHasEpub = Boolean(previous.epubNodeId);
-      const chapterHasEpub = Boolean(chapter.epubNodeId);
-      if (!previousHasEpub && chapterHasEpub) out[out.length - 1] = chapter;
-      continue;
-    }
-    out.push(chapter);
-  }
-  return out;
 }
 
 function localRatio(value: number, start: number, end: number): number {
@@ -967,17 +873,6 @@ export function submitChapterPlan(ctx: ChapterCurationContext, input: unknown): 
   };
 }
 
-function parseSpanDecisionOutput(output: unknown): RecursiveSpanDecision | null {
-  const value = typeof output === "string" ? safeJsonParse(output) : output;
-  if (!value || typeof value !== "object") return null;
-  const record = value as { accepted?: unknown; kind?: unknown; epubNodeId?: unknown };
-  if (record.accepted !== true) return null;
-  if (record.kind === "split" && typeof record.epubNodeId === "string") {
-    return { kind: "split", split: record as Extract<SubmitFulcrumSplitResult, { accepted: true }>, result: record as SubmitFulcrumSplitResult };
-  }
-  return null;
-}
-
 function parseNodeBoundaryOutput(output: unknown): NodeBoundaryDecision | null {
   const value = typeof output === "string" ? safeJsonParse(output) : output;
   if (!value || typeof value !== "object") return null;
@@ -1005,23 +900,6 @@ function safeJsonParse(value: string): unknown {
   } catch {
     return null;
   }
-}
-
-export function recursiveSpanToolUseBehavior(_: unknown, toolResults: FunctionToolResult[]): ToolsToFinalOutputResult {
-  const terminalResult = toolResults.find(
-    (result) =>
-      result.type === "function_output" &&
-      result.tool.name === "submitBoundarySplit" &&
-      parseSpanDecisionOutput(result.output)
-  );
-  if (!terminalResult || terminalResult.type !== "function_output") {
-    return { isFinalOutput: false, isInterrupted: undefined };
-  }
-  return {
-    isFinalOutput: true,
-    isInterrupted: undefined,
-    finalOutput: JSON.stringify(parseSpanDecisionOutput(terminalResult.output)?.result ?? terminalResult.output),
-  };
 }
 
 export function fulcrumJudgeToolUseBehavior(_: unknown, toolResults: FunctionToolResult[]): ToolsToFinalOutputResult {
@@ -1280,115 +1158,6 @@ function markUnrecoveredHeadingOnlyNodeBoundariesSkipped(
   }
 }
 
-export async function resolveRecursiveChapterSpans(
-  ctx: ChapterCurationContext,
-  decide: (span: ChapterCurationSpan, targetBoundary: ChapterCurationTargetBoundary) => Promise<RecursiveSpanDecision | null>,
-  options: { maxConcurrency?: number; reports?: RecursiveCurationReport[] } = {}
-): Promise<SubmittedChapter[] | null> {
-  const maxConcurrency = Math.max(1, options.maxConcurrency ?? 4);
-  const reports = options.reports;
-  let activeDecisions = 0;
-  const waiters: Array<() => void> = [];
-
-  async function withDecisionSlot<T>(fn: () => Promise<T>): Promise<T> {
-    if (activeDecisions >= maxConcurrency) {
-      await new Promise<void>((resolve) => waiters.push(resolve));
-    }
-    activeDecisions++;
-    try {
-      return await fn();
-    } finally {
-      activeDecisions--;
-      waiters.shift()?.();
-    }
-  }
-
-  async function visit(span: ChapterCurationSpan): Promise<SubmittedChapter[]> {
-    function partialLeaf(reason: string, errors: string[]): SubmittedChapter[] {
-      const chapters = automaticLeafChapters(ctx, span);
-      logChapterCurationEvent(ctx, {
-        type: "span-partial-leaf",
-        message: `recursive span=${span.path} partial_leaf=1 chapters=${chapters.length} reason=${reason}`,
-        span,
-        chapters: chapters.length,
-        chapterPlan: summarizeSubmittedChapterObjects(chapters, 80),
-        errors,
-      });
-      reports?.push({ ...span, outcome: "partial_leaf", errors, chapters: chapters.length, chapterPlan: chapters });
-      return chapters;
-    }
-
-    if (spanInternalBoundaryCount(span) === 0) {
-      const chapters = automaticLeafChapters(ctx, span);
-      logChapterCurationEvent(ctx, {
-        type: "span-auto-leaf",
-        message: `recursive span=${span.path} auto_leaf=1 chapters=${chapters.length} reason=no_internal_boundaries`,
-        span,
-        chapters: chapters.length,
-        chapterPlan: summarizeSubmittedChapterObjects(chapters, 80),
-      });
-      reports?.push({ ...span, outcome: "leaf", chapters: chapters.length, chapterPlan: chapters });
-      return chapters;
-    }
-    const targetBoundary = chooseTargetBoundary(ctx, span);
-    if (!targetBoundary) {
-      return partialLeaf("no_target_boundary", ["Span has unresolved boundaries but no target boundary could be chosen."]);
-    }
-    const decision = await withDecisionSlot(() => decide(span, targetBoundary));
-    if (!decision) {
-      logChapterCurationEvent(ctx, {
-        type: "span-no-decision",
-        message: `recursive span=${span.path} accepted=0 reason=no_decision`,
-        span,
-        targetBoundary,
-      });
-      return partialLeaf("no_decision", ["Span curator returned no accepted decision."]);
-    }
-    if (decision.split.epubNodeId !== targetBoundary.epubNodeId) {
-      logChapterCurationEvent(ctx, {
-        type: "span-wrong-target-split",
-        message: `recursive span=${span.path} accepted=0 reason=wrong_target expected=${targetBoundary.epubNodeId} actual=${decision.split.epubNodeId}`,
-        span,
-        targetBoundary,
-        split: {
-          epubNodeId: decision.split.epubNodeId,
-          title: decision.split.title,
-          startTime: decision.split.startTime,
-        },
-      });
-      return partialLeaf("wrong_target", [`Span curator submitted ${decision.split.epubNodeId} instead of assigned target ${targetBoundary.epubNodeId}.`]);
-    }
-    const { left, right } = splitSpan(span, decision.split);
-    logChapterCurationEvent(ctx, {
-      type: "span-split-accepted",
-      message: `recursive span=${span.path} split accepted=1 epub=${decision.split.epubNodeId} time=${Math.round(decision.split.startTime)}s left=${left.path} right=${right.path}`,
-      span,
-      split: {
-        epubNodeId: decision.split.epubNodeId,
-        epubIndex: decision.split.epubIndex,
-        title: decision.split.title,
-        startTime: decision.split.startTime,
-      },
-      left,
-      right,
-      result: decision.result,
-    });
-    reports?.push({
-      ...span,
-      outcome: "split",
-      split: {
-        epubNodeId: decision.split.epubNodeId,
-        title: decision.split.title,
-        startTime: decision.split.startTime,
-      },
-    });
-    const [leftChapters, rightChapters] = await Promise.all([visit(left), visit(right)]);
-    return normalizeSpanChapters([...leftChapters, ...rightChapters]);
-  }
-
-  return visit(createRootCurationSpan(ctx));
-}
-
 export function applyAudibleEpubNodeSelection(ctx: ChapterCurationContext, selection: AudibleEpubNodeSelection | null): ChapterCurationContext {
   if (!selection) return ctx;
   const requestedIds = new Set(selection.audibleNodeIds);
@@ -1548,12 +1317,6 @@ export function applyTranscriptEndpointEpubNodeScope(ctx: ChapterCurationContext
   };
 }
 
-// logChapterCurationEvent is needed in resolveRecursiveChapterSpans; import it lazily to avoid circular dependency
-// by importing from chapter-curation-debug directly
-import {
-  logChapterCurationEvent,
-} from "./chapter-curation-debug";
-
 // Export Zod schemas needed by runner
 export { submitFulcrumSplitSchema, audibleEpubNodeSelectionSchema as audibleEpubNodeSelectionSchemaExport };
-export { parseSpanDecisionOutput, parseNodeBoundaryOutput, parseFulcrumJudgmentOutput, parseAudibleEpubNodeSelectionOutput };
+export { parseNodeBoundaryOutput, parseFulcrumJudgmentOutput, parseAudibleEpubNodeSelectionOutput };
