@@ -562,6 +562,7 @@ function buildBoundaryComparisonAudit(
       },
       transcriptBefore: boundaryText.before.slice(-1_000),
       transcriptAfter: boundaryText.after.slice(0, 1_000),
+      extendedTranscriptAfter: transcriptAfterStart(ctx, startMs, 120_000).slice(0, 2_000),
       boundaryWords: boundaryText.boundaryWords,
     },
     transcriptWindow: normalizeToolText(transcriptWindow.text).slice(0, 1_000),

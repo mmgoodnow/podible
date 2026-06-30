@@ -1906,6 +1906,47 @@ describe("chapter curation tools", () => {
     expect(result.audit.boundaryComparison.targetEpub.headText).toContain("Northwoods");
   });
 
+  test("validateNodeBoundary includes extended after-context for spoken heading gaps", async () => {
+    const context = ctx({
+      durationMs: 300_000,
+      manifestation: manifestation({ duration_ms: 300_000 }),
+      epubEntries: [
+        epubEntry({
+          id: "chapter-six",
+          title: "VI",
+          cumulativeRatio: 0.5,
+          cumulativeWords: 8,
+          words: "previous chapter tail should end before the heading".split(/\s+/).map(word),
+        }),
+        epubEntry({
+          id: "chapter-seven",
+          title: "VII",
+          cumulativeRatio: 1,
+          cumulativeWords: 20,
+          words: "VII It had been a slow pursuit like melting ice and kinship".split(/\s+/).map(word),
+        }),
+      ],
+      transcript: transcriptFromUtterances([
+        { startMs: 90_000, endMs: 100_000, text: "previous chapter tail should end before the heading" },
+        { startMs: 100_000, endMs: 104_000, text: "Seven" },
+        { startMs: 165_000, endMs: 174_000, text: "It had been a slow pursuit, like melting ice." },
+      ]),
+    });
+
+    const result = await validateNodeBoundary(context, {
+      spanPath: "root",
+      epubNodeId: "chapter-seven",
+      title: "VII",
+      startTime: 100,
+    });
+
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error(result.errors.join("\n"));
+    expect(result.audit.boundaryComparison.transcriptAfter).toContain("Seven");
+    expect(result.audit.boundaryComparison.transcriptAfter).not.toContain("slow pursuit");
+    expect(result.audit.boundaryComparison.extendedTranscriptAfter).toContain("slow pursuit");
+  });
+
   test("validateNodeBoundary accepts the first narrated EPUB node after an audio-only preamble", async () => {
     const context = ctx({
       durationMs: 120_000,
