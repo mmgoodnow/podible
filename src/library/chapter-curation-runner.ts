@@ -2859,7 +2859,7 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
     const nodeBoundaryReports: NodeBoundaryCurationReport[] = [];
     const nodeBoundaryTraces: RecursiveSpanTrace[] = [];
     const nodeBoundaryMaxConcurrency = Math.max(1, Number(process.env.PODIBLE_CHAPTER_NODE_CONCURRENCY ?? 12));
-    const nodeBoundaryMaxTurns = Math.max(4, Number(process.env.PODIBLE_CHAPTER_NODE_MAX_TURNS ?? 16));
+    const nodeBoundaryMaxTurns = Math.max(4, Number(process.env.PODIBLE_CHAPTER_NODE_MAX_TURNS ?? 64));
     const minNodeBoundaryCoverage = Math.max(0, Math.min(1, Number(process.env.PODIBLE_CHAPTER_NODE_MIN_COVERAGE ?? 0.9)));
     logChapterCurationEvent(curationCtx, {
       type: "node-parallel-run-start",
