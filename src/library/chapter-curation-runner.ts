@@ -156,6 +156,21 @@ function maxTurnsAgentError(error: unknown): boolean {
   return /\bmax(?:imum)? turns\b/i.test(message);
 }
 
+class NodeBoundaryRejectedLimitError extends Error {
+  constructor(
+    readonly epubNodeId: string,
+    readonly rejectedCount: number,
+    readonly lastReason: string
+  ) {
+    super(`Node boundary ${epubNodeId} stopped after ${rejectedCount} rejected submissions. Last rejection: ${lastReason}`);
+    this.name = "NodeBoundaryRejectedLimitError";
+  }
+}
+
+function nodeBoundaryRejectedLimitError(error: unknown): boolean {
+  return error instanceof NodeBoundaryRejectedLimitError;
+}
+
 function normalizedWordTokens(value: string): string[] {
   return value
     .toLowerCase()
@@ -524,18 +539,66 @@ function spanScope(span: ChapterCurationSpan, inputScope?: { startTime?: number;
   };
 }
 
+function structurallyGenericTitle(title: string): boolean {
+  const tokens = normalizedWordTokens(title);
+  if (tokens.length === 0) return true;
+  return tokens.every(
+    (token) =>
+      token === "chapter" ||
+      token === "part" ||
+      token === "book" ||
+      token === "section" ||
+      /^\d+$/.test(token) ||
+      romanNumeralValue(token) !== null ||
+      Array.from({ length: 21 }, (_, value) => titleNumberWord(value)).includes(token)
+  );
+}
+
+function repeatedTitleContext(ctx: ChapterCurationContext, targetBoundary: ChapterCurationTargetBoundary): Record<string, unknown> {
+  const normalizedTargetTitle = normalizedWordTokens(targetBoundary.title).join(" ");
+  if (!normalizedTargetTitle) return { repeatedTitle: false, structuralTitleOnly: true, sameTitleNodes: [] };
+  const sameTitleNodes = ctx.epubEntries
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) => normalizedWordTokens(entry.title).join(" ") === normalizedTargetTitle)
+    .map(({ entry, index }) => ({
+      id: entry.id,
+      index,
+      title: entry.title,
+      firstWords: summarizeFirstWords(entry, 18),
+    }));
+  return {
+    repeatedTitle: sameTitleNodes.length > 1,
+    structuralTitleOnly: structurallyGenericTitle(targetBoundary.title),
+    sameTitleNodeCount: sameTitleNodes.length,
+    sameTitleNodes: sameTitleNodes.slice(0, 18),
+  };
+}
+
+function transcriptWindowSummaryAt(ctx: ChapterCurationContext, startTime: number, radiusSeconds: number): Record<string, unknown> {
+  const window = getTranscriptWindowFromContext(ctx, secondsToMs(startTime), secondsToMs(radiusSeconds));
+  return {
+    startTime: msToSeconds(window.startMs),
+    endTime: msToSeconds(window.endMs),
+    text: normalizeToolText(window.text).slice(0, 1_200),
+  };
+}
+
 function targetBoundaryPromptContext(ctx: ChapterCurationContext, span: ChapterCurationSpan, targetBoundary: ChapterCurationTargetBoundary): Record<string, unknown> {
   const targetEntry = ctx.epubEntries[targetBoundary.epubIndex] ?? null;
   const previousEntry = ctx.epubEntries[targetBoundary.epubIndex - 1] ?? null;
+  const nextEntry = ctx.epubEntries[targetBoundary.epubIndex + 1] ?? null;
   const targetText = getEpubNodeText(ctx, { epubNodeId: targetBoundary.epubNodeId, startWord: 0, wordCount: 90 });
   return {
     targetBoundary,
     expectedStartTime: targetBoundary.expectedStartTime,
+    expectedStartTimeIsEstimate: true,
     span: {
       path: span.path,
       timeSeconds: { start: span.startTime, end: span.endTime },
       epubIndexes: { start: span.epubStartIndex, end: span.epubEndIndex },
     },
+    repeatedTitleContext: repeatedTitleContext(ctx, targetBoundary),
+    transcriptWindowAroundExpectedTime: transcriptWindowSummaryAt(ctx, targetBoundary.expectedStartTime, 45),
     previousNode: previousEntry
       ? {
           id: previousEntry.id,
@@ -558,14 +621,18 @@ function targetBoundaryPromptContext(ctx: ChapterCurationContext, span: ChapterC
           phraseVariants: targetText?.phraseVariants ?? [],
         }
       : null,
+    nextNode: nextEntry
+      ? {
+          id: nextEntry.id,
+          title: nextEntry.title,
+          index: targetBoundary.epubIndex + 1,
+          firstWords: summarizeFirstWords(nextEntry, 48),
+        }
+      : null,
   };
 }
 
 function nodeBoundaryPrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, targetBoundary: ChapterCurationTargetBoundary): string {
-  const entry = ctx.epubEntries[targetBoundary.epubIndex] ?? null;
-  const previousEntry = ctx.epubEntries[targetBoundary.epubIndex - 1] ?? null;
-  const nextEntry = ctx.epubEntries[targetBoundary.epubIndex + 1] ?? null;
-  const targetText = getEpubNodeText(ctx, { epubNodeId: targetBoundary.epubNodeId, startWord: 0, wordCount: 120 });
   const nearbyAudioOnlyIntervals = (ctx.audioOnlyIntervals ?? []).filter(
     (interval) => Math.abs(interval.startTime - targetBoundary.expectedStartTime) < 1_200 || Math.abs(interval.endTime - targetBoundary.expectedStartTime) < 1_200
   );
@@ -575,36 +642,7 @@ function nodeBoundaryPrompt(ctx: ChapterCurationContext, span: ChapterCurationSp
     `spanPath: ${span.path}`,
     `durationSeconds: ${Math.round(msToSeconds(ctx.durationMs) * 1000) / 1000}`,
     `targetBoundary: ${JSON.stringify(targetBoundary)}`,
-    `targetBoundaryContext: ${JSON.stringify({
-      previousNode: previousEntry
-        ? {
-            id: previousEntry.id,
-            title: previousEntry.title,
-            tailText: previousEntry.words.slice(Math.max(0, previousEntry.words.length - 56)).map((word) => word.text).join(" "),
-          }
-        : null,
-      targetNode: entry
-        ? {
-            id: entry.id,
-            title: entry.title,
-            href: entry.href,
-            index: targetBoundary.epubIndex,
-            wordCount: entry.wordCount,
-            startRatio: inferEntryStartRatio(ctx.epubEntries, targetBoundary.epubIndex),
-            endRatio: inferEntryEndRatio(ctx.epubEntries, targetBoundary.epubIndex),
-            firstWords: summarizeFirstWords(entry, 90),
-            openerText: targetText?.text ?? "",
-            phraseVariants: targetText?.phraseVariants ?? [],
-          }
-        : null,
-      nextNode: nextEntry
-        ? {
-            id: nextEntry.id,
-            title: nextEntry.title,
-            firstWords: summarizeFirstWords(nextEntry, 36),
-          }
-        : null,
-    })}`,
+    `targetBoundaryContext: ${JSON.stringify(targetBoundaryPromptContext(ctx, span, targetBoundary))}`,
     `audioOnlyIntervalsNearExpectedTime: ${JSON.stringify(nearbyAudioOnlyIntervals)}`,
     "The EPUB list has already been filtered to narrated/audible nodes. Copyright, cover, TOC, and other non-narrated entries should not appear here unless the classifier was uncertain.",
     "Your only goal is this one node. Do not switch to a different node.",
@@ -612,10 +650,13 @@ function nodeBoundaryPrompt(ctx: ChapterCurationContext, span: ChapterCurationSp
     "1. Call researchEpubBoundary first. It searches this assigned node's opener phrases and reverse-checks transcript hits against the EPUB.",
     "2. If researchEpubBoundary finds an opener/near_opener candidate, inspect it with getTranscriptWindow and submit that first opener word or the silence immediately before it.",
     "3. If no candidate is good enough, call getEpubNodeText for a different target-node word window and search distinctive phrases with rgSearchTranscript or fuzzySearchTranscript.",
-    "4. Use searchEpubText to reject transcript hits that are interior prose rather than the target opener.",
-    "5. Do not submit EPUB ratio estimates without transcript evidence.",
-    "6. For the first narrated node, do not assume 0s if audioOnlyIntervals indicate credits/preamble. Find where the target opener actually begins.",
-    "7. submitNodeBoundary is final; call it only when you can prove this exact EPUB node begins at or immediately after startTime.",
+    "4. If the transcript appears to be in a different language than the EPUB, translate distinctive target opener phrases yourself and search those translated phrases. Then use the previous/target/next node context to prove the hit belongs to this exact EPUB node.",
+    "5. If targetBoundaryContext.repeatedTitleContext says the title is repeated or structural-title-only, ignore the title as evidence. Search the assigned node's body opener and compare against previousNode.tailText and nextNode.firstWords.",
+    "6. Use searchEpubText to reject transcript hits that are interior prose rather than the target opener.",
+    "7. Do not submit EPUB ratio estimates without transcript evidence.",
+    "8. expectedStartTime is only a rough estimate. If transcriptWindowAroundExpectedTime looks like the previous node or another repeated heading, search wider instead of anchoring there.",
+    "9. For the first narrated node, do not assume 0s if audioOnlyIntervals indicate credits/preamble. Find where the target opener actually begins.",
+    "10. submitNodeBoundary is final; call it only when you can prove this exact EPUB node begins at or immediately after startTime.",
     "All times are seconds.",
   ].join("\n");
 }
@@ -1059,9 +1100,7 @@ export function createNodeBoundaryCuratorAgent(
   function recordRejectedBoundary(reason: string): void {
     rejectedBoundaryCount++;
     if (rejectedBoundaryCount >= maxRejectedBoundarySubmissions) {
-      throw new Error(
-        `Node boundary ${targetBoundary.epubNodeId} stopped after ${rejectedBoundaryCount} rejected submissions. Last rejection: ${reason}`
-      );
+      throw new NodeBoundaryRejectedLimitError(targetBoundary.epubNodeId, rejectedBoundaryCount, reason);
     }
   }
 
@@ -2255,11 +2294,11 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
               attempt: attempt + 1,
               elapsedMs,
               model: attemptConfig.model,
-              retryable: retryableAgentError(error) || maxTurnsAgentError(error),
+              retryable: retryableAgentError(error) || maxTurnsAgentError(error) || nodeBoundaryRejectedLimitError(error),
               tracePath,
               error: serializedError,
             });
-            if (attempt < attempts.length - 1 && (retryableAgentError(error) || maxTurnsAgentError(error))) continue;
+            if (attempt < attempts.length - 1 && (retryableAgentError(error) || maxTurnsAgentError(error) || nodeBoundaryRejectedLimitError(error))) continue;
             return null;
           }
         }
