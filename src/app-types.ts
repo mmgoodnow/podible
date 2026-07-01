@@ -8,7 +8,8 @@ export type JobType =
   | "download"
   | "import"
   | "reconcile"
-  | "chapter_analysis";
+  | "chapter_analysis"
+  | "cover_generation";
 
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 

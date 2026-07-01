@@ -1,3 +1,4 @@
+import { queueMissingCoverGeneration } from "../library/cover-generation";
 import { scanLibraryRoot } from "../library/scanner";
 import type { JobRow } from "../app-types";
 import type { WorkerContext } from "./context";
@@ -26,6 +27,9 @@ export async function processReconcileJob(ctx: WorkerContext, job: JobRow): Prom
 export async function processFullLibraryRefreshJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
   const settings = ctx.getSettings();
   await scanLibraryRoot(ctx.repo, settings.libraryRoot);
+  for (const book of ctx.repo.listAllBooks()) {
+    if (!book.coverUrl) queueMissingCoverGeneration(ctx.repo, book.id);
+  }
   ctx.repo.markJobSucceeded(job.id);
   return "done";
 }

@@ -28,6 +28,7 @@ const MANIFESTATION_TRANSCRIPTS_MIGRATION_ID = 22;
 const DROP_ASSET_EBOOK_KIND_MIGRATION_ID = 23;
 const BOOK_ADDED_BY_USER_MIGRATION_ID = 24;
 const MANIFESTATION_LANGUAGE_MIGRATION_ID = 25;
+const COVER_GENERATION_JOB_TYPE_MIGRATION_ID = 26;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -97,7 +98,7 @@ CREATE TABLE IF NOT EXISTS asset_files (
 
 CREATE TABLE IF NOT EXISTS jobs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  type TEXT NOT NULL CHECK (type IN ('full_library_refresh', 'acquire', 'download', 'import', 'reconcile', 'chapter_analysis')),
+  type TEXT NOT NULL CHECK (type IN ('full_library_refresh', 'acquire', 'download', 'import', 'reconcile', 'chapter_analysis', 'cover_generation')),
   status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
   book_id INTEGER NULL,
   release_id INTEGER NULL,
@@ -353,7 +354,7 @@ function applyChapterAnalysisMigration(db: Database): void {
   db.exec(`
 CREATE TABLE jobs_new (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  type TEXT NOT NULL CHECK (type IN ('full_library_refresh', 'acquire', 'download', 'import', 'reconcile', 'chapter_analysis')),
+  type TEXT NOT NULL CHECK (type IN ('full_library_refresh', 'acquire', 'download', 'import', 'reconcile', 'chapter_analysis', 'cover_generation')),
   status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
   book_id INTEGER NULL,
   release_id INTEGER NULL,
@@ -798,6 +799,41 @@ function applyManifestationLanguageMigration(db: Database): void {
   }
 }
 
+function applyCoverGenerationJobTypeMigration(db: Database): void {
+  db.exec(`
+CREATE TABLE jobs_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL CHECK (type IN ('full_library_refresh', 'acquire', 'download', 'import', 'reconcile', 'chapter_analysis', 'cover_generation')),
+  status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+  book_id INTEGER NULL,
+  release_id INTEGER NULL,
+  payload_json TEXT NULL,
+  error TEXT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 5,
+  next_run_at TEXT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+  FOREIGN KEY (release_id) REFERENCES releases(id) ON DELETE CASCADE
+);
+
+INSERT INTO jobs_new (
+  id, type, status, book_id, release_id, payload_json, error,
+  attempt_count, max_attempts, next_run_at, created_at, updated_at
+)
+SELECT
+  id, type, status, book_id, release_id, payload_json, error,
+  attempt_count, max_attempts, next_run_at, created_at, updated_at
+FROM jobs;
+
+DROP TABLE jobs;
+ALTER TABLE jobs_new RENAME TO jobs;
+
+CREATE INDEX IF NOT EXISTS idx_jobs_status_next_created ON jobs(status, next_run_at, created_at);
+`);
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
@@ -902,5 +938,8 @@ export function runMigrations(db: Database): void {
   });
   apply(MANIFESTATION_LANGUAGE_MIGRATION_ID, () => {
     applyManifestationLanguageMigration(db);
+  });
+  apply(COVER_GENERATION_JOB_TYPE_MIGRATION_ID, () => {
+    applyCoverGenerationJobTypeMigration(db);
   });
 }

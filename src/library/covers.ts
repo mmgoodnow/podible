@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { LibraryBook } from "../app-types";
+import type { BookRow, LibraryBook } from "../app-types";
 import type { BooksRepo } from "../repo";
 
 function sanitizePathSegment(value: string): string {
@@ -29,12 +29,7 @@ export async function downloadCover(repo: BooksRepo, book: LibraryBook, coverUrl
       // keep default extension
     }
 
-    const settings = repo.getSettings();
-    const bookDir = path.join(
-      settings.libraryRoot,
-      sanitizePathSegment(book.author || "Unknown"),
-      sanitizePathSegment(book.title || `book-${book.id}`)
-    );
+    const bookDir = coverDirectoryForBook(repo, book);
     await mkdir(bookDir, { recursive: true });
 
     const coverPath = path.join(bookDir, `cover${ext}`);
@@ -43,4 +38,13 @@ export async function downloadCover(repo: BooksRepo, book: LibraryBook, coverUrl
   } catch {
     return null;
   }
+}
+
+export function coverDirectoryForBook(repo: BooksRepo, book: Pick<BookRow | LibraryBook, "id" | "title" | "author">): string {
+  const settings = repo.getSettings();
+  return path.join(
+    settings.libraryRoot,
+    sanitizePathSegment(book.author || "Unknown"),
+    sanitizePathSegment(book.title || `book-${book.id}`)
+  );
 }

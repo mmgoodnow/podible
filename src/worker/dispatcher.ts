@@ -1,4 +1,5 @@
 import { processChapterAnalysisJob } from "../library/chapter-analysis";
+import { processCoverGenerationJob } from "../library/cover-generation";
 import type { JobRow } from "../app-types";
 
 import { processAcquireJob } from "./acquire";
@@ -31,6 +32,9 @@ export async function processJob(ctx: WorkerContext, job: JobRow): Promise<JobPr
   }
   if (job.type === "chapter_analysis") {
     return processChapterAnalysisJob(ctx, job);
+  }
+  if (job.type === "cover_generation") {
+    return processCoverGenerationJob(ctx, job);
   }
   ctx.repo.markJobSucceeded(job.id);
   workerLog(ctx, `[worker] job=${job.id} type=${job.type} unknown_type=1 auto_succeeded=1`);

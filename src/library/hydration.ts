@@ -1,4 +1,5 @@
 import { downloadCover } from "./covers";
+import { queueMissingCoverGeneration } from "./cover-generation";
 import { fetchOpenLibraryMetadata } from "./openlibrary";
 import type { LibraryBook } from "../app-types";
 import type { BooksRepo } from "../repo";
@@ -33,6 +34,7 @@ export async function hydrateBookFromOpenLibrary(repo: BooksRepo, book: LibraryB
     language: metadata.language ?? book.language ?? null,
     identifiers: mergedIdentifiers,
   });
+  if (!coverPath) queueMissingCoverGeneration(repo, book.id);
 
   return true;
 }
