@@ -129,6 +129,7 @@ export type NodeBoundaryCurationReport = {
   expectedStartTime: number;
   outcome: "accepted" | "failed" | "dropped" | "skipped";
   startTime?: number;
+  failureKind?: "bad_transcript" | "ambiguous_structure" | "weak_evidence" | "budget_exhausted";
   errors?: string[];
   warnings?: string[];
   deterministic?: boolean;

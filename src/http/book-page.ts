@@ -222,6 +222,7 @@ function renderAdminManifestationSection(
   const rows = manifestations
     .map((manifestation) => {
       const containers = repo.listAssetsByManifestation(manifestation.id);
+      const analysis = repo.getChapterAnalysis(manifestation.id);
       const isSelected = manifestation.id === selectedManifestationId;
       const open = isSelected ? " open" : "";
       const label = manifestation.label?.trim() || `Manifestation ${manifestation.id}`;
@@ -253,6 +254,7 @@ function renderAdminManifestationSection(
       return `<details${open} class="manifestation-details">
         <summary><strong>${escapeHtml(label)}</strong> <span class="muted">#${manifestation.id} • ${escapeHtml(meta.join(" • "))}${isSelected ? " • selected" : ""}</span></summary>
         ${manifestation.selection_note ? `<p class="muted">Selection note: ${escapeHtml(manifestation.selection_note)}</p>` : ""}
+        ${renderAdminChapterCurationSummary(analysis)}
         <ul>${containerMarkup}</ul>
       </details>`;
     })
@@ -263,6 +265,73 @@ function renderAdminManifestationSection(
         <p class="muted">Diagnostic view of editions, containers, source releases, and imported files.</p>
         ${rows || `<div class="empty">No manifestations.</div>`}
       </section>`;
+}
+
+function renderAdminChapterCurationSummary(analysis: ReturnType<BooksRepo["getChapterAnalysis"]>): string {
+  if (!analysis) return `<p class="muted">Chapter curation: not run.</p>`;
+  const debug = parseDebugJson(analysis.debug_json);
+  const curation = recordValue(debug?.curation);
+  const summary = recordValue(curation?.summary);
+  const budget = recordValue(summary?.budget);
+  const unresolved = Array.isArray(summary?.unresolvedNodes) ? summary.unresolvedNodes : [];
+  const status = stringValue(curation?.status) ?? stringValue(summary?.status) ?? analysis.status;
+  const eventLogPath = stringValue(curation?.eventLogPath);
+  const traceDir = stringValue(curation?.traceDir);
+  const unresolvedByKind = new Map<string, number>();
+  for (const node of unresolved) {
+    const kind = stringValue(recordValue(node)?.failureKind) ?? "unknown";
+    unresolvedByKind.set(kind, (unresolvedByKind.get(kind) ?? 0) + 1);
+  }
+  const unresolvedSummary = [...unresolvedByKind.entries()].map(([kind, count]) => `${kind}: ${count}`).join(", ");
+  const unresolvedMarkup =
+    unresolved.length > 0
+      ? `<details><summary>Unresolved nodes: ${unresolved.length}${unresolvedSummary ? ` (${escapeHtml(unresolvedSummary)})` : ""}</summary>
+          <ul>${unresolved
+            .slice(0, 12)
+            .map((node) => {
+              const record = recordValue(node);
+              const title = stringValue(record?.title) ?? "Untitled";
+              const kind = stringValue(record?.failureKind) ?? "unknown";
+              const expected = numberValue(record?.expectedStartTime);
+              const errors = Array.isArray(record?.errors) ? record.errors.map((item) => String(item)).filter(Boolean) : [];
+              return `<li><strong>${escapeHtml(title)}</strong> <span class="muted">• ${escapeHtml(kind)}${expected === null ? "" : ` • expected ${Math.round(expected)}s`}${errors[0] ? ` • ${escapeHtml(errors[0])}` : ""}</span></li>`;
+            })
+            .join("")}</ul>
+        </details>`
+      : "";
+  const budgetMarkup = budget
+    ? `<div class="muted">Budget: ${escapeHtml(String(budget.agentCallsStarted ?? "?"))}/${escapeHtml(String(budget.maxAgentCalls ?? "?"))} agent calls, ${escapeHtml(String(budget.agentNodeTasksStarted ?? "?"))}/${escapeHtml(String(budget.maxAgentNodeTasks ?? "?"))} hard nodes${budget.exhausted ? ` • exhausted: ${escapeHtml(String(budget.exhaustedReason ?? "yes"))}` : ""}</div>`
+    : "";
+  return `<div class="admin-curation-summary">
+    <div><strong>Chapter curation:</strong> ${escapeHtml(status)} • ${analysis.resolved_boundary_count}/${analysis.total_boundary_count} boundaries • ${analysis.chapters_json ? "chapters stored" : "no stored chapters"}</div>
+    ${budgetMarkup}
+    ${unresolvedMarkup}
+    ${eventLogPath ? `<div class="muted">Events: <code>${escapeHtml(eventLogPath)}</code></div>` : ""}
+    ${traceDir ? `<div class="muted">Traces: <code>${escapeHtml(traceDir)}</code></div>` : ""}
+    ${analysis.error ? `<div class="error">Error: ${escapeHtml(analysis.error)}</div>` : ""}
+  </div>`;
+}
+
+function parseDebugJson(value: string | null): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return recordValue(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function renderAdminAssetFile(file: AssetFileRow): string {
@@ -864,6 +933,16 @@ export async function renderBookPage(
       }
       .manifestation-details li {
         margin: 6px 0;
+      }
+      .admin-curation-summary {
+        margin-top: 8px;
+        padding: 8px 10px;
+        border: 1px solid var(--line-soft);
+        border-radius: 10px;
+        background: var(--surface);
+      }
+      .admin-curation-summary code {
+        overflow-wrap: anywhere;
       }
       .release-search-controls {
         display: flex;

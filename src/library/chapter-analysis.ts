@@ -1630,7 +1630,7 @@ export async function requestBookTranscription(
 
 type AgenticCurationResult = {
   manifestationId: number;
-  chaptersJson: string;
+  chaptersJson: string | null;
   resolvedBoundaryCount: number;
   totalBoundaryCount: number;
   debugInfo: Record<string, unknown>;
@@ -1736,27 +1736,31 @@ async function tryAgenticCuration(
     const resolvedBoundaryCount = reports.filter((r) => r.outcome === "accepted").length;
     const totalBoundaryCount = reports.filter((r) => r.outcome === "accepted" || r.outcome === "failed").length;
 
-    if (!result.result?.accepted || !result.result.chapters || result.result.chapters.length === 0) {
-      return null;
-    }
-
-    const chapters = result.result.chapters.map((chapter) => ({
-      title: chapter.title,
-      startTime: chapter.startTime,
-    }));
+    const chapters =
+      result.result?.accepted && result.result.chapters.length > 0
+        ? result.result.chapters.map((chapter) => ({
+            title: chapter.title,
+            startTime: chapter.startTime,
+          }))
+        : null;
 
     return {
       manifestationId: manifestation.id,
-      chaptersJson: JSON.stringify(chapters),
+      chaptersJson: chapters ? JSON.stringify(chapters) : null,
       resolvedBoundaryCount,
       totalBoundaryCount,
       debugInfo: {
         curation: {
-          accepted: result.result.accepted,
-          chapterCount: chapters.length,
+          accepted: result.result?.accepted ?? false,
+          status: result.curationSummary?.status ?? (result.result?.accepted ? "accepted" : "failed"),
+          chapterCount: chapters?.length ?? 0,
           resolvedBoundaryCount,
           totalBoundaryCount,
           combinedFingerprint,
+          summary: result.curationSummary,
+          failureDiagnostic: result.nodeBoundaryFailureDiagnostic,
+          eventLogPath: debugEventLogPath,
+          traceDir: debugTraceDir,
         },
       },
     };

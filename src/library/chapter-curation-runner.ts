@@ -84,6 +84,7 @@ export type ChapterCurationDetailedResult = {
   nodeBoundaryReports?: NodeBoundaryCurationReport[];
   nodeBoundaryTraces?: ChapterCurationAgentTrace[];
   nodeBoundaryFailureDiagnostic?: NodeBoundaryFailureDiagnostic;
+  curationSummary?: ChapterCurationRunSummary;
 };
 
 export type NodeBoundaryFailureDiagnostic = {
@@ -107,6 +108,37 @@ export type NodeBoundaryFailureDiagnostic = {
     expectedStartTime: number;
     overlap: number;
   }>;
+};
+
+export type ChapterCurationRunSummary = {
+  status: "accepted" | "partial" | "failed" | "skipped";
+  acceptedBoundaryCount: number;
+  unresolvedBoundaryCount: number;
+  skippedBoundaryCount: number;
+  droppedBoundaryCount: number;
+  totalBoundaryCount: number;
+  chapterCount: number;
+  coverage: number;
+  budget: {
+    maxAgentNodeTasks: number;
+    maxAgentCalls: number;
+    maxWallMs: number;
+    agentNodeTasksStarted: number;
+    agentCallsStarted: number;
+    elapsedMs: number;
+    exhausted: boolean;
+    exhaustedReason: string | null;
+  };
+  unresolvedNodes: Array<{
+    epubNodeId: string;
+    epubIndex: number;
+    title: string;
+    expectedStartTime: number;
+    failureKind: NonNullable<NodeBoundaryCurationReport["failureKind"]>;
+    errors: string[];
+    warnings: string[];
+  }>;
+  failureDiagnostic?: NodeBoundaryFailureDiagnostic;
 };
 
 function chapterCurationModelSettings(
@@ -350,6 +382,89 @@ function buildNodeBoundaryFailureDiagnostic(ctx: ChapterCurationContext, reports
     failedExpectedWindowOverlap,
     firstCuratedNodeOpeningOverlap,
     worstFailedNodes,
+  };
+}
+
+function classifyNodeBoundaryFailure(ctx: ChapterCurationContext, report: NodeBoundaryCurationReport): NonNullable<NodeBoundaryCurationReport["failureKind"]> {
+  const combinedText = [...(report.errors ?? []), ...(report.warnings ?? [])].join(" ");
+  if (/\b(budget|wall.?clock|max agent|max turns|stopped after|too many)\b/i.test(combinedText)) return "budget_exhausted";
+  if (/\b(supplemental|non-narrated|heading-only|structural|divider|front matter|back matter)\b/i.test(combinedText)) return "ambiguous_structure";
+
+  const entry = ctx.epubEntries.find((candidate) => candidate.id === report.epubNodeId);
+  if (entry) {
+    const expectedOverlap = overlapRatio(entryOpeningDiagnosticTokens(entry), transcriptExpectedWindowTokens(ctx, report.expectedStartTime));
+    if (expectedOverlap < 0.18) return "bad_transcript";
+  }
+
+  return "weak_evidence";
+}
+
+function annotateNodeBoundaryFailures(ctx: ChapterCurationContext, reports: NodeBoundaryCurationReport[]): void {
+  for (const report of reports) {
+    if (report.outcome !== "failed") continue;
+    report.failureKind = report.failureKind ?? classifyNodeBoundaryFailure(ctx, report);
+  }
+}
+
+function buildChapterCurationRunSummary(input: {
+  ctx: ChapterCurationContext;
+  result: SubmitChapterPlanResult | null;
+  reports: NodeBoundaryCurationReport[];
+  failureDiagnostic?: NodeBoundaryFailureDiagnostic;
+  startedAt: number;
+  maxAgentNodeTasks: number;
+  maxAgentCalls: number;
+  maxWallMs: number;
+  agentNodeTasksStarted: number;
+  agentCallsStarted: number;
+  exhaustedReason: string | null;
+  skipped?: boolean;
+}): ChapterCurationRunSummary {
+  annotateNodeBoundaryFailures(input.ctx, input.reports);
+  const acceptedBoundaryCount = input.reports.filter((report) => report.outcome === "accepted").length;
+  const skippedBoundaryCount = input.reports.filter((report) => report.outcome === "skipped").length;
+  const droppedBoundaryCount = input.reports.filter((report) => report.outcome === "dropped").length;
+  const unresolved = input.reports.filter((report) => report.outcome === "failed");
+  const totalBoundaryCount = input.reports.length;
+  const resolvedBoundaryCount = acceptedBoundaryCount + skippedBoundaryCount + droppedBoundaryCount;
+  const elapsedMs = Date.now() - input.startedAt;
+  const accepted = Boolean(input.result?.accepted);
+  const status: ChapterCurationRunSummary["status"] = input.skipped
+    ? "skipped"
+    : accepted
+      ? unresolved.length === 0
+        ? "accepted"
+        : "partial"
+      : "failed";
+  return {
+    status,
+    acceptedBoundaryCount,
+    unresolvedBoundaryCount: unresolved.length,
+    skippedBoundaryCount,
+    droppedBoundaryCount,
+    totalBoundaryCount,
+    chapterCount: input.result?.accepted ? input.result.chapters.length : 0,
+    coverage: totalBoundaryCount === 0 ? 0 : Math.round((resolvedBoundaryCount / totalBoundaryCount) * 1_000) / 1_000,
+    budget: {
+      maxAgentNodeTasks: input.maxAgentNodeTasks,
+      maxAgentCalls: input.maxAgentCalls,
+      maxWallMs: input.maxWallMs,
+      agentNodeTasksStarted: input.agentNodeTasksStarted,
+      agentCallsStarted: input.agentCallsStarted,
+      elapsedMs,
+      exhausted: Boolean(input.exhaustedReason),
+      exhaustedReason: input.exhaustedReason,
+    },
+    unresolvedNodes: unresolved.map((report) => ({
+      epubNodeId: report.epubNodeId,
+      epubIndex: report.epubIndex,
+      title: report.title,
+      expectedStartTime: report.expectedStartTime,
+      failureKind: report.failureKind ?? "weak_evidence",
+      errors: report.errors ?? [],
+      warnings: report.warnings ?? [],
+    })),
+    failureDiagnostic: input.failureDiagnostic,
   };
 }
 
@@ -2079,13 +2194,37 @@ export async function runAgenticChapterCuration(ctx: ChapterCurationContext): Pr
 }
 
 export async function runNodeParallelAgenticChapterCurationDetailed(ctx: ChapterCurationContext): Promise<ChapterCurationDetailedResult> {
+  const runStartedAt = Date.now();
+  const emptyBudget = {
+    maxAgentNodeTasks: 0,
+    maxAgentCalls: 0,
+    maxWallMs: 0,
+    agentNodeTasksStarted: 0,
+    agentCallsStarted: 0,
+    exhaustedReason: null as string | null,
+  };
   const apiKey = ctx.settings.agents.apiKey.trim();
   if (!apiKey) {
     logChapterCurationEvent(ctx, {
       type: "node-parallel-run-skipped",
       message: "node parallel run skipped=no_api_key",
     });
-    return { result: null, finalOutput: null, newItems: [], rawResponses: [], nodeBoundaryReports: [], nodeBoundaryTraces: [] };
+    return {
+      result: null,
+      finalOutput: null,
+      newItems: [],
+      rawResponses: [],
+      nodeBoundaryReports: [],
+      nodeBoundaryTraces: [],
+      curationSummary: buildChapterCurationRunSummary({
+        ctx,
+        result: null,
+        reports: [],
+        startedAt: runStartedAt,
+        skipped: true,
+        ...emptyBudget,
+      }),
+    };
   }
   ensureTracingInitialized(apiKey);
   const provider = new OpenAIProvider({ apiKey, useResponses: true });
@@ -2148,14 +2287,23 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
         message: `node parallel preflight accepted=0 reason=epub_transcript_opening_mismatch best_overlap=${preflightDiagnostic.bestEarlyCuratedNodeOpeningOverlap ?? "unknown"}`,
         nodeBoundaryFailureDiagnostic: preflightDiagnostic,
       });
+      const reports: NodeBoundaryCurationReport[] = [];
       return {
         result: null,
         finalOutput: null,
         newItems: [],
         rawResponses: [],
-        nodeBoundaryReports: [],
+        nodeBoundaryReports: reports,
         nodeBoundaryTraces: [],
         nodeBoundaryFailureDiagnostic: preflightDiagnostic,
+        curationSummary: buildChapterCurationRunSummary({
+          ctx: curationCtx,
+          result: null,
+          reports,
+          failureDiagnostic: preflightDiagnostic,
+          startedAt: runStartedAt,
+          ...emptyBudget,
+        }),
       };
     }
 
@@ -2166,6 +2314,23 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
     const nodeBoundaryMaxConcurrency = Math.max(1, Number(process.env.PODIBLE_CHAPTER_NODE_CONCURRENCY ?? 12));
     const nodeBoundaryMaxTurns = Math.max(4, Number(process.env.PODIBLE_CHAPTER_NODE_MAX_TURNS ?? 64));
     const minNodeBoundaryCoverage = Math.max(0, Math.min(1, Number(process.env.PODIBLE_CHAPTER_NODE_MIN_COVERAGE ?? 0.9)));
+    const maxAgentNodeTasks = Math.max(0, Number(process.env.PODIBLE_CHAPTER_NODE_MAX_AGENT_TASKS ?? 24));
+    const maxAgentCalls = Math.max(0, Number(process.env.PODIBLE_CHAPTER_NODE_MAX_AGENT_CALLS ?? 48));
+    const maxWallMs = Math.max(0, Number(process.env.PODIBLE_CHAPTER_NODE_MAX_WALL_MS ?? 10 * 60 * 1000));
+    let agentNodeTasksStarted = 0;
+    let agentCallsStarted = 0;
+    let exhaustedReason: string | null = null;
+    const markBudgetExhausted = (reason: string): void => {
+      exhaustedReason ??= reason;
+    };
+    const budgetReturn = () => ({
+      maxAgentNodeTasks,
+      maxAgentCalls,
+      maxWallMs,
+      agentNodeTasksStarted,
+      agentCallsStarted,
+      exhaustedReason,
+    });
     logChapterCurationEvent(curationCtx, {
       type: "node-parallel-run-start",
       message: `node parallel run start=1 nodes=${curationCtx.epubEntries.length}`,
@@ -2175,6 +2340,9 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
       maxNodeConcurrency: nodeBoundaryMaxConcurrency,
       maxNodeTurns: nodeBoundaryMaxTurns,
       minNodeBoundaryCoverage,
+      maxAgentNodeTasks,
+      maxAgentCalls,
+      maxWallMs,
       durationSeconds: curationCtx.durationMs / 1000,
       epubEntries: curationCtx.epubEntries.length,
       originalEpubEntries: ctx.epubEntries.length,
@@ -2221,11 +2389,41 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
           });
           return null;
         }
+        if (maxWallMs > 0 && Date.now() - runStartedAt > maxWallMs) {
+          markBudgetExhausted("wall_clock_budget_exhausted");
+          logChapterCurationEvent(curationCtx, {
+            type: "node-boundary-budget-exhausted",
+            message: `node boundary epub=${targetBoundary.epubNodeId} budget=wall_clock exhausted=1 elapsed_ms=${Date.now() - runStartedAt}`,
+            span: rootSpan,
+            targetBoundary,
+          });
+          throw new Error("Chapter curation wall-clock budget exhausted.");
+        }
+        if (agentNodeTasksStarted >= maxAgentNodeTasks) {
+          markBudgetExhausted("agent_node_task_budget_exhausted");
+          logChapterCurationEvent(curationCtx, {
+            type: "node-boundary-budget-exhausted",
+            message: `node boundary epub=${targetBoundary.epubNodeId} budget=agent_node_tasks exhausted=1 started=${agentNodeTasksStarted}`,
+            span: rootSpan,
+            targetBoundary,
+          });
+          throw new Error("Chapter curation agent node-task budget exhausted.");
+        }
+        agentNodeTasksStarted++;
         const attemptModels = Array.from(new Set([primaryCuratorModel, configuredCuratorModel].filter(Boolean)));
         const attempts = attemptModels.map((model, index) => ({ model, delayMs: index === 0 ? 0 : 5_000 }));
         for (let attempt = 0; attempt < attempts.length; attempt++) {
           const attemptConfig = attempts[attempt]!;
           if (attemptConfig.delayMs > 0) await sleep(attemptConfig.delayMs);
+          if (maxWallMs > 0 && Date.now() - runStartedAt > maxWallMs) {
+            markBudgetExhausted("wall_clock_budget_exhausted");
+            throw new Error("Chapter curation wall-clock budget exhausted.");
+          }
+          if (agentCallsStarted >= maxAgentCalls) {
+            markBudgetExhausted("agent_call_budget_exhausted");
+            throw new Error("Chapter curation agent-call budget exhausted.");
+          }
+          agentCallsStarted++;
           try {
             const result = await runner.run(
               createNodeBoundaryCuratorAgent(curationCtx, rootSpan, targetBoundary, attemptConfig.model),
@@ -2329,6 +2527,14 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
       const coverage = nodeBoundaryReports.length === 0 ? 0 : resolvedReports / nodeBoundaryReports.length;
       if (coverage < minNodeBoundaryCoverage) {
         const nodeBoundaryFailureDiagnostic = buildNodeBoundaryFailureDiagnostic(curationCtx, nodeBoundaryReports);
+        const curationSummary = buildChapterCurationRunSummary({
+          ctx: curationCtx,
+          result: null,
+          reports: nodeBoundaryReports,
+          failureDiagnostic: nodeBoundaryFailureDiagnostic,
+          startedAt: runStartedAt,
+          ...budgetReturn(),
+        });
         logChapterCurationEvent(curationCtx, {
           type: "node-parallel-merge-rejected",
           message: `node parallel merge accepted=0 reason=low_coverage chapters=${nodeChapters.length} coverage=${coverage.toFixed(3)} failed=${failedReports}`,
@@ -2339,6 +2545,7 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
           failedReports,
           nodeBoundaryReports,
           nodeBoundaryFailureDiagnostic,
+          curationSummary,
         });
         return {
           result: null,
@@ -2348,6 +2555,7 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
           nodeBoundaryReports,
           nodeBoundaryTraces,
           nodeBoundaryFailureDiagnostic,
+          curationSummary,
         };
       }
       logChapterCurationEvent(curationCtx, {
@@ -2364,12 +2572,20 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
         notes: "Merged from one independently curated boundary task per audible EPUB node after the non-narrated EPUB-node pre-pass.",
       });
       if (nodeResult.accepted) {
+        const curationSummary = buildChapterCurationRunSummary({
+          ctx: curationCtx,
+          result: nodeResult,
+          reports: nodeBoundaryReports,
+          startedAt: runStartedAt,
+          ...budgetReturn(),
+        });
         logChapterCurationEvent(curationCtx, {
           type: "node-parallel-merge-accepted",
           message: `node parallel merge accepted=1 chapters=${nodeResult.chapters.length}`,
           chapters: nodeResult.chapters.length,
           result: nodeResult,
           nodeBoundaryReports,
+          curationSummary,
         });
         return {
           result: nodeResult,
@@ -2378,8 +2594,16 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
           rawResponses: [],
           nodeBoundaryReports,
           nodeBoundaryTraces,
+          curationSummary,
         };
       }
+      const curationSummary = buildChapterCurationRunSummary({
+        ctx: curationCtx,
+        result: null,
+        reports: nodeBoundaryReports,
+        startedAt: runStartedAt,
+        ...budgetReturn(),
+      });
       logChapterCurationEvent(curationCtx, {
         type: "node-parallel-merge-rejected",
         message: `node parallel merge accepted=0 chapters=${nodeChapters.length} errors=${JSON.stringify(nodeResult.errors.slice(0, 5))}`,
@@ -2388,14 +2612,24 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
         warnings: nodeResult.warnings,
         audit: nodeResult.audit,
         nodeBoundaryReports,
+        curationSummary,
       });
     } else {
       const nodeBoundaryFailureDiagnostic = buildNodeBoundaryFailureDiagnostic(curationCtx, nodeBoundaryReports);
+      const curationSummary = buildChapterCurationRunSummary({
+        ctx: curationCtx,
+        result: null,
+        reports: nodeBoundaryReports,
+        failureDiagnostic: nodeBoundaryFailureDiagnostic,
+        startedAt: runStartedAt,
+        ...budgetReturn(),
+      });
       logChapterCurationEvent(curationCtx, {
         type: "node-parallel-result-null",
         message: "node parallel result=null",
         nodeBoundaryReports,
         nodeBoundaryFailureDiagnostic,
+        curationSummary,
       });
       return {
         result: null,
@@ -2405,9 +2639,17 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
         nodeBoundaryReports,
         nodeBoundaryTraces,
         nodeBoundaryFailureDiagnostic,
+        curationSummary,
       };
     }
 
+    const curationSummary = buildChapterCurationRunSummary({
+      ctx: curationCtx,
+      result: null,
+      reports: nodeBoundaryReports,
+      startedAt: runStartedAt,
+      ...budgetReturn(),
+    });
     return {
       result: null,
       finalOutput: null,
@@ -2415,6 +2657,7 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
       rawResponses: [],
       nodeBoundaryReports,
       nodeBoundaryTraces,
+      curationSummary,
     };
   } finally {
     await provider.close().catch(() => undefined);

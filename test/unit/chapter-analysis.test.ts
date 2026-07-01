@@ -666,6 +666,122 @@ describe("chapter analysis", () => {
     }
   });
 
+  test("stores curation debug summary even when no chapters are accepted", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "podible-curation-debug-"));
+    const { db, repo } = setupRepo();
+    try {
+      await mkdir(root, { recursive: true });
+      const audioPath = path.join(root, "audio.mp3");
+      const epubPath = path.join(root, "book.epub");
+      await writeFile(audioPath, "fake audio bytes");
+      await createMinimalEpub(epubPath);
+
+      const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+      const audioManifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
+      const ebookManifestation = repo.addManifestation({ bookId: book.id, kind: "ebook" });
+      repo.addAsset({
+        bookId: book.id,
+        kind: "single",
+        mime: "audio/mpeg",
+        totalSize: 16,
+        durationMs: 90_000,
+        manifestationId: audioManifestation.id,
+        files: [{ path: audioPath, size: 16, start: 0, end: 15, durationMs: 90_000, title: "Audio" }],
+      });
+      const ebookAsset = repo.addAsset({
+        bookId: book.id,
+        kind: "single",
+        mime: "application/epub+zip",
+        totalSize: 100,
+        manifestationId: ebookManifestation.id,
+        files: [{ path: epubPath, size: 100, start: 0, end: 99, durationMs: 0, title: "EPUB" }],
+      });
+
+      const job = repo.createJob({
+        type: "chapter_analysis",
+        bookId: book.id,
+        payload: { manifestationId: audioManifestation.id, ebookAssetId: ebookAsset.id },
+      });
+
+      await processChapterAnalysisJob(
+        {
+          repo,
+          getSettings: () =>
+            defaultSettings({
+              agents: { apiKey: "test-key", timeoutMs: 1000 },
+            }),
+          onLog: () => undefined,
+        },
+        job,
+        {
+          extractChunkClip: async () => audioPath,
+          transcribeChunk: async () => ({
+            words: [{ startMs: 0, endMs: 500, raw: "The", token: "the" }],
+            segments: [{ startMs: 0, endMs: 500, text: "The" }],
+          }),
+          runAgenticCuration: async () => ({
+            result: null,
+            finalOutput: null,
+            newItems: [],
+            rawResponses: [],
+            nodeBoundaryReports: [
+              {
+                epubNodeId: "chapter-2",
+                epubIndex: 1,
+                title: "Chapter 2",
+                expectedStartTime: 42,
+                outcome: "failed",
+                failureKind: "bad_transcript",
+                errors: ["Target opener was not present in transcript window."],
+              },
+            ],
+            curationSummary: {
+              status: "failed",
+              acceptedBoundaryCount: 0,
+              unresolvedBoundaryCount: 1,
+              skippedBoundaryCount: 0,
+              droppedBoundaryCount: 0,
+              totalBoundaryCount: 1,
+              chapterCount: 0,
+              coverage: 0,
+              budget: {
+                maxAgentNodeTasks: 24,
+                maxAgentCalls: 48,
+                maxWallMs: 600000,
+                agentNodeTasksStarted: 1,
+                agentCallsStarted: 1,
+                elapsedMs: 100,
+                exhausted: false,
+                exhaustedReason: null,
+              },
+              unresolvedNodes: [
+                {
+                  epubNodeId: "chapter-2",
+                  epubIndex: 1,
+                  title: "Chapter 2",
+                  expectedStartTime: 42,
+                  failureKind: "bad_transcript",
+                  errors: ["Target opener was not present in transcript window."],
+                  warnings: [],
+                },
+              ],
+            },
+          }),
+        }
+      );
+
+      const analysis = repo.getChapterAnalysis(audioManifestation.id);
+      expect(analysis?.status).toBe("succeeded");
+      expect(analysis?.chapters_json).toBeNull();
+      const debug = JSON.parse(analysis!.debug_json!);
+      expect(debug.curation.status).toBe("failed");
+      expect(debug.curation.summary.unresolvedNodes[0].failureKind).toBe("bad_transcript");
+    } finally {
+      db.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("skips curation when no ebookAssetId in job payload", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "podible-curation-skip-"));
     const { db, repo } = setupRepo();
