@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
@@ -9,6 +9,7 @@ import JSZip from "jszip";
 
 import { runMigrations } from "../../src/db";
 import { hashSessionToken } from "../../src/auth";
+import { CHAPTER_ANALYSIS_ALGORITHM_VERSION } from "../../src/library/chapter-analysis";
 import { handleRpcMethod, handleRpcRequest } from "../../src/rpc";
 import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
@@ -952,6 +953,103 @@ describe("json-rpc handler", () => {
     expect(status.result.jobId).toBe(jobs[0]!.id);
 
     db.close();
+  });
+
+  test("library.requestTranscription force queues even when transcript status is current", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "podible-force-transcription-"));
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    try {
+      repo.updateSettings(
+        defaultSettings({
+          auth: { mode: "plex" },
+          agents: {
+            ...defaultSettings().agents,
+            apiKey: "test-key",
+          },
+        })
+      );
+
+      const audioPath = path.join(root, "current.m4b");
+      await writeFile(audioPath, "current audio bytes");
+      const book = repo.createBook({ title: "Current Book", author: "A. Writer" });
+      const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
+      repo.addAsset({
+        bookId: book.id,
+        kind: "single",
+        mime: "audio/mp4",
+        totalSize: 19,
+        durationMs: 1000,
+        manifestationId: manifestation.id,
+        files: [{ path: audioPath, size: 19, start: 0, end: 18, durationMs: 1000 }],
+      });
+
+      const initialStatus = await callRpc(
+        repo,
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "library.transcriptStatus",
+          params: {
+            bookId: book.id,
+            manifestationId: manifestation.id,
+          },
+        },
+        "user"
+      );
+      const currentFingerprint = initialStatus.result.currentFingerprint;
+      expect(typeof currentFingerprint).toBe("string");
+
+      repo.upsertChapterAnalysis({
+        manifestationId: manifestation.id,
+        status: "succeeded",
+        source: "whisper_transcript",
+        algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
+        fingerprint: currentFingerprint,
+        chaptersJson: JSON.stringify([{ title: "Chapter 1", startTime: 0 }]),
+        resolvedBoundaryCount: 1,
+        totalBoundaryCount: 1,
+      });
+
+      const idempotent = await callRpc(
+        repo,
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "library.requestTranscription",
+          params: {
+            bookId: book.id,
+            manifestationId: manifestation.id,
+          },
+        },
+        "user"
+      );
+      expect(idempotent.result.status).toBe("current");
+      expect(repo.listJobsByType("chapter_analysis")).toHaveLength(0);
+
+      const forced = await callRpc(
+        repo,
+        {
+          jsonrpc: "2.0",
+          id: 3,
+          method: "library.requestTranscription",
+          params: {
+            bookId: book.id,
+            manifestationId: manifestation.id,
+            force: true,
+          },
+        },
+        "user"
+      );
+      expect(forced.result.status).toBe("pending");
+      const jobs = repo.listJobsByType("chapter_analysis");
+      expect(jobs).toHaveLength(1);
+      expect(JSON.parse(jobs[0]!.payload_json ?? "{}").manifestationId).toBe(manifestation.id);
+    } finally {
+      db.close();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test("returns parse error for malformed json", async () => {

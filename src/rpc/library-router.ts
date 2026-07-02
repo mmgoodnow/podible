@@ -535,10 +535,11 @@ export const libraryRouter = defineRouter({
 
   requestTranscription: defineMethod({
     auth: "user",
-    summary: "Pull-trigger transcription for a book audio manifestation. Idempotent; returns current status.",
+    summary: "Pull-trigger transcription for a book audio manifestation. Idempotent unless force is true; returns current status.",
     paramsSchema: emptyParamsSchema.extend({
       bookId: positiveIntSchema,
       manifestationId: optionalPositiveIntSchema,
+      force: optionalBooleanSchema,
     }),
     resultSchema: z.object({
       status: z.enum(["current", "stale", "pending", "running", "failed", "missing_audio", "missing_config"]),
@@ -563,7 +564,11 @@ export const libraryRouter = defineRouter({
         }
       }
       const apiKeyConfigured = Boolean(ctx.repo.getSettings().agents.apiKey.trim());
-      return await requestBookTranscription(ctx.repo, params.bookId, { apiKeyConfigured, manifestationId: params.manifestationId });
+      return await requestBookTranscription(ctx.repo, params.bookId, {
+        apiKeyConfigured,
+        manifestationId: params.manifestationId,
+        force: params.force ?? false,
+      });
     },
   }),
 

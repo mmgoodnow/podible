@@ -1613,11 +1613,11 @@ export async function getBookTranscriptStatus(
 export async function requestBookTranscription(
   repo: BooksRepo,
   bookId: number,
-  options: { apiKeyConfigured: boolean; manifestationId?: number | null }
+  options: { apiKeyConfigured: boolean; manifestationId?: number | null; force?: boolean }
 ): Promise<TranscriptRequestResult> {
   const { hasAudio, base } = await buildTranscriptStatus(repo, bookId, options);
   if (!hasAudio) return base;
-  if (base.status === "current") return base;
+  if (base.status === "current" && !options.force) return base;
   if (base.status === "missing_config") return base;
 
   const job =
