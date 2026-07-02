@@ -401,7 +401,7 @@ describe("manifestation media", () => {
           { startTime: 0, title: "Opening credits" },
           { startTime: 120, title: "I: The Traveler" },
           { startTime: 1000, title: "II: Red Royal", source: "epub_position_estimate" },
-          { startTime: 2000, title: "III: Grey Thief", estimated: true },
+          { startTime: 2000, title: "III: Grey Thief", source: "curated" },
           { startTime: 2900, title: "Closing credits" },
         ]),
         debugJson: null,
@@ -417,7 +417,7 @@ describe("manifestation media", () => {
         { startTime: 0, title: "Opening credits" },
         { startTime: 120, title: "I: The Traveler" },
         { startTime: 1000, title: "II: Red Royal", source: "epub_position_estimate" },
-        { startTime: 2000, title: "III: Grey Thief", source: "epub_position_estimate" },
+        { startTime: 2000, title: "III: Grey Thief", source: "curated" },
         { startTime: 2900, title: "Closing credits" },
       ]);
     } finally {

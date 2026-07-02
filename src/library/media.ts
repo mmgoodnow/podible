@@ -56,7 +56,6 @@ type StoredCuratedChapter = {
   title: string;
   startTime: number;
   source?: "curated" | "epub_position_estimate";
-  estimated?: boolean;
 };
 
 function extensionForMime(mime: string): string {
@@ -292,7 +291,7 @@ async function buildTranscriptProposedChapterTimings(
       title: chapter.title,
       startMs,
       endMs: next ? Math.max(startMs, Math.round(next.startTime * 1000)) : Math.max(startMs, totalDurationMs),
-      source: chapter.source ?? (chapter.estimated ? "epub_position_estimate" : undefined),
+      source: chapter.source,
     };
   });
 }
