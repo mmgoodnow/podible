@@ -43,6 +43,13 @@ type ChapterTiming = {
   endMs: number;
   startOffset?: number;
   endOffset?: number;
+  estimated?: boolean;
+};
+
+type ServedChapter = {
+  startTime: number;
+  title: string;
+  estimated?: boolean;
 };
 
 function extensionForMime(mime: string): string {
@@ -267,7 +274,7 @@ async function buildTranscriptProposedChapterTimings(
 
   const analysis = repo.getChapterAnalysis(manifestation.id);
   if (!analysis?.chapters_json) return null;
-  const allChapters = JSON.parse(analysis.chapters_json) as Array<{ title: string; startTime: number }>;
+  const allChapters = JSON.parse(analysis.chapters_json) as Array<{ title: string; startTime: number; estimated?: boolean }>;
   if (!Array.isArray(allChapters) || allChapters.length === 0) return null;
 
   return allChapters.map((chapter, index) => {
@@ -278,6 +285,7 @@ async function buildTranscriptProposedChapterTimings(
       title: chapter.title,
       startMs,
       endMs: next ? Math.max(startMs, Math.round(next.startTime * 1000)) : Math.max(startMs, totalDurationMs),
+      estimated: chapter.estimated || undefined,
     };
   });
 }
@@ -286,7 +294,7 @@ export async function buildChapters(
   repo: BooksRepo,
   asset: AssetRow,
   files: AssetFileRow[]
-): Promise<{ version: string; chapters: Array<{ startTime: number; title: string }> } | null> {
+): Promise<{ version: string; chapters: ServedChapter[] } | null> {
   const timings = await buildChapterTimings(repo, asset, files);
   if (!timings || timings.length === 0) return null;
   return {
@@ -294,6 +302,7 @@ export async function buildChapters(
     chapters: timings.map((chapter) => ({
       startTime: chapter.startMs / 1000,
       title: chapter.title,
+      ...(chapter.estimated ? { estimated: true } : {}),
     })),
   };
 }
@@ -319,7 +328,7 @@ export async function buildManifestationChapters(
   repo: BooksRepo,
   manifestation: ManifestationRow,
   containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>
-): Promise<{ version: string; chapters: Array<{ startTime: number; title: string }> } | null> {
+): Promise<{ version: string; chapters: ServedChapter[] } | null> {
   const timings = await buildManifestationChapterTimings(repo, manifestation, containers);
   if (!timings || timings.length === 0) return null;
   return {
@@ -327,6 +336,7 @@ export async function buildManifestationChapters(
     chapters: timings.map((chapter) => ({
       startTime: chapter.startMs / 1000,
       title: chapter.title,
+      ...(chapter.estimated ? { estimated: true } : {}),
     })),
   };
 }

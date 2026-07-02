@@ -1741,6 +1741,8 @@ async function tryAgenticCuration(
         ? result.result.chapters.map((chapter) => ({
             title: chapter.title,
             startTime: chapter.startTime,
+            ...(chapter.epubNodeId ? { epubNodeId: chapter.epubNodeId } : {}),
+            ...(chapter.estimated ? { estimated: true } : {}),
           }))
         : null;
 

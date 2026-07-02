@@ -14,6 +14,7 @@ import {
   type TranscriptWindow,
   getEmbeddedAudioChapters,
   getTranscriptWindowFromContext,
+  estimateTimestampFromEpubPosition,
   inferEntryEndRatio,
   inferEntryStartRatio,
   msToSeconds,
@@ -53,7 +54,7 @@ export type SubmitChapterPlanResult =
       accepted: true;
       strategy: string;
       notes: string | null;
-      chapters: Array<{ title: string; startTime: number }>;
+      chapters: Array<{ title: string; startTime: number; epubNodeId?: string; estimated?: boolean }>;
       warnings: string[];
       audit: ChapterPlanAuditEntry[];
     }
@@ -122,6 +123,10 @@ export type SubmitNodeBoundaryResult =
 
 export type NodeBoundaryDecision = Extract<SubmitNodeBoundaryResult, { accepted: true }>;
 
+type MergeNodeBoundaryDecision = Pick<NodeBoundaryDecision, "epubNodeId" | "epubIndex" | "title" | "startTime"> & {
+  estimated?: boolean;
+};
+
 export type NodeBoundaryCurationReport = {
   epubNodeId: string;
   epubIndex: number;
@@ -133,6 +138,7 @@ export type NodeBoundaryCurationReport = {
   errors?: string[];
   warnings?: string[];
   deterministic?: boolean;
+  estimated?: boolean;
 };
 
 export type ChapterCurationAgentTrace = {
@@ -149,6 +155,7 @@ const submittedChapterSchema = z.object({
   title: z.string().trim().min(1),
   startTime: z.number().finite().nonnegative(),
   epubNodeId: z.string().trim().min(1).optional(),
+  estimated: z.boolean().optional(),
 });
 
 const submitChapterPlanSchema = z.object({
@@ -757,11 +764,12 @@ function summarizeSubmittedChapters(chapters: SubmittedChapter[], limit = 12): s
   return chapters.length > limit ? `${shown} | ... +${chapters.length - limit}` : shown;
 }
 
-export function summarizeSubmittedChapterObjects(chapters: SubmittedChapter[], limit = 24): Array<Pick<SubmittedChapter, "title" | "startTime" | "epubNodeId">> {
+export function summarizeSubmittedChapterObjects(chapters: SubmittedChapter[], limit = 24): Array<Pick<SubmittedChapter, "title" | "startTime" | "epubNodeId" | "estimated">> {
   return chapters.slice(0, limit).map((chapter) => ({
     title: chapter.title,
     startTime: chapter.startTime,
-    epubNodeId: chapter.epubNodeId,
+    ...(chapter.epubNodeId ? { epubNodeId: chapter.epubNodeId } : {}),
+    ...(chapter.estimated ? { estimated: true } : {}),
   }));
 }
 
@@ -868,6 +876,8 @@ export function submitChapterPlan(ctx: ChapterCurationContext, input: unknown): 
     chapters: plan.chapters.map((chapter) => ({
       title: chapter.title,
       startTime: chapter.startTime,
+      ...(chapter.epubNodeId ? { epubNodeId: chapter.epubNodeId } : {}),
+      ...(chapter.estimated ? { estimated: true } : {}),
     })),
     warnings,
     audit,
@@ -1022,13 +1032,15 @@ export async function resolveNodeBoundaryChapters(
     })
   );
 
-  const resolvedDecisions = [...decisions];
-  recoverSpokenHeadingOnlyNodeBoundaries(ctx, targets, resolvedDecisions, reports);
-  markUnrecoveredHeadingOnlyNodeBoundariesSkipped(ctx, targets, resolvedDecisions, reports);
+  const recoveredDecisions = [...decisions];
+  recoverSpokenHeadingOnlyNodeBoundaries(ctx, targets, recoveredDecisions, reports);
+  markUnrecoveredHeadingOnlyNodeBoundariesSkipped(ctx, targets, recoveredDecisions, reports);
+  const mergeDecisions: Array<MergeNodeBoundaryDecision | null> = [...recoveredDecisions];
+  estimateUnresolvedNodeBoundaries(ctx, targets, mergeDecisions, reports);
 
   const chapters: SubmittedChapter[] = [];
-  const chapterDecisions: NodeBoundaryDecision[] = [];
-  function markReportDropped(decision: NodeBoundaryDecision, reason: string): void {
+  const chapterDecisions: MergeNodeBoundaryDecision[] = [];
+  function markReportDropped(decision: MergeNodeBoundaryDecision, reason: string): void {
     const report = reports?.find((item) => item.epubNodeId === decision.epubNodeId && item.outcome === "accepted");
     if (report) {
       report.outcome = "dropped";
@@ -1045,8 +1057,8 @@ export async function resolveNodeBoundaryChapters(
       errors: [reason],
     });
   }
-  for (const decision of resolvedDecisions
-    .filter((decision): decision is NodeBoundaryDecision => Boolean(decision))
+  for (const decision of mergeDecisions
+    .filter((decision): decision is MergeNodeBoundaryDecision => Boolean(decision))
     .sort((a, b) => a.epubIndex - b.epubIndex || a.startTime - b.startTime)) {
     const previous = chapters.at(-1);
     if (previous && Math.abs(previous.startTime - decision.startTime) <= duplicateBoundaryWindowSeconds) {
@@ -1056,13 +1068,19 @@ export async function resolveNodeBoundaryChapters(
           title: decision.title,
           startTime: decision.startTime,
           epubNodeId: decision.epubNodeId,
+          estimated: decision.estimated || undefined,
         });
         chapterDecisions.push(decision);
         continue;
       }
       if (previousDecision && chapterTitleSpecificityScore(decision.title) > chapterTitleSpecificityScore(previous.title)) {
         markReportDropped(previousDecision, `Dropped duplicate/nearby boundary in favor of more specific EPUB title ${decision.title}.`);
-        chapters[chapters.length - 1] = { title: decision.title, startTime: decision.startTime, epubNodeId: decision.epubNodeId };
+        chapters[chapters.length - 1] = {
+          title: decision.title,
+          startTime: decision.startTime,
+          epubNodeId: decision.epubNodeId,
+          estimated: decision.estimated || undefined,
+        };
         chapterDecisions[chapterDecisions.length - 1] = decision;
       } else {
         markReportDropped(decision, `Dropped duplicate/nearby boundary after ${previous.title}.`);
@@ -1073,7 +1091,12 @@ export async function resolveNodeBoundaryChapters(
       const previousDecision = chapterDecisions.at(-1);
       if (previousDecision && chapterTitleSpecificityScore(decision.title) > chapterTitleSpecificityScore(previous.title)) {
         markReportDropped(previousDecision, `Dropped non-monotonic boundary in favor of more specific EPUB title ${decision.title}.`);
-        chapters[chapters.length - 1] = { title: decision.title, startTime: decision.startTime, epubNodeId: decision.epubNodeId };
+        chapters[chapters.length - 1] = {
+          title: decision.title,
+          startTime: decision.startTime,
+          epubNodeId: decision.epubNodeId,
+          estimated: decision.estimated || undefined,
+        };
         chapterDecisions[chapterDecisions.length - 1] = decision;
       } else {
         markReportDropped(decision, `Dropped non-monotonic boundary after ${previous.title}.`);
@@ -1084,6 +1107,7 @@ export async function resolveNodeBoundaryChapters(
       title: decision.title,
       startTime: decision.startTime,
       epubNodeId: decision.epubNodeId,
+      estimated: decision.estimated || undefined,
     });
     chapterDecisions.push(decision);
   }
@@ -1188,6 +1212,48 @@ function headingTokenAliases(token: string): string[] {
   return alias ? [alias] : [];
 }
 
+function estimateUnresolvedNodeBoundaries(
+  ctx: ChapterCurationContext,
+  targets: ChapterCurationTargetBoundary[],
+  decisions: Array<MergeNodeBoundaryDecision | null>,
+  reports: NodeBoundaryCurationReport[] | undefined
+): void {
+  for (const [index, decision] of decisions.entries()) {
+    if (decision) continue;
+    const target = targets[index];
+    if (!target) continue;
+
+    const report = reports?.find((item) => item.epubNodeId === target.epubNodeId && item.outcome === "failed");
+    if (!report) continue;
+
+    const entry = ctx.epubEntries[target.epubIndex];
+    if (!entry || isShortHeadingOnlyEntry(entry)) continue;
+    const hasBodyText = entry.words.some((word) => word.kind === "body");
+    if (!hasBodyText) continue;
+
+    const estimate = estimateTimestampFromEpubPosition(ctx, { epubNodeId: target.epubNodeId });
+    if (!estimate || !Number.isFinite(estimate.estimatedStartTime) || estimate.estimatedStartTime < 0) continue;
+
+    decisions[index] = {
+      epubNodeId: target.epubNodeId,
+      epubIndex: target.epubIndex,
+      title: target.title,
+      startTime: estimate.estimatedStartTime,
+      estimated: true,
+    };
+
+    report.outcome = "accepted";
+    report.startTime = estimate.estimatedStartTime;
+    report.estimated = true;
+    report.deterministic = true;
+    report.errors = undefined;
+    report.warnings = [
+      ...(report.warnings ?? []),
+      "Estimated from EPUB cumulative position after no transcript-backed boundary was accepted.",
+    ];
+  }
+}
+
 function skipLikelyUnnarratedSupplementalNodeReason(ctx: ChapterCurationContext, target: ChapterCurationTargetBoundary): string | null {
   const entry = ctx.epubEntries[target.epubIndex];
   if (!entry || entry.id !== target.epubNodeId) return null;
@@ -1222,8 +1288,8 @@ function isSupplementalFrontBackMatterTitle(title: string): boolean {
 
 function shouldKeepAdjacentDistinctEpubBoundaries(
   ctx: ChapterCurationContext,
-  previous: NodeBoundaryDecision,
-  current: NodeBoundaryDecision
+  previous: MergeNodeBoundaryDecision,
+  current: MergeNodeBoundaryDecision
 ): boolean {
   if (current.startTime <= previous.startTime) return false;
   if (current.epubIndex !== previous.epubIndex + 1) return false;

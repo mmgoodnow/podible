@@ -1261,8 +1261,8 @@ describe("chapter curation tools", () => {
     expect(result.accepted).toBe(true);
     if (!result.accepted) throw new Error(result.errors.join("\n"));
     expect(result.chapters).toEqual([
-      { title: "Prologue", startTime: 0 },
-      { title: "Chapter 1", startTime: 30 },
+      { title: "Prologue", startTime: 0, epubNodeId: "front" },
+      { title: "Chapter 1", startTime: 30, epubNodeId: "chapter-1" },
     ]);
     expect(result.audit[1]?.nearestEmbeddedBoundary?.startTime).toBe(0);
   });
@@ -2084,17 +2084,26 @@ describe("chapter curation tools", () => {
     expect(result.isFinalOutput).toBe(true);
   });
 
-  test("resolveNodeBoundaryChapters isolates failed node tasks and keeps accepted neighbors", async () => {
+  test("resolveNodeBoundaryChapters estimates failed node tasks and keeps accepted neighbors", async () => {
     const context = ctx({
       durationMs: 300_000,
       manifestation: manifestation({ duration_ms: 300_000 }),
       epubEntries: [
         epubEntry({ id: "chapter-1", title: "Chapter 1", cumulativeRatio: 0.33, cumulativeWords: 10 }),
-        epubEntry({ id: "chapter-2", title: "Chapter 2", cumulativeRatio: 0.66, cumulativeWords: 20 }),
+        epubEntry({
+          id: "chapter-2",
+          title: "Chapter 2",
+          cumulativeRatio: 0.66,
+          cumulativeWords: 20,
+          words: "Chapter 2 This node has enough body words to estimate when transcript evidence fails".split(/\s+/).map((text, index) => ({
+            ...word(text),
+            kind: index < 2 ? "heading" : "body",
+          })),
+        }),
         epubEntry({ id: "chapter-3", title: "Chapter 3", cumulativeRatio: 1, cumulativeWords: 30 }),
       ],
     });
-    const reports: Array<{ outcome: string; epubNodeId: string }> = [];
+    const reports: NodeBoundaryCurationReport[] = [];
     const chapters = await resolveNodeBoundaryChapters(
       context,
       async (targetBoundary): Promise<NodeBoundaryDecision | null> => {
@@ -2128,12 +2137,71 @@ describe("chapter curation tools", () => {
       { maxConcurrency: 3, reports: reports as never }
     );
 
-    expect(chapters?.map((chapter) => chapter.epubNodeId)).toEqual(["chapter-1", "chapter-3"]);
-    expect(reports.map((report) => `${report.epubNodeId}:${report.outcome}`)).toEqual([
-      "chapter-1:accepted",
-      "chapter-2:failed",
-      "chapter-3:accepted",
+    expect(chapters?.map((chapter) => chapter.epubNodeId)).toEqual(["chapter-1", "chapter-2", "chapter-3"]);
+    expect(chapters?.find((chapter) => chapter.epubNodeId === "chapter-2")).toMatchObject({
+      title: "Chapter 2",
+      startTime: 99,
+      estimated: true,
+    });
+    expect(reports.map((report) => `${report.epubNodeId}:${report.outcome}:${report.estimated ? "estimated" : "exact"}`)).toEqual([
+      "chapter-1:accepted:exact",
+      "chapter-2:accepted:estimated",
+      "chapter-3:accepted:exact",
     ]);
+  });
+
+  test("resolveNodeBoundaryChapters does not estimate unresolved heading-only dividers", async () => {
+    const context = ctx({
+      durationMs: 300_000,
+      manifestation: manifestation({ duration_ms: 300_000 }),
+      epubEntries: [
+        epubEntry({
+          id: "part-1",
+          title: "Part I: Slave",
+          cumulativeRatio: 0.33,
+          cumulativeWords: 2,
+          words: [
+            { ...word("Part"), kind: "heading" },
+            { ...word("I"), kind: "heading" },
+            { ...word("Slave"), kind: "heading" },
+          ],
+        }),
+        epubEntry({
+          id: "chapter-1",
+          title: "Chapter 1",
+          cumulativeRatio: 1,
+          cumulativeWords: 20,
+          words: "Chapter 1 This chapter has body text".split(/\s+/).map((text, index) => ({
+            ...word(text),
+            kind: index < 2 ? "heading" : "body",
+          })),
+        }),
+      ],
+    });
+    const reports: NodeBoundaryCurationReport[] = [];
+    const chapters = await resolveNodeBoundaryChapters(context, async () => null, { maxConcurrency: 2, reports });
+
+    expect(chapters?.map((chapter) => chapter.epubNodeId)).toEqual(["chapter-1"]);
+    expect(chapters?.[0]).toMatchObject({ epubNodeId: "chapter-1", estimated: true });
+    expect(reports.map((report) => `${report.epubNodeId}:${report.outcome}:${report.estimated ? "estimated" : "exact"}`)).toEqual([
+      "part-1:skipped:exact",
+      "chapter-1:accepted:estimated",
+    ]);
+  });
+
+  test("submitChapterPlan preserves estimated chapter metadata", () => {
+    const result = submitChapterPlan(ctx(), {
+      manifestationId: 10,
+      strategy: "test",
+      chapters: [
+        { title: "Prologue", startTime: 0, epubNodeId: "front" },
+        { title: "Chapter 1", startTime: 5, epubNodeId: "chapter-1", estimated: true },
+      ],
+    });
+
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error("expected acceptance");
+    expect(result.chapters[1]).toMatchObject({ estimated: true, epubNodeId: "chapter-1" });
   });
 
   test("resolveNodeBoundaryChapters recovers spoken title-only part headings from adjacent accepted boundaries", async () => {
