@@ -1742,7 +1742,7 @@ async function tryAgenticCuration(
             title: chapter.title,
             startTime: chapter.startTime,
             ...(chapter.epubNodeId ? { epubNodeId: chapter.epubNodeId } : {}),
-            ...(chapter.estimated ? { estimated: true } : {}),
+            ...(chapter.source ? { source: chapter.source } : {}),
           }))
         : null;
 

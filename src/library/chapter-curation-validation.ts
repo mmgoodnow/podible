@@ -54,7 +54,7 @@ export type SubmitChapterPlanResult =
       accepted: true;
       strategy: string;
       notes: string | null;
-      chapters: Array<{ title: string; startTime: number; epubNodeId?: string; estimated?: boolean }>;
+      chapters: Array<{ title: string; startTime: number; epubNodeId?: string; source?: "curated" | "epub_position_estimate" }>;
       warnings: string[];
       audit: ChapterPlanAuditEntry[];
     }
@@ -124,7 +124,7 @@ export type SubmitNodeBoundaryResult =
 export type NodeBoundaryDecision = Extract<SubmitNodeBoundaryResult, { accepted: true }>;
 
 type MergeNodeBoundaryDecision = Pick<NodeBoundaryDecision, "epubNodeId" | "epubIndex" | "title" | "startTime"> & {
-  estimated?: boolean;
+  source?: "curated" | "epub_position_estimate";
 };
 
 export type NodeBoundaryCurationReport = {
@@ -138,7 +138,7 @@ export type NodeBoundaryCurationReport = {
   errors?: string[];
   warnings?: string[];
   deterministic?: boolean;
-  estimated?: boolean;
+  source?: "curated" | "epub_position_estimate";
 };
 
 export type ChapterCurationAgentTrace = {
@@ -155,7 +155,7 @@ const submittedChapterSchema = z.object({
   title: z.string().trim().min(1),
   startTime: z.number().finite().nonnegative(),
   epubNodeId: z.string().trim().min(1).optional(),
-  estimated: z.boolean().optional(),
+  source: z.enum(["curated", "epub_position_estimate"]).optional(),
 });
 
 const submitChapterPlanSchema = z.object({
@@ -764,12 +764,12 @@ function summarizeSubmittedChapters(chapters: SubmittedChapter[], limit = 12): s
   return chapters.length > limit ? `${shown} | ... +${chapters.length - limit}` : shown;
 }
 
-export function summarizeSubmittedChapterObjects(chapters: SubmittedChapter[], limit = 24): Array<Pick<SubmittedChapter, "title" | "startTime" | "epubNodeId" | "estimated">> {
+export function summarizeSubmittedChapterObjects(chapters: SubmittedChapter[], limit = 24): Array<Pick<SubmittedChapter, "title" | "startTime" | "epubNodeId" | "source">> {
   return chapters.slice(0, limit).map((chapter) => ({
     title: chapter.title,
     startTime: chapter.startTime,
     ...(chapter.epubNodeId ? { epubNodeId: chapter.epubNodeId } : {}),
-    ...(chapter.estimated ? { estimated: true } : {}),
+    ...(chapter.source ? { source: chapter.source } : {}),
   }));
 }
 
@@ -877,7 +877,7 @@ export function submitChapterPlan(ctx: ChapterCurationContext, input: unknown): 
       title: chapter.title,
       startTime: chapter.startTime,
       ...(chapter.epubNodeId ? { epubNodeId: chapter.epubNodeId } : {}),
-      ...(chapter.estimated ? { estimated: true } : {}),
+      ...(chapter.source ? { source: chapter.source } : {}),
     })),
     warnings,
     audit,
@@ -1068,7 +1068,7 @@ export async function resolveNodeBoundaryChapters(
           title: decision.title,
           startTime: decision.startTime,
           epubNodeId: decision.epubNodeId,
-          estimated: decision.estimated || undefined,
+          source: decision.source ?? "curated",
         });
         chapterDecisions.push(decision);
         continue;
@@ -1079,7 +1079,7 @@ export async function resolveNodeBoundaryChapters(
           title: decision.title,
           startTime: decision.startTime,
           epubNodeId: decision.epubNodeId,
-          estimated: decision.estimated || undefined,
+          source: decision.source ?? "curated",
         };
         chapterDecisions[chapterDecisions.length - 1] = decision;
       } else {
@@ -1095,7 +1095,7 @@ export async function resolveNodeBoundaryChapters(
           title: decision.title,
           startTime: decision.startTime,
           epubNodeId: decision.epubNodeId,
-          estimated: decision.estimated || undefined,
+          source: decision.source ?? "curated",
         };
         chapterDecisions[chapterDecisions.length - 1] = decision;
       } else {
@@ -1107,7 +1107,7 @@ export async function resolveNodeBoundaryChapters(
       title: decision.title,
       startTime: decision.startTime,
       epubNodeId: decision.epubNodeId,
-      estimated: decision.estimated || undefined,
+      source: decision.source ?? "curated",
     });
     chapterDecisions.push(decision);
   }
@@ -1239,12 +1239,12 @@ function estimateUnresolvedNodeBoundaries(
       epubIndex: target.epubIndex,
       title: target.title,
       startTime: estimate.estimatedStartTime,
-      estimated: true,
+      source: "epub_position_estimate",
     };
 
     report.outcome = "accepted";
     report.startTime = estimate.estimatedStartTime;
-    report.estimated = true;
+    report.source = "epub_position_estimate";
     report.deterministic = true;
     report.errors = undefined;
     report.warnings = [

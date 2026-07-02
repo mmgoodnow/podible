@@ -43,12 +43,19 @@ type ChapterTiming = {
   endMs: number;
   startOffset?: number;
   endOffset?: number;
-  estimated?: boolean;
+  source?: "curated" | "epub_position_estimate";
 };
 
 type ServedChapter = {
   startTime: number;
   title: string;
+  source?: "curated" | "epub_position_estimate";
+};
+
+type StoredCuratedChapter = {
+  title: string;
+  startTime: number;
+  source?: "curated" | "epub_position_estimate";
   estimated?: boolean;
 };
 
@@ -274,7 +281,7 @@ async function buildTranscriptProposedChapterTimings(
 
   const analysis = repo.getChapterAnalysis(manifestation.id);
   if (!analysis?.chapters_json) return null;
-  const allChapters = JSON.parse(analysis.chapters_json) as Array<{ title: string; startTime: number; estimated?: boolean }>;
+  const allChapters = JSON.parse(analysis.chapters_json) as StoredCuratedChapter[];
   if (!Array.isArray(allChapters) || allChapters.length === 0) return null;
 
   return allChapters.map((chapter, index) => {
@@ -285,7 +292,7 @@ async function buildTranscriptProposedChapterTimings(
       title: chapter.title,
       startMs,
       endMs: next ? Math.max(startMs, Math.round(next.startTime * 1000)) : Math.max(startMs, totalDurationMs),
-      estimated: chapter.estimated || undefined,
+      source: chapter.source ?? (chapter.estimated ? "epub_position_estimate" : undefined),
     };
   });
 }
@@ -302,7 +309,7 @@ export async function buildChapters(
     chapters: timings.map((chapter) => ({
       startTime: chapter.startMs / 1000,
       title: chapter.title,
-      ...(chapter.estimated ? { estimated: true } : {}),
+      ...(chapter.source ? { source: chapter.source } : {}),
     })),
   };
 }
@@ -336,7 +343,7 @@ export async function buildManifestationChapters(
     chapters: timings.map((chapter) => ({
       startTime: chapter.startMs / 1000,
       title: chapter.title,
-      ...(chapter.estimated ? { estimated: true } : {}),
+      ...(chapter.source ? { source: chapter.source } : {}),
     })),
   };
 }

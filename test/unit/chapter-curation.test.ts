@@ -2141,12 +2141,12 @@ describe("chapter curation tools", () => {
     expect(chapters?.find((chapter) => chapter.epubNodeId === "chapter-2")).toMatchObject({
       title: "Chapter 2",
       startTime: 99,
-      estimated: true,
+      source: "epub_position_estimate",
     });
-    expect(reports.map((report) => `${report.epubNodeId}:${report.outcome}:${report.estimated ? "estimated" : "exact"}`)).toEqual([
-      "chapter-1:accepted:exact",
-      "chapter-2:accepted:estimated",
-      "chapter-3:accepted:exact",
+    expect(reports.map((report) => `${report.epubNodeId}:${report.outcome}:${report.source ?? "curated"}`)).toEqual([
+      "chapter-1:accepted:curated",
+      "chapter-2:accepted:epub_position_estimate",
+      "chapter-3:accepted:curated",
     ]);
   });
 
@@ -2182,26 +2182,26 @@ describe("chapter curation tools", () => {
     const chapters = await resolveNodeBoundaryChapters(context, async () => null, { maxConcurrency: 2, reports });
 
     expect(chapters?.map((chapter) => chapter.epubNodeId)).toEqual(["chapter-1"]);
-    expect(chapters?.[0]).toMatchObject({ epubNodeId: "chapter-1", estimated: true });
-    expect(reports.map((report) => `${report.epubNodeId}:${report.outcome}:${report.estimated ? "estimated" : "exact"}`)).toEqual([
-      "part-1:skipped:exact",
-      "chapter-1:accepted:estimated",
+    expect(chapters?.[0]).toMatchObject({ epubNodeId: "chapter-1", source: "epub_position_estimate" });
+    expect(reports.map((report) => `${report.epubNodeId}:${report.outcome}:${report.source ?? "curated"}`)).toEqual([
+      "part-1:skipped:curated",
+      "chapter-1:accepted:epub_position_estimate",
     ]);
   });
 
-  test("submitChapterPlan preserves estimated chapter metadata", () => {
+  test("submitChapterPlan preserves chapter source metadata", () => {
     const result = submitChapterPlan(ctx(), {
       manifestationId: 10,
       strategy: "test",
       chapters: [
         { title: "Prologue", startTime: 0, epubNodeId: "front" },
-        { title: "Chapter 1", startTime: 5, epubNodeId: "chapter-1", estimated: true },
+        { title: "Chapter 1", startTime: 5, epubNodeId: "chapter-1", source: "epub_position_estimate" },
       ],
     });
 
     expect(result.accepted).toBe(true);
     if (!result.accepted) throw new Error("expected acceptance");
-    expect(result.chapters[1]).toMatchObject({ estimated: true, epubNodeId: "chapter-1" });
+    expect(result.chapters[1]).toMatchObject({ source: "epub_position_estimate", epubNodeId: "chapter-1" });
   });
 
   test("resolveNodeBoundaryChapters recovers spoken title-only part headings from adjacent accepted boundaries", async () => {
@@ -2277,8 +2277,8 @@ describe("chapter curation tools", () => {
     );
 
     expect(chapters).toEqual([
-      { title: "III - Night", startTime: 101, epubNodeId: "part-3" },
-      { title: "Chapter Seven", startTime: 106, epubNodeId: "chapter-7" },
+      { title: "III - Night", startTime: 101, epubNodeId: "part-3", source: "curated" },
+      { title: "Chapter Seven", startTime: 106, epubNodeId: "chapter-7", source: "curated" },
     ]);
     expect(reports.map((report) => `${report.epubNodeId}:${report.outcome}:${report.deterministic ?? false}`)).toEqual([
       "part-3:accepted:true",
@@ -2330,7 +2330,7 @@ describe("chapter curation tools", () => {
       { maxConcurrency: 1, reports }
     );
 
-    expect(chapters).toEqual([{ title: "XIV: The Final Door", startTime: 39_150.06, epubNodeId: "chapter-14" }]);
+    expect(chapters).toEqual([{ title: "XIV: The Final Door", startTime: 39_150.06, epubNodeId: "chapter-14", source: "curated" }]);
     expect(reports.map((report) => `${report.epubNodeId}:${report.outcome}`)).toEqual(["part-6:dropped", "chapter-14:accepted"]);
     expect(reports[0]?.errors?.[0]).toContain("more specific EPUB title XIV: The Final Door");
   });
@@ -2399,7 +2399,7 @@ describe("chapter curation tools", () => {
       { maxConcurrency: 2, reports }
     );
 
-    expect(chapters).toEqual([{ title: "Chapter Nineteen", startTime: 120, epubNodeId: "chapter-19" }]);
+    expect(chapters).toEqual([{ title: "Chapter Nineteen", startTime: 120, epubNodeId: "chapter-19", source: "curated" }]);
     expect(reports.map((report) => `${report.epubNodeId}:${report.outcome}:${report.deterministic ?? false}`)).toEqual([
       "part-8:skipped:true",
       "chapter-19:accepted:false",
