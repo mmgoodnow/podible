@@ -433,6 +433,7 @@ describe("podible http", () => {
     expect(detailBody.includes("Available now")).toBe(true);
     expect(detailBody.includes("data-transcript-panel")).toBe(true);
     expect(detailBody.includes(`/transcripts/m/${standardAudio.manifestation_id}.json`)).toBe(true);
+    expect(detailBody.includes("force: true")).toBe(true);
     expect(detailBody.includes("Artwork")).toBe(true);
     expect(detailBody.includes("Load alternate covers")).toBe(true);
     expect(detailBody.includes("data-cover-panel")).toBe(true);

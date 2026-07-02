@@ -44,7 +44,13 @@ function displayAddedByUser(book: LibraryBook): string | null {
 
 function canRequestTranscription(status: TranscriptRequestResult | null): boolean {
   if (!status) return false;
-  return status.status === "stale" || status.status === "failed" || status.status === "missing_config";
+  return status.status === "current" || status.status === "stale" || status.status === "failed" || status.status === "missing_config";
+}
+
+function transcriptRequestLabel(status: TranscriptRequestResult | null): string {
+  if (status?.status === "current") return "Regenerate transcript";
+  if (status?.status === "failed") return "Retry transcription";
+  return "Generate transcript";
 }
 
 export function parseRequestedEditionId(value: string | null | undefined): number | null {
@@ -365,7 +371,13 @@ function renderTranscriptRuntimeScript(bookId: number, manifestationId: number |
         }
 
         function canRequest(status) {
-          return status === "stale" || status === "failed";
+          return status === "current" || status === "stale" || status === "failed";
+        }
+
+        function requestLabel(status) {
+          if (status === "current") return "Regenerate transcript";
+          if (status === "failed") return "Retry transcription";
+          return "Generate transcript";
         }
 
         function apply(result) {
@@ -382,7 +394,7 @@ function renderTranscriptRuntimeScript(bookId: number, manifestationId: number |
             const showButton = canRequest(result.status);
             button.hidden = !showButton;
             button.disabled = result.status === "pending" || result.status === "running";
-            button.textContent = result.status === "failed" ? "Retry transcription" : "Generate transcript";
+            button.textContent = requestLabel(result.status);
           }
           if ((result.status === "pending" || result.status === "running") && !polling) {
             polling = true;
@@ -390,7 +402,7 @@ function renderTranscriptRuntimeScript(bookId: number, manifestationId: number |
           }
         }
 
-        async function rpc(method) {
+        async function rpc(method, extraParams = {}) {
           const url = new URL("/rpc", window.location.origin);
           url.search = window.location.search;
           const response = await fetch(url.pathname + url.search, {
@@ -403,6 +415,7 @@ function renderTranscriptRuntimeScript(bookId: number, manifestationId: number |
               params: {
                 bookId: ${bookId},
                 ${manifestationId === null ? "" : `manifestationId: ${manifestationId},`}
+                ...extraParams,
               },
             }),
           });
@@ -425,7 +438,7 @@ function renderTranscriptRuntimeScript(bookId: number, manifestationId: number |
           button.addEventListener("click", async () => {
             button.disabled = true;
             try {
-              const result = await rpc("library.requestTranscription");
+              const result = await rpc("library.requestTranscription", { force: true });
               apply(result);
             } catch (e) {
               console.error("requestTranscription failed:", e);
@@ -845,7 +858,7 @@ export async function renderBookPage(
         <div class="actions" style="margin-top: 12px;">
           ${chaptersUrl ? `<a class="button-link" href="${escapeHtml(chaptersUrl)}">Chapters JSON</a>` : ""}
           <a class="button-link" data-transcript-link ${transcriptUrl && transcriptStatus?.status === "current" ? `href="${escapeHtml(transcriptUrl)}"` : `href="#" hidden`}>Transcript JSON</a>
-          <button type="button" data-transcript-request ${canRequestTranscription(transcriptStatus) ? "" : "hidden"} ${transcriptStatus?.status === "missing_config" ? "disabled" : ""}>${transcriptStatus?.status === "failed" ? "Retry transcription" : "Generate transcript"}</button>
+          <button type="button" data-transcript-request ${canRequestTranscription(transcriptStatus) ? "" : "hidden"} ${transcriptStatus?.status === "missing_config" ? "disabled" : ""}>${escapeHtml(transcriptRequestLabel(transcriptStatus))}</button>
         </div>
         ${transcriptStatus?.status === "missing_config" ? `<p class="muted" style="margin-top:8px;">Transcription requires an OpenAI API key in Settings.</p>` : ""}
         ${transcriptStatus?.status === "failed" && transcriptStatus.error ? `<p class="muted" style="margin-top:8px;">Last error: ${escapeHtml(transcriptStatus.error)}</p>` : ""}
