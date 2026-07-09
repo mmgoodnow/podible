@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "type": "module",
   "private": true,
+  "packageManager": "bun@1.4.0",
   "scripts": {
     "start": "bun run server.ts",
     "dev-login": "bun run scripts/dev-login.ts",
@@ -29,7 +30,7 @@
   },
   "devDependencies": {
     "@playwright/cli": "^0.1.5",
-    "bun-types": "^1.3.9",
+    "bun-types": "^1.4.0-canary.20260519T150915",
     "jszip": "^3.10.1",
     "typescript": "^5.9.3"
   }
