@@ -17,7 +17,10 @@ ENV GIT_COMMIT_MESSAGE=$GIT_COMMIT_MESSAGE
 
 COPY server.ts ./
 COPY src ./src
+COPY scripts ./scripts
 COPY podible.png ./
+
+RUN bun run validate:runtime-scripts
 
 ENV NODE_ENV=production
 ENV CONFIG_DIR=/config

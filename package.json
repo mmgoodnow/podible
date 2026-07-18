@@ -7,9 +7,9 @@
   "scripts": {
     "start": "bun run server.ts",
     "dev-login": "bun run scripts/dev-login.ts",
+    "validate:runtime-scripts": "bun run scripts/validate-runtime-scripts.ts",
     "red-rising-dashboard": "bun run scripts/red-rising-dashboard.ts",
     "summarize-curation-run": "bun run scripts/summarize-curation-run.ts",
-    "replay-chapter-analysis": "bun run scripts/replay-chapter-analysis.ts",
     "run-red-rising-curation": "bun run scripts/run-red-rising-curation.ts",
     "run-corpus-curation": "bun run scripts/run-corpus-curation.ts",
     "export-prod-corpus-case": "bun run scripts/export-prod-corpus-case.ts",
