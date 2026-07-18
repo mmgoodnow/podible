@@ -4,7 +4,7 @@ import { fetchOpenLibraryMetadata } from "./openlibrary";
 import type { BookRow, LibraryBook } from "../app-types";
 import type { BooksRepo } from "../repo";
 
-export const CURRENT_OPENLIBRARY_METADATA_VERSION = 2;
+export const CURRENT_OPENLIBRARY_METADATA_VERSION = 3;
 
 export type OpenLibraryMetadataStatus = "current" | "stale" | "never_hydrated";
 
@@ -40,7 +40,7 @@ export async function hydrateBookFromOpenLibrary(repo: BooksRepo, book: LibraryB
     publishedAt: metadata.publishedAt ?? book.publishedAt ?? null,
     description: metadata.description ?? book.description ?? null,
     descriptionHtml: metadata.descriptionHtml ?? book.descriptionHtml ?? null,
-    language: metadata.language ?? book.language ?? null,
+    language: metadata.language ?? null,
     identifiers: mergedIdentifiers,
     series: metadata.series ?? book.series,
     openLibraryMetadataVersion: CURRENT_OPENLIBRARY_METADATA_VERSION,

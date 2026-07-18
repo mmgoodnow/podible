@@ -124,4 +124,78 @@ describe("Open Library metadata hydration", () => {
     expect(repo.getBook(book.id)?.series).toEqual([]);
     expect(repo.getBookRow(book.id)?.openlibrary_metadata_version).toBe(CURRENT_OPENLIBRARY_METADATA_VERSION);
   });
+
+  test("uses the preferred matched edition language instead of the work language aggregate", async () => {
+    const book = repo.createBook({ title: "Wool", author: "Hugh Howey" });
+    repo.updateBookMetadata(book.id, {
+      identifiers: { openlibrary: "/works/OL16800608W" },
+      language: "spa",
+    });
+    globalThis.fetch = (async (input: unknown) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/search.json") {
+        expect(url.searchParams.get("lang")).toBe("en");
+        expect(url.searchParams.get("fields")).toContain("editions.language");
+        return Response.json({
+          docs: [
+            {
+              key: "/works/OL16800608W",
+              title: "Wool",
+              author_name: ["Hugh Howey"],
+              language: ["spa", "chi", "fre", "ita", "eng"],
+              editions: { docs: [{ language: ["eng"] }] },
+            },
+          ],
+        });
+      }
+      if (url.pathname === "/works/OL16800608W.json") {
+        return Response.json({ description: "They live beneath the earth." });
+      }
+      throw new Error(`Unexpected Open Library request: ${url}`);
+    }) as typeof fetch;
+
+    const job = queueStaleMetadataHydration(repo)!;
+    await processMetadataHydrationJob(
+      { repo, getSettings: () => defaultSettings() },
+      repo.claimQueuedJob(job.id)!
+    );
+
+    expect(repo.getBookRow(book.id)?.language).toBe("eng");
+  });
+
+  test("clears a stale language when Open Library has no matched edition language", async () => {
+    const book = repo.createBook({ title: "Wool", author: "Hugh Howey" });
+    repo.updateBookMetadata(book.id, {
+      identifiers: { openlibrary: "/works/OL16800608W" },
+      language: "spa",
+    });
+    globalThis.fetch = (async (input: unknown) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/search.json") {
+        return Response.json({
+          docs: [
+            {
+              key: "/works/OL16800608W",
+              title: "Wool",
+              author_name: ["Hugh Howey"],
+              language: ["spa", "eng"],
+              editions: { docs: [] },
+            },
+          ],
+        });
+      }
+      if (url.pathname === "/works/OL16800608W.json") {
+        return Response.json({ description: "They live beneath the earth." });
+      }
+      throw new Error(`Unexpected Open Library request: ${url}`);
+    }) as typeof fetch;
+
+    const job = queueStaleMetadataHydration(repo)!;
+    await processMetadataHydrationJob(
+      { repo, getSettings: () => defaultSettings() },
+      repo.claimQueuedJob(job.id)!
+    );
+
+    expect(repo.getBookRow(book.id)?.language).toBeNull();
+  });
 });

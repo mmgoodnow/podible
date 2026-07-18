@@ -4,12 +4,16 @@ type OpenLibraryDoc = {
   title?: string;
   author_name?: string[];
   first_publish_year?: number;
-  language?: string[];
   key?: string;
   cover_i?: number;
   series_key?: string[];
   series_name?: string[];
   series_position?: Array<string | number>;
+  editions?: {
+    docs?: Array<{
+      language?: string[];
+    }>;
+  };
 };
 
 type OpenLibraryResponse = {
@@ -89,12 +93,15 @@ const SEARCH_FIELDS = [
   "title",
   "author_name",
   "first_publish_year",
-  "language",
   "cover_i",
   "series_key",
   "series_name",
   "series_position",
+  "editions",
+  "editions.language",
 ].join(",");
+
+const OPEN_LIBRARY_PREFERRED_LANGUAGE = "en";
 
 function normalizeOpenLibraryKey(value: string): string | null {
   const trimmed = value.trim();
@@ -135,6 +142,7 @@ function toDescriptionHtml(value: string): string {
 async function fetchSearchDocs(params: Record<string, string>): Promise<OpenLibraryDoc[]> {
   const url = new URL("https://openlibrary.org/search.json");
   url.searchParams.set("fields", SEARCH_FIELDS);
+  url.searchParams.set("lang", OPEN_LIBRARY_PREFERRED_LANGUAGE);
   for (const [key, value] of Object.entries(params)) {
     if (value) {
       url.searchParams.set(key, value);
@@ -256,6 +264,10 @@ function seriesFromDoc(doc: OpenLibraryDoc): BookSeriesMembership[] {
   );
 }
 
+function languageFromMatchedEdition(doc: OpenLibraryDoc): string | undefined {
+  return doc.editions?.docs?.[0]?.language?.find((value) => value.trim())?.trim().toLowerCase() || undefined;
+}
+
 function docToCandidate(doc: OpenLibraryDoc, fallbackTitle?: string, fallbackAuthor?: string): OpenLibraryCandidate | null {
   const key = typeof doc.key === "string" ? normalizeOpenLibraryKey(doc.key) : null;
   const title = (doc.title ?? fallbackTitle ?? "").trim();
@@ -263,7 +275,7 @@ function docToCandidate(doc: OpenLibraryDoc, fallbackTitle?: string, fallbackAut
   if (!key || !title || !author) return null;
 
   const publishedAt = doc.first_publish_year ? `${doc.first_publish_year}-01-01T00:00:00.000Z` : undefined;
-  const language = doc.language?.[0];
+  const language = languageFromMatchedEdition(doc);
   const coverId = Number.isInteger(doc.cover_i) && Number(doc.cover_i) > 0 ? Number(doc.cover_i) : undefined;
   const identifiers: Record<string, string> = {
     openlibrary: key,

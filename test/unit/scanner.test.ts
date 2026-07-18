@@ -69,7 +69,8 @@ describe("library scanner metadata hydration", () => {
               {
                 key: "/works/OL123W",
                 first_publish_year: 1965,
-                language: ["eng"],
+                language: ["spa", "eng"],
+                editions: { docs: [{ language: ["eng"] }] },
               },
             ],
           }),

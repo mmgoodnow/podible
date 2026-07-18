@@ -611,7 +611,7 @@ export class BooksRepo {
         patch.publishedAt ?? current.published_at,
         patch.description ?? current.description,
         patch.descriptionHtml ?? current.description_html,
-        patch.language ?? current.language,
+        patch.language === undefined ? current.language : patch.language,
         patch.identifiers ? JSON.stringify(patch.identifiers) : current.identifiers_json,
         patch.series ? JSON.stringify(normalizeSeries(patch.series)) : current.series_json,
         patch.openLibraryMetadataVersion ?? current.openlibrary_metadata_version,
