@@ -1,4 +1,4 @@
-import type { BookRow, LibraryBook } from "../app-types";
+import type { BookRow, BookSeriesMembership, LibraryBook } from "../app-types";
 
 type OpenLibraryDoc = {
   title?: string;
@@ -7,6 +7,9 @@ type OpenLibraryDoc = {
   language?: string[];
   key?: string;
   cover_i?: number;
+  series_key?: string[];
+  series_name?: string[];
+  series_position?: Array<string | number>;
 };
 
 type OpenLibraryResponse = {
@@ -31,6 +34,7 @@ type OpenLibraryEdition = {
   languages?: Array<{ key?: string }>;
   isbn_10?: string[];
   isbn_13?: string[];
+  series?: string[];
 };
 
 export type OpenLibraryMetadata = {
@@ -40,6 +44,7 @@ export type OpenLibraryMetadata = {
   description?: string;
   descriptionHtml?: string;
   coverUrl?: string;
+  series?: BookSeriesMembership[];
 };
 
 export type OpenLibraryCandidate = {
@@ -50,6 +55,7 @@ export type OpenLibraryCandidate = {
   language?: string;
   coverId?: number;
   identifiers: Record<string, string>;
+  series: BookSeriesMembership[];
 };
 
 export type OpenLibraryCoverCandidate = {
@@ -70,6 +76,18 @@ type ResolveOptions = {
   title?: string | null;
   author?: string | null;
 };
+
+const SEARCH_FIELDS = [
+  "key",
+  "title",
+  "author_name",
+  "first_publish_year",
+  "language",
+  "cover_i",
+  "series_key",
+  "series_name",
+  "series_position",
+].join(",");
 
 function normalizeOpenLibraryKey(value: string): string | null {
   const trimmed = value.trim();
@@ -109,6 +127,7 @@ function toDescriptionHtml(value: string): string {
 
 async function fetchSearchDocs(params: Record<string, string>): Promise<OpenLibraryDoc[]> {
   const url = new URL("https://openlibrary.org/search.json");
+  url.searchParams.set("fields", SEARCH_FIELDS);
   for (const [key, value] of Object.entries(params)) {
     if (value) {
       url.searchParams.set(key, value);
@@ -157,6 +176,67 @@ async function fetchWorkEditions(openLibraryKey: string, limit: number): Promise
   return payload.entries ?? [];
 }
 
+function normalizeOpenLibrarySeriesKey(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^\/series\/OL\d+L$/i.test(trimmed)) {
+    return trimmed.slice("/series/".length).toUpperCase();
+  }
+  if (/^OL\d+L$/i.test(trimmed)) {
+    return trimmed.toUpperCase();
+  }
+  return trimmed;
+}
+
+function normalizeSeriesMemberships(series: BookSeriesMembership[]): BookSeriesMembership[] {
+  const seen = new Set<string>();
+  const out: BookSeriesMembership[] = [];
+  for (const item of series) {
+    const name = item.name.trim();
+    if (!name) continue;
+    const key = item.key ? normalizeOpenLibrarySeriesKey(item.key) : null;
+    const position = item.position?.trim() || null;
+    const dedupeKey = key ? `key:${key}` : `name:${name.toLowerCase()}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    out.push({ key, name, position });
+  }
+  return out;
+}
+
+function seriesFromDoc(doc: OpenLibraryDoc): BookSeriesMembership[] {
+  const names = Array.isArray(doc.series_name) ? doc.series_name : [];
+  const keys = Array.isArray(doc.series_key) ? doc.series_key : [];
+  const positions = Array.isArray(doc.series_position) ? doc.series_position : [];
+  return normalizeSeriesMemberships(
+    names.map((name, index) => ({
+      key: typeof keys[index] === "string" ? keys[index] : null,
+      name,
+      position: positions[index] === undefined ? null : String(positions[index]),
+    }))
+  );
+}
+
+function parseEditionSeriesValue(value: string): BookSeriesMembership | null {
+  const trimmed = value.replace(/\s+/g, " ").trim();
+  if (!trimmed) return null;
+  const commaMatch = trimmed.match(/^(.*?),\s*([0-9]+(?:\.[0-9]+)?|[ivxlcdm]+)$/i);
+  if (commaMatch) {
+    return { key: null, name: commaMatch[1]!.trim(), position: commaMatch[2]!.trim() };
+  }
+  const dashMatch = trimmed.match(/^(.*?)\s+--\s+(.+)$/);
+  if (dashMatch) {
+    return { key: null, name: dashMatch[1]!.trim(), position: dashMatch[2]!.trim() };
+  }
+  return { key: null, name: trimmed, position: null };
+}
+
+function seriesFromEditions(editions: OpenLibraryEdition[]): BookSeriesMembership[] {
+  return normalizeSeriesMemberships(
+    editions.flatMap((edition) => (edition.series ?? []).map(parseEditionSeriesValue).filter((value): value is BookSeriesMembership => value !== null))
+  );
+}
+
 function docToCandidate(doc: OpenLibraryDoc, fallbackTitle?: string, fallbackAuthor?: string): OpenLibraryCandidate | null {
   const key = typeof doc.key === "string" ? normalizeOpenLibraryKey(doc.key) : null;
   const title = (doc.title ?? fallbackTitle ?? "").trim();
@@ -178,6 +258,7 @@ function docToCandidate(doc: OpenLibraryDoc, fallbackTitle?: string, fallbackAut
     language,
     coverId,
     identifiers,
+    series: seriesFromDoc(doc),
   };
 }
 
@@ -196,6 +277,7 @@ function candidateToMetadata(
     description,
     descriptionHtml,
     coverUrl: coverId ? coverUrlFromId(coverId) : undefined,
+    series: candidate.series,
   };
 }
 
@@ -222,6 +304,22 @@ export async function searchOpenLibrary(query: string, limit = 20): Promise<Open
     if (candidate) out.push(candidate);
   }
   return out;
+}
+
+export async function searchOpenLibrarySeries(
+  series: { seriesKey?: string | null; seriesName?: string | null },
+  limit = 50
+): Promise<OpenLibraryCandidate[]> {
+  const safeLimit = Math.max(1, Math.min(100, Math.trunc(limit || 50)));
+  const key = series.seriesKey ? normalizeOpenLibrarySeriesKey(series.seriesKey) : null;
+  const name = series.seriesName?.trim() || "";
+  const query = key ? `series_key:${key}` : name ? `series_name:"${name.replace(/"/g, "")}"` : "";
+  if (!query) return [];
+  const docs = await fetchSearchDocs({
+    q: query,
+    limit: String(safeLimit),
+  });
+  return docs.map((doc) => docToCandidate(doc)).filter((value): value is OpenLibraryCandidate => value !== null);
 }
 
 export async function resolveOpenLibraryCandidate(options: ResolveOptions): Promise<OpenLibraryCandidate | null> {
@@ -268,7 +366,12 @@ export async function fetchOpenLibraryMetadata(
   if (!candidate) return null;
 
   const details = await fetchWorkDetails(candidate.openLibraryKey).catch(() => null);
-  return candidateToMetadata(candidate, details);
+  const metadata = candidateToMetadata(candidate, details);
+  if (metadata.series && metadata.series.length > 0) return metadata;
+
+  const editions = await fetchWorkEditions(candidate.openLibraryKey, 50).catch(() => []);
+  const editionSeries = seriesFromEditions(editions);
+  return { ...metadata, series: editionSeries };
 }
 
 function languageFromEdition(edition: OpenLibraryEdition): string | undefined {
@@ -295,6 +398,7 @@ export async function findOpenLibraryCoverCandidates(
       title: book.title,
       author: book.author,
       identifiers: { openlibrary: storedKey },
+      series: [],
     };
   } else {
     candidate = await resolveOpenLibraryCandidate({

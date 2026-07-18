@@ -29,6 +29,7 @@ const DROP_ASSET_EBOOK_KIND_MIGRATION_ID = 23;
 const BOOK_ADDED_BY_USER_MIGRATION_ID = 24;
 const MANIFESTATION_LANGUAGE_MIGRATION_ID = 25;
 const COVER_GENERATION_JOB_TYPE_MIGRATION_ID = 26;
+const BOOK_SERIES_MIGRATION_ID = 27;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -47,7 +48,8 @@ CREATE TABLE IF NOT EXISTS books (
   description TEXT NULL,
   description_html TEXT NULL,
   language TEXT NULL,
-  identifiers_json TEXT NULL
+  identifiers_json TEXT NULL,
+  series_json TEXT NULL
 );
 
 CREATE TABLE IF NOT EXISTS releases (
@@ -834,6 +836,12 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status_next_created ON jobs(status, next_run
 `);
 }
 
+function applyBookSeriesMigration(db: Database): void {
+  if (!hasColumn(db, "books", "series_json")) {
+    db.exec("ALTER TABLE books ADD COLUMN series_json TEXT NULL");
+  }
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
@@ -941,5 +949,8 @@ export function runMigrations(db: Database): void {
   });
   apply(COVER_GENERATION_JOB_TYPE_MIGRATION_ID, () => {
     applyCoverGenerationJobTypeMigration(db);
+  });
+  apply(BOOK_SERIES_MIGRATION_ID, () => {
+    applyBookSeriesMigration(db);
   });
 }

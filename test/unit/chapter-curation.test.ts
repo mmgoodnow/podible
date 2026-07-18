@@ -65,6 +65,7 @@ function book(overrides: Partial<BookRow> = {}): BookRow {
     description_html: null,
     language: "eng",
     identifiers_json: null,
+    series_json: null,
     ...overrides,
   };
 }

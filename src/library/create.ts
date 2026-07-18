@@ -32,6 +32,7 @@ export async function createOrReuseBookFromOpenLibrary(
       publishedAt: resolved.publishedAt ?? null,
       language: resolved.language ?? null,
       identifiers: resolved.identifiers,
+      series: resolved.series,
     });
 
     return book.id;

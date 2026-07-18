@@ -120,6 +120,12 @@ export const jobIdResultSchema = z.object({ jobId: positiveIntSchema });
 export const decisionModeSchema = z.enum(["deterministic", "agent"]);
 export const decisionTriggerSchema = z.enum(["none", "forced", "prior_failure", "low_confidence"]);
 
+export const bookSeriesMembershipSchema = z.object({
+  key: z.string().nullable(),
+  name: z.string(),
+  position: z.string().nullable(),
+});
+
 export const libraryBookSchema = z.object({
   id: positiveIntSchema,
   title: z.string(),
@@ -143,6 +149,7 @@ export const libraryBookSchema = z.object({
   descriptionHtml: z.string().nullable(),
   language: z.string().nullable(),
   identifiers: stringRecordSchema,
+  series: z.array(bookSeriesMembershipSchema),
   audioStatus: z.enum(["wanted", "snatched", "downloading", "downloaded", "imported", "error"]),
   ebookStatus: z.enum(["wanted", "snatched", "downloading", "downloaded", "imported", "error"]),
   status: z.enum(["wanted", "snatched", "downloading", "downloaded", "imported", "error", "partial"]),
@@ -280,6 +287,7 @@ export const openLibraryCandidateSchema = z.object({
   language: z.string().optional(),
   coverId: z.number().int().positive().optional(),
   identifiers: stringRecordSchema,
+  series: z.array(bookSeriesMembershipSchema),
 });
 
 export const openLibraryCoverCandidateSchema = z.object({

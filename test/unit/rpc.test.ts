@@ -1277,6 +1277,77 @@ describe("json-rpc handler", () => {
     db.close();
   });
 
+  test("library.series returns local books and Open Library search results", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown) => {
+      const url = new URL(String(input));
+      expect(url.origin).toBe("https://openlibrary.org");
+      expect(url.pathname).toBe("/search.json");
+      expect(url.searchParams.get("q")).toBe("series_key:OL326110L");
+      expect(url.searchParams.get("fields")).toContain("series_key");
+      return new Response(
+        JSON.stringify({
+          docs: [
+            {
+              key: "/works/OL82563W",
+              title: "Harry Potter and the Philosopher's Stone",
+              author_name: ["J. K. Rowling"],
+              first_publish_year: 1997,
+              language: ["eng"],
+              series_key: ["OL326110L"],
+              series_name: ["Harry Potter"],
+              series_position: ["1"],
+            },
+            {
+              key: "/works/OL82586W",
+              title: "Harry Potter and the Chamber of Secrets",
+              author_name: ["J. K. Rowling"],
+              first_publish_year: 1998,
+              language: ["eng"],
+              series_key: ["OL326110L"],
+              series_name: ["Harry Potter"],
+              series_position: ["2"],
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as typeof fetch;
+
+    try {
+      const db = new Database(":memory:");
+      runMigrations(db);
+      const repo = new BooksRepo(db);
+      const second = repo.createBook({ title: "Harry Potter and the Chamber of Secrets", author: "J. K. Rowling" });
+      const first = repo.createBook({ title: "Harry Potter and the Philosopher's Stone", author: "J. K. Rowling" });
+      repo.updateBookMetadata(second.id, { series: [{ key: "OL326110L", name: "Harry Potter", position: "2" }] });
+      repo.updateBookMetadata(first.id, { series: [{ key: "OL326110L", name: "Harry Potter", position: "1" }] });
+
+      const result = await callRpc(
+        repo,
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "library.series",
+          params: { seriesKey: "/series/OL326110L", limit: 10 },
+        },
+        "user"
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.result.series).toEqual({ key: "OL326110L", name: "Harry Potter", position: null });
+      expect(result.result.libraryBooks.map((book: any) => book.title)).toEqual([
+        "Harry Potter and the Philosopher's Stone",
+        "Harry Potter and the Chamber of Secrets",
+      ]);
+      expect(result.result.openLibraryBooks.map((book: any) => book.openLibraryKey)).toEqual(["/works/OL82563W", "/works/OL82586W"]);
+      expect(result.result.openLibraryBooks[0].series).toEqual([{ key: "OL326110L", name: "Harry Potter", position: "1" }]);
+      db.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("library.delete allows non-admin users and cascades DB rows and asset+cover files", async () => {
     const db = new Database(":memory:");
     runMigrations(db);

@@ -5,12 +5,14 @@ import { z } from "zod";
 import { createOrReuseBookFromOpenLibrary } from "../library/create";
 import { getBookTranscriptStatus, requestBookTranscription } from "../library/chapter-analysis";
 import { hydrateBookFromOpenLibrary } from "../library/hydration";
+import { searchOpenLibrarySeries } from "../library/openlibrary";
 import { RtorrentClient } from "../rtorrent";
 import { runSearch, runSnatchGroup, triggerAutoAcquire } from "../library/service";
 
 import { defineMethod, defineRouter } from "./framework";
 import {
   assetRowSchema,
+  bookSeriesMembershipSchema,
   emptyParamsSchema,
   jobIdResultSchema,
   libraryBookWithPlaybackSchema,
@@ -22,6 +24,7 @@ import {
   optionalPositiveIntSchema,
   optionalStringArraySchema,
   optionalStringSchema,
+  openLibraryCandidateSchema,
   positiveIntSchema,
   nonEmptyStringSchema,
   releaseRowSchema,
@@ -61,6 +64,21 @@ function publicSearchResult(result: z.infer<typeof torznabResultSchema>, index: 
     seeders: result.seeders,
     leechers: result.leechers,
   };
+}
+
+function seriesPositionSortValue(position: string | null | undefined): number {
+  if (!position) return Number.POSITIVE_INFINITY;
+  const numeric = Number(position);
+  return Number.isFinite(numeric) ? numeric : Number.POSITIVE_INFINITY;
+}
+
+function normalizeSeriesKey(value: string | null): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^\/series\/OL\d+L$/i.test(trimmed)) return trimmed.slice("/series/".length).toUpperCase();
+  if (/^OL\d+L$/i.test(trimmed)) return trimmed.toUpperCase();
+  return trimmed;
 }
 
 export const libraryRouter = defineRouter({
@@ -112,6 +130,57 @@ export const libraryRouter = defineRouter({
         book: enrichLibraryBookPlayback(ctx.repo, ctx.request, enrichedBook),
         releases: ctx.repo.listReleasesByBook(params.bookId),
         assets: ctx.repo.listAssetsByBook(params.bookId),
+      };
+    },
+  }),
+
+  series: defineMethod({
+    auth: "user",
+    readOnly: true,
+    summary: "List local and Open Library books in a series.",
+    paramsSchema: emptyParamsSchema
+      .extend({
+        seriesKey: optionalStringSchema,
+        seriesName: optionalStringSchema,
+        limit: limitSchema.optional(),
+      })
+      .refine((value) => Boolean(value.seriesKey?.trim() || value.seriesName?.trim()), {
+        message: "seriesKey or seriesName is required",
+      }),
+    resultSchema: z.object({
+      series: bookSeriesMembershipSchema,
+      libraryBooks: z.array(libraryBookWithPlaybackSchema),
+      openLibraryBooks: z.array(openLibraryCandidateSchema),
+    }),
+    async handler(ctx, params) {
+      const seriesKey = normalizeSeriesKey(params.seriesKey ?? null);
+      const seriesName = params.seriesName?.trim() || null;
+      const localBooks = ctx.repo.listBooksBySeries({ seriesKey, seriesName });
+      const openLibraryBooks = await searchOpenLibrarySeries({ seriesKey, seriesName }, params.limit ?? 50);
+      const matchedSeries =
+        localBooks.flatMap((book) => book.series).find((candidate) => {
+          if (seriesKey && candidate.key === seriesKey) return true;
+          return Boolean(!seriesKey && seriesName && candidate.name.toLowerCase() === seriesName.toLowerCase());
+        }) ??
+        openLibraryBooks.flatMap((book) => book.series).find((candidate) => {
+          if (seriesKey && candidate.key === seriesKey) return true;
+          return Boolean(!seriesKey && seriesName && candidate.name.toLowerCase() === seriesName.toLowerCase());
+        }) ?? {
+          key: seriesKey,
+          name: seriesName ?? seriesKey ?? "Series",
+          position: null,
+        };
+
+      return {
+        series: { key: matchedSeries.key, name: matchedSeries.name, position: null },
+        libraryBooks: localBooks.map((book) => enrichLibraryBookPlayback(ctx.repo, ctx.request, book)),
+        openLibraryBooks: openLibraryBooks.sort((a, b) => {
+          const aSeries = a.series.find((candidate) => (seriesKey ? candidate.key === seriesKey : candidate.name === matchedSeries.name));
+          const bSeries = b.series.find((candidate) => (seriesKey ? candidate.key === seriesKey : candidate.name === matchedSeries.name));
+          const positionDelta = seriesPositionSortValue(aSeries?.position) - seriesPositionSortValue(bSeries?.position);
+          if (positionDelta !== 0) return positionDelta;
+          return a.title.localeCompare(b.title);
+        }),
       };
     },
   }),

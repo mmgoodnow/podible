@@ -14,6 +14,7 @@ import type {
   AssetTranscriptStatus,
   AssetRow,
   BookRow,
+  BookSeriesMembership,
   ManifestationKind,
   ManifestationRow,
   ChapterAnalysisRow,
@@ -147,6 +148,64 @@ function parseIdentifiers(value: string | null): Record<string, string> {
   } catch {
     return {};
   }
+}
+
+function parseSeries(value: string | null): BookSeriesMembership[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item): BookSeriesMembership | null => {
+        if (!item || typeof item !== "object") return null;
+        const raw = item as Record<string, unknown>;
+        const name = typeof raw.name === "string" ? raw.name.trim() : "";
+        if (!name) return null;
+        const key = typeof raw.key === "string" && raw.key.trim() ? raw.key.trim() : null;
+        const position = typeof raw.position === "string" && raw.position.trim() ? raw.position.trim() : null;
+        return { key, name, position };
+      })
+      .filter((item): item is BookSeriesMembership => item !== null);
+  } catch {
+    return [];
+  }
+}
+
+function normalizeSeries(series: BookSeriesMembership[] | undefined): BookSeriesMembership[] {
+  if (!series) return [];
+  const seen = new Set<string>();
+  const out: BookSeriesMembership[] = [];
+  for (const item of series) {
+    const name = item.name.trim();
+    if (!name) continue;
+    const key = item.key?.trim() || null;
+    const position = item.position?.trim() || null;
+    const dedupeKey = key ? `key:${key}` : `name:${name.toLowerCase()}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    out.push({ key, name, position });
+  }
+  return out;
+}
+
+function seriesMatches(bookSeries: BookSeriesMembership[], target: { seriesKey?: string | null; seriesName?: string | null }): boolean {
+  const key = target.seriesKey?.trim() || null;
+  const name = target.seriesName?.trim().toLowerCase() || null;
+  return bookSeries.some((series) => {
+    if (key && series.key === key) return true;
+    return Boolean(!key && name && series.name.toLowerCase() === name);
+  });
+}
+
+function seriesPositionSortKey(book: LibraryBook, target: { seriesKey?: string | null; seriesName?: string | null }): number {
+  const key = target.seriesKey?.trim() || null;
+  const name = target.seriesName?.trim().toLowerCase() || null;
+  const series = book.series.find((candidate) => {
+    if (key && candidate.key === key) return true;
+    return Boolean(!key && name && candidate.name.toLowerCase() === name);
+  });
+  const numeric = series?.position ? Number(series.position) : NaN;
+  return Number.isFinite(numeric) ? numeric : Number.POSITIVE_INFINITY;
 }
 
 function stringifySettings(value: AppSettings): string {
@@ -515,6 +574,7 @@ export class BooksRepo {
       descriptionHtml: string | null;
       language: string | null;
       identifiers: Record<string, string>;
+      series: BookSeriesMembership[];
     }>
   ): BookRow {
     assertPositiveInt(bookId);
@@ -535,6 +595,7 @@ export class BooksRepo {
              description_html = ?,
              language = ?,
              identifiers_json = ?,
+             series_json = ?,
              updated_at = ?
          WHERE id = ?
          RETURNING *`
@@ -548,6 +609,7 @@ export class BooksRepo {
         patch.descriptionHtml ?? current.description_html,
         patch.language ?? current.language,
         patch.identifiers ? JSON.stringify(patch.identifiers) : current.identifiers_json,
+        patch.series ? JSON.stringify(normalizeSeries(patch.series)) : current.series_json,
         now,
         bookId
       ) as BookRow;
@@ -593,6 +655,18 @@ export class BooksRepo {
   listAllBooks(): LibraryBook[] {
     const rows = this.db.query("SELECT * FROM books ORDER BY added_at DESC, id DESC").all() as BookRow[];
     return rows.map((row) => this.toLibraryBook(row));
+  }
+
+  listBooksBySeries(target: { seriesKey?: string | null; seriesName?: string | null }): LibraryBook[] {
+    const rows = this.db.query("SELECT * FROM books WHERE series_json IS NOT NULL ORDER BY title ASC, id ASC").all() as BookRow[];
+    return rows
+      .map((row) => this.toLibraryBook(row))
+      .filter((book) => seriesMatches(book.series, target))
+      .sort((a, b) => {
+        const positionDelta = seriesPositionSortKey(a, target) - seriesPositionSortKey(b, target);
+        if (positionDelta !== 0) return positionDelta;
+        return a.title.localeCompare(b.title) || a.id - b.id;
+      });
   }
 
   listInProgressBooks(bookIds?: number[]): LibraryBook[] {
@@ -1538,6 +1612,7 @@ export class BooksRepo {
       descriptionHtml: row.description_html,
       language: row.language,
       identifiers: parseIdentifiers(row.identifiers_json),
+      series: parseSeries(row.series_json),
       audioStatus,
       ebookStatus,
       status: deriveBookStatus(audioStatus as MediaStatus, ebookStatus as MediaStatus),

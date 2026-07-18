@@ -103,6 +103,13 @@ export type BookRow = {
   description_html: string | null;
   language: string | null;
   identifiers_json: string | null;
+  series_json: string | null;
+};
+
+export type BookSeriesMembership = {
+  key: string | null;
+  name: string;
+  position: string | null;
 };
 
 export type ReleaseRow = {
@@ -319,6 +326,7 @@ export type LibraryBook = {
   descriptionHtml: string | null;
   language: string | null;
   identifiers: Record<string, string>;
+  series: BookSeriesMembership[];
   audioStatus: "wanted" | "snatched" | "downloading" | "downloaded" | "imported" | "error";
   ebookStatus: "wanted" | "snatched" | "downloading" | "downloaded" | "imported" | "error";
   status: "wanted" | "snatched" | "downloading" | "downloaded" | "imported" | "error" | "partial";

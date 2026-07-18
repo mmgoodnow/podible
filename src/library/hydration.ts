@@ -33,6 +33,7 @@ export async function hydrateBookFromOpenLibrary(repo: BooksRepo, book: LibraryB
     descriptionHtml: metadata.descriptionHtml ?? book.descriptionHtml ?? null,
     language: metadata.language ?? book.language ?? null,
     identifiers: mergedIdentifiers,
+    series: metadata.series ?? book.series,
   });
   if (!coverPath) queueMissingCoverGeneration(repo, book.id);
 

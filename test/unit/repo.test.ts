@@ -103,6 +103,21 @@ describe("books repo", () => {
     db.close();
   });
 
+  test("stores series memberships and lists books in series order", () => {
+    const { db, repo } = setupRepo();
+    const second = repo.createBook({ title: "Book Two", author: "Author" });
+    const first = repo.createBook({ title: "Book One", author: "Author" });
+    const unrelated = repo.createBook({ title: "Other", author: "Author" });
+
+    repo.updateBookMetadata(second.id, { series: [{ key: "OL1L", name: "Example Series", position: "2" }] });
+    repo.updateBookMetadata(first.id, { series: [{ key: "OL1L", name: "Example Series", position: "1" }] });
+    repo.updateBookMetadata(unrelated.id, { series: [{ key: "OL2L", name: "Other Series", position: "1" }] });
+
+    expect(repo.getBook(first.id)?.series).toEqual([{ key: "OL1L", name: "Example Series", position: "1" }]);
+    expect(repo.listBooksBySeries({ seriesKey: "OL1L" }).map((book) => book.title)).toEqual(["Book One", "Book Two"]);
+    db.close();
+  });
+
   test("stores and loads json app state through the main repo", () => {
     const { db, repo } = setupRepo();
     repo.setJsonState("probe_cache_v1", [{ file: "/tmp/a.mp3", mtimeMs: 123, data: null, error: "boom" }]);
