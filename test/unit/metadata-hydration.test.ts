@@ -52,6 +52,7 @@ describe("Open Library metadata hydration", () => {
   test("hydrates successful books independently and retries unresolved books", async () => {
     const first = repo.createBook({ title: "Dune", author: "Frank Herbert" });
     const second = repo.createBook({ title: "Unknown Book", author: "Unknown Author" });
+    repo.updateBookMetadata(first.id, { language: "spa" });
     globalThis.fetch = (async (input: unknown) => {
       const url = new URL(String(input));
       if (url.pathname === "/search.json") {
@@ -86,6 +87,7 @@ describe("Open Library metadata hydration", () => {
     const hydrated = repo.getBookRow(first.id)!;
     expect(hydrated.openlibrary_metadata_version).toBe(CURRENT_OPENLIBRARY_METADATA_VERSION);
     expect(hydrated.openlibrary_hydrated_at).not.toBeNull();
+    expect(hydrated.language).toBeNull();
     expect(JSON.parse(hydrated.series_json ?? "[]")).toEqual([]);
     expect(openLibraryMetadataStatus(hydrated)).toBe("current");
     expect(openLibraryMetadataStatus(repo.getBookRow(second.id)!)).toBe("never_hydrated");
@@ -98,37 +100,6 @@ describe("Open Library metadata hydration", () => {
     repo.updateBookMetadata(book.id, {
       identifiers: { openlibrary: "/works/OL16800608W" },
       series: [{ key: null, name: "InfiniTime", position: "006" }],
-    });
-    globalThis.fetch = (async (input: unknown) => {
-      const url = new URL(String(input));
-      if (url.pathname === "/search.json") {
-        return Response.json({
-          docs: [{ key: "/works/OL16800608W", title: "Wool", author_name: ["Hugh Howey"] }],
-        });
-      }
-      if (url.pathname === "/works/OL16800608W.json") {
-        return Response.json({ description: "They live beneath the earth.", series: [] });
-      }
-      if (url.pathname === "/works/OL16800608W/editions.json") {
-        throw new Error("Edition series metadata must not be used for work membership");
-      }
-      throw new Error(`Unexpected Open Library request: ${url}`);
-    }) as typeof fetch;
-
-    const job = queueStaleMetadataHydration(repo)!;
-    await processMetadataHydrationJob(
-      { repo, getSettings: () => defaultSettings() },
-      repo.claimQueuedJob(job.id)!
-    );
-
-    expect(repo.getBook(book.id)?.series).toEqual([]);
-    expect(repo.getBookRow(book.id)?.openlibrary_metadata_version).toBe(CURRENT_OPENLIBRARY_METADATA_VERSION);
-  });
-
-  test("uses the preferred matched edition language instead of the work language aggregate", async () => {
-    const book = repo.createBook({ title: "Wool", author: "Hugh Howey" });
-    repo.updateBookMetadata(book.id, {
-      identifiers: { openlibrary: "/works/OL16800608W" },
       language: "spa",
     });
     globalThis.fetch = (async (input: unknown) => {
@@ -149,7 +120,54 @@ describe("Open Library metadata hydration", () => {
         });
       }
       if (url.pathname === "/works/OL16800608W.json") {
-        return Response.json({ description: "They live beneath the earth." });
+        return Response.json({ description: "They live beneath the earth.", series: [] });
+      }
+      if (url.pathname === "/works/OL16800608W/editions.json") {
+        throw new Error("Edition series metadata must not be used for work membership");
+      }
+      throw new Error(`Unexpected Open Library request: ${url}`);
+    }) as typeof fetch;
+
+    const job = queueStaleMetadataHydration(repo)!;
+    await processMetadataHydrationJob(
+      { repo, getSettings: () => defaultSettings() },
+      repo.claimQueuedJob(job.id)!
+    );
+
+    expect(repo.getBook(book.id)?.series).toEqual([]);
+    expect(repo.getBookRow(book.id)?.language).toBe("eng");
+    expect(repo.getBookRow(book.id)?.openlibrary_metadata_version).toBe(CURRENT_OPENLIBRARY_METADATA_VERSION);
+  });
+
+  test("follows a redirected Open Library work before hydrating metadata", async () => {
+    const book = repo.createBook({ title: "Sunrise on the Reaping", author: "Suzanne Collins" });
+    repo.updateBookMetadata(book.id, {
+      identifiers: { openlibrary: "/works/OL42360848W" },
+      language: "ger",
+    });
+    globalThis.fetch = (async (input: unknown) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/search.json") {
+        const query = url.searchParams.get("q") ?? "";
+        if (query.includes("OL43426400W")) {
+          return Response.json({
+            docs: [
+              {
+                key: "/works/OL43426400W",
+                title: "Amanecer de la Cosecha",
+                author_name: ["Suzanne Collins"],
+                editions: { docs: [{ language: ["eng"] }] },
+              },
+            ],
+          });
+        }
+        return Response.json({ docs: [] });
+      }
+      if (url.pathname === "/works/OL42360848W.json") {
+        return Response.json({ location: "/works/OL43426400W", type: { key: "/type/redirect" } });
+      }
+      if (url.pathname === "/works/OL43426400W.json") {
+        return Response.json({ description: "The second Quarter Quell approaches." });
       }
       throw new Error(`Unexpected Open Library request: ${url}`);
     }) as typeof fetch;
@@ -161,41 +179,6 @@ describe("Open Library metadata hydration", () => {
     );
 
     expect(repo.getBookRow(book.id)?.language).toBe("eng");
-  });
-
-  test("clears a stale language when Open Library has no matched edition language", async () => {
-    const book = repo.createBook({ title: "Wool", author: "Hugh Howey" });
-    repo.updateBookMetadata(book.id, {
-      identifiers: { openlibrary: "/works/OL16800608W" },
-      language: "spa",
-    });
-    globalThis.fetch = (async (input: unknown) => {
-      const url = new URL(String(input));
-      if (url.pathname === "/search.json") {
-        return Response.json({
-          docs: [
-            {
-              key: "/works/OL16800608W",
-              title: "Wool",
-              author_name: ["Hugh Howey"],
-              language: ["spa", "eng"],
-              editions: { docs: [] },
-            },
-          ],
-        });
-      }
-      if (url.pathname === "/works/OL16800608W.json") {
-        return Response.json({ description: "They live beneath the earth." });
-      }
-      throw new Error(`Unexpected Open Library request: ${url}`);
-    }) as typeof fetch;
-
-    const job = queueStaleMetadataHydration(repo)!;
-    await processMetadataHydrationJob(
-      { repo, getSettings: () => defaultSettings() },
-      repo.claimQueuedJob(job.id)!
-    );
-
-    expect(repo.getBookRow(book.id)?.language).toBeNull();
+    expect(repo.getBook(book.id)?.identifiers.openlibrary).toBe("/works/OL43426400W");
   });
 });
