@@ -1,5 +1,6 @@
 import { buildManifestationChapters, manifestationDurationMs, selectPreferredAudioManifestation, streamExtensionForManifestation } from "../library/media";
 import { getBookTranscriptStatus, hasStoredManifestationTranscriptPayload, selectPreferredDownloadableEbookAsset } from "../library/chapter-analysis";
+import { CURRENT_OPENLIBRARY_METADATA_VERSION, openLibraryMetadataStatus } from "../library/hydration";
 import { BooksRepo } from "../repo";
 import type { AppSettings, AssetFileRow, AssetRow, LibraryBook, ManifestationRow, ReleaseRow, SessionWithUserRow } from "../app-types";
 
@@ -899,6 +900,18 @@ export async function renderBookPage(
         }
       </section>
       ${isAdmin ? renderAdminManifestationSection(repo, manifestations, allReleases, selectedManifestationId) : ""}
+      ${
+        isAdmin
+          ? `<section class="card span-12 admin-only-card">
+              <div class="section-title-row"><h2>Metadata</h2><span class="admin-only-pill">Admin only</span></div>
+              <div class="section-list">
+                <div><strong>Open Library:</strong> ${escapeHtml(openLibraryMetadataStatus(bookRow).replaceAll("_", " "))}</div>
+                <div><strong>Schema version:</strong> ${bookRow.openlibrary_metadata_version} / ${CURRENT_OPENLIBRARY_METADATA_VERSION}</div>
+                <div><strong>Last hydrated:</strong> ${escapeHtml(bookRow.openlibrary_hydrated_at ?? "Never")}</div>
+              </div>
+            </section>`
+          : ""
+      }
     </div>
     <style>
       .cover-candidates {

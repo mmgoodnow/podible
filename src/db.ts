@@ -30,6 +30,7 @@ const BOOK_ADDED_BY_USER_MIGRATION_ID = 24;
 const MANIFESTATION_LANGUAGE_MIGRATION_ID = 25;
 const COVER_GENERATION_JOB_TYPE_MIGRATION_ID = 26;
 const BOOK_SERIES_MIGRATION_ID = 27;
+const OPENLIBRARY_METADATA_HYDRATION_MIGRATION_ID = 28;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -49,7 +50,9 @@ CREATE TABLE IF NOT EXISTS books (
   description_html TEXT NULL,
   language TEXT NULL,
   identifiers_json TEXT NULL,
-  series_json TEXT NULL
+  series_json TEXT NULL,
+  openlibrary_metadata_version INTEGER NOT NULL DEFAULT 0,
+  openlibrary_hydrated_at TEXT NULL
 );
 
 CREATE TABLE IF NOT EXISTS releases (
@@ -100,7 +103,7 @@ CREATE TABLE IF NOT EXISTS asset_files (
 
 CREATE TABLE IF NOT EXISTS jobs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  type TEXT NOT NULL CHECK (type IN ('full_library_refresh', 'acquire', 'download', 'import', 'reconcile', 'chapter_analysis', 'cover_generation')),
+  type TEXT NOT NULL CHECK (type IN ('full_library_refresh', 'acquire', 'download', 'import', 'reconcile', 'chapter_analysis', 'cover_generation', 'metadata_hydration')),
   status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
   book_id INTEGER NULL,
   release_id INTEGER NULL,
@@ -842,6 +845,49 @@ function applyBookSeriesMigration(db: Database): void {
   }
 }
 
+function applyOpenLibraryMetadataHydrationMigration(db: Database): void {
+  if (!hasColumn(db, "books", "openlibrary_metadata_version")) {
+    db.exec("ALTER TABLE books ADD COLUMN openlibrary_metadata_version INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!hasColumn(db, "books", "openlibrary_hydrated_at")) {
+    db.exec("ALTER TABLE books ADD COLUMN openlibrary_hydrated_at TEXT NULL");
+  }
+
+  db.exec(`
+CREATE TABLE jobs_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL CHECK (type IN ('full_library_refresh', 'acquire', 'download', 'import', 'reconcile', 'chapter_analysis', 'cover_generation', 'metadata_hydration')),
+  status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+  book_id INTEGER NULL,
+  release_id INTEGER NULL,
+  payload_json TEXT NULL,
+  error TEXT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 5,
+  next_run_at TEXT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+  FOREIGN KEY (release_id) REFERENCES releases(id) ON DELETE CASCADE
+);
+
+INSERT INTO jobs_new (
+  id, type, status, book_id, release_id, payload_json, error,
+  attempt_count, max_attempts, next_run_at, created_at, updated_at
+)
+SELECT
+  id, type, status, book_id, release_id, payload_json, error,
+  attempt_count, max_attempts, next_run_at, created_at, updated_at
+FROM jobs;
+
+DROP TABLE jobs;
+ALTER TABLE jobs_new RENAME TO jobs;
+
+CREATE INDEX IF NOT EXISTS idx_jobs_status_next_created ON jobs(status, next_run_at, created_at);
+CREATE INDEX IF NOT EXISTS idx_books_openlibrary_metadata_version ON books(openlibrary_metadata_version, id);
+`);
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
@@ -952,5 +998,8 @@ export function runMigrations(db: Database): void {
   });
   apply(BOOK_SERIES_MIGRATION_ID, () => {
     applyBookSeriesMigration(db);
+  });
+  apply(OPENLIBRARY_METADATA_HYDRATION_MIGRATION_ID, () => {
+    applyOpenLibraryMetadataHydrationMigration(db);
   });
 }

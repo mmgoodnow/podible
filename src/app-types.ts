@@ -9,7 +9,8 @@ export type JobType =
   | "import"
   | "reconcile"
   | "chapter_analysis"
-  | "cover_generation";
+  | "cover_generation"
+  | "metadata_hydration";
 
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
@@ -104,6 +105,8 @@ export type BookRow = {
   language: string | null;
   identifiers_json: string | null;
   series_json: string | null;
+  openlibrary_metadata_version: number;
+  openlibrary_hydrated_at: string | null;
 };
 
 export type BookSeriesMembership = {

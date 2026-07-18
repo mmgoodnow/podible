@@ -575,6 +575,8 @@ export class BooksRepo {
       language: string | null;
       identifiers: Record<string, string>;
       series: BookSeriesMembership[];
+      openLibraryMetadataVersion: number;
+      openLibraryHydratedAt: string;
     }>
   ): BookRow {
     assertPositiveInt(bookId);
@@ -596,6 +598,8 @@ export class BooksRepo {
              language = ?,
              identifiers_json = ?,
              series_json = ?,
+             openlibrary_metadata_version = ?,
+             openlibrary_hydrated_at = ?,
              updated_at = ?
          WHERE id = ?
          RETURNING *`
@@ -610,6 +614,8 @@ export class BooksRepo {
         patch.language ?? current.language,
         patch.identifiers ? JSON.stringify(patch.identifiers) : current.identifiers_json,
         patch.series ? JSON.stringify(normalizeSeries(patch.series)) : current.series_json,
+        patch.openLibraryMetadataVersion ?? current.openlibrary_metadata_version,
+        patch.openLibraryHydratedAt ?? current.openlibrary_hydrated_at,
         now,
         bookId
       ) as BookRow;
@@ -655,6 +661,12 @@ export class BooksRepo {
   listAllBooks(): LibraryBook[] {
     const rows = this.db.query("SELECT * FROM books ORDER BY added_at DESC, id DESC").all() as BookRow[];
     return rows.map((row) => this.toLibraryBook(row));
+  }
+
+  listBooksWithStaleOpenLibraryMetadata(currentVersion: number): BookRow[] {
+    return this.db
+      .query("SELECT * FROM books WHERE openlibrary_metadata_version < ? ORDER BY id ASC")
+      .all(currentVersion) as BookRow[];
   }
 
   listBooksBySeries(target: { seriesKey?: string | null; seriesName?: string | null }): LibraryBook[] {

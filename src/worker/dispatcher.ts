@@ -7,6 +7,7 @@ import { workerLog, type WorkerContext } from "./context";
 import { processDownloadJob } from "./downloads";
 import { processImportJob } from "./imports";
 import { processFullLibraryRefreshJob, processReconcileJob } from "./maintenance";
+import { processMetadataHydrationJob } from "./metadata-hydration";
 
 export type JobProcessResult = "done" | "rescheduled";
 
@@ -35,6 +36,9 @@ export async function processJob(ctx: WorkerContext, job: JobRow): Promise<JobPr
   }
   if (job.type === "cover_generation") {
     return processCoverGenerationJob(ctx, job);
+  }
+  if (job.type === "metadata_hydration") {
+    return processMetadataHydrationJob(ctx, job);
   }
   ctx.repo.markJobSucceeded(job.id);
   workerLog(ctx, `[worker] job=${job.id} type=${job.type} unknown_type=1 auto_succeeded=1`);

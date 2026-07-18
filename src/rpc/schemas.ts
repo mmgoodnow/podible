@@ -51,6 +51,8 @@ export const jobTypeSchema = z.enum([
   "import",
   "reconcile",
   "chapter_analysis",
+  "cover_generation",
+  "metadata_hydration",
 ]);
 
 export const appSettingsSchema: z.ZodType<AppSettings> = z.object({

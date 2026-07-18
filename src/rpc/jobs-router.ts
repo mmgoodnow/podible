@@ -4,7 +4,16 @@ import { defineMethod, defineRouter } from "./framework";
 import { emptyParamsSchema, jobRowSchema, jobTypeSchema, limitSchema, positiveIntSchema } from "./schemas";
 import { enrichJob, RpcError } from "./shared";
 
-const allJobTypes = ["full_library_refresh", "acquire", "download", "import", "reconcile", "chapter_analysis"] as const;
+const allJobTypes = [
+  "full_library_refresh",
+  "acquire",
+  "download",
+  "import",
+  "reconcile",
+  "chapter_analysis",
+  "cover_generation",
+  "metadata_hydration",
+] as const;
 
 export const jobsRouter = defineRouter({
   list: defineMethod({

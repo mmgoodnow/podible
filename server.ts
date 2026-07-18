@@ -5,6 +5,7 @@ import { queuePendingCurationJobs } from "./src/library/chapter-analysis";
 import { pingPlexOwnerToken } from "./src/plex";
 import { BooksRepo } from "./src/repo";
 import { runWorker } from "./src/worker";
+import { queueStaleMetadataHydration } from "./src/worker/metadata-hydration";
 
 const startTime = Date.now();
 
@@ -13,6 +14,11 @@ const db = openDatabase(booksDbPath);
 const repo = new BooksRepo(db);
 repo.ensureSettings();
 const current = repo.getSettings();
+
+const metadataHydrationJob = queueStaleMetadataHydration(repo);
+if (metadataHydrationJob) {
+  console.log(`[metadata-hydration] job=${metadataHydrationJob.id} status=${metadataHydrationJob.status}`);
+}
 
 void runWorker({
   repo,

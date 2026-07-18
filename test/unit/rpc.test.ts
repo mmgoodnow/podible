@@ -175,6 +175,23 @@ describe("json-rpc handler", () => {
     db.close();
   });
 
+  test("jobs.list serializes internal metadata hydration jobs", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const job = repo.createJob({ type: "metadata_hydration" });
+
+    const response = await callRpc(
+      repo,
+      { jsonrpc: "2.0", id: 1, method: "jobs.list", params: { type: "metadata_hydration" } },
+      "admin"
+    );
+
+    expect(response.error).toBeUndefined();
+    expect(response.result.jobs.map((row: { id: number }) => row.id)).toEqual([job.id]);
+    db.close();
+  });
+
   test("library.inProgress returns LibraryBook-shaped rows and filters terminal books", async () => {
     const db = new Database(":memory:");
     runMigrations(db);

@@ -67,7 +67,16 @@ function adminTitle(title: string): string {
   return `<div class="section-title-row"><h2>${escapeHtml(title)}</h2><span class="admin-only-pill">Admin only</span></div>`;
 }
 
-const OPS_JOB_TYPES: JobType[] = ["full_library_refresh", "acquire", "download", "import", "reconcile", "chapter_analysis"];
+const OPS_JOB_TYPES: JobType[] = [
+  "full_library_refresh",
+  "acquire",
+  "download",
+  "import",
+  "reconcile",
+  "chapter_analysis",
+  "cover_generation",
+  "metadata_hydration",
+];
 
 function jobTarget(job: JobRow): string {
   return [job.book_id ? `book ${job.book_id}` : null, job.release_id ? `release ${job.release_id}` : null].filter(Boolean).join(" / ") || "no target";

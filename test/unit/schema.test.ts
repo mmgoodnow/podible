@@ -38,6 +38,75 @@ describe("schema migrations", () => {
     expect(indexExists(db, "idx_jobs_status_next_created")).toBe(true);
     expect(indexExists(db, "idx_torrent_cache_provider_guid")).toBe(true);
     expect(indexExists(db, "idx_torrent_cache_url")).toBe(true);
+    expect(indexExists(db, "idx_books_openlibrary_metadata_version")).toBe(true);
+
+    db.close();
+  });
+
+  test("marks existing books stale and preserves jobs when adding metadata hydration", () => {
+    const db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+      CREATE TABLE books (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        author TEXT NOT NULL,
+        cover_path TEXT NULL,
+        duration_ms INTEGER NULL,
+        word_count INTEGER NULL,
+        added_by_user_id INTEGER NULL,
+        added_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        published_at TEXT NULL,
+        description TEXT NULL,
+        description_html TEXT NULL,
+        language TEXT NULL,
+        identifiers_json TEXT NULL,
+        series_json TEXT NULL
+      );
+      CREATE TABLE jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT NOT NULL CHECK (type IN ('full_library_refresh', 'acquire', 'download', 'import', 'reconcile', 'chapter_analysis', 'cover_generation')),
+        status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+        book_id INTEGER NULL,
+        release_id INTEGER NULL,
+        payload_json TEXT NULL,
+        error TEXT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 5,
+        next_run_at TEXT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    const now = new Date().toISOString();
+    for (let id = 1; id <= 27; id += 1) {
+      db.query("INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)").run(id, now);
+    }
+    const book = db
+      .query("INSERT INTO books (title, author, added_at, updated_at) VALUES (?, ?, ?, ?) RETURNING id")
+      .get("Existing Book", "Existing Author", now, now) as { id: number };
+    const job = db
+      .query("INSERT INTO jobs (type, status, created_at, updated_at) VALUES ('reconcile', 'queued', ?, ?) RETURNING id")
+      .get(now, now) as { id: number };
+
+    runMigrations(db);
+
+    expect(
+      db
+        .query("SELECT openlibrary_metadata_version, openlibrary_hydrated_at FROM books WHERE id = ?")
+        .get(book.id)
+    ).toEqual({ openlibrary_metadata_version: 0, openlibrary_hydrated_at: null });
+    expect(db.query("SELECT type, status FROM jobs WHERE id = ?").get(job.id)).toEqual({
+      type: "reconcile",
+      status: "queued",
+    });
+    expect(() => {
+      db.query("INSERT INTO jobs (type, status, created_at, updated_at) VALUES ('metadata_hydration', 'queued', ?, ?)").run(
+        now,
+        now
+      );
+    }).not.toThrow();
 
     db.close();
   });
