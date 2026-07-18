@@ -1386,6 +1386,19 @@ describe("json-rpc handler", () => {
             author_name: ["Hugh Howey"],
             first_publish_year: 2014,
           },
+          {
+            key: "/works/OL99999999W",
+            title: "Sand",
+            author_name: ["Hugh Howey"],
+            first_publish_year: 2014,
+          },
+          {
+            key: "/works/OL88888888W",
+            title: "חול",
+            author_name: ["Hugh Howey"],
+            first_publish_year: 2014,
+            editions: { docs: [{ language: ["he"] }] },
+          },
         ],
       });
     }) as typeof fetch;

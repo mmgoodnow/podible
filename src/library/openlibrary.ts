@@ -23,6 +23,7 @@ type OpenLibraryResponse = {
 type OpenLibraryWorkResponse = {
   description?: string | { value?: string };
   covers?: number[];
+  location?: string;
   series?: Array<{
     series?: { key?: string };
     position?: string | number;
@@ -206,6 +207,13 @@ async function fetchWorkDetails(
   };
 }
 
+async function fetchWorkRedirectTarget(openLibraryKey: string): Promise<string | null> {
+  const response = await fetch(`https://openlibrary.org${openLibraryKey}.json`, { method: "GET" });
+  if (!response.ok) return null;
+  const payload = (await response.json()) as OpenLibraryWorkResponse;
+  return payload.location ? normalizeOpenLibraryKey(payload.location) : null;
+}
+
 async function fetchWorkCoverIds(openLibraryKey: string): Promise<number[]> {
   const url = new URL(`https://openlibrary.org${openLibraryKey}.json`);
   const response = await fetch(url, { method: "GET" });
@@ -361,7 +369,18 @@ export async function searchOpenLibraryAuthor(authorName: string, limit = 50): P
     q: `author:"${name}"`,
     limit: String(safeLimit),
   });
-  return docs.map((doc) => docToCandidate(doc)).filter((value): value is OpenLibraryCandidate => value !== null);
+  const seen = new Set<string>();
+  const books: OpenLibraryCandidate[] = [];
+  for (const doc of docs) {
+    const candidate = docToCandidate(doc);
+    if (!candidate) continue;
+    if (candidate.language && candidate.language !== OPEN_LIBRARY_PREFERRED_LANGUAGE) continue;
+    const identity = `${candidate.title.normalize("NFKD").toLocaleLowerCase()}|${candidate.author.normalize("NFKD").toLocaleLowerCase()}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    books.push(candidate);
+  }
+  return books;
 }
 
 export async function resolveOpenLibraryCandidate(options: ResolveOptions): Promise<OpenLibraryCandidate | null> {
@@ -378,6 +397,13 @@ export async function resolveOpenLibraryCandidate(options: ResolveOptions): Prom
     const fallback = await searchOpenLibrary(normalized, 5);
     const fallbackExact = pickCandidateByKey(fallback, normalized);
     if (fallbackExact) return fallbackExact;
+
+    const redirectedKey = await fetchWorkRedirectTarget(normalized).catch(() => null);
+    if (redirectedKey && redirectedKey !== normalized) {
+      const redirected = await searchOpenLibrary(`key:${redirectedKey}`, 5);
+      const exactRedirect = pickCandidateByKey(redirected, redirectedKey);
+      if (exactRedirect) return exactRedirect;
+    }
 
     return null;
   }
