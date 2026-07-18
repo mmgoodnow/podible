@@ -681,6 +681,13 @@ export class BooksRepo {
       });
   }
 
+  listBooksByAuthor(authorName: string): LibraryBook[] {
+    const rows = this.db
+      .query("SELECT * FROM books WHERE author = ? COLLATE NOCASE ORDER BY title ASC, id ASC")
+      .all(authorName.trim()) as BookRow[];
+    return rows.map((row) => this.toLibraryBook(row));
+  }
+
   listInProgressBooks(bookIds?: number[]): LibraryBook[] {
     const candidates = Array.isArray(bookIds) && bookIds.length > 0
       ? Array.from(new Set(bookIds))

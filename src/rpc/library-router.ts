@@ -5,7 +5,7 @@ import { z } from "zod";
 import { createOrReuseBookFromOpenLibrary } from "../library/create";
 import { getBookTranscriptStatus, requestBookTranscription } from "../library/chapter-analysis";
 import { hydrateBookFromOpenLibrary } from "../library/hydration";
-import { searchOpenLibrarySeries } from "../library/openlibrary";
+import { searchOpenLibraryAuthor, searchOpenLibrarySeries } from "../library/openlibrary";
 import { RtorrentClient } from "../rtorrent";
 import { runSearch, runSnatchGroup, triggerAutoAcquire } from "../library/service";
 
@@ -181,6 +181,31 @@ export const libraryRouter = defineRouter({
           if (positionDelta !== 0) return positionDelta;
           return a.title.localeCompare(b.title);
         }),
+      };
+    },
+  }),
+
+  author: defineMethod({
+    auth: "user",
+    readOnly: true,
+    summary: "List local and Open Library books by an author.",
+    paramsSchema: emptyParamsSchema.extend({
+      authorName: nonEmptyStringSchema,
+      limit: limitSchema.optional(),
+    }),
+    resultSchema: z.object({
+      author: z.string(),
+      libraryBooks: z.array(libraryBookWithPlaybackSchema),
+      openLibraryBooks: z.array(openLibraryCandidateSchema),
+    }),
+    async handler(ctx, params) {
+      const authorName = params.authorName.trim();
+      const localBooks = ctx.repo.listBooksByAuthor(authorName);
+      const openLibraryBooks = await searchOpenLibraryAuthor(authorName, params.limit ?? 50);
+      return {
+        author: localBooks[0]?.author ?? authorName,
+        libraryBooks: localBooks.map((book) => enrichLibraryBookPlayback(ctx.repo, ctx.request, book)),
+        openLibraryBooks: openLibraryBooks.sort((a, b) => a.title.localeCompare(b.title)),
       };
     },
   }),

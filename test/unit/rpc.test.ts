@@ -1365,6 +1365,62 @@ describe("json-rpc handler", () => {
     }
   });
 
+  test("library.author returns local books and Open Library works by the author", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown) => {
+      const url = new URL(String(input));
+      expect(url.origin).toBe("https://openlibrary.org");
+      expect(url.pathname).toBe("/search.json");
+      expect(url.searchParams.get("q")).toBe('author:"Hugh Howey"');
+      return Response.json({
+        docs: [
+          {
+            key: "/works/OL16800608W",
+            title: "Wool",
+            author_name: ["Hugh Howey"],
+            first_publish_year: 2011,
+          },
+          {
+            key: "/works/OL17377506W",
+            title: "Sand",
+            author_name: ["Hugh Howey"],
+            first_publish_year: 2014,
+          },
+        ],
+      });
+    }) as typeof fetch;
+
+    try {
+      const db = new Database(":memory:");
+      runMigrations(db);
+      const repo = new BooksRepo(db);
+      const wool = repo.createBook({ title: "Wool", author: "Hugh Howey" });
+      repo.updateBookMetadata(wool.id, {
+        identifiers: { openlibrary: "/works/OL16800608W" },
+      });
+      repo.createBook({ title: "Unrelated", author: "Another Writer" });
+
+      const result = await callRpc(
+        repo,
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "library.author",
+          params: { authorName: "Hugh Howey", limit: 20 },
+        },
+        "user"
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.result.author).toBe("Hugh Howey");
+      expect(result.result.libraryBooks.map((book: any) => book.title)).toEqual(["Wool"]);
+      expect(result.result.openLibraryBooks.map((book: any) => book.title)).toEqual(["Sand", "Wool"]);
+      db.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("library.rehydrate stores structured series metadata from the Open Library work", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown) => {

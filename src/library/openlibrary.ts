@@ -341,6 +341,17 @@ export async function searchOpenLibrarySeries(
   return docs.map((doc) => docToCandidate(doc)).filter((value): value is OpenLibraryCandidate => value !== null);
 }
 
+export async function searchOpenLibraryAuthor(authorName: string, limit = 50): Promise<OpenLibraryCandidate[]> {
+  const safeLimit = Math.max(1, Math.min(100, Math.trunc(limit || 50)));
+  const name = authorName.trim().replace(/"/g, "");
+  if (!name) return [];
+  const docs = await fetchSearchDocs({
+    q: `author:"${name}"`,
+    limit: String(safeLimit),
+  });
+  return docs.map((doc) => docToCandidate(doc)).filter((value): value is OpenLibraryCandidate => value !== null);
+}
+
 export async function resolveOpenLibraryCandidate(options: ResolveOptions): Promise<OpenLibraryCandidate | null> {
   const openLibraryKey = options.openLibraryKey?.trim() ?? "";
   if (openLibraryKey) {
