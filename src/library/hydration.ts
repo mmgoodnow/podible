@@ -4,7 +4,7 @@ import { fetchOpenLibraryMetadata } from "./openlibrary";
 import type { BookRow, LibraryBook } from "../app-types";
 import type { BooksRepo } from "../repo";
 
-export const CURRENT_OPENLIBRARY_METADATA_VERSION = 1;
+export const CURRENT_OPENLIBRARY_METADATA_VERSION = 2;
 
 export type OpenLibraryMetadataStatus = "current" | "stale" | "never_hydrated";
 

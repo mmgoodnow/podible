@@ -42,7 +42,6 @@ type OpenLibraryEdition = {
   languages?: Array<{ key?: string }>;
   isbn_10?: string[];
   isbn_13?: string[];
-  series?: string[];
 };
 
 export type OpenLibraryMetadata = {
@@ -257,26 +256,6 @@ function seriesFromDoc(doc: OpenLibraryDoc): BookSeriesMembership[] {
   );
 }
 
-function parseEditionSeriesValue(value: string): BookSeriesMembership | null {
-  const trimmed = value.replace(/\s+/g, " ").trim();
-  if (!trimmed) return null;
-  const commaMatch = trimmed.match(/^(.*?),\s*([0-9]+(?:\.[0-9]+)?|[ivxlcdm]+)$/i);
-  if (commaMatch) {
-    return { key: null, name: commaMatch[1]!.trim(), position: commaMatch[2]!.trim() };
-  }
-  const dashMatch = trimmed.match(/^(.*?)\s+--\s+(.+)$/);
-  if (dashMatch) {
-    return { key: null, name: dashMatch[1]!.trim(), position: dashMatch[2]!.trim() };
-  }
-  return { key: null, name: trimmed, position: null };
-}
-
-function seriesFromEditions(editions: OpenLibraryEdition[]): BookSeriesMembership[] {
-  return normalizeSeriesMemberships(
-    editions.flatMap((edition) => (edition.series ?? []).map(parseEditionSeriesValue).filter((value): value is BookSeriesMembership => value !== null))
-  );
-}
-
 function docToCandidate(doc: OpenLibraryDoc, fallbackTitle?: string, fallbackAuthor?: string): OpenLibraryCandidate | null {
   const key = typeof doc.key === "string" ? normalizeOpenLibraryKey(doc.key) : null;
   const title = (doc.title ?? fallbackTitle ?? "").trim();
@@ -406,12 +385,7 @@ export async function fetchOpenLibraryMetadata(
   if (!candidate) return null;
 
   const details = await fetchWorkDetails(candidate.openLibraryKey).catch(() => null);
-  const metadata = candidateToMetadata(candidate, details);
-  if (metadata.series && metadata.series.length > 0) return metadata;
-
-  const editions = await fetchWorkEditions(candidate.openLibraryKey, 50).catch(() => []);
-  const editionSeries = seriesFromEditions(editions);
-  return { ...metadata, series: editionSeries };
+  return candidateToMetadata(candidate, details);
 }
 
 function languageFromEdition(edition: OpenLibraryEdition): string | undefined {

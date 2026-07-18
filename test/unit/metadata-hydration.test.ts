@@ -92,4 +92,36 @@ describe("Open Library metadata hydration", () => {
     expect(repo.getJob(queued.id)?.status).toBe("queued");
     expect(repo.getJob(queued.id)?.error).toContain(String(second.id));
   });
+
+  test("does not derive work series from unrelated edition metadata", async () => {
+    const book = repo.createBook({ title: "Wool", author: "Hugh Howey" });
+    repo.updateBookMetadata(book.id, {
+      identifiers: { openlibrary: "/works/OL16800608W" },
+      series: [{ key: null, name: "InfiniTime", position: "006" }],
+    });
+    globalThis.fetch = (async (input: unknown) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/search.json") {
+        return Response.json({
+          docs: [{ key: "/works/OL16800608W", title: "Wool", author_name: ["Hugh Howey"] }],
+        });
+      }
+      if (url.pathname === "/works/OL16800608W.json") {
+        return Response.json({ description: "They live beneath the earth.", series: [] });
+      }
+      if (url.pathname === "/works/OL16800608W/editions.json") {
+        throw new Error("Edition series metadata must not be used for work membership");
+      }
+      throw new Error(`Unexpected Open Library request: ${url}`);
+    }) as typeof fetch;
+
+    const job = queueStaleMetadataHydration(repo)!;
+    await processMetadataHydrationJob(
+      { repo, getSettings: () => defaultSettings() },
+      repo.claimQueuedJob(job.id)!
+    );
+
+    expect(repo.getBook(book.id)?.series).toEqual([]);
+    expect(repo.getBookRow(book.id)?.openlibrary_metadata_version).toBe(CURRENT_OPENLIBRARY_METADATA_VERSION);
+  });
 });
