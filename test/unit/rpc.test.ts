@@ -1348,6 +1348,60 @@ describe("json-rpc handler", () => {
     }
   });
 
+  test("library.rehydrate stores structured series metadata from the Open Library work", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/search.json") {
+        return Response.json({
+          docs: [
+            {
+              key: "/works/OL82563W",
+              title: "Harry Potter and the Philosopher's Stone",
+              author_name: ["J. K. Rowling"],
+            },
+          ],
+        });
+      }
+      if (url.pathname === "/works/OL82563W.json") {
+        return Response.json({
+          description: "A young wizard begins school.",
+          series: [{ series: { key: "/series/OL326110L" }, position: "1" }],
+        });
+      }
+      if (url.pathname === "/series/OL326110L.json") {
+        return Response.json({ name: "Harry Potter" });
+      }
+      throw new Error(`Unexpected Open Library request: ${url}`);
+    }) as typeof fetch;
+
+    try {
+      const db = new Database(":memory:");
+      runMigrations(db);
+      const repo = new BooksRepo(db);
+      const book = repo.createBook({ title: "Harry Potter and the Philosopher's Stone", author: "J. K. Rowling" });
+      repo.updateBookMetadata(book.id, { identifiers: { openlibrary: "/works/OL82563W" } });
+
+      const result = await callRpc(
+        repo,
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "library.rehydrate",
+          params: { bookId: book.id },
+        },
+        "admin"
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.result.updatedBookIds).toEqual([book.id]);
+      expect(repo.getBook(book.id)?.series).toEqual([{ key: "OL326110L", name: "Harry Potter", position: "1" }]);
+      db.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("library.delete allows non-admin users and cascades DB rows and asset+cover files", async () => {
     const db = new Database(":memory:");
     runMigrations(db);

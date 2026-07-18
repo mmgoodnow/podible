@@ -19,6 +19,14 @@ type OpenLibraryResponse = {
 type OpenLibraryWorkResponse = {
   description?: string | { value?: string };
   covers?: number[];
+  series?: Array<{
+    series?: { key?: string };
+    position?: string | number;
+  }>;
+};
+
+type OpenLibrarySeriesResponse = {
+  name?: string;
 };
 
 type OpenLibraryEditionsResponse = {
@@ -140,7 +148,37 @@ async function fetchSearchDocs(params: Record<string, string>): Promise<OpenLibr
   return payload.docs ?? [];
 }
 
-async function fetchWorkDetails(openLibraryKey: string): Promise<{ description?: string; coverId?: number } | null> {
+async function fetchSeriesName(seriesKey: string): Promise<string | null> {
+  const key = normalizeOpenLibrarySeriesKey(seriesKey);
+  if (!key || !/^OL\d+L$/i.test(key)) return null;
+  const response = await fetch(`https://openlibrary.org/series/${key}.json`, { method: "GET" });
+  if (!response.ok) return null;
+  const payload = (await response.json()) as OpenLibrarySeriesResponse;
+  return payload.name?.trim() || null;
+}
+
+async function seriesFromWork(payload: OpenLibraryWorkResponse): Promise<BookSeriesMembership[]> {
+  const memberships = await Promise.all(
+    (payload.series ?? []).map(async (item): Promise<BookSeriesMembership | null> => {
+      const rawKey = item.series?.key;
+      if (!rawKey) return null;
+      const key = normalizeOpenLibrarySeriesKey(rawKey);
+      if (!key) return null;
+      const name = await fetchSeriesName(key).catch(() => null);
+      if (!name) return null;
+      return {
+        key,
+        name,
+        position: item.position === undefined ? null : String(item.position),
+      };
+    })
+  );
+  return normalizeSeriesMemberships(memberships.filter((item): item is BookSeriesMembership => item !== null));
+}
+
+async function fetchWorkDetails(
+  openLibraryKey: string
+): Promise<{ description?: string; coverId?: number; series: BookSeriesMembership[] } | null> {
   const url = new URL(`https://openlibrary.org${openLibraryKey}.json`);
   const response = await fetch(url, { method: "GET" });
   if (!response.ok) return null;
@@ -153,9 +191,11 @@ async function fetchWorkDetails(openLibraryKey: string): Promise<{ description?:
         : undefined;
   const description = rawDescription?.trim() || undefined;
   const coverId = Array.isArray(payload.covers) ? payload.covers.find((value) => Number.isInteger(value) && value > 0) : undefined;
+  const series = await seriesFromWork(payload);
   return {
     description,
     coverId,
+    series,
   };
 }
 
@@ -264,7 +304,7 @@ function docToCandidate(doc: OpenLibraryDoc, fallbackTitle?: string, fallbackAut
 
 function candidateToMetadata(
   candidate: OpenLibraryCandidate,
-  details?: { description?: string; coverId?: number } | null
+  details?: { description?: string; coverId?: number; series: BookSeriesMembership[] } | null
 ): OpenLibraryMetadata {
   const description = details?.description;
   const descriptionHtml = description ? toDescriptionHtml(description) : undefined;
@@ -277,7 +317,7 @@ function candidateToMetadata(
     description,
     descriptionHtml,
     coverUrl: coverId ? coverUrlFromId(coverId) : undefined,
-    series: candidate.series,
+    series: details?.series.length ? details.series : candidate.series,
   };
 }
 
