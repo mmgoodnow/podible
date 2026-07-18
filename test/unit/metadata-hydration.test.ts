@@ -95,7 +95,7 @@ describe("Open Library metadata hydration", () => {
     expect(repo.getJob(queued.id)?.error).toContain(String(second.id));
   });
 
-  test("does not derive work series from unrelated edition metadata", async () => {
+  test("does not derive work series from a single unrelated edition", async () => {
     const book = repo.createBook({ title: "Wool", author: "Hugh Howey" });
     repo.updateBookMetadata(book.id, {
       identifiers: { openlibrary: "/works/OL16800608W" },
@@ -123,7 +123,16 @@ describe("Open Library metadata hydration", () => {
         return Response.json({ description: "They live beneath the earth.", series: [] });
       }
       if (url.pathname === "/works/OL16800608W/editions.json") {
-        throw new Error("Edition series metadata must not be used for work membership");
+        return Response.json({
+          entries: [
+            {
+              key: "/books/OL27161382M",
+              title: "羊毛記",
+              series: ["InfiniTime -- 006"],
+              languages: [{ key: "/languages/chi" }],
+            },
+          ],
+        });
       }
       throw new Error(`Unexpected Open Library request: ${url}`);
     }) as typeof fetch;
@@ -137,6 +146,88 @@ describe("Open Library metadata hydration", () => {
     expect(repo.getBook(book.id)?.series).toEqual([]);
     expect(repo.getBookRow(book.id)?.language).toBe("eng");
     expect(repo.getBookRow(book.id)?.openlibrary_metadata_version).toBe(CURRENT_OPENLIBRARY_METADATA_VERSION);
+  });
+
+  test("derives series name and position when editions independently agree", async () => {
+    const book = repo.createBook({ title: "The Gate of the Feral Gods", author: "Matt Dinniman" });
+    repo.updateBookMetadata(book.id, { identifiers: { openlibrary: "/works/OL24848267W" } });
+    globalThis.fetch = (async (input: unknown) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/search.json") {
+        return Response.json({
+          docs: [
+            {
+              key: "/works/OL24848267W",
+              title: "The Gate of the Feral Gods",
+              author_name: ["Matt Dinniman"],
+              editions: { docs: [{ language: ["eng"] }] },
+            },
+          ],
+        });
+      }
+      if (url.pathname === "/works/OL24848267W.json") {
+        return Response.json({ description: "Welcome to the fifth floor.", series: [] });
+      }
+      if (url.pathname === "/works/OL24848267W/editions.json") {
+        return Response.json({
+          entries: [
+            { key: "/books/OL62200143M", series: ["Dungeon Crawler Carl, Book 4"] },
+            {
+              key: "/books/OL60487327M",
+              subtitle: "Dungeon Crawler Carl, Book 4",
+              series: ["Dungeon Crawler Carl"],
+            },
+            { key: "/books/OL33026536M", series: ["Dungeon Crawler Carl"] },
+          ],
+        });
+      }
+      throw new Error(`Unexpected Open Library request: ${url}`);
+    }) as typeof fetch;
+
+    const job = queueStaleMetadataHydration(repo)!;
+    await processMetadataHydrationJob(
+      { repo, getSettings: () => defaultSettings() },
+      repo.claimQueuedJob(job.id)!
+    );
+
+    expect(repo.getBook(book.id)?.series).toEqual([
+      { key: null, name: "Dungeon Crawler Carl", position: "4" },
+    ]);
+  });
+
+  test("keeps a corroborated series name but drops conflicting edition positions", async () => {
+    const book = repo.createBook({ title: "Example", author: "Author" });
+    repo.updateBookMetadata(book.id, { identifiers: { openlibrary: "/works/OL999W" } });
+    globalThis.fetch = (async (input: unknown) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/search.json") {
+        return Response.json({
+          docs: [{ key: "/works/OL999W", title: "Example", author_name: ["Author"] }],
+        });
+      }
+      if (url.pathname === "/works/OL999W.json") return Response.json({ series: [] });
+      if (url.pathname === "/works/OL999W/editions.json") {
+        return Response.json({
+          entries: [
+            { key: "/books/OL1M", series: ["Example Series, Book 3"] },
+            { key: "/books/OL2M", series: ["Example Series, Volume III"] },
+            { key: "/books/OL3M", series: ["Example Series, Book 4"] },
+            { key: "/books/OL4M", series: ["Example Series, Volume IV"] },
+          ],
+        });
+      }
+      throw new Error(`Unexpected Open Library request: ${url}`);
+    }) as typeof fetch;
+
+    const job = queueStaleMetadataHydration(repo)!;
+    await processMetadataHydrationJob(
+      { repo, getSettings: () => defaultSettings() },
+      repo.claimQueuedJob(job.id)!
+    );
+
+    expect(repo.getBook(book.id)?.series).toEqual([
+      { key: null, name: "Example Series", position: null },
+    ]);
   });
 
   test("follows a redirected Open Library work before hydrating metadata", async () => {

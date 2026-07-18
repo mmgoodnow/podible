@@ -41,6 +41,8 @@ type OpenLibraryEditionsResponse = {
 type OpenLibraryEdition = {
   key?: string;
   title?: string;
+  subtitle?: string;
+  series?: string[];
   covers?: number[];
   publish_date?: string;
   publishers?: string[];
@@ -272,6 +274,162 @@ function seriesFromDoc(doc: OpenLibraryDoc): BookSeriesMembership[] {
   );
 }
 
+type EditionSeriesEvidence = {
+  name: string;
+  editionKeys: Set<string>;
+  nameCounts: Map<string, number>;
+  positions: Map<string, Set<string>>;
+};
+
+const NUMBER_WORD_POSITIONS: Record<string, string> = {
+  one: "1",
+  first: "1",
+  two: "2",
+  second: "2",
+  three: "3",
+  third: "3",
+  four: "4",
+  fourth: "4",
+  five: "5",
+  fifth: "5",
+  six: "6",
+  sixth: "6",
+  seven: "7",
+  seventh: "7",
+  eight: "8",
+  eighth: "8",
+  nine: "9",
+  ninth: "9",
+  ten: "10",
+  tenth: "10",
+  eleven: "11",
+  eleventh: "11",
+  twelve: "12",
+  twelfth: "12",
+  thirteen: "13",
+  thirteenth: "13",
+  fourteen: "14",
+  fourteenth: "14",
+  fifteen: "15",
+  fifteenth: "15",
+  sixteen: "16",
+  sixteenth: "16",
+  seventeen: "17",
+  seventeenth: "17",
+  eighteen: "18",
+  eighteenth: "18",
+  nineteen: "19",
+  nineteenth: "19",
+  twenty: "20",
+  twentieth: "20",
+};
+
+function normalizeSeriesName(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLocaleLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function romanNumeralValue(value: string): number | null {
+  if (!/^[ivxlcdm]+$/i.test(value)) return null;
+  const values: Record<string, number> = { i: 1, v: 5, x: 10, l: 50, c: 100, d: 500, m: 1_000 };
+  let total = 0;
+  let previous = 0;
+  for (const character of value.toLocaleLowerCase().split("").reverse()) {
+    const current = values[character]!;
+    total += current < previous ? -current : current;
+    previous = current;
+  }
+  return total > 0 ? total : null;
+}
+
+function normalizeSeriesPosition(value: string): string | null {
+  const normalized = value.trim().replace(/^#\s*/, "").replace(/[.)]+$/, "").toLocaleLowerCase();
+  if (!normalized) return null;
+  if (/^\d+(?:\.\d+)?$/.test(normalized)) return String(Number(normalized));
+  const wordPosition = NUMBER_WORD_POSITIONS[normalized];
+  if (wordPosition) return wordPosition;
+  const romanPosition = romanNumeralValue(normalized);
+  return romanPosition === null ? null : String(romanPosition);
+}
+
+function parseEditionSeriesValue(value: string): { name: string; position: string | null } | null {
+  const trimmed = value.replace(/\s+/g, " ").trim();
+  if (!trimmed) return null;
+  const labeledPosition = trimmed.match(
+    /^(.*?)(?:\s*(?:,|--|[-–—:])\s*|\s+)(?:book|bk|volume|vol|tome|part)\.?\s*(#?\s*[a-z0-9.]+)$/i
+  );
+  const bareDelimitedPosition = trimmed.match(/^(.*?)\s*(?:,|--)\s*(#?\s*[a-z0-9.]+)$/i);
+  const match = labeledPosition ?? bareDelimitedPosition;
+  if (!match) return { name: trimmed, position: null };
+  const position = normalizeSeriesPosition(match[2]!);
+  const name = match[1]!.replace(/[\s,;:–—-]+$/, "").trim();
+  return name && position ? { name, position } : { name: trimmed, position: null };
+}
+
+function addEditionPosition(evidence: EditionSeriesEvidence, position: string, editionKey: string): void {
+  const editions = evidence.positions.get(position) ?? new Set<string>();
+  editions.add(editionKey);
+  evidence.positions.set(position, editions);
+}
+
+function seriesFromEditionConsensus(editions: OpenLibraryEdition[]): BookSeriesMembership[] {
+  const evidenceByName = new Map<string, EditionSeriesEvidence>();
+
+  editions.forEach((edition, index) => {
+    const editionKey = edition.key?.trim() || `edition:${index}`;
+    const seenInEdition = new Set<string>();
+    const editionSeries = Array.isArray(edition.series) ? edition.series : [];
+    for (const rawValue of editionSeries) {
+      if (typeof rawValue !== "string") continue;
+      const parsed = parseEditionSeriesValue(rawValue);
+      if (!parsed) continue;
+      const normalizedName = normalizeSeriesName(parsed.name);
+      if (!normalizedName || seenInEdition.has(normalizedName)) continue;
+      seenInEdition.add(normalizedName);
+      const evidence = evidenceByName.get(normalizedName) ?? {
+        name: parsed.name,
+        editionKeys: new Set<string>(),
+        nameCounts: new Map<string, number>(),
+        positions: new Map<string, Set<string>>(),
+      };
+      evidence.editionKeys.add(editionKey);
+      evidence.nameCounts.set(parsed.name, (evidence.nameCounts.get(parsed.name) ?? 0) + 1);
+      if (parsed.position) addEditionPosition(evidence, parsed.position, editionKey);
+      evidenceByName.set(normalizedName, evidence);
+    }
+  });
+
+  const accepted = [...evidenceByName.entries()].filter(([, evidence]) => evidence.editionKeys.size >= 2);
+  for (const [normalizedName, evidence] of accepted) {
+    editions.forEach((edition, index) => {
+      const parsedSubtitle = edition.subtitle ? parseEditionSeriesValue(edition.subtitle) : null;
+      if (!parsedSubtitle?.position || normalizeSeriesName(parsedSubtitle.name) !== normalizedName) return;
+      addEditionPosition(evidence, parsedSubtitle.position, edition.key?.trim() || `edition:${index}`);
+    });
+  }
+
+  return normalizeSeriesMemberships(
+    accepted.map(([, evidence]) => {
+      const name = [...evidence.nameCounts.entries()].sort(
+        ([leftName, leftCount], [rightName, rightCount]) => rightCount - leftCount || leftName.length - rightName.length
+      )[0]?.[0] ?? evidence.name;
+      const corroboratedPositions = [...evidence.positions.entries()]
+        .filter(([, editionKeys]) => editionKeys.size >= 2)
+        .map(([position]) => position);
+      return {
+        key: null,
+        name,
+        position: corroboratedPositions.length === 1 ? corroboratedPositions[0]! : null,
+      };
+    })
+  );
+}
+
 function languageFromMatchedEdition(doc: OpenLibraryDoc): string | undefined {
   return doc.editions?.docs?.[0]?.language?.find((value) => value.trim())?.trim().toLowerCase() || undefined;
 }
@@ -434,7 +592,11 @@ export async function fetchOpenLibraryMetadata(
   if (!candidate) return null;
 
   const details = await fetchWorkDetails(candidate.openLibraryKey).catch(() => null);
-  return candidateToMetadata(candidate, details);
+  const metadata = candidateToMetadata(candidate, details);
+  if (metadata.series?.length) return metadata;
+
+  const editions = await fetchWorkEditions(candidate.openLibraryKey, 50).catch(() => []);
+  return { ...metadata, series: seriesFromEditionConsensus(editions) };
 }
 
 function languageFromEdition(edition: OpenLibraryEdition): string | undefined {
