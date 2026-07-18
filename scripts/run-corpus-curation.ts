@@ -23,6 +23,13 @@ const errorPath = path.join(caseDir, `${mode}-agent-error-${runId}.json`);
 const baseModel = process.env.CORPUS_MODEL?.trim() || "gpt-5.4-mini";
 const curatorModel = process.env.CORPUS_CURATOR_MODEL?.trim() || "gpt-5.4-nano";
 const judgeModel = process.env.CORPUS_JUDGE_MODEL?.trim() || baseModel;
+const reasoningEffort = (() => {
+  const value = process.env.CORPUS_REASONING_EFFORT?.trim() || "medium";
+  if (!["none", "minimal", "low", "medium", "high", "xhigh"].includes(value)) {
+    throw new Error(`Unsupported CORPUS_REASONING_EFFORT=${value}`);
+  }
+  return value as "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+})();
 
 function gitString(args: string[]): string | null {
   try {
@@ -139,13 +146,13 @@ async function main(): Promise<void> {
       debugEventLogPath: eventLogPath,
       debugTraceDir: traceDir,
       debugReasoningSummary: "detailed",
-      debugReasoningEffort: "medium",
+      debugReasoningEffort: reasoningEffort,
       debugCuratorModel: curatorModel,
       debugJudgeModel: judgeModel,
     });
     const elapsedMs = Date.now() - startedAt;
-    await writeFile(resultPath, `${JSON.stringify({ ...detailed, mode, elapsedMs, debugModels: { model: baseModel, curatorModel, judgeModel }, git }, null, 2)}\n`, "utf8");
-    console.log(JSON.stringify({ ok: true, slug, mode, accepted: detailed.result?.accepted ?? false, chapters: detailed.result?.accepted ? detailed.result.chapters.length : 0, elapsedMs, resultPath, eventLogPath, traceDir, model: baseModel, curatorModel, judgeModel, git }, null, 2));
+    await writeFile(resultPath, `${JSON.stringify({ ...detailed, mode, elapsedMs, debugModels: { model: baseModel, curatorModel, judgeModel, reasoningEffort }, git }, null, 2)}\n`, "utf8");
+    console.log(JSON.stringify({ ok: true, slug, mode, accepted: detailed.result?.accepted ?? false, chapters: detailed.result?.accepted ? detailed.result.chapters.length : 0, elapsedMs, resultPath, eventLogPath, traceDir, model: baseModel, curatorModel, judgeModel, reasoningEffort, git }, null, 2));
   } catch (error) {
     const payload = {
       name: (error as Error).name,

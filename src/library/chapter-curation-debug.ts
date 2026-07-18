@@ -26,6 +26,15 @@ type AgentUsagePrice = {
 
 const openAiTokenPrices: Array<{ prefix: string; price: AgentUsagePrice }> = [
   {
+    prefix: "gpt-5.6-luna",
+    price: {
+      inputUsdPerMillion: 1,
+      cachedInputUsdPerMillion: 0.1,
+      outputUsdPerMillion: 6,
+      source: "OpenAI API pricing, standard text tokens, checked 2026-07-18",
+    },
+  },
+  {
     prefix: "gpt-5.4-mini",
     price: {
       inputUsdPerMillion: 0.75,
