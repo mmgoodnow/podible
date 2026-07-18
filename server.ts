@@ -2,6 +2,7 @@ import { ensureConfigDir, booksDbPath, port } from "./src/config";
 import { openDatabase } from "./src/db";
 import { createPodibleFetchHandler } from "./src/http";
 import { queuePendingCurationJobs } from "./src/library/chapter-analysis";
+import { watermarkLegacyGeneratedCovers } from "./src/library/cover-generation";
 import { pingPlexOwnerToken } from "./src/plex";
 import { BooksRepo } from "./src/repo";
 import { runWorker } from "./src/worker";
@@ -14,6 +15,13 @@ const db = openDatabase(booksDbPath);
 const repo = new BooksRepo(db);
 repo.ensureSettings();
 const current = repo.getSettings();
+
+const legacyCoverWatermarks = await watermarkLegacyGeneratedCovers(repo);
+if (legacyCoverWatermarks.updated > 0 || legacyCoverWatermarks.failed > 0) {
+  console.log(
+    `[cover-generation] legacy watermarks updated=${legacyCoverWatermarks.updated} failed=${legacyCoverWatermarks.failed}`
+  );
+}
 
 const metadataHydrationJob = queueStaleMetadataHydration(repo);
 if (metadataHydrationJob) {
