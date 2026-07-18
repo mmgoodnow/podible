@@ -883,8 +883,7 @@ export async function judgeChapterBoundary(
   if (!apiKey) return null;
   ensureTracingInitialized(apiKey);
   const timeoutMs = Math.min(Math.max(5_000, ctx.settings.agents.timeoutMs), 90_000);
-  const abort = new AbortController();
-  const timeout = setTimeout(() => abort.abort(), timeoutMs);
+  const signal = AbortSignal.timeout(timeoutMs);
   const provider = new OpenAIProvider({ apiKey, useResponses: true });
   try {
     const runner = new Runner({
@@ -894,7 +893,7 @@ export async function judgeChapterBoundary(
     });
     const result = await runner.run(createChapterBoundaryJudgeAgent(ctx, span), chapterBoundaryJudgePrompt(ctx, span, proposal), {
       maxTurns: 6,
-      signal: abort.signal,
+      signal,
       toolExecution: { maxFunctionToolConcurrency: 1 },
     });
     logAgentUsageEvent(ctx, {
@@ -947,7 +946,6 @@ export async function judgeChapterBoundary(
     });
     return null;
   } finally {
-    clearTimeout(timeout);
     await provider.close().catch(() => undefined);
   }
 }
