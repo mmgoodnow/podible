@@ -816,6 +816,9 @@ export function submitChapterPlan(ctx: ChapterCurationContext, input: unknown): 
   if (plan.chapters.length < 3 && ctx.durationMs >= 30 * 60_000) {
     warnings.push("Long manifestation has fewer than three chapters.");
   }
+  if (plan.chapters[0] && plan.chapters[0].startTime !== 0) {
+    warnings.push(`First chapter start normalized from ${plan.chapters[0].startTime}s to 0s so opening audio remains reachable.`);
+  }
 
   const audit = buildPlanAudit(ctx, plan.chapters);
   const missingTranscriptEvidence = audit.filter((entry) => !entry.transcriptAfterStart.trim()).length;
@@ -873,9 +876,9 @@ export function submitChapterPlan(ctx: ChapterCurationContext, input: unknown): 
     accepted: true,
     strategy: plan.strategy,
     notes: plan.notes ?? null,
-    chapters: plan.chapters.map((chapter) => ({
+    chapters: plan.chapters.map((chapter, index) => ({
       title: chapter.title,
-      startTime: chapter.startTime,
+      startTime: index === 0 ? 0 : chapter.startTime,
       ...(chapter.epubNodeId ? { epubNodeId: chapter.epubNodeId } : {}),
       ...(chapter.source ? { source: chapter.source } : {}),
     })),
@@ -953,6 +956,35 @@ export function audibleEpubNodeSelectionToolUseBehavior(_: unknown, toolResults:
     isInterrupted: undefined,
     finalOutput: JSON.stringify(parseAudibleEpubNodeSelectionOutput(terminalResult.output) ?? terminalResult.output),
   };
+}
+
+export function validateAudibleEpubNodeSelection(
+  ctx: Pick<ChapterCurationContext, "epubEntries">,
+  selection: AudibleEpubNodeSelection
+): AudibleEpubNodeSelection {
+  const knownIds = new Set(ctx.epubEntries.map((entry) => entry.id));
+  const audibleIds = new Set(selection.audibleNodeIds);
+  const excludedIds = new Set(selection.excludedNodes.map((entry) => entry.epubNodeId));
+  const unknownIds = [...new Set([...audibleIds, ...excludedIds])].filter((id) => !knownIds.has(id));
+  const overlappingIds = [...audibleIds].filter((id) => excludedIds.has(id));
+  const missingEntries = ctx.epubEntries.filter((entry) => !audibleIds.has(entry.id) && !excludedIds.has(entry.id));
+  const duplicateAudibleIds = selection.audibleNodeIds.filter((id, index, ids) => ids.indexOf(id) !== index);
+  const excludedNodeIds = selection.excludedNodes.map((entry) => entry.epubNodeId);
+  const duplicateExcludedIds = excludedNodeIds.filter((id, index, ids) => ids.indexOf(id) !== index);
+
+  const problems: string[] = [];
+  if (missingEntries.length > 0) {
+    problems.push(
+      `Unclassified nodes: ${missingEntries.map((entry) => `${entry.id} (${entry.title})`).join(", ")}. Put every one in audibleNodeIds or excludedNodes.`
+    );
+  }
+  if (unknownIds.length > 0) problems.push(`Unknown node ids: ${unknownIds.join(", ")}. Use only ids from the supplied EPUB structure.`);
+  if (overlappingIds.length > 0) problems.push(`Nodes cannot be both audible and excluded: ${overlappingIds.join(", ")}.`);
+  if (duplicateAudibleIds.length > 0) problems.push(`Duplicate audible node ids: ${[...new Set(duplicateAudibleIds)].join(", ")}.`);
+  if (duplicateExcludedIds.length > 0) problems.push(`Duplicate excluded node ids: ${[...new Set(duplicateExcludedIds)].join(", ")}.`);
+  if (problems.length > 0) throw new Error(`Invalid EPUB node selection. Revise the selection and call this tool again. ${problems.join(" ")}`);
+
+  return selection;
 }
 
 export async function resolveNodeBoundaryChapters(

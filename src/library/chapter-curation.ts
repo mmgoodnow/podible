@@ -91,6 +91,7 @@ export {
   nodeBoundaryToolUseBehavior,
   fulcrumJudgeToolUseBehavior,
   audibleEpubNodeSelectionToolUseBehavior,
+  validateAudibleEpubNodeSelection,
 } from "./chapter-curation-validation";
 
 export type { ChapterCurationDetailedResult } from "./chapter-curation-runner";

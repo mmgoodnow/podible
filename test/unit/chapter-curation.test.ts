@@ -33,6 +33,7 @@ import {
   submitChapterPlan,
   validateNodeBoundary,
   validateFulcrumSplit,
+  validateAudibleEpubNodeSelection,
   type ChapterCurationContext,
   type ChapterCurationSpan,
   type ChapterCurationTargetBoundary,
@@ -361,6 +362,43 @@ describe("chapter curation tools", () => {
     expect(filtered.audioOnlyIntervals).toEqual([{ startTime: 60, endTime: 75, kind: "part_bumper", notes: "Part 2 intro." }]);
   });
 
+  test("validateAudibleEpubNodeSelection rejects omitted nodes so the classifier can retry", () => {
+    const context = ctx({
+      epubEntries: [
+        epubEntry({ id: "prologue", title: "Prologue" }),
+        epubEntry({ id: "chapter-1", title: "Chapter 1" }),
+        epubEntry({ id: "copyright", title: "Copyright" }),
+      ],
+    });
+
+    expect(() =>
+      validateAudibleEpubNodeSelection(context, {
+        audibleNodeIds: ["prologue"],
+        excludedNodes: [{ epubNodeId: "copyright", reason: "copyright", notes: "Not narrated." }],
+        audioOnlyIntervals: [],
+      })
+    ).toThrow("chapter-1 (Chapter 1)");
+
+    expect(
+      validateAudibleEpubNodeSelection(context, {
+        audibleNodeIds: ["prologue", "chapter-1"],
+        excludedNodes: [{ epubNodeId: "copyright", reason: "copyright", notes: "Not narrated." }],
+        audioOnlyIntervals: [],
+      }).audibleNodeIds
+    ).toEqual(["prologue", "chapter-1"]);
+  });
+
+  test("validateAudibleEpubNodeSelection rejects unknown, duplicate, and overlapping ids", () => {
+    const context = ctx({ epubEntries: [epubEntry({ id: "chapter-1", title: "Chapter 1" })] });
+    expect(() =>
+      validateAudibleEpubNodeSelection(context, {
+        audibleNodeIds: ["chapter-1", "chapter-1", "invented"],
+        excludedNodes: [{ epubNodeId: "chapter-1", reason: "not_in_audio", notes: "Conflicting classification." }],
+        audioOnlyIntervals: [],
+      })
+    ).toThrow("Unknown node ids: invented");
+  });
+
   test("applyEmbeddedAudioChapterNodeScope narrows partial audio parts and rebases EPUB ratios", () => {
     const entries = Array.from({ length: 10 }, (_, index) =>
       epubEntry({
@@ -681,6 +719,35 @@ describe("chapter curation tools", () => {
 
     expect(candidate?.title).toBe("Chapter 2: Stella");
     expect(candidate?.startMs).toBe(511_905);
+  });
+
+  test("findEmbeddedNodeBoundaryCandidate aligns generic markers by ordinal instead of chapter number", () => {
+    const context = ctx({
+      durationMs: 4_000_000,
+      epubEntries: [
+        epubEntry({ id: "prologue", title: "Prologue" }),
+        epubEntry({ id: "chapter-1", title: "Chapter 1" }),
+        epubEntry({ id: "interlude", title: "Interlude" }),
+        epubEntry({ id: "chapter-2", title: "Chapter 2" }),
+      ],
+      embeddedChapters: [
+        { id: "raw-1", title: "Chapter 1", startMs: 0, endMs: 900_000 },
+        { id: "raw-2", title: "Chapter 2", startMs: 900_000, endMs: 1_900_000 },
+        { id: "raw-3", title: "Chapter 3", startMs: 1_900_000, endMs: 2_800_000 },
+        { id: "raw-4", title: "Chapter 4", startMs: 2_800_000, endMs: 4_000_000 },
+      ],
+    });
+
+    const candidate = findEmbeddedNodeBoundaryCandidate(context, {
+      epubNodeId: "chapter-2",
+      epubIndex: 3,
+      title: "Chapter 2",
+      expectedStartTime: 2_900,
+      localNodeRatio: 0.75,
+    });
+
+    expect(candidate?.id).toBe("raw-4");
+    expect(candidate?.startMs).toBe(2_800_000);
   });
 
   test("embeddedNodeBoundaryHasTranscriptEvidence accepts spoken heading plus EPUB opener", () => {
@@ -1268,6 +1335,22 @@ describe("chapter curation tools", () => {
       { title: "Chapter 1", startTime: 30, epubNodeId: "chapter-1" },
     ]);
     expect(result.audit[1]?.nearestEmbeddedBoundary?.startTime).toBe(0);
+  });
+
+  test("submitChapterPlan normalizes the first retained chapter to zero", () => {
+    const result = submitChapterPlan(ctx(), {
+      manifestationId: 10,
+      strategy: "spoken heading boundaries",
+      chapters: [
+        { title: "Prologue", startTime: 13.8, epubNodeId: "front" },
+        { title: "Chapter 1", startTime: 30, epubNodeId: "chapter-1" },
+      ],
+    });
+
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error(result.errors.join("\n"));
+    expect(result.chapters[0]?.startTime).toBe(0);
+    expect(result.warnings.join(" ")).toContain("normalized from 13.8s to 0s");
   });
 
   test("submitChapterPlan accepts structural plans without transcript token evidence", () => {

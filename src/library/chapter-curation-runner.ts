@@ -66,6 +66,7 @@ import {
   parseNodeBoundaryOutput,
   parseFulcrumJudgmentOutput,
   parseAudibleEpubNodeSelectionOutput,
+  validateAudibleEpubNodeSelection,
 } from "./chapter-curation-validation";
 import {
   logAgentUsageEvent,
@@ -426,13 +427,13 @@ function buildChapterCurationRunSummary(input: {
   const droppedBoundaryCount = input.reports.filter((report) => report.outcome === "dropped").length;
   const unresolved = input.reports.filter((report) => report.outcome === "failed");
   const totalBoundaryCount = input.reports.length;
-  const resolvedBoundaryCount = acceptedBoundaryCount + skippedBoundaryCount + droppedBoundaryCount;
+  const resolvedBoundaryCount = acceptedBoundaryCount + skippedBoundaryCount;
   const elapsedMs = Date.now() - input.startedAt;
   const accepted = Boolean(input.result?.accepted);
   const status: ChapterCurationRunSummary["status"] = input.skipped
     ? "skipped"
     : accepted
-      ? unresolved.length === 0
+      ? unresolved.length === 0 && droppedBoundaryCount === 0
         ? "accepted"
         : "partial"
       : "failed";
@@ -982,6 +983,7 @@ function createAudibleEpubNodeSelectionAgent(ctx: ChapterCurationContext): Agent
       "Exclude obvious non-audio front/back matter such as copyright pages, dedications, acknowledgments, tables of contents, cover/nav pages, ads, indexes, and about-the-author pages when they are not plausibly spoken in the audiobook.",
       "Treat edition-specific prefaces, revised/expanded edition notes, bonus essays, and print-only update notes as exclude-by-default unless the transcript beginning/ending excerpts directly show that specific node is narrated.",
       "Keep prologues, part headings, chapter nodes, epilogues, and any uncertain narrative node. False exclusions are worse than false inclusions.",
+      "Classify every supplied EPUB node exactly once: each id must appear in either audibleNodeIds or excludedNodes, never both. The submission tool will return an error listing omissions or conflicts so you can correct and resubmit.",
       "Use the transcript beginning and ending excerpts to identify audiobook credits/preamble and whether EPUB front/back matter is likely represented.",
       "For multi-asset audiobooks, classify audio-only intervals around asset starts, asset ends, and joins, such as publisher intros, end credits, recaps, and part bumpers that have no EPUB node.",
       "Keep audio-only intervals narrow and evidence-based. They are annotations for later tools, not chapter timestamps.",
@@ -991,10 +993,11 @@ function createAudibleEpubNodeSelectionAgent(ctx: ChapterCurationContext): Agent
     tools: [
       tool({
         name: "submitAudibleEpubNodeSelection",
-        description: "Submit the EPUB node ids that should be used for recursive audiobook chapter curation.",
+        description: "Partition every supplied EPUB node id into audibleNodeIds or excludedNodes for audiobook chapter curation.",
         parameters: audibleEpubNodeSelectionSchema,
         strict: true,
-        execute: (input) => input,
+        execute: (input) => validateAudibleEpubNodeSelection(ctx, input),
+        errorFunction: (_runContext, error) => (error instanceof Error ? error.message : String(error)),
       }),
     ],
     toolUseBehavior: audibleEpubNodeSelectionToolUseBehavior,
@@ -1864,11 +1867,21 @@ export function embeddedNodeBoundaryHasTranscriptEvidence(
 }
 
 export function findEmbeddedNodeBoundaryCandidate(
-  ctx: Pick<ChapterCurationContext, "epubEntries" | "embeddedChapters">,
+  ctx: Pick<ChapterCurationContext, "durationMs" | "epubEntries" | "embeddedChapters">,
   targetBoundary: ChapterCurationTargetBoundary
 ): ChapterCurationTiming | null {
   const entry = ctx.epubEntries[targetBoundary.epubIndex];
   if (!entry || entry.id !== targetBoundary.epubNodeId) return null;
+  const embeddedDiagnostics = getEmbeddedAudioChapters(ctx).diagnostics;
+  if (embeddedDiagnostics.labelQuality === "generic") {
+    const ordered = [...ctx.embeddedChapters].sort((a, b) => a.startMs - b.startMs);
+    if (ordered.length === ctx.epubEntries.length) return ordered[targetBoundary.epubIndex] ?? null;
+    return (
+      ordered
+        .map((chapter) => ({ chapter, distance: Math.abs(msToSeconds(chapter.startMs) - targetBoundary.expectedStartTime) }))
+        .sort((a, b) => a.distance - b.distance)[0]?.chapter ?? null
+    );
+  }
   const matches = ctx.embeddedChapters
     .filter((chapter) => embeddedTitleMatchesEpubNode(entry, chapter.title))
     .map((chapter) => ({
@@ -2520,10 +2533,11 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
     );
 
     if (nodeChapters && nodeChapters.length > 0) {
-      const resolvedReports = nodeBoundaryReports.filter((report) => report.outcome === "accepted" || report.outcome === "dropped" || report.outcome === "skipped").length;
+      const resolvedReports = nodeBoundaryReports.filter((report) => report.outcome === "accepted" || report.outcome === "skipped").length;
       const failedReports = nodeBoundaryReports.filter((report) => report.outcome === "failed").length;
+      const droppedReports = nodeBoundaryReports.filter((report) => report.outcome === "dropped").length;
       const coverage = nodeBoundaryReports.length === 0 ? 0 : resolvedReports / nodeBoundaryReports.length;
-      if (coverage < minNodeBoundaryCoverage) {
+      if (coverage < minNodeBoundaryCoverage || droppedReports > 0) {
         const nodeBoundaryFailureDiagnostic = buildNodeBoundaryFailureDiagnostic(curationCtx, nodeBoundaryReports);
         const curationSummary = buildChapterCurationRunSummary({
           ctx: curationCtx,
@@ -2535,12 +2549,13 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
         });
         logChapterCurationEvent(curationCtx, {
           type: "node-parallel-merge-rejected",
-          message: `node parallel merge accepted=0 reason=low_coverage chapters=${nodeChapters.length} coverage=${coverage.toFixed(3)} failed=${failedReports}`,
+          message: `node parallel merge accepted=0 reason=${droppedReports > 0 ? "dropped_boundaries" : "low_coverage"} chapters=${nodeChapters.length} coverage=${coverage.toFixed(3)} failed=${failedReports} dropped=${droppedReports}`,
           chapters: nodeChapters.length,
           coverage,
           minNodeBoundaryCoverage,
           resolvedReports,
           failedReports,
+          droppedReports,
           nodeBoundaryReports,
           nodeBoundaryFailureDiagnostic,
           curationSummary,
