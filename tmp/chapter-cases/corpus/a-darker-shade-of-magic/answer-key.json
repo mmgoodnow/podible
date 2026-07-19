@@ -8,7 +8,7 @@
     "transcript.json",
     "raw-chapters.json"
   ],
-  "expectedChapterCount": 49,
+  "expectedChapterCount": 60,
   "expectedChapters": [
     {
       "title": "I: The Traveler",
@@ -111,12 +111,20 @@
       "startTime": 16503.43
     },
     {
+      "title": "III",
+      "startTime": 17770.43
+    },
+    {
       "title": "VIII: An Arrangement",
       "startTime": 18452.31
     },
     {
       "title": "II",
       "startTime": 20637.47
+    },
+    {
+      "title": "III",
+      "startTime": 21118.75
     },
     {
       "title": "IX: Festival & Fire",
@@ -205,10 +213,47 @@
     {
       "title": "XIII: The Waiting King",
       "startTime": 36348.54
+    },
+    {
+      "title": "II",
+      "startTime": 36550.74
+    },
+    {
+      "title": "III",
+      "startTime": 37434.74
+    },
+    {
+      "title": "IV",
+      "startTime": 38282.42
+    },
+    {
+      "title": "V",
+      "startTime": 39149.42
+    },
+    {
+      "title": "VI",
+      "startTime": 39873.3
+    },
+    {
+      "title": "XIV: The Final Door",
+      "startTime": 39940.26
+    },
+    {
+      "title": "II",
+      "startTime": 40347.66
+    },
+    {
+      "title": "III",
+      "startTime": 40773.69
+    },
+    {
+      "title": "IV",
+      "startTime": 41368.17
     }
   ],
   "notes": [
     "Answer key reconstructed from the accepted manually-reviewed recursive curation artifact because the latest node-agent artifact is empty.",
+    "The original reconstruction omitted VII section III and VIII section III, then truncated after XIII: The Waiting King; all eleven missing boundaries were restored from the EPUB TOC, embedded chapter markers, and spoken transcript headings.",
     "This case exercises nested roman subchapters and generic embedded M4B chapter labels.",
     "Raw embedded chapters are generic and used only for timing corroboration, not titles."
   ]

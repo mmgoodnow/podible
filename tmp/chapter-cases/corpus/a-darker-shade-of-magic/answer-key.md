@@ -1,7 +1,7 @@
 # A Darker Shade of Magic answer key
 
 - Author: V.E. Schwab
-- Expected chapter count: 49
+- Expected chapter count: 60
 - Chapter sequence:
   - `I: The Traveler` @ `0.00`
   - `II` @ `1019.20`
@@ -28,8 +28,10 @@
   - `IV` @ `14968.39`
   - `VII: The Follower` @ `15563.43`
   - `II` @ `16503.43`
+  - `III` @ `17770.43`
   - `VIII: An Arrangement` @ `18452.31`
   - `II` @ `20637.47`
+  - `III` @ `21118.75`
   - `IX: Festival & Fire` @ `21560.43`
   - `II` @ `23341.47`
   - `III` @ `23848.95`
@@ -52,6 +54,15 @@
   - `V` @ `35420.98`
   - `VI` @ `36007.82`
   - `XIII: The Waiting King` @ `36348.54`
+  - `II` @ `36550.74`
+  - `III` @ `37434.74`
+  - `IV` @ `38282.42`
+  - `V` @ `39149.42`
+  - `VI` @ `39873.30`
+  - `XIV: The Final Door` @ `39940.26`
+  - `II` @ `40347.66`
+  - `III` @ `40773.69`
+  - `IV` @ `41368.17`
 - Ambiguities:
   - Repeated roman-numeral headings are intentional and should not be deduped.
   - Section-title chapters should stay attached to their chapter number, not split out.
