@@ -11,6 +11,7 @@ type AgentUsageSummary = {
   requests: number;
   inputTokens: number;
   cachedInputTokens: number;
+  cacheWriteInputTokens: number;
   uncachedInputTokens: number;
   outputTokens: number;
   reasoningTokens: number;
@@ -20,6 +21,7 @@ type AgentUsageSummary = {
 type AgentUsagePrice = {
   inputUsdPerMillion: number;
   cachedInputUsdPerMillion: number;
+  cacheWriteInputUsdPerMillion?: number;
   outputUsdPerMillion: number;
   source: string;
 };
@@ -28,10 +30,11 @@ const openAiTokenPrices: Array<{ prefix: string; price: AgentUsagePrice }> = [
   {
     prefix: "gpt-5.6-luna",
     price: {
-      inputUsdPerMillion: 1,
-      cachedInputUsdPerMillion: 0.1,
-      outputUsdPerMillion: 6,
-      source: "OpenAI API pricing, standard text tokens, checked 2026-07-18",
+      inputUsdPerMillion: 0.2,
+      cachedInputUsdPerMillion: 0.02,
+      cacheWriteInputUsdPerMillion: 0.25,
+      outputUsdPerMillion: 1.2,
+      source: "OpenAI API pricing, standard short-context text tokens, checked 2026-08-05",
     },
   },
   {
@@ -211,8 +214,8 @@ function numberFromRecord(record: unknown, keys: string[]): number {
 }
 
 function usageDetailsTotal(details: unknown, keys: string[]): number {
-  if (!Array.isArray(details)) return 0;
-  return details.reduce((sum, item) => sum + numberFromRecord(item, keys), 0);
+  if (Array.isArray(details)) return details.reduce((sum, item) => sum + numberFromRecord(item, keys), 0);
+  return numberFromRecord(details, keys);
 }
 
 function summarizeAgentRawResponseUsage(rawResponses: unknown[]): AgentUsageSummary {
@@ -220,6 +223,7 @@ function summarizeAgentRawResponseUsage(rawResponses: unknown[]): AgentUsageSumm
     requests: 0,
     inputTokens: 0,
     cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
     uncachedInputTokens: 0,
     outputTokens: 0,
     reasoningTokens: 0,
@@ -235,9 +239,10 @@ function summarizeAgentRawResponseUsage(rawResponses: unknown[]): AgentUsageSumm
     summary.outputTokens += numberFromRecord(usageRecord, ["outputTokens", "output_tokens"]);
     summary.totalTokens += numberFromRecord(usageRecord, ["totalTokens", "total_tokens"]);
     summary.cachedInputTokens += usageDetailsTotal(usageRecord.inputTokensDetails, ["cached_tokens", "cachedTokens"]);
+    summary.cacheWriteInputTokens += usageDetailsTotal(usageRecord.inputTokensDetails, ["cache_write_tokens", "cacheWriteTokens"]);
     summary.reasoningTokens += usageDetailsTotal(usageRecord.outputTokensDetails, ["reasoning_tokens", "reasoningTokens"]);
   }
-  summary.uncachedInputTokens = Math.max(0, summary.inputTokens - summary.cachedInputTokens);
+  summary.uncachedInputTokens = Math.max(0, summary.inputTokens - summary.cachedInputTokens - summary.cacheWriteInputTokens);
   if (summary.requests === 0 && summary.totalTokens > 0) summary.requests = rawResponses.length;
   return summary;
 }
@@ -262,6 +267,7 @@ function estimateOpenAiUsageCostUsd(model: string, usage: AgentUsageSummary): { 
   const amountUsd =
     (usage.uncachedInputTokens / 1_000_000) * price.inputUsdPerMillion +
     (usage.cachedInputTokens / 1_000_000) * price.cachedInputUsdPerMillion +
+    (usage.cacheWriteInputTokens / 1_000_000) * (price.cacheWriteInputUsdPerMillion ?? price.inputUsdPerMillion) +
     (usage.outputTokens / 1_000_000) * price.outputUsdPerMillion;
   return {
     amountUsd: Math.round(amountUsd * 1_000_000) / 1_000_000,
