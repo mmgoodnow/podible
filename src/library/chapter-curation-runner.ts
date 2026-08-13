@@ -166,6 +166,22 @@ function chapterCurationModelSettings(
   };
 }
 
+type AdaptiveChapterCurationReasoningEffort = "none" | "low" | "medium" | "high";
+
+const NODE_BOUNDARY_REJECTIONS_PER_REASONING_LEVEL = 8;
+
+export function nodeBoundaryReasoningEffortForRejectedSubmissions(
+  rejectedSubmissionCount: number
+): AdaptiveChapterCurationReasoningEffort {
+  const completedLevels = Math.floor(
+    Math.max(0, rejectedSubmissionCount) / NODE_BOUNDARY_REJECTIONS_PER_REASONING_LEVEL
+  );
+  if (completedLevels === 0) return "none";
+  if (completedLevels === 1) return "low";
+  if (completedLevels === 2) return "medium";
+  return "high";
+}
+
 function serializeAgentError(error: unknown): unknown {
   const err = error as Error & { state?: { toJSON?: () => unknown } };
   return {
@@ -1195,6 +1211,9 @@ export function createNodeBoundaryCuratorAgent(
   let rejectedBoundaryCount = 0;
   const rejectedBoundaries = new Set<string>();
   const maxRejectedBoundarySubmissions = Math.max(1, Number(process.env.PODIBLE_CHAPTER_NODE_MAX_REJECTIONS ?? 4));
+  const adaptiveReasoningEnabled = !ctx.debugReasoningEffort;
+  let currentReasoningEffort: AdaptiveChapterCurationReasoningEffort = "none";
+  let agent: Agent;
 
   function markEvidenceToolUsed(): void {
     if (rejectedBoundaryRequiresEvidence) evidenceCallsSinceRejectedBoundary++;
@@ -1234,15 +1253,45 @@ export function createNodeBoundaryCuratorAgent(
     if (rejectedBoundaryCount >= maxRejectedBoundarySubmissions) {
       throw new NodeBoundaryRejectedLimitError(targetBoundary.epubNodeId, rejectedBoundaryCount, reason);
     }
+    if (!adaptiveReasoningEnabled) return;
+    const nextReasoningEffort = nodeBoundaryReasoningEffortForRejectedSubmissions(rejectedBoundaryCount);
+    if (nextReasoningEffort === currentReasoningEffort) return;
+    const previousReasoningEffort = currentReasoningEffort;
+    currentReasoningEffort = nextReasoningEffort;
+    agent.modelSettings = {
+      ...agent.modelSettings,
+      reasoning: {
+        ...agent.modelSettings.reasoning,
+        effort: nextReasoningEffort,
+      },
+    };
+    logChapterCurationEvent(ctx, {
+      type: "node-boundary-reasoning-escalated",
+      message: `node boundary epub=${targetBoundary.epubNodeId} reasoning_effort=${nextReasoningEffort} rejected_submissions=${rejectedBoundaryCount}`,
+      span,
+      targetBoundary,
+      rejectedSubmissionCount: rejectedBoundaryCount,
+      previousReasoningEffort,
+      reasoningEffort: nextReasoningEffort,
+    });
   }
 
-  return new Agent({
+  const initialModelSettings = chapterCurationModelSettings(ctx, {
+    toolChoice: "required",
+    parallelToolCalls: false,
+  });
+  agent = new Agent({
     name: "NodeChapterCurator",
     model: modelOverride?.trim() || ctx.debugCuratorModel?.trim() || ctx.settings.agents.model,
-    modelSettings: chapterCurationModelSettings(ctx, {
-      toolChoice: "required",
-      parallelToolCalls: false,
-    }),
+    modelSettings: adaptiveReasoningEnabled
+      ? {
+          ...initialModelSettings,
+          reasoning: {
+            ...initialModelSettings.reasoning,
+            effort: currentReasoningEffort,
+          },
+        }
+      : initialModelSettings,
     resetToolChoice: false,
     instructions: [
       "You find the start timestamp of one assigned audible EPUB chapter node in an audiobook transcript.",
@@ -1429,6 +1478,7 @@ export function createNodeBoundaryCuratorAgent(
     ],
     toolUseBehavior: nodeBoundaryToolUseBehavior,
   });
+  return agent;
 }
 
 export type DeterministicBoundaryCandidate = {

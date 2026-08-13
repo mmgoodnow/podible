@@ -103,6 +103,7 @@ export {
   runAgenticChapterCurationDetailed,
   classifyAudibleEpubNodes,
   createNodeBoundaryCuratorAgent,
+  nodeBoundaryReasoningEffortForRejectedSubmissions,
   judgeChapterBoundary,
   judgeFulcrumSplit,
   findSpokenHeadingBoundaryCandidate,

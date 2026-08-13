@@ -19,12 +19,14 @@ import {
   estimateTimestampFromEpubPosition,
   getTranscriptWindow,
   nodeBoundaryTargets,
+  nodeBoundaryReasoningEffortForRejectedSubmissions,
   rgSearchTranscript,
   applyAudibleEpubNodeSelection,
   applyEmbeddedAudioChapterNodeScope,
   applyTranscriptEndpointEpubNodeScope,
   buildNodeBoundaryPreflightDiagnostic,
   chooseResearchBoundaryCandidate,
+  createNodeBoundaryCuratorAgent,
   createRootCurationSpan,
   rankTargetBoundaries,
   resolveNodeBoundaryChapters,
@@ -217,6 +219,33 @@ function ctx(overrides: Partial<ChapterCurationContext> = {}): ChapterCurationCo
 }
 
 describe("chapter curation tools", () => {
+  test("node boundary reasoning graduates every eight rejected submissions and saturates at high", () => {
+    expect(nodeBoundaryReasoningEffortForRejectedSubmissions(0)).toBe("none");
+    expect(nodeBoundaryReasoningEffortForRejectedSubmissions(7)).toBe("none");
+    expect(nodeBoundaryReasoningEffortForRejectedSubmissions(8)).toBe("low");
+    expect(nodeBoundaryReasoningEffortForRejectedSubmissions(15)).toBe("low");
+    expect(nodeBoundaryReasoningEffortForRejectedSubmissions(16)).toBe("medium");
+    expect(nodeBoundaryReasoningEffortForRejectedSubmissions(23)).toBe("medium");
+    expect(nodeBoundaryReasoningEffortForRejectedSubmissions(24)).toBe("high");
+    expect(nodeBoundaryReasoningEffortForRejectedSubmissions(80)).toBe("high");
+  });
+
+  test("node boundary curators start adaptive reasoning at none while eval overrides remain fixed", () => {
+    const context = ctx();
+    const span = createRootCurationSpan(context);
+    const targetBoundary = nodeBoundaryTargets(context)[0]!;
+
+    const adaptiveAgent = createNodeBoundaryCuratorAgent(context, span, targetBoundary);
+    expect(adaptiveAgent.modelSettings.reasoning?.effort).toBe("none");
+
+    const fixedAgent = createNodeBoundaryCuratorAgent(
+      ctx({ debugReasoningEffort: "medium" }),
+      span,
+      targetBoundary
+    );
+    expect(fixedAgent.modelSettings.reasoning?.effort).toBe("medium");
+  });
+
   test("buildNodeBoundaryPreflightDiagnostic rejects obvious EPUB transcript mismatches", () => {
     const result = buildNodeBoundaryPreflightDiagnostic(
       ctx({
