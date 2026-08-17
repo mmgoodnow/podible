@@ -31,6 +31,7 @@ const MANIFESTATION_LANGUAGE_MIGRATION_ID = 25;
 const COVER_GENERATION_JOB_TYPE_MIGRATION_ID = 26;
 const BOOK_SERIES_MIGRATION_ID = 27;
 const OPENLIBRARY_METADATA_HYDRATION_MIGRATION_ID = 28;
+const DURABLE_SESSIONS_MIGRATION_ID = 29;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -162,7 +163,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   user_id INTEGER NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('browser', 'app')) DEFAULT 'browser',
   token_hash TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
+  expires_at TEXT NULL,
   created_at TEXT NOT NULL,
   last_seen_at TEXT NOT NULL,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -888,6 +889,37 @@ CREATE INDEX IF NOT EXISTS idx_books_openlibrary_metadata_version ON books(openl
 `);
 }
 
+function applyDurableSessionsMigration(db: Database): void {
+  if (!hasColumn(db, "sessions", "expires_at")) return;
+  const now = nowIso();
+  db.exec(`
+CREATE TABLE sessions_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('browser', 'app')) DEFAULT 'browser',
+  token_hash TEXT NOT NULL,
+  expires_at TEXT NULL,
+  created_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+`);
+  db.query(
+    `INSERT INTO sessions_new (id, user_id, kind, token_hash, expires_at, created_at, last_seen_at)
+     SELECT id, user_id, kind, token_hash,
+            CASE WHEN expires_at > ? THEN NULL ELSE expires_at END,
+            created_at, last_seen_at
+     FROM sessions`
+  ).run(now);
+  db.exec(`
+DROP TABLE sessions;
+ALTER TABLE sessions_new RENAME TO sessions;
+CREATE UNIQUE INDEX ux_sessions_token_hash ON sessions(token_hash);
+CREATE INDEX idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX idx_sessions_expires_at ON sessions(expires_at);
+`);
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
@@ -1001,5 +1033,8 @@ export function runMigrations(db: Database): void {
   });
   apply(OPENLIBRARY_METADATA_HYDRATION_MIGRATION_ID, () => {
     applyOpenLibraryMetadataHydrationMigration(db);
+  });
+  apply(DURABLE_SESSIONS_MIGRATION_ID, () => {
+    applyDurableSessionsMigration(db);
   });
 }

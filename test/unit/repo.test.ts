@@ -94,6 +94,23 @@ describe("books repo", () => {
     db.close();
   });
 
+  test("creates durable sessions by default while preserving explicit expirations", () => {
+    const { db, repo } = setupRepo();
+    const user = repo.upsertUser({
+      provider: "plex",
+      providerUserId: "plex-durable",
+      username: "durable",
+      isAdmin: false,
+    });
+
+    const durable = repo.createSession(user.id, "durable-token-hash");
+    const expiring = repo.createSession(user.id, "expiring-token-hash", "2000-01-01T00:00:00.000Z");
+
+    expect(durable.expires_at).toBeNull();
+    expect(expiring.expires_at).toBe("2000-01-01T00:00:00.000Z");
+    db.close();
+  });
+
   test("stores word count on books", () => {
     const { db, repo } = setupRepo();
     const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });

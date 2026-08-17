@@ -245,7 +245,7 @@ export type SessionRow = {
   user_id: number;
   kind: SessionKind;
   token_hash: string;
-  expires_at: string;
+  expires_at: string | null;
   created_at: string;
   last_seen_at: string;
 };

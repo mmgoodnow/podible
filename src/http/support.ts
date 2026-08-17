@@ -1,4 +1,4 @@
-import { buildSessionCookie, createSessionToken, hashSessionToken, sessionExpiresAt } from "../auth";
+import { buildSessionCookie, createSessionToken, hashSessionToken } from "../auth";
 import {
   checkPlexUserAccess,
   exchangePlexPinForToken,
@@ -243,7 +243,7 @@ async function resolvePlexLoginStatus(
       isAdmin: existingPlexUser ? existingPlexUser.is_admin === 1 : !hasPlexAdminUser,
     });
     const sessionToken = createSessionToken();
-    repo.createSession(user.id, hashSessionToken(sessionToken), sessionExpiresAt());
+    repo.createSession(user.id, hashSessionToken(sessionToken));
     repo.deletePlexLoginAttempt(pinId);
     return {
       kind: "success",

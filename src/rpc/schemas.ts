@@ -316,7 +316,7 @@ export const userProfileSchema = z.object({
 
 export const sessionSummarySchema = z.object({
   kind: z.enum(["browser", "app"]),
-  expiresAt: z.string(),
+  expiresAt: z.string().nullable(),
 });
 
 export const downloadProgressSchema = z.object({

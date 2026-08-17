@@ -2017,6 +2017,7 @@ describe("json-rpc handler", () => {
     );
     const exchangePayload = (await exchange.json()) as any;
     expect(typeof exchangePayload.result.accessToken).toBe("string");
+    expect(exchangePayload.result.expiresAt).toBeNull();
     expect(exchangePayload.result.user.username).toBe("reader");
 
     const appRequest = new Request("http://localhost/rpc", {

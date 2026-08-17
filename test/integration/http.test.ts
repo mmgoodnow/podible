@@ -861,6 +861,7 @@ describe("podible http", () => {
       })
     );
     expect(authed.status).toBe(200);
+    expect(authed.headers.get("set-cookie")).toContain("Max-Age=34560000");
     const authedBody = await authed.text();
     expect(authedBody.includes("Signed in as Alice")).toBe(false);
     expect(authedBody.includes("Sign out")).toBe(true);

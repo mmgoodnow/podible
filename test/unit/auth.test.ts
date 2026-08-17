@@ -60,6 +60,19 @@ describe("auth", () => {
     expect(session?.username).toBe("user");
   });
 
+  test("resolves durable sessions until they are explicitly revoked", () => {
+    const token = "durable-token";
+    const request = new Request("http://example.com/rpc", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    const session = resolveBearerSessionFromRequest(request, (tokenHash) =>
+      tokenHash === hashSessionToken(token) ? makeSession(token, { expires_at: null }) : null
+    );
+
+    expect(session?.expires_at).toBeNull();
+  });
+
   test("prefers bearer auth over the browser cookie when both are present", () => {
     const cookieToken = "browser-token";
     const bearerToken = "bearer-token";
@@ -106,6 +119,7 @@ describe("auth", () => {
 
     const cookie = buildSessionCookie("token", request);
     expect(cookie).toContain("Secure");
+    expect(cookie).toContain("Max-Age=34560000");
 
     const cleared = clearSessionCookie(request);
     expect(cleared).toContain("Secure");

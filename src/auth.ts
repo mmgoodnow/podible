@@ -3,7 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { SessionWithUserRow } from "./app-types";
 
 export const SESSION_COOKIE_NAME = "podible_session";
-const SESSION_DURATION_MS = 1000 * 60 * 60 * 24 * 30;
+const BROWSER_SESSION_COOKIE_DURATION_MS = 1000 * 60 * 60 * 24 * 400;
 
 function parseCookies(request: Request): Map<string, string> {
   const header = request.headers.get("cookie") ?? "";
@@ -44,7 +44,7 @@ function resolveSessionFromToken(
   if (!trimmed) return null;
   const session = resolveSession(hashSessionToken(trimmed));
   if (!session) return null;
-  if (new Date(session.expires_at).getTime() <= Date.now()) {
+  if (session.expires_at !== null && new Date(session.expires_at).getTime() <= Date.now()) {
     return null;
   }
   return session;
@@ -55,6 +55,10 @@ export function resolveBrowserSessionFromRequest(
   resolveSession?: (tokenHash: string) => SessionWithUserRow | null
 ): SessionWithUserRow | null {
   return resolveSessionFromToken(parseCookies(request).get(SESSION_COOKIE_NAME), resolveSession);
+}
+
+export function browserSessionTokenFromRequest(request: Request): string | null {
+  return parseCookies(request).get(SESSION_COOKIE_NAME) ?? null;
 }
 
 export function resolveBearerSessionFromRequest(
@@ -80,7 +84,7 @@ export function buildSessionCookie(token: string, request: Request): string {
     "Path=/",
     "HttpOnly",
     "SameSite=Lax",
-    `Max-Age=${Math.floor(SESSION_DURATION_MS / 1000)}`,
+    `Max-Age=${Math.floor(BROWSER_SESSION_COOKIE_DURATION_MS / 1000)}`,
   ];
   if (secure) {
     parts.push("Secure");
@@ -95,8 +99,4 @@ export function clearSessionCookie(request: Request): string {
     parts.push("Secure");
   }
   return parts.join("; ");
-}
-
-export function sessionExpiresAt(): string {
-  return new Date(Date.now() + SESSION_DURATION_MS).toISOString();
 }

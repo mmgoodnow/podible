@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 
-import { createSessionToken, hashSessionToken, sessionExpiresAt } from "../auth";
+import { createSessionToken, hashSessionToken } from "../auth";
 import { z } from "zod";
 
 import { defineMethod, defineRouter, type RpcMethodDefinition } from "./framework";
@@ -103,7 +103,7 @@ export const authRouter = defineRouter({
     }),
     resultSchema: z.object({
       accessToken: z.string(),
-      expiresAt: z.string(),
+      expiresAt: z.string().nullable(),
       user: userProfileSchema,
     }),
     async handler(ctx, params) {
@@ -114,7 +114,7 @@ export const authRouter = defineRouter({
       ctx.repo.deleteAppLoginAttempt(consumed.attempt_id);
       ctx.repo.deleteExpiredAuthCodes(new Date().toISOString());
       const accessToken = createSessionToken();
-      const session = ctx.repo.createSession(consumed.user.id, hashSessionToken(accessToken), sessionExpiresAt(), "app");
+      const session = ctx.repo.createSession(consumed.user.id, hashSessionToken(accessToken), null, "app");
       return {
         accessToken,
         expiresAt: session.expires_at,

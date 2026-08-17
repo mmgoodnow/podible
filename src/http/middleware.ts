@@ -1,6 +1,6 @@
 import type { MiddlewareHandler } from "hono";
 
-import { resolveSessionFromRequest } from "../auth";
+import { browserSessionTokenFromRequest, buildSessionCookie, resolveSessionFromRequest } from "../auth";
 import { BooksRepo } from "../repo";
 import type { SessionWithUserRow } from "../app-types";
 
@@ -36,6 +36,11 @@ export function createRequestContextMiddleware(repo: BooksRepo): MiddlewareHandl
     c.set("session", session);
 
     await next();
+
+    const browserToken = session?.kind === "browser" ? browserSessionTokenFromRequest(c.req.raw) : null;
+    if (browserToken && !c.res.headers.has("set-cookie")) {
+      c.header("Set-Cookie", buildSessionCookie(browserToken, c.req.raw));
+    }
 
     const elapsedMs = Date.now() - startedAt;
     const suffix = c.get("logSuffix");

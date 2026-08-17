@@ -322,7 +322,7 @@ export class BooksRepo {
     return this.db.query("SELECT * FROM users ORDER BY username COLLATE NOCASE ASC, id ASC").all() as UserRow[];
   }
 
-  createSession(userId: number, tokenHash: string, expiresAt: string, kind: SessionKind = "browser"): SessionWithUserRow {
+  createSession(userId: number, tokenHash: string, expiresAt: string | null = null, kind: SessionKind = "browser"): SessionWithUserRow {
     assertPositiveInt(userId);
     const now = nowIso();
     const row = this.db
