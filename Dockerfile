@@ -1,4 +1,4 @@
-FROM oven/bun:canary
+FROM oven/bun:1.4.0
 
 WORKDIR /app
 
