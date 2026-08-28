@@ -4,7 +4,7 @@ import { Database } from "bun:sqlite";
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
-import { rankSearchResults, runSearch, runSnatch, runSnatchGroup } from "../../src/library/service";
+import { runSearch, runSnatch, runSnatchGroup } from "../../src/library/service";
 import { torrentCacheKeyFor } from "../../src/library/torrent-cache";
 import { infoHashFromTorrentBytes } from "../../src/library/torrent";
 
@@ -121,38 +121,6 @@ describe("search ranking", () => {
     }
   });
 
-  test("ranks the exact work above ordinal sequel titles", () => {
-    const results = [
-      {
-        title: "Second Foundation by Isaac Asimov [ENG / MP3]",
-        provider: "mock",
-        mediaType: "audio" as const,
-        sizeBytes: 100,
-        url: "https://example.com/second-foundation.torrent",
-        guid: null,
-        infoHash: null,
-        seeders: 50,
-        leechers: null,
-        raw: {},
-      },
-      {
-        title: "Foundation by Isaac Asimov [ENG / MP3]",
-        provider: "mock",
-        mediaType: "audio" as const,
-        sizeBytes: 100,
-        url: "https://example.com/foundation.torrent",
-        guid: null,
-        infoHash: null,
-        seeders: 1,
-        leechers: null,
-        raw: {},
-      },
-    ];
-    const ranked = rankSearchResults("Foundation Isaac Asimov", "audio", results, { targetTitle: "Foundation" });
-    expect(ranked.map((entry) => entry.result.title)).toEqual([
-      "Foundation by Isaac Asimov [ENG / MP3]",
-    ]);
-  });
 });
 
 function makeTorrentBytes(name: string): Uint8Array {

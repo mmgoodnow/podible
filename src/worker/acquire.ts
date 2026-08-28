@@ -47,7 +47,7 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
       };
 
       const query = `${book.title} ${book.author}`.trim();
-      const results = await runSearch(settings, { query, media, targetTitle: book.title });
+      const results = await runSearch(settings, { query, media });
       workerLog(
         ctx,
         `[acquire] job=${job.id} book=${book.id} media=${media} query=${JSON.stringify(query)} results=${results.length}`
@@ -59,7 +59,7 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
           media,
           results,
           editionPreference: settings.agents.editionPreference,
-          forceAgent: payload.forceAgent === true,
+          forceAgent: payload.forceAgent === true || Boolean(settings.agents.apiKey?.trim()),
           priorFailure: payload.priorFailure === true,
           rejectedUrls: Array.isArray(payload.rejectedUrls) ? payload.rejectedUrls : [],
           rejectedGuids: Array.isArray(payload.rejectedGuids) ? payload.rejectedGuids : [],

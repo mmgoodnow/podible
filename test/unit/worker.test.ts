@@ -233,7 +233,7 @@ describe("worker acquire auto-acquire retries", () => {
     }
   });
 
-  test("agent acquire can snatch ordered multipart selections into one manifestation", async () => {
+  test("configured auto-acquire always uses the agent and can snatch ordered multipart selections", async () => {
     const partOneTorrent = makeTorrentBytes("red-rising-ga-part-1");
     const partTwoTorrent = makeTorrentBytes("red-rising-ga-part-2");
     const torznab = startMockTorznab({
@@ -268,7 +268,7 @@ describe("worker acquire auto-acquire retries", () => {
     const acquireJob = repo.createJob({
       type: "acquire",
       bookId: book.id,
-      payload: { bookId: book.id, media: ["audio"], forceAgent: true },
+      payload: { bookId: book.id, media: ["audio"] },
     });
 
     const fakeProvider = new FakeModelProvider([
