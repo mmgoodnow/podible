@@ -10,6 +10,7 @@ import type { AppSettings, MediaType, ReleaseRow } from "../app-types";
 type SearchRequest = {
   query: string;
   media: MediaType;
+  targetTitle?: string;
 };
 
 export type SnatchRequest = {
@@ -75,6 +76,10 @@ type RankedSearchResult = {
   score: number;
 };
 
+type SearchRankingContext = {
+  targetTitle?: string;
+};
+
 function isMagnet(url: string): boolean {
   return url.trim().toLowerCase().startsWith("magnet:?");
 }
@@ -131,6 +136,49 @@ function mediaMatchTier(media: MediaType, title: string): 0 | 1 | 2 {
   return ebook ? 2 : 1;
 }
 
+const ordinalTokens = new Set([
+  "first",
+  "second",
+  "third",
+  "fourth",
+  "fifth",
+  "sixth",
+  "seventh",
+  "eighth",
+  "ninth",
+  "tenth",
+  "eleventh",
+  "twelfth",
+]);
+
+function normalizedWorkTitle(value: string): string[] {
+  const beforeAuthor = value.split(/\s+by\s+/i)[0] ?? value;
+  return beforeAuthor
+    .replace(/[[(].*$/u, " ")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function workTitleScore(targetTitle: string | undefined, releaseTitle: string): number {
+  if (!targetTitle?.trim()) return 0;
+  const target = normalizedWorkTitle(targetTitle);
+  const candidate = normalizedWorkTitle(releaseTitle);
+  if (target.length === 0 || candidate.length === 0) return 0;
+  if (candidate.join(" ") === target.join(" ")) return 180;
+
+  const startsWithTarget = target.every((token, index) => candidate[index] === token);
+  const endsWithTarget = target.every((token, index) => candidate[candidate.length - target.length + index] === token);
+  const preceding = endsWithTarget ? candidate[candidate.length - target.length - 1] : undefined;
+  const following = startsWithTarget ? candidate[target.length] : undefined;
+  const sequelToken = (token: string | undefined): boolean =>
+    Boolean(token && (ordinalTokens.has(token) || /^\d{1,2}$/u.test(token) || /^[ivxlcdm]{1,5}$/u.test(token)));
+  if (sequelToken(preceding) || sequelToken(following)) return -300;
+  return 0;
+}
+
 function scoreSearchResult(media: MediaType, query: string, row: TorznabResult): number {
   const needle = query.trim().toLowerCase();
   const words = needle.split(/\s+/).filter(Boolean);
@@ -155,12 +203,23 @@ function scoreSearchResult(media: MediaType, query: string, row: TorznabResult):
   return value;
 }
 
-export function rankSearchResults(query: string, media: MediaType, results: TorznabResult[]): RankedSearchResult[] {
+export function rankSearchResults(
+  query: string,
+  media: MediaType,
+  results: TorznabResult[],
+  context: SearchRankingContext = {}
+): RankedSearchResult[] {
   return results
-    .filter((row) => mediaMatchTier(media, row.title.toLowerCase()) > 0)
+    .filter(
+      (row) =>
+        mediaMatchTier(media, row.title.toLowerCase()) > 0 && workTitleScore(context.targetTitle, row.title) > -300
+    )
     .map((result) => ({
       result,
-      score: scoreSearchResult(media, query, result) + (mediaMatchTier(media, result.title.toLowerCase()) === 2 ? 80 : 0),
+      score:
+        scoreSearchResult(media, query, result) +
+        (mediaMatchTier(media, result.title.toLowerCase()) === 2 ? 80 : 0) +
+        workTitleScore(context.targetTitle, result.title),
     }))
     .sort((a, b) => {
       const scoreDiff = b.score - a.score;
@@ -173,7 +232,7 @@ export function rankSearchResults(query: string, media: MediaType, results: Torz
 
 export async function runSearch(settings: AppSettings, request: SearchRequest) {
   const results = await searchTorznab(settings.torznab, request.query, request.media);
-  return rankSearchResults(request.query, request.media, results).map((entry) => entry.result);
+  return rankSearchResults(request.query, request.media, results, { targetTitle: request.targetTitle }).map((entry) => entry.result);
 }
 
 export async function runSnatch(

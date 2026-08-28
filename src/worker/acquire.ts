@@ -47,7 +47,7 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
       };
 
       const query = `${book.title} ${book.author}`.trim();
-      const results = await runSearch(settings, { query, media });
+      const results = await runSearch(settings, { query, media, targetTitle: book.title });
       workerLog(
         ctx,
         `[acquire] job=${job.id} book=${book.id} media=${media} query=${JSON.stringify(query)} results=${results.length}`

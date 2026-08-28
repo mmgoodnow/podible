@@ -303,7 +303,7 @@ function deterministicSearchSelection(input: SearchSelectionInput): SearchSelect
       .map((item) => normalizeInfoHash(item))
       .filter((item): item is string => Boolean(item))
   );
-  const ranked = rankSearchResults(input.query, input.media, input.results).filter(
+  const ranked = rankSearchResults(input.query, input.media, input.results, { targetTitle: input.book?.title }).filter(
     (item) => !isRejectedCandidate(item.result, rejectedUrls, rejectedGuids, rejectedInfoHashes)
   );
   if (ranked.length === 0) {
@@ -632,7 +632,7 @@ export async function selectSearchCandidates(
         .map((item) => normalizeInfoHash(item))
         .filter((item): item is string => Boolean(item))
     );
-    const ranked = rankSearchResults(input.query, input.media, input.results)
+    const ranked = rankSearchResults(input.query, input.media, input.results, { targetTitle: input.book?.title })
       .filter((item) => !isRejectedCandidate(item.result, rejectedUrls, rejectedGuids, rejectedInfoHashes))
       .slice(0, 12);
     const userPrompt = buildSearchAgentPrompt(trigger, input, ranked);
