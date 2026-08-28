@@ -433,4 +433,48 @@ describe("snatch transport", () => {
       db.close();
     }
   });
+
+  test("removes a newly-created manifestation when every snatch is idempotent", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const book = repo.createBook({ title: "Foundation", author: "Isaac Asimov" });
+    repo.createRelease({
+      bookId: book.id,
+      provider: "mock",
+      providerGuid: "foundation-guid",
+      title: "Foundation by Isaac Asimov [ENG / MP3]",
+      mediaType: "audio",
+      infoHash: "0123456789abcdef0123456789abcdef01234567",
+      sizeBytes: 100,
+      url: "https://example.com/foundation.torrent",
+      status: "imported",
+    });
+
+    try {
+      const result = await runSnatchGroup(repo, defaultSettings(), {
+        bookId: book.id,
+        mediaType: "audio",
+        manifestation: {
+          label: null,
+          editionNote: null,
+          selectionNote: "Agent selected the matching release.",
+        },
+        parts: [
+          {
+            provider: "mock",
+            providerGuid: "foundation-guid",
+            title: "Foundation by Isaac Asimov [ENG / MP3]",
+            url: "https://example.com/foundation.torrent",
+          },
+        ],
+      });
+
+      expect(result.results[0]?.idempotent).toBe(true);
+      expect(result.manifestationId).toBeNull();
+      expect(repo.listManifestationsByBook(book.id)).toHaveLength(0);
+    } finally {
+      db.close();
+    }
+  });
 });

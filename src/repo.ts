@@ -1098,7 +1098,8 @@ export class BooksRepo {
       .run(durationMs, row.total_size, nowIso(), manifestationId);
   }
 
-  private pruneEmptyManifestationIfUnreferenced(manifestationId: number): void {
+  pruneEmptyManifestationIfUnreferenced(manifestationId: number): boolean {
+    assertPositiveInt(manifestationId);
     const row = this.db
       .query(
         `SELECT
@@ -1112,13 +1113,13 @@ export class BooksRepo {
       .get(manifestationId, manifestationId) as { container_count: number; active_job_count: number };
     if (row.container_count > 0) {
       this.recomputeManifestationAggregates(manifestationId);
-      return;
+      return false;
     }
     if (row.active_job_count > 0) {
       this.recomputeManifestationAggregates(manifestationId);
-      return;
+      return false;
     }
-    this.db.query("DELETE FROM manifestations WHERE id = ?").run(manifestationId);
+    return Number(this.db.query("DELETE FROM manifestations WHERE id = ?").run(manifestationId).changes) > 0;
   }
 
   getAsset(assetId: number): AssetRow | null {

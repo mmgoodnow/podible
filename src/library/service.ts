@@ -369,7 +369,7 @@ export async function runSnatchGroup(
   const language =
     normalizeManifestationLanguageCode(request.manifestation.language) ??
     inferLanguageFromReleaseTitles(request.parts.map((part) => part.title));
-  const manifestationId = needsExplicitManifestation
+  let manifestationId = needsExplicitManifestation
     ? repo.addManifestation({
         bookId: request.bookId,
         kind: request.mediaType === "ebook" ? "ebook" : "audio",
@@ -380,27 +380,33 @@ export async function runSnatchGroup(
       }).id
     : null;
   const results: SnatchResult[] = [];
-  for (const [index, part] of request.parts.entries()) {
-    results.push(
-      await runSnatch(
-        repo,
-        settings,
-        {
-          bookId: request.bookId,
-          provider: part.provider,
-          providerGuid: part.providerGuid ?? null,
-          title: part.title,
-          mediaType: request.mediaType,
-          url: part.url,
-          sizeBytes: part.sizeBytes ?? null,
-          infoHash: part.infoHash ?? null,
-          manifestationId,
-          sequenceInManifestation: needsExplicitManifestation ? index : null,
-          manifestationLanguage: language,
-        },
-        runtime
-      )
-    );
+  try {
+    for (const [index, part] of request.parts.entries()) {
+      results.push(
+        await runSnatch(
+          repo,
+          settings,
+          {
+            bookId: request.bookId,
+            provider: part.provider,
+            providerGuid: part.providerGuid ?? null,
+            title: part.title,
+            mediaType: request.mediaType,
+            url: part.url,
+            sizeBytes: part.sizeBytes ?? null,
+            infoHash: part.infoHash ?? null,
+            manifestationId,
+            sequenceInManifestation: needsExplicitManifestation ? index : null,
+            manifestationLanguage: language,
+          },
+          runtime
+        )
+      );
+    }
+  } finally {
+    if (manifestationId !== null && repo.pruneEmptyManifestationIfUnreferenced(manifestationId)) {
+      manifestationId = null;
+    }
   }
   return { manifestationId, results };
 }
