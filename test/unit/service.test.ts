@@ -82,6 +82,44 @@ describe("search ranking", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("keeps category-scoped results whose titles omit format markers", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = ((async () =>
+      new Response(
+        `<?xml version="1.0"?>
+<rss xmlns:torznab="http://torznab.com/schemas/2015/feed"><channel>
+  <item>
+    <title>Foundation by Isaac Asimov</title>
+    <enclosure url="https://example.com/foundation.torrent" length="100" />
+    <torznab:attr name="seeders" value="20" />
+  </item>
+  <item>
+    <title>Foundation by Isaac Asimov [ENG / EPUB]</title>
+    <enclosure url="https://example.com/foundation-epub.torrent" length="100" />
+    <torznab:attr name="seeders" value="1" />
+  </item>
+  <item>
+    <title>Foundation by Isaac Asimov [ENG / M4B]</title>
+    <enclosure url="https://example.com/foundation-m4b.torrent" length="100" />
+  </item>
+</channel></rss>`,
+        { headers: { "Content-Type": "application/rss+xml" } }
+      )) as unknown) as typeof fetch;
+
+    try {
+      const settings = defaultSettings({
+        torznab: [{ name: "mock", baseUrl: "http://mock.local", categories: { ebook: "7000" } }],
+      });
+      const ebook = await runSearch(settings, { query: "Foundation Isaac Asimov", media: "ebook" });
+      expect(ebook.map((result) => result.title)).toEqual([
+        "Foundation by Isaac Asimov [ENG / EPUB]",
+        "Foundation by Isaac Asimov",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 function makeTorrentBytes(name: string): Uint8Array {

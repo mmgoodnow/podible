@@ -103,12 +103,32 @@ const setMarkers = ["box set", "collection", "complete", "omnibus", "books 1-7",
 const audioMarkers = ["m4b", "m4a", "mp3", "aac", "flac", "opus", "ogg", "wav", "audiobook", "audio book", "audio"];
 const ebookMarkers = ["epub", "pdf", "mobi", "azw", "ebook", "e-book", "djvu", "cbz", "cbr"];
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function hasMarker(title: string, marker: string): boolean {
+  const pattern = escapeRegExp(marker).replace(/\\ /g, "\\s+");
+  return new RegExp(`(?:^|[^a-z0-9])${pattern}(?:$|[^a-z0-9])`, "i").test(title);
+}
+
 function hasAudioMarker(title: string): boolean {
-  return audioMarkers.some((marker) => title.includes(marker));
+  return audioMarkers.some((marker) => hasMarker(title, marker));
 }
 
 function hasEbookMarker(title: string): boolean {
-  return ebookMarkers.some((marker) => title.includes(marker));
+  return ebookMarkers.some((marker) => hasMarker(title, marker));
+}
+
+function mediaMatchTier(media: MediaType, title: string): 0 | 1 | 2 {
+  const audio = hasAudioMarker(title);
+  const ebook = hasEbookMarker(title);
+  if (media === "audio") {
+    if (ebook && !audio) return 0;
+    return audio ? 2 : 1;
+  }
+  if (audio && !ebook) return 0;
+  return ebook ? 2 : 1;
 }
 
 function scoreSearchResult(media: MediaType, query: string, row: TorznabResult): number {
@@ -136,20 +156,11 @@ function scoreSearchResult(media: MediaType, query: string, row: TorznabResult):
 }
 
 export function rankSearchResults(query: string, media: MediaType, results: TorznabResult[]): RankedSearchResult[] {
-  const filtered = results.filter((row) => {
-    const lower = row.title.toLowerCase();
-    const audio = hasAudioMarker(lower);
-    const ebook = hasEbookMarker(lower);
-    if (media === "audio") {
-      return audio && !ebook;
-    }
-    return ebook && !audio;
-  });
-
-  return filtered
+  return results
+    .filter((row) => mediaMatchTier(media, row.title.toLowerCase()) > 0)
     .map((result) => ({
       result,
-      score: scoreSearchResult(media, query, result),
+      score: scoreSearchResult(media, query, result) + (mediaMatchTier(media, result.title.toLowerCase()) === 2 ? 80 : 0),
     }))
     .sort((a, b) => {
       const scoreDiff = b.score - a.score;
