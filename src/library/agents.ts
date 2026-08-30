@@ -2,6 +2,7 @@ import { Agent, OpenAIProvider, Runner, tool } from "@openai/agents";
 import type { ModelProvider } from "@openai/agents-core";
 import { z } from "zod";
 
+import { TEXT_AGENT_MODEL } from "../ai-models";
 import type { ImportInspectionFile } from "./importer";
 import type { BooksRepo } from "../repo";
 import { rankSearchResults } from "./service";
@@ -152,7 +153,7 @@ function configuredAgent(settings: AppSettings) {
   if (!apiKey) return null;
   return {
     apiKey,
-    model: settings.agents.model || "gpt-5-mini",
+    model: TEXT_AGENT_MODEL,
     timeoutMs: Math.max(1000, Math.trunc(settings.agents.timeoutMs || 30000)),
   };
 }

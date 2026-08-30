@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { TEXT_AGENT_MODEL } from "../src/ai-models";
 import { loadEpubEntries, type StoredTranscriptPayload } from "../src/library/chapter-analysis";
 import {
   runNodeParallelAgenticChapterCurationDetailed,
@@ -20,9 +21,6 @@ const eventLogPath = path.join(caseDir, `${mode}-agent-events-${runId}.jsonl`);
 const traceDir = path.join(caseDir, `${mode}-agent-traces-${runId}`);
 const resultPath = path.join(caseDir, `${mode}-agent-result-${runId}.json`);
 const errorPath = path.join(caseDir, `${mode}-agent-error-${runId}.json`);
-const baseModel = process.env.CORPUS_MODEL?.trim() || "gpt-5.4-mini";
-const curatorModel = process.env.CORPUS_CURATOR_MODEL?.trim() || "gpt-5.4-nano";
-const judgeModel = process.env.CORPUS_JUDGE_MODEL?.trim() || baseModel;
 const reasoningEffort = (() => {
   const value = process.env.CORPUS_REASONING_EFFORT?.trim() || "medium";
   if (!["none", "minimal", "low", "medium", "high", "xhigh"].includes(value)) {
@@ -135,7 +133,6 @@ async function main(): Promise<void> {
       settings: defaultSettings({
         agents: {
           apiKey: process.env.OPENAI_API_KEY ?? "",
-          model: baseModel,
           timeoutMs: 1_800_000,
         },
       }),
@@ -147,12 +144,10 @@ async function main(): Promise<void> {
       debugTraceDir: traceDir,
       debugReasoningSummary: "detailed",
       debugReasoningEffort: reasoningEffort,
-      debugCuratorModel: curatorModel,
-      debugJudgeModel: judgeModel,
     });
     const elapsedMs = Date.now() - startedAt;
-    await writeFile(resultPath, `${JSON.stringify({ ...detailed, mode, elapsedMs, debugModels: { model: baseModel, curatorModel, judgeModel, reasoningEffort }, git }, null, 2)}\n`, "utf8");
-    console.log(JSON.stringify({ ok: true, slug, mode, accepted: detailed.result?.accepted ?? false, chapters: detailed.result?.accepted ? detailed.result.chapters.length : 0, elapsedMs, resultPath, eventLogPath, traceDir, model: baseModel, curatorModel, judgeModel, reasoningEffort, git }, null, 2));
+    await writeFile(resultPath, `${JSON.stringify({ ...detailed, mode, elapsedMs, debugModels: { model: TEXT_AGENT_MODEL, reasoningEffort }, git }, null, 2)}\n`, "utf8");
+    console.log(JSON.stringify({ ok: true, slug, mode, accepted: detailed.result?.accepted ?? false, chapters: detailed.result?.accepted ? detailed.result.chapters.length : 0, elapsedMs, resultPath, eventLogPath, traceDir, model: TEXT_AGENT_MODEL, reasoningEffort, git }, null, 2));
   } catch (error) {
     const payload = {
       name: (error as Error).name,

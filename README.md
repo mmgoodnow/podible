@@ -165,7 +165,6 @@ Bridge constraints:
   },
   "agents": {
     "provider": "openai-responses",
-    "model": "gpt-5-mini",
     "apiKey": "",
     "lowConfidenceThreshold": 0.45,
     "timeoutMs": 30000

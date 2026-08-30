@@ -2,6 +2,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { TEXT_AGENT_MODEL } from "../src/ai-models";
 import type { AssetFileRow, AssetRow, BookRow, ManifestationRow } from "../src/app-types";
 import { loadEpubEntries, type StoredTranscriptPayload } from "../src/library/chapter-analysis";
 import {
@@ -28,9 +29,6 @@ const eventLogPath = path.join(caseDir, `${mode}-agent-events-m59-${runId}.jsonl
 const traceDir = path.join(caseDir, `${mode}-agent-traces-m59-${runId}`);
 const resultPath = path.join(caseDir, `${mode}-agent-result-m59-${runId}.json`);
 const errorPath = path.join(caseDir, `${mode}-agent-error-m59-${runId}.json`);
-const baseModel = process.env.RED_RISING_MODEL?.trim() || "gpt-5.4-mini";
-const curatorModel = process.env.RED_RISING_CURATOR_MODEL?.trim() || baseModel;
-const judgeModel = process.env.RED_RISING_JUDGE_MODEL?.trim() || baseModel;
 
 function localCasePath(originalPath: string): string {
   return path.join(caseDir, originalPath.replace(/^\//, ""));
@@ -120,7 +118,6 @@ async function main(): Promise<void> {
       settings: defaultSettings({
         agents: {
           apiKey: process.env.OPENAI_API_KEY ?? "",
-          model: baseModel,
           timeoutMs: 1_800_000,
         },
       }),
@@ -132,12 +129,10 @@ async function main(): Promise<void> {
       debugTraceDir: traceDir,
       debugReasoningSummary: "detailed",
       debugReasoningEffort: "medium",
-      debugCuratorModel: curatorModel,
-      debugJudgeModel: judgeModel,
     });
     const elapsedMs = Date.now() - startedAt;
-    const output = { ok: true, mode, resultPath, eventLogPath, traceDir, accepted: result.result?.accepted ?? false, chapters: result.result?.accepted ? result.result.chapters.length : 0, elapsedMs, model: baseModel, curatorModel, judgeModel };
-    await writeFile(resultPath, `${JSON.stringify({ ...result, mode, elapsedMs, debugModels: { model: baseModel, curatorModel, judgeModel } }, null, 2)}\n`, "utf8");
+    const output = { ok: true, mode, resultPath, eventLogPath, traceDir, accepted: result.result?.accepted ?? false, chapters: result.result?.accepted ? result.result.chapters.length : 0, elapsedMs, model: TEXT_AGENT_MODEL };
+    await writeFile(resultPath, `${JSON.stringify({ ...result, mode, elapsedMs, debugModels: { model: TEXT_AGENT_MODEL } }, null, 2)}\n`, "utf8");
     console.log(JSON.stringify(output, null, 2));
   } catch (error) {
     const payload = {

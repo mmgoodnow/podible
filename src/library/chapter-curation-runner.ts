@@ -10,6 +10,7 @@ function ensureTracingInitialized(apiKey: string): void {
 }
 import { z } from "zod";
 
+import { TEXT_AGENT_MODEL } from "../ai-models";
 import type { EpubChapterEntry } from "./chapter-analysis";
 import {
   type ChapterCurationContext,
@@ -796,7 +797,7 @@ function nodeBoundaryPrompt(ctx: ChapterCurationContext, span: ChapterCurationSp
 function createChapterBoundaryJudgeAgent(ctx: ChapterCurationContext, span: ChapterCurationSpan): Agent {
   return new Agent({
     name: "ChapterBoundaryJudge",
-    model: ctx.debugJudgeModel?.trim() || ctx.settings.agents.model,
+    model: TEXT_AGENT_MODEL,
     modelSettings: chapterCurationModelSettings(ctx, {
       toolChoice: "required",
       parallelToolCalls: false,
@@ -915,7 +916,7 @@ export async function judgeChapterBoundary(
     });
     logAgentUsageEvent(ctx, {
       role: "judge",
-      model: ctx.debugJudgeModel?.trim() || ctx.settings.agents.model,
+      model: TEXT_AGENT_MODEL,
       rawResponses: result.rawResponses as unknown[],
       span,
     });
@@ -945,7 +946,7 @@ export async function judgeChapterBoundary(
   } catch (error) {
     logAgentUsageEvent(ctx, {
       role: "judge",
-      model: ctx.debugJudgeModel?.trim() || ctx.settings.agents.model,
+      model: TEXT_AGENT_MODEL,
       serializedError: serializeAgentError(error),
       span,
     });
@@ -987,7 +988,7 @@ export async function judgeFulcrumSplit(
 function createAudibleEpubNodeSelectionAgent(ctx: ChapterCurationContext): Agent {
   return new Agent({
     name: "AudibleEpubNodeClassifier",
-    model: ctx.settings.agents.model,
+    model: TEXT_AGENT_MODEL,
     modelSettings: chapterCurationModelSettings(ctx, {
       toolChoice: "required",
       parallelToolCalls: false,
@@ -1109,7 +1110,7 @@ export async function classifyAudibleEpubNodes(ctx: ChapterCurationContext, runn
     });
     logAgentUsageEvent(ctx, {
       role: "audible-node-selection",
-      model: ctx.settings.agents.model,
+      model: TEXT_AGENT_MODEL,
       rawResponses: result.rawResponses as unknown[],
     });
     const selection = parseAudibleEpubNodeSelectionOutput(result.finalOutput);
@@ -1129,7 +1130,7 @@ export async function classifyAudibleEpubNodes(ctx: ChapterCurationContext, runn
   } catch (error) {
     logAgentUsageEvent(ctx, {
       role: "audible-node-selection",
-      model: ctx.settings.agents.model,
+      model: TEXT_AGENT_MODEL,
       serializedError: serializeAgentError(error),
     });
     logChapterCurationEvent(ctx, {
@@ -1202,8 +1203,7 @@ const assignedSubmitNodeBoundarySchema = z.object({
 export function createNodeBoundaryCuratorAgent(
   ctx: ChapterCurationContext,
   span: ChapterCurationSpan,
-  targetBoundary: ChapterCurationTargetBoundary,
-  modelOverride?: string
+  targetBoundary: ChapterCurationTargetBoundary
 ): Agent {
   let rejectedBoundaryRequiresEvidence = false;
   let evidenceCallsSinceRejectedBoundary = 0;
@@ -1282,7 +1282,7 @@ export function createNodeBoundaryCuratorAgent(
   });
   agent = new Agent({
     name: "NodeChapterCurator",
-    model: modelOverride?.trim() || ctx.debugCuratorModel?.trim() || ctx.settings.agents.model,
+    model: TEXT_AGENT_MODEL,
     modelSettings: adaptiveReasoningEnabled
       ? {
           ...initialModelSettings,
@@ -2395,9 +2395,9 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
     logChapterCurationEvent(curationCtx, {
       type: "node-parallel-run-start",
       message: `node parallel run start=1 nodes=${curationCtx.epubEntries.length}`,
-      model: curationCtx.settings.agents.model,
-      curatorModel: curationCtx.debugCuratorModel?.trim() || curationCtx.settings.agents.model,
-      judgeModel: curationCtx.debugJudgeModel?.trim() || curationCtx.settings.agents.model,
+      model: TEXT_AGENT_MODEL,
+      curatorModel: TEXT_AGENT_MODEL,
+      judgeModel: TEXT_AGENT_MODEL,
       maxNodeConcurrency: nodeBoundaryMaxConcurrency,
       maxNodeTurns: nodeBoundaryMaxTurns,
       minNodeBoundaryCoverage,
@@ -2423,8 +2423,6 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
           span: rootSpan,
           targetBoundary,
         });
-        const primaryCuratorModel = curationCtx.debugCuratorModel?.trim() || curationCtx.settings.agents.model;
-        const configuredCuratorModel = curationCtx.settings.agents.model;
         const deterministicDecision = await tryDeterministicNodeBoundary(curationCtx, rootSpan, targetBoundary);
         if (deterministicDecision) {
           const elapsedMs = Date.now() - startedAt;
@@ -2471,8 +2469,7 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
           throw new Error("Chapter curation agent node-task budget exhausted.");
         }
         agentNodeTasksStarted++;
-        const attemptModels = Array.from(new Set([primaryCuratorModel, configuredCuratorModel].filter(Boolean)));
-        const attempts = attemptModels.map((model, index) => ({ model, delayMs: index === 0 ? 0 : 5_000 }));
+        const attempts = [{ model: TEXT_AGENT_MODEL, delayMs: 0 }];
         for (let attempt = 0; attempt < attempts.length; attempt++) {
           const attemptConfig = attempts[attempt]!;
           if (attemptConfig.delayMs > 0) await sleep(attemptConfig.delayMs);
@@ -2487,7 +2484,7 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
           agentCallsStarted++;
           try {
             const result = await runner.run(
-              createNodeBoundaryCuratorAgent(curationCtx, rootSpan, targetBoundary, attemptConfig.model),
+              createNodeBoundaryCuratorAgent(curationCtx, rootSpan, targetBoundary),
               nodeBoundaryPrompt(curationCtx, rootSpan, targetBoundary),
               {
                 maxTurns: nodeBoundaryMaxTurns,

@@ -74,7 +74,6 @@ export type AppSettings = {
   };
   agents: {
     provider: "openai-responses";
-    model: string;
     apiKey: string;
     editionPreference: string;
     lowConfidenceThreshold: number;

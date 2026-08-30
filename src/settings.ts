@@ -47,7 +47,6 @@ export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
     },
     agents: {
       provider: "openai-responses",
-      model: "gpt-5-mini",
       apiKey: "",
       editionPreference: "",
       lowConfidenceThreshold: 0.45,
@@ -178,7 +177,6 @@ export function parseSettings(value: string): AppSettings {
     },
     agents: {
       provider: parsedAgents.provider === "openai-responses" ? parsedAgents.provider : defaults.agents.provider,
-      model: typeof parsedAgents.model === "string" && parsedAgents.model.trim() ? parsedAgents.model : defaults.agents.model,
       apiKey: typeof parsedAgents.apiKey === "string" ? parsedAgents.apiKey : defaults.agents.apiKey,
       editionPreference:
         typeof parsedAgents.editionPreference === "string" ? parsedAgents.editionPreference : defaults.agents.editionPreference,

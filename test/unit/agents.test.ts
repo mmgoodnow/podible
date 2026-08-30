@@ -424,6 +424,7 @@ describe("agent decisions", () => {
         },
       })
     );
+    expect("model" in legacySettings.agents).toBe(false);
 
     const decision = await selectSearchCandidates(legacySettings, {
       query: "Dune Frank Herbert",

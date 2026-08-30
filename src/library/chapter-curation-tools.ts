@@ -44,8 +44,6 @@ export type ChapterCurationContext = {
   debugTraceDir?: string;
   debugReasoningSummary?: "auto" | "concise" | "detailed";
   debugReasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
-  debugCuratorModel?: string;
-  debugJudgeModel?: string;
 };
 
 export type ChapterCurationSpanBoundary = {

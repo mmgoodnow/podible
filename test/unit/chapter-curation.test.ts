@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { TEXT_AGENT_MODEL } from "../../src/ai-models";
 import {
   assessEmbeddedAudioChaptersForCuration,
   getEmbeddedAudioChapters,
@@ -236,6 +237,7 @@ describe("chapter curation tools", () => {
     const targetBoundary = nodeBoundaryTargets(context)[0]!;
 
     const adaptiveAgent = createNodeBoundaryCuratorAgent(context, span, targetBoundary);
+    expect(adaptiveAgent.model).toBe(TEXT_AGENT_MODEL);
     expect(adaptiveAgent.modelSettings.reasoning?.effort).toBe("none");
 
     const fixedAgent = createNodeBoundaryCuratorAgent(
