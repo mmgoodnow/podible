@@ -4,6 +4,7 @@ import { nowIso } from "./db";
 import { pseudoProgressForBook } from "./library/progress";
 import { deriveBookStatus, deriveMediaStatus, MediaStatus, ReleaseStatus } from "./library/status";
 import { defaultSettings, parseSettings } from "./settings";
+import { selectPreferredAudioManifestation, selectPreferredDownloadableEbookAsset } from "./library/asset-selection";
 import type {
   AppSettings,
   AppLoginAttemptRow,
@@ -1595,8 +1596,12 @@ export class BooksRepo {
       .filter((release) => release.media_type === "ebook")
       .map((release) => release.status);
 
-    const hasAudioAsset = manifestations.some((m) => m.kind === "audio");
-    const hasEbookAsset = manifestations.some((m) => m.kind === "ebook");
+    const assets = this.listAssetsByBook(row.id);
+    const hasAudioAsset = selectPreferredAudioManifestation(manifestations.map((manifestation) => ({
+      manifestation,
+      containers: assets.filter((asset) => asset.manifestation_id === manifestation.id),
+    }))) !== null;
+    const hasEbookAsset = selectPreferredDownloadableEbookAsset(assets) !== null;
 
     const audioStatus = deriveMediaStatus({
       mediaType: "audio",

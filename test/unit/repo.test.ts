@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
+import { renderBookPage } from "../../src/http/book-page";
 
 function setupRepo(): { db: Database; repo: BooksRepo } {
   const db = new Database(":memory:");
@@ -164,6 +165,35 @@ describe("books repo", () => {
     expect(JSON.parse(rescheduled.payload_json ?? "{}").telemetry.lastBytesDone).toBe(42);
 
     db.close();
+  });
+
+  test("pending manifestations are not ready until playable or downloadable assets exist", async () => {
+    const { db, repo } = setupRepo();
+    try {
+      const book = repo.createBook({ title: "Pending book", author: "Author" });
+      repo.addManifestation({ bookId: book.id, kind: "audio" });
+      const ebook = repo.addManifestation({ bookId: book.id, kind: "ebook" });
+      expect(repo.getBook(book.id)?.audioStatus).toBe("wanted");
+      expect(repo.getBook(book.id)?.ebookStatus).toBe("wanted");
+      const before = await (await renderBookPage(repo, repo.getSettings(), book.id)).text();
+      expect(before).not.toContain("eBook ready");
+      expect(before).not.toContain("Download EPUB/PDF</a>");
+
+      repo.addAsset({
+        bookId: book.id,
+        manifestationId: ebook.id,
+        kind: "single",
+        mime: "application/pdf",
+        totalSize: 123,
+        files: [{ path: "/tmp/pending.pdf", size: 123, start: 0, end: 122, durationMs: 0 }],
+      });
+      expect(repo.getBook(book.id)?.ebookStatus).toBe("imported");
+      const after = await (await renderBookPage(repo, repo.getSettings(), book.id)).text();
+      expect(after).toContain("eBook ready");
+      expect(after).toContain("Download EPUB/PDF</a>");
+    } finally {
+      db.close();
+    }
   });
 
   test("derives partial status across media", () => {

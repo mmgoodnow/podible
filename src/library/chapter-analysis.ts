@@ -17,6 +17,7 @@ import { readFfprobeChapters } from "../media/probe-cache";
 import type { BooksRepo } from "../repo";
 import { slugify } from "../utils/strings";
 import { selectPreferredAudioManifestation } from "./asset-selection";
+export { selectPreferredDownloadableEbookAsset } from "./asset-selection";
 import { runAgenticChapterCurationDetailed } from "./chapter-curation";
 import type { ChapterCurationTiming } from "./chapter-curation";
 
@@ -580,20 +581,6 @@ export function selectPreferredEpubAsset(assets: AssetRow[]): AssetRow | null {
   const ebooks = assets.filter((asset) => asset.mime === "application/epub+zip");
   if (ebooks.length === 0) return null;
   return [...ebooks].sort((a, b) => {
-    if (a.created_at !== b.created_at) return b.created_at.localeCompare(a.created_at);
-    return b.id - a.id;
-  })[0] ?? null;
-}
-
-export function selectPreferredDownloadableEbookAsset(assets: AssetRow[]): AssetRow | null {
-  const ebooks = assets.filter(
-    (asset) => asset.mime === "application/epub+zip" || asset.mime === "application/pdf"
-  );
-  if (ebooks.length === 0) return null;
-  return [...ebooks].sort((a, b) => {
-    const formatScore = (asset: AssetRow) => (asset.mime === "application/epub+zip" ? 1 : 0);
-    const score = formatScore(b) - formatScore(a);
-    if (score !== 0) return score;
     if (a.created_at !== b.created_at) return b.created_at.localeCompare(a.created_at);
     return b.id - a.id;
   })[0] ?? null;

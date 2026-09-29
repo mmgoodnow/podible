@@ -1,5 +1,17 @@
 import type { AssetRow, ManifestationRow } from "../app-types";
 
+export function selectPreferredDownloadableEbookAsset(assets: AssetRow[]): AssetRow | null {
+  const ebooks = assets.filter(
+    (asset) => asset.mime === "application/epub+zip" || asset.mime === "application/pdf"
+  );
+  return ebooks.sort((a, b) => {
+    const score = Number(b.mime === "application/epub+zip") - Number(a.mime === "application/epub+zip");
+    if (score !== 0) return score;
+    if (a.created_at !== b.created_at) return b.created_at.localeCompare(a.created_at);
+    return b.id - a.id;
+  })[0] ?? null;
+}
+
 function scoreAudioAsset(asset: AssetRow): number {
   let score = 0;
   if (asset.kind === "single" && asset.mime === "audio/mp4") score += 100;
