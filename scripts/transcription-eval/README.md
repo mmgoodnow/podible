@@ -9,6 +9,11 @@ bun scripts/transcription-eval/run.ts tmp/transcription-eval/excerpts/manifest.j
 # Repeat with the same production EPUB glossary extractor and prompt builder.
 bun scripts/transcription-eval/prepare-glossary.ts
 bun scripts/transcription-eval/run.ts tmp/transcription-eval/glossary/manifest.json
+
+# Same source intervals at production's atempo=2, with and without glossary.
+bun scripts/transcription-eval/prepare-speed.ts
+bun scripts/transcription-eval/run.ts tmp/transcription-eval/speed2x/no-glossary/manifest.json
+bun scripts/transcription-eval/run.ts tmp/transcription-eval/speed2x/glossary/manifest.json
 ```
 
 The preparation script extracts three twenty-minute, normal-speed mono AAC
