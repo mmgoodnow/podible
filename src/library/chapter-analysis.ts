@@ -924,7 +924,7 @@ export async function extractChunkClip(args: ExtractChunkArgs): Promise<string> 
   return clipPath;
 }
 
-function promptForChunk(book: BookRow, glossary: string[], manifestation?: Pick<ManifestationRow, "language"> | null): string {
+export function promptForChunk(book: Pick<BookRow, "title" | "author" | "language">, glossary: string[], manifestation?: Pick<ManifestationRow, "language"> | null): string {
   const promptParts = [`${book.title} by ${book.author}.`];
   const transcriptionLanguage = transcriptionLanguageForBook(book, manifestation);
   if (transcriptionLanguage) {

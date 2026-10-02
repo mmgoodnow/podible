@@ -5,6 +5,10 @@ This is an isolated local experiment, not a production transcription change.
 ```sh
 bun scripts/transcription-eval/prepare-excerpts.ts
 bun scripts/transcription-eval/run.ts tmp/transcription-eval/excerpts/manifest.json
+
+# Repeat with the same production EPUB glossary extractor and prompt builder.
+bun scripts/transcription-eval/prepare-glossary.ts
+bun scripts/transcription-eval/run.ts tmp/transcription-eval/glossary/manifest.json
 ```
 
 The preparation script extracts three twenty-minute, normal-speed mono AAC
