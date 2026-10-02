@@ -12,8 +12,10 @@ const outputDir = path.resolve(path.dirname(manifestPath), "results");
 await mkdir(outputDir, { recursive: true });
 const key = process.env.OPENAI_API_KEY;
 if (!key) throw new Error("OPENAI_API_KEY is required");
-const results = [];
-for (const sample of manifest.samples) {
+const results: Array<{ sample: string; title: string; model: string; elapsedMs: number; outputPath: string;
+  referenceStatus: string; score: ReturnType<typeof wordErrorRate> | null }> = [];
+let persistence = Promise.resolve();
+async function runSample(sample: Sample) {
   if (!/^[a-z0-9-]+$/.test(sample.id)) throw new Error("Sample id must be kebab case");
   const bytes = await readFile(sample.audioPath);
   const reference = sample.referencePath ? await readFile(sample.referencePath, "utf8") : null;
@@ -49,13 +51,21 @@ for (const sample of manifest.samples) {
     const result = { sample: sample.id, title: sample.title, model, elapsedMs: response.elapsedMs, outputPath,
       referenceStatus: sample.referenceStatus ?? "unreviewed", score: reference ? wordErrorRate(reference, response.text) : null };
     results.push(result);
-    await writeFile(path.join(outputDir, "summary.json"), JSON.stringify(results, null, 2));
     await writeFile(path.join(outputDir, `${sample.id}-${model}.txt`), response.text);
+    // Serialize report writes so concurrent completions cannot overwrite newer progress.
+    persistence = persistence.then(async () => {
+    await writeFile(path.join(outputDir, "summary.json"), JSON.stringify(results, null, 2));
     const report = ["# Transcription comparison", "", "References marked epub-provisional are not verified spoken ground truth. Unreviewed samples have no WER score.", "",
       "| Sample | Model | Request time (s) | Reference status | WER |", "| --- | --- | ---: | --- | ---: |",
       ...results.map(row => `| ${row.title} | ${row.model} | ${(row.elapsedMs / 1000).toFixed(1)} | ${row.referenceStatus} | ${row.score ? (row.score.wer * 100).toFixed(2) + "%" : "not scored"} |`)];
     await writeFile(path.join(outputDir, "report.md"), report.join("\n") + "\n");
+    });
+    await persistence;
     console.log(JSON.stringify({ event: "result", sample: sample.id, model, elapsedMs: response.elapsedMs,
       referenceStatus: result.referenceStatus, wer: result.score?.wer ?? null }));
   }
 }
+let nextSample = 0;
+await Promise.all(Array.from({ length: Math.min(3, manifest.samples.length) }, async () => {
+  while (nextSample < manifest.samples.length) await runSample(manifest.samples[nextSample++]!);
+}));

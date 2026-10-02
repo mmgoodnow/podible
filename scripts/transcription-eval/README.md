@@ -18,6 +18,7 @@ Supply `OPENAI_API_KEY` through the environment. Results are cached by audio
 bytes and request configuration and written immediately after each response.
 Rerunning resumes completed requests. The readable `results/report.md`, plain
 text transcripts, and raw responses remain under gitignored `tmp/`.
+Up to three samples run concurrently, with each sample's model requests in order.
 
 ## Reference quality
 
