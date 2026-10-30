@@ -34,6 +34,7 @@ const OPENLIBRARY_METADATA_HYDRATION_MIGRATION_ID = 28;
 const DURABLE_SESSIONS_MIGRATION_ID = 29;
 const DURABLE_MEDIA_EXECUTION_MIGRATION_ID = 30;
 const CANCELLED_EXECUTION_RETRY_MIGRATION_ID = 31;
+const GENERIC_EXECUTION_TYPES_MIGRATION_ID = 32;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -581,7 +582,9 @@ CREATE INDEX IF NOT EXISTS idx_manifestations_book ON manifestations(book_id);
 `);
 
   if (!hasColumn(db, "assets", "manifestation_id")) {
-    db.exec("ALTER TABLE assets ADD COLUMN manifestation_id INTEGER NULL REFERENCES manifestations(id) ON DELETE CASCADE");
+    db.exec(
+      "ALTER TABLE assets ADD COLUMN manifestation_id INTEGER NULL REFERENCES manifestations(id) ON DELETE CASCADE"
+    );
   }
   if (!hasColumn(db, "assets", "sequence_in_manifestation")) {
     db.exec("ALTER TABLE assets ADD COLUMN sequence_in_manifestation INTEGER NOT NULL DEFAULT 0");
@@ -596,25 +599,25 @@ CREATE INDEX IF NOT EXISTS idx_assets_manifestation_seq
   // manifestation.kind ('audio' / 'ebook'). Keeping it as a single statement
   // (per asset) so the asset's manifestation_id can be set in the same row.
   const orphanAssets = db
-    .query("SELECT id, book_id, kind, mime, total_size, duration_ms, created_at, updated_at FROM assets WHERE manifestation_id IS NULL")
+    .query(
+      "SELECT id, book_id, kind, mime, total_size, duration_ms, created_at, updated_at FROM assets WHERE manifestation_id IS NULL"
+    )
     .all() as Array<{
-      id: number;
-      book_id: number;
-      kind: string;
-      mime: string;
-      total_size: number;
-      duration_ms: number | null;
-      created_at: string;
-      updated_at: string;
-    }>;
+    id: number;
+    book_id: number;
+    kind: string;
+    mime: string;
+    total_size: number;
+    duration_ms: number | null;
+    created_at: string;
+    updated_at: string;
+  }>;
   const insertManifestation = db.prepare(
     `INSERT INTO manifestations (book_id, kind, label, edition_note, selection_note, language, duration_ms, total_size, preferred_score, created_at, updated_at)
      VALUES (?, ?, NULL, NULL, NULL, NULL, ?, ?, 0, ?, ?)
      RETURNING id`
   );
-  const linkAsset = db.prepare(
-    "UPDATE assets SET manifestation_id = ?, sequence_in_manifestation = 0 WHERE id = ?"
-  );
+  const linkAsset = db.prepare("UPDATE assets SET manifestation_id = ?, sequence_in_manifestation = 0 WHERE id = ?");
   for (const asset of orphanAssets) {
     const manifestationKind = asset.kind === "ebook" ? "ebook" : "audio";
     const result = insertManifestation.get(
@@ -1056,5 +1059,41 @@ export function runMigrations(db: Database): void {
   });
   apply(CANCELLED_EXECUTION_RETRY_MIGRATION_ID, () => {
     db.exec("ALTER TABLE jobs ADD COLUMN execution_generation INTEGER NOT NULL DEFAULT 0");
+  });
+  apply(GENERIC_EXECUTION_TYPES_MIGRATION_ID, () => {
+    // Rebuild the projection and its sole dependent table atomically. Dropping
+    // jobs with the live FK attached would cascade away execution identities.
+    db.exec(`
+      CREATE TEMP TABLE saved_job_executions AS SELECT * FROM job_executions;
+      CREATE TEMP TABLE saved_jobs_sequence AS SELECT seq FROM sqlite_sequence WHERE name = 'jobs';
+      DROP TABLE job_executions;
+      CREATE TABLE jobs_generic (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+        book_id INTEGER REFERENCES books(id) ON DELETE CASCADE,
+        release_id INTEGER REFERENCES releases(id) ON DELETE CASCADE,
+        payload_json TEXT, error TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 5,
+        next_run_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        dedupe_key TEXT, execution_generation INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT INTO jobs_generic SELECT * FROM jobs;
+      DROP TABLE jobs;
+      ALTER TABLE jobs_generic RENAME TO jobs;
+      UPDATE sqlite_sequence SET seq = MAX(seq, COALESCE((SELECT seq FROM saved_jobs_sequence), 0)) WHERE name = 'jobs';
+      INSERT INTO sqlite_sequence(name, seq) SELECT 'jobs', seq FROM saved_jobs_sequence
+        WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'jobs');
+      DROP TABLE saved_jobs_sequence;
+      CREATE INDEX idx_jobs_status_next_created ON jobs(status, next_run_at, created_at);
+      CREATE UNIQUE INDEX idx_jobs_dedupe_key ON jobs(dedupe_key);
+      CREATE TABLE job_executions (
+        job_id INTEGER PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+        run_id TEXT NOT NULL UNIQUE, owner_token TEXT
+      );
+      INSERT INTO job_executions SELECT * FROM saved_job_executions;
+      DROP TABLE saved_job_executions;
+    `);
   });
 }

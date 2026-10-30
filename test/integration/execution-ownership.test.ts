@@ -46,7 +46,7 @@ test("superseded execution cannot publish or complete after cancellation", () =>
   db.close();
 });
 
-test("durable import respects the legacy filesystem-refresh lane", async () => {
+test("durable import respects the filesystem-refresh lane", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "podible-execution-lane-"));
   const db = new Database(":memory:");
   runMigrations(db);
@@ -101,6 +101,6 @@ test("stale and duplicate failure projections do not consume retry attempts", as
   await handleJobFailure(ctx, job, new Error("current failure"), { runId: "run", token: "current" });
   await handleJobFailure(ctx, job, new Error("duplicate projection"), { runId: "run", token: "current" });
   expect(repo.getJob(job.id)?.attempt_count).toBe(1);
-  expect(repo.getJob(job.id)?.status).toBe("queued");
+  expect(repo.getJob(job.id)?.status).toBe("failed");
   db.close();
 });

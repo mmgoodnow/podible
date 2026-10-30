@@ -37,7 +37,7 @@ function importNote(
   return `${context}: ${mode}${trigger}${confidence}: ${detail.reason}${selectedText}`;
 }
 
-export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done" | "rescheduled"> {
+export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
   if (!job.release_id) {
     throw new Error("Import job missing release_id");
   }
@@ -58,14 +58,12 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
             selectedPaths: Array.isArray(payload.selectedPaths) ? payload.selectedPaths : []
           }
         : await client.getImportSource(release.info_hash);
-    if (!source.basePath && ctx.execution) throw new Error("Import source is not ready");
+    if (!source.basePath) throw new Error("Import source is not ready");
     return source;
   });
   const basePath = importSource.basePath;
   if (!basePath) {
-    const nextRun = new Date(Date.now() + Math.max(1000, settings.polling.rtorrentMs || 5000)).toISOString();
-    ctx.repo.rescheduleJob(job.id, nextRun);
-    return "rescheduled";
+    throw new Error("Import source is not ready");
   }
   workerLog(
     ctx,

@@ -235,7 +235,7 @@ export function pollMsForMedia(mediaType: MediaType, configuredPollMs: number): 
   return normalized;
 }
 
-export async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promise<"done" | "rescheduled"> {
+export async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
   if (!job.release_id) {
     throw new Error("Download job missing release_id");
   }
@@ -297,14 +297,10 @@ export async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promi
         `[download] job=${job.id} release=${release.id} media=${release.media_type} hash=${release.info_hash} complete=0 left_bytes=${decision.leftBytes ?? "null"} down_rate=${decision.downRate ?? "null"} eta_s=${etaText} poll_ms=${decision.pollMs} reason=${decision.reason}`
       );
       const pollMs = decision.pollMs;
-      if (ctx.execution) {
-        payload = issue.nextPayload;
-        await ctx.execution.sleep(`download:wait:${poll}`, pollMs);
-        continue;
-      }
-      const nextRun = new Date(Date.now() + pollMs).toISOString();
-      ctx.repo.rescheduleJob(job.id, nextRun, issue.nextPayload);
-      return "rescheduled";
+      if (!ctx.execution) throw new Error("Download polling requires durable execution");
+      payload = issue.nextPayload;
+      await ctx.execution.sleep(`download:wait:${poll}`, pollMs);
+      continue;
     }
 
     const importSource = await durableStep(ctx, "download:source", () => client.getImportSource(release.info_hash));

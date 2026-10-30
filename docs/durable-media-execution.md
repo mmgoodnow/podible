@@ -1,9 +1,10 @@
 # Durable media execution
 
-Acquisition, download, and import are Reflow function workflows, pinned to
-`reflow-ts@0.11.0`. They checkpoint individual searches, agent decisions,
-manifestation creation, each snatch, download observations, import source,
-file selection, and publication. A handler is not one opaque durable step.
+All background operations are Reflow function workflows, pinned to
+`reflow-ts@0.11.0`: acquisition, download, import, reconciliation, full-library
+refresh, metadata hydration, cover generation, and chapter analysis.
+Handlers checkpoint meaningful stages rather than wrapping the entire operation
+in one opaque durable step.
 
 ## Storage boundary
 
@@ -15,6 +16,9 @@ file selection, and publication. A handler is not one opaque durable step.
   `execution.sqlite` alongside the application database. Back up both files
   while workers are stopped or using coordinated SQLite-aware snapshots, not
   independent live copies of the main files without WAL.
+- Preserve configuration-directory transcript/curation artifacts and the
+  library's generated-cover artifacts too. Recorded steps reference these files;
+  restoring only the execution database is not a complete workflow backup.
 
 The outbox bridge uses an enqueue idempotency key derived from job ID. A crash
 before or after enqueue cannot lose the operation or create two engine runs.
@@ -40,27 +44,43 @@ job resumes its failed steps; restarting a cancelled operation gets a fresh
 execution generation, fencing off the cancelled run. Starting a new acquisition also creates fresh research.
 Successful existing assets and transcripts are never removed by migration.
 
-## Rollout and remaining machinery
+## Execution and Compatibility
 
-The legacy worker must exclude the three migrated types both when recovering
-running jobs and when claiming queued jobs. Existing queued/running media jobs
-can then be adopted by the bridge without changing their public IDs. Do not
-run an old worker and the new runtime against the same database during rollout.
+`runWorker` is now only the transactional-outbox bridge. There is no second
+worker claiming rows or resetting running jobs at startup. Reflow owns retries,
+leases, and durable waits. Job attempts and terminal failure remain public
+Activity projections; explicit retries resume the recorded run. Existing job
+IDs are preserved, and SQLite no longer constrains operation names with a
+domain-specific type enum. Application code still validates registered types.
+Do not run an old worker against the same database during rollout.
 
-This is not a wholesale removal of `jobs`: refresh, reconciliation, metadata,
-cover generation, and chapter analysis still use the legacy worker. Their
-recovery and checkpointing have not been migrated. The existing job-type enum
-also remains for API compatibility. Reflow itself has no domain-specific
-schema or job-type enum. The bridge and public Activity projection are the
-transitional compatibility boundary.
+Resource lanes remain in-process policy for this single-server deployment:
+an exclusive refresh cannot inspect hardlinks during import publication.
+Parallel callbacks belonging to one execution share its lanes, so transcription
+chunks and chapter-boundary agents retain their internal parallelism. Leases
+fence stale owners, but these lanes are not distributed resource locks. Do not
+horizontally scale workers without replacing the lane coordination.
 
-The server shares the existing in-process lane lock set between durable step
-callbacks and legacy handlers. In particular, a filesystem refresh cannot scan
-hardlinks while an import is preparing to publish them. This is transitional
-single-server compatibility, not a new distributed lock service; the remaining
-legacy worker is not safe to horizontally scale by itself.
+Metadata hydration checkpoints each book's fetch, cover download, and metadata
+publication. Refresh snapshots directory discovery and checkpoints each source's
+probing/publication; manifestation and asset creation are atomic. Reconciliation
+rechecks current releases and creates import handoffs transactionally.
 
-Acquisition is globally limited to one active workflow, imports to two;
+Cover generation checkpoints the generated image, watermark, and publication.
+Image bytes live in filesystem artifacts; publication uses execution-specific
+paths and never replaces a cover selected while generation was in progress.
+A crash after the remote API succeeds but before its response is saved can
+still repeat the paid request; durable execution cannot make that remote effect
+exactly-once without provider idempotency.
+
+Chapter analysis checkpoints paid chunks, EPUB input, audible-node selection,
+individual judged boundaries, and publication. Successful transcript/chapter
+artifacts remain available while replacement work runs or fails. The journal
+contains artifact references instead of full transcripts or agent evidence.
+The transcript cache remains a domain artifact for reuse across independent
+jobs, not a separate worker checkpoint protocol.
+
+Acquisition is globally limited to one active workflow, imports and chapter analysis to two;
 download waits release engine capacity. Cancellation cannot undo a torrent
 already handed to rTorrent, but it prevents later publication by the cancelled
 execution. Prepared, unpublished hardlinks may remain after a cancelled import.
@@ -76,9 +96,15 @@ freezes a worker, allows another process to reclaim the lease, and resumes the
 stale process before publication. Assertions cover search counts, external
 loads, ordered manifestations, unique assets, cancellation and job status.
 
-The existing HTTP end-to-end scenario runs against both workers, checking
+The HTTP end-to-end scenario runs against the durable worker, checking
 downloadable EPUBs, audio range/stream URLs, feeds, and reconciliation. No
 paid model calls or production downloads are used by these tests.
+
+Additional acceptance tests cover all eight workflow types, retry exhaustion,
+parallel sibling callbacks versus conflicting jobs, scanner rollback/replay,
+cover/metadata checkpoints, chapter artifact replay, and successful transcript
+preservation. Unit-level journal tests complement, rather than replace, the
+file-backed Reflow and subprocess crash tests.
 
 ## Production verification status (2026-10-29)
 

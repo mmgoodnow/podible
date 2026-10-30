@@ -1,134 +1,28 @@
-import { setTimeout as sleep } from "node:timers/promises";
-
-import { nowIso } from "./db";
 import { workerLog, type WorkerContext } from "./worker/context";
-import { processJob } from "./worker/dispatcher";
-import { handleJobFailure } from "./worker/failure";
-import { jobLockKeys, lockSetsConflict } from "./worker/locks";
-import type { JobType } from "./app-types";
+import { createJobExecutionRuntime } from "./worker/execution";
 
 export { pollMsForMedia, selectDownloadPollMs } from "./worker/downloads";
-const RUNNABLE_SCAN_LIMIT = 200;
 
-type WorkerDeps = {
-  processJob?: typeof processJob;
-  handleJobFailure?: typeof handleJobFailure;
-  excludedJobTypes?: JobType[];
-};
-
-type ActiveJob = {
-  jobType: Parameters<typeof processJob>[1]["type"];
-  keys: string[];
-  done: Promise<number>;
-};
-
-const JOB_TYPE_CONCURRENCY_LIMITS = new Map<Parameters<typeof processJob>[1]["type"], number>([
-  ["acquire", 1],
-  ["chapter_analysis", 2],
-]);
-const JOB_TYPE_PRIORITY = new Map<Parameters<typeof processJob>[1]["type"], number>([["acquire", 0]]);
-
-function activeJobTypeCounts(active: Map<number, ActiveJob>): Map<Parameters<typeof processJob>[1]["type"], number> {
-  const counts = new Map<Parameters<typeof processJob>[1]["type"], number>();
-  for (const entry of active.values()) {
-    counts.set(entry.jobType, (counts.get(entry.jobType) ?? 0) + 1);
-  }
-  return counts;
-}
-
-function canStartJobType(
-  type: Parameters<typeof processJob>[1]["type"],
-  activeCounts: Map<Parameters<typeof processJob>[1]["type"], number>
-): boolean {
-  const limit = JOB_TYPE_CONCURRENCY_LIMITS.get(type);
-  if (limit === undefined) return true;
-  return (activeCounts.get(type) ?? 0) < limit;
-}
-
-function chooseCandidateJob(
-  candidates: Parameters<typeof processJob>[1][],
-  active: Map<number, ActiveJob>
-): Parameters<typeof processJob>[1] | null {
-  if (candidates.length === 0) return null;
-  const activeCounts = activeJobTypeCounts(active);
-  const prioritized = [...candidates].sort(
-    (left, right) => (JOB_TYPE_PRIORITY.get(left.type) ?? 100) - (JOB_TYPE_PRIORITY.get(right.type) ?? 100)
+/** Bridge the public job outbox to Reflow. No job claiming or startup resets. */
+export async function runWorker(
+  ctx: WorkerContext,
+  options: Parameters<typeof createJobExecutionRuntime>[2] & { databasePath?: string } = {}
+): Promise<void> {
+  const runtime = await createJobExecutionRuntime(
+    ctx,
+    options.databasePath ?? ctx.repo.executionDatabasePath(),
+    options
   );
-  for (const candidate of prioritized) {
-    if (canStartJobType(candidate.type, activeCounts)) {
-      return candidate;
-    }
-  }
-  return null;
-}
-
-/**
- * Main worker loop: recover abandoned running jobs, then repeatedly claim and
- * execute runnable jobs until shutdown is requested.
- */
-export async function runWorker(ctx: WorkerContext, deps: WorkerDeps = {}): Promise<void> {
-  const excluded = deps.excludedJobTypes ?? [];
-  const requeued = ctx.repo.requeueRunningJobs(excluded);
-  if (requeued > 0) {
-    workerLog(ctx, `[worker] requeued ${requeued} running jobs`);
-  }
-
-  const active = new Map<number, ActiveJob>();
-  const activeLocks = ctx.activeLocks ?? new Set<string>();
-  const jobProcessor = deps.processJob ?? processJob;
-  const failureHandler = deps.handleJobFailure ?? handleJobFailure;
-
-  const launchJob = (job: Parameters<typeof processJob>[1], keys: string[]) => {
-    for (const key of keys) {
-      activeLocks.add(key);
-    }
-    const done = (async () => {
+  try {
+    while (!ctx.shouldStop?.()) {
       try {
-        const result = await jobProcessor(ctx, job);
-        if (result === "done") {
-          workerLog(ctx, `[worker] job=${job.id} type=${job.type} done`);
-        }
+        await runtime.reconcile();
       } catch (error) {
-        await failureHandler(ctx, job, error);
-      } finally {
-        for (const key of keys) {
-          activeLocks.delete(key);
-        }
-        active.delete(job.id);
+        workerLog(ctx, `[execution] outbox reconciliation failed: ${String(error)}`);
       }
-      return job.id;
-    })();
-    active.set(job.id, { jobType: job.type, keys, done });
-  };
-
-  for (;;) {
-    if (ctx.shouldStop?.() && active.size === 0) {
-      return;
+      await Bun.sleep(100);
     }
-
-    let launchedAny = false;
-    if (!ctx.shouldStop?.()) {
-      for (;;) {
-        const candidates = ctx.repo.listRunnableJobs(nowIso(), RUNNABLE_SCAN_LIMIT, excluded);
-        const runnable = candidates.filter((job) => !lockSetsConflict(activeLocks, jobLockKeys(ctx.repo, job)));
-        const candidate = chooseCandidateJob(runnable, active);
-        if (!candidate) break;
-        const claimed = ctx.repo.claimQueuedJob(candidate.id, nowIso());
-        if (!claimed) continue;
-        launchJob(claimed, jobLockKeys(ctx.repo, claimed));
-        launchedAny = true;
-      }
-    }
-
-    if (active.size === 0) {
-      await sleep(300);
-      continue;
-    }
-
-    if (launchedAny) {
-      continue;
-    }
-
-    await Promise.race([...active.values()].map((entry) => entry.done).concat(sleep(300).then(() => -1)));
+  } finally {
+    await runtime.stop();
   }
 }

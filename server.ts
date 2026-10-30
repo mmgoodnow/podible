@@ -1,5 +1,4 @@
-import path from "node:path";
-import { ensureConfigDir, booksDbPath, configDir, port } from "./src/config";
+import { ensureConfigDir, booksDbPath, port } from "./src/config";
 import { openDatabase } from "./src/db";
 import { createPodibleFetchHandler } from "./src/http";
 import { queuePendingCurationJobs } from "./src/library/chapter-analysis";
@@ -8,7 +7,6 @@ import { pingPlexOwnerToken } from "./src/plex";
 import { BooksRepo } from "./src/repo";
 import { runWorker } from "./src/worker";
 import { queueStaleMetadataHydration } from "./src/worker/metadata-hydration";
-import { createJobExecutionRuntime, EXECUTION_JOB_TYPES } from "./src/worker/execution";
 
 const startTime = Date.now();
 
@@ -38,18 +36,7 @@ const workerContext = {
   shouldStop: () => stopping,
   activeLocks: new Set<string>()
 };
-const execution = await createJobExecutionRuntime(workerContext, path.join(configDir, "execution.sqlite"));
-const executionBridge = (async () => {
-  while (!stopping) {
-    try {
-      await execution.reconcile();
-    } catch (error) {
-      console.error("[execution] outbox reconciliation failed", error);
-    }
-    await Bun.sleep(300);
-  }
-})();
-const worker = runWorker(workerContext, { excludedJobTypes: [...EXECUTION_JOB_TYPES] });
+const worker = runWorker(workerContext);
 
 // Enqueue curation for any book that already has a transcript but no chapters yet.
 void queuePendingCurationJobs(repo).then((count) => {
@@ -92,7 +79,7 @@ async function shutdown(): Promise<void> {
   // finish, exit without closing underneath it; leases allow safe reclamation.
   const deadline = setTimeout(() => process.exit(0), 8_000);
   deadline.unref();
-  await Promise.all([server.stop(), worker, executionBridge.then(() => execution.stop())]);
+  await Promise.all([server.stop(), worker]);
   db.close();
   clearTimeout(deadline);
   process.exit(0);

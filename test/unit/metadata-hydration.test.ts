@@ -2,17 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { runMigrations } from "../../src/db";
-import {
-  CURRENT_OPENLIBRARY_METADATA_VERSION,
-  openLibraryMetadataStatus,
-} from "../../src/library/hydration";
+import { CURRENT_OPENLIBRARY_METADATA_VERSION, openLibraryMetadataStatus } from "../../src/library/hydration";
 import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
 import { handleJobFailure } from "../../src/worker/failure";
-import {
-  processMetadataHydrationJob,
-  queueStaleMetadataHydration,
-} from "../../src/worker/metadata-hydration";
+import { processMetadataHydrationJob, queueStaleMetadataHydration } from "../../src/worker/metadata-hydration";
 
 describe("Open Library metadata hydration", () => {
   let db: Database;
@@ -42,14 +36,14 @@ describe("Open Library metadata hydration", () => {
 
     repo.updateBookMetadata(book.id, {
       openLibraryMetadataVersion: CURRENT_OPENLIBRARY_METADATA_VERSION,
-      openLibraryHydratedAt: new Date().toISOString(),
+      openLibraryHydratedAt: new Date().toISOString()
     });
     repo.markJobSucceeded(first!.id);
     expect(queueStaleMetadataHydration(repo)).toBeNull();
     expect(openLibraryMetadataStatus(repo.getBookRow(book.id)!)).toBe("current");
   });
 
-  test("hydrates successful books independently and retries unresolved books", async () => {
+  test("hydrates successful books independently and projects exhausted unresolved work as failed", async () => {
     const first = repo.createBook({ title: "Dune", author: "Frank Herbert" });
     const second = repo.createBook({ title: "Unknown Book", author: "Unknown Author" });
     repo.updateBookMetadata(first.id, { language: "spa" });
@@ -60,7 +54,7 @@ describe("Open Library metadata hydration", () => {
         return Response.json({
           docs: query.includes("Dune")
             ? [{ key: "/works/OL123W", title: "Dune", author_name: ["Frank Herbert"], language: ["eng"] }]
-            : [],
+            : []
         });
       }
       if (url.pathname === "/works/OL123W.json") {
@@ -73,7 +67,9 @@ describe("Open Library metadata hydration", () => {
     }) as typeof fetch;
 
     const queued = queueStaleMetadataHydration(repo)!;
-    const running = repo.claimQueuedJob(queued.id)!;
+    repo.attachJobExecution(queued.id, "metadata-run");
+    repo.ownJobExecution(queued.id, "metadata-run", "metadata-owner");
+    const running = repo.getJob(queued.id)!;
     const ctx = { repo, getSettings: () => defaultSettings() };
     let failure: unknown;
     try {
@@ -82,7 +78,7 @@ describe("Open Library metadata hydration", () => {
       failure = error;
     }
     expect(failure).toBeInstanceOf(Error);
-    await handleJobFailure(ctx, running, failure);
+    await handleJobFailure(ctx, running, failure, { runId: "metadata-run", token: "metadata-owner" });
 
     const hydrated = repo.getBookRow(first.id)!;
     expect(hydrated.openlibrary_metadata_version).toBe(CURRENT_OPENLIBRARY_METADATA_VERSION);
@@ -91,7 +87,7 @@ describe("Open Library metadata hydration", () => {
     expect(JSON.parse(hydrated.series_json ?? "[]")).toEqual([]);
     expect(openLibraryMetadataStatus(hydrated)).toBe("current");
     expect(openLibraryMetadataStatus(repo.getBookRow(second.id)!)).toBe("never_hydrated");
-    expect(repo.getJob(queued.id)?.status).toBe("queued");
+    expect(repo.getJob(queued.id)?.status).toBe("failed");
     expect(repo.getJob(queued.id)?.error).toContain(String(second.id));
   });
 
@@ -100,7 +96,7 @@ describe("Open Library metadata hydration", () => {
     repo.updateBookMetadata(book.id, {
       identifiers: { openlibrary: "/works/OL16800608W" },
       series: [{ key: null, name: "InfiniTime", position: "006" }],
-      language: "spa",
+      language: "spa"
     });
     globalThis.fetch = (async (input: unknown) => {
       const url = new URL(String(input));
@@ -114,9 +110,9 @@ describe("Open Library metadata hydration", () => {
               title: "Wool",
               author_name: ["Hugh Howey"],
               language: ["spa", "chi", "fre", "ita", "eng"],
-              editions: { docs: [{ language: ["eng"] }] },
-            },
-          ],
+              editions: { docs: [{ language: ["eng"] }] }
+            }
+          ]
         });
       }
       if (url.pathname === "/works/OL16800608W.json") {
@@ -129,19 +125,16 @@ describe("Open Library metadata hydration", () => {
               key: "/books/OL27161382M",
               title: "羊毛記",
               series: ["InfiniTime -- 006"],
-              languages: [{ key: "/languages/chi" }],
-            },
-          ],
+              languages: [{ key: "/languages/chi" }]
+            }
+          ]
         });
       }
       throw new Error(`Unexpected Open Library request: ${url}`);
     }) as typeof fetch;
 
     const job = queueStaleMetadataHydration(repo)!;
-    await processMetadataHydrationJob(
-      { repo, getSettings: () => defaultSettings() },
-      repo.claimQueuedJob(job.id)!
-    );
+    await processMetadataHydrationJob({ repo, getSettings: () => defaultSettings() }, repo.getJob(job.id)!);
 
     expect(repo.getBook(book.id)?.series).toEqual([]);
     expect(repo.getBookRow(book.id)?.language).toBe("eng");
@@ -160,9 +153,9 @@ describe("Open Library metadata hydration", () => {
               key: "/works/OL24848267W",
               title: "The Gate of the Feral Gods",
               author_name: ["Matt Dinniman"],
-              editions: { docs: [{ language: ["eng"] }] },
-            },
-          ],
+              editions: { docs: [{ language: ["eng"] }] }
+            }
+          ]
         });
       }
       if (url.pathname === "/works/OL24848267W.json") {
@@ -175,24 +168,19 @@ describe("Open Library metadata hydration", () => {
             {
               key: "/books/OL60487327M",
               subtitle: "Dungeon Crawler Carl, Book 4",
-              series: ["Dungeon Crawler Carl"],
+              series: ["Dungeon Crawler Carl"]
             },
-            { key: "/books/OL33026536M", series: ["Dungeon Crawler Carl"] },
-          ],
+            { key: "/books/OL33026536M", series: ["Dungeon Crawler Carl"] }
+          ]
         });
       }
       throw new Error(`Unexpected Open Library request: ${url}`);
     }) as typeof fetch;
 
     const job = queueStaleMetadataHydration(repo)!;
-    await processMetadataHydrationJob(
-      { repo, getSettings: () => defaultSettings() },
-      repo.claimQueuedJob(job.id)!
-    );
+    await processMetadataHydrationJob({ repo, getSettings: () => defaultSettings() }, repo.getJob(job.id)!);
 
-    expect(repo.getBook(book.id)?.series).toEqual([
-      { key: null, name: "Dungeon Crawler Carl", position: "4" },
-    ]);
+    expect(repo.getBook(book.id)?.series).toEqual([{ key: null, name: "Dungeon Crawler Carl", position: "4" }]);
   });
 
   test("keeps a corroborated series name but drops conflicting edition positions", async () => {
@@ -202,7 +190,7 @@ describe("Open Library metadata hydration", () => {
       const url = new URL(String(input));
       if (url.pathname === "/search.json") {
         return Response.json({
-          docs: [{ key: "/works/OL999W", title: "Example", author_name: ["Author"] }],
+          docs: [{ key: "/works/OL999W", title: "Example", author_name: ["Author"] }]
         });
       }
       if (url.pathname === "/works/OL999W.json") return Response.json({ series: [] });
@@ -212,29 +200,24 @@ describe("Open Library metadata hydration", () => {
             { key: "/books/OL1M", series: ["Example Series, Book 3"] },
             { key: "/books/OL2M", series: ["Example Series, Volume III"] },
             { key: "/books/OL3M", series: ["Example Series, Book 4"] },
-            { key: "/books/OL4M", series: ["Example Series, Volume IV"] },
-          ],
+            { key: "/books/OL4M", series: ["Example Series, Volume IV"] }
+          ]
         });
       }
       throw new Error(`Unexpected Open Library request: ${url}`);
     }) as typeof fetch;
 
     const job = queueStaleMetadataHydration(repo)!;
-    await processMetadataHydrationJob(
-      { repo, getSettings: () => defaultSettings() },
-      repo.claimQueuedJob(job.id)!
-    );
+    await processMetadataHydrationJob({ repo, getSettings: () => defaultSettings() }, repo.getJob(job.id)!);
 
-    expect(repo.getBook(book.id)?.series).toEqual([
-      { key: null, name: "Example Series", position: null },
-    ]);
+    expect(repo.getBook(book.id)?.series).toEqual([{ key: null, name: "Example Series", position: null }]);
   });
 
   test("follows a redirected Open Library work before hydrating metadata", async () => {
     const book = repo.createBook({ title: "Sunrise on the Reaping", author: "Suzanne Collins" });
     repo.updateBookMetadata(book.id, {
       identifiers: { openlibrary: "/works/OL42360848W" },
-      language: "ger",
+      language: "ger"
     });
     globalThis.fetch = (async (input: unknown) => {
       const url = new URL(String(input));
@@ -247,9 +230,9 @@ describe("Open Library metadata hydration", () => {
                 key: "/works/OL43426400W",
                 title: "Amanecer de la Cosecha",
                 author_name: ["Suzanne Collins"],
-                editions: { docs: [{ language: ["eng"] }] },
-              },
-            ],
+                editions: { docs: [{ language: ["eng"] }] }
+              }
+            ]
           });
         }
         return Response.json({ docs: [] });
@@ -264,10 +247,7 @@ describe("Open Library metadata hydration", () => {
     }) as typeof fetch;
 
     const job = queueStaleMetadataHydration(repo)!;
-    await processMetadataHydrationJob(
-      { repo, getSettings: () => defaultSettings() },
-      repo.claimQueuedJob(job.id)!
-    );
+    await processMetadataHydrationJob({ repo, getSettings: () => defaultSettings() }, repo.getJob(job.id)!);
 
     expect(repo.getBookRow(book.id)?.language).toBe("eng");
     expect(repo.getBook(book.id)?.identifiers.openlibrary).toBe("/works/OL43426400W");

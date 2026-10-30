@@ -80,7 +80,7 @@ function createBrowserSessionCookie(repo: BooksRepo, username = "admin", isAdmin
     providerUserId: `plex-${username}`,
     username,
     displayName: username,
-    isAdmin,
+    isAdmin
   });
   const token = `${username}-session-token`;
   repo.createSession(user.id, hashSessionToken(token), new Date(Date.now() + 60_000).toISOString());
@@ -102,8 +102,8 @@ async function rpc(
         jsonrpc: "2.0",
         id,
         method,
-        params,
-      }),
+        params
+      })
     })
   );
   expect(response.status).toBe(200);
@@ -111,7 +111,7 @@ async function rpc(
 }
 
 describe("books e2e", () => {
-  for (const durable of [false, true]) test(`audio and ebook flows including reconcile (${durable ? "Reflow" : "legacy"})`, async () => {
+  test("audio and ebook flows including reconcile (Reflow)", async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "books-e2e-"));
     const downloadAudio = path.join(tempRoot, "downloads-audio");
     const downloadEbook = path.join(tempRoot, "downloads-ebook");
@@ -141,12 +141,12 @@ describe("books e2e", () => {
     const torznab = startMockTorznab({
       results: [
         { title: "Dune Audio", torrentId: "audio", size: 1234, infoHash: audioHash },
-        { title: "Dune Ebook", torrentId: "ebook", size: 456, infoHash: ebookHash },
+        { title: "Dune Ebook", torrentId: "ebook", size: 456, infoHash: ebookHash }
       ],
       torrents: {
         audio: audioTorrent,
-        ebook: ebookTorrent,
-      },
+        ebook: ebookTorrent
+      }
     });
 
     const rtorrent = startMockRtorrent({
@@ -155,22 +155,22 @@ describe("books e2e", () => {
           name: "Dune Audio",
           basePath: downloadAudio,
           sizeBytes: 1234,
-          completeAfterPolls: 1,
+          completeAfterPolls: 1
         },
         [ebookHash]: {
           name: "Dune Ebook",
           basePath: downloadEbook,
           sizeBytes: 456,
-          completeAfterPolls: 1,
+          completeAfterPolls: 1
         },
         [reconcileHash]: {
           name: "Dune Recon",
           basePath: downloadRecon,
           sizeBytes: 222,
-          completeAfterPolls: 1,
-        },
+          completeAfterPolls: 1
+        }
       },
-      preloaded: [reconcileHash],
+      preloaded: [reconcileHash]
     });
 
     const db = new Database(":memory:");
@@ -183,17 +183,17 @@ describe("books e2e", () => {
           {
             name: "mock",
             baseUrl: torznab.baseUrl,
-            categories: { audio: "audio", ebook: "book" },
-          },
+            categories: { audio: "audio", ebook: "book" }
+          }
         ],
         rtorrent: {
           transport: "http-xmlrpc",
           url: rtorrent.url,
           username: "",
-          password: "",
+          password: ""
         },
         libraryRoot,
-        polling: { rtorrentMs: 50 },
+        polling: { rtorrentMs: 50 }
       })
     );
 
@@ -201,68 +201,84 @@ describe("books e2e", () => {
     const adminCookie = createBrowserSessionCookie(repo);
 
     let stopWorker = false;
-    const execution = durable ? await createJobExecutionRuntime({ repo, getSettings: () => repo.getSettings() }, path.join(tempRoot, "execution.sqlite"), { leaseMs: 300 }) : null;
-    let reconciling = Promise.resolve();
-    const timer = execution ? setInterval(() => {
-      reconciling = reconciling.then(() => execution.reconcile());
-    }, 30) : null;
-    const worker = runWorker({
-      repo,
-      getSettings: () => repo.getSettings(),
-      shouldStop: () => stopWorker,
-    }, { excludedJobTypes: durable ? [...EXECUTION_JOB_TYPES] : [] });
+    const worker = runWorker(
+      {
+        repo,
+        getSettings: () => repo.getSettings(),
+        shouldStop: () => stopWorker
+      },
+      { databasePath: path.join(tempRoot, "execution.sqlite"), leaseMs: 300 }
+    );
 
     try {
       const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
 
       const audioSearch = await rpc(fetchHandler, "search.run", { query: "Dune Frank Herbert", media: "audio" }, 1, {
-        cookie: adminCookie,
+        cookie: adminCookie
       });
       const ebookSearch = await rpc(fetchHandler, "search.run", { query: "Dune Frank Herbert", media: "ebook" }, 11, {
-        cookie: adminCookie,
+        cookie: adminCookie
       });
       const audioResult = audioSearch.result.results.find((row: any) => row.title === "Dune Audio");
       const ebookResult = ebookSearch.result.results.find((row: any) => row.title === "Dune Ebook");
       expect(audioResult).toBeTruthy();
       expect(ebookResult).toBeTruthy();
 
-      const snatchAudio = await rpc(fetchHandler, "snatch.create", {
-        bookId: book.id,
-        provider: audioResult.provider,
-        title: audioResult.title,
-        mediaType: "audio",
-        url: audioResult.url,
-        infoHash: audioResult.infoHash,
-        sizeBytes: audioResult.sizeBytes,
-      }, 2, {
-        cookie: adminCookie,
-      });
+      const snatchAudio = await rpc(
+        fetchHandler,
+        "snatch.create",
+        {
+          bookId: book.id,
+          provider: audioResult.provider,
+          title: audioResult.title,
+          mediaType: "audio",
+          url: audioResult.url,
+          infoHash: audioResult.infoHash,
+          sizeBytes: audioResult.sizeBytes
+        },
+        2,
+        {
+          cookie: adminCookie
+        }
+      );
       expect(snatchAudio.result.idempotent).toBe(false);
 
-      const snatchAgainJson = await rpc(fetchHandler, "snatch.create", {
-        bookId: book.id,
-        provider: audioResult.provider,
-        title: audioResult.title,
-        mediaType: "audio",
-        url: audioResult.url,
-        infoHash: audioResult.infoHash,
-        sizeBytes: audioResult.sizeBytes,
-      }, 3, {
-        cookie: adminCookie,
-      });
+      const snatchAgainJson = await rpc(
+        fetchHandler,
+        "snatch.create",
+        {
+          bookId: book.id,
+          provider: audioResult.provider,
+          title: audioResult.title,
+          mediaType: "audio",
+          url: audioResult.url,
+          infoHash: audioResult.infoHash,
+          sizeBytes: audioResult.sizeBytes
+        },
+        3,
+        {
+          cookie: adminCookie
+        }
+      );
       expect(snatchAgainJson.result.idempotent).toBe(true);
 
-      const snatchEbook = await rpc(fetchHandler, "snatch.create", {
-        bookId: book.id,
-        provider: ebookResult.provider,
-        title: ebookResult.title,
-        mediaType: "ebook",
-        url: ebookResult.url,
-        infoHash: ebookResult.infoHash,
-        sizeBytes: ebookResult.sizeBytes,
-      }, 4, {
-        cookie: adminCookie,
-      });
+      const snatchEbook = await rpc(
+        fetchHandler,
+        "snatch.create",
+        {
+          bookId: book.id,
+          provider: ebookResult.provider,
+          title: ebookResult.title,
+          mediaType: "ebook",
+          url: ebookResult.url,
+          infoHash: ebookResult.infoHash,
+          sizeBytes: ebookResult.sizeBytes
+        },
+        4,
+        {
+          cookie: adminCookie
+        }
+      );
       expect(snatchEbook.result.idempotent).toBe(false);
 
       const isEbookMime = (mime: string) => mime === "application/epub+zip" || mime === "application/pdf";
@@ -274,7 +290,7 @@ describe("books e2e", () => {
 
       const assetsRes = await fetchHandler(
         new Request(`http://localhost/assets?bookId=${book.id}`, {
-          headers: { cookie: adminCookie },
+          headers: { cookie: adminCookie }
         })
       );
       expect(assetsRes.status).toBe(200);
@@ -286,7 +302,7 @@ describe("books e2e", () => {
 
       const streamRes = await fetchHandler(
         new Request(`http://localhost/stream/m/${audioAsset.manifestation_id}.mp3`, {
-          headers: { cookie: adminCookie },
+          headers: { cookie: adminCookie }
         })
       );
       expect(streamRes.status).toBe(200);
@@ -295,7 +311,7 @@ describe("books e2e", () => {
 
       const ebookRes = await fetchHandler(
         new Request(`http://localhost/ebook/${ebookAsset.id}`, {
-          headers: { cookie: adminCookie },
+          headers: { cookie: adminCookie }
         })
       );
       expect(ebookRes.status).toBe(200);
@@ -304,7 +320,7 @@ describe("books e2e", () => {
 
       const feedRes = await fetchHandler(
         new Request("http://localhost/feed.xml", {
-          headers: { cookie: adminCookie },
+          headers: { cookie: adminCookie }
         })
       );
       expect(feedRes.status).toBe(200);
@@ -322,11 +338,11 @@ describe("books e2e", () => {
         infoHash: reconcileHash,
         url: `${torznab.baseUrl}/torrent/ebook.torrent`,
         sizeBytes: 200,
-        status: "downloaded",
+        status: "downloaded"
       });
 
       const reconcileRes = await rpc(fetchHandler, "import.reconcile", {}, 5, {
-        cookie: adminCookie,
+        cookie: adminCookie
       });
       expect(reconcileRes.result.jobId).toBeGreaterThan(0);
 
@@ -336,9 +352,6 @@ describe("books e2e", () => {
         "reconcile import"
       );
     } finally {
-      if (timer) clearInterval(timer);
-      await reconciling;
-      await execution?.stop();
       stopWorker = true;
       await sleep(400);
       await Promise.race([worker, sleep(1500)]);

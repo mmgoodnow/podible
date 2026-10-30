@@ -32,9 +32,9 @@ describe("books repo", () => {
         pushover: {
           enabled: true,
           apiToken: "token",
-          userKey: "user",
-        },
-      },
+          userKey: "user"
+        }
+      }
     };
     const saved = repo.updateSettings(next);
     expect(saved.libraryRoot).toBe("/tmp/library");
@@ -51,27 +51,15 @@ describe("books repo", () => {
     db.close();
   });
 
-  test("requeues running jobs and claims queued work in order", () => {
+  test("execution outbox preserves running state and stable public IDs", () => {
     const { db, repo } = setupRepo();
 
     const running = repo.createJob({ type: "download", status: "running" });
     const first = repo.createJob({ type: "download", status: "queued" });
     const second = repo.createJob({ type: "import", status: "queued" });
 
-    expect(repo.requeueRunningJobs()).toBe(1);
-
-    const claimed1 = repo.claimNextRunnableJob();
-    expect(claimed1?.id).toBe(running.id);
-    expect(claimed1?.status).toBe("running");
-
-    const claimed2 = repo.claimNextRunnableJob();
-    expect(claimed2?.id).toBe(first.id);
-
-    const claimed3 = repo.claimNextRunnableJob();
-    expect(claimed3?.id).toBe(second.id);
-
-    const claimed4 = repo.claimNextRunnableJob();
-    expect(claimed4).toBeNull();
+    expect(repo.listExecutionJobs().map((job) => job.id)).toEqual([running.id, first.id, second.id]);
+    expect(repo.getJob(running.id)?.status).toBe("running");
 
     db.close();
   });
@@ -83,7 +71,7 @@ describe("books repo", () => {
       providerUserId: "plex-123",
       username: "andy",
       displayName: "Andy",
-      isAdmin: true,
+      isAdmin: true
     });
     const tokenHash = randomBytes(16).toString("hex");
     repo.createSession(user.id, tokenHash, new Date(Date.now() + 60_000).toISOString());
@@ -101,7 +89,7 @@ describe("books repo", () => {
       provider: "plex",
       providerUserId: "plex-durable",
       username: "durable",
-      isAdmin: false,
+      isAdmin: false
     });
 
     const durable = repo.createSession(user.id, "durable-token-hash");
@@ -141,28 +129,21 @@ describe("books repo", () => {
     repo.setJsonState("probe_cache_v1", [{ file: "/tmp/a.mp3", mtimeMs: 123, data: null, error: "boom" }]);
     expect(
       repo.getJsonState<Array<{ file: string; mtimeMs: number; data: null; error: string }>>("probe_cache_v1")
-    ).toEqual([
-      { file: "/tmp/a.mp3", mtimeMs: 123, data: null, error: "boom" },
-    ]);
+    ).toEqual([{ file: "/tmp/a.mp3", mtimeMs: 123, data: null, error: "boom" }]);
     db.close();
   });
 
-  test("rescheduleJob clears stale error", () => {
+  test("explicit retry clears stale error without replacing domain input", () => {
     const { db, repo } = setupRepo();
 
     const job = repo.createJob({ type: "download", status: "queued", payload: { infoHash: "abc123" } });
-    const failed = repo.markJobFailed(job.id, "temporary socket error", new Date(Date.now() + 1000).toISOString());
-    expect(failed.error).toContain("socket");
+    const failed = repo.markJobFailed(job.id, "temporary socket error");
+    expect(failed?.error).toContain("socket");
 
-    const rescheduled = repo.rescheduleJob(job.id, new Date(Date.now() + 5000).toISOString(), {
-      infoHash: "abc123",
-      telemetry: {
-        lastBytesDone: 42,
-      },
-    });
+    const rescheduled = repo.retryJob(job.id);
     expect(rescheduled.status).toBe("queued");
     expect(rescheduled.error).toBeNull();
-    expect(JSON.parse(rescheduled.payload_json ?? "{}").telemetry.lastBytesDone).toBe(42);
+    expect(JSON.parse(rescheduled.payload_json ?? "{}").infoHash).toBe("abc123");
 
     db.close();
   });
@@ -185,7 +166,7 @@ describe("books repo", () => {
         kind: "single",
         mime: "application/pdf",
         totalSize: 123,
-        files: [{ path: "/tmp/pending.pdf", size: 123, start: 0, end: 122, durationMs: 0 }],
+        files: [{ path: "/tmp/pending.pdf", size: 123, start: 0, end: 122, durationMs: 0 }]
       });
       expect(repo.getBook(book.id)?.ebookStatus).toBe("imported");
       const after = await (await renderBookPage(repo, repo.getSettings(), book.id)).text();
@@ -207,7 +188,7 @@ describe("books repo", () => {
       mediaType: "audio",
       infoHash: "aaa111",
       url: "https://example.com/dune-audio.torrent",
-      status: "downloaded",
+      status: "downloaded"
     });
     const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio" });
     repo.addAsset({
@@ -224,9 +205,9 @@ describe("books repo", () => {
           start: 0,
           end: 122,
           durationMs: 1000,
-          title: "Part 1",
-        },
-      ],
+          title: "Part 1"
+        }
+      ]
     });
 
     const hydrated = repo.getBook(book.id);
@@ -249,7 +230,7 @@ describe("books repo", () => {
       mediaType: "audio",
       infoHash: "fff111",
       url: "https://example.com/book-one.torrent",
-      status: "downloaded",
+      status: "downloaded"
     });
 
     const bookOneManifestation = repo.addManifestation({ bookId: book1.id, kind: "audio" });
@@ -267,7 +248,7 @@ describe("books repo", () => {
           start: 0,
           end: 199,
           durationMs: 1000,
-          title: null,
+          title: null
         },
         {
           path: "/tmp/shared.mp3",
@@ -275,9 +256,9 @@ describe("books repo", () => {
           start: 200,
           end: 299,
           durationMs: 1000,
-          title: null,
-        },
-      ],
+          title: null
+        }
+      ]
     });
     const bookTwoManifestation = repo.addManifestation({ bookId: book2.id, kind: "audio" });
     repo.addAsset({
@@ -293,9 +274,9 @@ describe("books repo", () => {
           start: 0,
           end: 99,
           durationMs: 1000,
-          title: null,
-        },
-      ],
+          title: null
+        }
+      ]
     });
     repo.updateBookMetadata(book1.id, { coverPath: "/tmp/cover-shared.jpg" });
     repo.updateBookMetadata(book2.id, { coverPath: "/tmp/cover-shared.jpg" });
@@ -327,20 +308,20 @@ describe("books repo", () => {
         mime: "audio/mp4",
         totalSize: 1234,
         durationMs: 5000,
-        files: [{ path: "/tmp/solo.m4b", size: 1234, start: 0, end: 1233, durationMs: 5000 }],
+        files: [{ path: "/tmp/solo.m4b", size: 1234, start: 0, end: 1233, durationMs: 5000 }]
       } as Parameters<typeof repo.addAsset>[0])
     ).toThrow("Asset requires an explicit manifestation");
     db.close();
   });
 
-test("addAsset attaches to an existing manifestation when manifestationId is provided", () => {
+  test("addAsset attaches to an existing manifestation when manifestationId is provided", () => {
     const { db, repo } = setupRepo();
     const book = repo.createBook({ title: "Multi-part Book", author: "A" });
     const manifestation = repo.addManifestation({
       bookId: book.id,
       kind: "audio",
       label: "GraphicAudio dramatization",
-      editionNote: "full cast",
+      editionNote: "full cast"
     });
     const part1 = repo.addAsset({
       bookId: book.id,
@@ -350,7 +331,7 @@ test("addAsset attaches to an existing manifestation when manifestationId is pro
       durationMs: 30 * 60_000,
       manifestationId: manifestation.id,
       sequenceInManifestation: 0,
-      files: [{ path: "/tmp/p1.mp3", size: 1000, start: 0, end: 999, durationMs: 30 * 60_000 }],
+      files: [{ path: "/tmp/p1.mp3", size: 1000, start: 0, end: 999, durationMs: 30 * 60_000 }]
     });
     const part2 = repo.addAsset({
       bookId: book.id,
@@ -360,7 +341,7 @@ test("addAsset attaches to an existing manifestation when manifestationId is pro
       durationMs: 45 * 60_000,
       manifestationId: manifestation.id,
       sequenceInManifestation: 1,
-      files: [{ path: "/tmp/p2.mp3", size: 2000, start: 0, end: 1999, durationMs: 45 * 60_000 }],
+      files: [{ path: "/tmp/p2.mp3", size: 2000, start: 0, end: 1999, durationMs: 45 * 60_000 }]
     });
     expect(part1.manifestation_id).toBe(manifestation.id);
     expect(part2.manifestation_id).toBe(manifestation.id);
@@ -392,7 +373,7 @@ test("addAsset attaches to an existing manifestation when manifestationId is pro
       totalSize: 100,
       durationMs: 1000,
       manifestationId: manifestation.id,
-      files: [{ path: "/tmp/delete-me.m4b", size: 100, start: 0, end: 99, durationMs: 1000 }],
+      files: [{ path: "/tmp/delete-me.m4b", size: 100, start: 0, end: 99, durationMs: 1000 }]
     });
     expect(asset.manifestation_id).not.toBeNull();
 
@@ -416,7 +397,7 @@ test("addAsset attaches to an existing manifestation when manifestationId is pro
       durationMs: 30 * 60_000,
       manifestationId: manifestation.id,
       sequenceInManifestation: 0,
-      files: [{ path: "/tmp/two-parts-1.mp3", size: 1000, start: 0, end: 999, durationMs: 30 * 60_000 }],
+      files: [{ path: "/tmp/two-parts-1.mp3", size: 1000, start: 0, end: 999, durationMs: 30 * 60_000 }]
     });
     const part2 = repo.addAsset({
       bookId: book.id,
@@ -426,7 +407,7 @@ test("addAsset attaches to an existing manifestation when manifestationId is pro
       durationMs: 45 * 60_000,
       manifestationId: manifestation.id,
       sequenceInManifestation: 1,
-      files: [{ path: "/tmp/two-parts-2.mp3", size: 2000, start: 0, end: 1999, durationMs: 45 * 60_000 }],
+      files: [{ path: "/tmp/two-parts-2.mp3", size: 2000, start: 0, end: 1999, durationMs: 45 * 60_000 }]
     });
 
     expect(repo.deleteAsset(part1.id)).toBe(true);
@@ -450,7 +431,7 @@ test("addAsset attaches to an existing manifestation when manifestationId is pro
       mediaType: "audio",
       infoHash: "1111111111111111111111111111111111111111",
       url: "https://example.com/pending.torrent",
-      status: "downloaded",
+      status: "downloaded"
     });
     const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio", label: "Pending grouped edition" });
     const asset = repo.addAsset({
@@ -461,13 +442,13 @@ test("addAsset attaches to an existing manifestation when manifestationId is pro
       durationMs: 30 * 60_000,
       manifestationId: manifestation.id,
       sequenceInManifestation: 0,
-      files: [{ path: "/tmp/pending-part.mp3", size: 1000, start: 0, end: 999, durationMs: 30 * 60_000 }],
+      files: [{ path: "/tmp/pending-part.mp3", size: 1000, start: 0, end: 999, durationMs: 30 * 60_000 }]
     });
     repo.createJob({
       type: "import",
       bookId: book.id,
       releaseId: release.id,
-      payload: { manifestationId: manifestation.id, sequenceInManifestation: 0 },
+      payload: { manifestationId: manifestation.id, sequenceInManifestation: 0 }
     });
 
     expect(repo.deleteAsset(asset.id)).toBe(true);

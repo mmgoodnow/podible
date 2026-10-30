@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import path from "node:path";
 
 import { nowIso } from "./db";
 import { pseudoProgressForBook } from "./library/progress";
@@ -276,7 +277,11 @@ export class BooksRepo {
   }
 
   listExecutionJobs(): JobRow[] {
-    return this.db.query("SELECT * FROM jobs WHERE type IN ('acquire', 'download', 'import') AND status != 'succeeded' ORDER BY id").all() as JobRow[];
+    return this.db.query("SELECT * FROM jobs WHERE status != 'succeeded' ORDER BY id").all() as JobRow[];
+  }
+
+  executionDatabasePath(): string {
+    return this.db.filename === ":memory:" ? ":memory:" : path.join(path.dirname(this.db.filename), "execution.sqlite");
   }
 
   ensureSettings(): AppSettings {
@@ -1334,21 +1339,21 @@ export class BooksRepo {
       .get(error ?? null, now, jobId) as JobRow;
   }
 
-  markJobFailed(jobId: number, error: string, nextRunAt?: string | null): JobRow {
+  markJobFailed(jobId: number, error: string, attempts = 1): JobRow | null {
     this.beforeWrite();
     const now = nowIso();
     return this.db
       .query(
         `UPDATE jobs
-         SET status = CASE WHEN attempt_count + 1 >= max_attempts THEN 'failed' ELSE 'queued' END,
+         SET status = 'failed',
              error = ?,
-             attempt_count = attempt_count + 1,
-             next_run_at = CASE WHEN attempt_count + 1 >= max_attempts THEN NULL ELSE ? END,
+             attempt_count = MAX(attempt_count, ?),
+             next_run_at = NULL,
              updated_at = ?
          WHERE id = ? AND status != 'cancelled'
          RETURNING *`
       )
-      .get(error, nextRunAt ?? null, now, jobId) as JobRow;
+      .get(error, attempts, now, jobId) as JobRow | null;
   }
 
   retryJob(jobId: number): JobRow {
@@ -1365,59 +1370,6 @@ export class BooksRepo {
       )
       .get(now, now, jobId) as JobRow;
     });
-  }
-
-  rescheduleJob(jobId: number, nextRunAt: string, payload?: unknown): JobRow {
-    this.beforeWrite();
-    assertPositiveInt(jobId);
-    const now = nowIso();
-    return this.db
-      .query(
-        "UPDATE jobs SET status = 'queued', next_run_at = ?, payload_json = ?, error = NULL, updated_at = ? WHERE id = ? RETURNING *"
-      )
-      .get(nextRunAt, payload === undefined ? this.getJob(jobId)?.payload_json ?? null : JSON.stringify(payload), now, jobId) as JobRow;
-  }
-
-  requeueRunningJobs(excludedTypes: JobType[] = []): number {
-    const now = nowIso();
-    const result = this.db
-      .query(`UPDATE jobs SET status = 'queued', next_run_at = ?, updated_at = ? WHERE status = 'running'
-        ${excludedTypes.length ? `AND type NOT IN (${excludedTypes.map(() => "?").join(",")})` : ""}`)
-      .run(now, now, ...excludedTypes);
-    return Number(result.changes);
-  }
-
-  listRunnableJobs(now = nowIso(), limit = 10, excludedTypes: JobType[] = []): JobRow[] {
-    return this.db
-      .query(
-        `SELECT * FROM jobs
-         WHERE status = 'queued'
-           AND (next_run_at IS NULL OR next_run_at <= ?)
-           ${excludedTypes.length ? `AND type NOT IN (${excludedTypes.map(() => "?").join(",")})` : ""}
-         ORDER BY created_at ASC, id ASC
-         LIMIT ?`
-      )
-      .all(now, ...excludedTypes, limit) as JobRow[];
-  }
-
-  claimQueuedJob(jobId: number, now = nowIso()): JobRow | null {
-    assertPositiveInt(jobId);
-    return this.db.transaction(() => {
-      return (this.db
-        .query(
-          `UPDATE jobs
-           SET status = 'running', updated_at = ?
-           WHERE id = ? AND status = 'queued'
-           RETURNING *`
-        )
-        .get(now, jobId) as JobRow | null) ?? null;
-    })();
-  }
-
-  claimNextRunnableJob(now = nowIso()): JobRow | null {
-    const candidate = this.listRunnableJobs(now, 1)[0];
-    if (!candidate) return null;
-    return this.claimQueuedJob(candidate.id, nowIso());
   }
 
   listDownloads(): DownloadView[] {

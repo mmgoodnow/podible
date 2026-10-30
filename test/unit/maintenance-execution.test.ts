@@ -9,6 +9,7 @@ import { processCoverGenerationJob } from "../../src/library/cover-generation";
 import { BooksRepo } from "../../src/repo";
 import type { WorkerContext } from "../../src/worker/context";
 import { processMetadataHydrationJob } from "../../src/worker/metadata-hydration";
+import { processReconcileJob } from "../../src/worker/maintenance";
 
 function journalContext(repo: BooksRepo, results: Map<string, unknown>, failAfter?: string): WorkerContext {
   return {
@@ -115,6 +116,30 @@ test("metadata resumes a saved fetch without refetching after interruption", asy
     expect(repo.getBookRow(book.id)?.description).toBe("Saved description.");
   } finally {
     globalThis.fetch = originalFetch;
+    db.close();
+  }
+});
+
+test("reconciliation retry after a lost checkpoint does not duplicate its import handoff", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  const repo = new BooksRepo(db);
+  const book = repo.createBook({ title: "Book", author: "Author" });
+  const release = repo.createRelease({
+    bookId: book.id, mediaType: "ebook", provider: "fixture", title: "Book",
+    url: "https://unused.invalid", infoHash: "c".repeat(40), status: "downloaded",
+  });
+  const job = repo.createJob({ type: "reconcile" });
+  const results = new Map<string, unknown>();
+  const step = `reconcile-import:${release.id}`;
+  try {
+    await expect(processReconcileJob(journalContext(repo, results, step), job)).rejects.toThrow("interruption");
+    results.delete(step);
+    await processReconcileJob(journalContext(repo, results), job);
+    const imports = repo.listJobsByType("import");
+    expect(imports).toHaveLength(1);
+    expect(imports[0]?.release_id).toBe(release.id);
+  } finally {
     db.close();
   }
 });

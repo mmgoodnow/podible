@@ -34,9 +34,9 @@ function textModelResponse(text: string): ModelResponse {
         type: "message",
         role: "assistant",
         status: "completed",
-        content: [{ type: "output_text", text }],
-      },
-    ],
+        content: [{ type: "output_text", text }]
+      }
+    ]
   };
 }
 
@@ -62,7 +62,7 @@ class FakeModelProvider implements ModelProvider {
       },
       getStreamedResponse: async function* () {
         throw new Error("FakeModelProvider: streaming not supported");
-      },
+      }
     };
   }
 }
@@ -71,7 +71,7 @@ describe("worker acquire auto-acquire retries", () => {
   test("marks acquire job for retry when snatch fails", async () => {
     const torznab = startMockTorznab({
       results: [{ title: "Dune Audio", torrentId: "audio", size: 1234 }],
-      torrents: { audio: makeTorrentBytes("dune-audio") },
+      torrents: { audio: makeTorrentBytes("dune-audio") }
     });
 
     const db = new Database(":memory:");
@@ -86,8 +86,8 @@ describe("worker acquire auto-acquire retries", () => {
           transport: "http-xmlrpc",
           url: "http://127.0.0.1:65534/RPC2",
           username: "",
-          password: "",
-        },
+          password: ""
+        }
       })
     );
 
@@ -95,17 +95,20 @@ describe("worker acquire auto-acquire retries", () => {
     const acquireJob = repo.createJob({
       type: "acquire",
       bookId: book.id,
-      payload: { bookId: book.id, media: ["audio"] },
+      payload: { bookId: book.id, media: ["audio"] }
     });
 
     let stopWorker = false;
     const logs: string[] = [];
-    const worker = runWorker({
-      repo,
-      getSettings: () => repo.getSettings(),
-      shouldStop: () => stopWorker,
-      onLog: (line) => logs.push(line),
-    });
+    const worker = runWorker(
+      {
+        repo,
+        getSettings: () => repo.getSettings(),
+        shouldStop: () => stopWorker,
+        onLog: (line) => logs.push(line)
+      },
+      { retryDelayMs: 1 }
+    );
 
     try {
       const started = Date.now();
@@ -119,8 +122,8 @@ describe("worker acquire auto-acquire retries", () => {
       }
       const current = repo.getJob(acquireJob.id);
       expect(current).toBeTruthy();
-      expect(current?.status).toBe("queued");
-      expect(current?.attempt_count).toBe(1);
+      expect(current?.status).toBe("failed");
+      expect(current?.attempt_count).toBe(5);
       expect((current?.error ?? "").length).toBeGreaterThan(0);
       expect(repo.listReleasesByBook(book.id).length).toBe(0);
       expect(logs.some((line) => line.includes("snatch_error="))).toBe(true);
@@ -138,9 +141,9 @@ describe("worker acquire auto-acquire retries", () => {
     const torznab = startMockTorznab({
       results: [
         { title: "Eclipse by Stephenie Meyer [ENG / M4B]", torrentId: "audio", size: 1111 },
-        { title: "Eclipse by Stephenie Meyer [ENG / EPUB]", torrentId: "ebook", size: 2222 },
+        { title: "Eclipse by Stephenie Meyer [ENG / EPUB]", torrentId: "ebook", size: 2222 }
       ],
-      torrents: { audio: audioTorrent, ebook: ebookTorrent },
+      torrents: { audio: audioTorrent, ebook: ebookTorrent }
     });
 
     const db = new Database(":memory:");
@@ -154,8 +157,8 @@ describe("worker acquire auto-acquire retries", () => {
           transport: "http-xmlrpc",
           url: "http://rtorrent.mock/RPC2",
           username: "",
-          password: "",
-        },
+          password: ""
+        }
       })
     );
 
@@ -163,26 +166,29 @@ describe("worker acquire auto-acquire retries", () => {
     const acquireJob = repo.createJob({
       type: "acquire",
       bookId: book.id,
-      payload: { bookId: book.id, media: ["audio", "ebook"] },
+      payload: { bookId: book.id, media: ["audio", "ebook"] }
     });
 
     const originalFetch = globalThis.fetch;
-    let loadCallCount = 0;
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
       const url = String(input);
       if (url === "http://rtorrent.mock/RPC2") {
         const body = String(init?.body ?? "");
         const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
+        if (method === "download_list")
+          return new Response(
+            '<?xml version="1.0"?><methodResponse><params><param><value><array><data></data></array></value></param></params></methodResponse>',
+            { headers: { "Content-Type": "text/xml" } }
+          );
         if (method === "load.raw_start") {
-          loadCallCount += 1;
-          if (loadCallCount === 1) {
+          if (body.includes(Buffer.from(audioTorrent).toString("base64"))) {
             return new Response("boom", { status: 500 });
           }
           return new Response(
             `<?xml version="1.0"?><methodResponse><params><param><value><int>0</int></value></param></params></methodResponse>`,
             {
               status: 200,
-              headers: { "Content-Type": "text/xml" },
+              headers: { "Content-Type": "text/xml" }
             }
           );
         }
@@ -193,12 +199,15 @@ describe("worker acquire auto-acquire retries", () => {
 
     let stopWorker = false;
     const logs: string[] = [];
-    const worker = runWorker({
-      repo,
-      getSettings: () => repo.getSettings(),
-      shouldStop: () => stopWorker,
-      onLog: (line) => logs.push(line),
-    });
+    const worker = runWorker(
+      {
+        repo,
+        getSettings: () => repo.getSettings(),
+        shouldStop: () => stopWorker,
+        onLog: (line) => logs.push(line)
+      },
+      { retryDelayMs: 1 }
+    );
 
     try {
       const started = Date.now();
@@ -212,8 +221,8 @@ describe("worker acquire auto-acquire retries", () => {
       }
 
       const current = repo.getJob(acquireJob.id);
-      expect(current?.status).toBe("queued");
-      expect(current?.attempt_count).toBe(1);
+      expect(current?.status).toBe("failed");
+      expect(current?.attempt_count).toBe(5);
       expect(String(current?.error || "")).toContain("partially failed");
       expect(String(current?.error || "")).toContain("audio:");
 
@@ -239,9 +248,9 @@ describe("worker acquire auto-acquire retries", () => {
     const torznab = startMockTorznab({
       results: [
         { title: "Red Rising GraphicAudio Part 1 [MP3]", torrentId: "part-1", size: 1111 },
-        { title: "Red Rising GraphicAudio Part 2 [MP3]", torrentId: "part-2", size: 2222 },
+        { title: "Red Rising GraphicAudio Part 2 [MP3]", torrentId: "part-2", size: 2222 }
       ],
-      torrents: { "part-1": partOneTorrent, "part-2": partTwoTorrent },
+      torrents: { "part-1": partOneTorrent, "part-2": partTwoTorrent }
     });
 
     const db = new Database(":memory:");
@@ -253,14 +262,14 @@ describe("worker acquire auto-acquire retries", () => {
         torznab: [{ name: "mock", baseUrl: torznab.baseUrl }],
         agents: {
           apiKey: "test-key",
-          editionPreference: "prefer GraphicAudio dramatizations",
+          editionPreference: "prefer GraphicAudio dramatizations"
         },
         rtorrent: {
           transport: "http-xmlrpc",
           url: "http://rtorrent.mock/RPC2",
           username: "",
-          password: "",
-        },
+          password: ""
+        }
       })
     );
 
@@ -268,20 +277,22 @@ describe("worker acquire auto-acquire retries", () => {
     const acquireJob = repo.createJob({
       type: "acquire",
       bookId: book.id,
-      payload: { bookId: book.id, media: ["audio"] },
+      payload: { bookId: book.id, media: ["audio"] }
     });
 
     const fakeProvider = new FakeModelProvider([
-      textModelResponse(JSON.stringify({
-        selections: [
-          {
-            manifestation: { label: "GraphicAudio dramatization", editionNote: "full cast" },
-            parts: [0, 1],
-          },
-        ],
-        confidence: 0.88,
-        reason: "The preferred GraphicAudio edition is split across two parts.",
-      })),
+      textModelResponse(
+        JSON.stringify({
+          selections: [
+            {
+              manifestation: { label: "GraphicAudio dramatization", editionNote: "full cast" },
+              parts: [0, 1]
+            }
+          ],
+          confidence: 0.88,
+          reason: "The preferred GraphicAudio edition is split across two parts."
+        })
+      )
     ]);
 
     const originalFetch = globalThis.fetch;
@@ -295,7 +306,7 @@ describe("worker acquire auto-acquire retries", () => {
           `<?xml version="1.0"?><methodResponse><params><param><value><int>0</int></value></param></params></methodResponse>`,
           {
             status: 200,
-            headers: { "Content-Type": "text/xml" },
+            headers: { "Content-Type": "text/xml" }
           }
         );
       }
@@ -304,12 +315,15 @@ describe("worker acquire auto-acquire retries", () => {
 
     try {
       const logs: string[] = [];
-      await processAcquireJob({
-        repo,
-        getSettings: () => repo.getSettings(),
-        onLog: (line) => logs.push(line),
-        modelProvider: fakeProvider,
-      }, acquireJob);
+      await processAcquireJob(
+        {
+          repo,
+          getSettings: () => repo.getSettings(),
+          onLog: (line) => logs.push(line),
+          modelProvider: fakeProvider
+        },
+        acquireJob
+      );
 
       const manifestations = repo.listManifestationsByBook(book.id);
       expect(manifestations).toHaveLength(1);
@@ -319,7 +333,7 @@ describe("worker acquire auto-acquire retries", () => {
       const releases = repo.listReleasesByBook(book.id);
       expect(releases.map((release) => release.title).sort()).toEqual([
         "Red Rising GraphicAudio Part 1 [MP3]",
-        "Red Rising GraphicAudio Part 2 [MP3]",
+        "Red Rising GraphicAudio Part 2 [MP3]"
       ]);
       const downloadPayloads = repo
         .listJobsByType("download")
@@ -327,7 +341,7 @@ describe("worker acquire auto-acquire retries", () => {
         .sort((a, b) => a.sequenceInManifestation - b.sequenceInManifestation);
       expect(downloadPayloads).toMatchObject([
         { manifestationId: manifestations[0]?.id, sequenceInManifestation: 0, preferAgentImport: true },
-        { manifestationId: manifestations[0]?.id, sequenceInManifestation: 1, preferAgentImport: true },
+        { manifestationId: manifestations[0]?.id, sequenceInManifestation: 1, preferAgentImport: true }
       ]);
       expect(JSON.stringify(fakeProvider.requests[0]?.input)).toContain("prefer GraphicAudio");
       expect(logs.some((line) => line.includes("parts=2"))).toBe(true);
@@ -336,669 +350,6 @@ describe("worker acquire auto-acquire retries", () => {
       torznab.stop();
       db.close();
     }
-  });
-});
-
-describe("worker robustness", () => {
-  test("does not crash when failed job row was deleted before markJobFailed", async () => {
-    const queuedJobs = [
-      {
-        id: 123,
-        type: "acquire",
-        status: "queued",
-        book_id: 1,
-        release_id: null,
-        payload_json: JSON.stringify({ bookId: 1, media: ["audio"] }),
-        error: null,
-        attempt_count: 0,
-        max_attempts: 5,
-        next_run_at: null,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      },
-    ];
-    const logs: string[] = [];
-    let stopWorker = false;
-
-    const fakeRepo = {
-      requeueRunningJobs: () => 0,
-      listRunnableJobs: () => queuedJobs.filter((job) => job.status === "queued"),
-      claimQueuedJob: (jobId: number) => {
-        const job = queuedJobs.find((candidate) => candidate.id === jobId && candidate.status === "queued");
-        if (!job) return null;
-        job.status = "running";
-        return job;
-      },
-      getBookRow: () => ({ id: 1, title: "Twilight", author: "Stephenie Meyer" }),
-      markJobFailed: () => null,
-    } as unknown as BooksRepo;
-
-    const worker = runWorker({
-      repo: fakeRepo,
-      getSettings: () =>
-        defaultSettings({
-          auth: { mode: "plex" },
-          torznab: [],
-        }),
-      shouldStop: () => stopWorker,
-      onLog: (line) => {
-        logs.push(line);
-        if (line.includes("failed but row missing")) {
-          stopWorker = true;
-        }
-      },
-    });
-
-    try {
-      const started = Date.now();
-      for (;;) {
-        if (logs.some((line) => line.includes("failed but row missing"))) break;
-        if (Date.now() - started > 3000) {
-          throw new Error("Timed out waiting for missing-row failure log");
-        }
-        await sleep(25);
-      }
-      await Promise.race([worker, sleep(1000)]);
-      expect(logs.some((line) => line.includes("failed but row missing"))).toBe(true);
-    } finally {
-      stopWorker = true;
-      await Promise.race([worker, sleep(1000)]);
-    }
-  });
-});
-
-describe("worker concurrency", () => {
-  test("serializes acquire jobs globally even for different media on the same book", async () => {
-    const queuedJobs = [
-      {
-        id: 1,
-        type: "acquire",
-        status: "queued",
-        book_id: 7,
-        release_id: null,
-        payload_json: JSON.stringify({ bookId: 7, media: ["audio"] }),
-        error: null,
-        attempt_count: 0,
-        max_attempts: 5,
-        next_run_at: null,
-        created_at: "2026-01-01T00:00:00.000Z",
-        updated_at: "2026-01-01T00:00:00.000Z",
-      },
-      {
-        id: 2,
-        type: "acquire",
-        status: "queued",
-        book_id: 7,
-        release_id: null,
-        payload_json: JSON.stringify({ bookId: 7, media: ["ebook"] }),
-        error: null,
-        attempt_count: 0,
-        max_attempts: 5,
-        next_run_at: null,
-        created_at: "2026-01-01T00:00:01.000Z",
-        updated_at: "2026-01-01T00:00:01.000Z",
-      },
-    ];
-    let stopWorker = false;
-    let active = 0;
-    let maxConcurrent = 0;
-    let processed = 0;
-
-    const fakeRepo = {
-      requeueRunningJobs: () => 0,
-      listRunnableJobs: () => queuedJobs.filter((job) => job.status === "queued"),
-      claimQueuedJob: (jobId: number) => {
-        const job = queuedJobs.find((candidate) => candidate.id === jobId && candidate.status === "queued");
-        if (!job) return null;
-        job.status = "running";
-        return job;
-      },
-      getAsset: () => null,
-      getRelease: () => null,
-    } as unknown as BooksRepo;
-
-    await Promise.race([
-      runWorker(
-        {
-          repo: fakeRepo,
-          getSettings: () => defaultSettings({ auth: { mode: "plex" } }),
-          shouldStop: () => stopWorker,
-        },
-        {
-          processJob: async () => {
-            active += 1;
-            maxConcurrent = Math.max(maxConcurrent, active);
-            await sleep(50);
-            active -= 1;
-            processed += 1;
-            if (processed === 2) stopWorker = true;
-            return "done";
-          },
-          handleJobFailure: async () => {
-            throw new Error("unexpected failure");
-          },
-        }
-      ),
-      sleep(1000),
-    ]);
-
-    expect(processed).toBe(2);
-    expect(maxConcurrent).toBe(1);
-  });
-
-  test("serializes conflicting same-media acquire jobs for the same book", async () => {
-    const queuedJobs = [
-      {
-        id: 1,
-        type: "acquire",
-        status: "queued",
-        book_id: 7,
-        release_id: null,
-        payload_json: JSON.stringify({ bookId: 7, media: ["audio"] }),
-        error: null,
-        attempt_count: 0,
-        max_attempts: 5,
-        next_run_at: null,
-        created_at: "2026-01-01T00:00:00.000Z",
-        updated_at: "2026-01-01T00:00:00.000Z",
-      },
-      {
-        id: 2,
-        type: "acquire",
-        status: "queued",
-        book_id: 7,
-        release_id: null,
-        payload_json: JSON.stringify({ bookId: 7, media: ["audio"] }),
-        error: null,
-        attempt_count: 0,
-        max_attempts: 5,
-        next_run_at: null,
-        created_at: "2026-01-01T00:00:01.000Z",
-        updated_at: "2026-01-01T00:00:01.000Z",
-      },
-    ];
-    let stopWorker = false;
-    let active = 0;
-    let maxConcurrent = 0;
-    let processed = 0;
-
-    const fakeRepo = {
-      requeueRunningJobs: () => 0,
-      listRunnableJobs: () => queuedJobs.filter((job) => job.status === "queued"),
-      claimQueuedJob: (jobId: number) => {
-        const job = queuedJobs.find((candidate) => candidate.id === jobId && candidate.status === "queued");
-        if (!job) return null;
-        job.status = "running";
-        return job;
-      },
-      getAsset: () => null,
-      getRelease: () => null,
-    } as unknown as BooksRepo;
-
-    await Promise.race([
-      runWorker(
-        {
-          repo: fakeRepo,
-          getSettings: () => defaultSettings({ auth: { mode: "plex" } }),
-          shouldStop: () => stopWorker,
-        },
-        {
-          processJob: async () => {
-            active += 1;
-            maxConcurrent = Math.max(maxConcurrent, active);
-            await sleep(50);
-            active -= 1;
-            processed += 1;
-            if (processed === 2) stopWorker = true;
-            return "done";
-          },
-          handleJobFailure: async () => {
-            throw new Error("unexpected failure");
-          },
-        }
-      ),
-      sleep(1000),
-    ]);
-
-    expect(processed).toBe(2);
-    expect(maxConcurrent).toBe(1);
-  });
-
-  test("starts newly queued non-conflicting jobs while a long job is still active", async () => {
-    const queuedJobs: Array<Record<string, unknown>> = [
-      {
-        id: 1,
-        type: "chapter_analysis",
-        status: "queued",
-        book_id: 7,
-        release_id: null,
-        payload_json: JSON.stringify({ assetId: 11, ebookAssetId: 21 }),
-        error: null,
-        attempt_count: 0,
-        max_attempts: 5,
-        next_run_at: null,
-        created_at: "2026-01-01T00:00:00.000Z",
-        updated_at: "2026-01-01T00:00:00.000Z",
-      },
-    ];
-    let stopWorker = false;
-    const started: number[] = [];
-    let releaseSecondJob: (() => void) | undefined;
-    const firstJobGate = new Promise<void>((resolve) => {
-      releaseSecondJob = resolve;
-    });
-
-    const fakeRepo = {
-      requeueRunningJobs: () => 0,
-      listRunnableJobs: () => queuedJobs.filter((job) => job.status === "queued"),
-      claimQueuedJob: (jobId: number) => {
-        const job = queuedJobs.find((candidate) => candidate.id === jobId && candidate.status === "queued");
-        if (!job) return null;
-        job.status = "running";
-        return job;
-      },
-      getAsset: (assetId: number) => (assetId === 11 ? { id: 11, book_id: 7, source_release_id: null } : { id: 12, book_id: 8, source_release_id: null }),
-      getRelease: () => null,
-    } as unknown as BooksRepo;
-
-    const worker = runWorker(
-      {
-        repo: fakeRepo,
-        getSettings: () => defaultSettings({ auth: { mode: "plex" } }),
-        shouldStop: () => stopWorker,
-      },
-      {
-        processJob: async (_ctx, job) => {
-          started.push(job.id);
-          if (job.id === 1) {
-            await firstJobGate;
-          }
-          if (job.id === 2) {
-            stopWorker = true;
-          }
-          return "done";
-        },
-        handleJobFailure: async () => {
-          throw new Error("unexpected failure");
-        },
-      }
-    );
-
-    try {
-      const startedWaitingAt = Date.now();
-      while (!started.includes(1)) {
-        if (Date.now() - startedWaitingAt > 1000) {
-          throw new Error("Timed out waiting for first job to start");
-        }
-        await sleep(10);
-      }
-
-      queuedJobs.push({
-        id: 2,
-        type: "download",
-        status: "queued",
-        book_id: 8,
-        release_id: 42,
-        payload_json: JSON.stringify({ infoHash: "abc123" }),
-        error: null,
-        attempt_count: 0,
-        max_attempts: 5,
-        next_run_at: null,
-        created_at: "2026-01-01T00:00:01.000Z",
-        updated_at: "2026-01-01T00:00:01.000Z",
-      });
-
-      const secondJobWaitingAt = Date.now();
-      while (!started.includes(2)) {
-        if (Date.now() - secondJobWaitingAt > 1000) {
-          throw new Error("Timed out waiting for second job to start while first was active");
-        }
-        await sleep(10);
-      }
-
-      expect(started).toEqual([1, 2]);
-    } finally {
-      releaseSecondJob?.();
-      stopWorker = true;
-      await Promise.race([worker, sleep(1000)]);
-    }
-  });
-
-  test("limits chapter analysis jobs to two in parallel for different assets", async () => {
-    const queuedJobs = [
-      {
-        id: 1,
-        type: "chapter_analysis",
-        status: "queued",
-        book_id: 7,
-        release_id: null,
-        payload_json: JSON.stringify({ assetId: 101, ebookAssetId: 201 }),
-        error: null,
-        attempt_count: 0,
-        max_attempts: 5,
-        next_run_at: null,
-        created_at: "2026-01-01T00:00:00.000Z",
-        updated_at: "2026-01-01T00:00:00.000Z",
-      },
-      {
-        id: 2,
-        type: "chapter_analysis",
-        status: "queued",
-        book_id: 9,
-        release_id: null,
-        payload_json: JSON.stringify({ assetId: 102, ebookAssetId: 202 }),
-        error: null,
-        attempt_count: 0,
-        max_attempts: 5,
-        next_run_at: null,
-        created_at: "2026-01-01T00:00:01.000Z",
-        updated_at: "2026-01-01T00:00:01.000Z",
-      },
-      {
-        id: 3,
-        type: "chapter_analysis",
-        status: "queued",
-        book_id: 10,
-        release_id: null,
-        payload_json: JSON.stringify({ assetId: 103, ebookAssetId: 203 }),
-        error: null,
-        attempt_count: 0,
-        max_attempts: 5,
-        next_run_at: null,
-        created_at: "2026-01-01T00:00:02.000Z",
-        updated_at: "2026-01-01T00:00:02.000Z",
-      },
-    ];
-    let stopWorker = false;
-    let active = 0;
-    let maxConcurrent = 0;
-    let processed = 0;
-
-    const assets = new Map([
-      [101, { id: 101, book_id: 7, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
-      [102, { id: 102, book_id: 9, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
-      [103, { id: 103, book_id: 10, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
-    ]);
-
-    const fakeRepo = {
-      requeueRunningJobs: () => 0,
-      listRunnableJobs: () => queuedJobs.filter((job) => job.status === "queued"),
-      claimQueuedJob: (jobId: number) => {
-        const job = queuedJobs.find((candidate) => candidate.id === jobId && candidate.status === "queued");
-        if (!job) return null;
-        job.status = "running";
-        return job;
-      },
-      getAsset: (assetId: number) => assets.get(assetId) ?? null,
-      getRelease: () => null,
-    } as unknown as BooksRepo;
-
-    await Promise.race([
-      runWorker(
-        {
-          repo: fakeRepo,
-          getSettings: () => defaultSettings({ auth: { mode: "plex" } }),
-          shouldStop: () => stopWorker,
-        },
-        {
-          processJob: async () => {
-            active += 1;
-            maxConcurrent = Math.max(maxConcurrent, active);
-            await sleep(50);
-            active -= 1;
-            processed += 1;
-            if (processed === 3) stopWorker = true;
-            return "done";
-          },
-          handleJobFailure: async () => {
-            throw new Error("unexpected failure");
-          },
-        }
-      ),
-      sleep(1000),
-    ]);
-
-    expect(processed).toBe(3);
-    expect(maxConcurrent).toBe(2);
-  });
-
-  test("prefers acquire jobs over older chapter analysis jobs while respecting the acquire throttle", async () => {
-    const queuedJobs = [
-      {
-        id: 1,
-        type: "chapter_analysis",
-        status: "queued",
-        book_id: 7,
-        release_id: null,
-        payload_json: JSON.stringify({ assetId: 101, ebookAssetId: 201 }),
-        error: null,
-        attempt_count: 0,
-        max_attempts: 5,
-        next_run_at: null,
-        created_at: "2026-01-01T00:00:00.000Z",
-        updated_at: "2026-01-01T00:00:00.000Z",
-      },
-      {
-        id: 2,
-        type: "chapter_analysis",
-        status: "queued",
-        book_id: 9,
-        release_id: null,
-        payload_json: JSON.stringify({ assetId: 102, ebookAssetId: 202 }),
-        error: null,
-        attempt_count: 0,
-        max_attempts: 5,
-        next_run_at: null,
-        created_at: "2026-01-01T00:00:01.000Z",
-        updated_at: "2026-01-01T00:00:01.000Z",
-      },
-      {
-        id: 3,
-        type: "chapter_analysis",
-        status: "queued",
-        book_id: 10,
-        release_id: null,
-        payload_json: JSON.stringify({ assetId: 103, ebookAssetId: 203 }),
-        error: null,
-        attempt_count: 0,
-        max_attempts: 5,
-        next_run_at: null,
-        created_at: "2026-01-01T00:00:02.000Z",
-        updated_at: "2026-01-01T00:00:02.000Z",
-      },
-      {
-        id: 4,
-        type: "acquire",
-        status: "queued",
-        book_id: 11,
-        release_id: null,
-        payload_json: JSON.stringify({ bookId: 11, media: ["audio"] }),
-        error: null,
-        attempt_count: 0,
-        max_attempts: 5,
-        next_run_at: null,
-        created_at: "2026-01-01T00:00:03.000Z",
-        updated_at: "2026-01-01T00:00:03.000Z",
-      },
-      {
-        id: 5,
-        type: "acquire",
-        status: "queued",
-        book_id: 12,
-        release_id: null,
-        payload_json: JSON.stringify({ bookId: 12, media: ["audio"] }),
-        error: null,
-        attempt_count: 0,
-        max_attempts: 5,
-        next_run_at: null,
-        created_at: "2026-01-01T00:00:04.000Z",
-        updated_at: "2026-01-01T00:00:04.000Z",
-      },
-    ];
-    let stopWorker = false;
-    const started: number[] = [];
-    let releaseAcquireOne: (() => void) | undefined;
-    const acquireOneGate = new Promise<void>((resolve) => {
-      releaseAcquireOne = resolve;
-    });
-    const assets = new Map([
-      [101, { id: 101, book_id: 7, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
-      [102, { id: 102, book_id: 9, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
-      [103, { id: 103, book_id: 10, kind: "single", mime: "audio/mp4", total_size: 1, duration_ms: 1, source_release_id: null, created_at: "", updated_at: "" }],
-    ]);
-
-    const fakeRepo = {
-      requeueRunningJobs: () => 0,
-      listRunnableJobs: () => queuedJobs.filter((job) => job.status === "queued"),
-      claimQueuedJob: (jobId: number) => {
-        const job = queuedJobs.find((candidate) => candidate.id === jobId && candidate.status === "queued");
-        if (!job) return null;
-        job.status = "running";
-        return job;
-      },
-      getAsset: (assetId: number) => assets.get(assetId) ?? null,
-      getRelease: () => null,
-    } as unknown as BooksRepo;
-
-    await Promise.race([
-      runWorker(
-        {
-          repo: fakeRepo,
-          getSettings: () => defaultSettings({ auth: { mode: "plex" } }),
-          shouldStop: () => stopWorker,
-        },
-        {
-          processJob: async (_ctx, job) => {
-            started.push(job.id);
-            if (job.id === 4) {
-              await acquireOneGate;
-            }
-            if (job.id === 5) {
-              stopWorker = true;
-            }
-            await sleep(25);
-            return "done";
-          },
-          handleJobFailure: async () => {
-            throw new Error("unexpected failure");
-          },
-        }
-      ),
-      sleep(1000),
-    ]);
-
-    const startedWaitingAt = Date.now();
-    while (!started.includes(4) || started.filter((id) => id <= 3).length < 3) {
-      if (Date.now() - startedWaitingAt > 1000) {
-        throw new Error("Timed out waiting for acquire priority observation");
-      }
-      await sleep(10);
-    }
-
-    expect(started[0]).toBe(4);
-    expect(started.includes(5)).toBe(false);
-    expect(started.filter((id) => id <= 3)).toEqual([1, 2, 3]);
-
-    releaseAcquireOne?.();
-    const secondAcquireWaitingAt = Date.now();
-    while (!started.includes(5)) {
-      if (Date.now() - secondAcquireWaitingAt > 1000) {
-        throw new Error("Timed out waiting for second acquire to start after first finished");
-      }
-      await sleep(10);
-    }
-  });
-
-  test("limits concurrent acquire jobs globally", async () => {
-    const queuedJobs = [
-      {
-        id: 1,
-        type: "acquire",
-        status: "queued",
-        book_id: 7,
-        release_id: null,
-        payload_json: JSON.stringify({ bookId: 7, media: ["audio"] }),
-        error: null,
-        attempt_count: 0,
-        max_attempts: 5,
-        next_run_at: null,
-        created_at: "2026-01-01T00:00:00.000Z",
-        updated_at: "2026-01-01T00:00:00.000Z",
-      },
-      {
-        id: 2,
-        type: "acquire",
-        status: "queued",
-        book_id: 8,
-        release_id: null,
-        payload_json: JSON.stringify({ bookId: 8, media: ["audio"] }),
-        error: null,
-        attempt_count: 0,
-        max_attempts: 5,
-        next_run_at: null,
-        created_at: "2026-01-01T00:00:01.000Z",
-        updated_at: "2026-01-01T00:00:01.000Z",
-      },
-      {
-        id: 3,
-        type: "acquire",
-        status: "queued",
-        book_id: 9,
-        release_id: null,
-        payload_json: JSON.stringify({ bookId: 9, media: ["audio"] }),
-        error: null,
-        attempt_count: 0,
-        max_attempts: 5,
-        next_run_at: null,
-        created_at: "2026-01-01T00:00:02.000Z",
-        updated_at: "2026-01-01T00:00:02.000Z",
-      },
-    ];
-    let stopWorker = false;
-    let active = 0;
-    let maxConcurrent = 0;
-    let processed = 0;
-
-    const fakeRepo = {
-      requeueRunningJobs: () => 0,
-      listRunnableJobs: () => queuedJobs.filter((job) => job.status === "queued"),
-      claimQueuedJob: (jobId: number) => {
-        const job = queuedJobs.find((candidate) => candidate.id === jobId && candidate.status === "queued");
-        if (!job) return null;
-        job.status = "running";
-        return job;
-      },
-      getAsset: () => null,
-      getRelease: () => null,
-    } as unknown as BooksRepo;
-
-    await Promise.race([
-      runWorker(
-        {
-          repo: fakeRepo,
-          getSettings: () => defaultSettings({ auth: { mode: "plex" } }),
-          shouldStop: () => stopWorker,
-        },
-        {
-          processJob: async () => {
-            active += 1;
-            maxConcurrent = Math.max(maxConcurrent, active);
-            await sleep(50);
-            active -= 1;
-            processed += 1;
-            if (processed === 3) stopWorker = true;
-            return "done";
-          },
-          handleJobFailure: async () => {
-            throw new Error("unexpected failure");
-          },
-        }
-      ),
-      sleep(1000),
-    ]);
-
-    expect(processed).toBe(3);
-    expect(maxConcurrent).toBe(1);
   });
 });
 
@@ -1016,9 +367,9 @@ describe("worker import recovery", () => {
           name: "Red Rising GraphicAudio Part 2",
           basePath: "/downloads/red-rising-part-2.m4b",
           sizeBytes: 1234,
-          completeAfterPolls: 1,
-        },
-      },
+          completeAfterPolls: 1
+        }
+      }
     });
 
     repo.updateSettings(
@@ -1028,8 +379,8 @@ describe("worker import recovery", () => {
           transport: "http-xmlrpc",
           url: rtorrent.url,
           username: "",
-          password: "",
-        },
+          password: ""
+        }
       })
     );
 
@@ -1037,7 +388,7 @@ describe("worker import recovery", () => {
     const manifestation = repo.addManifestation({
       bookId: book.id,
       kind: "audio",
-      label: "GraphicAudio dramatization",
+      label: "GraphicAudio dramatization"
     });
     const release = repo.createRelease({
       bookId: book.id,
@@ -1047,7 +398,7 @@ describe("worker import recovery", () => {
       mediaType: "audio",
       infoHash,
       url: "https://example.com/red-rising-part-2.torrent",
-      status: "downloading",
+      status: "downloading"
     });
     const downloadJob = repo.createJob({
       type: "download",
@@ -1057,16 +408,19 @@ describe("worker import recovery", () => {
         infoHash,
         preferAgentImport: true,
         manifestationId: manifestation.id,
-        sequenceInManifestation: 1,
-      },
+        sequenceInManifestation: 1
+      }
     });
 
     try {
-      const result = await processDownloadJob({
-        repo,
-        getSettings: () => repo.getSettings(),
-        onLog: () => {},
-      }, downloadJob);
+      const result = await processDownloadJob(
+        {
+          repo,
+          getSettings: () => repo.getSettings(),
+          onLog: () => {}
+        },
+        downloadJob
+      );
 
       expect(result).toBe("done");
       const importJobs = repo.listJobsByType("import").filter((job) => job.release_id === release.id);
@@ -1100,8 +454,8 @@ describe("worker import recovery", () => {
         libraryRoot,
         agents: {
           ...defaultSettings().agents,
-          apiKey: "test-key",
-        },
+          apiKey: "test-key"
+        }
       })
     );
 
@@ -1114,7 +468,7 @@ describe("worker import recovery", () => {
       mediaType: "audio",
       infoHash: "4444444444444444444444444444444444444444",
       url: "https://example.com/red-rising.torrent",
-      status: "imported",
+      status: "imported"
     });
     const importJob = repo.createJob({
       type: "import",
@@ -1124,8 +478,8 @@ describe("worker import recovery", () => {
         basePath: downloadDir,
         reason: "user_reported_wrong_file",
         userReportedIssue: true,
-        rejectedSourcePaths: [onlyFile],
-      },
+        rejectedSourcePaths: [onlyFile]
+      }
     });
 
     const originalFetch = globalThis.fetch;
@@ -1134,11 +488,14 @@ describe("worker import recovery", () => {
     }) as unknown as typeof fetch;
 
     try {
-      const result = await processImportJob({
-        repo,
-        getSettings: () => repo.getSettings(),
-        onLog: () => {},
-      }, importJob);
+      const result = await processImportJob(
+        {
+          repo,
+          getSettings: () => repo.getSettings(),
+          onLog: () => {}
+        },
+        importJob
+      );
 
       expect(result).toBe("done");
       const finalImportJob = repo.getJob(importJob.id);
@@ -1186,12 +543,12 @@ describe("worker import recovery", () => {
           transport: "http-xmlrpc",
           url: rtorrentUrl,
           username: "",
-          password: "",
+          password: ""
         },
         agents: {
           ...defaultSettings().agents,
-          apiKey: "",
-        },
+          apiKey: ""
+        }
       })
     );
 
@@ -1204,13 +561,13 @@ describe("worker import recovery", () => {
       mediaType: "audio",
       infoHash,
       url: "https://example.com/wrong.torrent",
-      status: "downloaded",
+      status: "downloaded"
     });
     const importJob = repo.createJob({
       type: "import",
       bookId: book.id,
       releaseId: release.id,
-      payload: { reason: "test-import-recovery" },
+      payload: { reason: "test-import-recovery" }
     });
 
     const originalFetch = globalThis.fetch;
@@ -1239,20 +596,26 @@ describe("worker import recovery", () => {
         if (method === "d.message") return "<string></string>";
         throw new Error(`Unexpected rTorrent method in test: ${method}`);
       })();
-      return new Response(`<?xml version="1.0"?><methodResponse><params><param><value>${xmlValue}</value></param></params></methodResponse>`, {
-        status: 200,
-        headers: { "Content-Type": "text/xml" },
-      });
+      return new Response(
+        `<?xml version="1.0"?><methodResponse><params><param><value>${xmlValue}</value></param></params></methodResponse>`,
+        {
+          status: 200,
+          headers: { "Content-Type": "text/xml" }
+        }
+      );
     }) as unknown as typeof fetch;
 
     let stopWorker = false;
     const logs: string[] = [];
-    const worker = runWorker({
-      repo,
-      getSettings: () => repo.getSettings(),
-      shouldStop: () => stopWorker,
-      onLog: (line) => logs.push(line),
-    });
+    const worker = runWorker(
+      {
+        repo,
+        getSettings: () => repo.getSettings(),
+        shouldStop: () => stopWorker,
+        onLog: (line) => logs.push(line)
+      },
+      { retryDelayMs: 1 }
+    );
 
     try {
       const started = Date.now();
@@ -1311,8 +674,8 @@ describe("worker stalled torrent recovery", () => {
           transport: "http-xmlrpc",
           url: rtorrentUrl,
           username: "",
-          password: "",
-        },
+          password: ""
+        }
       })
     );
 
@@ -1325,13 +688,13 @@ describe("worker stalled torrent recovery", () => {
       mediaType: "audio",
       infoHash,
       url: "https://example.com/dune-audio.torrent",
-      status: "downloading",
+      status: "downloading"
     });
     const downloadJob = repo.createJob({
       type: "download",
       bookId: book.id,
       releaseId: release.id,
-      payload: { infoHash },
+      payload: { infoHash }
     });
 
     const originalFetch = globalThis.fetch;
@@ -1362,19 +725,22 @@ describe("worker stalled torrent recovery", () => {
         `<?xml version="1.0"?><methodResponse><params><param><value>${xmlValue}</value></param></params></methodResponse>`,
         {
           status: 200,
-          headers: { "Content-Type": "text/xml" },
+          headers: { "Content-Type": "text/xml" }
         }
       );
     }) as unknown as typeof fetch;
 
     let stopWorker = false;
     const logs: string[] = [];
-    const worker = runWorker({
-      repo,
-      getSettings: () => repo.getSettings(),
-      shouldStop: () => stopWorker,
-      onLog: (line) => logs.push(line),
-    });
+    const worker = runWorker(
+      {
+        repo,
+        getSettings: () => repo.getSettings(),
+        shouldStop: () => stopWorker,
+        onLog: (line) => logs.push(line)
+      },
+      { retryDelayMs: 1 }
+    );
 
     try {
       const started = Date.now();
@@ -1429,8 +795,8 @@ describe("worker stalled torrent recovery", () => {
           transport: "http-xmlrpc",
           url: rtorrentUrl,
           username: "",
-          password: "",
-        },
+          password: ""
+        }
       })
     );
 
@@ -1443,13 +809,13 @@ describe("worker stalled torrent recovery", () => {
       mediaType: "audio",
       infoHash,
       url: "https://example.com/dune-audio.torrent",
-      status: "downloading",
+      status: "downloading"
     });
     const downloadJob = repo.createJob({
       type: "download",
       bookId: book.id,
       releaseId: release.id,
-      payload: { infoHash },
+      payload: { infoHash }
     });
 
     const originalFetch = globalThis.fetch;
@@ -1478,7 +844,7 @@ describe("worker stalled torrent recovery", () => {
           `<?xml version="1.0"?><methodResponse><params><param><value>${xmlValue}</value></param></params></methodResponse>`,
           {
             status: 200,
-            headers: { "Content-Type": "text/xml" },
+            headers: { "Content-Type": "text/xml" }
           }
         );
       }
@@ -1489,7 +855,7 @@ describe("worker stalled torrent recovery", () => {
     const worker = runWorker({
       repo,
       getSettings: () => repo.getSettings(),
-      shouldStop: () => stopWorker,
+      shouldStop: () => stopWorker
     });
 
     try {
@@ -1533,9 +899,9 @@ describe("worker stalled torrent recovery", () => {
           pushover: {
             enabled: true,
             apiToken: "token",
-            userKey: "user",
-          },
-        },
+            userKey: "user"
+          }
+        }
       })
     );
 
@@ -1551,8 +917,8 @@ describe("worker stalled torrent recovery", () => {
         priorFailure: true,
         requireResult: true,
         notifyOnFailure: true,
-        failureContext: "Auto-reacquire after stalled torrent for release 12",
-      },
+        failureContext: "Auto-reacquire after stalled torrent for release 12"
+      }
     });
 
     const originalFetch = globalThis.fetch;
@@ -1562,7 +928,7 @@ describe("worker stalled torrent recovery", () => {
         pushoverBodies.push(String(init?.body ?? ""));
         return new Response('{"status":1}', {
           status: 200,
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json" }
         });
       }
       throw new Error(`Unexpected fetch url: ${url}`);
@@ -1572,7 +938,7 @@ describe("worker stalled torrent recovery", () => {
     const worker = runWorker({
       repo,
       getSettings: () => repo.getSettings(),
-      shouldStop: () => stopWorker,
+      shouldStop: () => stopWorker
     });
 
     try {
@@ -1620,7 +986,7 @@ describe("download ETA polling", () => {
         sizeBytes: 100,
         leftBytes: 10,
         downRate: 1,
-        message: null,
+        message: null
       },
       5000
     );
@@ -1641,7 +1007,7 @@ describe("download ETA polling", () => {
         sizeBytes: 500,
         leftBytes: 500,
         downRate: 5,
-        message: null,
+        message: null
       },
       5000
     );
@@ -1662,7 +1028,7 @@ describe("download ETA polling", () => {
         sizeBytes: 100,
         leftBytes: 50,
         downRate: 0,
-        message: null,
+        message: null
       },
       5000
     );
@@ -1683,7 +1049,7 @@ describe("download ETA polling", () => {
         sizeBytes: 1000,
         leftBytes: null,
         downRate: 2,
-        message: null,
+        message: null
       },
       5000
     );

@@ -51,7 +51,7 @@ test("scanner resume reuses completed directory stages and stable discovery", as
       expect(inStep).toBe(false);
       const saved = db.query("SELECT result FROM scan_checkpoints WHERE name = ?").get(name) as { result: string } | null;
       if (saved) return JSON.parse(saved.result).value;
-      if (!interrupted && name.includes("B") && name.endsWith(":files")) {
+      if (!interrupted && name.endsWith(`${JSON.stringify(["Author", "B"])}:files`)) {
         interrupted = true;
         throw new Error("interrupted before second directory");
       }

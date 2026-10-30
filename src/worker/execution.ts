@@ -8,7 +8,16 @@ import { handleJobFailure } from "./failure";
 import { workerLog, type WorkerContext } from "./context";
 import { jobLockKeys, lockSetsConflict } from "./locks";
 
-export const EXECUTION_JOB_TYPES = ["acquire", "download", "import"] as const;
+export const EXECUTION_JOB_TYPES = [
+  "acquire",
+  "download",
+  "import",
+  "reconcile",
+  "full_library_refresh",
+  "chapter_analysis",
+  "cover_generation",
+  "metadata_hydration"
+] as const;
 
 /** Job rows are an outbox and Activity projection; Reflow owns execution. */
 export async function createJobExecutionRuntime(
@@ -16,17 +25,21 @@ export async function createJobExecutionRuntime(
   databasePath: string,
   options: {
     leaseMs?: number;
+    retryDelayMs?: number;
+    processJob?: typeof processJob;
     onCheckpoint?: (jobId: number, stepName: string) => Promise<void>;
   } = {}
 ) {
   const leaseMs = options.leaseMs ?? 30_000;
+  let stopping = false;
   const activeLocks = (ctx.activeLocks ??= new Set<string>());
+  const laneOwners = new Map<string, { owner: string; count: number }>();
   const storage = new SQLiteStorage(databasePath);
   const workflows = EXECUTION_JOB_TYPES.map((type) =>
     createWorkflow(
       {
         name: `media-${type}-v1` as const,
-        concurrency: type === "acquire" ? 1 : type === "import" ? 2 : 16,
+        concurrency: type === "acquire" ? 1 : type === "import" || type === "chapter_analysis" ? 2 : 16,
         input: z.object({ jobId: z.number().int().positive(), generation: z.number().int().nonnegative().default(0) }),
         maxOperations: 200_000
       },
@@ -40,6 +53,7 @@ export async function createJobExecutionRuntime(
         if (!ctx.repo.ownJobExecution(input.jobId, runId, token)) throw new RunCancelledError(runId);
         const signals = new Set<AbortSignal>();
         const assertActive = () => {
+          if (stopping) throw new LeaseExpiredError(runId);
           for (const signal of signals) signal.throwIfAborted();
           const owner = ctx.repo.getJobExecution(input.jobId);
           if (owner?.run_id !== runId || owner.owner_token !== token) throw new LeaseExpiredError(runId);
@@ -51,23 +65,45 @@ export async function createJobExecutionRuntime(
           assertActive,
           run: <T>(name: string, handler: () => T | Promise<T>): Promise<T> =>
             step.run<unknown>(name, {
-              retry: { maxAttempts: 3, backoff: "exponential", initialDelay: 1000 },
+              retry: {
+                maxAttempts: ctx.repo.getJob(input.jobId)?.max_attempts ?? 5,
+                backoff: "exponential",
+                initialDelay: options.retryDelayMs ?? 1000
+              },
               handler: async ({ signal }) => {
                 signals.add(signal);
                 const current = ctx.repo.getJob(input.jobId);
-                const keys = current ? jobLockKeys(ctx.repo, current) : [];
+                // The execution key also makes jobs without domain lanes visible
+                // to an exclusive filesystem refresh. Sibling callbacks share lanes.
+                const keys = [...(current ? jobLockKeys(ctx.repo, current) : []), `execution:${token}`];
                 let locked = false;
                 try {
                   assertActive();
-                  while (lockSetsConflict(activeLocks, keys)) {
+                  while (
+                    lockSetsConflict(
+                      new Set([...activeLocks].filter((key) => laneOwners.get(key)?.owner !== token)),
+                      keys
+                    )
+                  ) {
                     assertActive();
                     await Bun.sleep(30);
                   }
-                  for (const key of keys) activeLocks.add(key);
+                  for (const key of keys) {
+                    const lane = laneOwners.get(key);
+                    laneOwners.set(key, { owner: token, count: (lane?.count ?? 0) + 1 });
+                    activeLocks.add(key);
+                  }
                   locked = true;
                   return await handler();
                 } finally {
-                  if (locked) for (const key of keys) activeLocks.delete(key);
+                  if (locked)
+                    for (const key of keys) {
+                      const lane = laneOwners.get(key)!;
+                      if (--lane.count === 0) {
+                        laneOwners.delete(key);
+                        activeLocks.delete(key);
+                      }
+                    }
                   signals.delete(signal);
                 }
               }
@@ -76,7 +112,8 @@ export async function createJobExecutionRuntime(
         };
         const job = await execution.run("job-input", () => ctx.repo.getJob(input.jobId)!);
         const ownedRepo = ctx.repo.forExecution(assertActive);
-        await processJob({ ...ctx, repo: ownedRepo, execution }, job);
+        const result = await (options.processJob ?? processJob)({ ...ctx, repo: ownedRepo, execution }, job);
+        if (result !== "done") throw new Error(`Job ${job.id} returned legacy rescheduling instead of durable sleep`);
         await execution.run("operation-finish", () => {
           const current = ownedRepo.getJob(job.id);
           if (current?.status === "running") ownedRepo.markJobSucceeded(job.id);
@@ -113,6 +150,11 @@ export async function createJobExecutionRuntime(
           continue;
         }
         if (job.status === "failed") continue;
+        if (!(EXECUTION_JOB_TYPES as readonly string[]).includes(job.type)) {
+          ctx.repo.markJobFailed(job.id, `Unsupported job type: ${job.type}`);
+          workerLog(ctx, `[execution] job=${job.id} unsupported type=${job.type}`);
+          continue;
+        }
         if (job.next_run_at && Date.parse(job.next_run_at) > Date.now()) continue;
         if (!link) {
           const name = `media-${job.type}-v1` as `media-${(typeof EXECUTION_JOB_TYPES)[number]}-v1`;
@@ -129,10 +171,16 @@ export async function createJobExecutionRuntime(
         if (!status) throw new Error(`Missing execution ${link.run_id} for job ${job.id}`);
         if (status.run.status === "failed") {
           if (job.status === "running") {
-            await handleJobFailure(ctx, job, new Error(status.run.error?.message ?? "Execution failed"), {
-              runId: link.run_id,
-              token: link.owner_token
-            });
+            await handleJobFailure(
+              ctx,
+              job,
+              new Error(status.run.error?.message ?? "Execution failed"),
+              {
+                runId: link.run_id,
+                token: link.owner_token
+              },
+              Math.max(1, ...status.steps.map((step) => step.attempts))
+            );
           } else {
             await engine.resume(link.run_id);
           }
@@ -148,6 +196,7 @@ export async function createJobExecutionRuntime(
       }
     },
     async stop() {
+      stopping = true;
       await engine.stop();
       await storage.close();
     }

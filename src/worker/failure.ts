@@ -4,11 +4,6 @@ import type { JobRow } from "../app-types";
 import type { AcquirePayload } from "./acquire";
 import { workerLog, type WorkerContext } from "./context";
 
-function backoffMs(attempt: number): number {
-  const safeAttempt = Math.max(0, Math.trunc(attempt));
-  return Math.min(5 * 60_000, 1_000 * 2 ** safeAttempt);
-}
-
 async function notifyBestEffort(ctx: WorkerContext, title: string, message: string): Promise<boolean> {
   try {
     const result = await sendPushoverNotification(ctx.getSettings(), { title, message });
@@ -45,25 +40,21 @@ export async function handleJobFailure(
   ctx: WorkerContext,
   job: JobRow,
   error: unknown,
-  expectedOwner?: { runId: string; token: string | null }
+  expectedOwner: { runId: string; token: string | null },
+  attempts = 1
 ): Promise<void> {
   const message = (error as Error).message;
-  const next = new Date(Date.now() + backoffMs(job.attempt_count)).toISOString();
-  const failed = (
-    expectedOwner
-      ? ctx.repo.transaction(() => {
-          const current = ctx.repo.getJob(job.id);
-          const execution = ctx.repo.getJobExecution(job.id);
-          if (
-            current?.status !== "running" ||
-            execution?.run_id !== expectedOwner.runId ||
-            execution.owner_token !== expectedOwner.token
-          )
-            return null;
-          return ctx.repo.markJobFailed(job.id, message, next);
-        })
-      : ctx.repo.markJobFailed(job.id, message, next)
-  ) as { status: string } | null;
+  const failed = ctx.repo.transaction(() => {
+    const current = ctx.repo.getJob(job.id);
+    const execution = ctx.repo.getJobExecution(job.id);
+    if (
+      current?.status !== "running" ||
+      execution?.run_id !== expectedOwner.runId ||
+      execution.owner_token !== expectedOwner.token
+    )
+      return null;
+    return ctx.repo.markJobFailed(job.id, message, attempts);
+  });
   if (!failed) {
     workerLog(ctx, `[worker] job=${job.id} type=${job.type} failed but row missing (likely deleted) error=${message}`);
     return;
