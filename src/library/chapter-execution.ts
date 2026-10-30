@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { LeaseExpiredError, RunCancelledError } from "reflow-ts";
+import { isRunControlError } from "reflow-ts";
 
 import { configDir } from "../config";
 import type { WorkerContext } from "../worker/context";
@@ -10,7 +10,7 @@ export type ChapterExecutionContext = Pick<WorkerContext, "execution">;
 
 export function rethrowChapterExecutionError(ctx: ChapterExecutionContext, error: unknown): void {
   ctx.execution?.assertActive();
-  if (error instanceof LeaseExpiredError || error instanceof RunCancelledError) throw error;
+  if (isRunControlError(error)) throw error;
 }
 
 /** Keep agent traces/transcript evidence in artifacts, not the workflow journal. */

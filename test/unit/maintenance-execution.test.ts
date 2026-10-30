@@ -143,3 +143,31 @@ test("reconciliation retry after a lost checkpoint does not duplicate its import
     db.close();
   }
 });
+
+test("one missing metadata result does not prevent later books from hydrating", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  const repo = new BooksRepo(db);
+  const missing = repo.createBook({ title: "Missing", author: "Author" });
+  const found = repo.createBook({ title: "Found", author: "Author" });
+  repo.updateBookMetadata(found.id, { identifiers: { openlibrary: "/works/OL123W" } });
+  const job = repo.createJob({ type: "metadata_hydration" });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: unknown) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/search.json") {
+      const query = url.searchParams.get("q") ?? "";
+      return Response.json({ docs: query.includes("Missing") ? [] : [{ key: "/works/OL123W", title: "Found", author_name: ["Author"] }] });
+    }
+    if (url.pathname.endsWith("editions.json")) return Response.json({ entries: [] });
+    return Response.json({ description: "Found metadata." });
+  }) as typeof fetch;
+  try {
+    await expect(processMetadataHydrationJob(journalContext(repo, new Map()), job)).rejects.toThrow(String(missing.id));
+    expect(repo.getBookRow(found.id)?.description).toBe("Found metadata.");
+    expect(repo.getBookRow(missing.id)?.openlibrary_hydrated_at).toBeNull();
+  } finally {
+    globalThis.fetch = originalFetch;
+    db.close();
+  }
+});

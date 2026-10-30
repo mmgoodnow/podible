@@ -1,4 +1,5 @@
 import type { JobRow } from "../app-types";
+import { isRunControlError } from "reflow-ts";
 import {
   CURRENT_OPENLIBRARY_METADATA_VERSION,
   hydrateBookFromOpenLibrary,
@@ -28,18 +29,31 @@ export async function processMetadataHydrationJob(ctx: WorkerContext, job: JobRo
     ctx.repo.listBooksWithStaleOpenLibraryMetadata(CURRENT_OPENLIBRARY_METADATA_VERSION).map((book) => ({ id: book.id }))
   );
   const failed: number[] = [];
+  let fatalStepError: unknown;
 
   for (const row of stale) {
     const book = ctx.repo.getBook(row.id);
     if (!book) continue;
-    if (!(await hydrateBookFromOpenLibrary(ctx.repo, book, { ctx, stepPrefix: `metadata:${row.id}`, requireMetadata: true }))) {
+    try {
+      if (!(await hydrateBookFromOpenLibrary(ctx.repo, book, { ctx, stepPrefix: `metadata:${row.id}`, requireMetadata: true }))) {
+        failed.push(row.id);
+        continue;
+      }
+    } catch (error) {
+      if (isRunControlError(error)) throw error;
+      ctx.execution?.assertActive();
+      fatalStepError ??= error;
       failed.push(row.id);
+      workerLog(ctx, `[metadata-hydration] book=${row.id} error=${String(error)}`);
       continue;
     }
     workerLog(ctx, `[metadata-hydration] book=${row.id} version=${CURRENT_OPENLIBRARY_METADATA_VERSION} hydrated=1`);
   }
 
   if (failed.length > 0) {
+    // Preserve the engine's failed-step identity so an explicit retry can
+    // re-execute that fetch instead of replaying it as a handled failure.
+    if (fatalStepError) throw fatalStepError;
     throw new Error(`Open Library metadata hydration failed for book ids: ${failed.join(", ")}`);
   }
 

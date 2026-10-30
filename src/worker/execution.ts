@@ -19,6 +19,15 @@ export const EXECUTION_JOB_TYPES = [
   "metadata_hydration"
 ] as const;
 
+export function executionRetryPolicy(maxAttempts: number, initialDelay?: number) {
+  const longBudget = maxAttempts > 8;
+  return {
+    maxAttempts,
+    backoff: longBudget ? "linear" as const : "exponential" as const,
+    initialDelay: initialDelay ?? (longBudget ? 30_000 : 1_000),
+  };
+}
+
 /** Job rows are an outbox and Activity projection; Reflow owns execution. */
 export async function createJobExecutionRuntime(
   ctx: WorkerContext,
@@ -65,11 +74,7 @@ export async function createJobExecutionRuntime(
           assertActive,
           run: <T>(name: string, handler: () => T | Promise<T>): Promise<T> =>
             step.run<unknown>(name, {
-              retry: {
-                maxAttempts: ctx.repo.getJob(input.jobId)?.max_attempts ?? 5,
-                backoff: "exponential",
-                initialDelay: options.retryDelayMs ?? 1000
-              },
+              retry: executionRetryPolicy(ctx.repo.getJob(input.jobId)?.max_attempts ?? 5, options.retryDelayMs),
               handler: async ({ signal }) => {
                 signals.add(signal);
                 const current = ctx.repo.getJob(input.jobId);
@@ -182,7 +187,14 @@ export async function createJobExecutionRuntime(
               Math.max(1, ...status.steps.map((step) => step.attempts))
             );
           } else {
-            await engine.resume(link.run_id);
+            if (job.type === "metadata_hydration") {
+              // A batch may have collected several exhausted book failures.
+              // Reflow.resume preserves handled failures; an explicit batch
+              // retry must clear all failed steps, keeping completed books.
+              await storage.requeueRun(link.run_id);
+            } else {
+              await engine.resume(link.run_id);
+            }
           }
         } else if (status.run.status === "cancelled" && job.status === "queued") {
           await engine.resume(link.run_id);

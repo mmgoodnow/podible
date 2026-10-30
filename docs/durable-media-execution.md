@@ -54,6 +54,12 @@ IDs are preserved, and SQLite no longer constrains operation names with a
 domain-specific type enum. Application code still validates registered types.
 Do not run an old worker against the same database during rollout.
 
+Normal five-attempt steps use one-second exponential backoff. Longer retry
+budgets use thirty-second linear backoff: twenty attempts span 95 minutes of
+waiting, rather than six days of uncapped exponential delays. A failed book's
+metadata step does not prevent later books from hydrating; engine control-flow
+signals still propagate without being turned into domain failures.
+
 Resource lanes remain in-process policy for this single-server deployment:
 an exclusive refresh cannot inspect hardlinks during import publication.
 Parallel callbacks belonging to one execution share its lanes, so transcription
