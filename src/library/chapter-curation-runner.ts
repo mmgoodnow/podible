@@ -12,6 +12,7 @@ import { z } from "zod";
 
 import { TEXT_AGENT_MODEL } from "../ai-models";
 import type { EpubChapterEntry } from "./chapter-analysis";
+import { chapterArtifactStep } from "./chapter-execution";
 import {
   type ChapterCurationContext,
   type ChapterCurationTiming,
@@ -2295,7 +2296,7 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
       tracingDisabled: true,
       traceIncludeSensitiveData: false,
     });
-    const audibleNodeSelection = await classifyAudibleEpubNodes(ctx, runner);
+    const audibleNodeSelection = await chapterArtifactStep(ctx, "chapter:curation:audible-nodes", () => classifyAudibleEpubNodes(ctx, runner));
     const audibleCurationCtx = applyAudibleEpubNodeSelection(ctx, audibleNodeSelection);
     const embeddedCurationCtx = applyEmbeddedAudioChapterNodeScope({
       ...ctx,
@@ -2415,7 +2416,7 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
 
     const nodeChapters = await resolveNodeBoundaryChapters(
       curationCtx,
-      async (targetBoundary): Promise<NodeBoundaryDecision | null> => {
+      (targetBoundary): Promise<NodeBoundaryDecision | null> => chapterArtifactStep(curationCtx, `chapter:curation:node:${targetBoundary.epubNodeId}`, async () => {
         const startedAt = Date.now();
         logChapterCurationEvent(curationCtx, {
           type: "node-boundary-start",
@@ -2575,10 +2576,11 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
           }
         }
         return null;
-      },
+      }),
       { maxConcurrency: nodeBoundaryMaxConcurrency, reports: nodeBoundaryReports }
     );
 
+    ctx.execution?.assertActive();
     if (nodeChapters && nodeChapters.length > 0) {
       const resolvedReports = nodeBoundaryReports.filter((report) => report.outcome === "accepted" || report.outcome === "skipped").length;
       const failedReports = nodeBoundaryReports.filter((report) => report.outcome === "failed").length;

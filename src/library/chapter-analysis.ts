@@ -15,10 +15,12 @@ import { configDir, ensureConfigDirSync } from "../config";
 import type { AppSettings, AssetFileRow, AssetRow, BookRow, JobRow, ManifestationRow } from "../app-types";
 import { readFfprobeChapters } from "../media/probe-cache";
 import type { BooksRepo } from "../repo";
+import { durableStep, type WorkerContext } from "../worker/context";
 import { slugify } from "../utils/strings";
 import { selectPreferredAudioManifestation } from "./asset-selection";
 export { selectPreferredDownloadableEbookAsset } from "./asset-selection";
 import { runAgenticChapterCurationDetailed } from "./chapter-curation";
+import { chapterArtifactStep, rethrowChapterExecutionError } from "./chapter-execution";
 import type { ChapterCurationTiming } from "./chapter-curation";
 
 const CHAPTER_ANALYSIS_SOURCE = "whisper_transcript";
@@ -295,11 +297,7 @@ type GlossaryTermStats = {
   chapterHits: Set<number>;
 };
 
-type ChapterAnalysisContext = {
-  repo: BooksRepo;
-  getSettings: () => AppSettings;
-  onLog?: (message: string) => void;
-};
+type ChapterAnalysisContext = Pick<WorkerContext, "repo" | "getSettings" | "onLog" | "execution" | "modelProvider">;
 
 type ChapterAnalysisDeps = {
   loadEpubEntries: typeof loadEpubEntries;
@@ -1215,8 +1213,13 @@ function transcriptArtifactPath(manifestationId: number, fingerprint: string): s
 async function persistTranscriptArtifact(manifestationId: number, fingerprint: string, transcriptJson: string): Promise<string> {
   ensureConfigDirSync();
   await mkdir(TRANSCRIPTS_DIR, { recursive: true });
-  const filePath = transcriptArtifactPath(manifestationId, fingerprint);
-  await writeFile(filePath, transcriptJson);
+  // Immutable content paths keep a late/stale writer from changing an artifact
+  // already referenced by a newer owner's successful transcript row.
+  const contentHash = createHash("sha256").update(transcriptJson).digest("hex");
+  const filePath = transcriptArtifactPath(manifestationId, `${fingerprint}-${contentHash}`);
+  const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(temporaryPath, transcriptJson);
+  await rename(temporaryPath, filePath);
   return filePath;
 }
 
@@ -1394,7 +1397,8 @@ async function transcribeAssetWithDeps(
       `[chapter-analysis] job=${job.id} asset=${asset.id} chunks=${plans.length} extract_concurrency=${CHAPTER_ANALYSIS_EXTRACT_CONCURRENCY} transcribe_concurrency=${CHAPTER_ANALYSIS_TRANSCRIPTION_CONCURRENCY}`
     );
     const persistedChunks = await Promise.all(
-      plans.map(async (plan) => {
+      plans.map((plan) => durableStep(ctx, `chapter:asset:${asset.id}:chunk:${plan.index}`, async () => {
+        ctx.execution?.assertActive();
         const cached = await loadCachedTranscriptChunk(chunkCacheDir, plan);
         if (cached) {
           log(
@@ -1407,6 +1411,7 @@ async function transcribeAssetWithDeps(
         let clipPath: string | null = null;
         try {
           clipPath = await limitExtract(async () => {
+            ctx.execution?.assertActive();
             log(
               ctx,
               `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=extract start_ms=${plan.startMs} duration_ms=${plan.durationMs}`
@@ -1421,13 +1426,16 @@ async function transcribeAssetWithDeps(
             });
           });
           const transcribed = await limitTranscribe(async () => {
+            ctx.execution?.assertActive();
             log(
               ctx,
               `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=transcribe clip=${JSON.stringify(clipPath)}`
             );
             return deps.transcribeChunk(settings, clipPath!, prompt, book, manifestation);
           });
+          ctx.execution?.assertActive();
           const persisted = await persistTranscriptChunk(chunkCacheDir, plan, transcribed);
+          ctx.execution?.assertActive();
           log(
             ctx,
             `[chapter-analysis] job=${job.id} asset=${asset.id} chunk=${plan.index + 1}/${plans.length} stage=done words=${transcribed.words.length} segments=${transcribed.segments.length}`
@@ -1436,7 +1444,7 @@ async function transcribeAssetWithDeps(
         } finally {
           if (clipPath) await rm(clipPath, { force: true }).catch(() => undefined);
         }
-      })
+      }))
     );
     const merged = await mergePersistedTranscriptChunks(persistedChunks);
     if (merged.words.length === 0) throw new Error("Whole-book transcription did not produce usable word timestamps");
@@ -1672,7 +1680,9 @@ async function tryAgenticCuration(
   payload: { manifestationId?: number; ebookAssetId?: number },
   settings: AppSettings,
   combinedFingerprint: string,
-  runCuration: typeof runAgenticChapterCurationDetailed
+  runCuration: typeof runAgenticChapterCurationDetailed,
+  loadEntries: typeof loadEpubEntries,
+  transcriptPath: string | null
 ): Promise<AgenticCurationResult | null> {
   if (!settings.agents.apiKey.trim()) return null;
   if (!payload.ebookAssetId) return null;
@@ -1688,18 +1698,19 @@ async function tryAgenticCuration(
 
   let epubEntries: EpubChapterEntry[];
   try {
-    epubEntries = await loadEpubEntries(ebookFile.path);
-  } catch {
+    epubEntries = await chapterArtifactStep(ctx, "chapter:curation:epub", () => loadEntries(ebookFile.path));
+  } catch (error) {
+    rethrowChapterExecutionError(ctx, error);
     return null;
   }
 
-  const transcript = await loadStoredManifestationTranscriptPayload(ctx.repo, manifestation.id);
-  if (!transcript) return null;
+  if (!transcriptPath) return null;
+  const transcript = publicStoredTranscriptPayload(JSON.parse(await Bun.file(transcriptPath).text()) as StoredTranscriptPayload);
 
   const embeddedChapters = await buildEmbeddedChaptersForContainers(audioContainers);
 
   const totalDurationMs = manifestation.duration_ms ?? audioContainers.reduce((sum, c) => sum + (c.asset.duration_ms ?? 0), 0);
-  const runId = new Date().toISOString();
+  const runId = await durableStep(ctx, "chapter:curation-run-id", () => new Date().toISOString());
   const curationRunDir = path.join(configDir, "chapter-curation-runs", slugify(`${book.author}-${book.title}`) || `book-${book.id}`);
   const debugEventLogPath = path.join(curationRunDir, `agent-events-${runId}.jsonl`);
   const debugTraceDir = path.join(curationRunDir, `agent-traces-${runId}`);
@@ -1717,6 +1728,7 @@ async function tryAgenticCuration(
       embeddedChapters,
       debugEventLogPath,
       debugTraceDir,
+      execution: ctx.execution,
     });
 
     const reports = result.nodeBoundaryReports ?? [];
@@ -1754,6 +1766,7 @@ async function tryAgenticCuration(
       },
     };
   } catch (error) {
+    rethrowChapterExecutionError(ctx, error);
     // Curation failure is non-fatal: transcript job still succeeds.
     console.warn(`[chapter-analysis] curation failed for manifestation ${manifestation.id}: ${(error as Error).message}`);
     return null;
@@ -1773,6 +1786,7 @@ export async function processChapterAnalysisJob(
     ...deps,
   };
   const jobStartedAt = performance.now();
+  ctx.execution?.assertActive();
   const payload = job.payload_json ? (JSON.parse(job.payload_json) as { manifestationId?: number; ebookAssetId?: number }) : {};
   if (!payload.manifestationId) {
     ctx.repo.markJobSucceeded(job.id);
@@ -1807,15 +1821,20 @@ export async function processChapterAnalysisJob(
   }
 
   // Compute the combined manifestation fingerprint.
-  const combinedFingerprint = await computeManifestationFingerprint(audioContainers);
-
-  // Check if the manifestation-level transcript is already cached.
-  const existingTranscriptRow = ctx.repo.getManifestationTranscript(manifestationId);
-  const isCached =
-    existingTranscriptRow?.status === "succeeded" &&
-    existingTranscriptRow.fingerprint === combinedFingerprint &&
-    existingTranscriptRow.transcript_path != null;
-  const existingCachedPayload = isCached ? await loadStoredManifestationTranscriptPayload(ctx.repo, manifestationId) : null;
+  const initial = await durableStep(ctx, "chapter:input", async () => {
+    const fingerprint = await computeManifestationFingerprint(audioContainers);
+    const row = ctx.repo.getManifestationTranscript(manifestationId);
+    const cached = row?.status === "succeeded" && row.fingerprint === fingerprint && row.transcript_path
+      ? await loadStoredManifestationTranscriptPayload(ctx.repo, manifestationId) : null;
+    return { fingerprint, cachedPath: cached ? row!.transcript_path : null };
+  });
+  const combinedFingerprint = initial.fingerprint;
+  if (await computeManifestationFingerprint(audioContainers) !== combinedFingerprint) {
+    throw new Error("Chapter audio changed during durable execution; request a new analysis job");
+  }
+  ctx.execution?.assertActive();
+  const existingCachedPayload = initial.cachedPath
+    ? publicStoredTranscriptPayload(JSON.parse(await Bun.file(initial.cachedPath).text()) as StoredTranscriptPayload) : null;
   const allCached = Boolean(existingCachedPayload);
 
   const settings = ctx.getSettings();
@@ -1843,26 +1862,31 @@ export async function processChapterAnalysisJob(
   // Load the epub once for glossary building.
   const ebookAsset = payload.ebookAssetId ? ctx.repo.getAssetWithFiles(payload.ebookAssetId) : null;
   const ebookFile = ebookAsset?.asset.mime === "application/epub+zip" ? ebookAsset.files[0] : null;
-  const glossary = allCached ? [] : await loadGlossary(ctx, resolvedDeps, ebookFile?.path ?? null);
+  const glossary = allCached ? [] : await durableStep(ctx, "chapter:glossary", () => loadGlossary(ctx, resolvedDeps, ebookFile?.path ?? null));
 
   let totalChunkCount = 0;
   let totalWordCount = 0;
   let transcriptSource: "new" | "cached" = allCached ? "cached" : "new";
+  let transcriptPath = initial.cachedPath;
 
   try {
+    ctx.execution?.assertActive();
     if (allCached && existingCachedPayload) {
       // Reuse existing manifestation transcript — count words for logging.
       totalWordCount = transcriptWordsFromStoredPayload(existingCachedPayload).length;
     } else {
       // Transcribe each container sequentially, collect per-asset payloads,
       // then combine and persist a single manifestation-level transcript.
-      ctx.repo.upsertManifestationTranscript({
-        manifestationId,
-        status: "pending",
-        source: CHAPTER_ANALYSIS_SOURCE,
-        algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
-        fingerprint: combinedFingerprint,
-        error: null,
+      await durableStep(ctx, "chapter:transcript-pending", () => {
+        if (ctx.repo.getManifestationTranscript(manifestationId)?.status === "succeeded") return;
+        ctx.repo.upsertManifestationTranscript({
+          manifestationId,
+          status: "pending",
+          source: CHAPTER_ANALYSIS_SOURCE,
+          algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
+          fingerprint: combinedFingerprint,
+          error: null,
+        });
       });
 
       const perAssetPayloads: Array<{ payload: StoredTranscriptPayload; durationMs: number }> = [];
@@ -1890,19 +1914,22 @@ export async function processChapterAnalysisJob(
       // Combine per-asset payloads with time offsets into one manifestation transcript.
       const combinedPayload = combineStoredTranscriptPayloads(perAssetPayloads);
       const transcriptJson = JSON.stringify(combinedPayload);
-      const newTranscriptPath = await persistTranscriptArtifact(manifestationId, combinedFingerprint, transcriptJson);
-      if (existingTranscriptRow?.transcript_path && existingTranscriptRow.transcript_path !== newTranscriptPath) {
-        await rm(existingTranscriptRow.transcript_path, { force: true });
-      }
-      ctx.repo.upsertManifestationTranscript({
-        manifestationId,
-        status: "succeeded",
-        source: CHAPTER_ANALYSIS_SOURCE,
-        algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
-        fingerprint: combinedFingerprint,
-        transcriptPath: newTranscriptPath,
-        error: null,
+      const published = await durableStep(ctx, "chapter:publish-transcript", async () => {
+        ctx.execution?.assertActive();
+        const newTranscriptPath = await persistTranscriptArtifact(manifestationId, combinedFingerprint, transcriptJson);
+        ctx.execution?.assertActive();
+        ctx.repo.upsertManifestationTranscript({
+          manifestationId,
+          status: "succeeded",
+          source: CHAPTER_ANALYSIS_SOURCE,
+          algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
+          fingerprint: combinedFingerprint,
+          transcriptPath: newTranscriptPath,
+          error: null,
+        });
+        return { path: newTranscriptPath };
       });
+      transcriptPath = published.path;
     }
 
     // Run agentic chapter curation once for the whole manifestation.
@@ -1913,27 +1940,33 @@ export async function processChapterAnalysisJob(
       payload,
       settings,
       combinedFingerprint,
-      resolvedDeps.runAgenticCuration
+      resolvedDeps.runAgenticCuration,
+      resolvedDeps.loadEpubEntries,
+      transcriptPath
     );
 
-    ctx.repo.upsertChapterAnalysis({
-      manifestationId,
-      status: "succeeded",
-      source: CHAPTER_ANALYSIS_SOURCE,
-      algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
-      fingerprint: combinedFingerprint,
-      chaptersJson: curationResult?.chaptersJson ?? null,
-      debugJson: JSON.stringify({
-        transcriptSource,
-        chunkCount: totalChunkCount,
-        transcriptWordCount: totalWordCount,
-        model: TIMESTAMP_TRANSCRIPTION_MODEL,
-        ...(curationResult?.debugInfo ?? {}),
-      }),
-      resolvedBoundaryCount: curationResult?.resolvedBoundaryCount ?? 0,
-      totalBoundaryCount: curationResult?.totalBoundaryCount ?? 0,
-      error: null,
+    await durableStep(ctx, "chapter:publish-analysis", () => {
+      ctx.execution?.assertActive();
+      ctx.repo.upsertChapterAnalysis({
+        manifestationId,
+        status: "succeeded",
+        source: CHAPTER_ANALYSIS_SOURCE,
+        algorithmVersion: CHAPTER_ANALYSIS_ALGORITHM_VERSION,
+        fingerprint: combinedFingerprint,
+        chaptersJson: curationResult?.chaptersJson ?? null,
+        debugJson: JSON.stringify({
+          transcriptSource,
+          chunkCount: totalChunkCount,
+          transcriptWordCount: totalWordCount,
+          model: TIMESTAMP_TRANSCRIPTION_MODEL,
+          ...(curationResult?.debugInfo ?? {}),
+        }),
+        resolvedBoundaryCount: curationResult?.resolvedBoundaryCount ?? 0,
+        totalBoundaryCount: curationResult?.totalBoundaryCount ?? 0,
+        error: null,
+      });
     });
+    ctx.execution?.assertActive();
     ctx.repo.markJobSucceeded(job.id);
     const totalJobMs = Math.round((performance.now() - jobStartedAt) * 100) / 100;
     log(
@@ -1942,10 +1975,11 @@ export async function processChapterAnalysisJob(
     );
     return "done";
   } catch (error) {
+    rethrowChapterExecutionError(ctx, error);
     const message = (error as Error).message;
     // Mark the manifestation transcript as failed if it was in progress.
     const currentTranscript = ctx.repo.getManifestationTranscript(manifestationId);
-    if (!currentTranscript || currentTranscript.fingerprint !== combinedFingerprint || currentTranscript.status !== "succeeded") {
+    if (!currentTranscript || currentTranscript.status !== "succeeded") {
       ctx.repo.upsertManifestationTranscript({
         manifestationId,
         status: "failed",

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { type FunctionToolResult, type ToolsToFinalOutputResult } from "@openai/agents";
 
 import type { EpubChapterEntry } from "./chapter-analysis";
+import { rethrowChapterExecutionError } from "./chapter-execution";
 import {
   type AudioOnlyInterval,
   type BoundaryEvidenceCandidate,
@@ -1051,6 +1052,7 @@ export async function resolveNodeBoundaryChapters(
         });
         return decision;
       } catch (error) {
+        rethrowChapterExecutionError(ctx, error);
         reports?.push({
           epubNodeId: target.epubNodeId,
           epubIndex: target.epubIndex,

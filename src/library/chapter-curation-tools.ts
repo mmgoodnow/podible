@@ -8,6 +8,7 @@ import uFuzzy from "@leeoniya/ufuzzy";
 import { z } from "zod";
 
 import type { AppSettings, AssetFileRow, AssetRow, BookRow, ManifestationRow } from "../app-types";
+import type { ChapterExecutionContext } from "./chapter-execution";
 import type { EpubChapterEntry, StoredTranscriptPayload, StoredTranscriptUtterance } from "./chapter-analysis";
 
 export type ChapterCurationTiming = {
@@ -29,7 +30,7 @@ export type AudioOnlyInterval = {
   notes: string;
 };
 
-export type ChapterCurationContext = {
+export type ChapterCurationContext = ChapterExecutionContext & {
   book: BookRow;
   manifestation: ManifestationRow;
   containers: ChapterCurationContainer[];
