@@ -24,7 +24,6 @@ export async function processReconcileJob(ctx: WorkerContext, job: JobRow): Prom
       });
     }));
   }
-  ctx.repo.markJobSucceeded(job.id);
   return "done";
 }
 
@@ -38,6 +37,5 @@ export async function processFullLibraryRefreshJob(ctx: WorkerContext, job: JobR
       queueMissingCoverGeneration(ctx.repo, bookId);
     }));
   }
-  ctx.repo.markJobSucceeded(job.id);
   return "done";
 }

@@ -57,7 +57,6 @@ export async function processMetadataHydrationJob(ctx: WorkerContext, job: JobRo
     throw new Error(`Open Library metadata hydration failed for book ids: ${failed.join(", ")}`);
   }
 
-  ctx.repo.markJobSucceeded(job.id);
   workerLog(ctx, `[metadata-hydration] job=${job.id} hydrated=${stale.length}`);
   return "done";
 }

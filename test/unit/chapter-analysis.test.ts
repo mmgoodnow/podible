@@ -412,7 +412,7 @@ describe("chapter analysis", () => {
       const deps = {
         extractChunkClip: async (args: { clipName: string }) => path.join(root, `${args.clipName}.mp3`),
         transcribeChunk: async (_settings: unknown, clipPath: string) => {
-          const chunkIndex = Number(clipPath.match(/chunk-(\d+)-attempt/u)?.[1] ?? -1);
+          const chunkIndex = Number(clipPath.match(/chunk-(\d+)(?:-|\.|$)/u)?.[1] ?? -1);
           transcribedChunks.push(chunkIndex);
           if (chunkIndex === 1 && failSecondChunk) {
             await new Promise((resolve) => setTimeout(resolve, 25));
@@ -531,7 +531,8 @@ describe("chapter analysis", () => {
       expect(analysis?.status).toBe("succeeded");
       expect(analysis?.chapters_json).toBe(chaptersJson);
       expect(analysis?.resolved_boundary_count).toBe(1);
-      expect(repo.getJob(job.id)?.id).toBe(job.id);
+      expect(repo.getManifestationTranscript(manifestation.id)?.status).toBe("failed");
+      expect(repo.getManifestationTranscript(manifestation.id)?.error).toBe("rerun failed");
       expect(asset.id).toBeGreaterThan(0);
     } finally {
       db.close();

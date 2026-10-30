@@ -92,6 +92,8 @@ describe("durable chapter pipeline", () => {
         expect(curated).toBe(1);
         const transcript = await loadStoredManifestationTranscriptPayload(repo, f.manifestation.id);
         expect(transcript?.words.map((w) => w.startMs)).toEqual([1000, 61_000]);
+        expect(repo.getManifestationTranscript(f.manifestation.id)?.status).toBe("succeeded");
+        expect(repo.getChapterAnalysis(f.manifestation.id)?.status).toBe("succeeded");
         const steps = reopened.query("SELECT value FROM chapter_test_steps").all() as { value: string }[];
         expect(steps.every((s) => !s.value.includes('"words":'))).toBe(true);
       } finally { reopened.close(); }

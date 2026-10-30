@@ -26,12 +26,10 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
   const settings = ctx.getSettings();
   const payload = job.payload_json ? (JSON.parse(job.payload_json) as AcquirePayload) : {};
   if (!payload.bookId) {
-    ctx.repo.markJobSucceeded(job.id);
     return "done";
   }
   const book = await durableStep(ctx, "book", () => ctx.repo.getBookRow(payload.bookId!));
   if (!book) {
-    ctx.repo.markJobSucceeded(job.id);
     return "done";
   }
   const mediaList: MediaType[] = payload.media && payload.media.length > 0 ? payload.media : ["audio", "ebook"];
@@ -155,6 +153,5 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
     throw new Error(`Auto-acquire found no usable release for book ${book.id}; ${detail}`);
   }
 
-  ctx.repo.markJobSucceeded(job.id);
   return "done";
 }

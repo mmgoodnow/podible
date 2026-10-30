@@ -108,7 +108,6 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
             })
           );
           ctx.repo.setReleaseStatus(release.id, "imported", null);
-          ctx.repo.markJobSucceeded(job.id);
           workerLog(
             ctx,
             `[import] job=${job.id} release=${release.id} wrong_file_agent_reimport=success selected=${decision.selectedPaths.length}`
@@ -183,7 +182,6 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
           })
         );
         ctx.repo.setReleaseStatus(release.id, "imported", null);
-        ctx.repo.markJobSucceeded(job.id);
         workerLog(
           ctx,
           `[import] job=${job.id} release=${release.id} agent_first=success mode=${decision.mode} selected=${decision.selectedPaths.length}`
@@ -215,7 +213,6 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
       })
     );
     ctx.repo.setReleaseStatus(release.id, "imported", null);
-    ctx.repo.markJobSucceeded(job.id);
     return "done";
   } catch (firstError) {
     if (isRunControlError(firstError)) throw firstError;
@@ -257,7 +254,6 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
           })
         );
         ctx.repo.setReleaseStatus(release.id, "imported", null);
-        ctx.repo.markJobSucceeded(job.id);
         workerLog(
           ctx,
           `[import] job=${job.id} release=${release.id} agent_recovery=success selected=${decision.selectedPaths.length}`

@@ -114,7 +114,7 @@ describe("worker acquire auto-acquire retries", () => {
       const started = Date.now();
       for (;;) {
         const current = repo.getJob(acquireJob.id);
-        if (current && current.attempt_count >= 1) break;
+        if (current?.status === "failed") break;
         if (Date.now() - started > 4_000) {
           throw new Error("Timed out waiting for acquire job retry");
         }
@@ -213,7 +213,7 @@ describe("worker acquire auto-acquire retries", () => {
       const started = Date.now();
       for (;;) {
         const current = repo.getJob(acquireJob.id);
-        if (current && current.attempt_count >= 1) break;
+        if (current?.status === "failed") break;
         if (Date.now() - started > 4_000) {
           throw new Error("Timed out waiting for partial acquire retry");
         }

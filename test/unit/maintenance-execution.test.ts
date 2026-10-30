@@ -51,7 +51,7 @@ test("cover resumes from generated artifact without another paid request", async
     await processCoverGenerationJob(journalContext(repo, results), job, deps);
     expect(requests).toBe(1);
     expect(await readFile(repo.getBookRow(book.id)!.cover_path!, "utf8")).toBe("image");
-    expect(repo.getJob(job.id)?.status).toBe("succeeded");
+    expect(repo.getJob(job.id)?.status).toBe("queued");
   } finally {
     db.close();
     await rm(root, { recursive: true, force: true });

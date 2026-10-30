@@ -1789,34 +1789,29 @@ export async function processChapterAnalysisJob(
   ctx.execution?.assertActive();
   const payload = job.payload_json ? (JSON.parse(job.payload_json) as { manifestationId?: number; ebookAssetId?: number }) : {};
   if (!payload.manifestationId) {
-    ctx.repo.markJobSucceeded(job.id);
     return "done";
   }
 
   const manifestationId = payload.manifestationId;
   const manifestationData = ctx.repo.getManifestationWithContainers(manifestationId);
   if (!manifestationData) {
-    ctx.repo.markJobSucceeded(job.id);
     return "done";
   }
 
   const audioContainers = manifestationData.containers;
   if (audioContainers.length === 0) {
-    ctx.repo.markJobSucceeded(job.id);
     return "done";
   }
 
   // Verify this manifestation is still the preferred one for its book.
   const preferredAudio = selectPreferredAudioAssetsForBook(ctx.repo, job.book_id ?? audioContainers[0]!.asset.book_id);
   if (!preferredAudio.some((asset) => asset.manifestation_id === manifestationId)) {
-    ctx.repo.markJobSucceeded(job.id);
     return "done";
   }
 
   const bookId = audioContainers[0]!.asset.book_id;
   const book = ctx.repo.getBookRow(bookId);
   if (!book) {
-    ctx.repo.markJobSucceeded(job.id);
     return "done";
   }
 
@@ -1839,7 +1834,6 @@ export async function processChapterAnalysisJob(
 
   const settings = ctx.getSettings();
   if (!allCached && !settings.agents.apiKey.trim()) {
-    ctx.repo.markJobSucceeded(job.id);
     return "done";
   }
 
@@ -1967,7 +1961,6 @@ export async function processChapterAnalysisJob(
       });
     });
     ctx.execution?.assertActive();
-    ctx.repo.markJobSucceeded(job.id);
     const totalJobMs = Math.round((performance.now() - jobStartedAt) * 100) / 100;
     log(
       ctx,

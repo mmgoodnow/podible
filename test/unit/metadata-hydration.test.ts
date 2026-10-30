@@ -5,7 +5,6 @@ import { runMigrations } from "../../src/db";
 import { CURRENT_OPENLIBRARY_METADATA_VERSION, openLibraryMetadataStatus } from "../../src/library/hydration";
 import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
-import { handleJobFailure } from "../../src/worker/failure";
 import { processMetadataHydrationJob, queueStaleMetadataHydration } from "../../src/worker/metadata-hydration";
 
 describe("Open Library metadata hydration", () => {
@@ -38,12 +37,11 @@ describe("Open Library metadata hydration", () => {
       openLibraryMetadataVersion: CURRENT_OPENLIBRARY_METADATA_VERSION,
       openLibraryHydratedAt: new Date().toISOString()
     });
-    repo.markJobSucceeded(first!.id);
     expect(queueStaleMetadataHydration(repo)).toBeNull();
     expect(openLibraryMetadataStatus(repo.getBookRow(book.id)!)).toBe("current");
   });
 
-  test("hydrates successful books independently and projects exhausted unresolved work as failed", async () => {
+  test("hydrates successful books independently and reports unresolved work without owning execution state", async () => {
     const first = repo.createBook({ title: "Dune", author: "Frank Herbert" });
     const second = repo.createBook({ title: "Unknown Book", author: "Unknown Author" });
     repo.updateBookMetadata(first.id, { language: "spa" });
@@ -67,8 +65,6 @@ describe("Open Library metadata hydration", () => {
     }) as typeof fetch;
 
     const queued = queueStaleMetadataHydration(repo)!;
-    repo.attachJobExecution(queued.id, "metadata-run");
-    repo.ownJobExecution(queued.id, "metadata-run", "metadata-owner");
     const running = repo.getJob(queued.id)!;
     const ctx = { repo, getSettings: () => defaultSettings() };
     let failure: unknown;
@@ -78,7 +74,6 @@ describe("Open Library metadata hydration", () => {
       failure = error;
     }
     expect(failure).toBeInstanceOf(Error);
-    await handleJobFailure(ctx, running, failure, { runId: "metadata-run", token: "metadata-owner" });
 
     const hydrated = repo.getBookRow(first.id)!;
     expect(hydrated.openlibrary_metadata_version).toBe(CURRENT_OPENLIBRARY_METADATA_VERSION);
@@ -87,8 +82,8 @@ describe("Open Library metadata hydration", () => {
     expect(JSON.parse(hydrated.series_json ?? "[]")).toEqual([]);
     expect(openLibraryMetadataStatus(hydrated)).toBe("current");
     expect(openLibraryMetadataStatus(repo.getBookRow(second.id)!)).toBe("never_hydrated");
-    expect(repo.getJob(queued.id)?.status).toBe("failed");
-    expect(repo.getJob(queued.id)?.error).toContain(String(second.id));
+    expect(repo.getJob(queued.id)?.status).toBe("queued");
+    expect((failure as Error).message).toContain(String(second.id));
   });
 
   test("does not derive work series from a single unrelated edition", async () => {

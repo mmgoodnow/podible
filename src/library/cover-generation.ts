@@ -293,17 +293,14 @@ export function queueMissingCoverGeneration(repo: BooksRepo, bookId: number): Jo
 export async function processCoverGenerationJob(ctx: WorkerContext, job: JobRow, deps?: CoverGenerationDeps): Promise<"done"> {
   ctx.execution?.assertActive();
   if (!job.book_id) {
-    ctx.repo.markJobSucceeded(job.id);
     return "done";
   }
   const settings = ctx.getSettings();
   const book = ctx.repo.getBookRow(job.book_id);
   if (!book || book.cover_path) {
-    ctx.repo.markJobSucceeded(job.id);
     return "done";
   }
   const coverPath = await generateCoverForBook(ctx.repo, book.id, settings.agents.apiKey, { ctx, deps });
-  ctx.repo.markJobSucceeded(job.id);
   log(ctx, `[cover-generation] job=${job.id} book=${book.id} cover=${coverPath}`);
   return "done";
 }

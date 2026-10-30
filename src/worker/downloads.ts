@@ -325,7 +325,6 @@ export async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promi
             sequenceInManifestation: payload.sequenceInManifestation ?? null
           }
         });
-        ctx.repo.markJobSucceeded(job.id);
       })
     );
     return "done";
