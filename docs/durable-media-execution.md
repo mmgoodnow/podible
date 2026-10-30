@@ -146,7 +146,7 @@ hotpatch was used.
 
 The pre-rollout online backup remains at
 `/opt/docker/config/podible/backups/pre-durable-20261030T1658Z`.
-Production is at migration 32. Both databases report `integrity_check=ok` and
+At that rollout, production reached migration 32. Both databases reported `integrity_check=ok` and
 zero foreign-key violations. Counts remain 62 books, 142 manifestations, 126
 assets, 759 asset files, and 138 releases.
 
@@ -171,3 +171,17 @@ passed a second startup: all 193 outcomes matched, all 62 existing checkpoint
 rows retained their original hash, no historical handler ran, and media counts
 were unchanged. Both migrated files passed integrity/foreign-key checks. The
 temporary local copies were deleted after verification.
+
+Normal CD run `41104921335` deployed consolidation commit `8e81610`. Production
+reached migration 34 with only identity/input/policy/fencing fields in `jobs`.
+All 193 pre-migration outcomes matched the backup, and all 62 existing step
+rows retained SHA-256
+`9b60e1fbc9aa31e202be19f116bf9a948531ffcfc3d300c4ceba0a4958dd18f4`.
+
+Authenticated reconciliation job 200 completed as run
+`6543a2ca-86ba-43c1-8dc1-e862c2b49f2c`, with three successful one-attempt steps.
+The verification session was removed, the outbox was empty, media counts were
+unchanged, and both databases passed integrity/foreign-key checks. Two separate
+chapter jobs were automatically queued by the existing startup behavior and
+completed; they were not historical jobs resurrected by migration. Local
+verification passed 387 tests, typechecking, and runtime-script validation.
