@@ -1,9 +1,8 @@
 import { nowIso } from "../db";
 import { RtorrentClient } from "../rtorrent";
-import { triggerAutoAcquire } from "../library/service";
 import type { RtorrentDownloadState } from "../rtorrent";
 import type { AppSettings, JobRow, MediaType } from "../app-types";
-import type { WorkerContext } from "./context";
+import { durableStep, type WorkerContext } from "./context";
 
 const FAST_POLL_MS = 500;
 const MID_POLL_MS = 2_000;
@@ -78,7 +77,7 @@ function describeDownloadIssue(prefix: string, state: RtorrentDownloadState, det
     prefix,
     `active=${state.isActive ? 1 : 0}`,
     `leftBytes=${leftBytes ?? "null"}`,
-    `downRate=${state.downRate ?? "null"}`,
+    `downRate=${state.downRate ?? "null"}`
   ];
   const message = trimMessage(detail ?? state.message);
   if (message) {
@@ -97,7 +96,9 @@ function analyzeDownloadIssue(
   const lastBytesDone = payload.telemetry?.lastBytesDone ?? null;
   const currentBytesDone = state.bytesDone ?? null;
   const progressed =
-    typeof currentBytesDone === "number" && typeof lastBytesDone === "number" ? currentBytesDone > lastBytesDone : false;
+    typeof currentBytesDone === "number" && typeof lastBytesDone === "number"
+      ? currentBytesDone > lastBytesDone
+      : false;
   const activeTransfer = (typeof state.downRate === "number" && state.downRate > 0) || progressed;
   const incomplete = leftBytes === null || leftBytes > 0;
   let stagnantSince = payload.telemetry?.stagnantSince ?? null;
@@ -110,7 +111,7 @@ function analyzeDownloadIssue(
 
   nextPayload.telemetry = {
     lastBytesDone: currentBytesDone,
-    stagnantSince,
+    stagnantSince
   };
 
   const message = trimMessage(state.message);
@@ -118,14 +119,14 @@ function analyzeDownloadIssue(
     return {
       action: "recover",
       nextPayload,
-      error: describeDownloadIssue("Torrent errored in rTorrent; queuing forced reacquire", state, message),
+      error: describeDownloadIssue("Torrent errored in rTorrent; queuing forced reacquire", state, message)
     };
   }
 
   if (!stagnantSince || !incomplete) {
     return {
       action: "continue",
-      nextPayload,
+      nextPayload
     };
   }
 
@@ -134,7 +135,7 @@ function analyzeDownloadIssue(
     return {
       action: "recover",
       nextPayload,
-      error: describeDownloadIssue("Torrent stalled with no progress; queuing forced reacquire", state),
+      error: describeDownloadIssue("Torrent stalled with no progress; queuing forced reacquire", state)
     };
   }
 
@@ -143,13 +144,13 @@ function analyzeDownloadIssue(
     return {
       action: "recover",
       nextPayload,
-      error: describeDownloadIssue("Torrent stalled past recovery threshold; queuing forced reacquire", state),
+      error: describeDownloadIssue("Torrent stalled past recovery threshold; queuing forced reacquire", state)
     };
   }
 
   return {
     action: "continue",
-    nextPayload,
+    nextPayload
   };
 }
 
@@ -163,7 +164,7 @@ function selectDownloadPollDecision(state: RtorrentDownloadState, configuredPoll
       reason: "fallback_no_left_bytes",
       leftBytes,
       downRate,
-      etaSeconds: null,
+      etaSeconds: null
     };
   }
   if (downRate === null) {
@@ -172,7 +173,7 @@ function selectDownloadPollDecision(state: RtorrentDownloadState, configuredPoll
       reason: "fallback_no_down_rate",
       leftBytes,
       downRate,
-      etaSeconds: null,
+      etaSeconds: null
     };
   }
   if (downRate <= 0) {
@@ -181,7 +182,7 @@ function selectDownloadPollDecision(state: RtorrentDownloadState, configuredPoll
       reason: "fallback_nonpositive_rate",
       leftBytes,
       downRate,
-      etaSeconds: null,
+      etaSeconds: null
     };
   }
 
@@ -192,7 +193,7 @@ function selectDownloadPollDecision(state: RtorrentDownloadState, configuredPoll
       reason: "fallback_invalid_eta",
       leftBytes,
       downRate,
-      etaSeconds: null,
+      etaSeconds: null
     };
   }
   if (etaSeconds <= ETA_FAST_WINDOW_SECONDS) {
@@ -201,7 +202,7 @@ function selectDownloadPollDecision(state: RtorrentDownloadState, configuredPoll
       reason: "eta_fast",
       leftBytes,
       downRate,
-      etaSeconds,
+      etaSeconds
     };
   }
   if (etaSeconds <= ETA_MID_WINDOW_SECONDS) {
@@ -210,7 +211,7 @@ function selectDownloadPollDecision(state: RtorrentDownloadState, configuredPoll
       reason: "eta_mid",
       leftBytes,
       downRate,
-      etaSeconds,
+      etaSeconds
     };
   }
   return {
@@ -218,7 +219,7 @@ function selectDownloadPollDecision(state: RtorrentDownloadState, configuredPoll
     reason: "eta_slow",
     leftBytes,
     downRate,
-    etaSeconds,
+    etaSeconds
   };
 }
 
@@ -244,62 +245,93 @@ export async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promi
   }
 
   const settings = ctx.getSettings();
-  const payload = job.payload_json ? (JSON.parse(job.payload_json) as DownloadJobPayload) : {};
+  let payload = job.payload_json ? (JSON.parse(job.payload_json) as DownloadJobPayload) : {};
   const client = new RtorrentClient(settings.rtorrent);
 
-  const state = await client.getDownloadState(release.info_hash);
-  if (!state.complete) {
-    const issue = analyzeDownloadIssue(state, payload, settings);
-    if (issue.action === "recover") {
-      ctx.repo.setReleaseStatus(release.id, "failed", issue.error);
-      const acquireJobId = await triggerAutoAcquire(ctx.repo, release.book_id, [release.media_type], {
-        forceAgent: true,
-        priorFailure: true,
-        requireResult: true,
-        notifyOnFailure: true,
-        failureContext: `Auto-reacquire after stalled torrent for release ${release.id}`,
-        rejectedUrls: [release.url],
-        rejectedGuids: release.provider_guid ? [release.provider_guid] : [],
-        rejectedInfoHashes: release.info_hash ? [release.info_hash] : [],
-      });
-      ctx.repo.markJobCancelled(job.id, `${issue.error}; recoveryAcquireJob=${acquireJobId}`);
-      logMessage(ctx, `[download] job=${job.id} release=${release.id} action=recover acquire_job=${acquireJobId}`);
-      return "done";
+  for (let poll = 0; ; poll++) {
+    const { state, issue, decision } = await durableStep(ctx, `download:poll:${poll}`, async () => {
+      const state = await client.getDownloadState(release.info_hash);
+      const issue = analyzeDownloadIssue(state, payload, settings);
+      const decision = selectDownloadPollDecision(
+        state,
+        pollMsForMedia(release.media_type, settings.polling.rtorrentMs || 5000)
+      );
+      return { state, issue, decision };
+    });
+    if (!state.complete) {
+      if (issue.action === "recover") {
+        await durableStep(ctx, "download:recover", () =>
+          ctx.repo.transaction(() => {
+            ctx.repo.setReleaseStatus(release.id, "failed", issue.error);
+            const acquireJob = ctx.repo.createJob({
+              type: "acquire",
+              bookId: release.book_id,
+              idempotencyKey: `download:${job.id}:recover`,
+              payload: {
+                bookId: release.book_id,
+                media: [release.media_type],
+                forceAgent: true,
+                priorFailure: true,
+                requireResult: true,
+                notifyOnFailure: true,
+                failureContext: `Auto-reacquire after stalled torrent for release ${release.id}`,
+                rejectedUrls: [release.url],
+                rejectedGuids: release.provider_guid ? [release.provider_guid] : [],
+                rejectedInfoHashes: release.info_hash ? [release.info_hash] : []
+              }
+            });
+            const acquireJobId = acquireJob.id;
+            ctx.repo.markJobCancelled(job.id, `${issue.error}; recoveryAcquireJob=${acquireJobId}`);
+            logMessage(
+              ctx,
+              `[download] job=${job.id} release=${release.id} action=recover acquire_job=${acquireJobId}`
+            );
+          })
+        );
+        return "done";
+      }
+      ctx.repo.setReleaseStatus(release.id, "downloading", null);
+      const etaText = decision.etaSeconds === null ? "null" : (Math.round(decision.etaSeconds * 100) / 100).toFixed(2);
+      logMessage(
+        ctx,
+        `[download] job=${job.id} release=${release.id} media=${release.media_type} hash=${release.info_hash} complete=0 left_bytes=${decision.leftBytes ?? "null"} down_rate=${decision.downRate ?? "null"} eta_s=${etaText} poll_ms=${decision.pollMs} reason=${decision.reason}`
+      );
+      const pollMs = decision.pollMs;
+      if (ctx.execution) {
+        payload = issue.nextPayload;
+        await ctx.execution.sleep(`download:wait:${poll}`, pollMs);
+        continue;
+      }
+      const nextRun = new Date(Date.now() + pollMs).toISOString();
+      ctx.repo.rescheduleJob(job.id, nextRun, issue.nextPayload);
+      return "rescheduled";
     }
-    ctx.repo.setReleaseStatus(release.id, "downloading", null);
-    const mediaPollMs = pollMsForMedia(release.media_type, settings.polling.rtorrentMs || 5000);
-    const decision = selectDownloadPollDecision(state, mediaPollMs);
-    const etaText =
-      decision.etaSeconds === null ? "null" : (Math.round(decision.etaSeconds * 100) / 100).toFixed(2);
+
+    const importSource = await durableStep(ctx, "download:source", () => client.getImportSource(release.info_hash));
     logMessage(
       ctx,
-      `[download] job=${job.id} release=${release.id} media=${release.media_type} hash=${release.info_hash} complete=0 left_bytes=${decision.leftBytes ?? "null"} down_rate=${decision.downRate ?? "null"} eta_s=${etaText} poll_ms=${decision.pollMs} reason=${decision.reason}`
+      `[download] job=${job.id} release=${release.id} hash=${release.info_hash} complete=1 bytes_done=${state.bytesDone ?? "null"} size_bytes=${state.sizeBytes ?? "null"} base_path=${JSON.stringify(importSource.basePath)} selected_paths=${importSource.selectedPaths.length}`
     );
-    const pollMs = decision.pollMs;
-    const nextRun = new Date(Date.now() + pollMs).toISOString();
-    ctx.repo.rescheduleJob(job.id, nextRun, issue.nextPayload);
-    return "rescheduled";
+    await durableStep(ctx, "download:handoff", () =>
+      ctx.repo.transaction(() => {
+        ctx.repo.setReleaseStatus(release.id, "downloaded", null);
+        ctx.repo.createJob({
+          type: "import",
+          releaseId: release.id,
+          bookId: release.book_id,
+          idempotencyKey: `download:${job.id}:import`,
+          payload: {
+            basePath: importSource.basePath,
+            selectedPaths: importSource.selectedPaths,
+            infoHash: release.info_hash,
+            preferAgentFirst: payload.preferAgentImport === true,
+            manifestationId: payload.manifestationId ?? null,
+            sequenceInManifestation: payload.sequenceInManifestation ?? null
+          }
+        });
+        ctx.repo.markJobSucceeded(job.id);
+      })
+    );
+    return "done";
   }
-
-  const importSource = await client.getImportSource(release.info_hash);
-  logMessage(
-    ctx,
-    `[download] job=${job.id} release=${release.id} hash=${release.info_hash} complete=1 bytes_done=${state.bytesDone ?? "null"} size_bytes=${state.sizeBytes ?? "null"} base_path=${JSON.stringify(importSource.basePath)} selected_paths=${importSource.selectedPaths.length}`
-  );
-  ctx.repo.setReleaseStatus(release.id, "downloaded", null);
-  ctx.repo.createJob({
-    type: "import",
-    releaseId: release.id,
-    bookId: release.book_id,
-    payload: {
-      basePath: importSource.basePath,
-      selectedPaths: importSource.selectedPaths,
-      infoHash: release.info_hash,
-      preferAgentFirst: payload.preferAgentImport === true,
-      manifestationId: payload.manifestationId ?? null,
-      sequenceInManifestation: payload.sequenceInManifestation ?? null,
-    },
-  });
-  ctx.repo.markJobSucceeded(job.id);
-  return "done";
 }

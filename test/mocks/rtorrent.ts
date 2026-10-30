@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { normalizeInfoHash } from "../../src/library/torrent";
+import { infoHashFromTorrentBytes } from "../../src/library/torrent";
 
 type DownloadConfig = {
   name: string;
@@ -26,6 +27,7 @@ type MockRtorrentOptions = {
 type MockRtorrent = {
   url: string;
   stop: () => void;
+  loadCalls: string[];
 };
 
 function xmlResponseString(value: string): string {
@@ -54,6 +56,8 @@ function parseBase64Param(xml: string): Uint8Array | null {
 export function startMockRtorrent(options: MockRtorrentOptions): MockRtorrent {
   const id = randomUUID();
   const states = new Map<string, DownloadState>();
+  const loaded = new Set((options.preloaded ?? []).map(normalizeInfoHash));
+  const loadCalls: string[] = [];
 
   const byHash = Object.fromEntries(
     Object.entries(options.byHash).map(([hash, config]) => [normalizeInfoHash(hash), config])
@@ -86,9 +90,17 @@ export function startMockRtorrent(options: MockRtorrentOptions): MockRtorrent {
       const body = await request.text();
       const method = parseMethodName(body);
 
+      if (method === "download_list") {
+        const hashes = [...loaded].map((hash) => `<value><string>${hash}</string></value>`).join("");
+        return new Response(`<?xml version="1.0"?><methodResponse><params><param><value><array><data>${hashes}</data></array></value></param></params></methodResponse>`);
+      }
+
       if (method === "load.raw_start") {
         const bytes = parseBase64Param(body);
         if (!bytes) return new Response(xmlResponseInt(0));
+        const hash = infoHashFromTorrentBytes(bytes);
+        loaded.add(hash);
+        loadCalls.push(hash);
         return new Response(xmlResponseInt(0), { headers: { "Content-Type": "text/xml" } });
       }
 
@@ -173,5 +185,6 @@ export function startMockRtorrent(options: MockRtorrentOptions): MockRtorrent {
   return {
     url: `http://127.0.0.1:${server.port}`,
     stop: () => server.stop(),
+    loadCalls,
   };
 }

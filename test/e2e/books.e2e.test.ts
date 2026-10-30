@@ -14,6 +14,7 @@ import { hashSessionToken } from "../../src/auth";
 import { defaultSettings } from "../../src/settings";
 import { infoHashFromTorrentBytes } from "../../src/library/torrent";
 import { runWorker } from "../../src/worker";
+import { createJobExecutionRuntime, EXECUTION_JOB_TYPES } from "../../src/worker/execution";
 import { startMockRtorrent } from "../mocks/rtorrent";
 import { startMockTorznab } from "../mocks/torznab";
 
@@ -110,7 +111,7 @@ async function rpc(
 }
 
 describe("books e2e", () => {
-  test("audio and ebook flows including reconcile", async () => {
+  for (const durable of [false, true]) test(`audio and ebook flows including reconcile (${durable ? "Reflow" : "legacy"})`, async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "books-e2e-"));
     const downloadAudio = path.join(tempRoot, "downloads-audio");
     const downloadEbook = path.join(tempRoot, "downloads-ebook");
@@ -200,11 +201,16 @@ describe("books e2e", () => {
     const adminCookie = createBrowserSessionCookie(repo);
 
     let stopWorker = false;
+    const execution = durable ? await createJobExecutionRuntime({ repo, getSettings: () => repo.getSettings() }, path.join(tempRoot, "execution.sqlite"), { leaseMs: 300 }) : null;
+    let reconciling = Promise.resolve();
+    const timer = execution ? setInterval(() => {
+      reconciling = reconciling.then(() => execution.reconcile());
+    }, 30) : null;
     const worker = runWorker({
       repo,
       getSettings: () => repo.getSettings(),
       shouldStop: () => stopWorker,
-    });
+    }, { excludedJobTypes: durable ? [...EXECUTION_JOB_TYPES] : [] });
 
     try {
       const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
@@ -330,6 +336,9 @@ describe("books e2e", () => {
         "reconcile import"
       );
     } finally {
+      if (timer) clearInterval(timer);
+      await reconciling;
+      await execution?.stop();
       stopWorker = true;
       await sleep(400);
       await Promise.race([worker, sleep(1500)]);

@@ -43,10 +43,14 @@ type ImportReleaseOptions = {
   manifestationId?: number | null;
   sequenceInManifestation?: number | null;
   importNote?: string | null;
+  importKey?: string;
 };
 
 function sanitizePathSegment(value: string): string {
-  return value.replace(/[\\/:*?"<>|]/g, " ").replace(/\s+/g, " ").trim();
+  return value
+    .replace(/[\\/:*?"<>|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 async function walkFiles(root: string): Promise<string[]> {
@@ -78,7 +82,7 @@ async function collectFiles(basePath: string): Promise<FileInfo[]> {
       sourcePath: file,
       ext: path.extname(file).toLowerCase(),
       size: Number(stat.size),
-      mtimeMs: Number(stat.mtimeMs),
+      mtimeMs: Number(stat.mtimeMs)
     });
   }
   return out;
@@ -92,7 +96,11 @@ function supportsEbook(ext: string): boolean {
   return ext === ".epub" || ext === ".pdf";
 }
 
-function selectDiscoveredFiles(files: FileInfo[], selectedPaths: string[] | undefined, selectionRoot: string): FileInfo[] {
+function selectDiscoveredFiles(
+  files: FileInfo[],
+  selectedPaths: string[] | undefined,
+  selectionRoot: string
+): FileInfo[] {
   if (!selectedPaths || selectedPaths.length === 0) {
     return files;
   }
@@ -168,7 +176,7 @@ function pickAudioCandidates(files: FileInfo[]): { kind: AssetKind; files: FileI
     return {
       kind: "single",
       files: [chosen],
-      mime: ext === "m4a" ? "audio/mp4" : "audio/mpeg",
+      mime: ext === "m4a" ? "audio/mp4" : "audio/mpeg"
     };
   }
 
@@ -179,14 +187,14 @@ function pickAudioCandidates(files: FileInfo[]): { kind: AssetKind; files: FileI
     return {
       kind: "single",
       files: mp3s,
-      mime: "audio/mpeg",
+      mime: "audio/mpeg"
     };
   }
 
   return {
     kind: "multi",
     files: mp3s,
-    mime: "audio/mpeg",
+    mime: "audio/mpeg"
   };
 }
 
@@ -196,7 +204,7 @@ function pickEbookCandidate(files: FileInfo[]): { kind: AssetKind; files: FileIn
     return {
       kind: "single",
       files: [epub],
-      mime: "application/epub+zip",
+      mime: "application/epub+zip"
     };
   }
   const pdf = files.find((file) => file.ext === ".pdf");
@@ -204,13 +212,16 @@ function pickEbookCandidate(files: FileInfo[]): { kind: AssetKind; files: FileIn
     return {
       kind: "single",
       files: [pdf],
-      mime: "application/pdf",
+      mime: "application/pdf"
     };
   }
   return null;
 }
 
-function chooseFilesForMedia(mediaType: MediaType, files: FileInfo[]): { kind: AssetKind; files: FileInfo[]; mime: string } {
+function chooseFilesForMedia(
+  mediaType: MediaType,
+  files: FileInfo[]
+): { kind: AssetKind; files: FileInfo[]; mime: string } {
   if (mediaType === "audio") {
     const picked = pickAudioCandidates(files);
     if (!picked) throw new Error("No supported audio files found for import");
@@ -236,6 +247,8 @@ export async function importReleaseFromPath(
   if (!book) {
     throw new Error(`Book ${release.book_id} not found`);
   }
+  const existing = options.importKey ? repo.findAssetByImportKey(options.importKey) : null;
+  if (existing) return { assetId: existing.id, linkedFiles: repo.getAssetFiles(existing.id).map((file) => file.path) };
 
   const baseStat = await fs.stat(basePath);
   const discovered = await collectFiles(basePath);
@@ -274,10 +287,7 @@ export async function importReleaseFromPath(
     const linkedPath = await ensureHardlink(file.sourcePath, targetPath);
     linkedFiles.push(linkedPath);
 
-    const durationSeconds =
-      release.media_type === "audio"
-        ? getDurationSeconds(linkedPath, file.mtimeMs) ?? 0
-        : 0;
+    const durationSeconds = release.media_type === "audio" ? (getDurationSeconds(linkedPath, file.mtimeMs) ?? 0) : 0;
     const durationMs = Math.max(0, Math.round(durationSeconds * 1000));
     const start = cursor;
     const end = Math.max(start, start + file.size - 1);
@@ -291,31 +301,11 @@ export async function importReleaseFromPath(
       start,
       end,
       durationMs,
-      title: selected.kind === "multi" ? `Part ${index + 1}` : null,
+      title: selected.kind === "multi" ? `Part ${index + 1}` : null
     });
   }
 
   const totalSize = assetFiles.reduce((sum, item) => sum + item.size, 0);
-  const manifestationId =
-    options.manifestationId ??
-    repo.addManifestation({
-      bookId: book.id,
-      kind: release.media_type === "ebook" ? "ebook" : "audio",
-      language: inferLanguageFromReleaseTitles([release.title]),
-    }).id;
-  const asset = repo.addAsset({
-    bookId: book.id,
-    kind: selected.kind,
-    mime: selected.mime,
-    totalSize,
-    durationMs: release.media_type === "audio" ? durationMsTotal : null,
-    sourceReleaseId: release.id,
-    manifestationId,
-    sequenceInManifestation: options.sequenceInManifestation ?? undefined,
-    importNote: options.importNote ?? null,
-    files: assetFiles,
-  });
-
   // Prefer first cover found in target root for /covers endpoint.
   const coverCandidates = [".jpg", ".jpeg", ".png"];
   const existingCover = await fs
@@ -324,23 +314,49 @@ export async function importReleaseFromPath(
       entries.find((entry) => entry.isFile() && coverCandidates.includes(path.extname(entry.name).toLowerCase()))
     )
     .catch(() => null);
-  if (existingCover) {
-    repo.updateBookMetadata(book.id, {
-      coverPath: path.join(root, existingCover.name),
-      durationMs: release.media_type === "audio" ? durationMsTotal : book.duration_ms,
+  const wordCount =
+    selected.mime === "application/epub+zip" && linkedFiles[0]
+      ? await computeEpubWordCount(linkedFiles[0]).catch(() => null)
+      : null;
+  // Publish the container, files, and derived book metadata together. The
+  // import identity reconciles a crash after commit but before step checkpoint.
+  const asset = repo.transaction(() => {
+    const published = options.importKey ? repo.findAssetByImportKey(options.importKey) : null;
+    if (published) return published;
+    const manifestationId =
+      options.manifestationId ??
+      repo.addManifestation({
+        bookId: book.id,
+        kind: release.media_type === "ebook" ? "ebook" : "audio",
+        language: inferLanguageFromReleaseTitles([release.title])
+      }).id;
+    const asset = repo.addAsset({
+      bookId: book.id,
+      kind: selected.kind,
+      mime: selected.mime,
+      totalSize,
+      durationMs: release.media_type === "audio" ? durationMsTotal : null,
+      sourceReleaseId: release.id,
+      manifestationId,
+      sequenceInManifestation: options.sequenceInManifestation ?? undefined,
+      importNote: options.importNote ?? null,
+      importKey: options.importKey,
+      files: assetFiles
     });
-  }
-
-  if (selected.mime === "application/epub+zip" && linkedFiles[0]) {
-    const wordCount = await computeEpubWordCount(linkedFiles[0]).catch(() => null);
+    if (existingCover)
+      repo.updateBookMetadata(book.id, {
+        coverPath: path.join(root, existingCover.name),
+        durationMs: release.media_type === "audio" ? durationMsTotal : book.duration_ms
+      });
     if (wordCount !== null) {
       repo.updateBookMetadata(book.id, { wordCount });
     }
-  }
+    return asset;
+  });
 
   return {
     assetId: asset.id,
-    linkedFiles,
+    linkedFiles
   };
 }
 
@@ -362,6 +378,6 @@ export async function inspectImportPath(basePath: string): Promise<ImportInspect
       size: file.size,
       mtimeMs: file.mtimeMs,
       supportedAudio: supportsAudio(file.ext),
-      supportedEbook: supportsEbook(file.ext),
+      supportedEbook: supportsEbook(file.ext)
     }));
 }

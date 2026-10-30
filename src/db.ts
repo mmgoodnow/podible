@@ -32,6 +32,7 @@ const COVER_GENERATION_JOB_TYPE_MIGRATION_ID = 26;
 const BOOK_SERIES_MIGRATION_ID = 27;
 const OPENLIBRARY_METADATA_HYDRATION_MIGRATION_ID = 28;
 const DURABLE_SESSIONS_MIGRATION_ID = 29;
+const DURABLE_MEDIA_EXECUTION_MIGRATION_ID = 30;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -1036,5 +1037,20 @@ export function runMigrations(db: Database): void {
   });
   apply(DURABLE_SESSIONS_MIGRATION_ID, () => {
     applyDurableSessionsMigration(db);
+  });
+  apply(DURABLE_MEDIA_EXECUTION_MIGRATION_ID, () => {
+    db.exec(`
+      ALTER TABLE jobs ADD COLUMN dedupe_key TEXT NULL;
+      CREATE UNIQUE INDEX idx_jobs_dedupe_key ON jobs(dedupe_key);
+      ALTER TABLE manifestations ADD COLUMN acquisition_key TEXT NULL;
+      CREATE UNIQUE INDEX idx_manifestations_acquisition_key ON manifestations(acquisition_key);
+      ALTER TABLE assets ADD COLUMN import_key TEXT NULL;
+      CREATE UNIQUE INDEX idx_assets_import_key ON assets(import_key);
+      CREATE TABLE job_executions (
+        job_id INTEGER PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+        run_id TEXT NOT NULL UNIQUE,
+        owner_token TEXT NULL
+      );
+    `);
   });
 }

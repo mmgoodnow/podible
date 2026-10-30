@@ -198,6 +198,12 @@ export class RtorrentClient {
     ]);
   }
 
+  async hasDownload(infoHash: string): Promise<boolean> {
+    const hashes = await this.call("download_list", []);
+    if (!Array.isArray(hashes)) throw new Error("rTorrent download_list did not return an array");
+    return hashes.some((hash) => typeof hash === "string" && hash.toLowerCase() === infoHash.toLowerCase());
+  }
+
   async getDownloadState(infoHash: string): Promise<RtorrentDownloadState> {
     const hash = infoHash.toUpperCase();
     const [name, returnedHash, complete, isActive, basePath, directory, isMultiFile, bytesDone, sizeBytes, leftBytes, downRate, message] =

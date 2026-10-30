@@ -71,6 +71,7 @@ type CreateJobInput = {
   payload?: unknown;
   maxAttempts?: number;
   nextRunAt?: string | null;
+  idempotencyKey?: string;
 };
 
 type UpsertChapterAnalysisInput = {
@@ -109,6 +110,7 @@ type AddAssetInput = {
   manifestationId: number;
   sequenceInManifestation?: number;
   importNote?: string | null;
+  importKey?: string;
   files: Array<{
     path: string;
     sourcePath?: string | null;
@@ -224,13 +226,42 @@ function assertPositiveInt(value: number): void {
 }
 
 export class BooksRepo {
-  constructor(private readonly db: Database) {
+  constructor(private readonly db: Database, private readonly beforeWrite: () => void = () => {}) {
     // Foreign-key cascades are part of normal behavior; enforce per connection.
     this.db.exec("PRAGMA foreign_keys = ON;");
   }
 
   transaction<T>(fn: () => T): T {
-    return this.db.transaction(fn)();
+    return this.db.transaction(() => { this.beforeWrite(); return fn(); })();
+  }
+
+  forExecution(beforeWrite: () => void): BooksRepo {
+    return new BooksRepo(this.db, beforeWrite);
+  }
+
+  getJobExecution(jobId: number): { run_id: string; owner_token: string | null } | null {
+    return this.db.query("SELECT run_id, owner_token FROM job_executions WHERE job_id = ?").get(jobId) as
+      { run_id: string; owner_token: string | null } | null;
+  }
+
+  attachJobExecution(jobId: number, runId: string): void {
+    this.db.query("INSERT OR IGNORE INTO job_executions (job_id, run_id) VALUES (?, ?)").run(jobId, runId);
+  }
+
+  ownJobExecution(jobId: number, runId: string, token: string): boolean {
+    return this.db.transaction(() => {
+      const job = this.getJob(jobId);
+      if (!job || !["queued", "running", "succeeded"].includes(job.status)) return false;
+      const updated = this.db.query("UPDATE job_executions SET owner_token = ? WHERE job_id = ? AND run_id = ?")
+        .run(token, jobId, runId);
+      if (!updated.changes) return false;
+      if (job.status !== "succeeded") this.db.query("UPDATE jobs SET status = 'running', updated_at = ? WHERE id = ?").run(nowIso(), jobId);
+      return true;
+    })();
+  }
+
+  listExecutionJobs(): JobRow[] {
+    return this.db.query("SELECT * FROM jobs WHERE type IN ('acquire', 'download', 'import') AND status != 'succeeded' ORDER BY id").all() as JobRow[];
   }
 
   ensureSettings(): AppSettings {
@@ -580,6 +611,7 @@ export class BooksRepo {
       openLibraryHydratedAt: string;
     }>
   ): BookRow {
+    this.beforeWrite();
     assertPositiveInt(bookId);
     const now = nowIso();
     const current = this.getBookRow(bookId);
@@ -884,6 +916,7 @@ export class BooksRepo {
   }
 
   createRelease(input: CreateReleaseInput): ReleaseRow {
+    this.beforeWrite();
     const now = nowIso();
     const hash = normalizeHash(input.infoHash);
     const row = this.db
@@ -932,6 +965,7 @@ export class BooksRepo {
   }
 
   setReleaseStatus(releaseId: number, status: ReleaseStatus, error?: string | null): ReleaseRow {
+    this.beforeWrite();
     assertPositiveInt(releaseId);
     const now = nowIso();
     const row = this.db
@@ -957,12 +991,21 @@ export class BooksRepo {
   }
 
   addAsset(input: AddAssetInput): AssetRow {
+    this.beforeWrite();
     assertPositiveInt(input.bookId);
     if (input.files.length === 0) {
       throw new Error("Asset requires at least one file");
     }
     const now = nowIso();
     return this.db.transaction(() => {
+      if (input.importKey) {
+        const existing = this.findAssetByImportKey(input.importKey);
+        if (existing) {
+          if (existing.book_id !== input.bookId || existing.source_release_id !== (input.sourceReleaseId ?? null)
+            || existing.manifestation_id !== input.manifestationId) throw new Error("Import identity reused for another container");
+          return existing;
+        }
+      }
       const rawManifestationId = input.manifestationId;
       if (rawManifestationId == null) {
         throw new Error("Asset requires an explicit manifestation");
@@ -977,8 +1020,8 @@ export class BooksRepo {
 
       const asset = this.db
         .query(
-          `INSERT INTO assets (book_id, kind, mime, total_size, duration_ms, source_release_id, manifestation_id, sequence_in_manifestation, import_note, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO assets (book_id, kind, mime, total_size, duration_ms, source_release_id, manifestation_id, sequence_in_manifestation, import_note, created_at, updated_at, import_key)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            RETURNING *`
         )
         .get(
@@ -992,7 +1035,8 @@ export class BooksRepo {
           sequence,
           input.importNote?.trim() || null,
           now,
-          now
+          now,
+          input.importKey ?? null
         ) as AssetRow;
 
       const insertFile = this.db.query(
@@ -1028,6 +1072,7 @@ export class BooksRepo {
   }
 
   addManifestation(input: AddManifestationInput): ManifestationRow {
+    this.beforeWrite();
     assertPositiveInt(input.bookId);
     const now = nowIso();
     const language = input.language?.trim().toLowerCase() || null;
@@ -1052,9 +1097,26 @@ export class BooksRepo {
       ) as ManifestationRow;
   }
 
+  findAssetByImportKey(key: string): AssetRow | null {
+    return this.db.query("SELECT * FROM assets WHERE import_key = ?").get(key) as AssetRow | null;
+  }
+
   getManifestation(manifestationId: number): ManifestationRow | null {
     assertPositiveInt(manifestationId);
     return (this.db.query("SELECT * FROM manifestations WHERE id = ?").get(manifestationId) as ManifestationRow | null) ?? null;
+  }
+
+  ensureManifestation(key: string, input: AddManifestationInput): ManifestationRow {
+    return this.transaction(() => {
+      const existing = this.db.query("SELECT * FROM manifestations WHERE acquisition_key = ?").get(key) as ManifestationRow | null;
+      if (existing) {
+        if (existing.book_id !== input.bookId || existing.kind !== input.kind) throw new Error("Acquisition identity reused for another manifestation");
+        return existing;
+      }
+      const manifestation = this.addManifestation(input);
+      this.db.query("UPDATE manifestations SET acquisition_key = ? WHERE id = ?").run(key, manifestation.id);
+      return manifestation;
+    });
   }
 
   listManifestationsByBook(bookId: number): ManifestationRow[] {
@@ -1100,6 +1162,7 @@ export class BooksRepo {
   }
 
   pruneEmptyManifestationIfUnreferenced(manifestationId: number): boolean {
+    this.beforeWrite();
     assertPositiveInt(manifestationId);
     const row = this.db
       .query(
@@ -1170,11 +1233,13 @@ export class BooksRepo {
   }
 
   createJob(input: CreateJobInput): JobRow {
+    this.beforeWrite();
     const now = nowIso();
     const row = this.db
       .query(
-        `INSERT INTO jobs (type, status, book_id, release_id, payload_json, error, attempt_count, max_attempts, next_run_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?)
+        `INSERT INTO jobs (type, status, book_id, release_id, payload_json, error, attempt_count, max_attempts, next_run_at, created_at, updated_at, dedupe_key)
+         VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?)
+         ON CONFLICT(dedupe_key) DO UPDATE SET dedupe_key = excluded.dedupe_key
          RETURNING *`
       )
       .get(
@@ -1186,8 +1251,11 @@ export class BooksRepo {
         input.maxAttempts ?? 5,
         input.nextRunAt ?? null,
         now,
-        now
+        now,
+        input.idempotencyKey ?? null
       ) as JobRow;
+    if (input.idempotencyKey && (row.type !== input.type || row.book_id !== (input.bookId ?? null)
+      || row.release_id !== (input.releaseId ?? null))) throw new Error("Job identity reused for another operation");
     return row;
   }
 
@@ -1235,13 +1303,15 @@ export class BooksRepo {
   }
 
   markJobSucceeded(jobId: number): JobRow {
+    this.beforeWrite();
     const now = nowIso();
     return this.db
-      .query("UPDATE jobs SET status = 'succeeded', error = NULL, updated_at = ? WHERE id = ? RETURNING *")
+      .query("UPDATE jobs SET status = 'succeeded', error = NULL, updated_at = ? WHERE id = ? AND status != 'cancelled' RETURNING *")
       .get(now, jobId) as JobRow;
   }
 
   markJobCancelled(jobId: number, error?: string | null): JobRow {
+    this.beforeWrite();
     assertPositiveInt(jobId);
     const now = nowIso();
     return this.db
@@ -1250,6 +1320,7 @@ export class BooksRepo {
   }
 
   markJobFailed(jobId: number, error: string, nextRunAt?: string | null): JobRow {
+    this.beforeWrite();
     const now = nowIso();
     return this.db
       .query(
@@ -1259,7 +1330,7 @@ export class BooksRepo {
              attempt_count = attempt_count + 1,
              next_run_at = CASE WHEN attempt_count + 1 >= max_attempts THEN NULL ELSE ? END,
              updated_at = ?
-         WHERE id = ?
+         WHERE id = ? AND status != 'cancelled'
          RETURNING *`
       )
       .get(error, nextRunAt ?? null, now, jobId) as JobRow;
@@ -1275,6 +1346,7 @@ export class BooksRepo {
   }
 
   rescheduleJob(jobId: number, nextRunAt: string, payload?: unknown): JobRow {
+    this.beforeWrite();
     assertPositiveInt(jobId);
     const now = nowIso();
     return this.db
@@ -1284,24 +1356,26 @@ export class BooksRepo {
       .get(nextRunAt, payload === undefined ? this.getJob(jobId)?.payload_json ?? null : JSON.stringify(payload), now, jobId) as JobRow;
   }
 
-  requeueRunningJobs(): number {
+  requeueRunningJobs(excludedTypes: JobType[] = []): number {
     const now = nowIso();
     const result = this.db
-      .query("UPDATE jobs SET status = 'queued', next_run_at = ?, updated_at = ? WHERE status = 'running'")
-      .run(now, now);
+      .query(`UPDATE jobs SET status = 'queued', next_run_at = ?, updated_at = ? WHERE status = 'running'
+        ${excludedTypes.length ? `AND type NOT IN (${excludedTypes.map(() => "?").join(",")})` : ""}`)
+      .run(now, now, ...excludedTypes);
     return Number(result.changes);
   }
 
-  listRunnableJobs(now = nowIso(), limit = 10): JobRow[] {
+  listRunnableJobs(now = nowIso(), limit = 10, excludedTypes: JobType[] = []): JobRow[] {
     return this.db
       .query(
         `SELECT * FROM jobs
          WHERE status = 'queued'
            AND (next_run_at IS NULL OR next_run_at <= ?)
+           ${excludedTypes.length ? `AND type NOT IN (${excludedTypes.map(() => "?").join(",")})` : ""}
          ORDER BY created_at ASC, id ASC
          LIMIT ?`
       )
-      .all(now, limit) as JobRow[];
+      .all(now, ...excludedTypes, limit) as JobRow[];
   }
 
   claimQueuedJob(jobId: number, now = nowIso()): JobRow | null {

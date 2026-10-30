@@ -1,7 +1,8 @@
 import { selectSearchCandidates } from "../library/agents";
 import { runSearch, runSnatchGroup } from "../library/service";
 import type { JobRow, MediaType } from "../app-types";
-import { workerLog, type WorkerContext } from "./context";
+import { durableStep, workerLog, type WorkerContext } from "./context";
+import { isRunControlError } from "reflow-ts";
 
 export type AcquirePayload = {
   bookId?: number;
@@ -28,7 +29,7 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
     ctx.repo.markJobSucceeded(job.id);
     return "done";
   }
-  const book = ctx.repo.getBookRow(payload.bookId);
+  const book = await durableStep(ctx, "book", () => ctx.repo.getBookRow(payload.bookId!));
   if (!book) {
     ctx.repo.markJobSucceeded(job.id);
     return "done";
@@ -47,12 +48,12 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
       };
 
       const query = `${book.title} ${book.author}`.trim();
-      const results = await runSearch(settings, { query, media });
+      const results = await durableStep(ctx, `${media}:search`, () => runSearch(settings, { query, media }));
       workerLog(
         ctx,
         `[acquire] job=${job.id} book=${book.id} media=${media} query=${JSON.stringify(query)} results=${results.length}`
       );
-      const decision = await selectSearchCandidates(
+      const decision = await durableStep(ctx, `${media}:selection`, () => selectSearchCandidates(
         settings,
         {
           query,
@@ -70,7 +71,7 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
           repo: ctx.repo,
           modelProvider: ctx.modelProvider,
         }
-      );
+      ));
       if (decision.error) {
         workerLog(
           ctx,
@@ -116,6 +117,9 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
             {
               onLog: (line) => workerLog(ctx, `[acquire] job=${job.id} book=${book.id} media=${media} ${line}`),
               preferAgentImport: decision.mode === "agent",
+              execution: ctx.execution,
+              operationKey: `acquire:${job.id}:${media}:${selectionIndex}`,
+              stepPrefix: `${media}:selection:${selectionIndex}`,
             }
           );
           for (const [partIndex, snatch] of group.results.entries()) {
@@ -127,6 +131,7 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
         }
         result.snatchSucceeded = true;
       } catch (error) {
+        if (isRunControlError(error)) throw error;
         const message = (error as Error).message;
         workerLog(ctx, `[acquire] job=${job.id} book=${book.id} media=${media} snatch_error=${JSON.stringify(message)}`);
         result.snatchError = `${media}: ${message}`;

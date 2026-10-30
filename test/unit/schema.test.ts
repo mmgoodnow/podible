@@ -47,6 +47,8 @@ describe("schema migrations", () => {
     const db = new Database(":memory:");
     db.exec(`
       CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+      CREATE TABLE manifestations (id INTEGER PRIMARY KEY);
+      CREATE TABLE assets (id INTEGER PRIMARY KEY);
       CREATE TABLE books (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,

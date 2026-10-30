@@ -15,6 +15,7 @@ type MockTorznabOptions = {
 type MockTorznab = {
   baseUrl: string;
   stop: () => void;
+  searches: string[];
 };
 
 function rssItem(baseUrl: string, result: MockResult): string {
@@ -33,11 +34,13 @@ ${attrs}
 
 export function startMockTorznab(options: MockTorznabOptions): MockTorznab {
   const id = randomUUID();
+  const searches: string[] = [];
   const server = Bun.serve({
     port: 0,
     fetch(request): Response {
       const url = new URL(request.url);
       if (url.pathname === "/api") {
+        searches.push(url.search);
         const body: string = `<?xml version="1.0"?>
 <rss xmlns:torznab="http://torznab.com/schemas/2015/feed">
   <channel>
@@ -66,5 +69,6 @@ export function startMockTorznab(options: MockTorznabOptions): MockTorznab {
   return {
     baseUrl: `http://127.0.0.1:${server.port}`,
     stop: () => server.stop(),
+    searches,
   };
 }

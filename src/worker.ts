@@ -5,6 +5,7 @@ import { workerLog, type WorkerContext } from "./worker/context";
 import { processJob } from "./worker/dispatcher";
 import { handleJobFailure } from "./worker/failure";
 import { jobLockKeys, lockSetsConflict } from "./worker/locks";
+import type { JobType } from "./app-types";
 
 export { pollMsForMedia, selectDownloadPollMs } from "./worker/downloads";
 const RUNNABLE_SCAN_LIMIT = 200;
@@ -12,6 +13,7 @@ const RUNNABLE_SCAN_LIMIT = 200;
 type WorkerDeps = {
   processJob?: typeof processJob;
   handleJobFailure?: typeof handleJobFailure;
+  excludedJobTypes?: JobType[];
 };
 
 type ActiveJob = {
@@ -65,7 +67,8 @@ function chooseCandidateJob(
  * execute runnable jobs until shutdown is requested.
  */
 export async function runWorker(ctx: WorkerContext, deps: WorkerDeps = {}): Promise<void> {
-  const requeued = ctx.repo.requeueRunningJobs();
+  const excluded = deps.excludedJobTypes ?? [];
+  const requeued = ctx.repo.requeueRunningJobs(excluded);
   if (requeued > 0) {
     workerLog(ctx, `[worker] requeued ${requeued} running jobs`);
   }
@@ -106,7 +109,7 @@ export async function runWorker(ctx: WorkerContext, deps: WorkerDeps = {}): Prom
     let launchedAny = false;
     if (!ctx.shouldStop?.()) {
       for (;;) {
-        const candidates = ctx.repo.listRunnableJobs(nowIso(), RUNNABLE_SCAN_LIMIT);
+        const candidates = ctx.repo.listRunnableJobs(nowIso(), RUNNABLE_SCAN_LIMIT, excluded);
         const runnable = candidates.filter((job) => !lockSetsConflict(activeLocks, jobLockKeys(ctx.repo, job)));
         const candidate = chooseCandidateJob(runnable, active);
         if (!candidate) break;

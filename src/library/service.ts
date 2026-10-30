@@ -6,6 +6,7 @@ import { searchTorznab } from "./torznab";
 import { inferLanguageFromReleaseTitles, normalizeManifestationLanguageCode } from "./language";
 import type { TorznabResult } from "./torznab";
 import type { AppSettings, MediaType, ReleaseRow } from "../app-types";
+import type { WorkerContext } from "../worker/context";
 
 type SearchRequest = {
   query: string;
@@ -68,6 +69,9 @@ type AutoAcquireOptions = {
 type SnatchRuntimeOptions = {
   onLog?: (message: string) => void;
   preferAgentImport?: boolean;
+  execution?: WorkerContext["execution"];
+  operationKey?: string;
+  stepPrefix?: string;
 };
 
 type RankedSearchResult = {
@@ -91,7 +95,7 @@ function idempotentResult(repo: BooksRepo, existing: ReleaseRow): SnatchResult {
   return {
     release: existing,
     jobId: existingJob?.id ?? -1,
-    idempotent: true,
+    idempotent: true
   };
 }
 
@@ -155,18 +159,13 @@ function scoreSearchResult(media: MediaType, query: string, row: TorznabResult):
   return value;
 }
 
-export function rankSearchResults(
-  query: string,
-  media: MediaType,
-  results: TorznabResult[]
-): RankedSearchResult[] {
+export function rankSearchResults(query: string, media: MediaType, results: TorznabResult[]): RankedSearchResult[] {
   return results
     .filter((row) => mediaMatchTier(media, row.title.toLowerCase()) > 0)
     .map((result) => ({
       result,
       score:
-        scoreSearchResult(media, query, result) +
-        (mediaMatchTier(media, result.title.toLowerCase()) === 2 ? 80 : 0),
+        scoreSearchResult(media, query, result) + (mediaMatchTier(media, result.title.toLowerCase()) === 2 ? 80 : 0)
     }))
     .sort((a, b) => {
       const scoreDiff = b.score - a.score;
@@ -217,13 +216,6 @@ export async function runSnatch(
     if (manifestation.kind !== expectedKind) {
       throw new Error(`Manifestation ${manifestationId} is ${manifestation.kind}, not ${expectedKind}`);
     }
-  } else if (sequenceInManifestation !== null) {
-    manifestationId = repo.addManifestation({
-      bookId: request.bookId,
-      kind: request.mediaType === "ebook" ? "ebook" : "audio",
-      selectionNote: request.selectionNote ?? null,
-      language: normalizeManifestationLanguageCode(request.manifestationLanguage) ?? inferLanguageFromReleaseTitles([request.title]),
-    }).id;
   }
   snatchLog(
     `[snatch] start book=${request.bookId} media=${request.mediaType} provider=${JSON.stringify(request.provider)} title=${JSON.stringify(request.title)} guid=${JSON.stringify(providerGuid)} explicit_hash=${JSON.stringify(explicitHash)} manifestation=${manifestationId ?? "auto"} sequence=${sequenceInManifestation ?? "auto"}`
@@ -262,7 +254,7 @@ export async function runSnatch(
       provider: request.provider,
       providerGuid,
       url: request.url,
-      infoHash: explicitHash,
+      infoHash: explicitHash
     },
     { onLog: (line) => snatchLog(line) }
   );
@@ -273,13 +265,13 @@ export async function runSnatch(
     key: torrentCacheKeyFor({
       provider: request.provider,
       providerGuid,
-      url: request.url,
+      url: request.url
     }),
     provider: request.provider,
     providerGuid,
     url: request.url,
     infoHash: derivedHash,
-    torrentBytes,
+    torrentBytes
   });
 
   const existingByDerived = repo.findReleaseByInfoHash(derivedHash);
@@ -298,57 +290,71 @@ export async function runSnatch(
   const commands = [
     ...(downloadPath ? [`d.directory.set="${rtorrentStringLiteral(downloadPath)}"`] : []),
     'd.custom1.set="Podible"',
-    `d.custom.set=addtime,${Math.round(Date.now() / 1000)}`,
+    `d.custom.set=addtime,${Math.round(Date.now() / 1000)}`
   ];
   snatchLog(`[snatch] rtorrent load.raw_start begin`);
   try {
-    await client.loadRawStart(torrentBytes, commands);
+    runtime.execution?.assertActive();
+    // Reconcile the external-success-before-checkpoint window by torrent identity.
+    if (!runtime.execution || !(await client.hasDownload(derivedHash))) {
+      runtime.execution?.assertActive();
+      await client.loadRawStart(torrentBytes, commands);
+    }
     snatchLog(`[snatch] rtorrent load.raw_start ok`);
   } catch (error) {
     snatchLog(`[snatch] rtorrent load.raw_start error=${JSON.stringify((error as Error).message)}`);
     throw error;
   }
 
-  if (manifestationId === null) {
-    manifestationId = repo.addManifestation({
+  return repo.transaction(() => {
+    const existing = repo.findReleaseByInfoHash(derivedHash);
+    if (existing) {
+      if (existing.book_id !== request.bookId) throw new Error(`Infohash already linked to book ${existing.book_id}`);
+      return idempotentResult(repo, existing);
+    }
+    if (manifestationId === null) {
+      manifestationId = repo.addManifestation({
+        bookId: request.bookId,
+        kind: request.mediaType === "ebook" ? "ebook" : "audio",
+        selectionNote: request.selectionNote ?? null,
+        language:
+          normalizeManifestationLanguageCode(request.manifestationLanguage) ??
+          inferLanguageFromReleaseTitles([request.title])
+      }).id;
+      sequenceInManifestation ??= 0;
+    }
+
+    const release = repo.createRelease({
       bookId: request.bookId,
-      kind: request.mediaType === "ebook" ? "ebook" : "audio",
-      selectionNote: request.selectionNote ?? null,
-      language: normalizeManifestationLanguageCode(request.manifestationLanguage) ?? inferLanguageFromReleaseTitles([request.title]),
-    }).id;
-    sequenceInManifestation = 0;
-  }
+      provider: request.provider,
+      providerGuid,
+      title: request.title,
+      mediaType: request.mediaType,
+      infoHash: derivedHash,
+      sizeBytes: request.sizeBytes ?? null,
+      url: request.url,
+      status: "snatched"
+    });
 
-  const release = repo.createRelease({
-    bookId: request.bookId,
-    provider: request.provider,
-    providerGuid,
-    title: request.title,
-    mediaType: request.mediaType,
-    infoHash: derivedHash,
-    sizeBytes: request.sizeBytes ?? null,
-    url: request.url,
-    status: "snatched",
+    const job = repo.createJob({
+      type: "download",
+      releaseId: release.id,
+      bookId: release.book_id,
+      payload: {
+        infoHash: release.info_hash,
+        preferAgentImport: runtime.preferAgentImport === true,
+        manifestationId,
+        sequenceInManifestation
+      }
+    });
+    snatchLog(`[snatch] created release=${release.id} download_job=${job.id} info_hash=${release.info_hash}`);
+
+    return {
+      release,
+      jobId: job.id,
+      idempotent: false
+    };
   });
-
-  const job = repo.createJob({
-    type: "download",
-    releaseId: release.id,
-    bookId: release.book_id,
-    payload: {
-      infoHash: release.info_hash,
-      preferAgentImport: runtime.preferAgentImport === true,
-      manifestationId,
-      sequenceInManifestation,
-    },
-  });
-  snatchLog(`[snatch] created release=${release.id} download_job=${job.id} info_hash=${release.info_hash}`);
-
-  return {
-    release,
-    jobId: job.id,
-    idempotent: false,
-  };
 }
 
 export async function runSnatchGroup(
@@ -369,44 +375,54 @@ export async function runSnatchGroup(
   const language =
     normalizeManifestationLanguageCode(request.manifestation.language) ??
     inferLanguageFromReleaseTitles(request.parts.map((part) => part.title));
+  const createManifestation = () => {
+    const input = {
+      bookId: request.bookId,
+      kind: request.mediaType === "ebook" ? ("ebook" as const) : ("audio" as const),
+      label: request.manifestation.label,
+      editionNote: request.manifestation.editionNote,
+      selectionNote: request.manifestation.selectionNote ?? null,
+      language
+    };
+    return runtime.operationKey
+      ? repo.ensureManifestation(runtime.operationKey, input).id
+      : repo.addManifestation(input).id;
+  };
+  const prefix = runtime.stepPrefix ?? "snatch";
   let manifestationId = needsExplicitManifestation
-    ? repo.addManifestation({
-        bookId: request.bookId,
-        kind: request.mediaType === "ebook" ? "ebook" : "audio",
-        label: request.manifestation.label,
-        editionNote: request.manifestation.editionNote,
-        selectionNote: request.manifestation.selectionNote ?? null,
-        language,
-      }).id
+    ? runtime.execution
+      ? await runtime.execution.run(`${prefix}:manifestation`, createManifestation)
+      : createManifestation()
     : null;
   const results: SnatchResult[] = [];
   try {
     for (const [index, part] of request.parts.entries()) {
-      results.push(
-        await runSnatch(
+      const snatch = () =>
+        runSnatch(
           repo,
           settings,
           {
+            ...part,
             bookId: request.bookId,
-            provider: part.provider,
-            providerGuid: part.providerGuid ?? null,
-            title: part.title,
             mediaType: request.mediaType,
-            url: part.url,
-            sizeBytes: part.sizeBytes ?? null,
-            infoHash: part.infoHash ?? null,
             manifestationId,
             sequenceInManifestation: needsExplicitManifestation ? index : null,
-            manifestationLanguage: language,
+            manifestationLanguage: language
           },
           runtime
-        )
-      );
+        );
+      results.push(await (runtime.execution ? runtime.execution.run(`${prefix}:part:${index}`, snatch) : snatch()));
     }
   } finally {
-    if (manifestationId !== null && repo.pruneEmptyManifestationIfUnreferenced(manifestationId)) {
+    if (!runtime.execution && manifestationId !== null && repo.pruneEmptyManifestationIfUnreferenced(manifestationId)) {
       manifestationId = null;
     }
+  }
+  if (runtime.execution && manifestationId !== null) {
+    const id = manifestationId;
+    manifestationId = await runtime.execution.run(`${prefix}:cleanup`, () =>
+      repo.pruneEmptyManifestationIfUnreferenced(id) ? null : id
+    );
   }
   return { manifestationId, results };
 }
@@ -431,8 +447,8 @@ export async function triggerAutoAcquire(
       failureContext: options.failureContext ?? null,
       rejectedUrls: options.rejectedUrls ?? [],
       rejectedGuids: options.rejectedGuids ?? [],
-      rejectedInfoHashes: options.rejectedInfoHashes ?? [],
-    },
+      rejectedInfoHashes: options.rejectedInfoHashes ?? []
+    }
   });
   return acquireJob.id;
 }

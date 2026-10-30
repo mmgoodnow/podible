@@ -10,7 +10,16 @@ export type WorkerContext = {
   shouldStop?: () => boolean;
   /** Override the agent model provider (e.g. a fake for tests). */
   modelProvider?: ModelProvider;
+  execution?: {
+    run<T>(name: string, handler: () => T | Promise<T>): Promise<T>;
+    sleep(name: string, milliseconds: number): Promise<void>;
+    assertActive(): void;
+  };
 };
+
+export function durableStep<T>(ctx: WorkerContext, name: string, handler: () => T | Promise<T>): Promise<T> {
+  return ctx.execution ? ctx.execution.run(name, handler) : Promise.resolve().then(handler);
+}
 
 export function workerLog(ctx: WorkerContext, message: string): void {
   if (ctx.onLog) {
