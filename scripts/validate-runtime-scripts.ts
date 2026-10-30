@@ -29,4 +29,15 @@ if (missing.length > 0) {
   throw new Error(`Missing runtime package-script entrypoints:\n${missing.map((entry) => `- ${entry}`).join("\n")}`);
 }
 
-console.log(`Validated ${entrypoints.size} runtime package-script entrypoints.`);
+const build = await Bun.build({
+  entrypoints: [...entrypoints.keys()].map((entrypoint) => path.resolve(entrypoint)),
+  target: "bun",
+  packages: "external",
+  write: false,
+  throw: false,
+});
+if (!build.success) {
+  throw new AggregateError(build.logs, "Runtime package scripts failed import/export validation");
+}
+
+console.log(`Validated ${entrypoints.size} runtime package-script entrypoints and local imports/exports.`);

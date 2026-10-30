@@ -112,18 +112,26 @@ cover/metadata checkpoints, chapter artifact replay, and successful transcript
 preservation. Unit-level journal tests complement, rather than replace, the
 file-backed Reflow and subprocess crash tests.
 
-## Production verification status (2026-10-29)
+## Production Verification (2026-10-30)
 
-A read-only production snapshot at schema 29 migrated locally to schema 31
-with all original fields unchanged across 62 books, 142 manifestations, 126
-assets, 759 asset files, 138 releases, 183 jobs, 17 stored transcripts and 38
-chapter-analysis records. Foreign-key verification reported zero errors.
-The deployed rTorrent adapter successfully returned its download list (9,358
-hashes), validating the external reconciliation protocol without snatching.
+Normal CD deployed the full migration and review fixes at `fbfe82e`.
+Watchtower's obsolete Docker API default was repaired with API 1.44 in the
+host's persistent Compose configuration. Shared CD commit `mmgoodnow/cd@600216b`
+restricts update requests to the calling repository's image; the successful
+rollout scanned and updated only Podible. No manual application deployment or
+hotpatch was used.
 
-Live workflow verification is blocked, not completed: GitHub's image build
-succeeds but the CD Watchtower update fails. The production Watchtower logs
-show Docker client API 1.25 rejected by a daemon requiring API 1.40 or newer.
-Production is still revision `34cbb9a40b4bd1bd767d134a7065e66c2432a676`.
-No manual rollout, hotpatch, production migration, or bulk refresh was made.
-Repair normal CD before performing a controlled live workflow smoke test.
+The pre-rollout online backup remains at
+`/opt/docker/config/podible/backups/pre-durable-20261030T1658Z`.
+Production is at migration 32. Both databases report `integrity_check=ok` and
+zero foreign-key violations. Counts remain 62 books, 142 manifestations, 126
+assets, 759 asset files, and 138 releases.
+
+A controlled authenticated `import.reconcile` RPC created job 193. It completed
+as Reflow run `6f4ac96e-6631-44b8-9cee-da63b18a1e9e`, with persisted completed
+`job-input`, `reconcile-targets`, and `operation-finish` steps, each attempted
+once. The check first verified that no downloaded releases needed importing;
+no downloads, paid calls, reimports, or retranscriptions were initiated, and
+media counts were unchanged. The temporary verification session was removed.
+Crash, retry, parallel transcription, and publication behavior are covered by
+local file-backed acceptance tests rather than destructive production tests.

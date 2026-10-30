@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { ensureConfigDir } from "../src/config";
-import { createSessionToken, hashSessionToken, sessionExpiresAt } from "../src/auth";
+import { createSessionToken, hashSessionToken } from "../src/auth";
 import { openDatabase } from "../src/db";
 import { BooksRepo } from "../src/repo";
 import type { AuthProvider } from "../src/app-types";
@@ -101,14 +101,14 @@ try {
   });
 
   const token = createSessionToken();
-  const session = repo.createSession(user.id, hashSessionToken(token), sessionExpiresAt(), "browser");
+  const session = repo.createSession(user.id, hashSessionToken(token), null, "browser");
   const loginUrl = `${options.origin}/`;
 
   console.log(`Dev login created for ${options.user}`);
   console.log(`User id: ${user.id}`);
   console.log(`Provider: ${user.provider}`);
   console.log(`Admin: ${user.is_admin ? "yes" : "no"}`);
-  console.log(`Expires: ${session.expires_at}`);
+  console.log(`Expires: ${session.expires_at ?? "until revoked"}`);
   console.log("");
   console.log(`Open: ${loginUrl}`);
   console.log(`Cookie: podible_session=${token}`);
