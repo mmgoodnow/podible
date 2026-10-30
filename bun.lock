@@ -13,6 +13,7 @@
         "fast-xml-parser": "^4.4.1",
         "hono": "^4.12.10",
         "openai": "^6.22.0",
+        "reflow-ts": "0.11.0",
         "zod": "^4.3.6",
       },
       "devDependencies": {
@@ -43,6 +44,8 @@
     "@openai/agents-realtime": ["@openai/agents-realtime@0.11.4", "", { "dependencies": { "@openai/agents-core": "0.11.4", "@types/ws": "^8.18.1", "debug": "^4.4.0", "ws": "^8.18.1" }, "peerDependencies": { "zod": "^4.0.0" } }, "sha512-SZS22YbsKilfPpsVJmHwigYbNX3W+ZHZFTm5+uDdV3OnziodCQu2P/cMag2dcpwmJq/fW0lANUzD+YC4l0qwoA=="],
 
     "@playwright/cli": ["@playwright/cli@0.1.5", "", { "dependencies": { "minimist": "^1.2.5", "playwright": "1.60.0-alpha-1775237291000" }, "bin": { "playwright-cli": "playwright-cli.js" } }, "sha512-UsvKLL3f3vqDJg/nbmTCXnpj5l92ma75Rl1r8G4Y3qIBMC7kitZV3bc52JtbPe1kaFSU/flJzpdwAVykSRm43w=="],
+
+    "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
 
     "@types/node": ["@types/node@25.2.3", "", { "dependencies": { "undici-types": "~7.16.0" } }, "sha512-m0jEgYlYz+mDJZ2+F4v8D1AyQb+QzsNqRuI7xg1VQX/KlKS0qT9r1Mo16yo5F/MtifXFgaofIFsdFMox2SxIbQ=="],
 
@@ -289,6 +292,8 @@
     "raw-body": ["raw-body@3.0.2", "", { "dependencies": { "bytes": "~3.1.2", "http-errors": "~2.0.1", "iconv-lite": "~0.7.0", "unpipe": "~1.0.0" } }, "sha512-K5zQjDllxWkf7Z5xJdV0/B0WTNqx6vxG70zJE4N0kBs4LovmEYWJzQGxC9bS9RAKu3bgM40lrd5zoLJ12MQ5BA=="],
 
     "readable-stream": ["readable-stream@2.3.8", "", { "dependencies": { "core-util-is": "~1.0.0", "inherits": "~2.0.3", "isarray": "~1.0.0", "process-nextick-args": "~2.0.0", "safe-buffer": "~5.1.1", "string_decoder": "~1.1.1", "util-deprecate": "~1.0.1" } }, "sha512-8p0AUk4XODgIewSi0l8Epjs+EVnWiK7NoDIEGU0HhE7+ZyY8D1IMY7odu5lRrFXGg71L15KG8QrPmum45RTtdA=="],
+
+    "reflow-ts": ["reflow-ts@0.11.0", "", { "dependencies": { "@standard-schema/spec": "^1.1.0" }, "peerDependencies": { "better-sqlite3": ">=9.0.0", "pg": "^8.0.0" }, "optionalPeers": ["better-sqlite3", "pg"], "bin": { "reflow-ts": "dist/cli.mjs" } }, "sha512-97iJ8JCn/llaJ6I+oUCo6W56Tn8hzxMBK0deqSmKw0UD1s+vmQBP1QMp8aOicIwexcg4Yb11W4/JifE9wGA+2w=="],
 
     "require-from-string": ["require-from-string@2.0.2", "", {}, "sha512-Xf0nWe6RseziFMu+Ap9biiUbmplq6S9/p+7w7YXP/JBHhrUDDUhwa+vANyubuqfZWTveU//DYVGsDG7RKL/vEw=="],
 
