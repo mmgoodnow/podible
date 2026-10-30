@@ -3,10 +3,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import OpenAI from "openai";
+import { createHash } from "node:crypto";
 
 import type { BookRow, JobRow } from "../app-types";
 import type { BooksRepo } from "../repo";
-import type { WorkerContext } from "../worker/context";
+import { durableStep, type WorkerContext } from "../worker/context";
 import { htmlToPlainText } from "../utils/strings";
 
 import { coverDirectoryForBook } from "./covers";
@@ -47,12 +48,13 @@ export function buildGeneratedCoverPrompt(book: BookRow, settingsTitle: string):
   ].join("\n");
 }
 
-export async function generateCoverForBook(repo: BooksRepo, bookId: number, apiKey: string): Promise<string> {
-  if (!apiKey.trim()) throw new Error("OpenAI API key not configured");
-  const book = repo.getBookRow(bookId);
-  if (!book) throw new Error(`Book ${bookId} not found`);
-  if (book.cover_path) return book.cover_path;
+type CoverGenerationDeps = {
+  generateImage?: (book: BookRow, apiKey: string, repo: BooksRepo) => Promise<Buffer>;
+  watermark?: (bytes: Uint8Array) => Promise<Buffer>;
+};
 
+async function generateImage(book: BookRow, apiKey: string, repo: BooksRepo): Promise<Buffer> {
+  if (!apiKey.trim()) throw new Error("OpenAI API key not configured");
   const settings = repo.getSettings();
   const client = new OpenAI({ apiKey, timeout: settings.agents.timeoutMs });
   const response = await client.images.generate({
@@ -68,14 +70,76 @@ export async function generateCoverForBook(repo: BooksRepo, bookId: number, apiK
 
   const generatedBytes = Buffer.from(b64, "base64");
   if (generatedBytes.length === 0) throw new Error("OpenAI image generation returned empty image data");
-  const bytes = await watermarkGeneratedCover(generatedBytes);
+  return generatedBytes;
+}
+
+export async function generateCoverForBook(
+  repo: BooksRepo,
+  bookId: number,
+  apiKey: string,
+  options?: { ctx: WorkerContext; deps?: CoverGenerationDeps }
+): Promise<string> {
+  const book = repo.getBookRow(bookId);
+  if (!book) throw new Error(`Book ${bookId} not found`);
+  if (book.cover_path) return book.cover_path;
+  const run = <T>(stage: string, handler: () => T | Promise<T>): Promise<T> =>
+    options ? durableStep(options.ctx, stage, handler) : Promise.resolve().then(handler);
 
   const coverDir = coverDirectoryForBook(repo, book);
   await mkdir(coverDir, { recursive: true });
-  const coverPath = path.join(coverDir, GENERATED_COVER_FILENAME);
-  await writeFile(coverPath, bytes);
-  repo.updateBookMetadata(book.id, { coverPath });
-  return coverPath;
+  const identity = createHash("sha256").update(options?.ctx.execution?.key ?? `book:${bookId}`).digest("hex").slice(0, 24);
+  const rawPath = path.join(coverDir, `.cover-${identity}.raw.jpg`);
+  const markedPath = path.join(coverDir, `.cover-${identity}.marked.jpg`);
+  const writeArtifact = async (target: string, bytes: Uint8Array) => {
+    const temporary = `${target}.tmp`;
+    await writeFile(temporary, bytes);
+    options?.ctx.execution?.assertActive();
+    await rename(temporary, target);
+    return target;
+  };
+  const hasArtifact = async (target: string): Promise<boolean> => {
+    try {
+      return (await readFile(target)).length > 0;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  };
+  await run("cover-generate", async () => {
+    options?.ctx.execution?.assertActive();
+    if (!(await hasArtifact(rawPath))) {
+      const bytes = await (options?.deps?.generateImage ?? generateImage)(book, apiKey, repo);
+      await writeArtifact(rawPath, bytes);
+    }
+    return rawPath;
+  });
+  await run("cover-watermark", async () => {
+    if (!(await hasArtifact(markedPath))) {
+      const bytes = await (options?.deps?.watermark ?? watermarkGeneratedCover)(await readFile(rawPath));
+      await writeArtifact(markedPath, bytes);
+    }
+    return markedPath;
+  });
+  const publicationDirectory = path.join(coverDir, ".generated-covers", identity);
+  const coverPath = path.join(publicationDirectory, GENERATED_COVER_FILENAME);
+  return run("cover-publish", async () => {
+    options?.ctx.execution?.assertActive();
+    const current = repo.getBookRow(bookId);
+    if (!current) throw new Error(`Book ${bookId} no longer exists`);
+    if (current.cover_path) return current.cover_path;
+    const bytes = await readFile(markedPath);
+    // Publication never overwrites an image another execution has already selected.
+    options?.ctx.execution?.assertActive();
+    const latest = repo.getBookRow(bookId);
+    if (latest?.cover_path) return latest.cover_path;
+    await mkdir(publicationDirectory, { recursive: true });
+    await writeArtifact(coverPath, bytes);
+    repo.transaction(() => {
+      options?.ctx.execution?.assertActive();
+      if (!repo.getBookRow(bookId)?.cover_path) repo.updateBookMetadata(bookId, { coverPath });
+    });
+    return repo.getBookRow(bookId)?.cover_path ?? coverPath;
+  });
 }
 
 export async function watermarkGeneratedCover(bytes: Uint8Array): Promise<Buffer> {
@@ -226,7 +290,8 @@ export function queueMissingCoverGeneration(repo: BooksRepo, bookId: number): Jo
   });
 }
 
-export async function processCoverGenerationJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
+export async function processCoverGenerationJob(ctx: WorkerContext, job: JobRow, deps?: CoverGenerationDeps): Promise<"done"> {
+  ctx.execution?.assertActive();
   if (!job.book_id) {
     ctx.repo.markJobSucceeded(job.id);
     return "done";
@@ -237,7 +302,7 @@ export async function processCoverGenerationJob(ctx: WorkerContext, job: JobRow)
     ctx.repo.markJobSucceeded(job.id);
     return "done";
   }
-  const coverPath = await generateCoverForBook(ctx.repo, book.id, settings.agents.apiKey);
+  const coverPath = await generateCoverForBook(ctx.repo, book.id, settings.agents.apiKey, { ctx, deps });
   ctx.repo.markJobSucceeded(job.id);
   log(ctx, `[cover-generation] job=${job.id} book=${book.id} cover=${coverPath}`);
   return "done";

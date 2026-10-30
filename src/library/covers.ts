@@ -13,7 +13,12 @@ function sanitizePathSegment(value: string): string {
   return sanitized || "Unknown";
 }
 
-export async function downloadCover(repo: BooksRepo, book: LibraryBook, coverUrl: string): Promise<string | null> {
+export async function downloadCover(
+  repo: BooksRepo,
+  book: LibraryBook,
+  coverUrl: string,
+  filenamePrefix = "cover"
+): Promise<string | null> {
   try {
     const response = await fetch(coverUrl, { method: "GET" });
     if (!response.ok) return null;
@@ -32,7 +37,7 @@ export async function downloadCover(repo: BooksRepo, book: LibraryBook, coverUrl
     const bookDir = coverDirectoryForBook(repo, book);
     await mkdir(bookDir, { recursive: true });
 
-    const coverPath = path.join(bookDir, `cover${ext}`);
+    const coverPath = path.join(bookDir, `${filenamePrefix}${ext}`);
     await writeFile(coverPath, bytes);
     return coverPath;
   } catch {

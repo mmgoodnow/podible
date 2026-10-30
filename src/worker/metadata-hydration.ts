@@ -5,7 +5,7 @@ import {
 } from "../library/hydration";
 import type { BooksRepo } from "../repo";
 
-import { workerLog, type WorkerContext } from "./context";
+import { durableStep, workerLog, type WorkerContext } from "./context";
 
 export function queueStaleMetadataHydration(repo: BooksRepo): JobRow | null {
   const stale = repo.listBooksWithStaleOpenLibraryMetadata(CURRENT_OPENLIBRARY_METADATA_VERSION);
@@ -24,12 +24,15 @@ export function queueStaleMetadataHydration(repo: BooksRepo): JobRow | null {
 }
 
 export async function processMetadataHydrationJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
-  const stale = ctx.repo.listBooksWithStaleOpenLibraryMetadata(CURRENT_OPENLIBRARY_METADATA_VERSION);
+  const stale = await durableStep(ctx, "metadata-targets", () =>
+    ctx.repo.listBooksWithStaleOpenLibraryMetadata(CURRENT_OPENLIBRARY_METADATA_VERSION).map((book) => ({ id: book.id }))
+  );
   const failed: number[] = [];
 
   for (const row of stale) {
     const book = ctx.repo.getBook(row.id);
-    if (!book || !(await hydrateBookFromOpenLibrary(ctx.repo, book))) {
+    if (!book) continue;
+    if (!(await hydrateBookFromOpenLibrary(ctx.repo, book, { ctx, stepPrefix: `metadata:${row.id}`, requireMetadata: true }))) {
       failed.push(row.id);
       continue;
     }
