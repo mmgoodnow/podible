@@ -1,7 +1,9 @@
 import { Database } from "bun:sqlite";
 import path from "node:path";
 
-import { nowIso } from "./db";
+import { nowIso, finalizeJobJournalMigration } from "./db";
+import { randomUUID } from "node:crypto";
+import { jobJournalReader, type JobJournalReader, type JobCommand } from "./worker/job-journal";
 import { pseudoProgressForBook } from "./library/progress";
 import { deriveBookStatus, deriveMediaStatus, MediaStatus, ReleaseStatus } from "./library/status";
 import { defaultSettings, parseSettings } from "./settings";
@@ -33,7 +35,7 @@ import type {
   SessionKind,
   UserRow,
   TorrentCacheRow,
-  PlexLoginAttemptRow,
+  PlexLoginAttemptRow
 } from "./app-types";
 
 type CreateBookInput = {
@@ -192,7 +194,10 @@ function normalizeSeries(series: BookSeriesMembership[] | undefined): BookSeries
   return out;
 }
 
-function seriesMatches(bookSeries: BookSeriesMembership[], target: { seriesKey?: string | null; seriesName?: string | null }): boolean {
+function seriesMatches(
+  bookSeries: BookSeriesMembership[],
+  target: { seriesKey?: string | null; seriesName?: string | null }
+): boolean {
   const key = target.seriesKey?.trim() || null;
   const name = target.seriesName?.trim().toLowerCase() || null;
   return bookSeries.some((series) => {
@@ -201,7 +206,10 @@ function seriesMatches(bookSeries: BookSeriesMembership[], target: { seriesKey?:
   });
 }
 
-function seriesPositionSortKey(book: LibraryBook, target: { seriesKey?: string | null; seriesName?: string | null }): number {
+function seriesPositionSortKey(
+  book: LibraryBook,
+  target: { seriesKey?: string | null; seriesName?: string | null }
+): number {
   const key = target.seriesKey?.trim() || null;
   const name = target.seriesName?.trim().toLowerCase() || null;
   const series = book.series.find((candidate) => {
@@ -227,75 +235,137 @@ function assertPositiveInt(value: number): void {
 }
 
 export class BooksRepo {
-  constructor(private readonly db: Database, private readonly beforeWrite: () => void = () => {}) {
-    // Foreign-key cascades are part of normal behavior; enforce per connection.
+  constructor(
+    private readonly db: Database,
+    private readonly beforeWrite: () => void = () => {},
+    private readonly journalState: { reader?: JobJournalReader; legacy?: boolean } = {}
+  ) {
     this.db.exec("PRAGMA foreign_keys = ON;");
+    this.journalState.legacy ??= (this.db.query("PRAGMA table_info(jobs)").all() as Array<{ name: string }>).some(
+      (column) => column.name === "status"
+    );
+    if (!this.journalState.legacy && !this.journalState.reader && this.db.filename !== ":memory:") {
+      this.journalState.reader = jobJournalReader(this.executionDatabasePath());
+    }
   }
 
   transaction<T>(fn: () => T): T {
-    return this.db.transaction(() => { this.beforeWrite(); return fn(); })();
+    return this.db.transaction(() => {
+      this.beforeWrite();
+      return fn();
+    })();
   }
 
   forExecution(beforeWrite: () => void): BooksRepo {
-    const scoped = new BooksRepo(this.db, beforeWrite);
-    // Guard and mutation share a SQLite transaction, so another process cannot
-    // revoke ownership between the check and the domain write.
+    const scoped = new BooksRepo(this.db, beforeWrite, this.journalState);
     return new Proxy(scoped, {
       get(target, property, receiver) {
         const value = Reflect.get(target, property, receiver);
         if (typeof value !== "function") return value;
         return (...args: unknown[]) => target.transaction(() => value.apply(target, args));
-      },
+      }
     });
   }
 
-  getJobExecution(jobId: number): { run_id: string; owner_token: string | null } | null {
-    return this.db.query("SELECT run_id, owner_token FROM job_executions WHERE job_id = ?").get(jobId) as
-      { run_id: string; owner_token: string | null } | null;
+  bindJobJournalReader(reader: JobJournalReader): void {
+    this.journalState.reader = reader;
   }
-
+  private refreshJobSchema(): void {
+    if (!this.journalState.legacy) return;
+    const columns = this.db.query("PRAGMA table_info(jobs)").all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "status")) {
+      this.journalState.legacy = false;
+      this.journalState.reader ??= jobJournalReader(this.executionDatabasePath());
+    }
+  }
+  legacyJobRows(): JobRow[] {
+    this.refreshJobSchema();
+    return this.journalState.legacy ? (this.db.query("SELECT * FROM jobs ORDER BY id").all() as JobRow[]) : [];
+  }
+  finishJobJournalMigration(): void {
+    finalizeJobJournalMigration(this.db);
+    this.journalState.legacy = false;
+  }
+  jobJournalNamespace(): string {
+    this.db
+      .query("INSERT OR IGNORE INTO app_state (key, value_json, updated_at) VALUES ('job-journal-namespace', ?, ?)")
+      .run(JSON.stringify(randomUUID()), nowIso());
+    return this.getJsonState<string>("job-journal-namespace")!;
+  }
+  listJobCommands(): JobCommand[] {
+    return this.db.query("SELECT * FROM job_commands ORDER BY id").all() as JobCommand[];
+  }
+  acknowledgeJobCommand(id: number): void {
+    this.db.query("DELETE FROM job_commands WHERE id = ?").run(id);
+  }
+  isJobCancellationRequested(jobId: number): boolean {
+    return Boolean(
+      this.db
+        .query(
+          `SELECT 1 FROM job_commands c JOIN jobs j ON j.id=c.job_id
+      WHERE c.job_id = ? AND c.kind = 'cancel' AND c.generation=j.execution_generation LIMIT 1`
+        )
+        .get(jobId)
+    );
+  }
+  private command(jobId: number, kind: JobCommand["kind"], payload: unknown = null): void {
+    const generation = this.jobExecutionGeneration(jobId);
+    if (generation === null) throw new Error(`Job ${jobId} not found`);
+    this.db
+      .query(
+        "INSERT INTO job_commands(job_id, kind, generation, run_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+      )
+      .run(jobId, kind, generation, this.getJobExecution(jobId)?.run_id ?? null, JSON.stringify(payload), nowIso());
+  }
+  getJobExecution(jobId: number): { run_id: string; owner_token: string | null } | null {
+    return this.db.query("SELECT run_id, owner_token FROM job_executions WHERE job_id = ?").get(jobId) as {
+      run_id: string;
+      owner_token: string | null;
+    } | null;
+  }
   jobExecutionGeneration(jobId: number): number | null {
-    const row = this.db.query("SELECT execution_generation FROM jobs WHERE id = ?").get(jobId) as { execution_generation: number } | null;
+    const row = this.db.query("SELECT execution_generation FROM jobs WHERE id = ?").get(jobId) as {
+      execution_generation: number;
+    } | null;
     return row?.execution_generation ?? null;
   }
-
   attachJobExecution(jobId: number, runId: string, generation = 0): void {
-    this.db.query(`INSERT OR IGNORE INTO job_executions (job_id, run_id)
-      SELECT id, ? FROM jobs WHERE id = ? AND execution_generation = ?`).run(runId, jobId, generation);
+    this.db
+      .query(
+        `INSERT OR IGNORE INTO job_executions (job_id, run_id)
+      SELECT id, ? FROM jobs WHERE id = ? AND execution_generation = ?`
+      )
+      .run(runId, jobId, generation);
   }
-
   ownJobExecution(jobId: number, runId: string, token: string): boolean {
-    return this.db.transaction(() => {
+    return this.transaction(() => {
       const job = this.getJob(jobId);
-      if (!job || !["queued", "running", "succeeded"].includes(job.status)) return false;
-      const updated = this.db.query("UPDATE job_executions SET owner_token = ? WHERE job_id = ? AND run_id = ?")
-        .run(token, jobId, runId);
-      if (!updated.changes) return false;
-      if (job.status !== "succeeded") this.db.query("UPDATE jobs SET status = 'running', updated_at = ? WHERE id = ?").run(nowIso(), jobId);
-      return true;
-    })();
+      if (!job || this.isJobCancellationRequested(jobId) || !["queued", "running", "succeeded"].includes(job.status))
+        return false;
+      return Boolean(
+        this.db
+          .query("UPDATE job_executions SET owner_token = ? WHERE job_id = ? AND run_id = ?")
+          .run(token, jobId, runId).changes
+      );
+    });
   }
-
   listExecutionJobs(): JobRow[] {
-    return this.db.query("SELECT * FROM jobs WHERE status != 'succeeded' ORDER BY id").all() as JobRow[];
+    return this.jobRows("ORDER BY j.id").filter((job) => job.status !== "succeeded");
   }
 
   executionDatabasePath(): string {
     return this.db.filename === ":memory:" ? ":memory:" : path.join(path.dirname(this.db.filename), "execution.sqlite");
   }
-
   ensureSettings(): AppSettings {
-    const existing = this.db.query("SELECT value_json FROM settings WHERE id = 1").get() as
-      | { value_json: string }
-      | null;
+    const existing = this.db.query("SELECT value_json FROM settings WHERE id = 1").get() as {
+      value_json: string;
+    } | null;
     if (existing) {
       return parseSettings(existing.value_json);
     }
 
     const defaults = defaultSettings();
-    this.db
-      .query("INSERT INTO settings (id, value_json) VALUES (1, ?)")
-      .run(stringifySettings(defaults));
+    this.db.query("INSERT INTO settings (id, value_json) VALUES (1, ?)").run(stringifySettings(defaults));
     return defaults;
   }
 
@@ -304,9 +374,9 @@ export class BooksRepo {
   }
 
   getJsonState<T>(key: string): T | null {
-    const row = this.db.query("SELECT value_json FROM app_state WHERE key = ?").get(key) as
-      | { value_json: string }
-      | null;
+    const row = this.db.query("SELECT value_json FROM app_state WHERE key = ?").get(key) as {
+      value_json: string;
+    } | null;
     if (!row) return null;
     try {
       return JSON.parse(row.value_json) as T;
@@ -329,7 +399,9 @@ export class BooksRepo {
 
   updateSettings(next: AppSettings): AppSettings {
     this.db
-      .query("INSERT INTO settings (id, value_json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET value_json = excluded.value_json")
+      .query(
+        "INSERT INTO settings (id, value_json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET value_json = excluded.value_json"
+      )
       .run(stringifySettings(next));
     return next;
   }
@@ -369,12 +441,19 @@ export class BooksRepo {
 
   listUsers(provider?: AuthProvider): UserRow[] {
     if (provider) {
-      return this.db.query("SELECT * FROM users WHERE provider = ? ORDER BY username COLLATE NOCASE ASC, id ASC").all(provider) as UserRow[];
+      return this.db
+        .query("SELECT * FROM users WHERE provider = ? ORDER BY username COLLATE NOCASE ASC, id ASC")
+        .all(provider) as UserRow[];
     }
     return this.db.query("SELECT * FROM users ORDER BY username COLLATE NOCASE ASC, id ASC").all() as UserRow[];
   }
 
-  createSession(userId: number, tokenHash: string, expiresAt: string | null = null, kind: SessionKind = "browser"): SessionWithUserRow {
+  createSession(
+    userId: number,
+    tokenHash: string,
+    expiresAt: string | null = null,
+    kind: SessionKind = "browser"
+  ): SessionWithUserRow {
     assertPositiveInt(userId);
     const now = nowIso();
     const row = this.db
@@ -396,7 +475,7 @@ export class BooksRepo {
 
   getSessionByTokenHash(tokenHash: string): SessionWithUserRow | null {
     return (
-      this.db
+      (this.db
         .query(
           `SELECT
              s.id, s.user_id, s.kind, s.token_hash, s.expires_at, s.created_at, s.last_seen_at,
@@ -405,8 +484,8 @@ export class BooksRepo {
            JOIN users u ON u.id = s.user_id
            WHERE s.token_hash = ?`
         )
-        .get(tokenHash) as SessionWithUserRow | null
-    ) ?? null;
+        .get(tokenHash) as SessionWithUserRow | null) ?? null
+    );
   }
 
   touchSession(sessionId: number): SessionWithUserRow | null {
@@ -452,7 +531,10 @@ export class BooksRepo {
 
   getPlexLoginAttempt(pinId: number): PlexLoginAttemptRow | null {
     assertPositiveInt(pinId);
-    return (this.db.query("SELECT * FROM plex_login_attempts WHERE pin_id = ?").get(pinId) as PlexLoginAttemptRow | null) ?? null;
+    return (
+      (this.db.query("SELECT * FROM plex_login_attempts WHERE pin_id = ?").get(pinId) as PlexLoginAttemptRow | null) ??
+      null
+    );
   }
 
   deletePlexLoginAttempt(pinId: number): boolean {
@@ -464,7 +546,12 @@ export class BooksRepo {
     return this.db.query("DELETE FROM plex_login_attempts WHERE created_at < ?").run(beforeIso).changes;
   }
 
-  createAppLoginAttempt(input: { id: string; redirectUri: string; state: string; expiresAt: string }): AppLoginAttemptRow {
+  createAppLoginAttempt(input: {
+    id: string;
+    redirectUri: string;
+    state: string;
+    expiresAt: string;
+  }): AppLoginAttemptRow {
     const now = nowIso();
     return this.db
       .query(
@@ -476,7 +563,10 @@ export class BooksRepo {
   }
 
   getAppLoginAttempt(attemptId: string): AppLoginAttemptRow | null {
-    return (this.db.query("SELECT * FROM app_login_attempts WHERE id = ?").get(attemptId) as AppLoginAttemptRow | null) ?? null;
+    return (
+      (this.db.query("SELECT * FROM app_login_attempts WHERE id = ?").get(attemptId) as AppLoginAttemptRow | null) ??
+      null
+    );
   }
 
   deleteAppLoginAttempt(attemptId: string): boolean {
@@ -515,7 +605,7 @@ export class BooksRepo {
     if (!user) return null;
     return {
       ...row,
-      user,
+      user
     };
   }
 
@@ -601,9 +691,11 @@ export class BooksRepo {
   }
 
   findBookByTitleAuthor(title: string, author: string): BookRow | null {
-    return (this.db
-      .query("SELECT * FROM books WHERE title = ? AND author = ? ORDER BY id DESC LIMIT 1")
-      .get(title, author) as BookRow | null) ?? null;
+    return (
+      (this.db
+        .query("SELECT * FROM books WHERE title = ? AND author = ? ORDER BY id DESC LIMIT 1")
+        .get(title, author) as BookRow | null) ?? null
+    );
   }
 
   findBookByOpenLibraryKey(openLibraryKey: string): BookRow | null {
@@ -723,7 +815,9 @@ export class BooksRepo {
   }
 
   listBooksBySeries(target: { seriesKey?: string | null; seriesName?: string | null }): LibraryBook[] {
-    const rows = this.db.query("SELECT * FROM books WHERE series_json IS NOT NULL ORDER BY title ASC, id ASC").all() as BookRow[];
+    const rows = this.db
+      .query("SELECT * FROM books WHERE series_json IS NOT NULL ORDER BY title ASC, id ASC")
+      .all() as BookRow[];
     return rows
       .map((row) => this.toLibraryBook(row))
       .filter((book) => seriesMatches(book.series, target))
@@ -742,11 +836,12 @@ export class BooksRepo {
   }
 
   listInProgressBooks(bookIds?: number[]): LibraryBook[] {
-    const candidates = Array.isArray(bookIds) && bookIds.length > 0
-      ? Array.from(new Set(bookIds))
-          .map((bookId) => this.getBook(bookId))
-          .filter((book): book is LibraryBook => Boolean(book))
-      : this.listAllBooks();
+    const candidates =
+      Array.isArray(bookIds) && bookIds.length > 0
+        ? Array.from(new Set(bookIds))
+            .map((bookId) => this.getBook(bookId))
+            .filter((book): book is LibraryBook => Boolean(book))
+        : this.listAllBooks();
     return candidates.filter((book) => {
       if (book.status === "imported") return false;
       if (book.status !== "error") return true;
@@ -755,25 +850,21 @@ export class BooksRepo {
   }
 
   hasActiveBookWork(bookId: number): boolean {
-    assertPositiveInt(bookId);
-    const row = this.db
-      .query(
-        `SELECT id
-         FROM jobs
-         WHERE book_id = ?
-           AND status IN ('queued', 'running')
-           AND type IN ('acquire', 'download', 'import', 'reconcile')
-         LIMIT 1`
-      )
-      .get(bookId) as { id: number } | null;
-    return Boolean(row);
+    return this.jobRows("WHERE j.book_id = ?", [bookId]).some(
+      (job) =>
+        ["queued", "running"].includes(job.status) && ["acquire", "download", "import", "reconcile"].includes(job.type)
+    );
   }
 
   /**
    * Returns filesystem artifacts owned exclusively by a single book so callers
    * can safely delete files after DB cascade delete.
    */
-  getBookDeleteArtifacts(bookId: number): { assetPaths: string[]; transcriptPaths: string[]; coverPath: string | null } {
+  getBookDeleteArtifacts(bookId: number): {
+    assetPaths: string[];
+    transcriptPaths: string[];
+    coverPath: string | null;
+  } {
     assertPositiveInt(bookId);
     const assetPaths = this.db
       .query(
@@ -815,7 +906,7 @@ export class BooksRepo {
     return {
       assetPaths: assetPaths.map((row) => row.path),
       transcriptPaths: transcriptPaths.map((row) => row.path),
-      coverPath,
+      coverPath
     };
   }
 
@@ -834,7 +925,9 @@ export class BooksRepo {
       .query("SELECT DISTINCT path FROM asset_files WHERE path IS NOT NULL AND path <> ''")
       .all() as Array<{ path: string }>;
     const transcriptPaths = this.db
-      .query("SELECT DISTINCT transcript_path FROM manifestation_transcripts WHERE transcript_path IS NOT NULL AND transcript_path <> ''")
+      .query(
+        "SELECT DISTINCT transcript_path FROM manifestation_transcripts WHERE transcript_path IS NOT NULL AND transcript_path <> ''"
+      )
       .all() as Array<{ transcript_path: string }>;
     const coverPaths = this.db
       .query("SELECT DISTINCT cover_path FROM books WHERE cover_path IS NOT NULL AND cover_path <> ''")
@@ -842,7 +935,7 @@ export class BooksRepo {
     return {
       assetPaths: assetPaths.map((row) => row.path),
       transcriptPaths: transcriptPaths.map((row) => row.transcript_path),
-      coverPaths: coverPaths.map((row) => row.cover_path),
+      coverPaths: coverPaths.map((row) => row.cover_path)
     };
   }
 
@@ -888,8 +981,7 @@ export class BooksRepo {
           | "app_login_attempts"
           | "auth_codes"
           | "app_state"
-      ) =>
-        ((this.db.query(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number } | null)?.count ?? 0);
+      ) => (this.db.query(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number } | null)?.count ?? 0;
       const deleted = {
         books: countRow("books"),
         releases: countRow("releases"),
@@ -905,7 +997,7 @@ export class BooksRepo {
         releaseSearches: countRow("release_searches"),
         appLoginAttempts: countRow("app_login_attempts"),
         authCodes: countRow("auth_codes"),
-        appState: countRow("app_state"),
+        appState: countRow("app_state")
       };
 
       this.db.query("DELETE FROM auth_codes").run();
@@ -925,7 +1017,7 @@ export class BooksRepo {
       this.db.query("DELETE FROM books").run();
       this.db
         .query(
-          "DELETE FROM sqlite_sequence WHERE name IN ('books', 'releases', 'assets', 'asset_files', 'jobs', 'chapter_analysis', 'users', 'sessions')"
+          "DELETE FROM sqlite_sequence WHERE name IN ('books', 'releases', 'assets', 'asset_files', 'chapter_analysis', 'users', 'sessions')"
         )
         .run();
 
@@ -967,9 +1059,11 @@ export class BooksRepo {
   }
 
   findReleaseByProviderGuid(provider: string, providerGuid: string): ReleaseRow | null {
-    return (this.db
-      .query("SELECT * FROM releases WHERE provider = ? AND provider_guid = ?")
-      .get(provider, providerGuid) as ReleaseRow | null) ?? null;
+    return (
+      (this.db
+        .query("SELECT * FROM releases WHERE provider = ? AND provider_guid = ?")
+        .get(provider, providerGuid) as ReleaseRow | null) ?? null
+    );
   }
 
   getRelease(releaseId: number): ReleaseRow | null {
@@ -979,9 +1073,7 @@ export class BooksRepo {
 
   listReleasesByBook(bookId: number): ReleaseRow[] {
     assertPositiveInt(bookId);
-    return this.db
-      .query("SELECT * FROM releases WHERE book_id = ? ORDER BY id DESC")
-      .all(bookId) as ReleaseRow[];
+    return this.db.query("SELECT * FROM releases WHERE book_id = ? ORDER BY id DESC").all(bookId) as ReleaseRow[];
   }
 
   setReleaseStatus(releaseId: number, status: ReleaseStatus, error?: string | null): ReleaseRow {
@@ -1021,8 +1113,12 @@ export class BooksRepo {
       if (input.importKey) {
         const existing = this.findAssetByImportKey(input.importKey);
         if (existing) {
-          if (existing.book_id !== input.bookId || existing.source_release_id !== (input.sourceReleaseId ?? null)
-            || existing.manifestation_id !== input.manifestationId) throw new Error("Import identity reused for another container");
+          if (
+            existing.book_id !== input.bookId ||
+            existing.source_release_id !== (input.sourceReleaseId ?? null) ||
+            existing.manifestation_id !== input.manifestationId
+          )
+            throw new Error("Import identity reused for another container");
           return existing;
         }
       }
@@ -1123,14 +1219,20 @@ export class BooksRepo {
 
   getManifestation(manifestationId: number): ManifestationRow | null {
     assertPositiveInt(manifestationId);
-    return (this.db.query("SELECT * FROM manifestations WHERE id = ?").get(manifestationId) as ManifestationRow | null) ?? null;
+    return (
+      (this.db.query("SELECT * FROM manifestations WHERE id = ?").get(manifestationId) as ManifestationRow | null) ??
+      null
+    );
   }
 
   ensureManifestation(key: string, input: AddManifestationInput): ManifestationRow {
     return this.transaction(() => {
-      const existing = this.db.query("SELECT * FROM manifestations WHERE acquisition_key = ?").get(key) as ManifestationRow | null;
+      const existing = this.db
+        .query("SELECT * FROM manifestations WHERE acquisition_key = ?")
+        .get(key) as ManifestationRow | null;
       if (existing) {
-        if (existing.book_id !== input.bookId || existing.kind !== input.kind) throw new Error("Acquisition identity reused for another manifestation");
+        if (existing.book_id !== input.bookId || existing.kind !== input.kind)
+          throw new Error("Acquisition identity reused for another manifestation");
         return existing;
       }
       const manifestation = this.addManifestation(input);
@@ -1185,21 +1287,17 @@ export class BooksRepo {
     this.beforeWrite();
     assertPositiveInt(manifestationId);
     const row = this.db
-      .query(
-        `SELECT
-           (SELECT COUNT(*) FROM assets WHERE manifestation_id = ?) AS container_count,
-           (SELECT COUNT(*) FROM jobs
-              WHERE status IN ('queued', 'running')
-                AND json_valid(payload_json)
-                AND CAST(json_extract(payload_json, '$.manifestationId') AS INTEGER) = ?
-           ) AS active_job_count`
-      )
-      .get(manifestationId, manifestationId) as { container_count: number; active_job_count: number };
+      .query("SELECT COUNT(*) AS container_count FROM assets WHERE manifestation_id = ?")
+      .get(manifestationId) as { container_count: number };
+    const activeJobs = this.jobRows(
+      "WHERE json_valid(j.payload_json) AND CAST(json_extract(j.payload_json, '$.manifestationId') AS INTEGER) = ?",
+      [manifestationId]
+    );
     if (row.container_count > 0) {
       this.recomputeManifestationAggregates(manifestationId);
       return false;
     }
-    if (row.active_job_count > 0) {
+    if (activeJobs.some((job) => job.status === "queued" || job.status === "running")) {
       this.recomputeManifestationAggregates(manifestationId);
       return false;
     }
@@ -1246,37 +1344,65 @@ export class BooksRepo {
   }
 
   hasAssetFilePath(filePath: string): boolean {
-    const row = this.db
-      .query("SELECT id FROM asset_files WHERE path = ? LIMIT 1")
-      .get(filePath) as { id: number } | null;
+    const row = this.db.query("SELECT id FROM asset_files WHERE path = ? LIMIT 1").get(filePath) as {
+      id: number;
+    } | null;
     return Boolean(row);
   }
 
   createJob(input: CreateJobInput): JobRow {
-    this.beforeWrite();
-    const now = nowIso();
-    const row = this.db
-      .query(
-        `INSERT INTO jobs (type, status, book_id, release_id, payload_json, error, attempt_count, max_attempts, next_run_at, created_at, updated_at, dedupe_key)
-         VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?)
-         ON CONFLICT(dedupe_key) DO UPDATE SET dedupe_key = excluded.dedupe_key
-         RETURNING *`
+    this.refreshJobSchema();
+    return this.transaction(() => {
+      const now = nowIso();
+      const legacy = this.journalState.legacy;
+      if (!legacy && input.status && input.status !== "queued")
+        throw new Error("New jobs must be enqueued, not assigned an execution status");
+      const row = legacy
+        ? (this.db
+            .query(
+              `INSERT INTO jobs(type,status,book_id,release_id,payload_json,max_attempts,next_run_at,created_at,updated_at,dedupe_key)
+            VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(dedupe_key) DO UPDATE SET dedupe_key=excluded.dedupe_key RETURNING *`
+            )
+            .get(
+              input.type,
+              input.status ?? "queued",
+              input.bookId ?? null,
+              input.releaseId ?? null,
+              input.payload === undefined ? null : JSON.stringify(input.payload),
+              input.maxAttempts ?? 5,
+              input.nextRunAt ?? null,
+              now,
+              now,
+              input.idempotencyKey ?? null
+            ) as JobRow)
+        : (this.db
+            .query(
+              `INSERT INTO jobs(type,book_id,release_id,payload_json,max_attempts,created_at,dedupe_key)
+            VALUES(?,?,?,?,?,?,?) ON CONFLICT(dedupe_key) DO UPDATE SET dedupe_key=excluded.dedupe_key RETURNING *`
+            )
+            .get(
+              input.type,
+              input.bookId ?? null,
+              input.releaseId ?? null,
+              input.payload === undefined ? null : JSON.stringify(input.payload),
+              input.maxAttempts ?? 5,
+              now,
+              input.idempotencyKey ?? null
+            ) as JobRow);
+      if (
+        row.type !== input.type ||
+        row.book_id !== (input.bookId ?? null) ||
+        row.release_id !== (input.releaseId ?? null)
       )
-      .get(
-        input.type,
-        input.status ?? "queued",
-        input.bookId ?? null,
-        input.releaseId ?? null,
-        input.payload === undefined ? null : JSON.stringify(input.payload),
-        input.maxAttempts ?? 5,
-        input.nextRunAt ?? null,
-        now,
-        now,
-        input.idempotencyKey ?? null
-      ) as JobRow;
-    if (input.idempotencyKey && (row.type !== input.type || row.book_id !== (input.bookId ?? null)
-      || row.release_id !== (input.releaseId ?? null))) throw new Error("Job identity reused for another operation");
-    return row;
+        throw new Error("Job identity reused for another operation");
+      if (
+        !legacy &&
+        !this.getJobExecution(row.id) &&
+        !this.db.query("SELECT 1 FROM job_commands WHERE job_id = ? AND kind = 'enqueue' LIMIT 1").get(row.id)
+      )
+        this.command(row.id, "enqueue", { notBefore: input.nextRunAt ?? null });
+      return this.getJob(row.id)!;
+    });
   }
 
   findQueuedOrRunningJobByAsset(type: JobType, assetId: number): JobRow | null {
@@ -1305,138 +1431,110 @@ export class BooksRepo {
     return null;
   }
 
+  private jobRows(suffix = "", params: Array<string | number | null> = []): JobRow[] {
+    this.refreshJobSchema();
+    const rows = this.db
+      .query(`SELECT j.*, e.run_id FROM jobs j LEFT JOIN job_executions e ON e.job_id=j.id ${suffix}`)
+      .all(...params) as Array<JobRow & { run_id: string | null }>;
+    if (this.journalState.legacy) return rows.map(({ run_id, ...row }) => row);
+    const reader = this.journalState.reader;
+    if (!reader) throw new Error("Job journal is not initialized");
+    const lifecycle = reader.read(rows.flatMap((row) => (row.run_id ? [row.run_id] : [])));
+    return rows.map(({ run_id, ...row }) => {
+      if (run_id && !lifecycle.has(run_id)) throw new Error(`Missing execution ${run_id} for job ${row.id}`);
+      return {
+        ...row,
+        ...(run_id
+          ? lifecycle.get(run_id)!
+          : { status: "queued" as const, error: null, attempt_count: 0, next_run_at: null, updated_at: row.created_at })
+      };
+    });
+  }
   getJob(jobId: number): JobRow | null {
     assertPositiveInt(jobId);
-    return (this.db.query("SELECT * FROM jobs WHERE id = ?").get(jobId) as JobRow | null) ?? null;
+    return this.jobRows("WHERE j.id = ?", [jobId])[0] ?? null;
   }
-
   listJobsByType(type: JobType): JobRow[] {
-    return this.db
-      .query("SELECT * FROM jobs WHERE type = ? ORDER BY id DESC")
-      .all(type) as JobRow[];
+    return this.jobRows("WHERE j.type = ? ORDER BY j.id DESC", [type]);
   }
-
   listRecentJobs(limit = 25): JobRow[] {
-    return this.db
-      .query("SELECT * FROM jobs ORDER BY id DESC LIMIT ?")
-      .all(Math.max(1, Math.trunc(limit))) as JobRow[];
+    return this.jobRows("ORDER BY j.id DESC LIMIT ?", [Math.max(1, Math.trunc(limit))]);
   }
 
-  markJobSucceeded(jobId: number): JobRow | null {
-    this.beforeWrite();
-    const now = nowIso();
-    return this.db
-      .query("UPDATE jobs SET status = 'succeeded', error = NULL, updated_at = ? WHERE id = ? AND status != 'cancelled' RETURNING *")
-      .get(now, jobId) as JobRow | null;
-  }
-
-  markJobCancelled(jobId: number, error?: string | null): JobRow {
-    this.beforeWrite();
-    assertPositiveInt(jobId);
-    const now = nowIso();
-    return this.db
-      .query("UPDATE jobs SET status = 'cancelled', error = ?, updated_at = ? WHERE id = ? RETURNING *")
-      .get(error ?? null, now, jobId) as JobRow;
-  }
-
-  markJobFailed(jobId: number, error: string, attempts = 1): JobRow | null {
-    this.beforeWrite();
-    const now = nowIso();
-    return this.db
-      .query(
-        `UPDATE jobs
-         SET status = 'failed',
-             error = ?,
-             attempt_count = MAX(attempt_count, ?),
-             next_run_at = NULL,
-             updated_at = ?
-         WHERE id = ? AND status != 'cancelled'
-         RETURNING *`
-      )
-      .get(error, attempts, now, jobId) as JobRow | null;
-  }
-
-  retryJob(jobId: number): JobRow {
-    const now = nowIso();
+  markJobCancelled(jobId: number, reason?: string | null): JobRow {
     return this.transaction(() => {
-    const current = this.getJob(jobId);
-    if (current?.status === "cancelled") {
-      this.db.query("DELETE FROM job_executions WHERE job_id = ?").run(jobId);
-      this.db.query("UPDATE jobs SET execution_generation = execution_generation + 1 WHERE id = ?").run(jobId);
-    }
-    return this.db
-      .query(
-        "UPDATE jobs SET status = 'queued', next_run_at = ?, error = NULL, updated_at = ? WHERE id = ? RETURNING *"
+      const job = this.getJob(jobId);
+      if (!job) throw new Error(`Job ${jobId} not found`);
+      if (["succeeded", "failed", "cancelled"].includes(job.status)) return job;
+      if (!this.isJobCancellationRequested(jobId)) this.command(jobId, "cancel", { reason: reason ?? null });
+      this.db.query("UPDATE job_executions SET owner_token = NULL WHERE job_id = ?").run(jobId);
+      return this.getJob(jobId)!;
+    });
+  }
+  retryJob(jobId: number): JobRow {
+    return this.transaction(() => {
+      const job = this.getJob(jobId);
+      if (!job) throw new Error(`Job ${jobId} not found`);
+      if (!["failed", "cancelled"].includes(job.status) && !this.isJobCancellationRequested(jobId)) return job;
+      if (
+        !this.isJobCancellationRequested(jobId) &&
+        this.db
+          .query(
+            `SELECT 1 FROM job_commands c JOIN jobs j ON j.id=c.job_id
+             WHERE c.job_id = ? AND c.generation=j.execution_generation
+               AND (c.kind='retry' OR (c.kind='enqueue' AND NOT EXISTS (
+                 SELECT 1 FROM job_executions e WHERE e.job_id=c.job_id
+               ))) LIMIT 1`
+          )
+          .get(jobId)
       )
-      .get(now, now, jobId) as JobRow;
+        return job;
+      this.db.query("UPDATE job_executions SET owner_token = NULL WHERE job_id = ?").run(jobId);
+      if (job.status === "cancelled" || this.isJobCancellationRequested(jobId)) {
+        this.db.query("DELETE FROM job_executions WHERE job_id = ?").run(jobId);
+        this.db.query("UPDATE jobs SET execution_generation=execution_generation+1 WHERE id = ?").run(jobId);
+        this.command(jobId, "enqueue");
+      } else this.command(jobId, "retry");
+      return this.getJob(jobId)!;
     });
   }
 
+  private downloadViews(jobs: JobRow[]): DownloadView[] {
+    return jobs.map((job) => {
+      const release = job.release_id ? this.getRelease(job.release_id) : null;
+      return {
+        job_id: job.id,
+        job_type: job.type,
+        job_status: job.status,
+        job_error: job.error,
+        release_id: release?.id ?? null,
+        release_status: release?.status ?? null,
+        release_error: release?.error ?? null,
+        media_type: release?.media_type ?? null,
+        info_hash: release?.info_hash ?? null,
+        book_id: release?.book_id ?? null
+      };
+    });
+  }
   listDownloads(): DownloadView[] {
-    return this.db
-      .query(
-        `SELECT
-          j.id AS job_id,
-          j.type AS job_type,
-          j.status AS job_status,
-          j.error AS job_error,
-          r.id AS release_id,
-          r.status AS release_status,
-          r.error AS release_error,
-          r.media_type AS media_type,
-          r.info_hash AS info_hash,
-          r.book_id AS book_id
-         FROM jobs j
-         LEFT JOIN releases r ON r.id = j.release_id
-         WHERE j.type = 'download'
-         ORDER BY j.id DESC`
-      )
-      .all() as DownloadView[];
+    return this.downloadViews(this.listJobsByType("download"));
   }
-
   getDownload(jobId: number): DownloadView | null {
-    assertPositiveInt(jobId);
-    return (this.db
-      .query(
-        `SELECT
-          j.id AS job_id,
-          j.type AS job_type,
-          j.status AS job_status,
-          j.error AS job_error,
-          r.id AS release_id,
-          r.status AS release_status,
-          r.error AS release_error,
-          r.media_type AS media_type,
-          r.info_hash AS info_hash,
-          r.book_id AS book_id
-         FROM jobs j
-         LEFT JOIN releases r ON r.id = j.release_id
-         WHERE j.type = 'download' AND j.id = ?`
-      )
-      .get(jobId) as DownloadView | null) ?? null;
+    const job = this.getJob(jobId);
+    return job?.type === "download" ? this.downloadViews([job])[0]! : null;
   }
-
-  getHealthSummary(): {
-    jobs: Record<string, number>;
-    releases: Record<string, number>;
-    queueSize: number;
-  } {
-    const jobsRows = this.db
-      .query("SELECT status, COUNT(*) AS c FROM jobs GROUP BY status")
-      .all() as Array<{ status: string; c: number }>;
-    const releaseRows = this.db
-      .query("SELECT status, COUNT(*) AS c FROM releases GROUP BY status")
-      .all() as Array<{ status: string; c: number }>;
-    const queueRow = this.db
-      .query("SELECT COUNT(*) AS c FROM jobs WHERE status = 'queued'")
-      .get() as { c: number };
-    const jobs = Object.fromEntries(jobsRows.map((row) => [row.status, row.c]));
-    const releases = Object.fromEntries(releaseRows.map((row) => [row.status, row.c]));
-    return {
-      jobs,
-      releases,
-      queueSize: queueRow?.c ?? 0,
-    };
+  getHealthSummary(): { jobs: Record<string, number>; releases: Record<string, number>; queueSize: number } {
+    const jobs: Record<string, number> = {};
+    for (const job of this.jobRows()) jobs[job.status] = (jobs[job.status] ?? 0) + 1;
+    const releases = Object.fromEntries(
+      (
+        this.db.query("SELECT status,COUNT(*) AS c FROM releases GROUP BY status").all() as Array<{
+          status: string;
+          c: number;
+        }>
+      ).map((row) => [row.status, row.c])
+    );
+    return { jobs, releases, queueSize: jobs.queued ?? 0 };
   }
 
   listAdminContentOps(): Array<{
@@ -1481,20 +1579,20 @@ export class BooksRepo {
          LIMIT 200`
       )
       .all() as Array<{
-        book_id: number;
-        title: string;
-        author: string;
-        manifestation_id: number;
-        kind: string;
-        transcript_status: string | null;
-        transcript_error: string | null;
-        chapter_status: string | null;
-        has_chapters: number;
-        resolved_boundary_count: number | null;
-        total_boundary_count: number | null;
-        chapter_error: string | null;
-        updated_at: string | null;
-      }>;
+      book_id: number;
+      title: string;
+      author: string;
+      manifestation_id: number;
+      kind: string;
+      transcript_status: string | null;
+      transcript_error: string | null;
+      chapter_status: string | null;
+      has_chapters: number;
+      resolved_boundary_count: number | null;
+      total_boundary_count: number | null;
+      chapter_error: string | null;
+      updated_at: string | null;
+    }>;
   }
 
   adminDbTableNames(): string[] {
@@ -1510,7 +1608,11 @@ export class BooksRepo {
     return rows.map((row) => row.name);
   }
 
-  adminDbTablePage(table: string, limit: number, offset: number): {
+  adminDbTablePage(
+    table: string,
+    limit: number,
+    offset: number
+  ): {
     columns: string[];
     rows: Array<Record<string, unknown>>;
     total: number;
@@ -1521,15 +1623,24 @@ export class BooksRepo {
     const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
     const safeOffset = Math.max(Math.trunc(offset), 0);
     const quoted = `"${table.replace(/"/g, '""')}"`;
-    const columns = (this.db.query(`PRAGMA table_info(${quoted})`).all() as Array<{ name: string }>).map((row) => row.name);
-    const total = ((this.db.query(`SELECT COUNT(*) AS count FROM ${quoted}`).get() as { count: number } | null)?.count ?? 0);
-    const rows = this.db.query(`SELECT * FROM ${quoted} LIMIT ? OFFSET ?`).all(safeLimit, safeOffset) as Array<Record<string, unknown>>;
+    const columns = (this.db.query(`PRAGMA table_info(${quoted})`).all() as Array<{ name: string }>).map(
+      (row) => row.name
+    );
+    const total =
+      (this.db.query(`SELECT COUNT(*) AS count FROM ${quoted}`).get() as { count: number } | null)?.count ?? 0;
+    const rows = this.db.query(`SELECT * FROM ${quoted} LIMIT ? OFFSET ?`).all(safeLimit, safeOffset) as Array<
+      Record<string, unknown>
+    >;
     return { columns, rows, total };
   }
 
   getChapterAnalysis(manifestationId: number): ChapterAnalysisRow | null {
     assertPositiveInt(manifestationId);
-    return (this.db.query("SELECT * FROM chapter_analysis WHERE manifestation_id = ?").get(manifestationId) as ChapterAnalysisRow | null) ?? null;
+    return (
+      (this.db
+        .query("SELECT * FROM chapter_analysis WHERE manifestation_id = ?")
+        .get(manifestationId) as ChapterAnalysisRow | null) ?? null
+    );
   }
 
   /** Book IDs where the manifestation transcript succeeded but no chapters_json exists yet, and an epub sibling is present. */
@@ -1637,29 +1748,28 @@ export class BooksRepo {
     const manifestations = this.listManifestationsByBook(row.id);
     const addedByUser = row.added_by_user_id ? this.getUserById(row.added_by_user_id) : null;
 
-    const audioStatuses = releases
-      .filter((release) => release.media_type === "audio")
-      .map((release) => release.status);
-    const ebookStatuses = releases
-      .filter((release) => release.media_type === "ebook")
-      .map((release) => release.status);
+    const audioStatuses = releases.filter((release) => release.media_type === "audio").map((release) => release.status);
+    const ebookStatuses = releases.filter((release) => release.media_type === "ebook").map((release) => release.status);
 
     const assets = this.listAssetsByBook(row.id);
-    const hasAudioAsset = selectPreferredAudioManifestation(manifestations.map((manifestation) => ({
-      manifestation,
-      containers: assets.filter((asset) => asset.manifestation_id === manifestation.id),
-    }))) !== null;
+    const hasAudioAsset =
+      selectPreferredAudioManifestation(
+        manifestations.map((manifestation) => ({
+          manifestation,
+          containers: assets.filter((asset) => asset.manifestation_id === manifestation.id)
+        }))
+      ) !== null;
     const hasEbookAsset = selectPreferredDownloadableEbookAsset(assets) !== null;
 
     const audioStatus = deriveMediaStatus({
       mediaType: "audio",
       releases: audioStatuses,
-      hasAsset: hasAudioAsset,
+      hasAsset: hasAudioAsset
     });
     const ebookStatus = deriveMediaStatus({
       mediaType: "ebook",
       releases: ebookStatuses,
-      hasAsset: hasEbookAsset,
+      hasAsset: hasEbookAsset
     });
 
     return {
@@ -1675,7 +1785,7 @@ export class BooksRepo {
             id: addedByUser.id,
             username: addedByUser.username,
             displayName: addedByUser.display_name,
-            thumbUrl: addedByUser.thumb_url,
+            thumbUrl: addedByUser.thumb_url
           }
         : null,
       addedAt: row.added_at,
@@ -1689,7 +1799,7 @@ export class BooksRepo {
       audioStatus,
       ebookStatus,
       status: deriveBookStatus(audioStatus as MediaStatus, ebookStatus as MediaStatus),
-      fullPseudoProgress: pseudoProgressForBook(audioStatus as MediaStatus, ebookStatus as MediaStatus),
+      fullPseudoProgress: pseudoProgressForBook(audioStatus as MediaStatus, ebookStatus as MediaStatus)
     };
   }
 }

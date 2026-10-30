@@ -35,6 +35,7 @@ const DURABLE_SESSIONS_MIGRATION_ID = 29;
 const DURABLE_MEDIA_EXECUTION_MIGRATION_ID = 30;
 const CANCELLED_EXECUTION_RETRY_MIGRATION_ID = 31;
 const GENERIC_EXECUTION_TYPES_MIGRATION_ID = 32;
+const EXECUTION_COMMAND_OUTBOX_MIGRATION_ID = 33;
 
 const BASE_SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -1096,4 +1097,31 @@ export function runMigrations(db: Database): void {
       DROP TABLE saved_job_executions;
     `);
   });
+  apply(EXECUTION_COMMAND_OUTBOX_MIGRATION_ID, () => {
+    db.exec(`CREATE TABLE job_commands (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('enqueue', 'cancel', 'retry')),
+      generation INTEGER NOT NULL,
+      run_id TEXT,
+      payload_json TEXT,
+      created_at TEXT NOT NULL
+    ); CREATE INDEX idx_job_commands_job ON job_commands(job_id, id);`);
+  });
+}
+
+/** Only called after all old rows have a verified, durable journal copy. */
+export function finalizeJobJournalMigration(db: Database): void {
+  if (db.query("SELECT id FROM schema_migrations WHERE id = 34").get()) return;
+  db.transaction(() => {
+    const missing = db.query("SELECT id FROM jobs WHERE id NOT IN (SELECT job_id FROM job_executions) LIMIT 1").get();
+    if (missing) throw new Error("Cannot drop job lifecycle before journal migration completes");
+    db.exec(`DROP INDEX IF EXISTS idx_jobs_status_next_created;
+      ALTER TABLE jobs DROP COLUMN status;
+      ALTER TABLE jobs DROP COLUMN error;
+      ALTER TABLE jobs DROP COLUMN attempt_count;
+      ALTER TABLE jobs DROP COLUMN next_run_at;
+      ALTER TABLE jobs DROP COLUMN updated_at;
+      INSERT INTO schema_migrations VALUES (34, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));`);
+  })();
 }

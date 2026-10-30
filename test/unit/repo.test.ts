@@ -133,17 +133,27 @@ describe("books repo", () => {
     db.close();
   });
 
-  test("explicit retry clears stale error without replacing domain input", () => {
+  test("explicit retry records one command without replacing domain input or inventing lifecycle state", () => {
     const { db, repo } = setupRepo();
 
     const job = repo.createJob({ type: "download", status: "queued", payload: { infoHash: "abc123" } });
-    const failed = repo.markJobFailed(job.id, "temporary socket error");
-    expect(failed?.error).toContain("socket");
+    repo.attachJobExecution(job.id, "test-run");
+    repo.bindJobJournalReader({
+      read: (ids) => new Map(ids.map((id) => [id, {
+        status: "failed" as const, error: "temporary socket error", attempt_count: 1,
+        next_run_at: null, updated_at: job.updated_at,
+      }])),
+    });
+    repo.finishJobJournalMigration();
 
     const rescheduled = repo.retryJob(job.id);
-    expect(rescheduled.status).toBe("queued");
-    expect(rescheduled.error).toBeNull();
+    // Reflow remains authoritative until it consumes the retry command.
+    expect(rescheduled.status).toBe("failed");
+    expect(rescheduled.error).toContain("socket");
     expect(JSON.parse(rescheduled.payload_json ?? "{}").infoHash).toBe("abc123");
+    repo.retryJob(job.id);
+    expect(repo.listJobCommands()).toMatchObject([{ job_id: job.id, kind: "retry", run_id: "test-run" }]);
+    expect(repo.listJobCommands()).toHaveLength(1);
 
     db.close();
   });

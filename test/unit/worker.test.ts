@@ -498,9 +498,11 @@ describe("worker import recovery", () => {
       );
 
       expect(result).toBe("done");
-      const finalImportJob = repo.getJob(importJob.id);
-      expect(finalImportJob?.status).toBe("cancelled");
-      expect(String(finalImportJob?.error || "")).toContain("no_alternative_single_importable_file:1");
+      const cancellation = repo
+        .listJobCommands()
+        .find((command) => command.job_id === importJob.id && command.kind === "cancel");
+      expect(cancellation).toBeDefined();
+      expect(cancellation?.payload_json).toContain("no_alternative_single_importable_file:1");
 
       const failedRelease = repo.getRelease(release.id);
       expect(failedRelease?.status).toBe("failed");
@@ -623,7 +625,7 @@ describe("worker import recovery", () => {
         const current = repo.getJob(importJob.id);
         if (current?.status === "cancelled" || current?.status === "succeeded") break;
         if (Date.now() - started > 4000) {
-          throw new Error("Timed out waiting for import recovery flow");
+          throw new Error(`Timed out waiting for import recovery flow: ${JSON.stringify(current)} ${logs.join("\n")}`);
         }
         await sleep(50);
       }
@@ -748,7 +750,9 @@ describe("worker stalled torrent recovery", () => {
         const current = repo.getJob(downloadJob.id);
         if (current?.status === "cancelled") break;
         if (Date.now() - started > 4000) {
-          throw new Error("Timed out waiting for stalled download recovery");
+          throw new Error(
+            `Timed out waiting for stalled download recovery: ${JSON.stringify(current)} ${logs.join("\n")}`
+          );
         }
         await sleep(50);
       }

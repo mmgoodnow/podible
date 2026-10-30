@@ -9,7 +9,12 @@ in one opaque durable step.
 ## Storage boundary
 
 - Domain data stays in `podible.sqlite`.
-- `jobs` remains the existing Activity/RPC record and transactional outbox.
+- `jobs` retains stable public identity, operation input, domain references,
+  creation time, dedupe identity, retry policy, and execution generation. It
+  does not store status, attempts, errors, next-run time, or lifecycle updates.
+- `job_commands` is a transactional outbox for enqueue/cancel/retry requests.
+  Commands are consumed and acknowledged, not retained as a second job state
+  machine. Cancellation also immediately invalidates the application owner.
 - `job_executions` links that stable ID to a generic engine run and fences
   application writes from superseded executions.
 - Reflow stores runs, steps, attempts, leases, and durable waits in a separate
@@ -20,7 +25,7 @@ in one opaque durable step.
   library's generated-cover artifacts too. Recorded steps reference these files;
   restoring only the execution database is not a complete workflow backup.
 
-The outbox bridge uses an enqueue idempotency key derived from job ID. A crash
+The outbox bridge uses namespaced enqueue idempotency keys. A crash
 before or after enqueue cannot lose the operation or create two engine runs.
 Release/download creation and download/import handoffs commit atomically in
 the domain database. These transactions do not pretend to include Reflow's
@@ -48,11 +53,25 @@ Successful existing assets and transcripts are never removed by migration.
 
 `runWorker` is now only the transactional-outbox bridge. There is no second
 worker claiming rows or resetting running jobs at startup. Reflow owns retries,
-leases, and durable waits. Job attempts and terminal failure remain public
-Activity projections; explicit retries resume the recorded run. Existing job
+leases, and durable waits. Activity/RPC reads derive status, attempts, errors,
+and wake times directly from the journal through a batch adapter; no periodic
+status-copying pump is necessary. Undispatched enqueue intents appear queued.
+Explicit retries resume the recorded run. Existing job
 IDs are preserved, and SQLite no longer constrains operation names with a
 domain-specific type enum. Application code still validates registered types.
 Do not run an old worker against the same database during rollout.
+
+Migration first copies legacy outcomes into Reflow idempotently, verifies the
+run links, and only then drops the old lifecycle columns in an application
+transaction. Historical failures and successes do not execute again. A restart
+between copying history and dropping columns resumes this transfer safely.
+Existing run checkpoints are preserved. Missing linked runs are integrity
+errors, not permission to restart an operation. Do not prune linked Reflow
+runs independently of application history.
+
+The two files intentionally have separate schema ownership: Podible uses
+`schema_migrations`; Reflow owns its database's `PRAGMA user_version`. Neither
+database alone is a complete operational backup.
 
 Normal five-attempt steps use one-second exponential backoff. Longer retry
 budgets use thirty-second linear backoff: twenty attempts span 95 minutes of
@@ -112,6 +131,10 @@ cover/metadata checkpoints, chapter artifact replay, and successful transcript
 preservation. Unit-level journal tests complement, rather than replace, the
 file-backed Reflow and subprocess crash tests.
 
+Journal consolidation tests additionally cover historical-outcome migration,
+an interrupted migration, stable execution identity after a library reset,
+missing linked runs, and HTTP job/download/health reads without reconciliation.
+
 ## Production Verification (2026-10-30)
 
 Normal CD deployed the full migration and review fixes at `fbfe82e`.
@@ -135,3 +158,16 @@ no downloads, paid calls, reimports, or retranscriptions were initiated, and
 media counts were unchanged. The temporary verification session was removed.
 Crash, retry, parallel transcription, and publication behavior are covered by
 local file-backed acceptance tests rather than destructive production tests.
+
+Before the lifecycle consolidation, a second coordinated backup was taken at
+`/config/backups/pre-job-consolidation-2026-10-30T17-57-20-063Z` inside Podible's
+configuration volume. Both databases were write-locked together while separate
+connections produced `VACUUM INTO` snapshots. Both copies passed integrity and
+foreign-key checks. The baseline contained 193 application jobs, of which 183
+were unlinked historical outcomes; those must migrate as history, not new work.
+
+The user-approved local rehearsal of these snapshots reached migration 34 and
+passed a second startup: all 193 outcomes matched, all 62 existing checkpoint
+rows retained their original hash, no historical handler ran, and media counts
+were unchanged. Both migrated files passed integrity/foreign-key checks. The
+temporary local copies were deleted after verification.

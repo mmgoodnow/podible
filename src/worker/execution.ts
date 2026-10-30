@@ -2,9 +2,14 @@ import { randomUUID } from "node:crypto";
 import { createEngine, createWorkflow, LeaseExpiredError, RunCancelledError } from "reflow-ts";
 import { SQLiteStorage } from "reflow-ts/sqlite-bun";
 import { z } from "zod";
+import { Database } from "bun:sqlite";
 
 import { processJob } from "./dispatcher";
-import { handleJobFailure } from "./failure";
+import { notifyJobFailure } from "./failure";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { archiveLegacyJob, importLegacyJob, jobJournalReader, JournalCommands } from "./job-journal";
 import { workerLog, type WorkerContext } from "./context";
 import { jobLockKeys, lockSetsConflict } from "./locks";
 
@@ -23,8 +28,8 @@ export function executionRetryPolicy(maxAttempts: number, initialDelay?: number)
   const longBudget = maxAttempts > 8;
   return {
     maxAttempts,
-    backoff: longBudget ? "linear" as const : "exponential" as const,
-    initialDelay: initialDelay ?? (longBudget ? 30_000 : 1_000),
+    backoff: longBudget ? ("linear" as const) : ("exponential" as const),
+    initialDelay: initialDelay ?? (longBudget ? 30_000 : 1_000)
   };
 }
 
@@ -35,7 +40,8 @@ export async function createJobExecutionRuntime(
   options: {
     leaseMs?: number;
     retryDelayMs?: number;
-    processJob?: typeof processJob;
+    processJob?: (ctx: WorkerContext, job: import("../app-types").JobRow) => Promise<"done" | void>;
+    afterHistoryCopy?: () => Promise<void>;
     onCheckpoint?: (jobId: number, stepName: string) => Promise<void>;
   } = {}
 ) {
@@ -43,7 +49,73 @@ export async function createJobExecutionRuntime(
   let stopping = false;
   const activeLocks = (ctx.activeLocks ??= new Set<string>());
   const laneOwners = new Map<string, { owner: string; count: number }>();
+  if (databasePath === ":memory:") {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "podible-execution-"));
+    databasePath = path.join(directory, "execution.sqlite");
+    process.once("exit", () => rmSync(directory, { recursive: true, force: true }));
+  }
   const storage = new SQLiteStorage(databasePath);
+  await storage.initialize();
+  const namespace = ctx.repo.jobJournalNamespace();
+  const commands = new JournalCommands(databasePath);
+  try {
+    for (const job of ctx.repo.legacyJobRows()) {
+      const link = ctx.repo.getJobExecution(job.id);
+      if (link) {
+        const run = await storage.getRun(link.run_id);
+        if (!run) throw new Error(`Missing execution ${link.run_id} for job ${job.id}`);
+        archiveLegacyJob(databasePath, link.run_id, job);
+        const generation = ctx.repo.jobExecutionGeneration(job.id)!;
+        // Before consolidation these mismatches represented unapplied control
+        // requests, not stale display state. Preserve them before dropping it.
+        const kind =
+          job.status === "cancelled" && !["completed", "failed", "cancelled"].includes(run.status)
+            ? "cancel"
+            : job.status === "queued" && ["failed", "cancelled"].includes(run.status)
+              ? "retry"
+              : null;
+        if (kind)
+          commands.apply(
+            `${namespace}:migration:${job.id}:${generation}:${kind}`,
+            {
+              id: 0,
+              job_id: job.id,
+              kind,
+              generation,
+              run_id: link.run_id,
+              payload_json: JSON.stringify({ reason: job.error }),
+              created_at: job.updated_at
+            },
+            link.run_id
+          );
+      } else {
+        const generation = ctx.repo.jobExecutionGeneration(job.id)!;
+        const run = await importLegacyJob(
+          storage,
+          job,
+          generation,
+          databasePath,
+          !(EXECUTION_JOB_TYPES as readonly string[]).includes(job.type)
+        );
+        ctx.repo.attachJobExecution(job.id, run.id, generation);
+      }
+    }
+    await options.afterHistoryCopy?.();
+    const checkpoint = new Database(databasePath);
+    try {
+      checkpoint.exec("PRAGMA busy_timeout = 5000; PRAGMA synchronous = FULL");
+      const result = checkpoint.query("PRAGMA wal_checkpoint(FULL)").get() as { busy: number };
+      if (result.busy) throw new Error("Journal history could not be durably checkpointed");
+    } finally {
+      checkpoint.close();
+    }
+    ctx.repo.finishJobJournalMigration();
+    ctx.repo.bindJobJournalReader(jobJournalReader(databasePath));
+  } catch (error) {
+    commands.close();
+    await storage.close();
+    throw error;
+  }
   const workflows = EXECUTION_JOB_TYPES.map((type) =>
     createWorkflow(
       {
@@ -61,19 +133,42 @@ export async function createJobExecutionRuntime(
         ctx.repo.attachJobExecution(input.jobId, runId, input.generation);
         if (!ctx.repo.ownJobExecution(input.jobId, runId, token)) throw new RunCancelledError(runId);
         const signals = new Set<AbortSignal>();
+        const cancelRequestedRun = async () => {
+          await engine.cancel(runId);
+          const command = ctx.repo
+            .listJobCommands()
+            .find(
+              (command) =>
+                command.kind === "cancel" && command.job_id === input.jobId && command.generation === input.generation
+            );
+          if (command) {
+            commands.apply(`${namespace}:command:${command.id}`, command, runId);
+            ctx.repo.acknowledgeJobCommand(command.id);
+          }
+        };
         const assertActive = () => {
           if (stopping) throw new LeaseExpiredError(runId);
           for (const signal of signals) signal.throwIfAborted();
+          if (ctx.repo.isJobCancellationRequested(input.jobId)) {
+            void cancelRequestedRun();
+            throw new RunCancelledError(runId);
+          }
           const owner = ctx.repo.getJobExecution(input.jobId);
           if (owner?.run_id !== runId || owner.owner_token !== token) throw new LeaseExpiredError(runId);
           const job = ctx.repo.getJob(input.jobId);
-          if (!job || job.status === "cancelled") throw new RunCancelledError(runId);
+          if (!job || job.status === "cancelled" || ctx.repo.isJobCancellationRequested(input.jobId))
+            throw new RunCancelledError(runId);
         };
         const execution: NonNullable<WorkerContext["execution"]> = {
           key: runId,
           assertActive,
-          run: <T>(name: string, handler: () => T | Promise<T>): Promise<T> =>
-            step.run<unknown>(name, {
+          run: <T>(name: string, handler: () => T | Promise<T>): Promise<T> => {
+            if (ctx.repo.isJobCancellationRequested(input.jobId)) {
+              return cancelRequestedRun().then(() => {
+                throw new RunCancelledError(runId);
+              });
+            }
+            return step.run<unknown>(name, {
               retry: executionRetryPolicy(ctx.repo.getJob(input.jobId)?.max_attempts ?? 5, options.retryDelayMs),
               handler: async ({ signal }) => {
                 signals.add(signal);
@@ -112,17 +207,15 @@ export async function createJobExecutionRuntime(
                   signals.delete(signal);
                 }
               }
-            }) as Promise<T>,
+            }) as Promise<T>;
+          },
           sleep: (name, milliseconds) => step.sleep(name, milliseconds)
         };
         const job = await execution.run("job-input", () => ctx.repo.getJob(input.jobId)!);
         const ownedRepo = ctx.repo.forExecution(assertActive);
         const result = await (options.processJob ?? processJob)({ ...ctx, repo: ownedRepo, execution }, job);
-        if (result !== "done") throw new Error(`Job ${job.id} returned legacy rescheduling instead of durable sleep`);
-        await execution.run("operation-finish", () => {
-          const current = ownedRepo.getJob(job.id);
-          if (current?.status === "running") ownedRepo.markJobSucceeded(job.id);
-        });
+        if (result !== "done" && result !== undefined) throw new Error(`Job ${job.id} returned an invalid result`);
+        await execution.run("operation-finish", () => execution.assertActive());
         return { jobId: job.id };
       }
     )
@@ -134,6 +227,12 @@ export async function createJobExecutionRuntime(
     runLeaseDurationMs: leaseMs,
     heartbeatIntervalMs: Math.max(20, Math.floor(leaseMs / 3)),
     hooks: {
+      onRunFailed: async ({ runId, error }) => {
+        const run = await storage.getRun(runId);
+        const input = run?.input as { jobId: number } | undefined;
+        const job = input ? ctx.repo.getJob(input.jobId) : null;
+        if (job) await notifyJobFailure(ctx, job, error);
+      },
       onStepStart: ({ runId, stepName }) => workerLog(ctx, `[execution] run=${runId} step=${stepName}`),
       onStepComplete: async ({ runId, stepName }) => {
         if (options.onCheckpoint) {
@@ -148,68 +247,70 @@ export async function createJobExecutionRuntime(
   return {
     engine,
     async reconcile() {
-      for (const job of ctx.repo.listExecutionJobs()) {
-        const link = ctx.repo.getJobExecution(job.id);
-        if (job.status === "cancelled") {
-          if (link) await engine.cancel(link.run_id);
+      // Fail closed on broken linkage, including terminal jobs; never recreate
+      // a lost journal from domain input and accidentally replay its effects.
+      ctx.repo.listExecutionJobs();
+      for (const command of ctx.repo.listJobCommands()) {
+        const job = ctx.repo.getJob(command.job_id);
+        if (!job) {
+          ctx.repo.acknowledgeJobCommand(command.id);
           continue;
         }
-        if (job.status === "failed") continue;
-        if (!(EXECUTION_JOB_TYPES as readonly string[]).includes(job.type)) {
-          ctx.repo.markJobFailed(job.id, `Unsupported job type: ${job.type}`);
-          workerLog(ctx, `[execution] job=${job.id} unsupported type=${job.type}`);
+        const generation = ctx.repo.jobExecutionGeneration(job.id);
+        const obsolete = command.generation !== generation;
+        if (obsolete && command.kind === "enqueue") {
+          ctx.repo.acknowledgeJobCommand(command.id);
           continue;
         }
-        if (job.next_run_at && Date.parse(job.next_run_at) > Date.now()) continue;
-        if (!link) {
-          const name = `media-${job.type}-v1` as `media-${(typeof EXECUTION_JOB_TYPES)[number]}-v1`;
-          const generation = ctx.repo.jobExecutionGeneration(job.id)!;
-          const run = await engine.enqueue(
-            name,
-            { jobId: job.id, generation },
-            { idempotencyKey: `job:${job.id}:${generation}` }
-          );
-          ctx.repo.attachJobExecution(job.id, run.id, generation);
+        let runId = command.run_id ?? (!obsolete ? ctx.repo.getJobExecution(job.id)?.run_id : undefined);
+        if (obsolete && command.kind === "cancel" && !runId) {
+          ctx.repo.acknowledgeJobCommand(command.id);
           continue;
         }
-        const status = await engine.getRunStatus(link.run_id);
-        if (!status) throw new Error(`Missing execution ${link.run_id} for job ${job.id}`);
-        if (status.run.status === "failed") {
-          if (job.status === "running") {
-            await handleJobFailure(
-              ctx,
-              job,
-              new Error(status.run.error?.message ?? "Execution failed"),
-              {
-                runId: link.run_id,
-                token: link.owner_token
-              },
-              Math.max(1, ...status.steps.map((step) => step.attempts))
-            );
-          } else {
-            if (job.type === "metadata_hydration") {
-              // A batch may have collected several exhausted book failures.
-              // Reflow.resume preserves handled failures; an explicit batch
-              // retry must clear all failed steps, keeping completed books.
-              await storage.requeueRun(link.run_id);
-            } else {
-              await engine.resume(link.run_id);
-            }
-          }
-        } else if (status.run.status === "cancelled" && job.status === "queued") {
-          await engine.resume(link.run_id);
-        } else if (status.run.status === "completed") {
-          ctx.repo.transaction(() => {
-            const current = ctx.repo.getJobExecution(job.id);
-            if (current?.run_id === link.run_id && current.owner_token === link.owner_token)
-              ctx.repo.markJobSucceeded(job.id);
+        if (command.kind === "enqueue") {
+          const key = `${namespace}:enqueue:${command.id}`;
+          const payload =
+            (command.payload_json
+              ? (JSON.parse(command.payload_json) as { notBefore?: string | null } | null)
+              : null) ?? {};
+          const now = Date.now();
+          const unsupported = !(EXECUTION_JOB_TYPES as readonly string[]).includes(job.type);
+          const result = await storage.createRun({
+            id: randomUUID(),
+            workflow: `media-${job.type}-v1`,
+            input: { jobId: job.id, generation: command.generation },
+            idempotencyKey: key,
+            status: unsupported
+              ? "failed"
+              : payload.notBefore && Date.parse(payload.notBefore) > now
+                ? "sleeping"
+                : "pending",
+            createdAt: Date.parse(command.created_at),
+            updatedAt: now,
+            startedAt: null,
+            finishedAt: unsupported ? now : null,
+            output: null,
+            error: unsupported
+              ? { stepName: "enqueue", message: `Unsupported job type: ${job.type}`, code: null }
+              : null,
+            wakeAt: payload.notBefore ? Date.parse(payload.notBefore) : null,
+            waitingFor: null
           });
+          runId = result.run.id;
+          ctx.repo.attachJobExecution(job.id, runId, command.generation);
         }
+        if (!runId || !(await storage.getRun(runId)))
+          throw new Error(`Missing execution for command ${command.id}, job ${job.id}`);
+        // Also notify the live engine so an in-process callback gets aborted.
+        if (command.kind === "cancel") await engine.cancel(runId);
+        commands.apply(`${namespace}:command:${command.id}`, command, runId);
+        ctx.repo.acknowledgeJobCommand(command.id);
       }
     },
     async stop() {
       stopping = true;
       await engine.stop();
+      commands.close();
       await storage.close();
     }
   };

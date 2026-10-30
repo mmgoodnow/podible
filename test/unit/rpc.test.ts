@@ -13,6 +13,7 @@ import { CHAPTER_ANALYSIS_ALGORITHM_VERSION } from "../../src/library/chapter-an
 import { handleRpcMethod, handleRpcRequest } from "../../src/rpc";
 import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
+import { createJobExecutionRuntime } from "../../src/worker/execution";
 import { startMockRtorrent } from "../mocks/rtorrent";
 import { startMockTorznab } from "../mocks/torznab";
 
@@ -394,7 +395,16 @@ describe("json-rpc handler", () => {
     expect(result.result.items[0].id).toBe(book.id);
     expect(result.result.items[0].status).toBe("error");
 
-    repo.markJobSucceeded(recoveryJob.id);
+    // This unit test supplies the journal projection; real engine transitions
+    // are covered by job-api-authority.test.ts.
+    repo.attachJobExecution(recoveryJob.id, "completed-recovery");
+    repo.bindJobJournalReader({
+      read: (ids) => new Map(ids.map((id) => [id, {
+        status: "succeeded" as const, error: null, attempt_count: 1,
+        next_run_at: null, updated_at: recoveryJob.updated_at,
+      }])),
+    });
+    repo.finishJobJournalMigration();
     result = await callRpc(repo, {
       jsonrpc: "2.0",
       id: 3,
@@ -533,33 +543,56 @@ describe("json-rpc handler", () => {
     db.close();
   });
 
-  test("jobs.retry requeues failed jobs and rejects non-retryable jobs", async () => {
+  test("jobs.retry records a retry consumed by Reflow and rejects non-retryable jobs", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
     repo.ensureSettings();
 
-    const failed = repo.createJob({ type: "acquire", status: "failed" });
-    const retried = await callRpc(repo, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "jobs.retry",
-      params: { jobId: failed.id },
+    const failed = repo.createJob({ type: "acquire", maxAttempts: 1 });
+    let attempts = 0;
+    const runtime = await createJobExecutionRuntime({ repo, getSettings: () => repo.getSettings(), onLog() {} }, ":memory:", {
+      processJob: async (ctx) => {
+        await ctx.execution!.run("retryable-work", () => {
+          if (++attempts === 1) throw new Error("temporary failure");
+        });
+        return "done";
+      },
     });
-    expect(retried.result.job.id).toBe(failed.id);
-    expect(retried.result.job.status).toBe("queued");
+    const until = async (status: string) => {
+      const deadline = Date.now() + 4_000;
+      while (repo.getJob(failed.id)?.status !== status) {
+        if (Date.now() > deadline) throw new Error(`Timed out waiting for ${status}`);
+        await runtime.reconcile();
+        await Bun.sleep(10);
+      }
+    };
+    try {
+      await until("failed");
+      const retried = await callRpc(repo, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "jobs.retry",
+        params: { jobId: failed.id },
+      });
+      expect(retried.result.job.id).toBe(failed.id);
+      expect(repo.listJobCommands()).toMatchObject([{ job_id: failed.id, kind: "retry" }]);
+      await until("succeeded");
+      expect(attempts).toBe(2);
 
-    const queued = repo.createJob({ type: "acquire", status: "queued" });
-    const notRetryable = await callRpc(repo, {
-      jsonrpc: "2.0",
-      id: 2,
-      method: "jobs.retry",
-      params: { jobId: queued.id },
-    });
-    expect(notRetryable.error.code).toBe(-32000);
-    expect(notRetryable.error.data.error).toBe("not_retryable");
-
-    db.close();
+      const queued = repo.createJob({ type: "acquire", status: "queued" });
+      const notRetryable = await callRpc(repo, {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "jobs.retry",
+        params: { jobId: queued.id },
+      });
+      expect(notRetryable.error.code).toBe(-32000);
+      expect(notRetryable.error.data.error).toBe("not_retryable");
+    } finally {
+      await runtime.stop();
+      db.close();
+    }
   });
 
   test("help lists rpc methods with readOnly flags", async () => {

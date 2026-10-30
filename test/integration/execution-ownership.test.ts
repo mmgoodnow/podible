@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { defaultSettings } from "../../src/settings";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
-import { handleJobFailure } from "../../src/worker/failure";
+import { notifyJobFailure } from "../../src/worker/failure";
 
 test("job handoffs and manifestations have stable retry identities", () => {
   const db = new Database(":memory:");
@@ -37,11 +37,10 @@ test("superseded execution cannot publish or complete after cancellation", () =>
   });
   expect(repo.ownJobExecution(job.id, "run", "new")).toBe(true);
   expect(() => fenced.addManifestation({ bookId: book.id, kind: "audio" })).toThrow("lost ownership");
-  expect(() => fenced.markJobSucceeded(job.id)).toThrow("lost ownership");
+  expect(() => fenced.createJob({ type: "import" })).toThrow("lost ownership");
   expect(repo.listManifestationsByBook(book.id)).toHaveLength(0);
   repo.markJobCancelled(job.id);
-  repo.markJobSucceeded(job.id);
-  expect(repo.getJob(job.id)?.status).toBe("cancelled");
+  expect(repo.isJobCancellationRequested(job.id)).toBe(true);
   expect(repo.ownJobExecution(job.id, "run", "third")).toBe(false);
   db.close();
 });
@@ -88,19 +87,32 @@ test("durable import respects the filesystem-refresh lane", async () => {
   }
 });
 
-test("stale and duplicate failure projections do not consume retry attempts", async () => {
+test("failure notifications cannot mutate authoritative execution status or attempts", async () => {
   const db = new Database(":memory:");
   runMigrations(db);
   const repo = new BooksRepo(db);
-  const job = repo.createJob({ type: "acquire", payload: {} });
-  repo.attachJobExecution(job.id, "run");
-  repo.ownJobExecution(job.id, "run", "current");
+  const job = repo.createJob({ type: "acquire", payload: {}, maxAttempts: 1 });
   const ctx = { repo, getSettings: () => defaultSettings(), onLog: () => {} };
-  await handleJobFailure(ctx, job, new Error("old failure"), { runId: "run", token: "old" });
-  expect(repo.getJob(job.id)?.attempt_count).toBe(0);
-  await handleJobFailure(ctx, job, new Error("current failure"), { runId: "run", token: "current" });
-  await handleJobFailure(ctx, job, new Error("duplicate projection"), { runId: "run", token: "current" });
-  expect(repo.getJob(job.id)?.attempt_count).toBe(1);
-  expect(repo.getJob(job.id)?.status).toBe("failed");
-  db.close();
+  const runtime = await createJobExecutionRuntime(ctx, ":memory:", {
+    processJob: async (ctx) => {
+      await ctx.execution!.run("fails", () => {
+        throw new Error("original failure");
+      });
+      return "done";
+    }
+  });
+  try {
+    await runtime.reconcile();
+    const id = repo.getJobExecution(job.id)!.run_id;
+    await runtime.engine.waitForRun(id);
+    const original = repo.getJob(job.id);
+    await notifyJobFailure(ctx, job, new Error("old failure"));
+    await notifyJobFailure(ctx, job, new Error("duplicate failure"));
+    expect(repo.getJob(job.id)).toEqual(original);
+    expect(original?.attempt_count).toBe(1);
+    expect(original?.status).toBe("failed");
+  } finally {
+    await runtime.stop();
+    db.close();
+  }
 });

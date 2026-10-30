@@ -7,6 +7,7 @@ import { pingPlexOwnerToken } from "./src/plex";
 import { BooksRepo } from "./src/repo";
 import { runWorker } from "./src/worker";
 import { queueStaleMetadataHydration } from "./src/worker/metadata-hydration";
+import { createJobExecutionRuntime } from "./src/worker/execution";
 
 const startTime = Date.now();
 
@@ -15,6 +16,16 @@ const db = openDatabase(booksDbPath);
 const repo = new BooksRepo(db);
 repo.ensureSettings();
 const current = repo.getSettings();
+let stopping = false;
+const workerContext = {
+  repo,
+  getSettings: () => repo.getSettings(),
+  onLog: (message: string) => console.log(message),
+  shouldStop: () => stopping,
+  activeLocks: new Set<string>()
+};
+// Migrate history and bind authoritative reads before queues or HTTP can run.
+const execution = await createJobExecutionRuntime(workerContext, repo.executionDatabasePath());
 
 const legacyCoverWatermarks = await watermarkLegacyGeneratedCovers(repo);
 if (legacyCoverWatermarks.updated > 0 || legacyCoverWatermarks.failed > 0) {
@@ -28,15 +39,7 @@ if (metadataHydrationJob) {
   console.log(`[metadata-hydration] job=${metadataHydrationJob.id} status=${metadataHydrationJob.status}`);
 }
 
-let stopping = false;
-const workerContext = {
-  repo,
-  getSettings: () => repo.getSettings(),
-  onLog: (message: string) => console.log(message),
-  shouldStop: () => stopping,
-  activeLocks: new Set<string>()
-};
-const worker = runWorker(workerContext);
+const worker = runWorker(workerContext, { runtime: execution });
 
 // Enqueue curation for any book that already has a transcript but no chapters yet.
 void queuePendingCurationJobs(repo).then((count) => {

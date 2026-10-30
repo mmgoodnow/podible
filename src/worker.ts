@@ -6,13 +6,14 @@ export { pollMsForMedia, selectDownloadPollMs } from "./worker/downloads";
 /** Bridge the public job outbox to Reflow. No job claiming or startup resets. */
 export async function runWorker(
   ctx: WorkerContext,
-  options: Parameters<typeof createJobExecutionRuntime>[2] & { databasePath?: string } = {}
+  options: Parameters<typeof createJobExecutionRuntime>[2] & {
+    databasePath?: string;
+    runtime?: Awaited<ReturnType<typeof createJobExecutionRuntime>>;
+  } = {}
 ): Promise<void> {
-  const runtime = await createJobExecutionRuntime(
-    ctx,
-    options.databasePath ?? ctx.repo.executionDatabasePath(),
-    options
-  );
+  const runtime =
+    options.runtime ??
+    (await createJobExecutionRuntime(ctx, options.databasePath ?? ctx.repo.executionDatabasePath(), options));
   try {
     while (!ctx.shouldStop?.()) {
       try {
