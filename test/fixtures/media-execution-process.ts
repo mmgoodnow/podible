@@ -20,9 +20,17 @@ fs.readdir = (async (...args: Parameters<typeof fs.readdir>) => {
   return result;
 }) as typeof fs.readdir;
 const transaction = BooksRepo.prototype.transaction;
+const transactionDepth = new WeakMap<BooksRepo, number>();
 BooksRepo.prototype.transaction = function <T>(fn: () => T): T {
-  const value = transaction.call(this, fn) as T;
-  if (value && typeof value === "object" && "mime" in value && "source_release_id" in value) {
+  const depth = (transactionDepth.get(this) ?? 0) + 1;
+  transactionDepth.set(this, depth);
+  let value: T;
+  try {
+    value = transaction.call(this, fn) as T;
+  } finally {
+    transactionDepth.set(this, depth - 1);
+  }
+  if (depth === 1 && value && typeof value === "object" && "mime" in value && "source_release_id" in value) {
     appendFileSync(`${root}/events`, "asset-publication\n");
     if (boundary === "asset-publication" && !existsSync(`${root}/resume`)) process.kill(process.pid, "SIGSTOP");
   }
@@ -90,7 +98,7 @@ while (Date.now() < deadline) {
   }
   if (
     jobs.length >= 5 &&
-    jobs.every((job) => job.status === "succeeded") &&
+    jobs.every((job) => job.status === "succeeded" || job.status === "cancelled") &&
     counts.running === 0 &&
     counts.pending === 0
   ) {

@@ -10,7 +10,10 @@ export type WorkerContext = {
   shouldStop?: () => boolean;
   /** Override the agent model provider (e.g. a fake for tests). */
   modelProvider?: ModelProvider;
+  /** Transitional lanes shared with the unmigrated scanner/curation worker. */
+  activeLocks?: Set<string>;
   execution?: {
+    key: string;
     run<T>(name: string, handler: () => T | Promise<T>): Promise<T>;
     sleep(name: string, milliseconds: number): Promise<void>;
     assertActive(): void;

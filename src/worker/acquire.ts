@@ -118,7 +118,7 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
               onLog: (line) => workerLog(ctx, `[acquire] job=${job.id} book=${book.id} media=${media} ${line}`),
               preferAgentImport: decision.mode === "agent",
               execution: ctx.execution,
-              operationKey: `acquire:${job.id}:${media}:${selectionIndex}`,
+              operationKey: `acquire:${ctx.execution?.key ?? job.id}:${media}:${selectionIndex}`,
               stepPrefix: `${media}:selection:${selectionIndex}`,
             }
           );

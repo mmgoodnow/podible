@@ -74,7 +74,7 @@ export async function runWorker(ctx: WorkerContext, deps: WorkerDeps = {}): Prom
   }
 
   const active = new Map<number, ActiveJob>();
-  const activeLocks = new Set<string>();
+  const activeLocks = ctx.activeLocks ?? new Set<string>();
   const jobProcessor = deps.processJob ?? processJob;
   const failureHandler = deps.handleJobFailure ?? handleJobFailure;
 

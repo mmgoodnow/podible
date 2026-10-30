@@ -1,4 +1,5 @@
-import { ensureConfigDir, booksDbPath, port } from "./src/config";
+import path from "node:path";
+import { ensureConfigDir, booksDbPath, configDir, port } from "./src/config";
 import { openDatabase } from "./src/db";
 import { createPodibleFetchHandler } from "./src/http";
 import { queuePendingCurationJobs } from "./src/library/chapter-analysis";
@@ -7,6 +8,7 @@ import { pingPlexOwnerToken } from "./src/plex";
 import { BooksRepo } from "./src/repo";
 import { runWorker } from "./src/worker";
 import { queueStaleMetadataHydration } from "./src/worker/metadata-hydration";
+import { createJobExecutionRuntime, EXECUTION_JOB_TYPES } from "./src/worker/execution";
 
 const startTime = Date.now();
 
@@ -28,11 +30,26 @@ if (metadataHydrationJob) {
   console.log(`[metadata-hydration] job=${metadataHydrationJob.id} status=${metadataHydrationJob.status}`);
 }
 
-void runWorker({
+let stopping = false;
+const workerContext = {
   repo,
   getSettings: () => repo.getSettings(),
-  onLog: (message) => console.log(message),
-});
+  onLog: (message: string) => console.log(message),
+  shouldStop: () => stopping,
+  activeLocks: new Set<string>()
+};
+const execution = await createJobExecutionRuntime(workerContext, path.join(configDir, "execution.sqlite"));
+const executionBridge = (async () => {
+  while (!stopping) {
+    try {
+      await execution.reconcile();
+    } catch (error) {
+      console.error("[execution] outbox reconciliation failed", error);
+    }
+    await Bun.sleep(300);
+  }
+})();
+const worker = runWorker(workerContext, { excludedJobTypes: [...EXECUTION_JOB_TYPES] });
 
 // Enqueue curation for any book that already has a transcript but no chapters yet.
 void queuePendingCurationJobs(repo).then((count) => {
@@ -57,26 +74,28 @@ const plexPingTimer = setInterval(() => void pingPlexAndLog(), PLEX_PING_INTERVA
 const server = Bun.serve({
   port,
   idleTimeout: 60,
-  fetch: createPodibleFetchHandler(repo, startTime),
+  fetch: createPodibleFetchHandler(repo, startTime)
 });
 
-const localBase = `http://localhost${port === 80 ? "" : `:${port}`}`;
+const localBase = `http://localhost${server.port === 80 ? "" : `:${server.port}`}`;
 
 console.log(`Podible backend listening on ${localBase}`);
 console.log(`Library root: ${current.libraryRoot}`);
 console.log(`RPC endpoint: ${localBase}/rpc`);
 console.log(`Home: ${localBase}/`);
 
-process.on("SIGINT", () => {
+async function shutdown(): Promise<void> {
+  if (stopping) return;
+  stopping = true;
   clearInterval(plexPingTimer);
-  server.stop();
+  // Keep SQLite open while handlers unwind. If an external call will not
+  // finish, exit without closing underneath it; leases allow safe reclamation.
+  const deadline = setTimeout(() => process.exit(0), 8_000);
+  deadline.unref();
+  await Promise.all([server.stop(), worker, executionBridge.then(() => execution.stop())]);
   db.close();
+  clearTimeout(deadline);
   process.exit(0);
-});
-
-process.on("SIGTERM", () => {
-  clearInterval(plexPingTimer);
-  server.stop();
-  db.close();
-  process.exit(0);
-});
+}
+process.on("SIGINT", () => void shutdown());
+process.on("SIGTERM", () => void shutdown());

@@ -106,7 +106,7 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
               manifestationId: payload.manifestationId ?? null,
               sequenceInManifestation: payload.sequenceInManifestation ?? null,
               importNote: importNote("wrong_file_review", decision),
-              importKey: `import:${job.id}:review`
+              importKey: `import:${job.id}`
             })
           );
           ctx.repo.setReleaseStatus(release.id, "imported", null);
@@ -181,7 +181,7 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
             manifestationId: payload.manifestationId ?? null,
             sequenceInManifestation: payload.sequenceInManifestation ?? null,
             importNote: importNote("agent_first", decision),
-            importKey: `import:${job.id}:agent-first`
+            importKey: `import:${job.id}`
           })
         );
         ctx.repo.setReleaseStatus(release.id, "imported", null);
@@ -213,7 +213,7 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
         manifestationId: payload.manifestationId ?? null,
         sequenceInManifestation: payload.sequenceInManifestation ?? null,
         importNote: importNote("deterministic", { selectedPaths: importSource.selectedPaths }),
-        importKey: `import:${job.id}:deterministic`
+        importKey: `import:${job.id}`
       })
     );
     ctx.repo.setReleaseStatus(release.id, "imported", null);
@@ -255,7 +255,7 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
             manifestationId: payload.manifestationId ?? null,
             sequenceInManifestation: payload.sequenceInManifestation ?? null,
             importNote: importNote("agent_recovery", decision),
-            importKey: `import:${job.id}:recovery`
+            importKey: `import:${job.id}`
           })
         );
         ctx.repo.setReleaseStatus(release.id, "imported", null);

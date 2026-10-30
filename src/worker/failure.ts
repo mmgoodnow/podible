@@ -36,15 +36,34 @@ async function maybeNotifyAcquireFailure(ctx: WorkerContext, job: JobRow, messag
     `Book: ${book ? `${book.title} by ${book.author}` : `book ${job.book_id ?? "unknown"}`}`,
     `Media: ${media}`,
     `Context: ${payload.failureContext ?? "auto-recovery"}`,
-    `Reason: ${message}`,
+    `Reason: ${message}`
   ].join("\n");
   await notifyBestEffort(ctx, title, body);
 }
 
-export async function handleJobFailure(ctx: WorkerContext, job: JobRow, error: unknown): Promise<void> {
+export async function handleJobFailure(
+  ctx: WorkerContext,
+  job: JobRow,
+  error: unknown,
+  expectedOwner?: { runId: string; token: string | null }
+): Promise<void> {
   const message = (error as Error).message;
   const next = new Date(Date.now() + backoffMs(job.attempt_count)).toISOString();
-  const failed = ctx.repo.markJobFailed(job.id, message, next) as { status: string } | null;
+  const failed = (
+    expectedOwner
+      ? ctx.repo.transaction(() => {
+          const current = ctx.repo.getJob(job.id);
+          const execution = ctx.repo.getJobExecution(job.id);
+          if (
+            current?.status !== "running" ||
+            execution?.run_id !== expectedOwner.runId ||
+            execution.owner_token !== expectedOwner.token
+          )
+            return null;
+          return ctx.repo.markJobFailed(job.id, message, next);
+        })
+      : ctx.repo.markJobFailed(job.id, message, next)
+  ) as { status: string } | null;
   if (!failed) {
     workerLog(ctx, `[worker] job=${job.id} type=${job.type} failed but row missing (likely deleted) error=${message}`);
     return;

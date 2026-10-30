@@ -38,7 +38,9 @@ const scenarios = [
 scenarios.push(
   { boundary: "audio:selection", mode: "takeover" },
   { boundary: "before-publication", mode: "takeover" },
-  { boundary: "audio:selection", mode: "cancel" }
+  { boundary: "audio:selection", mode: "cancel" },
+  { boundary: "audio:selection", mode: "cancel-retry" },
+  { boundary: "asset-publication", mode: "cancel-retry" }
 );
 for (const { boundary, mode } of scenarios) {
   test(`real media pipeline survives ${mode} at ${boundary}`, async () => {
@@ -94,16 +96,26 @@ for (const { boundary, mode } of scenarios) {
     let second: ReturnType<typeof launch> | undefined;
     try {
       await waitFor(`${root}/events`, boundary);
-      if (mode === "cancel") {
-        repo.markJobCancelled(1, "User cancelled");
+      if (mode === "cancel" || mode === "cancel-retry") {
+        const target =
+          boundary === "asset-publication"
+            ? repo
+                .listJobsByType("import")
+                .find((job) => job.release_id === repo.listAssetsByBook(book.id)[0]!.source_release_id)!.id
+            : 1;
+        repo.markJobCancelled(target, "User cancelled");
         await writeFile(`${root}/resume`, "yes");
+        if (boundary === "asset-publication") first.kill("SIGCONT");
         const exit = await Promise.race([first.exited, Bun.sleep(5_000).then(() => -1)]);
         expect(exit).toBe(0);
-        expect(repo.getJob(1)?.status).toBe("cancelled");
-        expect(repo.listReleasesByBook(book.id)).toHaveLength(0);
-        expect(repo.listAssetsByBook(book.id)).toHaveLength(0);
-        expect(rtorrent.loadCalls).toHaveLength(0);
-        return;
+        expect(repo.getJob(target)?.status).toBe("cancelled");
+        if (boundary !== "asset-publication") {
+          expect(repo.listReleasesByBook(book.id)).toHaveLength(0);
+          expect(repo.listAssetsByBook(book.id)).toHaveLength(0);
+          expect(rtorrent.loadCalls).toHaveLength(0);
+        }
+        if (mode === "cancel") return;
+        repo.retryJob(target);
       }
       first.kill(mode === "takeover" ? "SIGSTOP" : "SIGKILL");
       if (mode !== "takeover") await first.exited;
@@ -119,7 +131,8 @@ for (const { boundary, mode } of scenarios) {
         first.kill("SIGCONT");
         expect(await Promise.race([first.exited, Bun.sleep(5_000).then(() => -1)])).toBe(0);
       }
-      expect(torznab.searches).toHaveLength(1);
+      const researchCount = mode === "cancel-retry" && boundary === "audio:selection" ? 2 : 1;
+      expect(torznab.searches).toHaveLength(researchCount);
       expect(rtorrent.loadCalls.sort()).toEqual([...hashes].sort());
       expect(repo.listReleasesByBook(book.id)).toHaveLength(2);
       const manifestations = repo.listManifestationsByBook(book.id);
@@ -130,7 +143,7 @@ for (const { boundary, mode } of scenarios) {
       expect(repo.listJobsByType("import")).toHaveLength(2);
       expect(repo.listRecentJobs(100).every((job) => job.status === "succeeded")).toBe(true);
       const events = (await readFile(`${root}/events`, "utf8")).split("\n");
-      expect(events.filter((event) => event === "audio:selection")).toHaveLength(1);
+      expect(events.filter((event) => event === "audio:selection")).toHaveLength(researchCount);
     } finally {
       first.kill("SIGKILL");
       second?.kill("SIGKILL");

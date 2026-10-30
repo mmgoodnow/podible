@@ -236,7 +236,16 @@ export class BooksRepo {
   }
 
   forExecution(beforeWrite: () => void): BooksRepo {
-    return new BooksRepo(this.db, beforeWrite);
+    const scoped = new BooksRepo(this.db, beforeWrite);
+    // Guard and mutation share a SQLite transaction, so another process cannot
+    // revoke ownership between the check and the domain write.
+    return new Proxy(scoped, {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver);
+        if (typeof value !== "function") return value;
+        return (...args: unknown[]) => target.transaction(() => value.apply(target, args));
+      },
+    });
   }
 
   getJobExecution(jobId: number): { run_id: string; owner_token: string | null } | null {
@@ -244,8 +253,14 @@ export class BooksRepo {
       { run_id: string; owner_token: string | null } | null;
   }
 
-  attachJobExecution(jobId: number, runId: string): void {
-    this.db.query("INSERT OR IGNORE INTO job_executions (job_id, run_id) VALUES (?, ?)").run(jobId, runId);
+  jobExecutionGeneration(jobId: number): number | null {
+    const row = this.db.query("SELECT execution_generation FROM jobs WHERE id = ?").get(jobId) as { execution_generation: number } | null;
+    return row?.execution_generation ?? null;
+  }
+
+  attachJobExecution(jobId: number, runId: string, generation = 0): void {
+    this.db.query(`INSERT OR IGNORE INTO job_executions (job_id, run_id)
+      SELECT id, ? FROM jobs WHERE id = ? AND execution_generation = ?`).run(runId, jobId, generation);
   }
 
   ownJobExecution(jobId: number, runId: string, token: string): boolean {
@@ -1302,12 +1317,12 @@ export class BooksRepo {
       .all(Math.max(1, Math.trunc(limit))) as JobRow[];
   }
 
-  markJobSucceeded(jobId: number): JobRow {
+  markJobSucceeded(jobId: number): JobRow | null {
     this.beforeWrite();
     const now = nowIso();
     return this.db
       .query("UPDATE jobs SET status = 'succeeded', error = NULL, updated_at = ? WHERE id = ? AND status != 'cancelled' RETURNING *")
-      .get(now, jobId) as JobRow;
+      .get(now, jobId) as JobRow | null;
   }
 
   markJobCancelled(jobId: number, error?: string | null): JobRow {
@@ -1338,11 +1353,18 @@ export class BooksRepo {
 
   retryJob(jobId: number): JobRow {
     const now = nowIso();
+    return this.transaction(() => {
+    const current = this.getJob(jobId);
+    if (current?.status === "cancelled") {
+      this.db.query("DELETE FROM job_executions WHERE job_id = ?").run(jobId);
+      this.db.query("UPDATE jobs SET execution_generation = execution_generation + 1 WHERE id = ?").run(jobId);
+    }
     return this.db
       .query(
         "UPDATE jobs SET status = 'queued', next_run_at = ?, error = NULL, updated_at = ? WHERE id = ? RETURNING *"
       )
       .get(now, now, jobId) as JobRow;
+    });
   }
 
   rescheduleJob(jobId: number, nextRunAt: string, payload?: unknown): JobRow {
