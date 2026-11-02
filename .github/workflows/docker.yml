@@ -9,6 +9,19 @@ permissions:
   packages: write
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg unzip wamerican
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run validate:runtime-scripts
+      - run: bun test
   docker:
+    needs: verify
     uses: mmgoodnow/cd/.github/workflows/docker.yml@main
     secrets: inherit
