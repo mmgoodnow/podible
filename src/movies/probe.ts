@@ -19,6 +19,8 @@ export async function probeMovie(file: string): Promise<MovieProbe> {
   const subprocess = Bun.spawn(
     [
       "ffprobe",
+      "-protocol_whitelist",
+      "file,pipe",
       "-v",
       "error",
       "-print_format",
@@ -27,7 +29,7 @@ export async function probeMovie(file: string): Promise<MovieProbe> {
       "-show_format",
       file,
     ],
-    { stdout: "pipe", stderr: "pipe" },
+    { stdout: "pipe", stderr: "pipe", timeout: 120_000 },
   );
   const [stdout, stderr, status] = await Promise.all([
     new Response(subprocess.stdout).text(),
