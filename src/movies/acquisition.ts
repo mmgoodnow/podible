@@ -459,7 +459,9 @@ export async function acquireMovie(
         },
       );
       if (published) break;
-      if (scan + 1 >= (services.timing?.plexAttempts ?? 30))
+      // A busy library can take minutes to discover a new part. These are
+      // durable sleeps, not a reason to download a different release.
+      if (scan + 1 >= (services.timing?.plexAttempts ?? 120))
         throw new Error(
           "Plex did not verify the published movie; previous version retained",
         );

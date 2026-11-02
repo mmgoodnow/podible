@@ -138,6 +138,98 @@ test("stalled movie downloads are retained and replaced, with visible recovery e
     await s.close();
   }
 });
+
+for (const failure of ["unplayable", "wrong-movie", "wrong-language"] as const) {
+  test(`completed ${failure} release is retained and reacquired from another release`, async () => {
+    const s = await setup();
+    try {
+      s.fixture.addOffer("bad-content", 1920);
+      s.fixture.addOffer("valid-content", 1280);
+      const probe = s.fixture.services.probe;
+      s.fixture.services.probe = async (file) => {
+        if (path.basename(file) === "bad-content.mkv") {
+          if (failure === "unplayable") throw new Error("Invalid media");
+          if (failure === "wrong-language") {
+            const result = await probe(file);
+            for (const stream of result.streams)
+              if (stream.codec_type === "audio")
+                stream.tags = { language: "spa" };
+            return result;
+          }
+        }
+        return probe(file);
+      };
+      const inspect = s.fixture.services.decider.inspect;
+      s.fixture.services.decider.inspect = async (input) => {
+        const result = await inspect(input);
+        return failure === "wrong-movie" && input.offer.key === "bad-content"
+          ? {
+              ...result,
+              fileIndex: null,
+              reason: "Downloaded feature is a different movie",
+            }
+          : result;
+      };
+      await acquireMovie(
+        s.context,
+        s.repo.getJob(s.enqueue().job_id!)!,
+        s.fixture.services,
+      );
+      const version = s.repo.movies.version(
+        s.repo.movies.target(s.request.targetId)!.active_version_id!,
+      )!;
+      expect(
+        await fs.readFile(
+          path.join(s.root, "objects", version.files[0]!.relativePath),
+          "utf8",
+        ),
+      ).toContain("valid-content");
+      expect(s.fixture.stats.snatches).toBe(2);
+      expect(s.fixture.stats.removals).toBe(0);
+      expect(s.fixture.downloads.size).toBe(2);
+      const badDownload = [...s.fixture.downloads.values()][0]!;
+      expect(
+        await fs.readFile(
+          path.join(s.root, "downloads", badDownload.location.relativePath, "bad-content.mkv"),
+          "utf8",
+        ),
+      ).toContain("bad-content");
+    } finally {
+      await s.close();
+    }
+  });
+}
+
+test("Plex infrastructure failure retains the current version and does not reacquire unrelated releases", async () => {
+  const s = await setup();
+  try {
+    s.fixture.addOffer("original", 1280);
+    await acquireMovie(
+      s.context,
+      s.repo.getJob(s.enqueue().job_id!)!,
+      s.fixture.services,
+    );
+    const original = s.repo.movies.target(s.request.targetId)!.active_version_id;
+    s.fixture.addOffer("upgrade", 1920);
+    s.fixture.setPlexVerified(false);
+    await expect(
+      acquireMovie(
+        s.context,
+        s.repo.getJob(s.enqueue("upgrade").job_id!)!,
+        s.fixture.services,
+      ),
+    ).rejects.toThrow("Plex did not verify");
+    expect(s.repo.movies.target(s.request.targetId)!.active_version_id).toBe(
+      original,
+    );
+    expect(s.fixture.stats.snatches).toBe(2);
+    expect(s.fixture.stats.removals).toBe(0);
+    expect(s.repo.movies.publications()).toHaveLength(1);
+  } finally {
+    await s.close();
+  }
+});
+
 test("movie Reflow replay after snatch does not exclude its own selected release or add twice", async () => {
   const s = await setup();
   let runtime:
