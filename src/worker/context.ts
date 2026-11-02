@@ -10,6 +10,7 @@ export type WorkerContext = {
   shouldStop?: () => boolean;
   /** Override the agent model provider (e.g. a fake for tests). */
   modelProvider?: ModelProvider;
+  movieServices?: import("../movies/operations").MovieServices;
   /** In-process resource lanes; sibling steps share execution ownership. */
   activeLocks?: Set<string>;
   execution?: {

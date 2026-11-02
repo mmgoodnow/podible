@@ -31,6 +31,11 @@ function releaseLockKeys(repo: BooksRepo, releaseId: number | null | undefined):
 }
 
 export function jobLockKeys(repo: BooksRepo, job: JobRow): string[] {
+  if (job.type === "movie_acquire") {
+    const payload = parseJson<{ acquisitionId?: number }>(job.payload_json);
+    const acquisition = payload?.acquisitionId ? repo.movies.acquisition(payload.acquisitionId) : null;
+    return acquisition ? [`movie-target:${acquisition.target_id}`] : [];
+  }
   if (job.type === "full_library_refresh") {
     return [GLOBAL_LOCK_KEY];
   }

@@ -4,7 +4,7 @@ import type { BooksRepo } from "../repo";
 import { appRouter } from "../trpc";
 import type { HttpEnv } from "./middleware";
 
-export function createTrpcRoutes(repo: BooksRepo, startTime: number) {
+export function createTrpcRoutes(repo: BooksRepo, startTime: number, dependencies: { movieServices?: import("../movies/operations").MovieServices } = {}) {
   const app = new Hono<HttpEnv>();
   app.all("*", async (c) => {
     const request = c.req.raw;
@@ -23,6 +23,7 @@ export function createTrpcRoutes(repo: BooksRepo, startTime: number) {
       req: request,
       router: appRouter,
       createContext: () => ({
+        ...dependencies,
         repo,
         startTime,
         request,

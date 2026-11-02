@@ -40,6 +40,7 @@ export type RpcFailure = {
 export type RpcAuthLevel = "public" | "user" | "admin";
 
 export type RpcContext = {
+  movieServices?: import("../movies/operations").MovieServices;
   repo: BooksRepo;
   startTime: number;
   request: Request;

@@ -10,7 +10,9 @@ export type JobType =
   | "reconcile"
   | "chapter_analysis"
   | "cover_generation"
-  | "metadata_hydration";
+  | "metadata_hydration"
+  | "movie_acquire"
+  | "movie_reconcile";
 
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 

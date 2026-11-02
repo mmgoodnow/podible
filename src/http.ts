@@ -20,7 +20,7 @@ import { createTrpcRoutes } from "./http/trpc-routes";
 import { createSpaRoutes } from "./http/spa-routes";
 import { createActivityRoutes, createAddRoutes, createBookRoutes, createHomeRoutes, createLibraryRoutes } from "./http/user-routes";
 
-export function createPodibleFetchHandler(repo: BooksRepo, startTime: number, buildInfo: BuildInfo | null = BUILD_INFO): (request: Request) => Promise<Response> {
+export function createPodibleFetchHandler(repo: BooksRepo, startTime: number, buildInfo: BuildInfo | null = BUILD_INFO, dependencies: { movieServices?: import("./movies/operations").MovieServices } = {}): (request: Request) => Promise<Response> {
   const app = new Hono<HttpEnv>();
 
   app.use("*", createRequestContextMiddleware(repo));
@@ -34,8 +34,8 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number, bu
   app.route("/book", createBookRoutes(repo));
   app.route("/activity", createActivityRoutes(repo));
   app.route("/admin", createAdminRoutes(repo, startTime, buildInfo));
-  app.route("/rpc", createRpcRoutes(repo, startTime));
-  app.route("/api/trpc", createTrpcRoutes(repo, startTime));
+  app.route("/rpc", createRpcRoutes(repo, startTime, dependencies));
+  app.route("/api/trpc", createTrpcRoutes(repo, startTime, dependencies));
   app.route("/app", createSpaRoutes());
   app.route("/assets", createAssetsIndexRoutes(repo));
   app.route("/stream", createStreamRoutes(repo));

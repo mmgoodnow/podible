@@ -1,5 +1,6 @@
 import { workerLog, type WorkerContext } from "./worker/context";
 import { createJobExecutionRuntime } from "./worker/execution";
+import { randomUUID } from "node:crypto";
 
 export { pollMsForMedia, selectDownloadPollMs } from "./worker/downloads";
 
@@ -15,8 +16,14 @@ export async function runWorker(
     options.runtime ??
     (await createJobExecutionRuntime(ctx, options.databasePath ?? ctx.repo.executionDatabasePath(), options));
   try {
+    const boot = randomUUID();
+    let nextMovieMaintenance = 0;
     while (!ctx.shouldStop?.()) {
       try {
+        if (ctx.getSettings().movies.enabled && Date.now() >= nextMovieMaintenance) {
+          ctx.repo.createJob({ type: "movie_reconcile", idempotencyKey: `movie-maintenance:${boot}:${Math.floor(Date.now() / 3_600_000)}`, maxAttempts: 2 });
+          nextMovieMaintenance = Date.now() + 3_600_000;
+        }
         await runtime.reconcile();
       } catch (error) {
         workerLog(ctx, `[execution] outbox reconciliation failed: ${String(error)}`);

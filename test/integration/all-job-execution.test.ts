@@ -9,6 +9,7 @@ import { BooksRepo } from "../../src/repo";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
 
 const types = [
+  "movie_acquire", "movie_reconcile",
   "acquire",
   "download",
   "import",
@@ -38,7 +39,7 @@ async function until(check: () => boolean | Promise<boolean>) {
   }
 }
 
-test("all eight job types use checkpointed execution without claiming or resetting rows", async () => {
+test("all registered job types use checkpointed execution without claiming or resetting rows", async () => {
   const f = await fixture();
   const seen: string[] = [];
   const jobs = types.map((type) => f.repo.createJob({ type }));

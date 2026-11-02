@@ -14,6 +14,7 @@ import { workerLog, type WorkerContext } from "./context";
 import { jobLockKeys, lockSetsConflict } from "./locks";
 
 export const EXECUTION_JOB_TYPES = [
+  "movie_acquire", "movie_reconcile",
   "acquire",
   "download",
   "import",

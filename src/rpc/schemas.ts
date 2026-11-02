@@ -46,6 +46,7 @@ export const mediaSelectionSchema = z
   .transform((value) => Array.from(new Set(value)));
 
 export const jobTypeSchema = z.enum([
+  "movie_acquire", "movie_reconcile",
   "full_library_refresh",
   "acquire",
   "download",

@@ -4,7 +4,7 @@ import { BooksRepo } from "../repo";
 import { handleRpcMethod, handleRpcRequest } from "../rpc";
 import { setLogSuffix, type HttpEnv } from "./middleware";
 
-export function createRpcRoutes(repo: BooksRepo, startTime: number): Hono<HttpEnv> {
+export function createRpcRoutes(repo: BooksRepo, startTime: number, dependencies: { movieServices?: import("../movies/operations").MovieServices } = {}): Hono<HttpEnv> {
   const app = new Hono<HttpEnv>();
 
   app.post("/", async (c) => {
@@ -18,6 +18,7 @@ export function createRpcRoutes(repo: BooksRepo, startTime: number): Hono<HttpEn
       // ignore parse errors in logging path; handler will return JSON-RPC parse errors.
     }
     return handleRpcRequest(c.req.raw, {
+      ...dependencies,
       repo,
       startTime,
       request: c.req.raw,
@@ -44,6 +45,7 @@ export function createRpcRoutes(repo: BooksRepo, startTime: number): Hono<HttpEn
     }
 
     return handleRpcMethod(methodName, params, {
+      ...dependencies,
       repo,
       startTime,
       request: c.req.raw,

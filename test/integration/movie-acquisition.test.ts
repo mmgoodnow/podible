@@ -41,6 +41,7 @@ async function setup() {
     repo,
     getSettings: () => repo.getSettings(),
     onLog: () => {},
+    movieServices: fixture.services,
   };
   const enqueue = (reason: "initial" | "upgrade" = "initial") =>
     repo.movies.startAcquisition(
@@ -48,7 +49,7 @@ async function setup() {
       reason,
       (id) =>
         repo.createJob({
-          type: "reconcile",
+          type: "movie_acquire",
           payload: { acquisitionId: id },
           maxAttempts: 1,
         }).id,
@@ -187,9 +188,6 @@ test("movie Reflow replay after snatch does not exclude its own selected release
     runtime = await createJobExecutionRuntime(
       s.context,
       path.join(s.root, "execution.sqlite"),
-      {
-        processJob: (ctx, job) => acquireMovie(ctx, job, s.fixture.services),
-      },
     );
     await runtime.reconcile();
     const deadline = Date.now() + 5000;
