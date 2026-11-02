@@ -38,6 +38,7 @@ test("torrent adapter adds paused, reconciles uncertain success and controls onl
   const mock = startMockRtorrent({
     byHash: { [hash]: config },
     failAfterLoad: true,
+    registrationDelayMs: 75,
   });
   try {
     const client = adapter(mock.url);
@@ -51,6 +52,7 @@ test("torrent adapter adds paused, reconciles uncertain success and controls onl
     expect((await client.files(ref))[0]?.path).toBe(
       "/managed/payload/one/movie.bin",
     );
+    expect((await client.files(ref))[0]?.index).toBe(0);
     await client.removeRecord(ref);
     expect(mock.controlCalls.at(-1)).toBe("d.erase");
     expect(mock.controlCalls.some((call) => /delete|unlink/.test(call))).toBe(

@@ -218,10 +218,11 @@ export class RtorrentClient {
   ): Promise<void> {
     const literal = (value: string) =>
       value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    // directory.set appends the torrent name for multi-file releases; this root is literal.
     await this.call("load.raw", [
       xmlParamString(""),
       xmlParamBase64(torrentBytes),
-      xmlParamString(`d.directory.set="${literal(directory)}"`),
+      xmlParamString(`d.directory_base.set="${literal(directory)}"`),
       xmlParamString(`d.custom1.set="${literal(tag)}"`),
     ]);
   }

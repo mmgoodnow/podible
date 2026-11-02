@@ -24,7 +24,7 @@ export interface TorrentClient {
     location: DownloadLocation;
   }): Promise<TorrentRef>;
   inspect(ref: TorrentRef): Promise<TorrentSnapshot>;
-  files(ref: TorrentRef): Promise<{ path: string }[]>;
+  files(ref: TorrentRef): Promise<{ index: number; path: string }[]>;
   quiesce(ref: TorrentRef): Promise<void>;
   recheck(ref: TorrentRef): Promise<void>;
   resume(ref: TorrentRef): Promise<void>;

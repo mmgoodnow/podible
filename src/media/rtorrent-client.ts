@@ -67,6 +67,7 @@ export class RtorrentAdapter implements TorrentClient {
       nativeId: metainfo.infoHash,
     };
     if (!(await this.transport.hasDownload(metainfo.infoHash))) {
+      let loadError: unknown;
       try {
         await this.transport.loadRawPaused(
           input.metainfo,
@@ -74,7 +75,15 @@ export class RtorrentAdapter implements TorrentClient {
           this.options.ownershipTag,
         );
       } catch (error) {
-        if (!(await this.transport.hasDownload(metainfo.infoHash))) throw error;
+        loadError = error;
+      }
+      // XML-RPC acknowledgment can precede the client's asynchronous registration.
+      // Observe the identity before retrying an uncertain external side effect.
+      const deadline = Date.now() + 5000;
+      while (!(await this.transport.hasDownload(metainfo.infoHash))) {
+        if (Date.now() >= deadline)
+          throw loadError ?? new Error("Torrent registration was not observed");
+        await Bun.sleep(50);
       }
     }
     await this.owned(ref);
@@ -87,12 +96,13 @@ export class RtorrentAdapter implements TorrentClient {
     return ref;
   }
   private observedLocation(directory: string | null): DownloadLocation {
-    if (directory !== null) for (const [rootId, root] of Object.entries(this.options.roots)) {
-      if (directory === root || directory.startsWith(`${root}${path.sep}`)) {
-        const relativePath = path.relative(root, directory);
-        if (!relativePath.startsWith("..")) return { rootId, relativePath };
+    if (directory !== null)
+      for (const [rootId, root] of Object.entries(this.options.roots)) {
+        if (directory === root || directory.startsWith(`${root}${path.sep}`)) {
+          const relativePath = path.relative(root, directory);
+          if (!relativePath.startsWith("..")) return { rootId, relativePath };
+        }
       }
-    }
     throw new Error("Torrent directory is outside managed roots");
   }
   async inspect(ref: TorrentRef): Promise<TorrentSnapshot> {
@@ -124,9 +134,12 @@ export class RtorrentAdapter implements TorrentClient {
   async files(ref: TorrentRef) {
     const state = await this.inspect(ref);
     const directory = this.location(state.location);
-    return (await this.transport.getImportSource(ref.nativeId)).selectedPaths.map(file => {
-      if (!path.resolve(file).startsWith(`${directory}${path.sep}`)) throw new Error("Torrent file escaped its managed layout");
-      return { path: file };
+    return (
+      await this.transport.getImportSource(ref.nativeId)
+    ).selectedPaths.map((file, index) => {
+      if (!path.resolve(file).startsWith(`${directory}${path.sep}`))
+        throw new Error("Torrent file escaped its managed layout");
+      return { index, path: file };
     });
   }
   async quiesce(ref: TorrentRef) {

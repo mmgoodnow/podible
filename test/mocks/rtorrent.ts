@@ -25,6 +25,7 @@ type MockRtorrentOptions = {
   byHash: Record<string, DownloadConfig>;
   preloaded?: string[];
   failAfterLoad?: boolean;
+  registrationDelayMs?: number;
 };
 
 type MockRtorrent = {
@@ -63,6 +64,7 @@ export function startMockRtorrent(options: MockRtorrentOptions): MockRtorrent {
   const loaded = new Set((options.preloaded ?? []).map(normalizeInfoHash));
   const loadCalls: string[] = [];
   const controlCalls: string[] = [];
+  const timers = new Set<ReturnType<typeof setTimeout>>();
 
   const byHash = Object.fromEntries(
     Object.entries(options.byHash).map(([hash, config]) => [normalizeInfoHash(hash), config])
@@ -104,7 +106,10 @@ export function startMockRtorrent(options: MockRtorrentOptions): MockRtorrent {
         const bytes = parseBase64Param(body);
         if (!bytes) return new Response(xmlResponseInt(0));
         const hash = infoHashFromTorrentBytes(bytes);
-        loaded.add(hash);
+        if (options.registrationDelayMs) {
+          const timer = setTimeout(() => { loaded.add(hash); timers.delete(timer); }, options.registrationDelayMs);
+          timers.add(timer);
+        } else loaded.add(hash);
         loadCalls.push(hash);
         const state = states.get(hash);
         if (state && method === "load.raw") {
@@ -206,7 +211,7 @@ export function startMockRtorrent(options: MockRtorrentOptions): MockRtorrent {
 
   return {
     url: `http://127.0.0.1:${server.port}`,
-    stop: () => server.stop(),
+    stop: () => { for (const timer of timers) clearTimeout(timer); server.stop(); },
     loadCalls,
     controlCalls,
   };
