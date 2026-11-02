@@ -21,7 +21,7 @@ if (!url) {
   server.kill();
   throw new Error("Missing fixture URL");
 }
-const browser = await chromium.launch({ channel: "chrome", headless: true });
+const browser = await chromium.launch({ ...(process.env.CI ? {} : { channel: "chrome" }), headless: true });
 try {
   const context = await browser.newContext({
     viewport: { width: 1440, height: 960 },

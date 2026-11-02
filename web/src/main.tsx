@@ -6,6 +6,14 @@ import {
   useQuery,
 } from "@tanstack/react-query";
 import { rpc, TRPCProvider, useTRPC } from "./rpc";
+import { Link, useLocation } from "./router";
+import {
+  MovieSearch,
+  MovieDetail,
+  MovieRequests,
+  MovieRequestDetail,
+  MovieCredits,
+} from "./movies";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -75,6 +83,7 @@ function Library() {
 }
 
 function App() {
+  const route = useLocation();
   const trpc = useTRPC();
   const session = useQuery(trpc.auth.me.queryOptions({}));
   return (
@@ -84,9 +93,28 @@ function App() {
           podible<span>THE LIBRARY</span>
         </a>
         <nav aria-label="Main navigation">
-          <a href="/app/library" aria-current="page">
+          <Link
+            href="/app/library"
+            aria-current={
+              route === "/app/library" || route === "/app" ? "page" : undefined
+            }
+          >
             Library
-          </a>
+          </Link>
+          <Link
+            href="/app/movies"
+            aria-current={route.startsWith("/app/movies") ? "page" : undefined}
+          >
+            Movies
+          </Link>
+          <Link
+            href="/app/requests"
+            aria-current={
+              route.startsWith("/app/requests") ? "page" : undefined
+            }
+          >
+            Requests
+          </Link>
           <a href="/">Classic view</a>
         </nav>
         {session.data && <a href="/logout">Sign out</a>}
@@ -121,12 +149,16 @@ function App() {
           <ActorLibrary key={session.data.user.id} />
         )}
       </main>
-      <footer>Books worth keeping. Stories worth finding.</footer>
+      <footer>
+        Stories worth finding.
+        <MovieCredits />
+      </footer>
     </div>
   );
 }
 
 function ActorLibrary() {
+  const route = useLocation().split("?")[0]!;
   const [actorClient] = useState(
     () =>
       new QueryClient({
@@ -136,7 +168,24 @@ function ActorLibrary() {
   return (
     <QueryClientProvider client={actorClient}>
       <TRPCProvider trpcClient={rpc} queryClient={actorClient}>
-        <Library />
+        {/^\/app\/movies\/\d+$/.test(route) ? (
+          <MovieDetail key={route} tmdbId={Number(route.split("/").at(-1))} />
+        ) : route === "/app/movies" ? (
+          <MovieSearch />
+        ) : /^\/app\/requests\/\d+$/.test(route) ? (
+          <MovieRequestDetail
+            key={route}
+            requestId={Number(route.split("/").at(-1))}
+          />
+        ) : route === "/app/requests" ? (
+          <MovieRequests />
+        ) : ["/app", "/app/", "/app/library"].includes(route) ? (
+          <Library />
+        ) : (
+          <p>
+            Page not found. <Link href="/app/library">Open library</Link>.
+          </p>
+        )}
       </TRPCProvider>
     </QueryClientProvider>
   );
