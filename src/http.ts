@@ -16,6 +16,8 @@ import { createAppAuthRoutes, createLoginRoutes, createLogoutRoutes } from "./ht
 import { createFeedRoutes } from "./http/feed-routes";
 import { createRequestContextMiddleware, type HttpEnv } from "./http/middleware";
 import { createRpcRoutes } from "./http/rpc-routes";
+import { createTrpcRoutes } from "./http/trpc-routes";
+import { createSpaRoutes } from "./http/spa-routes";
 import { createActivityRoutes, createAddRoutes, createBookRoutes, createHomeRoutes, createLibraryRoutes } from "./http/user-routes";
 
 export function createPodibleFetchHandler(repo: BooksRepo, startTime: number, buildInfo: BuildInfo | null = BUILD_INFO): (request: Request) => Promise<Response> {
@@ -33,6 +35,8 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number, bu
   app.route("/activity", createActivityRoutes(repo));
   app.route("/admin", createAdminRoutes(repo, startTime, buildInfo));
   app.route("/rpc", createRpcRoutes(repo, startTime));
+  app.route("/api/trpc", createTrpcRoutes(repo, startTime));
+  app.route("/app", createSpaRoutes());
   app.route("/assets", createAssetsIndexRoutes(repo));
   app.route("/stream", createStreamRoutes(repo));
   app.route("/chapters", createChaptersRoutes(repo));

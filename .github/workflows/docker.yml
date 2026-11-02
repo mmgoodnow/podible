@@ -19,6 +19,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg unzip wamerican
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
+      - run: bun run build
       - run: bun run validate:runtime-scripts
       - run: bun test
   docker:

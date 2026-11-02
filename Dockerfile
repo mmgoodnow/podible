@@ -1,3 +1,12 @@
+FROM oven/bun:1.4.4 AS frontend
+
+WORKDIR /app
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
+COPY web ./web
+COPY scripts/build-web.ts ./scripts/build-web.ts
+RUN bun run build
+
 FROM oven/bun:1.4.4
 
 WORKDIR /app
@@ -7,7 +16,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json bun.lock ./
-RUN bun install --production
+RUN bun install --frozen-lockfile --production
 
 ARG GIT_SHA
 ARG GIT_COMMIT_MESSAGE
@@ -18,6 +27,7 @@ ENV GIT_COMMIT_MESSAGE=$GIT_COMMIT_MESSAGE
 COPY server.ts ./
 COPY src ./src
 COPY scripts ./scripts
+COPY --from=frontend /app/web/dist ./web/dist
 COPY podible.png ./
 
 RUN bun run validate:runtime-scripts

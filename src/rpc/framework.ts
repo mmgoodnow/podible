@@ -1,4 +1,4 @@
-import { ZodError, type ZodType } from "zod";
+import { ZodError, type ZodType, type output } from "zod";
 
 import { RpcError, type RpcAuthLevel, type RpcContext } from "./shared";
 
@@ -14,23 +14,25 @@ export type RpcMethodDefinition<TParams = unknown, TResult = unknown> = {
   handler: (ctx: RpcContext, params: TParams) => MaybePromise<TResult>;
 };
 
-export type RpcRouterDefinition = {
+export interface RpcRouterDefinition<
+  TRoutes extends Record<string, RpcNode> = Record<string, RpcNode>,
+> {
   kind: "router";
-  routes: Record<string, RpcNode>;
-};
+  routes: TRoutes;
+}
 
 export type RpcNode = RpcMethodDefinition<any, any> | RpcRouterDefinition;
 
-export function defineMethod<TParams, TResult>(config: {
+export function defineMethod<TParams extends ZodType, TResult>(config: {
   auth: RpcAuthLevel;
   readOnly?: boolean;
   summary: string;
-  paramsSchema: ZodType<TParams>;
+  paramsSchema: TParams;
   resultSchema: ZodType<TResult>;
-  handler: (ctx: RpcContext, params: TParams) => MaybePromise<TResult>;
-}): RpcMethodDefinition<TParams, TResult> {
+  handler: (ctx: RpcContext, params: output<TParams>) => MaybePromise<TResult>;
+}) {
   return {
-    kind: "method",
+    kind: "method" as const,
     auth: config.auth,
     readOnly: Boolean(config.readOnly),
     summary: config.summary,
@@ -40,14 +42,39 @@ export function defineMethod<TParams, TResult>(config: {
   };
 }
 
-export function defineRouter(routes: Record<string, RpcNode>): RpcRouterDefinition {
+export function defineRouter<const TRoutes extends Record<string, RpcNode>>(
+  routes: TRoutes,
+): RpcRouterDefinition<TRoutes> {
   return {
     kind: "router",
     routes,
   };
 }
 
-export function flattenRouter(node: RpcNode, prefix = ""): Record<string, RpcMethodDefinition<any, any>> {
+export async function executeMethod<TParams, TResult>(
+  method: RpcMethodDefinition<TParams, TResult>,
+  ctx: RpcContext,
+  params: Record<string, unknown>,
+): Promise<TResult> {
+  if (
+    method.auth !== "public" &&
+    (!ctx.session || (method.auth === "admin" && ctx.session.is_admin !== 1))
+  ) {
+    throw new RpcError(
+      ctx.session ? -32003 : -32001,
+      ctx.session ? "Forbidden" : "Unauthorized",
+    );
+  }
+  return parseMethodResult(
+    method,
+    await method.handler(ctx, parseMethodParams(method, params)),
+  );
+}
+
+export function flattenRouter(
+  node: RpcNode,
+  prefix = "",
+): Record<string, RpcMethodDefinition<any, any>> {
   if (node.kind === "method") {
     if (!prefix) {
       throw new Error("Cannot flatten a method without a name");
@@ -63,7 +90,10 @@ export function flattenRouter(node: RpcNode, prefix = ""): Record<string, RpcMet
   return flat;
 }
 
-export function parseMethodParams<TParams>(method: RpcMethodDefinition<TParams>, rawParams: Record<string, unknown>): TParams {
+export function parseMethodParams<TParams>(
+  method: RpcMethodDefinition<TParams>,
+  rawParams: Record<string, unknown>,
+): TParams {
   try {
     return method.paramsSchema.parse(rawParams);
   } catch (error) {
@@ -80,7 +110,10 @@ export function parseMethodParams<TParams>(method: RpcMethodDefinition<TParams>,
   }
 }
 
-export function parseMethodResult<TResult>(method: RpcMethodDefinition<any, TResult>, rawResult: unknown): TResult {
+export function parseMethodResult<TResult>(
+  method: RpcMethodDefinition<any, TResult>,
+  rawResult: unknown,
+): TResult {
   try {
     return method.resultSchema.parse(rawResult);
   } catch (error) {

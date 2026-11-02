@@ -11,3 +11,4 @@ podible.sqlite
 podible.sqlite-shm
 podible.sqlite-wal
 outputs/
+web/dist/

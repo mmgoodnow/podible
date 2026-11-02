@@ -6,6 +6,8 @@
   "packageManager": "bun@1.4.4",
   "scripts": {
     "start": "bun run server.ts",
+    "dev": "bun --watch dev.ts",
+    "build": "bun run scripts/build-web.ts",
     "dev-login": "bun run scripts/dev-login.ts",
     "validate:runtime-scripts": "bun run scripts/validate-runtime-scripts.ts",
     "red-rising-dashboard": "bun run scripts/red-rising-dashboard.ts",
@@ -15,7 +17,7 @@
     "export-prod-corpus-case": "bun run scripts/export-prod-corpus-case.ts",
     "compare-curation-modes": "bun run scripts/compare-curation-modes.ts",
     "test": "bun test",
-    "typecheck": "bun check"
+    "typecheck": "bun check && bun check -p web"
   },
   "dependencies": {
     "@leeoniya/ufuzzy": "^1.0.19",

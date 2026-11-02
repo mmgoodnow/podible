@@ -1,0 +1,9 @@
+.git
+.env*
+node_modules
+tmp
+data
+books
+web/dist
+.playwright-cli
+test

@@ -8,5 +8,5 @@ test("runtime, CI and package manager use the same Bun release with native check
   expect(docker).toContain(`FROM oven/bun:${version}`);
   expect(workflow).toContain(`bun-version: ${version}`);
   expect(workflow).toContain("needs: verify");
-  expect(pkg.scripts.typecheck).toBe("bun check");
+  expect(pkg.scripts.typecheck).toBe("bun check && bun check -p web");
 });
