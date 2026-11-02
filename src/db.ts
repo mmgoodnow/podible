@@ -1110,6 +1110,12 @@ export function runMigrations(db: Database): void {
     ); CREATE INDEX idx_job_commands_job ON job_commands(job_id, id);`);
   });
   apply(35, () => db.exec(MOVIES_SCHEMA_SQL));
+  apply(36, () => db.exec(`CREATE TABLE movie_publications (
+    target_id INTEGER PRIMARY KEY REFERENCES movie_targets(id),
+    version_id INTEGER NOT NULL REFERENCES movie_versions(id),
+    expected_revision INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+  );`));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

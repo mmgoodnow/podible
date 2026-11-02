@@ -13,6 +13,7 @@ import {
   type MovieFacts,
   type MovieQualityPolicy,
 } from "./quality";
+import { assessMovieUpgrade, evaluateMovieQuality } from "./quality";
 
 export type MovieTarget = {
   id: number;
@@ -321,5 +322,59 @@ export class MovieRepo {
         .query("UPDATE movie_acquisitions SET finished_at=? WHERE id=?")
         .run(new Date().toISOString(), id),
     );
+  }
+  publications() {
+    return this.db
+      .query(
+        "SELECT target_id,version_id,expected_revision FROM movie_publications ORDER BY target_id",
+      )
+      .all() as {
+      target_id: number;
+      version_id: number;
+      expected_revision: number;
+    }[];
+  }
+  stagePublication(targetId: number, versionId: number): void {
+    this.transaction(() => {
+      const target = this.target(targetId);
+      const version = this.version(versionId);
+      const owner = this.db
+        .query("SELECT movie_id FROM movie_versions WHERE id=?")
+        .get(versionId) as { movie_id: number } | null;
+      if (!target || !version || owner?.movie_id !== target.movie_id)
+        throw new Error("Invalid movie publication identity");
+      const policy = movieQualityPolicySchema.parse(
+        JSON.parse(target.policy_json),
+      );
+      if (
+        evaluateMovieQuality(policy, version.facts).eligibility !== "eligible"
+      )
+        throw new Error("Version does not satisfy quality policy");
+      if (target.active_version_id && target.active_version_id !== versionId) {
+        const current = this.version(target.active_version_id)!;
+        if (!assessMovieUpgrade(policy, current.facts, version.facts).upgrade)
+          throw new Error("Replacement is not an upgrade");
+      }
+      const prior = this.publications().find(
+        (entry) => entry.target_id === targetId,
+      );
+      if (prior && prior.version_id !== versionId)
+        throw new Error("Another publication is pending");
+      if (!prior)
+        this.db
+          .query("INSERT INTO movie_publications VALUES(?,?,?,?)")
+          .run(targetId, versionId, target.revision, new Date().toISOString());
+    });
+  }
+  clearPublication(targetId: number, versionId: number): void {
+    this.transaction(() => {
+      if (this.target(targetId)?.active_version_id !== versionId)
+        throw new Error("Cannot retire an unpromoted publication");
+      this.db
+        .query(
+          "DELETE FROM movie_publications WHERE target_id=? AND version_id=?",
+        )
+        .run(targetId, versionId);
+    });
   }
 }
