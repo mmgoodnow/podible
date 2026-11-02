@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type { AppSettings } from "../app-types";
+import { defaultMovieSettings, movieSettingsSchema } from "../movies/settings";
 
 const emptyToUndefined = (value: unknown) => {
   if (value === undefined || value === null || value === "") return undefined;
@@ -56,6 +57,7 @@ export const jobTypeSchema = z.enum([
 ]);
 
 export const appSettingsSchema: z.ZodType<AppSettings> = z.object({
+  movies: movieSettingsSchema.default(defaultMovieSettings()),
   torznab: z.array(
     z.object({
       name: z.string(),

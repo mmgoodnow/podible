@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import path from "node:path";
+import { MovieRepo } from "./movies/repo";
 
 import { nowIso, finalizeJobJournalMigration } from "./db";
 import { randomUUID } from "node:crypto";
@@ -235,6 +236,9 @@ function assertPositiveInt(value: number): void {
 }
 
 export class BooksRepo {
+  get movies() {
+    return new MovieRepo(this.db, this.beforeWrite, (id) => this.getJob(id));
+  }
   constructor(
     private readonly db: Database,
     private readonly beforeWrite: () => void = () => {},

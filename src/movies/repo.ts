@@ -1,0 +1,325 @@
+import type { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
+import type { JobRow } from "../app-types";
+import {
+  catalogMovieSchema,
+  type CatalogMovie,
+  type Movie,
+  type MovieStage,
+} from "./types";
+import {
+  movieFactsSchema,
+  movieQualityPolicySchema,
+  type MovieFacts,
+  type MovieQualityPolicy,
+} from "./quality";
+
+export type MovieTarget = {
+  id: number;
+  movie_id: number;
+  policy_json: string;
+  active_version_id: number | null;
+  revision: number;
+};
+export type MovieAcquisition = {
+  id: number;
+  target_id: number;
+  reason: "initial" | "upgrade" | "recovery";
+  job_id: number | null;
+  decision_json: string | null;
+  finished_at: string | null;
+};
+export class MovieRepo {
+  constructor(
+    private db: Database,
+    private beforeWrite: () => void,
+    private getJob: (id: number) => JobRow | null,
+  ) {}
+  transaction<T>(fn: () => T): T {
+    return this.db.transaction(() => {
+      this.beforeWrite();
+      return fn();
+    })();
+  }
+  upsertMovie(input: CatalogMovie): Movie {
+    const metadata = catalogMovieSchema.parse(input);
+    return this.transaction(() => {
+      const row = this.db
+        .query(
+          `INSERT INTO movies(tmdb_id,metadata_json,updated_at) VALUES(?,?,?)
+        ON CONFLICT(tmdb_id) DO UPDATE SET metadata_json=excluded.metadata_json,updated_at=excluded.updated_at RETURNING id`,
+        )
+        .get(
+          metadata.tmdbId,
+          JSON.stringify(metadata),
+          new Date().toISOString(),
+        ) as { id: number };
+      return { id: row.id, ...metadata };
+    });
+  }
+  movie(id: number): Movie | null {
+    const row = this.db
+      .query("SELECT id,metadata_json FROM movies WHERE id=?")
+      .get(id) as { id: number; metadata_json: string } | null;
+    return row
+      ? {
+          id: row.id,
+          ...catalogMovieSchema.parse(JSON.parse(row.metadata_json)),
+        }
+      : null;
+  }
+  movieByTmdb(tmdbId: number): Movie | null {
+    const row = this.db
+      .query("SELECT id FROM movies WHERE tmdb_id=?")
+      .get(tmdbId) as { id: number } | null;
+    return row ? this.movie(row.id) : null;
+  }
+  target(id: number): MovieTarget | null {
+    return this.db
+      .query("SELECT * FROM movie_targets WHERE id=?")
+      .get(id) as MovieTarget | null;
+  }
+  targets(): MovieTarget[] {
+    return this.db
+      .query("SELECT * FROM movie_targets ORDER BY id")
+      .all() as MovieTarget[];
+  }
+  request(userId: number, movie: CatalogMovie, rawPolicy: MovieQualityPolicy) {
+    const policy = movieQualityPolicySchema.parse(rawPolicy);
+    const policyJson = JSON.stringify(policy);
+    const key = createHash("sha256").update(policyJson).digest("hex");
+    return this.transaction(() => {
+      const stored = this.upsertMovie(movie);
+      const target = this.db
+        .query(
+          `INSERT INTO movie_targets(movie_id,policy_key,policy_json,created_at) VALUES(?,?,?,?)
+        ON CONFLICT(movie_id,policy_key) DO UPDATE SET policy_key=excluded.policy_key RETURNING *`,
+        )
+        .get(
+          stored.id,
+          key,
+          policyJson,
+          new Date().toISOString(),
+        ) as MovieTarget;
+      const request = this.db
+        .query(
+          `INSERT INTO movie_requests(user_id,target_id,created_at) VALUES(?,?,?)
+        ON CONFLICT(user_id,target_id) DO UPDATE SET target_id=excluded.target_id RETURNING id`,
+        )
+        .get(userId, target.id, new Date().toISOString()) as { id: number };
+      this.event(
+        target.id,
+        null,
+        `request:${request.id}`,
+        "requested",
+        "Movie requested",
+      );
+      return { requestId: request.id, targetId: target.id, movieId: stored.id };
+    });
+  }
+  requests(userId: number) {
+    return this.db
+      .query(
+        "SELECT id,target_id AS targetId,created_at AS createdAt FROM movie_requests WHERE user_id=? ORDER BY id DESC",
+      )
+      .all(userId) as { id: number; targetId: number; createdAt: string }[];
+  }
+  canAccessTarget(userId: number, targetId: number): boolean {
+    return Boolean(
+      this.db
+        .query("SELECT 1 FROM movie_requests WHERE user_id=? AND target_id=?")
+        .get(userId, targetId),
+    );
+  }
+  acquisition(id: number): MovieAcquisition | null {
+    return this.db
+      .query("SELECT * FROM movie_acquisitions WHERE id=?")
+      .get(id) as MovieAcquisition | null;
+  }
+  acquisitions(targetId: number): MovieAcquisition[] {
+    return this.db
+      .query(
+        "SELECT * FROM movie_acquisitions WHERE target_id=? ORDER BY id DESC",
+      )
+      .all(targetId) as MovieAcquisition[];
+  }
+  startAcquisition(
+    targetId: number,
+    reason: MovieAcquisition["reason"],
+    enqueue: (acquisitionId: number) => number,
+  ) {
+    return this.transaction(() => {
+      if (!this.target(targetId)) throw new Error("Unknown movie target");
+      const existing = this.acquisitions(targetId).find((entry) => {
+        if (entry.finished_at) return false;
+        const job = entry.job_id === null ? null : this.getJob(entry.job_id);
+        return !job || job.status === "queued" || job.status === "running";
+      });
+      if (existing) return { acquisition: existing, shared: true };
+      const row = this.db
+        .query(
+          "INSERT INTO movie_acquisitions(target_id,reason,created_at) VALUES(?,?,?) RETURNING id",
+        )
+        .get(targetId, reason, new Date().toISOString()) as { id: number };
+      const jobId = enqueue(row.id);
+      this.db
+        .query("UPDATE movie_acquisitions SET job_id=? WHERE id=?")
+        .run(jobId, row.id);
+      return { acquisition: this.acquisition(row.id)!, shared: false };
+    });
+  }
+  decision(id: number, value: unknown): void {
+    this.transaction(() =>
+      this.db
+        .query("UPDATE movie_acquisitions SET decision_json=? WHERE id=?")
+        .run(JSON.stringify(value), id),
+    );
+  }
+  event(
+    targetId: number,
+    acquisitionId: number | null,
+    key: string,
+    stage: MovieStage,
+    message: string,
+  ): void {
+    this.transaction(() =>
+      this.db
+        .query(
+          `INSERT INTO movie_events(target_id,acquisition_id,event_key,stage,message,created_at)
+      VALUES(?,?,?,?,?,?) ON CONFLICT(event_key) DO NOTHING`,
+        )
+        .run(
+          targetId,
+          acquisitionId,
+          key,
+          stage,
+          message,
+          new Date().toISOString(),
+        ),
+    );
+  }
+  events(targetId: number) {
+    return this.db
+      .query(
+        "SELECT id,stage,message,created_at AS createdAt FROM movie_events WHERE target_id=? ORDER BY id",
+      )
+      .all(targetId) as {
+      id: number;
+      stage: MovieStage;
+      message: string;
+      createdAt: string;
+    }[];
+  }
+  version(id: number): {
+    id: number;
+    facts: MovieFacts;
+    files: {
+      id: string;
+      relativePath: string;
+      sizeBytes: number;
+      probe: unknown;
+    }[];
+  } | null {
+    const row = this.db
+      .query("SELECT id,facts_json FROM movie_versions WHERE id=?")
+      .get(id) as { id: number; facts_json: string } | null;
+    if (!row) return null;
+    const files = this.db
+      .query(
+        `SELECT f.* FROM managed_content_files f JOIN movie_version_files v ON v.file_id=f.id
+      WHERE v.version_id=? ORDER BY v.sequence`,
+      )
+      .all(id) as {
+      id: string;
+      relative_path: string;
+      size_bytes: number;
+      probe_json: string;
+    }[];
+    return {
+      id: row.id,
+      facts: movieFactsSchema.parse(JSON.parse(row.facts_json)),
+      files: files.map((f) => ({
+        id: f.id,
+        relativePath: f.relative_path,
+        sizeBytes: f.size_bytes,
+        probe: JSON.parse(f.probe_json),
+      })),
+    };
+  }
+  recordVersion(
+    acquisitionId: number,
+    rawFacts: MovieFacts,
+    files: {
+      id: string;
+      relativePath: string;
+      sizeBytes: number;
+      probe: unknown;
+    }[],
+  ): number {
+    const facts = movieFactsSchema.parse(rawFacts);
+    if (!files.length) throw new Error("A movie version needs content files");
+    return this.transaction(() => {
+      const acquisition = this.acquisition(acquisitionId);
+      const target = acquisition && this.target(acquisition.target_id);
+      if (!target) throw new Error("Unknown acquisition");
+      const prior = this.db
+        .query("SELECT id FROM movie_versions WHERE acquisition_id=?")
+        .get(acquisitionId) as { id: number } | null;
+      if (prior) return prior.id;
+      const now = new Date().toISOString();
+      const version = this.db
+        .query(
+          "INSERT INTO movie_versions(movie_id,acquisition_id,facts_json,created_at) VALUES(?,?,?,?) RETURNING id",
+        )
+        .get(target.movie_id, acquisitionId, JSON.stringify(facts), now) as {
+        id: number;
+      };
+      for (const [index, file] of files.entries()) {
+        this.db
+          .query(
+            "INSERT INTO managed_content_files(id,relative_path,size_bytes,probe_json,created_at) VALUES(?,?,?,?,?)",
+          )
+          .run(
+            file.id,
+            file.relativePath,
+            file.sizeBytes,
+            JSON.stringify(file.probe),
+            now,
+          );
+        this.db
+          .query("INSERT INTO movie_version_files VALUES(?,?,?)")
+          .run(version.id, file.id, index);
+      }
+      return version.id;
+    });
+  }
+  selectVersion(
+    targetId: number,
+    versionId: number,
+    expectedRevision: number,
+  ): void {
+    this.transaction(() => {
+      const target = this.target(targetId);
+      const version = this.db
+        .query("SELECT movie_id FROM movie_versions WHERE id=?")
+        .get(versionId) as { movie_id: number } | null;
+      if (!target || version?.movie_id !== target.movie_id)
+        throw new Error("Version belongs to another movie");
+      if (target.active_version_id === versionId) return;
+      const changed = this.db
+        .query(
+          "UPDATE movie_targets SET active_version_id=?,revision=revision+1 WHERE id=? AND revision=?",
+        )
+        .run(versionId, targetId, expectedRevision);
+      if (changed.changes !== 1)
+        throw new Error("Movie target changed during publication");
+    });
+  }
+  finishAcquisition(id: number): void {
+    this.transaction(() =>
+      this.db
+        .query("UPDATE movie_acquisitions SET finished_at=? WHERE id=?")
+        .run(new Date().toISOString(), id),
+    );
+  }
+}

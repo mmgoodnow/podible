@@ -43,6 +43,22 @@ export const movieQualityPolicySchema = z
   })
   .strict();
 export type MovieQualityPolicy = z.infer<typeof movieQualityPolicySchema>;
+export const defaultMovieQualityPolicy: MovieQualityPolicy = {
+  tiers: [
+    { source: "hdtv", resolution: 720 },
+    { source: "web", resolution: 720 },
+    { source: "bluray", resolution: 720 },
+    { source: "web", resolution: 1080 },
+    { source: "bluray", resolution: 1080 },
+  ],
+  cut: "theatrical",
+  audioLanguages: ["en"],
+  allowedCodecs: ["h264", "hevc", "av1"],
+  preferredCodecs: [],
+  allowHdr: false,
+  minimumPreferenceGain: 10,
+  preferProper: true,
+};
 export const movieFactsSchema = z
   .object({
     identityVerified: z.boolean(),

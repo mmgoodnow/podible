@@ -1,4 +1,5 @@
 import type { AppSettings } from "./app-types";
+import { defaultMovieSettings, movieSettingsSchema } from "./movies/settings";
 
 type SettingsOverrides = Partial<Omit<AppSettings, "rtorrent" | "polling" | "recovery" | "feed" | "auth" | "agents" | "notifications">> & {
   rtorrent?: Partial<AppSettings["rtorrent"]>;
@@ -16,6 +17,7 @@ type SettingsOverrides = Partial<Omit<AppSettings, "rtorrent" | "polling" | "rec
 
 export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
   const defaults: AppSettings = {
+    movies: defaultMovieSettings(),
     torznab: [],
     rtorrent: {
       transport: "http-xmlrpc",
@@ -64,6 +66,7 @@ export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
   return {
     ...defaults,
     ...overrides,
+    movies: movieSettingsSchema.parse(overrides?.movies ?? defaults.movies),
     rtorrent: {
       ...defaults.rtorrent,
       ...(overrides?.rtorrent ?? {}),
@@ -129,6 +132,7 @@ export function parseSettings(value: string): AppSettings {
   return {
     ...defaults,
     ...parsed,
+    movies: movieSettingsSchema.parse(parsed.movies ?? {}),
     torznab: Array.isArray(parsed.torznab) ? parsed.torznab : defaults.torznab,
     rtorrent: {
       ...defaults.rtorrent,

@@ -43,6 +43,7 @@ export type TorznabSource = {
 };
 
 export type AppSettings = {
+  movies: import("./movies/settings").MovieSettings;
   torznab: TorznabSource[];
   rtorrent: {
     transport: "http-xmlrpc";

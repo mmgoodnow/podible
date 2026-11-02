@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 
 import { Database } from "bun:sqlite";
+import { MOVIES_SCHEMA_SQL } from "./movies/schema";
 
 const SCHEMA_MIGRATION_ID = 1;
 const GUID_MIGRATION_ID = 2;
@@ -1108,6 +1109,7 @@ export function runMigrations(db: Database): void {
       created_at TEXT NOT NULL
     ); CREATE INDEX idx_job_commands_job ON job_commands(job_id, id);`);
   });
+  apply(35, () => db.exec(MOVIES_SCHEMA_SQL));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */
