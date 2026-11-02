@@ -1486,6 +1486,58 @@ describe("podible http", () => {
     db.close();
   });
 
+  test("catalog failures are errors in RPC and the web page, not empty search results", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input: unknown) => new Response("Internal Server Error", { status: 500 })) as typeof fetch;
+    const db = new Database(":memory:");
+    try {
+      runMigrations(db);
+      const repo = new BooksRepo(db);
+      repo.ensureSettings();
+      const handler = createPodibleFetchHandler(repo, Date.now());
+      const cookie = createBrowserSessionCookie(repo, { username: "reader" });
+      const found = await rpc(handler, "openlibrary.search", { q: "one day", limit: 50 }, 1, { cookie });
+      expect(found.error.code).toBe(-32000);
+      expect(found.error.message).toContain("Open Library search failed (HTTP 500)");
+      expect(found.result).toBeUndefined();
+
+      const page = await handler(new Request("http://localhost/add?q=one%20day", { headers: { cookie } }));
+      const html = await page.text();
+      expect(html).toContain("Search failed: Open Library search failed (HTTP 500)");
+      expect(html).not.toContain("No matches for");
+    } finally {
+      globalThis.fetch = originalFetch;
+      db.close();
+    }
+  });
+
+  test("catalog RPC returns fallback results after a large upstream search fails", async () => {
+    const originalFetch = globalThis.fetch;
+    const limits: string[] = [];
+    globalThis.fetch = (async (input: unknown) => {
+      const limit = new URL(String(input)).searchParams.get("limit")!;
+      limits.push(limit);
+      return limit === "50" ? new Response("Internal Server Error", { status: 500 }) : Response.json({
+        docs: [{ key: "/works/OL123W", title: "One Day", author_name: ["David Nicholls"] }],
+      });
+    }) as typeof fetch;
+    const db = new Database(":memory:");
+    try {
+      runMigrations(db);
+      const repo = new BooksRepo(db);
+      repo.ensureSettings();
+      const handler = createPodibleFetchHandler(repo, Date.now());
+      const cookie = createBrowserSessionCookie(repo, { username: "reader" });
+      const found = await rpc(handler, "openlibrary.search", { q: "one day", limit: 50 }, 1, { cookie });
+      expect(found.error).toBeUndefined();
+      expect(found.result.results).toMatchObject([{ title: "One Day", author: "David Nicholls" }]);
+      expect(limits).toEqual(["50", "10"]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      db.close();
+    }
+  });
+
   test("supports rpc openlibrary.search and add-by-key-from-search flow", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown) => {

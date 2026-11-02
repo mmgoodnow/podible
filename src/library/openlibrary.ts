@@ -105,6 +105,8 @@ const SEARCH_FIELDS = [
 ].join(",");
 
 const OPEN_LIBRARY_PREFERRED_LANGUAGE = "en";
+const OPEN_LIBRARY_SEARCH_TIMEOUT_MS = 15_000;
+const OPEN_LIBRARY_SEARCH_RETRY_LIMIT = 10;
 
 function normalizeOpenLibraryKey(value: string): string | null {
   const trimmed = value.trim();
@@ -152,10 +154,43 @@ async function fetchSearchDocs(params: Record<string, string>): Promise<OpenLibr
     }
   }
 
-  const response = await fetch(url, { method: "GET" });
-  if (!response.ok) return [];
-  const payload = (await response.json()) as OpenLibraryResponse;
-  return payload.docs ?? [];
+  const retryLimit = String(Math.min(Number(params.limit ?? OPEN_LIBRARY_SEARCH_RETRY_LIMIT), OPEN_LIBRARY_SEARCH_RETRY_LIMIT));
+  // Large edition-enriched searches can fail upstream while a smaller page works.
+  // Only the first attempt may retry, so a persistent outage cannot loop.
+  for (let attempt = 0; ; attempt++) {
+    let response: Response;
+    try {
+      response = await fetch(url, { method: "GET", signal: AbortSignal.timeout(OPEN_LIBRARY_SEARCH_TIMEOUT_MS) });
+    } catch (cause) {
+      console.warn(`[openlibrary] search network failure limit=${url.searchParams.get("limit")} retryLimit=${attempt === 0 ? retryLimit : "none"}`);
+      if (attempt === 0) {
+        url.searchParams.set("limit", retryLimit);
+        continue;
+      }
+      throw new Error("Open Library search could not be reached. Please try again.", { cause });
+    }
+
+    if (!response.ok) {
+      const retry = attempt === 0 && (response.status === 408 || response.status >= 500);
+      console.warn(`[openlibrary] search failed status=${response.status} limit=${url.searchParams.get("limit")} retryLimit=${retry ? retryLimit : "none"}`);
+      await response.body?.cancel().catch(() => {});
+      if (retry) {
+        url.searchParams.set("limit", retryLimit);
+        continue;
+      }
+      throw new Error(`Open Library search failed (HTTP ${response.status}). Please try again.`);
+    }
+
+    let payload: OpenLibraryResponse;
+    try {
+      payload = (await response.json()) as OpenLibraryResponse;
+      if (!Array.isArray(payload?.docs)) throw new Error("Missing search documents");
+    } catch (cause) {
+      console.warn("[openlibrary] search returned an invalid response");
+      throw new Error("Open Library search returned an invalid response. Please try again.", { cause });
+    }
+    return payload.docs;
+  }
 }
 
 async function fetchSeriesName(seriesKey: string): Promise<string | null> {
