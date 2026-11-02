@@ -10,6 +10,7 @@ const entrySchema = z.object({
   poster_path: z.string().nullable().optional(),
   original_language: z.string(),
   imdb_id: z.string().nullable().optional(),
+  runtime: z.number().nullable().optional(),
 });
 function normalize(raw: z.infer<typeof entrySchema>): CatalogMovie {
   const year = Number(raw.release_date?.slice(0, 4));
@@ -25,6 +26,7 @@ function normalize(raw: z.infer<typeof entrySchema>): CatalogMovie {
         ? `https://image.tmdb.org/t/p/w342${raw.poster_path}`
         : null,
     imdbId: raw.imdb_id ?? null,
+    runtimeMinutes: raw.runtime && raw.runtime > 0 ? raw.runtime : null,
   };
 }
 export class CatalogUnavailableError extends Error {
@@ -44,7 +46,10 @@ export class TmdbCatalog implements MovieCatalog {
   private cache = new Map<string, { until: number; value: unknown }>();
   constructor(
     private token: string,
-    private fetcher: (url: string, init?: RequestInit) => Promise<Response> = fetch,
+    private fetcher: (
+      url: string,
+      init?: RequestInit,
+    ) => Promise<Response> = fetch,
   ) {}
   private async json(route: string): Promise<unknown> {
     if (!this.token.trim())

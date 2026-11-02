@@ -23,6 +23,7 @@ const listingSchema = z.object({
   }),
 });
 export class PlexMovieLibrary implements MovieLibrary {
+  private lastScan = 0;
   constructor(
     private settings: { url: string; token: string; sectionId: string },
   ) {
@@ -48,7 +49,31 @@ export class PlexMovieLibrary implements MovieLibrary {
     return response;
   }
   async scan(): Promise<void> {
+    const sectionSchema = z.object({
+      MediaContainer: z.object({
+        Directory: z
+          .array(
+            z.object({ key: z.string(), refreshing: z.boolean().optional() }),
+          )
+          .default([]),
+      }),
+    });
+    const sections = sectionSchema.parse(
+      await (await this.request("/library/sections")).json(),
+    ).MediaContainer.Directory;
+    const section = sections.find(
+      (entry) => entry.key === this.settings.sectionId,
+    );
+    if (!section)
+      throw new Error("Configured Plex movie library does not exist");
+    // Indexing and background analysis complete independently. Never block
+    // verify() on an unrelated thumbnail/codec job, or restart a live scan.
+    if (section.refreshing) return;
+    // Plex can return 200 for a path-scoped refresh without discovering new
+    // title folders. Coalesce section scans; readiness still requires verify().
+    if (Date.now() - this.lastScan < 10_000) return;
     await this.request(`/library/sections/${this.settings.sectionId}/refresh`);
+    this.lastScan = Date.now();
   }
   async verify(movie: Movie, serverVisiblePaths: string[]): Promise<boolean> {
     const expected = new Set(serverVisiblePaths);

@@ -6,6 +6,7 @@ export const movieSettingsSchema = z
     enabled: z.boolean().default(false),
     tmdbAccessToken: z.string().default(""),
     managedRoot: z.string().default(""),
+    downloadGroupId: z.number().int().nonnegative().nullable().default(null),
     plexUrl: z.string().default(""),
     plexToken: z.string().default(""),
     plexSectionId: z.string().default(""),

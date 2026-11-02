@@ -19,6 +19,32 @@ export async function reconcileMovies(ctx: WorkerContext): Promise<"done"> {
   await assertMovieStorage(ctx.repo, roots.contentRoot);
   const services =
     ctx.movieServices ?? configuredMovieServices(settings, ctx.modelProvider);
+  for (const target of ctx.repo.movies.targets()) {
+    if (ctx.repo.movies.activeRequestCount(target.id)) continue;
+    for (const torrent of ctx.repo.movies.downloads(target.id)) {
+      if (
+        torrent.client_id !== services.client.id ||
+        ctx.repo.movies.activeTorrentDemand(torrent.id)
+      )
+        continue;
+      await durableStep(
+        ctx,
+        `movies:pause-unrequested:${torrent.id}`,
+        async () => {
+          active();
+          if (!ctx.repo.movies.activeTorrentDemand(torrent.id)) {
+            const ref = {
+              clientId: torrent.client_id,
+              nativeId: torrent.native_id,
+            };
+            // Withdrawal is not permission to stop seeding completed data.
+            if (!(await services.client.inspect(ref)).complete)
+              await services.client.quiesce(ref);
+          }
+        },
+      );
+    }
+  }
   const pending = await durableStep(ctx, "movies:pending", () =>
     ctx.repo.movies.publications(),
   );

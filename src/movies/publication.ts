@@ -7,7 +7,7 @@ import {
 } from "../media/library-view";
 
 export interface MovieLibrary {
-  scan(): Promise<void>;
+  scan(paths?: string[]): Promise<void>;
   verify(movie: Movie, serverVisiblePaths: string[]): Promise<boolean>;
 }
 export type MovieViewRoots = {
@@ -138,7 +138,7 @@ export async function publishMovieVersion(input: {
       .map((entry) =>
         path.posix.join(roots.serverViewRoot, entry.relativePath),
       );
-    await library.scan();
+    await library.scan(paths);
     if (!(await library.verify(movie, paths)))
       throw new Error(
         "Plex has not verified the expected movie and content paths; previous version remains active",

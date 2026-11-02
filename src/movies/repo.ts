@@ -250,6 +250,18 @@ export class MovieRepo {
         .run(JSON.stringify(snapshot), id),
     );
   }
+  activeTorrentDemand(id: number): number {
+    return (
+      this.db
+        .query(
+          `SELECT COUNT(DISTINCT r.id) AS n FROM movie_requests r
+      JOIN movie_acquisitions a ON a.target_id=r.target_id
+      JOIN movie_acquisition_downloads d ON d.acquisition_id=a.id
+      WHERE d.torrent_id=? AND r.withdrawn_at IS NULL`,
+        )
+        .get(id) as { n: number }
+    ).n;
+  }
   downloads(targetId: number) {
     return this.db
       .query(

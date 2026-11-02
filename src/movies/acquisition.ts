@@ -17,6 +17,7 @@ import { factsFromMovieProbe } from "./probe";
 import { publishMovieVersion } from "./publication";
 import type { MovieOffer } from "./offers";
 import type { MovieServices, MovieFileCandidate } from "./operations";
+import { movieUpstreamStep } from "./upstream";
 
 export const movieAcquisitionPayloadSchema = z.object({
   acquisitionId: z.number().int().positive(),
@@ -124,7 +125,7 @@ export async function acquireMovie(
         ? "Searching for another release; previous downloads are retained"
         : "Searching movie releases",
     );
-    const search = await durableStep(ctx, `${prefix}:search`, () =>
+    const search = await movieUpstreamStep(ctx, `${prefix}:search`, async () =>
       attempt === 0 && manual?.manualOffer
         ? { offers: [manual.manualOffer], warnings: [] }
         : services.search(movie),
@@ -207,7 +208,7 @@ export async function acquireMovie(
       );
       continue;
     }
-    const encoded = await durableStep(ctx, `${prefix}:metainfo`, async () =>
+    const encoded = await movieUpstreamStep(ctx, `${prefix}:metainfo`, async () =>
       Buffer.from(await services.fetchMetainfo(offer)).toString("base64"),
     );
     const metainfo = Buffer.from(encoded, "base64");
@@ -237,6 +238,10 @@ export async function acquireMovie(
       await fs.mkdir(sourceRoot, { recursive: true });
       if ((await fs.realpath(sourceRoot)) !== sourceRoot)
         throw new Error("Download layout traverses a symlink");
+      if (settings.movies.downloadGroupId !== null) {
+        await fs.chown(sourceRoot, -1, settings.movies.downloadGroupId);
+        await fs.chmod(sourceRoot, 0o2770);
+      }
       const added = await services.client.ensureAdded({
         metainfo,
         location: binding.location,
@@ -293,7 +298,7 @@ export async function acquireMovie(
       )
         break;
       const interval =
-        services.timing?.pollMs ?? Math.max(1000, settings.polling.rtorrentMs);
+        services.timing?.pollMs ?? Math.max(5000, settings.polling.rtorrentMs);
       if (ctx.execution)
         await ctx.execution.sleep(`${prefix}:wait:${poll}`, interval);
       else await Bun.sleep(interval);

@@ -23,6 +23,15 @@ export function queueMovieAcquisition(
         }).id,
     );
     if (!queued.shared) {
+      repo.movies.event(
+        targetId,
+        queued.acquisition.id,
+        `acquisition:${queued.acquisition.id}:queued`,
+        "requested",
+        reason === "upgrade"
+          ? "Upgrade check queued; current version remains available"
+          : "Acquisition queued",
+      );
       if (manualOffer)
         repo.movies.decision(queued.acquisition.id, { manualOffer });
       for (const publication of repo.movies
@@ -61,14 +70,19 @@ export function movieRequestView(repo: BooksRepo, requestId: number) {
     ? ("withdrawn" as const)
     : available
       ? ("available" as const)
-      : job?.status === "failed" ||
-          job?.status === "cancelled" ||
-          acquisition?.finished_at ||
-          latest?.stage === "blocked"
-        ? ("blocked" as const)
-        : job?.status === "running"
+      : !acquisition?.finished_at &&
+          (job?.status === "queued" || job?.status === "running")
+        ? job.status === "running"
           ? ("running" as const)
-          : ("queued" as const);
+          : ("queued" as const)
+        : job?.status === "failed" ||
+            job?.status === "cancelled" ||
+            acquisition?.finished_at ||
+            latest?.stage === "blocked"
+          ? ("blocked" as const)
+          : job?.status === "running"
+            ? ("running" as const)
+            : ("queued" as const);
   const observation = repo.movies.downloads(target.id)[0]?.observation_json;
   const snapshot = observation
     ? (JSON.parse(observation) as TorrentSnapshot)

@@ -10,6 +10,7 @@ export const movieSchema = z.object({
   posterUrl: z.string().nullable(),
   originalLanguage: z.string(),
   imdbId: z.string().nullable(),
+  runtimeMinutes: z.number().positive().nullable().optional(),
 });
 export const catalogMovieSchema = movieSchema.omit({ id: true });
 export type CatalogMovie = z.infer<typeof catalogMovieSchema>;

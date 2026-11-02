@@ -188,6 +188,12 @@ export const movieRequestsRouter = defineRouter({
                 a.job_id,
                 "All movie requests withdrawn",
               );
+          if (!request.withdrawn_at)
+            ctx.repo.createJob({
+              type: "movie_reconcile",
+              idempotencyKey: `movie-withdrawal:${request.id}:${request.created_at}`,
+              maxAttempts: 2,
+            });
         }
       });
       return { request: movieRequestView(ctx.repo, input.requestId) };

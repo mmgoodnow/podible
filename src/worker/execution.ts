@@ -121,7 +121,7 @@ export async function createJobExecutionRuntime(
     createWorkflow(
       {
         name: `media-${type}-v1` as const,
-        concurrency: type === "acquire" ? 1 : type === "import" || type === "chapter_analysis" ? 2 : 16,
+        concurrency: type === "acquire" || type === "movie_reconcile" ? 1 : type === "import" || type === "chapter_analysis" || type === "movie_acquire" ? 2 : 16,
         input: z.object({ jobId: z.number().int().positive(), generation: z.number().int().nonnegative().default(0) }),
         maxOperations: 200_000
       },

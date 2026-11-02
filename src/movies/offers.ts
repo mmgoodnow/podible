@@ -71,10 +71,12 @@ export class MovieIndexers {
       throw new MovieIndexerError("No indexers are configured");
     const offers: MovieOffer[] = [];
     const warnings: string[] = [];
+    const retryAt: number[] = [];
     let successes = 0;
     for (const source of this.sources) {
       const key = source.baseUrl;
       if ((this.backoff.get(key) ?? 0) > Date.now()) {
+        retryAt.push(this.backoff.get(key)!);
         warnings.push(`${source.name}: waiting for indexer backoff`);
         continue;
       }
@@ -124,6 +126,8 @@ export class MovieIndexers {
             });
         }
       } catch (error) {
+        if (error instanceof MovieIndexerError)
+          retryAt.push(Date.now() + error.retryAfterMs);
         // Provider URLs/passkeys must not escape through error strings.
         warnings.push(
           error instanceof MovieIndexerError
@@ -135,6 +139,7 @@ export class MovieIndexers {
     if (!successes)
       throw new MovieIndexerError(
         warnings.join("; ") || "All indexers are unavailable",
+        retryAt.length ? Math.max(1000, Math.min(...retryAt) - Date.now()) : 60_000,
       );
     return { offers, warnings };
   }
