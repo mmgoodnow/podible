@@ -88,13 +88,21 @@ function parseXmlRpcValue(value: unknown): unknown {
     const arrayRecord = record.array as Record<string, unknown> | undefined;
     const dataRecord = arrayRecord?.data as Record<string, unknown> | undefined;
     const rawItems = dataRecord?.value;
-    const items = Array.isArray(rawItems) ? rawItems : rawItems === undefined ? [] : [rawItems];
+    const items = Array.isArray(rawItems)
+      ? rawItems
+      : rawItems === undefined
+        ? []
+        : [rawItems];
     return items.map((item) => parseXmlRpcValue(item));
   }
   if ("struct" in record) {
     const structRecord = record.struct as Record<string, unknown> | undefined;
     const rawMembers = structRecord?.member;
-    const members = Array.isArray(rawMembers) ? rawMembers : rawMembers === undefined ? [] : [rawMembers];
+    const members = Array.isArray(rawMembers)
+      ? rawMembers
+      : rawMembers === undefined
+        ? []
+        : [rawMembers];
     const out: Record<string, unknown> = {};
     for (const rawMember of members) {
       const member = rawMember as Record<string, unknown>;
@@ -111,15 +119,16 @@ function parseResponseValue(xml: string): unknown {
   const doc = parser.parse(xml) as Record<string, unknown>;
   const fault = parseFault(doc);
   if (fault) throw new Error(`rTorrent fault: ${fault}`);
-  const params = ((doc.methodResponse as Record<string, unknown> | undefined)?.params ??
-    {}) as Record<string, unknown>;
+  const params = ((doc.methodResponse as Record<string, unknown> | undefined)
+    ?.params ?? {}) as Record<string, unknown>;
   const param = params.param as Record<string, unknown> | undefined;
   const value = (param?.value ?? null) as unknown;
   return parseXmlRpcValue(value);
 }
 
 function toNumber(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return Math.trunc(value);
+  if (typeof value === "number" && Number.isFinite(value))
+    return Math.trunc(value);
   if (typeof value === "string") {
     const parsed = Number.parseInt(value, 10);
     return Number.isFinite(parsed) ? parsed : null;
@@ -130,7 +139,8 @@ function toNumber(value: unknown): number | null {
 function toBool(value: unknown): boolean {
   if (typeof value === "boolean") return value;
   if (typeof value === "number") return value !== 0;
-  if (typeof value === "string") return value === "1" || value.toLowerCase() === "true";
+  if (typeof value === "string")
+    return value === "1" || value.toLowerCase() === "true";
   return false;
 }
 
@@ -190,7 +200,10 @@ export class RtorrentClient {
     return parseResponseValue(xml);
   }
 
-  async loadRawStart(torrentBytes: Uint8Array, commands: string[] = []): Promise<void> {
+  async loadRawStart(
+    torrentBytes: Uint8Array,
+    commands: string[] = [],
+  ): Promise<void> {
     await this.call("load.raw_start", [
       xmlParamString(""),
       xmlParamBase64(torrentBytes),
@@ -198,29 +211,80 @@ export class RtorrentClient {
     ]);
   }
 
+  async loadRawPaused(
+    torrentBytes: Uint8Array,
+    directory: string,
+    tag: string,
+  ): Promise<void> {
+    const literal = (value: string) =>
+      value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    await this.call("load.raw", [
+      xmlParamString(""),
+      xmlParamBase64(torrentBytes),
+      xmlParamString(`d.directory.set="${literal(directory)}"`),
+      xmlParamString(`d.custom1.set="${literal(tag)}"`),
+    ]);
+  }
+
+  async getOwnershipTag(infoHash: string): Promise<string | null> {
+    return maybeText(
+      await this.call("d.custom1", [xmlParamString(infoHash.toUpperCase())]),
+    );
+  }
+
+  async getHashingState(infoHash: string): Promise<number | null> {
+    return toNumber(
+      await this.call("d.hashing", [xmlParamString(infoHash.toUpperCase())]),
+    );
+  }
+
+  async control(
+    infoHash: string,
+    action: "stop" | "close" | "open" | "start" | "check_hash" | "erase",
+  ): Promise<void> {
+    await this.call(`d.${action}`, [xmlParamString(infoHash.toUpperCase())]);
+  }
+
   async hasDownload(infoHash: string): Promise<boolean> {
     const hashes = await this.call("download_list", []);
-    if (!Array.isArray(hashes)) throw new Error("rTorrent download_list did not return an array");
-    return hashes.some((hash) => typeof hash === "string" && hash.toLowerCase() === infoHash.toLowerCase());
+    if (!Array.isArray(hashes))
+      throw new Error("rTorrent download_list did not return an array");
+    return hashes.some(
+      (hash) =>
+        typeof hash === "string" &&
+        hash.toLowerCase() === infoHash.toLowerCase(),
+    );
   }
 
   async getDownloadState(infoHash: string): Promise<RtorrentDownloadState> {
     const hash = infoHash.toUpperCase();
-    const [name, returnedHash, complete, isActive, basePath, directory, isMultiFile, bytesDone, sizeBytes, leftBytes, downRate, message] =
-      await Promise.all([
-        this.call("d.name", [xmlParamString(hash)]),
-        this.call("d.hash", [xmlParamString(hash)]),
-        this.call("d.complete", [xmlParamString(hash)]),
-        this.call("d.is_active", [xmlParamString(hash)]),
-        this.call("d.base_path", [xmlParamString(hash)]),
-        this.call("d.directory", [xmlParamString(hash)]),
-        this.call("d.is_multi_file", [xmlParamString(hash)]),
-        this.call("d.bytes_done", [xmlParamString(hash)]),
-        this.call("d.size_bytes", [xmlParamString(hash)]),
-        this.call("d.left_bytes", [xmlParamString(hash)]),
-        this.call("d.down.rate", [xmlParamString(hash)]),
-        this.call("d.message", [xmlParamString(hash)]),
-      ]);
+    const [
+      name,
+      returnedHash,
+      complete,
+      isActive,
+      basePath,
+      directory,
+      isMultiFile,
+      bytesDone,
+      sizeBytes,
+      leftBytes,
+      downRate,
+      message,
+    ] = await Promise.all([
+      this.call("d.name", [xmlParamString(hash)]),
+      this.call("d.hash", [xmlParamString(hash)]),
+      this.call("d.complete", [xmlParamString(hash)]),
+      this.call("d.is_active", [xmlParamString(hash)]),
+      this.call("d.base_path", [xmlParamString(hash)]),
+      this.call("d.directory", [xmlParamString(hash)]),
+      this.call("d.is_multi_file", [xmlParamString(hash)]),
+      this.call("d.bytes_done", [xmlParamString(hash)]),
+      this.call("d.size_bytes", [xmlParamString(hash)]),
+      this.call("d.left_bytes", [xmlParamString(hash)]),
+      this.call("d.down.rate", [xmlParamString(hash)]),
+      this.call("d.message", [xmlParamString(hash)]),
+    ]);
 
     const parsedName = maybeText(name);
     const parsedBasePath = maybeText(basePath);
@@ -250,13 +314,18 @@ export class RtorrentClient {
 
   async getImportSource(infoHash: string): Promise<RtorrentImportSource> {
     const hash = infoHash.toUpperCase();
-    const [name, basePath, directory, isMultiFile, fileRows] = await Promise.all([
-      this.call("d.name", [xmlParamString(hash)]),
-      this.call("d.base_path", [xmlParamString(hash)]),
-      this.call("d.directory", [xmlParamString(hash)]),
-      this.call("d.is_multi_file", [xmlParamString(hash)]),
-      this.call("f.multicall", [xmlParamString(hash), xmlParamString(""), xmlParamString("f.path=")]),
-    ]);
+    const [name, basePath, directory, isMultiFile, fileRows] =
+      await Promise.all([
+        this.call("d.name", [xmlParamString(hash)]),
+        this.call("d.base_path", [xmlParamString(hash)]),
+        this.call("d.directory", [xmlParamString(hash)]),
+        this.call("d.is_multi_file", [xmlParamString(hash)]),
+        this.call("f.multicall", [
+          xmlParamString(hash),
+          xmlParamString(""),
+          xmlParamString("f.path="),
+        ]),
+      ]);
 
     const parsedName = maybeText(name);
     const parsedBasePath = maybeText(basePath);
@@ -264,7 +333,9 @@ export class RtorrentClient {
     const parsedIsMultiFile = toBool(isMultiFile);
     const selectedPaths = asStringArray(fileRows)
       .map((relativePath) =>
-        parsedDirectory ? path.join(parsedDirectory, relativePath) : relativePath
+        parsedDirectory
+          ? path.join(parsedDirectory, relativePath)
+          : relativePath,
       )
       .filter(Boolean);
 

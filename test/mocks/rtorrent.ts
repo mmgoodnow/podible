@@ -11,6 +11,8 @@ type DownloadConfig = {
   filePaths?: string[];
   sizeBytes: number;
   completeAfterPolls: number;
+  ownershipTag?: string;
+  active?: boolean;
 };
 
 type DownloadState = DownloadConfig & {
@@ -22,12 +24,14 @@ type DownloadState = DownloadConfig & {
 type MockRtorrentOptions = {
   byHash: Record<string, DownloadConfig>;
   preloaded?: string[];
+  failAfterLoad?: boolean;
 };
 
 type MockRtorrent = {
   url: string;
   stop: () => void;
   loadCalls: string[];
+  controlCalls: string[];
 };
 
 function xmlResponseString(value: string): string {
@@ -58,6 +62,7 @@ export function startMockRtorrent(options: MockRtorrentOptions): MockRtorrent {
   const states = new Map<string, DownloadState>();
   const loaded = new Set((options.preloaded ?? []).map(normalizeInfoHash));
   const loadCalls: string[] = [];
+  const controlCalls: string[] = [];
 
   const byHash = Object.fromEntries(
     Object.entries(options.byHash).map(([hash, config]) => [normalizeInfoHash(hash), config])
@@ -95,12 +100,19 @@ export function startMockRtorrent(options: MockRtorrentOptions): MockRtorrent {
         return new Response(`<?xml version="1.0"?><methodResponse><params><param><value><array><data>${hashes}</data></array></value></param></params></methodResponse>`);
       }
 
-      if (method === "load.raw_start") {
+      if (method === "load.raw_start" || method === "load.raw") {
         const bytes = parseBase64Param(body);
         if (!bytes) return new Response(xmlResponseInt(0));
         const hash = infoHashFromTorrentBytes(bytes);
         loaded.add(hash);
         loadCalls.push(hash);
+        const state = states.get(hash);
+        if (state && method === "load.raw") {
+          state.active = false;
+          const assignment = parseStringParams(body).find(value => value.startsWith("d.custom1.set="));
+          state.ownershipTag = assignment?.replace(/^d.custom1.set=&quot;|&quot;$/g, "");
+        }
+        if (options.failAfterLoad) return new Response("unknown load outcome", { status: 500 });
         return new Response(xmlResponseInt(0), { headers: { "Content-Type": "text/xml" } });
       }
 
@@ -129,7 +141,17 @@ export function startMockRtorrent(options: MockRtorrentOptions): MockRtorrent {
         return new Response(xmlResponseString(state.infoHash.toUpperCase()), { headers: { "Content-Type": "text/xml" } });
       }
       if (method === "d.is_active") {
-        return new Response(xmlResponseInt(1), { headers: { "Content-Type": "text/xml" } });
+        return new Response(xmlResponseInt(state.active === false ? 0 : 1), { headers: { "Content-Type": "text/xml" } });
+      }
+      if (method === "d.custom1") return new Response(xmlResponseString(state.ownershipTag ?? ""));
+      if (method === "d.hashing") return new Response(xmlResponseInt(0));
+      if (["d.stop", "d.close", "d.open", "d.start", "d.check_hash", "d.erase"].includes(method)) {
+        controlCalls.push(method);
+        if (method === "d.stop" || method === "d.close") state.active = false;
+        if (method === "d.start") state.active = true;
+        if (method === "d.check_hash") state.completePolls = state.completeAfterPolls;
+        if (method === "d.erase") loaded.delete(hash);
+        return new Response(xmlResponseInt(0));
       }
       if (method === "d.base_path") {
         return new Response(xmlResponseString(state.basePath), { headers: { "Content-Type": "text/xml" } });
@@ -186,5 +208,6 @@ export function startMockRtorrent(options: MockRtorrentOptions): MockRtorrent {
     url: `http://127.0.0.1:${server.port}`,
     stop: () => server.stop(),
     loadCalls,
+    controlCalls,
   };
 }
