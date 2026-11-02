@@ -1,31 +1,62 @@
 # Isolated movie lab
 
-These services use separate named volumes and an internal-only network. No production
-configuration, Plex account, tracker passkeys or existing media mounts are used.
-The Docker network has no external connectivity. Plex trusts only the lab's
-private Docker network; this configuration is not for production.
+The services have private named volumes and an internal-only Docker network.
+No production configuration, Plex account, tracker passkeys or existing media
+mounts are used. No service ports are published. Plex trusts only this private
+network; this is not a production configuration.
 
-1. `docker build -t podible-movies-poc:local .`
-2. `bun run test/lab/plex-acceptance.ts`
-3. `bun run test/lab/torrent-acceptance.ts`
-4. `docker compose -f test/lab/compose.yml down` to stop services.
+## Full Movie Request
 
-The acceptance script generates a short movie using ffmpeg, applies the actual
-symlink reconciler inside Linux, creates a Plex personal-video library, checks
-indexing/byte-range reads, marks it watched, changes the view naming, then checks
-Plex identity/watch-state retention. Artifacts go to ignored `tmp/movies-lab`.
-It also starts real rTorrent and Prowlarr; startup alone does not establish their
-search/transfer contracts. The separate torrent acceptance verifies the neutral
-adapter against real rTorrent with private synthetic torrents: paused/idempotent
-add, existing-byte recheck, resume, quiesce, file layout, and record-only removal.
-It then transfers a fresh payload from a tiny local BitTorrent fixture peer and
-tracker, checks byte equality, and verifies a multi-file feature/nested-NFO layout
-against its metainfo indexes. It does not yet prove the Prowlarr search contract.
+Requires Bun 1.4.4, Docker, ffmpeg and local Chrome (or Playwright Chromium in CI).
+
+1. `bun install --frozen-lockfile`
+2. `bun run build`
+3. `docker build -t podible-movies-poc:local .`
+4. `bun run test/lab/movie-stack.ts`
+
+This opens the built SPA in real Chrome, requests a synthetic movie through
+tRPC, searches a real Prowlarr Generic Torznab indexer backed by a local fixture
+tracker, deliberately replaces a stalled torrent, transfers actual bytes through
+rTorrent, probes them with ffprobe, adopts them into canonical storage, publishes
+relative symlinks and verifies real Plex indexing plus a byte-range read. It then
+requests and verifies a 720p-to-1080p upgrade. Old media/torrent records remain.
+All identity/quality checks other than the fixture decider use production code.
+
+To exercise the actual movie selection/import agents instead of the deterministic
+fixture decider, explicitly authorize a local `OPENAI_API_KEY`, then run:
+
+```sh
+bun run test/lab/movie-stack.ts --live-agent
+```
+
+This costs real API usage. The key stays on the host; model calls are relayed over
+a private stdin/stdout bridge, not by exposing a credential to Plex/rTorrent or
+giving the Docker network internet access. No real tracker is contacted. The
+runner never prints the key or raw model payloads. The normal test suite does
+not call a paid model.
+
+Artifacts are in gitignored `tmp/movies-lab`: `movie-stack-acceptance.json`,
+`movie-stack-mobile.png`, and generated fixture clips. The report distinguishes
+live agents from fixture decisions and explicitly records synthetic identity.
+The Plex library is an offline personal-video section: exact paths and generated
+payload hashes are verified, but no fake online TMDB GUID is injected. Real
+online catalog matching/authentication requires separate authorized credentials.
+
+## Smaller Contracts
+
+- `bun run test/lab/plex-acceptance.ts`: relative links, indexing and byte ranges,
+  plus retained Plex identity/watch-state after declarative naming changes.
+- `bun run test/lab/torrent-acceptance.ts`: neutral adapter against rTorrent,
+  paused/idempotent add, recheck, file mapping and record-only removal of existing
+  records; then actual transfer and multifile feature/nested-NFO layouts.
+- `bun run scripts/smoke-movie-agent.ts --live`: small opt-in semantic-selection
+  smoke using the authorized host key, without any real tracker download.
+- `bun run test/browser/movies.ts`: faster fixture-backed full SPA flow, blocked
+  acquisition/manual recovery, upgrade, mobile layout, withdrawal and expiry.
+
+The full runner temporarily creates its own Prowlarr indexer and removes it at
+shutdown. Synthetic Plex sections and paused torrent/content records remain for
+inspection, because deletion of just-transferred records is not a safe cleanup
+assumption for the lab's rTorrent 0.9.8. `docker compose -f test/lab/compose.yml down`
+stops the services without deleting volumes. Never mount production paths here.
 No cross-seed service is included.
-
-No service ports are published. The Bun acceptance runner joins the private
-Plex container's network namespace to use its unclaimed, loopback-only setup API
-without borrowing an account token. Configuration volumes persist
-between runs. `down` does not delete them or the test content.
-Never mount production paths into this lab. Real metadata matching and authenticated
-movie-provider integration need a separate authorized online smoke test.

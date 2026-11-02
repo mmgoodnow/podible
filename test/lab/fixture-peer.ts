@@ -3,19 +3,28 @@ import os from "node:os";
 import { createHash, randomBytes } from "node:crypto";
 import bencode from "bencode";
 
-/** Minimal single-piece seed for the offline lab, never a public tracker/client. */
-export async function startFixturePeer() {
+/** Minimal seed for the offline lab, never a public tracker/client. */
+export async function startFixturePeer(
+  options: { bytes?: Buffer; name?: string; stalled?: boolean } = {},
+) {
   const ip = Object.values(os.networkInterfaces())
     .flat()
     .find((item) => item?.family === "IPv4" && !item.internal)?.address;
   if (!ip) throw new Error("Private lab interface not found");
-  const bytes = randomBytes(12_000);
-  const name = `transfer-${randomBytes(5).toString("hex")}.bin`;
+  const bytes = options.bytes ?? randomBytes(12_000);
+  const name = options.name ?? `transfer-${randomBytes(5).toString("hex")}.bin`;
+  const hashes: Buffer[] = [];
+  for (let start = 0; start < bytes.length; start += 16384)
+    hashes.push(
+      createHash("sha1")
+        .update(bytes.subarray(start, start + 16384))
+        .digest(),
+    );
   const info = {
     name,
     length: bytes.length,
     "piece length": 16384,
-    pieces: createHash("sha1").update(bytes).digest(),
+    pieces: Buffer.concat(hashes),
     private: 1,
   };
   const hash = createHash("sha1").update(bencode.encode(info)).digest();
@@ -53,7 +62,10 @@ export async function startFixturePeer() {
           Buffer.from("-PL0001-123456789012"),
         ]);
         socket.write(handshake);
-        message(5, Buffer.from([0x80]));
+        const bitfield = Buffer.alloc(Math.ceil(hashes.length / 8));
+        for (let index = 0; index < hashes.length; index++)
+          bitfield[Math.floor(index / 8)]! |= 1 << (7 - (index % 8));
+        message(5, bitfield);
         message(1);
         buffer = buffer.subarray(68);
         handshaken = true;
@@ -71,7 +83,12 @@ export async function startFixturePeer() {
         const index = frame.readUInt32BE(1);
         const begin = frame.readUInt32BE(5);
         const size = frame.readUInt32BE(9);
-        if (index !== 0 || size > 16384 || begin + size > bytes.length) {
+        if (
+          index >= hashes.length ||
+          size > 16384 ||
+          begin + size > 16384 ||
+          index * 16384 + begin + size > bytes.length
+        ) {
           socket.destroy();
           return;
         }
@@ -81,7 +98,10 @@ export async function startFixturePeer() {
         offset.writeUInt32BE(begin, 4);
         message(
           7,
-          Buffer.concat([offset, bytes.subarray(begin, begin + size)]),
+          Buffer.concat([
+            offset,
+            bytes.subarray(index * 16384 + begin, index * 16384 + begin + size),
+          ]),
         );
       }
     });
@@ -106,9 +126,9 @@ export async function startFixturePeer() {
       return new Response(
         bencode.encode({
           interval: 30,
-          complete: 1,
+          complete: options.stalled ? 0 : 1,
           incomplete: 0,
-          peers: compact,
+          peers: options.stalled ? Buffer.alloc(0) : compact,
         }),
         { headers: { "Content-Type": "application/x-bittorrent" } },
       );

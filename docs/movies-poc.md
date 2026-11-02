@@ -1,96 +1,134 @@
 # Native Movies POC
 
-## Status
+## Scope
 
-This is an incremental implementation, not a completed movie-request vertical.
-The foundations below are implemented; no production movie request endpoint or
-movie acquisition workflow has been enabled yet. Existing book routes and jobs
-remain in use. The SPA currently displays the existing book library.
+The native movie vertical is implemented at `/app/movies` and `/app/requests`.
+Existing book HTTP and JSON-RPC routes remain supported. Movies default to
+disabled; this work does not enable or configure movies in production.
 
-## Implemented
+This is not a Radarr frontend. Podible owns movie requests, policy, release
+selection, acquisition, canonical files and declarative Plex views. Cross-seeding,
+TV/anime, subtitles and torrent-specific derived views are out of scope.
 
-- Bun 1.4.4 runtime, native typechecking, HTML/React bundling and packaged assets.
-- Typed tRPC/TanStack Query SPA, sharing schemas, authorization and handlers with
-  the existing JSON-RPC API. `/rpc` remains a separate supported wire protocol.
-- Native movie, quality target, user request, acquisition, version, content-file
-  and semantic timeline records. Requests with identical policies share a target; incompatible
-  cut/quality requirements do not overwrite each other. No movie columns were
-  added to application jobs or book models.
-- TMDB adapter with normalized IDs/metadata, bounded caching, timeouts and explicit
-  upstream errors. It accepts catalog IDs, not client-authored fetch URLs.
-- Explainable quality eligibility, ordered tiers, hard language/cut/codec/HDR
-  constraints and a stable upgrade comparator. Unknown facts remain unknown.
-- Torrent client port with opaque client identity, file indexes, paused/idempotent
-  add, ownership checks, observation, recheck, resume, quiescence and record-only
-  removal. rTorrent is the first adapter; client details stay inside it.
-- Canonical content adoption uses independent, readonly files rather than sharing
-  a writable inode with the torrent client. Publication uses relative symlinks.
-  Content IDs are independent of the client's current save path.
-- Declarative view reconciliation with ownership records, interrupted-publication
-  recovery, path/collision checks and refusal to overwrite foreign files.
-- Publication intent survives process restarts. Both old and pending links exist
-  until Plex verifies the candidate's movie GUID and exact content paths. Only
-  then is the selected version promoted and the old presentation link retired.
-  Old versions, content bytes and torrent records are not automatically deleted.
+## Request to Plex
 
-`movies` settings are persisted and admin-only alongside the existing settings.
-They default to disabled. They describe the intended vertical configuration;
-setting `enabled` alone does not create an acquisition worker or movie UI.
+1. A user searches TMDB and requests a catalog ID. The server fetches metadata;
+   callers cannot supply arbitrary catalog or torrent URLs.
+2. Compatible requests share a policy-snapshot target and active acquisition.
+   Incompatible cut/quality policies cannot overwrite each other's selection.
+3. An application transaction persists request/acquisition identity and a job
+   command. Reflow owns steps, retries, leases and sleeps in the existing separate
+   execution database; movie tables do not duplicate execution state.
+4. Prowlarr/Torznab supplies releases. The existing shared text-agent model reviews
+   identity, cut and quality, with optional bounded metainfo inspection. There is
+   no title-regex prefilter that can hide all candidates from the agent. Concise
+   selection/import explanations are saved on the acquisition.
+5. An owned torrent-client adapter reconciles a paused add, resumes the download,
+   observes progress and retains stalled downloads before trying another release.
+   At most three alternatives are attempted. Rate-limit waits are durable and
+   honor bounded Retry-After delays.
+6. Actual ffprobe streams and duration accompany an agent's main-feature review.
+   Probe-derived facts override release-title claims. Unsupported multipart-only
+   contents are rejected rather than publishing only part of a movie.
+   Rejected/unplayable contents or post-probe policy mismatches trigger another
+   release, not just stalled downloads. Storage/permission/Plex failures instead
+   retry or surface a blocked operation without blaming the downloaded release.
+7. Verified bytes are independently copied into a readonly canonical content
+   store. They are not writable hardlinks to the client's seeding files. Adoption
+   checks path safety, size/hash identity, source changes and disk headroom.
+8. Publication stages an intent and relative symlinks alongside the old version.
+   Plex must report the expected TMDB/IMDb GUID and exact file paths before
+   promotion. A scan's HTTP 200 alone is not success. Section scans are coalesced;
+   background thumbnail analysis does not block checking an already indexed file.
+9. Only after verification does the selected version change and the obsolete
+   presentation link disappear. Old versions, canonical bytes and torrent records
+   remain. Failed upgrades leave the working movie available.
 
-## Verification
+Startup and hourly maintenance reconcile desired views, recover/retire interrupted
+publication intents, and enqueue fresh search/upgrade acquisitions when due.
+Retrying a failed step does not rerun already successful transfers or adoption.
+Withdrawing the last request cancels unneeded work and pauses incomplete owned
+downloads, but does not delete bytes or stop completed seeding. Shared requests
+continue for remaining users.
 
-The ordinary test suite covers transaction rollback, shared requests, execution
-fencing, policy evaluation, unknown facts, file adoption/cancellation, view
-recovery and publication failure/replay. The Plex HTTP contract test requires
-both the correct provider GUID and exact part path, not merely a successful scan.
+## UI and API
 
-The browser acceptance uses real Chrome, the packaged SPA and typed HTTP API.
-It checks filtering without reload, mobile overflow, missing resources and an
-expired session. This is book-library SPA acceptance, not movie UI acceptance.
+The Bun-built React SPA uses tRPC/TanStack Query with the same schemas,
+authorization and handlers as JSON-RPC. Request pages show semantic stages,
+byte progress, availability separately from upgrades, activity and explanations.
+Users can retry, withdraw, request an upgrade check or choose a release manually.
 
-The isolated Docker lab runs real Plex, rTorrent and Prowlarr with private volumes
-and no production credentials or media. See [the lab guide](../test/lab/README.md).
+- `movies.status`, `movies.search`, `movies.get`, `movies.request`.
+- `requests.list`, `requests.get`, `requests.retry`, `requests.checkUpgrade`,
+  `requests.withdraw`, `requests.searchReleases`, `requests.selectRelease`.
 
-- Real Plex indexed relative symlinks, served byte ranges, and retained its item
-  identity and watched state after a declarative rename. This uses a synthetic
-  personal-video library; authenticated real-movie GUID matching is not proven.
-- Real rTorrent verified paused/idempotent add, existing-byte recheck, state,
-  resume/quiescence, file mapping and record-only removal. It also downloaded a
-  fresh synthetic payload from a local tracker/peer and verified a multi-file
-  feature/nested-NFO layout against metainfo indexes.
-- rTorrent 0.9.8 crashed during lab runs that immediately removed a freshly
-  transferred record before the next operation. The cause is not established.
-  The passing transfer test retains/pauses the completed record, matching the
-  intended acquisition retention policy. This does not prove safe removal of
-  freshly completed transfers.
-- Prowlarr has been started, but an actual Prowlarr search contract is not tested.
-- No production SSH, manual deployment, production downloads or agent API calls
-  were performed for this POC work.
+All require a user session. Request access is owner-scoped. Manual release
+searches return a SQLite-backed `searchId` plus result indexes valid for 30
+minutes and scoped to that user/target. Download URLs and tracker credentials do
+not go to the browser. Expired/cross-user references are rejected without
+performing another expensive search. Generic book/admin RPC behavior is unchanged.
 
-## Remaining Vertical
+## Configuration
 
-1. Implement movie search/selection through Prowlarr, with server-owned release
-   references and persisted concise agent reasoning. Use the existing text model
-   constant, not a new model configuration surface or brittle title filters.
-2. Compose a native movie acquisition Reflow workflow: durable selection and
-   metainfo intent, client reconciliation, download observation, probe, canonical
-   adoption, Plex publication and semantic request events. Enqueue through the
-   existing transactional job-command outbox; do not duplicate execution state.
-3. Add typed movie search/detail/request screens and the request tracker. Keep
-   availability separate from optional upgrade progress, and explain blocked
-   states with a user-actionable retry/manual selection path.
-4. Add bounded stalled-download replacement and scheduled automatic upgrade
-   searches. Searches for upgrades must be new acquisitions, not memoized retries
-   of a previous search. Keep the current version available on any failure.
-5. Reconcile desired views on startup/code changes without a one-off filesystem
-   migration. Recover pending publication intents before accepting replacements.
-6. Prove the whole browser-to-Prowlarr-to-transfer-to-Plex path, upgrade, restart,
-   cancellation and stalled replacement against the local stack. Add a small
-   second-client adapter contract to verify the port is genuinely portable.
-7. Configure an authorized TMDB credential and verify real catalog/movie matching.
-   Before displaying TMDB metadata in a released UI, include the provider's
-   required attribution and approved branding.
+Use the existing administrator settings JSON; no new model configuration surface
+was added. Configure:
 
-Cross-seeding, shared-byte rescue and torrent-specific symlink materialization
-remain out of scope. The separate content identities, client roots and view
-renderer leave room for them without coupling canonical files to tracker names.
+- `movies.enabled`, `movies.tmdbAccessToken` (TMDB API read-access bearer token).
+- `movies.managedRoot`: an app-owned absolute directory visible at the same path
+  inside the torrent client. Contains `downloads`, `content`, `views/plex/movies`.
+- `movies.downloadGroupId`: optional shared group for client-writable download
+  directories; defaults to null. The app needs permission to assign that group.
+- `movies.plexUrl`, `movies.plexToken`, `movies.plexSectionId`.
+- `movies.plexViewPath`: the Plex-visible path for `views/plex/movies`. Plex must
+  also mount the canonical content with the same relative relationship, since
+  presentation links are relative. Mount the whole managed tree, not just views.
+- Existing `rtorrent`, `torznab` (Prowlarr sources), and `agents.apiKey` settings.
+- `movies.qualityPolicy`, `automaticUpgrades`, `searchIntervalHours` (default 24),
+  and `maximumReleaseBytes` (default 40 GiB).
+
+Use a dedicated Plex movie section and managed root. Existing foreign files and
+missing/replaced content mounts are errors, not permission to bulldoze data.
+Do not change managed roots/client identity during an acquisition; retry only
+after addressing the configuration mismatch.
+
+The default policy requires the theatrical cut, English audio, SDR and allowed
+720p/1080p tiers. Unknown facts need verification; they are not silently assumed.
+Quality is an ordered tier plus bounded within-tier preference, not a weighted
+sum that can override hard constraints. Equal/lower quality is not an upgrade.
+
+## Verification and Limits
+
+On 2026-11-02 the full local live-agent run passed: three real Prowlarr searches,
+three retained torrent records (one intentionally stalled), both actual media
+transfers, and promotion from version 1 to version 2 after Plex verification.
+The synthetic run ID was `80407337-a72d-4ffd-adce-6da32e01de41`.
+The final regression run passed 444 tests, both Chrome scripts, native Bun
+typechecking/build, runtime-script validation and the packaged-image auth/asset
+smoke. The separate real rTorrent single/multifile contract also passed.
+
+`bun test` covers native repository transactions, auth and opaque search
+references, real Reflow dispatch/recovery, stalled replacement, upgrades,
+cancellation/sharing, canonical adoption and publication replay. The generic
+file-backed execution harness also exercises SIGKILL/restart failure windows.
+
+Both browser acceptance scripts use Chrome/Chromium, built assets and actual
+typed HTTP calls, including mobile layout, deep links and session expiry. The
+movie script tests blocked/manual recovery, retained availability and upgrades.
+
+See [the isolated lab guide](../test/lab/README.md) for full-stack acceptance and
+the explicitly opt-in live-agent run. The lab uses generated media and private
+local services, not production trackers or user media. Its offline personal-video
+Plex library verifies file paths, payload hashes and byte-range reads; this is
+**not** proof of authenticated online TMDB/Plex GUID matching. That contract has
+fixture tests, but still needs an authorized TMDB credential and online Plex
+movie-library smoke test before claiming that deployment-specific integration.
+
+rTorrent 0.9.8 crashed in earlier lab experiments removing a just-transferred
+record. The passing transfer path retains/pauses records, matching acquisition
+retention. Safe removal of freshly completed transfers is not established.
+
+The neutral torrent port separates client identity and download layout from
+canonical content and library views. rTorrent is the only production adapter;
+an independent fixture client tests orchestration without rTorrent assumptions.
+No cross-seed discovery, shared-byte rescue or derived torrent layouts are
+implemented. Those can be added without making tracker names canonical identity.
