@@ -1,0 +1,39 @@
+name: podible-movies-lab
+services:
+  plex:
+    image: plexinc/pms-docker@sha256:6d778d41daae68f89115aa87a44ae14a96b23e71a2093da173b5a9aac4091336
+    environment:
+      TZ: UTC
+      ALLOWED_NETWORKS: 172.16.0.0/255.240.0.0
+    volumes:
+      - plex-config:/config
+      - content:/data:ro
+  rtorrent:
+    image: k44sh/rutorrent@sha256:b5b194d4d718f1997251c602c6f6bb70e052e694a3b5d786150cf7dcac687dcb
+    environment:
+      TZ: UTC
+      PUID: "1000"
+      PGID: "1000"
+      DOWNLOAD_PATH: /data/downloads
+      WAN_IP: 0.0.0.0
+      RUTORRENT_PORT: "8080"
+      XMLRPC_PORT: "8000"
+      WEBDAV_PORT: "9000"
+    volumes:
+      - rtorrent-config:/config
+      - content:/data
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr@sha256:04be30163fbaf48d6aeee7b5893c9f6614ffbad6d853971df0d6dcdf01c7f104
+    environment:
+      TZ: UTC
+    volumes:
+      - prowlarr-config:/config
+volumes:
+  content:
+    name: podible-movies-lab-content
+  plex-config:
+  rtorrent-config:
+  prowlarr-config:
+networks:
+  default:
+    internal: true
