@@ -1,5 +1,11 @@
 import type { Database } from "bun:sqlite";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import type { MovieOffer } from "./offers";
+import type {
+  DownloadLocation,
+  TorrentRef,
+  TorrentSnapshot,
+} from "../media/torrent-client";
 import type { JobRow } from "../app-types";
 import {
   catalogMovieSchema,
@@ -29,6 +35,7 @@ export type MovieAcquisition = {
   job_id: number | null;
   decision_json: string | null;
   finished_at: string | null;
+  created_at: string;
 };
 export class MovieRepo {
   constructor(
@@ -105,7 +112,7 @@ export class MovieRepo {
       const request = this.db
         .query(
           `INSERT INTO movie_requests(user_id,target_id,created_at) VALUES(?,?,?)
-        ON CONFLICT(user_id,target_id) DO UPDATE SET target_id=excluded.target_id RETURNING id`,
+        ON CONFLICT(user_id,target_id) DO UPDATE SET withdrawn_at=NULL RETURNING id`,
         )
         .get(userId, target.id, new Date().toISOString()) as { id: number };
       this.event(
@@ -131,6 +138,154 @@ export class MovieRepo {
         .query("SELECT 1 FROM movie_requests WHERE user_id=? AND target_id=?")
         .get(userId, targetId),
     );
+  }
+  requestById(id: number) {
+    return this.db
+      .query(
+        "SELECT id,user_id,target_id,withdrawn_at,created_at FROM movie_requests WHERE id=?",
+      )
+      .get(id) as {
+      id: number;
+      user_id: number;
+      target_id: number;
+      withdrawn_at: string | null;
+      created_at: string;
+    } | null;
+  }
+  activeRequestCount(targetId: number): number {
+    return (
+      this.db
+        .query(
+          "SELECT COUNT(*) AS n FROM movie_requests WHERE target_id=? AND withdrawn_at IS NULL",
+        )
+        .get(targetId) as { n: number }
+    ).n;
+  }
+  withdrawRequest(id: number): void {
+    this.transaction(() =>
+      this.db
+        .query("UPDATE movie_requests SET withdrawn_at=? WHERE id=?")
+        .run(new Date().toISOString(), id),
+    );
+  }
+  saveReleaseSearch(
+    userId: number,
+    targetId: number,
+    offers: MovieOffer[],
+  ): string {
+    return this.transaction(() => {
+      const now = new Date();
+      this.db
+        .query("DELETE FROM movie_release_searches WHERE expires_at<?")
+        .run(now.toISOString());
+      const id = randomUUID();
+      this.db
+        .query("INSERT INTO movie_release_searches VALUES(?,?,?,?,?)")
+        .run(
+          id,
+          userId,
+          targetId,
+          JSON.stringify(offers),
+          new Date(now.getTime() + 30 * 60_000).toISOString(),
+        );
+      return id;
+    });
+  }
+  searchedOffer(
+    userId: number,
+    targetId: number,
+    searchId: string,
+    index: number,
+  ): MovieOffer | null {
+    const search = this.db
+      .query(
+        "SELECT offers_json FROM movie_release_searches WHERE id=? AND user_id=? AND target_id=? AND expires_at>?",
+      )
+      .get(searchId, userId, targetId, new Date().toISOString()) as {
+      offers_json: string;
+    } | null;
+    return search
+      ? ((JSON.parse(search.offers_json) as MovieOffer[])[index] ?? null)
+      : null;
+  }
+  bindDownload(
+    acquisitionId: number,
+    ref: TorrentRef,
+    location: DownloadLocation,
+    offerKey: string,
+  ): number {
+    return this.transaction(() => {
+      const existing = this.db
+        .query("SELECT * FROM media_torrents WHERE client_id=? AND native_id=?")
+        .get(ref.clientId, ref.nativeId) as {
+        id: number;
+        location_json: string;
+      } | null;
+      if (existing && existing.location_json !== JSON.stringify(location))
+        throw new Error("Torrent binding uses another layout");
+      const id =
+        existing?.id ??
+        (
+          this.db
+            .query(
+              "INSERT INTO media_torrents(client_id,native_id,location_json,offer_key) VALUES(?,?,?,?) RETURNING id",
+            )
+            .get(
+              ref.clientId,
+              ref.nativeId,
+              JSON.stringify(location),
+              offerKey,
+            ) as { id: number }
+        ).id;
+      this.db
+        .query("INSERT OR IGNORE INTO movie_acquisition_downloads VALUES(?,?)")
+        .run(acquisitionId, id);
+      return id;
+    });
+  }
+  observeDownload(id: number, snapshot: TorrentSnapshot): void {
+    this.transaction(() =>
+      this.db
+        .query("UPDATE media_torrents SET observation_json=? WHERE id=?")
+        .run(JSON.stringify(snapshot), id),
+    );
+  }
+  downloads(targetId: number) {
+    return this.db
+      .query(
+        `SELECT t.* FROM media_torrents t JOIN movie_acquisition_downloads d ON d.torrent_id=t.id
+      JOIN movie_acquisitions a ON a.id=d.acquisition_id WHERE a.target_id=? ORDER BY a.id DESC,t.id DESC`,
+      )
+      .all(targetId) as {
+      id: number;
+      client_id: string;
+      native_id: string;
+      location_json: string;
+      offer_key: string;
+      observation_json: string | null;
+    }[];
+  }
+  torrent(clientId: string, nativeId: string) {
+    return this.db
+      .query("SELECT * FROM media_torrents WHERE client_id=? AND native_id=?")
+      .get(clientId, nativeId) as {
+      id: number;
+      client_id: string;
+      native_id: string;
+      location_json: string;
+      offer_key: string;
+    } | null;
+  }
+  abortPublication(targetId: number, versionId: number): void {
+    this.transaction(() => {
+      if (this.target(targetId)?.active_version_id === versionId)
+        throw new Error("Cannot abort an active version");
+      this.db
+        .query(
+          "DELETE FROM movie_publications WHERE target_id=? AND version_id=?",
+        )
+        .run(targetId, versionId);
+    });
   }
   acquisition(id: number): MovieAcquisition | null {
     return this.db

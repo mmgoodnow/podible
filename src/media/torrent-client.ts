@@ -13,6 +13,7 @@ export type TorrentSnapshot = {
 };
 
 export interface TorrentClient {
+  readonly id: string;
   readonly capabilities: {
     pausedAdd: boolean;
     recheck: boolean;

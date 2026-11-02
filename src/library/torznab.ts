@@ -3,10 +3,10 @@ import { XMLParser } from "fast-xml-parser";
 import type { MediaType, TorznabSource } from "../app-types";
 import { normalizeInfoHash } from "./torrent";
 
-type TorznabResult = {
+type SearchResult<TMedia extends string> = {
   title: string;
   provider: string;
-  mediaType: MediaType;
+  mediaType: TMedia;
   sizeBytes: number | null;
   url: string;
   guid: string | null;
@@ -95,12 +95,12 @@ function inferInfoHash(attrMap: Record<string, string>): string | null {
   return null;
 }
 
-export function parseTorznabSearch(xml: string, provider: string, mediaType: MediaType): TorznabResult[] {
+export function parseTorznabSearch<TMedia extends MediaType | "movie">(xml: string, provider: string, mediaType: TMedia): SearchResult<TMedia>[] {
   const doc = parser.parse(xml) as Record<string, unknown>;
   const channel = (doc.rss as Record<string, unknown> | undefined)?.channel as Record<string, unknown> | undefined;
   const items = toArray((channel?.item as Record<string, unknown> | Record<string, unknown>[] | undefined) ?? []);
 
-  const out: TorznabResult[] = [];
+  const out: SearchResult<TMedia>[] = [];
   for (const item of items) {
     const title = textValue(item.title);
     const attrMap = parseAttrMap(item);
@@ -160,4 +160,5 @@ export async function searchTorznab(sources: TorznabSource[], query: string, med
   return results;
 }
 
+type TorznabResult = SearchResult<MediaType>;
 export type { TorznabResult };

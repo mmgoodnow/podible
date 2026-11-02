@@ -11,6 +11,7 @@ import type {
 } from "./torrent-client";
 
 export class RtorrentAdapter implements TorrentClient {
+  get id() { return this.options.clientId; }
   readonly capabilities = {
     pausedAdd: true,
     recheck: true,

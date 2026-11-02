@@ -1116,6 +1116,24 @@ export function runMigrations(db: Database): void {
     expected_revision INTEGER NOT NULL,
     created_at TEXT NOT NULL
   );`));
+  apply(37, () => db.exec(`
+    ALTER TABLE movie_requests ADD COLUMN withdrawn_at TEXT;
+    CREATE TABLE movie_release_searches (
+      id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
+      target_id INTEGER NOT NULL REFERENCES movie_targets(id),
+      offers_json TEXT NOT NULL, expires_at TEXT NOT NULL
+    );
+    CREATE TABLE media_torrents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, client_id TEXT NOT NULL, native_id TEXT NOT NULL,
+      location_json TEXT NOT NULL, offer_key TEXT NOT NULL, observation_json TEXT,
+      UNIQUE(client_id,native_id)
+    );
+    CREATE TABLE movie_acquisition_downloads (
+      acquisition_id INTEGER NOT NULL REFERENCES movie_acquisitions(id),
+      torrent_id INTEGER NOT NULL REFERENCES media_torrents(id),
+      PRIMARY KEY(acquisition_id,torrent_id)
+    );
+  `));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */
