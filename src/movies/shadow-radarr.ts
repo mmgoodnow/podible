@@ -139,6 +139,7 @@ export class RadarrObserver {
             },
             releaseTitle: row.sourceTitle ?? row.title ?? movie.title,
             sourcePaths: sourcePaths.filter((p): p is string => Boolean(p)),
+            libraryPath: imported ? row.data?.importedPath ?? null : null,
             observedAt: new Date().toISOString(),
             radarr: {
               outcome: imported ? "imported" : "blocked",

@@ -38,7 +38,7 @@ export class MovieShadowRepo {
   capture(raw: ShadowInput) {
     const input = shadowInputSchema.parse(raw);
     // Poll time/outcome are not decision inputs; changing them must not repay the agent.
-    const { observedAt, radarr, ...evidence } = input.observation;
+    const { observedAt, radarr, libraryPath, ...evidence } = input.observation;
     const hash = createHash("sha256")
       .update(JSON.stringify({ ...input, observation: evidence }))
       .digest("hex");

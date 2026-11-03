@@ -107,7 +107,7 @@ export async function shadowInventory(
         return result;
       }
       if (result.files.length) {
-        result.source = index === 0 ? "download" : "library-fallback";
+        result.source = index > 0 || remote === observation.libraryPath ? "library-fallback" : "download";
         return result;
       }
     } catch (error) {

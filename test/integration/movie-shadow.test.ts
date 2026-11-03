@@ -87,6 +87,9 @@ test("shadow observes independently, deduplicates immutable inputs, and never mo
     await evaluateMovieShadow(ctx, repo.getJob(first.jobId!)!);
     expect(calls).toBe(1);
     expect(repo.movieShadow.list()).toHaveLength(1);
+    observation.libraryPath = "/library/a-different-path.mkv";
+    await syncMovieShadow(ctx);
+    expect(repo.movieShadow.list()).toHaveLength(1);
     expect(repo.movieShadow.get(first.id)!.result?.decision).toBe("import");
     expect(await fs.readFile(path.join(root, "feature.mkv"), "utf8")).toBe(
       "unaltered fixture bytes",
@@ -108,6 +111,9 @@ test("shadow observes independently, deduplicates immutable inputs, and never mo
       [],
     );
     expect(repo.movies.targets()).toEqual([]);
+    observation.sourcePaths = ["/downloads/feature.mkv"];
+    observation.libraryPath = "/downloads/feature.mkv";
+    expect((await shadowInventory(observation, settings.movies)).source).toBe("library-fallback");
   } finally {
     db.close();
     await fs.rm(root, { recursive: true, force: true });

@@ -8,6 +8,7 @@ export const shadowObservationSchema = z.object({
   movie: catalogMovieSchema,
   releaseTitle: z.string(),
   sourcePaths: z.array(z.string()),
+  libraryPath: z.string().nullable().optional(),
   observedAt: z.string(),
   radarr: z.object({
     outcome: z.enum(["imported", "blocked"]),
