@@ -41,6 +41,12 @@ try {
   await page
     .getByRole("heading", { name: "The Odyssey", exact: true })
     .waitFor();
+  if (await page.getByRole("navigation").getByRole("link", { name: "Movie sync" }).count())
+    throw new Error("Administrator navigation exposed to a reader");
+  await page.goto(new URL("/movie-dual-write", url).href);
+  await page.getByRole("alert").getByText("Administrator access required.").waitFor();
+  await page.getByRole("navigation").getByRole("link", { name: "Library", exact: true }).click();
+  await page.getByRole("heading", { name: "The Odyssey", exact: true }).waitFor();
   await page.getByRole("searchbox").fill("Piranesi");
   await page
     .getByRole("heading", { name: "The Odyssey", exact: true })

@@ -116,8 +116,10 @@ For example, send the following authenticated JSON-RPC request to `/rpc`:
 }
 ```
 
-The administrator movie-shadow screen includes the independent acquisition panel,
-manual sync, bounded backfill form, and polled acquisition progress. Nonadmins and
+The administrator Movie sync page at `/movie-dual-write` includes independent
+acquisition, manual sync, bounded backfill, and polled progress. The read-only
+Radarr comparison audit is a collapsed section on the same page, loaded only
+when opened; old `/movie-shadow` links redirect there. Nonadmins and
 anonymous callers cannot inspect or control this feed through either RPC transport.
 
 ## Canary And Acceptance

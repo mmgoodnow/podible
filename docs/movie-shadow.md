@@ -34,7 +34,14 @@ Include Radarr's URL base if configured (`/radarr` on Cyprus). Redirects are not
 
 ## Audit UI and RPC
 
-Administrator-only `/movie-shadow` shows configuration with secrets omitted, latest sync, cases, independent decisions, probe evidence, and persistent human reviews. JSON-RPC and typed tRPC expose the same admin-only `movieShadow.status`, `list`, `get`, `sync`, `retry`, `review` methods. `retry` retries failed execution; a changed file snapshot creates a new case automatically.
+The administrator Movie sync page at `/movie-dual-write` includes a collapsed
+**Radarr comparison audit** with configuration (secrets omitted), latest sync,
+cases, independent decisions, probe evidence, and persistent human reviews.
+Audit queries and polling start only while that section is open. Old
+`/movie-shadow` links redirect to the same page with the audit expanded.
+JSON-RPC and typed tRPC retain the admin-only `movieShadow.status`, `list`,
+`get`, `sync`, `retry`, `review` methods. `retry` retries failed execution;
+a changed file snapshot creates a new case automatically.
 
 SQLite `movie_shadow_cases` stores immutable input/policy/file fingerprints, result and human review. Reflow owns execution status/retries and checkpoints successful probes/agent responses. Repeated polls of unchanged evidence do not repay the agent. Inputs are bounded to 50 videos/5,000 directory entries/6 levels; symlink or path escapes fail closed. Missing/moved files are `unobservable`, not evidence of incorrect acquisition. History fallback to an already imported library file is labeled `library-fallback` and cannot evaluate the original download's file-selection ambiguity.
 

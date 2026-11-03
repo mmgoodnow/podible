@@ -143,7 +143,10 @@ test("SPA deep links and immutable assets do not hide missing resources", async 
       ["/app/", "/"],
       ["/app/movies/42?q=hello", "/movies/42?q=hello"],
       ["/app/requests/12", "/requests/12"],
-      ["/app/movie-shadow", "/movie-shadow"],
+      ["/movie-shadow", "/movie-dual-write#radarr-audit"],
+      ["/movie-shadow/7?history=1", "/movie-dual-write?history=1#radarr-audit"],
+      ["/app/movie-shadow", "/movie-dual-write#radarr-audit"],
+      ["/app/movie-shadow/7/", "/movie-dual-write#radarr-audit"],
       ["/app/movie-dual-write", "/movie-dual-write"],
       ["/app/assets/test-123.js", "/web-assets/test-123.js"],
     ]) {

@@ -1,4 +1,7 @@
 import { chromium } from "playwright";
+import assert from "node:assert/strict";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 const server = Bun.spawn(
   [process.execPath, "run", "test/fixtures/spa-server.ts"],
   {
@@ -35,9 +38,21 @@ try {
   ]);
   const page = await context.newPage();
   const errors: string[] = [];
+  const auditRequests: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(new URL("/movie-shadow", url).href);
-  await page.getByRole("heading", { name: "Movie shadow audit" }).waitFor();
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.includes("movieShadow."))
+      auditRequests.push(request.url());
+  });
+  await page.goto(new URL("/movie-dual-write", url).href);
+  await page.getByRole("heading", { name: "Movie sync", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Sync new requests" }).waitFor();
+  assert.equal(await page.getByRole("heading", { name: "Seerr dual-write" }).count(), 1);
+  assert.equal(await page.getByRole("navigation").getByRole("link", { name: "Movie sync" }).count(), 1);
+  assert.equal(await page.getByRole("navigation").getByRole("link", { name: "Shadow audit" }).count(), 0);
+  assert.equal(await page.locator("#radarr-audit").getAttribute("open"), null);
+  assert.equal(auditRequests.length, 0);
+  await page.getByText("Radarr comparison audit", { exact: true }).click();
   await page.getByText("#1 A Fixture Film", { exact: false }).click();
   await page
     .getByText("Podible: unobservable. No source files remain", { exact: true })
@@ -54,6 +69,7 @@ try {
   await page.getByRole("button", { name: "Save review" }).click();
   await page.getByText("Review saved.", { exact: true }).waitFor();
   await page.reload();
+  await page.getByText("Radarr comparison audit", { exact: true }).click();
   await page.getByText("#1 A Fixture Film", { exact: false }).click();
   await page
     .getByText("Optional audit feedback (never blocks acquisition)", {
@@ -67,7 +83,21 @@ try {
     throw new Error("Review did not persist");
   await page.getByRole("button", { name: "Observe Radarr now" }).click();
   await page.getByText("Observation queued.").waitFor();
+  const artifacts = path.resolve("tmp/movies-lab");
+  await mkdir(artifacts, { recursive: true });
+  await page.screenshot({ path: path.join(artifacts, "movie-sync-desktop.png"), fullPage: true, animations: "disabled" });
+  await page.getByText("Radarr comparison audit", { exact: true }).click();
+  await page.getByRole("button", { name: "Observe Radarr now" }).waitFor({ state: "detached" });
+  const requestsWhenClosed = auditRequests.length;
+  await page.waitForTimeout(5500);
+  assert.equal(auditRequests.length, requestsWhenClosed, "Collapsed audit continued polling");
+  await page.goto(new URL("/movie-shadow?history=1", url).href);
+  assert.equal(new URL(page.url()).pathname, "/movie-dual-write");
+  assert.equal(new URL(page.url()).search, "?history=1");
+  assert.equal(new URL(page.url()).hash, "#radarr-audit");
+  await page.getByRole("button", { name: "Observe Radarr now" }).waitFor();
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: path.join(artifacts, "movie-sync-mobile.png"), fullPage: true, animations: "disabled" });
   if (
     await page.evaluate(
       "document.documentElement.scrollWidth > window.innerWidth",
@@ -76,7 +106,7 @@ try {
     throw new Error("Shadow page overflows mobile viewport");
   if (errors.length) throw new Error(errors.join("\n"));
   console.log(
-    "Shadow browser: admin evidence, persistent review, sync, mobile passed",
+    "Movie sync browser: single admin page, lazy audit, stopped polling, legacy redirect, persistent review, sync, mobile passed",
   );
 } finally {
   await browser.close();

@@ -38,6 +38,8 @@ export function createSpaRoutes(directory = SPA_BUILD_DIRECTORY) {
       )
     )
       return c.notFound();
+    if (/^movie-shadow(?:\/\d+)?\/?$/.test(relative))
+      return c.redirect(`/movie-dual-write${url.search}#radarr-audit`, 308);
     if (/^\/app(?:\/|$)/.test(pathname))
       return c.redirect(`/${relative}${url.search}`, 308);
     const entry = Bun.file(path.join(directory, "index.html"));

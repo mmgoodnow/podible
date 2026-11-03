@@ -7,8 +7,7 @@ import {
 } from "@tanstack/react-query";
 import { rpc, TRPCProvider, useTRPC } from "./rpc";
 import { Link, useLocation } from "./router";
-import { MovieShadow } from "./movie-shadow";
-import { MovieDualWrite } from "./movie-dual-write";
+import { MovieSync } from "./movie-sync";
 import { Library, Catalog, BookCollection } from "./books";
 import { BookDetail } from "./book-detail";
 import {
@@ -66,16 +65,24 @@ function App() {
             Requests
           </Link>
           {session.data?.user.isAdmin && (
-            <Link href="/movie-shadow">Shadow audit</Link>
-          )}
-          {session.data?.user.isAdmin && (
-            <Link href="/movie-dual-write">Movie sync</Link>
+            <Link
+              href="/movie-dual-write"
+              aria-current={route === "/movie-dual-write" ? "page" : undefined}
+            >
+              Movie sync
+            </Link>
           )}
           {session.data?.user.isAdmin && <a href="/admin/settings">Settings</a>}
         </nav>
         {session.data && <a href="/logout">Sign out</a>}
       </header>
-      <main className={["/", "/library", "/add"].includes(route) ? "compact-main" : undefined}>
+      <main
+        className={
+          ["/", "/library", "/add", "/movie-dual-write"].includes(route)
+            ? "compact-main"
+            : undefined
+        }
+      >
         {session.isPending ? (
           <p role="status">Checking your session...</p>
         ) : session.isError ? (
@@ -130,9 +137,11 @@ function ActorLibrary({ isAdmin }: { isAdmin: boolean }) {
     <QueryClientProvider client={actorClient}>
       <TRPCProvider trpcClient={rpc} queryClient={actorClient}>
         {route === "/movie-dual-write" ? (
-          <MovieDualWrite />
-        ) : route === "/movie-shadow" ? (
-          <MovieShadow />
+          isAdmin ? (
+            <MovieSync />
+          ) : (
+            <p role="alert">Administrator access required.</p>
+          )
         ) : /^\/movies\/\d+$/.test(route) ? (
           <MovieDetail key={route} tmdbId={Number(route.split("/").at(-1))} />
         ) : route === "/movies" ? (

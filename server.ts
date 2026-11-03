@@ -92,8 +92,6 @@ export async function startServer(frontend?: HTMLBundle) {
             "/movies/:id": frontend,
             "/requests": frontend,
             "/requests/:id": frontend,
-            "/movie-shadow": frontend,
-            "/movie-shadow/:id": frontend,
             "/movie-dual-write": frontend,
           },
           development: { hmr: true, console: true },

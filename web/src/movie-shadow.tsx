@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTRPC } from "./rpc";
-import { MovieDualWrite } from "./movie-dual-write";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../src/trpc";
 type Case = inferRouterOutputs<AppRouter>["movieShadow"]["get"]["case"];
@@ -113,7 +112,7 @@ function Review({ item }: { item: Case }) {
     </div>
   );
 }
-export function MovieShadow() {
+export function MovieShadowAudit() {
   const trpc = useTRPC();
   const cache = useQueryClient();
   const [cursor, setCursor] = useState<number>();
@@ -134,14 +133,6 @@ export function MovieShadow() {
   );
   return (
     <>
-      <span className="eyebrow">ADMIN / PIPELINE COMPARISON</span>
-      <h1>Movie shadow audit</h1>
-      <p>
-        Independent acquisitions run in Podible’s isolated library; Radarr’s
-        downloads and main library are never modified. The import audits below
-        remain read-only comparisons against Radarr’s existing files.
-      </p>
-      <MovieDualWrite />
       {status.isError ? (
         <p role="alert">{status.error.message}</p>
       ) : (

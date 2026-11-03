@@ -528,7 +528,8 @@ persistence, no-delete removal, authenticated loopback RPC and independent recov
 
 ## 10. Shadow Observation and Admin API
 
-Implemented at `/movie-shadow`, with admin-only JSON-RPC and typed tRPC:
+Available in the collapsed Radarr comparison audit on `/movie-dual-write`, with
+admin-only JSON-RPC and typed tRPC. Old `/movie-shadow` links redirect there:
 
 ```ts
 type ShadowInput = import("../src/movies/shadow-types").ShadowInput;
