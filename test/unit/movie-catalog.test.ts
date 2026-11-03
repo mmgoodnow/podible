@@ -32,6 +32,34 @@ test("TMDB search normalizes identity and caches without exposing download or cr
   );
   expect(JSON.stringify(results)).not.toContain("fixture-secret");
 });
+test("TMDB accepts a legacy API key in the existing credential setting", async () => {
+  const key = "0123456789abcdef0123456789abcdef";
+  const calls: string[] = [];
+  const catalog = new TmdbCatalog(` ${key} `, async (input, init) => {
+    calls.push(input);
+    const url = new URL(input);
+    expect(url.origin).toBe("https://api.themoviedb.org");
+    expect(url.searchParams.get("api_key")).toBe(key);
+    expect(url.searchParams.get("query")).toBe("a & b");
+    expect(new Headers(init?.headers).has("Authorization")).toBe(false);
+    expect(init?.redirect).toBe("error");
+    return Response.json({ results: [] });
+  });
+  expect(await catalog.search("a & b")).toEqual([]);
+  expect(await catalog.search("a & b")).toEqual([]);
+  expect(calls).toHaveLength(1);
+});
+test("TMDB failures do not expose legacy API keys", async () => {
+  const key = "0123456789abcdef0123456789abcdef";
+  const catalog = new TmdbCatalog(key, async () =>
+    new Response("", { status: 401 }),
+  );
+  await expect(catalog.get(11)).rejects.toThrow("TMDB returned 401");
+  const offline = new TmdbCatalog(key, async (url) => {
+    throw new Error(`Could not fetch ${url}`);
+  });
+  await expect(offline.get(11)).rejects.toThrow("TMDB is temporarily unreachable");
+});
 test("TMDB failures are not empty results; rate limits retain retry information", async () => {
   const catalog = new TmdbCatalog(
     "fixture",

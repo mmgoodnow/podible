@@ -36,8 +36,11 @@ configuration. There is no global `movies.enabled` flag and no movie indexer arr
 
 Use actual service URLs, including URL bases only when configured. Keys travel in
 `X-Api-Key` headers for discovery/feed calls; redirects are not followed. Seerr
-provides catalog search/details when `movies.tmdbAccessToken` is absent. Podible
-does not extract or copy Seerr's bundled TMDB credential. The agent uses the
+provides catalog search/details when `movies.tmdbAccessToken` is absent. That
+existing setting accepts either a TMDB read-access bearer token or a legacy v3
+API key. An operator may temporarily supply Seerr's bundled key explicitly;
+Podible does not automatically discover it or embed it in the codebase. Replace
+it with your own credential in the same setting when available. The agent uses the
 existing `agents.apiKey`. Keep the working server token in `movies.plexToken`;
 do not assume an existing owner-auth token is valid for Plex library operations.
 

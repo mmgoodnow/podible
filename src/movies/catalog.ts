@@ -58,17 +58,23 @@ export class TmdbCatalog implements MovieCatalog {
       );
     const cached = this.cache.get(route);
     if (cached && cached.until > Date.now()) return cached.value;
-    const response = await this.fetcher(
-      `https://api.themoviedb.org/3${route}`,
-      {
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-          Accept: "application/json",
-        },
+    const credential = this.token.trim();
+    const url = new URL(`https://api.themoviedb.org/3${route}`);
+    const headers: Record<string, string> = { Accept: "application/json" };
+    // TMDB issues both legacy v3 API keys and v4 bearer read-access tokens.
+    if (/^[a-f0-9]{32}$/i.test(credential))
+      url.searchParams.set("api_key", credential);
+    else headers.Authorization = `Bearer ${credential}`;
+    let response: Response;
+    try {
+      response = await this.fetcher(url.href, {
+        headers,
         signal: AbortSignal.timeout(15_000),
         redirect: "error",
-      },
-    );
+      });
+    } catch {
+      throw new CatalogUnavailableError("TMDB is temporarily unreachable");
+    }
     if (!response.ok) {
       const raw = response.headers.get("retry-after");
       const delay = raw === null ? NaN : Number(raw);
