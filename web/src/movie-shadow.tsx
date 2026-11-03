@@ -68,44 +68,47 @@ function Review({ item }: { item: Case }) {
         </button>
       )}
       {retry.error && <p role="alert">{retry.error.message}</p>}
-      <form
-        className="shadow-review"
-        onSubmit={(event) => {
-          event.preventDefault();
-          mutation.mutate({ caseId: item.id, verdict, notes });
-        }}
-      >
-        <label>
-          Human verdict
-          <select
-            value={verdict}
-            onChange={(event) =>
-              setVerdict(event.target.value as typeof verdict)
-            }
-          >
-            {[
-              "uncertain",
-              "podible-correct",
-              "radarr-correct",
-              "both-correct",
-              "both-wrong",
-            ].map((value) => (
-              <option key={value}>{value}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Review notes
-          <textarea
-            value={notes}
-            maxLength={4000}
-            onChange={(event) => setNotes(event.target.value)}
-          />
-        </label>
-        <button disabled={mutation.isPending}>Save review</button>
-        {mutation.error && <p role="alert">{mutation.error.message}</p>}
-        {mutation.isSuccess && <p role="status">Review saved.</p>}
-      </form>
+      <details>
+        <summary>Optional audit feedback (never blocks acquisition)</summary>
+        <form
+          className="shadow-review"
+          onSubmit={(event) => {
+            event.preventDefault();
+            mutation.mutate({ caseId: item.id, verdict, notes });
+          }}
+        >
+          <label>
+            Human verdict
+            <select
+              value={verdict}
+              onChange={(event) =>
+                setVerdict(event.target.value as typeof verdict)
+              }
+            >
+              {[
+                "uncertain",
+                "podible-correct",
+                "radarr-correct",
+                "both-correct",
+                "both-wrong",
+              ].map((value) => (
+                <option key={value}>{value}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Review notes
+            <textarea
+              value={notes}
+              maxLength={4000}
+              onChange={(event) => setNotes(event.target.value)}
+            />
+          </label>
+          <button disabled={mutation.isPending}>Save review</button>
+          {mutation.error && <p role="alert">{mutation.error.message}</p>}
+          {mutation.isSuccess && <p role="status">Review saved.</p>}
+        </form>
+      </details>
     </div>
   );
 }
@@ -113,12 +116,13 @@ export function MovieShadow() {
   const trpc = useTRPC();
   const cache = useQueryClient();
   const [cursor, setCursor] = useState<number>();
+  const [includeHistory, setIncludeHistory] = useState(false);
   const status = useQuery(
     trpc.movieShadow.status.queryOptions({}, { refetchInterval: 5000 }),
   );
   const cases = useQuery(
     trpc.movieShadow.list.queryOptions(
-      { limit: 25, cursor },
+      { limit: 25, cursor, includeHistory },
       { refetchInterval: 5000 },
     ),
   );
@@ -183,6 +187,17 @@ export function MovieShadow() {
       ) : (
         <>
           <h2>Import cases</h2>
+          <label>
+            <input
+              type="checkbox"
+              checked={includeHistory}
+              onChange={(event) => {
+                setIncludeHistory(event.target.checked);
+                setCursor(undefined);
+              }}
+            />{" "}
+            Show superseded decisions
+          </label>
           {!cases.data.items.length && <p>No cases captured yet.</p>}
           {cases.data.items.map((item) => (
             <details className="panel" key={item.id}>

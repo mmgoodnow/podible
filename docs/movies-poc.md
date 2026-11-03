@@ -94,8 +94,10 @@ missing/replaced content mounts are errors, not permission to bulldoze data.
 Do not change managed roots/client identity during an acquisition; retry only
 after addressing the configuration mismatch.
 
-The default policy requires the theatrical cut, English audio, SDR and allowed
-720p/1080p tiers. Unknown facts need verification; they are not silently assumed.
+The default policy accepts any cut, language and dynamic range within the allowed
+720p/1080p tiers. Exact cuts or audio languages can be constrained explicitly;
+unknown unconstrained facts do not block automation. Unknown required facts are
+investigated or lead to automatic selection of another release, not human approval.
 Quality is an ordered tier plus bounded within-tier preference, not a weighted
 sum that can override hard constraints. Equal/lower quality is not an upgrade.
 

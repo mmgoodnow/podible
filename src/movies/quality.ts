@@ -33,8 +33,8 @@ export const movieQualityPolicySchema = z
         }),
       )
       .min(1),
-    cut: z.string().trim().min(1),
-    audioLanguages: z.array(z.string().trim().min(2)).min(1),
+    cut: z.string().trim().min(1).nullable(),
+    audioLanguages: z.array(z.string().trim().min(2)),
     allowedCodecs: z.array(z.string().trim().min(1)).min(1),
     preferredCodecs: z.array(z.string().trim().min(1)).default([]),
     allowHdr: z.boolean(),
@@ -51,11 +51,11 @@ export const defaultMovieQualityPolicy: MovieQualityPolicy = {
     { source: "web", resolution: 1080 },
     { source: "bluray", resolution: 1080 },
   ],
-  cut: "theatrical",
-  audioLanguages: ["en"],
+  cut: null,
+  audioLanguages: [],
   allowedCodecs: ["h264", "hevc", "av1"],
   preferredCodecs: [],
-  allowHdr: false,
+  allowHdr: true,
   minimumPreferenceGain: 10,
   preferProper: true,
 };
@@ -91,12 +91,15 @@ export function evaluateMovieQuality(
   const rejected: string[] = [];
   const missing: string[] = [];
   if (!facts.identityVerified) missing.push("movie identity is not verified");
-  if (facts.cut === null) missing.push("cut is unknown");
-  else if (facts.cut !== policy.cut) rejected.push("wrong cut");
+  if (policy.cut !== null) {
+    if (facts.cut === null) missing.push("required cut is unknown");
+    else if (facts.cut !== policy.cut) rejected.push("wrong cut");
+  }
   if (!facts.videoCodec) missing.push("video codec is unknown");
   else if (!policy.allowedCodecs.includes(facts.videoCodec))
     rejected.push("video codec is not allowed");
-  if (!facts.dynamicRange) missing.push("dynamic range is unknown");
+  if (!facts.dynamicRange && !policy.allowHdr)
+    missing.push("dynamic range is unknown");
   else if (facts.dynamicRange === "hdr" && !policy.allowHdr)
     rejected.push("HDR is not allowed");
   const languages = facts.audioLanguages.map(languageCode);
@@ -104,8 +107,10 @@ export function evaluateMovieQuality(
     !policy.audioLanguages.every((language) => languageCode(language) !== null)
   )
     throw new Error("Policy requires recognized language codes");
-  if (!languages.length) missing.push("audio language is unknown");
+  if (policy.audioLanguages.length && !languages.length)
+    missing.push("audio language is unknown");
   else if (
+    policy.audioLanguages.length &&
     !policy.audioLanguages.some((language) =>
       languages.includes(languageCode(language)),
     )

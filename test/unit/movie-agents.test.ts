@@ -65,3 +65,87 @@ test("movie agent uses the shared model, bounded structured selection and no pro
   expect(modelName).toBe(TEXT_AGENT_MODEL);
   expect(JSON.stringify(requests)).not.toContain("hidden");
 });
+
+test("import agent checks real policy in its tool loop without escalating irrelevant unknown facts", async () => {
+  const requests: ModelRequest[] = [];
+  const decision = {
+    fileIndex: 0,
+    facts: { identityVerified: true, cut: null, source: "web", proper: null },
+    reason:
+      "Matching playable feature; no edition or language restriction was requested",
+  };
+  const provider: ModelProvider = {
+    getModel: () => ({
+      getResponse: async (request) => {
+        requests.push(request);
+        return {
+          usage: new Usage(),
+          output:
+            requests.length === 1
+              ? [
+                  {
+                    type: "function_call",
+                    callId: "assess-1",
+                    name: "assessCandidate",
+                    arguments: JSON.stringify({
+                      fileIndex: 0,
+                      facts: decision.facts,
+                    }),
+                    status: "completed",
+                  },
+                ]
+              : [
+                  {
+                    type: "message",
+                    role: "assistant",
+                    status: "completed",
+                    content: [
+                      { type: "output_text", text: JSON.stringify(decision) },
+                    ],
+                  },
+                ],
+        };
+      },
+      getStreamedResponse: async function* () {
+        throw new Error("unused");
+      },
+    }),
+  };
+  const result = await createMovieDecider(defaultSettings(), provider).inspect({
+    movie: fixtureMovie,
+    policy: defaultMovieQualityPolicy,
+    offer: {
+      key: "test",
+      title: "A Fixture Film",
+      provider: "fixture",
+      sizeBytes: null,
+      seeders: null,
+      url: "",
+      infoHash: null,
+      attributes: {},
+    },
+    selection: { offerKey: "test", facts: fixtureFacts(), reason: "Selected" },
+    files: [
+      {
+        index: 0,
+        name: "feature.mkv",
+        sizeBytes: 1234,
+        probe: {
+          streams: [
+            {
+              codec_type: "video",
+              codec_name: "h264",
+              width: 1920,
+              height: 1080,
+            },
+            { codec_type: "audio", tags: { language: "hin" } },
+          ],
+        },
+      },
+    ],
+  });
+  expect(result.fileIndex).toBe(0);
+  expect(requests).toHaveLength(2);
+  expect(JSON.stringify(requests[1]?.input)).toContain("eligible");
+  expect(JSON.stringify(requests[1]?.input)).toContain("import");
+});

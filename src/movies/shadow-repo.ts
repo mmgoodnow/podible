@@ -96,13 +96,16 @@ export class MovieShadowRepo {
         : null,
     };
   }
-  list(before?: number, limit = 50) {
+  list(before?: number, limit = 50, includeHistory = false) {
     return (
       this.db
         .query(
-          "SELECT id FROM movie_shadow_cases WHERE id < ? ORDER BY id DESC LIMIT ?",
+        `SELECT c.id FROM movie_shadow_cases c WHERE c.id < ? AND (? OR NOT EXISTS (
+          SELECT 1 FROM movie_shadow_cases newer WHERE newer.id > c.id
+          AND json_extract(newer.input_json, '$.observation.key') = json_extract(c.input_json, '$.observation.key')
+        )) ORDER BY c.id DESC LIMIT ?`,
         )
-        .all(before ?? Number.MAX_SAFE_INTEGER, limit) as { id: number }[]
+      .all(before ?? Number.MAX_SAFE_INTEGER, includeHistory ? 1 : 0, limit) as { id: number }[]
     ).map(({ id }) => this.get(id)!);
   }
 }

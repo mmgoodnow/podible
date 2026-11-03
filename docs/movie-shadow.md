@@ -34,3 +34,11 @@ Administrator-only `/app/movie-shadow` shows configuration with secrets omitted,
 SQLite `movie_shadow_cases` stores immutable input/policy/file fingerprints, result and human review. Reflow owns execution status/retries and checkpoints successful probes/agent responses. Repeated polls of unchanged evidence do not repay the agent. Inputs are bounded to 50 videos/5,000 directory entries/6 levels; symlink or path escapes fail closed. Missing/moved files are `unobservable`, not evidence of incorrect acquisition. History fallback to an already imported library file is labeled `library-fallback` and cannot evaluate the original download's file-selection ambiguity.
 
 Radarr histories are whitelisted rather than persisted wholesale: torrent download URLs, passkeys and credentials are not retained. Shadow results reflect Podible's configured quality policy, not necessarily Radarr's quality profile. A disagreement is a review case, not a claim that Radarr is wrong. Human verdicts: `podible-correct`, `radarr-correct`, `both-correct`, `both-wrong`, `uncertain`.
+
+Human audit is optional and never gates acquisition. The import agent chooses the
+matching playable feature and checks actual policy through `assessCandidate`;
+native acquisition automatically tries another release when a real requirement
+cannot be met. Default policy does not impose unrequested edition/language/HDR
+restrictions. The audit list shows the latest evidence/policy case per observation
+by default; historical case IDs remain readable and `list({includeHistory:true})`
+includes superseded decisions without rewriting their evidence.

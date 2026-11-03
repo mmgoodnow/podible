@@ -14,7 +14,7 @@ import {
   fixtureMovie,
 } from "../fixtures/movie-services";
 
-async function setup() {
+async function setup(requestedPolicy = policy) {
   const root = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "movie-acquire-")),
   );
@@ -34,7 +34,7 @@ async function setup() {
     username: "requester",
     isAdmin: false,
   });
-  const request = repo.movies.request(user.id, fixtureMovie, policy);
+  const request = repo.movies.request(user.id, fixtureMovie, requestedPolicy);
   const fixture = createFixtureMovieServices(root);
   const context = {
     repo,
@@ -140,7 +140,7 @@ test("stalled movie downloads are retained and replaced, with visible recovery e
 
 for (const failure of ["unplayable", "wrong-movie", "wrong-language"] as const) {
   test(`completed ${failure} release is retained and reacquired from another release`, async () => {
-    const s = await setup();
+    const s = await setup({ ...policy, audioLanguages: ["en"] });
     try {
       s.fixture.addOffer("bad-content", 1920);
       s.fixture.addOffer("valid-content", 1280);

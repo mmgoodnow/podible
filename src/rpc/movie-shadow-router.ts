@@ -56,13 +56,14 @@ export const movieShadowRouter = defineRouter({
     paramsSchema: z.object({
       cursor: positiveIntSchema.optional(),
       limit: z.number().int().min(1).max(100).default(50),
+      includeHistory: z.boolean().default(false),
     }),
     resultSchema: z.object({
       items: z.array(shadowCaseSchema),
       nextCursor: z.number().nullable(),
     }),
     handler(ctx, p) {
-      const items = ctx.repo.movieShadow.list(p.cursor, p.limit);
+      const items = ctx.repo.movieShadow.list(p.cursor, p.limit, p.includeHistory);
       return {
         items,
         nextCursor: items.length === p.limit ? items.at(-1)!.id : null,

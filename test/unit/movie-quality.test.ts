@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   assessMovieUpgrade,
+  defaultMovieQualityPolicy,
   evaluateMovieQuality,
   type MovieFacts,
   type MovieQualityPolicy,
@@ -50,6 +51,12 @@ test("quality tiers handle cropped movie dimensions and language aliases", () =>
     assessMovieUpgrade(policy, facts, { ...facts, width: 1920, height: 800 })
       .upgrade,
   ).toBe(true);
+});
+test("default policy automates valid films without inventing cut, language or HDR restrictions", () => {
+  expect(evaluateMovieQuality(defaultMovieQualityPolicy, { ...facts, cut: null, dynamicRange: null, audioLanguages: [] }).eligibility).toBe("eligible");
+  expect(evaluateMovieQuality(defaultMovieQualityPolicy, { ...facts, cut: "uncut", audioLanguages: ["hin"], dynamicRange: "hdr" }).eligibility).toBe("eligible");
+  expect(evaluateMovieQuality(defaultMovieQualityPolicy, { ...facts, identityVerified: false }).eligibility).toBe("needs-verification");
+  expect(evaluateMovieQuality(policy, { ...facts, cut: null }).eligibility).toBe("needs-verification");
 });
 test("wrong identity/cut/language, unknown facts and device incompatibility cannot be scored into an upgrade", () => {
   for (const change of [

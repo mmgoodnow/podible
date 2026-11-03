@@ -96,7 +96,8 @@ test("shadow observes independently, deduplicates immutable inputs, and never mo
     );
     await fs.writeFile(path.join(root, "feature.mkv"), "different evidence");
     await syncMovieShadow(ctx);
-    expect(repo.movieShadow.list()).toHaveLength(2);
+    expect(repo.movieShadow.list(undefined, 50, true)).toHaveLength(2);
+    expect(repo.movieShadow.list()).toHaveLength(1);
     observation.sourcePaths = ["/downloads/missing.mkv"];
     await syncMovieShadow(ctx);
     const missing = repo.movieShadow.list()[0]!;

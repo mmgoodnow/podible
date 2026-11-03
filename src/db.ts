@@ -1,5 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { defaultMovieQualityPolicy } from "./movies/quality";
 
 import { Database } from "bun:sqlite";
 import { MOVIES_SCHEMA_SQL } from "./movies/schema";
@@ -1137,6 +1139,17 @@ export function runMigrations(db: Database): void {
   `));
   apply(38, () => db.exec(MOVIE_SHADOW_SCHEMA_SQL));
   apply(39, () => db.exec("UPDATE settings SET value_json = json_remove(value_json, '$.movies.enabled')"));
+  apply(40, () => {
+    const row = db.query("SELECT value_json FROM settings WHERE id=1").get() as { value_json: string } | null;
+    if (!row) return;
+    const settings = JSON.parse(row.value_json);
+    const legacyDefault = { ...defaultMovieQualityPolicy, cut: "theatrical", audioLanguages: ["en"], allowHdr: false };
+    // Only replace our own untouched stock policy, never a customized preference.
+    if (isDeepStrictEqual(settings.movies?.qualityPolicy, legacyDefault)) {
+      settings.movies.qualityPolicy = defaultMovieQualityPolicy;
+      db.query("UPDATE settings SET value_json=? WHERE id=1").run(JSON.stringify(settings));
+    }
+  });
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */
