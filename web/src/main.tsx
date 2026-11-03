@@ -66,7 +66,6 @@ function App() {
           >
             Requests
           </Link>
-          <a href="/classic">Classic view</a>
           {session.data?.user.isAdmin && (
             <Link href="/app/movie-shadow">Shadow audit</Link>
           )}

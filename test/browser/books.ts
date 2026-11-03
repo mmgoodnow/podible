@@ -162,6 +162,18 @@ try {
   assert.equal(download.suggestedFilename(), "Piranesi.pdf");
   assert.match(await readFile((await download.path())!, "utf8"), /^%PDF/);
 
+  assert.equal(await page.getByRole("link", { name: /Classic/ }).count(), 0);
+  await page.getByText("Manifestation diagnostics", { exact: true }).click();
+  const tree = page.getByTestId(`manifestation-${fixture.manifestationIds[1]}`);
+  await tree.locator("summary").first().click();
+  await tree.getByText("Chapter curation: completed", { exact: true }).waitFor();
+  assert.match(await tree.innerText(), /2\/2 boundaries/);
+  assert.match(await tree.innerText(), /Budget: 2\/12 agent calls/);
+  assert.match(await tree.innerText(), /fixture-audio\.mp3/);
+  assert.match(await tree.innerText(), /Release \d+: Alternate narration/);
+  const classic = await context.request.get(new URL(`/classic/book/${fixture.bookId}`, fixture.url).href);
+  assert.equal(classic.status(), 404);
+
   await page.screenshot({
     path: path.join(artifacts, "book-desktop.png"),
     fullPage: true,
@@ -427,6 +439,11 @@ try {
     await page.getByText("Find a specific edition", { exact: true }).count(),
     0,
   );
+  assert.equal(await page.getByText("Manifestation diagnostics", { exact: true }).count(), 0);
+  const forbiddenDiagnostics = await context.request.get(
+    new URL(`/api/trpc/book.diagnostics?input=${encodeURIComponent(JSON.stringify({ bookId: fixture.bookId }))}`, fixture.url).href,
+  );
+  assert.equal(forbiddenDiagnostics.status(), 403);
   await context.clearCookies();
   await page.reload();
   await page.getByRole("link", { name: "Sign in", exact: true }).waitFor();

@@ -3,6 +3,8 @@ import { Database } from "bun:sqlite";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createTRPCClient, httpLink } from "@trpc/client";
+import type { AppRouter } from "../../src/trpc";
 
 const isolatedDataDir = await mkdtemp(path.join(os.tmpdir(), "podible-http-test-data-"));
 
@@ -60,7 +62,7 @@ afterAll(async () => {
 });
 
 describe("podible http", () => {
-  test("serves root html user landing page", async () => {
+  test("preserves protected admin pages and navigation", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -75,16 +77,6 @@ describe("podible http", () => {
       sha: "123456789abcdef",
       message: "Test commit subject",
     });
-    const home = await fetchHandler(new Request("http://localhost/classic"));
-    expect(home.status).toBe(200);
-    expect(home.headers.get("content-type")).toContain("text/html");
-    const body = await home.text();
-    expect(body.includes("Podible")).toBe(true);
-    expect(body.includes("Sign in")).toBe(true);
-    expect(body.includes("Continue with Plex")).toBe(true);
-    expect(body.includes('<nav class="site-nav">')).toBe(false);
-    expect(body.includes(">Admin<")).toBe(false);
-
     const adminRedirect = await fetchHandler(new Request("http://localhost/admin"));
     expect(adminRedirect.status).toBe(303);
     expect(adminRedirect.headers.get("location")).toBe("/login?redirectTo=%2Fadmin");
@@ -315,6 +307,14 @@ describe("podible http", () => {
         new Request("http://localhost/downloads/1", { method: "GET" }),
         new Request("http://localhost/downloads/1/retry", { method: "POST" }),
         new Request("http://localhost/import/reconcile", { method: "POST" }),
+        new Request("http://localhost/classic", { method: "GET" }),
+        new Request("http://localhost/classic/library?q=Dune", { method: "GET" }),
+        new Request("http://localhost/classic/add?q=Dune", { method: "GET" }),
+        new Request(`http://localhost/classic/book/${createdRpc.result.book.id}`, { method: "GET" }),
+        new Request("http://localhost/classic/unknown", { method: "GET" }),
+        new Request("http://localhost/classic/add", { method: "POST", body: "openLibraryKey=%2Fworks%2FOL123W" }),
+        new Request("http://localhost/add", { method: "POST", body: "openLibraryKey=%2Fworks%2FOL123W" }),
+        new Request(`http://localhost/book/${createdRpc.result.book.id}/acquire`, { method: "POST", body: "media=audio" }),
       ];
       for (const request of removed) {
         const response = await fetchHandler(
@@ -326,6 +326,8 @@ describe("podible http", () => {
         );
         expect(response.status).toBe(404);
       }
+      expect(repo.listBooks(10).items).toHaveLength(1);
+      expect(repo.listJobsByType("acquire")).toHaveLength(1);
 
       db.close();
     } finally {
@@ -333,7 +335,7 @@ describe("podible http", () => {
     }
   });
 
-  test("serves library and book detail pages", async () => {
+  test("exposes library editions, release history, transcripts and downloads over RPC", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -375,13 +377,15 @@ describe("podible http", () => {
         },
       ],
     });
+    const transcriptPath = path.join(isolatedDataDir, "dune-transcript.json");
+    await writeFile(transcriptPath, JSON.stringify({ text: "Fear is the mind-killer", words: [] }));
     repo.upsertManifestationTranscript({
       manifestationId: standardManifestation.id,
       status: "succeeded",
       source: "whisper_transcript",
       algorithmVersion: "test",
       fingerprint: "test",
-      transcriptPath: path.join(isolatedDataDir, "dune-transcript.json"),
+      transcriptPath,
     });
     const graphicAudio = repo.addManifestation({
       bookId: book.id,
@@ -389,7 +393,7 @@ describe("podible http", () => {
       label: "GraphicAudio dramatization",
       editionNote: "full cast",
     });
-    repo.addAsset({
+    const graphicAsset = repo.addAsset({
       bookId: book.id,
       kind: "single",
       mime: "audio/mpeg",
@@ -409,90 +413,65 @@ describe("podible http", () => {
       ],
     });
 
+    const ebookManifestation = repo.addManifestation({ bookId: book.id, kind: "ebook" });
+    const ebookPath = path.join(isolatedDataDir, "dune.pdf");
+    await writeFile(ebookPath, "pdf bytes");
+    const ebookAsset = repo.addAsset({
+      bookId: book.id,
+      manifestationId: ebookManifestation.id,
+      kind: "single",
+      mime: "application/pdf",
+      totalSize: 9,
+      files: [{ path: ebookPath, size: 9, start: 0, end: 8, durationMs: 0 }],
+    });
+
     const fetchHandler = createPodibleFetchHandler(repo, Date.now());
     const userCookie = createBrowserSessionCookie(repo, { username: "reader" });
-    const library = await fetchHandler(
-      new Request("http://localhost/classic/library", {
-        headers: { cookie: userCookie },
-      })
-    );
-    expect(library.status).toBe(200);
-    const libraryBody = await library.text();
-    expect(libraryBody.includes("Library")).toBe(true);
-    expect(libraryBody.includes("Dune")).toBe(true);
-    expect(libraryBody.includes("Search by title or author")).toBe(true);
+    const library = await rpc(fetchHandler, "library.list", {}, 1, { cookie: userCookie });
+    expect(library.result.items).toHaveLength(1);
+    expect(library.result.items[0]).toMatchObject({ id: book.id, title: "Dune" });
 
-    const detail = await fetchHandler(
-      new Request(`http://localhost/classic/book/${book.id}`, {
-        headers: { cookie: userCookie },
-      })
+    const detail = await rpc(fetchHandler, "library.get", { bookId: book.id }, 2, { cookie: userCookie });
+    expect(detail.error).toBeUndefined();
+    expect(detail.result.book).toMatchObject({ id: book.id, audioStatus: "imported", ebookStatus: "imported" });
+    expect(detail.result.releases).toMatchObject([{ id: standardRelease.id, title: "Dune Standard Audio" }]);
+    expect(detail.result.assets.map((asset: any) => asset.id).sort()).toEqual(
+      [standardAudio.id, graphicAsset.id, ebookAsset.id].sort()
     );
-    expect(detail.status).toBe(200);
-    const detailBody = await detail.text();
-    expect(detailBody.includes("Play audio")).toBe(true);
-    expect(detailBody.includes("Available now")).toBe(true);
-    expect(detailBody.includes("data-transcript-panel")).toBe(true);
-    expect(detailBody.includes(`/transcripts/m/${standardAudio.manifestation_id}.json`)).toBe(true);
-    expect(detailBody.includes("force: true")).toBe(true);
-    expect(detailBody.includes("Artwork")).toBe(true);
-    expect(detailBody.includes("Load alternate covers")).toBe(true);
-    expect(detailBody.includes("data-cover-panel")).toBe(true);
-    // Stored transcript payloads surface the manifestation-level transcript URL.
-    expect(detailBody.includes("Out of date")).toBe(true);
-    expect(detailBody.includes("Find audio")).toBe(true);
-    expect(detailBody.includes("Release history")).toBe(true);
-    expect(detailBody.includes("Audio edition")).toBe(true);
-    expect(detailBody.includes("GraphicAudio dramatization")).toBe(true);
-    expect(detailBody.includes(`/stream/m/${standardAudio.manifestation_id}.`)).toBe(true);
-    expect(detailBody.includes("Something wrong?")).toBe(true);
-    expect(detailBody.includes("Report wrong audio")).toBe(true);
-    expect(detailBody.includes("data-report-import-issue")).toBe(true);
-    expect(detailBody.includes("Find a specific edition")).toBe(false);
-    expect(detailBody.includes("data-release-search-panel")).toBe(false);
-    expect(detailBody.includes("library.searchReleases")).toBe(false);
-    expect(detailBody.includes("library.createManifestationFromSearch")).toBe(false);
-    expect(detailBody.includes("Manual Import")).toBe(false);
-    expect(detailBody.includes("Admin only")).toBe(false);
-    expect(detailBody.includes("snatch.create")).toBe(false);
-    expect(detailBody.includes("Manifestations")).toBe(false);
+    const playback = detail.result.book.playback;
+    expect(playback.audio).toMatchObject({
+      manifestationId: standardManifestation.id,
+      streamUrl: `http://localhost/stream/m/${standardManifestation.id}.m4a`,
+      chaptersUrl: `http://localhost/chapters/m/${standardManifestation.id}.json`,
+      transcriptUrl: `http://localhost/transcripts/m/${standardManifestation.id}.json`,
+    });
+    expect(playback.audioOptions).toHaveLength(2);
+    expect(playback.audioOptions.find((option: any) => option.manifestationId === graphicAudio.id)).toMatchObject({
+      label: "GraphicAudio dramatization",
+      editionNote: "full cast",
+      streamUrl: `http://localhost/stream/m/${graphicAudio.id}.mp3`,
+      transcriptUrl: null,
+    });
+    expect(playback.ebook).toEqual({
+      assetId: ebookAsset.id,
+      downloadUrl: `http://localhost/ebook/${ebookAsset.id}`,
+      mimeType: "application/pdf",
+      sizeBytes: 9,
+    });
+    expect(library.result.items[0].playback).toEqual(playback);
 
-    const adminCookie = createBrowserSessionCookie(repo, { isAdmin: true, username: "admin" });
-    const adminDetail = await fetchHandler(
-      new Request(`http://localhost/classic/book/${book.id}`, {
-        headers: { cookie: adminCookie },
-      })
-    );
-    expect(adminDetail.status).toBe(200);
-    const adminDetailBody = await adminDetail.text();
-    expect(adminDetailBody.includes("Admin only")).toBe(true);
-    expect(adminDetailBody.includes("Manifestations")).toBe(true);
-    expect(adminDetailBody.includes("Something wrong?")).toBe(true);
-    expect(adminDetailBody.includes("Find a specific edition")).toBe(true);
-    expect(adminDetailBody.includes("Manual Import")).toBe(true);
-    expect(adminDetailBody.includes("data-manual-import-panel")).toBe(true);
-    expect(adminDetailBody.includes("Artwork")).toBe(true);
-    expect(adminDetailBody.includes("data-cover-panel")).toBe(true);
-    expect(adminDetailBody.includes("Something wrong?</h2><span class=\"admin-only-pill\">Admin only")).toBe(false);
-    expect(adminDetailBody.includes("Artwork</h2><span class=\"admin-only-pill\">Admin only")).toBe(false);
-    expect(adminDetailBody.includes('id="manual-import-book-id"')).toBe(false);
-    expect(adminDetailBody.includes("GraphicAudio dramatization")).toBe(true);
-    expect(adminDetailBody.includes(`Asset ${standardAudio.id}`)).toBe(true);
-    expect(adminDetailBody.includes("Dune Standard Audio")).toBe(true);
-
-    const selectedEdition = await fetchHandler(
-      new Request(`http://localhost/classic/book/${book.id}?edition=${graphicAudio.id}`, {
-        headers: { cookie: userCookie },
-      })
-    );
-    expect(selectedEdition.status).toBe(200);
-    const selectedEditionBody = await selectedEdition.text();
-    expect(selectedEditionBody.includes(`<option value="${graphicAudio.id}" selected>`)).toBe(true);
-    expect(selectedEditionBody.includes(`/stream/m/${graphicAudio.id}.`)).toBe(true);
+    const transcript = await fetchHandler(new Request(playback.audio.transcriptUrl, { headers: { cookie: userCookie } }));
+    expect(transcript.status).toBe(200);
+    expect(await transcript.json()).toMatchObject({ text: "Fear is the mind-killer" });
+    const download = await fetchHandler(new Request(playback.ebook.downloadUrl, { headers: { cookie: userCookie } }));
+    expect(download.status).toBe(200);
+    expect(download.headers.get("content-type")).toContain("application/pdf");
+    expect(await download.text()).toBe("pdf bytes");
 
     db.close();
   });
 
-  test("supports library search query in SSR", async () => {
+  test("filters library.list by title or author and returns no unrelated books", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -503,26 +482,25 @@ describe("podible http", () => {
       torznab: [],
     });
 
-    repo.createBook({ title: "Dune", author: "Frank Herbert" });
-    repo.createBook({ title: "Hyperion", author: "Dan Simmons" });
+    const dune = repo.createBook({ title: "Dune", author: "Frank Herbert" });
+    const hyperion = repo.createBook({ title: "Hyperion", author: "Dan Simmons" });
 
     const fetchHandler = createPodibleFetchHandler(repo, Date.now());
     const userCookie = createBrowserSessionCookie(repo, { username: "reader" });
-    const library = await fetchHandler(
-      new Request("http://localhost/classic/library?q=Hyperion", {
-        headers: { cookie: userCookie },
-      })
-    );
-    expect(library.status).toBe(200);
-    const libraryBody = await library.text();
-    expect(libraryBody.includes("matching “Hyperion”")).toBe(true);
-    expect(libraryBody.includes("Hyperion")).toBe(true);
-    expect(libraryBody.includes("Dune")).toBe(false);
+    for (const [q, expectedIds] of [
+      ["Hyperion", [hyperion.id]],
+      ["frank herbert", [dune.id]],
+      ["missing title", []],
+    ] as const) {
+      const library = await rpc(fetchHandler, "library.list", { q }, 1, { cookie: userCookie });
+      expect(library.error).toBeUndefined();
+      expect(library.result.items.map((item: any) => item.id)).toEqual([...expectedIds]);
+    }
 
     db.close();
   });
 
-  test("queues acquire from the book detail page", async () => {
+  test("requires authentication and queues targeted audio acquisition over RPC", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -537,25 +515,26 @@ describe("podible http", () => {
     const fetchHandler = createPodibleFetchHandler(repo, Date.now());
     const userCookie = createBrowserSessionCookie(repo, { username: "reader" });
 
-    const queued = await fetchHandler(
-      new Request(`http://localhost/book/${book.id}/acquire`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded", cookie: userCookie },
-        body: "media=audio",
-      })
-    );
-    expect(queued.status).toBe(303);
-    const location = queued.headers.get("location");
-    expect(location).toContain(`/book/${book.id}?notice=`);
+    const unauthorized = await rpc(fetchHandler, "library.acquire", { bookId: book.id, media: ["audio"] });
+    expect(unauthorized.error.code).toBe(-32001);
+    expect(repo.listJobsByType("acquire")).toHaveLength(0);
+    const queued = await rpc(fetchHandler, "library.acquire", { bookId: book.id, media: ["audio"] }, 2, {
+      cookie: userCookie,
+    });
+    expect(queued.error).toBeUndefined();
+    expect(queued.result.media).toEqual(["audio"]);
 
     const jobs = repo.listJobsByType("acquire");
     expect(jobs.length).toBe(1);
+    expect(jobs[0]?.id).toBe(queued.result.jobId);
     expect(jobs[0]?.book_id).toBe(book.id);
+    expect(jobs[0]?.status).toBe("queued");
+    expect(JSON.parse(jobs[0]?.payload_json ?? "{}").media).toEqual(["audio"]);
 
     db.close();
   });
 
-  test("surfaces user activity on home and keeps refresh in admin ops", async () => {
+  test("exposes book activity job state over authenticated RPC and keeps refresh admin-only", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -597,23 +576,52 @@ describe("podible http", () => {
       status: "failed",
     });
     repo.setReleaseStatus(failedRelease.id, "failed", "boom");
-    repo.createJob({ type: "acquire", bookId: book.id, status: "running" });
+    const runningJob = repo.createJob({ type: "acquire", bookId: book.id, status: "running" });
+    const failedJob = repo.createJob({ type: "download", bookId: failed.id, status: "failed" });
 
     const fetchHandler = createPodibleFetchHandler(repo, Date.now());
     const userCookie = createBrowserSessionCookie(repo, { username: "reader" });
 
-    const home = await fetchHandler(
-      new Request("http://localhost/classic", {
-        headers: { cookie: userCookie },
-      })
-    );
-    expect(home.status).toBe(200);
-    const homeBody = await home.text();
-    expect(homeBody.includes("Still working")).toBe(true);
-    expect(homeBody.includes("Needs attention")).toBe(true);
-    expect(homeBody.includes("Ready now")).toBe(true);
-    expect(homeBody.includes("Refresh library")).toBe(false);
-    expect(homeBody.includes("Broken Book")).toBe(true);
+    const client = (cookie?: string) => createTRPCClient<AppRouter>({
+      links: [httpLink({
+        url: "http://localhost/api/trpc",
+        fetch: async (input, init) => {
+          const response = await fetchHandler(new Request(input.toString(), {
+            ...init,
+            headers: {
+              ...Object.fromEntries(new Headers(init?.headers)),
+              ...(cookie ? { cookie } : {}),
+            },
+          }));
+          return {
+            status: response.status,
+            ok: response.ok,
+            headers: response.headers,
+            json: () => response.json(),
+            text: () => response.text(),
+          };
+        },
+      })],
+    });
+    await expect(client().book.activity.query({ bookId: book.id })).rejects.toMatchObject({
+      data: { code: "UNAUTHORIZED" },
+    });
+    const browser = client(userCookie);
+    const working = await browser.book.activity.query({ bookId: book.id });
+    expect(working.activeAcquisition).toBe(true);
+    expect(working.jobs).toMatchObject([{ id: runningJob.id, type: "acquire", status: "running", state: "running" }]);
+    expect(working.jobs).toHaveLength(1);
+    const broken = await browser.book.activity.query({ bookId: failed.id });
+    expect(broken.activeAcquisition).toBe(false);
+    expect(broken.jobs).toMatchObject([{ id: failedJob.id, type: "download", status: "failed", state: "failed" }]);
+    expect(broken.jobs).toHaveLength(1);
+    expect(broken.jobs[0]?.message).toContain("could not finish");
+    const ready = await rpc(fetchHandler, "library.get", { bookId: book.id }, 1, { cookie: userCookie });
+    expect(ready.result.book.audioStatus).toBe("imported");
+    expect(ready.result.book.playback.audio.manifestationId).toBe(manifestation.id);
+    const failedDetail = await rpc(fetchHandler, "library.get", { bookId: failed.id }, 2, { cookie: userCookie });
+    expect(failedDetail.result.book.audioStatus).toBe("error");
+    expect(failedDetail.result.book.playback.audio).toBeNull();
 
     const activity = await fetchHandler(
       new Request("http://localhost/activity", {
@@ -685,7 +693,7 @@ describe("podible http", () => {
     db.close();
   });
 
-  test("redirects logged-out page requests to login", async () => {
+  test("redirects logged-out protected admin and activity requests to login", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -697,18 +705,21 @@ describe("podible http", () => {
     });
 
     const fetchHandler = createPodibleFetchHandler(repo, Date.now());
-    const library = await fetchHandler(new Request("http://localhost/classic/library"));
-    expect(library.status).toBe(303);
-    expect(library.headers.get("location")).toBe("/login?redirectTo=%2Fclassic%2Flibrary");
-
-    const book = await fetchHandler(new Request("http://localhost/classic/book/1?foo=bar"));
-    expect(book.status).toBe(303);
-    expect(book.headers.get("location")).toBe("/login?redirectTo=%2Fclassic%2Fbook%2F1%3Ffoo%3Dbar");
+    for (const pathname of ["/admin", "/admin/settings", "/admin/db?table=books&limit=5", "/activity?foo=bar"]) {
+      const response = await fetchHandler(new Request(`http://localhost${pathname}`));
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe(`/login?redirectTo=${encodeURIComponent(pathname)}`);
+    }
+    for (const pathname of ["/classic", "/classic/library", "/classic/add", "/classic/book/1?foo=bar"]) {
+      const response = await fetchHandler(new Request(`http://localhost${pathname}`));
+      expect(response.status).toBe(404);
+      expect(response.headers.get("location")).toBeNull();
+    }
 
     db.close();
   });
 
-  test("serves add page search and add flow", async () => {
+  test("searches the catalog and attributes library.create to the authenticated actor", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown) => {
       const url = new URL(String(input));
@@ -760,40 +771,30 @@ describe("podible http", () => {
       const fetchHandler = createPodibleFetchHandler(repo, Date.now());
       const userCookie = createBrowserSessionCookie(repo, { username: "alice" });
 
-      const add = await fetchHandler(
-        new Request("http://localhost/classic/add?q=Hyperion%20Dan%20Simmons", {
-          headers: { cookie: userCookie },
-        })
-      );
-      expect(add.status).toBe(200);
-      const addBody = await add.text();
-      expect(addBody.includes("Add a book")).toBe(true);
-      expect(addBody.includes("Hyperion")).toBe(true);
-      expect(addBody.includes("/works/OL45804W")).toBe(true);
-
-      const created = await fetchHandler(
-        new Request("http://localhost/add", {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded", cookie: userCookie },
-          body: "openLibraryKey=%2Fworks%2FOL45804W",
-        })
-      );
-      expect(created.status).toBe(303);
-      const location = created.headers.get("location");
-      expect(location).toBe("/book/1");
+      const found = await rpc(fetchHandler, "openlibrary.search", { q: "Hyperion Dan Simmons" }, 1, { cookie: userCookie });
+      expect(found.result.results).toMatchObject([{
+        title: "Hyperion",
+        author: "Dan Simmons",
+        openLibraryKey: "/works/OL45804W",
+      }]);
+      const created = await rpc(fetchHandler, "library.create", {
+        openLibraryKey: found.result.results[0].openLibraryKey,
+      }, 2, { cookie: userCookie });
+      expect(created.error).toBeUndefined();
       const alice = repo.listUsers().find((user) => user.username === "alice");
-      expect(repo.getBookRow(1)?.added_by_user_id).toBe(alice?.id);
+      expect(alice).toBeDefined();
+      const bookId = created.result.book.id;
+      expect(repo.getBookRow(bookId)?.added_by_user_id).toBe(alice!.id);
+      expect(repo.getJob(created.result.acquisition_job_id)).toMatchObject({ book_id: bookId, type: "acquire", status: "queued" });
 
-      const detail = await fetchHandler(
-        new Request(`http://localhost/classic${location}`, {
-          headers: { cookie: userCookie },
-        })
-      );
-      expect(detail.status).toBe(200);
-      const detailBody = await detail.text();
-      expect(detailBody.includes("Hyperion")).toBe(true);
-      expect(detailBody.includes("Dan Simmons")).toBe(true);
-      expect(detailBody.includes("Added by alice")).toBe(true);
+      const detail = await rpc(fetchHandler, "library.get", { bookId }, 3, { cookie: userCookie });
+      expect(detail.result.book).toMatchObject({
+        title: "Hyperion",
+        author: "Dan Simmons",
+        addedByUserId: alice!.id,
+        addedByUser: { id: alice!.id, username: "alice" },
+      });
+      expect(created.result.book.addedByUser).toEqual(detail.result.book.addedByUser);
 
       db.close();
     } finally {
@@ -835,15 +836,8 @@ describe("podible http", () => {
 
     const fetchHandler = createPodibleFetchHandler(repo, Date.now());
 
-    const unauthorized = await fetchHandler(new Request("http://app.test/classic/library"));
-    expect(unauthorized.status).toBe(303);
-    expect(unauthorized.headers.get("location")).toBe("/login?redirectTo=%2Fclassic%2Flibrary");
-
-    const publicHome = await fetchHandler(new Request("http://app.test/classic"));
-    expect(publicHome.status).toBe(200);
-    const publicHomeBody = await publicHome.text();
-    expect(publicHomeBody.includes("Sign in")).toBe(true);
-    expect(publicHomeBody.includes("Your audiobook shelf")).toBe(false);
+    const unauthorized = await rpc(fetchHandler, "library.list", {});
+    expect(unauthorized.error.code).toBe(-32001);
 
     const loginPage = await fetchHandler(new Request("http://app.test/login?redirectTo=%2Flibrary"));
     expect(loginPage.status).toBe(200);
@@ -855,17 +849,32 @@ describe("podible http", () => {
       username: "alice",
       displayName: "Alice",
     });
+    const sessionHash = hashSessionToken(cookieHeader.slice("podible_session=".length));
+    const initialSession = repo.getSessionByTokenHash(sessionHash)!;
+    repo.createSession(initialSession.user_id, hashSessionToken("expired-browser-token"), "2000-01-01T00:00:00.000Z");
+    const expired = await fetchHandler(new Request("http://app.test/rpc/auth/me", {
+      headers: { cookie: "podible_session=expired-browser-token" },
+    }));
+    expect(expired.status).toBe(200);
+    expect(expired.headers.get("set-cookie")).toBeNull();
+    expect((await expired.json() as any).error.code).toBe(-32001);
     const authed = await fetchHandler(
-      new Request("http://app.test/classic/library", {
+      new Request("http://app.test/rpc/library/list", {
         headers: { cookie: cookieHeader },
       })
     );
     expect(authed.status).toBe(200);
     expect(authed.headers.get("set-cookie")).toContain("Max-Age=34560000");
-    const authedBody = await authed.text();
-    expect(authedBody.includes("Signed in as Alice")).toBe(false);
-    expect(authedBody.includes("Sign out")).toBe(true);
-    expect(authedBody.includes("Dune")).toBe(true);
+    expect(authed.headers.get("set-cookie")).toContain(`${cookieHeader}; Path=/; HttpOnly; SameSite=Lax`);
+    const authedBody = await authed.json() as any;
+    expect(authedBody.result.items).toMatchObject([{ id: book.id, title: "Dune" }]);
+    const me = await fetchHandler(new Request("http://app.test/rpc/auth/me", { headers: { cookie: cookieHeader } }));
+    expect(me.status).toBe(200);
+    expect(me.headers.get("set-cookie")).toContain("Max-Age=34560000");
+    const meBody = await me.json() as any;
+    expect(meBody.result.user).toMatchObject({ username: "alice", displayName: "Alice" });
+    expect(meBody.result.session.kind).toBe("browser");
+    expect(repo.getSessionByTokenHash(sessionHash)?.expires_at).toBe(initialSession.expires_at);
 
     const logout = await fetchHandler(
       new Request("http://app.test/logout", {
@@ -875,6 +884,9 @@ describe("podible http", () => {
     );
     expect(logout.status).toBe(303);
     expect(logout.headers.get("set-cookie")).toContain("Max-Age=0");
+    expect(repo.getSessionByTokenHash(sessionHash)).toBeNull();
+    const afterLogout = await rpc(fetchHandler, "library.list", {}, 2, { cookie: cookieHeader });
+    expect(afterLogout.error.code).toBe(-32001);
 
     db.close();
   });
@@ -1038,16 +1050,13 @@ describe("podible http", () => {
       expect(setCookie.includes("podible_session=")).toBe(true);
 
       const cookieHeader = setCookie.split(";")[0] ?? "";
-      const authed = await fetchHandler(
-        new Request("http://app.test/classic/library", {
-          headers: { cookie: cookieHeader },
-        })
-      );
-      expect(authed.status).toBe(200);
-      const authedBody = await authed.text();
-      expect(authedBody.includes("Signed in as Alice")).toBe(false);
-      expect(authedBody.includes("Sign out")).toBe(true);
-      expect(authedBody.includes("Dune")).toBe(true);
+      expect(setCookie).toContain("Max-Age=34560000");
+      const authed = await rpc(fetchHandler, "library.list", {}, 1, { cookie: cookieHeader });
+      expect(authed.error).toBeUndefined();
+      expect(authed.result.items).toMatchObject([{ id: book.id, title: "Dune" }]);
+      const me = await rpc(fetchHandler, "auth.me", {}, 2, { cookie: cookieHeader });
+      expect(me.result.user).toMatchObject({ username: "alice", displayName: "Alice", isAdmin: true });
+      expect(me.result.session.kind).toBe("browser");
       expect(repo.listUsers("plex")[0]?.is_admin).toBe(1);
       expect(repo.getSettings().auth.plex.ownerToken).toBe("plex-jwt-token");
       expect(repo.getPlexLoginAttempt(123)).toBeNull();
@@ -1428,7 +1437,7 @@ describe("podible http", () => {
     }
   });
 
-  test("does not grant admin or rpc access to non-admin browser sessions", async () => {
+  test("allows library RPC but denies admin pages and admin RPC to non-admin browser sessions", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -1450,12 +1459,9 @@ describe("podible http", () => {
     const fetchHandler = createPodibleFetchHandler(repo, Date.now());
     const cookieHeader = "podible_session=session-token";
 
-    const library = await fetchHandler(
-      new Request("http://app.test/library", {
-        headers: { cookie: cookieHeader },
-      })
-    );
-    expect(library.status).toBe(200);
+    const library = await rpc(fetchHandler, "library.list", {}, 1, { cookie: cookieHeader });
+    expect(library.error).toBeUndefined();
+    expect(library.result.items).toEqual([]);
 
     const admin = await fetchHandler(
       new Request("http://app.test/admin", {
@@ -1486,7 +1492,7 @@ describe("podible http", () => {
     db.close();
   });
 
-  test("catalog failures are errors in RPC and the web page, not empty search results", async () => {
+  test("catalog failures are RPC errors, not empty search results", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (_input: unknown) => new Response("Internal Server Error", { status: 500 })) as typeof fetch;
     const db = new Database(":memory:");
@@ -1500,11 +1506,6 @@ describe("podible http", () => {
       expect(found.error.code).toBe(-32000);
       expect(found.error.message).toContain("Open Library search failed (HTTP 500)");
       expect(found.result).toBeUndefined();
-
-      const page = await handler(new Request("http://localhost/classic/add?q=one%20day", { headers: { cookie } }));
-      const html = await page.text();
-      expect(html).toContain("Search failed: Open Library search failed (HTTP 500)");
-      expect(html).not.toContain("No matches for");
     } finally {
       globalThis.fetch = originalFetch;
       db.close();

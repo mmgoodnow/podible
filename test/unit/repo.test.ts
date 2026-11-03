@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
-import { renderBookPage } from "../../src/http/book-page";
+import { buildLibraryPlayback } from "../../src/rpc/shared";
 
 function setupRepo(): { db: Database; repo: BooksRepo } {
   const db = new Database(":memory:");
@@ -158,19 +158,22 @@ describe("books repo", () => {
     db.close();
   });
 
-  test("pending manifestations are not ready until playable or downloadable assets exist", async () => {
+  test("pending manifestations are not ready until playable or downloadable assets exist", () => {
     const { db, repo } = setupRepo();
     try {
       const book = repo.createBook({ title: "Pending book", author: "Author" });
-      repo.addManifestation({ bookId: book.id, kind: "audio" });
+      const audio = repo.addManifestation({ bookId: book.id, kind: "audio" });
       const ebook = repo.addManifestation({ bookId: book.id, kind: "ebook" });
+      const request = new Request("http://localhost/rpc");
       expect(repo.getBook(book.id)?.audioStatus).toBe("wanted");
       expect(repo.getBook(book.id)?.ebookStatus).toBe("wanted");
-      const before = await (await renderBookPage(repo, repo.getSettings(), book.id)).text();
-      expect(before).not.toContain("eBook ready");
-      expect(before).not.toContain("Download EPUB/PDF</a>");
+      expect(buildLibraryPlayback(repo, request, book.id)).toEqual({
+        audio: null,
+        audioOptions: [],
+        ebook: null,
+      });
 
-      repo.addAsset({
+      const ebookAsset = repo.addAsset({
         bookId: book.id,
         manifestationId: ebook.id,
         kind: "single",
@@ -179,9 +182,37 @@ describe("books repo", () => {
         files: [{ path: "/tmp/pending.pdf", size: 123, start: 0, end: 122, durationMs: 0 }]
       });
       expect(repo.getBook(book.id)?.ebookStatus).toBe("imported");
-      const after = await (await renderBookPage(repo, repo.getSettings(), book.id)).text();
-      expect(after).toContain("eBook ready");
-      expect(after).toContain("Download EPUB/PDF</a>");
+      expect(repo.getBook(book.id)?.audioStatus).toBe("wanted");
+      expect(buildLibraryPlayback(repo, request, book.id)).toEqual({
+        audio: null,
+        audioOptions: [],
+        ebook: {
+          assetId: ebookAsset.id,
+          downloadUrl: `http://localhost/ebook/${ebookAsset.id}`,
+          mimeType: "application/pdf",
+          sizeBytes: 123,
+        },
+      });
+
+      repo.addAsset({
+        bookId: book.id,
+        manifestationId: audio.id,
+        kind: "single",
+        mime: "audio/mpeg",
+        totalSize: 100,
+        durationMs: 1_000,
+        files: [{ path: "/tmp/pending.mp3", size: 100, start: 0, end: 99, durationMs: 1_000 }]
+      });
+      expect(repo.getBook(book.id)?.audioStatus).toBe("imported");
+      expect(repo.getBook(book.id)?.status).toBe("imported");
+      const playback = buildLibraryPlayback(repo, request, book.id);
+      expect(playback.audio).toMatchObject({
+        manifestationId: audio.id,
+        streamUrl: `http://localhost/stream/m/${audio.id}.mp3`,
+        transcriptUrl: null,
+      });
+      expect(playback.audioOptions).toEqual([playback.audio!]);
+      expect(playback.ebook?.assetId).toBe(ebookAsset.id);
     } finally {
       db.close();
     }

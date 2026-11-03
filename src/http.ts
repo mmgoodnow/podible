@@ -25,13 +25,7 @@ import {
 import { createRpcRoutes } from "./http/rpc-routes";
 import { createTrpcRoutes } from "./http/trpc-routes";
 import { createSpaRoutes } from "./http/spa-routes";
-import {
-  createActivityRoutes,
-  createAddRoutes,
-  createBookRoutes,
-  createHomeRoutes,
-  createLibraryRoutes,
-} from "./http/user-routes";
+import { createActivityRoutes } from "./http/activity-routes";
 
 export function createPodibleFetchHandler(
   repo: BooksRepo,
@@ -59,16 +53,9 @@ export function createPodibleFetchHandler(
     "/requests/:id",
   ])
     app.get(route, (c) => spa.fetch(c.req.raw));
-  app.route("/classic", createHomeRoutes(repo));
-  app.route("/classic/library", createLibraryRoutes(repo));
-  app.route("/classic/add", createAddRoutes(repo));
-  app.route("/classic/book", createBookRoutes(repo));
   app.route("/login", createLoginRoutes(repo));
   app.route("/logout", createLogoutRoutes(repo));
   app.route("/auth/app", createAppAuthRoutes(repo));
-  app.route("/library", createLibraryRoutes(repo));
-  app.route("/add", createAddRoutes(repo));
-  app.route("/book", createBookRoutes(repo));
   app.route("/activity", createActivityRoutes(repo));
   app.route("/admin", createAdminRoutes(repo, startTime, buildInfo));
   app.route("/rpc", createRpcRoutes(repo, startTime, dependencies));

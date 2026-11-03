@@ -117,6 +117,12 @@ export async function createBookSpaData() {
       ]),
       resolvedBoundaryCount: 2,
       totalBoundaryCount: 2,
+      debugJson: JSON.stringify({ curation: {
+        status: "completed",
+        eventLogPath: "/config/chapter-curation/events.jsonl",
+        traceDir: "/config/chapter-curation/traces",
+        summary: { budget: { agentCallsStarted: 2, maxAgentCalls: 12 } },
+      } }),
     });
     manifestations.push(manifestation);
   }

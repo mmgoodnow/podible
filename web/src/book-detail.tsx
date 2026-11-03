@@ -715,6 +715,7 @@ export function BookDetail({
           bookId={bookId}
           title={book.title}
           author={book.author}
+          selectedManifestationId={audio?.manifestationId}
           refresh={refresh}
         />
       )}

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { rpc, useTRPC } from "./rpc";
 import { bytes, Failure } from "./books";
+import { BookDiagnostics } from "./book-diagnostics";
 
 type Media = "audio" | "ebook";
 
@@ -9,11 +10,13 @@ export function BookAdmin({
   bookId,
   title,
   author,
+  selectedManifestationId,
   refresh,
 }: {
   bookId: number;
   title: string;
   author: string;
+  selectedManifestationId?: number;
   refresh: () => void;
 }) {
   const trpc = useTRPC();
@@ -48,7 +51,6 @@ export function BookAdmin({
         <div className="actions">
           <a href="/admin/ops">Operations</a>
           <a href="/admin/settings">Settings</a>
-          <a href={`/classic/book/${bookId}`}>Classic diagnostics</a>
         </div>
       </div>
       <details className="panel">
@@ -178,11 +180,12 @@ export function BookAdmin({
         )}
       </details>
       <ManualImport bookId={bookId} refresh={refresh} />
+      <BookDiagnostics bookId={bookId} selectedManifestationId={selectedManifestationId} />
       <details className="panel">
         <summary>Metadata & diagnostics</summary>
         <p>
-          Refresh this book from Open Library, or inspect manifestation files,
-          job history, and chapter diagnostics in the classic view.
+          Refresh this book from Open Library. Inspect editions and chapter curation
+          above, or open Operations for execution history.
         </p>
         <div className="actions">
           <button
@@ -192,7 +195,6 @@ export function BookAdmin({
           >
             Refresh metadata
           </button>
-          <a href={`/classic/book/${bookId}`}>Manifestation diagnostics</a>
           <a href="/admin/db">Database browser</a>
         </div>
         {hydrate.isError && <Failure error={hydrate.error} />}

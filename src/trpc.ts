@@ -52,6 +52,10 @@ const procedure = t.procedure.use(async ({ next }) => {
 
 export const appRouter = t.router({
   book: t.router({
+    diagnostics: procedure
+      .input(bookWebRouter.routes.diagnostics.paramsSchema)
+      .output(bookWebRouter.routes.diagnostics.resultSchema)
+      .query(({ ctx, input }) => executeMethod(bookWebRouter.routes.diagnostics, ctx, input)),
     activity: procedure
       .input(bookWebRouter.routes.activity.paramsSchema)
       .output(bookWebRouter.routes.activity.resultSchema)
