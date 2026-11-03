@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { defaultMovieQualityPolicy, movieQualityPolicySchema } from "./quality";
+import { seerrSettingsSchema } from "./seerr";
 
 export const movieShadowSettingsSchema = z
   .object({
@@ -25,6 +26,7 @@ export const movieShadowSettingsSchema = z
 export const movieSettingsSchema = z
   .object({
     shadow: movieShadowSettingsSchema.prefault({}),
+    seerr: seerrSettingsSchema.prefault({}),
     tmdbAccessToken: z.string().default(""),
     managedRoot: z.string().default(""),
     downloadGroupId: z.number().int().nonnegative().nullable().default(null),

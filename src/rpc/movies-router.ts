@@ -31,7 +31,7 @@ export const moviesRouter = defineRouter({
       const s = ctx.repo.getSettings();
       return {
         catalogConfigured: Boolean(
-          ctx.movieServices || s.movies.tmdbAccessToken,
+          ctx.movieServices || s.movies.tmdbAccessToken || (s.movies.seerr.url && s.movies.seerr.apiKey),
         ),
         acquisitionConfigured: Boolean(
           ctx.movieServices ||
@@ -40,7 +40,7 @@ export const moviesRouter = defineRouter({
             s.movies.plexSectionId &&
             s.movies.plexViewPath &&
             s.agents.apiKey &&
-            s.torznab.length),
+            (s.prowlarr.url ? s.prowlarr.apiKey : s.torznab.length)),
         ),
       };
     },

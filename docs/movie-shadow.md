@@ -1,5 +1,10 @@
 # Movie shadow mode
 
+For real, independent acquisition of new Seerr requests, top-level dynamic
+Prowlarr configuration, and bounded explicit backfill, see
+[Independent Seerr Movie Acquisition](movie-seerr.md). Shadow mode below remains
+a separate read-only audit, not the acquisition canary.
+
 Radarr remains authoritative. Podible polls its completed/blocked queue entries and recent import history, maps their paths into explicit allowed roots, probes the files and runs the real movie import verifier. No torrent calls, downloads, imports, content adoption, symlinks or Plex updates are available to this evaluator. Agent input excludes Radarr's outcome. This is an import audit, not an A/B test of release selection or automatic recovery.
 
 ## Settings

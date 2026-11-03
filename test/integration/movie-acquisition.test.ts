@@ -138,7 +138,11 @@ test("stalled movie downloads are retained and replaced, with visible recovery e
   }
 });
 
-for (const failure of ["unplayable", "wrong-movie", "wrong-language"] as const) {
+for (const failure of [
+  "unplayable",
+  "wrong-movie",
+  "wrong-language",
+] as const) {
   test(`completed ${failure} release is retained and reacquired from another release`, async () => {
     const s = await setup({ ...policy, audioLanguages: ["en"] });
     try {
@@ -189,7 +193,12 @@ for (const failure of ["unplayable", "wrong-movie", "wrong-language"] as const) 
       const badDownload = [...s.fixture.downloads.values()][0]!;
       expect(
         await fs.readFile(
-          path.join(s.root, "downloads", badDownload.location.relativePath, "bad-content.mkv"),
+          path.join(
+            s.root,
+            "downloads",
+            badDownload.location.relativePath,
+            "bad-content.mkv",
+          ),
           "utf8",
         ),
       ).toContain("bad-content");
@@ -208,7 +217,9 @@ test("Plex infrastructure failure retains the current version and does not reacq
       s.repo.getJob(s.enqueue().job_id!)!,
       s.fixture.services,
     );
-    const original = s.repo.movies.target(s.request.targetId)!.active_version_id;
+    const original = s.repo.movies.target(
+      s.request.targetId,
+    )!.active_version_id;
     s.fixture.addOffer("upgrade", 1920);
     s.fixture.setPlexVerified(false);
     await expect(
@@ -232,7 +243,8 @@ test("Plex infrastructure failure retains the current version and does not reacq
 test("movie Reflow replay after snatch does not exclude its own selected release or add twice", async () => {
   const s = await setup();
   let runtime:
-    Awaited<ReturnType<typeof createJobExecutionRuntime>> | undefined;
+    | Awaited<ReturnType<typeof createJobExecutionRuntime>>
+    | undefined;
   try {
     s.fixture.addOffer("resumed", 1280);
     const acquisition = s.enqueue();
@@ -292,3 +304,79 @@ test("movie Reflow replay after snatch does not exclude its own selected release
     await s.close();
   }
 }, 10_000);
+
+test("partial provider deferrals survive replay and do not consume acquisition attempts or become no-results", async () => {
+  const s = await setup();
+  try {
+    s.fixture.addOffer("deferred-provider", 1280);
+    const search = s.fixture.services.search;
+    let calls = 0;
+    s.fixture.services.search = async (...args) => {
+      calls++;
+      return calls <= 5
+        ? {
+            offers: [],
+            warnings: ["Provider temporarily disabled"],
+            deferred: [
+              {
+                provider: "recovering-provider",
+                retryAt: new Date(Date.now() + 1000).toISOString(),
+              },
+            ],
+          }
+        : search(...args);
+    };
+    const checkpoints = new Map<string, unknown>();
+    const sleeps: string[] = [];
+    let interrupted = false;
+    const context = {
+      ...s.context,
+      execution: {
+        key: "deferred-replay",
+        assertActive() {},
+        sleep: async (name: string) => {
+          sleeps.push(name);
+          if (!interrupted) {
+            interrupted = true;
+            throw new Error("process died during provider wait");
+          }
+        },
+        run: async <T>(
+          name: string,
+          action: () => T | Promise<T>,
+        ): Promise<T> => {
+          if (checkpoints.has(name)) return checkpoints.get(name) as T;
+          const result = await action();
+          checkpoints.set(name, structuredClone(result));
+          return result;
+        },
+      },
+    };
+    const acquisition = s.enqueue();
+    const job = s.repo.getJob(acquisition.job_id!)!;
+    await expect(
+      acquireMovie(context, job, s.fixture.services),
+    ).rejects.toThrow("process died");
+    expect(s.fixture.stats.snatches).toBe(0);
+    expect(s.repo.movies.acquisition(acquisition.id)?.finished_at).toBeNull();
+    await acquireMovie(context, job, s.fixture.services);
+    expect(calls).toBe(6);
+    expect(s.fixture.stats.snatches).toBe(1);
+    expect(
+      s.repo.movies.target(s.request.targetId)?.active_version_id,
+    ).not.toBeNull();
+    expect(checkpoints.has("movie:attempt:0:search:request:0")).toBe(true);
+    expect(checkpoints.has("movie:attempt:0:select")).toBe(true);
+    expect(
+      checkpoints.has("movie:attempt:0:indexer-wave:5:search:request:0"),
+    ).toBe(true);
+    expect(sleeps[0]).toBe("movie:attempt:0:wait-indexers");
+    expect(
+      s.repo.movies
+        .events(s.request.targetId)
+        .some((event) => event.stage === "blocked"),
+    ).toBe(false);
+  } finally {
+    await s.close();
+  }
+});

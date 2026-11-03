@@ -14,7 +14,8 @@ export type JobType =
   | "movie_acquire"
   | "movie_reconcile"
   | "movie_shadow_sync"
-  | "movie_shadow_evaluate";
+  | "movie_shadow_evaluate"
+  | "movie_dual_write_sync";
 
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
@@ -47,6 +48,7 @@ export type TorznabSource = {
 };
 
 export type AppSettings = {
+  prowlarr: import("zod").infer<typeof import("./media/prowlarr").prowlarrSettingsSchema>;
   movies: import("./movies/settings").MovieSettings;
   torznab: TorznabSource[];
   rtorrent: {

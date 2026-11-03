@@ -12,6 +12,7 @@ export type WorkerContext = {
   modelProvider?: ModelProvider;
   movieServices?: import("../movies/operations").MovieServices;
   movieShadowServices?: import("../movies/shadow").MovieShadowServices;
+  seerrSource?: import("../movies/seerr").SeerrSource;
   /** In-process resource lanes; sibling steps share execution ownership. */
   activeLocks?: Set<string>;
   execution?: {

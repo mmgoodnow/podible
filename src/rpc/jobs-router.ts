@@ -5,6 +5,11 @@ import { emptyParamsSchema, jobRowSchema, jobTypeSchema, limitSchema, positiveIn
 import { enrichJob, RpcError } from "./shared";
 
 const allJobTypes = [
+  "movie_acquire",
+  "movie_reconcile",
+  "movie_shadow_sync",
+  "movie_shadow_evaluate",
+  "movie_dual_write_sync",
   "full_library_refresh",
   "acquire",
   "download",

@@ -6,6 +6,7 @@ import { defaultMovieQualityPolicy } from "./movies/quality";
 import { Database } from "bun:sqlite";
 import { MOVIES_SCHEMA_SQL } from "./movies/schema";
 import { MOVIE_SHADOW_SCHEMA_SQL } from "./movies/shadow-repo";
+import { MOVIE_SEERR_SCHEMA_SQL } from "./movies/seerr-repo";
 
 const SCHEMA_MIGRATION_ID = 1;
 const GUID_MIGRATION_ID = 2;
@@ -1150,6 +1151,7 @@ export function runMigrations(db: Database): void {
       db.query("UPDATE settings SET value_json=? WHERE id=1").run(JSON.stringify(settings));
     }
   });
+  apply(41, () => db.exec(MOVIE_SEERR_SCHEMA_SQL));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

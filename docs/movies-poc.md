@@ -3,8 +3,8 @@
 ## Scope
 
 The native movie vertical is implemented at `/app/movies` and `/app/requests`.
-Existing book HTTP and JSON-RPC routes remain supported. Movies default to
-disabled; this work does not enable or configure movies in production.
+Existing book HTTP and JSON-RPC routes remain supported. Movies have no global
+enable flag; native acquisition requires the connections and storage below.
 
 This is not a Radarr frontend. Podible owns movie requests, policy, release
 selection, acquisition, canonical files and declarative Plex views. Cross-seeding,
@@ -73,8 +73,9 @@ performing another expensive search. Generic book/admin RPC behavior is unchange
 Use the existing administrator settings JSON; no new model configuration surface
 was added. Configure:
 
-- `movies.tmdbAccessToken` (TMDB API read-access bearer token). Movies do not
-  have an enable/disable flag; missing configuration is reported explicitly.
+- `movies.tmdbAccessToken` (TMDB API read-access bearer token), or the existing
+  Seerr metadata connection described in [movie-seerr.md](movie-seerr.md).
+  Missing configuration is reported explicitly.
 - `movies.managedRoot`: an app-owned absolute directory visible at the same path
   inside the app container. Contains `downloads`, `objects`, `views/plex/movies`.
 - `movies.downloadGroupId`: optional shared group for client-writable download
@@ -83,9 +84,11 @@ was added. Configure:
 - `movies.plexViewPath`: the Plex-visible path for `views/plex/movies`. Plex must
   also mount the canonical content with the same relative relationship, since
   presentation links are relative. Mount the whole managed tree, not just views.
-- Existing `torznab` (Prowlarr sources) and `agents.apiKey` settings. Book downloads
-  continue using the existing `rtorrent` settings; native movies use the private
-  Docker-managed Transmission engine, not those settings.
+- Top-level `prowlarr.url` and `prowlarr.apiKey` discover categorized indexers
+  dynamically. Legacy `torznab` sources remain the fallback when that connection
+  is absent. Agents reuse `agents.apiKey`. Book downloads continue using the
+  existing `rtorrent` settings; native movies use the private Docker-managed
+  Transmission engine, not those settings.
 - `movies.qualityPolicy`, `automaticUpgrades`, `searchIntervalHours` (default 24),
   and `maximumReleaseBytes` (default 40 GiB).
 
@@ -122,9 +125,10 @@ can use `bun run scripts/container.ts` with `transmission-daemon` installed.
 ### Radarr shadow mode
 
 See [movie-shadow.md](movie-shadow.md) for the independent read-only observer,
-admin audit UI and settings. Observation does not create native acquisition requests;
-explicit requests use the normal acquisition path. Cross-seeding, Seerr attribution
-and automated action on shadow disagreements are intentionally not implemented.
+admin audit UI and settings. Observation does not create native acquisition requests.
+The independent [Seerr feed](movie-seerr.md) and explicit requests use the native
+acquisition path. Cross-seeding and automated action on shadow disagreements are
+not implemented.
 
 ## Verification and Limits
 
@@ -158,7 +162,8 @@ record. The passing transfer path retains/pauses records, matching acquisition
 retention. Safe removal of freshly completed transfers is not established.
 
 The neutral torrent port separates client identity and download layout from
-canonical content and library views. rTorrent is the only production adapter;
-an independent fixture client tests orchestration without rTorrent assumptions.
+canonical content and library views. Native movies use private Transmission;
+books retain rTorrent. An independent fixture client tests orchestration without
+either client's assumptions.
 No cross-seed discovery, shared-byte rescue or derived torrent layouts are
 implemented. Those can be added without making tracker names canonical identity.

@@ -15,7 +15,7 @@ import {
 } from "./quality";
 import { factsFromMovieProbe } from "./probe";
 import { publishMovieVersion } from "./publication";
-import type { MovieOffer } from "./offers";
+import type { MovieOffer, MovieSearch } from "./offers";
 import type { MovieServices, MovieFileCandidate } from "./operations";
 import { readTransmissionIdentity } from "../media/managed-transmission";
 import { movieUpstreamStep } from "./upstream";
@@ -38,7 +38,8 @@ export function movieConfigurationIdentity(ctx: WorkerContext): string {
     .update(
       JSON.stringify([
         settings.movies.managedRoot,
-        ctx.movieServices?.client.id ?? `transmission:${readTransmissionIdentity().id}`,
+        ctx.movieServices?.client.id ??
+          `transmission:${readTransmissionIdentity().id}`,
         settings.movies.plexUrl,
         settings.movies.plexSectionId,
         settings.movies.plexViewPath,
@@ -71,9 +72,7 @@ export async function acquireMovie(
   );
   const active = () => {
     ctx.execution?.assertActive();
-    if (
-      movieConfigurationIdentity(ctx) !== configuration
-    )
+    if (movieConfigurationIdentity(ctx) !== configuration)
       throw new Error(
         "Movie storage/client configuration changed; start a new acquisition",
       );
@@ -124,61 +123,102 @@ export async function acquireMovie(
         ? "Searching for another release; previous downloads are retained"
         : "Searching movie releases",
     );
-    const search = await movieUpstreamStep(ctx, `${prefix}:search`, async () =>
-      attempt === 0 && manual?.manualOffer
-        ? { offers: [manual.manualOffer], warnings: [] }
-        : services.search(movie),
-    );
-    const candidates = search.offers
-      .filter(
-        (offer) =>
-          !excluded.has(offer.key) &&
-          (!priorKeys.has(offer.key) || manual?.manualOffer?.key === offer.key),
-      )
-      .filter(
-        (offer) =>
-          offer.sizeBytes === null ||
-          offer.sizeBytes <= settings.movies.maximumReleaseBytes,
-      );
-    if (
-      attempt === 0 &&
-      manual?.manualOffer &&
-      !candidates.some((offer) => offer.key === manual.manualOffer!.key)
-    )
-      candidates.push(manual.manualOffer);
-    emit(
-      `${attempt}:select`,
-      "selecting",
-      "Checking movie identity, cut and quality",
-    );
-    const selection = await durableStep(ctx, `${prefix}:select`, async () => {
-      const selected = await services.decider.select({
-        movie,
-        policy,
-        offers: candidates,
-        current,
-      });
-      if (
-        manual?.manualOffer &&
-        attempt === 0 &&
-        selected.offerKey !== manual.manualOffer.key
-      )
-        throw new Error(
-          "The selected manual release did not pass semantic review",
+    const { offer, selection } = await (async () => {
+      for (let wave = 0; ; wave++) {
+        const phase = wave ? `${prefix}:indexer-wave:${wave}` : prefix;
+        const search = await movieUpstreamStep<MovieSearch>(
+          ctx,
+          `${phase}:search`,
+          async () =>
+            attempt === 0 && manual?.manualOffer
+              ? { offers: [manual.manualOffer], warnings: [] }
+              : services.search(movie),
         );
-      if (
-        selected.offerKey &&
-        !candidates.some((offer) => offer.key === selected.offerKey)
-      )
-        throw new Error("Selection references an unknown release");
-      repo.decision(acquisition.id, {
-        ...manual,
-        selection: selected,
-        attempt,
-      });
-      return selected;
-    });
-    const offer = candidates.find((entry) => entry.key === selection.offerKey);
+        const candidates = search.offers
+          .filter(
+            (offer) =>
+              !excluded.has(offer.key) &&
+              (!priorKeys.has(offer.key) ||
+                manual?.manualOffer?.key === offer.key),
+          )
+          .filter(
+            (offer) =>
+              offer.sizeBytes === null ||
+              offer.sizeBytes <= settings.movies.maximumReleaseBytes,
+          );
+        if (
+          attempt === 0 &&
+          manual?.manualOffer &&
+          !candidates.some((offer) => offer.key === manual.manualOffer!.key)
+        )
+          candidates.push(manual.manualOffer);
+        emit(
+          `${attempt}:select`,
+          "selecting",
+          "Checking movie identity, cut and quality",
+        );
+        const selection = await durableStep(
+          ctx,
+          `${phase}:select`,
+          async () => {
+            const selected = await services.decider.select({
+              movie,
+              policy,
+              offers: candidates,
+              current,
+            });
+            if (
+              manual?.manualOffer &&
+              attempt === 0 &&
+              selected.offerKey !== manual.manualOffer.key
+            )
+              throw new Error(
+                "The selected manual release did not pass semantic review",
+              );
+            if (
+              selected.offerKey &&
+              !candidates.some((offer) => offer.key === selected.offerKey)
+            )
+              throw new Error("Selection references an unknown release");
+            repo.decision(acquisition.id, {
+              ...manual,
+              selection: selected,
+              attempt,
+            });
+            return selected;
+          },
+        );
+        const offer = candidates.find(
+          (entry) => entry.key === selection.offerKey,
+        );
+        if (!offer && search.deferred?.length) {
+          active();
+          const retryAt = Math.min(
+            ...search.deferred
+              .map((source) => Date.parse(source.retryAt))
+              .filter(Number.isFinite),
+          );
+          const delay = Math.max(
+            1000,
+            Math.min(3_600_000, retryAt - Date.now() || 60_000),
+          );
+          emit(
+            `${attempt}:waiting-indexers:${wave}`,
+            "searching",
+            `Waiting for deferred indexers: ${search.deferred.map((source) => source.provider).join(", ")}`,
+          );
+          if (ctx.execution)
+            await ctx.execution.sleep(`${phase}:wait-indexers`, delay);
+          else {
+            if (wave >= 2)
+              throw new Error("Indexer retry requires durable execution");
+            await Bun.sleep(delay);
+          }
+          continue;
+        }
+        return { offer, selection };
+      }
+    })();
     if (!offer) {
       emit(
         "blocked",
@@ -207,8 +247,11 @@ export async function acquireMovie(
       );
       continue;
     }
-    const encoded = await movieUpstreamStep(ctx, `${prefix}:metainfo`, async () =>
-      Buffer.from(await services.fetchMetainfo(offer)).toString("base64"),
+    const encoded = await movieUpstreamStep(
+      ctx,
+      `${prefix}:metainfo`,
+      async () =>
+        Buffer.from(await services.fetchMetainfo(offer)).toString("base64"),
     );
     const metainfo = Buffer.from(encoded, "base64");
     const metadata = inspectMetainfo(metainfo);

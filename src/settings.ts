@@ -1,5 +1,6 @@
 import type { AppSettings } from "./app-types";
 import { defaultMovieSettings, movieSettingsSchema } from "./movies/settings";
+import { prowlarrSettingsSchema } from "./media/prowlarr";
 
 type SettingsOverrides = Partial<Omit<AppSettings, "rtorrent" | "polling" | "recovery" | "feed" | "auth" | "agents" | "notifications">> & {
   rtorrent?: Partial<AppSettings["rtorrent"]>;
@@ -17,6 +18,7 @@ type SettingsOverrides = Partial<Omit<AppSettings, "rtorrent" | "polling" | "rec
 
 export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
   const defaults: AppSettings = {
+    prowlarr: prowlarrSettingsSchema.parse({}),
     movies: defaultMovieSettings(),
     torznab: [],
     rtorrent: {
@@ -67,6 +69,7 @@ export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
     ...defaults,
     ...overrides,
     movies: movieSettingsSchema.parse(overrides?.movies ?? defaults.movies),
+    prowlarr: prowlarrSettingsSchema.parse(overrides?.prowlarr ?? {}),
     rtorrent: {
       ...defaults.rtorrent,
       ...(overrides?.rtorrent ?? {}),
@@ -133,6 +136,7 @@ export function parseSettings(value: string): AppSettings {
     ...defaults,
     ...parsed,
     movies: movieSettingsSchema.parse(parsed.movies ?? {}),
+    prowlarr: prowlarrSettingsSchema.parse(parsed.prowlarr ?? {}),
     torznab: Array.isArray(parsed.torznab) ? parsed.torznab : defaults.torznab,
     rtorrent: {
       ...defaults.rtorrent,

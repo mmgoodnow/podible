@@ -23,8 +23,14 @@ export async function runWorker(
     const boot = randomUUID();
     let nextMovieMaintenance = 0;
     let nextShadowSync = 0;
+    let nextSeerrSync = 0;
     while (!ctx.shouldStop?.()) {
       try {
+        const seerr = ctx.getSettings().movies.seerr;
+        if (seerr.url && seerr.apiKey && Date.now() >= nextSeerrSync) {
+          ctx.repo.createJob({ type: "movie_dual_write_sync", idempotencyKey: `movie-seerr:${seerr.url}:${Math.floor(Date.now()/(seerr.pollIntervalMinutes*60_000))}`, maxAttempts: 3 });
+          nextSeerrSync = Date.now() + seerr.pollIntervalMinutes * 60_000;
+        }
         const shadow = ctx.getSettings().movies.shadow;
         if (shadow.enabled && Date.now() >= nextShadowSync) {
           ctx.repo.createJob({

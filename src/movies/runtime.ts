@@ -4,28 +4,48 @@ import type { ModelProvider } from "@openai/agents-core";
 import { managedTransmission } from "../media/managed-transmission";
 import { PlexMovieLibrary } from "../media/plex-library";
 import { TmdbCatalog } from "./catalog";
+import type { MovieCatalog } from "./catalog";
+import { SeerrClient } from "./seerr";
 import { createMovieDecider } from "./agents";
-import { MovieIndexers, fetchMovieMetainfo } from "./offers";
+import {
+  MovieIndexers,
+  DiscoveredMovieIndexers,
+  fetchMovieMetainfo,
+} from "./offers";
+import { ProwlarrDiscovery } from "../media/prowlarr";
 import { probeMovie } from "./probe";
 import type { MovieServices } from "./operations";
 import { movieRoots } from "./acquisition";
 
-let catalog: { token: string; value: TmdbCatalog } | undefined;
-let indexers: { key: string; value: MovieIndexers } | undefined;
+let catalog: { token: string; value: MovieCatalog } | undefined;
+let indexers: { key: string; value: Pick<MovieIndexers, "search"> } | undefined;
 export function movieCatalog(settings: AppSettings) {
-  if (catalog?.token !== settings.movies.tmdbAccessToken)
+  const key = createHash("sha256")
+    .update(
+      JSON.stringify([settings.movies.tmdbAccessToken, settings.movies.seerr]),
+    )
+    .digest("hex");
+  if (catalog?.token !== key)
     catalog = {
-      token: settings.movies.tmdbAccessToken,
-      value: new TmdbCatalog(settings.movies.tmdbAccessToken),
+      token: key,
+      value:
+        settings.movies.tmdbAccessToken || !settings.movies.seerr.url
+          ? new TmdbCatalog(settings.movies.tmdbAccessToken)
+          : new SeerrClient(settings.movies.seerr),
     };
   return catalog!.value;
 }
 export function movieIndexers(settings: AppSettings) {
   const key = createHash("sha256")
-    .update(JSON.stringify(settings.torznab))
+    .update(JSON.stringify([settings.prowlarr, settings.torznab]))
     .digest("hex");
   if (indexers?.key !== key)
-    indexers = { key, value: new MovieIndexers(settings.torznab) };
+    indexers = {
+      key,
+      value: settings.prowlarr.url
+        ? new DiscoveredMovieIndexers(new ProwlarrDiscovery(settings.prowlarr))
+        : new MovieIndexers(settings.torznab),
+    };
   return indexers!.value;
 }
 export function configuredMovieServices(

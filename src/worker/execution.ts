@@ -14,7 +14,7 @@ import { workerLog, type WorkerContext } from "./context";
 import { jobLockKeys, lockSetsConflict } from "./locks";
 
 export const EXECUTION_JOB_TYPES = [
-  "movie_acquire", "movie_reconcile", "movie_shadow_sync", "movie_shadow_evaluate",
+  "movie_acquire", "movie_reconcile", "movie_shadow_sync", "movie_shadow_evaluate", "movie_dual_write_sync",
   "acquire",
   "download",
   "import",
@@ -121,7 +121,7 @@ export async function createJobExecutionRuntime(
     createWorkflow(
       {
         name: `media-${type}-v1` as const,
-        concurrency: type === "acquire" || type === "movie_reconcile" || type === "movie_shadow_sync" ? 1 : type === "import" || type === "chapter_analysis" || type === "movie_acquire" || type === "movie_shadow_evaluate" ? 2 : 16,
+        concurrency: type === "acquire" || type === "movie_reconcile" || type === "movie_shadow_sync" || type === "movie_dual_write_sync" ? 1 : type === "import" || type === "chapter_analysis" || type === "movie_acquire" || type === "movie_shadow_evaluate" ? 2 : 16,
         input: z.object({ jobId: z.number().int().positive(), generation: z.number().int().nonnegative().default(0) }),
         maxOperations: 200_000
       },

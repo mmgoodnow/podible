@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import type { AppSettings } from "../app-types";
 import { defaultMovieSettings, movieSettingsSchema } from "../movies/settings";
+import { prowlarrSettingsSchema } from "../media/prowlarr";
 
 const emptyToUndefined = (value: unknown) => {
   if (value === undefined || value === null || value === "") return undefined;
@@ -47,6 +48,7 @@ export const mediaSelectionSchema = z
 
 export const jobTypeSchema = z.enum([
   "movie_acquire", "movie_reconcile",
+  "movie_shadow_sync", "movie_shadow_evaluate", "movie_dual_write_sync",
   "full_library_refresh",
   "acquire",
   "download",
@@ -58,6 +60,7 @@ export const jobTypeSchema = z.enum([
 ]);
 
 export const appSettingsSchema: z.ZodType<AppSettings> = z.object({
+  prowlarr: prowlarrSettingsSchema.prefault({}),
   movies: movieSettingsSchema.default(defaultMovieSettings()),
   torznab: z.array(
     z.object({

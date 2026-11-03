@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { TorznabSource } from "../app-types";
+import { ProwlarrDiscovery, type DiscoveredIndexer } from "../media/prowlarr";
 import { parseTorznabSearch } from "../library/torznab";
 import { inspectMetainfo } from "../media/metainfo";
 import type { Movie } from "./types";
@@ -14,11 +14,16 @@ export type MovieOffer = {
   infoHash: string | null;
   attributes: Record<string, unknown>;
 };
-export type MovieSearch = { offers: MovieOffer[]; warnings: string[] };
+export type MovieSearch = {
+  offers: MovieOffer[];
+  warnings: string[];
+  deferred?: { provider: string; retryAt: string }[];
+};
 export class MovieIndexerError extends Error {
   constructor(
     message: string,
     readonly retryAfterMs: number = 60_000,
+    readonly retryable = true,
   ) {
     super(message);
   }
@@ -42,12 +47,18 @@ export class MovieIndexers {
   private cache = new Map<string, { until: number; result: MovieSearch }>();
   private inflight = new Map<string, Promise<MovieSearch>>();
   constructor(
-    private sources: TorznabSource[],
+    private sources: DiscoveredIndexer[],
     private fetcher: (
       url: string,
       init?: RequestInit,
     ) => Promise<Response> = fetch,
   ) {}
+  updateSources(sources: DiscoveredIndexer[]) {
+    if (JSON.stringify(sources) !== JSON.stringify(this.sources)) {
+      this.sources = sources;
+      this.cache.clear();
+    }
+  }
   async search(movie: Movie, query?: string): Promise<MovieSearch> {
     const q =
       query?.trim() || `${movie.title}${movie.year ? ` ${movie.year}` : ""}`;
@@ -60,7 +71,15 @@ export class MovieIndexers {
     try {
       const result = await action;
       if (this.cache.size > 100) this.cache.clear();
-      this.cache.set(q, { until: Date.now() + 60_000, result });
+      const deferredUntil =
+        result.deferred
+          ?.map((source) => Date.parse(source.retryAt))
+          .filter(Number.isFinite) ?? [];
+      // Partial results must expire when the first missing provider can retry.
+      this.cache.set(q, {
+        until: Math.min(Date.now() + 60_000, ...deferredUntil),
+        result,
+      });
       return result;
     } finally {
       this.inflight.delete(q);
@@ -72,11 +91,20 @@ export class MovieIndexers {
     const offers: MovieOffer[] = [];
     const warnings: string[] = [];
     const retryAt: number[] = [];
+    const deferred: NonNullable<MovieSearch["deferred"]> = [];
     let successes = 0;
     for (const source of this.sources) {
       const key = source.baseUrl;
-      if ((this.backoff.get(key) ?? 0) > Date.now()) {
-        retryAt.push(this.backoff.get(key)!);
+      const availableAt = Math.max(
+        this.backoff.get(key) ?? 0,
+        source.availableAfter ?? 0,
+      );
+      if (availableAt > Date.now()) {
+        retryAt.push(availableAt);
+        deferred.push({
+          provider: source.name,
+          retryAt: new Date(availableAt).toISOString(),
+        });
         warnings.push(`${source.name}: waiting for indexer backoff`);
         continue;
       }
@@ -90,6 +118,7 @@ export class MovieIndexers {
         url.searchParams.set("limit", "100");
         if (source.apiKey) url.searchParams.set("apikey", source.apiKey);
         const response = await this.fetcher(url.toString(), {
+          redirect: "manual",
           signal: AbortSignal.timeout(20_000),
         });
         if (!response.ok) {
@@ -126,8 +155,15 @@ export class MovieIndexers {
             });
         }
       } catch (error) {
-        if (error instanceof MovieIndexerError)
-          retryAt.push(Date.now() + error.retryAfterMs);
+        const retry =
+          Date.now() +
+          (error instanceof MovieIndexerError ? error.retryAfterMs : 60_000);
+        this.backoff.set(key, retry);
+        retryAt.push(retry);
+        deferred.push({
+          provider: source.name,
+          retryAt: new Date(retry).toISOString(),
+        });
         // Provider URLs/passkeys must not escape through error strings.
         warnings.push(
           error instanceof MovieIndexerError
@@ -139,9 +175,32 @@ export class MovieIndexers {
     if (!successes)
       throw new MovieIndexerError(
         warnings.join("; ") || "All indexers are unavailable",
-        retryAt.length ? Math.max(1000, Math.min(...retryAt) - Date.now()) : 60_000,
+        retryAt.length
+          ? Math.max(1000, Math.min(...retryAt) - Date.now())
+          : 60_000,
       );
-    return { offers, warnings };
+    return { offers, warnings, ...(deferred.length ? { deferred } : {}) };
+  }
+}
+
+export class DiscoveredMovieIndexers {
+  private searcher: MovieIndexers;
+  constructor(
+    private discovery: ProwlarrDiscovery,
+    fetcher?: ConstructorParameters<typeof MovieIndexers>[1],
+  ) {
+    this.searcher = new MovieIndexers([], fetcher);
+  }
+  async search(movie: Movie, query?: string) {
+    try {
+      this.searcher.updateSources(await this.discovery.sources("movie"));
+    } catch {
+      throw new MovieIndexerError(
+        "Prowlarr indexer discovery is temporarily unavailable",
+        60_000,
+      );
+    }
+    return this.searcher.search(movie, query);
   }
 }
 

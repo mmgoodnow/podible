@@ -12,11 +12,13 @@ import { acquireMovie } from "../movies/acquisition";
 import { configuredMovieServices } from "../movies/runtime";
 import { reconcileMovies } from "../movies/maintenance";
 import { syncMovieShadow, evaluateMovieShadow } from "../movies/shadow";
+import { syncSeerrRequests } from "../movies/dual-write";
 
 export type JobProcessResult = "done";
 
 /** Domain handlers are code, not a database execution-type enum. */
 export async function processJob(ctx: WorkerContext, job: JobRow): Promise<JobProcessResult> {
+  if (job.type === "movie_dual_write_sync") return syncSeerrRequests(ctx, job);
   if (job.type === "movie_shadow_sync") return syncMovieShadow(ctx);
   if (job.type === "movie_shadow_evaluate") return evaluateMovieShadow(ctx, job);
   if (job.type === "movie_acquire") return acquireMovie(ctx, job, ctx.movieServices ?? configuredMovieServices(ctx.getSettings(), ctx.modelProvider));

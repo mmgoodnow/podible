@@ -5,6 +5,7 @@ import { libraryRouter } from "./rpc/library-router";
 import { RpcError, type RpcContext } from "./rpc/shared";
 import { moviesRouter, movieRequestsRouter } from "./rpc/movies-router";
 import { movieShadowRouter } from "./rpc/movie-shadow-router";
+import { movieDualWriteRouter } from "./rpc/movie-dual-write-router";
 
 const t = initTRPC.context<RpcContext>().create();
 const procedure = t.procedure.use(async ({ next }) => {
@@ -31,6 +32,12 @@ const procedure = t.procedure.use(async ({ next }) => {
 });
 
 export const appRouter = t.router({
+  movieDualWrite: t.router({
+    status: procedure.input(movieDualWriteRouter.routes.status.paramsSchema).output(movieDualWriteRouter.routes.status.resultSchema).query(({ctx,input}) => executeMethod(movieDualWriteRouter.routes.status,ctx,input)),
+    list: procedure.input(movieDualWriteRouter.routes.list.paramsSchema).output(movieDualWriteRouter.routes.list.resultSchema).query(({ctx,input}) => executeMethod(movieDualWriteRouter.routes.list,ctx,input)),
+    sync: procedure.input(movieDualWriteRouter.routes.sync.paramsSchema).output(movieDualWriteRouter.routes.sync.resultSchema).mutation(({ctx,input}) => executeMethod(movieDualWriteRouter.routes.sync,ctx,input)),
+    backfill: procedure.input(movieDualWriteRouter.routes.backfill.paramsSchema).output(movieDualWriteRouter.routes.backfill.resultSchema).mutation(({ctx,input}) => executeMethod(movieDualWriteRouter.routes.backfill,ctx,input)),
+  }),
   movieShadow: t.router({
     status: procedure
       .input(movieShadowRouter.routes.status.paramsSchema)
