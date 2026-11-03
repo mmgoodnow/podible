@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTRPC } from "./rpc";
 import { Link, navigate } from "./router";
 import type { MovieRequestView } from "../../src/movies/contracts";
+import tmdbLogo from "./assets/tmdb-logo.svg" with { type: "file" };
 
 function Failure({ message }: { message: string }) {
   return (
@@ -60,7 +61,12 @@ export function MovieSearch() {
             maxLength={200}
           />
         </label>
-        <button disabled={!draft.trim() || results.isFetching}>Search</button>
+        <button
+          disabled={!draft.trim() || results.isFetching}
+          aria-busy={results.isFetching}
+        >
+          {results.isFetching ? "Searching..." : "Search"}
+        </button>
       </form>
       {status.isError ? (
         <Failure message={status.error.message} />
@@ -274,7 +280,9 @@ function ReleaseSearch({
             maxLength={200}
           />
         </label>
-        <button disabled={results.isFetching}>Search releases</button>
+        <button disabled={results.isFetching} aria-busy={results.isFetching}>
+          {results.isFetching ? "Searching releases..." : "Search releases"}
+        </button>
       </form>
       {results.isFetching && <p role="status">Searching indexers...</p>}
       {results.isError && <Failure message={results.error.message} />}
@@ -525,7 +533,7 @@ export function MovieCredits() {
         <img
           width="130"
           alt="TMDB"
-          src="https://www.themoviedb.org/assets/2/v4/logos/v2/blue_long_2-9665a76b1ae401a510ec1e0ca40ddcb3b0cfe45f1d51b77a308fea0845885648.svg"
+          src={tmdbLogo}
         />
       </a>
       <p>

@@ -185,7 +185,7 @@ footer {
 .stage-tracker .reached { border-color: var(--ink); color: var(--ink); }
 .stage-tracker .reached span { background: var(--ink); }
 .actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 1.5rem 0; }
-button:disabled { opacity: .5; cursor: wait; }
+button:disabled { opacity: .5; cursor: default; }
 .secondary { background: transparent; color: var(--ink); }
 .request-columns { display: grid; grid-template-columns: 1.7fr 1fr; gap: 1.5rem; align-items: start; }
 .timeline { padding-left: 1.3rem; }
@@ -200,7 +200,7 @@ button:disabled { opacity: .5; cursor: wait; }
 progress { width: 100%; accent-color: var(--ink); }
 .credits { margin-top: 1rem; font-size: .75rem; }
 .credits summary { cursor: pointer; }
-.credits img { display: block; margin-top: 1rem; max-width: 130px; }
+.credits img { display: block; margin-top: 1rem; max-width: 130px; height: auto; }
 @media (max-width: 650px) {
   header {
     gap: 1rem;

@@ -23,6 +23,13 @@ try {
   const context = await browser.newContext({
     viewport: { width: 1440, height: 1000 },
   });
+  const externalRequests: string[] = [];
+  await context.route("**/*", async (route) => {
+    if (new URL(route.request().url()).origin !== new URL(url!).origin) {
+      externalRequests.push(route.request().url());
+      await route.abort();
+    } else await route.continue();
+  });
   await context.addCookies([
     {
       name: "podible_session",
@@ -39,12 +46,40 @@ try {
   await page
     .getByRole("heading", { name: "Find your next feature." })
     .waitFor();
+  const idleSearch = page.getByRole("button", { name: "Search", exact: true });
+  if (!await idleSearch.isDisabled() || await page.evaluate(
+    "getComputedStyle(document.querySelector('button:disabled')).cursor",
+  ) !== "default")
+    throw new Error("Disabled search shows a busy cursor before a search starts");
+  await page.getByText("Movie data & credits", { exact: true }).click();
+  const logo = page.getByRole("img", { name: "TMDB", exact: true });
+  await logo.evaluate((image) => (image as unknown as { decode(): Promise<void> }).decode());
+  const logoState = await logo.evaluate((image) => {
+    const img = image as unknown as { naturalWidth: number; currentSrc: string };
+    return { width: img.naturalWidth, src: img.currentSrc };
+  });
+  if (!logoState.width || new URL(logoState.src).origin !== new URL(url!).origin)
+    throw new Error("TMDB attribution logo did not decode as a local asset");
   await page.evaluate("window.__spaNavigationProof = 42");
   await page.getByRole("searchbox", { name: "Search movies" }).fill("fixture");
+  let finishSearch!: () => void;
+  const searchGate = new Promise<void>((resolve) => { finishSearch = resolve; });
+  await page.route("**/api/trpc/movies.search**", async (route) => {
+    await searchGate;
+    await route.continue();
+  });
   await page.getByRole("button", { name: "Search", exact: true }).click();
+  const searching = page.getByRole("button", { name: "Searching...", exact: true });
+  await searching.waitFor();
+  await searching.hover();
+  if (await searching.getAttribute("aria-busy") !== "true" ||
+      await page.evaluate("getComputedStyle(document.querySelector('button[aria-busy=true]')).cursor") !== "default")
+    throw new Error("Pending search lacks a busy label or shows a beachball cursor");
+  finishSearch();
   await page
     .getByRole("heading", { name: "A Fixture Film", exact: true })
     .click();
+  await page.unroute("**/api/trpc/movies.search**");
   await page
     .getByRole("button", { name: "Request movie", exact: true })
     .click();
@@ -96,6 +131,12 @@ try {
     fullPage: false,
     animations: "disabled",
   });
+  await page.getByText("Movie data & credits", { exact: true }).click();
+  await logo.evaluate((image) => (image as unknown as { decode(): Promise<void> }).decode());
+  await page.locator(".credits").screenshot({
+    path: path.join(artifacts, "movie-credits-mobile.png"),
+    animations: "disabled",
+  });
   await page
     .getByRole("button", { name: "Withdraw my request", exact: true })
     .click();
@@ -106,8 +147,10 @@ try {
   await page.reload();
   await page.getByRole("link", { name: "Sign in", exact: true }).waitFor();
   if (errors.length) throw new Error(errors.join("\n"));
+  if (externalRequests.length)
+    throw new Error("Fixture UI unexpectedly depends on external assets: " + externalRequests.join(", "));
   console.log(
-    "Movie SPA acceptance passed: catalog, request, blocked/manual recovery, upgrade, availability, client routing, deep link, mobile, withdrawal and expired session.",
+    "Movie SPA acceptance passed: catalog, request, blocked/manual recovery, upgrade, availability, client routing, deep link, mobile, withdrawal, expired session, offline attribution logo and normal pending-search cursor.",
   );
 } catch (error) {
   if (diagnosticPage) {
