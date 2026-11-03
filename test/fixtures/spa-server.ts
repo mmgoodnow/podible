@@ -8,6 +8,7 @@ import path from "node:path";
 import os from "node:os";
 import { createFixtureMovieServices } from "./movie-services";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
+import { fixtureMovie } from "./movie-services";
 
 const db = new Database(":memory:");
 runMigrations(db);
@@ -24,12 +25,20 @@ settings.movies = {
   plexViewPath: "/data/view",
 };
 repo.updateSettings(settings);
+if (process.env.SHADOW_FIXTURE) {
+  settings.movies.shadow.enabled = true;
+  settings.movies.shadow.radarrUrl = "http://radarr:7878";
+  repo.updateSettings(settings);
+  const { caseId } = repo.movieShadow.capture({ observation: { key: "fixture:history:1", movie: fixtureMovie, releaseTitle: "A Fixture Film 2024", sourcePaths: [], observedAt: new Date().toISOString(), radarr: { outcome: "imported", messages: [] } }, policy: settings.movies.qualityPolicy, files: [], source: "unavailable", warnings: ["Source is missing or has moved"] });
+  repo.movieShadow.finish(caseId, { decision: "unobservable", selectedFile: null, reason: "No source files remain", facts: null, quality: null, probes: [], probeErrors: [], model: "fixture", evaluatedAt: new Date().toISOString() });
+}
 const fixture = createFixtureMovieServices(root);
 const runtime = await createJobExecutionRuntime(
   {
     repo,
     getSettings: () => repo.getSettings(),
     movieServices: fixture.services,
+    movieShadowServices: { observe: async () => [], inspect: fixture.services.decider.inspect, probe: fixture.services.probe },
     onLog() {},
   },
   path.join(root, "execution.sqlite"),
@@ -48,7 +57,7 @@ const user = repo.upsertUser({
   provider: "local",
   providerUserId: "spa-fixture",
   username: "reader",
-  isAdmin: false,
+  isAdmin: Boolean(process.env.SHADOW_FIXTURE),
 });
 repo.createSession(
   user.id,

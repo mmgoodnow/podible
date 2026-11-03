@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-query";
 import { rpc, TRPCProvider, useTRPC } from "./rpc";
 import { Link, useLocation } from "./router";
+import { MovieShadow } from "./movie-shadow";
 import {
   MovieSearch,
   MovieDetail,
@@ -116,6 +117,9 @@ function App() {
             Requests
           </Link>
           <a href="/">Classic view</a>
+          {session.data?.user.isAdmin && (
+            <Link href="/app/movie-shadow">Shadow audit</Link>
+          )}
         </nav>
         {session.data && <a href="/logout">Sign out</a>}
       </header>
@@ -168,7 +172,9 @@ function ActorLibrary() {
   return (
     <QueryClientProvider client={actorClient}>
       <TRPCProvider trpcClient={rpc} queryClient={actorClient}>
-        {/^\/app\/movies\/\d+$/.test(route) ? (
+        {route === "/app/movie-shadow" ? (
+          <MovieShadow />
+        ) : /^\/app\/movies\/\d+$/.test(route) ? (
           <MovieDetail key={route} tmdbId={Number(route.split("/").at(-1))} />
         ) : route === "/app/movies" ? (
           <MovieSearch />

@@ -9,7 +9,7 @@ import { BooksRepo } from "../../src/repo";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
 
 const types = [
-  "movie_acquire", "movie_reconcile",
+  "movie_acquire", "movie_reconcile", "movie_shadow_sync", "movie_shadow_evaluate",
   "acquire",
   "download",
   "import",

@@ -2,7 +2,7 @@
  * Editor-navigable companion to movies-api-map.md. Open this file in your
  * TypeScript editor and Cmd-click an imported type/function to visit its source.
  * Types only: this file does not start services or register any new endpoints.
- * Transmission and shadow interfaces at the bottom are PROPOSED, NOT IMPLEMENTED.
+ * Transmission interfaces at the bottom are proposed; shadow types are implemented.
  */
 import type { inferRouterInputs, inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../src/trpc";
@@ -44,7 +44,7 @@ export type CanonicalFile = Awaited<ReturnType<typeof adoptContentFile>>;
 // router, so hover shows current shapes and changes cannot silently drift.
 export type Inputs = inferRouterInputs<AppRouter>;
 export type Outputs = inferRouterOutputs<AppRouter>;
-type RpcCall<N extends "movies" | "requests", M extends keyof Inputs[N] & keyof Outputs[N]> =
+type RpcCall<N extends "movies" | "requests" | "movieShadow", M extends keyof Inputs[N] & keyof Outputs[N]> =
   (input: Inputs[N][M]) => Promise<Outputs[N][M]>;
 
 export interface PublicMovieRpc {
@@ -129,65 +129,10 @@ export interface ContainerSupervisor {
   shutdown(): Promise<void>;
 }
 
-// PROPOSED ONLY: normalized observation contracts, not upstream wire schemas.
-export interface ExternalMovieObservation {
-  source: { instanceId: string; movieId: number; downloadId: string | null; eventId: string | null };
-  movie: CatalogMovie;
-  releaseTitle: string;
-  observedAt: string;
-  outcome: "downloading" | "imported" | "blocked" | "failed" | "unknown";
-  messages: string[];
-  sourcePath: string | null;
-}
-export interface RadarrObserver {
-  observe(input: { cursor: string | null }): Promise<{
-    observations: ExternalMovieObservation[];
-    nextCursor: string;
-  }>;
-}
-export interface SeerrObserver {
-  approvedMovieRequests(input: { cursor: string | null }): Promise<{
-    requests: Array<{ externalRequestId: string; tmdbId: number; requestedAt: string }>;
-    nextCursor: string;
-  }>;
-}
-export interface ShadowImportInput {
-  movie: Movie;
-  policy: MovieQualityPolicy;
-  offer: MovieOffer;
-  selection: MovieSelection;
-  files: MovieFileCandidate[];
-  // No Radarr outcome/reasoning is supplied to the deciding agent.
-}
-export interface ShadowDecision {
-  action: "would-import" | "would-reacquire" | "needs-attention" | "unobservable";
-  selectedFileIndex: number | null;
-  facts: MovieFacts | null;
-  quality: QualityEvaluation | null;
-  reason: string;
-}
-export interface ShadowEvaluator {
-  evaluate(input: ShadowImportInput): Promise<ShadowDecision>;
-}
-export type ShadowEvidencePorts = {
-  probe: MovieServices["probe"];
-  decider: Pick<MovieDecider, "inspect">;
-  // Deliberately no TorrentClient, publication, adoption, indexer or shell.
-};
-export type ShadowVerdict =
-  | "podible-correct" | "radarr-correct" | "both-correct" | "both-wrong" | "uncertain";
-export interface ShadowCase {
-  id: number;
-  observation: ExternalMovieObservation;
-  policySnapshot: MovieQualityPolicy;
-  decision: ShadowDecision | null;
-  job: MovieRequestView["job"];
-  review: { verdict: ShadowVerdict; notes: string } | null;
-}
-export interface MovieShadowRpc {
-  list(input: { cursor?: string; limit?: number }): Promise<{ cases: ShadowCase[]; nextCursor: string | null }>;
-  get(input: { caseId: number }): Promise<{ case: ShadowCase }>;
-  sync(input: {}): Promise<{ jobId: JobRow["id"] }>;
-  retry(input: { caseId: number }): Promise<{ jobId: JobRow["id"] }>;
-  review(input: { caseId: number; verdict: ShadowVerdict; notes: string }): Promise<{ case: ShadowCase }>;
-}
+// IMPLEMENTED: read-only import audit. Types follow the live sources/router.
+export type { ShadowObservation, ShadowInput, ShadowResult } from "../src/movies/shadow-types";
+export type { MovieShadowServices } from "../src/movies/shadow";
+export type { RadarrObserver } from "../src/movies/shadow-radarr";
+export type ShadowCase = Outputs["movieShadow"]["get"]["case"];
+export type MovieShadowRpc = { [M in keyof Inputs["movieShadow"] & keyof Outputs["movieShadow"]]: RpcCall<"movieShadow", M> };
+// Future: Seerr request attribution and same-candidate release-selection comparison.

@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { Database } from "bun:sqlite";
 import { MOVIES_SCHEMA_SQL } from "./movies/schema";
+import { MOVIE_SHADOW_SCHEMA_SQL } from "./movies/shadow-repo";
 
 const SCHEMA_MIGRATION_ID = 1;
 const GUID_MIGRATION_ID = 2;
@@ -1134,6 +1135,7 @@ export function runMigrations(db: Database): void {
       PRIMARY KEY(acquisition_id,torrent_id)
     );
   `));
+  apply(38, () => db.exec(MOVIE_SHADOW_SCHEMA_SQL));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

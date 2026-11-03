@@ -1,9 +1,31 @@
 import { z } from "zod";
 import { defaultMovieQualityPolicy, movieQualityPolicySchema } from "./quality";
 
+export const movieShadowSettingsSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    radarrUrl: z.string().default(""),
+    radarrApiKey: z.string().default(""),
+    pollIntervalMinutes: z.number().int().min(1).max(1440).default(5),
+    lookbackDays: z.number().int().min(1).max(90).default(7),
+    maxCasesPerSync: z.number().int().min(1).max(50).default(5),
+    pathMappings: z
+      .array(
+        z
+          .object({
+            remoteRoot: z.string().min(1),
+            localRoot: z.string().min(1),
+          })
+          .strict(),
+      )
+      .default([]),
+  })
+  .strict();
+
 export const movieSettingsSchema = z
   .object({
     enabled: z.boolean().default(false),
+    shadow: movieShadowSettingsSchema.prefault({}),
     tmdbAccessToken: z.string().default(""),
     managedRoot: z.string().default(""),
     downloadGroupId: z.number().int().nonnegative().nullable().default(null),

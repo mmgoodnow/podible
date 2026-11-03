@@ -4,6 +4,7 @@ import { executeMethod } from "./rpc/framework";
 import { libraryRouter } from "./rpc/library-router";
 import { RpcError, type RpcContext } from "./rpc/shared";
 import { moviesRouter, movieRequestsRouter } from "./rpc/movies-router";
+import { movieShadowRouter } from "./rpc/movie-shadow-router";
 
 const t = initTRPC.context<RpcContext>().create();
 const procedure = t.procedure.use(async ({ next }) => {
@@ -30,6 +31,44 @@ const procedure = t.procedure.use(async ({ next }) => {
 });
 
 export const appRouter = t.router({
+  movieShadow: t.router({
+    status: procedure
+      .input(movieShadowRouter.routes.status.paramsSchema)
+      .output(movieShadowRouter.routes.status.resultSchema)
+      .query(({ ctx, input }) =>
+        executeMethod(movieShadowRouter.routes.status, ctx, input),
+      ),
+    list: procedure
+      .input(movieShadowRouter.routes.list.paramsSchema)
+      .output(movieShadowRouter.routes.list.resultSchema)
+      .query(({ ctx, input }) =>
+        executeMethod(movieShadowRouter.routes.list, ctx, input),
+      ),
+    get: procedure
+      .input(movieShadowRouter.routes.get.paramsSchema)
+      .output(movieShadowRouter.routes.get.resultSchema)
+      .query(({ ctx, input }) =>
+        executeMethod(movieShadowRouter.routes.get, ctx, input),
+      ),
+    sync: procedure
+      .input(movieShadowRouter.routes.sync.paramsSchema)
+      .output(movieShadowRouter.routes.sync.resultSchema)
+      .mutation(({ ctx, input }) =>
+        executeMethod(movieShadowRouter.routes.sync, ctx, input),
+      ),
+    retry: procedure
+      .input(movieShadowRouter.routes.retry.paramsSchema)
+      .output(movieShadowRouter.routes.retry.resultSchema)
+      .mutation(({ ctx, input }) =>
+        executeMethod(movieShadowRouter.routes.retry, ctx, input),
+      ),
+    review: procedure
+      .input(movieShadowRouter.routes.review.paramsSchema)
+      .output(movieShadowRouter.routes.review.resultSchema)
+      .mutation(({ ctx, input }) =>
+        executeMethod(movieShadowRouter.routes.review, ctx, input),
+      ),
+  }),
   movies: t.router({
     status: procedure
       .input(moviesRouter.routes.status.paramsSchema)

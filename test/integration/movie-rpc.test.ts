@@ -120,7 +120,7 @@ test("user-safe movie RPC shares acquisition, protects opaque offers and reports
           "two",
         )
       ).result.request;
-      if (view.available) break;
+      if (view.available && view.stage === "available") break;
       if (Date.now() > deadline)
         throw new Error("Movie RPC did not become ready");
       await Bun.sleep(15);

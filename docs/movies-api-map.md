@@ -11,8 +11,11 @@ preexisting book/auth/admin API or every private helper.
 **Implemented:** movie/request RPCs, service ports, agent decisions, probing,
 quality checks, repository/outbox integration, canonical content and Plex views.
 
-**Proposed, not implemented:** Docker-managed Transmission, its supervisor,
-Radarr/Seerr observation, shadow RPCs, and the shadow audit UI. The current
+**Also implemented:** read-only Radarr import observation, shadow RPCs and the admin
+audit UI. See [shadow configuration](movie-shadow.md) for settings and limitations.
+Seerr attribution and release-selection A/B evaluation remain future work.
+
+**Proposed, not implemented:** Docker-managed Transmission and its supervisor. The current
 `configuredMovieServices` factory still constructs an `RtorrentAdapter`.
 
 Some interfaces group existing free functions for readability. They do not
@@ -535,81 +538,25 @@ be published or proxied through Podible's user API. Peer ports are a separate
 network concern. Legacy book/rTorrent work remains untouched during rollout.
 Neither the supervisor nor this adapter has landed yet.
 
-## 10. Shadow Observation and Admin API (Proposed Only)
+## 10. Shadow Observation and Admin API
 
-These are proposed normalized application interfaces, not verbatim Radarr/Seerr
-wire schemas. Start with Radarr import observation; Seerr request attribution
-and same-candidate-pool release-selection comparisons are later additions.
+Implemented at `/app/movie-shadow`, with admin-only JSON-RPC and typed tRPC:
 
 ```ts
-interface ExternalMovieObservation {
-  source: { instanceId: string; movieId: number; downloadId: string | null; eventId: string | null };
-  movie: CatalogMovie;
-  releaseTitle: string;
-  observedAt: ISODate;
-  outcome: "downloading" | "imported" | "blocked" | "failed" | "unknown";
-  messages: string[];
-  sourcePath: string | null; // Private, mapped through an approved read-only mount
-}
-interface RadarrObserver { // No grab/import/delete/blacklist methods
-  observe(input: { cursor: string | null }): Promise<{
-    observations: ExternalMovieObservation[];
-    nextCursor: string;
-  }>;
-}
-interface SeerrObserver { // Optional later attribution; no approve/request mutations
-  approvedMovieRequests(input: { cursor: string | null }): Promise<{
-    requests: Array<{ externalRequestId: string; tmdbId: TmdbId; requestedAt: ISODate }>;
-    nextCursor: string;
-  }>;
-}
-interface ShadowImportInput {
-  movie: Movie;
-  policy: MovieQualityPolicy;
-  offer: MovieOffer;
-  selection: MovieSelection;
-  files: MovieFileCandidate[];
-  // Radarr's action/reasons are deliberately excluded from the agent input.
-}
-interface ShadowDecision {
-  action: "would-import" | "would-reacquire" | "needs-attention" | "unobservable";
-  selectedFileIndex: number | null;
-  facts: MovieFacts | null;
-  quality: QualityEvaluation | null;
-  reason: string;
-}
-interface ShadowEvaluator {
-  evaluate(input: ShadowImportInput): Promise<ShadowDecision>;
-}
-type ShadowEvidencePorts = {
-  probe: MovieServices["probe"];
-  decider: Pick<MovieDecider, "inspect">;
-  // Intentionally no TorrentClient, MovieLibrary, adoption, search or shell.
-};
-type ShadowVerdict = "podible-correct" | "radarr-correct" | "both-correct" | "both-wrong" | "uncertain";
-interface ShadowCase {
-  id: number;
-  observation: ExternalMovieObservation;
-  policySnapshot: MovieQualityPolicy;
-  decision: ShadowDecision | null;
-  job: JobView | null; // Execution status projected from Reflow, not duplicated
-  review: { verdict: ShadowVerdict; notes: string } | null;
-}
-interface MovieShadowRpc { // Admin only; planned, not registered
-  list(input: { cursor?: string; limit?: number }): Promise<{ cases: ShadowCase[]; nextCursor: string | null }>;
-  get(input: { caseId: number }): Promise<{ case: ShadowCase }>;
-  sync(input: {}): Promise<{ jobId: JobId }>;
-  retry(input: { caseId: number }): Promise<{ jobId: JobId }>;
-  review(input: { caseId: number; verdict: ShadowVerdict; notes: string }): Promise<{ case: ShadowCase }>;
-}
+type ShadowInput = import("../src/movies/shadow-types").ShadowInput;
+type ShadowResult = import("../src/movies/shadow-types").ShadowResult;
+type ShadowEvidencePorts = import("../src/movies/shadow").MovieShadowServices;
+type ShadowInputs = import("@trpc/server").inferRouterInputs<import("../src/trpc").AppRouter>["movieShadow"];
+type ShadowOutputs = import("@trpc/server").inferRouterOutputs<import("../src/trpc").AppRouter>["movieShadow"];
+type MovieShadowRpc = { [Method in keyof ShadowInputs]: (input: ShadowInputs[Method]) => Promise<ShadowOutputs[Method]> };
+// status, list, get, sync, retry, review. See the .ts companion for Cmd-click navigation.
 ```
 
-Webhooks can later accelerate observation, but would only persist/enqueue work;
-polling repairs missed events. Shadow failures must not affect Radarr/Seerr.
-An unavailable/moved source is `unobservable`, not evidence of a bad import.
-Human audit must review disagreements and some agreements. Different candidate
-sets are not a fair release-ranking comparison, and an unattempted alternative
-has an unknown download outcome.
-
-No shadow endpoint, observer, worker type, evaluator facade, or audit page above
-exists in the current implementation. This section records the discussed design.
+GET-only Radarr observations cover recent imports and completed/blocked queue entries.
+The bounded evaluator has only observation, probe and import-verifier capabilities;
+no downloads, torrent control, file adoption, symlinks, or Plex mutation.
+It withholds Radarr outcomes from the agent, persists file/policy snapshots, and
+deduplicates unchanged evidence. Missing sources are unobservable, not wrong imports.
+Execution status is projected from Reflow. Human reviews are persisted on cases.
+Seerr attribution, webhook acceleration, release-selection A/B and shadow-driven
+automatic recovery are not part of this first read-only import audit.

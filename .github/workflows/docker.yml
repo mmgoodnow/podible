@@ -25,6 +25,7 @@ jobs:
       - run: bunx playwright install --with-deps chromium
       - run: bun run test/browser/spa.ts
       - run: bun run test/browser/movies.ts
+      - run: bun run test/browser/movie-shadow.ts
   docker:
     needs: verify
     uses: mmgoodnow/cd/.github/workflows/docker.yml@main

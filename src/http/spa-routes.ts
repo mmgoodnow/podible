@@ -29,7 +29,7 @@ export function createSpaRoutes(directory = SPA_BUILD_DIRECTORY) {
     }
     if (
       relative.includes(".") ||
-      !/^$|^(library|movies|requests)(\/\d+)?\/?$/.test(relative)
+      !/^$|^(library|movies|requests|movie-shadow)(\/\d+)?\/?$/.test(relative)
     )
       return c.notFound();
     const entry = Bun.file(path.join(directory, "index.html"));

@@ -21,6 +21,7 @@ import {
 import { searchRouter, snatchRouter } from "./rpc/search-router";
 import { systemRouter } from "./rpc/system-router";
 import { moviesRouter, movieRequestsRouter } from "./rpc/movies-router";
+import { movieShadowRouter } from "./rpc/movie-shadow-router";
 
 function response(payload: RpcSuccess | RpcFailure): Response {
   return new Response(JSON.stringify(payload, null, 2), {
@@ -66,6 +67,7 @@ const rootRouter = defineRouter({
   admin: adminRouter,
   movies: moviesRouter,
   requests: movieRequestsRouter,
+  movieShadow: movieShadowRouter,
 });
 methodsByName = flattenRouter(rootRouter);
 

@@ -11,11 +11,14 @@ import { processMetadataHydrationJob } from "./metadata-hydration";
 import { acquireMovie } from "../movies/acquisition";
 import { configuredMovieServices } from "../movies/runtime";
 import { reconcileMovies } from "../movies/maintenance";
+import { syncMovieShadow, evaluateMovieShadow } from "../movies/shadow";
 
 export type JobProcessResult = "done";
 
 /** Domain handlers are code, not a database execution-type enum. */
 export async function processJob(ctx: WorkerContext, job: JobRow): Promise<JobProcessResult> {
+  if (job.type === "movie_shadow_sync") return syncMovieShadow(ctx);
+  if (job.type === "movie_shadow_evaluate") return evaluateMovieShadow(ctx, job);
   if (job.type === "movie_acquire") return acquireMovie(ctx, job, ctx.movieServices ?? configuredMovieServices(ctx.getSettings(), ctx.modelProvider));
   if (job.type === "movie_reconcile") return reconcileMovies(ctx);
   if (job.type === "download") {

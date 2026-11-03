@@ -10,23 +10,47 @@ export async function runWorker(
   options: Parameters<typeof createJobExecutionRuntime>[2] & {
     databasePath?: string;
     runtime?: Awaited<ReturnType<typeof createJobExecutionRuntime>>;
-  } = {}
+  } = {},
 ): Promise<void> {
   const runtime =
     options.runtime ??
-    (await createJobExecutionRuntime(ctx, options.databasePath ?? ctx.repo.executionDatabasePath(), options));
+    (await createJobExecutionRuntime(
+      ctx,
+      options.databasePath ?? ctx.repo.executionDatabasePath(),
+      options,
+    ));
   try {
     const boot = randomUUID();
     let nextMovieMaintenance = 0;
+    let nextShadowSync = 0;
     while (!ctx.shouldStop?.()) {
       try {
-        if (ctx.getSettings().movies.enabled && Date.now() >= nextMovieMaintenance) {
-          ctx.repo.createJob({ type: "movie_reconcile", idempotencyKey: `movie-maintenance:${boot}:${Math.floor(Date.now() / 3_600_000)}`, maxAttempts: 2 });
+        const shadow = ctx.getSettings().movies.shadow;
+        if (shadow.enabled && Date.now() >= nextShadowSync) {
+          ctx.repo.createJob({
+            type: "movie_shadow_sync",
+            idempotencyKey: `movie-shadow-sync:${Math.floor(Date.now() / (shadow.pollIntervalMinutes * 60_000))}`,
+            maxAttempts: 3,
+          });
+          nextShadowSync = Date.now() + shadow.pollIntervalMinutes * 60_000;
+        }
+        if (
+          ctx.getSettings().movies.enabled &&
+          Date.now() >= nextMovieMaintenance
+        ) {
+          ctx.repo.createJob({
+            type: "movie_reconcile",
+            idempotencyKey: `movie-maintenance:${boot}:${Math.floor(Date.now() / 3_600_000)}`,
+            maxAttempts: 2,
+          });
           nextMovieMaintenance = Date.now() + 3_600_000;
         }
         await runtime.reconcile();
       } catch (error) {
-        workerLog(ctx, `[execution] outbox reconciliation failed: ${String(error)}`);
+        workerLog(
+          ctx,
+          `[execution] outbox reconciliation failed: ${String(error)}`,
+        );
       }
       await Bun.sleep(100);
     }
