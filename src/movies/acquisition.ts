@@ -17,6 +17,7 @@ import { factsFromMovieProbe } from "./probe";
 import { publishMovieVersion } from "./publication";
 import type { MovieOffer } from "./offers";
 import type { MovieServices, MovieFileCandidate } from "./operations";
+import { readTransmissionIdentity } from "../media/managed-transmission";
 import { movieUpstreamStep } from "./upstream";
 
 export const movieAcquisitionPayloadSchema = z.object({
@@ -37,7 +38,7 @@ export function movieConfigurationIdentity(ctx: WorkerContext): string {
     .update(
       JSON.stringify([
         settings.movies.managedRoot,
-        settings.rtorrent.url,
+        ctx.movieServices?.client.id ?? `transmission:${readTransmissionIdentity().id}`,
         settings.movies.plexUrl,
         settings.movies.plexSectionId,
         settings.movies.plexViewPath,

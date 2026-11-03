@@ -11,5 +11,5 @@
     "allowSyntheticDefaultImports": true,
     "types": ["bun-types"]
   },
-  "include": ["server.ts", "dev.ts", "scripts/build-web.ts", "src/**/*.ts", "src/**/*.d.ts", "test/**/*.ts", "docs/movies-api-map.ts"]
+  "include": ["server.ts", "dev.ts", "scripts/build-web.ts", "scripts/container.ts", "src/**/*.ts", "src/**/*.d.ts", "test/**/*.ts", "docs/movies-api-map.ts"]
 }

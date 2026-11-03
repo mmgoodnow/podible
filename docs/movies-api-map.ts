@@ -2,7 +2,7 @@
  * Editor-navigable companion to movies-api-map.md. Open this file in your
  * TypeScript editor and Cmd-click an imported type/function to visit its source.
  * Types only: this file does not start services or register any new endpoints.
- * Transmission interfaces at the bottom are proposed; shadow types are implemented.
+ * Torrent-engine and shadow types below follow the implemented source.
  */
 import type { inferRouterInputs, inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../src/trpc";
@@ -114,20 +114,9 @@ export interface PrivateMovieApi {
   executionRuntime: Awaited<ReturnType<typeof createJobExecutionRuntime>>;
 }
 
-// PROPOSED ONLY: private Docker-managed daemon, not yet implemented.
-export interface ManagedTorrentEngine {
-  start(): Promise<void>;
-  waitUntilReady(signal?: AbortSignal): Promise<void>;
-  status(): {
-    state: "starting" | "ready" | "restarting" | "stopped" | "failed";
-    message: string | null;
-  };
-  shutdown(input: { graceMs: number }): Promise<void>;
-}
-export interface ContainerSupervisor {
-  run(): Promise<void>;
-  shutdown(): Promise<void>;
-}
+// IMPLEMENTED: private Docker-managed daemon. Supervisor is scripts/container.ts.
+export type { TransmissionAdapter, TransmissionRpc } from "../src/media/transmission-client";
+export type { prepareTransmission, readTransmissionIdentity, managedTransmission } from "../src/media/managed-transmission";
 
 // IMPLEMENTED: read-only import audit. Types follow the live sources/router.
 export type { ShadowObservation, ShadowInput, ShadowResult } from "../src/movies/shadow-types";

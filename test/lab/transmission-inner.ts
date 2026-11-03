@@ -1,0 +1,200 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import bencode from "bencode";
+import { createHash } from "node:crypto";
+import {
+  prepareTransmission,
+  managedTransmission,
+  readTransmissionIdentity,
+} from "../../src/media/managed-transmission";
+import { TransmissionRpc } from "../../src/media/transmission-client";
+const root = await fs.mkdtemp("/tmp/transmission-acceptance-");
+const directory = path.join(root, "engine");
+const identity = prepareTransmission(directory);
+const rpc = new TransmissionRpc({
+  url: "http://127.0.0.1:9091/transmission/rpc",
+  username: identity.username,
+  password: identity.password,
+});
+let daemon: ReturnType<typeof Bun.spawn> | undefined;
+const files = [
+  { name: "Bundle/feature.bin", bytes: Buffer.alloc(80_000, 42) },
+  { name: "Bundle/release.nfo", bytes: Buffer.from("fixture nfo") },
+];
+const webseed = Bun.serve({
+  hostname: "127.0.0.1",
+  port: 18080,
+  fetch(request) {
+    const file = files.find(
+      (f) =>
+        "/seed/" + f.name === decodeURIComponent(new URL(request.url).pathname),
+    );
+    if (!file) return new Response(null, { status: 404 });
+    const range = /bytes=(\d+)-(\d*)/.exec(request.headers.get("range") ?? "");
+    if (!range) return new Response(file.bytes);
+    const start = Number(range[1]);
+    const end = Math.min(
+      file.bytes.length - 1,
+      range[2] ? Number(range[2]) : file.bytes.length - 1,
+    );
+    return new Response(file.bytes.subarray(start, end + 1), {
+      status: 206,
+      headers: {
+        "Content-Range": `bytes ${start}-${end}/${file.bytes.length}`,
+      },
+    });
+  },
+});
+async function start() {
+  daemon = Bun.spawn(
+    ["transmission-daemon", "--foreground", "--config-dir", directory],
+    { stdout: "ignore", stderr: "ignore" },
+  );
+  for (let n = 0; n < 100; n++) {
+    try {
+      await rpc.call("session-get");
+      return;
+    } catch {
+      await Bun.sleep(100);
+    }
+  }
+  throw new Error("Daemon did not become ready");
+}
+async function stop() {
+  daemon?.kill("SIGTERM");
+  if (daemon) await daemon.exited;
+}
+const data = Buffer.concat(files.map((f) => f.bytes));
+const pieces = [];
+for (let i = 0; i < data.length; i += 16384)
+  pieces.push(
+    createHash("sha1")
+      .update(data.subarray(i, i + 16384))
+      .digest(),
+  );
+const metainfo = bencode.encode({
+  "url-list": ["http://127.0.0.1:18080/seed/"],
+  info: {
+    name: "Bundle",
+    "piece length": 16384,
+    pieces: Buffer.concat(pieces),
+    files: files.map((f) => ({
+      length: f.bytes.length,
+      path: [f.name.split("/").at(-1)],
+    })),
+  },
+});
+try {
+  await start();
+  const client = managedTransmission(root, directory);
+  const ref = await client.ensureAdded({
+    metainfo,
+    location: { rootId: "movies", relativePath: "one" },
+  });
+  if ((await client.inspect(ref)).state !== "inactive")
+    throw new Error("Add was not paused");
+  await client.resume(ref);
+  const deadline = Date.now() + 90_000;
+  while (!(await client.inspect(ref)).complete) {
+    if (Date.now() > deadline) throw new Error("Webseed transfer timed out");
+    await Bun.sleep(200);
+  }
+  const paths = await client.files(ref);
+  for (const [index, file] of files.entries())
+    if (!(await fs.readFile(paths[index]!.path)).equals(file.bytes))
+      throw new Error("Transferred bytes differ");
+  await stop();
+  prepareTransmission(directory);
+  await start();
+  const resumed = managedTransmission(root, directory);
+  const same = await resumed.ensureAdded({
+    metainfo,
+    location: { rootId: "movies", relativePath: "one" },
+  });
+  if (
+    JSON.stringify(same) !== JSON.stringify(ref) ||
+    !(await resumed.inspect(same)).complete
+  )
+    throw new Error("Restart lost torrent state/identity");
+  await resumed.removeRecord(same);
+  if (!(await fs.readFile(paths[0]!.path)).equals(files[0]!.bytes))
+    throw new Error("Record removal deleted content");
+  await stop();
+  daemon = undefined;
+  const config = path.join(root, "supervised");
+  const supervisor = Bun.spawn(
+    [process.execPath, "run", "scripts/container.ts"],
+    {
+      env: { ...process.env, CONFIG_DIR: config, PORT: "3187" },
+      stdout: "inherit",
+      stderr: "inherit",
+    },
+  );
+  async function until(check: () => Promise<boolean>) {
+    const end = Date.now() + 20_000;
+    while (!(await check())) {
+      if (Date.now() > end) throw new Error("Supervisor acceptance timed out");
+      await Bun.sleep(100);
+    }
+  }
+  const daemonPids = async () => {
+    const result: number[] = [];
+    for (const entry of await fs.readdir("/proc"))
+      if (/^\d+$/.test(entry)) {
+        const command = await fs
+          .readFile(`/proc/${entry}/cmdline`, "utf8")
+          .catch(() => "");
+        if (command.split("\0")[0]?.endsWith("transmission-daemon"))
+          result.push(Number(entry));
+      }
+    return result;
+  };
+  try {
+    const healthy = async () => { try { const response = await fetch("http://127.0.0.1:3187/rpc/system/health"); const data = await response.json() as { result?: { ok: boolean } }; return data.result?.ok === true; } catch { return false; } };
+    await until(healthy);
+    const before = readTransmissionIdentity(path.join(config, "transmission"));
+    const firstPid = (await daemonPids())[0];
+    if (!firstPid) throw new Error("Private daemon is not running");
+    process.kill(firstPid, "SIGKILL");
+    await until(async () =>
+      (await daemonPids()).some((pid) => pid !== firstPid),
+    );
+    const privateRpc = new TransmissionRpc({
+      url: "http://127.0.0.1:9091/transmission/rpc",
+      username: before.username,
+      password: before.password,
+    });
+    await until(async () => {
+      try {
+        await privateRpc.call("session-get");
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    if ((await fetch("http://127.0.0.1:9091/transmission/rpc")).status !== 401)
+      throw new Error("Private RPC is not authenticated");
+    if (
+      readTransmissionIdentity(path.join(config, "transmission")).id !==
+      before.id
+    )
+      throw new Error("Restart changed client identity");
+    if (!await healthy())
+      throw new Error("Daemon failure stopped application");
+    console.log(
+      "Supervisor acceptance: real app readiness, independent daemon restart, private authenticated RPC, stable identity passed",
+    );
+  } finally {
+    supervisor.kill("SIGTERM");
+    const timeout = setTimeout(() => supervisor.kill("SIGKILL"), 15_000);
+    await supervisor.exited;
+    clearTimeout(timeout);
+  }
+  console.log(
+    "Transmission acceptance: paused add, actual webseed transfer, multi-file paths, persistent restart, no-delete removal passed",
+  );
+} finally {
+  await stop();
+  webseed.stop(true);
+  await fs.rm(root, { recursive: true, force: true });
+}

@@ -75,14 +75,16 @@ was added. Configure:
 
 - `movies.enabled`, `movies.tmdbAccessToken` (TMDB API read-access bearer token).
 - `movies.managedRoot`: an app-owned absolute directory visible at the same path
-  inside the torrent client. Contains `downloads`, `content`, `views/plex/movies`.
+  inside the app container. Contains `downloads`, `objects`, `views/plex/movies`.
 - `movies.downloadGroupId`: optional shared group for client-writable download
   directories; defaults to null. The app needs permission to assign that group.
 - `movies.plexUrl`, `movies.plexToken`, `movies.plexSectionId`.
 - `movies.plexViewPath`: the Plex-visible path for `views/plex/movies`. Plex must
   also mount the canonical content with the same relative relationship, since
   presentation links are relative. Mount the whole managed tree, not just views.
-- Existing `rtorrent`, `torznab` (Prowlarr sources), and `agents.apiKey` settings.
+- Existing `torznab` (Prowlarr sources) and `agents.apiKey` settings. Book downloads
+  continue using the existing `rtorrent` settings; native movies use the private
+  Docker-managed Transmission engine, not those settings.
 - `movies.qualityPolicy`, `automaticUpgrades`, `searchIntervalHours` (default 24),
   and `maximumReleaseBytes` (default 40 GiB).
 
@@ -95,6 +97,31 @@ The default policy requires the theatrical cut, English audio, SDR and allowed
 720p/1080p tiers. Unknown facts need verification; they are not silently assumed.
 Quality is an ordered tier plus bounded within-tier preference, not a weighted
 sum that can override hard constraints. Equal/lower quality is not an upgrade.
+
+### Private torrent engine
+
+The image bundles Debian's pinned, security-maintained `transmission-daemon`
+package (`4.1.0~beta2+dfsg-3+deb13u2`). `scripts/container.ts` supervises Bun and
+the foreground daemon independently, restarts failed processes with bounded
+backoff, and stops the app before the daemon. Allow a 30-second Docker stop
+grace period. Failed engine readiness does not block the web UI.
+
+`/config/transmission` persists the private identity, generated authentication,
+metainfo and resume state. Back up the whole config volume. RPC binds only to
+`127.0.0.1:9091`, requires authentication and is never published/proxied. There
+is no user/admin torrent-control API or extra torrent-client settings surface.
+Peer traffic is separate (`51413` TCP/UDP); publishing that port is optional and
+is not permission to publish `9091`. Existing book/rTorrent work is unchanged.
+Old native-movie executions from another client identity fail closed rather
+than silently being replayed against Transmission. Local non-Docker developers
+can use `bun run scripts/container.ts` with `transmission-daemon` installed.
+
+### Radarr shadow mode
+
+See [movie-shadow.md](movie-shadow.md) for the independent read-only observer,
+admin audit UI and settings. Live movie acquisition can remain disabled while
+shadow mode evaluates existing Radarr downloads. Cross-seeding, Seerr attribution
+and automated action on shadow disagreements are intentionally not implemented.
 
 ## Verification and Limits
 

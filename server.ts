@@ -87,6 +87,7 @@ export async function startServer(frontend?: HTMLBundle) {
             "/app/library": frontend,
             "/app/movies": frontend,
             "/app/requests": frontend,
+            "/app/movie-shadow": frontend,
           },
           development: { hmr: true, console: true },
         }

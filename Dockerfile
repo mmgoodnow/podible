@@ -12,7 +12,7 @@ FROM oven/bun:1.4.4
 WORKDIR /app
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg unzip wamerican \
+  && apt-get install -y --no-install-recommends ffmpeg unzip wamerican transmission-daemon=4.1.0~beta2+dfsg-3+deb13u2 \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json bun.lock ./
@@ -36,5 +36,6 @@ ENV NODE_ENV=production
 ENV CONFIG_DIR=/config
 
 EXPOSE 80
+EXPOSE 51413/tcp 51413/udp
 
-CMD ["bun", "run", "server.ts", "/books"]
+CMD ["bun", "run", "scripts/container.ts", "/books"]

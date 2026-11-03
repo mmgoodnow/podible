@@ -15,8 +15,8 @@ quality checks, repository/outbox integration, canonical content and Plex views.
 audit UI. See [shadow configuration](movie-shadow.md) for settings and limitations.
 Seerr attribution and release-selection A/B evaluation remain future work.
 
-**Proposed, not implemented:** Docker-managed Transmission and its supervisor. The current
-`configuredMovieServices` factory still constructs an `RtorrentAdapter`.
+**Also implemented:** Docker-managed Transmission and its supervisor. The movie
+factory constructs a private `TransmissionAdapter`; legacy book/rTorrent is unchanged.
 
 Some interfaces group existing free functions for readability. They do not
 imply that identically named facade classes exist. The live Zod schemas and
@@ -30,7 +30,7 @@ Browser / Kindling
      -> application transactions + command outbox
         -> Reflow execution
            -> catalog / indexers / semantic agents / ffprobe
-           -> TorrentClient -> rTorrent today; private Transmission proposed
+           -> TorrentClient -> private Docker-managed Transmission (movies)
            -> canonical content -> declarative symlink view -> Plex
 
 Proposed shadow path:
@@ -508,35 +508,25 @@ decisions, files, and publication state. The real worker registration includes
 `movie_acquire` and `movie_reconcile`. The service object is server-created,
 never reconstructed from client JSON.
 
-## 9. Docker-Managed Transmission (Proposed Only)
+## 9. Docker-Managed Transmission
 
-This is a proposed lifecycle boundary, not an installed service or public RPC.
-The backend adapter will translate the existing `TorrentClient` interface into
-Transmission's own protocol; we do not need a second application torrent API.
+The backend adapter translates the existing `TorrentClient` interface into
+Transmission's protocol. There is no new public torrent API. The Docker entrypoint
+is `scripts/container.ts`, which supervises the app and foreground daemon.
 
 ```ts
-interface ManagedTorrentEngine {
-  start(): Promise<void>; // Pinned foreground daemon; private generated credentials
-  waitUntilReady(signal?: AbortSignal): Promise<void>;
-  status(): {
-    state: "starting" | "ready" | "restarting" | "stopped" | "failed";
-    message: string | null; // Safe operational message, not credential dumps
-  };
-  shutdown(input: { graceMs: number }): Promise<void>;
-}
-interface ContainerSupervisor {
-  run(): Promise<void>; // Supervise Podible and daemon independently
-  shutdown(): Promise<void>;
-}
-// Future implementation:
-// class TransmissionAdapter implements TorrentClient { ... }
+type TransmissionAdapter = import("../src/media/transmission-client").TransmissionAdapter;
+type TransmissionRpc = import("../src/media/transmission-client").TransmissionRpc;
+type Prepare = typeof import("../src/media/managed-transmission").prepareTransmission;
+type ClientFactory = typeof import("../src/media/managed-transmission").managedTransmission;
 ```
 
 Only the adapter receives the private loopback RPC address and credentials.
 Torrent/resume state persists across image upgrades. Daemon RPC/web UI must not
 be published or proxied through Podible's user API. Peer ports are a separate
 network concern. Legacy book/rTorrent work remains untouched during rollout.
-Neither the supervisor nor this adapter has landed yet.
+Real container acceptance verifies webseed transfer, multi-file paths, restart
+persistence, no-delete removal, authenticated loopback RPC and independent recovery.
 
 ## 10. Shadow Observation and Admin API
 
