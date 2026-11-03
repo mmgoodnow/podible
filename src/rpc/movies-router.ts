@@ -7,12 +7,7 @@ import { movieRequestViewSchema } from "../movies/contracts";
 import { movieCatalog, movieIndexers } from "../movies/runtime";
 import { movieRequestView, queueMovieAcquisition } from "../movies/service";
 
-function enabled(ctx: RpcContext) {
-  if (!ctx.repo.getSettings().movies.enabled)
-    throw new RpcError(-32602, "Movies are disabled by the administrator");
-}
 function owned(ctx: RpcContext, requestId: number) {
-  enabled(ctx);
   const request = ctx.repo.movies.requestById(requestId);
   if (!request || request.user_id !== ctx.session!.user_id)
     throw new RpcError(-32003, "Movie request not found");
@@ -29,14 +24,12 @@ export const moviesRouter = defineRouter({
       "Read movie feature availability without exposing settings secrets.",
     paramsSchema: emptyParamsSchema,
     resultSchema: z.object({
-      enabled: z.boolean(),
       catalogConfigured: z.boolean(),
       acquisitionConfigured: z.boolean(),
     }),
     handler(ctx) {
       const s = ctx.repo.getSettings();
       return {
-        enabled: s.movies.enabled,
         catalogConfigured: Boolean(
           ctx.movieServices || s.movies.tmdbAccessToken,
         ),
@@ -59,7 +52,6 @@ export const moviesRouter = defineRouter({
     paramsSchema: z.object({ query: z.string().trim().min(1).max(200) }),
     resultSchema: z.object({ results: z.array(catalogMovieSchema) }),
     async handler(ctx, input) {
-      enabled(ctx);
       return {
         results: await (
           ctx.movieServices?.catalog ?? movieCatalog(ctx.repo.getSettings())
@@ -77,7 +69,6 @@ export const moviesRouter = defineRouter({
       requests: z.array(movieRequestViewSchema),
     }),
     async handler(ctx, input) {
-      enabled(ctx);
       const movie = await (
         ctx.movieServices?.catalog ?? movieCatalog(ctx.repo.getSettings())
       ).get(input.tmdbId);
@@ -94,7 +85,6 @@ export const moviesRouter = defineRouter({
     paramsSchema: z.object({ tmdbId: positiveIntSchema }),
     resultSchema: requestResult,
     async handler(ctx, input) {
-      enabled(ctx);
       const movie = await (
         ctx.movieServices?.catalog ?? movieCatalog(ctx.repo.getSettings())
       ).get(input.tmdbId);
@@ -121,7 +111,6 @@ export const movieRequestsRouter = defineRouter({
     paramsSchema: emptyParamsSchema,
     resultSchema: z.object({ requests: z.array(movieRequestViewSchema) }),
     handler(ctx) {
-      enabled(ctx);
       return {
         requests: ctx.repo.movies
           .requests(ctx.session!.user_id)

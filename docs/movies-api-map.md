@@ -158,7 +158,6 @@ interface ReleaseSearchResult {
 }
 interface MoviesRpc {
   status(input: {}): Promise<{
-    enabled: boolean;
     catalogConfigured: boolean;
     acquisitionConfigured: boolean; // Configuration presence, not a health probe
   }>;
@@ -201,7 +200,6 @@ read these settings through the movie API. Source: `src/rpc/settings-router.ts`.
 
 ```ts
 interface MovieSettings {
-  enabled: boolean;
   tmdbAccessToken: string;
   managedRoot: string;
   downloadGroupId: number | null;

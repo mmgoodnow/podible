@@ -35,7 +35,7 @@ export async function runWorker(
           nextShadowSync = Date.now() + shadow.pollIntervalMinutes * 60_000;
         }
         if (
-          ctx.getSettings().movies.enabled &&
+          ctx.repo.movies.hasTargets() &&
           Date.now() >= nextMovieMaintenance
         ) {
           ctx.repo.createJob({

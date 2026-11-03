@@ -20,7 +20,6 @@ const root = await fs.realpath(
 const settings = repo.getSettings();
 settings.movies = {
   ...settings.movies,
-  enabled: true,
   managedRoot: root,
   plexViewPath: "/data/view",
 };

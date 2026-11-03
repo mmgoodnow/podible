@@ -62,7 +62,6 @@ export async function acquireMovie(
   if (!acquisition || !target || !movie || acquisition.job_id !== job.id)
     throw new Error("Invalid movie acquisition identity");
   const settings = ctx.getSettings();
-  if (!settings.movies.enabled) throw new Error("Movies are disabled");
   const roots = movieRoots(
     settings.movies.managedRoot,
     settings.movies.plexViewPath,
@@ -73,7 +72,6 @@ export async function acquireMovie(
   const active = () => {
     ctx.execution?.assertActive();
     if (
-      !ctx.getSettings().movies.enabled ||
       movieConfigurationIdentity(ctx) !== configuration
     )
       throw new Error(

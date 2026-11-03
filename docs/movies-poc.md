@@ -73,7 +73,8 @@ performing another expensive search. Generic book/admin RPC behavior is unchange
 Use the existing administrator settings JSON; no new model configuration surface
 was added. Configure:
 
-- `movies.enabled`, `movies.tmdbAccessToken` (TMDB API read-access bearer token).
+- `movies.tmdbAccessToken` (TMDB API read-access bearer token). Movies do not
+  have an enable/disable flag; missing configuration is reported explicitly.
 - `movies.managedRoot`: an app-owned absolute directory visible at the same path
   inside the app container. Contains `downloads`, `objects`, `views/plex/movies`.
 - `movies.downloadGroupId`: optional shared group for client-writable download
@@ -119,8 +120,8 @@ can use `bun run scripts/container.ts` with `transmission-daemon` installed.
 ### Radarr shadow mode
 
 See [movie-shadow.md](movie-shadow.md) for the independent read-only observer,
-admin audit UI and settings. Live movie acquisition can remain disabled while
-shadow mode evaluates existing Radarr downloads. Cross-seeding, Seerr attribution
+admin audit UI and settings. Observation does not create native acquisition requests;
+explicit requests use the normal acquisition path. Cross-seeding, Seerr attribution
 and automated action on shadow disagreements are intentionally not implemented.
 
 ## Verification and Limits

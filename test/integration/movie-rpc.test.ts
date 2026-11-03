@@ -23,7 +23,6 @@ test("user-safe movie RPC shares acquisition, protects opaque offers and reports
   const settings = repo.ensureSettings();
   settings.movies = {
     ...settings.movies,
-    enabled: true,
     managedRoot: root,
     plexViewPath: "/data/view",
   };
@@ -67,6 +66,8 @@ test("user-safe movie RPC shares acquisition, protects opaque offers and reports
     path.join(root, "execution.sqlite"),
   );
   try {
+    const status = await rpc("movies.status", {});
+    expect(status.result).not.toHaveProperty("enabled");
     const unauthorized = await rpc(
       "movies.search",
       { query: "fixture" },

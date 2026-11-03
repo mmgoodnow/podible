@@ -8,7 +8,6 @@ Use the existing administrator settings JSON at `/admin/settings`. Merge this in
 
 ```json
 {
-  "enabled": false,
   "shadow": {
     "enabled": true,
     "radarrUrl": "http://radarr:7878/radarr",
@@ -24,7 +23,7 @@ Use the existing administrator settings JSON at `/admin/settings`. Merge this in
 }
 ```
 
-`movies.enabled` controls live acquisition, separately from `movies.shadow.enabled`. Shadow uses `movies.qualityPolicy` and the existing `agents.apiKey`. No additional model configuration. Changes take effect without restarting; polling interval changes apply after the current interval. Mount observed media read-only when possible; the evaluator itself only performs reads, even where existing application mounts are writable for book imports.
+Movies are always available: explicit requests start acquisition through the normal request API. The observer does not create those requests. `movies.shadow.enabled` controls only the observer. Shadow uses `movies.qualityPolicy` and the existing `agents.apiKey`. No additional model configuration. Changes take effect without restarting; polling interval changes apply after the current interval. Mount observed media read-only when possible; the evaluator itself only performs reads, even where existing application mounts are writable for book imports.
 
 Include Radarr's URL base if configured (`/radarr` on Cyprus). Redirects are not followed with credentials. `radarrApiKey` is stored only in administrator settings, never in cases or the status response.
 

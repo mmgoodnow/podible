@@ -29,7 +29,7 @@ export function MovieSearch() {
   const results = useQuery({
     ...trpc.movies.search.queryOptions({ query }),
     enabled: Boolean(
-      query.trim() && status.data?.enabled && status.data.catalogConfigured,
+      query.trim() && status.data?.catalogConfigured,
     ),
   });
   return (
@@ -72,11 +72,6 @@ export function MovieSearch() {
         <Failure message={status.error.message} />
       ) : status.isPending ? (
         <p role="status">Checking movie catalog...</p>
-      ) : !status.data.enabled ? (
-        <p className="notice">
-          Movies are not enabled yet. An administrator can enable them in{" "}
-          <a href="/admin/settings">settings</a>.
-        </p>
       ) : !status.data.catalogConfigured ? (
         <p className="notice">
           The movie catalog needs a TMDB credential. Ask an administrator to

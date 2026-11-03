@@ -25,7 +25,6 @@ test("new recovery is queued despite an older blocked event; automatic checks up
   const settings = repo.ensureSettings();
   settings.movies = {
     ...settings.movies,
-    enabled: true,
     managedRoot: root,
     plexViewPath: "/view",
   };

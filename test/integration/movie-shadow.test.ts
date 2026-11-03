@@ -79,7 +79,7 @@ test("shadow observes independently, deduplicates immutable inputs, and never mo
     movieShadowServices: services,
   };
   try {
-    expect(settings.movies.enabled).toBe(false);
+    expect(settings.movies).not.toHaveProperty("enabled");
     await syncMovieShadow(ctx);
     const first = repo.movieShadow.list()[0]!;
     await evaluateMovieShadow(ctx, repo.getJob(first.jobId!)!);
@@ -145,7 +145,7 @@ test("Radarr base-path redirects fail explicitly without forwarding credentials"
   }
 });
 
-test("shadow jobs execute through Reflow while native acquisition is disabled; RPC is admin-only", async () => {
+test("shadow jobs execute through Reflow without native movie requests; RPC is admin-only", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "shadow-execution-"));
   const db = new Database(path.join(root, "app.sqlite"));
   runMigrations(db);

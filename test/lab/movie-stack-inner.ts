@@ -177,7 +177,6 @@ const repo = new BooksRepo(db);
 const settings = repo.ensureSettings();
 settings.movies = {
   ...settings.movies,
-  enabled: true,
   managedRoot: root,
   downloadGroupId: 1000,
   plexViewPath: viewRoot,

@@ -24,7 +24,6 @@ export const movieShadowSettingsSchema = z
 
 export const movieSettingsSchema = z
   .object({
-    enabled: z.boolean().default(false),
     shadow: movieShadowSettingsSchema.prefault({}),
     tmdbAccessToken: z.string().default(""),
     managedRoot: z.string().default(""),

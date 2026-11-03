@@ -32,8 +32,6 @@ export function configuredMovieServices(
   settings: AppSettings,
   modelProvider?: ModelProvider,
 ): MovieServices {
-  if (!settings.movies.enabled)
-    throw new Error("Movies are disabled by the administrator");
   movieRoots(settings.movies.managedRoot, settings.movies.plexViewPath);
   return {
     catalog: movieCatalog(settings),

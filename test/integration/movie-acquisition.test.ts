@@ -24,7 +24,6 @@ async function setup() {
   const settings = defaultSettings();
   settings.movies = {
     ...settings.movies,
-    enabled: true,
     managedRoot: root,
     plexViewPath: "/data/views/plex/movies",
   };

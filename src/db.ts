@@ -1136,6 +1136,7 @@ export function runMigrations(db: Database): void {
     );
   `));
   apply(38, () => db.exec(MOVIE_SHADOW_SCHEMA_SQL));
+  apply(39, () => db.exec("UPDATE settings SET value_json = json_remove(value_json, '$.movies.enabled')"));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

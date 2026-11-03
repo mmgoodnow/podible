@@ -92,6 +92,9 @@ export class MovieRepo {
       .query("SELECT * FROM movie_targets ORDER BY id")
       .all() as MovieTarget[];
   }
+  hasTargets(): boolean {
+    return Boolean(this.db.query("SELECT 1 FROM movie_targets LIMIT 1").get());
+  }
   request(userId: number, movie: CatalogMovie, rawPolicy: MovieQualityPolicy) {
     const policy = movieQualityPolicySchema.parse(rawPolicy);
     const policyJson = JSON.stringify(policy);

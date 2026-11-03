@@ -7,7 +7,7 @@ import { queueMovieAcquisition } from "./service";
 
 export async function reconcileMovies(ctx: WorkerContext): Promise<"done"> {
   const settings = ctx.getSettings();
-  if (!settings.movies.enabled) return "done";
+  if (!ctx.repo.movies.hasTargets()) return "done";
   const roots = movieRoots(
     settings.movies.managedRoot,
     settings.movies.plexViewPath,
