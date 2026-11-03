@@ -452,3 +452,35 @@ progress {
   overflow-wrap: anywhere;
   font-size: 0.8rem;
 }
+.shadow-review {
+  display: grid;
+  grid-template-columns: minmax(10rem, 1fr) minmax(12rem, 3fr) auto;
+  gap: 1rem;
+  align-items: end;
+  margin-top: 1.5rem;
+}
+.shadow-review label {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.shadow-review select,
+.shadow-review textarea {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  padding: 0.65rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+.shadow-review textarea {
+  min-height: 3rem;
+  resize: vertical;
+}
+@media (max-width: 600px) {
+  .shadow-review {
+    grid-template-columns: 1fr;
+  }
+}

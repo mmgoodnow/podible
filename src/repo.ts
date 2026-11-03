@@ -1465,6 +1465,9 @@ export class BooksRepo {
   listJobsByType(type: JobType): JobRow[] {
     return this.jobRows("WHERE j.type = ? ORDER BY j.id DESC", [type]);
   }
+  latestJobByType(type: JobType): JobRow | null {
+    return this.jobRows("WHERE j.type = ? ORDER BY j.id DESC LIMIT 1", [type])[0] ?? null;
+  }
   listRecentJobs(limit = 25): JobRow[] {
     return this.jobRows("ORDER BY j.id DESC LIMIT ?", [Math.max(1, Math.trunc(limit))]);
   }

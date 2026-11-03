@@ -69,6 +69,7 @@ function Review({ item }: { item: Case }) {
       )}
       {retry.error && <p role="alert">{retry.error.message}</p>}
       <form
+        className="shadow-review"
         onSubmit={(event) => {
           event.preventDefault();
           mutation.mutate({ caseId: item.id, verdict, notes });

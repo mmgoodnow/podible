@@ -34,9 +34,7 @@ export const movieShadowRouter = defineRouter({
     handler(ctx) {
       const { radarrApiKey, ...settings } =
         ctx.repo.getSettings().movies.shadow;
-      const job = ctx.repo
-        .listJobsByType("movie_shadow_sync")
-        .sort((a, b) => b.id - a.id)[0];
+      const job = ctx.repo.latestJobByType("movie_shadow_sync");
       return {
         ...settings,
         keyConfigured: Boolean(radarrApiKey),

@@ -77,13 +77,17 @@ export class RadarrObserver {
       try {
         response = await this.fetcher(new URL(`api/v3/${resource}`, base), {
           method: "GET",
-          redirect: "error",
+          redirect: "manual",
           headers: { "X-Api-Key": this.settings.radarrApiKey },
           signal: AbortSignal.timeout(30_000),
         });
       } catch {
         throw new Error("Radarr observation request failed");
       }
+      if (response.status >= 300 && response.status < 400)
+        throw new Error(
+          "Radarr redirects this API URL; include its configured URL base (for example /radarr) in movies.shadow.radarrUrl",
+        );
       if (!response.ok)
         throw new Error(`Radarr observation returned HTTP ${response.status}`);
       return response.json();

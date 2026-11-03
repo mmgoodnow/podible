@@ -60,6 +60,7 @@ test("shadow observes independently, deduplicates immutable inputs, and never mo
       calls++;
       expect(JSON.stringify(input)).not.toContain("secret Radarr answer");
       expect(JSON.stringify(input)).not.toContain('"outcome"');
+      expect(input.offer.key).toBe("shadow-candidate");
       return {
         fileIndex: 0,
         facts: {
@@ -110,6 +111,31 @@ test("shadow observes independently, deduplicates immutable inputs, and never mo
   } finally {
     db.close();
     await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Radarr base-path redirects fail explicitly without forwarding credentials", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  const settings = new BooksRepo(db).ensureSettings();
+  settings.movies.shadow.radarrUrl = "http://radarr:7878";
+  settings.movies.shadow.radarrApiKey = "private";
+  let calls = 0;
+  const fetcher = (async (_url: unknown, init: RequestInit) => {
+    calls++;
+    expect(init.redirect).toBe("manual");
+    return new Response(null, {
+      status: 307,
+      headers: { Location: "http://other-host/radarr" },
+    });
+  }) as typeof fetch;
+  try {
+    await expect(
+      new RadarrObserver(settings.movies.shadow, fetcher).observe(),
+    ).rejects.toThrow("include its configured URL base");
+    expect(calls).toBe(1);
+  } finally {
+    db.close();
   }
 });
 
@@ -178,6 +204,9 @@ test("shadow jobs execute through Reflow while native acquisition is disabled; R
     )
       await Bun.sleep(20);
     expect(repo.getJob(queued.result.jobId)?.status).toBe("succeeded");
+    expect(
+      (await rpc("movieShadow.status", "admin")).result.lastSync.jobId,
+    ).toBe(queued.result.jobId);
   } finally {
     await runtime.stop();
     db.close();

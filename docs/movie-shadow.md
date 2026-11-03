@@ -11,7 +11,7 @@ Use the existing administrator settings JSON at `/admin/settings`. Merge this in
   "enabled": false,
   "shadow": {
     "enabled": true,
-    "radarrUrl": "http://radarr:7878",
+    "radarrUrl": "http://radarr:7878/radarr",
     "radarrApiKey": "<existing Radarr API key>",
     "pollIntervalMinutes": 5,
     "lookbackDays": 7,
@@ -25,6 +25,8 @@ Use the existing administrator settings JSON at `/admin/settings`. Merge this in
 ```
 
 `movies.enabled` controls live acquisition, separately from `movies.shadow.enabled`. Shadow uses `movies.qualityPolicy` and the existing `agents.apiKey`. No additional model configuration. Changes take effect without restarting; polling interval changes apply after the current interval. Mount observed media read-only when possible; the evaluator itself only performs reads, even where existing application mounts are writable for book imports.
+
+Include Radarr's URL base if configured (`/radarr` on Cyprus). Redirects are not followed with credentials. `radarrApiKey` is stored only in administrator settings, never in cases or the status response.
 
 ## Audit UI and RPC
 

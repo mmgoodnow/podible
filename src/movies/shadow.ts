@@ -140,9 +140,9 @@ export async function syncMovieShadow(
   const settings = ctx.getSettings();
   if (!settings.movies.shadow.enabled)
     throw new Error("Movie shadow mode is disabled");
-  const observations = await durableStep(ctx, "shadow:observe", () =>
-    services.observe(),
-  );
+  // GETs are safe to repeat. Do not journal the whole lookback on every poll;
+  // immutable case fingerprints, not duplicate history snapshots, dedupe work.
+  const observations = await services.observe();
   let created = 0;
   for (const observation of observations) {
     if (created >= settings.movies.shadow.maxCasesPerSync) break;
@@ -205,7 +205,7 @@ export async function evaluateMovieShadow(
     }
     if (result.probes.length) {
       const offer = {
-        key: input.observation.key,
+        key: "shadow-candidate",
         title: input.observation.releaseTitle,
         provider: "Radarr shadow",
         url: "",
