@@ -29,8 +29,7 @@ const queryClient = new QueryClient({
 function App() {
   const route =
     useLocation()
-      .split("?")[0]!
-      .replace(/^\/app(?=\/|$)/, "") || "/";
+      .split("?")[0]! || "/";
   const trpc = useTRPC();
   const session = useQuery(trpc.auth.me.queryOptions({}));
   return (
@@ -55,27 +54,28 @@ function App() {
             Discover
           </Link>
           <Link
-            href="/app/movies"
+            href="/movies"
             aria-current={route.startsWith("/movies") ? "page" : undefined}
           >
             Movies
           </Link>
           <Link
-            href="/app/requests"
+            href="/requests"
             aria-current={route.startsWith("/requests") ? "page" : undefined}
           >
             Requests
           </Link>
           {session.data?.user.isAdmin && (
-            <Link href="/app/movie-shadow">Shadow audit</Link>
+            <Link href="/movie-shadow">Shadow audit</Link>
           )}
           {session.data?.user.isAdmin && (
-            <Link href="/app/movie-dual-write">Movie sync</Link>
+            <Link href="/movie-dual-write">Movie sync</Link>
           )}
+          {session.data?.user.isAdmin && <a href="/admin/settings">Settings</a>}
         </nav>
         {session.data && <a href="/logout">Sign out</a>}
       </header>
-      <main>
+      <main className={["/", "/library", "/add"].includes(route) ? "compact-main" : undefined}>
         {session.isPending ? (
           <p role="status">Checking your session...</p>
         ) : session.isError ? (
@@ -109,7 +109,6 @@ function App() {
         )}
       </main>
       <footer>
-        Stories worth finding.
         <MovieCredits />
       </footer>
     </div>
@@ -120,7 +119,6 @@ function ActorLibrary({ isAdmin }: { isAdmin: boolean }) {
   const route =
     useLocation()
       .split("?")[0]!
-      .replace(/^\/app(?=\/|$)/, "")
       .replace(/\/$/, "") || "/";
   const [actorClient] = useState(
     () =>

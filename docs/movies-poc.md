@@ -2,7 +2,7 @@
 
 ## Scope
 
-The native movie vertical is implemented at `/app/movies` and `/app/requests`.
+The native movie vertical is implemented at `/movies` and `/requests`.
 Existing book HTTP and JSON-RPC routes remain supported. Movies have no global
 enable flag; native acquisition requires the connections and storage below.
 

@@ -115,31 +115,45 @@ test("typed API shares JSON-RPC results, validates inputs and preserves session 
 test("SPA deep links and immutable assets do not hide missing resources", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "podible-spa-"));
   try {
-    await mkdir(path.join(directory, "assets"));
+    await mkdir(path.join(directory, "web-assets"));
     await Bun.write(
       path.join(directory, "index.html"),
       "<!doctype html><title>Podible</title>",
     );
     await Bun.write(
-      path.join(directory, "assets/test-123.js"),
+      path.join(directory, "web-assets/test-123.js"),
       "export const ready = true;",
     );
     const app = createSpaRoutes(directory);
-    expect((await app.request("http://localhost/app/movies/42")).status).toBe(
+    expect((await app.request("http://localhost/movies/42")).status).toBe(
       200,
     );
     expect(
-      (await app.request("http://localhost/app/movies/42")).headers.get(
+      (await app.request("http://localhost/movies/42")).headers.get(
         "cache-control",
       ),
     ).toBe("no-cache");
     expect(
       (
-        await app.request("http://localhost/app/assets/test-123.js")
+        await app.request("http://localhost/web-assets/test-123.js")
       ).headers.get("cache-control"),
     ).toContain("immutable");
+    for (const [oldPath, canonical] of [
+      ["/app", "/"],
+      ["/app/", "/"],
+      ["/app/movies/42?q=hello", "/movies/42?q=hello"],
+      ["/app/requests/12", "/requests/12"],
+      ["/app/movie-shadow", "/movie-shadow"],
+      ["/app/movie-dual-write", "/movie-dual-write"],
+      ["/app/assets/test-123.js", "/web-assets/test-123.js"],
+    ]) {
+      const redirected = await app.request(`http://localhost${oldPath}`);
+      expect(redirected.status).toBe(308);
+      expect(redirected.headers.get("location")).toBe(canonical);
+    }
     for (const route of [
       "/app/assets/missing.js",
+      "/web-assets/missing.js",
       "/app/unknown",
       "/app/missing.css",
     ])

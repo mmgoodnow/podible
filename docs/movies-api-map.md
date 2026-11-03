@@ -528,7 +528,7 @@ persistence, no-delete removal, authenticated loopback RPC and independent recov
 
 ## 10. Shadow Observation and Admin API
 
-Implemented at `/app/movie-shadow`, with admin-only JSON-RPC and typed tRPC:
+Implemented at `/movie-shadow`, with admin-only JSON-RPC and typed tRPC:
 
 ```ts
 type ShadowInput = import("../src/movies/shadow-types").ShadowInput;

@@ -36,7 +36,7 @@ try {
   const page = await context.newPage();
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(new URL("/app/movie-shadow", url).href);
+  await page.goto(new URL("/movie-shadow", url).href);
   await page.getByRole("heading", { name: "Movie shadow audit" }).waitFor();
   await page.getByText("#1 A Fixture Film", { exact: false }).click();
   await page

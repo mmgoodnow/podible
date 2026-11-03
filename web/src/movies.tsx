@@ -46,7 +46,7 @@ export function MovieSearch() {
           history.replaceState(
             null,
             "",
-            `/app/movies${q ? `?q=${encodeURIComponent(q)}` : ""}`,
+            `/movies${q ? `?q=${encodeURIComponent(q)}` : ""}`,
           );
         }}
       >
@@ -91,7 +91,7 @@ export function MovieSearch() {
               <Link
                 className="book-card"
                 key={movie.tmdbId}
-                href={`/app/movies/${movie.tmdbId}`}
+                href={`/movies/${movie.tmdbId}`}
               >
                 <div className="jacket">
                   {movie.posterUrl ? (
@@ -128,7 +128,7 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
         void queryClient.invalidateQueries({
           queryKey: trpc.requests.list.queryKey(),
         });
-        navigate(`/app/requests/${request.id}`);
+        navigate(`/requests/${request.id}`);
       },
     }),
   );
@@ -138,7 +138,7 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
   const existing = requests.find((entry) => entry.state !== "withdrawn");
   return (
     <>
-      <Link href="/app/movies" className="back">
+      <Link href="/movies" className="back">
         Back to movies
       </Link>
       <section className="movie-hero">
@@ -159,7 +159,7 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
             {movie.overview || "No description available."}
           </p>
           {existing ? (
-            <Link className="button" href={`/app/requests/${existing.id}`}>
+            <Link className="button" href={`/requests/${existing.id}`}>
               {existing.available ? "Available in Plex" : "Track request"}
             </Link>
           ) : (
@@ -199,7 +199,7 @@ export function MovieRequests() {
         <div className="request-list">
           {requests.data.requests.map((request) => (
             <Link
-              href={`/app/requests/${request.id}`}
+              href={`/requests/${request.id}`}
               key={request.id}
               className="request-row"
             >
@@ -224,7 +224,7 @@ export function MovieRequests() {
         </div>
       ) : (
         <p>
-          No movie requests yet. <Link href="/app/movies">Find a movie</Link>.
+          No movie requests yet. <Link href="/movies">Find a movie</Link>.
         </p>
       )}
     </>
@@ -440,7 +440,7 @@ export function MovieRequestDetail({ requestId }: { requestId: number }) {
     ["queued", "running"].includes(request.state) || request.upgrading;
   return (
     <>
-      <Link href="/app/requests" className="back">
+      <Link href="/requests" className="back">
         All requests
       </Link>
       <span className="eyebrow">
@@ -474,7 +474,7 @@ export function MovieRequestDetail({ requestId }: { requestId: number }) {
             Withdraw my request
           </button>
         )}
-        <Link href={`/app/movies/${request.movie.tmdbId}`}>Movie details</Link>
+        <Link href={`/movies/${request.movie.tmdbId}`}>Movie details</Link>
       </div>
       {[retry.error, upgrade.error, withdraw.error]
         .filter(Boolean)

@@ -9,11 +9,11 @@ const result = await Bun.build({
   target: "browser",
   minify: true,
   splitting: true,
-  publicPath: "/app/",
+  publicPath: "/",
   naming: {
     entry: "[name].[ext]",
-    chunk: "assets/[name]-[hash].[ext]",
-    asset: "assets/[name]-[hash].[ext]",
+    chunk: "web-assets/[name]-[hash].[ext]",
+    asset: "web-assets/[name]-[hash].[ext]",
   },
   define: { "process.env.NODE_ENV": JSON.stringify("production") },
 });

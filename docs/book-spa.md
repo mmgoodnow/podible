@@ -1,7 +1,10 @@
 # Book Web Application
 
 The Bun-built React SPA is served at `/`, `/library`, `/add`, `/book/:bookId`,
-`/series` and `/author`. Existing `/app` paths remain aliases. The old book UI,
+`/series` and `/author`. Movies, requests, shadow audit and movie sync also use
+root-level URLs. Existing `/app` page URLs redirect permanently to those routes,
+preserving query parameters. Built frontend files are served from `/web-assets`.
+The old book UI,
 its `/classic` routes and HTML form mutation endpoints have been removed.
 Authentication, feeds, administrator pages, JSON-RPC, typed tRPC and opaque media
 URLs retain their existing routes.

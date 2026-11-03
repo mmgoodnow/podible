@@ -85,10 +85,23 @@ try {
   );
 
   await page.goto(fixture.url);
-  await page.getByRole("heading", { name: "A good story awaits." }).waitFor();
+  await page.getByRole("heading", { name: "Library", exact: true }).waitFor();
+  const navigation = page.getByRole("navigation", { name: "Main navigation" });
+  assert.equal(await navigation.getByRole("link", { name: "Settings", exact: true }).getAttribute("href"), "/admin/settings");
+  assert.equal(await navigation.locator('a[href^="/app"]').count(), 0);
   await page.locator(".book-card").nth(47).waitFor();
   assert.equal(await page.locator(".book-card").count(), 48);
-  await page.getByRole("button", { name: "More from your shelves" }).click();
+  const libraryText = await page.locator("main").innerText();
+  assert.doesNotMatch(libraryText, /A good story awaits|For the long way home|YOUR COLLECTION/);
+  assert.ok(await page.evaluate("parseFloat(getComputedStyle(document.querySelector('h1')).fontSize) <= 32"));
+  assert.ok((await page.locator(".book-card").first().boundingBox())!.y < 300, "Books should appear near the top, not below a hero banner");
+  await page.screenshot({ path: path.join(artifacts, "library-desktop.png"), fullPage: false, animations: "disabled" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false);
+  assert.ok((await page.locator(".book-card").first().boundingBox())!.y < 450, "Books should be visible without scrolling on mobile");
+  await page.screenshot({ path: path.join(artifacts, "library-mobile.png"), fullPage: false, animations: "disabled" });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("button", { name: "Load more", exact: true }).click();
   await page.locator(".book-card").nth(51).waitFor();
   const documentId = await page.evaluate(() => performance.timeOrigin);
   await page.getByRole("searchbox").fill("Piranesi");
@@ -320,6 +333,11 @@ try {
     .waitFor();
 
   await page.getByRole("link", { name: "Discover", exact: true }).click();
+  await page.getByRole("heading", { name: "Find books", exact: true }).waitFor();
+  const catalogText = await page.locator("main").innerText();
+  assert.doesNotMatch(catalogText, /Follow your curiosity|THE NEXT GREAT READ|only the beginning|Your whole library/);
+  assert.ok(await page.evaluate("parseFloat(getComputedStyle(document.querySelector('h1')).fontSize) <= 32"));
+  assert.ok((await page.getByRole("searchbox").boundingBox())!.y < 330, "Catalog search should not sit below a promotional banner");
   await page
     .getByRole("searchbox", { name: "Search the book catalog" })
     .fill("provider-error");
@@ -439,6 +457,7 @@ try {
     await page.getByText("Find a specific edition", { exact: true }).count(),
     0,
   );
+  assert.equal(await navigation.getByRole("link", { name: "Settings", exact: true }).count(), 0);
   assert.equal(await page.getByText("Manifestation diagnostics", { exact: true }).count(), 0);
   const forbiddenDiagnostics = await context.request.get(
     new URL(`/api/trpc/book.diagnostics?input=${encodeURIComponent(JSON.stringify({ bookId: fixture.bookId }))}`, fixture.url).href,

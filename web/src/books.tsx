@@ -77,17 +77,8 @@ export function Library() {
   const items = books.data?.pages.flatMap((page) => page.items) ?? [];
   return (
     <>
-      <div className="section-heading">
-        <div>
-          <span className="eyebrow">YOUR COLLECTION</span>
-          <h1>A good story awaits.</h1>
-        </div>
-        <Link className="button" href="/add">
-          Find a book <span aria-hidden="true">+</span>
-        </Link>
-      </div>
-      <div className="shelf-toolbar">
-        <p className="muted">For the long way home. For one more chapter.</p>
+      <div className="library-toolbar">
+        <h1>Library</h1>
         <label className="search">
           Filter library
           <input
@@ -97,6 +88,7 @@ export function Library() {
             placeholder="Title or author"
           />
         </label>
+        <Link className="button" href="/add">Find a book</Link>
       </div>
       {books.isPending ? (
         <p role="status">Loading your library...</p>
@@ -105,7 +97,7 @@ export function Library() {
       ) : items.length === 0 ? (
         <section className="empty-shelf">
           <h2>
-            {q ? "No matching stories." : "Your next chapter starts here."}
+            {q ? "No matching books." : "No books yet."}
           </h2>
           <p>Find a title and we will look for audio and ebook editions.</p>
           <Link className="button" href="/add">
@@ -127,7 +119,7 @@ export function Library() {
               >
                 {books.isFetchingNextPage
                   ? "Loading..."
-                  : "More from your shelves"}
+                  : "Load more"}
               </button>
             </div>
           )}
@@ -211,17 +203,8 @@ export function Catalog() {
   );
   return (
     <>
-      <Link className="back" href="/library">
-        Back to your shelves
-      </Link>
       <section className="catalog-intro">
-        <span className="eyebrow">THE NEXT GREAT READ</span>
-        <h1>Follow your curiosity.</h1>
-        <p>
-          Search a title, an author, a world you want to get lost in.
-          <br />
-          We will find the audio and ebook editions for your library.
-        </p>
+        <h1>Find books</h1>
       </section>
       <form
         className="catalog-search"
@@ -243,16 +226,7 @@ export function Catalog() {
         </label>
         <button disabled={!draft.trim()}>Search books</button>
       </form>
-      {!query ? (
-        <div className="catalog-note">
-          <span aria-hidden="true">01 /</span>
-          <p>
-            A book is only the beginning.
-            <br />
-            <strong>Your whole library, in one place.</strong>
-          </p>
-        </div>
-      ) : search.isPending ? (
+      {!query ? null : search.isPending ? (
         <p role="status">Searching Open Library...</p>
       ) : search.isError ? (
         <Failure error={search.error} retry={() => void search.refetch()} />

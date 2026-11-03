@@ -51,6 +51,9 @@ export function createPodibleFetchHandler(
     "/movies/:id",
     "/requests",
     "/requests/:id",
+    "/movie-shadow",
+    "/movie-shadow/:id",
+    "/movie-dual-write",
   ])
     app.get(route, (c) => spa.fetch(c.req.raw));
   app.route("/login", createLoginRoutes(repo));
@@ -61,6 +64,7 @@ export function createPodibleFetchHandler(
   app.route("/rpc", createRpcRoutes(repo, startTime, dependencies));
   app.route("/api/trpc", createTrpcRoutes(repo, startTime, dependencies));
   app.route("/app", spa);
+  app.route("/web-assets", spa);
   app.route("/assets", createAssetsIndexRoutes(repo));
   app.route("/stream", createStreamRoutes(repo));
   app.route("/chapters", createChaptersRoutes(repo));

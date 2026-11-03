@@ -154,14 +154,26 @@ input {
   transform: translateY(-5px) rotate(-1deg);
   box-shadow: 6px 12px 18px #203c3030;
 }
-.shelf-toolbar {
+.compact-main {
+  padding-block: 1.5rem;
+}
+.library-toolbar {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 2rem;
-  border-block: 1px solid var(--line);
-  padding: 1.2rem 0;
-  margin-bottom: 2.5rem;
+  align-items: end;
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+.library-toolbar h1 {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 600;
+  letter-spacing: normal;
+  align-self: center;
+}
+.library-toolbar .search {
+  margin-left: auto;
+  flex: 1;
+  max-width: 360px;
 }
 .load-more {
   text-align: center;
@@ -172,23 +184,19 @@ input {
   text-align: center;
 }
 .catalog-intro {
-  padding: 2rem 0 0;
-  max-width: 800px;
+  padding: 0;
 }
 .catalog-intro h1 {
-  font-size: clamp(2.6rem, 6vw, 5.2rem);
-  margin-bottom: 1.5rem;
-}
-.catalog-intro p {
-  font-size: 1.2rem;
-  color: var(--muted);
-  line-height: 1.6;
+  font-size: 1.75rem;
+  font-weight: 600;
+  letter-spacing: normal;
+  margin: 0 0 1.5rem;
 }
 .catalog-search {
   display: flex;
   gap: 1rem;
   align-items: end;
-  margin: 2.5rem 0;
+  margin: 0 0 1.5rem;
 }
 .catalog-search .search {
   flex: 1;
@@ -199,21 +207,6 @@ input {
 }
 .catalog-search button {
   padding-block: 1rem;
-}
-.catalog-note {
-  border-top: 1px solid var(--line);
-  margin-top: 4rem;
-  display: flex;
-  gap: 2rem;
-  padding-block: 2rem;
-  align-items: center;
-  color: var(--muted);
-  font-size: 1.2rem;
-}
-.catalog-note > span {
-  color: var(--accent);
-  font-size: 3rem;
-  font-style: italic;
 }
 .catalog-result {
   display: grid;
@@ -472,11 +465,9 @@ details > summary {
   }
 }
 @media (max-width: 650px) {
-  .shelf-toolbar,
   .catalog-search {
     display: block;
   }
-  .shelf-toolbar .search,
   .catalog-search .search {
     min-width: 0;
     margin-bottom: 1rem;
@@ -484,6 +475,22 @@ details > summary {
   .section-heading .button {
     display: inline-block;
     margin-bottom: 1.5rem;
+  }
+  .library-toolbar {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 1rem;
+  }
+  .library-toolbar .button {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .library-toolbar .search {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    min-width: 0;
+    max-width: none;
+    margin: 0;
   }
   .catalog-result {
     grid-template-columns: 48px minmax(0, 1fr);

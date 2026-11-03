@@ -37,7 +37,7 @@ try {
   const page = await context.newPage();
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(new URL("/app/library", url).href);
+  await page.goto(new URL("/library", url).href);
   await page
     .getByRole("heading", { name: "The Odyssey", exact: true })
     .waitFor();
@@ -58,7 +58,7 @@ try {
   });
   if (
     (
-      await context.request.get(new URL("/app/assets/missing.js", url).href)
+      await context.request.get(new URL("/web-assets/missing.js", url).href)
     ).status() !== 404
   )
     throw new Error("Missing asset became SPA HTML");

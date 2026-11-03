@@ -9,11 +9,14 @@ export const SPA_BUILD_DIRECTORY = path.resolve(
 export function createSpaRoutes(directory = SPA_BUILD_DIRECTORY) {
   const app = new Hono();
   app.get("*", async (c) => {
-    const pathname = new URL(c.req.url).pathname;
+    const url = new URL(c.req.url);
+    const pathname = url.pathname;
     const relative = pathname.replace(/^\/app(?=\/|$)/, "").replace(/^\//, "");
-    if (pathname.startsWith("/app/assets/") && relative.startsWith("assets/")) {
+    const legacyAsset = pathname.startsWith("/app/assets/");
+    const assetPath = legacyAsset ? relative.replace(/^assets\//, "web-assets/") : relative;
+    if (assetPath.startsWith("web-assets/")) {
       if (
-        relative
+        assetPath
           .split("/")
           .some(
             (part) =>
@@ -21,8 +24,9 @@ export function createSpaRoutes(directory = SPA_BUILD_DIRECTORY) {
           )
       )
         return c.notFound();
-      const file = Bun.file(path.join(directory, relative));
+      const file = Bun.file(path.join(directory, assetPath));
       if (!(await file.exists())) return c.notFound();
+      if (/^\/app(?:\/|$)/.test(pathname)) return c.redirect(`/${assetPath}${url.search}`, 308);
       return new Response(file, {
         headers: { "Cache-Control": "public, max-age=31536000, immutable" },
       });
@@ -34,6 +38,8 @@ export function createSpaRoutes(directory = SPA_BUILD_DIRECTORY) {
       )
     )
       return c.notFound();
+    if (/^\/app(?:\/|$)/.test(pathname))
+      return c.redirect(`/${relative}${url.search}`, 308);
     const entry = Bun.file(path.join(directory, "index.html"));
     if (!(await entry.exists()))
       return c.text("SPA build missing. Run bun run build.", 503);
