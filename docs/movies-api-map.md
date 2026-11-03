@@ -1,5 +1,9 @@
 # Movie API Map
 
+For Cmd-click/go-to-definition in a TypeScript editor, open the companion
+`docs/movies-api-map.ts`. Its implemented contracts import the actual source
+types/functions, and its public call signatures derive from the real router.
+
 TypeScript interface pseudocode for the movie POC and the proposed managed
 torrent/shadow additions. This covers cross-component contracts, not the entire
 preexisting book/auth/admin API or every private helper.
