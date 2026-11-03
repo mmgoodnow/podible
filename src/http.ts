@@ -12,20 +12,57 @@ import {
   createStreamRoutes,
   createTranscriptsRoutes,
 } from "./http/asset-routes";
-import { createAppAuthRoutes, createLoginRoutes, createLogoutRoutes } from "./http/auth-routes";
+import {
+  createAppAuthRoutes,
+  createLoginRoutes,
+  createLogoutRoutes,
+} from "./http/auth-routes";
 import { createFeedRoutes } from "./http/feed-routes";
-import { createRequestContextMiddleware, type HttpEnv } from "./http/middleware";
+import {
+  createRequestContextMiddleware,
+  type HttpEnv,
+} from "./http/middleware";
 import { createRpcRoutes } from "./http/rpc-routes";
 import { createTrpcRoutes } from "./http/trpc-routes";
 import { createSpaRoutes } from "./http/spa-routes";
-import { createActivityRoutes, createAddRoutes, createBookRoutes, createHomeRoutes, createLibraryRoutes } from "./http/user-routes";
+import {
+  createActivityRoutes,
+  createAddRoutes,
+  createBookRoutes,
+  createHomeRoutes,
+  createLibraryRoutes,
+} from "./http/user-routes";
 
-export function createPodibleFetchHandler(repo: BooksRepo, startTime: number, buildInfo: BuildInfo | null = BUILD_INFO, dependencies: { movieServices?: import("./movies/operations").MovieServices } = {}): (request: Request) => Promise<Response> {
+export function createPodibleFetchHandler(
+  repo: BooksRepo,
+  startTime: number,
+  buildInfo: BuildInfo | null = BUILD_INFO,
+  dependencies: {
+    movieServices?: import("./movies/operations").MovieServices;
+  } = {},
+): (request: Request) => Promise<Response> {
   const app = new Hono<HttpEnv>();
 
   app.use("*", createRequestContextMiddleware(repo));
 
-  app.route("/", createHomeRoutes(repo));
+  const spa = createSpaRoutes();
+  for (const route of [
+    "/",
+    "/library",
+    "/add",
+    "/book/:bookId",
+    "/series",
+    "/author",
+    "/movies",
+    "/movies/:id",
+    "/requests",
+    "/requests/:id",
+  ])
+    app.get(route, (c) => spa.fetch(c.req.raw));
+  app.route("/classic", createHomeRoutes(repo));
+  app.route("/classic/library", createLibraryRoutes(repo));
+  app.route("/classic/add", createAddRoutes(repo));
+  app.route("/classic/book", createBookRoutes(repo));
   app.route("/login", createLoginRoutes(repo));
   app.route("/logout", createLogoutRoutes(repo));
   app.route("/auth/app", createAppAuthRoutes(repo));
@@ -36,7 +73,7 @@ export function createPodibleFetchHandler(repo: BooksRepo, startTime: number, bu
   app.route("/admin", createAdminRoutes(repo, startTime, buildInfo));
   app.route("/rpc", createRpcRoutes(repo, startTime, dependencies));
   app.route("/api/trpc", createTrpcRoutes(repo, startTime, dependencies));
-  app.route("/app", createSpaRoutes());
+  app.route("/app", spa);
   app.route("/assets", createAssetsIndexRoutes(repo));
   app.route("/stream", createStreamRoutes(repo));
   app.route("/chapters", createChaptersRoutes(repo));

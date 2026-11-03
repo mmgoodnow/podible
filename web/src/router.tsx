@@ -15,7 +15,7 @@ export function navigate(href: string) {
   window.scrollTo(0, 0);
 }
 export function Link({
-  href = "/app",
+  href = "/",
   onClick,
   ...props
 }: AnchorHTMLAttributes<HTMLAnchorElement>) {
@@ -31,7 +31,10 @@ export function Link({
           event.metaKey ||
           event.ctrlKey ||
           event.shiftKey ||
-          event.altKey
+          event.altKey ||
+          props.download !== undefined ||
+          (props.target && props.target !== "_self") ||
+          new URL(href, location.href).origin !== location.origin
         )
           return;
         event.preventDefault();

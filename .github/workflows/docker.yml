@@ -24,6 +24,7 @@ jobs:
       - run: bun test
       - run: bunx playwright install --with-deps chromium
       - run: bun run test/browser/spa.ts
+      - run: bun run test/browser/books.ts
       - run: bun run test/browser/movies.ts
       - run: bun run test/browser/movie-shadow.ts
       - run: docker build -t podible-transmission-test .

@@ -10,8 +10,8 @@ export function createSpaRoutes(directory = SPA_BUILD_DIRECTORY) {
   const app = new Hono();
   app.get("*", async (c) => {
     const pathname = new URL(c.req.url).pathname;
-    const relative = pathname.replace(/^\/app\/?/, "");
-    if (relative.startsWith("assets/")) {
+    const relative = pathname.replace(/^\/app(?=\/|$)/, "").replace(/^\//, "");
+    if (pathname.startsWith("/app/assets/") && relative.startsWith("assets/")) {
       if (
         relative
           .split("/")
@@ -29,7 +29,9 @@ export function createSpaRoutes(directory = SPA_BUILD_DIRECTORY) {
     }
     if (
       relative.includes(".") ||
-      !/^$|^(library|movies|requests|movie-shadow)(\/\d+)?\/?$/.test(relative)
+      !/^(?:|library|add|series|author|movies(?:\/\d+)?|requests(?:\/\d+)?|book\/\d+|movie-shadow(?:\/\d+)?|movie-dual-write)\/?$/.test(
+        relative,
+      )
     )
       return c.notFound();
     const entry = Bun.file(path.join(directory, "index.html"));

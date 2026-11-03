@@ -75,7 +75,7 @@ describe("podible http", () => {
       sha: "123456789abcdef",
       message: "Test commit subject",
     });
-    const home = await fetchHandler(new Request("http://localhost/"));
+    const home = await fetchHandler(new Request("http://localhost/classic"));
     expect(home.status).toBe(200);
     expect(home.headers.get("content-type")).toContain("text/html");
     const body = await home.text();
@@ -412,7 +412,7 @@ describe("podible http", () => {
     const fetchHandler = createPodibleFetchHandler(repo, Date.now());
     const userCookie = createBrowserSessionCookie(repo, { username: "reader" });
     const library = await fetchHandler(
-      new Request("http://localhost/library", {
+      new Request("http://localhost/classic/library", {
         headers: { cookie: userCookie },
       })
     );
@@ -423,7 +423,7 @@ describe("podible http", () => {
     expect(libraryBody.includes("Search by title or author")).toBe(true);
 
     const detail = await fetchHandler(
-      new Request(`http://localhost/book/${book.id}`, {
+      new Request(`http://localhost/classic/book/${book.id}`, {
         headers: { cookie: userCookie },
       })
     );
@@ -458,7 +458,7 @@ describe("podible http", () => {
 
     const adminCookie = createBrowserSessionCookie(repo, { isAdmin: true, username: "admin" });
     const adminDetail = await fetchHandler(
-      new Request(`http://localhost/book/${book.id}`, {
+      new Request(`http://localhost/classic/book/${book.id}`, {
         headers: { cookie: adminCookie },
       })
     );
@@ -480,7 +480,7 @@ describe("podible http", () => {
     expect(adminDetailBody.includes("Dune Standard Audio")).toBe(true);
 
     const selectedEdition = await fetchHandler(
-      new Request(`http://localhost/book/${book.id}?edition=${graphicAudio.id}`, {
+      new Request(`http://localhost/classic/book/${book.id}?edition=${graphicAudio.id}`, {
         headers: { cookie: userCookie },
       })
     );
@@ -509,7 +509,7 @@ describe("podible http", () => {
     const fetchHandler = createPodibleFetchHandler(repo, Date.now());
     const userCookie = createBrowserSessionCookie(repo, { username: "reader" });
     const library = await fetchHandler(
-      new Request("http://localhost/library?q=Hyperion", {
+      new Request("http://localhost/classic/library?q=Hyperion", {
         headers: { cookie: userCookie },
       })
     );
@@ -603,7 +603,7 @@ describe("podible http", () => {
     const userCookie = createBrowserSessionCookie(repo, { username: "reader" });
 
     const home = await fetchHandler(
-      new Request("http://localhost/", {
+      new Request("http://localhost/classic", {
         headers: { cookie: userCookie },
       })
     );
@@ -697,13 +697,13 @@ describe("podible http", () => {
     });
 
     const fetchHandler = createPodibleFetchHandler(repo, Date.now());
-    const library = await fetchHandler(new Request("http://localhost/library"));
+    const library = await fetchHandler(new Request("http://localhost/classic/library"));
     expect(library.status).toBe(303);
-    expect(library.headers.get("location")).toBe("/login?redirectTo=%2Flibrary");
+    expect(library.headers.get("location")).toBe("/login?redirectTo=%2Fclassic%2Flibrary");
 
-    const book = await fetchHandler(new Request("http://localhost/book/1?foo=bar"));
+    const book = await fetchHandler(new Request("http://localhost/classic/book/1?foo=bar"));
     expect(book.status).toBe(303);
-    expect(book.headers.get("location")).toBe("/login?redirectTo=%2Fbook%2F1%3Ffoo%3Dbar");
+    expect(book.headers.get("location")).toBe("/login?redirectTo=%2Fclassic%2Fbook%2F1%3Ffoo%3Dbar");
 
     db.close();
   });
@@ -761,7 +761,7 @@ describe("podible http", () => {
       const userCookie = createBrowserSessionCookie(repo, { username: "alice" });
 
       const add = await fetchHandler(
-        new Request("http://localhost/add?q=Hyperion%20Dan%20Simmons", {
+        new Request("http://localhost/classic/add?q=Hyperion%20Dan%20Simmons", {
           headers: { cookie: userCookie },
         })
       );
@@ -785,7 +785,7 @@ describe("podible http", () => {
       expect(repo.getBookRow(1)?.added_by_user_id).toBe(alice?.id);
 
       const detail = await fetchHandler(
-        new Request(`http://localhost${location}`, {
+        new Request(`http://localhost/classic${location}`, {
           headers: { cookie: userCookie },
         })
       );
@@ -835,11 +835,11 @@ describe("podible http", () => {
 
     const fetchHandler = createPodibleFetchHandler(repo, Date.now());
 
-    const unauthorized = await fetchHandler(new Request("http://app.test/library"));
+    const unauthorized = await fetchHandler(new Request("http://app.test/classic/library"));
     expect(unauthorized.status).toBe(303);
-    expect(unauthorized.headers.get("location")).toBe("/login?redirectTo=%2Flibrary");
+    expect(unauthorized.headers.get("location")).toBe("/login?redirectTo=%2Fclassic%2Flibrary");
 
-    const publicHome = await fetchHandler(new Request("http://app.test/"));
+    const publicHome = await fetchHandler(new Request("http://app.test/classic"));
     expect(publicHome.status).toBe(200);
     const publicHomeBody = await publicHome.text();
     expect(publicHomeBody.includes("Sign in")).toBe(true);
@@ -856,7 +856,7 @@ describe("podible http", () => {
       displayName: "Alice",
     });
     const authed = await fetchHandler(
-      new Request("http://app.test/library", {
+      new Request("http://app.test/classic/library", {
         headers: { cookie: cookieHeader },
       })
     );
@@ -1039,7 +1039,7 @@ describe("podible http", () => {
 
       const cookieHeader = setCookie.split(";")[0] ?? "";
       const authed = await fetchHandler(
-        new Request("http://app.test/library", {
+        new Request("http://app.test/classic/library", {
           headers: { cookie: cookieHeader },
         })
       );
@@ -1501,7 +1501,7 @@ describe("podible http", () => {
       expect(found.error.message).toContain("Open Library search failed (HTTP 500)");
       expect(found.result).toBeUndefined();
 
-      const page = await handler(new Request("http://localhost/add?q=one%20day", { headers: { cookie } }));
+      const page = await handler(new Request("http://localhost/classic/add?q=one%20day", { headers: { cookie } }));
       const html = await page.text();
       expect(html).toContain("Search failed: Open Library search failed (HTTP 500)");
       expect(html).not.toContain("No matches for");

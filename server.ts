@@ -82,12 +82,25 @@ export async function startServer(frontend?: HTMLBundle) {
     ...(frontend
       ? {
           routes: {
+            "/": frontend,
+            "/library": frontend,
+            "/add": frontend,
+            "/book/:bookId": frontend,
+            "/series": frontend,
+            "/author": frontend,
             "/app": frontend,
             "/app/": frontend,
             "/app/library": frontend,
+            "/app/add": frontend,
+            "/app/book/:bookId": frontend,
+            "/app/series": frontend,
+            "/app/author": frontend,
             "/app/movies": frontend,
+            "/app/movies/:id": frontend,
             "/app/requests": frontend,
+            "/app/requests/:id": frontend,
             "/app/movie-shadow": frontend,
+            "/app/movie-dual-write": frontend,
           },
           development: { hmr: true, console: true },
         }

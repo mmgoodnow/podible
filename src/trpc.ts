@@ -1,17 +1,34 @@
 import { initTRPC, TRPCError } from "@trpc/server";
+import { z } from "zod";
 import { authRouter } from "./rpc/auth-router";
 import { executeMethod } from "./rpc/framework";
 import { libraryRouter } from "./rpc/library-router";
+import { bookWebRouter } from "./rpc/book-web-router";
+import { openLibraryRouter } from "./rpc/openlibrary-router";
+import { importRouter } from "./rpc/import-router";
 import { RpcError, type RpcContext } from "./rpc/shared";
 import { moviesRouter, movieRequestsRouter } from "./rpc/movies-router";
 import { movieShadowRouter } from "./rpc/movie-shadow-router";
 import { movieDualWriteRouter } from "./rpc/movie-dual-write-router";
 
 const t = initTRPC.context<RpcContext>().create();
+const id = z.number().int().positive();
+const bookInput = z.object({ bookId: id });
+const media = z.enum(["audio", "ebook"]);
+function freshArtwork<T extends { coverUrl: string | null; updatedAt: string }>(book: T): T {
+  return book.coverUrl
+    ? { ...book, coverUrl: `${book.coverUrl}${book.coverUrl.includes("?") ? "&" : "?"}v=${encodeURIComponent(book.updatedAt)}` }
+    : book;
+}
 const procedure = t.procedure.use(async ({ next }) => {
   const result = await next();
   if (!result.ok && result.error.cause instanceof RpcError) {
     const cause = result.error.cause;
+    const notFound =
+      cause.data !== null &&
+      typeof cause.data === "object" &&
+      "error" in cause.data &&
+      cause.data.error === "not_found";
     throw new TRPCError({
       code:
         cause.code === -32001
@@ -20,9 +37,11 @@ const procedure = t.procedure.use(async ({ next }) => {
             ? "FORBIDDEN"
             : cause.code === -32602
               ? "BAD_REQUEST"
-              : "INTERNAL_SERVER_ERROR",
+              : notFound
+                ? "NOT_FOUND"
+                : "INTERNAL_SERVER_ERROR",
       message:
-        cause.code === -32000
+        cause.code === -32000 && !notFound
           ? "The operation could not be completed"
           : cause.message,
       cause,
@@ -32,6 +51,52 @@ const procedure = t.procedure.use(async ({ next }) => {
 });
 
 export const appRouter = t.router({
+  book: t.router({
+    activity: procedure
+      .input(bookWebRouter.routes.activity.paramsSchema)
+      .output(bookWebRouter.routes.activity.resultSchema)
+      .query(({ ctx, input }) => executeMethod(bookWebRouter.routes.activity, ctx, input)),
+    editions: procedure
+      .input(bookWebRouter.routes.editions.paramsSchema)
+      .output(bookWebRouter.routes.editions.resultSchema)
+      .query(({ ctx, input }) => executeMethod(bookWebRouter.routes.editions, ctx, input)),
+    chapters: procedure
+      .input(bookWebRouter.routes.chapters.paramsSchema)
+      .output(bookWebRouter.routes.chapters.resultSchema)
+      .query(({ ctx, input }) => executeMethod(bookWebRouter.routes.chapters, ctx, input)),
+  }),
+  openlibrary: t.router({
+    search: procedure
+      .input(openLibraryRouter.routes.search.paramsSchema)
+      .output(openLibraryRouter.routes.search.resultSchema)
+      .query(({ ctx, input }) => executeMethod(openLibraryRouter.routes.search, ctx, input)),
+    covers: procedure
+      .input(openLibraryRouter.routes.covers.paramsSchema)
+      .output(openLibraryRouter.routes.covers.resultSchema)
+      .query(({ ctx, input }) => executeMethod(openLibraryRouter.routes.covers, ctx, input)),
+    setCover: procedure
+      .input(openLibraryRouter.routes.setCover.paramsSchema)
+      .output(openLibraryRouter.routes.setCover.resultSchema)
+      .mutation(async ({ ctx, input }) => {
+        const result = await executeMethod(openLibraryRouter.routes.setCover, ctx, input);
+        return { ...result, book: freshArtwork(result.book) };
+      }),
+  }),
+  import: t.router({
+    inspect: procedure
+      .input(importRouter.routes.inspect.paramsSchema)
+      .output(importRouter.routes.inspect.resultSchema)
+      .query(({ ctx, input }) => executeMethod(importRouter.routes.inspect, ctx, input)),
+    manual: procedure
+      .input(bookInput.extend({
+        mediaType: media,
+        path: z.string().trim().min(1),
+        selectedPaths: z.array(z.string()).optional(),
+        title: z.string().optional(),
+      }))
+      .output(importRouter.routes.manual.resultSchema)
+      .mutation(({ ctx, input }) => executeMethod(importRouter.routes.manual, ctx, input)),
+  }),
   movieDualWrite: t.router({
     status: procedure.input(movieDualWriteRouter.routes.status.paramsSchema).output(movieDualWriteRouter.routes.status.resultSchema).query(({ctx,input}) => executeMethod(movieDualWriteRouter.routes.status,ctx,input)),
     list: procedure.input(movieDualWriteRouter.routes.list.paramsSchema).output(movieDualWriteRouter.routes.list.resultSchema).query(({ctx,input}) => executeMethod(movieDualWriteRouter.routes.list,ctx,input)),
@@ -155,18 +220,81 @@ export const appRouter = t.router({
       ),
   }),
   library: t.router({
+    create: procedure
+      .input(libraryRouter.routes.create.paramsSchema)
+      .output(libraryRouter.routes.create.resultSchema)
+      .mutation(({ ctx, input }) => executeMethod(libraryRouter.routes.create, ctx, input)),
+    acquire: procedure
+      .input(bookInput.extend({
+        media: z.array(media).min(1).optional(),
+        forceAgent: z.boolean().optional(),
+        priorFailure: z.boolean().optional(),
+        rejectedUrls: z.array(z.string()).optional(),
+        rejectedGuids: z.array(z.string()).optional(),
+        rejectedInfoHashes: z.array(z.string()).optional(),
+      }))
+      .output(libraryRouter.routes.acquire.resultSchema)
+      .mutation(({ ctx, input }) => executeMethod(libraryRouter.routes.acquire, ctx, input)),
+    series: procedure
+      .input(libraryRouter.routes.series.paramsSchema)
+      .output(libraryRouter.routes.series.resultSchema)
+      .query(async ({ ctx, input }) => {
+        const result = await executeMethod(libraryRouter.routes.series, ctx, input);
+        return { ...result, libraryBooks: result.libraryBooks.map(freshArtwork) };
+      }),
+    author: procedure
+      .input(libraryRouter.routes.author.paramsSchema)
+      .output(libraryRouter.routes.author.resultSchema)
+      .query(async ({ ctx, input }) => {
+        const result = await executeMethod(libraryRouter.routes.author, ctx, input);
+        return { ...result, libraryBooks: result.libraryBooks.map(freshArtwork) };
+      }),
+    reportImportIssue: procedure
+      .input(bookInput.extend({ mediaType: media, releaseId: id.optional(), manifestationId: id.optional() }))
+      .output(libraryRouter.routes.reportImportIssue.resultSchema)
+      .mutation(({ ctx, input }) => executeMethod(libraryRouter.routes.reportImportIssue, ctx, input)),
+    transcriptStatus: procedure
+      .input(libraryRouter.routes.transcriptStatus.paramsSchema)
+      .output(libraryRouter.routes.transcriptStatus.resultSchema)
+      .query(({ ctx, input }) => executeMethod(libraryRouter.routes.transcriptStatus, ctx, input)),
+    requestTranscription: procedure
+      .input(libraryRouter.routes.requestTranscription.paramsSchema)
+      .output(libraryRouter.routes.requestTranscription.resultSchema)
+      .mutation(({ ctx, input }) => executeMethod(libraryRouter.routes.requestTranscription, ctx, input)),
+    searchReleases: procedure
+      .input(libraryRouter.routes.searchReleases.paramsSchema)
+      .output(libraryRouter.routes.searchReleases.resultSchema)
+      .query(({ ctx, input }) => executeMethod(libraryRouter.routes.searchReleases, ctx, input)),
+    createManifestationFromSearch: procedure
+      .input(libraryRouter.routes.createManifestationFromSearch.paramsSchema)
+      .output(libraryRouter.routes.createManifestationFromSearch.resultSchema)
+      .mutation(({ ctx, input }) => executeMethod(libraryRouter.routes.createManifestationFromSearch, ctx, input)),
+    rehydrate: procedure
+      .input(libraryRouter.routes.rehydrate.paramsSchema)
+      .output(libraryRouter.routes.rehydrate.resultSchema)
+      .mutation(({ ctx, input }) => executeMethod(libraryRouter.routes.rehydrate, ctx, input)),
+    delete: procedure
+      .input(libraryRouter.routes.delete.paramsSchema)
+      .output(libraryRouter.routes.delete.resultSchema)
+      .mutation(({ ctx, input }) => executeMethod(libraryRouter.routes.delete, ctx, input)),
     list: procedure
-      .input(libraryRouter.routes.list.paramsSchema)
+      .input(z.object({
+        limit: z.number().int().positive().max(200).optional(),
+        q: z.string().optional(),
+        cursor: id.optional(),
+      }))
       .output(libraryRouter.routes.list.resultSchema)
-      .query(({ ctx, input }) =>
-        executeMethod(libraryRouter.routes.list, ctx, input),
-      ),
+      .query(async ({ ctx, input }) => {
+        const result = await executeMethod(libraryRouter.routes.list, ctx, input);
+        return { ...result, items: result.items.map(freshArtwork) };
+      }),
     get: procedure
       .input(libraryRouter.routes.get.paramsSchema)
       .output(libraryRouter.routes.get.resultSchema)
-      .query(({ ctx, input }) =>
-        executeMethod(libraryRouter.routes.get, ctx, input),
-      ),
+      .query(async ({ ctx, input }) => {
+        const result = await executeMethod(libraryRouter.routes.get, ctx, input);
+        return { ...result, book: freshArtwork(result.book) };
+      }),
   }),
 });
 

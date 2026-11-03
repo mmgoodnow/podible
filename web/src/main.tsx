@@ -8,6 +8,9 @@ import {
 import { rpc, TRPCProvider, useTRPC } from "./rpc";
 import { Link, useLocation } from "./router";
 import { MovieShadow } from "./movie-shadow";
+import { MovieDualWrite } from "./movie-dual-write";
+import { Library, Catalog, BookCollection } from "./books";
+import { BookDetail } from "./book-detail";
 import {
   MovieSearch,
   MovieDetail,
@@ -23,102 +26,52 @@ const queryClient = new QueryClient({
   },
 });
 
-function Library() {
-  const trpc = useTRPC();
-  const [q, setQ] = useState("");
-  const books = useQuery(
-    trpc.library.list.queryOptions({ q, limit: 100, cursor: undefined }),
-  );
-  return (
-    <>
-      <div className="section-heading">
-        <div>
-          <span className="eyebrow">YOUR COLLECTION</span>
-          <h1>A good story awaits.</h1>
-        </div>
-        <label className="search">
-          Filter library
-          <input
-            type="search"
-            value={q}
-            onChange={(event) => setQ(event.target.value)}
-            placeholder="Title or author"
-          />
-        </label>
-      </div>
-      {books.isPending ? (
-        <p role="status">Loading your library...</p>
-      ) : books.isError ? (
-        <p role="alert">
-          Could not load your library.{" "}
-          <button onClick={() => books.refetch()}>Try again</button>
-        </p>
-      ) : books.data.items.length === 0 ? (
-        <p>
-          No books found. <a href="/add">Add a book</a>
-        </p>
-      ) : (
-        <div className="book-grid">
-          {books.data.items.map((book) => (
-            <a className="book-card" href={`/book/${book.id}`} key={book.id}>
-              <div className="jacket">
-                {book.coverUrl ? (
-                  <img src={book.coverUrl} alt="" loading="lazy" />
-                ) : (
-                  <span>{book.title}</span>
-                )}
-              </div>
-              <h2>{book.title}</h2>
-              <p>{book.author}</p>
-              <span className="state">
-                {book.playback.audio || book.playback.ebook
-                  ? "Available"
-                  : "In progress"}
-              </span>
-            </a>
-          ))}
-        </div>
-      )}
-    </>
-  );
-}
-
 function App() {
-  const route = useLocation();
+  const route =
+    useLocation()
+      .split("?")[0]!
+      .replace(/^\/app(?=\/|$)/, "") || "/";
   const trpc = useTRPC();
   const session = useQuery(trpc.auth.me.queryOptions({}));
   return (
     <div className="shell">
       <header>
-        <a href="/app" className="wordmark">
+        <Link href="/" className="wordmark">
           podible<span>THE LIBRARY</span>
-        </a>
+        </Link>
         <nav aria-label="Main navigation">
           <Link
-            href="/app/library"
+            href="/library"
             aria-current={
-              route === "/app/library" || route === "/app" ? "page" : undefined
+              route === "/library" || route === "/" ? "page" : undefined
             }
           >
             Library
           </Link>
           <Link
+            href="/add"
+            aria-current={route === "/add" ? "page" : undefined}
+          >
+            Discover
+          </Link>
+          <Link
             href="/app/movies"
-            aria-current={route.startsWith("/app/movies") ? "page" : undefined}
+            aria-current={route.startsWith("/movies") ? "page" : undefined}
           >
             Movies
           </Link>
           <Link
             href="/app/requests"
-            aria-current={
-              route.startsWith("/app/requests") ? "page" : undefined
-            }
+            aria-current={route.startsWith("/requests") ? "page" : undefined}
           >
             Requests
           </Link>
-          <a href="/">Classic view</a>
+          <a href="/classic">Classic view</a>
           {session.data?.user.isAdmin && (
             <Link href="/app/movie-shadow">Shadow audit</Link>
+          )}
+          {session.data?.user.isAdmin && (
+            <Link href="/app/movie-dual-write">Movie sync</Link>
           )}
         </nav>
         {session.data && <a href="/logout">Sign out</a>}
@@ -150,7 +103,10 @@ function App() {
             )}
           </section>
         ) : (
-          <ActorLibrary key={session.data.user.id} />
+          <ActorLibrary
+            key={session.data.user.id}
+            isAdmin={session.data.user.isAdmin}
+          />
         )}
       </main>
       <footer>
@@ -161,8 +117,12 @@ function App() {
   );
 }
 
-function ActorLibrary() {
-  const route = useLocation().split("?")[0]!;
+function ActorLibrary({ isAdmin }: { isAdmin: boolean }) {
+  const route =
+    useLocation()
+      .split("?")[0]!
+      .replace(/^\/app(?=\/|$)/, "")
+      .replace(/\/$/, "") || "/";
   const [actorClient] = useState(
     () =>
       new QueryClient({
@@ -172,24 +132,39 @@ function ActorLibrary() {
   return (
     <QueryClientProvider client={actorClient}>
       <TRPCProvider trpcClient={rpc} queryClient={actorClient}>
-        {route === "/app/movie-shadow" ? (
+        {route === "/movie-dual-write" ? (
+          <MovieDualWrite />
+        ) : route === "/movie-shadow" ? (
           <MovieShadow />
-        ) : /^\/app\/movies\/\d+$/.test(route) ? (
+        ) : /^\/movies\/\d+$/.test(route) ? (
           <MovieDetail key={route} tmdbId={Number(route.split("/").at(-1))} />
-        ) : route === "/app/movies" ? (
+        ) : route === "/movies" ? (
           <MovieSearch />
-        ) : /^\/app\/requests\/\d+$/.test(route) ? (
+        ) : /^\/requests\/\d+$/.test(route) ? (
           <MovieRequestDetail
             key={route}
             requestId={Number(route.split("/").at(-1))}
           />
-        ) : route === "/app/requests" ? (
+        ) : route === "/requests" ? (
           <MovieRequests />
-        ) : ["/app", "/app/", "/app/library"].includes(route) ? (
+        ) : /^\/book\/\d+$/.test(route) ? (
+          <BookDetail
+            key={route}
+            bookId={Number(route.split("/").at(-1))}
+            isAdmin={isAdmin}
+          />
+        ) : route === "/add" ? (
+          <Catalog />
+        ) : route === "/series" || route === "/author" ? (
+          <BookCollection
+            key={location.pathname + location.search}
+            kind={route === "/series" ? "series" : "author"}
+          />
+        ) : ["/", "/library"].includes(route) ? (
           <Library />
         ) : (
           <p>
-            Page not found. <Link href="/app/library">Open library</Link>.
+            Page not found. <Link href="/library">Open library</Link>.
           </p>
         )}
       </TRPCProvider>

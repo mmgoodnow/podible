@@ -1,0 +1,33 @@
+# Book Web Application
+
+The Bun-built React SPA is served at `/`, `/library`, `/add`, `/book/:bookId`,
+`/series` and `/author`. Existing `/app` paths remain aliases. The old book UI is
+available under `/classic`; authentication, feeds, administrator pages, JSON-RPC,
+typed tRPC and opaque media URLs retain their existing routes.
+
+The book screens use tRPC adapters over existing authenticated domain methods.
+Browser-only read models expose acquisition activity, downloadable ebook editions,
+and chapter previews without exposing provider credentials or raw execution logs.
+Mutations reuse the public domain handlers rather than duplicating business rules.
+
+Book detail supports audio/ebook edition selection, playback and downloads,
+manifestation-scoped chapter/transcript generation and forced regeneration,
+non-destructive issue reporting, artwork selection, metadata refresh and deletion.
+Acquisition failures and scheduled waits remain visible rather than looking like
+an indefinitely loading book. Administrators additionally get manual release
+selection, local import and diagnostics; user-level release selection remains
+available in the book's management panel.
+
+Server-returned media links are opaque. Clients select returned editions and use
+their stream, chapters, transcript and download URLs; they do not derive asset
+paths from numeric IDs. Artwork URLs carry a revision so cover changes are visible
+without a hard browser refresh.
+
+Chrome acceptance uses the real HTTP/tRPC routes and built assets, generated audio
+with byte-range playback, PDF downloads, realistic catalog/indexer fixtures,
+session/admin boundaries, and desktop/mobile layouts:
+
+```sh
+bun run build
+bun run test/browser/books.ts
+```
