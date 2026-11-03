@@ -294,8 +294,15 @@ test("real Reflow Seerr fanout independently downloads, verifies and publishes w
       path.join(s.root, "execution.sqlite"),
     );
     const deadline = Date.now() + 7000;
+    const acquisitionFinished = () => {
+      const target = s.repo.movies.targets()[0];
+      if (!target?.active_version_id) return false;
+      const acquisition = s.repo.movies.acquisitions(target.id)[0];
+      return acquisition?.job_id !== null && acquisition?.job_id !== undefined
+        && s.repo.getJob(acquisition.job_id)?.status === "succeeded";
+    };
     while (
-      !s.repo.movies.targets()[0]?.active_version_id ||
+      !acquisitionFinished() ||
       s.repo.getJob(sync.id)?.status !== "succeeded"
     ) {
       await runtime.reconcile();
