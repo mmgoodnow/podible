@@ -60,10 +60,9 @@ blocked. Partial caches expire no later than the next provider retry time.
 
 If `prowlarr.url` is empty, movies retain the legacy `settings.torznab` fallback.
 Movie acquisition does not replace the book rTorrent client or rewrite its legacy
-Torznab configuration. A separately integrated book-discovery helper may also
-consume this shared connection when it is configured. The rollout owner must
-verify that interaction separately and authorize any switch away from legacy MAM;
-the movie feature is not evidence that book authentication/backoff is repaired.
+Torznab configuration. Book searches also consume this shared connection when it
+is configured, selecting audiobook category 3030 or ebook category 7020. See
+[indexer recovery](indexer-recovery.md) for category discovery and outage handling.
 
 ## Feed And Backfill
 
@@ -149,4 +148,3 @@ Upstream wire contracts were checked against the primary implementations:
 [Seerr movie metadata](https://github.com/seerr-team/seerr/blob/develop/server/models/Movie.ts),
 [Prowlarr indexers](https://github.com/Prowlarr/Prowlarr/blob/develop/src/Prowlarr.Api.V1/Indexers/IndexerResource.cs),
 and [Prowlarr health](https://github.com/Prowlarr/Prowlarr/blob/develop/src/Prowlarr.Api.V1/Indexers/IndexerStatusResource.cs).
-

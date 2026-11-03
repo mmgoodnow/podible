@@ -1,7 +1,10 @@
 import { XMLParser } from "fast-xml-parser";
+import { createHash } from "node:crypto";
+import { isRunControlError } from "reflow-ts";
 
 import type { MediaType, TorznabSource } from "../app-types";
 import { normalizeInfoHash } from "./torrent";
+import { INDEXER_RETRY_MS, IndexerError, IndexerSearchError, indexerCooldown, indexerFailure, parseIndexerRetryAfter, type IndexerFailure } from "./indexer-errors";
 
 type SearchResult<TMedia extends string> = {
   title: string;
@@ -146,18 +149,153 @@ function buildSearchUrl(source: TorznabSource, query: string, mediaType: MediaTy
   return url;
 }
 
-export async function searchTorznab(sources: TorznabSource[], query: string, mediaType: MediaType): Promise<TorznabResult[]> {
-  const results: TorznabResult[] = [];
-  for (const source of sources) {
-    const url = buildSearchUrl(source, query, mediaType);
-    const response = await fetch(url, { method: "GET" });
-    if (!response.ok) {
-      throw new Error(`Torznab source ${source.name} returned ${response.status}`);
+export type IndexerSearchBatch = { results: TorznabResult[]; failures: IndexerFailure[] };
+type SearchSource = TorznabSource & { availableAfter?: number };
+const MAX_ENTRIES = 128;
+const MAX_XML_BYTES = 8 * 1024 * 1024;
+const MAX_CACHE_BYTES = 32 * 1024 * 1024;
+
+function digest(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+/** Share raw responses, not media-tagged results: category-less audio/ebook URLs are identical. */
+export class TorznabSearchClient {
+  private cache = new Map<string, { until: number; xml: string; bytes: number }>();
+  private cacheBytes = 0;
+  private inflight = new Map<string, Promise<string>>();
+  private backoff = new Map<string, { failure: IndexerFailure; count: number; until: number }>();
+
+  constructor(
+    private fetcher: (url: URL, init: RequestInit) => Promise<Response> = (url, init) => fetch(url, init),
+    private now: () => number = () => Date.now(),
+  ) {}
+
+  private async readXml(response: Response): Promise<string> {
+    if (!response.body) throw new Error("Missing indexer response");
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > MAX_XML_BYTES) throw new Error("Indexer response is too large");
+        chunks.push(value);
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
     }
-    const xml = await response.text();
-    results.push(...parseTorznabSearch(xml, source.name, mediaType));
+    return Buffer.concat(chunks).toString("utf8");
   }
-  return results;
+
+  private evictCache(key: string): void {
+    const cached = this.cache.get(key);
+    if (cached) this.cacheBytes -= cached.bytes;
+    this.cache.delete(key);
+  }
+
+  private async xml(source: SearchSource, query: string, media: MediaType): Promise<string> {
+    let url: URL;
+    try {
+      url = buildSearchUrl(source, query, media);
+      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error();
+    } catch {
+      throw new IndexerError(indexerFailure(source.name, 400, null));
+    }
+    url.searchParams.sort();
+    const requestKey = digest(url.href);
+    const identity = new URL(url);
+    for (const key of ["q", "t", "cat", "offset", "limit"]) identity.searchParams.delete(key);
+    const providerKey = digest(identity.href);
+    const blocked = this.backoff.get(providerKey);
+    const availableAt = Math.max(source.availableAfter ?? 0, blocked?.until ?? 0);
+    if (availableAt > this.now()) {
+      const failure = blocked && blocked.until >= (source.availableAfter ?? 0)
+        ? { ...blocked.failure, provider: indexerFailure(source.name, null, availableAt).provider }
+        : indexerCooldown(source.name, availableAt);
+      throw new IndexerError(failure);
+    }
+    const cached = this.cache.get(requestKey);
+    if (cached && cached.until > this.now()) return cached.xml;
+    if (cached) this.evictCache(requestKey);
+    const pending = this.inflight.get(requestKey);
+    if (pending) return pending;
+    if (this.inflight.size >= MAX_ENTRIES) {
+      throw new IndexerError(indexerFailure(source.name, null, this.now() + INDEXER_RETRY_MS));
+    }
+    const request = (async () => {
+      try {
+        const response = await this.fetcher(url, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(20_000) });
+        if (!response.ok) {
+          const delay = Math.max(INDEXER_RETRY_MS, parseIndexerRetryAfter(response.headers.get("retry-after"), this.now()) ?? 0);
+          await response.body?.cancel().catch(() => {});
+          throw new IndexerError(indexerFailure(source.name, response.status, this.now() + delay));
+        }
+        const xml = await this.readXml(response);
+        const doc = parser.parse(xml) as Record<string, unknown>;
+        if (doc.error) {
+          const code = Number((doc.error as Record<string, unknown>).code);
+          throw new IndexerError(indexerFailure(source.name, code >= 100 && code <= 102 ? 401 : null, this.now() + INDEXER_RETRY_MS));
+        }
+        if (!doc.rss || typeof doc.rss !== "object" || !Object.hasOwn(doc.rss, "channel")) throw new Error("Invalid Torznab response");
+        // A concurrent healthy category must not erase a newer failure/cooldown.
+        if (this.backoff.get(providerKey) === blocked) this.backoff.delete(providerKey);
+        const bytes = Buffer.byteLength(xml);
+        for (const [key, entry] of this.cache) if (entry.until <= this.now()) this.evictCache(key);
+        while (this.cache.size >= MAX_ENTRIES || this.cacheBytes + bytes > MAX_CACHE_BYTES) {
+          this.evictCache(this.cache.keys().next().value!);
+        }
+        this.cache.set(requestKey, { until: this.now() + 30_000, xml, bytes });
+        this.cacheBytes += bytes;
+        return xml;
+      } catch (error) {
+        if (isRunControlError(error)) throw error;
+        const failure = error instanceof IndexerError ? error.failure : indexerFailure(source.name, null, this.now() + INDEXER_RETRY_MS);
+        const count = (this.backoff.get(providerKey)?.count ?? 0) + 1;
+        const until = failure.kind === "unavailable"
+          ? Math.max(failure.retryAt ?? 0, this.now() + Math.min(30 * 60_000, INDEXER_RETRY_MS * 2 ** Math.min(count - 1, 5)))
+          : this.now() + INDEXER_RETRY_MS;
+        const safeFailure = { ...failure, retryAt: failure.kind === "unavailable" ? until : null };
+        if (!this.backoff.has(providerKey) && this.backoff.size >= MAX_ENTRIES) this.backoff.delete(this.backoff.keys().next().value!);
+        this.backoff.set(providerKey, { failure: safeFailure, count, until });
+        throw new IndexerError(safeFailure);
+      }
+    })();
+    this.inflight.set(requestKey, request);
+    try {
+      return await request;
+    } finally {
+      this.inflight.delete(requestKey);
+    }
+  }
+
+  async search(sources: SearchSource[], query: string, media: MediaType): Promise<IndexerSearchBatch> {
+    const batches = await Promise.all(sources.map(async (source): Promise<IndexerSearchBatch> => {
+      try {
+        const xml = await this.xml(source, query, media);
+        return { results: parseTorznabSearch(xml, source.name, media), failures: [] };
+      } catch (error) {
+        if (isRunControlError(error)) throw error;
+        if (!(error instanceof IndexerError)) throw error;
+        return { results: [], failures: [error.failure] };
+      }
+    }));
+    return { results: batches.flatMap((batch) => batch.results), failures: batches.flatMap((batch) => batch.failures) };
+  }
+}
+
+const searchClient = new TorznabSearchClient();
+
+export function searchTorznabBatch(sources: SearchSource[], query: string, media: MediaType): Promise<IndexerSearchBatch> {
+  return searchClient.search(sources, query, media);
+}
+
+export async function searchTorznab(sources: TorznabSource[], query: string, mediaType: MediaType): Promise<TorznabResult[]> {
+  const batch = await searchTorznabBatch(sources, query, mediaType);
+  if (!batch.results.length && batch.failures.length) throw new IndexerSearchError(batch.failures);
+  return batch.results;
 }
 
 type TorznabResult = SearchResult<MediaType>;

@@ -1,8 +1,9 @@
 import { selectSearchCandidates } from "../library/agents";
-import { runSearch, runSnatchGroup } from "../library/service";
+import { runSnatchGroup } from "../library/service";
 import type { JobRow, MediaType } from "../app-types";
 import { durableStep, workerLog, type WorkerContext } from "./context";
 import { isRunControlError } from "reflow-ts";
+import { selectWithIndexerRecovery } from "./indexer-search";
 
 export type AcquirePayload = {
   bookId?: number;
@@ -46,12 +47,7 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
       };
 
       const query = `${book.title} ${book.author}`.trim();
-      const results = await durableStep(ctx, `${media}:search`, () => runSearch(settings, { query, media }));
-      workerLog(
-        ctx,
-        `[acquire] job=${job.id} book=${book.id} media=${media} query=${JSON.stringify(query)} results=${results.length}`
-      );
-      const decision = await durableStep(ctx, `${media}:selection`, () => selectSearchCandidates(
+      const decision = await selectWithIndexerRecovery(ctx, { query, media, jobId: job.id, bookId: book.id }, (results, stepName) => durableStep(ctx, stepName, () => selectSearchCandidates(
         settings,
         {
           query,
@@ -69,7 +65,7 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
           repo: ctx.repo,
           modelProvider: ctx.modelProvider,
         }
-      ));
+      )));
       if (decision.error) {
         workerLog(
           ctx,

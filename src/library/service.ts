@@ -2,9 +2,11 @@ import { BooksRepo } from "../repo";
 import { RtorrentClient } from "../rtorrent";
 import { getOrFetchCachedTorrentBytes, torrentCacheKeyFor } from "./torrent-cache";
 import { infoHashFromTorrentBytes, normalizeInfoHash } from "./torrent";
-import { searchTorznab } from "./torznab";
+import { searchTorznabBatch } from "./torznab";
+import { bookIndexerSources } from "./indexer-discovery";
+import { IndexerError, IndexerSearchError } from "./indexer-errors";
 import { inferLanguageFromReleaseTitles, normalizeManifestationLanguageCode } from "./language";
-import type { TorznabResult } from "./torznab";
+import type { IndexerSearchBatch, TorznabResult } from "./torznab";
 import type { AppSettings, MediaType, ReleaseRow } from "../app-types";
 import type { WorkerContext } from "../worker/context";
 
@@ -177,8 +179,21 @@ export function rankSearchResults(query: string, media: MediaType, results: Torz
 }
 
 export async function runSearch(settings: AppSettings, request: SearchRequest) {
-  const results = await searchTorznab(settings.torznab, request.query, request.media);
-  return rankSearchResults(request.query, request.media, results).map((entry) => entry.result);
+  const batch = await runSearchBatch(settings, request);
+  if (!batch.results.length && batch.failures.length) throw new IndexerSearchError(batch.failures);
+  return batch.results;
+}
+
+export async function runSearchBatch(settings: AppSettings, request: SearchRequest): Promise<IndexerSearchBatch> {
+  let sources;
+  try {
+    sources = await bookIndexerSources(settings, request.media);
+  } catch (error) {
+    if (!(error instanceof IndexerError)) throw error;
+    return { results: [], failures: [error.failure] };
+  }
+  const batch = await searchTorznabBatch(sources, request.query, request.media);
+  return { ...batch, results: rankSearchResults(request.query, request.media, batch.results).map((entry) => entry.result) };
 }
 
 export async function runSnatch(
