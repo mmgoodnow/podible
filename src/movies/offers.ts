@@ -2,8 +2,10 @@ import { ProwlarrDiscovery, type DiscoveredIndexer } from "../media/prowlarr";
 import { IndexerGateway, indexerGateway, releaseIdentity, type SearchResult } from "../media/indexer-gateway";
 import { inspectMetainfo } from "../media/metainfo";
 import type { Movie } from "./types";
+import { createHash } from "node:crypto";
 
 export type MovieOffer = {
+  inboxId?: number;
   key: string;
   title: string;
   provider: string;
@@ -85,7 +87,9 @@ export class MovieIndexers {
 
 export function movieOfferFromResult(result: SearchResult<"movie">): MovieOffer {
   return {
-    key: releaseIdentity(result),
+    key: createHash("sha256")
+      .update(JSON.stringify([releaseIdentity(result), result.infoHash, result.sizeBytes, result.title]))
+      .digest("hex"),
     title: result.title,
     provider: result.provider,
     sizeBytes: result.sizeBytes,

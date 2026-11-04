@@ -208,7 +208,6 @@ interface MovieSettings {
   plexSectionId: string;
   plexViewPath: string;
   automaticUpgrades: boolean;
-  searchIntervalHours: number;
   maximumReleaseBytes: number;
   qualityPolicy: MovieQualityPolicy;
 }

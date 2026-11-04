@@ -95,6 +95,20 @@ export interface DB {
     "updated_at": string;
   };
 
+  "indexer_feeds": {
+    "id": string;
+    "provider": string;
+    "media_type": string;
+    "head_key": string | null;
+    "last_polled_at": string | null;
+    "last_success_at": string | null;
+    "last_error": string | null;
+    "retry_at": string | null;
+    "gap_since": string | null;
+    "gap_note": string | null;
+    "updated_at": string;
+  };
+
   "job_commands": {
     "id": Generated<number>;
     "job_id": number;
@@ -277,6 +291,26 @@ export interface DB {
     "public_jwk_json": string;
     "private_key_pkcs8": string;
     "created_at": string;
+  };
+
+  "release_considerations": {
+    "release_id": number;
+    "target_kind": string;
+    "target_id": number;
+    "target_revision": string;
+    "job_id": number;
+    "source_job_id": number;
+    "decision_note": string;
+    "created_at": string;
+  };
+
+  "release_inbox": {
+    "id": Generated<number>;
+    "feed_id": string;
+    "release_key": string;
+    "content_key": string;
+    "payload_json": string;
+    "first_seen_at": string;
   };
 
   "release_searches": {

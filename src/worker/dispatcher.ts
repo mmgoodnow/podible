@@ -13,11 +13,15 @@ import { configuredMovieServices } from "../movies/runtime";
 import { reconcileMovies } from "../movies/maintenance";
 import { syncMovieShadow, evaluateMovieShadow } from "../movies/shadow";
 import { syncSeerrRequests } from "../movies/dual-write";
+import { syncIndexerFeeds } from "./indexer-feeds";
+import { matchMovieFeed } from "../movies/feed";
 
 export type JobProcessResult = "done";
 
 /** Domain handlers are code, not a database execution-type enum. */
 export async function processJob(ctx: WorkerContext, job: JobRow): Promise<JobProcessResult> {
+  if (job.type === "indexer_feed_sync") return syncIndexerFeeds(ctx);
+  if (job.type === "movie_feed_match") return matchMovieFeed(ctx, job);
   if (job.type === "movie_dual_write_sync") return syncSeerrRequests(ctx, job);
   if (job.type === "movie_shadow_sync") return syncMovieShadow(ctx);
   if (job.type === "movie_shadow_evaluate") return evaluateMovieShadow(ctx, job);

@@ -89,8 +89,11 @@ was added. Configure:
   is absent. Agents reuse `agents.apiKey`. Book downloads continue using the
   existing `rtorrent` settings; native movies use the private Docker-managed
   Transmission engine, not those settings.
-- `movies.qualityPolicy`, `automaticUpgrades`, `searchIntervalHours` (default 24),
+- `movies.qualityPolicy`, `automaticUpgrades` (RSS-driven),
   and `maximumReleaseBytes` (default 40 GiB).
+
+New releases arrive through the shared [RSS inbox](indexer-feeds.md); there are
+no scheduled per-title searches. Reconciliation repairs existing views only.
 
 Use a dedicated Plex movie section and managed root. Existing foreign files and
 missing/replaced content mounts are errors, not permission to bulldoze data.

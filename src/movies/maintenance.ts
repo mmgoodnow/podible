@@ -3,7 +3,6 @@ import { movieRoots } from "./acquisition";
 import { configuredMovieServices } from "./runtime";
 import { prepareMovieStorage, assertMovieStorage } from "./storage";
 import { publishMovieVersion, reconcileMovieView } from "./publication";
-import { queueMovieAcquisition } from "./service";
 
 export async function reconcileMovies(ctx: WorkerContext): Promise<"done"> {
   const settings = ctx.getSettings();
@@ -89,28 +88,6 @@ export async function reconcileMovies(ctx: WorkerContext): Promise<"done"> {
     await reconcileMovieView(ctx.repo.movies, roots, active);
     await services.library.scan();
   });
-  if (!settings.movies.automaticUpgrades) return "done";
-  const now = await durableStep(ctx, "movies:clock", () => Date.now());
-  const targets = await durableStep(ctx, "movies:targets", () =>
-    ctx.repo.movies.targets().map((target) => target.id),
-  );
-  for (const id of targets)
-    await durableStep(ctx, `movies:upgrade-check:${id}`, () => {
-      active();
-      if (!ctx.repo.movies.activeRequestCount(id)) return;
-      const target = ctx.repo.movies.target(id)!;
-      const latest = ctx.repo.movies.acquisitions(id)[0];
-      if (
-        latest &&
-        now - Date.parse(latest.created_at) <
-          settings.movies.searchIntervalHours * 60 * 60_000
-      )
-        return;
-      queueMovieAcquisition(
-        ctx.repo,
-        id,
-        target.active_version_id ? "upgrade" : "recovery",
-      );
-    });
+  // Source discovery is event-driven via RSS; reconciliation only repairs existing views.
   return "done";
 }

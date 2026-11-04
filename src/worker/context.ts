@@ -13,6 +13,9 @@ export type WorkerContext = {
   movieServices?: import("../movies/operations").MovieServices;
   movieShadowServices?: import("../movies/shadow").MovieShadowServices;
   seerrSource?: import("../movies/seerr").SeerrSource;
+  movieFeedMatcher?: import("../movies/agents").MovieFeedMatcher;
+  indexerFeedSources?: () => Promise<import("../media/prowlarr").DiscoveredIndexer[]>;
+  indexerFeedGateway?: Pick<import("../media/indexer-gateway").IndexerGateway, "page">;
   /** In-process resource lanes; sibling steps share execution ownership. */
   activeLocks?: Set<string>;
   execution?: {

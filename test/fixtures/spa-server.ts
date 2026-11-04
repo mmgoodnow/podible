@@ -25,9 +25,14 @@ settings.movies = {
 };
 repo.updateSettings(settings);
 if (process.env.SHADOW_FIXTURE) {
+  settings.prowlarr={url:"https://fixture-prowlarr.invalid",apiKey:"fixture-private-key"};
   settings.movies.shadow.enabled = true;
   settings.movies.shadow.radarrUrl = "http://radarr:7878";
   repo.updateSettings(settings);
+  const now=new Date().toISOString();
+  repo.releaseInbox.ensureFeed("rss-fixture","Fixture indexer","movie",now);
+  repo.releaseInbox.succeed("rss-fixture","head","Earlier releases are outside the available feed history.",now);
+  repo.releaseInbox.fail("rss-fixture",{provider:"Fixture indexer",kind:"unavailable",status:429,retryAt:Date.now()+60_000,message:"Indexer Fixture indexer is temporarily unavailable (HTTP 429)."},now);
   const { caseId } = repo.movieShadow.capture({ observation: { key: "fixture:history:1", movie: fixtureMovie, releaseTitle: "A Fixture Film 2024", sourcePaths: [], observedAt: new Date().toISOString(), radarr: { outcome: "imported", messages: [] } }, policy: settings.movies.qualityPolicy, files: [], source: "unavailable", warnings: ["Source is missing or has moved"] });
   repo.movieShadow.finish(caseId, { decision: "unobservable", selectedFile: null, reason: "No source files remain", facts: null, quality: null, probes: [], probeErrors: [], model: "fixture", evaluatedAt: new Date().toISOString() });
 }
@@ -38,6 +43,7 @@ const runtime = await createJobExecutionRuntime(
     getSettings: () => repo.getSettings(),
     movieServices: fixture.services,
     movieShadowServices: { observe: async () => [], inspect: fixture.services.decider.inspect, probe: fixture.services.probe },
+    indexerFeedSources: async () => [],
     onLog() {},
   },
   path.join(root, "execution.sqlite"),

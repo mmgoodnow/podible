@@ -10,6 +10,7 @@ import { RpcError, type RpcContext } from "./rpc/shared";
 import { moviesRouter, movieRequestsRouter } from "./rpc/movies-router";
 import { movieShadowRouter } from "./rpc/movie-shadow-router";
 import { movieDualWriteRouter } from "./rpc/movie-dual-write-router";
+import { indexerFeedsRouter } from "./rpc/indexer-feeds-router";
 
 const t = initTRPC.context<RpcContext>().create();
 const id = z.number().int().positive();
@@ -51,6 +52,16 @@ const procedure = t.procedure.use(async ({ next }) => {
 });
 
 export const appRouter = t.router({
+  indexerFeeds: t.router({
+    status: procedure
+      .input(indexerFeedsRouter.routes.status.paramsSchema)
+      .output(indexerFeedsRouter.routes.status.resultSchema)
+      .query(({ ctx, input }) => executeMethod(indexerFeedsRouter.routes.status, ctx, input)),
+    sync: procedure
+      .input(indexerFeedsRouter.routes.sync.paramsSchema)
+      .output(indexerFeedsRouter.routes.sync.resultSchema)
+      .mutation(({ ctx, input }) => executeMethod(indexerFeedsRouter.routes.sync, ctx, input)),
+  }),
   book: t.router({
     diagnostics: procedure
       .input(bookWebRouter.routes.diagnostics.paramsSchema)

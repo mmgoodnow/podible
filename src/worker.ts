@@ -1,6 +1,7 @@
 import { workerLog, type WorkerContext } from "./worker/context";
 import { createJobExecutionRuntime } from "./worker/execution";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
+import { INDEXER_FEED_INTERVAL_MS } from "./worker/indexer-feeds";
 
 export { pollMsForMedia, selectDownloadPollMs } from "./worker/downloads";
 
@@ -24,8 +25,19 @@ export async function runWorker(
     let nextMovieMaintenance = 0;
     let nextShadowSync = 0;
     let nextSeerrSync = 0;
+    let nextFeedSync = 0;
     while (!ctx.shouldStop?.()) {
       try {
+        const prowlarr = ctx.getSettings().prowlarr;
+        if (prowlarr.url && ctx.repo.movies.hasTargets() && Date.now() >= nextFeedSync) {
+          const key = createHash("sha256").update(JSON.stringify(prowlarr)).digest("hex");
+          ctx.repo.createJob({
+            type: "indexer_feed_sync",
+            idempotencyKey: "indexer-feeds:" + key + ":" + Math.floor(Date.now() / INDEXER_FEED_INTERVAL_MS),
+            maxAttempts: 3,
+          });
+          nextFeedSync = Date.now() + INDEXER_FEED_INTERVAL_MS;
+        }
         const seerr = ctx.getSettings().movies.seerr;
         if (seerr.url && seerr.apiKey && Date.now() >= nextSeerrSync) {
           ctx.repo.createJob({ type: "movie_dual_write_sync", idempotencyKey: `movie-seerr:${seerr.url}:${Math.floor(Date.now()/(seerr.pollIntervalMinutes*60_000))}`, maxAttempts: 3 });

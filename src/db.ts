@@ -7,6 +7,7 @@ import { Database } from "bun:sqlite";
 import { MOVIES_SCHEMA_SQL } from "./movies/schema";
 import { MOVIE_SHADOW_SCHEMA_SQL } from "./movies/shadow-repo";
 import { MOVIE_SEERR_SCHEMA_SQL } from "./movies/seerr-repo";
+import { RELEASE_INBOX_SCHEMA_SQL } from "./media/release-inbox-schema";
 
 const SCHEMA_MIGRATION_ID = 1;
 const GUID_MIGRATION_ID = 2;
@@ -1152,6 +1153,10 @@ export function runMigrations(db: Database): void {
     }
   });
   apply(41, () => db.exec(MOVIE_SEERR_SCHEMA_SQL));
+  apply(42, () => {
+    db.exec(RELEASE_INBOX_SCHEMA_SQL);
+    db.exec("UPDATE settings SET value_json = json_remove(value_json, '$.movies.searchIntervalHours')");
+  });
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

@@ -3,6 +3,7 @@ import path from "node:path";
 import { MovieRepo } from "./movies/repo";
 import { MovieShadowRepo } from "./movies/shadow-repo";
 import { MovieSeerrRepo } from "./movies/seerr-repo";
+import { ReleaseInboxRepo } from "./media/release-inbox";
 
 import { nowIso, finalizeJobJournalMigration } from "./db";
 import { randomUUID } from "node:crypto";
@@ -239,6 +240,7 @@ function assertPositiveInt(value: number): void {
 
 export class BooksRepo {
   get movieSeerr() { return new MovieSeerrRepo(this.db, this.beforeWrite); }
+  get releaseInbox() { return new ReleaseInboxRepo(this.db, this.beforeWrite); }
   get movieShadow() {
     return new MovieShadowRepo(this.db, this.beforeWrite, (id) => this.getJob(id));
   }

@@ -47,6 +47,11 @@ try {
   await page.goto(new URL("/movie-dual-write", url).href);
   await page.getByRole("heading", { name: "Movie sync", exact: true }).waitFor();
   await page.getByRole("button", { name: "Sync new requests" }).waitFor();
+  await page.getByRole("heading",{name:"Indexer feeds",exact:true}).waitFor();
+  await page.locator("summary").filter({hasText:"Fixture indexer"}).click();
+  await page.getByText("Earlier releases are outside the available feed history.",{exact:true}).waitFor();
+  await page.getByRole("button",{name:"Poll feeds now",exact:true}).click();
+  await page.getByText("Feed polling queued.",{exact:true}).waitFor();
   assert.equal(await page.getByRole("heading", { name: "Seerr dual-write" }).count(), 1);
   assert.equal(await page.getByRole("navigation").getByRole("link", { name: "Movie sync" }).count(), 1);
   assert.equal(await page.getByRole("navigation").getByRole("link", { name: "Shadow audit" }).count(), 0);

@@ -19,6 +19,7 @@ import type { MovieOffer, MovieSearch } from "./offers";
 import type { MovieServices, MovieFileCandidate } from "./operations";
 import { readTransmissionIdentity } from "../media/managed-transmission";
 import { movieUpstreamStep } from "./upstream";
+import { refreshMovieFeedOffer } from "./feed-offers";
 
 export const movieAcquisitionPayloadSchema = z.object({
   acquisitionId: z.number().int().positive(),
@@ -90,7 +91,10 @@ export async function acquireMovie(
   const policy = movieQualityPolicySchema.parse(initial.policy);
   const current = initial.current;
   const manual = acquisition.decision_json
-    ? (JSON.parse(acquisition.decision_json) as { manualOffer?: MovieOffer })
+    ? (JSON.parse(acquisition.decision_json) as {
+        manualOffer?: MovieOffer;
+        feedOffers?: MovieOffer[];
+      })
     : null;
   await durableStep(ctx, "movie:storage", async () => {
     active();
@@ -113,15 +117,25 @@ export async function acquireMovie(
   };
   const priorKeys = new Set(initial.priorKeys);
   const excluded = new Set<string>();
+  let feedDownloadFailed = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     active();
     const prefix = `movie:attempt:${attempt}`;
+    const useFeed = Boolean(
+      manual?.feedOffers &&
+        (!feedDownloadFailed ||
+          manual.feedOffers.some((offer) => !excluded.has(offer.key))),
+    );
     emit(
       `${attempt}:search`,
-      "searching",
-      attempt
-        ? "Searching for another release; previous downloads are retained"
-        : "Searching movie releases",
+      useFeed ? "selecting" : "searching",
+      useFeed
+        ? "Considering releases received from indexer feeds"
+        : feedDownloadFailed
+          ? "Searching for a replacement after a failed feed download"
+          : attempt
+            ? "Searching for another release; previous downloads are retained"
+            : "Searching movie releases",
     );
     const { offer, selection } = await (async () => {
       for (let wave = 0; ; wave++) {
@@ -130,11 +144,14 @@ export async function acquireMovie(
           ctx,
           `${phase}:search`,
           async () =>
-            attempt === 0 && manual?.manualOffer
-              ? { offers: [manual.manualOffer], warnings: [] }
-              : services.search(movie),
+            useFeed && manual?.feedOffers
+              ? { offers: manual.feedOffers, warnings: [] }
+              : attempt === 0 && manual?.manualOffer
+                ? { offers: [manual.manualOffer], warnings: [] }
+                : services.search(movie),
         );
         const candidates = search.offers
+          .map((offer) => refreshMovieFeedOffer(ctx.repo, offer))
           .filter(
             (offer) =>
               !excluded.has(offer.key) &&
@@ -164,7 +181,9 @@ export async function acquireMovie(
             const selected = await services.decider.select({
               movie,
               policy,
-              offers: candidates,
+              offers: candidates.map((offer) =>
+                refreshMovieFeedOffer(ctx.repo, offer),
+              ),
               current,
             });
             if (
@@ -251,7 +270,9 @@ export async function acquireMovie(
       ctx,
       `${prefix}:metainfo`,
       async () =>
-        Buffer.from(await services.fetchMetainfo(offer)).toString("base64"),
+        Buffer.from(
+          await services.fetchMetainfo(refreshMovieFeedOffer(ctx.repo, offer)),
+        ).toString("base64"),
     );
     const metainfo = Buffer.from(encoded, "base64");
     const metadata = inspectMetainfo(metainfo);
@@ -346,6 +367,7 @@ export async function acquireMovie(
       else await Bun.sleep(interval);
     }
     if (!completed) {
+      feedDownloadFailed = Boolean(manual?.feedOffers);
       await durableStep(ctx, `${prefix}:stall`, async () => {
         active();
         await services.client.quiesce(ref);
@@ -415,6 +437,7 @@ export async function acquireMovie(
     });
     const chosen = files.find((file) => file.index === inspected.fileIndex);
     if (!chosen) {
+      feedDownloadFailed = Boolean(manual?.feedOffers);
       excluded.add(offer.key);
       emit(
         `${attempt}:invalid-content`,
@@ -429,6 +452,8 @@ export async function acquireMovie(
       assessed.eligibility !== "eligible" ||
       (current && !assessMovieUpgrade(policy, current, facts).upgrade)
     ) {
+      if (assessed.eligibility !== "eligible")
+        feedDownloadFailed = Boolean(manual?.feedOffers);
       excluded.add(offer.key);
       emit(
         `${attempt}:invalid-quality`,

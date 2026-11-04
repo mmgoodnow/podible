@@ -15,7 +15,7 @@ import {
   createFixtureMovieServices,
   fixtureMovie,
 } from "../fixtures/movie-services";
-test("new recovery is queued despite an older blocked event; automatic checks upgrade and debounce", async () => {
+test("reconciliation does not search; explicit recovery and upgrades preserve current content", async () => {
   const root = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "movie-maintenance-")),
   );
@@ -68,7 +68,9 @@ test("new recovery is queued despite an older blocked event; automatic checks up
       "UPDATE movie_acquisitions SET created_at='2020-01-01T00:00:00.000Z'",
     ).run();
     await reconcileMovies(ctx);
-    const upgrade = repo.movies.acquisitions(requested.targetId)[0]!;
+    expect(repo.movies.acquisitions(requested.targetId)).toHaveLength(2);
+    expect(fixture.stats.searches).toBe(2);
+    const upgrade = queueMovieAcquisition(repo, requested.targetId, "upgrade").acquisition;
     expect(upgrade.reason).toBe("upgrade");
     expect(movieRequestView(repo, requested.requestId).available).toBe(true);
     await acquireMovie(ctx, repo.getJob(upgrade.job_id!)!, fixture.services);

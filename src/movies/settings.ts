@@ -35,7 +35,6 @@ export const movieSettingsSchema = z
     plexSectionId: z.string().default(""),
     plexViewPath: z.string().default(""),
     automaticUpgrades: z.boolean().default(true),
-    searchIntervalHours: z.number().min(1).max(168).default(24),
     maximumReleaseBytes: z
       .number()
       .int()

@@ -9,6 +9,7 @@ export function queueMovieAcquisition(
   targetId: number,
   reason: MovieAcquisition["reason"],
   manualOffer?: MovieOffer,
+  feedOffers?: MovieOffer[],
 ) {
   return repo.transaction(() => {
     const queued = repo.movies.startAcquisition(
@@ -34,6 +35,8 @@ export function queueMovieAcquisition(
       );
       if (manualOffer)
         repo.movies.decision(queued.acquisition.id, { manualOffer });
+      else if (feedOffers)
+        repo.movies.decision(queued.acquisition.id, { feedOffers });
       for (const publication of repo.movies
         .publications()
         .filter((entry) => entry.target_id === targetId)) {

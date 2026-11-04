@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { MovieDualWrite } from "./movie-dual-write";
 import { MovieShadowAudit } from "./movie-shadow";
+import { IndexerFeeds } from "./indexer-feeds";
 
 export function MovieSync() {
   const [auditOpen, setAuditOpen] = useState(
@@ -10,6 +11,7 @@ export function MovieSync() {
     <>
       <h1>Movie sync</h1>
       <MovieDualWrite />
+      <IndexerFeeds />
       <details
         id="radarr-audit"
         className="panel"
