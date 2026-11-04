@@ -15,6 +15,8 @@ const indexerSchema = z.object({
   name: z.string(),
   enable: z.boolean(),
   supportsSearch: z.boolean().optional(),
+  supportsRss: z.boolean().optional(),
+  supportsPagination: z.boolean().optional(),
   protocol: z.enum(["torrent", "usenet"]),
   capabilities: z
     .object({ categories: z.array(categorySchema).nullable().optional() })
@@ -25,7 +27,7 @@ const indexerSchema = z.object({
     .nullable()
     .optional(),
 });
-export type DiscoveredIndexer = TorznabSource & { availableAfter?: number };
+export type DiscoveredIndexer = TorznabSource & { availableAfter?: number; supportsPagination?: boolean };
 
 /** Configured categories and temporary health are separate: outages never remove a source. */
 export class ProwlarrDiscovery {
@@ -110,6 +112,7 @@ export class ProwlarrDiscovery {
   }
   async sources(
     kind: "movie" | "audio" | "ebook",
+    mode: "search" | "rss" = "search",
   ): Promise<DiscoveredIndexer[]> {
     const wanted =
       kind === "movie" ? [2000] : kind === "audio" ? [3030] : [7020];
@@ -124,7 +127,7 @@ export class ProwlarrDiscovery {
       .filter(
         (i) =>
           i.enable &&
-          i.supportsSearch !== false &&
+          (mode === "rss" ? i.supportsRss !== false : i.supportsSearch !== false) &&
           i.protocol === "torrent" &&
           (!i.capabilities?.categories?.length ||
             supports(i.capabilities.categories)),
@@ -133,6 +136,7 @@ export class ProwlarrDiscovery {
         name: i.name,
         baseUrl: new URL(`${i.id}/api`, this.base()).href,
         apiKey: this.settings.apiKey,
+        supportsPagination: i.supportsPagination,
         // Missing capabilities may be a provider outage, not proof of no category support.
         availableAfter:
           Math.max(

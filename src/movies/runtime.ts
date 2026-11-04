@@ -12,7 +12,7 @@ import {
   DiscoveredMovieIndexers,
   fetchMovieMetainfo,
 } from "./offers";
-import { ProwlarrDiscovery } from "../media/prowlarr";
+import { indexerSources } from "../media/indexer-discovery";
 import { probeMovie } from "./probe";
 import type { MovieServices } from "./operations";
 import { movieRoots } from "./acquisition";
@@ -43,7 +43,9 @@ export function movieIndexers(settings: AppSettings) {
     indexers = {
       key,
       value: settings.prowlarr.url
-        ? new DiscoveredMovieIndexers(new ProwlarrDiscovery(settings.prowlarr))
+        ? new DiscoveredMovieIndexers({
+            sources: (kind, mode) => indexerSources(settings, kind, mode),
+          })
         : new MovieIndexers(settings.torznab),
     };
   return indexers!.value;

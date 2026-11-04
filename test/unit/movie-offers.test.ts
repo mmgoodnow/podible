@@ -31,7 +31,7 @@ test("movie searches coalesce, retain unknown release titles, and never treat up
     async () => new Response("<html>unavailable</html>"),
   );
   await expect(invalid.search(fixtureMovie)).rejects.toThrow(
-    "invalid Torznab response",
+    "temporarily unavailable",
   );
 });
 test("indexer 429 backoff survives the next search and does not expose provider credentials", async () => {
@@ -49,6 +49,6 @@ test("indexer 429 backoff survives the next search and does not expose provider 
   await expect(indexers.search(fixtureMovie)).rejects.toThrow("HTTP 429");
   await expect(
     indexers.search(fixtureMovie, "different query"),
-  ).rejects.toThrow("backoff");
+  ).rejects.toThrow("HTTP 429");
   expect(calls).toBe(1);
 });

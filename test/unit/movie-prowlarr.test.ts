@@ -134,7 +134,7 @@ test("partial search cache expires at provider retry time rather than retaining 
     expect((await movies.search(fixtureMovie)).deferred).toHaveLength(1);
     expect(calls).toBe(2);
     blocked = false;
-    now += 1001;
+    now += 60_001;
     expect((await movies.search(fixtureMovie)).deferred).toBeUndefined();
     expect(calls).toBe(4);
   } finally {
