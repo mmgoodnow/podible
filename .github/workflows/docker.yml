@@ -30,6 +30,7 @@ jobs:
       - run: bun run test/browser/movie-shadow.ts
       - run: docker build -t podible-transmission-test .
       - run: docker run --rm --network none -v "$PWD/test:/app/test:ro" --entrypoint bun podible-transmission-test run test/lab/transmission-inner.ts
+      - run: docker run --rm --network none -v "$PWD/test:/app/test:ro" --entrypoint bun podible-transmission-test run test/lab/book-migration-inner.ts
   docker:
     needs: verify
     uses: mmgoodnow/cd/.github/workflows/docker.yml@main

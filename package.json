@@ -9,6 +9,7 @@
     "dev": "bun --watch dev.ts",
     "build": "bun run scripts/build-web.ts",
     "dev-login": "bun run scripts/dev-login.ts",
+    "migrate:book-torrents": "bun run scripts/migrate-book-torrents.ts",
     "validate:runtime-scripts": "bun run scripts/validate-runtime-scripts.ts",
     "red-rising-dashboard": "bun run scripts/red-rising-dashboard.ts",
     "summarize-curation-run": "bun run scripts/summarize-curation-run.ts",
