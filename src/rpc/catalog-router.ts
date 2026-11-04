@@ -8,7 +8,7 @@ export const catalogRouter = defineRouter({
   available: defineMethod({ auth: "user", readOnly: true,
     summary: "Search already-published shared movies/TV without waiting on remote catalogs or exposing anyone's requests.",
     paramsSchema: z.object({ query: z.string().trim().max(200).default(""), limit: z.number().int().min(1).max(100).default(50) }).strict(),
-    resultSchema: z.object({ movies: z.array(catalogMovieSchema), tv: z.array(z.object({ entryId: id, key: z.string(), title: z.string(), year: z.number().nullable(), availableEpisodes: z.number().int().nonnegative() })), movieTruncated: z.boolean(), tvTruncated: z.boolean() }),
+    resultSchema: z.object({ movies: z.array(catalogMovieSchema), tv: z.array(z.object({ entryId: id, key: z.string(), title: z.string(), year: z.number().nullable(), posterUrl: tvCatalogEntrySchema.shape.posterUrl, availableEpisodes: z.number().int().nonnegative() })), movieTruncated: z.boolean(), tvTruncated: z.boolean() }),
     handler(ctx, input) {
       const movies = ctx.repo.movies.availableCatalog(input.query, input.limit + 1);
       const tv = ctx.repo.tv.availableCatalog(input.query, input.limit + 1);

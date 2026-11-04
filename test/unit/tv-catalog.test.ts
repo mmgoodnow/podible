@@ -42,6 +42,7 @@ test("TV discovery uses the shared token, bounded GET transport, cache/coalescin
   expect(detail.seasons[0]!.requestable).toBe(true);
   const mapped = await catalog.resolve(70);
   expect(mapped.key).toBe("tvdb:700"); expect(mapped.episodes[0]!.key).toBe("tvdb:7001");
+  expect(mapped.posterUrl).toBe("https://image.tmdb.org/t/p/w342/poster.jpg");
   expect(f.calls).toHaveLength(4);
   for (const call of f.calls) {
     const headers = new Headers(call.init?.headers);
@@ -124,6 +125,14 @@ test("configured catalog is reused without ignoring credential rotation", () => 
   expect(configuredTvCatalog(settings)).not.toBe(first);
 });
 
+test("SkyHook artwork is retained only from explicit public provider images when TMDB has no poster", async () => {
+  const posterUrl = "https://artworks.thetvdb.com/banners/posters/700.jpg";
+  const f = fixture({ tmdb: { ...details, poster_path: null }, skyhook: { ...skyhookShow, images: [{ coverType: "poster", url: posterUrl }] } });
+  const catalog = new TmdbTvCatalog("token", { url: "", apiKey: "" }, { fetcher: f.fetcher });
+  expect((await catalog.resolve(70)).posterUrl).toBe(posterUrl);
+  expect(f.calls).toHaveLength(2);
+});
+
 test("provider timeouts bound both response headers and streaming bodies, and concurrency is capped", async () => {
   for (const fetcher of [
     async () => new Promise<Response>(() => {}),
@@ -153,6 +162,7 @@ test("shows absent from Sonarr resolve stable TVDB aired identity via bounded GE
     const f = fixture({ series: [], skyhook: skyhookShow });
     const catalog = new TmdbTvCatalog("token", connection, { fetcher: f.fetcher });
     const result = await catalog.resolve(70);
+    expect(result.posterUrl).toBe("https://image.tmdb.org/t/p/w342/poster.jpg");
     expect(result.key).toBe("tvdb:700"); expect(result.episodes.map((ep) => ep.key)).toEqual(["tvdb:7001", "tvdb:7002"]);
     expect(result.episodes[1]!.numbering).toEqual([
       { scheme: "tvdb:aired", season: 2, episode: 2, absolute: null, source: "skyhook:v1:tvdb:aired:700" },

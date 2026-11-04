@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { AppSettings } from "../app-types";
 import { SonarrCatalog, type SonarrSeriesRef } from "./sonarr";
-import { tvCatalogEntrySchema, type TvCatalogEntry } from "./types";
+import { tvCatalogEntrySchema, tvPosterFromImages, type TvCatalogEntry } from "./types";
 import type { TvFetcher } from "./upstream";
 
 const id = z.number().int().positive().safe();
@@ -72,6 +72,7 @@ const providerDate = z.union([z.iso.date(), z.literal("")]).nullable().optional(
 const skyhookShowSchema = z.object({
   tvdbId: id, tmdbId: z.number().int().nonnegative().nullable().optional(), title: z.string().min(1),
   runtime: z.number().nonnegative().nullable().optional(),
+  images: z.unknown().optional(),
   episodes: z.array(z.object({
     tvdbId: id, tvdbShowId: id.optional(), seasonNumber: z.number().int().nonnegative(), episodeNumber: id,
     title: z.string().default(""), airDate: providerDate,
@@ -215,7 +216,7 @@ export class TmdbTvCatalog implements TvCatalog {
     raw ??= await this.skyhook(metadata);
     if (raw.tvdbId !== metadata.external_ids.tvdb_id)
       throw new TvCatalogError("TMDB and canonical catalog disagree on TVDB work identity; correct the mapping before requesting.", "unsupported");
-    return canonicalTvSeasons(raw, metadata.id);
+    return canonicalTvSeasons({ ...raw, posterUrl: summary(metadata).posterUrl ?? raw.posterUrl ?? null }, metadata.id);
   }
   private async skyhook(metadata: z.infer<typeof tmdbDetails>): Promise<TvCatalogEntry> {
     const tvdbId = metadata.external_ids.tvdb_id!;
@@ -237,7 +238,7 @@ export class TmdbTvCatalog implements TvCatalog {
       throw new TvCatalogError("TMDB/SkyHook work or episode ownership disagrees; correct the provider identity mapping before requesting.", "unsupported");
     return { key: `tvdb:${tvdbId}`, tvdbId, tmdbId: metadata.id, title: show.title,
       aliases: [...new Set([metadata.name, metadata.original_name].filter((name) => name !== show.title))],
-      year: summary(metadata).year, anime: false, source, relations: [],
+      year: summary(metadata).year, posterUrl: summary(metadata).posterUrl ?? tvPosterFromImages(show.images), anime: false, source, relations: [],
       refs: [ { provider: "tvdb", id: String(tvdbId), source }, { provider: "tmdb", id: String(metadata.id), source: "tmdb:external_ids" } ],
       episodes: show.episodes.map((episode) => ({
         key: `tvdb:${episode.tvdbId}`, title: episode.title,

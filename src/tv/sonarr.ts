@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { TvCatalogEntry } from "./types";
+import { tvPosterFromImages, tvPosterUrl, type TvCatalogEntry } from "./types";
 import {
   approvedSeerrTv,
   sonarrInstance,
@@ -31,6 +31,8 @@ const seriesSchema = z.object({
   alternateTitles: z.array(z.object({ title: z.string() })).max(1000).nullable().optional(),
   year: z.number().int().nonnegative().nullable().optional(),
   seriesType: z.enum(["standard", "daily", "anime"]),
+  images: z.unknown().optional(),
+  remotePoster: z.unknown().optional(),
 });
 const episodeSchema = z.object({
   id: localId,
@@ -92,6 +94,7 @@ export class SonarrCatalog {
       title: this.#http.clean(series.title),
       aliases: [...new Set((series.alternateTitles ?? []).map((a) => this.#http.clean(a.title)).filter(Boolean))],
       year: series.year || null,
+      posterUrl: tvPosterFromImages(series.images) ?? tvPosterUrl(series.remotePoster),
       anime: series.seriesType === "anime",
       source,
       refs: [
@@ -146,7 +149,7 @@ export class SonarrCatalog {
     return this.#entry(series, episodes);
   }
 
-  async resolve(ref: SonarrSeriesRef): Promise<TvCatalogEntry> {
+  async #resolveSeries(ref: SonarrSeriesRef): Promise<SeriesWire> {
     const parsed = tvWire("sonarr", z.object({
       tvdbId: localId.nullable().optional(),
       tmdbId: localId.nullable().optional(),
@@ -159,14 +162,22 @@ export class SonarrCatalog {
     if (parsed.sonarrSeriesId) {
       const series = await this.#series(parsed.sonarrSeriesId);
       if (!matches(series)) throw new TvUpstreamError("sonarr", "local series ID failed the external identity cross-check");
-      return this.#catalog(series);
+      return series;
     }
     const series = tvWire("sonarr", z.array(seriesSchema).max(10_000),
       await this.#http.get(known(parsed.tvdbId) ? `series?tvdbId=${parsed.tvdbId}` : "series"));
     const candidates = series.filter(matches);
     if (candidates.length !== 1)
       throw new TvUpstreamError("sonarr", candidates.length ? "ambiguous external series identity" : "series not found by external identity");
-    return this.#catalog(candidates[0]!);
+    return candidates[0]!;
+  }
+
+  async resolve(ref: SonarrSeriesRef): Promise<TvCatalogEntry> { return this.#catalog(await this.#resolveSeries(ref)); }
+
+  /** Artwork-only intake: exact work cross-check, no episode/release search or external mutation. */
+  async poster(ref: SonarrSeriesRef): Promise<string | null> {
+    const series = await this.#resolveSeries(ref);
+    return tvPosterFromImages(series.images) ?? tvPosterUrl(series.remotePoster);
   }
 
   async get(key: string): Promise<TvCatalogEntry> {

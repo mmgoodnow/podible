@@ -28,7 +28,8 @@ test("shared local catalog is user-safe, published-only, bounded and independent
   addMovie(11, "Shared Movie", true);
   addMovie(12, "Private Pending Movie", false);
   addMovie(13, "Shared Second Movie", true);
-  const tv = repo.tv.requestSeasons(owner.id, fixtureTvEntry(), settings.movies.qualityPolicy, [1]);
+  const posterUrl = "https://artworks.thetvdb.com/banners/posters/700.jpg";
+  const tv = repo.tv.requestSeasons(owner.id, { ...fixtureTvEntry(), posterUrl }, settings.movies.qualityPolicy, [1]);
   const acquisition = repo.tv.startAcquisition(tv.targetId, "initial", () => repo.createJob({ type: "metadata_hydration", status: "succeeded" }).id, tv.requestId).acquisition;
   const fileId = randomUUID();
   const version = repo.tv.recordVersion(acquisition.id, { identityVerified: true }, [{ id: fileId, relativePath: `files/${fileId.slice(0, 2)}/${fileId}.mkv`, sizeBytes: 10, probe: {}, episodeIds: [tv.episodeIds[0]!] }]);
@@ -49,7 +50,7 @@ test("shared local catalog is user-safe, published-only, bounded and independent
     expect(limited.movies).toHaveLength(1); expect(limited.movieTruncated).toBe(true);
     const all = (await rpc("catalog.available")).result;
     expect(all.movies.map((m: any) => m.title).sort()).toEqual(["Shared Movie", "Shared Second Movie"]);
-    expect(all.tv).toHaveLength(1); expect(all.tv[0]).toMatchObject({ title: "A Work", availableEpisodes: 1 });
+    expect(all.tv).toHaveLength(1); expect(all.tv[0]).toMatchObject({ title: "A Work", availableEpisodes: 1, posterUrl });
     expect((await rpc("catalog.available", { query: "Another Title" })).result.tv).toHaveLength(1);
     expect(JSON.stringify(all)).not.toContain("Private");
     expect(JSON.stringify(all)).not.toContain("requestId");
@@ -61,10 +62,13 @@ test("shared local catalog is user-safe, published-only, bounded and independent
     const followed = await rpc("movies.request", { tmdbId: 11 });
     expect(followed.result.request.available).toBe(true);
     const detail = (await rpc("catalog.tvEntry", { entryId: tv.entryId })).result;
-    expect(detail.availableEpisodes).toBe(1); expect(detail.entry.title).toBe("A Work");
+    expect(detail.availableEpisodes).toBe(1); expect(detail.entry.title).toBe("A Work"); expect(detail.entry.posterUrl).toBe(posterUrl);
     expect(JSON.stringify(detail)).not.toContain("Private owner");
     expect((await rpc("catalog.tvEntry", { entryId: 999 })).error.code).toBe(-32602);
     const routes = await handle(new Request("http://localhost/tv/library/1"));
     expect(routes.status).toBe(200);
+    db.query("UPDATE tv_entries SET metadata_json=json_remove(metadata_json,'$.posterUrl') WHERE id=?").run(tv.entryId);
+    expect((await rpc("catalog.available")).result.tv[0].posterUrl).toBeNull();
+    expect((await rpc("catalog.tvEntry", { entryId: tv.entryId })).result.entry.posterUrl).toBeNull();
   } finally { db.close(); }
 });

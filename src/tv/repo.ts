@@ -6,7 +6,7 @@ import { assertTorrentUseWritable } from "../media/torrent-use";
 import type { JobRow } from "../app-types";
 import type { DownloadLocation, TorrentRef, TorrentSnapshot } from "../media/torrent-client";
 import {
-  tvCatalogEntrySchema, tvContentFileSchema, tvStages,
+  tvCatalogEntrySchema, tvContentFileSchema, tvPosterUrlSchema, tvStages,
   type TvAcquisition, type TvActiveEpisode, type TvCatalogEntry,
   type TvContentFile, type TvEntry, type TvEpisode, type TvEvent,
   type TvExternalRef, type TvPolicy, type TvPublication, type TvRequest,
@@ -66,6 +66,8 @@ export class TvRepo {
     return this.transaction(() => {
       const now = new Date().toISOString();
       const { episodes, relations, refs, ...metadata } = catalog;
+      const previous = this.db.query("SELECT metadata_json FROM tv_entries WHERE catalog_key=?").get(catalog.key) as { metadata_json: string } | null;
+      metadata.posterUrl ??= previous ? tvPosterUrlSchema.parse(JSON.parse(previous.metadata_json).posterUrl) : null;
       const row = this.db.query(`INSERT INTO tv_entries(catalog_key,metadata_json,updated_at) VALUES(?,?,?)
         ON CONFLICT(catalog_key) DO UPDATE SET metadata_json=excluded.metadata_json,updated_at=excluded.updated_at RETURNING id`)
         .get(catalog.key, json(metadata), now) as { id: number };
@@ -115,8 +117,9 @@ export class TvRepo {
   entry(id: number): TvEntry | null {
     const row = this.db.query("SELECT metadata_json FROM tv_entries WHERE id=?").get(id) as { metadata_json: string } | null;
     if (!row) return null;
+    const metadata = JSON.parse(row.metadata_json);
     return {
-      ...JSON.parse(row.metadata_json), id, refs: this.refs("entry", id), episodes: this.episodes(id),
+      ...metadata, posterUrl: tvPosterUrlSchema.parse(metadata.posterUrl), id, refs: this.refs("entry", id), episodes: this.episodes(id),
       relations: this.db.query(`SELECT related_key AS key,title,relation,source FROM tv_entry_relations
         WHERE entry_id=? ORDER BY related_key,relation,source`).all(id),
     } as TvEntry;
@@ -134,9 +137,9 @@ export class TvRepo {
         OR EXISTS(SELECT 1 FROM json_each(e.metadata_json,'$.aliases') alias WHERE instr(lower(alias.value),lower(?)) > 0)
       GROUP BY e.id ORDER BY e.id DESC LIMIT ?`).all(query, query, limit) as { id: number; catalog_key: string; metadata_json: string; availableEpisodes: number }[])
       .map(row => {
-        const metadata = tvCatalogEntrySchema.pick({ title: true, year: true }).parse(JSON.parse(row.metadata_json));
+        const metadata = tvCatalogEntrySchema.pick({ title: true, year: true, posterUrl: true }).parse(JSON.parse(row.metadata_json));
         return { entryId: row.id, key: row.catalog_key, title: metadata.title,
-          year: metadata.year, availableEpisodes: row.availableEpisodes };
+          year: metadata.year, posterUrl: metadata.posterUrl, availableEpisodes: row.availableEpisodes };
       });
   }
   availableEpisodeCount(entryId: number): number {
@@ -145,6 +148,27 @@ export class TvRepo {
   }
   entries(): TvEntry[] {
     return (this.db.query("SELECT id FROM tv_entries ORDER BY id").all() as { id: number }[]).map((r) => this.entry(r.id)!);
+  }
+
+  missingArtwork(afterId: number, limit = 3) {
+    return (this.db.query(`SELECT id,metadata_json FROM tv_entries WHERE json_extract(metadata_json,'$.posterUrl') IS NULL
+      ORDER BY CASE WHEN id>? THEN 0 ELSE 1 END,id LIMIT ?`).all(afterId, limit) as { id: number; metadata_json: string }[])
+      .map(row => ({ ...tvCatalogEntrySchema.pick({ key: true, tvdbId: true, tmdbId: true, posterUrl: true }).parse(JSON.parse(row.metadata_json)),
+        id: row.id, refs: this.refs("entry", row.id) }));
+  }
+
+  updateArtwork(expected: ReturnType<TvRepo["missingArtwork"]>[number], posterUrl: string): boolean {
+    const poster = tvPosterUrlSchema.parse(posterUrl);
+    if (!poster) return false;
+    return this.transaction(() => {
+      const row = this.db.query("SELECT metadata_json FROM tv_entries WHERE id=?").get(expected.id) as { metadata_json: string } | null;
+      if (!row) return false;
+      const metadata = JSON.parse(row.metadata_json);
+      if (metadata.key !== expected.key || metadata.tvdbId !== expected.tvdbId || metadata.tmdbId !== expected.tmdbId ||
+          tvPosterUrlSchema.parse(metadata.posterUrl) !== null || json(this.refs("entry", expected.id)) !== json(expected.refs)) return false;
+      return Number(this.db.query("UPDATE tv_entries SET metadata_json=json_set(metadata_json,'$.posterUrl',?),updated_at=? WHERE id=?")
+        .run(poster, new Date().toISOString(), expected.id).changes) === 1;
+    });
   }
 
   episode(id: number, entryId?: number): TvEpisode | null {

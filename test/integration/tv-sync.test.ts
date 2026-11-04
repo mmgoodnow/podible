@@ -8,7 +8,9 @@ import { finalizeJobJournalMigration, runMigrations } from "../../src/db";
 import { createPodibleFetchHandler } from "../../src/http";
 import { seerrInstance } from "../../src/movies/seerr";
 import { BooksRepo } from "../../src/repo";
-import { syncTvRequests, tvSeerrFeedKey, tvSyncPayloadSchema, type TvSyncServices } from "../../src/tv/sync";
+import { hydrateMissingTvArtwork, syncTvRequests, tvSeerrFeedKey, tvSyncPayloadSchema, type TvSyncServices } from "../../src/tv/sync";
+import { SonarrCatalog } from "../../src/tv/sonarr";
+import { sonarrInstance } from "../../src/tv/upstream";
 import type { TvCatalogEntry } from "../../src/tv/types";
 import type { SeerrTvRequest } from "../../src/tv/upstream";
 import type { WorkerContext } from "../../src/worker/context";
@@ -126,6 +128,107 @@ test("TV sync activation never backfills history and future-only approved season
     expect(s.calls.latest).toBe(1);
     expect(s.calls.requests).toEqual([]);
     expect(s.repo.getJsonState<{ baselineId: number }>(s.feedKey)!.baselineId).toBe(100);
+  } finally { await s.close(); }
+});
+
+test("normal TV sync hydrates three old unmodified origins per pass, persists its cursor and changes artwork only", async () => {
+  const s = await setup();
+  try {
+    const connection = { url: s.repo.getSettings().tv.sonarrUrl, apiKey: s.repo.getSettings().tv.sonarrApiKey };
+    const instance = sonarrInstance(connection.url);
+    const user = s.repo.upsertUser({ provider: "local", providerUserId: "old-artwork", username: "Old viewer", isAdmin: false });
+    const ids: number[] = [];
+    for (let number = 1; number <= 4; number++) {
+      const entry = { ...catalog(), key: `tvdb:${1000 + number}`, tvdbId: 1000 + number, tmdbId: 2000 + number,
+        refs: [{ provider: "sonarr" as const, id: String(number), instance, source: "sonarr:series" }] };
+      ids.push(s.repo.tv.requestApproved({ userId: user.id, entry, policy: {}, episodeKeys: [entry.episodes[0]!.key],
+        origin: { instance: s.instance, externalRequestId: number, source: { request: sourceRequest(number) } } }).entryId);
+    }
+    s.db.query("UPDATE tv_entries SET metadata_json=json_remove(metadata_json,'$.posterUrl')").run();
+    expect(s.repo.tv.entry(ids[0]!)!.posterUrl).toBeNull();
+    const originalMetadata = ids.map(id => s.repo.tv.entry(id)!);
+    const unchanged = () => ["tv_entry_refs", "tv_episodes", "tv_episode_numbering", "tv_targets", "tv_requests", "tv_request_episodes", "tv_acquisitions"]
+      .map(table => s.db.query(`SELECT * FROM ${table}`).all());
+    const before = unchanged();
+    const calls: number[] = [];
+    s.services.catalog = new SonarrCatalog(connection, async (input, init) => {
+      expect(s.db.inTransaction).toBe(false);
+      const url = new URL(String(input));
+      expect(init?.method).toBe("GET");
+      const number = Number(/^\/base\/api\/v3\/series\/([1-4])$/.exec(url.pathname)?.[1]);
+      expect(number).toBeGreaterThan(0); calls.push(number);
+      return Response.json({ id: number, tvdbId: 1000 + number, tmdbId: 2000 + number, title: "Provider title must not overwrite work", seriesType: "standard",
+        images: [{ coverType: "poster", url: "/MediaCover/private.jpg", remoteUrl: `https://artworks.thetvdb.com/banners/posters/${number}.jpg` }] });
+    });
+    s.services.source.changes = async since => ({ requests: [], through: since });
+    await s.sync();
+    expect(calls).toEqual([1, 2, 3]);
+    expect(s.repo.tv.entry(ids[3]!)!.posterUrl).toBeNull();
+    expect(s.repo.getJsonState<number>(`tv-artwork-cursor:${instance}`)).toBe(ids[2]!);
+    s.reopen();
+    await s.sync();
+    expect(calls).toEqual([1, 2, 3, 4]);
+    expect(unchanged()).toEqual(before);
+    for (const [index, id] of ids.entries()) {
+      const entry = s.repo.tv.entry(id)!;
+      expect(entry.posterUrl).toBe(`https://artworks.thetvdb.com/banners/posters/${index + 1}.jpg`);
+      expect({ ...entry, posterUrl: null }).toEqual({ ...originalMetadata[index]!, posterUrl: null });
+    }
+    s.repo.tv.upsertEntry({ ...originalMetadata[0]!, posterUrl: null });
+    expect(s.repo.tv.entry(ids[0]!)!.posterUrl).toBe("https://artworks.thetvdb.com/banners/posters/1.jpg");
+    const count = calls.length;
+    s.repo.tv.entries(); s.repo.tv.availableCatalog("", 50);
+    expect(calls).toHaveLength(count);
+    expect(s.nativeOutbox()).toEqual([]);
+  } finally { await s.close(); }
+});
+
+test.each(["identity", "refs", "configuration", "cancelled"] as const)("artwork hydration refuses stale writes after %s changes during I/O", async change => {
+  const s = await setup();
+  try {
+    const settings = s.repo.getSettings(), connection = { url: settings.tv.sonarrUrl, apiKey: settings.tv.sonarrApiKey };
+    const instance = sonarrInstance(connection.url);
+    const entry = s.repo.tv.upsertEntry({ ...catalog(), refs: [{ provider: "sonarr", id: "7", instance, source: "sonarr:series" }] });
+    let active = true;
+    s.context.execution = { key: "artwork-test", assertActive() { if (!active) throw new Error("Cancelled"); }, async run(_name, action) { return action(); }, async sleep() {} };
+    const catalogReader = new SonarrCatalog(connection, async () => {
+      if (change === "identity") s.db.query("UPDATE tv_entries SET metadata_json=json_set(metadata_json,'$.tmdbId',999) WHERE id=?").run(entry.id);
+      if (change === "refs") s.db.query("UPDATE tv_entry_refs SET external_id='8' WHERE provider='sonarr'").run();
+      if (change === "configuration") { settings.tv.sonarrApiKey = "rotated"; s.repo.updateSettings(settings); }
+      if (change === "cancelled") active = false;
+      return Response.json({ id: 7, tvdbId: entry.tvdbId, tmdbId: entry.tmdbId, title: "Known", seriesType: "standard",
+        images: [{ coverType: "poster", remoteUrl: "https://artworks.thetvdb.com/banners/posters/p.jpg" }] });
+    });
+    if (["configuration", "cancelled"].includes(change))
+      await expect(hydrateMissingTvArtwork(s.context, catalogReader)).rejects.toThrow();
+    else await hydrateMissingTvArtwork(s.context, catalogReader);
+    expect(s.repo.tv.entry(entry.id)!.posterUrl).toBeNull();
+    expect(s.nativeOutbox()).toEqual([]);
+  } finally { await s.close(); }
+});
+
+test("artwork checkpoint replay retains the original identity guard instead of rebinding cached artwork", async () => {
+  const s = await setup();
+  try {
+    const connection = { url: s.repo.getSettings().tv.sonarrUrl, apiKey: s.repo.getSettings().tv.sonarrApiKey };
+    const instance = sonarrInstance(connection.url);
+    const entry = s.repo.tv.upsertEntry({ ...catalog(), refs: [{ provider: "sonarr", id: "7", instance, source: "sonarr:series" }] });
+    const checkpoints = new Map<string, unknown>(); let crash = true, calls = 0;
+    s.context.execution = { key: "artwork-replay", assertActive() {}, async sleep() {}, async run<T>(name: string, action: () => T | Promise<T>): Promise<T> {
+      if (checkpoints.has(name)) return checkpoints.get(name) as T;
+      if (name.startsWith("tv-artwork:write:") && crash) { crash = false; throw new Error("Lost write step"); }
+      const result = await action(); checkpoints.set(name, result); return result;
+    } };
+    const reader = new SonarrCatalog(connection, async () => {
+      calls++;
+      return Response.json({ id: 7, tvdbId: entry.tvdbId, tmdbId: entry.tmdbId, title: "Known", seriesType: "standard",
+        images: [{ coverType: "poster", remoteUrl: "https://artworks.thetvdb.com/banners/posters/old.jpg" }] });
+    });
+    await expect(hydrateMissingTvArtwork(s.context, reader)).rejects.toThrow("Lost write step");
+    s.db.query("UPDATE tv_entry_refs SET external_id='8' WHERE provider='sonarr'").run();
+    await hydrateMissingTvArtwork(s.context, reader);
+    expect(calls).toBe(1);
+    expect(s.repo.tv.entry(entry.id)!.posterUrl).toBeNull();
   } finally { await s.close(); }
 });
 

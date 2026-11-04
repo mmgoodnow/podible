@@ -1,5 +1,27 @@
 import { z } from "zod";
 
+/** Only public provider artwork, never credentialed/local Sonarr media-cover URLs. */
+export function tvPosterUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > 4096) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password || url.port || url.search || url.hash) return null;
+    const allowed = url.hostname === "image.tmdb.org" ? /^\/t\/p\/(?:w\d+|original)\/[a-zA-Z0-9._-]+$/.test(url.pathname)
+      : ["artworks.thetvdb.com", "thetvdb.com", "www.thetvdb.com"].includes(url.hostname) && url.pathname.startsWith("/banners/");
+    return allowed ? url.href : null;
+  } catch { return null; }
+}
+export const tvPosterUrlSchema = z.string().refine(value => tvPosterUrl(value) !== null).nullable().catch(null).default(null);
+export function tvPosterFromImages(images: unknown): string | null {
+  if (!Array.isArray(images) || images.length > 100) return null;
+  for (const image of images) {
+    if (!image || typeof image !== "object" || typeof image.coverType !== "string" || image.coverType.toLowerCase() !== "poster") continue;
+    const poster = tvPosterUrl(image.remoteUrl) ?? tvPosterUrl(image.url);
+    if (poster) return poster;
+  }
+  return null;
+}
+
 export const tvProviders = ["tmdb", "tvdb", "anilist", "anidb", "sonarr"] as const;
 export const tvCatalogKeySchema = z.string().regex(
   /^(?:(?:tvdb|tmdb|anilist|anidb):[1-9]\d*|sonarr:.+:[1-9]\d*)$/,
@@ -52,6 +74,7 @@ export const tvCatalogEntrySchema = z.object({
   title: z.string().min(1),
   aliases: z.array(z.string()),
   year: z.number().int().nullable(),
+  posterUrl: tvPosterUrlSchema,
   // Provider enrichment hint only. Work hierarchy/relations/numbering are generic, not gated by animation.
   anime: z.boolean(),
   episodes: z.array(tvCatalogEpisodeSchema),

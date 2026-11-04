@@ -89,8 +89,12 @@ test("strict SEASON selection has no episode-level surface and unsupported mappi
 test("native requests select all known season episodes including future/undated, exclude other seasons, and deduplicate concurrent submissions", async () => {
   const s = await setup();
   try {
+    const posterUrl = "https://image.tmdb.org/t/p/w342/native.jpg";
+    s.fixture.setEntry({ ...s.fixture.entry(), posterUrl });
     const [first, second] = await Promise.all([s.call("request", { tmdbId: 70, seasonNumbers: [1] }), s.call("request", { tmdbId: 70, seasonNumbers: [1] })]) as any[];
     const request = first.request;
+    expect(request.entry.posterUrl).toBe(posterUrl);
+    expect(await s.call("myRequests")).toMatchObject({ requests: [{ entry: { posterUrl } }] });
     expect(second.request.requestId).toBe(request.requestId);
     expect(request.seasonNumbers).toEqual([1]); expect(request.requestedEpisodes).toBe(3); expect(request.futureEpisodes).toBe(2);
     expect(s.repo.tv.requestedEpisodes(request.requestId).map((ep) => ep.key)).toEqual(["tvdb:7001", "tvdb:7002", "tvdb:7003"]);

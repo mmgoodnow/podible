@@ -19,9 +19,45 @@ const legacyOriginSourceSchema = z.object({ episodeLimit: z.number() });
 export function tvSeerrFeedKey(instance: string) { return `tv-seerr-feed:${instance}`; }
 export type TvSyncServices = {
   source: SeerrTvSource;
-  catalog: Pick<SonarrCatalog, "resolveSeerr">;
+  catalog: Pick<SonarrCatalog, "resolveSeerr"> & Partial<Pick<SonarrCatalog, "poster" | "instance">>;
   enrich: (entry: TvCatalogEntry) => Promise<AnimeCatalogProjection>;
 };
+
+/** Backfill old, unchanged works without loading episodes or doing HTTP on Library reads. */
+export async function hydrateMissingTvArtwork(ctx: WorkerContext, supplied?: TvSyncServices["catalog"]) {
+  const settings = ctx.getSettings();
+  if (!settings.tv.sonarrUrl || !settings.tv.sonarrApiKey || (supplied && !supplied.poster)) return;
+  let catalog: TvSyncServices["catalog"];
+  try { catalog = supplied ?? new SonarrCatalog({ url: settings.tv.sonarrUrl, apiKey: settings.tv.sonarrApiKey }); }
+  catch { workerLog(ctx, "[tv-artwork] Sonarr artwork configuration unavailable; existing artwork retained"); return; }
+  if (!catalog.poster || !catalog.instance) return;
+  const configuration = JSON.stringify([settings.tv.sonarrUrl, settings.tv.sonarrApiKey]);
+  const active = () => {
+    ctx.execution?.assertActive();
+    const current = ctx.getSettings();
+    if (JSON.stringify([current.tv.sonarrUrl, current.tv.sonarrApiKey]) !== configuration)
+      throw new Error("TV artwork connection changed during refresh");
+  };
+  const cursorKey = `tv-artwork-cursor:${catalog.instance}`;
+  const cursor = ctx.repo.getJsonState<number>(cursorKey) ?? 0;
+  const batch = ctx.repo.tv.missingArtwork(cursor, 3);
+  for (const entry of batch) {
+    active();
+    const refs = entry.refs.filter(ref => ref.provider === "sonarr" && ref.instance === catalog.instance && /^[1-9]\d*$/.test(ref.id));
+    const fetched = await durableStep(ctx, `tv-artwork:read:${entry.id}`, async () => {
+      active();
+      if (refs.length !== 1 || (!entry.tvdbId && !entry.tmdbId)) return { entry, poster: null };
+      try { return { entry, poster: await catalog.poster!({ sonarrSeriesId: Number(refs[0]!.id), tvdbId: entry.tvdbId, tmdbId: entry.tmdbId }) }; }
+      catch { active(); workerLog(ctx, `[tv-artwork] metadata unavailable for entry=${entry.id}; existing artwork retained`); return { entry, poster: null }; }
+    });
+    await durableStep(ctx, `tv-artwork:write:${entry.id}`, () => ctx.repo.transaction(() => {
+      active();
+      if (fetched.poster) ctx.repo.tv.updateArtwork(fetched.entry, fetched.poster);
+      ctx.repo.setJsonState(cursorKey, entry.id);
+    }));
+  }
+}
+
 export function configuredTvSyncServices(ctx: WorkerContext): TvSyncServices {
   const settings = ctx.getSettings();
   return { source: new SeerrTvClient(settings.movies.seerr),
@@ -31,6 +67,8 @@ export async function syncTvRequests(ctx: WorkerContext, job: JobRow,
   services?: TvSyncServices, nativeCatalog?: TvCatalog): Promise<"done"> {
   const input = tvSyncPayloadSchema.parse(JSON.parse(job.payload_json ?? "{}"));
   const settings = ctx.getSettings();
+  if (!input.backfillRequestIds && settings.tv.sonarrUrl && settings.tv.sonarrApiKey)
+    await hydrateMissingTvArtwork(ctx, services?.catalog ?? ctx.tvSyncServices?.catalog);
   if (!input.backfillRequestIds && ctx.repo.tv.requests().some((request) => !request.withdrawn_at && nativeTvRequestScope(request))) {
     const nativeConfiguration = () => JSON.stringify([
       ctx.getSettings().movies.tmdbAccessToken, ctx.getSettings().tv.sonarrUrl, ctx.getSettings().tv.sonarrApiKey,

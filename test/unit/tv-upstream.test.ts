@@ -19,6 +19,7 @@ const modified = "2026-11-03T12:00:00.000Z";
 const series = {
   id: 17, tvdbId: 307375, tmdbId: 67075, title: "Mob Psycho 100",
   alternateTitles: [{ title: "Mob Psycho" }], year: 2016, seriesType: "anime",
+  images: [{ coverType: "poster", url: "/sonarr/MediaCover/17/poster.jpg", remoteUrl: "https://artworks.thetvdb.com/banners/posters/307375.jpg" }],
 };
 const episode = {
   id: 172, seriesId: 17, tvdbId: 5704031, title: "Episode title",
@@ -62,6 +63,23 @@ async function failure(action: Promise<unknown>): Promise<TvUpstreamError> {
 }
 
 describe("TV GET transport", () => {
+  test("artwork-only reads use exact Sonarr identity, public remote images and no episode or search requests", async () => {
+    const f = catalogFixture();
+    const catalog = new SonarrCatalog(connection, f.fetcher);
+    expect(await catalog.poster({ sonarrSeriesId: 17, tvdbId: 307375, tmdbId: 67075 }))
+      .toBe("https://artworks.thetvdb.com/banners/posters/307375.jpg");
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]!.url.pathname).toBe("/sonarr/api/v3/series/17");
+    expect((await catalog.resolve({ sonarrSeriesId: 17, tvdbId: 307375 })).posterUrl)
+      .toBe("https://artworks.thetvdb.com/banners/posters/307375.jpg");
+    await expect(catalog.poster({ sonarrSeriesId: 17, tvdbId: 999 })).rejects.toThrow("identity cross-check");
+    for (const remoteUrl of ["http://artworks.thetvdb.com/banners/p.jpg", "https://artworks.thetvdb.com/banners/p.jpg?apikey=secret",
+      "https://private.invalid/poster.jpg", "https://user:pass@artworks.thetvdb.com/banners/p.jpg", undefined]) {
+      const invalid = catalogFixture([{ ...series, images: [{ coverType: "poster", remoteUrl, url: "/MediaCover/17/poster.jpg" }] }]);
+      expect(await new SonarrCatalog(connection, invalid.fetcher).poster({ sonarrSeriesId: 17, tvdbId: 307375 })).toBeNull();
+    }
+  });
+
   test("preserves URL bases, refuses redirects and keeps credentials out of objects", async () => {
     const f = catalogFixture();
     const catalog = new SonarrCatalog(connection, f.fetcher);

@@ -12,7 +12,7 @@ const episode: TvEpisode = { id: 12, key: "tvdb:1001", title: "First of a sequel
   numbering: [{ scheme: "tvdb-aired", season: 2, episode: 1, absolute: null, source: "fixture" },
     { scheme: "anidb", season: 1, episode: 1, absolute: null, source: "fixture" }] };
 const entry: TvEntry = { id: 3, key: "anidb:200", title: "A Sequel", aliases: ["An Aggregate Series"], year: 2020,
-  anime: true, tvdbId: 100, tmdbId: null, episodes: [episode], refs: [], relations: [
+  posterUrl: null, anime: true, tvdbId: 100, tmdbId: null, episodes: [episode], refs: [], relations: [
     { key: "anidb:199", title: "A Prequel", relation: "PREQUEL", source: "fixture" }] };
 const offer = { key: "release", title: "An Aggregate Series 02x01", provider: "Fixture", sizeBytes: 1234,
   seeders: 3, infoHash: null, url: "https://private.invalid/torrent?passkey=hidden", attributes: { secret: "hidden" } };
