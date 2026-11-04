@@ -142,17 +142,28 @@ for (const [kind, index] of [["movies", 0], ["tv", 1]] as const) {
     expect(f.repo.listJobsByType(kind === "movies" ? "movie_acquire" : "tv_acquire")).toHaveLength(0);
   });
 
-  test(`${kind}: lost selected canonical bytes are unsupported, not a false acquisition success`, async () => {
+  test(`${kind}: lost selected canonical bytes invalidate selection and atomically queue replacement without losing demand`, async () => {
     await using f = await fixture();
     const version = await f.addVersion(kind), key = f.keys[index]!;
     await fs.unlink(version.canonical);
     const resource = f.preview(key);
     expect(resource.canonical.state).toBe("missing");
-    expect(resource.action).toBe("blocked");
-    expect(codes(resource)).toContain("unsupported-repair");
-    expect(f.service.recover(f.command(key, "queue-acquisition")).results[0]!.status).toBe("blocked");
-    if (kind === "tv") expect(f.repo.tv.missingEpisodes(f.requestedTv.requestId)).toHaveLength(0);
-    expect(f.repo.listJobsByType(kind === "movies" ? "movie_acquire" : "tv_acquire")).toHaveLength(0);
+    expect(resource.action).toBe("queue-acquisition");
+    const command = f.command(key, "queue-acquisition"), result = f.service.recover(command);
+    expect(result.results[0]!.status).toBe("queued");
+    expect(f.service.recover(command)).toEqual(result);
+    if (kind === "tv") {
+      expect(f.repo.tv.missingEpisodes(f.requestedTv.requestId)).toHaveLength(2);
+      expect(() => f.repo.tv.stagePublication(f.requestedTv.targetId, version.versionId)).toThrow("confirmed missing");
+    } else {
+      expect(f.repo.movies.target(f.requestedMovie.targetId)!.active_version_id).toBeNull();
+      expect(() => f.repo.movies.selectVersion(f.requestedMovie.targetId, version.versionId, 2)).toThrow("confirmed missing");
+      expect(() => f.repo.movies.stagePublication(f.requestedMovie.targetId, version.versionId)).toThrow("confirmed missing");
+    }
+    expect(f.repo.listJobsByType(kind === "movies" ? "movie_acquire" : "tv_acquire")).toHaveLength(1);
+    expect(f.repo.retention.get(key)).toMatchObject({ desiredPresence: "present", actualPresence: "missing" });
+    expect(f.db.query("SELECT file_id FROM media_content_losses").all()).toEqual([{ file_id: version.file.id }]);
+    expect(kind === "movies" ? f.repo.movies.version(version.versionId) : f.repo.tv.version(version.versionId)).not.toBeNull();
   });
 
   test(`${kind}: intentional eviction and withdrawal never create new demand`, async () => {
@@ -215,6 +226,49 @@ test("outbox failure rolls back acquisition, job, and success receipt; exact ope
   f.db.exec("DROP TRIGGER reject_recovery_command");
   expect(f.service.recover(command).results[0]!.status).toBe("queued");
   expect(f.repo.listJobCommands()).toHaveLength(1);
+});
+
+for (const [kind, index] of [["movies", 0], ["tv", 1]] as const) {
+  test(`${kind}: loss invalidation, tombstones, presence observation and jobs roll back together on outbox failure`, async () => {
+    await using f = await fixture();
+    const version = await f.addVersion(kind), key = f.keys[index]!;
+    await f.modern();
+    await fs.unlink(version.canonical);
+    const selection = kind === "movies" ? f.repo.movies.target(f.requestedMovie.targetId) : f.repo.tv.activeEpisodes(f.requestedTv.targetId);
+    const intent = f.repo.retention.get(key), command = f.command(key, "queue-acquisition");
+    f.db.exec("CREATE TRIGGER reject_loss_outbox BEFORE INSERT ON job_commands BEGIN SELECT RAISE(ABORT,'loss outbox unavailable'); END");
+    expect(() => f.service.recover(command)).toThrow("loss outbox unavailable");
+    expect(kind === "movies" ? f.repo.movies.target(f.requestedMovie.targetId) : f.repo.tv.activeEpisodes(f.requestedTv.targetId)).toEqual(selection);
+    expect(f.repo.retention.get(key)).toEqual(intent);
+    expect(f.db.query("SELECT * FROM media_content_losses").all()).toEqual([]);
+    expect(f.repo.listJobCommands()).toHaveLength(0);
+    f.db.exec("DROP TRIGGER reject_loss_outbox");
+    expect(f.service.recover(command).results[0]!.status).toBe("queued");
+    expect(f.repo.listJobCommands()).toHaveLength(2);
+  });
+}
+
+test("a missing file restored before command is not invalidated or reacquired", async () => {
+  await using f = await fixture();
+  const version = await f.addVersion("movies"), bytes = await fs.readFile(version.canonical), key = f.keys[0]!;
+  await fs.unlink(version.canonical);
+  const command = f.command(key, "queue-acquisition");
+  await fs.writeFile(version.canonical, bytes);
+  expect(codes(f.service.recover(command).results[0]!)).toContain("stale-revision");
+  expect(f.repo.movies.target(f.requestedMovie.targetId)!.active_version_id).toBe(version.versionId);
+  expect(f.db.query("SELECT * FROM media_content_losses").all()).toEqual([]);
+});
+
+test("loss shared by another selected target blocks single-target invalidation", async () => {
+  await using f = await fixture();
+  const version = await f.addVersion("movies"), key = f.keys[0]!;
+  const other = f.repo.movies.request(f.user.id, movie, { ...defaultMovieQualityPolicy, cut: "alternate" });
+  f.repo.movies.selectVersion(other.targetId, version.versionId, f.repo.movies.target(other.targetId)!.revision);
+  await fs.unlink(version.canonical);
+  expect(codes(f.preview(key))).toContain("loss-invalidation-blocked");
+  expect(f.service.recover(f.command(key, "queue-acquisition")).results[0]!.status).toBe("blocked");
+  expect(f.repo.movies.target(f.requestedMovie.targetId)!.active_version_id).toBe(version.versionId);
+  expect(f.db.query("SELECT * FROM media_content_losses").all()).toEqual([]);
 });
 
 test("revision fences reject changed policy, canonical bytes, withdrawal and intent without fallback", async () => {

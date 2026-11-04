@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { assertVersionContentAvailable } from "../media/content-loss";
 import type { JobRow } from "../app-types";
 import type { DownloadLocation, TorrentRef, TorrentSnapshot } from "../media/torrent-client";
 import {
@@ -475,6 +476,7 @@ export class TvRepo {
 
   stagePublication(targetId: number, versionId: number, expectedRevision?: number): void {
     this.transaction(() => {
+      assertVersionContentAvailable(this.db, "tv", versionId);
       const { target } = this.ownedVersion(targetId, versionId);
       const prior = this.publications().find((p) => p.target_id === targetId);
       if (prior) {
@@ -492,6 +494,7 @@ export class TvRepo {
 
   promotePublication(targetId: number, versionId: number, expectedRevision: number): void {
     this.transaction(() => {
+      assertVersionContentAvailable(this.db, "tv", versionId);
       const { target, version } = this.ownedVersion(targetId, versionId);
       const publication = this.publications().find((p) => p.target_id === targetId);
       if (!publication || publication.version_id !== versionId || publication.expected_revision !== expectedRevision)

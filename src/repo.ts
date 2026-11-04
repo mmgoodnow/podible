@@ -8,6 +8,7 @@ import { BookTorrentsRepo } from "./media/book-torrents";
 import { TvRepo } from "./tv/repo";
 import { RetentionRepo } from "./media/retention-repo";
 import { readRecoveryInventory, type RecoveryReadInput } from "./media/recovery-query";
+import { ContentLossRepo } from "./media/content-loss";
 import { TvShadowRepo } from "./tv/shadow-repo";
 
 import { nowIso, finalizeJobJournalMigration } from "./db";
@@ -257,6 +258,7 @@ export class BooksRepo {
   get tv() { return new TvRepo(this.db, this.beforeWrite, (id) => this.getJob(id)); }
   get tvShadow() { return new TvShadowRepo(this.db, this.beforeWrite, (id) => this.getJob(id)); }
   get retention() { return new RetentionRepo(this.db, this.beforeWrite); }
+  get contentLoss() { return new ContentLossRepo(this.db, this.beforeWrite, (id) => this.getJob(id)); }
   constructor(
     private readonly db: Database,
     private readonly beforeWrite: () => void = () => {},

@@ -20,6 +20,7 @@ import type { MovieServices, MovieFileCandidate } from "./operations";
 import { readTransmissionIdentity } from "../media/managed-transmission";
 import { movieUpstreamStep } from "./upstream";
 import { refreshMovieFeedOffer } from "./feed-offers";
+import { recoverMissingTorrentSource } from "../media/recovery-source";
 
 export const movieAcquisitionPayloadSchema = z.object({
   acquisitionId: z.number().int().positive(),
@@ -83,13 +84,16 @@ export async function acquireMovie(
       throw new Error("Movie target is intentionally evicted; only an explicit re-request restores demand");
   };
   active();
-  const initial = await durableStep(ctx, "movie:target-snapshot", () => ({
+  const initial = await durableStep(ctx, "movie:target-snapshot", () => {
+    const retry = new Set(ctx.repo.contentLoss.retryDownloads({ namespace: "movie-target", id: String(target.id) }).map(d => d.offer_key));
+    return {
     policy: JSON.parse(target.policy_json),
     current: target.active_version_id
       ? repo.version(target.active_version_id)!.facts
       : null,
-    priorKeys: repo.downloads(target.id).map((download) => download.offer_key),
-  }));
+    priorKeys: repo.downloads(target.id).map((download) => download.offer_key).filter(key => !retry.has(key)),
+    lossRecoveryKeys: [...retry],
+  }; });
   const policy = movieQualityPolicySchema.parse(initial.policy);
   const current = initial.current;
   const manual = acquisition.decision_json
@@ -315,6 +319,8 @@ export async function acquireMovie(
       return added;
     });
     const downloadId = repo.torrent(ref.clientId, ref.nativeId)!.id;
+    if (initial.lossRecoveryKeys?.includes(offer.key))
+      await recoverMissingTorrentSource({ ctx, client: services.client, ref, sourceRoot, metadata, prefix, active });
     emit(`${attempt}:download`, "downloading", `Downloading ${offer.title}`);
     let lastBytes = -1;
     let progressedAt = 0;

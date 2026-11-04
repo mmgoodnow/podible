@@ -91,8 +91,12 @@ upstream release; the application's normal RSS intake remains responsible.
 These checks establish local implementation/acceptance, not production rollout
 verification. Normal CD handles deployment. A genuine production quality upgrade
 is still unverified. TV/seed-store eviction, automatic torrent retirement and
-full lost-array rebuild remain unfinished; selected-but-missing media recovery
-is explicitly blocked until domain selection invalidation is implemented.
+full lost-array rebuild remain unfinished. Confirmed selected-byte loss now has
+atomic domain invalidation/outbox recovery (schema 51), including equal-quality
+movie replacement and exact TV file-coverage repair. Unknown/replaced mounts,
+shared selected files and unsupported reselection remain blocked. Intact seed
+sources are reused without rechecking; explicitly retried missing source bytes
+trigger only that source's verification before download can resume.
 
 Do not manually deploy, remove foreign library content, delete seed data, or
 manufacture completion of downloads/releases that have not actually arrived.

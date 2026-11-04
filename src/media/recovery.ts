@@ -95,6 +95,14 @@ export class RecoveryService {
         if (this.quickFence(fresh) !== fresh.fence)
           return blocked("stale-revision", "Targeted recovery fence changed; no action was taken.");
         const jobIds: number[] = [];
+        const missingSelected = fresh.resource.canonical.files.filter(file => file.selected && file.presence === "missing").map(file => file.id);
+        if (command.action === "queue-acquisition" && missingSelected.length) {
+          this.repo.contentLoss.invalidate(command.key, fresh.resource.targetRevision!, missingSelected, params.operationId);
+          jobIds.push(this.repo.createJob({
+            type: command.key.namespace === "movie-target" ? "movie_reconcile" : "tv_reconcile",
+            idempotencyKey: `recovery-view:${params.operationId}:${keyString(command.key)}`, maxAttempts: 3,
+          }).id);
+        }
         if (command.action === "repair-view") {
           repairRecoveryView(fresh.mount, fresh.entries, fresh.view);
         } else if (command.key.namespace === "movie-target") {
@@ -224,6 +232,20 @@ export class RecoveryService {
       resource.canonical.state = mount.state !== "verified" ? "unknown" : !selected ? "not-selected"
         : selectedFiles.some(({ observation }) => observation.presence === "unknown") ? "unknown"
         : selectedFiles.some(({ observation }) => observation.presence === "missing") ? "missing" : "present";
+      const missingSelectedIds = selectedFiles.filter(item => item.observation.presence === "missing").map(item => item.file.id);
+      if (missingSelectedIds.length) {
+        const conflict = this.repo.contentLoss.check(key, target.revision, missingSelectedIds);
+        if (conflict) block("loss-invalidation-blocked", conflict);
+        if (!movie) {
+          const missing = new Set(missingSelectedIds);
+          const lostEpisodes = new Set(versions.flatMap(version => "episodeIds" in version
+            ? version.files.filter(file => missing.has(file.id)).flatMap(file => file.episodeIds) : []));
+          queueRequestIds = [...new Set([...queueRequestIds, ...activeRequests.filter(request =>
+            this.repo.tv.requestedEpisodes(Number(request.id)).some(ep => lostEpisodes.has(ep.id) && ep.airDate && Date.parse(ep.airDate) <= Date.now()))
+            .map(request => Number(request.id))])];
+          missingDemand = queueRequestIds.length > 0;
+        } else missingDemand = true;
+      }
       fileEvidence = observations.map(({ file, observation }) => [file.id, file.relativePath, file.sizeBytes, observation]);
       const viewFence = recoveryViewFence(mount, entries);
       view = observeRecoveryView(mount, entries);
@@ -240,14 +262,12 @@ export class RecoveryService {
       if (resource.activeAcquisitions.length) block("active-acquisition", "An existing acquisition owns this target; wait or inspect its existing job.");
       if (publications.length) block("active-publication", "A publication is pending; recovery will not race its ownership.");
       if (observations.some(({ observation }) => observation.presence === "unknown")) block("canonical-unverified", "Canonical paths/types/sizes or ownership cannot be verified.");
-      if (selected && resource.canonical.state === "missing") block("unsupported-repair",
-        movie ? "Selected movie bytes are missing, but acquisition treats its selected version as upgrade-only. Safe selection invalidation is not supported by this API."
-          : "Selected TV bytes are missing, but acquisition uses DB episode availability. Safe episode invalidation is not supported by this API.");
-      if (missingDemand && observations.some(({ file, observation }) => !selectedPaths.has(file.relativePath) && observation.presence === "present"))
+      if (!missingSelectedIds.length && missingDemand && observations.some(({ file, observation }) => !selectedPaths.has(file.relativePath) && observation.presence === "present"))
         block("unsupported-repair", "Retained nonselected owned content survives. Safe republication/reselection requires domain verification; no replacement download was queued.");
       if (["conflict", "unknown"].includes(view.state)) block("view-unverified", "View ownership is unknown or a foreign/conflicting path exists; nothing is overwritten.");
       if (!resource.reasons.length) {
-        resource.action = selected && view.state === "missing" ? "repair-view" : missingDemand ? "queue-acquisition" : "none";
+        resource.action = missingSelectedIds.length && missingDemand ? "queue-acquisition"
+          : selected && view.state === "missing" ? "repair-view" : missingDemand ? "queue-acquisition" : "none";
         if (resource.action !== "none" && (files.length > 20 || database.links.length > 20 || entries.length > 20 || acquisitions.length > 20 || versions.length > 20 ||
             JSON.stringify(database).length > 65536 || JSON.stringify(view.manifest).length > 65536)) {
           block("mutation-limit", "Recovery mutation exceeds its short-fence budget (20 files/versions/acquisitions, 64 KiB metadata). Preview remains read-only.");

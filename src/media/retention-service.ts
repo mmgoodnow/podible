@@ -327,7 +327,8 @@ export class RetentionService {
       }
     }
     if (options.wholeResource) {
-      const retired = new Set(this.repo.retention.retiredFileIds(targetId));
+      const retired = new Set([...this.repo.retention.retiredFileIds(targetId),
+        ...this.repo.contentLoss.fileIds({ namespace: "movie-target", id: String(targetId) })]);
       const selected = new Set(associations.filter((association) => association.version_id === target.active_version_id).map((association) => association.file_id));
       for (let index = files.length - 1; index >= 0; index--)
         if (files[index]!.presence === "missing" && retired.has(files[index]!.id) && !selected.has(files[index]!.id)) files.splice(index, 1);

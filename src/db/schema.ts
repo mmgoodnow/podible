@@ -187,6 +187,14 @@ export interface DB {
     "acquisition_key": string | null;
   };
 
+  "media_content_losses": {
+    "file_id": string;
+    "namespace": string;
+    "target_id": number;
+    "operation_id": string;
+    "observed_at": string;
+  };
+
   "media_torrents": {
     "id": Generated<number>;
     "client_id": string;

@@ -92,20 +92,36 @@ a verified mount, no competing acquisition/publication, and no unsupported reuse
 case. It calls `queueMovieAcquisition(..., "recovery")` or
 `queueTvAcquisition(originalRequestId, "recovery")` inside the existing transaction.
 It preserves original requests and intent and atomically commits acquisition,
-job/outbox command, and recovery receipt. TV queues only requests with genuinely
-unselected aired episodes. This command itself performs no search or download;
+job/outbox command, and recovery receipt. TV queues requests with unselected aired
+episodes, including coverage invalidated by confirmed loss. This command itself performs no search or download;
 explicitly queued existing acquisition may later perform its ordinary search.
 There are no periodic searches or automatic recovery/download actions.
 
+### Confirmed Selected-Content Loss
+
+On a verified mount, absent selected canonical paths can be recovered through the
+same explicit `queue-acquisition` action. Migration 51 adds `media_content_losses`,
+a durable per-file absence record. `ContentLossRepo` fences target revision,
+active demand, competing acquisition/publication and shared selections. In the
+same transaction as the acquisition/outbox/receipt, it clears the missing movie
+selection or only the exact lost TV file's episode coverage, observes missing
+presence without changing desired presence, and queues view reconciliation.
+Multi-episode coverage is invalidated together. Existing requests, versions,
+surviving canonical bytes, torrent records and seed data are retained.
+
+Old publication retries cannot reselect a tombstoned version. New acquisition may
+retry a previously successful source whose adopted copy was lost, while prior
+rejected releases remain excluded. Movies no longer require a quality upgrade
+to replace absent bytes. TV reuses verified surviving pack data through its
+existing exact source/provenance checks and imports into new canonical file IDs.
+Unknown/missing mounts and changed/wrong-size/noncanonical files are not absence
+evidence and remain blocked. Shared active selections require joint invalidation
+and are blocked rather than partially updated. Repaired bytes appearing before
+the command invalidate its preview revision.
+
 ### Unsupported Cases
 
-Selected movie bytes can be physically missing while the database still selects
-the version. Existing acquisition then applies upgrade-only policy. Selected TV
-bytes can be physically missing while `missingEpisodes()` reports no missing
-episodes. Enqueueing either is **not** a supported repair. Recovery returns
-`blocked` / `unsupported-repair`, retaining selection and requests unchanged.
-Safe selection invalidation needs an additional domain API, not direct recovery
-SQL writes or a false successful queued job. Surviving nonselected versions also
+Surviving nonselected versions still
 block replacement acquisition when republication/reselection cannot be safely
 verified through the existing APIs. Historical torrent/seed-store reuse is not
 invented from size, title, last-known completion, or a pathname.
@@ -163,4 +179,6 @@ intentional eviction, withdrawal, missing/replaced mounts, actual canonical loss
 foreign/symlinked paths, surviving-content reuse, strict admin APIs, large
 unrelated episode inventory, query/writer budgets, and exclusion of another WAL
 writer during the filesystem fence. They do not claim production Plex recovery,
-network acquisition success, or support for blocked selected-byte invalidation.
+production network acquisition success. Real Reflow fixtures verify equal-quality
+movie recovery and exact TV episode reimport without a new snatch, plus atomic
+loss/outbox rollback and retained request/history/surviving-file identities.

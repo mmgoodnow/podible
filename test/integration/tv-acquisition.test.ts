@@ -20,6 +20,8 @@ import { tvSourceSchema } from "../../src/tv/source-reuse";
 import type { WorkerContext } from "../../src/worker/context";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
 import { createFixtureMovieServices, fixtureMovie } from "../fixtures/movie-services";
+import { RecoveryService } from "../../src/media/recovery";
+import { randomUUID } from "node:crypto";
 
 function catalog(): TvCatalogEntry {
   return {
@@ -201,6 +203,37 @@ function seasonCatalog(count: number, future = false) {
     numbering: [{ scheme: "tvdb:aired", season: 2, episode: index + 1, absolute: index + 13, source: "explicit-fixture" }] }));
   return entry;
 }
+
+test("canonical loss invalidates only its exact TV file coverage and reimports a retained pack without replacing surviving episodes", async () => {
+  const entry = seasonCatalog(3), s = await setup(entry.episodes.map(ep => ep.key), entry);
+  let runtime: Runtime | undefined;
+  try {
+    const key = { namespace: "tv-target" as const, id: String(s.request.targetId) };
+    s.repo.retention.request(key, { expectedRevision: 0, reason: "Explicit recovery test demand" });
+    s.fixture.addPack("loss-season", entry.episodes.map(ep => ep.key));
+    const first = s.enqueue();
+    runtime = await createJobExecutionRuntime(s.context, path.join(s.root, "execution.sqlite"), { retryDelayMs: 1 });
+    await until(runtime, () => s.repo.getJob(first.job_id!)?.status === "succeeded", () => "Initial TV publication");
+    const version = s.repo.tv.versionSources(s.request.targetId)[0]!.version, missing = version.files[1]!;
+    const survivor = path.join(s.roots.contentRoot, version.files[0]!.relativePath), before = await fs.stat(survivor);
+    await fs.unlink(path.join(s.roots.contentRoot, missing.relativePath));
+    const recovery = new RecoveryService(s.repo), resource = recovery.preview({ targets: [key] }).resources[0]!;
+    expect(resource.action, JSON.stringify(resource.reasons)).toBe("queue-acquisition");
+    const result = recovery.recover({ operationId: randomUUID(), targets: [{ key, expectedRevision: resource.revision, action: "queue-acquisition" }] });
+    expect(result.results[0]!.status).toBe("queued");
+    expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(2);
+    expect(s.repo.tv.missingEpisodes(s.request.requestId).map(ep => ep.id)).toEqual(missing.episodeIds);
+    await until(runtime, () => result.results[0]!.jobIds.every(id => s.repo.getJob(id)?.status === "succeeded"), () => "TV loss recovery");
+    expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(3);
+    expect(s.repo.tv.missingEpisodes(s.request.requestId)).toHaveLength(0);
+    const after = await fs.stat(survivor);
+    expect([after.ino, after.mtimeMs]).toEqual([before.ino, before.mtimeMs]);
+    expect(s.fixture.stats.snatches).toBe(1);
+    expect(s.fixture.stats.searches).toBe(1);
+    await assertOwnedViews(s);
+    expect(() => s.repo.tv.stagePublication(s.request.targetId, version.id)).toThrow("confirmed missing");
+  } finally { await runtime?.stop(); await s.close(); }
+});
 
 test("a successful season pack among failed sibling bindings supplies all newly approved aired episodes without another search or snatch", async () => {
   const input = seasonCatalog(53, true), keys = input.episodes.map((episode) => episode.key);

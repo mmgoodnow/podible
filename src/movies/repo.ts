@@ -21,6 +21,7 @@ import {
 } from "./quality";
 import { assessMovieUpgrade, evaluateMovieQuality } from "./quality";
 import { RetentionRepo } from "../media/retention-repo";
+import { assertVersionContentAvailable } from "../media/content-loss";
 
 export type MovieTarget = {
   id: number;
@@ -488,6 +489,7 @@ export class MovieRepo {
     expectedRevision: number,
   ): void {
     this.transaction(() => {
+      assertVersionContentAvailable(this.db, "movie", versionId);
       const target = this.target(targetId);
       const version = this.db
         .query("SELECT movie_id FROM movie_versions WHERE id=?")
@@ -524,6 +526,7 @@ export class MovieRepo {
   }
   stagePublication(targetId: number, versionId: number): void {
     this.transaction(() => {
+      assertVersionContentAvailable(this.db, "movie", versionId);
       const target = this.target(targetId);
       const version = this.version(versionId);
       const owner = this.db

@@ -49,6 +49,7 @@ export function createFixtureMovieServices(root: string) {
     scans: 0,
     removals: 0,
     quiesces: 0,
+    rechecks: 0,
   };
   const payloads = new Map<
     string,
@@ -217,7 +218,7 @@ export function createFixtureMovieServices(root: string) {
         stats.quiesces++;
         downloads.get(ref.nativeId)!.resumed = false;
       },
-      recheck: async () => {},
+      recheck: async (ref) => { stats.rechecks++; downloads.get(ref.nativeId)!.resumed = false; },
       resume: async (ref) => {
         downloads.get(ref.nativeId)!.resumed = true;
       },

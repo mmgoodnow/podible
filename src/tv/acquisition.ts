@@ -18,6 +18,7 @@ import type { TvContentFile } from "./types";
 import type { MovieOffer } from "../movies/offers";
 import { refreshTvFeedOffer } from "./feed";
 import { completeTvSource, recordedLegacyTvSource, reusableTvSources, tvSourceFiles, tvSourceSchema, type TvSource } from "./source-reuse";
+import { recoverMissingTorrentSource } from "../media/recovery-source";
 
 export async function tvUpstreamStep<T>(ctx: WorkerContext, name: string, action: () => Promise<T>): Promise<T> {
   for (let attempt = 0; attempt < (ctx.execution ? Infinity : 3); attempt++) {
@@ -70,8 +71,10 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
   const snapshot = await durableStep(ctx, "tv:target-snapshot", async () => {
     const episodeIds = repo.missingEpisodes(requestId).filter((episode) => episode.airDate && Date.parse(episode.airDate) <= Date.now()).map((episode) => episode.id);
     const reuse = await reusableTvSources(ctx.repo, target.id, acquisition.id, episodeIds);
-    return { episodeIds, priorKeys: repo.downloads(target.id).map((download) => download.offer_key), policy: JSON.parse(target.policy_json),
-      priorHashes: repo.downloads(target.id).map((download) => download.native_id), sourceReuse: true,
+    const retry = ctx.repo.contentLoss.retryDownloads({ namespace: "tv-target", id: String(target.id) });
+    return { episodeIds, priorKeys: repo.downloads(target.id).map((download) => download.offer_key).filter(key => !retry.some(d => d.offer_key === key)), policy: JSON.parse(target.policy_json),
+      priorHashes: repo.downloads(target.id).map((download) => download.native_id).filter(hash => !retry.some(d => d.native_id === hash)), sourceReuse: true,
+      lossRecoveryHashes: retry.map(d => d.native_id),
       reuseSources: reuse.sources, consumedSources: reuse.consumed };
   });
   const episodes = snapshot.episodeIds.map((id) => repo.episode(id, entry.id)!);
@@ -219,6 +222,8 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
         active(); repo.bindDownload(acquisition.id, added, location, offer.key); return added;
       });
       const downloadId = repo.torrent(ref.clientId, ref.nativeId)!.id;
+      if (snapshot.lossRecoveryHashes?.includes(metadata.infoHash))
+        await recoverMissingTorrentSource({ ctx, client: services.client, ref, sourceRoot, metadata, prefix, active });
       emit(`${attempt}:downloading`, "downloading", `Downloading ${offer.title}`);
       let complete = false, lastBytes = -1, progressedAt = 0, startedAt = 0;
       for (let poll = 0; poll < 20_000; poll++) {
