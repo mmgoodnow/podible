@@ -30,7 +30,7 @@ try {
   page.on("request", (request) => { const path = new URL(request.url()).pathname; if (path.startsWith("/api/trpc/")) requests.push(path); });
   const identityGate = new Promise<void>((resolve) => { releaseIdentity = resolve; });
   await page.route("**/api/trpc/auth.me**", async (route) => { await identityGate; await route.continue(); });
-  await page.goto(new URL("/library", origin).href);
+  await page.goto(new URL("/library?media=books", origin).href);
   await page.locator(".book-card").nth(47).waitFor();
   assert.equal(await page.locator(".book-card").count(), 48);
   assert.equal(requests.filter((path) => path.includes("library.bootstrap")).length, 1);
@@ -53,7 +53,7 @@ try {
   await page.waitForFunction("document.querySelectorAll('.book-card').length === 1");
   assert.equal(requests.some((path) => path.includes("library.list")), true, "Filtering and pagination must keep using their own query keys");
   requests.length = 0;
-  await page.goto(new URL("/library?q=Piranesi", origin).href);
+  await page.goto(new URL("/library?media=books&q=Piranesi", origin).href);
   await page.getByRole("link", { name: /Piranesi Susanna Clarke/ }).waitFor();
   assert.equal(await page.locator(".book-card").count(), 1, "Filtered bootstrap was seeded with the unfiltered page");
   assert.equal(requests.filter((path) => path.includes("library.bootstrap")).length, 1);
@@ -63,7 +63,7 @@ try {
   readerContext.setDefaultTimeout(15_000);
   await readerContext.addCookies([{ name: "podible_session", value: "book-spa-reader", url: origin, httpOnly: true }]);
   const readerPage = await readerContext.newPage();
-  await readerPage.goto(origin);
+  await readerPage.goto(new URL("/library?media=books", origin).href);
   await readerPage.locator(".book-card").nth(47).waitFor();
   assert.equal(await readerPage.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Settings", exact: true }).count(), 0);
   const anonymous = await browser.newContext();

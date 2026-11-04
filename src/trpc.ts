@@ -78,6 +78,8 @@ export const appRouter = t.router({
     collect: procedure.input(stewardshipRouter.routes.collect.paramsSchema).output(stewardshipRouter.routes.collect.resultSchema).mutation(({ ctx, input }) => executeMethod(stewardshipRouter.routes.collect, ctx, input)),
   }),
   catalog: t.router({
+    recent: procedure.input(catalogRouter.routes.recent.paramsSchema).output(catalogRouter.routes.recent.resultSchema).query(({ ctx, input }) => executeMethod(catalogRouter.routes.recent, ctx, input)),
+    discovery: procedure.input(catalogRouter.routes.discovery.paramsSchema).output(catalogRouter.routes.discovery.resultSchema).query(({ ctx, input }) => executeMethod(catalogRouter.routes.discovery, ctx, input)),
     available: procedure.input(catalogRouter.routes.available.paramsSchema).output(catalogRouter.routes.available.resultSchema).query(({ ctx, input }) => executeMethod(catalogRouter.routes.available, ctx, input)),
     tvEntry: procedure.input(catalogRouter.routes.tvEntry.paramsSchema).output(catalogRouter.routes.tvEntry.resultSchema).query(({ ctx, input }) => executeMethod(catalogRouter.routes.tvEntry, ctx, input)),
   }),

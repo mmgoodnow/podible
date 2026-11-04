@@ -3,8 +3,19 @@ import { defineMethod, defineRouter } from "./framework";
 import { RpcError } from "./shared";
 import { catalogMovieSchema } from "../movies/types";
 import { tvCatalogEntrySchema } from "../tv/types";
+import { homeRecentSchema } from "../media/home-recent";
+import { homeDiscovery, homeDiscoverySchema } from "../media/home-discovery";
 const id = z.number().int().positive();
 export const catalogRouter = defineRouter({
+  recent: defineMethod({ auth: "user", readOnly: true,
+    summary: "Bounded shared library rails ordered by verified publication and actual episode air dates.",
+    paramsSchema: z.object({ limit: z.number().int().min(1).max(20).default(12) }).strict(),
+    resultSchema: homeRecentSchema,
+    handler(ctx, input) { return ctx.repo.readHomeRecent(input); } }),
+  discovery: defineMethod({ auth: "user", readOnly: true,
+    summary: "Server-cached public trending lists using the existing TMDB configuration, without per-card lookups.",
+    paramsSchema: z.object({}).strict(), resultSchema: homeDiscoverySchema,
+    handler(ctx) { return homeDiscovery.get(ctx.repo.readSettings()?.movies.tmdbAccessToken); } }),
   available: defineMethod({ auth: "user", readOnly: true,
     summary: "Search already-published shared movies/TV without waiting on remote catalogs or exposing anyone's requests.",
     paramsSchema: z.object({ query: z.string().trim().max(200).default(""), limit: z.number().int().min(1).max(100).default(50) }).strict(),

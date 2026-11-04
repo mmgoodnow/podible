@@ -10,6 +10,12 @@ const originalFetch = globalThis.fetch;
 globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
   if (url.hostname === "api.themoviedb.org") {
+    if (url.pathname === "/3/trending/movie/week" || url.pathname === "/3/trending/tv/week") return Response.json({ results: Array.from({ length: 14 }, (_, i) => ({
+      id: i === 0 ? url.pathname.includes("/movie/") ? 42 : 70 : 1000 + i,
+      title: i === 0 ? "Piranesi on Screen" : `Trending movie ${i}`,
+      name: i === 0 ? "Piranesi Series" : `Trending series ${i}`,
+      poster_path: `/poster${i}.jpg`, release_date: "2026-01-01", first_air_date: "2026-01-01", adult: false,
+    })) });
     if (url.pathname === "/3/search/movie") return Response.json({ results: [{ id: 42, title: "Piranesi on Screen", original_title: "Piranesi on Screen", overview: "Fixture movie", original_language: "en", release_date: "2020-01-01" }] });
     if (url.pathname === "/3/search/tv") return Response.json({ results: [{ id: 70, name: "Piranesi Series", original_name: "Piranesi Series", overview: "Fixture TV", first_air_date: "2099-01-01" }] });
     if (url.pathname === "/3/tv/70") return Response.json({ id: 70, name: "Piranesi Series", original_name: "Piranesi Series", overview: "Fixture TV", first_air_date: "2099-01-01", external_ids: { tvdb_id: 700 }, seasons: [

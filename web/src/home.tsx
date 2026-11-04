@@ -7,6 +7,7 @@ import { AddCandidate, Failure, Library } from "./books";
 import { Link, useLocation } from "./router";
 import { ScreenCard } from "./screen-card";
 import { movieBadge, movieDetail, tvBadge, tvDetail } from "./screen-status";
+import { ContentRail, RailBook } from "./content-rail";
 
 type Media = "all" | "books" | "movies" | "tv";
 const mediaTypes: Media[] = ["all", "books", "movies", "tv"];
@@ -37,9 +38,12 @@ export function UnifiedLibrary({ initialPage }: {
   const booksShown = media === "all" || media === "books";
   const moviesShown = media === "all" || media === "movies";
   const tvShown = media === "all" || media === "tv";
+  const homeRails = media === "all" && !q.trim();
+  const recent = useQuery(trpc.catalog.recent.queryOptions({ limit: 12 }, { enabled: homeRails, staleTime: 60_000 }));
+  const discovery = useQuery(trpc.catalog.discovery.queryOptions({}, { enabled: homeRails, staleTime: 10 * 60_000, retry: false }));
   const movies = useQuery(trpc.requests.list.queryOptions({}, { enabled: moviesShown, refetchInterval: 15_000 }));
   const tv = useQuery(trpc.tv.myRequests.queryOptions({}, { enabled: tvShown, refetchInterval: 15_000 }));
-  const available = useQuery(trpc.catalog.available.queryOptions({ query: localQ, limit: 50 }, { enabled: moviesShown || tvShown, refetchInterval: 15_000 }));
+  const available = useQuery(trpc.catalog.available.queryOptions({ query: localQ, limit: 50 }, { enabled: !homeRails && (moviesShown || tvShown), refetchInterval: 15_000 }));
   const movieStatus = useQuery(trpc.movies.status.queryOptions({}, { enabled: moviesShown && Boolean(remoteQ) }));
   const remoteBooks = useQuery(trpc.openlibrary.search.queryOptions({ q: remoteQ, limit: 20 }, { enabled: booksShown && Boolean(remoteQ), staleTime: 10 * 60_000 }));
   const remoteMovies = useQuery(trpc.movies.search.queryOptions({ query: remoteQ }, { enabled: moviesShown && Boolean(remoteQ) && movieStatus.data?.catalogConfigured === true, staleTime: 10 * 60_000 }));
@@ -55,13 +59,14 @@ export function UnifiedLibrary({ initialPage }: {
   const pendingMovies = movieItems.filter(request => !request.available);
   const readyTv = tvItems.filter(request => request.availableEpisodes > 0 && !request.intentionallyAbsent);
   const pendingTv = tvItems.filter(request => request.availableEpisodes === 0 || request.intentionallyAbsent);
-  const movieCard = (request: MovieRequest) => <ScreenCard key={`request:${request.id}`} title={request.movie.title} year={request.movie.year}
+  const outstandingTv = tvItems.filter(request => request.intentionallyAbsent || request.availableEpisodes < request.requestedEpisodes);
+  const movieCard = (request: MovieRequest) => <ScreenCard key={`request:movie:${request.id}`} title={request.movie.title} year={request.movie.year}
     posterUrl={request.movie.posterUrl} href={`/requests/${request.id}`} media="movie" badge={movieBadge(request)} source="Your request"
     detail={movieDetail(request)}
     progress={!request.available && request.state === "running" && request.stage === "downloading" && request.download?.bytesDone != null && request.download.sizeBytes != null ? {
       value: request.download.bytesDone, max: request.download.sizeBytes, label: `${request.movie.title} download progress`,
     } : undefined} />;
-  const tvCard = (request: TvRequest) => <ScreenCard key={`request:${request.requestId}`} title={request.entry.title} year={request.entry.year} posterUrl={request.entry.posterUrl ?? null}
+  const tvCard = (request: TvRequest) => <ScreenCard key={`request:tv:${request.requestId}`} title={request.entry.title} year={request.entry.year} posterUrl={request.entry.posterUrl ?? null}
     href={`/tv/requests/${request.requestId}`} media="tv" badge={tvBadge(request)} source={`Season${request.seasonNumbers.length === 1 ? "" : "s"} ${request.seasonNumbers.join(", ")}`}
     detail={tvDetail(request)}
     progress={request.intentionallyAbsent ? undefined : { value: request.availableEpisodes, max: request.requestedEpisodes, label: `${request.entry.title} available episodes` }} />;
@@ -81,7 +86,47 @@ export function UnifiedLibrary({ initialPage }: {
         {m === "all" ? "All" : m === "tv" ? "TV" : m === "books" ? "Books" : "Movies"}
       </button>)}
     </div>
-    <section aria-label="In your library">
+    {homeRails ? <div className="home-rails">
+      {(pendingMovies.length > 0 || outstandingTv.length > 0) && <ContentRail title="Your requests" more={[
+        ...(pendingMovies.length ? [{ href: "/library?media=movies", label: `Movies (${pendingMovies.length})` }] : []),
+        ...(outstandingTv.length ? [{ href: "/library?media=tv", label: `TV (${outstandingTv.length})` }] : []),
+      ]}>
+        {pendingMovies.slice(0, 10).map(movieCard)}{outstandingTv.slice(0, 10).map(tvCard)}
+      </ContentRail>}
+      {movies.isError && <Failure error={movies.error} retry={() => void movies.refetch()} />}
+      {tv.isError && <Failure error={tv.error} retry={() => void tv.refetch()} />}
+      {recent.isPending && <p role="status">Loading library...</p>}
+      {recent.isError && <Failure error={recent.error} retry={() => void recent.refetch()} />}
+      {!!recent.data?.books.length && <ContentRail title="Newly added books" more={{ href: "/library?media=books", label: "All books" }}>
+        {recent.data.books.map(book => <RailBook key={book.id} book={book} />)}
+      </ContentRail>}
+      {!!recent.data?.movies.length && <ContentRail title="Newly added movies" more={{ href: "/library?media=movies", label: "All movies" }}>
+        {recent.data.movies.map(movie => <ScreenCard key={movie.tmdbId} title={movie.title} year={movie.year} posterUrl={movie.posterUrl}
+          href={`/movies/${movie.tmdbId}`} media="movie" badge={{ label: "Available", tone: "available" }} detail="Ready in Plex" />)}
+      </ContentRail>}
+      {!!recent.data?.tv.length && <ContentRail title="Newly added TV" more={{ href: "/library?media=tv", label: "All TV" }}>
+        {recent.data.tv.map(entry => <ScreenCard key={entry.entryId} title={entry.title} year={entry.year} posterUrl={entry.posterUrl}
+          href={`/tv/library/${entry.entryId}`} media="tv" badge={{ label: "Available", tone: "available" }} detail="Episodes ready in Plex" />)}
+      </ContentRail>}
+      {!!recent.data?.episodes.length && <ContentRail title="Recently aired, in your library" more={{ href: "/library?media=tv", label: "All TV" }}>
+        {recent.data.episodes.map(ep => <ScreenCard key={`${ep.entryId}:${ep.episodeId}`} title={ep.title} posterUrl={ep.posterUrl}
+          href={`/tv/library/${ep.entryId}`} media="tv" badge={{ label: "Available", tone: "available" }}
+          source={ep.season != null && ep.episode != null ? `S${ep.season} E${ep.episode}` : ep.episodeTitle}
+          detail={`Aired ${ep.airDate}`} />)}
+      </ContentRail>}
+      {!recent.isPending && !recent.isError && recent.data && !recent.data.books.length && !recent.data.movies.length && !recent.data.tv.length &&
+        <p className="muted">No newly published titles yet. Browse a media tab or search above.</p>}
+      {discovery.isPending && <p role="status">Loading trending titles...</p>}
+      {discovery.isError && <p className="muted">Trending titles are unavailable right now. Your library is still available.</p>}
+      {(["movies", "tv"] as const).map(kind => {
+        const section = discovery.data?.[kind];
+        return section?.items.length ? <ContentRail key={kind} title={kind === "movies" ? "Trending movies" : "Trending TV"}>
+          {section.items.map(item => <ScreenCard key={item.tmdbId} title={item.title} year={item.year} posterUrl={item.posterUrl}
+            href={kind === "movies" ? `/movies/${item.tmdbId}` : `/tv/${item.tmdbId}`} media={kind === "movies" ? "movie" : "tv"}
+            badge={{ label: kind === "movies" ? "Movie" : "TV series", tone: "catalog" }} detail={kind === "movies" ? "View movie" : "Choose seasons"} />)}
+        </ContentRail> : section?.unavailable ? <p className="muted" key={kind}>Trending {kind === "movies" ? "movies" : "TV"} unavailable right now.</p> : null;
+      })}
+    </div> : <section aria-label="In your library">
       {booksShown && <section className="media-section library-books" aria-label="Your books">
         <h2 className="visually-hidden">Books</h2><Library initialPage={initialPage} query={q} embedded />
       </section>}
@@ -126,7 +171,7 @@ export function UnifiedLibrary({ initialPage }: {
         {tv.isError ? <Failure error={tv.error} retry={() => void tv.refetch()} /> : tv.isPending ? <p role="status">Loading your TV...</p> : !tvItems.length && !sharedTv.length ?
           <p className="muted">{term ? "No matching TV requests." : "Search above to find TV and choose seasons."}</p> : null}
       </section>}
-    </section>
+    </section>}
     {searching && <section className="remote-results" aria-label="Catalog results">
       <h2>Catalog matches</h2>
       <div className="remote-columns unified-catalogs">

@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { readHomeRecent, type HomeRecentInput } from "./media/home-recent";
 import path from "node:path";
 import { MovieRepo } from "./movies/repo";
 import { MovieShadowRepo } from "./movies/shadow-repo";
@@ -267,6 +268,7 @@ export class BooksRepo {
   get contentLoss() { return new ContentLossRepo(this.db, this.beforeWrite, (id) => this.getJob(id)); }
   get tvRetention() { return new TvRetentionRepo(this.db, this.beforeWrite, (id) => this.getJob(id)); }
   readTorrentRetirementConsumers(binding: RetirementBinding) { return readConsumerCount(this.db, binding); }
+  readHomeRecent(input: HomeRecentInput) { return readHomeRecent(this.db, input); }
   readStewardshipInventory(input: StewardshipInventoryInput) { return readStewardshipInventory(this.db, input); }
   readStewardshipTitles(input: StewardshipTitleInput) { return readStewardshipTitles(this.db, input); }
   constructor(

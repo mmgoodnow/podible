@@ -84,7 +84,7 @@ try {
     }),
   );
 
-  await page.goto(fixture.url);
+  await page.goto(new URL("/library?media=books", fixture.url).href);
   await page.getByRole("heading", { name: "Library", exact: true }).waitFor();
   const navigation = page.getByRole("navigation", { name: "Main navigation" });
   assert.equal(await navigation.getByRole("link", { name: "Settings", exact: true }).getAttribute("href"), "/settings");

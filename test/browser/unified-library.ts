@@ -11,7 +11,7 @@ import { fixtureTvEntry } from "../fixtures/tv-catalog";
 // Real repository publications and private requests, separate from the upstream catalog fixture.
 async function checkPosterShelves(browser: Awaited<ReturnType<typeof chromium.launch>>) {
   const data = await createBookSpaData();
-  const { repo, admin, reader } = data;
+  const { repo, admin, reader, db } = data;
   const policy = repo.getSettings().movies.qualityPolicy;
   const art = "https://artworks.thetvdb.com/banners/";
   const movieTitles = ["The Last Coast", "A Room in Winter", "After the Rain", "The Quiet Atlas", "A Very Long Movie Title About Finding Our Way Back Home", "Night Orchard"];
@@ -25,13 +25,18 @@ async function checkPosterShelves(browser: Awaited<ReturnType<typeof chromium.la
     const version = repo.movies.recordVersion(acquisition.id, fixtureFacts(), [{ id, relativePath: `files/${id.slice(0, 2)}/${id}.mkv`, sizeBytes: 10, probe: {} }]);
     repo.movies.selectVersion(requested.targetId, version, 0);
     repo.movies.finishAcquisition(acquisition.id);
+    const key = `published:${requested.targetId}:${version}`;
+    repo.movies.event(requested.targetId, null, key, "available", "Verified in Plex and ready to watch");
+    db.query("UPDATE movie_events SET created_at=? WHERE event_key=?").run(new Date(Date.now() - index * 86_400_000).toISOString(), key);
   }
   repo.movies.request(reader.id, { ...fixtureMovie, tmdbId: 600, title: "Tomorrow's Tide", posterUrl: `${art}6.svg` }, policy);
   repo.movies.request(admin.id, { ...fixtureMovie, tmdbId: 601, title: "Private unreleased movie" }, policy);
   const tvTitles = ["The Glasshouse", "North of Here", "Small Hours"];
   for (const [index, title] of tvTitles.entries()) {
+    const entry = fixtureTvEntry();
+    entry.episodes = entry.episodes.map(ep => ({ ...ep, key: ep.key.replace("700", String(800 + index)), airDate: new Date(Date.now() - 86_400_000).toISOString().slice(0, 10) }));
     const requested = repo.tv.requestSeasons(index === 0 ? reader.id : admin.id, {
-      ...fixtureTvEntry(), key: `tvdb:${800 + index}`, tvdbId: 800 + index, tmdbId: 800 + index, title,
+      ...entry, key: `tvdb:${800 + index}`, tvdbId: 800 + index, tmdbId: 800 + index, title,
       posterUrl: `${art}${index + 7}.svg`,
     }, policy, [1]);
     const acquisition = repo.tv.startAcquisition(requested.targetId, "initial", () => repo.createJob({ type: "metadata_hydration" }).id, requested.requestId).acquisition;
@@ -41,6 +46,7 @@ async function checkPosterShelves(browser: Awaited<ReturnType<typeof chromium.la
     repo.tv.promotePublication(requested.targetId, version, 0);
     repo.tv.clearPublication(requested.targetId, version);
     repo.tv.finishAcquisition(acquisition.id);
+    repo.tv.event(requested.targetId, null, `tv-published:${requested.targetId}:${version}`, "available", "Episode identity and file paths verified in Plex");
   }
   repo.tv.requestSeasons(reader.id, { ...fixtureTvEntry(), key: "tvdb:900", tvdbId: 900, tmdbId: 900, title: "The Next Chapter" }, policy, [2]);
   repo.tv.requestSeasons(admin.id, { ...fixtureTvEntry(), key: "tvdb:901", tvdbId: 901, tmdbId: 901, title: "Private unreleased TV" }, policy, [2]);
@@ -67,6 +73,27 @@ async function checkPosterShelves(browser: Awaited<ReturnType<typeof chromium.la
   const page = await context.newPage();
   page.on("pageerror", error => errors.push(error.message));
   try {
+    await page.goto(origin);
+    const movieRail = page.getByRole("region", { name: "Newly added movies", exact: true });
+    await movieRail.locator(".screen-card").nth(5).waitFor();
+    assert.deepEqual(await movieRail.locator("h3").allTextContents(), movieTitles, "Newly published movies must sort by publication date, not IDs");
+    await page.getByRole("region", { name: "Your requests", exact: true }).getByRole("link", { name: /Tomorrow's Tide/ }).waitFor();
+    await page.getByRole("region", { name: "Recently aired, in your library", exact: true }).locator(".screen-card").nth(2).waitFor();
+    assert.equal(await page.getByText(/Private unreleased/).count(), 0);
+    await page.screenshot({ path: path.join(os.tmpdir(), "podible-home-rails-desktop.png"), fullPage: true, animations: "disabled" });
+    await page.setViewportSize({ width: 390, height: 844 });
+    const track = movieRail.getByRole("group", { name: "Newly added movies cards" });
+    await track.focus(); await page.keyboard.press("ArrowRight");
+    assert.ok(await track.evaluate(el => el.scrollLeft > 0), "ArrowRight must scroll a focused rail");
+    await page.keyboard.press("Home");
+    assert.ok(await track.evaluate(el => el.scrollLeft <= 3), "Home must return to the first card (allowing track focus padding)");
+    await page.keyboard.press("End");
+    assert.ok(await track.evaluate(el => el.scrollLeft > 0));
+    assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false, "Home rails overflow the mobile page");
+    await page.screenshot({ path: path.join(os.tmpdir(), "podible-home-rails-mobile.png"), fullPage: true, animations: "disabled" });
+    await movieRail.getByRole("link", { name: /Night Orchard/ }).click();
+    await page.getByRole("heading", { name: "Night Orchard", exact: true }).waitFor();
+    await page.setViewportSize({ width: 1440, height: 1100 });
     await page.goto(`${origin}/?media=movies`);
     const movies = page.getByRole("region", { name: "Your movies" });
     await movies.getByText("6 available", { exact: true }).waitFor();
@@ -167,6 +194,7 @@ async function checkPosterShelves(browser: Awaited<ReturnType<typeof chromium.la
 const server = Bun.spawn([process.execPath, "run", "test/fixtures/unified-spa-server.ts"], { stdout: "pipe", stderr: "inherit" });
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 let releaseBooks = () => {};
+let releaseDiscovery = () => {};
 try {
   const reader = server.stdout.getReader();
   let output = "", origin = "";
@@ -188,11 +216,35 @@ try {
   const errors: string[] = [];
   page.on("pageerror", e => errors.push(e.message));
   const gate = new Promise<void>(resolve => { releaseBooks = resolve; });
+  const discoveryGate = new Promise<void>(resolve => { releaseDiscovery = resolve; });
+  await page.route("**/api/trpc/catalog.discovery**", async route => { await discoveryGate; await route.continue(); });
+  await context.route("**/*", async route => {
+    const url = new URL(route.request().url());
+    if (url.origin === origin) return route.continue();
+    if (url.hostname === "image.tmdb.org") return route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450"><rect width="300" height="450" fill="#284e42"/><circle cx="170" cy="160" r="95" fill="#d7c5a0"/><path d="M0 260L140 150L300 340V450H0Z" fill="#577063"/></svg>' });
+    return route.fulfill({ status: 404, body: "" });
+  });
   await page.route("**/api/trpc/openlibrary.search**", async route => { await gate; await route.continue(); });
   await page.goto(origin);
+  await page.getByRole("region", { name: "Newly added books", exact: true }).getByRole("link", { name: /Piranesi/ }).waitFor();
+  await page.getByText("Loading trending titles...", { exact: true }).waitFor();
+  releaseDiscovery();
+  await page.getByRole("region", { name: "Trending movies", exact: true }).locator(".screen-card").nth(13).waitFor();
+  await page.getByRole("region", { name: "Trending TV", exact: true }).locator(".screen-card").nth(13).waitFor();
+  await page.waitForFunction("[...document.querySelectorAll('.home-rails .screen-poster > img')].some(img => img.complete && img.naturalWidth === 300)");
+  await page.getByRole("region", { name: "Trending TV", exact: true }).locator(".screen-card").first().scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(os.tmpdir(), "podible-home-discovery-desktop.png"), fullPage: true, animations: "disabled" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false, "Discovery rails overflow mobile");
+  await page.screenshot({ path: path.join(os.tmpdir(), "podible-home-discovery-mobile.png"), fullPage: true, animations: "disabled" });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  assert.equal(await page.getByRole("region", { name: "Your books", exact: true }).count(), 0, "All home must use rails, not the full books grid");
+  await page.getByRole("button", { name: "Books", exact: true }).click();
   await page.locator(".book-card").nth(47).waitFor();
+  await page.getByRole("button", { name: "All", exact: true }).click();
   assert.equal(await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: /Discover|Movies|Requests/ }).count(), 0);
   await page.getByRole("searchbox", { name: "Search library and catalogs" }).fill("Piranesi");
+  assert.equal(await page.locator(".home-rails").count(), 0, "Search must replace home rails immediately");
   await page.getByRole("region", { name: "Your books" }).getByRole("link", { name: /Piranesi Susanna Clarke/ }).waitFor();
   await page.getByRole("region", { name: "Movie catalog" }).getByRole("link", { name: /Piranesi on Screen/ }).waitFor();
   await page.getByRole("region", { name: "TV catalog" }).getByRole("link", { name: /Piranesi Series/ }).waitFor();
@@ -213,7 +265,9 @@ try {
   await page.reload();
   await page.getByText("0 of 2 episodes verified in Plex.", { exact: true }).waitFor();
   await page.getByRole("link", { name: "Back to library" }).click();
-  await page.getByRole("region", { name: "Your TV" }).getByRole("link", { name: /Piranesi Series/ }).waitFor();
+  await page.getByRole("region", { name: "Your TV", exact: true }).getByRole("link", { name: /Piranesi Series/ }).waitFor();
+  await page.goto(origin);
+  await page.getByRole("region", { name: "Your requests", exact: true }).getByRole("link", { name: /Piranesi Series/ }).waitFor();
   await page.goto(requestUrl);
   page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Withdraw my request" }).click();
@@ -226,4 +280,4 @@ try {
   assert.deepEqual(errors, []);
   await checkPosterShelves(browser);
   console.log("Unified Library Chrome acceptance passed: real RPC publications/private requests, poster images and 2:3 geometry, broken/missing artwork, request disclosure, actual detail navigation, TV progress, auth/privacy, two-column mobile/no overflow, independent delayed providers and durable season request/withdrawal.");
-} finally { releaseBooks(); await browser?.close(); server.kill("SIGTERM"); await server.exited; }
+} finally { releaseBooks(); releaseDiscovery(); await browser?.close(); server.kill("SIGTERM"); await server.exited; }
