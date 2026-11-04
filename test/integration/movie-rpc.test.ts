@@ -149,6 +149,7 @@ test("user-safe movie RPC shares acquisition, protects opaque offers and reports
         method: "POST",
         headers: {
           origin: "https://evil.invalid",
+          "content-type": "application/json",
           cookie: "podible_session=one",
         },
         body: "{}",

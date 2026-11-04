@@ -16,6 +16,13 @@ The administrator-only `book.diagnostics` read model supplies the manifestation,
 container, release and file tree plus chapter-curation summaries inside the SPA.
 Mutations reuse the public domain handlers rather than duplicating business rules.
 
+Behind a TLS-terminating reverse proxy, preserve the public `Host` and overwrite
+`X-Forwarded-Proto` with a single `http` or `https` value. Typed mutation origin
+checks use that external scheme and the request host, never `X-Forwarded-Host`.
+Foreign origins and cross-site requests remain forbidden; rejection responses use
+the tRPC envelope so clients can display the actual error. The admin browser
+journey runs through an HTTPS-to-HTTP proxy fixture to cover this deployment shape.
+
 Book detail supports audio/ebook edition selection, playback and downloads,
 manifestation-scoped chapter/transcript generation and forced regeneration,
 non-destructive issue reporting, artwork selection, metadata refresh and deletion.

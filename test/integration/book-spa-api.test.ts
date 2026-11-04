@@ -43,7 +43,7 @@ test("tRPC HTTP responses never cache account, settings, batches, errors or reje
     const crossSiteHeaders: Record<string, string>[] = [{ origin: "https://foreign.invalid" }, { "sec-fetch-site": "cross-site" }];
     for (const headers of crossSiteHeaders) {
       const rejected = await handler(new Request("http://localhost/api/trpc/settings.update", {
-        method: "POST", headers: { cookie: "podible_session=book-spa-admin", ...headers }, body: "{}",
+        method: "POST", headers: { cookie: "podible_session=book-spa-admin", "content-type": "application/json", ...headers }, body: "{}",
       }));
       expect(rejected.status).toBe(403);
       expect(rejected.headers.get("cache-control")).toBe("no-store");

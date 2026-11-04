@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdir } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright";
 
+const tlsRoot = await mkdtemp(path.join(os.tmpdir(), "podible-proxy-browser-"));
+const key = path.join(tlsRoot, "key.pem"), cert = path.join(tlsRoot, "cert.pem");
+const certificate = Bun.spawnSync(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key,
+  "-out", cert, "-days", "1", "-subj", "/CN=localhost"]);
+assert.equal(certificate.exitCode, 0, "Unable to generate local TLS fixture certificate");
 const server = Bun.spawn([process.execPath, "run", "test/fixtures/spa-server.ts"], {
   stdout: "pipe", stderr: "inherit",
-  env: { ...process.env, PORT: "0", ADMIN_FIXTURE: "1", TV_FIXTURE: "", SHADOW_FIXTURE: "", AUTH_FIXTURE: "" },
+  env: { ...process.env, PORT: "0", ADMIN_FIXTURE: "1", TV_FIXTURE: "", SHADOW_FIXTURE: "", AUTH_FIXTURE: "",
+    FIXTURE_TLS_KEY: key, FIXTURE_TLS_CERT: cert },
 });
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 try {
@@ -20,14 +27,14 @@ try {
   }
   reader.releaseLock();
   browser = await chromium.launch({ ...(process.env.CI ? {} : { channel: "chrome" }), headless: true });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, ignoreHTTPSErrors: true });
   await context.addCookies([{ name: "podible_session", value: "spa-browser-fixture", url, httpOnly: true }]);
   const rpc = async (method: string, params: Record<string, unknown> = {}, request = context.request) => {
     const response = await request.post(new URL("/rpc", url).href, { data: { jsonrpc: "2.0", id: 1, method, params } });
     assert.equal(response.status(), 200);
     return response.json() as Promise<{ result?: any; error?: { code: number; message: string } }>;
   };
-  const anonymous = await browser.newContext(), readerContext = await browser.newContext();
+  const anonymous = await browser.newContext({ ignoreHTTPSErrors: true }), readerContext = await browser.newContext({ ignoreHTTPSErrors: true });
   await readerContext.addCookies([{ name: "podible_session", value: "admin-reader-fixture", url, httpOnly: true }]);
   for (const method of ["settings.get", "settings.update", "adminWeb.users", "adminWeb.ops", "adminWeb.plexServers", "adminWeb.selectPlexServer", "adminWeb.refresh", "jobs.retry", "retention.preview", "retention.evict"]) {
     assert.equal((await rpc(method, {}, anonymous.request)).error?.code, -32001);
@@ -50,12 +57,13 @@ try {
 
   const page = await context.newPage();
   const pageErrors: string[] = [], networkErrors: string[] = [];
-  let expectedSettingsError = false, settingsPosts = 0, diagnosticsRequests = 0;
+  let expectedSettingsError = false, expectedRetryRejection = false, settingsPosts = 0, diagnosticsRequests = 0;
   page.on("pageerror", (error) => pageErrors.push(error.message));
   page.on("requestfailed", (request) => networkErrors.push(`${request.url()}: ${request.failure()?.errorText}`));
   page.on("response", (response) => {
     if (response.url().includes("/api/trpc/") && response.status() >= 400 &&
-        !(expectedSettingsError && response.url().includes("settings.update"))) networkErrors.push(`${response.status()} ${response.url()}`);
+        !(expectedSettingsError && response.url().includes("settings.update")) &&
+        !(expectedRetryRejection && response.url().includes("jobs.retry"))) networkErrors.push(`${response.status()} ${response.url()}`);
   });
   page.on("request", (request) => {
     const resource = new URL(request.url());
@@ -191,6 +199,21 @@ try {
   const diagnostics = await rpc("adminWeb.ops", { includeJobs: true });
   const failedImport = diagnostics.result.diagnostics.recentJobs.find((job: { type: string; status: string }) => job.type === "import" && job.status === "failed");
   assert.ok(failedImport);
+  expectedRetryRejection = true;
+  await page.route("**/api/trpc/jobs.retry*", async route => {
+    const response = await route.fetch({ headers: { ...route.request().headers(), origin: "https://foreign.invalid" } });
+    await route.fulfill({ response });
+  });
+  const rejectedRetry = page.waitForResponse(response => response.url().includes("jobs.retry") && response.request().method() === "POST");
+  const retryButton = attention.getByRole("article", { name: "Fixture Import Failure", exact: true }).getByRole("button", { name: "Retry", exact: true });
+  await retryButton.click();
+  assert.equal((await rejectedRetry).status(), 403);
+  await attention.getByRole("alert").filter({ hasText: "Cross-origin mutation rejected" }).waitFor();
+  assert.ok(!(await attention.innerText()).includes("Unable to transform response"));
+  assert.ok(!(await attention.innerText()).includes("Retry was not queued"));
+  assert.equal((await rpc("jobs.get", { jobId: failedImport.id })).result.job.status, "failed");
+  await page.unroute("**/api/trpc/jobs.retry*");
+  expectedRetryRejection = false;
   const retryResponse = page.waitForResponse((response) => response.url().includes("jobs.retry") && response.request().method() === "POST");
   await attention.getByRole("article", { name: "Fixture Import Failure", exact: true }).getByRole("button", { name: "Retry", exact: true }).click();
   assert.equal((await retryResponse).status(), 200);
@@ -248,4 +271,5 @@ try {
   await browser?.close();
   server.kill("SIGTERM");
   await server.exited;
+  await rm(tlsRoot, { recursive: true, force: true });
 }

@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import { createTRPCClient, httpBatchLink, httpLink } from "@trpc/client";
 import { hashSessionToken } from "../../src/auth";
 import { runMigrations } from "../../src/db";
 import { createPodibleFetchHandler } from "../../src/http";
@@ -11,6 +11,55 @@ import { createSpaRoutes } from "../../src/http/spa-routes";
 import { BooksRepo } from "../../src/repo";
 import type { AppRouter } from "../../src/trpc";
 import { authRouter } from "../../src/rpc/auth-router";
+
+test("typed mutation clients handle TLS proxy origins and decode cross-origin rejections", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  const repo = new BooksRepo(db);
+  repo.ensureSettings();
+  const admin = repo.upsertUser({ provider: "local", providerUserId: "proxy-admin", username: "admin", isAdmin: true });
+  repo.createSession(admin.id, hashSessionToken("proxy-admin"), null, "browser");
+  const handler = createPodibleFetchHandler(repo, Date.now());
+  const client = (headers: Record<string, string>, link: typeof httpBatchLink | typeof httpLink = httpBatchLink) => createTRPCClient<AppRouter>({
+    links: [link({ url: "http://podible.example/api/trpc", fetch: async (input, init) => {
+      const response = await handler(new Request(input.toString(), {
+        ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), cookie: "podible_session=proxy-admin", ...headers },
+      }));
+      return { status: response.status, ok: response.ok, headers: response.headers, json: () => response.json(), text: () => response.text() };
+    } })],
+  });
+  try {
+    const failed = () => repo.createJob({ type: "full_library_refresh", status: "failed" });
+    const job = failed();
+    await expect(client({ origin: "https://podible.example", "x-forwarded-proto": "https", "sec-fetch-site": "same-origin" })
+      .jobs.retry.mutate({ jobId: job.id })).resolves.toMatchObject({ job: { id: job.id } });
+    expect(db.query("SELECT kind FROM job_commands WHERE job_id=? ORDER BY id DESC LIMIT 1").get(job.id)).toEqual({ kind: "retry" });
+    const rejectedHeaders: Record<string, string>[] = [
+      { origin: "https://foreign.example", "x-forwarded-proto": "https" },
+      { origin: "null", "x-forwarded-proto": "https" },
+      { origin: "http://podible.example", "x-forwarded-proto": "https" },
+      { origin: "https://podible.example:8443", "x-forwarded-proto": "https" },
+      { origin: "https://podible.example", "x-forwarded-proto": "https", "sec-fetch-site": "cross-site" },
+      { origin: "https://foreign.example", "x-forwarded-proto": "https", "x-forwarded-host": "foreign.example" },
+      { origin: "https://podible.example", "x-forwarded-proto": "https, http" },
+    ];
+    for (const headers of rejectedHeaders) {
+      for (const link of [httpBatchLink, httpLink]) {
+        const blocked = failed();
+        const before = db.query("SELECT COUNT(*) AS n FROM job_commands WHERE job_id=?").get(blocked.id);
+        await expect(client(headers, link).jobs.retry.mutate({ jobId: blocked.id })).rejects.toMatchObject({
+          message: "Cross-origin mutation rejected", data: { code: "FORBIDDEN", httpStatus: 403 },
+        });
+        expect(repo.getJob(blocked.id)?.status).toBe("failed");
+        expect(db.query("SELECT COUNT(*) AS n FROM job_commands WHERE job_id=?").get(blocked.id)).toEqual(before);
+      }
+    }
+    const direct = failed();
+    await expect(client({ origin: "http://podible.example" }).jobs.retry.mutate({ jobId: direct.id }))
+      .resolves.toMatchObject({ job: { id: direct.id } });
+    expect(db.query("SELECT kind FROM job_commands WHERE job_id=? ORDER BY id DESC LIMIT 1").get(direct.id)).toEqual({ kind: "retry" });
+  } finally { db.close(); }
+});
 
 test("typed API shares JSON-RPC results, validates inputs and preserves session auth", async () => {
   const db = new Database(":memory:");
@@ -92,7 +141,7 @@ test("typed API shares JSON-RPC results, validates inputs and preserves session 
     );
     expect(invalid.status).toBe(400);
     const csrf = await handler(
-      new Request("http://localhost/api/trpc/auth.me", {
+      new Request("http://localhost/api/trpc/jobs.retry", {
         method: "POST",
         headers: {
           origin: "https://evil.example",

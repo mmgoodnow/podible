@@ -176,7 +176,7 @@ function Recovery({ recovery, nextWakeAt }: Pick<Job, "recovery" | "nextWakeAt">
 }
 function JobDiagnostic({ job }: { job: Job }) {
   const trpc = useTRPC(), cache = useQueryClient();
-  const retry = useMutation(trpc.jobs.retry.mutationOptions({ onSuccess: () => cache.invalidateQueries({ queryKey: trpc.adminWeb.ops.queryKey() }) }));
+  const retry = useMutation(trpc.jobs.retry.mutationOptions({ onSettled: () => cache.invalidateQueries({ queryKey: trpc.adminWeb.ops.pathKey() }) }));
   return <details className="panel">
     <summary>Job #{job.id} / {job.type} / {job.status}</summary>
     <p><Recovery recovery={job.recovery} nextWakeAt={job.nextWakeAt} />. Attempts {job.attempts}/{job.maxAttempts}.</p>
@@ -185,7 +185,7 @@ function JobDiagnostic({ job }: { job: Job }) {
     {["failed", "cancelled"].includes(job.status) && <button disabled={retry.isPending} onClick={() => retry.mutate({ jobId: job.id })}>
       {retry.isPending ? "Queuing..." : `Retry job #${job.id}`}
     </button>}
-    {retry.error && <p role="alert">Retry was not queued: {retry.error.message}</p>}
+    {retry.error && <p role="alert">Could not confirm the retry: {retry.error.message}. Check the refreshed status before trying again.</p>}
     {retry.isSuccess && <p role="status">Retry requested for job #{job.id}. Follow its actual execution state above.</p>}
   </details>;
 }
@@ -204,8 +204,7 @@ function ActivityProblem({ incident, onRetried }: { incident: Ops["incidents"][n
   const trpc = useTRPC(), cache = useQueryClient();
   const retry = useMutation(trpc.jobs.retry.mutationOptions({ onSuccess: async () => {
     onRetried(incident.jobId!);
-    await cache.invalidateQueries({ queryKey: trpc.adminWeb.ops.pathKey() });
-  } }));
+  }, onSettled: () => cache.invalidateQueries({ queryKey: trpc.adminWeb.ops.pathKey() }) }));
   const retryable = incident.jobId !== null && ["manual-retry", "cancelled"].includes(incident.recovery);
   const correction = problemAction(incident.code);
   return <article className="activity-item problem" aria-label={incident.title}>
@@ -217,7 +216,7 @@ function ActivityProblem({ incident, onRetried }: { incident: Ops["incidents"][n
       : <Link className="button" href={correction.href}>{correction.label}</Link>}</div>}
     {retryable && !correction && <div className="actions"><button disabled={retry.isPending} onClick={() => retry.mutate({ jobId: incident.jobId! })}>
       {retry.isPending ? "Requesting retry..." : "Retry"}</button></div>}
-    {retry.error && <p role="alert">Retry was not queued: {retry.error.message}</p>}
+    {retry.error && <p role="alert">Could not confirm the retry: {retry.error.message}. Check the refreshed status before trying again.</p>}
     <details><summary>Technical details</summary><p>{incident.code}{incident.jobId ? ` / job #${incident.jobId}` : ""}</p>
       {retryable && correction && <button disabled={retry.isPending} onClick={() => retry.mutate({ jobId: incident.jobId! })}>Retry after resolving the problem</button>}
     </details>

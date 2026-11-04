@@ -196,6 +196,7 @@ const authFixture = { mode: "success", starts: 0, callbacks: 0 };
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: Number(process.env.PORT ?? 0),
+  ...(process.env.FIXTURE_TLS_KEY ? { tls: { key: Bun.file(process.env.FIXTURE_TLS_KEY), cert: Bun.file(process.env.FIXTURE_TLS_CERT!) } } : {}),
   async fetch(request) {
     const url = new URL(request.url), pathname = url.pathname;
     if (process.env.AUTH_FIXTURE) {
@@ -237,6 +238,14 @@ const server = Bun.serve({
     if (request.method === "POST" && pathname === "/__fixture/add-upgrade") {
       fixture.addOffer("upgrade", 1920);
       return Response.json({ ok: true });
+    }
+    if (process.env.FIXTURE_TLS_KEY) {
+      // Model Caddy terminating HTTPS while forwarding HTTP with the public Host.
+      const internal = new URL(request.url);
+      internal.protocol = "http:";
+      const headers = new Headers(request.headers);
+      headers.set("x-forwarded-proto", "https");
+      return handler(new Request(internal.href, { method: request.method, headers, body: request.body }));
     }
     return handler(request);
   },
