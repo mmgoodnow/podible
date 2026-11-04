@@ -223,6 +223,23 @@ export class ReleaseInboxRepo {
         .where("target_revision", "=", revision),
     );
   }
+  /** Read retained matching evidence, independent of the acquisition's later outcome. */
+  consideredEntries(kind: string, targetId: number, limit = 1000) {
+    if (!Number.isSafeInteger(targetId) || targetId <= 0 ||
+        !Number.isSafeInteger(limit) || limit < 1 || limit > 1000)
+      throw new Error("Invalid considered inbox lookup");
+    return typedAll(
+      this.db,
+      dbSql.selectFrom("release_inbox")
+        .innerJoin("release_considerations", "release_considerations.release_id", "release_inbox.id")
+        .selectAll("release_inbox")
+        .distinct()
+        .where("release_considerations.target_kind", "=", kind)
+        .where("release_considerations.target_id", "=", targetId)
+        .orderBy("release_inbox.id", "desc")
+        .limit(limit),
+    ).map((row) => ({ ...row, result: inboxResultSchema.parse(JSON.parse(row.payload_json)) }));
+  }
   consideredForDispatch(
     releaseId: number,
     kind: string,

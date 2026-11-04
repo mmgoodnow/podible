@@ -4,6 +4,8 @@ import type { JobRow, MediaType } from "../app-types";
 import { durableStep, workerLog, type WorkerContext } from "./context";
 import { isRunControlError } from "reflow-ts";
 import { selectWithIndexerRecovery } from "./indexer-search";
+import { z } from "zod";
+import type { TorznabResult } from "../library/torznab";
 
 export type AcquirePayload = {
   bookId?: number;
@@ -16,7 +18,25 @@ export type AcquirePayload = {
   rejectedUrls?: string[];
   rejectedGuids?: string[];
   rejectedInfoHashes?: string[];
+  /** Server-owned durable inbox references; never accepted from search/snatch RPC payloads. */
+  feedCandidateIds?: number[];
+  feedRoutingNote?: string;
 };
+
+const feedCandidateSchema = z.array(z.number().int().positive()).min(1).max(1000);
+
+function currentFeedCandidates(ctx: WorkerContext, ids: number[], media: MediaType) {
+  const entries = ctx.repo.releaseInbox.entries(ids);
+  if (entries.length !== new Set(ids).size) throw new Error("Book RSS inbox candidates are missing");
+  if (entries.some((entry) => entry.result.mediaType !== media))
+    throw new Error("Book RSS candidate has the wrong media type");
+  return entries.map((entry) => ({ id: entry.id, result: entry.result as TorznabResult }));
+}
+
+function mediaReady(ctx: WorkerContext, bookId: number, media: MediaType): boolean {
+  const current = ctx.repo.getBook(bookId);
+  return !current || (media === "audio" ? current.audioStatus : current.ebookStatus) === "imported";
+}
 
 function selectionNote(media: MediaType, decision: { mode: string; trigger: string; confidence: number; reason: string }): string {
   const prefix = decision.mode === "agent" ? "Agent selected" : "Deterministic search selected";
@@ -26,6 +46,11 @@ function selectionNote(media: MediaType, decision: { mode: string; trigger: stri
 export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
   const settings = ctx.getSettings();
   const payload = job.payload_json ? (JSON.parse(job.payload_json) as AcquirePayload) : {};
+  if (payload.feedCandidateIds !== undefined) {
+    feedCandidateSchema.parse(payload.feedCandidateIds);
+    if (payload.media?.length !== 1 || !["audio", "ebook"].includes(payload.media[0]))
+      throw new Error("Book RSS acquisition requires exactly one media type");
+  }
   if (!payload.bookId) {
     return "done";
   }
@@ -46,15 +71,20 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
         noResultReason: null,
       };
 
+      const feedEligible = payload.feedCandidateIds
+        ? await durableStep(ctx, `${media}:feed-eligibility`, () => !mediaReady(ctx, book.id, media))
+        : true;
+      if (!feedEligible) return result;
+
       const query = `${book.title} ${book.author}`.trim();
-      const decision = await selectWithIndexerRecovery(ctx, { query, media, jobId: job.id, bookId: book.id }, (results, stepName) => durableStep(ctx, stepName, () => selectSearchCandidates(
+      const select = (results: TorznabResult[]) => selectSearchCandidates(
         settings,
         {
           query,
           media,
           results,
           editionPreference: settings.agents.editionPreference,
-          forceAgent: payload.forceAgent === true || Boolean(settings.agents.apiKey?.trim()),
+          forceAgent: payload.forceAgent === true || Boolean(ctx.modelProvider) || Boolean(settings.agents.apiKey?.trim()),
           priorFailure: payload.priorFailure === true,
           rejectedUrls: Array.isArray(payload.rejectedUrls) ? payload.rejectedUrls : [],
           rejectedGuids: Array.isArray(payload.rejectedGuids) ? payload.rejectedGuids : [],
@@ -65,7 +95,23 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
           repo: ctx.repo,
           modelProvider: ctx.modelProvider,
         }
-      )));
+      );
+      const feedSelection = payload.feedCandidateIds
+        ? await durableStep(ctx, `${media}:feed-selection`, async () => {
+            const candidates = currentFeedCandidates(ctx, payload.feedCandidateIds!, media);
+            const decision = await select(candidates.map((candidate) => candidate.result));
+            const partIds = decision.selections.map((selection) => selection.parts.map((part) => {
+              const candidate = candidates.find((candidate) => candidate.result === part);
+              if (!candidate) throw new Error("Book selector returned a release outside its RSS evidence");
+              return candidate.id;
+            }));
+            return { decision, partIds };
+          })
+        : null;
+      const decision = feedSelection?.decision ?? await selectWithIndexerRecovery(
+        ctx, { query, media, jobId: job.id, bookId: book.id },
+        (results, stepName) => durableStep(ctx, stepName, () => select(results)),
+      );
       if (decision.error) {
         workerLog(
           ctx,
@@ -82,6 +128,16 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
       }
       try {
         for (const [selectionIndex, selection] of decision.selections.entries()) {
+          const groupEligible = payload.feedCandidateIds
+            ? await durableStep(ctx, `${media}:feed-group:${selectionIndex}:eligibility`, () => !mediaReady(ctx, book.id, media))
+            : true;
+          if (!groupEligible) return result;
+          // Resolve server-owned IDs again after agent work/replay: feed polling may
+          // have refreshed expiring URLs while this acquisition was pending.
+          const parts = feedSelection
+            ? feedSelection.partIds[selectionIndex].map((id) =>
+                currentFeedCandidates(ctx, [id], media)[0].result)
+            : selection.parts;
           workerLog(
             ctx,
             `[acquire] job=${job.id} book=${book.id} media=${media} selection=${selectionIndex} mode=${decision.mode} confidence=${decision.confidence.toFixed(
@@ -97,9 +153,12 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
               mediaType: media,
               manifestation: {
                 ...selection.manifestation,
-                selectionNote: selectionNote(media, decision),
+                selectionNote: [
+                  payload.feedRoutingNote?.slice(0, 4000),
+                  selectionNote(media, decision),
+                ].filter(Boolean).join("\n"),
               },
-              parts: selection.parts.map((part) => ({
+              parts: parts.map((part) => ({
                 provider: part.provider,
                 providerGuid: part.guid ?? null,
                 title: part.title,

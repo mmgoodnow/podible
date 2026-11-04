@@ -17,7 +17,8 @@ export type JobType =
   | "movie_shadow_evaluate"
   | "movie_dual_write_sync"
   | "indexer_feed_sync"
-  | "movie_feed_match";
+  | "movie_feed_match"
+  | "book_feed_match";
 
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 

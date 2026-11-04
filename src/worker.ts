@@ -29,8 +29,10 @@ export async function runWorker(
     while (!ctx.shouldStop?.()) {
       try {
         const prowlarr = ctx.getSettings().prowlarr;
-        if (prowlarr.url && ctx.repo.movies.hasTargets() && Date.now() >= nextFeedSync) {
-          const key = createHash("sha256").update(JSON.stringify(prowlarr)).digest("hex");
+        const feedSettings = ctx.getSettings();
+        if ((prowlarr.url || feedSettings.torznab.length) &&
+            (ctx.repo.movies.hasTargets() || ctx.repo.hasBooks()) && Date.now() >= nextFeedSync) {
+          const key = createHash("sha256").update(JSON.stringify([prowlarr, feedSettings.torznab])).digest("hex");
           ctx.repo.createJob({
             type: "indexer_feed_sync",
             idempotencyKey: "indexer-feeds:" + key + ":" + Math.floor(Date.now() / INDEXER_FEED_INTERVAL_MS),

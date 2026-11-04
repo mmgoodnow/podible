@@ -2,14 +2,18 @@
 
 Books and movies share `src/media/indexer-gateway.ts`: discovery, bounded XML
 reads, normalized Torznab results, coalescing, and provider-wide cooldowns.
-RSS requests use `t=search` without a title query, scoped to movie categories.
+RSS requests use `t=search` without a title query, scoped to movie, audiobook,
+or ebook categories (2000, 3030, and 7020 respectively, with configured book
+category overrides preserved).
 RSS capability is independent of interactive-search capability. Secrets and raw
 download URLs stay server-side.
 
 ## Intake And Recovery
 
-With Prowlarr configured and movie targets present, the worker polls applicable
-movie feeds every 15 minutes. It does not periodically search each title.
+With Prowlarr or configured Torznab sources and library targets present, the worker
+polls applicable feeds every 15 minutes. It does not periodically search each title.
+Prowlarr discovery selects enabled torrent indexers with the requested category
+and RSS capability; search-only indexers are not silently treated as feed sources.
 Initial requests, explicit retry/upgrade checks, and the existing failure-recovery
 paths may still perform targeted searches. Hourly movie reconciliation only
 repairs managed views and pending publication.
@@ -49,9 +53,55 @@ matching-job receipt to prevent replay from dispatching again after promotion.
 Queuing the acquisition and its receipts is atomic. Selection/import explanations remain on
 the acquisition, and routing explanations on the consideration association.
 
-The inventory/gateway are media-neutral. The first automatic feed consumer is
-movies; book search already uses the shared gateway, but book RSS consumption and
-legacy book-storage/client migration are deliberately not part of this change.
+## Book Consumption
+
+`BookFeedMatcher` uses the shared agent model/key to route audio and ebook inbox
+entries against books missing that media. It performs broad semantic matching,
+without a title-regex prefilter. Inputs contain bounded title/author/media and
+identity attributes, not download URLs, API keys or arbitrary descriptions.
+Oversized inputs split at 32 KiB of serialized UTF-8 JSON while preserving every
+target/release pair. Unknown indices, cross-media matches, and empty evidence
+are rejected before any acquisition is queued.
+
+Books have no automatic edition-upgrade policy. Existing playable/downloadable
+media is excluded from routing, checked again at dispatch, and checked again
+before RSS acquisition/snatching. Books missing the other media remain eligible.
+No existing manifestation, asset, download or file is removed or replaced.
+
+`book_feed_match` queues ordinary `acquire` jobs with server-owned
+`feedCandidateIds`, not client-authored torrent URLs. Queuing and consideration
+receipts commit together. Receipts use `target_kind=book:audio` or `book:ebook`,
+a revision of real catalog/media state plus edition preferences, and the causal
+matching-job ID. Replaying a dispatched match cannot queue it again after import
+or a preference change. An active acquisition/download/import for the same media
+causes a durable wait, followed by a fresh readiness check, rather than dropping
+candidates. An ebook-only outage does not hold up audio (an acquisition with
+absent/empty media requests both formats).
+
+The feed path resolves current inbox payloads, reuses `selectSearchCandidates`
+for evidence-backed edition selection and ordered multipart groups, then uses
+`runSnatchGroup`. Selected inbox IDs are checkpointed with the decision so current
+URLs can be resolved again after selection or replay, immediately before snatching.
+Initial readiness and pre-group eligibility are durable checkpoints. Once an owned
+multipart group starts, replay completes its remaining parts even if its first
+container has already imported and made the book appear ready.
+Routing reasons remain on consideration associations and join selection reasons
+on the manifestation's existing selection note. Failed-release exclusions are
+forwarded to normal selection. A failed content hash stays excluded. A known
+different hash can be reconsidered when a provider reuses the failed GUID and/or
+download URL; snatching still validates the actual metainfo identity.
+
+New matched releases are pooled with earlier considered evidence for that book
+and media (up to 1,000 recent IDs, prioritizing the current batch). Thus a part
+rejected because its companion was missing can be reconsidered when that companion
+arrives in a later poll. Only the new unseen releases get new receipts; earlier
+considerations retain their original acquisition/reason associations. The selector
+is instructed not to acquire a known incomplete multipart edition.
+
+Neither an empty routing result nor an edition rejection triggers a title search.
+Initial/explicit acquisition is unchanged, and a real later download/import
+failure may use the existing event-driven reacquisition path. This changes book
+candidate intake, not the book content/view layout.
 
 ## Administration
 
@@ -78,7 +128,10 @@ CI runs that check. Neither command opens production or Reflow's database.
 Run `bun test`, `bun run check:db-types`, `bun run typecheck`, `bun run build`,
 `bun run validate:runtime-scripts` and the four browser acceptance scripts.
 RSS acceptance uses synthetic upstream/agent/torrent/Plex seams with actual
-SQLite, outbox, Reflow and filesystem logic. This is not a claim of production
+SQLite, outbox, Reflow and filesystem logic. Book tests additionally cover
+category-scoped audio/ebook intake, missing-only dispatch, receipt rollback and
+replay, busy-target waits, URL rotation during selection, and a search-free ebook
+snatch/import. This is not a claim of production
 RSS matching accuracy or a new live upgrade canary. See
 [upgrade acceptance boundaries](movie-upgrade-validation.md).
 

@@ -15,6 +15,7 @@ import { syncMovieShadow, evaluateMovieShadow } from "../movies/shadow";
 import { syncSeerrRequests } from "../movies/dual-write";
 import { syncIndexerFeeds } from "./indexer-feeds";
 import { matchMovieFeed } from "../movies/feed";
+import { matchBookFeed } from "./book-feeds";
 
 export type JobProcessResult = "done";
 
@@ -22,6 +23,7 @@ export type JobProcessResult = "done";
 export async function processJob(ctx: WorkerContext, job: JobRow): Promise<JobProcessResult> {
   if (job.type === "indexer_feed_sync") return syncIndexerFeeds(ctx);
   if (job.type === "movie_feed_match") return matchMovieFeed(ctx, job);
+  if (job.type === "book_feed_match") return matchBookFeed(ctx, job);
   if (job.type === "movie_dual_write_sync") return syncSeerrRequests(ctx, job);
   if (job.type === "movie_shadow_sync") return syncMovieShadow(ctx);
   if (job.type === "movie_shadow_evaluate") return evaluateMovieShadow(ctx, job);

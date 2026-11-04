@@ -28,6 +28,13 @@ export const indexerFeedsRouter = defineRouter({
           error: z.string().nullable(),
         })
         .nullable(),
+      lastBookMatch: z
+        .object({
+          jobId: z.number(),
+          status: z.string(),
+          error: z.string().nullable(),
+        })
+        .nullable(),
       feeds: z.array(
         z.object({
           id: z.string(),
@@ -45,8 +52,10 @@ export const indexerFeedsRouter = defineRouter({
     handler(ctx) {
       const j = ctx.repo.latestJobByType("indexer_feed_sync");
       const m = ctx.repo.latestJobByType("movie_feed_match");
+      const b = ctx.repo.latestJobByType("book_feed_match");
+      const settings = ctx.repo.getSettings();
       return {
-        configured: Boolean(ctx.repo.getSettings().prowlarr.url),
+        configured: Boolean(settings.prowlarr.url || settings.torznab.length),
         intervalMinutes: INDEXER_FEED_INTERVAL_MS / 60_000,
         lastSync: j
           ? {
@@ -66,6 +75,15 @@ export const indexerFeedsRouter = defineRouter({
                 : null,
             }
           : null,
+        lastBookMatch: b
+          ? {
+              jobId: b.id,
+              status: b.status,
+              error: b.error
+                ? "Book release matching failed; inspect or retry the operation."
+                : null,
+            }
+          : null,
         feeds: ctx.repo.releaseInbox.feeds().map((f) => ({
           id: f.id,
           provider: f.provider,
@@ -82,14 +100,16 @@ export const indexerFeedsRouter = defineRouter({
   }),
   sync: defineMethod({
     auth: "admin",
-    summary: "Poll configured movie RSS feeds without any per-title searches.",
+    summary:
+      "Poll configured book and movie RSS feeds without any per-title searches.",
     paramsSchema: emptyParamsSchema.strict(),
     resultSchema: z.object({ jobId: z.number() }),
     handler(ctx) {
-      if (!ctx.repo.getSettings().prowlarr.url)
+      const settings = ctx.repo.getSettings();
+      if (!settings.prowlarr.url && !settings.torznab.length)
         throw new RpcError(
           -32602,
-          "Configure Prowlarr before polling indexer feeds",
+          "Configure Prowlarr or Torznab sources before polling indexer feeds",
         );
       return {
         jobId: ctx.repo.createJob({

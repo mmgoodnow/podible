@@ -19,8 +19,8 @@ export function IndexerFeeds() {
     <section className="panel">
       <h2>Indexer feeds</h2>
       <p>
-        New releases are checked against wanted movies and upgrade policies. No
-        scheduled per-movie searches.
+        New releases are checked against missing book formats and wanted movies,
+        including movie upgrade policies. No scheduled per-title searches.
       </p>
       {status.data && (
         <>
@@ -29,8 +29,12 @@ export function IndexerFeeds() {
             {status.data.lastSync?.status ?? "Not run"}.
           </p>
           <p>
-            Latest release matching:{" "}
+            Movie release matching:{" "}
             {status.data.lastMatch?.status ?? "No new releases"}.
+          </p>
+          <p>
+            Book release matching:{" "}
+            {status.data.lastBookMatch?.status ?? "No new releases"}.
           </p>
           {status.data.lastSync?.error && (
             <p role="alert">{status.data.lastSync.error}</p>
@@ -38,8 +42,14 @@ export function IndexerFeeds() {
           {status.data.lastMatch?.error && (
             <p role="alert">{status.data.lastMatch.error}</p>
           )}
+          {status.data.lastBookMatch?.error && (
+            <p role="alert">{status.data.lastBookMatch.error}</p>
+          )}
           {!status.data.configured && (
-            <p>Configure Prowlarr in Settings to receive indexer feeds.</p>
+            <p>
+              Configure Prowlarr or Torznab sources in Settings to receive
+              indexer feeds.
+            </p>
           )}
           <button
             disabled={!status.data.configured || sync.isPending}
@@ -50,7 +60,7 @@ export function IndexerFeeds() {
           {status.data.feeds.map((feed) => (
             <details className="panel" key={feed.id}>
               <summary>
-                {feed.provider} ·{" "}
+                {feed.provider} · {feed.mediaType} ·{" "}
                 {feed.error
                   ? "Unavailable"
                   : feed.lastSuccessAt
