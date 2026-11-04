@@ -55,6 +55,8 @@ export function createPodibleFetchHandler(
     "/movie-shadow",
     "/movie-shadow/:id",
     "/movie-dual-write",
+    "/tv-sync",
+    "/retention",
   ])
     app.get(route, (c) => spa.fetch(c.req.raw));
   app.route("/login", createLoginRoutes(repo));

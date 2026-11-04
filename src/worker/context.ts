@@ -11,6 +11,10 @@ export type WorkerContext = {
   /** Override the agent model provider (e.g. a fake for tests). */
   modelProvider?: ModelProvider;
   movieServices?: import("../movies/operations").MovieServices;
+  tvServices?: import("../tv/runtime").TvServices;
+  tvShadowServices?: import("../tv/shadow").TVShadowServices;
+  tvSyncServices?: import("../tv/sync").TvSyncServices;
+  tvFeedMatcher?: import("../tv/feed").TvFeedMatcher;
   bookTorrentClient?: import("../media/torrent-client").TorrentClient;
   movieShadowServices?: import("../movies/shadow").MovieShadowServices;
   seerrSource?: import("../movies/seerr").SeerrSource;

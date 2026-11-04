@@ -11,6 +11,9 @@ import { moviesRouter, movieRequestsRouter } from "./rpc/movies-router";
 import { movieShadowRouter } from "./rpc/movie-shadow-router";
 import { movieDualWriteRouter } from "./rpc/movie-dual-write-router";
 import { indexerFeedsRouter } from "./rpc/indexer-feeds-router";
+import { tvShadowRouter } from "./rpc/tv-shadow-router";
+import { retentionRouter } from "./rpc/retention-router";
+import { tvRouter } from "./rpc/tv-router";
 
 const t = initTRPC.context<RpcContext>().create();
 const id = z.number().int().positive();
@@ -52,6 +55,25 @@ const procedure = t.procedure.use(async ({ next }) => {
 });
 
 export const appRouter = t.router({
+  tv: t.router({
+    status: procedure.input(tvRouter.routes.status.paramsSchema).output(tvRouter.routes.status.resultSchema).query(({ ctx, input }) => executeMethod(tvRouter.routes.status, ctx, input)),
+    list: procedure.input(tvRouter.routes.list.paramsSchema).output(tvRouter.routes.list.resultSchema).query(({ ctx, input }) => executeMethod(tvRouter.routes.list, ctx, input)),
+    get: procedure.input(tvRouter.routes.get.paramsSchema).output(tvRouter.routes.get.resultSchema).query(({ ctx, input }) => executeMethod(tvRouter.routes.get, ctx, input)),
+    sync: procedure.input(tvRouter.routes.sync.paramsSchema).output(tvRouter.routes.sync.resultSchema).mutation(({ ctx, input }) => executeMethod(tvRouter.routes.sync, ctx, input)),
+    backfill: procedure.input(tvRouter.routes.backfill.paramsSchema).output(tvRouter.routes.backfill.resultSchema).mutation(({ ctx, input }) => executeMethod(tvRouter.routes.backfill, ctx, input)),
+    retry: procedure.input(tvRouter.routes.retry.paramsSchema).output(tvRouter.routes.retry.resultSchema).mutation(({ ctx, input }) => executeMethod(tvRouter.routes.retry, ctx, input)),
+  }),
+  retention: t.router({
+    status: procedure.input(retentionRouter.routes.status.paramsSchema).output(retentionRouter.routes.status.resultSchema).query(({ ctx, input }) => executeMethod(retentionRouter.routes.status, ctx, input)),
+    audit: procedure.input(retentionRouter.routes.audit.paramsSchema).output(retentionRouter.routes.audit.resultSchema).query(({ ctx, input }) => executeMethod(retentionRouter.routes.audit, ctx, input)),
+  }),
+  tvShadow: t.router({
+    status: procedure.input(tvShadowRouter.routes.status.paramsSchema).output(tvShadowRouter.routes.status.resultSchema).query(({ ctx, input }) => executeMethod(tvShadowRouter.routes.status, ctx, input)),
+    list: procedure.input(tvShadowRouter.routes.list.paramsSchema).output(tvShadowRouter.routes.list.resultSchema).query(({ ctx, input }) => executeMethod(tvShadowRouter.routes.list, ctx, input)),
+    get: procedure.input(tvShadowRouter.routes.get.paramsSchema).output(tvShadowRouter.routes.get.resultSchema).query(({ ctx, input }) => executeMethod(tvShadowRouter.routes.get, ctx, input)),
+    sync: procedure.input(tvShadowRouter.routes.sync.paramsSchema).output(tvShadowRouter.routes.sync.resultSchema).mutation(({ ctx, input }) => executeMethod(tvShadowRouter.routes.sync, ctx, input)),
+    retry: procedure.input(tvShadowRouter.routes.retry.paramsSchema).output(tvShadowRouter.routes.retry.resultSchema).mutation(({ ctx, input }) => executeMethod(tvShadowRouter.routes.retry, ctx, input)),
+  }),
   indexerFeeds: t.router({
     status: procedure
       .input(indexerFeedsRouter.routes.status.paramsSchema)

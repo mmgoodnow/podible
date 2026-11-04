@@ -37,6 +37,7 @@ export async function matchMovieFeed(
       .filter(
         (target) =>
           ctx.repo.movies.activeRequestCount(target.id) > 0 &&
+          ctx.repo.retention.get({ namespace: "movie-target", id: String(target.id) })?.desiredPresence !== "evicted" &&
           (!target.active_version_id ||
             ctx.getSettings().movies.automaticUpgrades),
       )
@@ -80,6 +81,7 @@ export async function matchMovieFeed(
       if (
         !target ||
         !ctx.repo.movies.activeRequestCount(targetId) ||
+        ctx.repo.retention.get({ namespace: "movie-target", id: String(targetId) })?.desiredPresence === "evicted" ||
         (target.active_version_id &&
           !ctx.getSettings().movies.automaticUpgrades)
       )
@@ -122,6 +124,7 @@ export async function matchMovieFeed(
         ctx.repo.transaction(() => {
           ctx.execution?.assertActive();
           const current = ctx.repo.movies.target(targetId);
+          if (ctx.repo.retention.get({ namespace: "movie-target", id: String(targetId) })?.desiredPresence === "evicted") return;
           if (
             !current ||
             revision(current.policy_json, current.revision) !== targetRevision

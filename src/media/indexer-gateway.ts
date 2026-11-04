@@ -6,7 +6,7 @@ import type { MediaType, TorznabSource } from "../app-types";
 import { normalizeInfoHash } from "../library/torrent";
 import { INDEXER_RETRY_MS, IndexerError, IndexerSearchError, indexerCooldown, indexerFailure, parseIndexerRetryAfter, type IndexerFailure } from "./indexer-errors";
 
-export type IndexerMedia = MediaType | "movie";
+export type IndexerMedia = MediaType | "movie" | "tv";
 export type SearchResult<TMedia extends string> = {
   title: string;
   provider: string;
@@ -141,7 +141,7 @@ function buildSearchUrl(source: TorznabSource, request: IndexerRequest): URL {
   url.searchParams.set("t", "search");
   if (request.query?.trim()) url.searchParams.set("q", request.query.trim());
   else url.searchParams.delete("q");
-  const category = request.media === "movie" ? "2000" : request.media === "audio" ? source.categories?.audio : source.categories?.ebook;
+  const category = request.media === "movie" ? "2000" : request.media === "tv" ? "5000" : request.media === "audio" ? source.categories?.audio : source.categories?.ebook;
   if (category) {
     url.searchParams.set("cat", category);
   }

@@ -121,6 +121,7 @@ export interface DB {
     "gap_since": string | null;
     "gap_note": string | null;
     "updated_at": string;
+    "boundary_json": string | null;
   };
 
   "job_commands": {

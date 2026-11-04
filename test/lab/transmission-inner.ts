@@ -15,6 +15,7 @@ import {
   prepareTransmission,
   managedTransmission,
   managedBookTransmission,
+  managedTvTransmission,
   readTransmissionIdentity,
 } from "../../src/media/managed-transmission";
 import { TransmissionRpc } from "../../src/media/transmission-client";
@@ -132,6 +133,25 @@ try {
   await resumed.removeRecord(same);
   if (!(await fs.readFile(paths[0]!.path)).equals(files[0]!.bytes))
     throw new Error("Record removal deleted content");
+
+  const tv = managedTvTransmission(path.join(root, "tv"), directory);
+  const tvRef = await tv.ensureAdded({ metainfo, location: { rootId: "tv", relativePath: "episode-pack" } });
+  if ((await tv.inspect(tvRef)).state !== "inactive") throw new Error("TV add was not paused");
+  let refused = false;
+  try { await resumed.inspect(tvRef); } catch { refused = true; }
+  if (!refused) throw new Error("Movie adapter accepted a TV-owned torrent");
+  await tv.resume(tvRef);
+  const tvDeadline = Date.now() + 90_000;
+  while (!(await tv.inspect(tvRef)).complete) {
+    if (Date.now() > tvDeadline) throw new Error("TV webseed transfer timed out");
+    await Bun.sleep(200);
+  }
+  const tvFiles = await tv.files(tvRef);
+  for (const [index, file] of files.entries())
+    if (!(await fs.readFile(tvFiles[index]!.path)).equals(file.bytes)) throw new Error("TV bytes differ");
+  await tv.removeRecord(tvRef);
+  if (!(await fs.readFile(tvFiles[0]!.path)).equals(files[0]!.bytes)) throw new Error("TV record removal deleted data");
+  console.log("TV private Transmission: paused add, owned root/tag, exact bytes, foreign adapter refusal, non-destructive removal verified");
 
   const libraryRoot = path.join(root, "books");
   await fs.mkdir(libraryRoot);

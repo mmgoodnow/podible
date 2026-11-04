@@ -31,6 +31,11 @@ function releaseLockKeys(repo: BooksRepo, releaseId: number | null | undefined):
 }
 
 export function jobLockKeys(repo: BooksRepo, job: JobRow): string[] {
+  if (job.type === "tv_acquire") {
+    const payload = parseJson<{ acquisitionId?: number }>(job.payload_json);
+    const acquisition = payload?.acquisitionId ? repo.tv.acquisition(payload.acquisitionId) : null;
+    return acquisition ? [`tv-target:${acquisition.target_id}`] : [];
+  }
   if (job.type === "movie_acquire") {
     const payload = parseJson<{ acquisitionId?: number }>(job.payload_json);
     const acquisition = payload?.acquisitionId ? repo.movies.acquisition(payload.acquisitionId) : null;

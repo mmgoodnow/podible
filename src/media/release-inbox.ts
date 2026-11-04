@@ -12,7 +12,7 @@ import type { IndexerFailure } from "./indexer-errors";
 export const inboxResultSchema = z.object({
   title: z.string().min(1),
   provider: z.string(),
-  mediaType: z.enum(["movie", "audio", "ebook"]),
+  mediaType: z.enum(["movie", "audio", "ebook", "tv"]),
   sizeBytes: z.number().nonnegative().nullable(),
   url: z
     .url()
@@ -33,6 +33,25 @@ export function feedIdentity(source: SearchSource, media: IndexerMedia) {
 export function feedReleaseKey(result: SearchResult<string>) {
   return digest(result.guid ?? result.infoHash ?? result.url);
 }
+
+export const MAX_FEED_BOUNDARY_KEYS = 5;
+export function boundedFeedBoundary(keys: Iterable<string | null>): string[] {
+  const distinct = new Set<string>();
+  for (const key of keys) {
+    if (key === null) continue;
+    if (typeof key !== "string" || !key.length || key.length > 256)
+      throw new Error("Invalid feed boundary key");
+    distinct.add(key);
+    if (distinct.size === MAX_FEED_BOUNDARY_KEYS) break;
+  }
+  return [...distinct];
+}
+type FeedBoundarySnapshot = {
+  id: string;
+  head_key: string | null;
+  last_success_at: string | null;
+  boundary_json: string | null;
+};
 
 /** Feed inventory and domain associations; execution/retry state stays in Reflow. */
 export class ReleaseInboxRepo {
@@ -71,6 +90,32 @@ export class ReleaseInboxRepo {
         .orderBy("provider")
         .orderBy("media_type"),
     );
+  }
+  /** Only retained release IDs establish overlap; provider publication dates never do. */
+  boundaryKeys(feed: FeedBoundarySnapshot): string[] {
+    if (feed.boundary_json && feed.boundary_json.length <= 2048) {
+      try {
+        const keys: unknown = JSON.parse(feed.boundary_json);
+        if (Array.isArray(keys) && keys.length > 0 && keys.length <= MAX_FEED_BOUNDARY_KEYS &&
+            keys.every(key => typeof key === "string" && key.length > 0 && key.length <= 256))
+          return boundedFeedBoundary([feed.head_key, ...keys]);
+      } catch { /* Legacy/corrupt snapshots retain the known head, never an invented boundary. */ }
+    }
+    const head = feed.head_key;
+    if (!head || !feed.last_success_at) return boundedFeedBoundary([head]);
+    const captured = typedGet(this.db, dbSql.selectFrom("release_inbox")
+      .select(["id", "first_seen_at"]).where("feed_id", "=", feed.id)
+      .where("release_key", "=", head).where("first_seen_at", "<=", feed.last_success_at)
+      .orderBy("id", "desc").limit(1));
+    if (!captured) return [head];
+    // Legacy ingest wrote newest-first rows and the cursor in the same commit/capture time.
+    // Same-feed IDs following that captured head prove prior capture, unlike pubDate alone.
+    const older = typedAll(this.db, dbSql.selectFrom("release_inbox")
+      .select("release_key").select(eb => eb.fn.min<number>("id").as("capture_order"))
+      .where("feed_id", "=", feed.id).where("first_seen_at", "=", captured.first_seen_at)
+      .where("id", ">=", captured.id).groupBy("release_key").orderBy("capture_order")
+      .limit(MAX_FEED_BOUNDARY_KEYS));
+    return boundedFeedBoundary([head, ...older.map(row => row.release_key)]);
   }
   entries(ids: number[]) {
     if (!ids.length) return [];
@@ -152,6 +197,8 @@ export class ReleaseInboxRepo {
     gap: string | null,
     now: string,
     expectedHead?: string | null,
+    boundaryKeys?: readonly string[],
+    expectedBoundaryJson?: string | null,
   ) {
     this.beforeWrite();
     const previous = this.feed(id)!;
@@ -161,12 +208,16 @@ export class ReleaseInboxRepo {
       previous.head_key !== head
     )
       return;
+    if (expectedBoundaryJson !== undefined && previous.boundary_json !== expectedBoundaryJson)
+      return;
+    const boundary = boundedFeedBoundary([head, ...(boundaryKeys ?? []), ...this.boundaryKeys(previous)]);
     typedRun(
       this.db,
       dbSql
         .updateTable("indexer_feeds")
         .set({
           head_key: head ?? previous.head_key,
+          boundary_json: boundary.length ? JSON.stringify(boundary) : null,
           last_polled_at: now,
           last_success_at: now,
           last_error: null,
@@ -175,7 +226,9 @@ export class ReleaseInboxRepo {
           gap_note: previous.gap_note ?? gap,
           updated_at: now,
         })
-        .where("id", "=", id),
+        .where("id", "=", id)
+        .where("head_key", previous.head_key === null ? "is" : "=", previous.head_key)
+        .where("boundary_json", previous.boundary_json === null ? "is" : "=", previous.boundary_json),
     );
   }
   fail(

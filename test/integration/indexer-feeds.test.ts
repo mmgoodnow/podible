@@ -9,7 +9,7 @@ import {
   IndexerGateway,
   type SearchResult,
 } from "../../src/media/indexer-gateway";
-import { feedIdentity, feedReleaseKey } from "../../src/media/release-inbox";
+import { boundedFeedBoundary, feedIdentity, feedReleaseKey } from "../../src/media/release-inbox";
 import { movieOfferFromResult, type MovieOffer } from "../../src/movies/offers";
 import {
   movieRequestView,
@@ -289,6 +289,194 @@ test("feed catch-up follows provider-capped short pages when the reported total 
   }
 });
 
+for (const deleted of [1, 4]) {
+  test(`five retained boundary anchors prevent a false gap when the first ${deleted} releases are deleted`, async () => {
+    const s = await setup();
+    try {
+      const prior = Array.from({ length: 8 }, (_, i) => result(`anchor-${i}`));
+      s.setRows(prior);
+      await syncIndexerFeeds(s.context);
+      expect(JSON.parse(s.repo.releaseInbox.feed(feedId)!.boundary_json!)).toEqual(prior.slice(0, 5).map(feedReleaseKey));
+      const fresh = Array.from({ length: 101 }, (_, i) => result(`new-${i}`));
+      s.requests.length = 0;
+      s.setRows([...fresh, ...prior.slice(deleted)]);
+      await syncIndexerFeeds(s.context);
+      expect(s.requests.map(url => url.searchParams.get("offset"))).toEqual(["0", "100"]);
+      const feed = s.repo.releaseInbox.feed(feedId)!;
+      expect(feed.gap_note).toBeNull();
+      expect(feed.gap_since).toBeNull();
+      expect(feed.head_key).toBe(feedReleaseKey(fresh[0]!));
+      expect(JSON.parse(feed.boundary_json!)).toEqual(fresh.slice(0, 5).map(feedReleaseKey));
+      expect(s.count("release_inbox")).toBe(109);
+      const before = s.count("job_commands");
+      await syncIndexerFeeds({ ...s.context, indexerFeedGateway: s.gateway() });
+      expect(s.count("job_commands")).toBe(before);
+      expect(s.searches()).toBe(0);
+    } finally { await s.close(); }
+  });
+}
+
+test("missing every retained anchor signals bounded history uncertainty and later overlap cannot clear it", async () => {
+  const s = await setup();
+  try {
+    const prior = Array.from({ length: 8 }, (_, i) => result(`old-anchor-${i}`));
+    s.setRows(prior);
+    await syncIndexerFeeds(s.context);
+    const fresh = Array.from({ length: 1100 }, (_, i) => result(`new-history-${i}`));
+    // Older captured rows are not substitutes for the explicit five-key boundary.
+    s.setRows([...fresh, ...prior.slice(5)]);
+    s.requests.length = 0;
+    await syncIndexerFeeds(s.context);
+    expect(s.requests.map(url => Number(url.searchParams.get("offset")))).toEqual(
+      Array.from({ length: 10 }, (_, i) => i * 100),
+    );
+    const gap = s.repo.releaseInbox.feed(feedId)!;
+    expect(gap.gap_since).not.toBeNull();
+    expect(gap.gap_note).toContain("previous feed boundary was not found");
+    expect(s.count("release_inbox")).toBe(1008);
+    expect(JSON.parse(gap.boundary_json!)).toEqual(fresh.slice(0, 5).map(feedReleaseKey));
+    s.setRows([result("later-head"), ...fresh.slice(0, 10)]);
+    await syncIndexerFeeds(s.context);
+    const recovered = s.repo.releaseInbox.feed(feedId)!;
+    expect(recovered.head_key).toBe(feedReleaseKey(result("later-head")));
+    expect(recovered.gap_since).toBe(gap.gap_since);
+    expect(recovered.gap_note).toBe(gap.gap_note);
+    expect(s.searches()).toBe(0);
+  } finally { await s.close(); }
+});
+
+test("legacy feeds reconstruct anchors only from the persisted head's prior capture", async () => {
+  const s = await setup();
+  try {
+    const prior = Array.from({ length: 8 }, (_, i) => result(`legacy-anchor-${i}`));
+    s.setRows(prior);
+    await syncIndexerFeeds(s.context);
+    s.db.query("UPDATE indexer_feeds SET boundary_json=NULL WHERE id=?").run(feedId);
+    const legacy = s.repo.releaseInbox.feed(feedId)!;
+    expect(s.repo.releaseInbox.boundaryKeys(legacy)).toEqual(prior.slice(0, 5).map(feedReleaseKey));
+    s.setRows([result("legacy-new"), ...prior.slice(4)]);
+    await syncIndexerFeeds(s.context);
+    expect(s.repo.releaseInbox.feed(feedId)!.gap_note).toBeNull();
+    expect(JSON.parse(s.repo.releaseInbox.feed(feedId)!.boundary_json!)).toEqual(
+      [result("legacy-new"), ...prior.slice(4)].slice(0, 5).map(feedReleaseKey),
+    );
+  } finally { await s.close(); }
+});
+
+test("an uncommitted legacy capture and provider dates cannot prove boundary overlap", async () => {
+  const s = await setup();
+  try {
+    s.setRows([result("legacy-head")]);
+    await syncIndexerFeeds(s.context);
+    const candidate = { ...result("unproven"), raw: { pubDate: "1999-01-01T00:00:00Z" } };
+    // Captured after the recorded success, with no corresponding successful cursor commit.
+    s.repo.releaseInbox.ingest(feedId, [candidate], "2099-01-01T00:00:00.000Z");
+    s.db.query("UPDATE indexer_feeds SET boundary_json=NULL WHERE id=?").run(feedId);
+    const legacy = s.repo.releaseInbox.feed(feedId)!;
+    expect(s.repo.releaseInbox.boundaryKeys(legacy)).toEqual([legacy.head_key!]);
+    s.context.indexerFeedGateway = { page: async (_source, media) =>
+      ({ results: [{ ...candidate, mediaType: media }], count: 1, total: 1, offset: 0 }) };
+    await syncIndexerFeeds(s.context);
+    expect(s.repo.releaseInbox.feed(feedId)!.gap_note).toContain("previous feed boundary was not found");
+    expect(s.searches()).toBe(0);
+  } finally { await s.close(); }
+});
+
+test("a stale same-head success cannot replace newer anchors or invent a gap", async () => {
+  const s = await setup();
+  try {
+    const prior = Array.from({ length: 5 }, (_, i) => result(`same-head-${i}`));
+    s.setRows(prior);
+    await syncIndexerFeeds(s.context);
+    const before = s.repo.releaseInbox.feed(feedId)!;
+    const nextKeys = [before.head_key!, feedReleaseKey(result("another-captured-release"))];
+    const later = new Date(Date.parse(before.last_success_at!) + 1000).toISOString();
+    s.repo.transaction(() => {
+      s.repo.releaseInbox.ingest(feedId, [result("another-captured-release")], later);
+      s.repo.releaseInbox.succeed(feedId, before.head_key, null, later, before.head_key, nextKeys, before.boundary_json);
+    });
+    const committed = s.repo.releaseInbox.feed(feedId)!;
+    s.repo.releaseInbox.succeed(feedId, before.head_key, "stale false gap", before.last_success_at!,
+      before.head_key, JSON.parse(before.boundary_json!), before.boundary_json);
+    expect(s.repo.releaseInbox.feed(feedId)).toEqual(committed);
+    expect(JSON.parse(committed.boundary_json!).slice(0, 2)).toEqual(nextKeys);
+    expect(committed.gap_note).toBeNull();
+  } finally { await s.close(); }
+});
+
+test("boundary normalization is bounded, distinct, and preserves a useful older capture on empty success", async () => {
+  expect(boundedFeedBoundary([null, "one", "one", "two", "three", "four", "five", "six"]))
+    .toEqual(["one", "two", "three", "four", "five"]);
+  expect(() => boundedFeedBoundary(["x".repeat(257)])).toThrow("boundary key");
+  const s = await setup();
+  try {
+    s.setRows(Array.from({ length: 5 }, (_, i) => result(`empty-anchor-${i}`)));
+    await syncIndexerFeeds(s.context);
+    const before = s.repo.releaseInbox.feed(feedId)!;
+    s.setRows([]);
+    await syncIndexerFeeds(s.context);
+    const after = s.repo.releaseInbox.feed(feedId)!;
+    expect(after.head_key).toBe(before.head_key);
+    expect(after.boundary_json).toBe(before.boundary_json);
+    expect(after.gap_note).not.toBeNull();
+  } finally { await s.close(); }
+});
+
+test("committed anchors survive restart and a lost persist checkpoint without duplicate fanout", async () => {
+  const s = await setup();
+  let reopened: Database | undefined;
+  let failedAfterCommit = false;
+  try {
+    const prior = Array.from({ length: 5 }, (_, i) => result(`restart-anchor-${i}`));
+    s.setRows(prior);
+    await syncIndexerFeeds(s.context);
+    const fresh = Array.from({ length: 101 }, (_, i) => result(`restart-new-${i}`));
+    s.setRows([...fresh, prior[4]!]);
+    const runtime = await s.start({ processJob: (ctx, job) => {
+      if (job.type !== "indexer_feed_sync") return processJob(ctx, job);
+      const execution = ctx.execution!;
+      return processJob({ ...ctx, execution: { ...execution,
+        run: <T>(name: string, action: () => T | Promise<T>): Promise<T> => execution.run(name, async () => {
+          const value = await action();
+          if (name.endsWith(":persist") && !failedAfterCommit) {
+            failedAfterCommit = true;
+            throw new Error("lost feed boundary checkpoint after commit");
+          }
+          return value;
+        }),
+      } }, job);
+    } });
+    const sync = s.repo.createJob({ type: "indexer_feed_sync", maxAttempts: 1 });
+    await until(async () => { await runtime.reconcile(); return s.repo.getJob(sync.id)?.status === "failed"; });
+    expect(failedAfterCommit).toBe(true);
+    const runId = s.repo.getJobExecution(sync.id)!.run_id;
+    const committed = s.repo.releaseInbox.feed(feedId)!;
+    expect(committed.gap_note).toBeNull();
+    expect(JSON.parse(committed.boundary_json!)).toEqual(fresh.slice(0, 5).map(feedReleaseKey));
+    const count = s.count("release_inbox");
+    const matches = s.repo.listJobsByType("movie_feed_match").length;
+    expect(count).toBe(106);
+    expect(matches).toBe(3);
+    await s.stop();
+    reopened = new Database(path.join(s.root, "app.sqlite"));
+    const repo = new BooksRepo(reopened);
+    expect(repo.releaseInbox.feed(feedId)).toEqual(committed);
+    s.context.repo = repo;
+    s.context.getSettings = () => repo.getSettings();
+    let networkReads = 0;
+    s.context.indexerFeedGateway = { page: async () => { networkReads++; throw new Error("Completed feed pages must replay locally"); } };
+    await s.start();
+    repo.retryJob(sync.id);
+    await s.done(sync.id);
+    expect(repo.getJobExecution(sync.id)!.run_id).toBe(runId);
+    expect(networkReads).toBe(0);
+    expect(repo.releaseInbox.feed(feedId)).toEqual(committed);
+    expect(s.count("release_inbox")).toBe(count);
+    expect(repo.listJobsByType("movie_feed_match")).toHaveLength(matches);
+    expect(s.searches()).toBe(0);
+  } finally { await s.stop(); reopened?.close(); await s.close(); }
+}, 15_000);
+
 for (const failureAt of ["second-fanout", "cursor"]) {
   test(`feed ${failureAt} failure atomically rolls back inbox, fanout/outbox, and cursor before safe replay`, async () => {
     const s = await setup();
@@ -343,7 +531,7 @@ test("a failed later page preserves the prior head/batch and durable cooldown su
   const s = await setup();
   let reopened: Database | undefined;
   try {
-    s.setRows([result("old-head")]);
+    s.setRows(Array.from({ length: 5 }, (_, i) => result(`failure-anchor-${i}`)));
     await syncIndexerFeeds(s.context);
     const before = s.repo.releaseInbox.feed(feedId)!;
     const fresh = Array.from({ length: 100 }, (_, i) => result(`partial-${i}`));
@@ -358,6 +546,7 @@ test("a failed later page preserves the prior head/batch and durable cooldown su
     await syncIndexerFeeds(s.context);
     const failed = s.repo.releaseInbox.feed(feedId)!;
     expect(failed.head_key).toBe(before.head_key);
+    expect(failed.boundary_json).toBe(before.boundary_json);
     expect(failed.last_success_at).toBe(before.last_success_at);
     expect(failed.retry_at && Date.parse(failed.retry_at)).toBeGreaterThan(
       Date.now(),
@@ -365,7 +554,7 @@ test("a failed later page preserves the prior head/batch and durable cooldown su
     expect(failed.last_error).toContain("429");
     expect(JSON.stringify(failed)).not.toContain("private upstream");
     expect(JSON.stringify(failed)).not.toContain("private-feed-key");
-    expect(s.count("release_inbox")).toBe(1);
+    expect(s.count("release_inbox")).toBe(5);
     expect(s.repo.listJobsByType("movie_feed_match")).toHaveLength(1);
     reopened = new Database(path.join(s.root, "app.sqlite"));
     const repo = new BooksRepo(reopened);
@@ -396,7 +585,7 @@ test("a failed later page preserves the prior head/batch and durable cooldown su
       retry_at: null,
       last_error: null,
     });
-    expect(s.count("release_inbox")).toBe(1);
+    expect(s.count("release_inbox")).toBe(5);
     expect(s.searches()).toBe(0);
   } finally {
     reopened?.close();

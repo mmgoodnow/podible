@@ -16,11 +16,22 @@ import { syncSeerrRequests } from "../movies/dual-write";
 import { syncIndexerFeeds } from "./indexer-feeds";
 import { matchMovieFeed } from "../movies/feed";
 import { matchBookFeed } from "./book-feeds";
+import { acquireTv } from "../tv/acquisition";
+import { syncTvShadow, evaluateTvShadow } from "../tv/shadow";
+import { syncTvRequests } from "../tv/sync";
+import { reconcileTv } from "../tv/maintenance";
+import { matchTvFeed } from "../tv/feed";
 
 export type JobProcessResult = "done";
 
 /** Domain handlers are code, not a database execution-type enum. */
 export async function processJob(ctx: WorkerContext, job: JobRow): Promise<JobProcessResult> {
+  if (job.type === "tv_acquire") return acquireTv(ctx, job);
+  if (job.type === "tv_sync") return syncTvRequests(ctx, job);
+  if (job.type === "tv_reconcile") return reconcileTv(ctx);
+  if (job.type === "tv_feed_match") return matchTvFeed(ctx, job);
+  if (job.type === "tv_shadow_sync") return syncTvShadow(ctx);
+  if (job.type === "tv_shadow_evaluate") return evaluateTvShadow(ctx, job);
   if (job.type === "indexer_feed_sync") return syncIndexerFeeds(ctx);
   if (job.type === "movie_feed_match") return matchMovieFeed(ctx, job);
   if (job.type === "book_feed_match") return matchBookFeed(ctx, job);

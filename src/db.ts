@@ -1167,6 +1167,7 @@ export function runMigrations(db: Database): void {
   apply(46, () => db.exec(TV_SCHEMA_SQL));
   apply(47, () => db.exec(RETENTION_SCHEMA_SQL));
   apply(48, () => db.exec(TV_SHADOW_SCHEMA_SQL));
+  apply(49, () => db.exec("ALTER TABLE indexer_feeds ADD COLUMN boundary_json TEXT NULL"));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

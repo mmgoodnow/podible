@@ -210,7 +210,7 @@ export function MovieRequests() {
                     ? request.upgrading
                       ? "Available; looking for an upgrade"
                       : "Available in Plex"
-                    : request.state === "waiting-for-release" ? "Waiting for a release" : request.state}
+                    : request.state === "waiting-for-release" ? "No matching release found yet" : request.state}
                 </p>
               </div>
               <span className={`state ${request.available ? "ready" : ""}`}>
@@ -342,7 +342,7 @@ function Progress({ request }: { request: MovieRequestView }) {
             : request.available
               ? "Ready to watch in Plex"
               : request.state === "waiting-for-release"
-                ? "Waiting for a release"
+                ? "Watching for a release"
                 : request.state === "blocked"
                 ? "Needs attention"
                 : "Working on your movie"}
@@ -383,7 +383,7 @@ function Progress({ request }: { request: MovieRequestView }) {
       {!request.available && request.state !== "withdrawn" && (
         <p>
           {request.state === "waiting-for-release"
-            ? "No suitable release is available yet. Podible is watching incoming indexer releases and will try automatically when one appears. You don't need to do anything."
+            ? "No matching release has been found yet. Podible is watching incoming indexer releases and will try automatically when one appears. You don't need to do anything."
             : request.job?.error ??
             request.events.at(-1)?.message ??
             "Your request is queued."}

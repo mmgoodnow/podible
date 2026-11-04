@@ -8,7 +8,7 @@ import {
 } from "../media/indexer-gateway";
 import type { DiscoveredIndexer } from "../media/prowlarr";
 import { IndexerError, indexerFailure } from "../media/indexer-errors";
-import { feedIdentity, feedReleaseKey } from "../media/release-inbox";
+import { boundedFeedBoundary, feedIdentity, feedReleaseKey } from "../media/release-inbox";
 import { durableStep, type WorkerContext } from "./context";
 import { hasWantedBookMedia } from "./book-feeds";
 
@@ -51,6 +51,7 @@ export async function syncIndexerFeeds(
       ? ["movie"]
       : [
           ...(ctx.repo.movies.hasTargets() ? ["movie" as const] : []),
+          ...(ctx.repo.tv.hasTargets() ? ["tv" as const] : []),
           ...(hasWantedBookMedia(ctx.repo)
             ? ["audio" as const, "ebook" as const]
             : []),
@@ -74,27 +75,29 @@ export async function syncIndexerFeeds(
   const gateway = ctx.indexerFeedGateway ?? indexerGateway;
   for (const { source, media } of inventory) {
     const id = feedIdentity(source, media),
-      prefix = "feed:" + id;
+      prefix = "feed:" + id + ":boundary-v2";
     const feed = await durableStep(ctx, prefix + ":inventory", () => {
       active();
-      return ctx.repo.releaseInbox.ensureFeed(
+      const snapshot = ctx.repo.releaseInbox.ensureFeed(
         id,
         indexerFailure(source.name, null, null).provider,
         media,
         new Date().toISOString(),
       );
+      return { ...snapshot, boundaryKeys: ctx.repo.releaseInbox.boundaryKeys(snapshot) };
     });
     if (feed.retry_at && Date.parse(feed.retry_at) > Date.now()) continue;
     const results: SearchResult<IndexerMedia>[] = [];
+    const anchors = new Set(feed.boundaryKeys);
     let head: string | null = null,
-      covered = feed.head_key === null,
+      covered = anchors.size === 0,
       gap: string | null = null;
     const pageHeads = new Set<string>();
     let offset = 0;
     try {
       for (
         let pageIndex = 0;
-        pageIndex < (feed.head_key ? MAX_PAGES : 1);
+        pageIndex < (anchors.size ? MAX_PAGES : 1);
         pageIndex++
       ) {
         active();
@@ -106,9 +109,9 @@ export async function syncIndexerFeeds(
         if (pageIndex === 0) head = first;
         results.push(...page.results);
         if (
-          !feed.head_key ||
+          !anchors.size ||
           page.results.some(
-            (result) => feedReleaseKey(result) === feed.head_key,
+            (result) => anchors.has(feedReleaseKey(result)),
           )
         ) {
           covered = true;
@@ -140,13 +143,14 @@ export async function syncIndexerFeeds(
           for (let start = 0; start < inserted.length; start += PAGE_SIZE) {
             const ids = inserted.slice(start, start + PAGE_SIZE);
             ctx.repo.createJob({
-              type: media === "movie" ? "movie_feed_match" : "book_feed_match",
+              type: media === "movie" ? "movie_feed_match" : media === "tv" ? "tv_feed_match" : "book_feed_match",
               payload: { releaseIds: ids },
               idempotencyKey: "rss-match:" + id + ":" + ids.join(","),
               maxAttempts: 3,
             });
           }
-          ctx.repo.releaseInbox.succeed(id, head, gap, now, feed.head_key);
+          const boundary = boundedFeedBoundary([...results.map(feedReleaseKey), ...feed.boundaryKeys]);
+          ctx.repo.releaseInbox.succeed(id, head, gap, now, feed.head_key, boundary, feed.boundary_json);
         }),
       );
     } catch (error) {

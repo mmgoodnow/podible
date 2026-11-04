@@ -24,6 +24,9 @@ import { moviesRouter, movieRequestsRouter } from "./rpc/movies-router";
 import { movieShadowRouter } from "./rpc/movie-shadow-router";
 import { movieDualWriteRouter } from "./rpc/movie-dual-write-router";
 import { indexerFeedsRouter } from "./rpc/indexer-feeds-router";
+import { tvShadowRouter } from "./rpc/tv-shadow-router";
+import { retentionRouter } from "./rpc/retention-router";
+import { tvRouter } from "./rpc/tv-router";
 
 function response(payload: RpcSuccess | RpcFailure): Response {
   return new Response(JSON.stringify(payload, null, 2), {
@@ -72,6 +75,9 @@ const rootRouter = defineRouter({
   movieShadow: movieShadowRouter,
   movieDualWrite: movieDualWriteRouter,
   indexerFeeds: indexerFeedsRouter,
+  tvShadow: tvShadowRouter,
+  retention: retentionRouter,
+  tv: tvRouter,
 });
 methodsByName = flattenRouter(rootRouter);
 

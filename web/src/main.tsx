@@ -8,6 +8,8 @@ import {
 import { rpc, TRPCProvider, useTRPC } from "./rpc";
 import { Link, useLocation } from "./router";
 import { MovieSync } from "./movie-sync";
+import { TvSync } from "./tv-sync";
+import { RetentionAudit } from "./retention";
 import { Library, Catalog, BookCollection } from "./books";
 import { BookDetail } from "./book-detail";
 import {
@@ -73,12 +75,14 @@ function App() {
             </Link>
           )}
           {session.data?.user.isAdmin && <a href="/admin/settings">Settings</a>}
+          {session.data?.user.isAdmin && <Link href="/tv-sync" aria-current={route === "/tv-sync" ? "page" : undefined}>TV sync</Link>}
+          {session.data?.user.isAdmin && <Link href="/retention" aria-current={route === "/retention" ? "page" : undefined}>Retention</Link>}
         </nav>
         {session.data && <a href="/logout">Sign out</a>}
       </header>
       <main
         className={
-          ["/", "/library", "/add", "/movie-dual-write"].includes(route)
+          (["/", "/library", "/add", "/movie-dual-write", "/tv-sync"].includes(route) || route.startsWith("/requests"))
             ? "compact-main"
             : undefined
         }
@@ -136,7 +140,11 @@ function ActorLibrary({ isAdmin }: { isAdmin: boolean }) {
   return (
     <QueryClientProvider client={actorClient}>
       <TRPCProvider trpcClient={rpc} queryClient={actorClient}>
-        {route === "/movie-dual-write" ? (
+        {route === "/retention" ? (
+          isAdmin ? <RetentionAudit /> : <p role="alert">Administrator access required.</p>
+        ) : route === "/tv-sync" ? (
+          isAdmin ? <TvSync /> : <p role="alert">Administrator access required.</p>
+        ) : route === "/movie-dual-write" ? (
           isAdmin ? (
             <MovieSync />
           ) : (

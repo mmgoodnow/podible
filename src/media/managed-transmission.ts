@@ -116,3 +116,13 @@ export function managedBookTransmission(
     }),
   });
 }
+
+export function managedTvTransmission(root: string, directory = path.join(configDir, "transmission")) {
+  const identity = readTransmissionIdentity(directory);
+  return new TransmissionAdapter({
+    clientId: `transmission:${identity.id}`,
+    roots: { tv: path.join(root, "downloads") },
+    ownershipTag: "Podible TV",
+    rpc: new TransmissionRpc({ url: "http://127.0.0.1:9091/transmission/rpc", username: identity.username, password: identity.password }),
+  });
+}

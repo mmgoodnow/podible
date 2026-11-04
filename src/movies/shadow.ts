@@ -1,5 +1,4 @@
-import path from "node:path";
-import { promises as fs } from "node:fs";
+import { observedFiles } from "../media/observed-files";
 import type { JobRow, AppSettings } from "../app-types";
 import type { BooksRepo } from "../repo";
 import { TEXT_AGENT_MODEL } from "../ai-models";
@@ -32,94 +31,18 @@ export function configuredShadowServices(
     probe: probeMovie,
   };
 }
-const within = (root: string, file: string) =>
-  file === root || file.startsWith(root + path.sep);
 export async function shadowInventory(
   observation: ShadowObservation,
   settings: AppSettings["movies"],
 ): Promise<ShadowInput> {
-  const result: ShadowInput = {
+  const inventory = await observedFiles(observation, settings.shadow.pathMappings);
+  return {
     observation,
     policy: settings.qualityPolicy,
-    files: [],
-    source: "unavailable",
-    warnings: [],
+    ...inventory,
+    // Preserve the existing movie fingerprint contract while TV uses richer stats.
+    files: inventory.files.map(({ path, name, sizeBytes, mtimeMs }) => ({ path, name, sizeBytes, mtimeMs })),
   };
-  for (const [index, remote] of observation.sourcePaths.entries()) {
-    const mapping = [...settings.shadow.pathMappings]
-      .sort((a, b) => b.remoteRoot.length - a.remoteRoot.length)
-      .find((m) => within(path.resolve(m.remoteRoot), path.resolve(remote)));
-    if (
-      !mapping ||
-      !path.isAbsolute(remote) ||
-      !path.isAbsolute(mapping.remoteRoot) ||
-      !path.isAbsolute(mapping.localRoot)
-    ) {
-      result.warnings.push(
-        "Source path has no absolute, explicit shadow mapping",
-      );
-      continue;
-    }
-    const root = await fs.realpath(mapping.localRoot).catch(() => null);
-    if (!root) {
-      result.warnings.push("Mapped source root is unavailable");
-      continue;
-    }
-    const source = path.resolve(
-      mapping.localRoot,
-      path.relative(mapping.remoteRoot, remote),
-    );
-    let visited = 0;
-    let truncated = false;
-    const walk = async (file: string, depth: number): Promise<void> => {
-      if (++visited > 5000 || depth > 6 || result.files.length >= 50) {
-        truncated = true;
-        return;
-      }
-      const stat = await fs.lstat(file);
-      const real = await fs.realpath(file);
-      if (stat.isSymbolicLink() || !within(root, real))
-        throw new Error("Unsafe shadow source");
-      if (stat.isDirectory()) {
-        for (const name of (await fs.readdir(file)).sort()) {
-          if (truncated) break;
-          await walk(path.join(file, name), depth + 1);
-        }
-      } else if (
-        stat.isFile() &&
-        /\.(mkv|mp4|m4v|avi|mov|ts|m2ts|mpg|mpeg)$/i.test(file)
-      ) {
-        result.files.push({
-          path: real,
-          name: path.relative(source, file) || path.basename(file),
-          sizeBytes: stat.size,
-          mtimeMs: stat.mtimeMs,
-        });
-      }
-    };
-    try {
-      await walk(source, 0);
-      if (truncated) {
-        result.files = [];
-        result.warnings.push(
-          "Shadow inventory exceeded safety bounds; manual inspection required",
-        );
-        return result;
-      }
-      if (result.files.length) {
-        result.source = index > 0 || remote === observation.libraryPath ? "library-fallback" : "download";
-        return result;
-      }
-    } catch (error) {
-      result.files = [];
-      result.warnings.push(
-        (error as NodeJS.ErrnoException).code === "ENOENT"
-          ? "Source is missing or has moved"
-          : "Source cannot be inspected safely",
-      );
-    }
-  }
-  return result;
 }
 export function queueShadowCase(repo: BooksRepo, caseId: number) {
   return repo.movieShadow.transaction(() => {

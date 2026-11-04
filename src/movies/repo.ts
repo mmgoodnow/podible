@@ -20,6 +20,7 @@ import {
   type MovieQualityPolicy,
 } from "./quality";
 import { assessMovieUpgrade, evaluateMovieQuality } from "./quality";
+import { RetentionRepo } from "../media/retention-repo";
 
 export type MovieTarget = {
   id: number;
@@ -125,6 +126,11 @@ export class MovieRepo {
         "requested",
         "Movie requested",
       );
+      const retention = new RetentionRepo(this.db, this.beforeWrite);
+      const resource = { namespace: "movie-target", id: String(target.id) };
+      const intent = retention.get(resource);
+      if (!intent || intent.desiredPresence !== "present")
+        retention.request(resource, { expectedRevision: intent?.revision ?? 0, reason: "Explicit movie request" });
       return { requestId: request.id, targetId: target.id, movieId: stored.id };
     });
   }

@@ -244,7 +244,7 @@ export async function acquireMovie(
       emit(
         "blocked",
         current ? "retained" : "waiting",
-        current ? selection.reason : "No suitable release is available yet. Watching incoming indexer releases automatically.",
+        current ? selection.reason : "No matching release has been found yet. Watching incoming indexer releases automatically.",
       );
       await durableStep(ctx, "movie:finish-no-candidate", () =>
         repo.finishAcquisition(acquisition.id),

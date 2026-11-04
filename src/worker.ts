@@ -27,6 +27,8 @@ export async function runWorker(
     let nextShadowSync = 0;
     let nextSeerrSync = 0;
     let nextFeedSync = 0;
+    let nextTvSync = 0;
+    let nextTvMaintenance = 0;
     while (!ctx.shouldStop?.()) {
       try {
         if (ctx.repo.hasBooks() && Date.now() >= nextBookMaintenance) {
@@ -40,7 +42,7 @@ export async function runWorker(
         const prowlarr = ctx.getSettings().prowlarr;
         const feedSettings = ctx.getSettings();
         if ((prowlarr.url || feedSettings.torznab.length) &&
-            (ctx.repo.movies.hasTargets() || ctx.repo.hasBooks()) && Date.now() >= nextFeedSync) {
+            (ctx.repo.movies.hasTargets() || ctx.repo.tv.hasTargets() || ctx.repo.hasBooks()) && Date.now() >= nextFeedSync) {
           const key = createHash("sha256").update(JSON.stringify([prowlarr, feedSettings.torznab])).digest("hex");
           ctx.repo.createJob({
             type: "indexer_feed_sync",
@@ -55,6 +57,18 @@ export async function runWorker(
           nextSeerrSync = Date.now() + seerr.pollIntervalMinutes * 60_000;
         }
         const shadow = ctx.getSettings().movies.shadow;
+        const tv = ctx.getSettings().tv;
+        if (tv.sonarrUrl && tv.sonarrApiKey && Date.now() >= nextTvSync) {
+          const slot = Math.floor(Date.now() / (tv.pollIntervalMinutes * 60_000));
+          ctx.repo.createJob({ type: "tv_shadow_sync", idempotencyKey: `tv-shadow:${slot}`, maxAttempts: 3 });
+          if (seerr.url && seerr.apiKey && tv.managedRoot && tv.plexSectionId && tv.plexViewPath)
+            ctx.repo.createJob({ type: "tv_sync", idempotencyKey: `tv-seerr:${seerr.url}:${slot}`, maxAttempts: 3 });
+          nextTvSync = Date.now() + tv.pollIntervalMinutes * 60_000;
+        }
+        if (ctx.repo.tv.hasTargets() && tv.managedRoot && tv.plexSectionId && tv.plexViewPath && Date.now() >= nextTvMaintenance) {
+          ctx.repo.createJob({ type: "tv_reconcile", idempotencyKey: `tv-maintenance:${boot}:${Math.floor(Date.now() / 3_600_000)}`, maxAttempts: 2 });
+          nextTvMaintenance = Date.now() + 3_600_000;
+        }
         if (shadow.enabled && Date.now() >= nextShadowSync) {
           ctx.repo.createJob({
             type: "movie_shadow_sync",

@@ -88,7 +88,7 @@ try {
     .click();
   console.log("Movie browser: submitted request");
   await page
-    .getByRole("heading", { name: "Waiting for a release", exact: true })
+    .getByRole("heading", { name: "Watching for a release", exact: true })
     .waitFor();
   await context.request.post(new URL("/__fixture/add-release", url).href);
   await page.getByText("Choose a release manually", { exact: true }).click();

@@ -111,16 +111,16 @@ export class ProwlarrDiscovery {
     }
   }
   async sources(
-    kind: "movie" | "audio" | "ebook",
+    kind: "movie" | "tv" | "audio" | "ebook",
     mode: "search" | "rss" = "search",
   ): Promise<DiscoveredIndexer[]> {
     const wanted =
-      kind === "movie" ? [2000] : kind === "audio" ? [3030] : [7020];
+      kind === "movie" ? [2000] : kind === "tv" ? [5000] : kind === "audio" ? [3030] : [7020];
     const supports = (categories: Category[]): boolean =>
       categories.some(
         (c) =>
           wanted.some(
-            (id) => c.id === id || (id === 2000 && c.id >= 2000 && c.id < 3000),
+            (id) => c.id === id || ([2000, 5000].includes(id) && c.id >= id && c.id < id + 1000),
           ) || supports(c.subCategories ?? []),
       );
     return (await this.indexers())
