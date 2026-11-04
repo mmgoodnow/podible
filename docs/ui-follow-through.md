@@ -65,10 +65,16 @@ proposal or a passing isolated test is not a shipped feature.
 - [x] All eleven fixture-backed Chrome acceptance suites and desktop/mobile
   visual inspection pass. No real Plex login or upstream-provider claim.
 - [x] Final audit patch committed/pushed; deploy through normal CD only.
-- [ ] Verify actual running production SHA before calling the changes deployed.
+- [x] Normal CD run `41934689207` passed every verification/build gate; production
+  independently reports running SHA `b300cbd93fe28f47bad1930bae57efc9712e9720`
+  and schema 54. All 145 current book bindings have exactly the same ownership
+  identity digest before/after consolidation; the legacy table is gone. All 17
+  successful transcript identities/fingerprints/paths have the same digest, and
+  the asset-file count remains 766. No torrents were controlled or files moved.
 
 Browser integration caught stale selectors for new home rails and renamed
 storage/torrent actions. Update against actual rendered behavior; do not skip
 suites or weaken deployment gates. Desktop/mobile home and torrent-health visual
-checks passed locally. Until the latest CD and running SHA are checked, pushed
-changes are not verified deployed.
+checks passed locally. These are fixture-browser results, separate from the live
+build/schema/data verification above. Future changes must still distinguish a
+push from a verified production rollout.
