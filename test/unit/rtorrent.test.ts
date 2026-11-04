@@ -31,6 +31,16 @@ describe("rtorrent xmlrpc helpers", () => {
     expect(value).toEqual([["a.mp3"], ["b.mp3"]]);
   });
 
+  test("preserves whitespace and numeric-looking XML-RPC strings", () => {
+    const response = (value: string) =>
+      `<methodResponse><params><param><value><string>${value}</string></value></param></params></methodResponse>`;
+    expect(parseResponseValue(response("/downloads/Daisy Jones &amp; the Six ")))
+      .toBe("/downloads/Daisy Jones & the Six ");
+    expect(parseResponseValue(response("  cover.jpg "))).toBe("  cover.jpg ");
+    expect(parseResponseValue(response("001"))).toBe("001");
+    expect(parseResponseValue(response("true"))).toBe("true");
+  });
+
   test("throws on fault payload", () => {
     expect(() =>
       parseResponseValue(
@@ -168,6 +178,28 @@ describe("rtorrent xmlrpc helpers", () => {
         "/downloads/Mistborn Book 3 - The Hero of Ages.m4b",
         "/downloads/Mistborn Book 3 - The Hero of Ages.nfo",
       ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("retains trailing-space directories through import-source discovery", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      const method = /<methodName>([^<]+)<\/methodName>/.exec(String(init?.body))?.[1];
+      const values: Record<string, string> = {
+        "d.name": "<string>Book </string>",
+        "d.base_path": "<string>/downloads/Book </string>",
+        "d.directory": "<string>/downloads/Book </string>",
+        "d.is_multi_file": "<i8>1</i8>",
+        "f.multicall": "<array><data><value><array><data><value><string>book.epub</string></value></data></array></value></data></array>",
+      };
+      return new Response(`<methodResponse><params><param><value>${values[method!]}</value></param></params></methodResponse>`);
+    }) as typeof fetch;
+    try {
+      const client = new RtorrentClient({ transport: "http-xmlrpc", url: "http://mock.local/RPC2", username: "", password: "" });
+      expect(await client.getImportSource("0123456789abcdef0123456789abcdef01234567"))
+        .toEqual({ basePath: "/downloads/Book ", selectedPaths: ["/downloads/Book /book.epub"] });
     } finally {
       globalThis.fetch = originalFetch;
     }

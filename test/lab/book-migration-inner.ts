@@ -25,7 +25,7 @@ runMigrations(db);
 const repo = new BooksRepo(db);
 const fixtures = [];
 for (const [index, tag] of ["Podible", "LazyLibrarian", "Podible"].entries()) {
-  const name = `Bundle${index}`;
+  const name = `Bundle${index}${index === 0 ? " " : ""}`;
   const contents = [Buffer.from(`%PDF-1.4\nVerified legacy book ${index}\n`), Buffer.from(`NFO ${index}`)];
   const files = ["book.pdf", "release.nfo"];
   const torrent = new Uint8Array(bencode.encode({ info: { name, "piece length": 16384,
@@ -96,7 +96,7 @@ try {
   if (await runMigrationCli([...args, "--apply", "--workers-stopped", "--report", report, "--hash", fixtures[0]!.metadata.infoHash]) !== 0)
     throw new Error("Restart/replay migration failed");
   if (legacy.controlCalls.includes("d.erase") || legacy.loadCalls.length) throw new Error("Migration erased or redownloaded a source");
-  console.log("Book migration real-daemon acceptance passed: Podible + LL, full piece verification, zero downloaded bytes, source-path cutover, corrupt-data rejection, persistent restart/replay, retained source records.");
+  console.log("Book migration real-daemon acceptance passed: Podible + LL, trailing-space paths, full piece verification, zero downloaded bytes, source-path cutover, corrupt-data rejection, persistent restart/replay, retained source records.");
 } finally {
   await stop(); legacy.stop(); db.close(); await fs.rm(root, { recursive: true, force: true });
 }

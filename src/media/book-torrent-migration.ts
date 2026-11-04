@@ -230,7 +230,7 @@ function completedLegacy(legacy: LegacyMigrationState, hash: string, size: numbe
   requireSafe(legacy.tag !== null && allowedTags.includes(legacy.tag), "legacy-tag-excluded");
   requireSafe(s.hash?.toLowerCase() === hash, "legacy-identity-changed");
   requireSafe(s.complete && legacy.hashing === 0 && s.sizeBytes === size &&
-    s.bytesDone === size && s.leftBytes === 0 && s.downRate === 0 && !s.message,
+    s.bytesDone === size && s.leftBytes === 0 && s.downRate === 0,
   "legacy-not-complete");
 }
 

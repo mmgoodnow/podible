@@ -169,6 +169,16 @@ test("dry-run reads cached metainfo and raw sources without writing, stopping, a
   expect(JSON.stringify(result)).not.toContain("SECRET");
 });
 
+test("a stale legacy tracker warning does not replace full target piece verification", async () => {
+  const f = await fixture();
+  f.legacy.state.message = "Tracker warning containing SECRET";
+  const result = await f.run();
+  expect(result[0]?.phase).toBe("complete");
+  expect(f.events.indexOf("recheck")).toBeLessThan(f.events.indexOf("commit"));
+  expect(f.events.indexOf("verify")).toBeLessThan(f.events.indexOf("commit"));
+  expect(JSON.stringify(result)).not.toContain("SECRET");
+});
+
 test("book and hash filters intersect and do not touch unrelated releases", async () => {
   const f = await fixture();
   expect(await f.run({ apply: true, bookIds: [f.book.id + 1] })).toEqual([]);

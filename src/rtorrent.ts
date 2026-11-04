@@ -29,7 +29,9 @@ const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "",
   removeNSPrefix: true,
-  parseTagValue: true,
+  // XML-RPC strings include exact filesystem paths; never trim or coerce them.
+  parseTagValue: false,
+  trimValues: false,
   textNodeName: "#text",
 });
 
@@ -76,12 +78,13 @@ function parseXmlRpcValue(value: unknown): unknown {
   if (typeof value !== "object") return value;
   const record = value as Record<string, unknown>;
   if ("string" in record) return record.string;
-  if ("i4" in record) return record.i4;
-  if ("i8" in record) return record.i8;
-  if ("int" in record) return record.int;
-  if ("long" in record) return record.long;
-  if ("boolean" in record) return record.boolean;
-  if ("double" in record) return record.double;
+  for (const tag of ["i4", "i8", "int", "long", "boolean", "double"]) {
+    if (tag in record) {
+      const number = Number(record[tag]);
+      if (!Number.isFinite(number)) throw new Error("Invalid XML-RPC number");
+      return number;
+    }
+  }
   if ("base64" in record) return record.base64;
   if ("#text" in record) return record["#text"];
   if ("array" in record) {
