@@ -5,26 +5,13 @@ import type { AppRouter } from "../../src/trpc";
 import { useTRPC } from "./rpc";
 import { AddCandidate, Failure, Library } from "./books";
 import { Link, useLocation } from "./router";
-import { ScreenCard, type ScreenBadge } from "./screen-card";
+import { ScreenCard } from "./screen-card";
+import { movieBadge, movieDetail, tvBadge, tvDetail } from "./screen-status";
 
 type Media = "all" | "books" | "movies" | "tv";
 const mediaTypes: Media[] = ["all", "books", "movies", "tv"];
 type MovieRequest = inferRouterOutputs<AppRouter>["requests"]["list"]["requests"][number];
 type TvRequest = inferRouterOutputs<AppRouter>["tv"]["myRequests"]["requests"][number];
-function movieBadge(request: MovieRequest): ScreenBadge {
-  if (request.available) return { label: request.upgrading ? "Available · Upgrading" : "Available", tone: "available" };
-  if (request.stage === "downloading") return { label: "Downloading", tone: "active" };
-  if (request.state === "running") return { label: "In progress", tone: "active" };
-  if (request.state === "queued") return { label: "Requested", tone: "active" };
-  return { label: "Waiting for release", tone: "waiting" };
-}
-function tvBadge(request: TvRequest): ScreenBadge {
-  if (request.intentionallyAbsent) return { label: "Intentionally unavailable", tone: "paused" };
-  if (request.requestedEpisodes > 0 && request.availableEpisodes >= request.requestedEpisodes) return { label: "Available", tone: "available" };
-  if (request.availableEpisodes > 0) return { label: "Partly available", tone: "available" };
-  if (request.acquisitions.some(acquisition => acquisition.status === "queued" || acquisition.status === "running")) return { label: "In progress", tone: "active" };
-  return { label: request.futureEpisodes ? "Upcoming episodes" : "Waiting for release", tone: "waiting" };
-}
 
 export function UnifiedLibrary({ initialPage }: {
   initialPage?: inferRouterOutputs<AppRouter>["library"]["bootstrap"];
@@ -70,13 +57,13 @@ export function UnifiedLibrary({ initialPage }: {
   const pendingTv = tvItems.filter(request => request.availableEpisodes === 0 || request.intentionallyAbsent);
   const movieCard = (request: MovieRequest) => <ScreenCard key={`request:${request.id}`} title={request.movie.title} year={request.movie.year}
     posterUrl={request.movie.posterUrl} href={`/requests/${request.id}`} media="movie" badge={movieBadge(request)} source="Your request"
-    detail={request.available ? "Ready in Plex" : request.stage === "downloading" ? "Acquiring your movie" : request.state === "blocked" ? "Waiting for a suitable release" : "Track your request"}
-    progress={!request.available && request.stage === "downloading" && request.download?.bytesDone != null && request.download.sizeBytes != null ? {
+    detail={movieDetail(request)}
+    progress={!request.available && request.state === "running" && request.stage === "downloading" && request.download?.bytesDone != null && request.download.sizeBytes != null ? {
       value: request.download.bytesDone, max: request.download.sizeBytes, label: `${request.movie.title} download progress`,
     } : undefined} />;
   const tvCard = (request: TvRequest) => <ScreenCard key={`request:${request.requestId}`} title={request.entry.title} year={request.entry.year} posterUrl={request.entry.posterUrl ?? null}
     href={`/tv/requests/${request.requestId}`} media="tv" badge={tvBadge(request)} source={`Season${request.seasonNumbers.length === 1 ? "" : "s"} ${request.seasonNumbers.join(", ")}`}
-    detail={`${request.availableEpisodes}/${request.requestedEpisodes} episodes ready${request.futureEpisodes ? ` · ${request.futureEpisodes} upcoming` : ""}`}
+    detail={tvDetail(request)}
     progress={request.intentionallyAbsent ? undefined : { value: request.availableEpisodes, max: request.requestedEpisodes, label: `${request.entry.title} available episodes` }} />;
   const searching = remoteQ === q.trim() && Boolean(remoteQ);
   const currentBookKeys = new Set(initialPage?.library.items.map(b => b.identifiers.openlibrary).filter(Boolean) ?? []);
@@ -107,7 +94,7 @@ export function UnifiedLibrary({ initialPage }: {
             href={`/movies/${movie.tmdbId}`} media="movie" badge={{ label: "Available", tone: "available" }} source="Shared library" detail="Ready in Plex" />)}
         </div>
         {pendingMovies.length > 0 && <section className="screen-requests" aria-label="Movie requests">
-          <div className="screen-shelf__heading"><h3>Movie requests</h3><span>{pendingMovies.length} waiting or in progress</span></div>
+          <div className="screen-shelf__heading"><h3>Movie requests</h3><span>{pendingMovies.length} not available</span></div>
           <div className="screen-grid">{pendingMovies.slice(0, 6).map(movieCard)}</div>
           {pendingMovies.length > 6 && <details className="screen-requests__more">
             <summary>Show all requests <span>{pendingMovies.length - 6} more</span></summary>
