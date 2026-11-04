@@ -7,6 +7,7 @@ import { useTRPC } from "./rpc";
 import { Link } from "./router";
 import "./activity.css";
 import { activityItems, attentionItems, downloadProgress, problemAction, type ActivityDownload } from "./activity-model";
+import { Connections } from "./connections";
 
 type SettingsDraft = { text: string; base: string } | null;
 const draftKey = ["admin-settings-draft"] as const;
@@ -250,7 +251,6 @@ export function OpsPage() {
   const refresh = useMutation(trpc.adminWeb.refresh.mutationOptions({ onSuccess: () => cache.invalidateQueries({ queryKey: trpc.adminWeb.ops.queryKey() }) }));
   const work = ops.data ? activityItems(ops.data) : [];
   const attention = ops.data ? attentionItems(ops.data.incidents) : [];
-  const feedProblems = ops.data?.feeds.filter(feed => feed.state === "unavailable" || feed.gap).length ?? 0;
   return <div className="activity-page">
     <div className="activity-heading"><h1>Activity</h1><button className="secondary" disabled={ops.isFetching} onClick={() => ops.refetch()}>Refresh</button></div>
     {retryNotice !== null && <p role="status">Retry requested for job #{retryNotice}. Its current progress appears below.</p>}
@@ -283,17 +283,7 @@ export function OpsPage() {
           </details>
         </article>)}</div>
       </section>
-      <details className="activity-status" open={feedProblems > 0}><summary>Connections <small>{feedProblems ? `${feedProblems} need attention` : "Provider status and integration checks"}</small></summary>
-        <div role="region" aria-label="Provider state">
-          <ul className="activity-connections">{ops.data.feeds.map(feed => <li key={feed.id}>
-            <strong>{feed.provider}</strong> / {feed.mediaType}: <strong>{feed.state}</strong>
-            {feed.error && <p>{feed.error.message}</p>}
-            {feed.gap && <p>Some feed history could not be verified.</p>}
-            <details><summary>Connection details</summary><p>Last success: {date(feed.lastSuccessAt)}. Next poll: {date(feed.nextPollAt)}. Provider retry boundary: {date(feed.retryAt)}.</p></details>
-          </li>)}</ul>
-          <div className="activity-tools"><Link href="/settings">Connection settings</Link><Link href="/movie-dual-write">Seerr / Radarr comparisons</Link><Link href="/tv-sync">Seerr / Sonarr comparisons</Link></div>
-        </div>
-      </details>
+      <Connections feeds={ops.data.feeds} observedAt={ops.data.observedAt} truncated={ops.data.feeds.length >= 100} />
       <details className="activity-status"><summary>Torrent health</summary><div><Link href="/stewardship">Inspect private torrent registrations</Link></div></details>
       <p className="muted">Updated {date(ops.data.observedAt)}.</p>
     </>}

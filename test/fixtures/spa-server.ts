@@ -82,6 +82,10 @@ if (process.env.ADMIN_FIXTURE) {
   repo.releaseInbox.ensureFeed("admin-fixture-feed", "Fixture provider", "movie", new Date().toISOString());
   repo.releaseInbox.fail("admin-fixture-feed", { provider: "Fixture provider", kind: "unavailable", status: 429,
     retryAt: Date.now() + 180_000, message: "HTTP 429 cooldown; provider retry data recorded" }, new Date().toISOString());
+  repo.releaseInbox.ensureFeed("admin-fixture-tv", "Fixture provider", "tv", new Date().toISOString());
+  repo.releaseInbox.succeed("admin-fixture-tv", "fixture-head", null, new Date().toISOString());
+  repo.releaseInbox.ensureFeed("admin-fixture-gap", "History provider", "movie", new Date().toISOString());
+  repo.releaseInbox.succeed("admin-fixture-gap", "fixture-head", "Earlier history could not be verified", new Date().toISOString());
 }
 if (process.env.SHADOW_FIXTURE) {
   settings.prowlarr={url:"https://fixture-prowlarr.invalid",apiKey:"fixture-private-key"};
