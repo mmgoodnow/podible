@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { AppSettings } from "../app-types";
 import { defaultMovieSettings, movieSettingsSchema } from "../movies/settings";
 import { tvSettingsSchema } from "../tv/settings";
+import { JOB_TYPES } from "../job-types";
 import { prowlarrSettingsSchema } from "../media/prowlarr";
 
 const emptyToUndefined = (value: unknown) => {
@@ -47,18 +48,7 @@ export const mediaSelectionSchema = z
   }, z.array(mediaSchema).min(1))
   .transform((value) => Array.from(new Set(value)));
 
-export const jobTypeSchema = z.enum([
-  "movie_acquire", "movie_reconcile",
-  "movie_shadow_sync", "movie_shadow_evaluate", "movie_dual_write_sync",
-  "full_library_refresh",
-  "acquire",
-  "download",
-  "import",
-  "reconcile",
-  "chapter_analysis",
-  "cover_generation",
-  "metadata_hydration",
-]);
+export const jobTypeSchema = z.enum(JOB_TYPES);
 
 export const appSettingsSchema: z.ZodType<AppSettings> = z.object({
   prowlarr: prowlarrSettingsSchema.prefault({}),

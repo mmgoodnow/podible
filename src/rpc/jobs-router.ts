@@ -3,22 +3,9 @@ import { z } from "zod";
 import { defineMethod, defineRouter } from "./framework";
 import { emptyParamsSchema, jobRowSchema, jobTypeSchema, limitSchema, positiveIntSchema } from "./schemas";
 import { enrichJob, RpcError } from "./shared";
+import { JOB_TYPES } from "../job-types";
 
-const allJobTypes = [
-  "movie_acquire",
-  "movie_reconcile",
-  "movie_shadow_sync",
-  "movie_shadow_evaluate",
-  "movie_dual_write_sync",
-  "full_library_refresh",
-  "acquire",
-  "download",
-  "import",
-  "reconcile",
-  "chapter_analysis",
-  "cover_generation",
-  "metadata_hydration",
-] as const;
+const allJobTypes = JOB_TYPES;
 
 export const jobsRouter = defineRouter({
   list: defineMethod({

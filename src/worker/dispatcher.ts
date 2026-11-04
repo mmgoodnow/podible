@@ -64,5 +64,6 @@ export async function processJob(ctx: WorkerContext, job: JobRow): Promise<JobPr
   if (job.type === "metadata_hydration") {
     return processMetadataHydrationJob(ctx, job);
   }
-  throw new Error(`Unsupported job type: ${job.type}`);
+  const unhandled: never = job.type;
+  throw new Error(`Unsupported job type: ${unhandled}`);
 }

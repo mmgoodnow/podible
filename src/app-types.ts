@@ -2,24 +2,7 @@ export type MediaType = "audio" | "ebook";
 
 export type ReleaseStatus = "snatched" | "downloading" | "downloaded" | "imported" | "failed";
 
-export type JobType =
-  | "tv_acquire" | "tv_sync" | "tv_reconcile" | "tv_shadow_sync" | "tv_shadow_evaluate" | "tv_feed_match"
-  | "full_library_refresh"
-  | "acquire"
-  | "download"
-  | "import"
-  | "reconcile"
-  | "chapter_analysis"
-  | "cover_generation"
-  | "metadata_hydration"
-  | "movie_acquire"
-  | "movie_reconcile"
-  | "movie_shadow_sync"
-  | "movie_shadow_evaluate"
-  | "movie_dual_write_sync"
-  | "indexer_feed_sync"
-  | "movie_feed_match"
-  | "book_feed_match";
+export type JobType = (typeof import("./job-types").JOB_TYPES)[number];
 
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
