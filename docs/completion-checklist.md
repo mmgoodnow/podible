@@ -40,8 +40,8 @@ complete Seerr-replacement backlog.
 
 - [x] Share category intake across books, movies and TV with five checkpoint anchors.
 - [x] Cover upgrades, replacement failure and crash recovery in acceptance tests.
-- [ ] Capture a production Radarr/Podible RSS timing comparison using the existing Seerr canary.
-- [ ] Record whether missing evidence requires a future release rather than claiming a synthetic replay proves live timing.
+- [x] Capture a production Radarr/Podible RSS timing comparison using the existing Seerr canary, including exact Plex identity/path verification.
+- [x] Distinguish initial absence from real arrival: the release appeared later, without a periodic per-title search or a synthetic replay.
 
 Production observation on 2026-11-04 UTC: existing request 4, A Dog's Perfect
 Christmas (TMDB 1570488), is monitored in Radarr as movie 2346. Radarr reports
@@ -50,6 +50,16 @@ Podible has no matching inbox release or consideration. Neither system has
 acquired this canary yet; a date alone is not evidence that a tracker release
 exists. Movie, TV, audio and ebook feeds are polling successfully. Do not start
 periodic per-title searches to manufacture a comparison.
+
+Later live outcome on the same date: BeyondHD feed entries 32031/32032 were
+first seen at 08:03:02.942 UTC, considered at 08:03:05.789, and acquisition 5
+started downloading at 08:03:44.874. It became available at 08:13:04.545.
+Independent read-only verification confirmed selected version 4, the canonical
+symlink and exact TMDB 1570488 path in isolated Plex section 15. Radarr's exact
+movie-specific history shows a grab at 08:15:41 and import at 08:24:52.
+These are observed times across independent providers/policies, not a controlled
+algorithm speed test. Later FileList/PTP offers were retained without replacing
+the selected version. See [the comparison](movie-rss-canary.md).
 
 ## Retention And Recovery
 
@@ -60,7 +70,9 @@ periodic per-title searches to manufacture a comparison.
 - [x] Implement durable, revalidated whole-resource eviction and declarative view retirement.
 - [x] Preserve seed-store data, active acquisitions, protected/shared content and re-request identity.
 - [x] Cover interruption, stale plans, failed effects and re-request recovery in real Reflow/SQLite acceptance tests.
-- [ ] Verify production preview/no-op behavior before any destructive action.
+- [x] Verify production preview/no-op behavior before any destructive action: normal CD run 41797827625 serves dfb6eba on schema 50; default preview reports healthy space, pressure false, zero candidates and zero connection changes/write attempts.
+- [x] Observe normal scheduler-created retention cleanup jobs 2392 and 2408 succeed with zero eviction records; job 2392 was independently verified in Reflow with no pending command, and the parent confirmed job 2408 in its minimal read-only proof. No manually queued job or executor invocation.
+- [x] Compare all 17 successful transcript rows/fingerprints across rollout and confirm filesystem-identity preservation of canonical movie/seed files around the preview; see the dated production evidence in retention.md.
 
 The quiet `monitor-tv-and-rss-canaries` heartbeat follows the remaining external
 release/download outcomes every 30 minutes, read-only. It must not start searches,

@@ -7,7 +7,7 @@ books, torrent registrations, and download/seed stores are outside its destructi
 
 ## Automatic Movie Cleanup
 
-The scheduler queues one global `retention_cleanup` job per fifteen-minute slot when movie storage
+The scheduler queues one global `retention_cleanup` job per five-minute slot when movie storage
 is configured. It observes the movie filesystem first. Healthy or unknown space is a no-op:
 no per-title Plex history lookup, provider search, seed inspection, intent change, or deletion.
 This is not a periodic release-search/upgrade loop.
@@ -451,3 +451,52 @@ The byte-accounting correction above remains local and was not deployed by this 
 - Concurrent TV canaries changed the global active-acquisition count between read samples
   (two, then three). The audit intentionally over-blocks on that activity; it does not infer
   target-specific use or claim the whole library was a transactionally frozen snapshot.
+
+### Production No-Op Verification (2026-11-04 08:29 UTC)
+
+Normal CD run
+[`41797827625`](https://github.com/mmgoodnow/podible/actions/runs/41797827625)
+completed verification, both architecture builds, guarded manifest publication and Watchtower.
+Read-only SSH then confirmed the actual serving build was
+`dfb6ebacd3c81951c94d1592607952331937f70a`, a descendant of `1bf5779`, with
+application schema 50. Worker-gated startup completed, no worker failure/restart loop was
+observed, HTTP health returned 200 (81 ms sampled), and the private Transmission RPC reported
+`4.1.4 (a6d907d9ea)`. Existing private credentials remained inside the container.
+
+- The real `previewRetention(repo, undefined, undefined, {})` used the unchanged production
+  20 GiB reserve, default adapters and actual filesystem counters. The movie root was known
+  ext4 (`0xef53`), with 59,400,010,952,704 available bytes in the sample. The result was
+  `pressure: false`, zero candidates and `nextAfterTargetId: null`; pressure was not forced.
+- Preview used SQLite `readonly: true`, `PRAGMA query_only=1`, and a repository write guard.
+  Write attempts were zero and connection `total_changes()` was zero before and after.
+  Settings, retention resources/events/evictions, pressure cursor and movie selections also
+  had identical before/after hashes. This proves the preview did not write; it does not claim
+  the concurrently running application's entire database was frozen.
+- The normal boot scheduler, not the verifier, created job `2392` at
+  `2026-11-04T08:23:17.865Z`, with dedupe key `retention-pressure:5979268` and default empty
+  payload. The deployed `RETENTION_PRESSURE_INTERVAL_MS` is 300,000: the normal pressure
+  scheduler runs every five minutes. Its actual Reflow run
+  `ea63a8be-1ee9-4a89-9025-60dadb16293b` completed at
+  `2026-11-04T08:24:15.352Z`, without error. Both `job-input` and `operation-finish` were
+  completed, the app command was acknowledged, and `retention_evictions` contained zero rows.
+  The parent's subsequent minimal read-only proof also confirmed scheduler job `2408`
+  succeeded, with both jobs successful and still zero eviction rows. It independently
+  confirmed the same healthy preview counters, zero connection changes and all 17 preserved
+  fingerprints. No additional production probes were performed after that confirmation.
+- All 17 successful transcript rows and their fingerprints matched the 08:04 UTC pre-rollout
+  baseline exactly. The SHA-256 of the ordered `(manifestation_id, fingerprint)` pairs remained
+  `bec4e8b36120822e1bfd69e19794ec2ba4cefd052b88d75ad121026c1186a326`.
+- The original three canonical movie files retained the same registered sizes, device/inode,
+  timestamps and link metadata across rollout. Inventory grew to four because the already
+  running A Dog's Perfect Christmas acquisition recorded its canonical version at
+  `08:12:45.763Z`, before the final container started at `08:23:16Z`. All four current canonical
+  objects and four movie seed files had identical filesystem-identity inventories before and
+  after preview (08:25-08:28 UTC). All four seed registrations and persisted download bindings
+  also matched the pre-rollout baseline. These are metadata/identity comparisons, not a rehash
+  of entire movie/seed files or a claim that a downloading file never changed before completion.
+
+This establishes the healthy-space production no-op only. The verifier did not create a job,
+record intent, change configuration, force pressure, invoke an executor, pause/control torrents,
+or deploy manually. Destructive pressure behavior and recovery remain acceptance-test evidence,
+not a claimed production eviction exercise. The separately approval-gated book-transfer maintenance
+window and future TV/RSS release observations are not completed by these checks.

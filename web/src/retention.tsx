@@ -151,7 +151,7 @@ export function RetentionAudit() {
     <h1>Retention audit</h1>
     <section className="panel" aria-label="Disk-pressure management">
       <h2>Disk-pressure management</h2>
-      <p>The background worker checks every 15 minutes and reclaims eligible owned movie objects only when free space falls below the configured threshold. It protects recent requests, protected titles, active playback and acquisitions, shared files, and torrent seed data.</p>
+      <p>The background worker checks every 5 minutes and reclaims eligible owned movie objects only when free space falls below the configured threshold. It protects recent requests, protected titles, active playback and acquisitions, shared files, and torrent seed data.</p>
       <p>Policy is in Settings JSON under <code>retention.minimumFreeBytes</code> and <code>retention.protectedMovieTargetIds</code>. The default free-space floor is 20 GiB. TV, books and foreign libraries are not automatically evicted.</p>
       <button type="button" disabled={pressure.isFetching} onClick={() => { void pressure.refetch(); }}>
         {pressure.isFetching ? "Checking disk..." : "Preview disk pressure"}
