@@ -11,6 +11,7 @@ import { createJobExecutionRuntime } from "../../src/worker/execution";
 const types = [
   "indexer_feed_sync", "movie_feed_match", "book_feed_match",
   "movie_acquire", "movie_reconcile", "movie_shadow_sync", "movie_shadow_evaluate", "movie_dual_write_sync",
+  "tv_acquire", "tv_sync", "tv_reconcile", "tv_shadow_sync", "tv_shadow_evaluate", "tv_feed_match",
   "acquire",
   "download",
   "import",

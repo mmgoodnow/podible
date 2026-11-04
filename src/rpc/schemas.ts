@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import type { AppSettings } from "../app-types";
 import { defaultMovieSettings, movieSettingsSchema } from "../movies/settings";
+import { tvSettingsSchema } from "../tv/settings";
 import { prowlarrSettingsSchema } from "../media/prowlarr";
 
 const emptyToUndefined = (value: unknown) => {
@@ -62,6 +63,7 @@ export const jobTypeSchema = z.enum([
 export const appSettingsSchema: z.ZodType<AppSettings> = z.object({
   prowlarr: prowlarrSettingsSchema.prefault({}),
   movies: movieSettingsSchema.default(defaultMovieSettings()),
+  tv: tvSettingsSchema.prefault({}),
   torznab: z.array(
     z.object({
       name: z.string(),

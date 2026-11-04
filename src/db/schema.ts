@@ -354,6 +354,26 @@ export interface DB {
     "updated_at": string;
   };
 
+  "retention_events": {
+    "namespace": string;
+    "resource_id": string;
+    "revision": number;
+    "action": string;
+    "reason": string;
+    "desired_presence": string;
+    "actual_presence": string;
+    "created_at": string;
+  };
+
+  "retention_resources": {
+    "namespace": string;
+    "resource_id": string;
+    "desired_presence": string;
+    "actual_presence": string;
+    "revision": number;
+    "updated_at": string;
+  };
+
   "schema_migrations": {
     "id": Generated<number>;
     "applied_at": string;
@@ -383,6 +403,164 @@ export interface DB {
     "torrent_bytes": Uint8Array;
     "created_at": string;
     "updated_at": string;
+  };
+
+  "tv_acquisition_downloads": {
+    "acquisition_id": number;
+    "torrent_id": number;
+  };
+
+  "tv_acquisitions": {
+    "id": Generated<number>;
+    "target_id": number;
+    "request_id": number | null;
+    "reason": string;
+    "job_id": number | null;
+    "decision_json": string | null;
+    "finished_at": string | null;
+    "created_at": string;
+  };
+
+  "tv_active_episodes": {
+    "target_id": number;
+    "entry_id": number;
+    "episode_id": number;
+    "version_id": number;
+  };
+
+  "tv_entries": {
+    "id": Generated<number>;
+    "catalog_key": string;
+    "metadata_json": string;
+    "updated_at": string;
+  };
+
+  "tv_entry_episodes": {
+    "entry_id": number;
+    "episode_id": number;
+  };
+
+  "tv_entry_refs": {
+    "entry_id": number;
+    "provider": string;
+    "instance": string;
+    "external_id": string;
+    "source": string;
+  };
+
+  "tv_entry_relations": {
+    "entry_id": number;
+    "related_key": string;
+    "title": string;
+    "relation": string;
+    "source": string;
+  };
+
+  "tv_episode_numbering": {
+    "entry_id": number;
+    "episode_id": number;
+    "scheme": string;
+    "season": number | null;
+    "episode": number | null;
+    "absolute": number | null;
+    "source": string;
+  };
+
+  "tv_episode_refs": {
+    "episode_id": number;
+    "provider": string;
+    "instance": string;
+    "external_id": string;
+    "source": string;
+  };
+
+  "tv_episodes": {
+    "id": Generated<number>;
+    "episode_key": string;
+    "metadata_json": string;
+    "updated_at": string;
+  };
+
+  "tv_events": {
+    "id": Generated<number>;
+    "target_id": number;
+    "acquisition_id": number | null;
+    "event_key": string;
+    "stage": string;
+    "message": string;
+    "created_at": string;
+  };
+
+  "tv_publications": {
+    "target_id": Generated<number>;
+    "version_id": number;
+    "expected_revision": number;
+    "created_at": string;
+  };
+
+  "tv_request_episodes": {
+    "request_id": number;
+    "entry_id": number;
+    "episode_id": number;
+  };
+
+  "tv_request_origins": {
+    "instance": string;
+    "external_request_id": number;
+    "entry_id": number;
+    "request_id": number;
+    "source_json": string;
+    "created_at": string;
+  };
+
+  "tv_requests": {
+    "id": Generated<number>;
+    "user_id": number;
+    "target_id": number;
+    "request_key": string;
+    "withdrawn_at": string | null;
+    "created_at": string;
+  };
+
+  "tv_shadow_cases": {
+    "id": Generated<number>;
+    "input_hash": string;
+    "input_json": string;
+    "job_id": number | null;
+    "result_json": string | null;
+    "created_at": string;
+  };
+
+  "tv_targets": {
+    "id": Generated<number>;
+    "entry_id": number;
+    "policy_key": string;
+    "policy_json": string;
+    "revision": Generated<number>;
+    "created_at": string;
+  };
+
+  "tv_version_file_episodes": {
+    "version_id": number;
+    "file_id": string;
+    "entry_id": number;
+    "episode_id": number;
+  };
+
+  "tv_version_files": {
+    "version_id": number;
+    "entry_id": number;
+    "file_id": string;
+    "sequence": number;
+  };
+
+  "tv_versions": {
+    "id": Generated<number>;
+    "entry_id": number;
+    "target_id": number;
+    "acquisition_id": number;
+    "facts_json": string;
+    "created_at": string;
   };
 
   "users": {

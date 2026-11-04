@@ -3,6 +3,7 @@ export type MediaType = "audio" | "ebook";
 export type ReleaseStatus = "snatched" | "downloading" | "downloaded" | "imported" | "failed";
 
 export type JobType =
+  | "tv_acquire" | "tv_sync" | "tv_reconcile" | "tv_shadow_sync" | "tv_shadow_evaluate" | "tv_feed_match"
   | "full_library_refresh"
   | "acquire"
   | "download"
@@ -53,6 +54,7 @@ export type TorznabSource = {
 export type AppSettings = {
   prowlarr: import("zod").infer<typeof import("./media/prowlarr").prowlarrSettingsSchema>;
   movies: import("./movies/settings").MovieSettings;
+  tv: import("./tv/settings").TvSettings;
   torznab: TorznabSource[];
   rtorrent: {
     transport: "http-xmlrpc";

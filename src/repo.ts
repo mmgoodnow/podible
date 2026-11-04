@@ -5,6 +5,9 @@ import { MovieShadowRepo } from "./movies/shadow-repo";
 import { MovieSeerrRepo } from "./movies/seerr-repo";
 import { ReleaseInboxRepo } from "./media/release-inbox";
 import { BookTorrentsRepo } from "./media/book-torrents";
+import { TvRepo } from "./tv/repo";
+import { RetentionRepo } from "./media/retention-repo";
+import { TvShadowRepo } from "./tv/shadow-repo";
 
 import { nowIso, finalizeJobJournalMigration } from "./db";
 import { randomUUID } from "node:crypto";
@@ -250,6 +253,9 @@ export class BooksRepo {
   get movies() {
     return new MovieRepo(this.db, this.beforeWrite, (id) => this.getJob(id));
   }
+  get tv() { return new TvRepo(this.db, this.beforeWrite, (id) => this.getJob(id)); }
+  get tvShadow() { return new TvShadowRepo(this.db, this.beforeWrite, (id) => this.getJob(id)); }
+  get retention() { return new RetentionRepo(this.db, this.beforeWrite); }
   constructor(
     private readonly db: Database,
     private readonly beforeWrite: () => void = () => {},

@@ -9,6 +9,9 @@ import { MOVIE_SHADOW_SCHEMA_SQL } from "./movies/shadow-repo";
 import { MOVIE_SEERR_SCHEMA_SQL } from "./movies/seerr-repo";
 import { RELEASE_INBOX_SCHEMA_SQL } from "./media/release-inbox-schema";
 import { BOOK_TORRENTS_SCHEMA_SQL } from "./media/book-torrents-schema";
+import { TV_SCHEMA_SQL } from "./tv/schema";
+import { RETENTION_SCHEMA_SQL } from "./media/retention-schema";
+import { TV_SHADOW_SCHEMA_SQL } from "./tv/shadow-repo";
 
 const SCHEMA_MIGRATION_ID = 1;
 const GUID_MIGRATION_ID = 2;
@@ -1161,6 +1164,9 @@ export function runMigrations(db: Database): void {
   apply(43, () => db.exec(BOOK_TORRENTS_SCHEMA_SQL));
   apply(44, () => db.exec("DROP INDEX IF EXISTS ux_releases_provider_guid"));
   apply(45, () => db.exec("ALTER TABLE asset_files ADD COLUMN identity_path TEXT NULL"));
+  apply(46, () => db.exec(TV_SCHEMA_SQL));
+  apply(47, () => db.exec(RETENTION_SCHEMA_SQL));
+  apply(48, () => db.exec(TV_SHADOW_SCHEMA_SQL));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */
