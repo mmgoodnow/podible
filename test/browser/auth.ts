@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
+import { capturePage } from "./capture";
 
 const server = Bun.spawn([process.execPath, "run", "test/fixtures/spa-server.ts"], {
   stdout: "pipe", stderr: "inherit",
@@ -82,7 +83,7 @@ try {
     console.error(JSON.stringify({ route: page.url(), status: loginEntry?.status(), body: await page.locator("body").innerText(), pageErrors, networkErrors }));
     throw error;
   });
-  await page.screenshot({ path: path.join(artifacts, "auth-login-desktop.png"), animations: "disabled" });
+  await capturePage(page, path.join(artifacts, "auth-login-desktop.png"));
   const loading = await success.newPage();
   await loading.goto(link("/login/plex/loading"));
   await loading.getByRole("heading", { name: "Plex sign-in", exact: true }).waitFor();
@@ -171,7 +172,7 @@ try {
   assert.equal((await (await blocked.request.get(link("/__fixture/auth-state"))).json()).starts, startsBefore, "Blocked popup still started provider work");
   assert.equal(await blockedPage.getByRole("button", { name: "Continue with Plex", exact: true }).isEnabled(), true);
   assert.equal(await blockedPage.evaluate("document.documentElement.scrollWidth > innerWidth"), false);
-  await blockedPage.screenshot({ path: path.join(artifacts, "auth-blocked-mobile.png"), animations: "disabled" });
+  await capturePage(blockedPage, path.join(artifacts, "auth-blocked-mobile.png"));
   await blockedPage.getByRole("link", { name: "Continue in this window instead", exact: true }).click();
   await blockedPage.waitForURL((url) => url.pathname === "/login" && url.searchParams.get("inline") === "1");
   await blockedPage.getByRole("button", { name: "Continue with Plex", exact: true }).click();
