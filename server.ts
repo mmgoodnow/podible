@@ -1,13 +1,9 @@
 import { ensureConfigDir, booksDbPath, port } from "./src/config";
 import { openDatabase } from "./src/db";
 import { createPodibleFetchHandler } from "./src/http";
-import { queuePendingCurationJobs } from "./src/library/chapter-analysis";
-import { watermarkLegacyGeneratedCovers } from "./src/library/cover-generation";
 import { pingPlexOwnerToken } from "./src/plex";
 import { BooksRepo } from "./src/repo";
-import { runWorker } from "./src/worker";
-import { queueStaleMetadataHydration } from "./src/worker/metadata-hydration";
-import { createJobExecutionRuntime } from "./src/worker/execution";
+import { BackgroundWorker } from "./src/runtime/background-worker";
 import type { HTMLBundle } from "bun";
 
 export async function startServer(frontend?: HTMLBundle) {
@@ -15,114 +11,96 @@ export async function startServer(frontend?: HTMLBundle) {
 
   await ensureConfigDir();
   const db = openDatabase(booksDbPath);
-  const repo = new BooksRepo(db);
-  repo.ensureSettings();
-  const current = repo.getSettings();
+  let server: ReturnType<typeof Bun.serve> | undefined;
   let stopping = false;
-  const workerContext = {
-    repo,
-    getSettings: () => repo.getSettings(),
-    onLog: (message: string) => console.log(message),
-    shouldStop: () => stopping,
-    activeLocks: new Set<string>(),
-  };
-  // Migrate history and bind authoritative reads before queues or HTTP can run.
-  const execution = await createJobExecutionRuntime(
-    workerContext,
-    repo.executionDatabasePath(),
-  );
-
-  const legacyCoverWatermarks = await watermarkLegacyGeneratedCovers(repo);
-  if (legacyCoverWatermarks.updated > 0 || legacyCoverWatermarks.failed > 0) {
-    console.log(
-      `[cover-generation] legacy watermarks updated=${legacyCoverWatermarks.updated} failed=${legacyCoverWatermarks.failed}`,
-    );
-  }
-
-  const metadataHydrationJob = queueStaleMetadataHydration(repo);
-  if (metadataHydrationJob) {
-    console.log(
-      `[metadata-hydration] job=${metadataHydrationJob.id} status=${metadataHydrationJob.status}`,
-    );
-  }
-
-  const worker = runWorker(workerContext, { runtime: execution });
-
-  // Enqueue curation for any book that already has a transcript but no chapters yet.
-  void queuePendingCurationJobs(repo).then((count) => {
-    if (count > 0)
-      console.log(
-        `[chapter-analysis] queued curation for ${count} already-transcribed book(s)`,
-      );
-  });
-
-  // Keep the Plex owner token alive so shared-user lookups don't 401 a week
-  // after admin setup. Plex.tv extends a token's lifetime when /api/v2/ping is
-  // hit before the embedded `exp`. We do it at startup (cheap, catches a token
-  // that's about to expire) and every 24h thereafter. If it fails, we log; the
-  // admin recovery path is to log out and back in (which re-captures the token).
-  async function pingPlexAndLog(): Promise<void> {
-    const settings = repo.getSettings();
-    if (!settings.auth.plex.ownerToken) return;
-    const ok = await pingPlexOwnerToken(settings);
-    console.log(
-      `[plex] owner token ping ${ok ? "ok" : "FAILED — admin must re-link Plex"}`,
-    );
-  }
-  void pingPlexAndLog();
-  const PLEX_PING_INTERVAL_MS = 24 * 60 * 60 * 1000;
-  const plexPingTimer = setInterval(
-    () => void pingPlexAndLog(),
-    PLEX_PING_INTERVAL_MS,
-  );
-
-  const server = Bun.serve({
-    port,
-    idleTimeout: 60,
-    ...(frontend
-      ? {
-          routes: {
-            "/": frontend,
-            "/library": frontend,
-            "/add": frontend,
-            "/book/:bookId": frontend,
-            "/series": frontend,
-            "/author": frontend,
-            "/movies": frontend,
-            "/movies/:id": frontend,
-            "/requests": frontend,
-            "/requests/:id": frontend,
-            "/movie-dual-write": frontend,
-          },
-          development: { hmr: true, console: true },
-        }
-      : { development: false }),
-    fetch: createPodibleFetchHandler(repo, startTime),
-  });
-
-  const localBase = `http://localhost${server.port === 80 ? "" : `:${server.port}`}`;
-
-  console.log(`Podible backend listening on ${localBase}`);
-  console.log(`Library root: ${current.libraryRoot}`);
-  console.log(`RPC endpoint: ${localBase}/rpc`);
-  console.log(`Home: ${localBase}/`);
-
-  async function shutdown(): Promise<void> {
+  let plexPingTimer: ReturnType<typeof setInterval> | undefined;
+  const background = new BackgroundWorker({ databasePath: booksDbPath, onFailure: error => {
+    console.error("[background] execution worker failed", error.message);
+    void shutdown(1);
+  } });
+  async function shutdown(exitCode = 0): Promise<void> {
     if (stopping) return;
     stopping = true;
     clearInterval(plexPingTimer);
-    // Keep SQLite open while handlers unwind. If an external call will not
-    // finish, exit without closing underneath it; leases allow safe reclamation.
-    const deadline = setTimeout(() => process.exit(0), 8_000);
+    const deadline = setTimeout(() => process.exit(exitCode || 1), 8_000);
     deadline.unref();
-    await Promise.all([server.stop(), worker]);
-    db.close();
-    clearTimeout(deadline);
-    process.exit(0);
+    try {
+      const [, result] = await Promise.all([server?.stop(), background.stop()]);
+      if (result.forced) console.warn("[background] worker terminated after shutdown deadline; durable leases will recover work");
+      db.close();
+      clearTimeout(deadline);
+      process.exit(exitCode);
+    } catch {
+      console.error("[background] shutdown incomplete; exiting without starting another engine");
+      process.exit(1);
+    }
   }
-  process.on("SIGINT", () => void shutdown());
-  process.on("SIGTERM", () => void shutdown());
-  return server;
+  const onSignal = () => void shutdown();
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  try {
+    await background.start();
+    if (stopping) throw new Error("Server stopped during background startup");
+    // Construct after the worker's durable journal migration, never cache legacy schema on main.
+    const repo = new BooksRepo(db);
+    repo.ensureSettings();
+    const current = repo.getSettings();
+
+    // Keep the Plex owner token alive; this existing asynchronous request does not run jobs.
+    async function pingPlexAndLog(): Promise<void> {
+      const settings = repo.getSettings();
+      if (!settings.auth.plex.ownerToken) return;
+      const ok = await pingPlexOwnerToken(settings);
+      console.log(`[plex] owner token ping ${ok ? "ok" : "FAILED - admin must re-link Plex"}`);
+    }
+    void pingPlexAndLog();
+    const PLEX_PING_INTERVAL_MS = 24 * 60 * 60 * 1000;
+    plexPingTimer = setInterval(
+      () => void pingPlexAndLog(),
+      PLEX_PING_INTERVAL_MS,
+    );
+
+    const fetchHandler = createPodibleFetchHandler(repo, startTime);
+    server = Bun.serve({
+      port,
+      idleTimeout: 60,
+      ...(frontend
+        ? {
+            routes: {
+              "/": frontend,
+              "/library": frontend,
+              "/add": frontend,
+              "/book/:bookId": frontend,
+              "/series": frontend,
+              "/author": frontend,
+              "/movies": frontend,
+              "/movies/:id": frontend,
+              "/requests": frontend,
+              "/requests/:id": frontend,
+              "/movie-dual-write": frontend,
+            },
+            development: { hmr: true, console: true },
+          }
+        : { development: false }),
+      fetch: request => background.state === "ready" ? fetchHandler(request)
+        : new Response("Background execution unavailable", { status: 503 }),
+    });
+
+    const localBase = `http://localhost${server.port === 80 ? "" : `:${server.port}`}`;
+    console.log(`Podible backend listening on ${localBase}`);
+    console.log(`Library root: ${current.libraryRoot}`);
+    console.log(`RPC endpoint: ${localBase}/rpc`);
+    console.log(`Home: ${localBase}/`);
+    return server;
+  } catch (error) {
+    clearInterval(plexPingTimer);
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+    await server?.stop();
+    await background.stop();
+    db.close();
+    throw error;
+  }
 }
 
 if (import.meta.main) await startServer();

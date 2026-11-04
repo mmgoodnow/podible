@@ -943,6 +943,7 @@ export function nowIso(): string {
 export function openDatabase(dbPath: string): Database {
   mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new Database(dbPath, { create: true });
+  db.exec("PRAGMA busy_timeout = 2000;");
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   runMigrations(db);
