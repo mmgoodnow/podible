@@ -8,7 +8,8 @@ import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
 import { processAcquireJob } from "../../src/worker/acquire";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
-import { startMockRtorrent } from "../mocks/rtorrent";
+import bencode from "bencode";
+import { MockBookTorrentClient } from "../mocks/book-torrents";
 
 async function until(check: () => boolean | Promise<boolean>) {
   const deadline = Date.now() + 5000;
@@ -19,7 +20,7 @@ async function until(check: () => boolean | Promise<boolean>) {
 }
 
 function torrent(name: string) {
-  return Buffer.from(`d4:infod4:name${name.length}:${name}6:lengthi10e12:piece lengthi16384e6:pieces20:12345678901234567890ee`);
+  return bencode.encode({ info: { name, length: 10, "piece length": 16384, pieces: Buffer.alloc(20, 1) } });
 }
 
 async function fixture() {
@@ -28,17 +29,18 @@ async function fixture() {
   runMigrations(db);
   const repo = new BooksRepo(db);
   const logs: string[] = [];
-  const context = { repo, getSettings: () => repo.getSettings(), onLog: (line: string) => { logs.push(line); }, activeLocks: new Set<string>() };
+  const libraryRoot = path.join(root, "library");
+  const bookTorrentClient = new MockBookTorrentClient(path.join(libraryRoot, ".podible", "downloads"));
+  const context = { repo, bookTorrentClient, getSettings: () => ({ ...repo.getSettings(), libraryRoot }), onLog: (line: string) => { logs.push(line); }, activeLocks: new Set<string>() };
   const start = () => createJobExecutionRuntime(context, path.join(root, "execution.sqlite"), {
     retryDelayMs: 1,
     processJob: (ctx, job) => job.type === "acquire" ? processAcquireJob(ctx, job) : Promise.resolve("done" as const),
   });
-  return { repo, context, logs, start, async close() { db.close(); await rm(root, { recursive: true, force: true }); } };
+  return { repo, context, bookTorrentClient, logs, start, async close() { db.close(); await rm(root, { recursive: true, force: true }); } };
 }
 
 test("a queued ebook outage survives Reflow restart while completed audio work is preserved", async () => {
   const f = await fixture();
-  const rtorrent = startMockRtorrent({ byHash: {} });
   const calls = { audio: 0, ebook: 0, torrents: 0 };
   let recovered = false;
   const server = Bun.serve({ port: 0, fetch(request) {
@@ -58,7 +60,6 @@ test("a queued ebook outage survives Reflow restart while completed audio work i
   try {
     f.repo.updateSettings(defaultSettings({
       torznab: [{ name: "MAM", baseUrl: server.url.origin, apiKey: "private-key", categories: { audio: "3030", ebook: "7020" } }],
-      rtorrent: { transport: "http-xmlrpc", url: rtorrent.url, username: "", password: "" },
     }));
     runtime = await f.start();
     const book = f.repo.createBook({ title: "Dune", author: "Frank Herbert" });
@@ -75,7 +76,7 @@ test("a queued ebook outage survives Reflow restart while completed audio work i
     expect(before!.steps.find((step) => step.name === "ebook:search")!.attempts).toBe(1);
     expect(before!.steps.find((step) => step.name === "ebook:search:wait:0")!.status).toBe("sleeping");
     expect(f.repo.listReleasesByBook(book.id)).toHaveLength(1);
-    expect(rtorrent.loadCalls).toHaveLength(1);
+    expect(f.bookTorrentClient.adds).toHaveLength(1);
     expect(f.context.activeLocks.size).toBe(0);
     expect(calls).toEqual({ audio: 1, ebook: 1, torrents: 1 });
     expect(JSON.stringify(before!.steps.filter((step) => step.name.startsWith("ebook:search")))).not.toContain("private-key");
@@ -96,8 +97,8 @@ test("a queued ebook outage survives Reflow restart while completed audio work i
     const after = await runtime.engine.getRunStatus(runId);
     expect(after!.run.status).toBe("completed");
     expect(calls).toEqual({ audio: 1, ebook: 2, torrents: 2 });
-    expect(rtorrent.loadCalls).toHaveLength(2);
-    expect(new Set(rtorrent.loadCalls).size).toBe(2);
+    expect(f.bookTorrentClient.adds).toHaveLength(2);
+    expect(new Set(f.bookTorrentClient.adds).size).toBe(2);
     expect(f.repo.listReleasesByBook(book.id)).toHaveLength(2);
     expect(f.repo.listManifestationsByBook(book.id)).toHaveLength(2);
     expect(f.repo.listJobsByType("download")).toHaveLength(2);
@@ -109,7 +110,6 @@ test("a queued ebook outage survives Reflow restart while completed audio work i
     if (runtime) await runtime.stop();
     clock?.mockRestore();
     await server.stop(true);
-    rtorrent.stop();
     await f.close();
   }
 }, 15_000);

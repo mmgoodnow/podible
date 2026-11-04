@@ -7,7 +7,7 @@ import { hasStoredManifestationTranscriptPayload, selectPreferredDownloadableEbo
 import { selectPreferredAudioManifestation, streamExtensionForManifestation } from "../library/media";
 import { computeDownloadFraction, pseudoProgressForMediaStatus, pseudoProgressForRelease } from "../library/progress";
 import { BooksRepo } from "../repo";
-import { RtorrentClient } from "../rtorrent";
+import type { BookDownloadClient } from "../media/book-torrents";
 import type { JobRow, LibraryBook, ReleaseRow, SessionWithUserRow } from "../app-types";
 
 export type RpcId = string | number | null;
@@ -40,6 +40,7 @@ export type RpcFailure = {
 export type RpcAuthLevel = "public" | "user" | "admin";
 
 export type RpcContext = {
+  bookTorrentClient?: import("../media/torrent-client").TorrentClient;
   movieServices?: import("../movies/operations").MovieServices;
   repo: BooksRepo;
   startTime: number;
@@ -115,7 +116,7 @@ export async function removeFileIfPresent(filePath: string): Promise<boolean> {
 
 export async function enrichDownload(
   download: ReturnType<BooksRepo["listDownloads"]>[number],
-  client: RtorrentClient | null
+  client: BookDownloadClient | null
 ): Promise<DownloadRpcView> {
   if (download.release_status !== "downloading" || !download.info_hash || !client) {
     return {
@@ -170,7 +171,7 @@ function mediaPseudoProgress(status: LibraryBook["audioStatus"] | LibraryBook["e
 async function liveFractionForMedia(
   releases: ReleaseRow[],
   mediaType: "audio" | "ebook",
-  client: RtorrentClient | null
+  client: BookDownloadClient | null
 ): Promise<number | null> {
   if (!client) return null;
   const downloading = releases.filter(
@@ -200,7 +201,7 @@ async function liveFractionForMedia(
 export async function enrichLibraryBookProgress(
   repo: BooksRepo,
   book: LibraryBook,
-  client: RtorrentClient | null
+  client: BookDownloadClient | null
 ): Promise<LibraryBook> {
   if (book.audioStatus !== "downloading" && book.ebookStatus !== "downloading") {
     return book;

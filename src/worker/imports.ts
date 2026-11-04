@@ -1,6 +1,6 @@
 import { selectManualImportPaths } from "../library/agents";
 import { importReleaseFromPath, inspectImportPath, type ImportInspectionFile } from "../library/importer";
-import { RtorrentClient } from "../rtorrent";
+import { bookDownloadClient } from "../media/book-torrents";
 import { isRunControlError } from "reflow-ts";
 import type { JobRow } from "../app-types";
 import { durableStep, workerLog, type WorkerContext } from "./context";
@@ -49,10 +49,11 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
 
   const settings = ctx.getSettings();
   const payload = job.payload_json ? (JSON.parse(job.payload_json) as ImportJobPayload) : {};
-  const client = new RtorrentClient(settings.rtorrent);
+  const client = bookDownloadClient(ctx.repo, settings, ctx.bookTorrentClient);
   const importSource = await durableStep(ctx, "import:source", async () => {
     const source =
-      payload.basePath || (Array.isArray(payload.selectedPaths) && payload.selectedPaths.length > 0)
+      !ctx.repo.bookTorrents.get(release.info_hash) &&
+      (payload.basePath || (Array.isArray(payload.selectedPaths) && payload.selectedPaths.length > 0))
         ? {
             basePath: payload.basePath ?? null,
             selectedPaths: Array.isArray(payload.selectedPaths) ? payload.selectedPaths : []

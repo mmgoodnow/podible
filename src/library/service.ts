@@ -1,5 +1,6 @@
 import { BooksRepo } from "../repo";
-import { RtorrentClient } from "../rtorrent";
+import { ensureBookTorrentAdded } from "../media/book-torrents";
+import type { TorrentClient } from "../media/torrent-client";
 import { getOrFetchCachedTorrentBytes, torrentCacheKeyFor } from "./torrent-cache";
 import { infoHashFromTorrentBytes, normalizeInfoHash } from "./torrent";
 import { searchTorznabBatch } from "./torznab";
@@ -74,6 +75,7 @@ type SnatchRuntimeOptions = {
   execution?: WorkerContext["execution"];
   operationKey?: string;
   stepPrefix?: string;
+  bookTorrentClient?: TorrentClient;
 };
 
 type RankedSearchResult = {
@@ -99,10 +101,6 @@ function idempotentResult(repo: BooksRepo, existing: ReleaseRow): SnatchResult {
     jobId: existingJob?.id ?? -1,
     idempotent: true
   };
-}
-
-function rtorrentStringLiteral(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 const setMarkers = ["box set", "collection", "complete", "omnibus", "books 1-7", "1-3", "series"];
@@ -163,7 +161,6 @@ function scoreSearchResult(media: MediaType, query: string, row: TorznabResult):
 
 export function rankSearchResults(query: string, media: MediaType, results: TorznabResult[]): RankedSearchResult[] {
   return results
-    .filter((row) => mediaMatchTier(media, row.title.toLowerCase()) > 0)
     .map((result) => ({
       result,
       score:
@@ -236,31 +233,8 @@ export async function runSnatch(
     `[snatch] start book=${request.bookId} media=${request.mediaType} provider=${JSON.stringify(request.provider)} title=${JSON.stringify(request.title)} guid=${JSON.stringify(providerGuid)} explicit_hash=${JSON.stringify(explicitHash)} manifestation=${manifestationId ?? "auto"} sequence=${sequenceInManifestation ?? "auto"}`
   );
 
-  if (explicitHash) {
-    const existingByHash = repo.findReleaseByInfoHash(explicitHash);
-    if (existingByHash) {
-      if (existingByHash.book_id !== request.bookId) {
-        throw new Error(`Infohash already linked to book ${existingByHash.book_id}`);
-      }
-      snatchLog(
-        `[snatch] dedupe reason=explicit_hash release=${existingByHash.id} info_hash=${existingByHash.info_hash} provider_guid=${JSON.stringify(existingByHash.provider_guid)}`
-      );
-      return idempotentResult(repo, existingByHash);
-    }
-  }
-
-  if (providerGuid) {
-    const existingByGuid = repo.findReleaseByProviderGuid(request.provider, providerGuid);
-    if (existingByGuid) {
-      if (existingByGuid.book_id !== request.bookId) {
-        throw new Error(`Provider guid already linked to book ${existingByGuid.book_id}`);
-      }
-      snatchLog(
-        `[snatch] dedupe reason=provider_guid release=${existingByGuid.id} info_hash=${existingByGuid.info_hash} provider_guid=${JSON.stringify(existingByGuid.provider_guid)}`
-      );
-      return idempotentResult(repo, existingByGuid);
-    }
-  }
+  const existingByGuid = providerGuid ? repo.findReleaseByProviderGuid(request.provider, providerGuid) : null;
+  const existingByClaimedHash = explicitHash ? repo.findReleaseByInfoHash(explicitHash) : null;
 
   snatchLog(`[snatch] fetch_torrent start`);
   const { bytes: torrentBytes, cacheHit } = await getOrFetchCachedTorrentBytes(
@@ -271,7 +245,11 @@ export async function runSnatch(
       url: request.url,
       infoHash: explicitHash
     },
-    { onLog: (line) => snatchLog(line) }
+    {
+      onLog: (line) => snatchLog(line),
+      // GUIDs and supplied hashes are hints, not proof that a mutable URL still has the same content.
+      revalidate: explicitHash === null || existingByGuid !== null || existingByClaimedHash !== null,
+    }
   );
   snatchLog(`[snatch] fetch_torrent ok bytes=${torrentBytes.byteLength} cache_hit=${cacheHit}`);
   const derivedHash = infoHashFromTorrentBytes(torrentBytes);
@@ -300,24 +278,15 @@ export async function runSnatch(
     return idempotentResult(repo, existingByDerived);
   }
 
-  const client = new RtorrentClient(settings.rtorrent);
-  const downloadPath = settings.rtorrent.downloadPath?.trim() ?? "";
-  const commands = [
-    ...(downloadPath ? [`d.directory.set="${rtorrentStringLiteral(downloadPath)}"`] : []),
-    'd.custom1.set="Podible"',
-    `d.custom.set=addtime,${Math.round(Date.now() / 1000)}`
-  ];
-  snatchLog(`[snatch] rtorrent load.raw_start begin`);
+  snatchLog(`[snatch] private Transmission add begin`);
   try {
-    runtime.execution?.assertActive();
-    // Reconcile the external-success-before-checkpoint window by torrent identity.
-    if (!runtime.execution || !(await client.hasDownload(derivedHash))) {
-      runtime.execution?.assertActive();
-      await client.loadRawStart(torrentBytes, commands);
-    }
-    snatchLog(`[snatch] rtorrent load.raw_start ok`);
+    await ensureBookTorrentAdded(repo, settings, request.bookId, torrentBytes, {
+      bookTorrentClient: runtime.bookTorrentClient,
+      assertActive: () => runtime.execution?.assertActive(),
+    });
+    snatchLog(`[snatch] private Transmission add ok`);
   } catch (error) {
-    snatchLog(`[snatch] rtorrent load.raw_start error=${JSON.stringify((error as Error).message)}`);
+    snatchLog(`[snatch] private Transmission add error=${JSON.stringify((error as Error).message)}`);
     throw error;
   }
 
@@ -350,6 +319,7 @@ export async function runSnatch(
       url: request.url,
       status: "snatched"
     });
+    repo.bookTorrents.attach(derivedHash, release.id);
 
     const job = repo.createJob({
       type: "download",

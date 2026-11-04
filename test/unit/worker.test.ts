@@ -1,10 +1,11 @@
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import bencode from "bencode";
 import type { Model, ModelProvider, ModelRequest, ModelResponse } from "@openai/agents-core";
 import { Usage } from "@openai/agents-core";
 
@@ -18,11 +19,12 @@ import { processDownloadJob } from "../../src/worker/downloads";
 import { processImportJob } from "../../src/worker/imports";
 import { startMockRtorrent } from "../mocks/rtorrent";
 import { startMockTorznab } from "../mocks/torznab";
+import { MockBookTorrentClient } from "../mocks/book-torrents";
 
 function makeTorrentBytes(name: string): Uint8Array {
-  const nameLen = Buffer.byteLength(name);
-  const content = `d8:announce15:http://tracker/4:infod4:name${nameLen}:${name}12:piece lengthi16384e6:lengthi10e6:pieces20:12345678901234567890ee`;
-  return new Uint8Array(Buffer.from(content, "ascii"));
+  return bencode.encode({ announce: "http://tracker/", info: {
+    name, length: 10, "piece length": 16384, pieces: Buffer.from("12345678901234567890"),
+  } });
 }
 
 /** Build an internal ModelResponse with a plain text assistant message. */
@@ -69,6 +71,9 @@ class FakeModelProvider implements ModelProvider {
 
 describe("worker acquire auto-acquire retries", () => {
   test("marks acquire job for retry when snatch fails", async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "book-worker-")));
+    const client = new MockBookTorrentClient(path.join(root, ".podible", "downloads"));
+    client.rejectedHashes.add(infoHashFromTorrentBytes(makeTorrentBytes("dune-audio")));
     const torznab = startMockTorznab({
       results: [{ title: "Dune Audio", torrentId: "audio", size: 1234 }],
       torrents: { audio: makeTorrentBytes("dune-audio") }
@@ -79,9 +84,10 @@ describe("worker acquire auto-acquire retries", () => {
     const repo = new BooksRepo(db);
     repo.updateSettings(
       defaultSettings({
+        libraryRoot: root,
         auth: { mode: "plex" },
         torznab: [{ name: "mock", baseUrl: torznab.baseUrl }],
-        // Intentionally unreachable to force runSnatch failure.
+        // Legacy configuration is not used for new book snatches.
         rtorrent: {
           transport: "http-xmlrpc",
           url: "http://127.0.0.1:65534/RPC2",
@@ -103,6 +109,7 @@ describe("worker acquire auto-acquire retries", () => {
     const worker = runWorker(
       {
         repo,
+        bookTorrentClient: client,
         getSettings: () => repo.getSettings(),
         shouldStop: () => stopWorker,
         onLog: (line) => logs.push(line)
@@ -132,12 +139,16 @@ describe("worker acquire auto-acquire retries", () => {
       await Promise.race([worker, sleep(1000)]);
       torznab.stop();
       db.close();
+      await rm(root, { recursive: true, force: true });
     }
   });
 
   test("retries acquire when one media snatch fails after another media succeeds", async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "book-worker-")));
+    const client = new MockBookTorrentClient(path.join(root, ".podible", "downloads"));
     const audioTorrent = makeTorrentBytes("eclipse-audio");
     const ebookTorrent = makeTorrentBytes("eclipse-ebook");
+    client.rejectedHashes.add(infoHashFromTorrentBytes(audioTorrent));
     const torznab = startMockTorznab({
       results: [
         { title: "Eclipse by Stephenie Meyer [ENG / M4B]", torrentId: "audio", size: 1111 },
@@ -151,6 +162,7 @@ describe("worker acquire auto-acquire retries", () => {
     const repo = new BooksRepo(db);
     repo.updateSettings(
       defaultSettings({
+        libraryRoot: root,
         auth: { mode: "plex" },
         torznab: [{ name: "mock", baseUrl: torznab.baseUrl }],
         rtorrent: {
@@ -169,39 +181,12 @@ describe("worker acquire auto-acquire retries", () => {
       payload: { bookId: book.id, media: ["audio", "ebook"] }
     });
 
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
-      const url = String(input);
-      if (url === "http://rtorrent.mock/RPC2") {
-        const body = String(init?.body ?? "");
-        const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
-        if (method === "download_list")
-          return new Response(
-            '<?xml version="1.0"?><methodResponse><params><param><value><array><data></data></array></value></param></params></methodResponse>',
-            { headers: { "Content-Type": "text/xml" } }
-          );
-        if (method === "load.raw_start") {
-          if (body.includes(Buffer.from(audioTorrent).toString("base64"))) {
-            return new Response("boom", { status: 500 });
-          }
-          return new Response(
-            `<?xml version="1.0"?><methodResponse><params><param><value><int>0</int></value></param></params></methodResponse>`,
-            {
-              status: 200,
-              headers: { "Content-Type": "text/xml" }
-            }
-          );
-        }
-        throw new Error(`Unexpected rTorrent method in test: ${method}`);
-      }
-      return (originalFetch as typeof fetch)(input as any, init);
-    }) as typeof fetch;
-
     let stopWorker = false;
     const logs: string[] = [];
     const worker = runWorker(
       {
         repo,
+        bookTorrentClient: client,
         getSettings: () => repo.getSettings(),
         shouldStop: () => stopWorker,
         onLog: (line) => logs.push(line)
@@ -235,14 +220,16 @@ describe("worker acquire auto-acquire retries", () => {
       expect(logs.some((line) => line.includes("media=ebook") && line.includes("download_job="))).toBe(true);
     } finally {
       stopWorker = true;
-      globalThis.fetch = originalFetch;
       await Promise.race([worker, sleep(1000)]);
       torznab.stop();
       db.close();
+      await rm(root, { recursive: true, force: true });
     }
   });
 
   test("configured auto-acquire always uses the agent and can snatch ordered multipart selections", async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "book-worker-")));
+    const client = new MockBookTorrentClient(path.join(root, ".podible", "downloads"));
     const partOneTorrent = makeTorrentBytes("red-rising-ga-part-1");
     const partTwoTorrent = makeTorrentBytes("red-rising-ga-part-2");
     const torznab = startMockTorznab({
@@ -258,6 +245,7 @@ describe("worker acquire auto-acquire retries", () => {
     const repo = new BooksRepo(db);
     repo.updateSettings(
       defaultSettings({
+        libraryRoot: root,
         auth: { mode: "plex" },
         torznab: [{ name: "mock", baseUrl: torznab.baseUrl }],
         agents: {
@@ -295,29 +283,12 @@ describe("worker acquire auto-acquire retries", () => {
       )
     ]);
 
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
-      const url = String(input);
-      if (url === "http://rtorrent.mock/RPC2") {
-        const body = String(init?.body ?? "");
-        const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
-        expect(method).toBe("load.raw_start");
-        return new Response(
-          `<?xml version="1.0"?><methodResponse><params><param><value><int>0</int></value></param></params></methodResponse>`,
-          {
-            status: 200,
-            headers: { "Content-Type": "text/xml" }
-          }
-        );
-      }
-      return (originalFetch as typeof fetch)(input as any, init);
-    }) as typeof fetch;
-
     try {
       const logs: string[] = [];
       await processAcquireJob(
         {
           repo,
+          bookTorrentClient: client,
           getSettings: () => repo.getSettings(),
           onLog: (line) => logs.push(line),
           modelProvider: fakeProvider
@@ -346,9 +317,9 @@ describe("worker acquire auto-acquire retries", () => {
       expect(JSON.stringify(fakeProvider.requests[0]?.input)).toContain("prefer GraphicAudio");
       expect(logs.some((line) => line.includes("parts=2"))).toBe(true);
     } finally {
-      globalThis.fetch = originalFetch;
       torznab.stop();
       db.close();
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

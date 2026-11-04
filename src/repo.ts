@@ -4,6 +4,7 @@ import { MovieRepo } from "./movies/repo";
 import { MovieShadowRepo } from "./movies/shadow-repo";
 import { MovieSeerrRepo } from "./movies/seerr-repo";
 import { ReleaseInboxRepo } from "./media/release-inbox";
+import { BookTorrentsRepo } from "./media/book-torrents";
 
 import { nowIso, finalizeJobJournalMigration } from "./db";
 import { randomUUID } from "node:crypto";
@@ -241,6 +242,7 @@ function assertPositiveInt(value: number): void {
 export class BooksRepo {
   get movieSeerr() { return new MovieSeerrRepo(this.db, this.beforeWrite); }
   get releaseInbox() { return new ReleaseInboxRepo(this.db, this.beforeWrite); }
+  get bookTorrents() { return new BookTorrentsRepo(this.db, this.beforeWrite); }
   get movieShadow() {
     return new MovieShadowRepo(this.db, this.beforeWrite, (id) => this.getJob(id));
   }
@@ -815,6 +817,10 @@ export class BooksRepo {
     return { items, nextCursor };
   }
 
+  hasBooks(): boolean {
+    return Boolean(this.db.query("SELECT 1 FROM books LIMIT 1").get());
+  }
+
   listAllBooks(): LibraryBook[] {
     const rows = this.db.query("SELECT * FROM books ORDER BY added_at DESC, id DESC").all() as BookRow[];
     return rows.map((row) => this.toLibraryBook(row));
@@ -1073,7 +1079,7 @@ export class BooksRepo {
   findReleaseByProviderGuid(provider: string, providerGuid: string): ReleaseRow | null {
     return (
       (this.db
-        .query("SELECT * FROM releases WHERE provider = ? AND provider_guid = ?")
+        .query("SELECT * FROM releases WHERE provider = ? AND provider_guid = ? ORDER BY id DESC LIMIT 1")
         .get(provider, providerGuid) as ReleaseRow | null) ?? null
     );
   }

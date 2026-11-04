@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import bencode from "bencode";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { MockBookTorrentClient } from "../mocks/book-torrents";
 
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
@@ -44,7 +49,7 @@ describe("search ranking", () => {
     }
   });
 
-  test("only returns results that match requested media format", async () => {
+  test("ranks requested media first without withholding other evidence from the agent", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = ((async () =>
       new Response(
@@ -72,12 +77,14 @@ describe("search ranking", () => {
       });
 
       const audio = await runSearch(settings, { query: "Great Big Beautiful Life Emily Henry", media: "audio" });
-      expect(audio).toHaveLength(1);
+      expect(audio).toHaveLength(2);
       expect(audio[0]?.title).toContain("/ M4B");
+      expect(audio[1]?.title).toContain("/ EPUB");
 
       const ebook = await runSearch(settings, { query: "Great Big Beautiful Life Emily Henry", media: "ebook" });
-      expect(ebook).toHaveLength(1);
+      expect(ebook).toHaveLength(2);
       expect(ebook[0]?.title).toContain("/ EPUB");
+      expect(ebook[1]?.title).toContain("/ M4B");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -115,6 +122,7 @@ describe("search ranking", () => {
       expect(ebook.map((result) => result.title)).toEqual([
         "Foundation by Isaac Asimov [ENG / EPUB]",
         "Foundation by Isaac Asimov",
+        "Foundation by Isaac Asimov [ENG / M4B]",
       ]);
     } finally {
       globalThis.fetch = originalFetch;
@@ -124,357 +132,258 @@ describe("search ranking", () => {
 });
 
 function makeTorrentBytes(name: string): Uint8Array {
-  const nameLen = Buffer.byteLength(name);
-  const content = `d8:announce15:http://tracker/4:infod4:name${nameLen}:${name}12:piece lengthi16384e6:lengthi10e6:pieces20:12345678901234567890ee`;
-  return new Uint8Array(Buffer.from(content, "ascii"));
+  return bencode.encode({ announce: "http://tracker/", info: {
+    name, length: 10, "piece length": 16384, pieces: Buffer.from("12345678901234567890"),
+  } });
 }
 
 describe("snatch transport", () => {
-  test("rejects magnet urls to enforce load.raw_start usage", async () => {
-    const db = new Database(":memory:");
-    runMigrations(db);
-    const repo = new BooksRepo(db);
-    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
-
-    const settings = defaultSettings({
-      rtorrent: {
-        transport: "http-xmlrpc",
-        url: "http://mock.local/RPC2",
-      },
-    });
-
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async () => {
-      throw new Error("fetch should not be called for magnet rejection");
-    }) as unknown as typeof fetch;
-
-    try {
-      await expect(
-        runSnatch(repo, settings, {
-          bookId: book.id,
-          provider: "mock",
-          title: "Dune",
-          mediaType: "audio",
-          url: "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
-          infoHash: "0123456789abcdef0123456789abcdef01234567",
-        })
-      ).rejects.toThrow("Magnet URLs are not supported");
-    } finally {
-      globalThis.fetch = originalFetch;
-      db.close();
-    }
-  });
-
-  test("uses load.raw_start for torrent urls", async () => {
-    const db = new Database(":memory:");
-    runMigrations(db);
-    const repo = new BooksRepo(db);
-    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
-
-    const torrentUrl = "https://example.com/dune.torrent";
-    const torrentBytes = makeTorrentBytes("dune-audio");
-    const expectedHash = infoHashFromTorrentBytes(torrentBytes);
-    const rpcUrl = "https://rtorrent.example/RPC2";
-    const settings = defaultSettings({
-      rtorrent: {
-        transport: "http-xmlrpc",
-        url: rpcUrl,
-        downloadPath: "/downloads/books",
-      },
-    });
-
-    const methods: string[] = [];
-    const rpcBodies: string[] = [];
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
-      const url = String(input);
-      if (url === torrentUrl) {
-        return new Response(torrentBytes, {
-          status: 200,
-          headers: { "Content-Type": "application/x-bittorrent" },
-        });
-      }
-      if (url === rpcUrl) {
-        const body = String(init?.body ?? "");
-        rpcBodies.push(body);
-        const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
-        methods.push(method);
-        return new Response(
-          '<?xml version="1.0"?><methodResponse><params><param><value><int>0</int></value></param></params></methodResponse>',
-          { status: 200, headers: { "Content-Type": "text/xml" } }
-        );
-      }
-      throw new Error(`Unexpected fetch url: ${url}`);
-    }) as unknown as typeof fetch;
-
-    try {
-      const result = await runSnatch(repo, settings, {
-        bookId: book.id,
-        provider: "mock",
-        title: "Dune Audio",
-        mediaType: "audio",
-        url: torrentUrl,
-      });
-      expect(result.idempotent).toBe(false);
-      expect(result.release.info_hash).toBe(expectedHash);
-      expect(methods).toContain("load.raw_start");
-      expect(methods).not.toContain("load.start");
-      expect(rpcBodies.some((body) => body.includes("d.directory.set=&quot;/downloads/books&quot;"))).toBe(true);
-      expect(rpcBodies.some((body) => body.includes("d.custom1.set=&quot;Podible&quot;"))).toBe(true);
-      expect(rpcBodies.some((body) => /d\.custom\.set=addtime,\d{10}/.test(body))).toBe(true);
-    } finally {
-      globalThis.fetch = originalFetch;
-      db.close();
-    }
-  });
-
-  test("reuses cached torrent bytes and skips torrent fetch", async () => {
-    const db = new Database(":memory:");
-    runMigrations(db);
-    const repo = new BooksRepo(db);
-    const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
-
-    const torrentUrl = "https://example.com/dune-cached.torrent";
-    const provider = "mock";
-    const providerGuid = "g-cache";
-    const torrentBytes = makeTorrentBytes("dune-audio-cached");
-    const expectedHash = infoHashFromTorrentBytes(torrentBytes);
-    repo.putTorrentCache({
-      key: torrentCacheKeyFor({ provider, providerGuid, url: torrentUrl }),
-      provider,
-      providerGuid,
-      url: torrentUrl,
-      torrentBytes,
-    });
-
-    const rpcUrl = "https://rtorrent.example/RPC2";
-    const settings = defaultSettings({
-      rtorrent: {
-        transport: "http-xmlrpc",
-        url: rpcUrl,
-        downloadPath: "",
-      },
-    });
-
-    const fetches: string[] = [];
-    const rpcBodies: string[] = [];
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
-      const url = String(input);
-      fetches.push(url);
-      if (url === torrentUrl) {
-        throw new Error("torrent url should not be fetched when cache is populated");
-      }
-      if (url === rpcUrl) {
-        const body = String(init?.body ?? "");
-        rpcBodies.push(body);
-        const method = /<methodName>([^<]+)<\/methodName>/.exec(body)?.[1] ?? "";
-        expect(method).toBe("load.raw_start");
-        return new Response(
-          '<?xml version="1.0"?><methodResponse><params><param><value><int>0</int></value></param></params></methodResponse>',
-          { status: 200, headers: { "Content-Type": "text/xml" } }
-        );
-      }
-      throw new Error(`Unexpected fetch url: ${url}`);
-    }) as unknown as typeof fetch;
-
-    try {
-      const result = await runSnatch(repo, settings, {
-        bookId: book.id,
-        provider,
-        providerGuid,
-        title: "Dune Audio",
-        mediaType: "audio",
-        url: torrentUrl,
-      });
-      expect(result.idempotent).toBe(false);
-      expect(result.release.info_hash).toBe(expectedHash);
-      expect(fetches).not.toContain(torrentUrl);
-      expect(fetches).toContain(rpcUrl);
-      expect(rpcBodies.some((body) => body.includes("d.custom1.set=&quot;Podible&quot;"))).toBe(true);
-      expect(rpcBodies.some((body) => /d\.custom\.set=addtime,\d{10}/.test(body))).toBe(true);
-      expect(rpcBodies.some((body) => body.includes("d.directory.set="))).toBe(false);
-    } finally {
-      globalThis.fetch = originalFetch;
-      db.close();
-    }
-  });
-
-  test("carries manifestation attachment metadata into the download job", async () => {
+  async function fixture() {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "book-snatch-")));
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
     const book = repo.createBook({ title: "Red Rising", author: "Pierce Brown" });
-    const manifestation = repo.addManifestation({ bookId: book.id, kind: "audio", label: "GraphicAudio dramatization" });
-
-    const torrentUrl = "https://example.com/red-rising-part-2.torrent";
-    const torrentBytes = makeTorrentBytes("red-rising-part-2");
-    const rpcUrl = "https://rtorrent.example/RPC2";
-    const settings = defaultSettings({
-      rtorrent: {
-        transport: "http-xmlrpc",
-        url: rpcUrl,
-        downloadPath: "",
-      },
-    });
-
+    const settings = defaultSettings({ libraryRoot: root, rtorrent: { url: "http://never-legacy.invalid/RPC2" } });
+    const client = new MockBookTorrentClient(path.join(root, ".podible", "downloads"));
     const originalFetch = globalThis.fetch;
+    const torrents = new Map<string, Uint8Array>();
+    let requests = 0;
     globalThis.fetch = (async (input: unknown) => {
-      const url = String(input);
-      if (url === torrentUrl) {
-        return new Response(torrentBytes, {
-          status: 200,
-          headers: { "Content-Type": "application/x-bittorrent" },
-        });
-      }
-      if (url === rpcUrl) {
-        return new Response(
-          '<?xml version="1.0"?><methodResponse><params><param><value><int>0</int></value></param></params></methodResponse>',
-          { status: 200, headers: { "Content-Type": "text/xml" } }
-        );
-      }
-      throw new Error(`Unexpected fetch url: ${url}`);
-    }) as unknown as typeof fetch;
-
-    try {
-      const result = await runSnatch(repo, settings, {
-        bookId: book.id,
-        provider: "mock",
-        title: "Red Rising GraphicAudio Part 2",
-        mediaType: "audio",
-        url: torrentUrl,
-        manifestationId: manifestation.id,
-        sequenceInManifestation: 1,
+      if (!String(input).startsWith("https://fixture.invalid/")) throw new Error("Unexpected non-metainfo request");
+      requests++;
+      return new Response(torrents.get(String(input)) ?? makeTorrentBytes(String(input).split("/").at(-1)!), {
+        headers: { "Content-Type": "application/x-bittorrent" },
       });
-      const job = repo.listJobsByType("download").find((row) => row.id === result.jobId);
-      const payload = JSON.parse(job?.payload_json ?? "{}");
-      expect(payload.manifestationId).toBe(manifestation.id);
-      expect(payload.sequenceInManifestation).toBe(1);
-    } finally {
-      globalThis.fetch = originalFetch;
-      db.close();
-    }
+    }) as typeof fetch;
+    return {
+      db, repo, book, settings, client, torrents, requests: () => requests,
+      snatch: (overrides: Partial<Parameters<typeof runSnatch>[2]> = {}) => runSnatch(repo, settings, {
+        bookId: book.id, provider: "fixture", title: "Red Rising", mediaType: "audio",
+        url: "https://fixture.invalid/book.mp3", ...overrides,
+      }, { bookTorrentClient: client }),
+      async close() { globalThis.fetch = originalFetch; db.close(); await fs.rm(root, { recursive: true, force: true }); },
+    };
+  }
+
+  test("rejects magnets before contacting a torrent client", async () => {
+    const f = await fixture();
+    try {
+      await expect(f.snatch({ url: "magnet:?xt=urn:btih:" + "a".repeat(40) })).rejects.toThrow("Magnet URLs");
+      expect(f.client.adds).toHaveLength(0);
+      expect(f.requests()).toBe(0);
+    } finally { await f.close(); }
   });
 
-  test("snatches ordered release groups into one manifestation", async () => {
-    const db = new Database(":memory:");
-    runMigrations(db);
-    const repo = new BooksRepo(db);
-    const book = repo.createBook({ title: "Red Rising", author: "Pierce Brown" });
-
-    const partOneUrl = "https://example.com/red-rising-part-1.torrent";
-    const partTwoUrl = "https://example.com/red-rising-part-2.torrent";
-    const torrentBytes = new Map([
-      [partOneUrl, makeTorrentBytes("red-rising-part-1")],
-      [partTwoUrl, makeTorrentBytes("red-rising-part-2")],
-    ]);
-    const rpcUrl = "https://rtorrent.example/RPC2";
-    const settings = defaultSettings({
-      rtorrent: {
-        transport: "http-xmlrpc",
-        url: rpcUrl,
-        downloadPath: "",
-      },
-    });
-
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: unknown) => {
-      const url = String(input);
-      const bytes = torrentBytes.get(url);
-      if (bytes) {
-        return new Response(bytes, {
-          status: 200,
-          headers: { "Content-Type": "application/x-bittorrent" },
-        });
-      }
-      if (url === rpcUrl) {
-        return new Response(
-          '<?xml version="1.0"?><methodResponse><params><param><value><int>0</int></value></param></params></methodResponse>',
-          { status: 200, headers: { "Content-Type": "text/xml" } }
-        );
-      }
-      throw new Error(`Unexpected fetch url: ${url}`);
-    }) as unknown as typeof fetch;
-
+  test("new books reserve private Transmission ownership before adding, then attach the release", async () => {
+    const f = await fixture();
     try {
-      const result = await runSnatchGroup(repo, settings, {
-        bookId: book.id,
-        mediaType: "audio",
-        manifestation: {
-          label: "GraphicAudio dramatization",
-          editionNote: null,
-          selectionNote: "Agent selected both parts because they match the GraphicAudio preference.",
-        },
-        parts: [
-          {
-            provider: "mock",
-            title: "Red Rising GraphicAudio Part 1",
-            url: partOneUrl,
-          },
-          {
-            provider: "mock",
-            title: "Red Rising GraphicAudio Part 2",
-            url: partTwoUrl,
-          },
-        ],
-      });
+      f.client.beforeAdd = hash => {
+        expect(f.repo.bookTorrents.get(hash)).toMatchObject({
+          book_id: f.book.id, backend: "transmission", client_id: f.client.id, release_id: null,
+          root_path: path.join(f.settings.libraryRoot, ".podible", "downloads"), relative_path: hash,
+        });
+        expect(f.repo.listReleasesByBook(f.book.id)).toHaveLength(0);
+      };
+      const result = await f.snatch();
+      expect(result.idempotent).toBe(false);
+      expect(f.client.adds).toEqual([result.release.info_hash]);
+      expect(f.client.resumes).toEqual([result.release.info_hash]);
+      expect(f.repo.bookTorrents.get(result.release.info_hash)?.release_id).toBe(result.release.id);
+      expect(f.requests()).toBe(1);
+    } finally { await f.close(); }
+  });
 
+  test("uses cached metainfo initially but verifies GUID collisions before hash deduplication", async () => {
+    const f = await fixture();
+    try {
+      const url = "https://fixture.invalid/cached.mp3";
+      f.repo.putTorrentCache({
+        key: torrentCacheKeyFor({ provider: "fixture", providerGuid: "cached", url }),
+        provider: "fixture", providerGuid: "cached", url, torrentBytes: makeTorrentBytes("cached.mp3"),
+      });
+      const hash = infoHashFromTorrentBytes(makeTorrentBytes("cached.mp3"));
+      const first = await f.snatch({ url, providerGuid: "cached", infoHash: hash });
+      const second = await f.snatch({ url, providerGuid: "cached", infoHash: hash });
+      expect(first.idempotent).toBe(false);
+      expect(second.idempotent).toBe(true);
+      expect(second.release.id).toBe(first.release.id);
+      expect(f.requests()).toBe(1);
+      expect(f.client.adds).toHaveLength(1);
+    } finally { await f.close(); }
+  });
+
+  test("reconciles an external add before a lost acknowledgment without creating another torrent", async () => {
+    const f = await fixture();
+    try {
+      f.client.failResumeOnce = true;
+      await expect(f.snatch()).rejects.toThrow("Lost resume acknowledgment");
+      expect(f.repo.listReleasesByBook(f.book.id)).toHaveLength(0);
+      const hash = f.client.adds[0]!;
+      expect(f.repo.bookTorrents.get(hash)?.release_id).toBeNull();
+      const result = await f.snatch();
+      expect(f.client.adds).toHaveLength(1);
+      expect(f.repo.bookTorrents.get(hash)?.release_id).toBe(result.release.id);
+      expect(f.repo.listJobsByType("download")).toHaveLength(1);
+    } finally { await f.close(); }
+  });
+
+  test("reused GUID with a new known hash creates a new release and preserves the old seeding torrent", async () => {
+    const f = await fixture();
+    try {
+      const url = "https://fixture.invalid/reused";
+      f.torrents.set(url, makeTorrentBytes("old.mp3"));
+      const first = await f.snatch({ providerGuid: "reused", url });
+      const oldRecord = f.client.records.get(first.release.info_hash)!;
+      oldRecord.snapshot.state = "seeding";
+      const replacement = makeTorrentBytes("new.mp3");
+      const hash = infoHashFromTorrentBytes(replacement);
+      f.torrents.set(url, replacement);
+      const second = await f.snatch({ providerGuid: "reused", infoHash: hash, url });
+      expect(second.idempotent).toBe(false);
+      expect(second.release.info_hash).toBe(hash);
+      expect(second.release.id).not.toBe(first.release.id);
+      expect(f.repo.findReleaseByProviderGuid("fixture", "reused")?.id).toBe(second.release.id);
+      expect(f.repo.listReleasesByBook(f.book.id)).toHaveLength(2);
+      expect(f.client.adds).toHaveLength(2);
+      expect(oldRecord.snapshot.state).toBe("seeding");
+      expect(f.client.controls).toHaveLength(0);
+      expect(f.requests()).toBe(2);
+      runMigrations(f.db);
+      expect(f.repo.listReleasesByBook(f.book.id)).toHaveLength(2);
+    } finally { await f.close(); }
+  });
+
+  test("reused GUID with unknown hash refetches a changed torrent at the same URL", async () => {
+    const f = await fixture();
+    try {
+      const url = "https://fixture.invalid/reused-unknown";
+      f.torrents.set(url, makeTorrentBytes("first.mp3"));
+      const first = await f.snatch({ providerGuid: "unknown-hash", url });
+      f.torrents.set(url, makeTorrentBytes("second.mp3"));
+      const second = await f.snatch({ providerGuid: "unknown-hash", infoHash: null, url });
+      expect(second.idempotent).toBe(false);
+      expect(second.release.info_hash).not.toBe(first.release.info_hash);
+      expect(f.client.adds).toHaveLength(2);
+      expect(f.requests()).toBe(2);
+    } finally { await f.close(); }
+  });
+
+  test("unknown-hash snatch refreshes stale agent-inspection cache before any release exists", async () => {
+    const f = await fixture();
+    try {
+      const url = "https://fixture.invalid/inspected";
+      f.repo.putTorrentCache({ key: torrentCacheKeyFor({ provider: "fixture", providerGuid: "inspected", url }),
+        provider: "fixture", providerGuid: "inspected", url,
+        infoHash: infoHashFromTorrentBytes(makeTorrentBytes("stale.mp3")), torrentBytes: makeTorrentBytes("stale.mp3"),
+      });
+      const current = makeTorrentBytes("current.mp3");
+      f.torrents.set(url, current);
+      const result = await f.snatch({ providerGuid: "inspected", url, infoHash: null });
+      expect(result.release.info_hash).toBe(infoHashFromTorrentBytes(current));
+      expect(f.client.adds).toEqual([result.release.info_hash]);
+      expect(f.requests()).toBe(1);
+    } finally { await f.close(); }
+  });
+
+  test("an unverified old hash claim cannot hide changed metainfo behind an existing release", async () => {
+    const f = await fixture();
+    try {
+      const url = "https://fixture.invalid/stale-claim";
+      f.torrents.set(url, makeTorrentBytes("first.mp3"));
+      const first = await f.snatch({ providerGuid: "stale", url });
+      const replacement = makeTorrentBytes("replacement.mp3");
+      f.torrents.set(url, replacement);
+      const second = await f.snatch({ providerGuid: "stale", infoHash: first.release.info_hash, url });
+      expect(second.idempotent).toBe(false);
+      expect(second.release.info_hash).toBe(infoHashFromTorrentBytes(replacement));
+      expect(f.client.adds).toHaveLength(2);
+    } finally { await f.close(); }
+  });
+
+  test("a new hash claim cannot create a second release when fetched metainfo is unchanged", async () => {
+    const f = await fixture();
+    try {
+      const first = await f.snatch({ providerGuid: "same-content" });
+      const second = await f.snatch({ providerGuid: "same-content", infoHash: "a".repeat(40) });
+      expect(second.idempotent).toBe(true);
+      expect(second.release.id).toBe(first.release.id);
+      expect(f.repo.listReleasesByBook(f.book.id)).toHaveLength(1);
+      expect(f.client.adds).toHaveLength(1);
+      expect(f.requests()).toBe(2);
+    } finally { await f.close(); }
+  });
+
+  test("verified hash ownership cannot be stolen with a reused GUID or forged new hash", async () => {
+    const f = await fixture();
+    try {
+      const first = await f.snatch({ providerGuid: "shared-guid" });
+      const other = f.repo.createBook({ title: "Other book", author: "Other" });
+      await expect(f.snatch({ bookId: other.id, providerGuid: "shared-guid", infoHash: "a".repeat(40) }))
+        .rejects.toThrow("Infohash already linked to book " + f.book.id);
+      expect(f.repo.bookTorrents.get(first.release.info_hash)?.book_id).toBe(f.book.id);
+      expect(f.repo.listReleasesByBook(other.id)).toHaveLength(0);
+      expect(f.client.adds).toHaveLength(1);
+      expect(f.client.controls).toHaveLength(0);
+    } finally { await f.close(); }
+  });
+
+  test("carries ordered manifestation attachment metadata through group snatches", async () => {
+    const f = await fixture();
+    try {
+      const result = await runSnatchGroup(f.repo, f.settings, {
+        bookId: f.book.id, mediaType: "audio",
+        manifestation: { label: "GraphicAudio dramatization", editionNote: null, selectionNote: "Both ordered parts." },
+        parts: [1, 2].map(part => ({
+          provider: "fixture", title: "Red Rising Part " + part,
+          url: "https://fixture.invalid/part-" + part + ".mp3",
+        })),
+      }, { bookTorrentClient: f.client });
       expect(result.results).toHaveLength(2);
-      expect(result.manifestationId).toBeTruthy();
-      const manifestation = repo.getManifestation(result.manifestationId!);
-      expect(manifestation?.label).toBe("GraphicAudio dramatization");
-      expect(manifestation?.selection_note).toBe("Agent selected both parts because they match the GraphicAudio preference.");
-      const jobs = repo.listJobsByType("download");
-      const payloads = jobs.map((job) => JSON.parse(job.payload_json ?? "{}")).sort((a, b) => a.sequenceInManifestation - b.sequenceInManifestation);
-      expect(payloads.map((payload) => payload.manifestationId)).toEqual([result.manifestationId, result.manifestationId]);
-      expect(payloads.map((payload) => payload.sequenceInManifestation)).toEqual([0, 1]);
-    } finally {
-      globalThis.fetch = originalFetch;
-      db.close();
-    }
+      expect(f.client.adds).toHaveLength(2);
+      expect(f.repo.getManifestation(result.manifestationId!)?.selection_note).toBe("Both ordered parts.");
+      const payloads = f.repo.listJobsByType("download").map(job => JSON.parse(job.payload_json!))
+        .sort((a, b) => a.sequenceInManifestation - b.sequenceInManifestation);
+      expect(payloads.map(p => p.manifestationId)).toEqual([result.manifestationId, result.manifestationId]);
+      expect(payloads.map(p => p.sequenceInManifestation)).toEqual([0, 1]);
+    } finally { await f.close(); }
   });
 
-  test("removes a newly-created manifestation when every snatch is idempotent", async () => {
-    const db = new Database(":memory:");
-    runMigrations(db);
-    const repo = new BooksRepo(db);
-    const book = repo.createBook({ title: "Foundation", author: "Isaac Asimov" });
-    repo.createRelease({
-      bookId: book.id,
-      provider: "mock",
-      providerGuid: "foundation-guid",
-      title: "Foundation by Isaac Asimov [ENG / MP3]",
-      mediaType: "audio",
-      infoHash: "0123456789abcdef0123456789abcdef01234567",
-      sizeBytes: 100,
-      url: "https://example.com/foundation.torrent",
-      status: "imported",
-    });
-
+  test("publication rollback leaves a durable intent that reuses the external torrent", async () => {
+    const f = await fixture();
     try {
-      const result = await runSnatchGroup(repo, defaultSettings(), {
-        bookId: book.id,
-        mediaType: "audio",
-        manifestation: {
-          label: null,
-          editionNote: null,
-          selectionNote: "Agent selected the matching release.",
-        },
-        parts: [
-          {
-            provider: "mock",
-            providerGuid: "foundation-guid",
-            title: "Foundation by Isaac Asimov [ENG / MP3]",
-            url: "https://example.com/foundation.torrent",
-          },
-        ],
-      });
+      f.db.exec("CREATE TRIGGER fail_download BEFORE INSERT ON jobs WHEN NEW.type = 'download' BEGIN SELECT RAISE(ABORT, 'fixture publication failure'); END");
+      await expect(f.snatch()).rejects.toThrow("fixture publication failure");
+      const hash = f.client.adds[0]!;
+      expect(f.repo.listReleasesByBook(f.book.id)).toHaveLength(0);
+      expect(f.repo.listManifestationsByBook(f.book.id)).toHaveLength(0);
+      expect(f.repo.bookTorrents.get(hash)?.release_id).toBeNull();
+      f.db.exec("DROP TRIGGER fail_download");
+      const result = await f.snatch();
+      expect(f.repo.bookTorrents.get(hash)?.release_id).toBe(result.release.id);
+      expect(f.client.adds).toHaveLength(1);
+      expect(f.repo.listJobsByType("download")).toHaveLength(1);
+    } finally { await f.close(); }
+  });
 
+  test("preserves legacy rTorrent releases and removes empty redundant group manifestations", async () => {
+    const f = await fixture();
+    try {
+      const release = f.repo.createRelease({
+        bookId: f.book.id, provider: "fixture", providerGuid: "legacy", title: "Red Rising", mediaType: "audio",
+        infoHash: infoHashFromTorrentBytes(makeTorrentBytes("legacy")), sizeBytes: 100, url: "https://fixture.invalid/legacy", status: "imported",
+      });
+      const result = await runSnatchGroup(f.repo, f.settings, {
+        bookId: f.book.id, mediaType: "audio",
+        manifestation: { label: null, editionNote: null, selectionNote: "Existing edition." },
+        parts: [{ provider: "fixture", providerGuid: "legacy", title: "Red Rising", url: release.url }],
+      }, { bookTorrentClient: f.client });
       expect(result.results[0]?.idempotent).toBe(true);
       expect(result.manifestationId).toBeNull();
-      expect(repo.listManifestationsByBook(book.id)).toHaveLength(0);
-    } finally {
-      db.close();
-    }
+      expect(f.repo.bookTorrents.get(release.info_hash)).toBeNull();
+      expect(f.repo.listManifestationsByBook(f.book.id)).toHaveLength(0);
+      expect(f.client.adds).toHaveLength(0);
+      expect(f.requests()).toBe(1);
+    } finally { await f.close(); }
   });
 });

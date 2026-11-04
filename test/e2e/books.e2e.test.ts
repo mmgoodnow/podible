@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -17,12 +17,7 @@ import { runWorker } from "../../src/worker";
 import { createJobExecutionRuntime, EXECUTION_JOB_TYPES } from "../../src/worker/execution";
 import { startMockRtorrent } from "../mocks/rtorrent";
 import { startMockTorznab } from "../mocks/torznab";
-
-function makeTorrentBytes(name: string): Uint8Array {
-  const nameLen = Buffer.byteLength(name);
-  const content = `d8:announce15:http://tracker/4:infod4:name${nameLen}:${name}12:piece lengthi16384e6:lengthi10e6:pieces20:12345678901234567890ee`;
-  return new Uint8Array(Buffer.from(content, "ascii"));
-}
+import { FakeBookTorrentClient, bookTorrentMetainfo } from "../mocks/book-torrent";
 
 async function createMinimalEpub(filePath: string): Promise<void> {
   const zip = new JSZip();
@@ -130,9 +125,11 @@ describe("books e2e", () => {
     await createMinimalEpub(ebookFile);
     await createMinimalEpub(reconcileFile);
 
-    const audioTorrent = makeTorrentBytes("audio-book");
-    const ebookTorrent = makeTorrentBytes("ebook-book");
-    const reconcileTorrent = makeTorrentBytes("ebook-reconcile");
+    const audioBytes = await readFile(audioFile);
+    const ebookBytes = await readFile(ebookFile);
+    const audioTorrent = bookTorrentMetainfo("book.mp3", audioBytes);
+    const ebookTorrent = bookTorrentMetainfo("book.epub", ebookBytes);
+    const reconcileTorrent = bookTorrentMetainfo("other.epub", await readFile(reconcileFile));
 
     const audioHash = infoHashFromTorrentBytes(audioTorrent);
     const ebookHash = infoHashFromTorrentBytes(ebookTorrent);
@@ -151,18 +148,6 @@ describe("books e2e", () => {
 
     const rtorrent = startMockRtorrent({
       byHash: {
-        [audioHash]: {
-          name: "Dune Audio",
-          basePath: downloadAudio,
-          sizeBytes: 1234,
-          completeAfterPolls: 1
-        },
-        [ebookHash]: {
-          name: "Dune Ebook",
-          basePath: downloadEbook,
-          sizeBytes: 456,
-          completeAfterPolls: 1
-        },
         [reconcileHash]: {
           name: "Dune Recon",
           basePath: downloadRecon,
@@ -171,6 +156,13 @@ describe("books e2e", () => {
         }
       },
       preloaded: [reconcileHash]
+    });
+    const bookTorrentClient = new FakeBookTorrentClient(libraryRoot, {
+      contents: {
+        [audioHash]: { "book.mp3": audioBytes },
+        [ebookHash]: { "book.epub": ebookBytes },
+      },
+      completeAfterPolls: 1,
     });
 
     const db = new Database(":memory:");
@@ -197,7 +189,7 @@ describe("books e2e", () => {
       })
     );
 
-    const fetchHandler = createPodibleFetchHandler(repo, Date.now());
+    const fetchHandler = createPodibleFetchHandler(repo, Date.now(), null, { bookTorrentClient });
     const adminCookie = createBrowserSessionCookie(repo);
 
     let stopWorker = false;
@@ -205,6 +197,8 @@ describe("books e2e", () => {
       {
         repo,
         getSettings: () => repo.getSettings(),
+        bookTorrentClient,
+        bookFeedMatcher: async () => [],
         shouldStop: () => stopWorker
       },
       { databasePath: path.join(tempRoot, "execution.sqlite"), leaseMs: 300 }
@@ -315,8 +309,8 @@ describe("books e2e", () => {
         })
       );
       expect(ebookRes.status).toBe(200);
-      const ebookBytes = new Uint8Array(await ebookRes.arrayBuffer());
-      expect(ebookBytes.length).toBeGreaterThan(0);
+      const downloadedEbookBytes = new Uint8Array(await ebookRes.arrayBuffer());
+      expect(downloadedEbookBytes.length).toBeGreaterThan(0);
 
       const feedRes = await fetchHandler(
         new Request("http://localhost/feed.xml", {
@@ -351,6 +345,15 @@ describe("books e2e", () => {
         (assets) => assets.some((asset) => isEbookMime(asset.mime)),
         "reconcile import"
       );
+      expect([...bookTorrentClient.adds].sort()).toEqual([audioHash, ebookHash].sort());
+      expect(rtorrent.loadCalls).toEqual([]);
+      expect(repo.bookTorrents.get(reconcileHash)).toBeNull();
+      for (const hash of [audioHash, ebookHash]) {
+        expect(repo.bookTorrents.get(hash)).toMatchObject({ book_id: book.id, client_id: bookTorrentClient.id });
+        const binding = repo.bookTorrents.get(hash)!;
+        expect((await bookTorrentClient.files({ clientId: bookTorrentClient.id, nativeId: hash }))[0]!.path)
+          .toStartWith(path.join(binding.root_path, hash) + path.sep);
+      }
     } finally {
       stopWorker = true;
       await sleep(400);
@@ -358,6 +361,7 @@ describe("books e2e", () => {
       torznab.stop();
       rtorrent.stop();
       db.close();
+      await rm(tempRoot, { recursive: true, force: true });
     }
   });
 });

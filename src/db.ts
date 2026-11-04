@@ -8,6 +8,7 @@ import { MOVIES_SCHEMA_SQL } from "./movies/schema";
 import { MOVIE_SHADOW_SCHEMA_SQL } from "./movies/shadow-repo";
 import { MOVIE_SEERR_SCHEMA_SQL } from "./movies/seerr-repo";
 import { RELEASE_INBOX_SCHEMA_SQL } from "./media/release-inbox-schema";
+import { BOOK_TORRENTS_SCHEMA_SQL } from "./media/book-torrents-schema";
 
 const SCHEMA_MIGRATION_ID = 1;
 const GUID_MIGRATION_ID = 2;
@@ -1157,6 +1158,8 @@ export function runMigrations(db: Database): void {
     db.exec(RELEASE_INBOX_SCHEMA_SQL);
     db.exec("UPDATE settings SET value_json = json_remove(value_json, '$.movies.searchIntervalHours')");
   });
+  apply(43, () => db.exec(BOOK_TORRENTS_SCHEMA_SQL));
+  apply(44, () => db.exec("DROP INDEX IF EXISTS ux_releases_provider_guid"));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

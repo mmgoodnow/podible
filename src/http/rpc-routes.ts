@@ -4,7 +4,10 @@ import { BooksRepo } from "../repo";
 import { handleRpcMethod, handleRpcRequest } from "../rpc";
 import { setLogSuffix, type HttpEnv } from "./middleware";
 
-export function createRpcRoutes(repo: BooksRepo, startTime: number, dependencies: { movieServices?: import("../movies/operations").MovieServices } = {}): Hono<HttpEnv> {
+export function createRpcRoutes(repo: BooksRepo, startTime: number, dependencies: {
+  movieServices?: import("../movies/operations").MovieServices;
+  bookTorrentClient?: import("../media/torrent-client").TorrentClient;
+} = {}): Hono<HttpEnv> {
   const app = new Hono<HttpEnv>();
 
   app.post("/", async (c) => {

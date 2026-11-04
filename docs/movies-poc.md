@@ -86,9 +86,9 @@ was added. Configure:
   presentation links are relative. Mount the whole managed tree, not just views.
 - Top-level `prowlarr.url` and `prowlarr.apiKey` discover categorized indexers
   dynamically. Legacy `torznab` sources remain the fallback when that connection
-  is absent. Agents reuse `agents.apiKey`. Book downloads continue using the
-  existing `rtorrent` settings; native movies use the private Docker-managed
-  Transmission engine, not those settings.
+  is absent. Agents reuse `agents.apiKey`. New book and movie downloads use
+  the private Docker-managed Transmission engine. Existing book releases retain
+  their `rtorrent` connection; see [book download ownership](book-downloads.md).
 - `movies.qualityPolicy`, `automaticUpgrades` (RSS-driven),
   and `maximumReleaseBytes` (default 40 GiB).
 
@@ -120,7 +120,8 @@ metainfo and resume state. Back up the whole config volume. RPC binds only to
 `127.0.0.1:9091`, requires authentication and is never published/proxied. There
 is no user/admin torrent-control API or extra torrent-client settings surface.
 Peer traffic is separate (`51413` TCP/UDP); publishing that port is optional and
-is not permission to publish `9091`. Existing book/rTorrent work is unchanged.
+is not permission to publish `9091`. Existing book/rTorrent downloads are preserved;
+new books use a separately labelled private Transmission layout.
 Old native-movie executions from another client identity fail closed rather
 than silently being replayed against Transmission. Local non-Docker developers
 can use `bun run scripts/container.ts` with `transmission-daemon` installed.
@@ -165,8 +166,8 @@ record. The passing transfer path retains/pauses records, matching acquisition
 retention. Safe removal of freshly completed transfers is not established.
 
 The neutral torrent port separates client identity and download layout from
-canonical content and library views. Native movies use private Transmission;
-books retain rTorrent. An independent fixture client tests orchestration without
+canonical content and library views. New books and movies use private Transmission;
+legacy books retain rTorrent. An independent fixture client tests orchestration without
 either client's assumptions.
 No cross-seed discovery, shared-byte rescue or derived torrent layouts are
 implemented. Those can be added without making tracker names canonical identity.

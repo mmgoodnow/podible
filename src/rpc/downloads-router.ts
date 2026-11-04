@@ -1,4 +1,4 @@
-import { RtorrentClient } from "../rtorrent";
+import { bookDownloadClient } from "../media/book-torrents";
 
 import { defineMethod, defineRouter } from "./framework";
 import { downloadRpcViewSchema, emptyParamsSchema, jobRowSchema, positiveIntSchema } from "./schemas";
@@ -17,7 +17,7 @@ export const downloadsRouter = defineRouter({
     async handler(ctx) {
       const downloads = ctx.repo.listDownloads();
       const hasDownloading = downloads.some((download) => download.release_status === "downloading" && download.info_hash);
-      const client = hasDownloading ? new RtorrentClient(ctx.repo.getSettings().rtorrent) : null;
+      const client = hasDownloading ? bookDownloadClient(ctx.repo, ctx.repo.getSettings(), ctx.bookTorrentClient) : null;
       const enriched = await Promise.all(downloads.map((download) => enrichDownload(download, client)));
       return { downloads: enriched };
     },
@@ -38,7 +38,7 @@ export const downloadsRouter = defineRouter({
       }
       const client =
         download.release_status === "downloading" && download.info_hash
-          ? new RtorrentClient(ctx.repo.getSettings().rtorrent)
+          ? bookDownloadClient(ctx.repo, ctx.repo.getSettings(), ctx.bookTorrentClient)
           : null;
       return enrichDownload(download, client);
     },

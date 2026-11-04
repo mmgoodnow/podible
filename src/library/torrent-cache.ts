@@ -1,6 +1,7 @@
 import bencode from "bencode";
 
 import type { BooksRepo } from "../repo";
+import { infoHashFromTorrentBytes, normalizeInfoHash } from "./torrent";
 
 type TorrentCacheIdentity = {
   provider?: string | null;
@@ -98,11 +99,16 @@ export function inspectTorrentFiles(bytes: Uint8Array): TorrentFileEntry[] {
 export async function getOrFetchCachedTorrentBytes(
   repo: BooksRepo,
   identity: TorrentCacheIdentity,
-  options: { onLog?: (message: string) => void } = {}
+  options: { onLog?: (message: string) => void; revalidate?: boolean } = {}
 ): Promise<{ bytes: Uint8Array; cacheKey: string; cacheHit: boolean }> {
   const cacheKey = torrentCacheKeyFor(identity);
   const cached = repo.getTorrentCache(cacheKey);
-  if (cached?.torrent_bytes) {
+  let cachedHash: string | null = null;
+  if (cached?.torrent_bytes && !options.revalidate) {
+    try { cachedHash = infoHashFromTorrentBytes(cached.torrent_bytes); } catch { /* Refetch corrupt legacy cache entries. */ }
+  }
+  if (cached?.torrent_bytes && cachedHash && !options.revalidate && cached.url === identity.url &&
+      (!identity.infoHash || cachedHash === normalizeInfoHash(identity.infoHash))) {
     options.onLog?.(`[torrent_cache] hit key=${JSON.stringify(cacheKey)} bytes=${cached.torrent_bytes.byteLength}`);
     return { bytes: cached.torrent_bytes, cacheKey, cacheHit: true };
   }
@@ -113,7 +119,7 @@ export async function getOrFetchCachedTorrentBytes(
     provider: identity.provider ?? null,
     providerGuid: identity.providerGuid ?? null,
     url: identity.url,
-    infoHash: identity.infoHash ?? null,
+    infoHash: infoHashFromTorrentBytes(bytes),
     torrentBytes: bytes,
   });
   options.onLog?.(`[torrent_cache] stored key=${JSON.stringify(cacheKey)} bytes=${bytes.byteLength}`);

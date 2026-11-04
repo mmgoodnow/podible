@@ -3,6 +3,82 @@ import { createPodibleFetchHandler } from "../../src/http";
 import { appRouter } from "../../src/trpc";
 import { hashSessionToken } from "../../src/auth";
 import { createBookSpaData } from "../fixtures/book-spa-data";
+import { FakeBookTorrentClient, bookTorrentMetainfo } from "../mocks/book-torrent";
+import { infoHashFromTorrentBytes } from "../../src/library/torrent";
+import { startMockTorznab } from "../mocks/torznab";
+
+test("book client fake adds paused, guards ownership, and reuses the same managed files", async () => {
+  const data = await createBookSpaData();
+  try {
+    const client = new FakeBookTorrentClient(data.repo.getSettings().libraryRoot);
+    const metainfo = bookTorrentMetainfo("part.mp3");
+    const hash = infoHashFromTorrentBytes(metainfo);
+    const location = { rootId: "books", relativePath: hash };
+    const ref = await client.ensureAdded({ metainfo, location });
+    expect(await client.inspect(ref)).toMatchObject({ state: "inactive", complete: false, bytesDone: 0, location });
+    const files = await client.files(ref);
+    expect(files).toHaveLength(1);
+    expect(files[0]!.path).toContain(`/.podible/downloads/${hash}/part.mp3`);
+    expect(await Bun.file(files[0]!.path).text()).toHaveLength(11);
+    expect(await client.ensureAdded({ metainfo, location })).toEqual(ref);
+    expect(client.adds).toEqual([hash]);
+    expect(await client.files(ref)).toEqual(files);
+    await expect(client.ensureAdded({ metainfo, location: { ...location, relativePath: "another-torrent" } })).rejects.toThrow("location");
+    await expect(client.resume({ ...ref, clientId: "rtorrent:foreign" })).rejects.toThrow("Foreign");
+    await expect(client.inspect({ ...ref, nativeId: "0".repeat(40) })).rejects.toThrow("Missing");
+    await client.resume(ref);
+    expect(await client.inspect(ref)).toMatchObject({ state: "downloading", complete: false });
+    expect(await client.inspect(ref)).toMatchObject({ state: "seeding", complete: true, bytesDone: 11 });
+    await expect(client.removeRecord(ref)).rejects.toThrow("must not delete");
+  } finally {
+    await data.close();
+  }
+});
+
+test("typed book RPC creates ordered manual editions through the private client without exposing search URLs", async () => {
+  const data = await createBookSpaData();
+  const torrents = { a: bookTorrentMetainfo("a.mp3"), b: bookTorrentMetainfo("b.mp3") };
+  const torznab = startMockTorznab({
+    results: ["a", "b"].map((part) => ({ title: `Piranesi Part ${part} [MP3]`, torrentId: part, size: 10 })),
+    torrents,
+  });
+  try {
+    const settings = data.repo.getSettings();
+    settings.torznab = [{ name: "fixture", baseUrl: torznab.baseUrl }];
+    settings.rtorrent.url = "http://127.0.0.1:1/legacy-must-not-be-used";
+    data.repo.updateSettings(settings);
+    const bookTorrentClient = new FakeBookTorrentClient(settings.libraryRoot);
+    const client = appRouter.createCaller({
+      repo: data.repo, request: new Request("http://localhost/"), startTime: Date.now(), bookTorrentClient,
+      session: data.repo.getSessionByTokenHash(hashSessionToken("book-spa-reader")),
+    });
+    const search = await client.library.searchReleases({ bookId: data.book.id, mediaType: "audio", query: "" });
+    expect(search.results).toHaveLength(2);
+    expect(JSON.stringify(search)).not.toContain(torznab.baseUrl);
+    expect(JSON.stringify(search)).not.toContain(".torrent");
+    const indexes = ["b", "a"].map((part) => search.results.findIndex((result) => result.title.includes(`Part ${part}`)));
+    const result = await client.library.createManifestationFromSearch({
+      bookId: data.book.id, mediaType: "audio", searchId: search.searchId, indexes,
+      manifestation: { label: "Ordered private edition", editionNote: "Reader selection" },
+    });
+    expect(result.manifestationId).toBeGreaterThan(0);
+    expect(result.results.map((entry) => entry.release.info_hash)).toEqual([torrents.b, torrents.a].map(infoHashFromTorrentBytes));
+    for (const [index, entry] of result.results.entries()) {
+      expect(entry.idempotent).toBe(false);
+      expect(data.repo.bookTorrents.get(entry.release.info_hash)).toMatchObject({
+        book_id: data.book.id, release_id: entry.release.id, client_id: bookTorrentClient.id,
+      });
+      expect(JSON.parse(data.repo.getJob(entry.jobId)!.payload_json!)).toMatchObject({
+        manifestationId: result.manifestationId, sequenceInManifestation: index,
+      });
+    }
+    expect(bookTorrentClient.adds).toHaveLength(2);
+    expect(torznab.searches).toHaveLength(1);
+  } finally {
+    torznab.stop();
+    await data.close();
+  }
+});
 
 test("book adapters keep media URLs opaque, editions scoped, failures safe, and admin actions protected", async () => {
   const data = await createBookSpaData();

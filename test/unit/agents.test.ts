@@ -8,6 +8,8 @@ import { selectManualImportPaths, selectSearchCandidates } from "../../src/libra
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { defaultSettings, parseSettings } from "../../src/settings";
+import { torrentCacheKeyFor } from "../../src/library/torrent-cache";
+import type { TorznabResult } from "../../src/library/torznab";
 
 function makeMultiFileTorrentBytes(rootName: string, files: Array<{ path: string[]; length: number }>): Uint8Array {
   return bencode.encode({
@@ -356,6 +358,134 @@ describe("agent decisions", () => {
       globalThis.fetch = originalFetch;
       db.close();
     }
+  });
+
+  test("forced/configured search agents inspect all oppositely tagged candidates even when fallback selects nothing", async () => {
+    for (const media of ["audio", "ebook"] as const) {
+      const db = new Database(":memory:");
+      runMigrations(db);
+      const repo = new BooksRepo(db);
+      const wrongTag = media === "audio" ? "EPUB" : "MP3";
+      const correctFile = media === "audio" ? "Foundation.m4b" : "Foundation.epub";
+      const candidates: TorznabResult[] = ["decoy", "complete", "rejected"].map((name) => ({
+        title: `Foundation Isaac Asimov [${wrongTag}] ${name}`,
+        provider: "mislabeled-provider", mediaType: media, guid: name, infoHash: null,
+        url: `https://example.invalid/${media}/${name}.torrent`, sizeBytes: 1000,
+        seeders: 1, leechers: 0, raw: {},
+      }));
+      for (const [index, candidate] of candidates.entries()) {
+        const torrentBytes = makeMultiFileTorrentBytes("Release", [
+          { path: [index === 1 ? correctFile : `Another-Book.${media === "audio" ? "epub" : "mp3"}`], length: 900 },
+          { path: ["release.nfo"], length: 100 },
+        ]);
+        repo.putTorrentCache({
+          key: torrentCacheKeyFor({ provider: candidate.provider, providerGuid: candidate.guid, url: candidate.url }),
+          provider: candidate.provider, providerGuid: candidate.guid, url: candidate.url, torrentBytes,
+        });
+      }
+      const fakeProvider = new FakeModelProvider([
+        functionCallModelResponse([
+          { callId: "inspect_decoy", name: "inspect", arguments: JSON.stringify({ index: 0 }) },
+          { callId: "inspect_complete", name: "inspect", arguments: JSON.stringify({ index: 1 }) },
+        ]),
+        textModelResponse(JSON.stringify({
+          selections: [{ manifestation: { label: "Verified contents", editionNote: "Incorrect provider format tag" }, parts: [1] }],
+          confidence: 0.95, reason: `The inspected file list contains ${correctFile}, despite the ${wrongTag} title tag`,
+        })),
+      ]);
+      try {
+        // One media exercises explicit forcing, the other configured-agent
+        // recovery even when the normal confidence threshold disables review.
+        const settings = defaultSettings({ agents: agentSettings({ lowConfidenceThreshold: 0 }) });
+        const input = {
+          query: "Foundation Isaac Asimov", media, results: candidates,
+          rejectedGuids: ["rejected"], forceAgent: media === "audio",
+          book: { id: 1, title: "Foundation", author: "Isaac Asimov" },
+        };
+        const fallback = await selectSearchCandidates(defaultSettings(), { ...input, forceAgent: false }, { repo });
+        expect(fallback.mode).toBe("deterministic");
+        expect(fallback.selections).toEqual([]);
+        const decision = await selectSearchCandidates(settings, input, { repo, modelProvider: fakeProvider });
+        expect(decision.mode).toBe("agent");
+        expect(decision.selections[0].parts).toEqual([candidates[1]]);
+        expect(fakeProvider.requests).toHaveLength(2);
+        expect(JSON.stringify(fakeProvider.requests[0])).toContain("Never knowingly select an incomplete multipart edition");
+        const prompt = JSON.stringify(fakeProvider.requests[0].input);
+        expect(prompt).toContain(candidates[0].title);
+        expect(prompt).toContain(candidates[1].title);
+        expect(prompt).not.toContain(candidates[2].title);
+        const evidence = JSON.stringify(fakeProvider.requests[1].input);
+        expect(evidence).toContain(correctFile);
+        expect(evidence).toContain("Another-Book.");
+        expect(evidence).toContain("release.nfo");
+      } finally { db.close(); }
+    }
+  });
+
+  test("empty or entirely rejected search evidence never invokes the agent", async () => {
+    const settings = defaultSettings({ agents: agentSettings() });
+    const candidate: TorznabResult = {
+      title: "Foundation Isaac Asimov [EPUB]", mediaType: "audio", provider: "mock",
+      url: "https://example.invalid/rejected.torrent", guid: "rejected", infoHash: null,
+      sizeBytes: 1000, seeders: 1, leechers: 0, raw: {},
+    };
+    const fakeProvider = new FakeModelProvider([]);
+    for (const results of [[], [candidate]]) {
+      const decision = await selectSearchCandidates(settings, {
+        query: "Foundation Isaac Asimov", media: "audio", results,
+        forceAgent: true, rejectedGuids: ["rejected"],
+      }, { modelProvider: fakeProvider });
+      expect(decision.selections).toEqual([]);
+    }
+    expect(fakeProvider.requests).toHaveLength(0);
+  });
+
+  test("deterministic media hints do not mistake Isaac for AAC", async () => {
+    const candidate: TorznabResult = {
+      title: "Foundation Isaac Asimov", mediaType: "ebook", provider: "mock",
+      url: "https://example.invalid/foundation.torrent", guid: "foundation", infoHash: null,
+      sizeBytes: 1000, seeders: 1, leechers: 0, raw: {},
+    };
+    const decision = await selectSearchCandidates(defaultSettings(), {
+      query: "Foundation Isaac Asimov", media: "ebook", results: [candidate],
+    });
+    expect(decision.mode).toBe("deterministic");
+    expect(decision.selections[0].parts).toEqual([candidate]);
+  });
+
+  test("failed GUID and URL may identify new content, but unknown and explicitly failed hashes stay excluded", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const book = repo.createBook({ title: "Foundation", author: "Isaac Asimov" });
+    const url = "https://example.invalid/mutable.torrent";
+    const failed = repo.createRelease({
+      bookId: book.id, provider: "mock", providerGuid: "mutable", title: "Foundation old content",
+      mediaType: "audio", infoHash: "a".repeat(40), url,
+    });
+    repo.setReleaseStatus(failed.id, "failed", "Wrong content");
+    const candidates: TorznabResult[] = [
+      { name: "unknown", hash: null }, { name: "old-content", hash: "a".repeat(40) },
+      { name: "new-content", hash: "b".repeat(40) }, { name: "other-rejected-content", hash: "c".repeat(40) },
+    ].map(({ name, hash }) => ({
+      title: `Foundation Isaac Asimov [M4B] ${name}`, provider: "mock", mediaType: "audio",
+      guid: "mutable", url, infoHash: hash, sizeBytes: 1000, seeders: 1, leechers: 0, raw: {},
+    }));
+    const fakeProvider = new FakeModelProvider([textModelResponse(JSON.stringify({
+      selections: [{ manifestation: { label: null, editionNote: null }, parts: [0] }],
+      confidence: 0.95, reason: "Known new torrent identity, not the previously failed content",
+    }))]);
+    try {
+      const decision = await selectSearchCandidates(defaultSettings({ agents: agentSettings() }), {
+        query: "Foundation Isaac Asimov", media: "audio", results: candidates, forceAgent: true,
+        book: { id: book.id, title: book.title, author: book.author },
+        rejectedUrls: [url], rejectedGuids: ["mutable"], rejectedInfoHashes: ["a".repeat(40), "c".repeat(40)],
+      }, { repo, modelProvider: fakeProvider });
+      expect(decision.selections[0].parts).toEqual([candidates[2]]);
+      const prompt = JSON.stringify(fakeProvider.requests[0].input);
+      expect(prompt).toContain(candidates[2].title);
+      for (const index of [0, 1, 3]) expect(prompt).not.toContain(candidates[index].title);
+    } finally { db.close(); }
   });
 
   test("search throws when agent call fails", async () => {

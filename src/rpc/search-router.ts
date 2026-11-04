@@ -79,7 +79,7 @@ export const snatchRouter = defineRouter({
         sizeBytes: Number.isFinite(params.sizeBytes) ? params.sizeBytes : null,
         manifestationId: params.manifestationId,
         sequenceInManifestation: params.sequenceInManifestation,
-      });
+      }, { bookTorrentClient: ctx.bookTorrentClient });
     },
   }),
 
@@ -121,7 +121,7 @@ export const snatchRouter = defineRouter({
           infoHash: release.infoHash ?? null,
           sizeBytes: release.sizeBytes,
         })),
-      });
+      }, { bookTorrentClient: ctx.bookTorrentClient });
     },
   }),
 });

@@ -61,6 +61,19 @@ export interface DB {
     "created_at": string;
   };
 
+  "book_torrents": {
+    "info_hash": string;
+    "book_id": number;
+    "release_id": number | null;
+    "backend": string;
+    "client_id": string;
+    "root_path": string;
+    "root_token": string;
+    "root_id": string;
+    "relative_path": string;
+    "created_at": string;
+  };
+
   "books": {
     "id": Generated<number>;
     "title": string;

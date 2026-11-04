@@ -7,7 +7,7 @@ import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
 import { infoHashFromTorrentBytes } from "../../src/library/torrent";
-import { startMockRtorrent } from "../mocks/rtorrent";
+import { FakeBookTorrentClient, bookTorrentMetainfo, startBookTorrentFixture } from "../mocks/book-torrent";
 import { startMockTorznab } from "../mocks/torznab";
 
 async function waitFor(file: string, needle: string) {
@@ -18,14 +18,6 @@ async function waitFor(file: string, needle: string) {
   }
   throw new Error(`Missing checkpoint ${needle}`);
 }
-function torrent(name: string) {
-  return new Uint8Array(
-    Buffer.from(
-      `d4:infod4:name${name.length}:${name}6:lengthi10e12:piece lengthi16384e6:pieces20:12345678901234567890ee`
-    )
-  );
-}
-
 const scenarios = [
   "audio:search",
   "audio:selection",
@@ -45,11 +37,9 @@ scenarios.push(
 for (const { boundary, mode } of scenarios) {
   test(`real media pipeline survives ${mode} at ${boundary}`, async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "podible-media-crash-"));
-    const a = torrent("part-a"),
-      b = torrent("part-b");
+    const a = bookTorrentMetainfo("part-a.mp3"),
+      b = bookTorrentMetainfo("part-b.mp3");
     const hashes = [a, b].map(infoHashFromTorrentBytes);
-    const files = [path.join(root, "a.mp3"), path.join(root, "b.mp3")];
-    for (const file of files) await writeFile(file, "ID3-fixture");
     const torznab = startMockTorznab({
       results: ["a", "b"].map((id, index) => ({
         title: `Red Rising Part ${index + 1} [MP3]`,
@@ -58,19 +48,9 @@ for (const { boundary, mode } of scenarios) {
       })),
       torrents: { a, b }
     });
-    const rtorrent = startMockRtorrent({
-      byHash: Object.fromEntries(
-        hashes.map((hash, index) => [
-          hash,
-          {
-            name: `part-${index}`,
-            basePath: files[index]!,
-            sizeBytes: 10,
-            completeAfterPolls: 2
-          }
-        ])
-      )
-    });
+    const bookTorrentClient = new FakeBookTorrentClient(path.join(root, "library"));
+    const torrentServer = startBookTorrentFixture(bookTorrentClient);
+    await writeFile(`${root}/book-torrent-url`, torrentServer.url);
     const db = new Database(path.join(root, "domain.sqlite"));
     db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000");
     runMigrations(db);
@@ -78,7 +58,7 @@ for (const { boundary, mode } of scenarios) {
     repo.updateSettings(
       defaultSettings({
         torznab: [{ name: "mock", baseUrl: torznab.baseUrl }],
-        rtorrent: { transport: "http-xmlrpc", url: rtorrent.url, username: "", password: "" },
+        rtorrent: { transport: "http-xmlrpc", url: "http://127.0.0.1:1/legacy-must-not-be-used", username: "", password: "" },
         agents: { apiKey: "fixture-not-a-real-key" },
         libraryRoot: path.join(root, "library"),
         polling: { rtorrentMs: 50 }
@@ -96,6 +76,13 @@ for (const { boundary, mode } of scenarios) {
     let second: ReturnType<typeof launch> | undefined;
     try {
       await waitFor(`${root}/events`, boundary);
+      if (boundary === "external-snatch") {
+        expect(bookTorrentClient.adds).toEqual([hashes[0]!]);
+        expect(repo.listReleasesByBook(book.id)).toHaveLength(0);
+        expect(repo.bookTorrents.get(hashes[0]!)).toMatchObject({ book_id: book.id, release_id: null });
+        expect(await bookTorrentClient.inspect({ clientId: bookTorrentClient.id, nativeId: hashes[0]! }))
+          .toMatchObject({ state: "inactive", complete: false });
+      }
       if (mode === "cancel" || mode === "cancel-retry") {
         const target =
           boundary === "asset-publication"
@@ -112,7 +99,7 @@ for (const { boundary, mode } of scenarios) {
         if (boundary !== "asset-publication") {
           expect(repo.listReleasesByBook(book.id)).toHaveLength(0);
           expect(repo.listAssetsByBook(book.id)).toHaveLength(0);
-          expect(rtorrent.loadCalls).toHaveLength(0);
+          expect(bookTorrentClient.adds).toHaveLength(0);
         }
         if (mode === "cancel") return;
         repo.retryJob(target);
@@ -133,13 +120,26 @@ for (const { boundary, mode } of scenarios) {
       }
       const researchCount = mode === "cancel-retry" && boundary === "audio:selection" ? 2 : 1;
       expect(torznab.searches).toHaveLength(researchCount);
-      expect(rtorrent.loadCalls.sort()).toEqual([...hashes].sort());
+      expect([...bookTorrentClient.adds].sort()).toEqual([...hashes].sort());
+      if (boundary === "external-snatch")
+        expect(bookTorrentClient.addAttempts.filter((hash) => hash === hashes[0])).toHaveLength(2);
+      for (const hash of hashes) {
+        const binding = repo.bookTorrents.get(hash);
+        expect(binding).toMatchObject({ book_id: book.id, client_id: bookTorrentClient.id, relative_path: hash });
+        const files = await bookTorrentClient.files({ clientId: bookTorrentClient.id, nativeId: hash });
+        expect(files).toHaveLength(1);
+        expect(files[0]!.path).toStartWith(path.join(binding!.root_path, hash) + path.sep);
+      }
       expect(repo.listReleasesByBook(book.id)).toHaveLength(2);
       const manifestations = repo.listManifestationsByBook(book.id);
       expect(manifestations).toHaveLength(1);
       expect(
         repo.listAssetsByManifestation(manifestations[0]!.id).map((asset) => asset.sequence_in_manifestation)
       ).toEqual([0, 1]);
+      expect(
+        repo.listAssetsByManifestation(manifestations[0]!.id)
+          .map((asset) => repo.getRelease(asset.source_release_id!)!.info_hash)
+      ).toEqual(hashes);
       expect(repo.listJobsByType("import")).toHaveLength(2);
       expect(repo.listRecentJobs(100).every((job) => job.status === "succeeded")).toBe(true);
       const events = (await readFile(`${root}/events`, "utf8")).split("\n");
@@ -147,9 +147,10 @@ for (const { boundary, mode } of scenarios) {
     } finally {
       first.kill("SIGKILL");
       second?.kill("SIGKILL");
+      await first.exited;
       if (second) await second.exited;
       torznab.stop();
-      rtorrent.stop();
+      torrentServer.stop();
       db.close();
       await rm(root, { recursive: true, force: true });
     }

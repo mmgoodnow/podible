@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { Usage, type ModelProvider } from "@openai/agents-core";
 import { BooksRepo } from "../../src/repo";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
+import { connectBookTorrentFixture } from "../mocks/book-torrent";
 
 const [root, boundary = ""] = process.argv.slice(2);
 if (!root) throw new Error("Missing fixture root");
@@ -16,7 +17,9 @@ async function checkpoint(name: string) {
 const readdir = fs.readdir.bind(fs);
 fs.readdir = (async (...args: Parameters<typeof fs.readdir>) => {
   const result = await readdir(...args);
-  if (String(args[0]).includes(`${root}/library/`)) await checkpoint("before-publication");
+  const directory = String(args[0]);
+  if (directory.includes(`${root}/library/`) && !directory.includes("/.podible/"))
+    await checkpoint("before-publication");
   return result;
 }) as typeof fs.readdir;
 const transaction = BooksRepo.prototype.transaction;
@@ -36,16 +39,33 @@ BooksRepo.prototype.transaction = function <T>(fn: () => T): T {
   }
   return value;
 };
-const originalFetch = globalThis.fetch;
-globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
-  const response = await originalFetch(...args);
-  if (String(args[1]?.body).includes("<methodName>load.raw_start</methodName>")) await checkpoint("external-snatch");
-  return response;
-}) as typeof fetch;
+const bookTorrentClient = connectBookTorrentFixture(await fs.readFile(`${root}/book-torrent-url`, "utf8"));
+const ensureAdded = bookTorrentClient.ensureAdded.bind(bookTorrentClient);
+bookTorrentClient.ensureAdded = async (input) => {
+  const ref = await ensureAdded(input);
+  await checkpoint("external-snatch");
+  return ref;
+};
 const modelProvider: ModelProvider = {
   getModel: () => ({
     getResponse: async (request) => {
-      await checkpoint(JSON.stringify(request).includes("selectedIndices") ? "import-agent" : "search-agent");
+      const importing = JSON.stringify(request).includes("selectedIndices");
+      await checkpoint(importing ? "import-agent" : "search-agent");
+      let selectedIndices: number[] = [];
+      if (importing) {
+        let prompt = "";
+        if (typeof request.input === "string") prompt = request.input;
+        else for (const item of request.input) {
+          if (item.type !== "message" || item.role !== "user") continue;
+          prompt += typeof item.content === "string" ? item.content : item.content
+            .flatMap((content) => content.type === "input_text" ? [content.text] : []).join("\n");
+        }
+        const filesJson = /```json\n([\s\S]*?)\n```/.exec(prompt)?.[1];
+        if (!filesJson) throw new Error("Missing fixture importable-file list");
+        const files = JSON.parse(filesJson) as { index: number }[];
+        selectedIndices = files.map((file) => file.index);
+        if (!selectedIndices.length) throw new Error("Fixture has no importable files");
+      }
       return {
         usage: new Usage(),
         output: [
@@ -58,7 +78,7 @@ const modelProvider: ModelProvider = {
                 type: "output_text",
                 text: JSON.stringify({
                   selections: [{ manifestation: { label: "Two parts", editionNote: null }, parts: [0, 1] }],
-                  selectedIndices: [0],
+                  selectedIndices,
                   confidence: 0.99,
                   reason: "Fixture selection"
                 })
@@ -78,7 +98,8 @@ const runtime = await createJobExecutionRuntime(
     repo,
     getSettings: () => repo.getSettings(),
     modelProvider,
-    onLog: () => {}
+    bookTorrentClient,
+    onLog: (message) => appendFileSync(`${root}/worker.log`, `${message}\n`)
   },
   `${root}/execution.sqlite`,
   {
@@ -109,6 +130,14 @@ while (Date.now() < deadline) {
   await Bun.sleep(30);
 }
 console.error(JSON.stringify(repo.listRecentJobs(100)));
+for (const job of repo.listRecentJobs(100)) {
+  const execution = repo.getJobExecution(job.id);
+  if (execution && job.status !== "succeeded") {
+    const status = await runtime.engine.getRunStatus(execution.run_id);
+    console.error(JSON.stringify({ jobId: job.id, runState: status?.run.status,
+      steps: status?.steps.map(({ name, status, error, attempts }) => ({ name, status, error, attempts })) }));
+  }
+}
 await runtime.stop();
 db.close();
 process.exit(1);

@@ -6,7 +6,7 @@ import { createOrReuseBookFromOpenLibrary } from "../library/create";
 import { getBookTranscriptStatus, requestBookTranscription } from "../library/chapter-analysis";
 import { hydrateBookFromOpenLibrary } from "../library/hydration";
 import { searchOpenLibraryAuthor, searchOpenLibrarySeries } from "../library/openlibrary";
-import { RtorrentClient } from "../rtorrent";
+import { bookDownloadClient } from "../media/book-torrents";
 import { runSearch, runSnatchGroup, triggerAutoAcquire } from "../library/service";
 
 import { defineMethod, defineRouter } from "./framework";
@@ -123,7 +123,7 @@ export const libraryRouter = defineRouter({
       }
       const bookClient =
         book.audioStatus === "downloading" || book.ebookStatus === "downloading"
-          ? new RtorrentClient(ctx.repo.getSettings().rtorrent)
+          ? bookDownloadClient(ctx.repo, ctx.repo.getSettings(), ctx.bookTorrentClient)
           : null;
       const enrichedBook = await enrichLibraryBookProgress(ctx.repo, book, bookClient);
       return {
@@ -223,7 +223,7 @@ export const libraryRouter = defineRouter({
     async handler(ctx, params) {
       const items = ctx.repo.listInProgressBooks(params.bookIds);
       const hasDownloading = items.some((book) => book.audioStatus === "downloading" || book.ebookStatus === "downloading");
-      const client = hasDownloading ? new RtorrentClient(ctx.repo.getSettings().rtorrent) : null;
+      const client = hasDownloading ? bookDownloadClient(ctx.repo, ctx.repo.getSettings(), ctx.bookTorrentClient) : null;
       return {
         items: (await Promise.all(items.map((book) => enrichLibraryBookProgress(ctx.repo, book, client)))).map((book) =>
           enrichLibraryBookPlayback(ctx.repo, ctx.request, book)
@@ -446,7 +446,7 @@ export const libraryRouter = defineRouter({
           infoHash: release.infoHash ?? null,
           sizeBytes: release.sizeBytes,
         })),
-      });
+      }, { bookTorrentClient: ctx.bookTorrentClient });
     },
   }),
 

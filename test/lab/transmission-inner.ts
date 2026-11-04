@@ -2,9 +2,17 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import bencode from "bencode";
 import { createHash } from "node:crypto";
+import { Database } from "bun:sqlite";
+import { runMigrations } from "../../src/db";
+import { BooksRepo } from "../../src/repo";
+import { runSnatch } from "../../src/library/service";
+import { bookDownloadClient } from "../../src/media/book-torrents";
+import { processDownloadJob } from "../../src/worker/downloads";
+import { processImportJob } from "../../src/worker/imports";
 import {
   prepareTransmission,
   managedTransmission,
+  managedBookTransmission,
   readTransmissionIdentity,
 } from "../../src/media/managed-transmission";
 import { TransmissionRpc } from "../../src/media/transmission-client";
@@ -21,10 +29,13 @@ const files = [
   { name: "Bundle/feature.bin", bytes: Buffer.alloc(80_000, 42) },
   { name: "Bundle/release.nfo", bytes: Buffer.from("fixture nfo") },
 ];
+const torrentFiles = new Map<string, Uint8Array>();
 const webseed = Bun.serve({
   hostname: "127.0.0.1",
   port: 18080,
   fetch(request) {
+    const torrent = torrentFiles.get(new URL(request.url).pathname);
+    if (torrent) return new Response(torrent);
     const file = files.find(
       (f) =>
         "/seed/" + f.name === decodeURIComponent(new URL(request.url).pathname),
@@ -119,6 +130,130 @@ try {
   await resumed.removeRecord(same);
   if (!(await fs.readFile(paths[0]!.path)).equals(files[0]!.bytes))
     throw new Error("Record removal deleted content");
+
+  const libraryRoot = path.join(root, "books");
+  await fs.mkdir(libraryRoot);
+  const bookBytes = Buffer.from(
+    "%PDF-1.4\nSynthetic book transmission fixture\n%%EOF\n",
+  );
+  files.push({ name: "book.pdf", bytes: bookBytes });
+  const bookTorrent = new Uint8Array(
+    bencode.encode({
+      "url-list": ["http://127.0.0.1:18080/seed/book.pdf"],
+      info: {
+        name: "book.pdf",
+        length: bookBytes.length,
+        "piece length": 16384,
+        pieces: createHash("sha1").update(bookBytes).digest(),
+      },
+    }),
+  );
+  torrentFiles.set("/torrent/book", bookTorrent);
+  using bookDb = new Database(":memory:");
+  runMigrations(bookDb);
+  const bookRepo = new BooksRepo(bookDb);
+  const settings = bookRepo.ensureSettings();
+  settings.libraryRoot = libraryRoot;
+  bookRepo.updateSettings(settings);
+  const book = bookRepo.createBook({
+    title: "Transmission fixture",
+    author: "Synthetic",
+  });
+  const bookClient = managedBookTransmission(
+    path.join(libraryRoot, ".podible", "downloads"),
+    directory,
+  );
+  const snatch = await runSnatch(
+    bookRepo,
+    settings,
+    {
+      bookId: book.id,
+      provider: "Loopback webseed",
+      title: "Transmission fixture PDF",
+      mediaType: "ebook",
+      url: "http://127.0.0.1:18080/torrent/book",
+      sizeBytes: bookBytes.length,
+    },
+    { bookTorrentClient: bookClient },
+  );
+  const downloadClient = bookDownloadClient(bookRepo, settings, bookClient);
+  const bookDeadline = Date.now() + 90_000;
+  while (
+    !(await downloadClient.getDownloadState(snatch.release.info_hash)).complete
+  ) {
+    if (Date.now() > bookDeadline)
+      throw new Error("Book webseed transfer timed out");
+    await Bun.sleep(200);
+  }
+  await processDownloadJob(
+    {
+      repo: bookRepo,
+      getSettings: () => settings,
+      bookTorrentClient: bookClient,
+    },
+    bookRepo.getJob(snatch.jobId)!,
+  );
+  const importJob = bookRepo.listJobsByType("import")[0]!;
+  await processImportJob(
+    {
+      repo: bookRepo,
+      getSettings: () => settings,
+      bookTorrentClient: bookClient,
+    },
+    importJob,
+  );
+  const asset = bookRepo.listAssetsByBook(book.id)[0]!;
+  const imported = bookRepo.getAssetFiles(asset.id)[0]!;
+  const bookSource = (
+    await downloadClient.getImportSource(snatch.release.info_hash)
+  ).selectedPaths[0]!;
+  const [sourceStat, importedStat] = await Promise.all([
+    fs.stat(bookSource),
+    fs.stat(imported.path),
+  ]);
+  if (
+    sourceStat.ino !== importedStat.ino ||
+    sourceStat.dev !== importedStat.dev ||
+    !(await fs.readFile(imported.path)).equals(bookBytes)
+  )
+    throw new Error(
+      "Book import did not preserve bytes with a same-filesystem hardlink",
+    );
+  await stop();
+  prepareTransmission(directory);
+  await start();
+  const restartedBookClient = managedBookTransmission(
+    path.join(libraryRoot, ".podible", "downloads"),
+    directory,
+  );
+  if (
+    !(
+      await bookDownloadClient(
+        bookRepo,
+        settings,
+        restartedBookClient,
+      ).getDownloadState(snatch.release.info_hash)
+    ).complete
+  )
+    throw new Error("Daemon restart lost the book's download binding");
+  const repeated = await runSnatch(
+    bookRepo,
+    settings,
+    {
+      bookId: book.id,
+      provider: "Loopback webseed",
+      title: "Transmission fixture PDF",
+      mediaType: "ebook",
+      url: "http://127.0.0.1:18080/torrent/book",
+      infoHash: snatch.release.info_hash,
+    },
+    { bookTorrentClient: restartedBookClient },
+  );
+  if (!repeated.idempotent || repeated.release.id !== snatch.release.id)
+    throw new Error("Book retry duplicated its release");
+  console.log(
+    "Book Transmission acceptance: real webseed transfer, private client binding, download/import handoff, zero-copy hardlink, restart and idempotency passed",
+  );
   await stop();
   daemon = undefined;
   const config = path.join(root, "supervised");
@@ -150,7 +285,15 @@ try {
     return result;
   };
   try {
-    const healthy = async () => { try { const response = await fetch("http://127.0.0.1:3187/rpc/system/health"); const data = await response.json() as { result?: { ok: boolean } }; return data.result?.ok === true; } catch { return false; } };
+    const healthy = async () => {
+      try {
+        const response = await fetch("http://127.0.0.1:3187/rpc/system/health");
+        const data = (await response.json()) as { result?: { ok: boolean } };
+        return data.result?.ok === true;
+      } catch {
+        return false;
+      }
+    };
     await until(healthy);
     const before = readTransmissionIdentity(path.join(config, "transmission"));
     const firstPid = (await daemonPids())[0];
@@ -179,7 +322,7 @@ try {
       before.id
     )
       throw new Error("Restart changed client identity");
-    if (!await healthy())
+    if (!(await healthy()))
       throw new Error("Daemon failure stopped application");
     console.log(
       "Supervisor acceptance: real app readiness, independent daemon restart, private authenticated RPC, stable identity passed",

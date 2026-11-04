@@ -5,6 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import type { AppRouter } from "../../src/trpc";
+import { FakeBookTorrentClient, bookTorrentMetainfo } from "../mocks/book-torrent";
+import { startMockTorznab } from "../mocks/torznab";
+import { infoHashFromTorrentBytes } from "../../src/library/torrent";
 
 const isolatedDataDir = await mkdtemp(path.join(os.tmpdir(), "podible-http-test-data-"));
 
@@ -62,6 +65,48 @@ afterAll(async () => {
 });
 
 describe("podible http", () => {
+  test("manual snatch RPC injects the private book client and preserves hash idempotency", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const torrent = bookTorrentMetainfo("Piranesi.mp3");
+    const hash = infoHashFromTorrentBytes(torrent);
+    const torznab = startMockTorznab({ results: [], torrents: { piranesi: torrent } });
+    try {
+      const settings = repo.ensureSettings();
+      settings.libraryRoot = path.join(isolatedDataDir, "private-manual-snatch");
+      settings.rtorrent.url = "http://127.0.0.1:1/legacy-must-not-be-used";
+      repo.updateSettings(settings);
+      const bookTorrentClient = new FakeBookTorrentClient(settings.libraryRoot);
+      const handler = createPodibleFetchHandler(repo, Date.now(), null, { bookTorrentClient });
+      const book = repo.createBook({ title: "Piranesi", author: "Susanna Clarke" });
+      const params = {
+        bookId: book.id, provider: "fixture", title: "Piranesi MP3", mediaType: "audio",
+        url: `${torznab.baseUrl}/torrent/piranesi.torrent`, infoHash: hash, sizeBytes: 10,
+      };
+      const cookie = createBrowserSessionCookie(repo, { isAdmin: true });
+      const result = await rpc(handler, "snatch.create", params, 1, { cookie });
+      expect(result.error).toBeUndefined();
+      expect(result.result).toMatchObject({ idempotent: false, release: { info_hash: hash } });
+      const again = await rpc(handler, "snatch.create", params, 2, { cookie });
+      expect(again.error).toBeUndefined();
+      expect(again.result).toMatchObject({ idempotent: true, jobId: result.result.jobId });
+      expect(bookTorrentClient.adds).toEqual([hash]);
+      expect(bookTorrentClient.resumes).toEqual([hash]);
+      expect(repo.bookTorrents.get(hash)).toMatchObject({
+        book_id: book.id, release_id: result.result.release.id, client_id: bookTorrentClient.id,
+      });
+      expect(repo.listReleasesByBook(book.id)).toHaveLength(1);
+      expect(repo.listManifestationsByBook(book.id)).toHaveLength(1);
+      const binding = repo.bookTorrents.get(hash)!;
+      expect((await bookTorrentClient.files({ clientId: bookTorrentClient.id, nativeId: hash }))[0]!.path)
+        .toStartWith(path.join(binding.root_path, hash) + path.sep);
+    } finally {
+      torznab.stop();
+      db.close();
+    }
+  });
+
   test("preserves protected admin pages and navigation", async () => {
     const db = new Database(":memory:");
     runMigrations(db);

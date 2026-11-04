@@ -335,8 +335,9 @@ semantic evidence; ffprobe is not proof of the movie's identity.
 
 ## 6. Worker to Torrent Engine (Implemented Port)
 
-Source: `src/media/torrent-client.ts`. The production adapter today is rTorrent;
-the proposed Transmission adapter will implement this same contract.
+Source: `src/media/torrent-client.ts`. New movie and book acquisitions use private
+Transmission. Legacy book releases resolve their persisted rTorrent backend;
+see [book download ownership](book-downloads.md).
 
 ```ts
 type TorrentRef = { clientId: string; nativeId: string };

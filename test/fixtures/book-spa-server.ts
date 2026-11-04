@@ -1,12 +1,10 @@
 import { createPodibleFetchHandler } from "../../src/http";
 import { createBookSpaData } from "./book-spa-data";
 import { startMockTorznab } from "../mocks/torznab";
-import { startMockRtorrent } from "../mocks/rtorrent";
+import { FakeBookTorrentClient, bookTorrentMetainfo } from "../mocks/book-torrent";
 
 const data = await createBookSpaData();
-const torrent = new TextEncoder().encode(
-  "d8:announce15:http://tracker/4:infod4:name12:Piranesi.mp312:piece lengthi16384e6:lengthi10e6:pieces20:12345678901234567890ee",
-);
+const torrent = bookTorrentMetainfo("Piranesi.mp3");
 const torznab = startMockTorznab({
   results: [
     {
@@ -17,11 +15,10 @@ const torznab = startMockTorznab({
   ],
   torrents: { piranesi: torrent },
 });
-const rtorrent = startMockRtorrent({ byHash: {} });
 const settings = data.repo.getSettings();
 settings.torznab = [{ name: "fixture", baseUrl: torznab.baseUrl }];
-settings.rtorrent.url = rtorrent.url;
 data.repo.updateSettings(settings);
+const bookTorrentClient = new FakeBookTorrentClient(settings.libraryRoot);
 const originalFetch = globalThis.fetch;
 const picture = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -89,7 +86,7 @@ globalThis.fetch = Object.assign(
   },
   { preconnect: originalFetch.preconnect },
 );
-const handler = createPodibleFetchHandler(data.repo, Date.now(), null);
+const handler = createPodibleFetchHandler(data.repo, Date.now(), null, { bookTorrentClient });
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handler });
 console.log(
   `BOOK_FIXTURE=${JSON.stringify({ url: server.url.href, bookId: data.book.id, failedBookId: data.failedBook.id, manifestationIds: data.manifestations.map((item) => item.id), importPath: data.audioPath })}`,
@@ -97,7 +94,6 @@ console.log(
 process.on("SIGTERM", async () => {
   server.stop(true);
   torznab.stop();
-  rtorrent.stop();
   await data.close();
   process.exit(0);
 });

@@ -99,3 +99,20 @@ export function managedTransmission(
     }),
   });
 }
+
+export function managedBookTransmission(
+  downloadsRoot: string,
+  directory = path.join(configDir, "transmission"),
+) {
+  const identity = readTransmissionIdentity(directory);
+  return new TransmissionAdapter({
+    clientId: `transmission:${identity.id}`,
+    roots: { books: downloadsRoot },
+    ownershipTag: "Podible Books",
+    rpc: new TransmissionRpc({
+      url: "http://127.0.0.1:9091/transmission/rpc",
+      username: identity.username,
+      password: identity.password,
+    }),
+  });
+}

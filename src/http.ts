@@ -33,6 +33,7 @@ export function createPodibleFetchHandler(
   buildInfo: BuildInfo | null = BUILD_INFO,
   dependencies: {
     movieServices?: import("./movies/operations").MovieServices;
+    bookTorrentClient?: import("./media/torrent-client").TorrentClient;
   } = {},
 ): (request: Request) => Promise<Response> {
   const app = new Hono<HttpEnv>();

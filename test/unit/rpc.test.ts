@@ -1,10 +1,11 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import bencode from "bencode";
 import JSZip from "jszip";
 
 import { runMigrations } from "../../src/db";
@@ -14,7 +15,8 @@ import { handleRpcMethod, handleRpcRequest } from "../../src/rpc";
 import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
-import { startMockRtorrent } from "../mocks/rtorrent";
+import { MockBookTorrentClient } from "../mocks/book-torrents";
+import type { TorrentClient } from "../../src/media/torrent-client";
 import { startMockTorznab } from "../mocks/torznab";
 
 type RpcCallerAuth = "none" | "user" | "admin";
@@ -44,18 +46,18 @@ function makeRpcContext(repo: BooksRepo, request: Request, auth: RpcCallerAuth =
 }
 
 function makeTorrentBytes(name: string): Uint8Array {
-  const nameLen = Buffer.byteLength(name);
-  const content = `d8:announce15:http://tracker/4:infod4:name${nameLen}:${name}12:piece lengthi16384e6:lengthi10e6:pieces20:12345678901234567890ee`;
-  return new Uint8Array(Buffer.from(content, "ascii"));
+  return bencode.encode({ announce: "http://tracker/", info: {
+    name, length: 10, "piece length": 16384, pieces: Buffer.from("12345678901234567890"),
+  } });
 }
 
-async function callRpc(repo: BooksRepo, body: string | object, auth: RpcCallerAuth = "admin") {
+async function callRpc(repo: BooksRepo, body: string | object, auth: RpcCallerAuth = "admin", bookTorrentClient?: TorrentClient) {
   const request = new Request("http://localhost/rpc", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
-  const response = await handleRpcRequest(request, makeRpcContext(repo, request, auth));
+  const response = await handleRpcRequest(request, { ...makeRpcContext(repo, request, auth), bookTorrentClient });
   expect(response.status).toBe(200);
   return (await response.json()) as any;
 }
@@ -1215,11 +1217,15 @@ describe("json-rpc handler", () => {
     );
 
     expect(result.result.query).toBe("Dune Frank Herbert");
-    expect(result.result.results).toHaveLength(1);
+    expect(result.result.results).toHaveLength(2);
     expect(result.result.results[0].index).toBe(0);
     expect(result.result.results[0].title).toContain("M4B");
-    expect(result.result.results[0].url).toBeUndefined();
-    expect(result.result.results[0].raw).toBeUndefined();
+    expect(result.result.results[1].index).toBe(1);
+    expect(result.result.results[1].title).toContain("EPUB");
+    for (const release of result.result.results) {
+      expect(release.url).toBeUndefined();
+      expect(release.raw).toBeUndefined();
+    }
 
     const search = repo.getReleaseSearch(result.result.searchId);
     expect(search?.book_id).toBe(book.id);
@@ -1231,12 +1237,13 @@ describe("json-rpc handler", () => {
   });
 
   test("library.createManifestationFromSearch snatches selected indexes into a new manifestation", async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "book-rpc-")));
+    const client = new MockBookTorrentClient(path.join(root, ".podible", "downloads"));
     const torrentBytes = makeTorrentBytes("dune-audio");
     const torznab = startMockTorznab({
       results: [{ title: "Dune by Frank Herbert [ENG / M4B]", torrentId: "dune-audio", size: 1234 }],
       torrents: { "dune-audio": torrentBytes },
     });
-    const rtorrent = startMockRtorrent({ byHash: {} });
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -1244,9 +1251,10 @@ describe("json-rpc handler", () => {
       defaultSettings({
         auth: { mode: "plex" },
         torznab: [{ name: "mock", baseUrl: torznab.baseUrl }],
+        libraryRoot: root,
         rtorrent: {
           transport: "http-xmlrpc",
-          url: rtorrent.url,
+          url: "http://never-legacy.invalid/RPC2",
           username: "",
           password: "",
         },
@@ -1278,7 +1286,7 @@ describe("json-rpc handler", () => {
           manifestation: { label: null, editionNote: null },
         },
       },
-      "user"
+      "user", client
     );
 
     expect(created.result.manifestationId).toBeGreaterThan(0);
@@ -1293,8 +1301,8 @@ describe("json-rpc handler", () => {
     expect(payload.sequenceInManifestation).toBe(0);
 
     torznab.stop();
-    rtorrent.stop();
     db.close();
+    await rm(root, { recursive: true, force: true });
   });
 
   test("requires openLibraryKey for library.create", async () => {

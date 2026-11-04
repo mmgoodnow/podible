@@ -4,7 +4,10 @@ import type { BooksRepo } from "../repo";
 import { appRouter } from "../trpc";
 import type { HttpEnv } from "./middleware";
 
-export function createTrpcRoutes(repo: BooksRepo, startTime: number, dependencies: { movieServices?: import("../movies/operations").MovieServices } = {}) {
+export function createTrpcRoutes(repo: BooksRepo, startTime: number, dependencies: {
+  movieServices?: import("../movies/operations").MovieServices;
+  bookTorrentClient?: import("../media/torrent-client").TorrentClient;
+} = {}) {
   const app = new Hono<HttpEnv>();
   app.all("*", async (c) => {
     const request = c.req.raw;

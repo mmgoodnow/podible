@@ -1,5 +1,5 @@
 import { nowIso } from "../db";
-import { RtorrentClient } from "../rtorrent";
+import { bookDownloadClient } from "../media/book-torrents";
 import type { RtorrentDownloadState } from "../rtorrent";
 import type { AppSettings, JobRow, MediaType } from "../app-types";
 import { durableStep, type WorkerContext } from "./context";
@@ -119,7 +119,7 @@ function analyzeDownloadIssue(
     return {
       action: "recover",
       nextPayload,
-      error: describeDownloadIssue("Torrent errored in rTorrent; queuing forced reacquire", state, message)
+      error: describeDownloadIssue("Torrent engine reported an error; queuing forced reacquire", state, message)
     };
   }
 
@@ -246,7 +246,7 @@ export async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promi
 
   const settings = ctx.getSettings();
   let payload = job.payload_json ? (JSON.parse(job.payload_json) as DownloadJobPayload) : {};
-  const client = new RtorrentClient(settings.rtorrent);
+  const client = bookDownloadClient(ctx.repo, settings, ctx.bookTorrentClient);
 
   for (let poll = 0; ; poll++) {
     const { state, issue, decision } = await durableStep(ctx, `download:poll:${poll}`, async () => {
