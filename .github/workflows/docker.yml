@@ -8,6 +8,10 @@ permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: podible-image-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
