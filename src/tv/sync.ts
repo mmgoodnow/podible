@@ -11,9 +11,9 @@ import type { TvCatalogEntry } from "./types";
 
 export const tvSyncPayloadSchema = z.object({
   backfillRequestIds: z.array(z.number().int().positive()).min(1).max(5).optional(),
-  episodeLimit: z.number().int().min(1).max(50).optional(),
-}).strict().refine((value) => !value.episodeLimit || !!value.backfillRequestIds, "Episode limit is only for explicit backfill");
+}).strict();
 const feedSchema = z.object({ baselineId: z.number().int().nonnegative(), cursor: z.string().datetime() });
+const legacyOriginSourceSchema = z.object({ episodeLimit: z.number() });
 export function tvSeerrFeedKey(instance: string) { return `tv-seerr-feed:${instance}`; }
 export type TvSyncServices = {
   source: SeerrTvSource;
@@ -57,8 +57,21 @@ export async function syncTvRequests(ctx: WorkerContext, job: JobRow,
       if (request.id !== id || !approvedSeerrTv(request)) throw new Error(`Seerr request ${id} is not approved TV`);
       requests.push(request);
     }
-  } else for (const request of changed!.requests)
-    if (request.id > feed.baselineId || ctx.repo.tv.origins(instance, request.id).length) requests.push(request);
+  } else {
+    for (const request of changed!.requests)
+      if (request.id > feed.baselineId || ctx.repo.tv.origins(instance, request.id).length) requests.push(request);
+    // Re-read only known legacy origins outside the modified window, never unrelated request history.
+    // The old field identifies a one-time migration; its value never limits season membership.
+    const seen = new Set(requests.map((request) => request.id));
+    const legacyIds = [...new Set(ctx.repo.tv.origins(instance)
+      .filter((origin) => legacyOriginSourceSchema.safeParse(origin.source).success).map((origin) => origin.externalRequestId))].sort((a, b) => a - b);
+    for (const id of legacyIds) {
+      if (seen.has(id)) continue;
+      const request = await tvUpstreamStep(ctx, `tv-seerr:request:${id}`, () => services.source.request(id));
+      if (request.id !== id) throw new Error(`Seerr request ${id} returned a different identity`);
+      requests.push(request);
+    }
+  }
   for (const request of requests) {
     active();
     if (!approvedSeerrTv(request)) continue;
@@ -68,13 +81,10 @@ export async function syncTvRequests(ctx: WorkerContext, job: JobRow,
       number.scheme === "tvdb:aired" && number.season !== null && seasons.has(number.season)));
     if (!selected.length) throw new Error(`Seerr request ${request.id} has no explicitly mapped episodes in its approved seasons`);
     const origins = ctx.repo.tv.origins(instance, request.id);
-    const prior = origins[0];
-    const priorLimit = z.object({ episodeLimit: z.number().int().positive().nullable() }).safeParse(prior?.source);
-    const limit = priorLimit.success ? priorLimit.data.episodeLimit : input.episodeLimit ?? null;
-    const pinned = limit ? origins.flatMap((origin) => ctx.repo.tv.requestedEpisodes(origin.requestId).map((episode) => episode.key)) : [];
-    // A canary selects episode identities once, not a moving first-N provider sort order.
-    const wantedKeys = new Set(pinned.length ? pinned : (limit ? selected.slice(0, limit) : selected).map((episode) => episode.key));
-    if ([...wantedKeys].some((key) => !selected.some((episode) => episode.key === key)))
+    // Approval selects complete provider seasons, including future episodes, before work projection.
+    const wantedKeys = new Set(selected.map((episode) => episode.key));
+    const previousKeys = origins.flatMap((origin) => ctx.repo.tv.requestedEpisodes(origin.requestId).map((episode) => episode.key));
+    if (previousKeys.some((key) => !wantedKeys.has(key)))
       throw new Error("Previously selected TV episodes no longer map to the approved seasons; retaining the existing scope");
     const projection = await durableStep(ctx, `tv-seerr:anime:${request.id}`, () => catalog.anime
       ? services.enrich(catalog) : Promise.resolve({ entries: [catalog], warnings: [], unmappedEpisodeKeys: [] }));
@@ -96,14 +106,15 @@ export async function syncTvRequests(ctx: WorkerContext, job: JobRow,
         if (!episodeKeys.length) continue;
         for (const key of episodeKeys) { if (covered.has(key)) throw new Error("Anime projection assigned an episode to multiple works"); covered.add(key); }
         const oldOrigin = ctx.repo.tv.origins(instance, request.id).find((origin) => ctx.repo.tv.entry(origin.entryId)?.key === entry.key);
-        const previousEpisodes = new Set(oldOrigin ? ctx.repo.tv.requestedEpisodeIds(oldOrigin.requestId) : []);
+        const previouslyAired = new Set(oldOrigin ? ctx.repo.tv.requestedEpisodes(oldOrigin.requestId)
+          .filter((episode) => episode.airDate && Date.parse(episode.airDate) <= Date.now()).map((episode) => episode.id) : []);
         const native = ctx.repo.tv.requestApproved({ userId: user.id, entry, policy, episodeKeys,
-          origin: { instance, externalRequestId: request.id, source: { request, episodeLimit: limit, warnings: projection.warnings } } });
+          origin: { instance, externalRequestId: request.id, source: { request, warnings: projection.warnings } } });
         // Replaying an origin is not a new user re-request after intentional eviction.
         const key = { namespace: "tv-target", id: String(native.targetId) };
         if (!ctx.repo.retention.get(key)) ensurePresentIntent(ctx.repo, key, "Approved Seerr TV request");
         if (ctx.repo.retention.get(key)?.desiredPresence === "evicted") continue;
-        if (ctx.repo.tv.missingEpisodes(native.requestId).some((episode) => !previousEpisodes.has(episode.id) && episode.airDate && Date.parse(episode.airDate) <= Date.now()))
+        if (ctx.repo.tv.missingEpisodes(native.requestId).some((episode) => !previouslyAired.has(episode.id) && episode.airDate && Date.parse(episode.airDate) <= Date.now()))
           queueTvAcquisition(ctx.repo, native.requestId);
       }
       if (covered.size !== wantedKeys.size) throw new Error("Anime projection lost requested episode identities");

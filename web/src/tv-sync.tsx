@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../src/trpc";
 import { useTRPC } from "./rpc";
-import { parseTvCanaryBackfill } from "./tv-sync-input";
+import { parseTvSeasonBackfill } from "./tv-sync-input";
 
 type AuditCase = inferRouterOutputs<AppRouter>["tvShadow"]["get"]["case"];
 type NativeRequest = inferRouterOutputs<AppRouter>["tv"]["get"];
@@ -43,7 +43,7 @@ function NativeRequestDetails({ item }: { item: NativeRequest }) {
         </li>)}</ol>
       </details>}
       <button disabled={row.withdrawn || busy || retry.isPending} onClick={() => retry.mutate({ requestId: row.requestId })}>
-        {retry.isPending ? "Queuing..." : row.intentionallyAbsent ? "Re-request episodes" : "Retry native acquisition"}
+        {retry.isPending ? "Queuing..." : "Re-request seasons"}
       </button>
       {busy && <p role="status">An acquisition is already queued or running.</p>}
       {retry.isSuccess && <p role="status">Native recovery queued as job #{retry.data.jobId}. Availability is unchanged until publication succeeds.</p>}
@@ -55,7 +55,6 @@ function NativeRequestDetails({ item }: { item: NativeRequest }) {
 function NativeTvAcquisitions() {
   const trpc = useTRPC(), cache = useQueryClient();
   const [ids, setIds] = useState("");
-  const [episodeLimit, setEpisodeLimit] = useState("1");
   const status = useQuery(trpc.tv.status.queryOptions({}, { refetchInterval: 5000 }));
   const requests = useQuery(trpc.tv.list.queryOptions({ limit: 25 }, { refetchInterval: 3000 }));
   const refresh = async () => {
@@ -64,10 +63,10 @@ function NativeTvAcquisitions() {
   };
   const sync = useMutation(trpc.tv.sync.mutationOptions({ onSuccess: refresh }));
   const backfill = useMutation(trpc.tv.backfill.mutationOptions({ onSuccess: refresh }));
-  const parsed = parseTvCanaryBackfill(ids, episodeLimit);
+  const parsed = parseTvSeasonBackfill(ids);
   return <section className="panel" aria-label="Native TV acquisition">
     <h2>Independent TV acquisition</h2>
-    <p>Approved Seerr intent runs through Podible's own release selection, download, episode verification and isolated Plex publication. Sonarr remains separate. Existing requests are not backfilled automatically.</p>
+    <p>Explicitly approved Seerr seasons run through Podible's own release selection, download, episode verification and isolated Plex publication. All episodes in those seasons are requested, including future or not-yet-dated episodes. Sonarr remains separate. Existing requests are not backfilled automatically.</p>
     {status.isPending ? <p role="status">Loading native TV status...</p> : status.isError ? <p role="alert">{status.error.message}</p> : <>
       <p>Native connection: <strong>{status.data.configured ? "Configured" : "Incomplete"}</strong>. Isolated Plex section: {status.data.plexSectionId || "Not configured"}.</p>
       <p>{status.data.baselineId === null ? "Not activated. First sync establishes a no-history baseline." : `Automatic feed starts after Seerr request #${status.data.baselineId}.`}</p>
@@ -79,8 +78,8 @@ function NativeTvAcquisitions() {
     {sync.isSuccess && <p role="status">Native request sync queued as job #{sync.data.jobId}; this is not an acquisition completion.</p>}
     {sync.error && <p role="alert">{sync.error.message}</p>}
     <details>
-      <summary>Bounded canary backfill</summary>
-      <p>This starts real independent acquisition, not an audit. Select up to five approved Seerr TV requests, with an explicit episode limit per request. The default is one episode.</p>
+      <summary>Approved-season backfill</summary>
+      <p>This starts real independent acquisition, not an audit. Select up to five Seerr TV requests. Each includes all episodes in its explicitly approved seasons; unapproved seasons are excluded and future episode intent is retained.</p>
       <form style={{ display: "flex", flexWrap: "wrap", alignItems: "end", gap: "1rem" }} onSubmit={(event) => {
         event.preventDefault();
         if (status.data?.configured && parsed.value && !backfill.isPending) backfill.mutate(parsed.value);
@@ -88,17 +87,13 @@ function NativeTvAcquisitions() {
         <label style={{ display: "grid", gap: "0.4rem", flex: "1 1 14rem", minWidth: 0 }}>
           Seerr TV request IDs
           <input value={ids} onChange={(event) => { setIds(event.target.value); backfill.reset(); }}
-            placeholder="One to five IDs, separated by commas" autoComplete="off" aria-describedby="tv-canary-bounds" />
-        </label>
-        <label style={{ display: "grid", gap: "0.4rem", flex: "0 1 13rem", minWidth: 0 }}>
-          Episode limit per request
-          <input type="number" min={1} max={50} step={1} value={episodeLimit} onChange={(event) => { setEpisodeLimit(event.target.value); backfill.reset(); }} required />
+            placeholder="One to five IDs, separated by commas" autoComplete="off" aria-describedby="tv-approved-season-scope" />
         </label>
         <button type="submit" disabled={!status.data?.configured || !parsed.value || backfill.isPending}>
-          {backfill.isPending ? "Queuing..." : "Acquire bounded canary"}
+          {backfill.isPending ? "Queuing..." : "Acquire approved seasons"}
         </button>
       </form>
-      <p id="tv-canary-bounds">One to five distinct request IDs; 1-50 episodes per request. Existing native request coverage and recorded backfill limits are preserved, not reduced by this form.</p>
+      <p id="tv-approved-season-scope">Enter one to five distinct Seerr request IDs. Approval is season-level only: no individual episode selection or episode cap.</p>
       {ids.trim() && parsed.error && <p role="alert">{parsed.error}</p>}
       {backfill.isSuccess && <p role="status">Explicit native backfill queued as job #{backfill.data.jobId}; follow actual episode coverage below.</p>}
       {backfill.error && <p role="alert">{backfill.error.message}</p>}

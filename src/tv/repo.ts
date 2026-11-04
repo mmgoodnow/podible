@@ -370,6 +370,13 @@ export class TvRepo {
       facts: JSON.parse(row.facts_json) as unknown, files, episodeIds: ids(files.flatMap((f) => f.episodeIds)) };
   }
 
+  versionSources(targetId: number) {
+    return (this.db.query("SELECT id,acquisition_id FROM tv_versions WHERE target_id=? ORDER BY id DESC").all(targetId) as { id: number; acquisition_id: number }[])
+      .map((row) => ({ version: this.version(row.id)!, acquisition: this.acquisition(row.acquisition_id)!,
+        downloads: this.db.query(`SELECT t.* FROM media_torrents t JOIN tv_acquisition_downloads d ON d.torrent_id=t.id
+          WHERE d.acquisition_id=? ORDER BY t.id`).all(row.acquisition_id) as ReturnType<TvRepo["downloads"]> }));
+  }
+
   recordVersion(acquisitionId: number, facts: unknown, rawFiles: TvContentFile[]): number {
     z.object({ identityVerified: z.literal(true) }).parse(facts);
     const files = z.array(tvContentFileSchema).min(1, "A TV version needs content files").parse(rawFiles)

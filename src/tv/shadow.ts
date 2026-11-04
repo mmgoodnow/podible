@@ -163,8 +163,7 @@ export async function evaluateTvShadow(ctx: Context, job: JobRow, services = ctx
       try {
         plan = validateTvImportPlan(await durableStep(ctx, "tv-shadow:inspect", () => services.inspect({
           entry: input.entry, episodes, policy: input.policy,
-          offer: { key: "tv-shadow-candidate", title: input.observation.releaseTitle, provider: "Read-only TV evidence",
-            url: "", infoHash: null, sizeBytes: null, seeders: null, attributes: {} }, files: candidates,
+          offer: { key: "tv-shadow-candidate", title: input.observation.releaseTitle, provider: "Read-only TV evidence" }, files: candidates,
         })), candidates, episodes);
       } catch {
         ctx.execution?.assertActive();

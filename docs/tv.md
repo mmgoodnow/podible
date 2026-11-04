@@ -18,6 +18,12 @@ episode, with entry-scoped numbering. Explicit AniDB/TVDB mappings and AniList
 relationships can split an aggregate into logical works; unknown mappings retain
 the original provider entry with warnings. See [anime metadata](tv-anime.md).
 
+Seasons are the product request unit. Requests consume every known episode in
+the explicitly approved upstream seasons, including future episodes. Episode IDs
+remain the internal import, availability and provider-projection units; they are
+not an individual-episode request surface. Separately identified works and cours
+still retain their sourced mappings rather than becoming artificial seasons.
+
 ## Settings
 
 The existing administrator settings JSON accepts:
@@ -49,8 +55,10 @@ credential, TV indexer list, public torrent endpoint, or model selector.
 
 - First Seerr activation saves a no-history baseline before its checkpoint. Only
   explicitly approved seasons of new requests are consumed. Historical backfill
-  requires up to five named request IDs and an episode cap (UI default: one).
-  Capped selections retain episode identities across later catalog reordering.
+  requires up to five named request IDs and consumes their approved seasons in
+  full. There is no episode cap or individual-episode backfill. Previously capped
+  canaries expand to their approved season scope on their next successful sync;
+  future episodes remain wanted without triggering a premature download.
 - Anime projection may fan one upstream request out into several work requests,
   preserving exactly the selected source episode IDs. External requesters map by
   Plex ID, never display name; unknown requesters get a non-login local principal.
@@ -66,7 +74,11 @@ credential, TV indexer list, public torrent endpoint, or model selector.
   merely a successful scan or matching ordinals. Previous versions remain linked
   until replacement verification. Multi-episode files replace atomically.
 - Partial packs publish only verified requested episodes and queue missing aired
-  episodes separately. Future requested episodes remain wanted. Routine discovery
+  episodes separately. Completed, previously verified packs are checked before
+  another indexer search: exact torrent/source provenance and fresh file evidence
+  are required, and only still-missing requested episodes are adopted. Reuse does
+  not add, resume or redownload the torrent. Fully accounted sources are skipped.
+  Future requested episodes remain wanted. Routine discovery
   is event-driven via category RSS, not periodic searches per title. Feed routing
   uses the normal selector/importer and durable per-target/source receipts.
 - Reflow owns execution/retries/checkpoints. Application transactions retain
@@ -89,7 +101,9 @@ must not disguise unsupported TV discovery as an empty result set.
 ## Production Canary Progress (2026-11-03)
 
 The rollout uses the isolated Plex section `16` (TVDB aired order); Sonarr's main
-library remains separate. Native requests were explicitly limited to:
+library remains separate. The initial canaries used episode caps, which exposed
+the mismatch between downloaded packs and requested coverage. That request mode
+has been removed; the initial production observations were:
 
 - Breaking Bad, Seerr request `721`: S02E01 only. The season pack completed and
   the verifier selected its matching 47-minute episode file, not the whole pack.
@@ -98,14 +112,15 @@ library remains separate. Native requests were explicitly limited to:
   different release which continued downloading. Stable Transmission subsequently
   passed a separate BTN announce check; see [runtime verification](transmission-runtime.md).
 - Khom Khlang, Seerr request `726`: ten known season-one episode identities,
-  including the future tenth episode. At least two episodes completed canonical
-  adoption and publication; an independent, read-only Plex check confirmed their
-  exact episode IDs and file paths. Missing aired episodes continued through
+  including the future tenth episode. Nine episodes subsequently completed
+  canonical adoption and publication. An independent, read-only Plex check confirmed
+  exact episode IDs and file paths for all nine. Missing aired episodes continued through
   separate recovery acquisitions rather than marking the entire season available.
 
-An episode cap bounds requested/published coverage, **not pack download bytes**.
 The current torrent-client API does not select individual files within a pack;
-the existing per-release byte limit still applies. A fully downloaded pack is
+requests must therefore never be truncated to a one-episode canary while a whole
+season pack is downloaded. The existing per-release byte limit still applies.
+A fully downloaded pack is
 not proof that any requested episode has passed import and Plex verification.
 The future episode's RSS-driven acquisition remains an observation to complete
 after it airs and a suitable release arrives.

@@ -8,7 +8,7 @@ import { finalizeJobJournalMigration, runMigrations } from "../../src/db";
 import { createPodibleFetchHandler } from "../../src/http";
 import { seerrInstance } from "../../src/movies/seerr";
 import { BooksRepo } from "../../src/repo";
-import { syncTvRequests, tvSeerrFeedKey, type TvSyncServices } from "../../src/tv/sync";
+import { syncTvRequests, tvSeerrFeedKey, tvSyncPayloadSchema, type TvSyncServices } from "../../src/tv/sync";
 import type { TvCatalogEntry } from "../../src/tv/types";
 import type { SeerrTvRequest } from "../../src/tv/upstream";
 import type { WorkerContext } from "../../src/worker/context";
@@ -84,8 +84,17 @@ async function setup() {
   const nativeOutbox = () => db.query(`SELECT c.id,c.job_id FROM job_commands c JOIN jobs j ON j.id=c.job_id
     WHERE c.kind='enqueue' AND j.type='tv_acquire' ORDER BY c.id`).all();
   const count = (table: string) => (db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+  const restoreLegacyCanary = (externalRequestId: number, legacyCount = 1) => {
+    const origin = repo.tv.origins(instance, externalRequestId)[0]!;
+    const episodeIds = repo.tv.requestedEpisodeIds(origin.requestId);
+    for (const episodeId of episodeIds.slice(legacyCount))
+      db.query("DELETE FROM tv_request_episodes WHERE request_id=? AND episode_id=?").run(origin.requestId, episodeId);
+    db.query("UPDATE tv_request_origins SET source_json=? WHERE instance=? AND external_request_id=? AND entry_id=?")
+      .run(JSON.stringify({ ...origin.source as object, episodeLimit: legacyCount }), instance, externalRequestId, origin.entryId);
+    return repo.tv.origins(instance, externalRequestId)[0]!;
+  };
   return {
-    root, records, calls, services, context, instance, feedKey, sync, count, nativeOutbox,
+    root, records, calls, services, context, instance, feedKey, sync, count, nativeOutbox, restoreLegacyCanary,
     setCatalog: (next: TvCatalogEntry) => { rawCatalog = structuredClone(next); },
     get repo() { return repo; }, get db() { return db; },
     reopen: () => { db.close(); db = new Database(appPath); repo = new BooksRepo(db); },
@@ -135,7 +144,8 @@ test("selected TVDB seasons fan out to separate anime origins with stable IDs an
     const episodeIds = origins.map((origin) => s.repo.tv.requestedEpisodeIds(origin.requestId));
     expect(origins.flatMap((origin) => s.repo.tv.requestedEpisodes(origin.requestId).map((ep) => ep.key))).toEqual(["tvdb:101", "tvdb:102", "tvdb:201", "tvdb:202"]);
     expect(origins.every((origin) => origin.externalRequestId === 101 && origin.instance === s.instance)).toBe(true);
-    expect(origins[0]!.source).toMatchObject({ episodeLimit: null, request: { id: 101, media: { tvdbId: 307375 } } });
+    expect(origins[0]!.source).toMatchObject({ request: { id: 101, media: { tvdbId: 307375 } } });
+    expect(origins[0]!.source).not.toHaveProperty("episodeLimit");
     expect(s.repo.tv.entry(origins[0]!.entryId)!.relations[0]!.source).toBe("anilist:exact-ID:fixture");
     expect(s.repo.listJobsByType("tv_acquire")).toHaveLength(2);
     expect(s.nativeOutbox()).toHaveLength(2);
@@ -243,38 +253,127 @@ test("real Reflow retries a failed durable TV cursor after fanout without refetc
   } finally { await runtime?.stop(); await s.close(); }
 }, 15_000);
 
-test("explicit one-episode canary pins stable episode identity when later overlap changes provider episode ordering", async () => {
+test("overlap expands legacy capped origins to complete approved seasons with stable identities and no unapproved fanout", async () => {
   const s = await setup();
   try {
-    await s.sync({ backfillRequestIds: [100], episodeLimit: 1 });
-    const origin = s.repo.tv.origins(s.instance, 100)[0]!;
+    await s.sync({ backfillRequestIds: [100] });
+    const origin = s.restoreLegacyCanary(100);
+    const targetId = s.repo.tv.requestById(origin.requestId)!.target_id;
     const selectedIds = s.repo.tv.requestedEpisodeIds(origin.requestId);
     expect(selectedIds).toHaveLength(1);
     expect(s.repo.tv.requestedEpisodes(origin.requestId)[0]!.key).toBe("tvdb:101");
-    for (const acquisition of s.repo.tv.acquisitions(s.repo.tv.requestById(origin.requestId)!.target_id)) s.repo.tv.finishAcquisition(acquisition.id);
+    for (const acquisition of s.repo.tv.acquisitions(targetId)) s.repo.tv.finishAcquisition(acquisition.id);
+    const before = s.repo.getJsonState<{ baselineId: number; cursor: string }>(s.feedKey)!;
     const reordered = catalog();
-    [reordered.episodes[0], reordered.episodes[1]] = [reordered.episodes[1]!, reordered.episodes[0]!];
+    reordered.episodes.reverse();
     s.setCatalog(reordered);
+    s.records.set(100, sourceRequest(100, { seasons: [
+      { seasonNumber: 1, status: 2 }, { seasonNumber: 2, status: 5 }, { seasonNumber: 3, status: 1 },
+    ], updatedAt: new Date(Date.parse(before.cursor) + 60_000).toISOString() }));
     await s.sync();
+    const expanded = s.repo.tv.origins(s.instance, 100);
+    expect(expanded).toHaveLength(2);
+    const original = expanded.find((item) => item.entryId === origin.entryId)!;
+    expect(original).toMatchObject({ requestId: origin.requestId, instance: origin.instance, externalRequestId: 100, createdAt: origin.createdAt });
+    expect(s.repo.tv.requestById(original.requestId)!.target_id).toBe(targetId);
+    expect(s.repo.tv.requestedEpisodeIds(original.requestId)).toContain(selectedIds[0]!);
+    expect(s.repo.tv.requestedEpisodes(original.requestId).map((ep) => ep.key).sort()).toEqual(["tvdb:101", "tvdb:102"]);
+    expect(expanded.flatMap((item) => s.repo.tv.requestedEpisodes(item.requestId).map((ep) => ep.key)).sort())
+      .toEqual(["tvdb:101", "tvdb:102", "tvdb:201", "tvdb:202"]);
+    expect(expanded.every((item) => !("episodeLimit" in (item.source as object)))).toBe(true);
+    expect(s.repo.tv.entry(expanded.find((item) => item.entryId !== origin.entryId)!.entryId)!.key).toBe("anidb:1002");
+    const expandedIds = expanded.map((item) => s.repo.tv.requestedEpisodeIds(item.requestId));
     await s.sync();
-    expect(s.repo.tv.requestedEpisodeIds(origin.requestId)).toEqual(selectedIds);
-    expect(s.repo.tv.origins(s.instance, 100)).toHaveLength(1);
-    expect(s.repo.listJobsByType("tv_acquire")).toHaveLength(1);
-    expect(s.nativeOutbox()).toHaveLength(1);
-    expect(s.repo.tv.origins(s.instance, 100)[0]!.source).toMatchObject({ episodeLimit: 1 });
+    expect(s.repo.tv.origins(s.instance, 100)).toEqual(expanded);
+    expect(expanded.map((item) => s.repo.tv.requestedEpisodeIds(item.requestId))).toEqual(expandedIds);
+    expect(s.repo.listJobsByType("tv_acquire")).toHaveLength(3);
+    expect(s.nativeOutbox()).toHaveLength(3);
+    expect(s.repo.getJsonState<{ baselineId: number; cursor: string }>(s.feedKey))
+      .toEqual({ baselineId: before.baselineId, cursor: s.records.get(100)!.updatedAt });
   } finally { await s.close(); }
 });
 
-test("future-only canary membership loss preserves pinned intent and cursor without widening or enqueueing acquisition", async () => {
-  for (const failure of ["missing-provider-episode", "unapproved-season"] as const) {
+test("normal sync expands known historical canaries to 13/25/10 approved-season episodes even outside the overlap window", async () => {
+  const s = await setup();
+  try {
+    s.records.clear();
+    const catalogs = new Map<number, TvCatalogEntry>();
+    for (const [id, season, count] of [[721, 2, 13], [713, 1, 25], [726, 1, 10]] as const) {
+      const entry = catalog();
+      entry.anime = false;
+      entry.tvdbId = 307_000 + id; entry.tmdbId = 101_000 + id; entry.key = `tvdb:${entry.tvdbId}`;
+      entry.episodes = Array.from({ length: count }, (_, index) => ({
+        key: `tvdb:${id * 1000 + index + 1}`, title: "Episode", airDate: "2016-01-01", runtimeMinutes: 24,
+        numbering: [{ scheme: "tvdb:aired", season, episode: index + 1, absolute: index + 1, source: `${entry.key}:aired` }],
+      }));
+      entry.episodes.push({ key: `tvdb:${id * 1000 + 999}`, title: "Unapproved season", airDate: "2016-01-01", runtimeMinutes: 24,
+        numbering: [{ scheme: "tvdb:aired", season: 3, episode: 1, absolute: 999, source: `${entry.key}:aired` }] });
+      catalogs.set(id, entry);
+      s.records.set(id, sourceRequest(id, { media: { tvdbId: entry.tvdbId, tmdbId: entry.tmdbId },
+        seasons: [{ seasonNumber: season, status: 2 }, { seasonNumber: 3, status: 1 }] }));
+    }
+    s.services.catalog.resolveSeerr = async (request) => { s.calls.catalogs.push(request.id); return structuredClone(catalogs.get(request.id)!); };
+    await s.sync({ backfillRequestIds: [721, 713, 726] });
+    const old = [s.restoreLegacyCanary(721), s.restoreLegacyCanary(713), s.restoreLegacyCanary(726, 10)];
+    const firstIds = old.map((origin) => s.repo.tv.requestedEpisodeIds(origin.requestId)[0]!);
+    expect(old.map((origin) => s.repo.tv.requestedEpisodeIds(origin.requestId).length)).toEqual([1, 1, 10]);
+    for (const origin of old)
+      for (const acquisition of s.repo.tv.acquisitions(s.repo.tv.requestById(origin.requestId)!.target_id)) s.repo.tv.finishAcquisition(acquisition.id);
+    s.calls.requests.length = 0;
+    s.records.set(700, sourceRequest(700));
+    s.services.source.changes = async (since) => ({ requests: [], through: new Date(Date.parse(since) + 60_000).toISOString() });
+    const before = s.repo.getJsonState<{ baselineId: number; cursor: string }>(s.feedKey)!;
+    await s.sync();
+    expect(old.map((origin) => s.repo.tv.requestedEpisodeIds(origin.requestId).length)).toEqual([13, 25, 10]);
+    expect(s.calls.requests).toEqual([713, 721, 726]);
+    for (const [index, origin] of old.entries()) {
+      expect(s.repo.tv.origins(s.instance, origin.externalRequestId)[0]!).toMatchObject({ requestId: origin.requestId, entryId: origin.entryId });
+      expect(s.repo.tv.origins(s.instance, origin.externalRequestId)[0]!.source).not.toHaveProperty("episodeLimit");
+      expect(s.repo.tv.requestedEpisodeIds(origin.requestId)).toContain(firstIds[index]!);
+      expect(s.repo.tv.requestedEpisodes(origin.requestId).some((ep) => ep.numbering.some((number) => number.season === 3))).toBe(false);
+    }
+    expect(s.repo.tv.origins(s.instance, 700)).toEqual([]);
+    expect(s.repo.getJsonState<{ baselineId: number; cursor: string }>(s.feedKey))
+      .toEqual({ baselineId: 726, cursor: new Date(Date.parse(before.cursor) + 60_000).toISOString() });
+    await s.sync();
+    expect(s.calls.requests).toEqual([713, 721, 726]);
+    expect(s.repo.listJobsByType("tv_acquire")).toHaveLength(5);
+    expect(s.nativeOutbox()).toHaveLength(5);
+    expect(s.calls.latest).toBe(1);
+  } finally { await s.close(); }
+});
+
+test("a malformed historical-origin detail read leaves cursor, legacy intent and acquisition outbox unchanged", async () => {
+  const s = await setup();
+  try {
+    s.setCatalog(catalog(true));
+    await s.sync({ backfillRequestIds: [100] });
+    const origin = s.restoreLegacyCanary(100);
+    const before = s.repo.getJsonState<{ baselineId: number; cursor: string }>(s.feedKey)!;
+    const selectedIds = s.repo.tv.requestedEpisodeIds(origin.requestId);
+    s.services.source.changes = async (since) => ({ requests: [], through: new Date(Date.parse(since) + 60_000).toISOString() });
+    for (const invalid of [sourceRequest(999), { ...sourceRequest(100), seasons: undefined } as unknown as SeerrTvRequest]) {
+      s.services.source.request = async () => structuredClone(invalid);
+      await expect(s.sync()).rejects.toThrow();
+      expect(s.repo.getJsonState<{ baselineId: number; cursor: string }>(s.feedKey)).toEqual(before);
+      expect(s.repo.tv.origins(s.instance, 100)).toEqual([origin]);
+      expect(s.repo.tv.requestedEpisodeIds(origin.requestId)).toEqual(selectedIds);
+      expect(s.nativeOutbox()).toEqual([]);
+      expect(s.repo.listJobsByType("tv_acquire")).toEqual([]);
+    }
+  } finally { await s.close(); }
+});
+
+test("future-only membership loss retains legacy/full-season intent and cursor; recovery restores the whole approved season without acquisition", async () => {
+  for (const legacy of [true, false]) for (const failure of ["missing-provider-episode", "unapproved-season"] as const) {
     const s = await setup();
     try {
       s.setCatalog(catalog(true));
-      await s.sync({ backfillRequestIds: [100], episodeLimit: 1 });
-      const origin = s.repo.tv.origins(s.instance, 100)[0]!;
+      await s.sync({ backfillRequestIds: [100] });
+      const origin = legacy ? s.restoreLegacyCanary(100) : s.repo.tv.origins(s.instance, 100)[0]!;
       const selectedIds = s.repo.tv.requestedEpisodeIds(origin.requestId);
       const before = s.repo.getJsonState<{ baselineId: number; cursor: string }>(s.feedKey)!;
-      expect(s.repo.tv.requestedEpisodes(origin.requestId).map((ep) => ep.key)).toEqual(["tvdb:101"]);
+      expect(s.repo.tv.requestedEpisodes(origin.requestId).map((ep) => ep.key)).toEqual(legacy ? ["tvdb:101"] : ["tvdb:101", "tvdb:102"]);
       if (failure === "missing-provider-episode") {
         const missing = catalog(true);
         missing.episodes = missing.episodes.filter((ep) => ep.key !== "tvdb:101");
@@ -293,12 +392,63 @@ test("future-only canary membership loss preserves pinned intent and cursor with
       s.setCatalog(catalog(true));
       s.records.set(100, sourceRequest(100));
       await s.sync();
-      expect(s.repo.tv.requestedEpisodeIds(origin.requestId)).toEqual(selectedIds);
-      expect(s.repo.tv.missingEpisodes(origin.requestId)).toHaveLength(1);
+      expect(s.repo.tv.requestedEpisodeIds(origin.requestId)).toHaveLength(2);
+      expect(s.repo.tv.requestedEpisodeIds(origin.requestId)).toContain(selectedIds[0]!);
+      expect(s.repo.tv.missingEpisodes(origin.requestId)).toHaveLength(2);
       expect(s.repo.listJobsByType("tv_acquire")).toEqual([]);
-      expect(s.repo.tv.origins(s.instance, 100)[0]!.source).toMatchObject({ episodeLimit: 1 });
+      expect(s.repo.tv.origins(s.instance, 100)[0]!.source).not.toHaveProperty("episodeLimit");
     } finally { await s.close(); }
   }
+});
+
+test("generic TV requests include whole approved seasons beyond 50 episodes and retain stable future/undated intent across updates", async () => {
+  const s = await setup();
+  try {
+    const entry = catalog();
+    entry.anime = false;
+    entry.episodes = [...Array.from({ length: 62 }, (_, index) => ({
+      key: `tvdb:${10_001 + index}`, title: "Episode", airDate: index === 59 ? null : index >= 60 ? "2099-01-01" : "2016-01-01",
+      runtimeMinutes: 24, numbering: [{ scheme: "tvdb:aired", season: 1, episode: index + 1, absolute: index + 1, source: "tvdb:307375:aired" }],
+    })), ...entry.episodes.filter((ep) => ep.numbering.some((number) => number.season !== 1))];
+    s.setCatalog(entry);
+    s.records.set(100, sourceRequest(100, { seasons: [
+      { seasonNumber: 1, status: 2 }, { seasonNumber: 2, status: 5 }, { seasonNumber: 3, status: 1 },
+    ] }));
+    await s.sync({ backfillRequestIds: [100] });
+    const origin = s.repo.tv.origins(s.instance, 100)[0]!;
+    expect(s.repo.tv.origins(s.instance, 100)).toHaveLength(1);
+    expect(s.repo.tv.entry(origin.entryId)!.key).toBe(entry.key);
+    const initial = s.repo.tv.requestedEpisodes(origin.requestId);
+    expect(initial).toHaveLength(64);
+    expect(initial.some((ep) => ep.key === "tvdb:301")).toBe(false);
+    expect(initial.filter((ep) => !ep.airDate || Date.parse(ep.airDate) > Date.now())).toHaveLength(4);
+    const initialIds = new Map(initial.map((ep) => [ep.key, ep.id]));
+    for (const acquisition of s.repo.tv.acquisitions(s.repo.tv.requestById(origin.requestId)!.target_id)) s.repo.tv.finishAcquisition(acquisition.id);
+    entry.episodes.push({ key: "tvdb:10063", title: "Upcoming episode", airDate: "2099-01-01", runtimeMinutes: 24,
+      numbering: [{ scheme: "tvdb:aired", season: 1, episode: 63, absolute: 63, source: "tvdb:307375:aired" }] });
+    entry.episodes.push({ key: "tvdb:302", title: "Not approved", airDate: "2016-01-01", runtimeMinutes: 24,
+      numbering: [{ scheme: "tvdb:aired", season: 3, episode: 2, absolute: 302, source: "tvdb:307375:aired" }] });
+    s.setCatalog(entry);
+    await s.sync();
+    const withFuture = s.repo.tv.requestedEpisodes(origin.requestId);
+    expect(withFuture).toHaveLength(65);
+    expect(withFuture.some((ep) => ep.key === "tvdb:10063")).toBe(true);
+    expect(withFuture.some((ep) => ["tvdb:301", "tvdb:302"].includes(ep.key))).toBe(false);
+    expect(s.repo.listJobsByType("tv_acquire")).toHaveLength(1);
+    entry.episodes.find((ep) => ep.key === "tvdb:10063")!.airDate = "2016-01-01";
+    entry.episodes.find((ep) => ep.key === "tvdb:10060")!.airDate = "2016-01-01";
+    s.setCatalog(entry);
+    await s.sync();
+    await s.sync();
+    expect(s.repo.tv.requestedEpisodes(origin.requestId)).toHaveLength(65);
+    for (const episode of s.repo.tv.requestedEpisodes(origin.requestId)) {
+      if (initialIds.has(episode.key)) expect(episode.id).toBe(initialIds.get(episode.key)!);
+    }
+    expect(s.repo.listJobsByType("tv_acquire")).toHaveLength(2);
+    expect(s.nativeOutbox()).toHaveLength(2);
+    expect(s.calls.enrich).toBe(0);
+    expect(s.repo.tv.origins(s.instance, 100)[0]!.source).not.toHaveProperty("episodeLimit");
+  } finally { await s.close(); }
 });
 
 test("intentionally evicted origins accept new approved membership without restoring presence or enqueueing acquisition", async () => {
@@ -310,7 +460,7 @@ test("intentionally evicted origins accept new approved membership without resto
     s.setCatalog(first);
     s.records.set(101, sourceRequest(101));
     await s.sync();
-    const origin = s.repo.tv.origins(s.instance, 101)[0]!;
+    const origin = s.restoreLegacyCanary(101);
     const targetId = s.repo.tv.requestById(origin.requestId)!.target_id;
     for (const acquisition of s.repo.tv.acquisitions(targetId)) s.repo.tv.finishAcquisition(acquisition.id);
     const key = { namespace: "tv-target", id: String(targetId) };
@@ -320,15 +470,16 @@ test("intentionally evicted origins accept new approved membership without resto
     await s.sync();
     expect(s.repo.tv.requestedEpisodes(origin.requestId).map((ep) => ep.key)).toEqual(["tvdb:101", "tvdb:102"]);
     expect(s.repo.retention.get(key)!.desiredPresence).toBe("evicted");
+    expect(s.repo.tv.origins(s.instance, 101)[0]!.source).not.toHaveProperty("episodeLimit");
     expect(s.repo.listJobsByType("tv_acquire")).toHaveLength(1);
     expect(s.nativeOutbox()).toHaveLength(1);
   } finally { await s.close(); }
 });
 
-test("TV JSON-RPC and tRPC are admin-only, validate canary bounds and omit upstream credentials", async () => {
+test("TV JSON-RPC and tRPC are admin-only, reject episode-level scope and omit upstream credentials", async () => {
   const s = await setup();
   try {
-    await s.sync({ backfillRequestIds: [100], episodeLimit: 1 });
+    await s.sync({ backfillRequestIds: [100] });
     for (const [token, isAdmin] of [["admin", true], ["viewer", false]] as const) {
       const user = s.repo.upsertUser({ provider: "local", providerUserId: token, username: token, isAdmin });
       s.repo.createSession(user.id, hashSessionToken(token), null, "browser");
@@ -343,7 +494,7 @@ test("TV JSON-RPC and tRPC are admin-only, validate canary bounds and omit upstr
     const requestId = s.repo.tv.requests()[0]!.id;
     const methods = [
       ["status", {}], ["list", {}], ["get", { requestId }], ["sync", {}],
-      ["backfill", { backfillRequestIds: [100], episodeLimit: 1 }], ["retry", { requestId }],
+      ["backfill", { backfillRequestIds: [100] }], ["retry", { requestId }],
     ] as const;
     const jobsBeforeDenials = s.count("jobs");
     for (const [method, params] of methods) {
@@ -352,24 +503,36 @@ test("TV JSON-RPC and tRPC are admin-only, validate canary bounds and omit upstr
     }
     expect(s.count("jobs")).toBe(jobsBeforeDenials);
     for (const params of [{ backfillRequestIds: [] }, { backfillRequestIds: [1, 2, 3, 4, 5, 6] },
-      { backfillRequestIds: [100], episodeLimit: 0 }, { backfillRequestIds: [100], episodeLimit: 51 },
-      { backfillRequestIds: [100], episodeLimit: 1, untrustedUrl: "https://wrong.invalid" }])
+      ...[null, 0, 1, 50, 51].map((episodeLimit) => ({ backfillRequestIds: [100], episodeLimit })),
+      { backfillRequestIds: [100], episodeIds: [1] }, { backfillRequestIds: [100], episodeKeys: ["tvdb:101"] },
+      { backfillRequestIds: [100], untrustedUrl: "https://wrong.invalid" }]) {
       expect((await rpc("backfill", params)).error?.code).toBe(-32602);
+      expect(tvSyncPayloadSchema.safeParse(params).success).toBe(false);
+    }
+    expect((await rpc("sync", { episodeLimit: 1 })).error?.code).toBe(-32602);
+    expect(s.count("jobs")).toBe(jobsBeforeDenials);
     const status = await rpc("status"), list = await rpc("list"), detail = await rpc("get", { requestId });
     expect(status.result?.configured).toBe(true);
     expect(status.result?.baselineId).toBe(100);
-    expect(detail.result?.requestedEpisodes).toBe(1);
+    expect(detail.result?.requestedEpisodes).toBe(2);
     expect(detail.result?.entry.key).toBe("anidb:1001");
     expect(list.result?.items).toHaveLength(1);
     const encoded = JSON.stringify([status, list, detail]);
     for (const secret of ["seerr-fixture-private", "sonarr-fixture-private", "plex-fixture-private", "seerr.invalid", "sonarr.invalid"])
       expect(encoded).not.toContain(secret);
     expect((await rpc("sync")).result?.jobId).toBeGreaterThan(0);
-    const backfill = await rpc("backfill", { backfillRequestIds: [100], episodeLimit: 1 });
-    expect(JSON.parse(s.repo.getJob(backfill.result!.jobId)!.payload_json!)).toEqual({ backfillRequestIds: [100], episodeLimit: 1 });
+    const backfill = await rpc("backfill", { backfillRequestIds: [100] });
+    expect(JSON.parse(s.repo.getJob(backfill.result!.jobId)!.payload_json!)).toEqual({ backfillRequestIds: [100] });
     const trpc = (token: string) => handler(new Request("http://localhost/api/trpc/tv.list?input=%7B%7D", { headers: { cookie: `podible_session=${token}` } }));
     expect((await trpc("viewer")).status).toBe(403);
     expect((await trpc("admin")).status).toBe(200);
+    for (const params of [{ backfillRequestIds: [100], episodeLimit: 1 }, { backfillRequestIds: [100], episodeIds: [1] }]) {
+      const beforeInvalid = s.count("jobs");
+      const rejected = await handler(new Request("http://localhost/api/trpc/tv.backfill", { method: "POST",
+        headers: { cookie: "podible_session=admin", "Content-Type": "application/json" }, body: JSON.stringify(params) }));
+      expect(rejected.status).toBe(400);
+      expect(s.count("jobs")).toBe(beforeInvalid);
+    }
     const crossOrigin = await handler(new Request("http://localhost/api/trpc/tv.sync", { method: "POST",
       headers: { origin: "https://untrusted.invalid", cookie: "podible_session=admin", "Content-Type": "application/json" }, body: "{}" }));
     expect(crossOrigin.status).toBe(403);

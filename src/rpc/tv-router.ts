@@ -67,16 +67,16 @@ export const tvRouter = defineRouter({
     handler: (ctx, p) => requestView(ctx, p.requestId) }),
   sync: defineMethod({ auth: "admin", summary: "Consume new approved Seerr TV requests; activation never downloads existing requests.",
     paramsSchema: empty, resultSchema: z.object({ jobId: id }), handler: (ctx) => sync(ctx) }),
-  backfill: defineMethod({ auth: "admin", summary: "Explicitly acquire a bounded set of episodes from approved historical Seerr requests.",
-    paramsSchema: z.object({ backfillRequestIds: z.array(id).min(1).max(5), episodeLimit: z.number().int().min(1).max(50).default(1) }).strict(),
+  backfill: defineMethod({ auth: "admin", summary: "Explicitly acquire all episodes in approved seasons from historical Seerr TV requests, retaining future intent.",
+    paramsSchema: z.object({ backfillRequestIds: z.array(id).min(1).max(5) }).strict(),
     resultSchema: z.object({ jobId: id }), handler: (ctx, p) => sync(ctx, p) }),
-  retry: defineMethod({ auth: "admin", summary: "Explicitly re-request/recover a TV target without deleting its current episodes or seed data.",
+  retry: defineMethod({ auth: "admin", summary: "Explicitly re-request/recover TV seasons without deleting current episodes or seed data.",
     paramsSchema: z.object({ requestId: id }).strict(), resultSchema: z.object({ jobId: id }),
     handler(ctx, p) {
       const request = ctx.repo.tv.requestById(p.requestId);
       if (!request || request.withdrawn_at) throw new RpcError(-32602, "Active TV request not found");
       return ctx.repo.transaction(() => {
-        ensurePresentIntent(ctx.repo, { namespace: "tv-target", id: String(request.target_id) }, "Administrator explicitly re-requested TV episodes");
+        ensurePresentIntent(ctx.repo, { namespace: "tv-target", id: String(request.target_id) }, "Administrator explicitly re-requested TV seasons");
         return { jobId: queueTvAcquisition(ctx.repo, p.requestId, "recovery").acquisition.job_id! };
       });
     } }),

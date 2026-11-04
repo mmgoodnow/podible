@@ -4,7 +4,7 @@ import path from "node:path";
 import { chromium } from "playwright";
 
 const server = Bun.spawn([process.execPath, "run", "test/fixtures/spa-server.ts"], {
-  stdout: "pipe", stderr: "inherit", env: { ...process.env, PORT: "0", TV_FIXTURE: "1", SHADOW_FIXTURE: "" },
+  stdout: "pipe", stderr: "inherit", env: { ...process.env, PORT: "0", TV_FIXTURE: "1", SHADOW_FIXTURE: "", ADMIN_FIXTURE: "", AUTH_FIXTURE: "" },
 });
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 try {
@@ -20,6 +20,8 @@ try {
   reader.releaseLock();
   browser = await chromium.launch({ ...(process.env.CI ? {} : { channel: "chrome" }), headless: true });
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  context.setDefaultTimeout(15_000);
+  context.setDefaultNavigationTimeout(15_000);
   await context.addCookies([{ name: "podible_session", value: "spa-browser-fixture", url, httpOnly: true }]);
   const rpc = async (method: string, params: Record<string, unknown> = {}, request = context.request) => {
     const response = await request.post(new URL("/rpc", url).href, { data: { jsonrpc: "2.0", id: 1, method, params } });
@@ -73,17 +75,20 @@ try {
   for (const secret of ["tv-fixture-seerr-private", "tv-fixture-agent-private", "tv-fixture-sonarr-private"])
     assert.ok(!(await page.locator("body").innerText()).includes(secret), "Server credentials reached the page");
 
-  await native.getByText("Bounded canary backfill", { exact: true }).click();
+  await native.getByText("Approved-season backfill", { exact: true }).click();
   const ids = native.getByLabel("Seerr TV request IDs", { exact: true });
-  const limit = native.getByLabel("Episode limit per request", { exact: true });
-  const acquire = native.getByRole("button", { name: "Acquire bounded canary", exact: true });
-  assert.equal(await limit.inputValue(), "1");
+  const acquire = native.getByRole("button", { name: "Acquire approved seasons", exact: true });
+  assert.equal(await native.getByLabel("Episode limit per request", { exact: true }).count(), 0, "Episode-level scope is still offered");
+  assert.equal(await native.getByRole("spinbutton").count(), 0, "Episode cap was replaced by another numeric control");
+  await native.getByText("Each includes all episodes in its explicitly approved seasons", { exact: false }).waitFor();
+  await native.getByText("Approval is season-level only", { exact: false }).waitFor();
   assert.equal(await acquire.isDisabled(), true);
-  await ids.fill("726,724,723,721,720,719");
-  assert.equal(await acquire.isDisabled(), true);
-  await ids.fill("726"); await limit.fill("51");
-  assert.equal(await acquire.isDisabled(), true);
-  await limit.fill("1");
+  for (const value of ["726,724,723,721,720,719", "726,726", "726, episodeLimit:1", "726, /etc/passwd"]) {
+    await ids.fill(value);
+    assert.equal(await acquire.isDisabled(), true, `Untrusted request scope accepted: ${value}`);
+  }
+  await ids.fill("726");
+  assert.equal(await acquire.isEnabled(), true);
   const mutation = async (method: string, action: () => Promise<unknown>) => {
     const response = page.waitForResponse((item) => new URL(item.url()).pathname.endsWith(method) && item.request().method() === "POST");
     await action();
@@ -104,16 +109,23 @@ try {
     return { id: value.jobId, input: posted[0] ?? posted };
   };
   const backfill = await mutation("tv.backfill", () => acquire.click());
-  assert.deepEqual(backfill.input, { backfillRequestIds: [726], episodeLimit: 1 });
+  assert.deepEqual(backfill.input, { backfillRequestIds: [726] });
   await native.getByText(`Explicit native backfill queued as job #${backfill.id}`, { exact: false }).waitFor();
   const sync = await mutation("tv.sync", () => native.getByRole("button", { name: "Sync new TV requests", exact: true }).click());
   await native.getByText(`Native request sync queued as job #${sync.id}`, { exact: false }).waitFor();
-  const recovery = await mutation("tv.retry", () => native.getByRole("button", { name: "Retry native acquisition", exact: true }).click());
+  const recovery = await mutation("tv.retry", () => native.getByRole("button", { name: "Re-request seasons", exact: true }).click());
   await native.getByText(`Native recovery queued as job #${recovery.id}`, { exact: false }).waitFor();
   assert.equal((await rpc("tv.list")).result.items[0].availableEpisodes, 1, "Queued work changed episode availability");
   await native.getByText("1 of 2 requested episodes available", { exact: true }).waitFor();
 
-  assert.equal((await rpc("tv.backfill", { backfillRequestIds: [726], episodeLimit: 1, path: "/etc/passwd" })).error?.code, -32602);
+  const lastSync = (await rpc("tv.status")).result.lastSync;
+  for (const invalid of [{ backfillRequestIds: [726], episodeLimit: 1 }, { backfillRequestIds: [726], episodeIds: [1] },
+    { backfillRequestIds: [726], path: "/etc/passwd" }]) {
+    assert.equal((await rpc("tv.backfill", invalid)).error?.code, -32602);
+    const rejected = await context.request.post(new URL("/api/trpc/tv.backfill", url).href, { data: invalid });
+    assert.equal(rejected.status(), 400);
+  }
+  assert.deepEqual((await rpc("tv.status")).result.lastSync, lastSync, "Rejected episode/path scope still queued work");
   assert.equal((await rpc("tvShadow.sync", { sourcePaths: ["/etc/passwd"] })).error?.code, -32602);
   assert.equal((await rpc("tv.readPath", { path: "/etc/passwd" })).error?.code, -32601);
   for (const pathname of ["/api/trpc/tv.missing", "/tv-sync/arbitrary-path", "/web-assets/tv-missing.js"])
@@ -125,13 +137,14 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false, "TV page overflows mobile viewport");
   await ids.scrollIntoViewIfNeeded();
-  assert.equal(await limit.isVisible(), true, "Mobile canary episode limit is inaccessible");
+  assert.equal(await acquire.isVisible(), true, "Mobile approved-season action is inaccessible");
+  assert.equal(await native.getByRole("spinbutton").count(), 0, "Mobile UI still offers an episode cap");
   await page.screenshot({ path: path.join(artifacts, "tv-sync-mobile.png"), animations: "disabled" });
   await audit.getByText("Entry relationships and provider numbering", { exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(artifacts, "tv-sync-mobile-audit.png"), animations: "disabled" });
   assert.deepEqual(pageErrors, [], "TV UI runtime errors");
   assert.deepEqual(networkErrors, [], "TV UI request/HTTP errors");
-  console.log("TV browser acceptance passed: real auth/RPC, native coverage versus audit, explicit anime maps, bounded default-one backfill, queued sync/retry, safe routes, desktop/mobile and clean runtime/network.");
+  console.log("TV browser acceptance passed: real auth/RPC, native coverage versus audit, explicit anime maps, complete approved-season backfill with no episode cap, rejected episode-level API/UI input, queued sync/retry, safe routes, desktop/mobile and clean runtime/network.");
 } finally {
   await browser?.close();
   server.kill("SIGTERM");

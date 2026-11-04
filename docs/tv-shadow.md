@@ -141,15 +141,15 @@ TV acquisition** section. Available/requested episode counts, future/undated
 episodes, actual job state, selection/mapping decisions, and execution events are
 not inferred from comparison results. Native sync and retry use `tv.sync/retry`;
 explicit recovery of intentionally absent content is labelled **Re-request
-episodes**. Expanded request details refresh independently; collapsed requests do
+seasons**. Expanded request details refresh independently; collapsed requests do
 not fan out individual detail queries.
 
-The bounded canary form uses `tv.backfill` with one to five distinct explicit
-Seerr request IDs and an episode limit from 1 to 50, defaulting to **one episode
-per request**. Submission starts real acquisition, not an audit. Existing native
-coverage and recorded backfill limits are preserved by the server; a lower form
-value does not shrink an existing request. Queue receipts never claim successful
-download or publication.
+The backfill form uses `tv.backfill` with one to five distinct explicit Seerr
+request IDs. It requests the full explicitly approved seasons, including future
+episode intent, and has no individual-episode selector or episode-limit parameter.
+Submission starts real acquisition, not an audit. Existing native coverage is
+preserved, while previously capped origins expand to the approved season scope.
+Queue receipts never claim successful download or publication.
 
 ## Acceptance
 
@@ -167,7 +167,7 @@ mapped files and probe quality, changed/resumed sources, symlink/path boundaries
 credential redaction, and administrator-only method contracts. Movie shadow
 regressions exercise the neutral extraction. Chrome acceptance uses an isolated
 `TV_FIXTURE` mode and real auth/RPC handlers. It checks native coverage versus audit
-verdicts, anime source diagnostics, bounded default-one backfill payloads, actual
+verdicts, anime source diagnostics, season-only backfill payloads, actual
 queued sync/retry state, path rejection, desktop/mobile layout, and runtime/network
 errors. New native work remains queued, with no external provider calls or
 transfers. Screenshots are under `tmp/movies-lab/tv-sync-*.png`.
