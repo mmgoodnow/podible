@@ -11,6 +11,7 @@ import { IndexerError, indexerFailure, type IndexerFailure } from "../media/inde
 import { boundedFeedBoundary, feedIdentity, feedReleaseKey } from "../media/release-inbox";
 import { durableStep, type WorkerContext } from "./context";
 import { hasWantedBookMedia } from "./book-feeds";
+import type { FeedGapDiagnostics } from "../media/feed-gap";
 
 export const INDEXER_FEED_INTERVAL_MS = 15 * 60_000;
 const PAGE_SIZE = 100;
@@ -99,6 +100,8 @@ export async function syncIndexerFeeds(
       gap: string | null = null;
     const pageHeads = new Set<string>();
     let offset = 0;
+    let pagesFetched = 0, reportedTotal: number | null = null;
+    let stopReason: FeedGapDiagnostics["reason"] = "page-budget-exhausted";
     let failure: IndexerFailure | null = null;
     for (
       let pageIndex = 0;
@@ -137,6 +140,8 @@ export async function syncIndexerFeeds(
       }
       // Retain completed page checkpoints written before result envelopes.
       const page = "kind" in outcome ? outcome.page : outcome;
+      pagesFetched++;
+      reportedTotal = page.total;
       const first = page.results[0] ? feedReleaseKey(page.results[0]) : null;
       if (pageIndex === 0) head = first;
       results.push(...page.results);
@@ -152,13 +157,18 @@ export async function syncIndexerFeeds(
         (page.total === null
           ? page.count < PAGE_SIZE
           : offset + page.count >= page.total)
-      )
+      ) {
+        stopReason = "history-exhausted";
         break;
-      if (
-        source.supportsPagination === false ||
-        (first !== null && pageHeads.has(first))
-      )
+      }
+      if (source.supportsPagination === false) {
+        stopReason = "pagination-unsupported";
         break;
+      }
+      if (first !== null && pageHeads.has(first)) {
+        stopReason = "repeated-page";
+        break;
+      }
       if (first) pageHeads.add(first);
       offset += page.count;
     }
@@ -193,7 +203,15 @@ export async function syncIndexerFeeds(
           });
         }
         const boundary = boundedFeedBoundary([...results.map(feedReleaseKey), ...feed.boundaryKeys]);
-        ctx.repo.releaseInbox.succeed(id, head, gap, now, feed.head_key, boundary, feed.boundary_json);
+        const diagnostics: FeedGapDiagnostics | null = gap ? {
+          version: 1, detectedAt: now, reason: stopReason,
+          previousSuccessAt: feed.last_success_at, previousPollAt: feed.last_polled_at,
+          previousPollFailed: feed.last_error !== null,
+          pagesFetched, resultsFetched: results.length, distinctResults: new Set(results.map(feedReleaseKey)).size,
+          anchorsExpected: anchors.size, pageSize: PAGE_SIZE, pageBudget: MAX_PAGES,
+          supportsPagination: source.supportsPagination ?? null, reportedTotal,
+        } : null;
+        ctx.repo.releaseInbox.succeed(id, head, gap, now, feed.head_key, boundary, feed.boundary_json, diagnostics);
       }),
     );
   }

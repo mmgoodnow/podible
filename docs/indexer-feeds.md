@@ -25,6 +25,20 @@ The available provider history may be shorter. A missing boundary is recorded
 as a persistent coverage gap, not a successful claim of complete coverage or a
 trigger for library-wide searches. Gaps are visible in Movie sync.
 
+Migration 54 adds `indexer_feeds.gap_diagnostics_json`. New gaps atomically record
+the paging stop reason (available history ended, pagination unsupported, repeated
+page head, or the 10-page budget exhausted), pages/entries/distinct entries,
+expected checkpoint count, reported total, pagination capability, and the previous
+successful/attempted poll times with a preceding-failure flag. These are observed
+conditions, not proof that entries were deleted or a provider was down throughout
+the interval. Publication dates do not establish overlap.
+
+`gap_since` retains the first historical warning; diagnostics describe the latest
+observed gap using their own `detectedAt`. Successful later overlap retains that
+historical evidence. Older gaps without diagnostics have an unknown cause.
+Failed pages do not write a new gap diagnosis or advance the checkpoint. The
+admin feed RPC exposes validated diagnostics, never provider URLs or credentials.
+
 A failed page does not advance the head or commit a partial batch. Other
 providers continue. Provider retry times survive restart. Inserting new inbox
 entries, advancing the feed checkpoint, and creating matching jobs/outbox commands

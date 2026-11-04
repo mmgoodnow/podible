@@ -4,6 +4,7 @@ import { defineMethod, defineRouter } from "./framework";
 import { emptyParamsSchema } from "./schemas";
 import { RpcError } from "./shared";
 import { INDEXER_FEED_INTERVAL_MS } from "../worker/indexer-feeds";
+import { feedGapDiagnosticsSchema, readFeedGapDiagnostics } from "../media/feed-gap";
 
 export const indexerFeedsRouter = defineRouter({
   status: defineMethod({
@@ -46,6 +47,7 @@ export const indexerFeedsRouter = defineRouter({
           retryAt: z.string().nullable(),
           gapSince: z.string().nullable(),
           gapNote: z.string().nullable(),
+          gapDiagnostics: feedGapDiagnosticsSchema.nullable(),
         }),
       ),
     }),
@@ -94,6 +96,7 @@ export const indexerFeedsRouter = defineRouter({
           retryAt: f.retry_at,
           gapSince: f.gap_since,
           gapNote: f.gap_note,
+          gapDiagnostics: readFeedGapDiagnostics(f.gap_diagnostics_json),
         })),
       };
     },

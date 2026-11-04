@@ -8,6 +8,7 @@ import type {
   SearchSource,
 } from "./indexer-gateway";
 import type { IndexerFailure } from "./indexer-errors";
+import { feedGapDiagnosticsSchema, type FeedGapDiagnostics } from "./feed-gap";
 
 export const inboxResultSchema = z.object({
   title: z.string().min(1),
@@ -199,6 +200,7 @@ export class ReleaseInboxRepo {
     expectedHead?: string | null,
     boundaryKeys?: readonly string[],
     expectedBoundaryJson?: string | null,
+    gapDiagnostics?: FeedGapDiagnostics | null,
   ) {
     this.beforeWrite();
     const previous = this.feed(id)!;
@@ -224,6 +226,9 @@ export class ReleaseInboxRepo {
           retry_at: null,
           gap_since: previous.gap_since ?? (gap ? now : null),
           gap_note: previous.gap_note ?? gap,
+          gap_diagnostics_json: gap && gapDiagnostics
+            ? JSON.stringify(feedGapDiagnosticsSchema.parse(gapDiagnostics))
+            : previous.gap_diagnostics_json,
           updated_at: now,
         })
         .where("id", "=", id)
