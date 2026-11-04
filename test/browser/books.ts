@@ -280,7 +280,27 @@ try {
   await page
     .getByRole("button", { name: "Choose artwork", exact: true })
     .click();
+  const refetchStarted = Promise.withResolvers<void>();
+  const releaseRefetch = Promise.withResolvers<void>();
+  let heldRefetch = false;
+  const holdDetail = async (route: import("playwright").Route) => {
+    if (!heldRefetch && route.request().url().includes("library.get")) {
+      heldRefetch = true;
+      refetchStarted.resolve();
+      await releaseRefetch.promise;
+    }
+    await route.continue();
+  };
+  await page.route("**/api/trpc/**", holdDetail);
   await page.getByRole("button", { name: /Use cover 12346/ }).click();
+  try {
+    await Promise.race([refetchStarted.promise, Bun.sleep(10_000).then(() => { throw new Error("Cover replacement did not refresh book details"); })]);
+    assert.equal(await page.getByRole("status").filter({ hasText: "Cover updated." }).count(), 0,
+      "Cover success must wait for refreshed book details");
+    assert.equal(await page.getByRole("button", { name: /Use cover 12346/ }).isDisabled(), true);
+  } finally {
+    releaseRefetch.resolve();
+  }
   await page
     .getByRole("status")
     .filter({ hasText: "Cover updated." })
@@ -299,6 +319,7 @@ try {
       .getAttribute("src"),
     replacementCover,
   );
+  await page.unroute("**/api/trpc/**", holdDetail);
 
   await page.getByText("Find a specific edition", { exact: true }).click();
   await page

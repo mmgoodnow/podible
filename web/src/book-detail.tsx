@@ -30,8 +30,11 @@ function Artwork({ bookId }: { bookId: number }) {
   );
   const apply = useMutation(
     trpc.openlibrary.setCover.mutationOptions({
-      onSuccess: () => {
-        void cache.invalidateQueries({ queryKey: trpc.library.pathKey() });
+      onSuccess: async (result) => {
+        cache.setQueryData(trpc.library.get.queryKey({ bookId }), (current) => current ? {
+          ...current, book: { ...current.book, coverUrl: result.book.coverUrl },
+        } : current);
+        await cache.invalidateQueries({ queryKey: trpc.library.pathKey() });
       },
     }),
   );
