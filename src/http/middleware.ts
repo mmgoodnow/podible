@@ -24,14 +24,33 @@ function loginRedirectPath(url: URL): string {
   return `/login?redirectTo=${encodeURIComponent(nextPath)}`;
 }
 
+const SESSION_ACTIVITY_INTERVAL_MS = 60_000;
+
+function isWriteContention(error: unknown): boolean {
+  return error instanceof Error && "code" in error &&
+    typeof error.code === "string" && /^(?:SQLITE_BUSY|SQLITE_LOCKED)(?:_|$)/.test(error.code);
+}
+
 export function createRequestContextMiddleware(repo: BooksRepo): MiddlewareHandler<HttpEnv> {
+  const activityAttempts = new Map<number, number>();
   return async (c, next) => {
     const startedAt = Date.now();
     c.set("logSuffix", "");
 
     let session = resolveSessionFromRequest(c.req.raw, (tokenHash) => repo.getSessionByTokenHash(tokenHash));
-    if (session) {
-      session = repo.touchSession(session.id) ?? session;
+    const now = Date.now();
+    const lastSeen = session ? Date.parse(session.last_seen_at) : now;
+    if (session && (!Number.isFinite(lastSeen) || now - lastSeen >= SESSION_ACTIVITY_INTERVAL_MS) &&
+        now - (activityAttempts.get(session.id) ?? -Infinity) >= SESSION_ACTIVITY_INTERVAL_MS) {
+      // Expiry/revocation were checked above. Activity bookkeeping is best-effort,
+      // not a reason to fail an otherwise authenticated read during worker writes.
+      try {
+        session = repo.touchSession(session.id) ?? session;
+      } catch (error) {
+        if (!isWriteContention(error)) throw error;
+      }
+      activityAttempts.set(session.id, now);
+      if (activityAttempts.size > 1024) activityAttempts.delete(activityAttempts.keys().next().value!);
     }
     c.set("session", session);
 

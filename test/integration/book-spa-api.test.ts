@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { createPodibleFetchHandler } from "../../src/http";
 import { appRouter } from "../../src/trpc";
 import { hashSessionToken } from "../../src/auth";
@@ -6,6 +6,110 @@ import { createBookSpaData } from "../fixtures/book-spa-data";
 import { FakeBookTorrentClient, bookTorrentMetainfo } from "../mocks/book-torrent";
 import { infoHashFromTorrentBytes } from "../../src/library/torrent";
 import { startMockTorznab } from "../mocks/torznab";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import { z } from "zod";
+
+test("tRPC HTTP responses never cache account, settings, batches, errors or rejected mutations", async () => {
+  const data = await createBookSpaData();
+  try {
+    const handler = createPodibleFetchHandler(data.repo, Date.now());
+    const get = (procedure: string, token: string | null, input: unknown = {}) => handler(new Request(
+      `http://localhost/api/trpc/${procedure}?input=${encodeURIComponent(JSON.stringify(input))}`,
+      { headers: token ? { cookie: `podible_session=${token}` } : {} },
+    ));
+    for (const [procedure, token, status] of [
+      ["auth.me", "book-spa-reader", 200],
+      ["auth.me", null, 401],
+      ["settings.get", "book-spa-admin", 200],
+      ["settings.get", "book-spa-reader", 403],
+      ["settings.get", null, 401],
+      ["settings.update", "book-spa-admin", 405],
+      ["missing.procedure", "book-spa-admin", 404],
+    ] as const) {
+      const response = await get(procedure, token);
+      expect(response.status).toBe(status);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("etag")).toBeNull();
+      await response.body?.cancel();
+    }
+    const batch = await handler(new Request(
+      `http://localhost/api/trpc/auth.me,settings.get?batch=1&input=${encodeURIComponent(JSON.stringify({ 0: {}, 1: {} }))}`,
+      { headers: { cookie: "podible_session=book-spa-admin" } },
+    ));
+    expect(batch.status).toBe(200);
+    expect(batch.headers.get("cache-control")).toBe("no-store");
+    expect(await batch.json()).toHaveLength(2);
+    const crossSiteHeaders: Record<string, string>[] = [{ origin: "https://foreign.invalid" }, { "sec-fetch-site": "cross-site" }];
+    for (const headers of crossSiteHeaders) {
+      const rejected = await handler(new Request("http://localhost/api/trpc/settings.update", {
+        method: "POST", headers: { cookie: "podible_session=book-spa-admin", ...headers }, body: "{}",
+      }));
+      expect(rejected.status).toBe(403);
+      expect(rejected.headers.get("cache-control")).toBe("no-store");
+    }
+    const malformed = await handler(new Request("http://localhost/api/trpc/settings.update", {
+      method: "POST", headers: { cookie: "podible_session=book-spa-admin", "content-type": "application/json" },
+      body: "{bad-json",
+    }));
+    expect(malformed.status).toBe(400);
+    expect(malformed.headers.get("cache-control")).toBe("no-store");
+  } finally { await data.close(); }
+});
+
+test("opaque tRPC cover URLs immediately change version after cover selection while legacy URLs revalidate", async () => {
+  const data = await createBookSpaData();
+  try {
+    const oldPath = path.join(data.root, "first-cover.jpg");
+    await writeFile(oldPath, "first-cover");
+    data.repo.updateBookMetadata(data.book.id, { coverPath: oldPath });
+    data.db.query("UPDATE books SET updated_at=? WHERE id=?").run("2026-01-01T00:00:00.000Z", data.book.id);
+    const handler = createPodibleFetchHandler(data.repo, Date.now());
+    const request = (url: string, headers: Record<string, string> = {}) => handler(new Request(new URL(url, "http://localhost").href, {
+      headers: { cookie: "podible_session=book-spa-reader", ...headers },
+    }));
+    const bookResponse = z.object({ result: z.object({ data: z.object({ book: z.object({
+      coverUrl: z.string(), updatedAt: z.string(),
+    }) }) }) });
+    const getBook = async () => {
+      const response = await request(`http://localhost/api/trpc/library.get?input=${encodeURIComponent(JSON.stringify({ bookId: data.book.id }))}`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      return bookResponse.parse(await response.json()).result.data.book;
+    };
+    const before = await getBook();
+    const oldUrl = before.coverUrl;
+    const first = await request(oldUrl);
+    expect(first.headers.get("cache-control")).toBe("private, max-age=86400, must-revalidate");
+    const etag = first.headers.get("etag")!;
+    expect(await first.text()).toBe("first-cover");
+    const coverFetch = spyOn(globalThis, "fetch").mockResolvedValue(new Response("selected-cover"));
+    try {
+      const mutation = await handler(new Request("http://localhost/api/trpc/openlibrary.setCover", {
+        method: "POST", headers: { cookie: "podible_session=book-spa-reader", "content-type": "application/json" },
+        body: JSON.stringify({ bookId: data.book.id, coverId: 123 }),
+      }));
+      expect(mutation.status).toBe(200);
+      expect(mutation.headers.get("cache-control")).toBe("no-store");
+      expect(coverFetch).toHaveBeenCalledTimes(1);
+      const selected = bookResponse.parse(await mutation.json()).result.data.book;
+      expect(selected.coverUrl).not.toBe(oldUrl);
+      expect(new URL(selected.coverUrl, "http://localhost").searchParams.get("v")).toBe(selected.updatedAt);
+      expect((await getBook()).coverUrl).toBe(selected.coverUrl);
+      const next = await request(selected.coverUrl, { "if-none-match": etag });
+      expect(next.status).toBe(200);
+      expect(next.headers.get("etag")).not.toBe(etag);
+      expect(await next.text()).toBe("selected-cover");
+      const stale = await request(oldUrl, { "if-none-match": etag });
+      expect(stale.status).toBe(307);
+      expect(stale.headers.get("cache-control")).toBe("no-store");
+      expect(new URL(stale.headers.get("location")!, "http://localhost").href).toBe(new URL(selected.coverUrl, "http://localhost").href);
+      const legacy = await request(`http://localhost/covers/${data.book.id}.jpg`);
+      expect(legacy.headers.get("cache-control")).toBe("private, no-cache");
+      expect(await legacy.text()).toBe("selected-cover");
+    } finally { coverFetch.mockRestore(); }
+  } finally { await data.close(); }
+});
 
 test("book client fake adds paused, guards ownership, and reuses the same managed files", async () => {
   const data = await createBookSpaData();

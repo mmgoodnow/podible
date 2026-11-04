@@ -135,8 +135,11 @@ export class TvRepo {
     if (entryId !== undefined && !this.db.query("SELECT 1 FROM tv_entry_episodes WHERE entry_id=? AND episode_id=?").get(entryId, id)) return null;
     return {
       ...JSON.parse(row.metadata_json), id, refs: this.refs("episode", id),
-      numbering: this.db.query(`SELECT entry_id AS entryId,scheme,season,episode,absolute,source FROM tv_episode_numbering
-        WHERE episode_id=? AND (? IS NULL OR entry_id=?) ORDER BY entry_id,scheme`).all(id, entryId ?? null, entryId ?? null),
+      numbering: entryId === undefined
+        ? this.db.query(`SELECT entry_id AS entryId,scheme,season,episode,absolute,source FROM tv_episode_numbering
+          WHERE episode_id=? ORDER BY entry_id,scheme`).all(id)
+        : this.db.query(`SELECT entry_id AS entryId,scheme,season,episode,absolute,source FROM tv_episode_numbering
+          WHERE entry_id=? AND episode_id=? ORDER BY scheme`).all(entryId, id),
     } as TvEpisode;
   }
 

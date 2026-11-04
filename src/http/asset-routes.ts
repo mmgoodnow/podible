@@ -1,4 +1,6 @@
 import { Hono } from "hono";
+import { createHash } from "node:crypto";
+import { stat } from "node:fs/promises";
 
 import {
   buildManifestationChapters,
@@ -94,6 +96,10 @@ export function createTranscriptsRoutes(repo: BooksRepo): Hono<HttpEnv> {
 
 export function createCoverRoutes(repo: BooksRepo): Hono<HttpEnv> {
   const app = new Hono<HttpEnv>();
+  app.use("*", async (c, next) => {
+    await next();
+    if (!c.res.headers.has("Cache-Control")) c.res.headers.set("Cache-Control", "no-store");
+  });
   app.use("*", requireAuthenticatedRequest);
   app.get("/:idPart", async (c) => {
     const bookId = parseId(c.req.param("idPart").replace(/\.jpg$/i, ""));
@@ -101,15 +107,36 @@ export function createCoverRoutes(repo: BooksRepo): Hono<HttpEnv> {
     if (!book?.cover_path) {
       return c.notFound();
     }
-    const file = Bun.file(book.cover_path);
-    if (!(await file.exists())) {
+    const url = new URL(c.req.url);
+    const versions = url.searchParams.getAll("v");
+    if (versions.length && (versions.length !== 1 || versions[0] !== book.updated_at)) {
+      url.searchParams.set("v", book.updated_at);
+      return new Response(null, { status: 307, headers: {
+        Location: `${url.pathname}${url.search}`, "Cache-Control": "no-store",
+      } });
+    }
+    const metadata = await stat(book.cover_path, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT" || error.code === "ENOTDIR") return null;
+      throw error;
+    });
+    if (!metadata?.isFile()) {
       return c.notFound();
     }
-    return new Response(file, {
-      headers: {
-        "Content-Type": book.cover_path.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg",
-      },
-    });
+    // Metadata is a weak validator, not a digest of image bytes. Never read the body for 304.
+    const etag = `W/"${createHash("sha256").update(JSON.stringify([
+      book.id, book.cover_path, book.updated_at, String(metadata.dev), String(metadata.ino),
+      String(metadata.size), String(metadata.mtimeNs), String(metadata.ctimeNs),
+    ])).digest("hex")}"`;
+    const headers = {
+      "Content-Type": book.cover_path.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg",
+      "Cache-Control": versions.length ? "private, max-age=86400, must-revalidate" : "private, no-cache",
+      Vary: "Cookie, Authorization", ETag: etag,
+    };
+    const condition = c.req.header("If-None-Match");
+    if (condition?.trim() === "*" || condition?.split(",").some((tag) => tag.trim().replace(/^W\//, "") === etag.slice(2))) {
+      return new Response(null, { status: 304, headers });
+    }
+    return new Response(Bun.file(book.cover_path), { headers });
   });
   return app;
 }

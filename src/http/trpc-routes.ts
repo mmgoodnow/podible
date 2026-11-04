@@ -17,11 +17,10 @@ export function createTrpcRoutes(repo: BooksRepo, startTime: number, dependencie
         (origin !== null && origin !== new URL(request.url).origin) ||
         request.headers.get("sec-fetch-site") === "cross-site"
       ) {
-        return c.json({ error: "Cross-origin mutation rejected" }, 403);
+        return c.json({ error: "Cross-origin mutation rejected" }, 403, { "Cache-Control": "no-store" });
       }
     }
-    c.header("Cache-Control", "no-store");
-    return fetchRequestHandler({
+    const response = await fetchRequestHandler({
       endpoint: "/api/trpc",
       req: request,
       router: appRouter,
@@ -33,6 +32,8 @@ export function createTrpcRoutes(repo: BooksRepo, startTime: number, dependencie
         session: c.get("session"),
       }),
     });
+    response.headers.set("Cache-Control", "no-store");
+    return response;
   });
   return app;
 }

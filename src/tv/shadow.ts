@@ -8,7 +8,7 @@ import { evaluateMovieQuality } from "../movies/quality";
 import { createTvDecider, validateTvImportPlan, type TvDecider } from "./agents";
 import { SonarrObserver, type SonarrObservation } from "./sonarr";
 import { ANILIST_URL, ANIME_LINKS_URL, ANIME_MAPPING_URL, enrichAnimeEntry, type AnimeCatalogProjection } from "./anime";
-import type { TvCatalogEntry } from "./types";
+import type { TvCatalogEntry, TvEntry } from "./types";
 import {
   tvShadowInputSchema, tvShadowObservationSchema, tvShadowResultSchema,
   type TvShadowInput, type TvShadowResult,
@@ -92,6 +92,8 @@ export async function syncTvShadow(ctx: Context, services = ctx.tvShadowServices
   if (!settings.tv.sonarrUrl.trim() || !settings.tv.sonarrApiKey.trim()) throw new Error("Configure the server Sonarr connection for TV observation");
   // Never checkpoint the whole lookback: every pass must see current filesystem evidence.
   const observations = await services.observe();
+  // Sonarr observations repeat entire series catalogs. Reuse only exact snapshots within this pass.
+  const catalogs = new Map<string, { snapshot: string; entry: TvEntry }>();
   let created = 0;
   for (const raw of observations) {
     ctx.execution?.assertActive();
@@ -100,14 +102,17 @@ export async function syncTvShadow(ctx: Context, services = ctx.tvShadowServices
     if (!parsed.success) throw new Error("TV observation has malformed episode metadata");
     const observation = redactTvShadow(parsed.data, settings);
     const inventory = await observedFiles(observation, settings.tv.pathMappings);
+    const snapshot = JSON.stringify(observation.entry);
     ctx.repo.tvShadow.transaction(() => {
-      const entry = ctx.repo.tv.upsertEntry(observation.entry);
+      const prior = catalogs.get(observation.entry.key);
+      const entry = prior?.snapshot === snapshot ? prior.entry : ctx.repo.tv.upsertEntry(observation.entry);
       const wanted = new Set(observation.episodeKeys);
       const episodeIds = entry.episodes.filter((episode) => wanted.has(episode.key)).map((episode) => episode.id).sort((a, b) => a - b);
       const input = tvShadowInputSchema.parse({ observation, entry, episodeIds, policy: settings.movies.qualityPolicy, ...inventory,
         warnings: [...inventory.warnings, ...(observation.warnings ?? [])] });
       const captured = ctx.repo.tvShadow.capture(input);
       if (captured.created) { queueTvShadowCase(ctx.repo, captured.caseId); created++; }
+      catalogs.set(observation.entry.key, { snapshot, entry });
     });
   }
   return "done" as const;

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -8,6 +8,7 @@ import { BooksRepo } from "../../src/repo";
 import { observedFiles } from "../../src/media/observed-files";
 import { evaluateTvShadow, projectTvShadowObservation, queueTvShadowCase, syncTvShadow, type TVShadowServices } from "../../src/tv/shadow";
 import { TvShadowRepo } from "../../src/tv/shadow-repo";
+import { TvRepo } from "../../src/tv/repo";
 import { tvShadowRouter } from "../../src/rpc/tv-shadow-router";
 import { executeMethod, type RpcMethodDefinition } from "../../src/rpc/framework";
 import type { RpcContext } from "../../src/rpc/shared";
@@ -128,6 +129,51 @@ describe("TV immutable audit capture", () => {
     expect(f.repo.tvShadow.list()).toHaveLength(1);
     expect(f.latest().input.episodeIds).toEqual(original.input.episodeIds);
     expect(f.repo.tvShadow.get(original.id)?.input.files).toEqual(original.input.files);
+  });
+
+  test("one poll reuses identical catalogs, not filesystem evidence or changed catalog snapshots", async () => {
+    const f = await setup();
+    f.settings.tv.maxCasesPerSync = 50;
+    const observations = Array.from({ length: 4 }, (_, i) => ({ ...structuredClone(f.observation), key: `sonarr:fixture:history:${i}` }));
+    f.services.observe = async () => observations;
+    const upserts = spyOn(TvRepo.prototype, "upsertEntry");
+    try {
+      await syncTvShadow(f.ctx);
+      expect(upserts).toHaveBeenCalledTimes(1);
+      const first = f.repo.tvShadow.list(undefined, 50, true);
+      expect(first).toHaveLength(4);
+      expect(new Set(first.flatMap((row) => row.input.episodeIds))).toEqual(new Set([2]));
+      upserts.mockClear();
+      await fs.writeFile(path.join(f.root, "episode.mkv"), "fresh source evidence for every observation");
+      await syncTvShadow(f.ctx);
+      expect(upserts).toHaveBeenCalledTimes(1);
+      expect(f.repo.tvShadow.list(undefined, 50, true)).toHaveLength(8);
+      expect(f.repo.tvShadow.list()).toHaveLength(4);
+      upserts.mockClear();
+      observations[3]!.entry.episodes[1]!.numbering[0]!.episode = 99;
+      await syncTvShadow(f.ctx);
+      expect(upserts).toHaveBeenCalledTimes(2);
+      expect(f.repo.tvShadow.list(undefined, 50, true)).toHaveLength(9);
+      expect(f.repo.tvShadow.list()[0]!.input.entry.episodes[1]!.numbering.find((map) => map.scheme === "tvdb:aired")?.episode).toBe(99);
+      expect(f.repo.tvShadow.list()[0]!.input.episodeIds).toEqual([2]);
+    } finally { upserts.mockRestore(); }
+  });
+
+  test("entry-scoped episode numbering reloads use the existing identity index, not a catalog-wide scan per episode", async () => {
+    const f = await setup();
+    const queries = spyOn(f.db, "query");
+    let lookups: string[];
+    try {
+      await syncTvShadow(f.ctx);
+      lookups = [...new Set(queries.mock.calls.map(([sql]) => sql).filter((sql) =>
+        sql.includes("SELECT entry_id AS entryId") && sql.includes("FROM tv_episode_numbering")))];
+    } finally { queries.mockRestore(); }
+    expect(lookups!).not.toHaveLength(0);
+    for (const sql of lookups!) {
+      const plan = f.db.query(`EXPLAIN QUERY PLAN ${sql}`).all(...Array.from({ length: sql.match(/\?/g)?.length ?? 0 }, () => 1)) as { detail: string }[];
+      expect(plan.map((row) => row.detail).join(" ")).toMatch(/SEARCH tv_episode_numbering .*\(entry_id=\? AND episode_id=\?\)/);
+      expect(plan.some((row) => /SCAN tv_episode_numbering/.test(row.detail))).toBe(false);
+    }
   });
 
   test.each(["jobs", "attachment"])("a failed %s write rolls catalog/case/job/outbox back together", async (stage) => {
