@@ -3,7 +3,6 @@ import { readTransmissionIdentity } from "./managed-transmission";
 import { TransmissionRpc } from "./transmission-client";
 import { boundedStewardshipFetch } from "./torrent-stewardship";
 import { allTrackerRetirementEvidence, retirementDigest } from "./torrent-retirement-evidence";
-import { MINIMUM_SEED_SECONDS } from "./torrent-stewardship-types";
 import type { RetirementBinding } from "./torrent-retirement-types";
 
 const count = z.number().int().nonnegative().safe();
@@ -33,8 +32,8 @@ export function validateDaemonBinding(binding: RetirementBinding, snapshot: Reti
 export function eligibleDaemonRecord(binding: RetirementBinding, snapshot: RetirementDaemonSnapshot, now: number) {
   const row = validateDaemonBinding(binding, snapshot);
   if (![0, 5, 6].includes(row.status) || row.leftUntilDone !== 0 || row.sizeWhenDone !== row.totalSize ||
-      row.haveValid !== row.totalSize || row.haveUnchecked !== 0 || row.error === 3 || row.secondsSeeding < MINIMUM_SEED_SECONDS)
-    throw new Error("Daemon record is not fully complete with the required actual seed time");
+      row.haveValid !== row.totalSize || row.haveUnchecked !== 0 || row.error === 3 || !count.safeParse(row.secondsSeeding).success)
+    throw new Error("Daemon record is not fully complete with a known actual seed counter");
   const trackers = allTrackerRetirementEvidence(row.trackerStats, now);
   if (!trackers) throw new Error("Not every current tracker explicitly reports unregistration");
   return { row, trackers };

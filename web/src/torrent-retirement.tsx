@@ -10,7 +10,7 @@ export function TorrentRetirementStatus() {
   const preview = useQuery(trpc.torrentRetirement.preview.queryOptions({ source, offset, limit: 20 }, { refetchInterval: 30_000 }));
   return <section className="media-section" aria-label="Automatic orphan retirement">
     <h2>Automatic orphan record retirement</h2>
-    <p>Only unused private torrent records qualify: every tracker must repeatedly report unregistration, and the daemon must report at least 30 days of actual seeding. Library-bound or actively used records remain protected.</p>
+    <p>Only complete, unused private torrent records qualify: every tracker, including backups, must report unregistration across three advancing announcements at least 15 minutes apart. No minimum seed duration applies to this record-only retirement. Library-bound or actively used records remain protected.</p>
     <p>No seed files or canonical media are deleted. Ambiguous tracker failures, timeouts and missing evidence do not authorize retirement.</p>
     <div className="media-filters" role="group" aria-label="Retirement binding source">
       {(["books", "screen"] as const).map(value => <button key={value} className="secondary" aria-pressed={source === value}

@@ -60,8 +60,11 @@ Retirement requires all of the following, freshly rechecked before dispatch:
 - Full completion: non-checking stopped/seed-queued/seeding state, zero wanted
   bytes remaining, `sizeWhenDone == totalSize == haveValid`, `haveUnchecked == 0`,
   and no local-storage error. A partial wanted-file download is not complete.
-- At least 2,592,000 **actual daemon `secondsSeeding`**, never torrent age or
-  elapsed wall time inferred by Podible. Missing or regressed counters block.
+- Known, nonnegative **actual daemon `secondsSeeding`** with no regression in the
+  evidence or before removal. There is no minimum seed duration for this narrowly
+  confirmed-unregistered orphan record-only action: the counter can remain frozen
+  at zero while every tracker refuses the torrent. Missing or invalid counters
+  still block; torrent age and inferred elapsed time are not substitutes.
 - Three durable qualified observations, each with every current tracker,
   including backup trackers, explicitly reporting unregistration. Every tracker's
   own announce timestamp must advance by at least 15 minutes between samples.
@@ -72,6 +75,9 @@ Retirement requires all of the following, freshly rechecked before dispatch:
   retirement, and unchanged configuration/binding revisions under the global lane.
 
 The existing primary-only stewardship streak is never removal authority.
+The 30-day seed protection for live/unknown tracker obligations and seed-file
+eviction is unchanged. This exception only removes a confirmed-unregistered orphan
+daemon record; it never authorizes deleting seed data or canonical media.
 Separate bounded all-tracker certificates are persisted atomically with the
 collector's observations. Only opaque digests and typed timing/count facts are
 stored; no tracker URL, passkey, raw tracker response, daemon password, session

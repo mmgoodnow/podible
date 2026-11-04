@@ -93,7 +93,10 @@ Tracker health is independent of torrent progress:
   unknown telemetry, seed-counter regression, or long observation gaps reset it.
 - The daemon's actual `secondsSeeding` is the only seed-time source. Missing,
   negative or invalid counters mean unknown/protected. Neither torrent creation
-  dates nor download completion age count toward the 30-day minimum.
+  dates nor download completion age count toward the 30-day seed protection.
+  This protection remains in force for live/unknown tracker obligations and
+  seed-file eviction; confirmed-unregistered orphan record-only retirement below
+  is a separate policy, not a seed-data eviction authorization.
 - Incomplete paused downloads are explicit observations. This collector does not
   resume them, reannounce them, or infer why they are paused.
 
@@ -102,8 +105,10 @@ Tracker health is independent of torrent progress:
 The normal five-minute job can retire only complete **orphan** records with no
 domain binding or admitted consumer, after every current tracker (including
 backups) supplies three individually advanced unregistered announcements at
-least 15 minutes apart and actual seed time exceeds 30 days. Generic HTTP errors,
-timeouts, scrape errors and a primary-only failure are insufficient.
+least 15 minutes apart. No minimum seed duration applies to this record-only
+action: a confirmed-unregistered torrent's actual seed counter can freeze at zero.
+The counter must still be known and nonregressing. Generic HTTP errors, timeouts,
+scrape errors, live/unknown backups and a primary-only failure are insufficient.
 
 Durable admission covers asynchronous book/movie/TV producers and binding
 writes. Retirement holds the global worker lane, persists intent before its

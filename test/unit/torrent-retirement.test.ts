@@ -59,6 +59,26 @@ test("all current trackers including backups must supply three individually adva
   } finally { await s.close(); }
 });
 
+test("record-only evidence still rejects unknown counters and resets proof on seed-counter regression", async () => {
+  const s = await retirementFixture({ frozenSeedSeconds: 60 });
+  try {
+    const proof = readRetirementEvidence(s.repo, s.binding.key)!;
+    const regressed = structuredClone(proof);
+    regressed.samples[0]!.actualSeedSeconds = 0;
+    regressed.samples[1]!.actualSeedSeconds = 50;
+    regressed.samples[2]!.actualSeedSeconds = 40;
+    expect(qualifiedRetirementEvidence(regressed, s.binding.bindingDigest, s.now())).toBe(false);
+    const input = { bindingKey: s.binding.key, bindingDigest: s.binding.bindingDigest,
+      observedAt: new Date(s.now()).toISOString(), ownershipVerified: true, complete: true, trackerStats: s.record()!.trackerStats };
+    const reset = recordRetirementEvidence(s.repo, { ...input, actualSeedSeconds: 59 });
+    expect(reset.samples).toHaveLength(1);
+    expect(qualifiedRetirementEvidence(reset, s.binding.bindingDigest, s.now())).toBe(false);
+    const unknown = recordRetirementEvidence(s.repo, { ...input, actualSeedSeconds: null });
+    expect(unknown.samples).toHaveLength(0);
+    expect(qualifiedRetirementEvidence(unknown, s.binding.bindingDigest, s.now())).toBe(false);
+  } finally { await s.close(); }
+});
+
 test("orphan checks reject attached books, admitted async producers, source-file references and missing global execution", async () => {
   const s = await retirementFixture();
   try {
@@ -190,10 +210,20 @@ test("intent persistence failure rolls back the claim and never performs removal
   } finally { await s.close(); }
 });
 
-test("real default dispatcher/Reflow retirement hook runs inside its own global step, not after the collector lock has released", async () => {
-  const s = await retirementFixture();
+test.each([[undefined, "unregistered"], [0, "unregistered"], [0, "live"], [0, "timeout"]] as const)(
+  "real default dispatcher/Reflow retirement hook respects frozen seed=%s and backup=%s inside its own global step", async (frozenSeedSeconds, backup) => {
+  const s = await retirementFixture({ frozenSeedSeconds });
   let runtime: Awaited<ReturnType<typeof createJobExecutionRuntime>> | undefined;
   try {
+    if (frozenSeedSeconds === 0) {
+      const evidence = readRetirementEvidence(s.repo, s.binding.key)!;
+      expect(evidence.samples.map(sample => sample.actualSeedSeconds)).toEqual([0, 0, 0]);
+      expect(qualifiedRetirementEvidence(evidence, s.binding.bindingDigest, s.now())).toBe(true);
+      expect(s.service.preview().items[0]!.eligible).toBe(true);
+    }
+    const tracker = (s.record()!.trackerStats as Record<string, any>[])[1]!;
+    if (backup === "live") { tracker.lastAnnounceSucceeded = true; tracker.lastAnnounceResult = "Success"; }
+    if (backup === "timeout") tracker.lastAnnounceTimedOut = true;
     const ctx: Parameters<typeof createJobExecutionRuntime>[0] = { repo: s.repo, getSettings: () => s.repo.getSettings(), onLog() {},
       stewardshipAdapters: { connection: s.connection, now: s.now, retirement: s.adapters } };
     runtime = await createJobExecutionRuntime(ctx, path.join(s.root, "execution.sqlite"), { retryDelayMs: 1 });
@@ -203,7 +233,15 @@ test("real default dispatcher/Reflow retirement hook runs inside its own global 
       if (Date.now() > deadline) throw new Error(`Default retirement hook did not complete: ${s.repo.getJob(s.job.id)?.error}`);
       await Bun.sleep(15);
     }
-    expect(s.removeCount()).toBe(1); expect(s.record()).toBeNull(); expect(ctx.activeLocks!.has("*")).toBe(false);
+    const eligible = backup === "unregistered";
+    expect(s.removeCount()).toBe(eligible ? 1 : 0);
+    if (eligible) expect(s.record()).toBeNull();
+    else {
+      expect(s.record()!.secondsSeeding).toBe(0);
+      expect(s.service.preview().items[0]!.eligible).toBe(false);
+      expect(() => assertTorrentDatabaseWritable(s.db, s.ref)).not.toThrow();
+    }
+    expect(ctx.activeLocks!.has("*")).toBe(false);
     expect(await fs.readFile(s.retainedFile, "utf8")).toBe("seed data must survive");
   } finally { await runtime?.stop(); await s.close(); }
 }, 15_000);
@@ -266,8 +304,8 @@ test("targeted orphan consumer SQL ignores more than 2000 unrelated links/assets
   } finally { await s.close(); }
 });
 
-test.each(["normal", "changed-session", "replacement-record"] as const)("private record-only transport pins session and numeric identity: %s", async mode => {
-  const s = await retirementFixture();
+test.each(["normal", "frozen-zero", "changed-session", "replacement-record", "live-backup", "timeout-backup", "seed-regression", "unknown-seed", "incomplete"] as const)("private record-only transport pins session, identity and integrity without a minimum seed duration: %s", async mode => {
+  const s = await retirementFixture({ frozenSeedSeconds: mode === "frozen-zero" ? 0 : 60 });
   try {
     let row = structuredClone(s.record()), session = "s".repeat(32), removes = 0;
     const methods: string[] = [];
@@ -290,7 +328,12 @@ test.each(["normal", "changed-session", "replacement-record"] as const)("private
     const daemon = privateRetirementDaemon({ readIdentity: () => identity, fetcher, now: s.now });
     const snapshot = await daemon.read(s.binding);
     if (mode === "replacement-record") row!.id++;
-    if (mode === "normal") { await daemon.removeRecord(s.binding, snapshot, () => {}); expect(row).toBeNull(); expect(removes).toBe(1); }
+    if (mode === "live-backup") (row!.trackerStats as Record<string, any>[])[1]!.lastAnnounceSucceeded = true;
+    if (mode === "timeout-backup") (row!.trackerStats as Record<string, any>[])[1]!.lastAnnounceTimedOut = true;
+    if (mode === "seed-regression") row!.secondsSeeding--;
+    if (mode === "unknown-seed") delete (row as Record<string, unknown>).secondsSeeding;
+    if (mode === "incomplete") row!.haveValid--;
+    if (mode === "normal" || mode === "frozen-zero") { await daemon.removeRecord(s.binding, snapshot, () => {}); expect(row).toBeNull(); expect(removes).toBe(1); }
     else { await expect(daemon.removeRecord(s.binding, snapshot, () => {})).rejects.toThrow(); expect(row).not.toBeNull(); expect(removes).toBe(mode === "changed-session" ? 1 : 0); }
     expect(methods.every(method => ["session-get", "torrent-get", "torrent-remove"].includes(method))).toBe(true);
   } finally { await s.close(); }

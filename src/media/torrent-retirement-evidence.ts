@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { BooksRepo } from "../repo";
-import { MINIMUM_SEED_SECONDS } from "./torrent-stewardship-types";
 import { retirementEvidenceSchema, type RetirementEvidence } from "./torrent-retirement-types";
 
 export const retirementDigest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -39,7 +38,7 @@ export function recordRetirementEvidence(repo: Pick<BooksRepo, "getJsonState" | 
   const now = Date.parse(input.observedAt), previous = readRetirementEvidence(repo, input.bindingKey);
   if (previous && Date.parse(previous.observedAt) > now) return previous;
   const seed = count.safeParse(input.actualSeedSeconds);
-  const current = input.ownershipVerified && input.complete && seed.success && seed.data >= MINIMUM_SEED_SECONDS
+  const current = input.ownershipVerified && input.complete && seed.success
     ? allTrackerRetirementEvidence(input.trackerStats, now) : null;
   const compatible = current && previous && previous.bindingDigest === input.bindingDigest &&
     previous.trackerSetDigest === current.trackerSetDigest && previous.allTrackersExplicitlyUnregistered &&
@@ -62,11 +61,12 @@ export function recordRetirementEvidence(repo: Pick<BooksRepo, "getJsonState" | 
 }
 export function qualifiedRetirementEvidence(evidence: RetirementEvidence | null, bindingDigest: string, now: number): boolean {
   if (!evidence || evidence.bindingDigest !== bindingDigest || !evidence.complete || !evidence.allTrackersExplicitlyUnregistered ||
-      evidence.actualSeedSeconds === null || evidence.actualSeedSeconds < MINIMUM_SEED_SECONDS || evidence.samples.length !== 3 ||
+      evidence.actualSeedSeconds === null || evidence.samples.length !== 3 ||
       now < Date.parse(evidence.observedAt) || now - Date.parse(evidence.observedAt) > 60 * 60_000) return false;
   const first = evidence.samples[0]!.trackers;
   return evidence.trackerSetDigest === retirementDigest(first.map((t) => t.key)) && evidence.samples.every((sample, index) =>
-    sample.actualSeedSeconds >= MINIMUM_SEED_SECONDS && sample.trackers.length === first.length &&
+    sample.actualSeedSeconds <= evidence.actualSeedSeconds! &&
+    (index === 0 || sample.actualSeedSeconds >= evidence.samples[index - 1]!.actualSeedSeconds) && sample.trackers.length === first.length &&
     sample.trackers.every((tracker, i) => tracker.key === first[i]!.key && tracker.announcedAt <= now / 1000 &&
       now / 1000 - tracker.announcedAt <= 48 * 3600 && (index === 0 ||
         tracker.announcedAt >= evidence.samples[index - 1]!.trackers[i]!.announcedAt + 15 * 60)));

@@ -15,7 +15,7 @@ import type { WorkerContext } from "../../src/worker/context";
 export const retirementFixtureSecret = "must-not-persist-private-tracker-passkey";
 export const retirementFixtureClient = "transmission:11111111-1111-4111-8111-111111111111";
 export const retirementFixtureHash = "a".repeat(40);
-export async function retirementFixture() {
+export async function retirementFixture(options: { frozenSeedSeconds?: number } = {}) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "torrent-retirement-")));
   const db = new Database(path.join(root, "domain.sqlite")); runMigrations(db); finalizeJobJournalMigration(db);
   const repo = new BooksRepo(db); repo.bindJobJournalReader({ read: () => new Map() });
@@ -34,11 +34,11 @@ export async function retirementFixture() {
     isBackup: index === 1, hasAnnounced: true, lastAnnounceSucceeded: false, lastAnnounceTimedOut: false,
     lastAnnounceTime: Math.floor(now / 1000), lastAnnounceResult: "Unregistered torrent" }));
   let record: RetirementDaemonSnapshot["record"] = { id: 7, hashString: retirementFixtureHash, downloadDir: directory, labels: ["Podible Books"],
-    status: 6, leftUntilDone: 0, secondsSeeding: MINIMUM_SEED_SECONDS, totalSize: 22, sizeWhenDone: 22, haveValid: 22, haveUnchecked: 0,
+    status: 6, leftUntilDone: 0, secondsSeeding: options.frozenSeedSeconds ?? MINIMUM_SEED_SECONDS, totalSize: 22, sizeWhenDone: 22, haveValid: 22, haveUnchecked: 0,
     error: 2, trackerStats: stats() };
   for (let index = 0; index < 3; index++) {
     if (index) now += 15 * 60_000;
-    record.trackerStats = stats(); record.secondsSeeding = MINIMUM_SEED_SECONDS + index * 900;
+    record.trackerStats = stats(); record.secondsSeeding = options.frozenSeedSeconds ?? MINIMUM_SEED_SECONDS + index * 900;
     recordRetirementEvidence(repo, { bindingKey: binding.key, bindingDigest: binding.bindingDigest,
       observedAt: new Date(now).toISOString(), ownershipVerified: true, complete: true, actualSeedSeconds: record.secondsSeeding, trackerStats: record.trackerStats });
   }

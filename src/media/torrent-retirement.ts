@@ -58,7 +58,7 @@ export class TorrentRetirement {
       recordOnly: true, filesDeleted: false, items: current.bindings.map((binding) => {
         const qualified = qualifiedRetirementEvidence(readRetirementEvidence(this.repo, binding.key), binding.bindingDigest, now);
         const blockers: string[] = [];
-        if (!qualified) blockers.push("Three complete, all-tracker unregistered announcements spaced at least 15 minutes apart and 30 actual seed days are not proven.");
+        if (!qualified) blockers.push("Three complete, all-tracker unregistered announcements spaced at least 15 minutes apart with known, nonregressing seed counters are not proven.");
         {
           try { consumersClear(consumerSchema.parse(fence.inspect(binding)), binding); }
           catch { blockers.push("Complete zero-domain-binding/consumer/acquisition/publication proof is unavailable."); }
