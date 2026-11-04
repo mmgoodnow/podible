@@ -3,40 +3,182 @@ name: Build and Push Docker Image
 on:
   push:
   workflow_dispatch:
+    inputs:
+      book_migration_lab:
+        description: Also run the legacy book migration lab (manual only)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
   packages: write
 
+env:
+  BUN_VERSION: 1.4.4
+
 jobs:
-  verify:
-    runs-on: ubuntu-latest
+  unit:
+    name: Unit and Integration Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.4
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ env.BUN_VERSION }}-${{ hashFiles('bun.lock') }}
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg unzip wamerican
+      - run: bun install --frozen-lockfile
+      - run: bun test
+
+  build:
+    name: Types and Frontend Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ env.BUN_VERSION }}-${{ hashFiles('bun.lock') }}
       - run: bun install --frozen-lockfile
       - run: bun run check:db-types
       - run: bun run typecheck
       - run: bun run build
       - run: bun run validate:runtime-scripts
-      - run: bun test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  browser:
+    name: Browser (${{ matrix.group }})
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: library
+            suites: spa books library-performance
+            packages: ffmpeg unzip wamerican
+          - group: screen
+            suites: movies movie-shadow tv unified-library
+            packages: ffmpeg unzip wamerican
+          - group: admin
+            suites: admin auth recovery
+            packages: openssl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ env.BUN_VERSION }}-${{ hashFiles('bun.lock') }}
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: web/dist
+      - name: Install browser fixture prerequisites
+        env:
+          FIXTURE_PACKAGES: ${{ matrix.packages }}
+        run: |
+          read -r -a packages <<< "$FIXTURE_PACKAGES"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
       - run: bunx playwright install --with-deps chromium
-      - run: bun run test/browser/spa.ts
-      - run: bun run test/browser/books.ts
-      - run: bun run test/browser/movies.ts
-      - run: bun run test/browser/movie-shadow.ts
-      - run: bun run test/browser/tv.ts
-      - run: bun run test/browser/admin.ts
-      - run: bun run test/browser/auth.ts
-      - run: bun run test/browser/library-performance.ts
-      - run: bun run test/browser/unified-library.ts
-      - run: bun run test/browser/recovery.ts
-      - run: docker build -t podible-transmission-test .
-      - run: docker run --rm --network none -v "$PWD/test:/app/test:ro" --entrypoint bun podible-transmission-test run test/lab/transmission-inner.ts
-      - run: docker run --rm --network none -v "$PWD/test:/app/test:ro" --entrypoint bun podible-transmission-test run test/lab/book-migration-inner.ts
+      - name: Run browser suites sequentially within this isolated group
+        env:
+          SUITES: ${{ matrix.suites }}
+        run: |
+          set -euo pipefail
+          for suite in $SUITES; do
+            echo "::group::Browser suite: $suite"
+            timeout --signal=TERM --kill-after=10s 5m bun run "test/browser/$suite.ts"
+            echo "::endgroup::"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-${{ matrix.group }}
+          path: |
+            tmp/movies-lab/*.png
+            tmp/books-spa/*.png
+            /tmp/podible-unified*.png
+          if-no-files-found: ignore
+          retention-days: 7
+
+  runtime:
+    name: Cached Image and Real Transmission Lab
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Set registry cache name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and load the runtime lab image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: podible-transmission-test:ci
+          # Read shared CD's compile cache, but never replace its metadata/parallel-build cache.
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE }}:cache-lab-amd64
+            type=registry,ref=${{ env.IMAGE }}:cache-amd64
+          cache-to: type=registry,ref=${{ env.IMAGE }}:cache-lab-amd64,mode=max
+      - name: Real daemon runtime acceptance (no external networking)
+        run: docker run --rm --network none -v "$PWD/test:/app/test:ro" --entrypoint bun podible-transmission-test:ci run test/lab/transmission-inner.ts
+      - name: Legacy book migration lab (manual opt-in only)
+        if: github.event_name == 'workflow_dispatch' && inputs.book_migration_lab
+        run: docker run --rm --network none -v "$PWD/test:/app/test:ro" --entrypoint bun podible-transmission-test:ci run test/lab/book-migration-inner.ts
+
+  verify:
+    name: verify
+    needs: [unit, build, browser, runtime]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Require every verification job to pass
+        env:
+          UNIT_RESULT: ${{ needs.unit.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
+          RUNTIME_RESULT: ${{ needs.runtime.result }}
+        run: |
+          for result in "$UNIT_RESULT" "$BUILD_RESULT" "$BROWSER_RESULT" "$RUNTIME_RESULT"; do
+            [ "$result" = success ] || exit 1
+          done
+
   docker:
     needs: verify
     uses: mmgoodnow/cd/.github/workflows/docker.yml@main
