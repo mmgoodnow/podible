@@ -7,7 +7,7 @@ import {
   type SearchResult,
 } from "../media/indexer-gateway";
 import type { DiscoveredIndexer } from "../media/prowlarr";
-import { IndexerError, indexerFailure } from "../media/indexer-errors";
+import { IndexerError, indexerFailure, type IndexerFailure } from "../media/indexer-errors";
 import { boundedFeedBoundary, feedIdentity, feedReleaseKey } from "../media/release-inbox";
 import { durableStep, type WorkerContext } from "./context";
 import { hasWantedBookMedia } from "./book-feeds";
@@ -15,6 +15,11 @@ import { hasWantedBookMedia } from "./book-feeds";
 export const INDEXER_FEED_INTERVAL_MS = 15 * 60_000;
 const PAGE_SIZE = 100;
 const MAX_PAGES = 10;
+
+type FeedPage = Awaited<ReturnType<typeof indexerGateway.page>>;
+type FeedPageResult =
+  | { kind: "success"; page: FeedPage }
+  | { kind: "failure"; failure: IndexerFailure };
 
 export type IndexerFeedContext = WorkerContext & {
   indexerFeedMediaSources?: (
@@ -46,7 +51,7 @@ export async function syncIndexerFeeds(
   // Preserve the legacy no-argument injection as movie-only. Typed injection
   // owns all media and avoids accidental real-network calls in movie fixtures.
   const media: IndexerMedia[] = ctx.indexerFeedMediaSources
-    ? ["movie", "audio", "ebook"]
+    ? ["movie", "tv", "audio", "ebook"]
     : ctx.indexerFeedSources
       ? ["movie"]
       : [
@@ -94,71 +99,71 @@ export async function syncIndexerFeeds(
       gap: string | null = null;
     const pageHeads = new Set<string>();
     let offset = 0;
-    try {
-      for (
-        let pageIndex = 0;
-        pageIndex < (anchors.size ? MAX_PAGES : 1);
-        pageIndex++
-      ) {
-        active();
-        const page = await durableStep(ctx, prefix + ":page:" + pageIndex, () =>
-          gateway.page(source, media, offset, PAGE_SIZE),
-        );
-        active();
-        const first = page.results[0] ? feedReleaseKey(page.results[0]) : null;
-        if (pageIndex === 0) head = first;
-        results.push(...page.results);
-        if (
-          !anchors.size ||
-          page.results.some(
-            (result) => anchors.has(feedReleaseKey(result)),
-          )
-        ) {
-          covered = true;
-          break;
-        }
-        if (
-          !page.count ||
-          (page.total === null
-            ? page.count < PAGE_SIZE
-            : offset + page.count >= page.total)
-        )
-          break;
-        if (
-          source.supportsPagination === false ||
-          (first !== null && pageHeads.has(first))
-        )
-          break;
-        if (first) pageHeads.add(first);
-        offset += page.count;
-      }
-      if (!covered)
-        gap =
-          "The previous feed boundary was not found within the available/bounded feed history. Some releases may have been missed; no per-title search was started.";
-      await durableStep(ctx, prefix + ":persist", () =>
-        ctx.repo.transaction(() => {
-          active();
-          const now = new Date().toISOString();
-          const inserted = ctx.repo.releaseInbox.ingest(id, results, now);
-          for (let start = 0; start < inserted.length; start += PAGE_SIZE) {
-            const ids = inserted.slice(start, start + PAGE_SIZE);
-            ctx.repo.createJob({
-              type: media === "movie" ? "movie_feed_match" : media === "tv" ? "tv_feed_match" : "book_feed_match",
-              payload: { releaseIds: ids },
-              idempotencyKey: "rss-match:" + id + ":" + ids.join(","),
-              maxAttempts: 3,
-            });
-          }
-          const boundary = boundedFeedBoundary([...results.map(feedReleaseKey), ...feed.boundaryKeys]);
-          ctx.repo.releaseInbox.succeed(id, head, gap, now, feed.head_key, boundary, feed.boundary_json);
-        }),
-      );
-    } catch (error) {
-      if (isRunControlError(error)) throw error;
+    let failure: IndexerFailure | null = null;
+    for (
+      let pageIndex = 0;
+      pageIndex < (anchors.size ? MAX_PAGES : 1);
+      pageIndex++
+    ) {
       active();
-      if (!(error instanceof IndexerError)) throw error;
-      const failure = error.failure;
-      // A failed page never advances the watermark or commits a partial batch.
+      // Expected provider failures must be values before Reflow sees them:
+      // a thrown IndexerError becomes step retries/control/serialized errors.
+      const outcome = await durableStep<FeedPageResult | FeedPage>(
+        ctx,
+        prefix + ":page:" + pageIndex,
+        async (): Promise<FeedPageResult> => {
+          active();
+          try {
+            const page = await gateway.page(source, media, offset, PAGE_SIZE);
+            active();
+            return { kind: "success", page };
+          } catch (error) {
+            if (isRunControlError(error)) throw error;
+            active();
+            if (!(error instanceof IndexerError)) throw error;
+            // Only the gateway's safe metadata, never the Error/cause/body.
+            const { provider, kind, status, retryAt, message } = error.failure;
+            return {
+              kind: "failure",
+              failure: { provider, kind, status, retryAt, message },
+            };
+          }
+        },
+      );
+      active();
+      if ("kind" in outcome && outcome.kind === "failure") {
+        failure = outcome.failure;
+        break;
+      }
+      // Retain completed page checkpoints written before result envelopes.
+      const page = "kind" in outcome ? outcome.page : outcome;
+      const first = page.results[0] ? feedReleaseKey(page.results[0]) : null;
+      if (pageIndex === 0) head = first;
+      results.push(...page.results);
+      if (
+        !anchors.size ||
+        page.results.some((result) => anchors.has(feedReleaseKey(result)))
+      ) {
+        covered = true;
+        break;
+      }
+      if (
+        !page.count ||
+        (page.total === null
+          ? page.count < PAGE_SIZE
+          : offset + page.count >= page.total)
+      )
+        break;
+      if (
+        source.supportsPagination === false ||
+        (first !== null && pageHeads.has(first))
+      )
+        break;
+      if (first) pageHeads.add(first);
+      offset += page.count;
+    }
+    if (failure) {
+      // Discard every buffered page; no watermark or partial batch commits.
       await durableStep(ctx, prefix + ":failure", () => {
         active();
         ctx.repo.releaseInbox.fail(
@@ -168,7 +173,29 @@ export async function syncIndexerFeeds(
           feed.last_success_at,
         );
       });
+      continue;
     }
+    if (!covered)
+      gap =
+        "The previous feed boundary was not found within the available/bounded feed history. Some releases may have been missed; no per-title search was started.";
+    await durableStep(ctx, prefix + ":persist", () =>
+      ctx.repo.transaction(() => {
+        active();
+        const now = new Date().toISOString();
+        const inserted = ctx.repo.releaseInbox.ingest(id, results, now);
+        for (let start = 0; start < inserted.length; start += PAGE_SIZE) {
+          const ids = inserted.slice(start, start + PAGE_SIZE);
+          ctx.repo.createJob({
+            type: media === "movie" ? "movie_feed_match" : media === "tv" ? "tv_feed_match" : "book_feed_match",
+            payload: { releaseIds: ids },
+            idempotencyKey: "rss-match:" + id + ":" + ids.join(","),
+            maxAttempts: 3,
+          });
+        }
+        const boundary = boundedFeedBoundary([...results.map(feedReleaseKey), ...feed.boundaryKeys]);
+        ctx.repo.releaseInbox.succeed(id, head, gap, now, feed.head_key, boundary, feed.boundary_json);
+      }),
+    );
   }
   return "done";
 }

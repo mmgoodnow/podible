@@ -1,9 +1,9 @@
 # Shared Indexers And RSS
 
-Books and movies share `src/media/indexer-gateway.ts`: discovery, bounded XML
+Books, movies, and TV share `src/media/indexer-gateway.ts`: discovery, bounded XML
 reads, normalized Torznab results, coalescing, and provider-wide cooldowns.
-RSS requests use `t=search` without a title query, scoped to movie, audiobook,
-or ebook categories (2000, 3030, and 7020 respectively, with configured book
+RSS requests use `t=search` without a title query, scoped to movie, TV, audiobook,
+or ebook categories (2000, 5000, 3030, and 7020 respectively, with configured book
 category overrides preserved).
 RSS capability is independent of interactive-search capability. Secrets and raw
 download URLs stay server-side.
@@ -31,6 +31,24 @@ entries, advancing the feed checkpoint, and creating matching jobs/outbox comman
 are one synchronous SQLite transaction. Replays deduplicate by feed, provider
 release identity, and meaningful content changes; changing seeder counts alone
 does not create new work. Stale replay cannot rewind a newer head.
+
+Expected provider failures are checkpointed **inside** each durable page step as
+discriminated `{ kind: "success", page }` or `{ kind: "failure", failure }`
+results. An `IndexerError` must not escape into Reflow's generic step retry/error
+serialization before the feed can isolate it. Failure results contain only the
+gateway's safe metadata, never the Error object, cause, request URL, or upstream
+response body. Previously completed bare-page checkpoints remain replayable.
+
+A failed page discards all buffered pages for that feed, records its safe health
+and retry time in a separate durable step, and continues with the other
+providers/media. The sync job does not sleep or fail merely because a provider is
+unavailable or rejects its credentials. The next poll skips feeds whose persisted
+retry time has not arrived; due feeds can try again. Gateway cooldowns also apply
+across a provider's categories. HTTP 429 from Prowlarr does **not** establish actual
+upstream rate limiting, and a reported cooldown does not establish its cause.
+Cancellation, lost execution ownership, changed indexer configuration, unexpected
+programming errors, and storage/checkpoint failures still abort the operation;
+they are not converted into provider downtime or successful empty feeds.
 
 ## Movie Consumption
 
@@ -134,6 +152,23 @@ replay, busy-target waits, URL rotation during selection, and a search-free eboo
 snatch/import. This is not a claim of production
 RSS matching accuracy or a new live upgrade canary. See
 [upgrade acceptance boundaries](movie-upgrade-validation.md).
+
+Focused feed-isolation checks:
+
+```sh
+bun test test/unit/indexer-feeds.test.ts test/unit/indexer-durability.test.ts test/unit/indexer-gateway.test.ts test/integration/indexer-feeds.test.ts test/integration/indexer-feeds-rpc.test.ts test/integration/book-feeds.test.ts test/integration/book-feed-scheduling.test.ts
+bun run typecheck
+```
+
+The feed tests use the real SQLite Reflow journal to exercise provider cooldowns,
+HTTP 429/503/403 isolation across movie/TV/audio/ebook, later-page failures without
+partial ingestion, storage failure/restart/retry, cached-page replay, persisted
+retry times with a fresh gateway, and eventual recovery. They also verify fatal
+programming/configuration changes, in-flight cancellation, and that sensitive
+upstream error bodies never reach failure checkpoints, health, or logs. Typed
+source injection owns all four media (return `[]` for unwanted media), including
+TV, so fixtures never fall back to real discovery. The legacy no-argument source
+injection remains movie-only.
 
 Wire behavior follows [Torznab/Newznab pagination and empty-query search](https://torznab.github.io/spec-1.3-draft/external/newznab/api.html)
 and [Prowlarr's RSS/search/pagination capabilities](https://github.com/Prowlarr/Prowlarr/blob/develop/src/Prowlarr.Api.V1/Indexers/IndexerResource.cs).

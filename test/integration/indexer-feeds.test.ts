@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runMigrations } from "../../src/db";
-import { indexerFailure } from "../../src/media/indexer-errors";
+import { IndexerError, indexerFailure } from "../../src/media/indexer-errors";
 import {
   IndexerGateway,
   type SearchResult,
@@ -630,6 +630,206 @@ test("one failed provider does not prevent another provider from ingesting or in
     await s.close();
   }
 });
+
+for (const outage of ["cooldown", "429", "503", "403"] as const) {
+  test(`real Reflow isolates a provider ${outage} while other providers and media progress`, async () => {
+    const s = await setup();
+    try {
+      const healthy = { ...source, name: "Healthy", baseUrl: "https://feed.invalid/2/api" };
+      const retryAt = Date.now() + 300_000;
+      const blocked = outage === "cooldown" ? { ...source, availableAfter: retryAt } : source;
+      const mediaCalls: string[] = [];
+      const requests: URL[] = [];
+      const logs: string[] = [];
+      s.context.onLog = (line) => { logs.push(line); };
+      s.context.indexerFeedMediaSources = async (media) => {
+        mediaCalls.push(media);
+        return [blocked, healthy];
+      };
+      s.context.indexerFeedGateway = new IndexerGateway(async (url) => {
+        requests.push(url);
+        expect(url.searchParams.has("q")).toBe(false);
+        expect(url.searchParams.get("t")).toBe("search");
+        return url.pathname === "/1/api"
+          ? new Response("mam_id=private upstream credentials private-feed-key", {
+              status: Number(outage), headers: { "Retry-After": "300" },
+            })
+          : new Response(xml([result(`healthy-${url.searchParams.get("cat")}`)], 0, 1));
+      });
+      const runtime = await s.start();
+      const job = s.repo.createJob({ type: "indexer_feed_sync", maxAttempts: 3 });
+      await s.done(job.id);
+      expect(mediaCalls).toEqual(["movie", "tv", "audio", "ebook"]);
+      const run = (await runtime.engine.getRunStatus(s.repo.getJobExecution(job.id)!.run_id))!;
+      expect(run.run.status).toBe("completed");
+      const pages = run.steps.filter((step) => step.name.includes(":page:"));
+      expect(pages).toHaveLength(8);
+      expect(pages.every((step) => step.status === "completed" && step.attempts === 1)).toBe(true);
+      expect(pages.filter((step) => (step.output as { kind: string }).kind === "failure")).toHaveLength(4);
+      for (const media of ["movie", "tv", "audio", "ebook"] as const) {
+        const failed = s.repo.releaseInbox.feed(feedIdentity(source, media))!;
+        expect(failed.head_key).toBeNull();
+        expect(failed.last_success_at).toBeNull();
+        expect(failed.last_error).toContain(outage === "cooldown" ? "cooldown" : `HTTP ${outage}`);
+        if (outage === "403") expect(failed.retry_at).toBeNull();
+        else expect(Date.parse(failed.retry_at!)).toBeGreaterThan(Date.now());
+        expect(s.repo.releaseInbox.feed(feedIdentity(healthy, media))).toMatchObject({ last_error: null, retry_at: null });
+        expect(s.repo.releaseInbox.feed(feedIdentity(healthy, media))!.head_key).not.toBeNull();
+      }
+      expect(requests.filter((url) => url.pathname === "/1/api")).toHaveLength(outage === "cooldown" ? 0 : 1);
+      expect(s.count("release_inbox")).toBe(4);
+      expect(s.repo.listJobsByType("movie_feed_match")).toHaveLength(1);
+      expect(s.repo.listJobsByType("tv_feed_match")).toHaveLength(1);
+      expect(s.repo.listJobsByType("book_feed_match")).toHaveLength(2);
+      const persisted = JSON.stringify({ run, feeds: s.repo.releaseInbox.feeds(), logs });
+      for (const secret of ["mam_id", "private upstream", "private-feed-key"]) expect(persisted).not.toContain(secret);
+      if (outage === "429") expect(persisted).toContain("not rate limiting");
+      expect(s.searches()).toBe(0);
+    } finally { await s.close(); }
+  });
+}
+
+test("real Reflow replays a later-page failure after storage repair/restart, then retries only the due feed", async () => {
+  const s = await setup();
+  try {
+    const prior = Array.from({ length: 5 }, (_, i) => result(`journal-anchor-${i}`));
+    s.setRows(prior);
+    await syncIndexerFeeds(s.context);
+    const before = s.repo.releaseInbox.feed(feedId)!;
+    const healthy = { ...source, name: "Healthy", baseUrl: "https://feed.invalid/2/api" };
+    s.context.indexerFeedSources = async () => [source, healthy];
+    const partial = Array.from({ length: 100 }, (_, i) => result(`uncommitted-${i}`));
+    s.context.indexerFeedGateway = s.gateway((url) =>
+      Number(url.searchParams.get("offset")) === 0
+        ? new Response(xml(partial, 0, 500))
+        : new Response("mam_id=private private-feed-key", { status: 429, headers: { "Retry-After": "300" } }),
+    );
+    s.db.exec(`CREATE TRIGGER reject_feed_failure BEFORE UPDATE ON indexer_feeds
+      WHEN NEW.last_error IS NOT NULL
+      BEGIN SELECT RAISE(ABORT,'injected failure storage outage'); END`);
+    const runtime = await s.start();
+    const job = s.repo.createJob({ type: "indexer_feed_sync", maxAttempts: 1 });
+    await until(async () => { await runtime.reconcile(); return s.repo.getJob(job.id)?.status === "failed"; });
+    const runId = s.repo.getJobExecution(job.id)!.run_id;
+    const failed = (await runtime.engine.getRunStatus(runId))!;
+    expect(s.repo.getJob(job.id)!.error).toContain("injected failure storage outage");
+    const prefix = `feed:${feedId}:boundary-v2`;
+    expect(failed.steps.find((step) => step.name === prefix + ":page:0")).toMatchObject({
+      status: "completed", attempts: 1, output: { kind: "success" },
+    });
+    expect(failed.steps.find((step) => step.name === prefix + ":page:1")).toMatchObject({
+      status: "completed", attempts: 1, output: { kind: "failure", failure: { status: 429 } },
+    });
+    expect(failed.steps.find((step) => step.name === prefix + ":failure")!.status).toBe("failed");
+    expect(s.repo.releaseInbox.feed(feedId)).toEqual(before);
+    expect(s.count("release_inbox")).toBe(5);
+    expect(s.repo.listJobsByType("movie_feed_match")).toHaveLength(1);
+    expect(s.repo.releaseInbox.feed(feedIdentity(healthy, "movie"))).toBeNull();
+    for (const secret of ["mam_id", "private-feed-key"]) expect(JSON.stringify(failed)).not.toContain(secret);
+
+    await s.stop();
+    s.db.exec("DROP TRIGGER reject_feed_failure");
+    s.requests.length = 0;
+    // A fresh gateway has no in-memory backoff/cache. Blocked pages must replay.
+    s.context.indexerFeedGateway = s.gateway((url) => {
+      if (url.pathname === "/1/api") throw new Error("Journal page unexpectedly fetched again");
+      return new Response(xml([result("healthy-first")], 0, 1));
+    });
+    const restarted = await s.start();
+    s.repo.retryJob(job.id);
+    await s.done(job.id);
+    expect(s.repo.getJobExecution(job.id)!.run_id).toBe(runId);
+    const replayed = (await restarted.engine.getRunStatus(runId))!;
+    expect(replayed.steps.find((step) => step.name === prefix + ":page:1")!.attempts).toBe(1);
+    expect(replayed.steps.find((step) => step.name === prefix + ":failure")!.status).toBe("completed");
+    const blocked = s.repo.releaseInbox.feed(feedId)!;
+    expect(blocked.head_key).toBe(before.head_key);
+    expect(blocked.boundary_json).toBe(before.boundary_json);
+    expect(blocked.last_success_at).toBe(before.last_success_at);
+    expect(Date.parse(blocked.retry_at!)).toBeGreaterThan(Date.now());
+    expect(s.requests.map((url) => url.pathname)).toEqual(["/2/api"]);
+    expect(s.count("release_inbox")).toBe(6);
+    expect(s.repo.listJobsByType("movie_feed_match")).toHaveLength(2);
+
+    await s.stop();
+    s.requests.length = 0;
+    s.context.indexerFeedGateway = s.gateway((url) => {
+      if (url.pathname === "/1/api") throw new Error("Persisted provider retry was ignored");
+      return new Response(xml([result("healthy-second"), result("healthy-first")], 0, 2));
+    });
+    await s.start();
+    await s.sync();
+    expect(s.requests.map((url) => url.pathname)).toEqual(["/2/api"]);
+    expect(s.repo.releaseInbox.feed(feedId)).toEqual(blocked);
+    expect(s.count("release_inbox")).toBe(7);
+
+    s.repo.releaseInbox.fail(feedId, indexerFailure(source.name, 429, Date.now() - 1), new Date().toISOString());
+    s.requests.length = 0;
+    s.context.indexerFeedGateway = s.gateway((url) => new Response(xml(
+      url.pathname === "/1/api" ? [result("recovered"), ...prior] : [result("healthy-second")], 0,
+      url.pathname === "/1/api" ? 6 : 1,
+    )));
+    await s.sync();
+    expect(s.requests.map((url) => url.pathname)).toEqual(["/1/api", "/2/api"]);
+    expect(s.repo.releaseInbox.feed(feedId)).toMatchObject({
+      head_key: feedReleaseKey(result("recovered")), last_error: null, retry_at: null,
+    });
+    expect(s.count("release_inbox")).toBe(8);
+    expect(s.repo.listJobsByType("movie_feed_match")).toHaveLength(4);
+    expect(s.searches()).toBe(0);
+  } finally { await s.close(); }
+}, 15_000);
+
+for (const interruption of ["cancellation", "configuration", "programming"] as const) {
+  test(`real Reflow keeps ${interruption} fatal/control, not provider downtime`, async () => {
+    const s = await setup();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let entered = false;
+    let calls = 0;
+    try {
+      const healthy = { ...source, name: "Healthy", baseUrl: "https://feed.invalid/2/api" };
+      s.context.indexerFeedSources = async () => [source, healthy];
+      s.context.indexerFeedGateway = { page: async () => {
+        calls++;
+        entered = true;
+        await gate;
+        if (interruption === "programming") throw new TypeError("invalid feed page implementation");
+        throw new IndexerError(indexerFailure(source.name, 429, Date.now() + 300_000));
+      } };
+      const runtime = await s.start();
+      const job = s.repo.createJob({ type: "indexer_feed_sync", maxAttempts: 1 });
+      await runtime.reconcile();
+      await until(() => entered);
+      if (interruption === "cancellation") s.repo.markJobCancelled(job.id, "Fixture cancellation");
+      if (interruption === "configuration") {
+        const settings = s.repo.getSettings();
+        settings.prowlarr.apiKey = "repaired-key";
+        s.repo.updateSettings(settings);
+      }
+      release();
+      await until(async () => {
+        await runtime.reconcile();
+        return s.repo.getJob(job.id)?.status === (interruption === "cancellation" ? "cancelled" : "failed");
+      });
+      const run = (await runtime.engine.getRunStatus(s.repo.getJobExecution(job.id)!.run_id))!;
+      if (interruption === "configuration") expect(s.repo.getJob(job.id)!.error).toContain("Indexer configuration changed");
+      if (interruption === "programming") expect(s.repo.getJob(job.id)!.error).toContain("invalid feed page implementation");
+      expect(run.steps.some((step) => step.name.endsWith(":failure"))).toBe(false);
+      expect(run.steps.some((step) => step.name.endsWith(":persist"))).toBe(false);
+      expect(s.repo.releaseInbox.feed(feedId)).toMatchObject({
+        last_error: null, retry_at: null, last_success_at: null,
+      });
+      expect(s.repo.releaseInbox.feed(feedIdentity(healthy, "movie"))).toBeNull();
+      expect(s.count("release_inbox")).toBe(0);
+      expect(s.repo.listJobsByType("movie_feed_match")).toHaveLength(0);
+      expect(calls).toBe(1);
+    } finally {
+      release();
+      await s.close();
+    }
+  });
+}
 
 test("bounded history records an observable gap without falling back to a movie search", async () => {
   const s = await setup();

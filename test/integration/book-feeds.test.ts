@@ -142,7 +142,7 @@ test("shared intake polls audio and ebook category feeds without title searches,
     f.book();
     const calls: URL[] = [];
     f.ctx.indexerFeedMediaSources = async (media) =>
-      media === "movie" ? [] : [source];
+      media === "audio" || media === "ebook" ? [source] : [];
     f.ctx.indexerFeedGateway = new IndexerGateway(async (url) => {
       calls.push(url);
       expect(url.searchParams.has("q")).toBe(false);
@@ -221,7 +221,7 @@ test("category-aware RSS discovery retains audiobook/ebook sources, not search-o
     );
     const requested: [string, string | null][] = [];
     f.ctx.indexerFeedMediaSources = async (media) =>
-      media === "movie" ? [] : discovery.sources(media, "rss");
+      media === "audio" || media === "ebook" ? discovery.sources(media, "rss") : [];
     f.ctx.indexerFeedGateway = new IndexerGateway(async (url) => {
       requested.push([url.pathname, url.searchParams.get("cat")]);
       return new Response("<rss><channel/></rss>");
