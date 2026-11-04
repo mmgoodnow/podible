@@ -84,4 +84,52 @@ private application/execution/client backups, an independent restore watchdog,
 and unconditional supervisor restoration are prerequisites for using this
 maintenance procedure. Pin the container ID, avoid overlapping deployments, and
 do not proceed on an unconfirmed worker shutdown. The website is unavailable
-during this window; production apply remains pending the approved window.
+during this window.
+
+### Completed Production Transfer (2026-11-04 UTC)
+
+The approved transfer is complete on build `e581960`: **144 torrents**, including
+120 Podible and 24 LazyLibrarian sources, totaling **47,201,179,188 bytes**.
+All 144 now have verified private Transmission bindings and are in its seeding
+state. Four report `torrent not registered with this tracker` (release IDs 6, 8,
+64 and 138); that is a tracker-availability problem, not missing local data.
+No tracker records, original source files or rTorrent records were removed.
+Original rTorrent records are stopped and retained.
+
+The main window ran from 15:45:24 to 15:48:20 UTC. Ten first-pass verifications
+reported partial completion and were safely paused without a binding or download.
+Sampled original pieces matched their metainfo, and fresh full rechecks then
+verified all ten completely. Their final cutover used those fresh verification
+receipts, current complete engine/file observations, exact original hardlink
+identities and the existing atomic repository cutover. Tracker errors were kept
+distinct from storage errors. Finalization finished at 15:57:34 UTC after a
+second brief window. This does not establish the root cause of the initial
+verification-state failures or claim a general verifier fix.
+
+Independent final checks confirmed:
+
+- 144 complete engine records, zero unchecked/missing bytes and zero bytes downloaded.
+- 1,174 migrated source files retain their exact original inodes and sizes.
+- All 765 canonical book files retain their IDs, paths, inode/device, sizes and mtimes.
+- All 765 declarative presentation symlinks resolve to their expected canonical files.
+- All 17 successful transcript rows, artifact hashes and live fingerprints are unchanged.
+- The application restarted while the same private torrent daemon stayed running;
+  the public SPA returned HTTP 200 after the window.
+
+Private application/execution database backups passed SQLite integrity checks.
+Initial client session backups and the first-pass report are in
+`/config/backups/book-transfer-2026-11-04T15-45Z/`. The final report,
+independent verification and another pre-cutover database snapshot are in
+`/config/backups/book-transfer-2026-11-04T16-00Z/`. These contain private operational
+state and must not be committed. The earlier 15:25Z directory is an aborted
+operator preflight; it changed no torrents or database rows.
+
+### Future Relocation Requirement
+
+This one-off full-recheck procedure is not the desired routine relocation API.
+Ordinary same-client moves and derived-view changes should preserve verified
+torrent state and stable content identity, reconcile paths declaratively, and
+avoid hashing all bytes again. A cross-client transfer additionally needs a
+validated translation of resume/verification state; an existing client's
+`complete` flag alone is not that proof. Until that mechanism exists, retain the
+conservative recheck requirement rather than silently trusting arbitrary paths.

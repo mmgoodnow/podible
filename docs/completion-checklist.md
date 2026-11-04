@@ -31,10 +31,10 @@ complete Seerr-replacement backlog.
 - [x] Run production dry-run: 144 releases, 139 initially ready, five exceptions to diagnose.
 - [x] Diagnose all five initial exceptions: four stale tracker messages and an XML-RPC-trimmed trailing-space directory; fixes retain full piece verification.
 - [x] Re-run deployed dry-run at 8344dbb: all 144 planned, zero exceptions, no production changes.
-- [ ] Back up application/execution/client state and preserve transcript fingerprints.
-- [ ] Establish a confirmed quiescent maintenance window while Transmission stays available.
-- [ ] Apply and reconcile the transfer, including LazyLibrarian ownership tags.
-- [ ] Verify source bindings, piece checks, seeding, publication and transcript preservation.
+- [x] Back up application/execution/client state and preserve transcript fingerprints.
+- [x] Establish the approved quiescent maintenance window while Transmission stays available.
+- [x] Apply and reconcile all 144 transfers: 120 Podible and 24 LazyLibrarian sources.
+- [x] Independently verify all bindings, complete piece state, seeding state, original inodes, 765 canonical files/views and all 17 transcript identities; zero downloaded bytes. Four retained tracker-registration warnings remain, distinct from data verification. See book-storage.md.
 
 ## RSS And Upgrades
 
@@ -76,8 +76,8 @@ the selected version. See [the comparison](movie-rss-canary.md).
 
 The quiet `monitor-tv-and-rss-canaries` heartbeat follows the remaining external
 release/download outcomes every 30 minutes, read-only. It must not start searches,
-control torrents, deploy, or apply the pending book transfer. A maintenance-window
-approval is still required for that separate one-off transfer.
+control torrents or deploy. The separately approved book transfer is now complete;
+the monitor must not repeat it or treat it as pending.
 
 Do not manually deploy, remove foreign library content, delete seed data, or
 manufacture completion of downloads/releases that have not actually arrived.
