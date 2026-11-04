@@ -133,12 +133,12 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
   );
   if (details.isError) return <Failure message={details.error.message} />;
   if (!details.data) return <p role="status">Loading movie...</p>;
-  const { movie, requests } = details.data;
+  const { movie, requests, availableInLibrary } = details.data;
   const existing = requests.find((entry) => entry.state !== "withdrawn");
   return (
     <>
-      <Link href="/movies" className="back">
-        Back to movies
+      <Link href="/library?media=movies" className="back">
+        Back to library
       </Link>
       <section className="movie-hero">
         <div className="jacket">
@@ -157,6 +157,7 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
           <p className="synopsis">
             {movie.overview || "No description available."}
           </p>
+          {availableInLibrary && !existing && <p className="notice">Available in the shared library. Following it will not start another download.</p>}
           {existing ? (
             <Link className="button" href={`/requests/${existing.id}`}>
               {existing.available ? "Available in Plex" : "Track request"}
@@ -166,7 +167,7 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
               disabled={request.isPending}
               onClick={() => request.mutate({ tmdbId })}
             >
-              {request.isPending ? "Requesting..." : "Request movie"}
+              {request.isPending ? "Requesting..." : availableInLibrary ? "Follow movie" : "Request movie"}
             </button>
           )}
           {request.isError && <Failure message={request.error.message} />}
@@ -222,7 +223,7 @@ export function MovieRequests() {
         </div>
       ) : (
         <p>
-          No movie requests yet. <Link href="/movies">Find a movie</Link>.
+          No movie requests yet. <Link href="/library?media=movies">Find a movie</Link>.
         </p>
       )}
     </>
@@ -442,8 +443,8 @@ export function MovieRequestDetail({ requestId }: { requestId: number }) {
     ["queued", "running"].includes(request.state) || request.upgrading;
   return (
     <>
-      <Link href="/requests" className="back">
-        All requests
+      <Link href="/library?media=movies" className="back">
+        Back to library
       </Link>
       <div className="library-toolbar"><h1>{request.movie.title}</h1></div>
       <p className="muted">{request.movie.year} / Request {request.id}</p>

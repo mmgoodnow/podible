@@ -62,13 +62,16 @@ export function BookCard({ book }: { book: Book }) {
   );
 }
 
-export function Library({ initialPage }: {
+export function Library({ initialPage, query, embedded = false }: {
   initialPage?: { q: string; library: inferRouterOutputs<AppRouter>["library"]["list"] };
+  query?: string;
+  embedded?: boolean;
 } = {}) {
   const trpc = useTRPC();
-  const [q, setQ] = useState(
+  const [draft, setQ] = useState(
     new URLSearchParams(location.search).get("q") ?? "",
   );
+  const q = query ?? draft;
   const deferredQ = useDeferredValue(q);
   const books = useInfiniteQuery(
     trpc.library.list.infiniteQueryOptions(
@@ -81,7 +84,7 @@ export function Library({ initialPage }: {
   const items = books.data?.pages.flatMap((page) => page.items) ?? [];
   return (
     <>
-      <div className="library-toolbar">
+      {!embedded && <div className="library-toolbar">
         <h1>Library</h1>
         <label className="search">
           Filter library
@@ -93,11 +96,13 @@ export function Library({ initialPage }: {
           />
         </label>
         <Link className="button" href="/add">Find a book</Link>
-      </div>
+      </div>}
       {books.isPending ? (
         <p role="status">Loading your library...</p>
       ) : books.isError ? (
         <Failure error={books.error} retry={() => void books.refetch()} />
+      ) : items.length === 0 && embedded && q ? (
+        <p className="muted">No matching books in your library.</p>
       ) : items.length === 0 ? (
         <section className="empty-shelf">
           <h2>
@@ -133,7 +138,7 @@ export function Library({ initialPage }: {
   );
 }
 
-function AddCandidate({ candidate }: { candidate: Candidate }) {
+export function AddCandidate({ candidate, compact = false }: { candidate: Candidate; compact?: boolean }) {
   const trpc = useTRPC();
   const cache = useQueryClient();
   const add = useMutation(
@@ -145,13 +150,13 @@ function AddCandidate({ candidate }: { candidate: Candidate }) {
     }),
   );
   return (
-    <article className="catalog-result">
+    <article className={`catalog-result${compact ? " compact" : ""}`}>
       <div className="catalog-spine" aria-hidden="true">
         {candidate.title.slice(0, 1)}
       </div>
       <div>
         <span className="eyebrow">
-          {candidate.publishedAt || "OPEN LIBRARY"}
+          {candidate.publishedAt?.slice(0, 4) || "Open Library"}
         </span>
         <h2>{candidate.title}</h2>
         <p>{candidate.author}</p>

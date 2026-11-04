@@ -175,6 +175,124 @@ input {
   flex: 1;
   max-width: 360px;
 }
+.media-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: -0.75rem;
+  margin-bottom: 0.5rem;
+}
+.media-filters button {
+  padding: 0.35rem 0.8rem;
+  font-size: 0.9rem;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.media-section.library-books {
+  margin-top: 0.5rem;
+}
+.media-filters button[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--paper, #f5f2e8);
+}
+.media-section {
+  margin-block: 1.5rem 2rem;
+  min-width: 0;
+}
+.media-section > h2, .remote-results > h2 {
+  font-size: 1.35rem;
+  margin-block: 0 1rem;
+}
+.remote-results {
+  border-top: 1px solid var(--line);
+  padding-top: 1.5rem;
+}
+.remote-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 1.5rem;
+}
+.remote-columns > .media-section {
+  margin-block: 0.5rem;
+}
+.catalog-result.compact {
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 0.6rem 1rem;
+  padding-block: 0.8rem;
+}
+.catalog-result.compact .catalog-spine {
+  width: 42px;
+  min-height: 65px;
+  font-size: 1.5rem;
+}
+.catalog-result.compact h2 {
+  font-size: 1.1rem;
+}
+.catalog-result.compact > button {
+  grid-column: 2;
+  justify-self: start;
+}
+.catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
+  gap: 1.5rem;
+}
+.search-result-card {
+  min-width: 0;
+}
+.search-result-card h3 {
+  font-size: 1rem;
+  margin-block: 0.8rem 0.3rem;
+}
+.search-result-card p {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.season-options {
+  display: grid;
+  gap: 0.8rem;
+  margin-block: 1rem;
+  border: 1px solid var(--line);
+}
+.season-options label {
+  display: flex;
+  align-items: start;
+  gap: 0.7rem;
+  padding: 0.5rem;
+}
+.season-options input {
+  margin-top: 0.3rem;
+}
+.season-options small {
+  display: block;
+  color: var(--muted);
+}
+.recovery-actions, .recovery-title {
+  display: flex;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+}
+.recovery-resource {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-block: 1rem;
+}
+.recovery-title label {
+  display: flex;
+  gap: 0.8rem;
+  align-items: center;
+}
 .load-more {
   text-align: center;
   padding: 3rem 0 0;

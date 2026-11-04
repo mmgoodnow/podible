@@ -335,7 +335,8 @@ try {
     .filter({ hasText: "Imported 1 file" })
     .waitFor();
 
-  await page.getByRole("link", { name: "Discover", exact: true }).click();
+  await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Library", exact: true }).click();
+  await page.getByRole("link", { name: "Find a book", exact: true }).click();
   await page.getByRole("heading", { name: "Find books", exact: true }).waitFor();
   const catalogText = await page.locator("main").innerText();
   assert.doesNotMatch(catalogText, /Follow your curiosity|THE NEXT GREAT READ|only the beginning|Your whole library/);

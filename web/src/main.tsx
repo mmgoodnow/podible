@@ -14,8 +14,13 @@ import { TvSync } from "./tv-sync";
 import { RetentionAudit } from "./retention";
 import { SettingsPage, UsersPage, OpsPage } from "./admin";
 import { LoginScreen } from "./auth";
-import { Library, Catalog, BookCollection } from "./books";
+import { Catalog, BookCollection } from "./books";
 import { BookDetail } from "./book-detail";
+import { UnifiedLibrary } from "./home";
+import { TvDetail, TvLibraryDetail, TvRequestDetail } from "./tv";
+import { RecoveryPage } from "./recovery";
+import { StewardshipPage } from "./stewardship";
+import type { StewardshipPanelApi } from "../../src/media/torrent-stewardship-types";
 import {
   MovieSearch,
   MovieDetail,
@@ -30,6 +35,10 @@ const queryClient = new QueryClient({
     mutations: { retry: false },
   },
 });
+const stewardshipApi: StewardshipPanelApi = {
+  status: input => rpc.stewardship.status.query(input),
+  collect: input => rpc.stewardship.collect.mutate(input),
+};
 
 function App() {
   const currentLocation = useLocation();
@@ -58,24 +67,6 @@ function App() {
           >
             Library
           </Link>
-          <Link
-            href="/add"
-            aria-current={route === "/add" ? "page" : undefined}
-          >
-            Discover
-          </Link>
-          <Link
-            href="/movies"
-            aria-current={route.startsWith("/movies") ? "page" : undefined}
-          >
-            Movies
-          </Link>
-          <Link
-            href="/requests"
-            aria-current={route.startsWith("/requests") ? "page" : undefined}
-          >
-            Requests
-          </Link>
           {session.data?.user.isAdmin && (
             <Link
               href="/movie-dual-write"
@@ -88,12 +79,14 @@ function App() {
           {session.data?.user.isAdmin && <Link href="/ops" aria-current={route === "/ops" ? "page" : undefined}>Ops</Link>}
           {session.data?.user.isAdmin && <Link href="/tv-sync" aria-current={route === "/tv-sync" ? "page" : undefined}>TV sync</Link>}
           {session.data?.user.isAdmin && <Link href="/retention" aria-current={route === "/retention" ? "page" : undefined}>Retention</Link>}
+          {session.data?.user.isAdmin && <Link href="/recovery" aria-current={route === "/recovery" ? "page" : undefined}>Recovery</Link>}
+          {session.data?.user.isAdmin && <Link href="/stewardship" aria-current={route === "/stewardship" ? "page" : undefined}>Torrent health</Link>}
         </nav>
         {session.data && <form method="post" action="/logout"><button type="submit">Sign out</button></form>}
       </header>
       <main
         className={
-          (["/", "/library", "/add", "/movie-dual-write", "/tv-sync", "/retention", "/settings", "/users", "/ops"].includes(route) || route.startsWith("/requests"))
+          (["/", "/library", "/add", "/movie-dual-write", "/tv-sync", "/retention", "/recovery", "/stewardship", "/settings", "/users", "/ops"].includes(route) || route.startsWith("/requests"))
             ? "compact-main"
             : undefined
         }
@@ -157,6 +150,10 @@ function ActorLibrary({ isAdmin, initialLibrary }: {
         {["/settings", "/users", "/ops"].includes(route) ? (
           isAdmin ? (route === "/settings" ? <SettingsPage /> : route === "/users" ? <UsersPage /> : <OpsPage />)
             : <p role="alert">Administrator access required.</p>
+        ) : route === "/stewardship" ? (
+          isAdmin ? <StewardshipPage api={stewardshipApi} /> : <p role="alert">Administrator access required.</p>
+        ) : route === "/recovery" ? (
+          isAdmin ? <RecoveryPage /> : <p role="alert">Administrator access required.</p>
         ) : route === "/retention" ? (
           isAdmin ? <RetentionAudit /> : <p role="alert">Administrator access required.</p>
         ) : route === "/tv-sync" ? (
@@ -167,6 +164,12 @@ function ActorLibrary({ isAdmin, initialLibrary }: {
           ) : (
             <p role="alert">Administrator access required.</p>
           )
+        ) : /^\/tv\/library\/\d+$/.test(route) ? (
+          <TvLibraryDetail key={route} entryId={Number(route.split("/").at(-1))} />
+        ) : /^\/tv\/requests\/\d+$/.test(route) ? (
+          <TvRequestDetail key={route} requestId={Number(route.split("/").at(-1))} />
+        ) : /^\/tv\/\d+$/.test(route) ? (
+          <TvDetail key={route} tmdbId={Number(route.split("/").at(-1))} />
         ) : /^\/movies\/\d+$/.test(route) ? (
           <MovieDetail key={route} tmdbId={Number(route.split("/").at(-1))} />
         ) : route === "/movies" ? (
@@ -192,7 +195,7 @@ function ActorLibrary({ isAdmin, initialLibrary }: {
             kind={route === "/series" ? "series" : "author"}
           />
         ) : ["/", "/library"].includes(route) ? (
-          <Library initialPage={initialLibrary} />
+          <UnifiedLibrary initialPage={initialLibrary} />
         ) : (
           <p>
             Page not found. <Link href="/library">Open library</Link>.

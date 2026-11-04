@@ -1,8 +1,9 @@
 # In-Flight Completion Checklist
 
 Scope: finish the existing TV, retention, RSS, book-transfer and performance
-work. This is not the deferred subtitles, cross-seeding, unified search, or
-complete Seerr-replacement backlog.
+work, followed by native TV discovery, unified Library search and bounded
+recovery/stewardship. Subtitles, cross-seeding and full Seerr replacement remain
+outside this completion batch.
 
 ## Production Rollout And TV
 
@@ -14,7 +15,7 @@ complete Seerr-replacement backlog.
 - [x] Verify normal CD run 41792008135 serves 8344dbb with the background worker healthy, schema 49 and Transmission 4.1.4.
 - [x] Verify approved season membership expands to 13 / 25 / 10 episodes.
 - [x] Complete Breaking Bad season publication from its existing pack, with exact Plex IDs/paths for all 13 episodes and no new search/download.
-- [ ] Complete Berserk download, import and exact Plex verification.
+- [x] Complete Berserk download, import and exact Plex verification: all 25 approved episodes, canonical sizes/symlinks and exact section 16 identities/paths independently verified November 4 at 10:39 UTC on running e581960.
 - [ ] Observe the actively airing Khom Khlang request through its next release.
 
 ## Performance
@@ -74,10 +75,24 @@ the selected version. See [the comparison](movie-rss-canary.md).
 - [x] Observe normal scheduler-created retention cleanup jobs 2392 and 2408 succeed with zero eviction records; job 2392 was independently verified in Reflow with no pending command, and the parent confirmed job 2408 in its minimal read-only proof. No manually queued job or executor invocation.
 - [x] Compare all 17 successful transcript rows/fingerprints across rollout and confirm filesystem-identity preservation of canonical movie/seed files around the preview; see the dated production evidence in retention.md.
 
-The quiet `monitor-tv-and-rss-canaries` heartbeat follows the remaining external
-release/download outcomes every 30 minutes, read-only. It must not start searches,
-control torrents or deploy. The separately approved book transfer is now complete;
-the monitor must not repeat it or treat it as pending.
+The `monitor-tv-and-rss-canaries` heartbeat was removed at the user's request.
+There is no active Codex monitor. Khom Khlang E10 remains dependent on a real
+upstream release; the application's normal RSS intake remains responsible.
+
+## Follow-Through Implementation
+
+- [x] Isolate expected upstream provider failures inside durable RSS page steps; healthy providers still ingest and failed providers retain checkpoints. Test real Reflow restart/replay, cooldown, 429/503/403 and secret exclusion.
+- [x] Diagnose the one-off transfer's false verification failures in Transmission's deferred stop/verify cancellation ordering. Test the adapter race and repeated multi-piece verification against the real stable daemon.
+- [x] Native user TV catalog/detail/whole-season request and withdrawal APIs, using canonical episode identities without adding requests to Sonarr or Seerr. Typed SPA controls and browser acceptance included.
+- [x] One Library search across local books/movies/TV, shared published content and own requests, with independent remote results and media filters. Keep legacy detail URLs, not separate primary navigation silos.
+- [x] Bounded admin recovery inventory, explicit replay-safe link repairs using surviving owned bytes, and supported unselected-target acquisition. Test changed/missing mounts, intent fencing, short writer sections, outbox rollback and unchanged canonical bytes.
+- [x] Continuous five-minute private torrent observations through Reflow, saved-status admin UI, actual 30-day seed-time protection and sanitized repeated tracker evidence. No torrent controls or deletion.
+
+These checks establish local implementation/acceptance, not production rollout
+verification. Normal CD handles deployment. A genuine production quality upgrade
+is still unverified. TV/seed-store eviction, automatic torrent retirement and
+full lost-array rebuild remain unfinished; selected-but-missing media recovery
+is explicitly blocked until domain selection invalidation is implemented.
 
 Do not manually deploy, remove foreign library content, delete seed data, or
 manufacture completion of downloads/releases that have not actually arrived.

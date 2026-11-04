@@ -112,10 +112,9 @@ try {
   await page
     .getByRole("heading", { name: "Ready to watch in Plex", exact: true })
     .waitFor();
-  await page.getByRole("link", { name: "Requests", exact: true }).click();
-  await page
-    .getByRole("heading", { name: "Requests", exact: true })
-    .waitFor();
+  await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Library", exact: true }).click();
+  await page.getByRole("group", { name: "Media type" }).getByRole("button", { name: "Movies", exact: true }).click();
+  await page.getByRole("region", { name: "Your movies" }).locator(".request-row").first().waitFor();
   if ((await page.evaluate("window.__spaNavigationProof")) !== 42)
     throw new Error("SPA navigation reloaded the document");
   await page.goto(detailUrl);
