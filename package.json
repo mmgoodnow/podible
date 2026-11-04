@@ -17,6 +17,8 @@
     "export-prod-corpus-case": "bun run scripts/export-prod-corpus-case.ts",
     "compare-curation-modes": "bun run scripts/compare-curation-modes.ts",
     "test": "bun test",
+    "generate:db-types": "bun run scripts/generate-db-types.ts",
+    "check:db-types": "bun run scripts/generate-db-types.ts --check",
     "typecheck": "bun check && bun check -p web"
   },
   "dependencies": {
@@ -31,6 +33,7 @@
     "bencode": "^4.0.0",
     "fast-xml-parser": "^4.4.1",
     "hono": "^4.12.10",
+    "kysely": "0.29.8",
     "openai": "^6.22.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
