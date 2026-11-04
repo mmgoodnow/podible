@@ -295,7 +295,15 @@ export class RetentionService {
         if (rows(tables!, "movie_publications").some((row) => versionIds.has(row.version_id))) shared = true;
         if (rows(tables!, "asset_files").some((row) => row.path === actual.canonicalPath || row.identity_path === actual.canonicalPath)) shared = true;
         detail.references = shared ? "shared" : views === null ? "unknown" : "verified-unshared";
-        if (shared) { detail.verifiedReclaimableBytes = 0; detail.reasons.push("Database, published view, or inode links still reference this object outside a canonical-only removal."); }
+        if (shared) {
+          detail.reasons.push("Database or published view references, or multiple inode links, prevent a verified-unshared removal set.");
+          // At most one name per candidate can be removed. More links prove a surviving inode;
+          // logical references and symlinks alone say nothing about allocation freed.
+          if (actual.linkCount > fileIds.size) {
+            detail.verifiedReclaimableBytes = 0;
+            detail.reasons.push("An inode link must survive even if every canonical candidate is unlinked; no allocation would be freed.");
+          }
+        }
         else if (detail.references === "verified-unshared" && this.adapters.reclaimableAllocation) {
           const verified = await this.adapters.reclaimableAllocation({ ...actual });
           if (verified !== null && count.safeParse(verified).success && verified <= actual.allocatedBytes)

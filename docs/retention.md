@@ -241,8 +241,12 @@ data prevent a zero-active-work claim. This can over-block unrelated work in thi
 This assumes durable DB registrations and managed manifests contain every *managed* logical
 consumer. It cannot discover arbitrary unregistered symlinks outside managed views, establish
 exclusive ownership of foreign trees, or prove global filesystem allocation exclusivity.
-Hardlinks or remaining references outside canonical-only scope report zero reclaimable bytes.
-Otherwise `allocatedBytes` comes from `stat.blocks * 512`, but `verifiedReclaimableBytes` defaults
+Logical DB/view references block deletion but do not prove zero physically reclaimable bytes:
+a published symlink does not retain an unlinked inode. Those bytes remain **null**. Zero is
+verified only when an inode's link count exceeds the entire canonical candidate count, proving
+at least one link must survive this removal set. Multiple links entirely within the candidate
+set do not prove that; duplicate physical identities remain blocked, not counted as savings.
+`allocatedBytes` comes from `stat.blocks * 512`, but `verifiedReclaimableBytes` defaults
 to **null**, not logical file size or allocated blocks. A trusted server-only
 `reclaimableAllocation(file)` adapter must independently account for snapshots/clones and
 allocation sharing; its result must be a safe nonnegative count no larger than observed blocks.
@@ -283,3 +287,29 @@ can receive these trusted adapters during server composition; no adapter is popu
 Run `bun test test/unit/retention-service.test.ts` for real migrated SQLite/FS reference and
 presence tests, atomic helper rollback, root/path fencing, seed identity/history/independence,
 watch-history coverage, byte accounting, bounded paging and admin read-only RPC validation.
+
+### Production Read-Only Validation (2026-11-03)
+
+The deployed service was inspected with a SQLite read-only/query-only connection, repository
+write guard, filesystem metadata reads and private `torrent-get` only. No intent, jobs, files,
+configuration or download registrations were changed; the connection recorded zero changes.
+The initial running build was `79737b5`; a final read-only audit independently confirmed the
+deployed build was `1c0db9b`, with the same retention-service source and unchanged movie counts.
+The byte-accounting correction above remains local and was not deployed by this sidecar.
+
+- Four movie targets: three verified present; one unknown with no selected canonical version.
+  All four movie intents were legacy/untracked; recovery stayed `inspect`, not auto-reacquire.
+- The three canonical regular files matched the DB sizes and pinned content mount. Each had
+  one inode link and one real published-view symlink resolving to the expected object. These
+  logical references block canonical-only deletion; they are not proof of zero freed allocation.
+- Three exact owned Transmission bindings retained complete, separately-inoded seed files
+  under the canonical download root, with matching private client identity and exact owned
+  label. Final observed seed durations were 25,007-25,168 seconds (about 7 hours), not 30 days. Surviving
+  seed copies apply only to canonical-object removal, never seed-store deletion; tracker time
+  and other requirements remained unknown, and separate inodes do not prove separate extents.
+- Watch history was unknown for all four; no global/all-user Plex adapter is installed. No
+  allocation-sharing verifier is installed, so the corrected present-object byte counts remain
+  unknown, not file lengths or observed blocks. Every deletion audit was blocked.
+- Concurrent TV canaries changed the global active-acquisition count between read samples
+  (two, then three). The audit intentionally over-blocks on that activity; it does not infer
+  target-specific use or claim the whole library was a transactionally frozen snapshot.

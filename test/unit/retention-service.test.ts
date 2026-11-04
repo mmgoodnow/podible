@@ -221,7 +221,7 @@ describe("retention service owned presence and intent", () => {
 });
 
 describe("retention service conservative storage evidence", () => {
-  test("real inode links and cross-media database references yield zero reclaimable bytes", async () => {
+  test("surviving inode links prove zero bytes but logical references leave allocation unknown", async () => {
     await using f = await fixture();
     const otherLink = path.join(f.root, "other-consumer.mkv");
     await fs.link(f.objectPath, otherLink);
@@ -232,20 +232,47 @@ describe("retention service conservative storage evidence", () => {
     f.db.exec("CREATE TABLE future_media_refs(file_id TEXT NOT NULL)");
     f.db.query("INSERT INTO future_media_refs VALUES (?)").run(f.fileId);
     result = await f.service().audit(f.key);
-    expect(result.files[0]).toMatchObject({ linkCount: 1, databaseReferences: 2, references: "shared", verifiedReclaimableBytes: 0 });
+    expect(result.files[0]).toMatchObject({ linkCount: 1, databaseReferences: 2, references: "shared", verifiedReclaimableBytes: null });
+    expect(result.verifiedReclaimableBytes).toBeNull();
+    expect(result.audit.reclaimableBytes).toBe(0);
     expect(blockerCodes(result)).toContain("shared-references");
+    expect(blockerCodes(result)).toContain("bytes-unverified");
   });
 
   test("another target and a real published view remain references even with one inode link", async () => {
     await using f = await fixture();
     const second = f.repo.movies.request(f.user.id, movie, { ...defaultMovieQualityPolicy, cut: "extended" });
     f.repo.movies.selectVersion(second.targetId, f.versionId, 0);
-    expect((await f.service().audit(f.key)).files[0]!.references).toBe("shared");
+    expect((await f.service().audit(f.key)).files[0]).toMatchObject({ references: "shared", verifiedReclaimableBytes: null });
     f.db.query("UPDATE movie_targets SET active_version_id=NULL WHERE id=?").run(second.targetId);
     await reconcileMovieView(f.repo.movies, { contentRoot: f.contentRoot,
       viewRoot: path.join(f.settings.movies.managedRoot, "views", "plex", "movies"), serverViewRoot: "/server/movies" });
     const result = await f.service().audit(f.key);
-    expect(result.files[0]).toMatchObject({ linkCount: 1, references: "shared", verifiedReclaimableBytes: 0 });
+    expect(result.files[0]).toMatchObject({ linkCount: 1, references: "shared", verifiedReclaimableBytes: null });
+    expect(result.verifiedReclaimableBytes).toBeNull();
+    expect(result.audit.reclaimableBytes).toBe(0);
+    expect(blockerCodes(result)).toContain("shared-references");
+    expect(blockerCodes(result)).toContain("bytes-unverified");
+  });
+
+  test("hardlinks entirely within the canonical candidate set do not prove surviving allocation", async () => {
+    await using f = await fixture();
+    const acquisition = f.repo.movies.startAcquisition(f.requested.targetId, "initial", () => f.repo.createJob({ type: "reconcile" }).id).acquisition;
+    const fileId = randomUUID();
+    const relativePath = `files/${fileId.slice(0, 2)}/${fileId}.mkv`;
+    const objectPath = path.join(f.contentRoot, relativePath);
+    await fs.mkdir(path.dirname(objectPath), { recursive: true });
+    await fs.link(f.objectPath, objectPath);
+    f.repo.movies.recordVersion(acquisition.id, facts, [{ id: fileId, relativePath, sizeBytes: 8192, probe: {} }]);
+    f.repo.movies.finishAcquisition(acquisition.id);
+    f.db.query("UPDATE jobs SET status='succeeded' WHERE id=?").run(acquisition.job_id);
+    const result = await f.service().audit(f.key);
+    expect(result.files).toHaveLength(2);
+    for (const file of result.files)
+      expect(file).toMatchObject({ linkCount: 2, references: "shared", verifiedReclaimableBytes: null });
+    expect(result.verifiedReclaimableBytes).toBeNull();
+    expect(result.audit.reclaimableBytes).toBe(0);
+    expect(blockerCodes(result)).toContain("file-identity-invalid");
   });
 
   test("actual allocation needs a server verifier; malformed or oversized claims are ignored", async () => {
