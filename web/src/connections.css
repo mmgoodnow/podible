@@ -210,23 +210,12 @@
 .connections-empty {
   font-size: .95rem;
 }
-.connections-comparisons, .connections-help {
+.connections-help {
   margin-top: 1rem;
-  font-size: .85rem;
-}
-.connections-comparisons summary, .connections-help summary {
-  cursor: pointer;
-}
-.connections-help p {
+  font-size: .8rem;
   color: var(--muted, #687368);
   max-width: 65ch;
   line-height: 1.5;
-}
-.connections-comparisons > div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: .8rem 1.5rem;
-  padding-top: .8rem;
 }
 @media (max-width: 700px) {
   .connections-grid {

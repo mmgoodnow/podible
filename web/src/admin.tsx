@@ -159,7 +159,7 @@ export function UsersPage() {
 type Ops = inferRouterOutputs<AppRouter>["adminWeb"]["ops"];
 type Job = Ops["diagnostics"]["recentJobs"][number];
 const recoveryLabels: Record<Job["recovery"], string> = {
-  running: "Working", "automatic-retry": "Will retry automatically", "scheduled-wake": "Scheduled wake", queued: "Queued",
+  running: "Working", "automatic-retry": "Will retry automatically", "scheduled-wake": "Waiting to continue", queued: "Queued",
   "manual-retry": "Manual retry available", cancelled: "Cancelled", complete: "Complete", unknown: "Recovery state unknown",
 };
 const date = (value: string | null) => value ? new Date(value).toLocaleString() : "Not reported";
@@ -175,48 +175,23 @@ function WorkTitle({ title, href }: { title: string; href: string | null }) {
 function Recovery({ recovery, nextWakeAt }: Pick<Job, "recovery" | "nextWakeAt">) {
   return <span>{recoveryLabels[recovery]}{nextWakeAt ? `; next wake ${date(nextWakeAt)}` : recovery === "scheduled-wake" ? "; wake time not reported" : ""}</span>;
 }
-function JobDiagnostic({ job }: { job: Job }) {
-  const trpc = useTRPC(), cache = useQueryClient();
-  const retry = useMutation(trpc.jobs.retry.mutationOptions({ onSettled: () => cache.invalidateQueries({ queryKey: trpc.adminWeb.ops.pathKey() }) }));
-  return <details className="panel">
-    <summary>Job #{job.id} / {job.type} / {job.status}</summary>
-    <p><Recovery recovery={job.recovery} nextWakeAt={job.nextWakeAt} />. Attempts {job.attempts}/{job.maxAttempts}.</p>
-    {job.error && <p>{job.error.code}: {job.error.message}</p>}
-    {job.bookId && <p><Link href={`/book/${job.bookId}`}>Open book #{job.bookId}</Link></p>}
-    {["failed", "cancelled"].includes(job.status) && <button disabled={retry.isPending} onClick={() => retry.mutate({ jobId: job.id })}>
-      {retry.isPending ? "Queuing..." : `Retry job #${job.id}`}
-    </button>}
-    {retry.error && <p role="alert">Could not confirm the retry: {retry.error.message}. Check the refreshed status before trying again.</p>}
-    {retry.isSuccess && <p role="status">Retry requested for job #{job.id}. Follow its actual execution state above.</p>}
-  </details>;
-}
-function OpsDiagnostics() {
-  const trpc = useTRPC();
-  const diagnostics = useQuery(trpc.adminWeb.ops.queryOptions({ includeJobs: true }, { refetchInterval: 5000 }));
-  return diagnostics.isPending ? <p role="status">Loading execution details...</p> : diagnostics.isError ? <p role="alert">{diagnostics.error.message}</p> : <>
-    {diagnostics.data.diagnostics.warnings.map((warning, index) => <p key={index}>{warning}</p>)}
-    {diagnostics.data.diagnostics.truncated && <p>Only the bounded recent execution history is shown.</p>}
-    {!diagnostics.data.diagnostics.recentJobs.length && <p>No recent jobs.</p>}
-    {diagnostics.data.diagnostics.recentJobs.map((job) => <JobDiagnostic key={job.id} job={job} />)}
-  </>;
-}
-
-function ActivityProblem({ incident, onRetried }: { incident: Ops["incidents"][number]; onRetried: (id: number) => void }) {
+function ActivityProblem({ incident, onRetried }: { incident: Ops["incidents"][number]; onRetried: (title: string) => void }) {
   const trpc = useTRPC(), cache = useQueryClient();
   const retry = useMutation(trpc.jobs.retry.mutationOptions({ onSuccess: async () => {
-    onRetried(incident.jobId!);
+    onRetried(incident.title);
   }, onSettled: () => cache.invalidateQueries({ queryKey: trpc.adminWeb.ops.pathKey() }) }));
   const retryable = incident.jobId !== null && ["manual-retry", "cancelled"].includes(incident.recovery);
   const correction = problemAction(incident.code);
+  const comparison = incident.code === "comparison-failed";
   return <article className="activity-item problem" aria-label={incident.title}>
     <div className="activity-item-heading"><h3><WorkTitle title={incident.title} href={incident.href} /></h3>
-      <span className="activity-badge">{retryable ? "Stopped" : "Needs attention"}</span></div>
+      <span className="activity-badge">{comparison ? "Comparison stopped" : retryable ? "Stopped" : "Needs attention"}</span></div>
     <p>{incident.detail}</p>
     <p><Recovery recovery={incident.recovery} nextWakeAt={incident.nextWakeAt} /></p>
     {correction && <div className="actions">{correction.href.startsWith("#") ? <a className="button" href={correction.href}>{correction.label}</a>
       : <Link className="button" href={correction.href}>{correction.label}</Link>}</div>}
     {retryable && !correction && <div className="actions"><button disabled={retry.isPending} onClick={() => retry.mutate({ jobId: incident.jobId! })}>
-      {retry.isPending ? "Requesting retry..." : "Retry"}</button></div>}
+      {retry.isPending ? "Requesting retry..." : comparison ? "Retry comparison" : "Retry"}</button></div>}
     {retry.error && <p role="alert">Could not confirm the retry: {retry.error.message}. Check the refreshed status before trying again.</p>}
     <details><summary>Technical details</summary><p>{incident.code}{incident.jobId ? ` / job #${incident.jobId}` : ""}</p>
       {retryable && correction && <button disabled={retry.isPending} onClick={() => retry.mutate({ jobId: incident.jobId! })}>Retry after resolving the problem</button>}
@@ -225,10 +200,11 @@ function ActivityProblem({ incident, onRetried }: { incident: Ops["incidents"][n
 }
 
 function ActivityWork({ work, downloads }: { work: Ops["activeAcquisitions"][number]; downloads: ActivityDownload[] }) {
-  const phase = work.job.recovery === "running" ? work.stage?.replaceAll("_", " ") || "Working" : recoveryLabels[work.job.recovery];
+  const phase = work.job.recovery === "running" ? "Working" : recoveryLabels[work.job.recovery];
   const measured = downloadProgress(downloads);
   return <article className="activity-item" aria-label={work.title}>
     <div className="activity-item-heading"><h3><WorkTitle title={work.title} href={work.href} /></h3><span className="activity-badge">{phase}</span></div>
+    {work.stage && <p>{work.stage.replaceAll("_", " ")}</p>}
     {measured ? <>
       <progress aria-label={`Download progress for ${work.title}`} value={measured.done} max={measured.size} />
       <p>{bytes(measured.done)} of {bytes(measured.size)}{measured.speed !== null && measured.live ? ` / ${bytes(measured.speed)}/s` : ""}{!measured.live ? " / last recorded progress" : ""}</p>
@@ -245,15 +221,16 @@ function ActivityWork({ work, downloads }: { work: Ops["activeAcquisitions"][num
 
 export function OpsPage() {
   const trpc = useTRPC(), cache = useQueryClient();
-  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
-  const [retryNotice, setRetryNotice] = useState<number | null>(null);
+  const [retryNotice, setRetryNotice] = useState<string | null>(null);
   const ops = useQuery(trpc.adminWeb.ops.queryOptions({ includeJobs: false }, { refetchInterval: 5000 }));
   const refresh = useMutation(trpc.adminWeb.refresh.mutationOptions({ onSuccess: () => cache.invalidateQueries({ queryKey: trpc.adminWeb.ops.queryKey() }) }));
   const work = ops.data ? activityItems(ops.data) : [];
+  const running = work.filter(item => item.work.job.recovery === "running");
+  const waiting = work.filter(item => item.work.job.recovery !== "running");
   const attention = ops.data ? attentionItems(ops.data.incidents) : [];
   return <div className="activity-page">
     <div className="activity-heading"><h1>Activity</h1><button className="secondary" disabled={ops.isFetching} onClick={() => ops.refetch()}>Refresh</button></div>
-    {retryNotice !== null && <p role="status">Retry requested for job #{retryNotice}. Its current progress appears below.</p>}
+    {retryNotice !== null && <p role="status">Retry requested for {retryNotice}. Its current progress appears below.</p>}
     {ops.isPending ? <p role="status">Loading operations...</p> : ops.isError ? <p role="alert">{ops.error.message}</p> : <>
       <section className="activity-section" aria-label="Needs attention">
         <h2>Needs attention <small>{attention.length}</small></h2>
@@ -261,11 +238,15 @@ export function OpsPage() {
           {attention.map(incident => <ActivityProblem key={incident.key} incident={incident} onRetried={setRetryNotice} />)}</div>}
       </section>
       <section className="activity-section" aria-label="Active work">
-        <h2>In progress <small>{work.length}</small></h2>
-        {!work.length ? <p className="muted">No downloads or imports in progress.</p> : <div className="activity-items">
-          {work.map(item => <ActivityWork key={item.work.job.id} work={item.work} downloads={item.downloads} />)}</div>}
-        {ops.data.summary.waiting > 0 && <p className="activity-waiting">{ops.data.summary.waiting} {ops.data.summary.waiting === 1 ? "request is" : "requests are"} waiting for a release or an unaired episode. <Link href="/library">View library</Link></p>}
+        <h2>In progress <small>{running.length}</small></h2>
+        {!running.length ? <p className="muted">No downloads or imports in progress.</p> : <div className="activity-items">
+          {running.map(item => <ActivityWork key={item.work.job.id} work={item.work} downloads={item.downloads} />)}</div>}
       </section>
+      {(waiting.length > 0 || ops.data.summary.waiting > 0) && <section className="activity-section" aria-label="Waiting work">
+        <h2>Waiting</h2>
+        <div className="activity-items">{waiting.map(item => <ActivityWork key={item.work.job.id} work={item.work} downloads={item.downloads} />)}</div>
+        {ops.data.summary.waiting > 0 && <p className="activity-waiting">{ops.data.summary.waiting} {ops.data.summary.waiting === 1 ? "request is" : "requests are"} waiting for a release or an unaired episode. <Link href="/library">View library</Link></p>}
+      </section>}
       {ops.data.diagnostics.warnings.length > 0 && <details className="activity-status"><summary>Some activity status is unavailable</summary>
         {ops.data.diagnostics.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</details>}
       <section className="activity-section" id="activity-storage" aria-label="Storage and links">
@@ -284,15 +265,14 @@ export function OpsPage() {
         </article>)}</div>
       </section>
       <Connections feeds={ops.data.feeds} observedAt={ops.data.observedAt} truncated={ops.data.feeds.length >= 100} />
-      <details className="activity-status"><summary>Torrent health</summary><div><Link href="/stewardship">Inspect private torrent registrations</Link></div></details>
+      <section className="activity-section"><h2>Torrent health</h2><Link href="/stewardship">Review torrent problems</Link></section>
       <p className="muted">Updated {date(ops.data.observedAt)}.</p>
     </>}
-    <details className="activity-status" open={diagnosticsOpen} onToggle={(event) => setDiagnosticsOpen(event.currentTarget.open)}>
-      <summary>Execution details</summary>
-      <div className="actions"><button disabled={refresh.isPending} onClick={() => refresh.mutate({})}>{refresh.isPending ? "Queuing..." : "Queue library refresh"}</button></div>
+    <section className="activity-section" aria-label="Library maintenance">
+      <h2>Library maintenance</h2>
+      <button className="secondary" disabled={refresh.isPending} onClick={() => refresh.mutate({})}>{refresh.isPending ? "Requesting refresh..." : "Refresh library metadata"}</button>
       {refresh.error && <p role="alert">Library refresh was not queued: {refresh.error.message}</p>}
-      {refresh.isSuccess && <p role="status">Library refresh {refresh.data.shared ? "already queued or running" : "queued"} as job #{refresh.data.jobId}.</p>}
-      {diagnosticsOpen && <OpsDiagnostics />}
-    </details>
+      {refresh.isSuccess && <p role="status">Library refresh {refresh.data.shared ? "already queued or running" : "queued"}.</p>}
+    </section>
   </div>;
 }

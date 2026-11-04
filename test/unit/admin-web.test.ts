@@ -16,6 +16,7 @@ import { defaultMovieQualityPolicy } from "../../src/movies/quality";
 import { prepareMovieStorage } from "../../src/movies/storage";
 import { tvRouter } from "../../src/rpc/tv-router";
 import { catalogRouter } from "../../src/rpc/catalog-router";
+import { fixtureTvEntry } from "../fixtures/tv-catalog";
 
 const NOW = Date.parse("2026-11-04T12:00:00.000Z");
 const ownerToken = "private-owner-credential";
@@ -506,6 +507,42 @@ describe("operational facts from the execution authority", () => {
     expect(JSON.stringify(result)).not.toContain(providerKey);
     expect(JSON.stringify(result)).not.toContain(ownerToken);
     expect(JSON.stringify(result)).not.toContain("payload_json");
+  });
+
+  test("failed comparisons name the show and distinguish audit impact from acquisition", async () => {
+    await using f = await fixture();
+    const catalog = { ...fixtureTvEntry(), title: "The Daily Show" };
+    const entry = f.repo.tv.upsertEntry(catalog);
+    const { caseId } = f.repo.tvShadow.capture({ entry, observation: {
+      key: "fixture:daily-show", entry, episodeKeys: [entry.episodes[0]!.key],
+      releaseTitle: "Private source title", sourcePaths: [], libraryPath: null,
+      observedAt: new Date(NOW).toISOString(), sonarr: { outcome: "imported", messages: [] },
+    }, episodeIds: [entry.episodes[0]!.id], policy: defaultMovieQualityPolicy,
+      source: "unavailable", files: [], warnings: [] });
+    const job = f.job({ type: "tv_shadow_evaluate", payload: { caseId } }, { status: "failed", error: `Invalid mapping ${secretUrl}` });
+    f.repo.tvShadow.attachJob(caseId, job.id);
+    const before = f.db.query("SELECT total_changes() AS n").get();
+    const result = await executeMethod(f.router.routes.ops, f.ctx, {});
+    expect(result.incidents).toContainEqual(expect.objectContaining({ title: "The Daily Show: Sonarr comparison",
+      code: "comparison-failed", detail: expect.stringContaining("does not change downloads or your Plex library") }));
+    expect(JSON.stringify(result)).not.toContain(secretUrl);
+    expect(f.db.query("SELECT total_changes() AS n").get()).toEqual(before);
+    expect(f.repo.tv.targets()).toEqual([]);
+  });
+
+  test("scheduled book cards retain the action and use exact saved provider waits when available", async () => {
+    await using f = await fixture();
+    const book = f.repo.createBook({ title: "Salt, Fat, Acid, Heat", author: "Samin Nosrat" });
+    const job = f.job({ type: "acquire", bookId: book.id, payload: { media: ["audio", "ebook"] } },
+      { next_run_at: new Date(NOW + 60_000).toISOString() });
+    let result = await executeMethod(f.router.routes.ops, f.ctx, {});
+    expect(result.activeAcquisitions[0]).toMatchObject({ title: book.title, stage: "Finding audiobook and ebook editions" });
+    const runId = f.repo.getJobExecution(job.id)!.run_id;
+    f.repo.bindJobJournalReader({ read: ids => new Map(ids.flatMap(id => f.lifecycle.has(id) ? [[id, f.lifecycle.get(id)!] as const] : [])),
+      waits: () => new Map([[runId, [{ reason: "provider-search", media: "audio" }]]]) });
+    result = await executeMethod(f.router.routes.ops, f.ctx, {});
+    expect(result.activeAcquisitions[0]).toMatchObject({ stage: "Waiting for providers before retrying the audiobook search.",
+      job: { recovery: "scheduled-wake" } });
   });
 
   test("journal failure is explicitly unknown and read methods never initialize missing settings", async () => {

@@ -2,6 +2,7 @@ import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../src/trpc";
 import { Link } from "./router";
 import "./connections.css";
+import { feedGapReasons } from "../../src/media/feed-gap";
 
 export type ConnectionFeed = inferRouterOutputs<AppRouter>["adminWeb"]["ops"]["feeds"][number];
 type State = ConnectionFeed["state"];
@@ -100,6 +101,12 @@ export function Connections({ feeds, observedAt, truncated = false }: {
             {provider.feeds.map(feed => <article className="connections-feed" key={feed.id} aria-label={`${mediaLabel(feed.mediaType)} feed checkpoints`}>
               <h3>{mediaLabel(feed.mediaType)}</h3>
               <p className={feed.gap ? "connections-gap" : "connections-coverage"}>{feed.gap ? "History gap recorded. Some feed history could not be verified." : "No history gap recorded."}</p>
+              {feed.gap && (feed.gapDiagnostics ? <p className="connections-explanation">
+                {feedGapReasons[feed.gapDiagnostics.reason]} {feed.gapDiagnostics.pagesFetched} pages returned {feed.gapDiagnostics.resultsFetched} entries.
+                {" "}Recorded <Timestamp value={feed.gapDiagnostics.detectedAt} />; previous success <Timestamp value={feed.gapDiagnostics.previousSuccessAt} />.
+                {feed.gapDiagnostics.previousPollFailed && " The preceding poll failed."}
+                {" "}Missing checkpoints do not establish that releases were deleted.
+              </p> : <p className="connections-explanation">Recorded <Timestamp value={feed.gapSince} />. The cause was not captured for this older gap.</p>)}
               <dl>
                 <div><dt>Last poll attempt</dt><dd><Timestamp value={feed.lastPolledAt} /></dd></div>
                 <div><dt>Last successful poll</dt><dd><Timestamp value={feed.lastSuccessAt} /></dd></div>
@@ -111,12 +118,6 @@ export function Connections({ feeds, observedAt, truncated = false }: {
         </details>
       </li>)}</ul>}
     <div className="connections-footer"><Link href="/settings">Connection settings</Link><span>Overview updated <Timestamp value={observedAt} /></span></div>
-    <details className="connections-comparisons"><summary>Integration comparisons</summary><div>
-      <Link href="/movie-dual-write">Seerr / Radarr comparisons</Link><Link href="/tv-sync">Seerr / Sonarr comparisons</Link>
-    </div></details>
-    <details className="connections-help"><summary>About these reports</summary>
-      <p>Saved indexer polls, not a live availability check. Snapshots may differ in age. A successful media feed does not clear another feed's saved error. Cooldowns can be shared across media on the same endpoint.</p>
-      <p>Provider counts group exact source labels in the saved feeds shown here; they are not an inventory of every configured endpoint. Feed gaps describe missing history, not provider availability.</p>
-    </details>
+    <p className="connections-help">Saved poll results, not a live connection test. Feed gaps indicate unverified history, not an outage.</p>
   </section>;
 }

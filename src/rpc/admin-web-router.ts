@@ -10,6 +10,7 @@ import { assertMovieStorage } from "../movies/storage";
 import { defineMethod, defineRouter } from "./framework";
 import { RpcError } from "./shared";
 import { adminTorrentKey, readAdminTorrents, type AdminTorrentBinding, type AdminTorrentSource, type AdminTransmissionReader } from "./admin-torrents";
+import { feedGapDiagnosticsSchema, readFeedGapDiagnostics } from "../media/feed-gap";
 
 const empty = z.object({}).strict();
 const id = z.number().int().positive().safe();
@@ -52,7 +53,8 @@ export const adminWebOpsSchema = z.object({
   feeds: z.array(z.object({
     id: z.string(), provider: z.string(), mediaType: z.string(), state: z.enum(["healthy", "cooldown", "unavailable", "unknown"]),
     lastSuccessAt: z.string().nullable(), lastPolledAt: z.string().nullable(), retryAt: z.string().nullable(), nextPollAt: z.string().nullable(),
-    error: safeErrorSchema.nullable(), gap: z.boolean(),
+    error: safeErrorSchema.nullable(), gap: z.boolean(), gapSince: z.string().nullable(),
+    gapDiagnostics: feedGapDiagnosticsSchema.nullable(),
   })),
   storage: z.array(z.object({
     media: z.enum(["book", "movie", "tv"]), root: z.string().nullable(),
@@ -289,17 +291,37 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
   if (inventory.truncated) warnings.push("Managed torrent inventory exceeded the bounded read budget; current download counts are incomplete.");
 
   const latestByType = new Map<string, JobRow[]>();
+  let jobWaits = new Map<number, import("../worker/job-journal").JobWait[]>();
+  try { jobWaits = repo.jobWaits(jobs.filter(job => active(job) && job.type === "acquire" && job.book_id).slice(0, 100).map(job => job.id)); }
+  catch { warnings.push("Some scheduled search reasons could not be read; no provider wait is inferred."); }
   function contextFor(job: JobRow): Context {
     const associated = contexts.get(job.id);
     if (associated) return associated;
+    if (job.type === "tv_shadow_evaluate" || job.type === "movie_shadow_evaluate") {
+      let caseId: number | null = null;
+      try { const payload = JSON.parse(job.payload_json ?? "{}"); if (id.safeParse(payload.caseId).success) caseId = payload.caseId; } catch { /* Unknown case identity stays unnamed. */ }
+      const tvCase = caseId && job.type === "tv_shadow_evaluate" ? repo.tvShadow.get(caseId) : null;
+      const movieCase = caseId && job.type === "movie_shadow_evaluate" ? repo.movieShadow.get(caseId) : null;
+      const name = tvCase?.input.entry.title ?? movieCase?.input.observation.movie.title;
+      const kind = job.type === "tv_shadow_evaluate" ? "Sonarr" : "Radarr";
+      return { key: `job:${job.id}`, title: name ? `${label(name)}: ${kind} comparison` : `${kind} comparison`,
+        media: "system", targetId: null, href: null, stage: `Compare imports with ${kind}`,
+        suppressIncident: !!(tvCase?.result || movieCase?.result) };
+    }
     if (job.book_id) {
       const book = repo.getBook(job.book_id);
       const release = job.release_id ? repo.getRelease(job.release_id) : null;
       let media: string[] = release ? [release.media_type] : ["audio", "ebook"];
       try { const payload = JSON.parse(job.payload_json ?? "{}"); if (!release && Array.isArray(payload.media) && payload.media.length) media = payload.media; } catch { /* Unknown payload is not returned. */ }
       const available = !!book && media.every((kind) => kind === "audio" ? book.audioStatus === "imported" : kind === "ebook" && book.ebookStatus === "imported");
-      return { key: `job:${job.id}`, title: label(book?.title ?? `Book ${job.book_id}`), media: "book", targetId: job.book_id,
-        href: `/book/${job.book_id}`, stage: release?.status ?? job.type,
+      const formats = media.map(kind => kind === "audio" ? "audiobook" : kind === "ebook" ? "ebook" : "edition").join(" and ");
+      const waits = (jobWaits.get(job.id) ?? []).filter(wait =>
+        wait.media === "audio" ? book?.audioStatus !== "imported" : book?.ebookStatus !== "imported");
+      const stage = waits.length ? `Waiting for providers before retrying the ${waits.map(wait => wait.media === "audio" ? "audiobook" : "ebook").join(" and ")} search.`
+        : job.type === "acquire" ? `Finding ${formats} editions`
+        : job.type === "import" ? `Importing the ${formats}` : job.type === "download" ? `Downloading the ${formats}` : "Updating this book";
+      return { key: `job:${job.id}`, title: label(book?.title ?? "Unavailable book title"), media: "book", targetId: job.book_id,
+        href: book ? `/book/${job.book_id}` : null, stage,
         suppressIncident: ["acquire", "download", "import"].includes(job.type) && available };
     }
     return { key: `job:${job.id}`, title: job.type.replaceAll("_", " "), media: "system", targetId: null, href: null, stage: job.type, suppressIncident: false };
@@ -335,7 +357,11 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
       const newer = latestByType.get(job.type)!.some((other) => other.id > job.id && other.book_id === job.book_id && other.release_id === job.release_id);
       if (newer) continue;
     }
-    const error = view.error ?? normalizedAdminError("Operation failed")!;
+    const comparison = job.type === "tv_shadow_evaluate" || job.type === "movie_shadow_evaluate";
+    const error = comparison ? { code: "comparison-failed", message: job.type === "tv_shadow_evaluate"
+      ? "The independent Sonarr comparison could not finish inspecting episode mappings. This comparison does not change downloads or your Plex library."
+      : "The independent Radarr comparison could not finish. This comparison does not change downloads or your Plex library." }
+      : view.error ?? normalizedAdminError("Operation failed")!;
     incidents.push({ key: `job:${job.id}`, title: work.title, detail: error.message, code: error.code,
       jobId: job.id, href: work.href, recovery: view.recovery, nextWakeAt: view.nextWakeAt });
   }
@@ -349,7 +375,8 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
       if (error) incidents.push({ key: `feed:${feed.id}`, title: label(feed.provider), detail: error.message, code: error.code,
         jobId: null, href: "/movie-dual-write", recovery: nextPollAt ? "scheduled-wake" : "unknown", nextWakeAt: nextPollAt });
       return { id: label(feed.id), provider: label(feed.provider), mediaType: label(feed.media_type), state,
-        lastSuccessAt: iso(feed.last_success_at), lastPolledAt: iso(feed.last_polled_at), retryAt, nextPollAt, error, gap: Boolean(feed.gap_since) };
+        lastSuccessAt: iso(feed.last_success_at), lastPolledAt: iso(feed.last_polled_at), retryAt, nextPollAt, error, gap: Boolean(feed.gap_since),
+        gapSince: iso(feed.gap_since), gapDiagnostics: readFeedGapDiagnostics(feed.gap_diagnostics_json) };
     });
   } catch { warnings.push("Provider feed observations are unavailable; provider health is unknown."); }
   const storage = await storageView(repo, settings);

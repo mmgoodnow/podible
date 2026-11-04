@@ -7,7 +7,7 @@ import { Connections, connectionProviders, type ConnectionFeed } from "../../web
 const now = "2026-11-04T12:00:00Z";
 function feed(overrides: Partial<ConnectionFeed> = {}): ConnectionFeed {
   return { id: "one", provider: "A source", mediaType: "movie", state: "healthy", lastSuccessAt: now,
-    lastPolledAt: now, retryAt: null, nextPollAt: null, error: null, gap: false, ...overrides };
+    lastPolledAt: now, retryAt: null, nextPollAt: null, error: null, gap: false, gapSince: null, gapDiagnostics: null, ...overrides };
 }
 function render(feeds: ConnectionFeed[], truncated = false) {
   return renderToStaticMarkup(createElement(Connections, { feeds, observedAt: now, truncated }));
@@ -35,13 +35,33 @@ test("mixed saved observations remain mixed even if another media feed succeeded
   expect(providers[0]).toMatchObject({ label: "Mixed reports", mixed: true, tone: "cooldown", lastPollAt: now });
   expect(providers[0]!.states).toEqual(["cooldown", "healthy"]);
   const html = render(providers[0]!.feeds);
-  expect(html).toContain("Snapshots may differ in age.");
+  expect(html).toContain("Saved poll results, not a live connection test.");
   expect(providers[0]!.reports).toEqual([{ state: "cooldown", count: 1 }, { state: "healthy", count: 1 }]);
   expect(html).toContain("1 cooldown");
   expect(html).toContain("1 success");
   const summary = html.slice(html.indexOf("<summary>"), html.indexOf("</summary>"));
   expect(summary).not.toContain("Snapshots");
   expect(html).not.toContain("Provider down");
+});
+
+test("navigation and scope caveats are not hidden behind empty disclosures", () => {
+  const html = render([feed()]);
+  expect(html).not.toContain("Integration comparisons");
+  expect(html).not.toContain("About these reports");
+  expect(html).not.toContain("connections-help\"><summary");
+});
+
+test("historical gaps admit unknown cause while new gaps show recorded stop evidence", () => {
+  expect(render([feed({ gap: true, gapSince: now })])).toContain("The cause was not captured for this older gap.");
+  const html = render([feed({ gap: true, gapSince: now, gapDiagnostics: {
+    version: 1, detectedAt: now, reason: "page-budget-exhausted", previousSuccessAt: now, previousPollAt: now,
+    previousPollFailed: true, pagesFetched: 10, resultsFetched: 1000, distinctResults: 1000, anchorsExpected: 5,
+    pageSize: 100, pageBudget: 10, supportsPagination: true, reportedTotal: 2000,
+  } })]);
+  expect(html).toContain("The 10-page retrieval limit was reached");
+  expect(html).toContain("10 pages returned 1000 entries");
+  expect(html).toContain("The preceding poll failed.");
+  expect(html).not.toContain("cause was not captured");
 });
 
 test("a successful transport observation with a history gap does not become a provider outage", () => {

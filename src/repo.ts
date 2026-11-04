@@ -357,6 +357,16 @@ export class BooksRepo {
       owner_token: string | null;
     } | null;
   }
+  jobWaits(jobIds: number[]) {
+    const result = new Map<number, import("./worker/job-journal").JobWait[]>();
+    if (!jobIds.length || !this.journalState.reader?.waits) return result;
+    if (jobIds.length > 100 || jobIds.some(id => !Number.isSafeInteger(id) || id < 1)) throw new Error("Invalid job wait observation request");
+    const rows = this.db.query(`SELECT job_id,run_id FROM job_executions WHERE job_id IN (${jobIds.map(() => "?").join(",")})`)
+      .all(...jobIds) as { job_id: number; run_id: string }[];
+    const observed = this.journalState.reader.waits(rows.map(row => row.run_id));
+    for (const row of rows) if (observed.has(row.run_id)) result.set(row.job_id, observed.get(row.run_id)!);
+    return result;
+  }
   jobExecutionGeneration(jobId: number): number | null {
     const row = this.db.query("SELECT execution_generation FROM jobs WHERE id = ?").get(jobId) as {
       execution_generation: number;

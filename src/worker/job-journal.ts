@@ -4,7 +4,11 @@ import type { JobRow, JobStatus } from "../app-types";
 import type { SQLiteStorage } from "reflow-ts/sqlite-bun";
 
 export type JobLifecycle = Pick<JobRow, "status" | "error" | "attempt_count" | "next_run_at" | "updated_at">;
-export type JobJournalReader = { read(runIds: string[]): Map<string, JobLifecycle> };
+export type JobWait = { reason: "provider-search"; media: "audio" | "ebook" };
+export type JobJournalReader = {
+  read(runIds: string[]): Map<string, JobLifecycle>;
+  waits?(runIds: string[]): Map<string, JobWait[]>;
+};
 export type JobCommand = {
   id: number;
   job_id: number;
@@ -36,6 +40,26 @@ function errorMessage(value: string | null): string | null {
 /** Read-only, synchronous batch adapter for the pinned Reflow SQLite schema. */
 export function jobJournalReader(filename: string): JobJournalReader {
   return {
+    waits(runIds) {
+      const out = new Map<string, JobWait[]>();
+      if (!runIds.length) return out;
+      if (runIds.length > 100) throw new Error("Job wait observation budget exceeded");
+      const db = new Database(filename, { readonly: true });
+      db.exec("PRAGMA busy_timeout = 5000");
+      try {
+        const rows = db.query(`SELECT run_id,name FROM workflow_steps WHERE run_id IN (${runIds.map(() => "?").join(",")})
+          AND status='sleeping' AND kind='sleep' LIMIT 1000`).all(...runIds) as { run_id: string; name: string }[];
+        for (const row of rows) {
+          const match = /^(audio|ebook):search:wait:\d+$/.exec(row.name);
+          if (!match) continue;
+          const waits = out.get(row.run_id) ?? [];
+          const media = match[1] as "audio" | "ebook";
+          if (!waits.some(wait => wait.media === media)) waits.push({ reason: "provider-search", media });
+          out.set(row.run_id, waits);
+        }
+        return out;
+      } finally { db.close(); }
+    },
     read(runIds) {
       const out = new Map<string, JobLifecycle>();
       if (!runIds.length) return out;
