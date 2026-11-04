@@ -80,13 +80,13 @@ function parseXmlRpcValue(value: unknown): unknown {
   if ("string" in record) return record.string;
   for (const tag of ["i4", "i8", "int", "long", "boolean", "double"]) {
     if (tag in record) {
+      if (typeof record[tag] !== "string" || !record[tag].trim()) throw new Error("Invalid XML-RPC number");
       const number = Number(record[tag]);
       if (!Number.isFinite(number)) throw new Error("Invalid XML-RPC number");
       return number;
     }
   }
   if ("base64" in record) return record.base64;
-  if ("#text" in record) return record["#text"];
   if ("array" in record) {
     const arrayRecord = record.array as Record<string, unknown> | undefined;
     const dataRecord = arrayRecord?.data as Record<string, unknown> | undefined;
@@ -115,6 +115,7 @@ function parseXmlRpcValue(value: unknown): unknown {
     }
     return out;
   }
+  if ("#text" in record) return record["#text"];
   return record;
 }
 

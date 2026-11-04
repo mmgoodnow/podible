@@ -41,6 +41,15 @@ describe("rtorrent xmlrpc helpers", () => {
     expect(parseResponseValue(response("true"))).toBe("true");
   });
 
+  test("pretty-printed arrays and structs ignore layout text, not string contents", () => {
+    const response = (value: string) => `<methodResponse>\n  <params>\n    <param>\n      <value>\n        ${value}\n      </value>\n    </param>\n  </params>\n</methodResponse>`;
+    expect(parseResponseValue(response(`<array>\n  <data>\n    <value><string> Book </string></value>\n    <value><int>2</int></value>\n  </data>\n</array>`)))
+      .toEqual([" Book ", 2]);
+    expect(parseResponseValue(response(`<struct>\n  <member>\n    <name>path</name>\n    <value><string>/downloads/Book </string></value>\n  </member>\n</struct>`)))
+      .toEqual({ path: "/downloads/Book " });
+    expect(() => parseResponseValue(response("<int> </int>"))).toThrow("Invalid XML-RPC number");
+  });
+
   test("throws on fault payload", () => {
     expect(() =>
       parseResponseValue(
