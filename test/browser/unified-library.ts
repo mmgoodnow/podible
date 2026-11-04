@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
 import { chromium } from "playwright";
 const server = Bun.spawn([process.execPath, "run", "test/fixtures/unified-spa-server.ts"], { stdout: "pipe", stderr: "inherit" });
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
@@ -36,7 +38,7 @@ try {
   assert.equal(await page.getByRole("heading", { name: "Piranesi Companion" }).count(), 0, "Slow book provider unexpectedly finished");
   releaseBooks();
   await page.getByRole("heading", { name: "Piranesi Companion" }).waitFor();
-  await page.screenshot({ path: "/private/tmp/podible-unified-desktop.png", fullPage: true, animations: "disabled" });
+  await page.screenshot({ path: path.join(os.tmpdir(), "podible-unified-desktop.png"), fullPage: true, animations: "disabled" });
   await page.getByRole("region", { name: "TV catalog" }).getByRole("link", { name: /Piranesi Series/ }).click();
   await page.getByRole("heading", { name: "Choose seasons" }).waitFor();
   const checkboxes = page.getByRole("group", { name: "Seasons", exact: true }).getByRole("checkbox");
@@ -57,7 +59,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(origin);
   await page.getByRole("searchbox").waitFor();
-  await page.screenshot({ path: "/private/tmp/podible-unified-mobile.png", fullPage: false, animations: "disabled" });
+  await page.screenshot({ path: path.join(os.tmpdir(), "podible-unified-mobile.png"), fullPage: false, animations: "disabled" });
   assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false);
   assert.deepEqual(errors, []);
   console.log("Unified Library Chrome acceptance passed: instant local results, independent delayed providers, user-level season selection, durable request/deep link, withdrawal, compact navigation and mobile layout.");
