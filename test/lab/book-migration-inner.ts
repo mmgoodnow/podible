@@ -24,12 +24,16 @@ const db = new Database(database);
 runMigrations(db);
 const repo = new BooksRepo(db);
 const fixtures = [];
-for (const [index, tag] of ["Podible", "LazyLibrarian", "Podible"].entries()) {
+for (const [index, tag] of ["Podible", "LazyLibrarian", "Podible", ...Array<string>(12).fill("Podible")].entries()) {
   const name = `Bundle${index}${index === 0 ? " " : ""}`;
-  const contents = [Buffer.from(`%PDF-1.4\nVerified legacy book ${index}\n`), Buffer.from(`NFO ${index}`)];
+  const contents = [Buffer.alloc(index < 3 ? 64 : 16 * 1024 * 1024, index + 42), Buffer.from(`NFO ${index}`)];
   const files = ["book.pdf", "release.nfo"];
+  const payload = Buffer.concat(contents);
+  const pieces = [];
+  for (let offset = 0; offset < payload.length; offset += 16384)
+    pieces.push(createHash("sha1").update(payload.subarray(offset, offset + 16384)).digest());
   const torrent = new Uint8Array(bencode.encode({ info: { name, "piece length": 16384,
-    pieces: createHash("sha1").update(Buffer.concat(contents)).digest(),
+    pieces: Buffer.concat(pieces),
     files: files.map((file, i) => ({ length: contents[i]!.length, path: [file] })) } }));
   const metadata = inspectMetainfo(torrent);
   const source = path.join(root, "raw", name);
@@ -95,6 +99,10 @@ try {
   await stop(); prepareTransmission(engine); await start();
   if (await runMigrationCli([...args, "--apply", "--workers-stopped", "--report", report, "--hash", fixtures[0]!.metadata.infoHash]) !== 0)
     throw new Error("Restart/replay migration failed");
+  for (const fixture of fixtures.slice(3)) {
+    if (await runMigrationCli([...args, "--apply", "--workers-stopped", "--report", report, "--hash", fixture.metadata.infoHash]) !== 0)
+      throw new Error("Repeated multi-piece migration failed");
+  }
   if (legacy.controlCalls.includes("d.erase") || legacy.loadCalls.length) throw new Error("Migration erased or redownloaded a source");
   console.log("Book migration real-daemon acceptance passed: Podible + LL, trailing-space paths, full piece verification, zero downloaded bytes, source-path cutover, corrupt-data rejection, persistent restart/replay, retained source records.");
 } finally {

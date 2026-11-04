@@ -238,10 +238,18 @@ export class TransmissionAdapter implements TorrentClient {
     });
   }
   async quiesce(ref: TorrentRef) {
-    await this.owned(ref);
+    if ((await this.owned(ref)).status === 0) return;
     await this.options.rpc.call("torrent-stop", { ids: [ref.nativeId] });
     const deadline = Date.now() + 5000;
-    while ((await this.inspect(ref)).state !== "inactive") {
+    let inactiveSince: number | null = null;
+    for (;;) {
+      // Transmission defers stop_soon() to its pulse. An old check can finish
+      // first, exposing STOPPED before that stop cancels the next verification.
+      // Only a stable inactive observation settles an issued stop request.
+      if ((await this.inspect(ref)).state === "inactive") {
+        inactiveSince ??= Date.now();
+        if (Date.now() - inactiveSince >= 1000) return;
+      } else inactiveSince = null;
       if (Date.now() > deadline)
         throw new Error("Torrent did not become quiescent");
       await Bun.sleep(50);

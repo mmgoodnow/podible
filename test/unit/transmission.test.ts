@@ -119,6 +119,44 @@ test("Transmission checks result even on HTTP 200 and never leaks provider error
     "Torrent engine rejected torrent-add",
   );
 });
+test("a completed check with a deferred stop cannot cancel the next verification", async () => {
+  const hash = inspectMetainfo(metainfo).infoHash;
+  let state = 2;
+  let complete = false;
+  let stopAt = 0;
+  let verifiedAt = 0;
+  let stopCalls = 0;
+  const rpc = new TransmissionRpc({
+    url: "http://127.0.0.1", username: "a", password: "b",
+    fetcher: (async (_url, init) => {
+      const input = JSON.parse(init!.body as string);
+      if (stopAt && Date.now() >= stopAt) {
+        stopAt = 0;
+        if (state === 2) { state = 0; verifiedAt = 0; }
+      }
+      if (verifiedAt && Date.now() >= verifiedAt) { state = 0; complete = true; }
+      if (input.method === "torrent-stop") {
+        stopCalls++;
+        // The old verification finishes before Transmission processes stop_soon().
+        state = 0; stopAt = Date.now() + 150;
+      }
+      if (input.method === "torrent-verify") { state = 2; verifiedAt = Date.now() + 250; }
+      return Response.json({ result: "success", arguments: input.method === "torrent-get" ? {
+        torrents: [{ hashString: hash, downloadDir: "/managed/case", labels: ["Podible Movies"],
+          status: state, leftUntilDone: complete ? 0 : 7, sizeWhenDone: 7,
+          rateDownload: 0, error: 0, errorString: "", files: [{ name: "film.mkv", length: 7 }] }],
+      } : {} });
+    }) as typeof fetch,
+  });
+  const client = new TransmissionAdapter({ clientId: "engine", roots: { movies: "/managed" }, ownershipTag: "Podible Movies", rpc });
+  const ref = { clientId: "engine", nativeId: hash };
+  await client.recheck(ref);
+  await Bun.sleep(300);
+  expect(await client.inspect(ref)).toMatchObject({ state: "inactive", complete: true });
+  expect(stopCalls).toBe(1);
+  await client.quiesce(ref);
+  expect(stopCalls).toBe(1);
+});
 test("private Transmission identity and resume directory survive preparation with restrictive permissions", async () => {
   const root = await fs.mkdtemp(
     path.join(os.tmpdir(), "private-transmission-"),

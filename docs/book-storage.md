@@ -106,6 +106,22 @@ distinct from storage errors. Finalization finished at 15:57:34 UTC after a
 second brief window. This does not establish the root cause of the initial
 verification-state failures or claim a general verifier fix.
 
+Subsequent local hardening reproduced a deferred-stop cancellation: Transmission
+4.1.4's stop RPC schedules `stop_soon()`, whose eventual `stop_now()` removes
+verification work. A previous check can finish first, briefly exposing stopped
+state before that deferred stop is processed. Starting another check immediately
+can therefore cancel the fresh check partway through. The adapter now leaves
+already-inactive records alone and requires a stable inactive observation after
+an issued stop before returning. This preserves the full piece checks rather
+than accepting partial counters or automatically resuming failed verification.
+The regression fails against the old adapter and passes with the fix; repeated
+multi-piece migrations also pass the real 4.1.4 daemon lab, alongside corrupt-byte
+refusal, restart/replay and zero-download assertions. Production's 144 already
+verified torrents are not rechecked again for this change.
+
+Upstream sequencing: [stop RPC](https://github.com/transmission/transmission/blob/4.1.4/libtransmission/rpcimpl.cc)
+and [deferred stop / verifier cleanup](https://github.com/transmission/transmission/blob/4.1.4/libtransmission/torrent.cc).
+
 Independent final checks confirmed:
 
 - 144 complete engine records, zero unchecked/missing bytes and zero bytes downloaded.
