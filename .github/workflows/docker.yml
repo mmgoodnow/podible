@@ -32,7 +32,6 @@ jobs:
       - run: bun run test/browser/admin.ts
       - run: bun run test/browser/auth.ts
       - run: bun run test/browser/library-performance.ts
-      - run: bun run test/browser/library-performance.ts
       - run: docker build -t podible-transmission-test .
       - run: docker run --rm --network none -v "$PWD/test:/app/test:ro" --entrypoint bun podible-transmission-test run test/lab/transmission-inner.ts
       - run: docker run --rm --network none -v "$PWD/test:/app/test:ro" --entrypoint bun podible-transmission-test run test/lab/book-migration-inner.ts
