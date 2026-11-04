@@ -36,7 +36,7 @@ export function jobLockKeys(repo: BooksRepo, job: JobRow): string[] {
     const acquisition = payload?.acquisitionId ? repo.movies.acquisition(payload.acquisitionId) : null;
     return acquisition ? [`movie-target:${acquisition.target_id}`] : [];
   }
-  if (job.type === "full_library_refresh") {
+  if (job.type === "full_library_refresh" || job.type === "reconcile") {
     return [GLOBAL_LOCK_KEY];
   }
 
@@ -47,7 +47,7 @@ export function jobLockKeys(repo: BooksRepo, job: JobRow): string[] {
     return unique(mediaList.map((media) => mediaLaneKey(bookId, media)));
   }
 
-  if (job.type === "download" || job.type === "import" || job.type === "reconcile") {
+  if (job.type === "download" || job.type === "import") {
     return releaseLockKeys(repo, job.release_id);
   }
 

@@ -70,7 +70,7 @@ test("all registered job types use checkpointed execution without claiming or re
   }
 });
 
-test("same execution parallel steps overlap, conflicting jobs and global refresh do not", async () => {
+test.each(["full_library_refresh", "reconcile"] as const)("same execution parallel steps overlap, conflicting jobs and %s do not", async (maintenanceType) => {
   const f = await fixture();
   const book = f.repo.createBook({ title: "Parallel", author: "Fixture" });
   const entered: string[] = [];
@@ -96,7 +96,7 @@ test("same execution parallel steps overlap, conflicting jobs and global refresh
     await runtime.reconcile();
     await until(() => entered.length === 3);
     const second = f.repo.createJob({ type: "chapter_analysis", bookId: book.id, payload: { manifestationId: 1 } });
-    const refresh = f.repo.createJob({ type: "full_library_refresh" });
+    const refresh = f.repo.createJob({ type: maintenanceType });
     await runtime.reconcile();
     await Bun.sleep(150);
     expect(entered).toEqual([`${first.id}:0`, `${first.id}:1`, `${first.id}:2`]);
