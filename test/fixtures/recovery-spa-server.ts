@@ -38,9 +38,27 @@ const before = await fs.stat(canonical);
 const version = repo.movies.recordVersion(acquisition.id, fixtureFacts(), [{ id, relativePath, sizeBytes: before.size, probe: {} }]);
 repo.movies.selectVersion(requested.targetId, version, 0);
 repo.movies.finishAcquisition(acquisition.id);
+const healthy = repo.movies.request(member.id, { ...fixtureMovie, tmdbId: 102, title: "Healthy owned movie" }, settings.movies.qualityPolicy);
+const oldAcquisition = repo.movies.startAcquisition(healthy.targetId, "initial", () => repo.createJob({ type: "metadata_hydration", status: "succeeded" }).id).acquisition;
+const oldId = randomUUID();
+repo.movies.recordVersion(oldAcquisition.id, fixtureFacts(), [{ id: oldId, relativePath: `files/${oldId.slice(0, 2)}/${oldId}.mkv`, sizeBytes: 1, probe: {} }]);
+repo.movies.finishAcquisition(oldAcquisition.id);
+const healthyAcquisition = repo.movies.startAcquisition(healthy.targetId, "initial", () => repo.createJob({ type: "metadata_hydration", status: "succeeded" }).id).acquisition;
+const healthyId = randomUUID(), healthyRelative = `files/${healthyId.slice(0, 2)}/${healthyId}.mkv`;
+const healthyCanonical = path.join(contentRoot, healthyRelative);
+await fs.mkdir(path.dirname(healthyCanonical), { recursive: true });
+await fs.writeFile(healthyCanonical, "healthy selected bytes");
+const healthyBefore = await fs.stat(healthyCanonical);
+const healthyVersion = repo.movies.recordVersion(healthyAcquisition.id, fixtureFacts(), [{ id: healthyId, relativePath: healthyRelative, sizeBytes: healthyBefore.size, probe: {} }]);
+repo.movies.selectVersion(healthy.targetId, healthyVersion, 0);
+repo.movies.finishAcquisition(healthyAcquisition.id);
 await reconcileMovieView(repo.movies, roots);
-const view = path.join(roots.viewRoot, movieViewEntries(repo.movies, roots)[0]!.relativePath);
+const view = path.join(roots.viewRoot, movieViewEntries(repo.movies, roots).find(entry => entry.contentPath === canonical)!.relativePath);
+const healthyView = path.join(roots.viewRoot, movieViewEntries(repo.movies, roots).find(entry => entry.contentPath === healthyCanonical)!.relativePath);
 await fs.unlink(view);
+for (let index = 0; index < 19; index++) repo.movies.request(member.id, {
+  ...fixtureMovie, tmdbId: 200 + index, title: index === 0 ? "Initial pending movie" : `Pending movie ${index}`,
+}, settings.movies.qualityPolicy);
 repo.tv.requestSeasons(member.id, fixtureTvEntry(), settings.movies.qualityPolicy, [1]);
 const handler = createPodibleFetchHandler(repo, Date.now());
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async request => {
@@ -48,8 +66,10 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async request 
     return Response.json({ receipts: db.query("SELECT key FROM app_state WHERE key LIKE 'torrent-stewardship:v1:collection:%'").all().length });
   if (new URL(request.url).pathname === "/__fixture/verify") {
     const after = await fs.stat(canonical);
+    const healthyAfter = await fs.stat(healthyCanonical);
     return Response.json({ repaired: await fs.realpath(view).catch(() => null) === canonical,
       preserved: before.ino === after.ino && before.size === after.size && before.mtimeMs === after.mtimeMs,
+      healthyPreserved: healthyBefore.ino === healthyAfter.ino && healthyBefore.size === healthyAfter.size && healthyBefore.mtimeMs === healthyAfter.mtimeMs && await fs.realpath(healthyView) === healthyCanonical,
       tvMountStillMissing: !await fs.lstat(settings.tv.managedRoot).then(() => true).catch(() => false) });
   }
   return handler(request);
