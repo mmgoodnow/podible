@@ -70,6 +70,7 @@ async function checkPosterShelves(browser: Awaited<ReturnType<typeof chromium.la
     await page.goto(`${origin}/?media=movies`);
     const movies = page.getByRole("region", { name: "Your movies" });
     await movies.getByText("6 available", { exact: true }).waitFor();
+    assert.equal(await movies.getByText("Shared library", { exact: false }).count(), 0);
     assert.equal(await page.getByRole("region", { name: "Your books" }).count(), 0);
     const poster = movies.getByRole("img", { name: "The Last Coast movie poster", exact: true });
     await poster.scrollIntoViewIfNeeded();
@@ -93,6 +94,7 @@ async function checkPosterShelves(browser: Awaited<ReturnType<typeof chromium.la
     await page.goto(`${origin}/?media=tv`);
     const tv = page.getByRole("region", { name: "Your TV" });
     await tv.getByText("3 available", { exact: true }).waitFor();
+    assert.equal(await tv.getByText("Shared library", { exact: false }).count(), 0);
     await page.waitForFunction("['The Glasshouse tv series poster', 'North of Here tv series poster'].every(alt => [...document.querySelectorAll('.screen-poster > img')].some(img => img.alt === alt && img.complete && img.naturalWidth === 300))");
     const progress = tv.getByRole("progressbar", { name: "The Glasshouse available episodes" });
     assert.equal(await progress.getAttribute("value"), "1");

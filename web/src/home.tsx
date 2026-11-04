@@ -91,7 +91,7 @@ export function UnifiedLibrary({ initialPage }: {
         <div className="screen-grid">
           {readyMovies.map(movieCard)}
           {sharedMovies.map(movie => <ScreenCard key={`shared:${movie.tmdbId}`} title={movie.title} year={movie.year} posterUrl={movie.posterUrl}
-            href={`/movies/${movie.tmdbId}`} media="movie" badge={{ label: "Available", tone: "available" }} source="Shared library" detail="Ready in Plex" />)}
+            href={`/movies/${movie.tmdbId}`} media="movie" badge={{ label: "Available", tone: "available" }} detail="Ready in Plex" />)}
         </div>
         {pendingMovies.length > 0 && <section className="screen-requests" aria-label="Movie requests">
           <div className="screen-shelf__heading"><h3>Movie requests</h3><span>{pendingMovies.length} not available</span></div>
@@ -111,7 +111,7 @@ export function UnifiedLibrary({ initialPage }: {
         <div className="screen-grid">
           {readyTv.map(tvCard)}
           {sharedTv.map(entry => <ScreenCard key={`shared:${entry.entryId}`} title={entry.title} year={entry.year} posterUrl={entry.posterUrl}
-            href={`/tv/library/${entry.entryId}`} media="tv" badge={{ label: "Available", tone: "available" }} source="Shared library"
+            href={`/tv/library/${entry.entryId}`} media="tv" badge={{ label: "Available", tone: "available" }}
             detail={`${entry.availableEpisodes} episode${entry.availableEpisodes === 1 ? "" : "s"} ready`} />)}
         </div>
         {pendingTv.length > 0 && <section className="screen-requests" aria-label="TV requests">
