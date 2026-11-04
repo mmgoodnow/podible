@@ -62,7 +62,9 @@ export function BookCard({ book }: { book: Book }) {
   );
 }
 
-export function Library() {
+export function Library({ initialPage }: {
+  initialPage?: { q: string; library: inferRouterOutputs<AppRouter>["library"]["list"] };
+} = {}) {
   const trpc = useTRPC();
   const [q, setQ] = useState(
     new URLSearchParams(location.search).get("q") ?? "",
@@ -71,7 +73,9 @@ export function Library() {
   const books = useInfiniteQuery(
     trpc.library.list.infiniteQueryOptions(
       { q: deferredQ, limit: 48 },
-      { getNextPageParam: (last) => last.nextCursor, refetchInterval: 15_000 },
+      { getNextPageParam: (last) => last.nextCursor, refetchInterval: 15_000,
+        // Seed only this authenticated actor's exact query; filters/pagination keep their own keys.
+        initialData: initialPage?.q === deferredQ ? { pages: [initialPage.library], pageParams: [null] } : undefined },
     ),
   );
   const items = books.data?.pages.flatMap((page) => page.items) ?? [];

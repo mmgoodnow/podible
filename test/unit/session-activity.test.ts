@@ -1,13 +1,15 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { Hono } from "hono";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { hashSessionToken } from "../../src/auth";
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { createRequestContextMiddleware, requireAuthenticatedRequest, type HttpEnv } from "../../src/http/middleware";
 
-function fixture() {
-  const db = new Database(":memory:");
+function fixture(db = new Database(":memory:")) {
   runMigrations(db);
   const repo = new BooksRepo(db);
   const user = repo.upsertUser({ provider: "local", providerUserId: "activity-test", username: "reader", isAdmin: false });
@@ -62,7 +64,37 @@ test("throttled activity never bypasses session expiry checks", async () => {
 
 test("unexpected activity storage failures are not hidden as lock contention", async () => {
   using f = fixture();
+  f.db.exec("PRAGMA busy_timeout=2000");
   f.age();
   f.repo.touchSession = () => { throw Object.assign(new Error("unexpected activity failure"), { code: "SQLITE_CORRUPT" }); };
   expect((await f.request()).status).toBe(500);
+  expect(f.db.query("PRAGMA busy_timeout").get()).toEqual({ timeout: 2000 });
+});
+
+test("optional activity never waits on an independent WAL writer or changes the durable write timeout", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "session-activity-contention-"));
+  try {
+    const filename = path.join(root, "app.sqlite");
+    const db = new Database(filename);
+    db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=2000;");
+    using f = fixture(db);
+    using writer = new Database(filename);
+    f.age();
+    writer.exec("BEGIN IMMEDIATE");
+    try {
+      const start = performance.now();
+      expect((await f.request()).status).toBe(200);
+      const elapsedMs = performance.now() - start;
+      console.log(JSON.stringify({ scenario: "authenticated read during independent WAL write", elapsedMs: Math.round(elapsedMs) }));
+      expect(elapsedMs).toBeLessThan(500);
+      expect(f.db.query("PRAGMA busy_timeout").get()).toEqual({ timeout: 2000 });
+      const lastSeen = f.repo.getSessionByTokenHash(hashSessionToken("activity-test-session"))!.last_seen_at;
+      expect(Date.parse(lastSeen)).toBeLessThan(Date.now() - 60_000);
+    } finally { writer.exec("ROLLBACK"); }
+    expect((await f.request()).status).toBe(200);
+    expect(f.repo.touchSessionWithoutWaiting(f.session.id)?.id).toBe(f.session.id);
+    expect(f.db.query("PRAGMA busy_timeout").get()).toEqual({ timeout: 2000 });
+    f.repo.deleteSession(f.session.id);
+    expect((await f.request()).status).toBe(401);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

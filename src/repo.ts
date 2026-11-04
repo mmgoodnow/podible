@@ -524,6 +524,15 @@ export class BooksRepo {
     return this.getSessionByTokenHash(row.token_hash);
   }
 
+  touchSessionWithoutWaiting(sessionId: number): SessionWithUserRow | null {
+    const { timeout } = this.db.query("PRAGMA busy_timeout").get() as { timeout: number };
+    // Optional HTTP activity must not stall the event loop behind the worker's writer lock.
+    // This synchronous scope restores the connection's durable-write policy before returning.
+    this.db.exec("PRAGMA busy_timeout=0");
+    try { return this.touchSession(sessionId); }
+    finally { this.db.exec(`PRAGMA busy_timeout=${timeout}`); }
+  }
+
   deleteSession(sessionId: number): boolean {
     assertPositiveInt(sessionId);
     return this.db.query("DELETE FROM sessions WHERE id = ?").run(sessionId).changes > 0;

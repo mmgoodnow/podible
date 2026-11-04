@@ -10,6 +10,7 @@ import { bookDownloadClient } from "../media/book-torrents";
 import { runSearch, runSnatchGroup, triggerAutoAcquire } from "../library/service";
 
 import { defineMethod, defineRouter } from "./framework";
+import { authRouter } from "./auth-router";
 import {
   assetRowSchema,
   bookSeriesMembershipSchema,
@@ -30,10 +31,20 @@ import {
   releaseRowSchema,
   torznabResultSchema,
 } from "./schemas";
-import { enrichLibraryBookPlayback, enrichLibraryBookProgress, removeFileIfPresent, RpcError } from "./shared";
+import { enrichLibraryBookPlayback, enrichLibraryBookProgress, removeFileIfPresent, RpcError, type RpcContext } from "./shared";
 import type { BookRow } from "../app-types";
 
 const RELEASE_SEARCH_TTL_MS = 30 * 60 * 1000;
+const libraryListParamsSchema = emptyParamsSchema.extend({
+  limit: limitSchema.optional(), cursor: optionalPositiveIntSchema, q: optionalStringSchema,
+});
+const libraryPageSchema = z.object({
+  items: z.array(libraryBookWithPlaybackSchema), nextCursor: positiveIntSchema.optional(),
+});
+function readLibraryPage(ctx: RpcContext, params: z.output<typeof libraryListParamsSchema>): z.output<typeof libraryPageSchema> {
+  const result = ctx.repo.listBooks(params.limit ?? 50, params.cursor, params.q);
+  return { ...result, items: result.items.map((book) => enrichLibraryBookPlayback(ctx.repo, ctx.request, book)) };
+}
 
 const releaseSearchResultSchema = z.object({
   index: z.number().int().nonnegative(),
@@ -82,26 +93,23 @@ function normalizeSeriesKey(value: string | null): string | null {
 }
 
 export const libraryRouter = defineRouter({
+  bootstrap: defineMethod({
+    auth: "user",
+    readOnly: true,
+    summary: "Read the authenticated actor and first Library page in one request.",
+    paramsSchema: libraryListParamsSchema.omit({ cursor: true }).strict(),
+    resultSchema: authRouter.routes.me.resultSchema.and(z.object({ q: z.string(), library: libraryPageSchema })),
+    async handler(ctx, params) {
+      return { ...await authRouter.routes.me.handler(ctx, {}), q: params.q ?? "", library: readLibraryPage(ctx, params) };
+    },
+  }),
   list: defineMethod({
     auth: "user",
     readOnly: true,
     summary: "List books in the library.",
-    paramsSchema: emptyParamsSchema.extend({
-      limit: limitSchema.optional(),
-      cursor: optionalPositiveIntSchema,
-      q: optionalStringSchema,
-    }),
-    resultSchema: z.object({
-      items: z.array(libraryBookWithPlaybackSchema),
-      nextCursor: positiveIntSchema.optional(),
-    }),
-    async handler(ctx, params) {
-      const result = ctx.repo.listBooks(params.limit ?? 50, params.cursor, params.q);
-      return {
-        ...result,
-        items: result.items.map((book) => enrichLibraryBookPlayback(ctx.repo, ctx.request, book)),
-      };
-    },
+    paramsSchema: libraryListParamsSchema,
+    resultSchema: libraryPageSchema,
+    handler: readLibraryPage,
   }),
 
   get: defineMethod({

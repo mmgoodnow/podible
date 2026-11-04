@@ -282,6 +282,13 @@ export const appRouter = t.router({
       ),
   }),
   library: t.router({
+    bootstrap: procedure
+      .input(libraryRouter.routes.bootstrap.paramsSchema)
+      .output(libraryRouter.routes.bootstrap.resultSchema)
+      .query(async ({ ctx, input }) => {
+        const result = await executeMethod(libraryRouter.routes.bootstrap, ctx, input);
+        return { ...result, library: { ...result.library, items: result.library.items.map(freshArtwork) } };
+      }),
     create: procedure
       .input(libraryRouter.routes.create.paramsSchema)
       .output(libraryRouter.routes.create.resultSchema)

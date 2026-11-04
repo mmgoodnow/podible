@@ -33,7 +33,7 @@ try {
     page.on("response", (response) => {
       if (!response.url().includes("/api/trpc/") && !response.url().includes("/login/plex/start")) return;
       if (response.status() < 400) return;
-      if (response.status() === 401 && new URL(response.url()).pathname === "/api/trpc/auth.me") {
+      if (response.status() === 401 && ["/api/trpc/auth.me", "/api/trpc/library.bootstrap"].includes(new URL(response.url()).pathname)) {
         // The SPA checks its actor before sign-in and after logout; a session-bearing 401 is unexpected.
         networkChecks.push(response.request().allHeaders().then((headers) => {
           if (/(?:^|;\s*)podible_session=/.test(headers.cookie ?? "")) networkErrors.push(`${mode}: Authenticated request returned HTTP 401 ${response.url()}`);

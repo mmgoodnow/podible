@@ -45,7 +45,7 @@ export function createRequestContextMiddleware(repo: BooksRepo): MiddlewareHandl
       // Expiry/revocation were checked above. Activity bookkeeping is best-effort,
       // not a reason to fail an otherwise authenticated read during worker writes.
       try {
-        session = repo.touchSession(session.id) ?? session;
+        session = repo.touchSessionWithoutWaiting(session.id) ?? session;
       } catch (error) {
         if (!isWriteContention(error)) throw error;
       }

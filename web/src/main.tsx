@@ -1,5 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { useState } from "react";
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "../../src/trpc";
 import {
   QueryClient,
   QueryClientProvider,
@@ -30,9 +32,15 @@ const queryClient = new QueryClient({
 });
 
 function App() {
-  const route = useLocation().split("?")[0]!.replace(/\/+$/, "") || "/";
+  const currentLocation = useLocation();
+  const route = currentLocation.split("?")[0]!.replace(/\/+$/, "") || "/";
+  const libraryRoute = route === "/" || route === "/library";
   const trpc = useTRPC();
-  const session = useQuery(trpc.auth.me.queryOptions({}));
+  const identity = useQuery(trpc.auth.me.queryOptions({}, { enabled: !libraryRoute }));
+  const bootstrap = useQuery(trpc.library.bootstrap.queryOptions({
+    q: new URLSearchParams(currentLocation.split("?")[1] ?? "").get("q") ?? "", limit: 48,
+  }, { enabled: libraryRoute }));
+  const session = libraryRoute ? bootstrap : identity;
   if (route === "/login" || route === "/login/plex/loading" || route === "/login/plex/result")
     return <LoginScreen key={route} mode={route.endsWith("/loading") ? "loading" : route.endsWith("/result") ? "result" : "login"} />;
   return (
@@ -118,6 +126,7 @@ function App() {
           <ActorLibrary
             key={session.data.user.id}
             isAdmin={session.data.user.isAdmin}
+            initialLibrary={libraryRoute ? bootstrap.data : undefined}
           />
         )}
       </main>
@@ -128,7 +137,10 @@ function App() {
   );
 }
 
-function ActorLibrary({ isAdmin }: { isAdmin: boolean }) {
+function ActorLibrary({ isAdmin, initialLibrary }: {
+  isAdmin: boolean;
+  initialLibrary?: inferRouterOutputs<AppRouter>["library"]["bootstrap"];
+}) {
   const route =
     useLocation()
       .split("?")[0]!
@@ -180,7 +192,7 @@ function ActorLibrary({ isAdmin }: { isAdmin: boolean }) {
             kind={route === "/series" ? "series" : "author"}
           />
         ) : ["/", "/library"].includes(route) ? (
-          <Library />
+          <Library initialPage={initialLibrary} />
         ) : (
           <p>
             Page not found. <Link href="/library">Open library</Link>.
