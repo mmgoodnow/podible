@@ -34,6 +34,8 @@ settings.movies = {
 };
 repo.updateSettings(settings);
 if (process.env.ADMIN_FIXTURE) {
+  // Exercise a healthy-disk preview independently of the CI runner's free space.
+  settings.retention.minimumFreeBytes = 0;
   settings.feed.title = "Fixture library";
   settings.libraryRoot = path.join(root, "books");
   settings.tv.managedRoot = path.join(root, "tv-unavailable");
