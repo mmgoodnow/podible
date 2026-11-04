@@ -18,6 +18,9 @@ import { settingsRouter } from "./rpc/settings-router";
 import { jobsRouter } from "./rpc/jobs-router";
 import { downloadsRouter } from "./rpc/downloads-router";
 import { adminWebRouter } from "./rpc/admin-web-router";
+import { recoveryRouter } from "./rpc/recovery-router";
+import { catalogRouter } from "./rpc/catalog-router";
+import { stewardshipRouter } from "./rpc/stewardship-router";
 
 const t = initTRPC.context<RpcContext>().create();
 const id = z.number().int().positive();
@@ -59,6 +62,19 @@ const procedure = t.procedure.use(async ({ next }) => {
 });
 
 export const appRouter = t.router({
+  stewardship: t.router({
+    status: procedure.input(stewardshipRouter.routes.status.paramsSchema).output(stewardshipRouter.routes.status.resultSchema).query(({ ctx, input }) => executeMethod(stewardshipRouter.routes.status, ctx, input)),
+    collect: procedure.input(stewardshipRouter.routes.collect.paramsSchema).output(stewardshipRouter.routes.collect.resultSchema).mutation(({ ctx, input }) => executeMethod(stewardshipRouter.routes.collect, ctx, input)),
+  }),
+  catalog: t.router({
+    available: procedure.input(catalogRouter.routes.available.paramsSchema).output(catalogRouter.routes.available.resultSchema).query(({ ctx, input }) => executeMethod(catalogRouter.routes.available, ctx, input)),
+    tvEntry: procedure.input(catalogRouter.routes.tvEntry.paramsSchema).output(catalogRouter.routes.tvEntry.resultSchema).query(({ ctx, input }) => executeMethod(catalogRouter.routes.tvEntry, ctx, input)),
+  }),
+  recovery: t.router({
+    inventory: procedure.input(recoveryRouter.routes.inventory.paramsSchema).output(recoveryRouter.routes.inventory.resultSchema).query(({ ctx, input }) => executeMethod(recoveryRouter.routes.inventory, ctx, input)),
+    preview: procedure.input(recoveryRouter.routes.preview.paramsSchema).output(recoveryRouter.routes.preview.resultSchema).query(({ ctx, input }) => executeMethod(recoveryRouter.routes.preview, ctx, input)),
+    recover: procedure.input(recoveryRouter.routes.recover.paramsSchema).output(recoveryRouter.routes.recover.resultSchema).mutation(({ ctx, input }) => executeMethod(recoveryRouter.routes.recover, ctx, input)),
+  }),
   adminWeb: t.router({
     users: procedure.input(adminWebRouter.routes.users.paramsSchema).output(adminWebRouter.routes.users.resultSchema).query(({ ctx, input }) => executeMethod(adminWebRouter.routes.users, ctx, input)),
     plexServers: procedure.input(adminWebRouter.routes.plexServers.paramsSchema).output(adminWebRouter.routes.plexServers.resultSchema).query(({ ctx, input }) => executeMethod(adminWebRouter.routes.plexServers, ctx, input)),
@@ -81,6 +97,12 @@ export const appRouter = t.router({
     retry: procedure.input(downloadsRouter.routes.retry.paramsSchema).output(downloadsRouter.routes.retry.resultSchema).mutation(({ ctx, input }) => executeMethod(downloadsRouter.routes.retry, ctx, input)),
   }),
   tv: t.router({
+    search: procedure.input(tvRouter.routes.search.paramsSchema).output(tvRouter.routes.search.resultSchema).query(({ ctx, input }) => executeMethod(tvRouter.routes.search, ctx, input)),
+    details: procedure.input(tvRouter.routes.details.paramsSchema).output(tvRouter.routes.details.resultSchema).query(({ ctx, input }) => executeMethod(tvRouter.routes.details, ctx, input)),
+    request: procedure.input(tvRouter.routes.request.paramsSchema).output(tvRouter.routes.request.resultSchema).mutation(({ ctx, input }) => executeMethod(tvRouter.routes.request, ctx, input)),
+    myRequests: procedure.input(tvRouter.routes.myRequests.paramsSchema).output(tvRouter.routes.myRequests.resultSchema).query(({ ctx, input }) => executeMethod(tvRouter.routes.myRequests, ctx, input)),
+    myRequest: procedure.input(tvRouter.routes.myRequest.paramsSchema).output(tvRouter.routes.myRequest.resultSchema).query(({ ctx, input }) => executeMethod(tvRouter.routes.myRequest, ctx, input)),
+    withdraw: procedure.input(tvRouter.routes.withdraw.paramsSchema).output(tvRouter.routes.withdraw.resultSchema).mutation(({ ctx, input }) => executeMethod(tvRouter.routes.withdraw, ctx, input)),
     status: procedure.input(tvRouter.routes.status.paramsSchema).output(tvRouter.routes.status.resultSchema).query(({ ctx, input }) => executeMethod(tvRouter.routes.status, ctx, input)),
     list: procedure.input(tvRouter.routes.list.paramsSchema).output(tvRouter.routes.list.resultSchema).query(({ ctx, input }) => executeMethod(tvRouter.routes.list, ctx, input)),
     get: procedure.input(tvRouter.routes.get.paramsSchema).output(tvRouter.routes.get.resultSchema).query(({ ctx, input }) => executeMethod(tvRouter.routes.get, ctx, input)),

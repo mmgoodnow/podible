@@ -22,11 +22,13 @@ import { syncTvRequests } from "../tv/sync";
 import { reconcileTv } from "../tv/maintenance";
 import { matchTvFeed } from "../tv/feed";
 import { runRetentionCleanup } from "../media/retention-execution";
+import { processStewardshipCollection } from "../media/torrent-stewardship-worker";
 
 export type JobProcessResult = "done";
 
 /** Domain handlers are code, not a database execution-type enum. */
 export async function processJob(ctx: WorkerContext, job: JobRow): Promise<JobProcessResult> {
+  if (job.type === "torrent_stewardship_collect") return processStewardshipCollection(ctx, job, ctx.stewardshipAdapters);
   if (job.type === "retention_cleanup") return runRetentionCleanup(ctx, job, ctx.retentionAdapters);
   if (job.type === "tv_acquire") return acquireTv(ctx, job);
   if (job.type === "tv_sync") return syncTvRequests(ctx, job);

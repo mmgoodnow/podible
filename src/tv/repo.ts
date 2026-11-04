@@ -125,6 +125,22 @@ export class TvRepo {
     return row ? this.entry(row.id) : null;
   }
 
+  availableCatalog(query: string, limit: number) {
+    return (this.db.query(`SELECT e.id,e.catalog_key,e.metadata_json,COUNT(DISTINCT a.episode_id) AS availableEpisodes
+      FROM tv_entries e JOIN tv_targets t ON t.entry_id=e.id JOIN tv_active_episodes a ON a.target_id=t.id
+      WHERE instr(lower(json_extract(e.metadata_json,'$.title')),lower(?)) > 0
+        OR EXISTS(SELECT 1 FROM json_each(e.metadata_json,'$.aliases') alias WHERE instr(lower(alias.value),lower(?)) > 0)
+      GROUP BY e.id ORDER BY e.id DESC LIMIT ?`).all(query, query, limit) as { id: number; catalog_key: string; metadata_json: string; availableEpisodes: number }[])
+      .map(row => {
+        const metadata = tvCatalogEntrySchema.pick({ title: true, year: true }).parse(JSON.parse(row.metadata_json));
+        return { entryId: row.id, key: row.catalog_key, title: metadata.title,
+          year: metadata.year, availableEpisodes: row.availableEpisodes };
+      });
+  }
+  availableEpisodeCount(entryId: number): number {
+    return (this.db.query(`SELECT COUNT(DISTINCT a.episode_id) AS n FROM tv_active_episodes a
+      JOIN tv_targets t ON t.id=a.target_id WHERE t.entry_id=?`).get(entryId) as { n: number }).n;
+  }
   entries(): TvEntry[] {
     return (this.db.query("SELECT id FROM tv_entries ORDER BY id").all() as { id: number }[]).map((r) => this.entry(r.id)!);
   }

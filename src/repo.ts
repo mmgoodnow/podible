@@ -7,6 +7,7 @@ import { ReleaseInboxRepo } from "./media/release-inbox";
 import { BookTorrentsRepo } from "./media/book-torrents";
 import { TvRepo } from "./tv/repo";
 import { RetentionRepo } from "./media/retention-repo";
+import { readRecoveryInventory, type RecoveryReadInput } from "./media/recovery-query";
 import { TvShadowRepo } from "./tv/shadow-repo";
 
 import { nowIso, finalizeJobJournalMigration } from "./db";
@@ -397,6 +398,11 @@ export class BooksRepo {
   readSettings(): AppSettings | null {
     const row = this.db.query<{ value_json: string }, []>("SELECT value_json FROM settings WHERE id = 1").get();
     return row ? parseSettings(row.value_json) : null;
+  }
+
+  /** Bounded, read-only recovery joins; never initializes settings or lifecycle intent. */
+  readRecoveryInventory(input: RecoveryReadInput) {
+    return readRecoveryInventory(this.db, input);
   }
 
   getJsonState<T>(key: string): T | null {

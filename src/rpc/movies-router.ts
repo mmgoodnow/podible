@@ -67,16 +67,17 @@ export const moviesRouter = defineRouter({
     resultSchema: z.object({
       movie: catalogMovieSchema,
       requests: z.array(movieRequestViewSchema),
+      availableInLibrary: z.boolean(),
     }),
     async handler(ctx, input) {
-      const movie = await (
+      const movie = ctx.repo.movies.movieByTmdb(input.tmdbId) ?? await (
         ctx.movieServices?.catalog ?? movieCatalog(ctx.repo.getSettings())
       ).get(input.tmdbId);
       const requests = ctx.repo.movies
         .requests(ctx.session!.user_id)
         .map((r) => movieRequestView(ctx.repo, r.id))
         .filter((r) => r.movie.tmdbId === input.tmdbId);
-      return { movie, requests };
+      return { movie, requests, availableInLibrary: ctx.repo.movies.availableByTmdb(input.tmdbId) };
     },
   }),
   request: defineMethod({
@@ -85,7 +86,7 @@ export const moviesRouter = defineRouter({
     paramsSchema: z.object({ tmdbId: positiveIntSchema }),
     resultSchema: requestResult,
     async handler(ctx, input) {
-      const movie = await (
+      const movie = ctx.repo.movies.movieByTmdb(input.tmdbId) ?? await (
         ctx.movieServices?.catalog ?? movieCatalog(ctx.repo.getSettings())
       ).get(input.tmdbId);
       const result = ctx.repo.transaction(() => {

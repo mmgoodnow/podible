@@ -3,6 +3,8 @@ import { createJobExecutionRuntime } from "./worker/execution";
 import { randomUUID, createHash } from "node:crypto";
 import { INDEXER_FEED_INTERVAL_MS } from "./worker/indexer-feeds";
 import { RETENTION_PRESSURE_INTERVAL_MS } from "./media/retention-policy-types";
+import { STEWARDSHIP_INTERVAL_MS } from "./media/torrent-stewardship-types";
+import { hasTorrentStewardshipBindings } from "./media/torrent-stewardship";
 
 export { pollMsForMedia, selectDownloadPollMs } from "./worker/downloads";
 
@@ -31,8 +33,17 @@ export async function runWorker(
     let nextTvSync = 0;
     let nextTvMaintenance = 0;
     let nextRetention = 0;
+    let nextStewardship = 0;
     while (!ctx.shouldStop?.()) {
       try {
+        if (Date.now() >= nextStewardship) {
+          if (hasTorrentStewardshipBindings(ctx.repo)) ctx.repo.createJob({
+              type: "torrent_stewardship_collect",
+              idempotencyKey: `torrent-stewardship:${Math.floor(Date.now() / STEWARDSHIP_INTERVAL_MS)}`,
+              maxAttempts: 3,
+            });
+          nextStewardship = Date.now() + STEWARDSHIP_INTERVAL_MS;
+        }
         if (ctx.repo.hasBooks() && Date.now() >= nextBookMaintenance) {
           ctx.repo.createJob({
             type: "reconcile",

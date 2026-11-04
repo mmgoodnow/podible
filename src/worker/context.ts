@@ -17,6 +17,7 @@ export type WorkerContext = {
   tvFeedMatcher?: import("../tv/feed").TvFeedMatcher;
   bookTorrentClient?: import("../media/torrent-client").TorrentClient;
   retentionAdapters?: import("../media/retention-policy").RetentionAdapters;
+  stewardshipAdapters?: import("../media/torrent-stewardship").StewardshipAdapters;
   movieShadowServices?: import("../movies/shadow").MovieShadowServices;
   seerrSource?: import("../movies/seerr").SeerrSource;
   movieFeedMatcher?: import("../movies/agents").MovieFeedMatcher;

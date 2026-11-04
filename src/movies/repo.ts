@@ -77,6 +77,18 @@ export class MovieRepo {
         }
       : null;
   }
+  availableByTmdb(tmdbId: number): boolean {
+    return !!this.db.query(`SELECT 1 FROM movies m JOIN movie_targets t ON t.movie_id=m.id
+      WHERE m.tmdb_id=? AND t.active_version_id IS NOT NULL LIMIT 1`).get(tmdbId);
+  }
+  availableCatalog(query: string, limit: number): CatalogMovie[] {
+    return (this.db.query(`SELECT m.metadata_json FROM movies m
+      WHERE EXISTS(SELECT 1 FROM movie_targets t WHERE t.movie_id=m.id AND t.active_version_id IS NOT NULL)
+      AND (instr(lower(json_extract(m.metadata_json,'$.title')),lower(?)) > 0
+        OR instr(lower(json_extract(m.metadata_json,'$.originalTitle')),lower(?)) > 0)
+      ORDER BY m.id DESC LIMIT ?`).all(query, query, limit) as { metadata_json: string }[])
+      .map(row => catalogMovieSchema.parse(JSON.parse(row.metadata_json)));
+  }
   movieByTmdb(tmdbId: number): Movie | null {
     const row = this.db
       .query("SELECT id FROM movies WHERE tmdb_id=?")
