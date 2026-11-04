@@ -180,9 +180,9 @@ export class BookTorrentsRepo {
     })();
   }
 
-  use<T>(binding: BookTorrentBinding, bookId: number, action: () => Promise<T>) {
+  use<T>(binding: BookTorrentBinding, action: () => Promise<T>) {
     return withDatabaseTorrentUse(this.db, this.beforeWrite, { clientId: binding.client_id, infoHash: binding.info_hash },
-      `book-add:${bookId}`, action);
+      action);
   }
 }
 
@@ -400,7 +400,7 @@ export async function ensureBookTorrentAdded(
     });
   }
   const reserved = binding;
-  return repo.bookTorrents.use(reserved, bookId, async () => {
+  return repo.bookTorrents.use(reserved, async () => {
   let binding = reserved;
   const reclaim = binding.book_id !== bookId;
   if (

@@ -84,7 +84,7 @@ test("durable claim excludes the real producer wrapper and settings writer; safe
     const operationId = randomUUID();
     const service = new TorrentRetirement(s.repo, { ...s.adapters, afterCheckpoint: async stage => {
       if (stage !== "intent-committed") return;
-      await expect(withTorrentUse(s.repo, s.ref, "competing source", async () => { throw new Error("Producer must never enter I/O"); })).rejects.toThrow("retiring");
+      await expect(withTorrentUse(s.repo, s.ref, async () => { throw new Error("Producer must never enter I/O"); })).rejects.toThrow("retiring");
       expect(() => s.repo.updateSettings(s.repo.getSettings())).toThrow("retirement");
       throw new Error("Crash before dispatch");
     } });

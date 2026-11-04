@@ -217,7 +217,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
         active(); await assertMovieStorage(ctx.repo, roots.contentRoot);
         await fs.mkdir(sourceRoot, { recursive: true });
         if (await fs.realpath(sourceRoot) !== sourceRoot) throw new Error("TV download layout traverses a symlink");
-        return withTorrentUse(ctx.repo, { clientId: services.client.id, infoHash: metadata.infoHash }, `${acquisition.id}:${prefix}`, async () => {
+        return withTorrentUse(ctx.repo, { clientId: services.client.id, infoHash: metadata.infoHash }, async () => {
           const added = await services.client.ensureAdded({ metainfo, location });
           if (added.clientId !== services.client.id || added.nativeId.toLowerCase() !== metadata.infoHash)
             throw new Error("TV client returned another torrent identity");

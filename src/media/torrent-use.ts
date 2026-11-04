@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { admitTorrentUse, assertTorrentDatabaseWritable, finishTorrentUse, type TorrentRecordRef } from "./torrent-retirement-admission";
 
 function store(db: Database, beforeWrite: () => void) {
@@ -26,17 +26,16 @@ export function assertTorrentUseWritable(db: Database, ref: TorrentRecordRef) {
 
 /** Hold durable admission across async daemon I/O and binding acknowledgement. Unknown outcomes retain the token. */
 export async function withTorrentUse<T>(repo: Parameters<typeof admitTorrentUse>[0], ref: TorrentRecordRef,
-  operation: string, action: () => Promise<T>): Promise<T> {
+  action: () => Promise<T>): Promise<T> {
   if (!privateRef(ref)) return action();
-  const h = createHash("sha256").update(JSON.stringify([ref, operation])).digest("hex");
-  const operationId = `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
-  const token = admitTorrentUse(repo, ref, operationId);
+  // Logical retries can overlap: each invocation must retain independent protection.
+  const token = admitTorrentUse(repo, ref, randomUUID());
   const result = await action();
   finishTorrentUse(repo, ref, token);
   return result;
 }
 
 export function withDatabaseTorrentUse<T>(db: Database, beforeWrite: () => void, ref: TorrentRecordRef,
-  operation: string, action: () => Promise<T>) {
-  return withTorrentUse(store(db, beforeWrite), ref, operation, action);
+  action: () => Promise<T>) {
+  return withTorrentUse(store(db, beforeWrite), ref, action);
 }

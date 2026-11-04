@@ -311,7 +311,7 @@ export async function acquireMovie(
         await fs.chown(sourceRoot, -1, settings.movies.downloadGroupId);
         await fs.chmod(sourceRoot, 0o2770);
       }
-      return withTorrentUse(ctx.repo, { clientId: services.client.id, infoHash: metadata.infoHash }, `${acquisition.id}:${prefix}`, async () => {
+      return withTorrentUse(ctx.repo, { clientId: services.client.id, infoHash: metadata.infoHash }, async () => {
         const added = await services.client.ensureAdded({
           metainfo,
           location: binding.location,

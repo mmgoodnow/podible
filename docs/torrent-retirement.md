@@ -29,6 +29,15 @@ Parent producer integration must remain installed:
   write transaction. Relevant private-engine identity mutations must honor the
   same claim boundary. These guards perform no network I/O.
 
+The producer wrappers allocate a unique durable admission for **each invocation**,
+even when concurrent calls or retries have the same logical operation label.
+One success releases only its own admission, never another live call's token.
+Failed or ambiguous invocations retain their admission across successful retries;
+a later success alone does not prove that an earlier call has stopped or settled.
+This deliberately blocks orphan retirement until residual ambiguous admissions
+are explicitly reconciled. There is no automatic residual-token cleanup, TTL,
+or inference of safety from a matching operation label in this slice.
+
 An orphan has no current book, attached release, or release referencing its hash;
 or, for screen media, no movie/TV acquisition-download binding. Asset-file source,
 identity or content paths below the seed directory also block eligibility. The
