@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { hashSessionToken } from "../../src/auth";
+import { buildSessionCookie, createSessionToken, hashSessionToken } from "../../src/auth";
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { createPodibleFetchHandler } from "../../src/http";
@@ -16,6 +16,8 @@ import { factsFromMovieProbe } from "../../src/movies/probe";
 import { evaluateMovieQuality } from "../../src/movies/quality";
 import type { TvCatalogEntry } from "../../src/tv/types";
 import { tvShadowInputSchema } from "../../src/tv/shadow-types";
+import { createHash } from "node:crypto";
+import { safeReturnPath } from "../../src/redirects";
 
 const db = new Database(":memory:");
 runMigrations(db);
@@ -31,6 +33,54 @@ settings.movies = {
   plexViewPath: "/data/view",
 };
 repo.updateSettings(settings);
+if (process.env.ADMIN_FIXTURE) {
+  settings.feed.title = "Fixture library";
+  settings.libraryRoot = path.join(root, "books");
+  settings.tv.managedRoot = path.join(root, "tv-unavailable");
+  settings.auth.plex = { ...settings.auth.plex, ownerToken: "admin-fixture-owner-secret", machineId: "fixture-mendel" };
+  settings.agents.apiKey = "admin-fixture-agent-secret";
+  settings.rtorrent.url = "http://admin-fixture.invalid/RPC2";
+  await fs.mkdir(settings.libraryRoot);
+  repo.updateSettings(settings);
+  const servers = [
+    { machineId: "fixture-mendel", name: "Mendel", product: "Plex Media Server", owned: true, sourceTitle: null },
+    { machineId: "fixture-cyprus", name: "Cyprus", product: "Plex Media Server", owned: false, sourceTitle: "Fixture owner" },
+  ];
+  repo.setJsonState("plex_server_devices", {
+    ownerTokenHash: createHash("sha256").update(settings.auth.plex.ownerToken).digest("hex"),
+    fetchedAtMs: Date.now(), servers: servers.map((server) => ({ ...server, accessToken: "admin-fixture-server-secret" })),
+  });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
+    const url = new URL(args[0] instanceof Request ? args[0].url : String(args[0]));
+    if (url.origin === "https://plex.tv" && url.pathname === "/api/resources") return new Response(`<MediaContainer>${servers.map((server) =>
+      `<Device clientIdentifier="${server.machineId}" name="${server.name}" product="${server.product}" owned="${server.owned ? "1" : "0"}" provides="server" accessToken="admin-fixture-server-secret" />`).join("")}</MediaContainer>`,
+      { headers: { "Content-Type": "application/xml" } });
+    throw new Error("Admin fixture forbids provider network access");
+  }, { preconnect: realFetch.preconnect });
+  const viewer = repo.upsertUser({ provider: "local", providerUserId: "admin-browser-reader", username: "Fixture reader", displayName: "Actual Reader", isAdmin: false });
+  repo.createSession(viewer.id, hashSessionToken("admin-reader-fixture"), null, "browser");
+  const activeBook = repo.createBook({ title: "Fixture Active Book", author: "Operational author" });
+  repo.createJob({ type: "acquire", bookId: activeBook.id, payload: { media: ["audio"] }, status: "queued", nextRunAt: new Date(Date.now() + 600_000).toISOString() });
+  const downloadBook = repo.createBook({ title: "Fixture Active Download", author: "Operational author" });
+  const release = repo.createRelease({ bookId: downloadBook.id, provider: "Fixture provider", title: "Fixture audiobook", mediaType: "audio",
+    infoHash: "a".repeat(40), url: "https://provider.invalid/private-torrent", status: "downloading" });
+  repo.createJob({ type: "download", bookId: downloadBook.id, releaseId: release.id, status: "queued", nextRunAt: new Date(Date.now() + 600_000).toISOString() });
+  const failedBook = repo.createBook({ title: "Fixture Import Failure", author: "Operational author" });
+  const failed = repo.createJob({ type: "import", bookId: failedBook.id, status: "failed", maxAttempts: 1 });
+  db.query("UPDATE jobs SET error=?,attempt_count=1 WHERE id=?").run("Invalid import from https://provider.invalid/?token=admin-fixture-provider-secret", failed.id);
+  const delayedBook = repo.createBook({ title: "Fixture Automatic Retry", author: "Operational author" });
+  const delayed = repo.createJob({ type: "acquire", bookId: delayedBook.id, nextRunAt: new Date(Date.now() + 300_000).toISOString(), payload: { media: ["audio"] } });
+  db.query("UPDATE jobs SET error=?,attempt_count=1 WHERE id=?").run("HTTP 429 cooldown from https://provider.invalid/?token=admin-fixture-provider-secret", delayed.id);
+  const waiting = repo.movies.request(viewer.id, { ...fixtureMovie, tmdbId: 202, title: "Fixture Waiting For Offers" }, settings.movies.qualityPolicy);
+  const acquisition = repo.movies.startAcquisition(waiting.targetId, "initial", (id) =>
+    repo.createJob({ type: "movie_acquire", payload: { acquisitionId: id }, status: "succeeded" }).id).acquisition;
+  repo.movies.event(waiting.targetId, acquisition.id, "admin-browser-waiting", "waiting", "No suitable release yet; monitoring feed offers automatically");
+  repo.movies.finishAcquisition(acquisition.id);
+  repo.releaseInbox.ensureFeed("admin-fixture-feed", "Fixture provider", "movie", new Date().toISOString());
+  repo.releaseInbox.fail("admin-fixture-feed", { provider: "Fixture provider", kind: "unavailable", status: 429,
+    retryAt: Date.now() + 180_000, message: "HTTP 429 cooldown; provider retry data recorded" }, new Date().toISOString());
+}
 if (process.env.SHADOW_FIXTURE) {
   settings.prowlarr={url:"https://fixture-prowlarr.invalid",apiKey:"fixture-private-key"};
   settings.movies.shadow.enabled = true;
@@ -111,7 +161,7 @@ const runtime = await createJobExecutionRuntime(
 let pumping = false;
 const interval = setInterval(async () => {
   // TV browser actions exercise real queue receipts, never external acquisition.
-  if (pumping || process.env.TV_FIXTURE) return;
+  if (pumping || process.env.TV_FIXTURE || process.env.ADMIN_FIXTURE || process.env.AUTH_FIXTURE) return;
   pumping = true;
   try {
     await runtime.reconcile();
@@ -123,7 +173,7 @@ const user = repo.upsertUser({
   provider: "local",
   providerUserId: "spa-fixture",
   username: "reader",
-  isAdmin: Boolean(process.env.SHADOW_FIXTURE || process.env.TV_FIXTURE),
+  isAdmin: Boolean(process.env.SHADOW_FIXTURE || process.env.TV_FIXTURE || process.env.ADMIN_FIXTURE),
 });
 repo.createSession(
   user.id,
@@ -140,11 +190,44 @@ for (const [title, author] of [
 const handler = createPodibleFetchHandler(repo, Date.now(), null, {
   movieServices: fixture.services,
 });
+const authFixture = { mode: "success", starts: 0, callbacks: 0 };
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: Number(process.env.PORT ?? 0),
-  fetch(request) {
-    const pathname = new URL(request.url).pathname;
+  async fetch(request) {
+    const url = new URL(request.url), pathname = url.pathname;
+    if (process.env.AUTH_FIXTURE) {
+      if (pathname === "/__fixture/auth-mode" && request.method === "POST") {
+        const input = await request.json() as { mode?: string };
+        if (!["success", "error", "no-cookie", "start-error", "invalid-origin"].includes(input.mode ?? "")) return new Response("Invalid fixture mode", { status: 400 });
+        authFixture.mode = input.mode!;
+        return Response.json({ ok: true });
+      }
+      if (pathname === "/__fixture/auth-state" && request.method === "GET") return Response.json(authFixture);
+      if (pathname === "/login/plex/start" && request.method === "POST") {
+        authFixture.starts++;
+        if (authFixture.mode === "start-error") return Response.json({ error: "Fixture could not start Plex sign-in" }, { status: 502, headers: { "Cache-Control": "no-store" } });
+        const callback = new URL("/__fixture/auth-callback", url);
+        callback.searchParams.set("mode", authFixture.mode);
+        callback.searchParams.set("redirectTo", safeReturnPath(url.searchParams.get("redirectTo")) ?? "/");
+        const auth = new URL(authFixture.mode === "invalid-origin" ? "https://untrusted.invalid/auth" : "https://app.plex.tv/auth");
+        auth.hash = "?" + new URLSearchParams({ forwardUrl: callback.href, code: "fixture-only" });
+        return Response.json({ pinId: 1, authUrl: auth.href }, { headers: { "Cache-Control": "no-store" } });
+      }
+      if (pathname === "/__fixture/auth-callback" && request.method === "GET") {
+        authFixture.callbacks++;
+        const mode = url.searchParams.get("mode"), ok = mode === "success" || mode === "no-cookie";
+        const params = new URLSearchParams({ ok: ok ? "1" : "0", redirectTo: safeReturnPath(url.searchParams.get("redirectTo")) ?? "/" });
+        if (!ok) params.set("error", "Fixture Plex sign-in denied");
+        const headers = new Headers({ Location: `/login/plex/result?${params}`, "Cache-Control": "no-store" });
+        if (mode === "success") {
+          const token = createSessionToken();
+          repo.createSession(user.id, hashSessionToken(token), null, "browser");
+          headers.append("Set-Cookie", buildSessionCookie(token, request));
+        }
+        return new Response(null, { status: 303, headers });
+      }
+    }
     if (request.method === "POST" && pathname === "/__fixture/add-release") {
       fixture.addOffer("manual", 1280);
       return Response.json({ ok: true });

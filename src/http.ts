@@ -57,8 +57,16 @@ export function createPodibleFetchHandler(
     "/movie-dual-write",
     "/tv-sync",
     "/retention",
-  ])
+    "/settings",
+    "/users",
+    "/ops",
+    "/login",
+    "/login/plex/loading",
+    "/login/plex/result",
+  ]) {
     app.get(route, (c) => spa.fetch(c.req.raw));
+    if (route !== "/") app.get(`${route}/`, (c) => spa.fetch(c.req.raw));
+  }
   app.route("/login", createLoginRoutes(repo));
   app.route("/logout", createLogoutRoutes(repo));
   app.route("/auth/app", createAppAuthRoutes(repo));

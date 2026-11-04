@@ -34,8 +34,7 @@ export function MovieSearch() {
   });
   return (
     <>
-      <span className="eyebrow">MOVIE NIGHT, SORTED</span>
-      <h1>Find your next feature.</h1>
+      <div className="library-toolbar"><h1>Movies</h1></div>
       <form
         className="movie-search"
         onSubmit={(event) => {

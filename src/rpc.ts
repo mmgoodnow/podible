@@ -27,6 +27,7 @@ import { indexerFeedsRouter } from "./rpc/indexer-feeds-router";
 import { tvShadowRouter } from "./rpc/tv-shadow-router";
 import { retentionRouter } from "./rpc/retention-router";
 import { tvRouter } from "./rpc/tv-router";
+import { adminWebRouter } from "./rpc/admin-web-router";
 
 function response(payload: RpcSuccess | RpcFailure): Response {
   return new Response(JSON.stringify(payload, null, 2), {
@@ -78,6 +79,7 @@ const rootRouter = defineRouter({
   tvShadow: tvShadowRouter,
   retention: retentionRouter,
   tv: tvRouter,
+  adminWeb: adminWebRouter,
 });
 methodsByName = flattenRouter(rootRouter);
 

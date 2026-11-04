@@ -124,7 +124,6 @@ export function RetentionAudit() {
     retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false,
   }));
   return <>
-    <span className="eyebrow">ADMINISTRATOR / STORAGE EVIDENCE</span>
     <h1>Retention audit</h1>
     <section className="panel" aria-label="Read-only audit mode">
       <h2>Read-only / audit only</h2>

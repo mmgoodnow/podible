@@ -10,6 +10,8 @@ import { Link, useLocation } from "./router";
 import { MovieSync } from "./movie-sync";
 import { TvSync } from "./tv-sync";
 import { RetentionAudit } from "./retention";
+import { SettingsPage, UsersPage, OpsPage } from "./admin";
+import { LoginScreen } from "./auth";
 import { Library, Catalog, BookCollection } from "./books";
 import { BookDetail } from "./book-detail";
 import {
@@ -28,11 +30,11 @@ const queryClient = new QueryClient({
 });
 
 function App() {
-  const route =
-    useLocation()
-      .split("?")[0]! || "/";
+  const route = useLocation().split("?")[0]!.replace(/\/+$/, "") || "/";
   const trpc = useTRPC();
   const session = useQuery(trpc.auth.me.queryOptions({}));
+  if (route === "/login" || route === "/login/plex/loading" || route === "/login/plex/result")
+    return <LoginScreen key={route} mode={route.endsWith("/loading") ? "loading" : route.endsWith("/result") ? "result" : "login"} />;
   return (
     <div className="shell">
       <header>
@@ -74,15 +76,16 @@ function App() {
               Movie sync
             </Link>
           )}
-          {session.data?.user.isAdmin && <a href="/admin/settings">Settings</a>}
+          {session.data?.user.isAdmin && <Link href="/settings" aria-current={route === "/settings" ? "page" : undefined}>Settings</Link>}
+          {session.data?.user.isAdmin && <Link href="/ops" aria-current={route === "/ops" ? "page" : undefined}>Ops</Link>}
           {session.data?.user.isAdmin && <Link href="/tv-sync" aria-current={route === "/tv-sync" ? "page" : undefined}>TV sync</Link>}
           {session.data?.user.isAdmin && <Link href="/retention" aria-current={route === "/retention" ? "page" : undefined}>Retention</Link>}
         </nav>
-        {session.data && <a href="/logout">Sign out</a>}
+        {session.data && <form method="post" action="/logout"><button type="submit">Sign out</button></form>}
       </header>
       <main
         className={
-          (["/", "/library", "/add", "/movie-dual-write", "/tv-sync"].includes(route) || route.startsWith("/requests"))
+          (["/", "/library", "/add", "/movie-dual-write", "/tv-sync", "/retention", "/settings", "/users", "/ops"].includes(route) || route.startsWith("/requests"))
             ? "compact-main"
             : undefined
         }
@@ -91,8 +94,7 @@ function App() {
           <p role="status">Checking your session...</p>
         ) : session.isError ? (
           <section className="welcome">
-            <span className="eyebrow">YOUR NEXT CHAPTER</span>
-            <h1>Make yourself at home.</h1>
+            <div className="library-toolbar"><h1>{session.error.data?.code === "UNAUTHORIZED" ? "Sign in" : "Connection unavailable"}</h1></div>
             {session.error.data?.code === "UNAUTHORIZED" ? (
               <>
                 <p>Sign in to open your library.</p>
@@ -140,7 +142,10 @@ function ActorLibrary({ isAdmin }: { isAdmin: boolean }) {
   return (
     <QueryClientProvider client={actorClient}>
       <TRPCProvider trpcClient={rpc} queryClient={actorClient}>
-        {route === "/retention" ? (
+        {["/settings", "/users", "/ops"].includes(route) ? (
+          isAdmin ? (route === "/settings" ? <SettingsPage /> : route === "/users" ? <UsersPage /> : <OpsPage />)
+            : <p role="alert">Administrator access required.</p>
+        ) : route === "/retention" ? (
           isAdmin ? <RetentionAudit /> : <p role="alert">Administrator access required.</p>
         ) : route === "/tv-sync" ? (
           isAdmin ? <TvSync /> : <p role="alert">Administrator access required.</p>

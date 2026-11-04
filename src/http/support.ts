@@ -1,4 +1,4 @@
-import { buildSessionCookie, createSessionToken, hashSessionToken } from "../auth";
+import { createSessionToken, hashSessionToken } from "../auth";
 import {
   checkPlexUserAccess,
   exchangePlexPinForToken,
@@ -6,23 +6,12 @@ import {
 } from "../plex";
 
 import { BooksRepo } from "../repo";
-import type { AppSettings, PlexJwk, SessionWithUserRow } from "../app-types";
+import type { AppSettings, PlexJwk } from "../app-types";
 
 import {
   addApiKey,
-  escapeHtml,
-  renderAppPage,
   sanitizeRedirectPath,
 } from "./common";
-
-function renderPlexLoadingPage(settings: AppSettings, apiKey: string | null = null): Response {
-  const body = `
-    <section class="hero">
-      <h1>Plex sign-in</h1>
-      <p>Finish the Plex sign-in flow in this window. Podible will continue automatically when Plex redirects back.</p>
-    </section>`;
-  return renderAppPage("Plex sign in", body, settings, null, "", apiKey);
-}
 
 async function waitForPlexLoginResult(
   repo: BooksRepo,
@@ -49,48 +38,6 @@ async function waitForPlexLoginResult(
     error: "Timed out waiting for Plex sign-in.",
     redirectTo: "/login",
   };
-}
-
-function renderPlexImmediateResultPage(
-  result: { ok: boolean; redirectTo: string; error?: string | null }
-): Response {
-  const payload = JSON.stringify({
-    type: "podible-plex-login",
-    ok: result.ok,
-    redirectTo: result.redirectTo,
-    error: result.error ?? null,
-  });
-  return new Response(
-    `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Plex sign-in complete</title>
-  </head>
-  <body style="font-family: ui-sans-serif, system-ui, sans-serif; padding: 24px;">
-    <p>${escapeHtml(result.ok ? "Sign-in complete. You can close this window." : result.error ?? "Plex sign-in failed.")}</p>
-    <script>
-      (function () {
-        var payload = ${payload};
-        if (window.opener && !window.opener.closed) {
-          window.opener.postMessage(payload, window.location.origin);
-          ${result.ok ? "window.close();" : ""}
-        } else if (payload.ok && payload.redirectTo) {
-          window.location.href = payload.redirectTo;
-        }
-      })();
-    </script>
-  </body>
-</html>`,
-    {
-      status: result.ok ? 200 : 400,
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": "no-store",
-      },
-    }
-  );
 }
 
 async function resolvePlexLoginStatus(
@@ -265,7 +212,5 @@ async function resolvePlexLoginStatus(
 }
 
 export {
-  renderPlexImmediateResultPage,
-  renderPlexLoadingPage,
   waitForPlexLoginResult,
 };

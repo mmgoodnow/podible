@@ -1,0 +1,407 @@
+import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { createHash, randomUUID } from "node:crypto";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { runMigrations, finalizeJobJournalMigration } from "../../src/db";
+import { BooksRepo } from "../../src/repo";
+import { createAdminWebRouter, normalizedAdminError } from "../../src/rpc/admin-web-router";
+import { executeMethod, flattenRouter } from "../../src/rpc/framework";
+import type { RpcContext } from "../../src/rpc/shared";
+import type { JobLifecycle } from "../../src/worker/job-journal";
+import type { PlexServerDevice } from "../../src/plex";
+import { defaultMovieQualityPolicy } from "../../src/movies/quality";
+import { prepareMovieStorage } from "../../src/movies/storage";
+
+const NOW = Date.parse("2026-11-04T12:00:00.000Z");
+const ownerToken = "private-owner-credential";
+const providerKey = "private-provider-key";
+const secretUrl = `https://private.invalid/api?apikey=${providerKey}`;
+const server = (machineId = "server-a", overrides: Partial<PlexServerDevice> = {}): PlexServerDevice => ({
+  machineId, name: `Plex ${machineId}`, product: "Plex Media Server", owned: true, provides: ["server"],
+  accessToken: "private-server-credential", sourceTitle: null, ...overrides,
+});
+async function fixture() {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "admin-web-")));
+  const db = new Database(":memory:");
+  runMigrations(db);
+  finalizeJobJournalMigration(db);
+  const repo = new BooksRepo(db);
+  const lifecycle = new Map<string, JobLifecycle>();
+  repo.bindJobJournalReader({ read: (ids) => new Map(ids.filter((key) => lifecycle.has(key)).map((key) => [key, lifecycle.get(key)!])) });
+  const user = repo.upsertUser({ provider: "plex", providerUserId: "private-provider-user-id", username: "admin", displayName: "Administrator", isAdmin: true });
+  repo.createSession(user.id, "private-session-hash", null, "browser");
+  const settings = repo.getSettings();
+  settings.auth.plex.ownerToken = ownerToken;
+  settings.auth.plex.machineId = "server-a";
+  settings.prowlarr = { url: "https://private.invalid", apiKey: providerKey };
+  settings.libraryRoot = path.join(root, "books");
+  settings.movies.managedRoot = path.join(root, "movies");
+  settings.tv.managedRoot = path.join(root, "missing-tv-mount");
+  await fs.mkdir(settings.libraryRoot);
+  repo.updateSettings(settings);
+  await prepareMovieStorage(repo, path.join(settings.movies.managedRoot, "objects"));
+  const ctx: RpcContext = { repo, startTime: NOW, request: new Request("https://podible.invalid/rpc"),
+    session: { user_id: user.id, is_admin: 1 } as RpcContext["session"] };
+  let now = NOW;
+  let fetches = 0;
+  let fetcher: (input: typeof settings) => Promise<PlexServerDevice[]> = async () => [server(), server("server-b", { owned: false, sourceTitle: "Shared owner" })];
+  const router = createAdminWebRouter({ now: () => now, fetchPlexServers: async (input) => { fetches++; return fetcher(input); } });
+  const setLifecycle = (jobId: number, patch: Partial<JobLifecycle>) => {
+    const key = repo.getJobExecution(jobId)?.run_id ?? `fixture:${jobId}`;
+    const value = { status: "queued" as const, error: null, attempt_count: 0, next_run_at: null, updated_at: new Date(now).toISOString(), ...lifecycle.get(key), ...patch };
+    lifecycle.set(key, value);
+    repo.attachJobExecution(jobId, key);
+  };
+  const job = (input: Parameters<BooksRepo["createJob"]>[0], patch: Partial<JobLifecycle> = {}) => {
+    const row = repo.createJob(input); setLifecycle(row.id, patch); return repo.getJob(row.id)!;
+  };
+  const cache = (ageMs = 0, token = ownerToken, devices = [server()]) => repo.setJsonState("plex_server_devices", {
+    ownerTokenHash: createHash("sha256").update(token).digest("hex"), fetchedAtMs: now - ageMs, servers: devices,
+  });
+  return { root, db, repo, settings, user, ctx, router, job, setLifecycle, cache, lifecycle,
+    fetches: () => fetches, setFetcher: (next: typeof fetcher) => { fetcher = next; }, setNow: (value: number) => { now = value; },
+    async [Symbol.asyncDispose]() { db.close(); await fs.rm(root, { recursive: true, force: true }); },
+  };
+}
+type Fixture = Awaited<ReturnType<typeof fixture>>;
+function movieAcquisition(f: Fixture, n: number, status: JobLifecycle["status"] = "running") {
+  const requested = f.repo.movies.request(f.user.id, { tmdbId: n, title: `Movie ${n}`, originalTitle: `Movie ${n}`, year: 2024,
+    overview: "", originalLanguage: "en", imdbId: null, posterUrl: null }, defaultMovieQualityPolicy);
+  const acquisition = f.repo.movies.startAcquisition(requested.targetId, "initial", () => f.job({ type: "movie_acquire" }, { status }).id).acquisition;
+  return { ...requested, acquisition };
+}
+
+describe("admin web authorization and metadata", () => {
+  test("only five scoped methods exist; every method rejects missing/non-admin sessions before effects", async () => {
+    await using f = await fixture();
+    expect(Object.keys(f.router.routes)).toEqual(["users", "plexServers", "selectPlexServer", "ops", "refresh"]);
+    for (const [name, method] of Object.entries(flattenRouter(f.router))) {
+      const input = name === "selectPlexServer" ? { machineId: "server-a" } : {};
+      await expect(executeMethod(method, { ...f.ctx, session: null }, input)).rejects.toMatchObject({ code: -32001 });
+      await expect(executeMethod(method, { ...f.ctx, session: { user_id: f.user.id, is_admin: 0 } as RpcContext["session"] }, input)).rejects.toMatchObject({ code: -32003 });
+    }
+    expect(f.fetches()).toBe(0);
+    expect(f.repo.listJobCommands()).toEqual([]);
+    expect(f.router.routes.users.readOnly).toBe(true);
+    expect(f.router.routes.plexServers.readOnly).toBe(true);
+    expect(f.router.routes.ops.readOnly).toBe(true);
+    expect(f.router.routes.refresh.readOnly).toBe(false);
+    expect(f.router.routes.selectPlexServer.readOnly).toBe(false);
+    await expect(executeMethod(f.router.routes.ops, f.ctx, { table: "users" })).rejects.toMatchObject({ code: -32602 });
+    await expect(executeMethod(f.router.routes.refresh, f.ctx, { type: "acquire", maxAttempts: 999 })).rejects.toMatchObject({ code: -32602 });
+  });
+
+  test("users returns explicit metadata only, with no account IDs, sessions, settings, or writes", async () => {
+    await using f = await fixture();
+    const before = f.db.query("SELECT total_changes() AS n").get();
+    const result = await executeMethod(f.router.routes.users, f.ctx, {});
+    expect(result.users).toHaveLength(1);
+    expect(result.users[0]).toMatchObject({ id: f.user.id, provider: "plex", username: "admin", displayName: "Administrator", isAdmin: true });
+    expect(Object.keys(result.users[0]!).sort()).toEqual(["createdAt", "displayName", "id", "isAdmin", "provider", "updatedAt", "username"]);
+    expect(JSON.stringify(result)).not.toMatch(/private-|token|credential|session|provider_user_id/);
+    expect(f.db.query("SELECT total_changes() AS n").get()).toEqual(before);
+  });
+});
+
+describe("Plex discovery and exact selection", () => {
+  test("current owner cache is reused, strips old cached access tokens, and preserves selected server", async () => {
+    await using f = await fixture();
+    f.cache();
+    const result = await executeMethod(f.router.routes.plexServers, f.ctx, {});
+    expect(result).toMatchObject({ ownerTokenConfigured: true, ownerTokenExpired: null, selectedMachineId: "server-a", source: "cache", error: null });
+    expect(result.servers[0]).toEqual({ machineId: "server-a", name: "Plex server-a", product: "Plex Media Server", owned: true, sourceTitle: null });
+    expect(f.fetches()).toBe(0);
+    expect(JSON.stringify(result)).not.toMatch(/private-|accessToken|ownerTokenHash/);
+  });
+
+  test("fresh discovery uses existing owner settings, filters client devices, and stores metadata only", async () => {
+    await using f = await fixture();
+    f.setFetcher(async (settings) => {
+      expect(settings.auth.plex.ownerToken).toBe(ownerToken);
+      return [server(), server("client", { provides: ["player"] }), server("server-b", { name: `Name ${secretUrl}`, sourceTitle: ownerToken })];
+    });
+    const result = await executeMethod(f.router.routes.plexServers, f.ctx, {});
+    expect(result.source).toBe("fresh");
+    expect(result.servers).toHaveLength(2);
+    expect(result.selectedMachineId).toBe("server-a");
+    expect(JSON.stringify(result)).not.toContain(providerKey);
+    expect(JSON.stringify(result)).not.toContain(ownerToken);
+    expect(JSON.stringify(result)).not.toContain("https://");
+    const cached = JSON.stringify(f.repo.getJsonState("plex_server_devices"));
+    expect(cached).not.toContain("private-server-credential");
+    expect(cached).not.toContain("accessToken");
+  });
+
+  test("failed discovery labels stale cache and never reuses another owner identity's cache", async () => {
+    await using f = await fixture();
+    f.cache(6 * 60_000);
+    f.setFetcher(async () => { throw new Error(`HTTP 503 ${secretUrl} ${ownerToken}`); });
+    let result = await executeMethod(f.router.routes.plexServers, f.ctx, {});
+    expect(result.source).toBe("stale-cache");
+    expect(result.error).toContain("discovery failed");
+    expect(result.servers).toHaveLength(1);
+    const settings = f.repo.getSettings(); settings.auth.plex.ownerToken = "rotated-owner"; f.repo.updateSettings(settings);
+    result = await executeMethod(f.router.routes.plexServers, f.ctx, {});
+    expect(result.source).toBe("unavailable");
+    expect(result.servers).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain(providerKey);
+    expect(JSON.stringify(result)).not.toContain("private.invalid");
+  });
+
+  test("absent token performs no lookup; token expiry is metadata, not an exposed credential", async () => {
+    await using f = await fixture();
+    let settings = f.repo.getSettings(); settings.auth.plex.ownerToken = ""; f.repo.updateSettings(settings);
+    expect(await executeMethod(f.router.routes.plexServers, f.ctx, {})).toMatchObject({ source: "not-configured", ownerTokenConfigured: false, ownerTokenExpired: null });
+    expect(f.fetches()).toBe(0);
+    settings = f.repo.getSettings();
+    settings.auth.plex.ownerToken = `e30.${Buffer.from(JSON.stringify({ exp: 1 })).toString("base64url")}.signature`;
+    f.repo.updateSettings(settings);
+    expect((await executeMethod(f.router.routes.plexServers, f.ctx, {})).ownerTokenExpired).toBe(true);
+  });
+
+  test("selection validates fresh exact server IDs, not arbitrary or cache-only IDs", async () => {
+    await using f = await fixture();
+    f.cache(0, ownerToken, [server("cache-only")]);
+    f.setFetcher(async () => [server(), server("client-only", { provides: ["player"] })]);
+    for (const machineId of ["cache-only", "client-only", "unknown", "server-a ", secretUrl])
+      await expect(executeMethod(f.router.routes.selectPlexServer, f.ctx, { machineId })).rejects.toMatchObject({ code: -32602 });
+    expect(f.repo.getSettings().auth.plex.machineId).toBe("server-a");
+    await expect(executeMethod(f.router.routes.selectPlexServer, f.ctx, { machineId: "server-a", settings: {} })).rejects.toMatchObject({ code: -32602 });
+    f.setFetcher(async () => [server(), server()]);
+    await expect(executeMethod(f.router.routes.selectPlexServer, f.ctx, { machineId: "server-a" })).rejects.toMatchObject({ code: -32602 });
+  });
+
+  test("selection preserves unrelated concurrent settings edits and returns only selected ID", async () => {
+    await using f = await fixture();
+    f.setFetcher(async () => {
+      const current = f.repo.getSettings(); current.feed.title = "Concurrent title";
+      current.movies.plexToken = "shared-movie-plex-credential"; f.repo.updateSettings(current);
+      return [server("server-b", { owned: false, sourceTitle: "Shared account" })];
+    });
+    expect(await executeMethod(f.router.routes.selectPlexServer, f.ctx, { machineId: "server-b" })).toEqual({ selectedMachineId: "server-b" });
+    const settings = f.repo.getSettings();
+    expect(settings.feed.title).toBe("Concurrent title");
+    expect(settings.movies.plexToken).toBe("shared-movie-plex-credential");
+    expect(settings.auth.plex.ownerToken).toBe(ownerToken);
+    expect(settings.prowlarr).toEqual(f.settings.prowlarr);
+    expect(settings.auth.plex.machineId).toBe("server-b");
+  });
+
+  test("owner rotation and a failed atomic cache write cannot commit a stale or partial selection", async () => {
+    await using f = await fixture();
+    f.setFetcher(async () => {
+      const settings = f.repo.getSettings(); settings.auth.plex.ownerToken = "rotated-owner"; f.repo.updateSettings(settings);
+      return [server("server-b")];
+    });
+    await expect(executeMethod(f.router.routes.selectPlexServer, f.ctx, { machineId: "server-b" })).rejects.toMatchObject({ code: -32000 });
+    expect(f.repo.getSettings().auth.plex.machineId).toBe("server-a");
+    expect(f.repo.getJsonState("plex_server_devices")).toBeNull();
+    f.setFetcher(async () => [server("server-b")]);
+    f.db.exec(`CREATE TRIGGER block_plex_cache BEFORE INSERT ON app_state WHEN NEW.key='plex_server_devices'
+      BEGIN SELECT RAISE(ABORT, 'cache unavailable'); END`);
+    await expect(executeMethod(f.router.routes.selectPlexServer, f.ctx, { machineId: "server-b" })).rejects.toThrow("cache unavailable");
+    expect(f.repo.getSettings().auth.plex.machineId).toBe("server-a");
+  });
+});
+
+describe("operational facts from the execution authority", () => {
+  test("Ops leads real active work, recorded downloads, failures, scheduled retries and feed cooldowns", async () => {
+    await using f = await fixture();
+    const book = f.repo.createBook({ title: "Book in flight", author: "Writer" });
+    const wake = new Date(NOW + 60_000).toISOString();
+    f.job({ type: "acquire", bookId: book.id }, { status: "running" });
+    const download = f.job({ type: "download", bookId: book.id }, { next_run_at: wake });
+    const failed = f.job({ type: "import", bookId: book.id }, { status: "failed", error: `bad import ${secretUrl}`, attempt_count: 2 });
+    const retry = f.job({ type: "metadata_hydration" }, { status: "queued", next_run_at: wake, error: `HTTP 503 ${secretUrl}`, attempt_count: 1 });
+    const movie = movieAcquisition(f, 101);
+    const torrentId = f.repo.movies.bindDownload(movie.acquisition.id, { clientId: "private-client", nativeId: "a".repeat(40) }, { rootId: "movies", relativePath: "owned" }, "offer");
+    f.repo.movies.observeDownload(torrentId, { ref: { clientId: "private-client", nativeId: "a".repeat(40) }, location: { rootId: "movies", relativePath: "owned" },
+      state: "downloading", complete: false, bytesDone: 40, sizeBytes: 100, downloadBytesPerSecond: 5, message: secretUrl, observedAt: new Date(NOW).toISOString() });
+    f.repo.releaseInbox.ensureFeed("feed", `Provider ${secretUrl}`, "movie", new Date(NOW).toISOString());
+    f.repo.releaseInbox.fail("feed", { provider: "Provider", kind: "unavailable", status: 429, retryAt: NOW + 120_000, message: `HTTP 429 ${secretUrl}` }, new Date(NOW).toISOString());
+    const before = f.db.query("SELECT total_changes() AS n").get();
+    const result = await executeMethod(f.router.routes.ops, f.ctx, {});
+    expect(result.activeAcquisitions.map((item) => item.title)).toContain("Book in flight");
+    expect(result.activeAcquisitions.map((item) => item.media)).toContain("movie");
+    expect(result.downloads.find((item) => item.job.id === download.id)).toMatchObject({ telemetry: "unknown", bytesDone: null });
+    expect(result.downloads.find((item) => item.media === "movie")).toMatchObject({ telemetry: "recorded", bytesDone: 40, sizeBytes: 100, bytesPerSecond: 5 });
+    expect(result.incidents.find((item) => item.jobId === failed.id)).toMatchObject({ recovery: "manual-retry", nextWakeAt: null });
+    expect(result.incidents.find((item) => item.jobId === retry.id)).toMatchObject({ code: "provider-unavailable", recovery: "automatic-retry", nextWakeAt: wake });
+    expect(result.feeds[0]).toMatchObject({ state: "cooldown", retryAt: new Date(NOW + 120_000).toISOString(), nextPollAt: null });
+    expect(result.summary.nextWakeAt).toBe(wake);
+    expect(result.diagnostics.recentJobs).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain(providerKey);
+    expect(JSON.stringify(result)).not.toContain("https://");
+    expect(JSON.stringify(result)).not.toContain("payload_json");
+    expect(f.db.query("SELECT total_changes() AS n").get()).toEqual(before);
+    expect((f.db.query("PRAGMA table_info(jobs)").all() as { name: string }[]).map((column) => column.name)).not.toContain("status");
+  });
+
+  test("available movies, completed no-match waits, withdrawals and superseded failures are not incidents", async () => {
+    await using f = await fixture();
+    const waiting = movieAcquisition(f, 201, "succeeded");
+    f.repo.movies.finishAcquisition(waiting.acquisition.id);
+    f.repo.movies.event(waiting.targetId, waiting.acquisition.id, "waiting", "waiting", "No matching release; waiting for RSS");
+    const available = movieAcquisition(f, 202, "failed");
+    f.setLifecycle(available.acquisition.job_id!, { status: "failed", error: "Publication retry failed" });
+    const version = f.repo.movies.recordVersion(available.acquisition.id, { identityVerified: true, cut: "theatrical", source: "web", width: 1920,
+      height: 1080, videoCodec: "h264", dynamicRange: "sdr", audioLanguages: ["en"], proper: false },
+    [{ id: randomUUID(), relativePath: "files/available.mkv", sizeBytes: 10, probe: {} }]);
+    f.repo.movies.selectVersion(available.targetId, version, 0);
+    const withdrawn = movieAcquisition(f, 203, "failed");
+    f.setLifecycle(withdrawn.acquisition.job_id!, { status: "failed", error: "old failure" });
+    f.repo.movies.withdrawRequest(withdrawn.requestId);
+    const superseded = f.job({ type: "full_library_refresh" }, { status: "failed", error: "old refresh failure" });
+    f.job({ type: "full_library_refresh" }, { status: "succeeded" });
+    const result = await executeMethod(f.router.routes.ops, f.ctx, {});
+    expect(result.summary.waiting).toBe(1);
+    expect(result.incidents).toEqual([]);
+    expect(result.activeAcquisitions).toEqual([]);
+    expect(result.diagnostics.recentJobs).toEqual([]);
+    expect(result.incidents.some((incident) => incident.jobId === superseded.id)).toBe(false);
+  });
+
+  test("tracker client allowlist errors are actionable; generic observations never invent the exact cause", async () => {
+    await using f = await fixture();
+    const movie = movieAcquisition(f, 401);
+    const torrentId = f.repo.movies.bindDownload(movie.acquisition.id, { clientId: "owned-client", nativeId: "d".repeat(40) }, { rootId: "movies", relativePath: "owned" }, "offer");
+    const snapshot = { ref: { clientId: "owned-client", nativeId: "d".repeat(40) }, location: { rootId: "movies", relativePath: "owned" },
+      state: "downloading" as const, complete: false, bytesDone: 0, sizeBytes: 100, downloadBytesPerSecond: 0, observedAt: new Date(NOW).toISOString(),
+      message: `Tracker rejected: Your client version is not whitelisted. ${secretUrl}` };
+    f.repo.movies.observeDownload(torrentId, snapshot);
+    let result = await executeMethod(f.router.routes.ops, f.ctx, {});
+    expect(result.downloads[0]!.problem).toMatchObject({ code: "tracker-client-not-allowed" });
+    expect(result.incidents[0]!.detail).toContain("allowed client/version list");
+    expect(JSON.stringify(result)).not.toContain(providerKey);
+    f.repo.movies.observeDownload(torrentId, { ...snapshot, message: "Torrent engine reported a tracker or storage error" });
+    result = await executeMethod(f.router.routes.ops, f.ctx, {});
+    expect(result.downloads[0]!.problem).toMatchObject({ code: "torrent-tracker-or-storage" });
+    expect(result.downloads[0]!.problem!.message).toContain("Exact cause is unknown");
+    expect(result.downloads[0]!.problem!.message).toContain("No private client status lookup");
+    expect(f.fetches()).toBe(0);
+  });
+
+  test("TV future episodes remain informational while real TV acquisitions/downloads are visible", async () => {
+    await using f = await fixture();
+    for (const [n, date] of [[301, "2020-01-01"], [302, "2099-01-01"]] as const) {
+      const request = f.repo.tv.request(f.user.id, { key: `tvdb:${n}`, tvdbId: n, tmdbId: null, title: `Series ${n}`, aliases: [], year: 2020, anime: false,
+        episodes: [{ key: `tvdb:${n}01`, title: "Episode", airDate: date, runtimeMinutes: 30,
+          numbering: [{ scheme: "tvdb:aired", season: 1, episode: 1, absolute: null }] }], relations: [] }, {}, [`tvdb:${n}01`]);
+      const acquisition = f.repo.tv.startAcquisition(request.targetId, "initial", () => f.job({ type: "tv_acquire" }, { status: n === 301 ? "running" : "succeeded" }).id, request.requestId).acquisition;
+      if (n === 302) f.repo.tv.finishAcquisition(acquisition.id);
+      else f.repo.tv.bindDownload(acquisition.id, { clientId: "private-tv", nativeId: "b".repeat(40) }, { rootId: "tv", relativePath: "owned" }, "offer");
+    }
+    const result = await executeMethod(f.router.routes.ops, f.ctx, {});
+    expect(result.summary.waiting).toBe(1);
+    expect(result.activeAcquisitions.find((item) => item.media === "tv")).toMatchObject({ title: "Series 301", href: "/tv-sync" });
+    expect(result.downloads.find((item) => item.media === "tv")).toMatchObject({ telemetry: "unknown", bytesDone: null });
+    expect(result.incidents).toEqual([]);
+  });
+
+  test("pending cancellation cannot masquerade as active acquisition or a future automatic wake", async () => {
+    await using f = await fixture();
+    const job = f.job({ type: "acquire" }, { next_run_at: new Date(NOW + 60_000).toISOString(), error: "Old retry error" });
+    f.repo.markJobCancelled(job.id, "Operator cancelled");
+    const result = await executeMethod(f.router.routes.ops, f.ctx, {});
+    expect(result.activeAcquisitions).toEqual([]);
+    expect(result.incidents).toEqual([]);
+    expect(result.summary.nextWakeAt).toBeNull();
+  });
+
+  test("storage separates capacity from mount identity, unknown/missing paths never become success", async () => {
+    await using f = await fixture();
+    let result = await executeMethod(f.router.routes.ops, f.ctx, {});
+    expect(result.storage.find((store) => store.media === "book")).toMatchObject({ capacityState: "known", identityState: "unknown" });
+    expect(result.storage.find((store) => store.media === "movie")).toMatchObject({ capacityState: "known", identityState: "verified" });
+    expect(result.storage.find((store) => store.media === "tv")).toMatchObject({ capacityState: "unknown", identityState: "unknown", totalBytes: null, availableBytes: null });
+    await fs.writeFile(path.join(f.settings.movies.managedRoot, "objects", ".podible-content.json"), JSON.stringify({ id: randomUUID() }));
+    result = await executeMethod(f.router.routes.ops, f.ctx, {});
+    expect(result.storage.find((store) => store.media === "movie")).toMatchObject({ capacityState: "known", identityState: "mismatch" });
+    expect(result.incidents.some((item) => item.code === "storage-identity")).toBe(true);
+  });
+
+  test("recent diagnostics are lazy, bounded, normalized and include TV/feed job types", async () => {
+    await using f = await fixture();
+    for (let n = 0; n < 35; n++) f.job({ type: n % 2 ? "tv_feed_match" : "indexer_feed_sync" }, { status: "succeeded", error: null });
+    f.job({ type: "tv_shadow_sync" }, { status: "failed", error: `Error ${secretUrl} ${ownerToken}` });
+    let reads = 0;
+    const original = f.repo.listRecentJobs.bind(f.repo);
+    f.repo.listRecentJobs = (limit) => { reads++; return original(limit); };
+    expect((await executeMethod(f.router.routes.ops, f.ctx, {})).diagnostics.recentJobs).toEqual([]);
+    expect(reads).toBe(0);
+    const result = await executeMethod(f.router.routes.ops, f.ctx, { includeJobs: true });
+    expect(reads).toBe(1);
+    expect(result.diagnostics.recentJobs).toHaveLength(30);
+    expect(result.diagnostics.recentJobs[0]!.type).toBe("tv_shadow_sync");
+    expect(result.diagnostics.recentJobs.some((job) => job.type === "tv_feed_match")).toBe(true);
+    expect(JSON.stringify(result)).not.toContain(providerKey);
+    expect(JSON.stringify(result)).not.toContain(ownerToken);
+    expect(JSON.stringify(result)).not.toContain("payload_json");
+  });
+
+  test("journal failure is explicitly unknown and read methods never initialize missing settings", async () => {
+    await using f = await fixture();
+    f.job({ type: "acquire" });
+    f.repo.bindJobJournalReader({ read() { throw new Error(secretUrl); } });
+    const result = await executeMethod(f.router.routes.ops, f.ctx, {});
+    expect(result.incidents).toContainEqual(expect.objectContaining({ code: "execution-state-unknown", recovery: "unknown" }));
+    expect(result.diagnostics.warnings.join(" ")).toContain("incomplete");
+    expect(JSON.stringify(result)).not.toContain(providerKey);
+    f.repo.bindJobJournalReader({ read: () => f.lifecycle });
+    f.db.exec("DELETE FROM settings");
+    const before = f.db.query("SELECT total_changes() AS n").get();
+    await executeMethod(f.router.routes.users, f.ctx, {});
+    await executeMethod(f.router.routes.ops, f.ctx, {});
+    await executeMethod(f.router.routes.plexServers, f.ctx, {});
+    expect(f.db.query("SELECT total_changes() AS n").get()).toEqual(before);
+    expect(f.db.query("SELECT * FROM settings").all()).toEqual([]);
+  });
+});
+
+describe("bounded transactional full-library refresh", () => {
+  test("repeated requests share one bounded job and one enqueue intent, while completion allows a new refresh", async () => {
+    await using f = await fixture();
+    const results = await Promise.all(Array.from({ length: 8 }, () => executeMethod(f.router.routes.refresh, f.ctx, {})));
+    expect(new Set(results.map((result) => result.jobId)).size).toBe(1);
+    expect(results.filter((result) => !result.shared)).toHaveLength(1);
+    const first = results[0]!.jobId;
+    expect(f.repo.getJob(first)!.max_attempts).toBe(2);
+    expect(f.repo.listJobCommands().filter((command) => command.kind === "enqueue")).toHaveLength(1);
+    f.setLifecycle(first, { status: "succeeded" });
+    const next = await executeMethod(f.router.routes.refresh, f.ctx, {});
+    expect(next.shared).toBe(false);
+    expect(next.jobId).not.toBe(first);
+  });
+
+  test("a retry already persisted in the outbox is shared rather than creating duplicate work", async () => {
+    await using f = await fixture();
+    const job = f.job({ type: "full_library_refresh" }, { status: "failed", error: "Failed refresh" });
+    f.repo.retryJob(job.id);
+    expect(await executeMethod(f.router.routes.refresh, f.ctx, {})).toEqual({ jobId: job.id, shared: true });
+    const ops = await executeMethod(f.router.routes.ops, f.ctx, { includeJobs: true });
+    expect(ops.diagnostics.recentJobs.find((item) => item.id === job.id)?.recovery).toBe("queued");
+  });
+
+  test("outbox failure rolls back the refresh job and a write guard prevents every refresh effect", async () => {
+    await using f = await fixture();
+    f.db.exec("CREATE TRIGGER block_enqueue BEFORE INSERT ON job_commands BEGIN SELECT RAISE(ABORT, 'outbox unavailable'); END");
+    await expect(executeMethod(f.router.routes.refresh, f.ctx, {})).rejects.toThrow("outbox unavailable");
+    expect(f.repo.listJobsByType("full_library_refresh")).toEqual([]);
+    expect(f.repo.listJobCommands()).toEqual([]);
+    const fenced = new BooksRepo(f.db, () => { throw new Error("stale execution"); });
+    fenced.bindJobJournalReader({ read: () => f.lifecycle });
+    await expect(executeMethod(f.router.routes.refresh, { ...f.ctx, repo: fenced }, {})).rejects.toThrow("stale execution");
+  });
+});
+
+test("normalized errors never return raw messages or misclassify credential-bearing outage URLs", () => {
+  expect(normalizedAdminError(`HTTP 503 ${secretUrl}`)?.code).toBe("provider-unavailable");
+  expect(normalizedAdminError(`HTTP 429 ${secretUrl}; check credentials`)?.code).toBe("provider-cooldown");
+  expect(normalizedAdminError(`HTTP 401 ${secretUrl}`)?.code).toBe("provider-configuration");
+  expect(normalizedAdminError("Your client is not on the whitelist")?.code).toBe("tracker-client-not-allowed");
+  for (const raw of [secretUrl, `Bearer ${ownerToken}`, `apiKey=${providerKey}`, "ENOSPC", "mount identity changed"])
+    expect(JSON.stringify(normalizedAdminError(raw))).not.toContain(providerKey);
+  expect(normalizedAdminError(null)).toBeNull();
+});

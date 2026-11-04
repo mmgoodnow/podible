@@ -44,7 +44,7 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(new URL("/movies", url).href);
   await page
-    .getByRole("heading", { name: "Find your next feature." })
+    .getByRole("heading", { name: "Movies", exact: true })
     .waitFor();
   if (new URL(page.url()).pathname !== "/movies") throw new Error("Movie navigation still uses /app");
   if (await page.getByRole("navigation").locator('a[href^="/app"]').count())

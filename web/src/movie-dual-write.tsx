@@ -34,7 +34,6 @@ export function MovieDualWrite() {
       parsed.every((n) => Number.isInteger(n) && n > 0);
   return (
     <section className="panel">
-      <span className="eyebrow">INDEPENDENT ACQUISITION</span>
       <h2>Seerr dual-write</h2>
       <p>
         New approved Seerr requests run through Podible’s own search, agent

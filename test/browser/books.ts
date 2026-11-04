@@ -87,7 +87,7 @@ try {
   await page.goto(fixture.url);
   await page.getByRole("heading", { name: "Library", exact: true }).waitFor();
   const navigation = page.getByRole("navigation", { name: "Main navigation" });
-  assert.equal(await navigation.getByRole("link", { name: "Settings", exact: true }).getAttribute("href"), "/admin/settings");
+  assert.equal(await navigation.getByRole("link", { name: "Settings", exact: true }).getAttribute("href"), "/settings");
   assert.equal(await navigation.locator('a[href^="/app"]').count(), 0);
   await page.locator(".book-card").nth(47).waitFor();
   assert.equal(await page.locator(".book-card").count(), 48);
@@ -107,6 +107,9 @@ try {
   await page.getByRole("searchbox").fill("Piranesi");
   await page.getByRole("link", { name: /Piranesi Susanna Clarke/ }).click();
   await page.getByRole("heading", { name: "Piranesi", exact: true }).waitFor();
+  assert.equal(await page.locator(".eyebrow, .portrait-caption").count(), 0, "Book details must not contain decorative slogans");
+  await page.getByRole("heading", { name: "Listen or download", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Cover artwork", exact: true }).waitFor();
   assert.equal(
     await page.evaluate(() => performance.timeOrigin),
     documentId,

@@ -60,6 +60,21 @@ async function rpc(
   return (await response.json()) as any;
 }
 
+async function plexResultLocation(response: Response, ok: boolean, redirectTo = ok ? "/" : "/login"): Promise<URL> {
+  expect(response.status).toBe(303);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  const location = response.headers.get("location");
+  expect(location).toBeTruthy();
+  const url = new URL(location!, "http://app.test");
+  expect(url.origin).toBe("http://app.test");
+  expect(url.pathname).toBe("/login/plex/result");
+  expect(url.searchParams.get("ok")).toBe(ok ? "1" : "0");
+  expect(url.searchParams.get("redirectTo")).toBe(redirectTo);
+  expect([...url.searchParams.keys()].sort()).toEqual(ok ? ["ok", "redirectTo"] : ["error", "ok", "redirectTo"]);
+  expect(await response.text()).toBe("");
+  return url;
+}
+
 afterAll(async () => {
   await rm(isolatedDataDir, { recursive: true, force: true });
 });
@@ -107,7 +122,7 @@ describe("podible http", () => {
     }
   });
 
-  test("preserves protected admin pages and navigation", async () => {
+  test("redirects protected legacy admin pages to the SPA and removes curation and database routes", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -127,117 +142,55 @@ describe("podible http", () => {
     expect(adminRedirect.headers.get("location")).toBe("/login?redirectTo=%2Fadmin");
 
     const userCookie = createBrowserSessionCookie(repo, { username: "reader" });
-    const userAdmin = await fetchHandler(
-      new Request("http://localhost/admin/jobs", {
-        headers: { cookie: userCookie },
-      })
-    );
-    expect(userAdmin.status).toBe(403);
-
     const adminCookie = createBrowserSessionCookie(repo, { isAdmin: true, username: "admin" });
-    const admin = await fetchHandler(
-      new Request("http://localhost/admin", {
-        headers: { cookie: adminCookie },
-      })
-    );
-    expect(admin.status).toBe(303);
-    expect(admin.headers.get("location")).toBe("/admin/settings");
-
-    const adminPages = ["/admin/settings", "/admin/users", "/admin/ops", "/admin/curation", "/admin/db"];
-    for (const path of adminPages) {
-      const response = await fetchHandler(
-        new Request(`http://localhost${path}`, {
-          headers: { cookie: adminCookie },
-        })
-      );
-      expect(response.status).toBe(200);
-      const pageBody = await response.text();
-      expect(pageBody.includes('class="admin-subnav"')).toBe(false);
-      expect(pageBody.includes('href="/admin/settings"')).toBe(true);
-      expect(pageBody.includes('href="/admin/users"')).toBe(true);
-      expect(pageBody.includes('href="/admin/ops"')).toBe(true);
-      expect(pageBody.includes('href="/admin/curation"')).toBe(true);
-      expect(pageBody.includes('href="/admin/db"')).toBe(true);
-      expect(pageBody.includes('href="/admin"')).toBe(false);
-    }
-
-    for (const path of ["/admin/jobs", "/admin/downloads", "/admin/content"]) {
-      const response = await fetchHandler(
-        new Request(`http://localhost${path}`, {
-          headers: { cookie: adminCookie },
-        })
-      );
+    const redirects = [
+      ["/admin", "/settings"], ["/admin/settings", "/settings"], ["/admin/users", "/users"],
+      ["/admin/plex", "/settings"], ["/admin/ops", "/ops"], ["/admin/jobs", "/ops"],
+      ["/admin/downloads", "/ops"], ["/admin/content", "/ops"],
+      ["/admin/settings?plex_notice=Selected%20server.", "/settings?plex_notice=Selected%20server."],
+    ];
+    for (const [legacy, canonical] of redirects) {
+      const response = await fetchHandler(new Request(`http://localhost${legacy}`, { headers: { cookie: adminCookie } }));
       expect(response.status).toBe(303);
-      expect(response.headers.get("location")).toBe("/admin/ops");
+      expect(response.headers.get("location")).toBe(canonical);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(await response.text()).not.toContain("<html");
+      const forbidden = await fetchHandler(new Request(`http://localhost${legacy}`, { headers: { cookie: userCookie } }));
+      expect(forbidden.status).toBe(403);
+      expect(forbidden.headers.get("location")).toBeNull();
+      const loggedOut = await fetchHandler(new Request(`http://localhost${legacy}`));
+      expect(loggedOut.status).toBe(303);
+      expect(loggedOut.headers.get("location")).toBe(`/login?redirectTo=${encodeURIComponent(legacy)}`);
     }
 
-    const settingsPage = await fetchHandler(
-      new Request("http://localhost/admin/settings", {
-        headers: { cookie: adminCookie },
-      })
-    );
-    const settingsBody = await settingsPage.text();
-    expect(settingsBody.includes("site-nav")).toBe(true);
-    expect(settingsBody.includes("Admin:")).toBe(false);
-    expect(settingsBody.includes("Ops")).toBe(true);
-    expect(settingsBody.includes("DB")).toBe(true);
-    expect(settingsBody.includes("Commit:")).toBe(true);
-    expect(settingsBody.includes("1234567")).toBe(true);
-    expect(settingsBody.includes("Test commit subject")).toBe(true);
-    expect(settingsBody.includes("Uptime:")).toBe(true);
-    expect(settingsBody.includes("settings-editor")).toBe(true);
-    expect(settingsBody.includes("Refresh Library")).toBe(false);
-    expect(settingsBody.includes("wipe-db-btn")).toBe(false);
-    expect(settingsBody.includes("Wipe Entire Database")).toBe(false);
-    expect(settingsBody.includes("wipeDatabase")).toBe(false);
-    expect(settingsBody.includes("settings-save-btn")).toBe(true);
-    expect(settingsBody.includes("Manual Search + Snatch")).toBe(false);
-    expect(settingsBody.includes("Snatch Checked as One Edition")).toBe(false);
-    expect(settingsBody.includes("manual-import-btn")).toBe(false);
-    expect(settingsBody.includes("Feed Preview")).toBe(false);
-    expect(settingsBody.includes("Recent Library")).toBe(false);
-    expect(settingsBody.includes("Open Library Search")).toBe(false);
-
-    const opsPage = await fetchHandler(
-      new Request("http://localhost/admin/ops", {
-        headers: { cookie: adminCookie },
-      })
-    );
-    const opsBody = await opsPage.text();
-    expect(opsBody.includes("Triage")).toBe(true);
-    expect(opsBody.includes("Active Work")).toBe(true);
-    expect(opsBody.includes("Content Pipeline")).toBe(true);
-    expect(opsBody.includes("Raw Queues")).toBe(true);
-    expect(opsBody.includes("Jobs table")).toBe(true);
-    expect(opsBody.includes("Downloads table")).toBe(true);
-    expect(opsBody.includes("Refresh library")).toBe(true);
-
-    const curationApi = await fetchHandler(
-      new Request("http://localhost/admin/curation/api/runs", {
-        headers: { cookie: adminCookie },
-      })
-    );
-    expect(curationApi.status).toBe(200);
-    const curationPayload = await curationApi.json() as any;
-    expect(Array.isArray(curationPayload.runs)).toBe(true);
-
-    const dbPage = await fetchHandler(
-      new Request("http://localhost/admin/db?table=books&limit=5", {
-        headers: { cookie: adminCookie },
-      })
-    );
-    expect(dbPage.status).toBe(200);
-    const dbBody = await dbPage.text();
-    expect(dbBody.includes("DB Explorer")).toBe(true);
-    expect(dbBody.includes("No SQL editor")).toBe(true);
-    expect(dbBody.includes("<textarea")).toBe(false);
-
-    const rejectedDbPage = await fetchHandler(
-      new Request("http://localhost/admin/db?table=sqlite_master", {
-        headers: { cookie: adminCookie },
-      })
-    );
-    expect(rejectedDbPage.status).toBe(400);
+    for (const removed of ["/admin/curation", "/admin/curation/api/runs", "/admin/curation/api/trace?runId=anything&file=trace.json",
+      "/admin/curation/api/unknown", "/admin/db", "/admin/db?table=books&limit=5", "/admin/db?table=sqlite_master"]) {
+      for (const cookie of [adminCookie, userCookie, ""]) {
+        const response = await fetchHandler(new Request(`http://localhost${removed}`, { headers: cookie ? { cookie } : {} }));
+        expect(response.status).toBe(404);
+        expect(response.headers.get("location")).toBeNull();
+      }
+    }
+    for (const legacy of ["/admin/refresh", "/admin/plex/select"]) {
+      for (const [cookie, expectedStatus] of [["", 401], [userCookie, 403]] as const) {
+        const response = await fetchHandler(new Request(`http://localhost${legacy}`, {
+          method: "POST", headers: { cookie, "Content-Type": "application/x-www-form-urlencoded" }, body: "machineId=forbidden-server",
+        }));
+        expect(response.status).toBe(expectedStatus);
+        expect(response.headers.get("cache-control")).toBe("no-store");
+      }
+    }
+    expect(repo.listJobsByType("full_library_refresh")).toEqual([]);
+    expect(repo.getSettings().auth.plex.machineId).toBe(settings.auth.plex.machineId);
+    for (const canonical of ["/settings", "/users", "/ops"]) {
+      const page = await fetchHandler(new Request(`http://localhost${canonical}`, { headers: { cookie: adminCookie } }));
+      expect(page.status).toBe(200);
+      expect(page.headers.get("content-type")).toContain("text/html");
+      const html = await page.text();
+      expect(html).toContain('id="root"');
+      expect(html).not.toContain("Wipe Entire Database");
+      expect(html).not.toContain("DB Explorer");
+    }
 
     db.close();
   });
@@ -342,7 +295,6 @@ describe("podible http", () => {
       const removed = [
         new Request("http://localhost/health", { method: "GET" }),
         new Request("http://localhost/server", { method: "GET" }),
-        new Request("http://localhost/settings", { method: "GET" }),
         new Request("http://localhost/settings", { method: "PUT", body: "{}" }),
         new Request("http://localhost/openlibrary/search?q=dune", { method: "GET" }),
         new Request("http://localhost/library", { method: "POST", body: "{}" }),
@@ -694,13 +646,9 @@ describe("podible http", () => {
         headers: { cookie: adminCookie },
       })
     );
-    expect(adminOps.status).toBe(200);
-    const adminOpsBody = await adminOps.text();
-    expect(adminOpsBody.includes("Refresh library")).toBe(true);
-    expect(adminOpsBody.includes("Triage")).toBe(true);
-    expect(adminOpsBody.includes("Active Work")).toBe(true);
-    expect(adminOpsBody.includes("Content Pipeline")).toBe(true);
-    expect(adminOpsBody.includes("Raw Queues")).toBe(true);
+    expect(adminOps.status).toBe(303);
+    expect(adminOps.headers.get("location")).toBe("/ops");
+    expect(adminOps.headers.get("cache-control")).toBe("no-store");
 
     const refreshed = await fetchHandler(
       new Request("http://localhost/admin/refresh", {
@@ -709,7 +657,8 @@ describe("podible http", () => {
       })
     );
     expect(refreshed.status).toBe(303);
-    expect(refreshed.headers.get("location")).toContain("/admin/ops?notice=");
+    expect(refreshed.headers.get("location")).toContain("/ops?notice=");
+    expect(refreshed.headers.get("cache-control")).toBe("no-store");
     expect(repo.listJobsByType("full_library_refresh").length).toBe(1);
 
     db.close();
@@ -735,7 +684,8 @@ describe("podible http", () => {
       })
     );
     expect(refreshed.status).toBe(303);
-    expect(refreshed.headers.get("location")).toContain("/admin/ops?notice=");
+    expect(refreshed.headers.get("location")).toContain("/ops?notice=");
+    expect(refreshed.headers.get("cache-control")).toBe("no-store");
     expect(repo.listJobsByType("full_library_refresh").length).toBe(1);
 
     db.close();
@@ -753,12 +703,12 @@ describe("podible http", () => {
     });
 
     const fetchHandler = createPodibleFetchHandler(repo, Date.now());
-    for (const pathname of ["/admin", "/admin/settings", "/admin/db?table=books&limit=5", "/activity?foo=bar"]) {
+    for (const pathname of ["/admin", "/admin/settings", "/admin/users", "/admin/ops", "/admin/jobs", "/admin/downloads", "/admin/content", "/admin/plex", "/activity?foo=bar"]) {
       const response = await fetchHandler(new Request(`http://localhost${pathname}`));
       expect(response.status).toBe(303);
       expect(response.headers.get("location")).toBe(`/login?redirectTo=${encodeURIComponent(pathname)}`);
     }
-    for (const pathname of ["/classic", "/classic/library", "/classic/add", "/classic/book/1?foo=bar"]) {
+    for (const pathname of ["/classic", "/classic/library", "/classic/add", "/classic/book/1?foo=bar", "/admin/curation", "/admin/curation/api/runs", "/admin/db?table=books&limit=5"]) {
       const response = await fetchHandler(new Request(`http://localhost${pathname}`));
       expect(response.status).toBe(404);
       expect(response.headers.get("location")).toBeNull();
@@ -890,7 +840,7 @@ describe("podible http", () => {
     const loginPage = await fetchHandler(new Request("http://app.test/login?redirectTo=%2Flibrary"));
     expect(loginPage.status).toBe(200);
     const loginBody = await loginPage.text();
-    expect(loginBody.includes("Continue with Plex")).toBe(true);
+    expect(loginBody).toContain('id="root"');
     expect(loginBody.includes('<nav class="site-nav">')).toBe(false);
 
     const cookieHeader = createBrowserSessionCookie(repo, {
@@ -962,16 +912,26 @@ describe("podible http", () => {
     const authorizeUrl = begin.result.authorizeUrl as string;
 
     const authorize = await fetchHandler(new Request(authorizeUrl));
-    expect(authorize.status).toBe(200);
-    const authorizeBody = await authorize.text();
-    expect(authorizeBody.includes("Continue with Plex")).toBe(true);
-    expect(authorizeBody.includes('<nav class="site-nav">')).toBe(false);
-
     const authorizePath = new URL(authorizeUrl).pathname;
+    expect(authorize.status).toBe(303);
+    expect(authorize.headers.get("cache-control")).toBe("no-store");
+    const loginLocation = new URL(authorize.headers.get("location")!, "http://localhost");
+    expect(loginLocation.pathname).toBe("/login");
+    expect(loginLocation.searchParams.get("inline")).toBe("1");
+    expect(loginLocation.searchParams.get("redirectTo")).toBe(`${authorizePath}/complete`);
+    expect(await authorize.text()).toBe("");
+    const unauthenticatedComplete = await fetchHandler(new Request(`${authorizeUrl}/complete`));
+    expect(unauthenticatedComplete.status).toBe(303);
+    expect(unauthenticatedComplete.headers.get("location")).toBe(authorize.headers.get("location"));
+    expect(db.query("SELECT COUNT(*) AS n FROM auth_codes").get()).toEqual({ n: 0 });
+    expect(repo.getAppLoginAttempt(begin.result.attemptId)).not.toBeNull();
     const browserCookie = createBrowserSessionCookie(repo, {
       username: "kindling",
       displayName: "Kindling",
     });
+    const authenticatedAuthorize = await fetchHandler(new Request(authorizeUrl, { headers: { cookie: browserCookie } }));
+    expect(authenticatedAuthorize.status).toBe(303);
+    expect(authenticatedAuthorize.headers.get("location")).toBe(`${authorizePath}/complete`);
 
     const complete = await fetchHandler(
       new Request(`http://app.test${authorizePath}/complete`, {
@@ -979,6 +939,8 @@ describe("podible http", () => {
       })
     );
     expect(complete.status).toBe(302);
+    expect(complete.headers.get("cache-control")).toBe("no-store");
+    expect(await complete.text()).toBe("");
     const callbackLocation = complete.headers.get("location") ?? "";
     expect(callbackLocation.startsWith("kindling://auth/podible?")).toBe(true);
     const callbackUrl = new URL(callbackLocation);
@@ -986,10 +948,14 @@ describe("podible http", () => {
     const state = callbackUrl.searchParams.get("state");
     expect(code).toBeTruthy();
     expect(state).toBe(begin.result.state);
+    expect(db.query("SELECT code_hash FROM auth_codes").get()).toEqual({ code_hash: hashSessionToken(code!) });
 
     const exchange = await rpc(fetchHandler, "auth.exchange", { code }, 2);
     expect(typeof exchange.result.accessToken).toBe("string");
     expect(exchange.result.user.username).toBe("kindling");
+    expect(repo.getAppLoginAttempt(begin.result.attemptId)).toBeNull();
+    const replayedExchange = await rpc(fetchHandler, "auth.exchange", { code }, 4);
+    expect(replayedExchange.error.code).toBe(-32000);
 
     const me = await rpc(fetchHandler, "auth.me", {}, 3, {
       Authorization: `Bearer ${exchange.result.accessToken}`,
@@ -998,6 +964,56 @@ describe("podible http", () => {
     expect(me.result.session.kind).toBe("app");
 
     db.close();
+  });
+
+  test("auth SPA shells expose no secrets and invalid or expired attempts redirect without granting sessions or codes", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const settings = repo.ensureSettings();
+    settings.auth.plex.ownerToken = "owner-token-must-stay-server-side";
+    settings.agents.apiKey = "agent-key-must-stay-server-side";
+    repo.updateSettings(settings);
+    const handler = createPodibleFetchHandler(repo, Date.now());
+    try {
+      for (const route of ["/login?redirectTo=%2Flibrary", "/login/plex/loading", "/login/plex/result?ok=1&code=untrusted-code&redirectTo=%2Flibrary"]) {
+        const page = await handler(new Request(`http://app.test${route}`));
+        expect(page.status).toBe(200);
+        const body = await page.text();
+        expect(body).toContain('id="root"');
+        expect(body).not.toContain("owner-token-must-stay-server-side");
+        expect(body).not.toContain("agent-key-must-stay-server-side");
+        expect(body).not.toContain("untrusted-code");
+      }
+      for (const pinId of ["", "0", "-1", "123junk", "9007199254740992"]) {
+        const response = await handler(new Request(`http://app.test/login/plex/complete?pinId=${pinId}`));
+        const result = await plexResultLocation(response, false);
+        expect(result.searchParams.get("error")).toBe("Missing or invalid Plex PIN id.");
+        expect(response.headers.get("set-cookie")).toBeNull();
+      }
+      repo.createPlexLoginAttempt({ pinId: 321, clientIdentifier: "expired-fixture", publicJwkJson: "{}", privateKeyPkcs8: "not-used-for-expired-attempt" });
+      db.query("UPDATE plex_login_attempts SET created_at=? WHERE pin_id=?").run("2000-01-01T00:00:00.000Z", 321);
+      const expiredPlex = await handler(new Request("http://app.test/login/plex/complete?pinId=321"));
+      const expiredResult = await plexResultLocation(expiredPlex, false);
+      expect(expiredResult.searchParams.get("error")).toContain("has expired");
+      expect(expiredPlex.headers.get("set-cookie")).toBeNull();
+      expect(repo.getPlexLoginAttempt(321)).toBeNull();
+      repo.createAppLoginAttempt({ id: "expired-app", redirectUri: "kindling://auth/podible", state: "expired-state", expiresAt: "2000-01-01T00:00:00.000Z" });
+      for (const attempt of ["missing-app", "expired-app"]) for (const suffix of ["", "/complete"]) {
+        const response = await handler(new Request(`http://app.test/auth/app/${attempt}${suffix}`));
+        expect(response.status).toBe(303);
+        expect(response.headers.get("cache-control")).toBe("no-store");
+        const location = new URL(response.headers.get("location")!, "http://app.test");
+        expect(location.pathname).toBe("/login");
+        expect(location.searchParams.get("error")).toContain("missing or has expired");
+        expect(location.searchParams.has("code")).toBe(false);
+        expect(await response.text()).toBe("");
+        expect(response.headers.get("set-cookie")).toBeNull();
+      }
+      expect(repo.getAppLoginAttempt("expired-app")).toBeNull();
+      expect(db.query("SELECT COUNT(*) AS n FROM sessions").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM auth_codes").get()).toEqual({ n: 0 });
+    } finally { db.close(); }
   });
 
   test("supports Plex browser login and creates a browser session", async () => {
@@ -1075,11 +1091,11 @@ describe("podible http", () => {
       const loginPage = await fetchHandler(new Request("http://app.test/login"));
       expect(loginPage.status).toBe(200);
       const loginBody = await loginPage.text();
-      expect(loginBody.includes("Continue with Plex")).toBe(true);
+      expect(loginBody).toContain('id="root"');
       expect(loginBody.includes('<nav class="site-nav">')).toBe(false);
 
       const start = await fetchHandler(
-        new Request("http://app.test/login/plex/start", {
+        new Request("http://app.test/login/plex/start?redirectTo=%2Flibrary%3Fview%3Daudio", {
           method: "POST",
         })
       );
@@ -1089,16 +1105,21 @@ describe("podible http", () => {
       expect(startPayload.authUrl).toContain("https://app.plex.tv/auth#?");
       expect(startPayload.authUrl).toContain("PINCODE123");
       expect(startPayload.authUrl).toContain(encodeURIComponent("http://app.test/login/plex/complete?pinId=123"));
+      const forwardUrl = new URL(new URLSearchParams(new URL(startPayload.authUrl).hash.slice(2)).get("forwardUrl")!);
+      expect(forwardUrl.origin).toBe("http://app.test");
+      expect(forwardUrl.pathname).toBe("/login/plex/complete");
+      expect(forwardUrl.searchParams.get("redirectTo")).toBe("/library?view=audio");
 
-      const complete = await fetchHandler(new Request("http://app.test/login/plex/complete?pinId=123"));
-      expect(complete.status).toBe(200);
-      const completeBody = await complete.text();
-      expect(completeBody.includes("Sign-in complete. You can close this window.")).toBe(true);
+      const complete = await fetchHandler(new Request(forwardUrl.toString()));
+      const resultLocation = await plexResultLocation(complete, true, "/library?view=audio");
       const setCookie = complete.headers.get("set-cookie") ?? "";
       expect(setCookie.includes("podible_session=")).toBe(true);
 
       const cookieHeader = setCookie.split(";")[0] ?? "";
       expect(setCookie).toContain("Max-Age=34560000");
+      expect(resultLocation.href).not.toContain(cookieHeader.slice("podible_session=".length));
+      expect(resultLocation.href).not.toContain("plex-jwt-token");
+      expect(resultLocation.href).not.toContain("PINCODE123");
       const authed = await rpc(fetchHandler, "library.list", {}, 1, { cookie: cookieHeader });
       expect(authed.error).toBeUndefined();
       expect(authed.result.items).toMatchObject([{ id: book.id, title: "Dune" }]);
@@ -1108,6 +1129,11 @@ describe("podible http", () => {
       expect(repo.listUsers("plex")[0]?.is_admin).toBe(1);
       expect(repo.getSettings().auth.plex.ownerToken).toBe("plex-jwt-token");
       expect(repo.getPlexLoginAttempt(123)).toBeNull();
+      const consumedAttempt = await fetchHandler(new Request(forwardUrl.toString()));
+      const consumedResult = await plexResultLocation(consumedAttempt, false);
+      expect(consumedResult.searchParams.get("error")).toContain("missing or has expired");
+      expect(consumedAttempt.headers.get("set-cookie")).toBeNull();
+      expect(repo.listUsers("plex")).toHaveLength(1);
 
       db.close();
     } finally {
@@ -1166,16 +1192,18 @@ describe("podible http", () => {
 
       const fetchHandler = createPodibleFetchHandler(repo, Date.now());
       const start = await fetchHandler(
-        new Request("http://app.test/login/plex/start", {
+        new Request("http://app.test/login/plex/start?redirectTo=%2F%5Cuntrusted.invalid", {
           method: "POST",
         })
       );
       expect(start.status).toBe(200);
+      const startPayload = await start.json() as { authUrl: string };
+      const forwardUrl = new URL(new URLSearchParams(new URL(startPayload.authUrl).hash.slice(2)).get("forwardUrl")!);
+      expect(forwardUrl.searchParams.has("redirectTo")).toBe(false);
 
-      const complete = await fetchHandler(new Request("http://app.test/login/plex/complete?pinId=123"));
-      expect(complete.status).toBe(200);
-      const completeBody = await complete.text();
-      expect(completeBody.includes("Sign-in complete. You can close this window.")).toBe(true);
+      const complete = await fetchHandler(new Request("http://app.test/login/plex/complete?pinId=123&redirectTo=%2F%5Cuntrusted.invalid"));
+      await plexResultLocation(complete, true);
+      expect(complete.headers.get("set-cookie")).toContain("podible_session=");
 
       expect(repo.listUsers("plex")).toHaveLength(1);
       expect(repo.getSettings().auth.plex.ownerToken).toBe("plex-jwt-token");
@@ -1186,7 +1214,7 @@ describe("podible http", () => {
     }
   });
 
-  test("allows admin to select which Plex server controls access", async () => {
+  test("discovers Plex servers through adminWeb RPC and retains the admin-only compatibility selection POST", async () => {
     const originalFetch = globalThis.fetch;
     let plexResourcesFetches = 0;
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
@@ -1239,21 +1267,25 @@ describe("podible http", () => {
           headers: { cookie: adminCookie },
         })
       );
-      expect(page.status).toBe(200);
-      const pageBody = await page.text();
-      expect(pageBody.includes("Plex Access Control")).toBe(true);
-      expect(pageBody.includes("Family Server")).toBe(true);
-      expect(pageBody.includes("Friends Server")).toBe(true);
+      expect(page.status).toBe(303);
+      expect(page.headers.get("location")).toBe("/settings");
+      expect(page.headers.get("cache-control")).toBe("no-store");
+      expect(plexResourcesFetches).toBe(0);
+
+      const servers = await rpc(fetchHandler, "adminWeb.plexServers", {}, 1, { cookie: adminCookie });
+      expect(servers.error).toBeUndefined();
+      expect(servers.result.source).toBe("fresh");
+      expect(servers.result.servers.map((server: { name: string }) => server.name)).toEqual(["Family Server", "Friends Server"]);
+      expect(JSON.stringify(servers.result)).not.toContain("owner-token");
       expect(plexResourcesFetches).toBe(1);
 
-      const cachedPage = await fetchHandler(
-        new Request("http://app.test/admin/settings", {
-          headers: { cookie: adminCookie },
-        })
-      );
-      expect(cachedPage.status).toBe(200);
+      const cachedServers = await rpc(fetchHandler, "adminWeb.plexServers", {}, 2, { cookie: adminCookie });
+      expect(cachedServers.error).toBeUndefined();
+      expect(cachedServers.result.source).toBe("cache");
+      expect(cachedServers.result.servers).toEqual(servers.result.servers);
       expect(plexResourcesFetches).toBe(1);
 
+      const beforeSelection = repo.getSettings();
       const selected = await fetchHandler(
         new Request("http://app.test/admin/plex/select", {
           method: "POST",
@@ -1265,7 +1297,25 @@ describe("podible http", () => {
         })
       );
       expect(selected.status).toBe(303);
+      expect(selected.headers.get("location")).toBe("/settings?plex_notice=Selected%20server.");
+      expect(selected.headers.get("cache-control")).toBe("no-store");
       expect(repo.getSettings().auth.plex.machineId).toBe("family-server");
+      expect(repo.getSettings()).toEqual({ ...beforeSelection, auth: { ...beforeSelection.auth,
+        plex: { ...beforeSelection.auth.plex, machineId: "family-server" } } });
+      expect(plexResourcesFetches).toBe(1);
+
+      const missing = await fetchHandler(new Request("http://app.test/admin/plex/select", {
+        method: "POST", headers: { cookie: adminCookie, "Content-Type": "application/x-www-form-urlencoded" }, body: "machineId=%20",
+      }));
+      expect(missing.status).toBe(303);
+      expect(missing.headers.get("location")).toBe("/settings?plex_error=Missing%20machine%20id");
+      expect(repo.getSettings().auth.plex.machineId).toBe("family-server");
+
+      const rpcSelected = await rpc(fetchHandler, "adminWeb.selectPlexServer", { machineId: "friends-server" }, 3, { cookie: adminCookie });
+      expect(rpcSelected.error).toBeUndefined();
+      expect(rpcSelected.result).toEqual({ selectedMachineId: "friends-server" });
+      expect(repo.getSettings().auth.plex.machineId).toBe("friends-server");
+      expect(plexResourcesFetches).toBe(2);
 
       db.close();
     } finally {
@@ -1345,11 +1395,11 @@ describe("podible http", () => {
       expect(start.status).toBe(200);
 
       const complete = await fetchHandler(new Request("http://app.test/login/plex/complete?pinId=123"));
-      expect(complete.status).toBe(400);
+      const resultLocation = await plexResultLocation(complete, false);
       expect(complete.headers.get("set-cookie")).toBeNull();
-      const body = await complete.text();
-      expect(body.includes("This Plex user is not allowed on this Podible instance.")).toBe(true);
+      expect(resultLocation.searchParams.get("error")).toBe("This Plex user is not allowed on this Podible instance.");
       expect(repo.listUsers("plex")).toHaveLength(1);
+      expect(repo.getPlexLoginAttempt(123)).toBeNull();
 
       db.close();
     } finally {
@@ -1411,9 +1461,14 @@ describe("podible http", () => {
       expect(start.status).toBe(200);
 
       const complete = await fetchHandler(new Request("http://app.test/login/plex/complete?pinId=123"));
-      expect(complete.status).toBe(200);
-      const body = await complete.text();
-      expect(body.includes("Sign-in complete.")).toBe(true);
+      await plexResultLocation(complete, true);
+      const cookieHeader = (complete.headers.get("set-cookie") ?? "").split(";")[0]!;
+      expect(cookieHeader).toStartWith("podible_session=");
+      const me = await rpc(fetchHandler, "auth.me", {}, 1, { cookie: cookieHeader });
+      expect(me.result.user.username).toBe("alice");
+      expect(me.result.user.isAdmin).toBe(false);
+      expect(me.result.session.kind).toBe("browser");
+      expect(repo.getSettings().auth.plex.ownerToken).toBe(expiredJwt);
 
       db.close();
     } finally {
@@ -1472,12 +1527,13 @@ describe("podible http", () => {
       expect(start.status).toBe(200);
 
       const complete = await fetchHandler(new Request("http://app.test/login/plex/complete?pinId=123"));
-      expect(complete.status).toBe(400);
+      const resultLocation = await plexResultLocation(complete, false);
       expect(complete.headers.get("set-cookie")).toBeNull();
-      const body = await complete.text();
-      expect(body.includes("owner token has expired")).toBe(true);
-      expect(body.includes("admin needs to re-link")).toBe(true);
+      expect(resultLocation.searchParams.get("error")).toContain("owner token has expired");
+      expect(resultLocation.searchParams.get("error")).toContain("admin needs to re-link");
+      expect(resultLocation.href).not.toContain("new-user-token");
       expect(repo.listUsers("plex")).toHaveLength(1); // only admin, new user not added
+      expect(repo.getPlexLoginAttempt(123)).toBeNull();
 
       db.close();
     } finally {

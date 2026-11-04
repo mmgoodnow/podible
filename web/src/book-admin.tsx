@@ -45,12 +45,11 @@ export function BookAdmin({
     <section className="book-admin">
       <div className="section-heading">
         <div>
-          <span className="eyebrow">LIBRARIAN'S DESK</span>
-          <h2 className="editorial-heading">A little more control.</h2>
+          <h2 className="editorial-heading">Administration</h2>
         </div>
         <div className="actions">
-          <a href="/admin/ops">Operations</a>
-          <a href="/admin/settings">Settings</a>
+          <a href="/ops">Operations</a>
+          <a href="/settings">Settings</a>
         </div>
       </div>
       <details className="panel">

@@ -33,7 +33,7 @@ export function createSpaRoutes(directory = SPA_BUILD_DIRECTORY) {
     }
     if (
       relative.includes(".") ||
-      !/^(?:|library|add|series|author|movies(?:\/\d+)?|requests(?:\/\d+)?|book\/\d+|movie-shadow(?:\/\d+)?|movie-dual-write|tv-sync|retention)\/?$/.test(
+      !/^(?:|library|add|series|author|movies(?:\/\d+)?|requests(?:\/\d+)?|book\/\d+|movie-shadow(?:\/\d+)?|movie-dual-write|tv-sync|retention|settings|users|ops|login(?:\/plex\/(?:loading|result))?)\/?$/.test(
         relative,
       )
     )
@@ -48,7 +48,7 @@ export function createSpaRoutes(directory = SPA_BUILD_DIRECTORY) {
     return new Response(entry, {
       headers: {
         "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": "no-cache",
+        "Cache-Control": relative.startsWith("login") ? "no-store" : "no-cache",
       },
     });
   });

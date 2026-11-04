@@ -14,6 +14,10 @@ import { indexerFeedsRouter } from "./rpc/indexer-feeds-router";
 import { tvShadowRouter } from "./rpc/tv-shadow-router";
 import { retentionRouter } from "./rpc/retention-router";
 import { tvRouter } from "./rpc/tv-router";
+import { settingsRouter } from "./rpc/settings-router";
+import { jobsRouter } from "./rpc/jobs-router";
+import { downloadsRouter } from "./rpc/downloads-router";
+import { adminWebRouter } from "./rpc/admin-web-router";
 
 const t = initTRPC.context<RpcContext>().create();
 const id = z.number().int().positive();
@@ -55,6 +59,27 @@ const procedure = t.procedure.use(async ({ next }) => {
 });
 
 export const appRouter = t.router({
+  adminWeb: t.router({
+    users: procedure.input(adminWebRouter.routes.users.paramsSchema).output(adminWebRouter.routes.users.resultSchema).query(({ ctx, input }) => executeMethod(adminWebRouter.routes.users, ctx, input)),
+    plexServers: procedure.input(adminWebRouter.routes.plexServers.paramsSchema).output(adminWebRouter.routes.plexServers.resultSchema).query(({ ctx, input }) => executeMethod(adminWebRouter.routes.plexServers, ctx, input)),
+    selectPlexServer: procedure.input(adminWebRouter.routes.selectPlexServer.paramsSchema).output(adminWebRouter.routes.selectPlexServer.resultSchema).mutation(({ ctx, input }) => executeMethod(adminWebRouter.routes.selectPlexServer, ctx, input)),
+    ops: procedure.input(adminWebRouter.routes.ops.paramsSchema).output(adminWebRouter.routes.ops.resultSchema).query(({ ctx, input }) => executeMethod(adminWebRouter.routes.ops, ctx, input)),
+    refresh: procedure.input(adminWebRouter.routes.refresh.paramsSchema).output(adminWebRouter.routes.refresh.resultSchema).mutation(({ ctx, input }) => executeMethod(adminWebRouter.routes.refresh, ctx, input)),
+  }),
+  settings: t.router({
+    get: procedure.input(settingsRouter.routes.get.paramsSchema).output(settingsRouter.routes.get.resultSchema).query(({ ctx, input }) => executeMethod(settingsRouter.routes.get, ctx, input)),
+    update: procedure.input(settingsRouter.routes.update.paramsSchema).output(settingsRouter.routes.update.resultSchema).mutation(({ ctx, input }) => executeMethod(settingsRouter.routes.update, ctx, input)),
+  }),
+  jobs: t.router({
+    list: procedure.input(jobsRouter.routes.list.paramsSchema).output(jobsRouter.routes.list.resultSchema).query(({ ctx, input }) => executeMethod(jobsRouter.routes.list, ctx, input)),
+    get: procedure.input(jobsRouter.routes.get.paramsSchema).output(jobsRouter.routes.get.resultSchema).query(({ ctx, input }) => executeMethod(jobsRouter.routes.get, ctx, input)),
+    retry: procedure.input(jobsRouter.routes.retry.paramsSchema).output(jobsRouter.routes.retry.resultSchema).mutation(({ ctx, input }) => executeMethod(jobsRouter.routes.retry, ctx, input)),
+  }),
+  downloads: t.router({
+    list: procedure.input(downloadsRouter.routes.list.paramsSchema).output(downloadsRouter.routes.list.resultSchema).query(({ ctx, input }) => executeMethod(downloadsRouter.routes.list, ctx, input)),
+    get: procedure.input(downloadsRouter.routes.get.paramsSchema).output(downloadsRouter.routes.get.resultSchema).query(({ ctx, input }) => executeMethod(downloadsRouter.routes.get, ctx, input)),
+    retry: procedure.input(downloadsRouter.routes.retry.paramsSchema).output(downloadsRouter.routes.retry.resultSchema).mutation(({ ctx, input }) => executeMethod(downloadsRouter.routes.retry, ctx, input)),
+  }),
   tv: t.router({
     status: procedure.input(tvRouter.routes.status.paramsSchema).output(tvRouter.routes.status.resultSchema).query(({ ctx, input }) => executeMethod(tvRouter.routes.status, ctx, input)),
     list: procedure.input(tvRouter.routes.list.paramsSchema).output(tvRouter.routes.list.resultSchema).query(({ ctx, input }) => executeMethod(tvRouter.routes.list, ctx, input)),

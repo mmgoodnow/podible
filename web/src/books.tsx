@@ -279,11 +279,8 @@ export function BookCollection({ kind }: { kind: "series" | "author" }) {
   return (
     <>
       <Link className="back" href="/library">
-        Back to your shelves
+        Back to library
       </Link>
-      <span className="eyebrow">
-        {kind === "series" ? "ONE MORE CHAPTER" : "MORE FROM THE AUTHOR"}
-      </span>
       <h1>{name || params.get("key") || "Choose a collection"}</h1>
       {result.isPending && <p role="status">Finding books...</p>}
       {result.isError && (
@@ -291,7 +288,7 @@ export function BookCollection({ kind }: { kind: "series" | "author" }) {
       )}
       {result.data && (
         <>
-          <h2 className="editorial-heading">On your shelves</h2>
+          <h2 className="editorial-heading">In your library</h2>
           {result.data.libraryBooks.length ? (
             <div className="book-grid">
               {result.data.libraryBooks.map((book) => (

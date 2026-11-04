@@ -8,21 +8,21 @@ import {
 } from "../auth";
 import { buildPlexAuthUrl, createEphemeralPlexIdentity, createPlexPin } from "../plex";
 import { BooksRepo } from "../repo";
-import { renderLoginPage } from "./login-page";
-import { renderAppAuthErrorPage, sanitizeRedirectPath } from "./common";
+import { sanitizeRedirectPath } from "./common";
 import { getCurrentSession, type HttpEnv } from "./middleware";
-import { renderPlexImmediateResultPage, renderPlexLoadingPage, waitForPlexLoginResult } from "./support";
+import { waitForPlexLoginResult } from "./support";
+
+function plexResultRedirect(c: Context<HttpEnv>, result: { ok: boolean; redirectTo: string | null; error?: string | null }): Response {
+  const query = new URLSearchParams({ ok: result.ok ? "1" : "0", redirectTo: sanitizeRedirectPath(result.redirectTo) ?? "/" });
+  if (!result.ok) query.set("error", result.error || "Plex sign-in failed.");
+  return c.redirect(`/login/plex/result?${query}`, 303);
+}
 
 export function createLoginRoutes(repo: BooksRepo): Hono<HttpEnv> {
   const app = new Hono<HttpEnv>();
-  app.get("/", (c) => {
-    const settings = repo.getSettings();
-    return renderLoginPage(settings, {
-      notice: c.req.query("notice"),
-      error: c.req.query("error"),
-      currentUser: getCurrentSession(c),
-      redirectTo: sanitizeRedirectPath(c.req.query("redirectTo")),
-    });
+  app.use("*", async (c, next) => {
+    c.header("Cache-Control", "no-store");
+    await next();
   });
 
   app.post("/plex/start", async (c) => {
@@ -58,21 +58,19 @@ export function createLoginRoutes(repo: BooksRepo): Hono<HttpEnv> {
     }
   });
 
-  app.get("/plex/loading", (c) => renderPlexLoadingPage(repo.getSettings()));
-
   app.get("/plex/complete", async (c) => {
-    let settings = repo.getSettings();
+    const settings = repo.getSettings();
     const redirectTo = sanitizeRedirectPath(c.req.query("redirectTo"));
     if (settings.auth.mode !== "plex") {
-      return renderPlexImmediateResultPage({ ok: false, redirectTo: "/", error: "Plex sign-in is not enabled." });
+      return plexResultRedirect(c, { ok: false, redirectTo: "/login", error: "Plex sign-in is not enabled." });
     }
-    const pinId = Number.parseInt(c.req.query("pinId") ?? "", 10);
-    if (!Number.isInteger(pinId) || pinId <= 0) {
-      return renderPlexImmediateResultPage({ ok: false, redirectTo: "/login", error: "Missing or invalid Plex PIN id." });
+    const rawPinId = c.req.query("pinId") ?? "";
+    const pinId = Number(rawPinId);
+    if (!/^[1-9]\d*$/.test(rawPinId) || !Number.isSafeInteger(pinId)) {
+      return plexResultRedirect(c, { ok: false, redirectTo: "/login", error: "Missing or invalid Plex PIN id." });
     }
     const result = await waitForPlexLoginResult(repo, settings, pinId, null, redirectTo);
-    settings = result.settings;
-    const response = renderPlexImmediateResultPage({
+    const response = plexResultRedirect(c, {
       ok: result.kind === "success",
       redirectTo: result.redirectTo,
       error: result.kind === "error" ? result.error : null,
@@ -103,29 +101,33 @@ export function createLogoutRoutes(repo: BooksRepo): Hono<HttpEnv> {
 
 export function createAppAuthRoutes(repo: BooksRepo): Hono<HttpEnv> {
   const app = new Hono<HttpEnv>();
-  app.get("/:attemptId", (c) => renderAppLogin(repo, c, false));
-  app.get("/:attemptId/complete", (c) => renderAppLogin(repo, c, true));
+  app.use("*", async (c, next) => {
+    c.header("Cache-Control", "no-store");
+    await next();
+  });
+  app.get("/:attemptId", (c) => handleAppLogin(repo, c, false));
+  app.get("/:attemptId/complete", (c) => handleAppLogin(repo, c, true));
   return app;
 }
 
-function renderAppLogin(repo: BooksRepo, c: Context<HttpEnv>, isComplete: boolean): Response {
-  const settings = repo.getSettings();
+function handleAppLogin(repo: BooksRepo, c: Context<HttpEnv>, isComplete: boolean): Response {
   repo.deleteExpiredAppLoginAttempts(new Date().toISOString());
   const attemptId = c.req.param("attemptId");
   if (!attemptId) {
-    return renderAppAuthErrorPage(settings, "This app sign-in attempt is missing or has expired.");
+    return c.redirect(`/login?error=${encodeURIComponent("This app sign-in attempt is missing or has expired.")}`, 303);
   }
   const attempt = repo.getAppLoginAttempt(attemptId);
   if (!attempt) {
-    return renderAppAuthErrorPage(settings, "This app sign-in attempt is missing or has expired.");
+    return c.redirect(`/login?error=${encodeURIComponent("This app sign-in attempt is missing or has expired.")}`, 303);
   }
 
   const currentSession = getCurrentSession(c);
   const attemptPath = `/auth/app/${encodeURIComponent(attempt.id)}`;
+  if (!currentSession) {
+    const query = new URLSearchParams({ inline: "1", redirectTo: `${attemptPath}/complete` });
+    return c.redirect(`/login?${query}`, 303);
+  }
   if (isComplete) {
-    if (!currentSession) {
-      return c.redirect(attemptPath, 303);
-    }
     const code = createSessionToken();
     repo.createAuthCode({
       codeHash: hashSessionToken(code),
@@ -139,13 +141,5 @@ function renderAppLogin(repo: BooksRepo, c: Context<HttpEnv>, isComplete: boolea
     return c.redirect(callbackUrl.toString(), 302);
   }
 
-  if (currentSession) {
-    return c.redirect(`${attemptPath}/complete`, 303);
-  }
-
-  return renderLoginPage(settings, {
-    currentUser: currentSession,
-    redirectTo: `${attemptPath}/complete`,
-    inlinePlexLogin: true,
-  });
+  return c.redirect(`${attemptPath}/complete`, 303);
 }

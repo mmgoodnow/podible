@@ -39,8 +39,7 @@ function Artwork({ bookId }: { bookId: number }) {
     <section className="panel artwork-panel">
       <div className="progress-heading">
         <div>
-          <span className="eyebrow">MAKE IT YOURS</span>
-          <h2>Judge it by its cover.</h2>
+          <h2>Cover artwork</h2>
         </div>
         <button className="secondary" onClick={() => setShow(!show)}>
           {show ? "Hide covers" : "Choose artwork"}
@@ -145,7 +144,6 @@ function AudioContents({
     status.data?.status === "pending" || status.data?.status === "running";
   return (
     <section className="panel contents-panel">
-      <span className="eyebrow">BETWEEN THE LINES</span>
       <h2>Chapters & transcript</h2>
       <p className="muted">
         For the selected audio edition. Generation also curates chapter
@@ -299,7 +297,7 @@ export function BookDetail({
     return (
       <>
         <Link className="back" href="/library">
-          Back to your shelves
+          Back to library
         </Link>
         <Failure error={detail.error} retry={() => void detail.refetch()} />
       </>
@@ -328,7 +326,7 @@ export function BookDetail({
   return (
     <>
       <Link className="back" href="/library">
-        Back to your shelves
+        Back to library
       </Link>
       <section className="book-hero">
         <div className="book-portrait">
@@ -339,10 +337,8 @@ export function BookDetail({
               <span>{book.title}</span>
             )}
           </div>
-          <span className="portrait-caption">A PLACE ON YOUR SHELF</span>
         </div>
         <div className="book-story">
-          <span className="eyebrow">YOUR PERSONAL EDITION</span>
           <h1>{book.title}</h1>
           <Link
             className="book-author"
@@ -382,10 +378,7 @@ export function BookDetail({
             {book.publishedAt && <span>{book.publishedAt}</span>}
             {book.language && <span>{book.language}</span>}
           </div>
-          <p className="book-description">
-            {book.description ||
-              `${book.title} by ${book.author}. Your next story, ready for its own place in your library.`}
-          </p>
+          {book.description && <p className="book-description">{book.description}</p>}
           {book.addedByUser && (
             <p className="muted">
               Added by{" "}
@@ -397,8 +390,7 @@ export function BookDetail({
       <div className="book-columns">
         <div>
           <section className="panel listening-panel">
-            <span className="eyebrow">PRESS PLAY. TURN A PAGE.</span>
-            <h2>Read it your way.</h2>
+            <h2>Listen or download</h2>
             {book.playback.audioOptions.length > 0 && (
               <label className="field">
                 Audio edition
@@ -503,7 +495,6 @@ export function BookDetail({
         </div>
         <aside>
           <section className="panel acquisition-panel">
-            <span className="eyebrow">BEHIND THE SHELVES</span>
             <h2>
               {latest?.state === "waiting_provider"
                 ? "Waiting for the provider."
@@ -512,8 +503,8 @@ export function BookDetail({
                   : latest?.state === "needs_attention"
                     ? "Provider needs attention."
                     : latest?.status === "failed"
-                      ? "Acquisition needs a hand."
-                      : "Find your editions."}
+                      ? "Acquisition failed."
+                      : "Acquisition"}
             </h2>
             {activity.isPending && <p role="status">Checking acquisition...</p>}
             {activity.isError && (
@@ -589,7 +580,7 @@ export function BookDetail({
           </section>
           {(audioReleaseIds.length > 0 || ebook?.releaseId) && (
             <section className="panel">
-              <h2>Not the right story?</h2>
+              <h2>Report a problem</h2>
               <p className="muted">
                 Report a wrong import. We keep this edition while reviewing
                 alternatives and, if needed, reacquiring.
