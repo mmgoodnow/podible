@@ -73,14 +73,17 @@ export function Library({ initialPage, query, embedded = false }: {
   );
   const q = query ?? draft;
   const deferredQ = useDeferredValue(q);
-  const books = useInfiniteQuery(
-    trpc.library.list.infiniteQueryOptions(
-      { q: deferredQ, limit: 48 },
-      { getNextPageParam: (last) => last.nextCursor, refetchInterval: 15_000,
-        // Seed only this authenticated actor's exact query; filters/pagination keep their own keys.
-        initialData: initialPage?.q === deferredQ ? { pages: [initialPage.library], pageParams: [null] } : undefined },
-    ),
+  const listOptions = trpc.library.list.infiniteQueryOptions(
+    { q: deferredQ, limit: 48 },
+    { getNextPageParam: (last) => last.nextCursor, refetchInterval: 15_000 },
   );
+  const books = useInfiniteQuery({
+    ...listOptions,
+    // Preserve tRPC's omitted first cursor when the seeded page is refetched.
+    initialData: initialPage?.q === deferredQ ? {
+      pages: [initialPage.library], pageParams: [listOptions.initialPageParam],
+    } : undefined,
+  });
   const items = books.data?.pages.flatMap((page) => page.items) ?? [];
   return (
     <>

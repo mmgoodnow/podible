@@ -38,6 +38,14 @@ try {
   assert.equal(requests.some((path) => path.includes("library.list")), false, "Bootstrap immediately duplicated the first-page request");
   await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Settings", exact: true }).waitFor();
   releaseIdentity();
+  const refresh = await page.waitForResponse(response => new URL(response.url()).pathname.includes("library.list"), { timeout: 25_000 });
+  const refreshInput = JSON.parse(new URL(refresh.url()).searchParams.get("input")!);
+  console.log("Library background refresh input:", JSON.stringify(refreshInput));
+  assert.equal(refresh.status(), 200, "The first seeded-page background refresh must succeed");
+  assert.equal(Object.values(refreshInput).some(input => (input as { cursor?: unknown }).cursor === null), false,
+    "The initial-page cursor must be omitted, not serialized as null");
+  assert.equal(await page.locator(".book-card").count(), 48);
+  assert.equal(await page.getByRole("alert").count(), 0);
   await page.getByRole("button", { name: "Load more", exact: true }).click();
   await page.locator(".book-card").nth(51).waitFor();
   await page.getByRole("searchbox").fill("Piranesi");
