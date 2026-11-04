@@ -1,5 +1,5 @@
 import { useState, type CSSProperties, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../src/trpc";
 import { useTRPC } from "./rpc";
@@ -37,6 +37,11 @@ function ResourceAudit({ resource, sourceUpdatedAt }: { resource: Resource; sour
   const audit = useQuery(trpc.retention.audit.queryOptions(resource.key, {
     enabled: false, retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false,
   }));
+  const preview = useQuery(trpc.retention.preview.queryOptions({ targetId: resource.targetId }, {
+    enabled: false, retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false,
+  }));
+  const evict = useMutation(trpc.retention.evict.mutationOptions({ onSuccess: () => { void audit.refetch(); void preview.refetch(); } }));
+  const candidate = preview.data?.candidates.find((candidate) => candidate.targetId === resource.targetId);
   // A page refresh supersedes an older per-resource query still retained in the cache.
   const item = audit.data && audit.dataUpdatedAt >= sourceUpdatedAt ? audit.data : resource;
   return <details className="panel">
@@ -97,6 +102,22 @@ function ResourceAudit({ resource, sourceUpdatedAt }: { resource: Resource; sour
       </li>)}
     </ul>}
     <p className="notice">Read-only result. Even passing evidence does not authorize deletion or change desired presence.</p>
+    <h3>Eviction preview</h3>
+    <p>Only canonical movie objects are removed. Torrent registrations and their independent seed-store files remain intact. The server rechecks all safety evidence before acting.</p>
+    <button type="button" className="secondary" disabled={preview.isFetching || evict.isPending}
+      onClick={() => { void preview.refetch(); }}>{preview.isFetching ? "Checking eligibility..." : "Preview eviction"}</button>
+    {preview.isError && <p role="alert">Eviction preview failed: {preview.error.message}</p>}
+    {preview.data && !candidate && <p>No selected canonical movie version can be evaluated for this target.</p>}
+    {candidate && <>
+      <p>{candidate.eligible ? "Eligible after current checks" : "Not eligible"} / Reclaimable: {bytes(candidate.reclaimableBytes)} / Plays: {known(candidate.playCount)}</p>
+      {candidate.blockers.length > 0 && <ul aria-label="Eviction safety blockers">{candidate.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul>}
+      {candidate.eligible && candidate.expectedRevision !== null && <button type="button" disabled={evict.isPending} onClick={() => {
+        if (window.confirm(`Remove Podible's canonical copy of ${item.title}? Seed-store data is retained. You can request it again later.`))
+          evict.mutate({ targetId: item.targetId, expectedRevision: candidate.expectedRevision!, reason: "Administrator requested eviction after inspecting eligibility" });
+      }}>{evict.isPending ? "Queueing eviction..." : "Evict canonical copy"}</button>}
+    </>}
+    {evict.isError && <p role="alert">Eviction was not queued: {evict.error.message}</p>}
+    {evict.data && <p role="status">Eviction queued as job {evict.data.jobId}. Queueing is not confirmation that bytes were removed.</p>}
     <h3>Canonical file facts</h3>
     {!item.files.length && <p>No complete owned-file inventory is available. This is not proof of zero bytes or intentional absence.</p>}
     {item.files.map((file) => <details className="panel" key={file.id}>
@@ -123,11 +144,28 @@ export function RetentionAudit() {
   const status = useQuery(trpc.retention.status.queryOptions({ afterTargetId, limit: 20 }, {
     retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false,
   }));
+  const pressure = useQuery(trpc.retention.preview.queryOptions({}, {
+    enabled: false, retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false,
+  }));
   return <>
     <h1>Retention audit</h1>
+    <section className="panel" aria-label="Disk-pressure management">
+      <h2>Disk-pressure management</h2>
+      <p>The background worker checks every 15 minutes and reclaims eligible owned movie objects only when free space falls below the configured threshold. It protects recent requests, protected titles, active playback and acquisitions, shared files, and torrent seed data.</p>
+      <p>Policy is in Settings JSON under <code>retention.minimumFreeBytes</code> and <code>retention.protectedMovieTargetIds</code>. The default free-space floor is 20 GiB. TV, books and foreign libraries are not automatically evicted.</p>
+      <button type="button" disabled={pressure.isFetching} onClick={() => { void pressure.refetch(); }}>
+        {pressure.isFetching ? "Checking disk..." : "Preview disk pressure"}
+      </button>
+      {pressure.isError && <p role="alert">Disk preview failed: {pressure.error.message}</p>}
+      {pressure.data && <>
+        <p>Available: {bytes(pressure.data.disk.availableBytes)} / {pressure.data.pressure === null ? "Pressure unknown" : pressure.data.pressure ? "Below the free-space floor" : "No disk pressure"}</p>
+        <p className="muted">{pressure.data.disk.reason} Observed {timestamp(pressure.data.disk.observedAt)}. This preview does not delete anything.</p>
+        {pressure.data.candidates.length > 0 && <ul>{pressure.data.candidates.map((candidate) => <li key={candidate.targetId}>{candidate.title}: {candidate.eligible ? "Eligible" : candidate.blockers.join(", ")} / {bytes(candidate.reclaimableBytes)}</li>)}</ul>}
+      </>}
+    </section>
     <section className="panel" aria-label="Read-only audit mode">
-      <h2>Read-only / audit only</h2>
-      <p>No files are deleted, no downloads are started, and no resource is marked evicted. This page reads server-observed facts; it cannot change intent or retention settings.</p>
+      <h2>Read-only resource observations</h2>
+      <p>Loading or refreshing these audits does not delete files, start downloads, or change intent. Explicit eviction controls appear separately after an eligibility preview.</p>
       <p>Current scope: canonical movie objects. TV and book retention audits are not available yet. Watch history, seed history, and reclaimable storage stay unknown until verified.</p>
       <button type="button" disabled={status.isFetching} onClick={() => { void status.refetch(); }}>
         {status.isFetching ? "Inspecting page..." : "Refresh page audit"}

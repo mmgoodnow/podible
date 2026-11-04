@@ -2,6 +2,7 @@ import type { AppSettings } from "./app-types";
 import { defaultMovieSettings, movieSettingsSchema } from "./movies/settings";
 import { prowlarrSettingsSchema } from "./media/prowlarr";
 import { tvSettingsSchema } from "./tv/settings";
+import { retentionPolicySchema } from "./media/retention-policy-types";
 
 type SettingsOverrides = Partial<Omit<AppSettings, "rtorrent" | "polling" | "recovery" | "feed" | "auth" | "agents" | "notifications">> & {
   rtorrent?: Partial<AppSettings["rtorrent"]>;
@@ -22,6 +23,7 @@ export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
     prowlarr: prowlarrSettingsSchema.parse({}),
     movies: defaultMovieSettings(),
     tv: tvSettingsSchema.parse({}),
+    retention: retentionPolicySchema.parse({}),
     torznab: [],
     rtorrent: {
       transport: "http-xmlrpc",
@@ -72,6 +74,7 @@ export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
     ...overrides,
     movies: movieSettingsSchema.parse(overrides?.movies ?? defaults.movies),
     tv: tvSettingsSchema.parse(overrides?.tv ?? defaults.tv),
+    retention: retentionPolicySchema.parse(overrides?.retention ?? {}),
     prowlarr: prowlarrSettingsSchema.parse(overrides?.prowlarr ?? {}),
     rtorrent: {
       ...defaults.rtorrent,
@@ -140,6 +143,7 @@ export function parseSettings(value: string): AppSettings {
     ...parsed,
     movies: movieSettingsSchema.parse(parsed.movies ?? {}),
     tv: tvSettingsSchema.parse(parsed.tv ?? {}),
+    retention: retentionPolicySchema.parse(parsed.retention ?? {}),
     prowlarr: prowlarrSettingsSchema.parse(parsed.prowlarr ?? {}),
     torznab: Array.isArray(parsed.torznab) ? parsed.torznab : defaults.torznab,
     rtorrent: {

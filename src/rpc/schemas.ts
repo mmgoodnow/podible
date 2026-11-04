@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { AppSettings } from "../app-types";
 import { defaultMovieSettings, movieSettingsSchema } from "../movies/settings";
 import { tvSettingsSchema } from "../tv/settings";
+import { retentionPolicySchema } from "../media/retention-policy-types";
 import { JOB_TYPES } from "../job-types";
 import { prowlarrSettingsSchema } from "../media/prowlarr";
 
@@ -54,6 +55,7 @@ export const appSettingsSchema: z.ZodType<AppSettings> = z.object({
   prowlarr: prowlarrSettingsSchema.prefault({}),
   movies: movieSettingsSchema.default(defaultMovieSettings()),
   tv: tvSettingsSchema.prefault({}),
+  retention: retentionPolicySchema.prefault({}),
   torznab: z.array(
     z.object({
       name: z.string(),

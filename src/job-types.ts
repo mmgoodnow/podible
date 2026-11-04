@@ -5,4 +5,5 @@ export const JOB_TYPES = [
   "movie_acquire", "movie_reconcile", "movie_shadow_sync", "movie_shadow_evaluate", "movie_dual_write_sync",
   "acquire", "download", "import", "reconcile", "full_library_refresh",
   "chapter_analysis", "cover_generation", "metadata_hydration",
+  "retention_cleanup",
 ] as const;

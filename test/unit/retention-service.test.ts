@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -317,6 +317,47 @@ describe("retention service conservative storage evidence", () => {
     expect(seed.calls).toEqual(["torrent-get"]);
   });
 
+  test("unchanged completion counters cannot turn same-size corrupted seed bytes into a surviving copy", async () => {
+    await using f = await fixture();
+    const seed = await bindSeed(f);
+    expect((await f.service().audit(f.key)).seeding.state).toBe("verified-independent-seed-store");
+    await fs.writeFile(path.join(seed.seedDirectory, "movie.mkv"), Buffer.alloc(8192, 90));
+    const result = await f.service().audit(f.key);
+    expect(result.seeding.state).toBe("last-copy-or-unknown");
+    expect(result.seeding.obligations[0]!.remainingSeedableCopies).not.toBe(1);
+    expect(result.audit.eligible).toBe(false);
+    expect((await fs.readFile(f.objectPath))[0]).toBe(65);
+    expect(seed.calls).toEqual(["torrent-get", "torrent-get"]);
+  });
+
+  test("surviving-copy proof must cover every canonical object, not just one matching member", async () => {
+    await using f = await fixture();
+    await bindSeed(f);
+    const id = randomUUID(), relative = `files/${id.slice(0, 2)}/${id}.mkv`;
+    await fs.mkdir(path.dirname(path.join(f.contentRoot, relative)), { recursive: true });
+    await fs.writeFile(path.join(f.contentRoot, relative), Buffer.alloc(8192, 66));
+    f.db.query("INSERT INTO managed_content_files(id,relative_path,size_bytes,probe_json,created_at) VALUES(?,?,8192,'{}',?)")
+      .run(id, relative, new Date().toISOString());
+    f.db.query("INSERT INTO movie_version_files(version_id,file_id,sequence) VALUES(?,?,1)").run(f.versionId, id);
+    const result = await f.service().audit(f.key);
+    expect(result.files).toHaveLength(2);
+    expect(result.seeding.state).toBe("last-copy-or-unknown");
+    expect(result.seeding.obligations[0]!.remainingSeedableCopies).toBeNull();
+    expect(result.audit.eligible).toBe(false);
+  });
+
+  test("durable canonical SHA evidence revalidates staged-path recovery against fresh seed bytes", async () => {
+    await using f = await fixture();
+    const seed = await bindSeed(f), stat = await fs.stat(f.objectPath, { bigint: true });
+    const sha256 = createHash("sha256").update(await fs.readFile(f.objectPath)).digest("hex");
+    await fs.rename(f.objectPath, path.join(f.root, "staged-owned.mkv"));
+    const evidence = [{ canonicalPath: f.objectPath, device: String(stat.dev), inode: String(stat.ino), sizeBytes: Number(stat.size),
+      allocatedBytes: Number(stat.blocks * 512n), linkCount: 1, ctimeNs: String(stat.ctimeNs), mtimeNs: String(stat.mtimeNs), sha256 }];
+    expect((await f.service().seedEvidence(f.requested.targetId, f.settings.movies.managedRoot, evidence)).state).toBe("verified-independent-seed-store");
+    await fs.writeFile(path.join(seed.seedDirectory, "movie.mkv"), Buffer.alloc(8192, 90));
+    expect((await f.service().seedEvidence(f.requested.targetId, f.settings.movies.managedRoot, evidence)).state).toBe("last-copy-or-unknown");
+  });
+
   test("wrong client, near-match ownership labels and escaping engine paths cannot supply seed evidence", async () => {
     await using f = await fixture();
     await bindSeed(f, { label: "Podible Movies foreign" });
@@ -359,16 +400,22 @@ describe("retention service conservative storage evidence", () => {
   });
 });
 
-describe("retention admin read-only router", () => {
-  test("strict admin-only status/audit accept no file paths, seed claims or eviction mutation", async () => {
+describe("retention administrator router", () => {
+  test("read-only observations reject file paths, seed claims and intent writes; mutations require an admin", async () => {
     await using f = await fixture();
     const router = createRetentionRouter(f.adapters);
     const ctx: RpcContext = { repo: f.repo, startTime: 0, request: new Request("https://podible.invalid/rpc"), session: null };
-    expect(Object.keys(router.routes)).toEqual(["status", "audit"]);
+    expect(Object.keys(router.routes)).toEqual(["status", "audit", "preview", "evict"]);
     expect(router.routes.status.readOnly).toBe(true);
     expect(router.routes.audit.readOnly).toBe(true);
+    expect(router.routes.preview.readOnly).toBe(true);
+    expect(router.routes.evict.readOnly).toBe(false);
+    for (const method of Object.values(router.routes))
+      await expect(executeMethod<any, any>(method, ctx, {})).rejects.toMatchObject({ code: -32001 });
     await expect(executeMethod(router.routes.status, ctx, {})).rejects.toMatchObject({ code: -32001 });
     ctx.session = { user_id: f.user.id, is_admin: 0 } as RpcContext["session"];
+    for (const method of Object.values(router.routes))
+      await expect(executeMethod<any, any>(method, ctx, {})).rejects.toMatchObject({ code: -32003 });
     await expect(executeMethod(router.routes.audit, ctx, f.key)).rejects.toMatchObject({ code: -32003 });
     ctx.session = { user_id: f.user.id, is_admin: 1 } as RpcContext["session"];
     for (const extra of [{ filePath: f.objectPath }, { secondsSeeded: 9_000_000 }, { desiredPresence: "evicted" }])
@@ -383,6 +430,26 @@ describe("retention admin read-only router", () => {
     expect(result.resources).toHaveLength(1);
     expect(f.db.query("SELECT total_changes() AS n").get()).toEqual(before);
     expect(f.repo.retention.events(f.key)).toEqual(beforeEvents);
+  });
+
+  test("pressure preview is bounded and nonmutating; callers cannot supply deletion evidence", async () => {
+    await using f = await fixture();
+    const router = createRetentionRouter({ ...f.adapters, observeDisk: async () => ({
+      state: "known", filesystem: "test", device: "1", totalBytes: 100 * 1024 ** 3,
+      availableBytes: 90 * 1024 ** 3, observedAt: new Date().toISOString(), reason: "Fixture disk",
+    }) });
+    const ctx: RpcContext = { repo: f.repo, startTime: 0, request: new Request("https://podible.invalid/rpc"),
+      session: { user_id: f.user.id, is_admin: 1 } as RpcContext["session"] };
+    const before = f.db.query("SELECT total_changes() AS n").get();
+    expect(await executeMethod(router.routes.preview, ctx, {})).toMatchObject({ pressure: false, candidates: [] });
+    for (const params of [{ limit: 101 }, { targetId: 0 }, { filePath: f.objectPath }, { force: true }, { watchHistory: "watched" }])
+      await expect(executeMethod(router.routes.preview, ctx, params)).rejects.toMatchObject({ code: -32602 });
+    for (const extra of [{ filePath: f.objectPath }, { force: true }, { secondsSeeded: 9_000_000 }])
+      await expect(executeMethod(router.routes.evict, ctx, { targetId: f.requested.targetId, expectedRevision: 1, reason: "Fixture", ...extra }))
+        .rejects.toMatchObject({ code: -32602 });
+    await expect(executeMethod(router.routes.evict, ctx, { targetId: f.requested.targetId, expectedRevision: 1, reason: "Fixture" }))
+      .rejects.toThrow("fresh-or-unknown-request");
+    expect(f.db.query("SELECT total_changes() AS n").get()).toEqual(before);
   });
 
   test("reading with absent settings never creates defaults, and pagination is bounded", async () => {

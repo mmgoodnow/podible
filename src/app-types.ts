@@ -38,6 +38,7 @@ export type AppSettings = {
   prowlarr: import("zod").infer<typeof import("./media/prowlarr").prowlarrSettingsSchema>;
   movies: import("./movies/settings").MovieSettings;
   tv: import("./tv/settings").TvSettings;
+  retention: import("./media/retention-policy-types").RetentionPolicy;
   torznab: TorznabSource[];
   rtorrent: {
     transport: "http-xmlrpc";

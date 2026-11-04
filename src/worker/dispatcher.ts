@@ -21,11 +21,13 @@ import { syncTvShadow, evaluateTvShadow } from "../tv/shadow";
 import { syncTvRequests } from "../tv/sync";
 import { reconcileTv } from "../tv/maintenance";
 import { matchTvFeed } from "../tv/feed";
+import { runRetentionCleanup } from "../media/retention-execution";
 
 export type JobProcessResult = "done";
 
 /** Domain handlers are code, not a database execution-type enum. */
 export async function processJob(ctx: WorkerContext, job: JobRow): Promise<JobProcessResult> {
+  if (job.type === "retention_cleanup") return runRetentionCleanup(ctx, job, ctx.retentionAdapters);
   if (job.type === "tv_acquire") return acquireTv(ctx, job);
   if (job.type === "tv_sync") return syncTvRequests(ctx, job);
   if (job.type === "tv_reconcile") return reconcileTv(ctx);

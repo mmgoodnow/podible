@@ -29,13 +29,13 @@ try {
   };
   const anonymous = await browser.newContext(), readerContext = await browser.newContext();
   await readerContext.addCookies([{ name: "podible_session", value: "admin-reader-fixture", url, httpOnly: true }]);
-  for (const method of ["settings.get", "settings.update", "adminWeb.users", "adminWeb.ops", "adminWeb.plexServers", "adminWeb.selectPlexServer", "adminWeb.refresh", "jobs.retry"]) {
+  for (const method of ["settings.get", "settings.update", "adminWeb.users", "adminWeb.ops", "adminWeb.plexServers", "adminWeb.selectPlexServer", "adminWeb.refresh", "jobs.retry", "retention.preview", "retention.evict"]) {
     assert.equal((await rpc(method, {}, anonymous.request)).error?.code, -32001);
     assert.equal((await rpc(method, {}, readerContext.request)).error?.code, -32003);
   }
   assert.equal((await readerContext.request.get(new URL("/api/trpc/adminWeb.users?input=%7B%7D", url).href)).status(), 403);
   const readerPage = await readerContext.newPage();
-  for (const pathname of ["/settings", "/users", "/ops"]) {
+  for (const pathname of ["/settings", "/users", "/ops", "/retention"]) {
     await readerPage.goto(new URL(pathname, url).href);
     await readerPage.getByRole("alert").getByText("Administrator access required.").waitFor();
     assert.equal(await readerPage.getByLabel("Settings JSON", { exact: true }).count(), 0);
@@ -212,6 +212,19 @@ try {
   assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false, "Settings overflows mobile viewport");
   await page.getByLabel("Plex access server", { exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(artifacts, "admin-settings-mobile.png"), animations: "disabled" });
+  const cleanupBefore = (await rpc("jobs.list", { type: "retention_cleanup" })).result.jobs;
+  await page.getByRole("navigation").getByRole("link", { name: "Retention", exact: true }).click();
+  await page.getByRole("heading", { name: "Disk-pressure management", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Preview disk pressure", exact: true }).click();
+  await page.getByText("No disk pressure", { exact: false }).waitFor();
+  const waitingAudit = page.locator("details.panel").filter({ has: page.locator("summary").filter({ hasText: "Fixture Waiting For Offers" }) }).first();
+  await waitingAudit.locator("summary").first().click();
+  await waitingAudit.getByRole("button", { name: "Preview eviction", exact: true }).click();
+  await waitingAudit.getByText("No selected canonical movie version can be evaluated for this target.", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Evict canonical copy", exact: true }).count(), 0);
+  assert.deepEqual((await rpc("jobs.list", { type: "retention_cleanup" })).result.jobs, cleanupBefore, "Preview queued a destructive job");
+  assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false, "Retention overflows mobile viewport");
+  await page.screenshot({ path: path.join(artifacts, "admin-retention-mobile.png"), animations: "disabled" });
   assert.deepEqual(pageErrors, [], "Admin UI page errors");
   assert.deepEqual(networkErrors, [], "Unexpected admin UI request/HTTP errors");
   console.log("Admin Chrome acceptance passed: canonical routes/auth, removed DB/curation, safe users, preserved JSON drafts/refetch/navigation/in-flight edits, validated saves and Plex rebase, operational triage/retry/provider/storage, lazy diagnostics, bounded refresh and mobile layout.");

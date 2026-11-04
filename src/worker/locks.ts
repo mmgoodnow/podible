@@ -41,7 +41,7 @@ export function jobLockKeys(repo: BooksRepo, job: JobRow): string[] {
     const acquisition = payload?.acquisitionId ? repo.movies.acquisition(payload.acquisitionId) : null;
     return acquisition ? [`movie-target:${acquisition.target_id}`] : [];
   }
-  if (job.type === "full_library_refresh" || job.type === "reconcile") {
+  if (job.type === "full_library_refresh" || job.type === "reconcile" || job.type === "retention_cleanup") {
     return [GLOBAL_LOCK_KEY];
   }
 

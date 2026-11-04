@@ -366,6 +366,17 @@ export interface DB {
     "created_at": string;
   };
 
+  "retention_evictions": {
+    "id": string | null;
+    "namespace": string;
+    "resource_id": string;
+    "plan_json": string;
+    "job_id": number;
+    "created_at": string;
+    "finished_at": string | null;
+    "result_json": string | null;
+  };
+
   "retention_resources": {
     "namespace": string;
     "resource_id": string;

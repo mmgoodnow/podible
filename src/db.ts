@@ -11,6 +11,7 @@ import { RELEASE_INBOX_SCHEMA_SQL } from "./media/release-inbox-schema";
 import { BOOK_TORRENTS_SCHEMA_SQL } from "./media/book-torrents-schema";
 import { TV_SCHEMA_SQL } from "./tv/schema";
 import { RETENTION_SCHEMA_SQL } from "./media/retention-schema";
+import { RETENTION_EXECUTION_SCHEMA_SQL } from "./media/retention-execution-schema";
 import { TV_SHADOW_SCHEMA_SQL } from "./tv/shadow-repo";
 
 const SCHEMA_MIGRATION_ID = 1;
@@ -1169,6 +1170,7 @@ export function runMigrations(db: Database): void {
   apply(47, () => db.exec(RETENTION_SCHEMA_SQL));
   apply(48, () => db.exec(TV_SHADOW_SCHEMA_SQL));
   apply(49, () => db.exec("ALTER TABLE indexer_feeds ADD COLUMN boundary_json TEXT NULL"));
+  apply(50, () => db.exec(RETENTION_EXECUTION_SCHEMA_SQL));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

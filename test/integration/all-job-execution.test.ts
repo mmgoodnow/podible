@@ -19,7 +19,8 @@ const types = [
   "full_library_refresh",
   "chapter_analysis",
   "cover_generation",
-  "metadata_hydration"
+  "metadata_hydration",
+  "retention_cleanup",
 ] as const satisfies readonly JobType[];
 const exhaustive: Exclude<JobType, (typeof types)[number]> extends never ? true : never = true;
 void exhaustive;
@@ -71,7 +72,7 @@ test("all registered job types use checkpointed execution without claiming or re
   }
 });
 
-test.each(["full_library_refresh", "reconcile"] as const)("same execution parallel steps overlap, conflicting jobs and %s do not", async (maintenanceType) => {
+test.each(["full_library_refresh", "reconcile", "retention_cleanup"] as const)("same execution parallel steps overlap, conflicting jobs and %s do not", async (maintenanceType) => {
   const f = await fixture();
   const book = f.repo.createBook({ title: "Parallel", author: "Fixture" });
   const entered: string[] = [];

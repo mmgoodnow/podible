@@ -394,6 +394,11 @@ export class BooksRepo {
     return this.ensureSettings();
   }
 
+  readSettings(): AppSettings | null {
+    const row = this.db.query<{ value_json: string }, []>("SELECT value_json FROM settings WHERE id = 1").get();
+    return row ? parseSettings(row.value_json) : null;
+  }
+
   getJsonState<T>(key: string): T | null {
     const row = this.db.query("SELECT value_json FROM app_state WHERE key = ?").get(key) as {
       value_json: string;

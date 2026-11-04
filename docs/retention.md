@@ -1,9 +1,145 @@
-# Retention and Recovery Foundation
+# Retention and Recovery
 
-This track records shared lifecycle facts and supplies a pure, conservative deletion audit.
-It does not delete files, evict automatically, enqueue acquisition jobs, inspect disks or clients,
-register migrations, or add settings, RPC, or worker behavior. TV, movies and books can adopt it
-independently without a media-specific policy framework.
+Retention now includes a bounded disk-pressure cleanup loop for Podible-owned canonical movie
+objects. The original lifecycle repository and pure audit remain reusable foundations; neither
+deletes by itself. Only the durable movie execution path below performs deletion. TV objects,
+books, torrent registrations, and download/seed stores are outside its destructive scope.
+
+## Automatic Movie Cleanup
+
+The scheduler queues one global `retention_cleanup` job per fifteen-minute slot when movie storage
+is configured. It observes the movie filesystem first. Healthy or unknown space is a no-op:
+no per-title Plex history lookup, provider search, seed inspection, intent change, or deletion.
+This is not a periodic release-search/upgrade loop.
+
+`AppSettings.retention` has just two settings:
+
+```ts
+{ minimumFreeBytes: 20 * 1024 ** 3, protectedMovieTargetIds: [] }
+```
+
+When available space is below the reserve, inspect at most 20 selected targets per pass by
+default, rank the eligible inspected candidates by lowest global play count, then oldest last
+viewing, then stable target ID. A persisted scan cursor lets later passes inspect other targets;
+this is not a claim to have globally ranked unseen history. Execute at most three whole-target
+plans per job and measure space again after each. Stop as soon as the observed reserve is met,
+space becomes unknown, no inspected candidate is eligible, or the target budget is exhausted.
+The loop never treats expected file bytes as newly available space.
+
+Both automatic and explicit operator eviction require all of these conditions:
+
+- Existing tracked retention intent, a selected owned movie version, and a complete bounded
+  object/reference inventory. Untracked legacy content is never silently adopted or evicted.
+- Target is not in `protectedMovieTargetIds`. The most recent explicit request, considering
+  both movie request rows and retention request events across users, is at least 30 days old.
+  A fresh request is protected even when another user had already requested the same target.
+- Known watched history with verified all-user Plex visibility, positive known retained play
+  count, known last viewing, and a fresh `activePlayback: none`. Unwatched, owner-only, partial,
+  unknown, currently playing, or unresolvable playback evidence blocks action. Watched means
+  at least one completed history event, not that every authorized user has watched.
+- No relevant unfinished acquisition, active import/library refresh, pending publication, or
+  sharing outside this target's complete retained-version removal set. Repeated references
+  inside the same complete target set are not external sharing; other targets/media domains,
+  book asset paths, unknown view inventories, and extra hardlinks block.
+- Pinned content mount and exact registered UUID object layout, regular files, stable physical
+  identities, known positive reclaimable allocation, and independent surviving seed data.
+  Current source/seed bytes must match canonical SHA-256 evidence; cached Transmission
+  completion counters and same-size independent inodes alone are not surviving-copy proof.
+
+Seed obligations are scoped through the removal set's exact file/version/acquisition bindings,
+not every historical torrent ever associated with the target. Unrelated retired-version
+sources are not affected by deleting a newly acquired object. All bindings of each affected
+acquisition still participate, including retained failed/stalled siblings; those are not
+mistaken for the verified source merely because the acquisition eventually produced a version.
+
+No operator override turns unknown or unwatched evidence into permission. The 30-day last-seed-
+copy floor and unknown tracker obligations remain unchanged. V1 never deletes a last seed copy:
+it requires the independent owned seed store to survive with byte-backed coverage of every
+canonical object being removed. Seed-store paths, torrent records, resume state, and tracker
+registrations are not removed or controlled.
+
+### Filesystem Space Evidence
+
+The default action adapter supports Linux ext4 only. It combines the verified filesystem type
+with complete logical-reference checks, a single inode link, pinned open-file identity, stable
+size/timestamps, and observed allocated blocks. Sparse files are counted by allocation, not
+logical length. Unsupported filesystems or unverified sharing remain unknown; there is no
+generic `file size = freed bytes` fallback or client-authored reclaimability claim.
+
+These are filesystem allocator bytes, not a promise of underlying thin-pool, hardware, or
+block-device snapshot savings. Results retain filesystem availability before/after and
+`observedAvailableDeltaBytes` separately from planned allocation. `attributedFreedBytes` stays
+null because concurrent volume activity can increase or decrease the observed delta. Available
+space after each action, not that delta or an expected byte sum, controls the pressure loop.
+
+A predeployment read-only probe found the configured production movie root on ext4 (`0xef53`)
+with roughly 59 TB available, comfortably above the default reserve. This supports a healthy
+no-op expectation; it is not evidence that production deletion was exercised.
+
+### Intent, Effects, and Recovery
+
+Schema 50 installs `RETENTION_EXECUTION_SCHEMA_SQL` from `retention-execution-schema.ts`.
+`retention_evictions` records an immutable resource/file plan, job linkage, creation time, and
+eventual domain outcome. It does not duplicate Reflow status, attempts, leases, or retry fields.
+The existing `BooksRepo.retention` uses the same application connection as requests and outbox.
+
+An operator plan atomically records eviction intent, clears the selected movie version with
+revision fencing, creates the durable job/outbox command, and stores the exact plan. A pressure
+job stores each plan under its already durable job. Movie/request/version/file DB identities
+survive; explicit re-request can restore desired presence and acquire or reuse bytes normally.
+Eviction intent alone never sets actual presence to missing and never proves space was freed.
+
+Reflow captures original per-object SHA receipts before the destructive execution step. The
+global filesystem lane covers execution, while `withEvictionFence` additionally obtains an
+immediate application SQLite writer transaction around only short synchronous guarded
+rename/unlink effects. HTTP request/settings writes cannot land between the intent check and
+those syscalls. No network request, hash, awaited operation, or custom retry loop runs under
+that writer transaction; async/thenable effect callbacks are rejected.
+
+Execution retires only the owned declarative movie view and revalidates the pinned mount,
+intent, object identities, references, acquisition state, fresh watch/playback, allocation,
+and independent seed bytes before deletion. Candidates move through an owned private staging
+directory under the canonical content root and must still match their original durable SHA.
+Staging ownership is published as a marker-bearing temporary directory via atomic rename;
+an arbitrary preexisting unmarked directory is never blessed. Process interruption during
+initialization, after presentation retirement, after staging, or after unlink is replayable.
+
+A newer present request supersedes the eviction. Proven staged bytes are restored without
+overwriting a new canonical file or a newer selected version. `supersedeEviction` preserves
+that newer intent, records verified present/absent identities, restores the prior selection
+only when its required files are available and no newer selection/publication exists, and
+closes the old plan. Already-unlinked identities are retained as known absence for explicit
+request recovery, not abandoned unfinished work or falsely restored bytes. Only verified
+absence IDs become retirement tombstones; restored IDs do not. Later whole-resource planning
+can therefore exclude intentionally absent historical objects without deleting their DB IDs.
+
+Completion observes missing only after canonical and staged members are verified absent on
+the still-pinned mount. A blocked, staged, or superseded operation is not reported as successful
+eviction merely because its old desired state was evicted.
+
+### Operator and Composition Contract
+
+- Admin `retention.preview` accepts `{ targetId?, afterTargetId?, limit? }`; default limit 20,
+  maximum 100. A selected target can be previewed even when overall space is healthy. Reads do
+  not write intent, settings defaults, events, jobs, cursor, or files.
+- Admin `retention.evict` accepts only `{ targetId, expectedRevision, reason }`, re-observes
+  server evidence, and returns `{ evictionId, jobId }`. It accepts no path, watch/seed facts,
+  byte estimate, or force flag. Existing job controls expose durable progress/retry.
+- `previewRetention`, `queueMovieEviction`, and `RetentionAdapters` come from
+  `src/media/retention-policy.ts`; `runRetentionCleanup(ctx, job, adapters?)` is in
+  `src/media/retention-execution.ts`. A job payload is `{}` for pressure or `{ evictionId }`
+  for a precommitted operator plan. Schemas/defaults are in `retention-policy-types.ts`.
+- `BooksRepo.readSettings()` is typed and noninitializing. Adapter injection is server-only.
+  Preview may use bounded Plex read-model caches; action validation uses
+  `createPlexWatchHistoryReader({ cacheTtlMs: 0 })`. Current sessions are always fresh.
+
+Run `bun test test/unit/retention*.test.ts test/integration/retention-execution.test.ts`.
+Acceptance uses actual SQLite, owned temporary files/symlinks, exact fake private-client
+inventory, and real Reflow restart tests. It covers healthy/dry-run no-op, ranking and measured
+space stopping, atomic outbox rollback, protected/fresh/untracked/unwatched/unknown/shared
+resources, byte-corrupt seed copies, cross-connection writer fencing, supersession, and crash
+recovery. No production pause, deletion, seed-store mutation, or torrent control is part of
+this verification.
 
 ## Integration Contract
 
@@ -156,7 +292,7 @@ For each obligation, provide its stable `id`, `remainingSeedableCopies`,
   guessed by namespace, path, age, or media kind. Thirty days is this module's floor, not a
   claim that every tracker's requirements end after thirty days.
 
-## Verification and Deferred Work
+## Foundation Verification
 
 Run `bun test test/unit/retention.test.ts test/unit/retention-repo.test.ts`. Fixtures install
 the exported schema in isolated SQLite databases without requiring parent migration edits.
@@ -164,9 +300,9 @@ Tests cover lifecycle transitions, intentional versus accidental loss, withdrawa
 conflicts, persistence/reopen, guards, journal failure, same-connection request/outbox rollback,
 physical sharing/bytes, consumption/acquisitions, and seed duration/history/requirements.
 
-Parent-owned integration: migration registration, shared DB type generation, `BooksRepo`
-accessor, settings/RPC/worker wiring, authoritative fact collectors and recovery dispatch.
-Actual deletion and automatic eviction are intentionally absent from this first track.
+The parent owns migration registration, shared DB type generation, `BooksRepo` accessors,
+settings/RPC/worker wiring, and recovery dispatch. These foundation tests do not execute
+deletion; the action-loop modules and acceptance tests described above do.
 
 ## Read-Only Sidecar
 
@@ -175,7 +311,8 @@ parent-owned `BooksRepo.retention` getter and registered schema (migration 47). 
 `RETENTION_SCHEMA_SQL` again after `runMigrations`. The sidecar does not own migration/type
 generation, the RPC root, tRPC registration, UI wiring, or TV's unfinished repository contract.
 
-`retentionRouter` from `src/rpc/retention-router.ts` exports only admin, read-only methods:
+`retentionRouter` from `src/rpc/retention-router.ts` retains these admin, read-only methods
+alongside the new preview/evict action endpoints described above:
 
 - `status({ afterTargetId?: number, limit?: number })` returns paginated resource details,
   `supportedNamespaces: ["movie-target"]` and explicitly unsupported TV/book namespaces.
@@ -275,7 +412,8 @@ Unknown seed history blocks last-copy deletion; tracker requirements remain unkn
 guessed from Transmission limits, age, labels, or the 30-day local floor. This sidecar does not
 implement seed-store deletion or a tracker-policy integration.
 
-Watch history intentionally defaults to **unknown** on the first dry run. A server-only
+An unconfigured `RetentionService` leaves watch history **unknown**. Application composition
+now supplies the global Plex reader described above. A server-only
 `watchHistory` adapter receives movie identity and the existing shared `movies.plexUrl`,
 `movies.plexToken`, `movies.plexSectionId`. It should use GET global Plex history with verified
 coverage across users; there is no Tautulli dependency. Only explicit `global-all-users`

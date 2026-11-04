@@ -5,9 +5,9 @@ import { z } from "zod";
 import type { BooksRepo } from "../repo";
 import { assertMovieStorage } from "../movies/storage";
 import { defaultMovieSettings } from "../movies/settings";
-import { parseSettings } from "../settings";
 import { readTransmissionIdentity } from "./managed-transmission";
 import { TransmissionRpc } from "./transmission-client";
+import { retentionDigest } from "./retention-filesystem";
 import {
   auditDeletion, recoveryDecision, validateResourceKey,
   type ActualPresence, type DeletionFileEvidence, type ResourceKey,
@@ -43,6 +43,7 @@ const fileSchema = z.object({
   physicalId: z.string().nullable(), linkCount: count.nullable(),
   databaseReferences: count, references: z.enum(["verified-unshared", "shared", "unknown"]),
   allocatedBytes: count.nullable(), verifiedReclaimableBytes: count.nullable(),
+  mtimeNs: z.string().nullable(), ctimeNs: z.string().nullable(),
   reasons: z.array(z.string()),
 });
 export const retentionResourceDetailSchema = z.object({
@@ -57,7 +58,8 @@ export const retentionResourceDetailSchema = z.object({
   displayState: z.enum(["present", "missing", "intentional-absence", "eviction-intent-only", "unknown"]),
   desiredRecovery: recovery, recoveryAllowedByIntent: z.boolean(),
   files: z.array(fileSchema), activeAcquisitions: count.nullable(),
-  watch: z.object({ state: z.enum(["watched", "unwatched", "unknown"]), coverage: z.enum(["global-all-users", "unknown"]), reason: z.string() }),
+  watch: z.object({ state: z.enum(["watched", "unwatched", "unknown"]), coverage: z.enum(["global-all-users", "unknown"]), reason: z.string(),
+    playCount: count.nullable(), lastViewedAt: z.string().nullable(), activePlayback: z.enum(["active", "none", "unknown"]) }),
   seeding: z.object({
     state: z.enum(["verified-independent-seed-store", "last-copy-or-unknown"]), reason: z.string(),
     obligations: z.array(z.object({
@@ -78,15 +80,17 @@ export const retentionStatusSchema = z.object({
 });
 export type RetentionResourceDetail = z.infer<typeof retentionResourceDetailSchema>;
 type FileDetail = RetentionResourceDetail["files"][number];
-type PhysicalFile = {
+export type PhysicalFile = {
+  id?: string;
   canonicalPath: string; device: string; inode: string; sizeBytes: number;
-  allocatedBytes: number; linkCount: number; ctimeNs: string;
+  allocatedBytes: number; linkCount: number; ctimeNs: string; mtimeNs: string; sha256?: string;
 };
 export type RetentionServiceAdapters = {
   /** Trusted server-side adapter; GET Plex global history using the supplied shared movie credentials. */
   watchHistory?: (input: {
     tmdbId: number; imdbId: string | null; plexUrl: string; plexToken: string; plexSectionId: string;
-  }) => Promise<{ state: "watched" | "unwatched" | "unknown"; coverage: "global-all-users" | "owner-only" | "unknown" }>;
+  }) => Promise<{ state: "watched" | "unwatched" | "unknown"; coverage: "global-all-users" | "owner-only" | "unknown";
+    playCount?: number | null; lastViewedAt?: string | null; activePlayback?: "active" | "none" | "unknown" }>;
   /** Must account for clone/snapshot/allocation sharing. stat.blocks alone is NOT this evidence. */
   reclaimableAllocation?: (file: PhysicalFile) => Promise<number | null>;
   /** undefined uses the existing private identity; null explicitly leaves seed telemetry unknown. */
@@ -123,8 +127,7 @@ const fingerprint = (tables: Tables) => JSON.stringify([...tables]);
 
 function movieSettings(repo: BooksRepo) {
   // getSettings() creates a defaults row; audit reads must never initialize configuration.
-  const row = repo.adminDbTablePage("settings", 100, 0).rows.find((row) => row.id === 1);
-  return row ? parseSettings(z.string().parse(row.value_json)).movies : defaultMovieSettings();
+  return repo.readSettings()?.movies ?? defaultMovieSettings();
 }
 
 function contained(root: string, relative: string): string {
@@ -184,17 +187,19 @@ async function viewReferences(root: string, contentId: string): Promise<Set<stri
   return references;
 }
 
-function activeAcquisitions(repo: BooksRepo, tables: Tables): number | null {
+function activeAcquisitions(repo: BooksRepo, tables: Tables, targetId?: number): number | null {
   let active = 0;
   for (const [name, table] of tables) {
     if (!name.endsWith("_acquisitions")) continue;
+    if (targetId !== undefined && name !== "movie_acquisitions") continue;
     if (!table.columns.includes("finished_at") || !table.columns.includes("job_id")) return null;
     for (const row of table.rows) {
+      if (targetId !== undefined && row.target_id !== targetId) continue;
       if (typeof row.job_id !== "number") { if (row.finished_at === null) return null; continue; }
       let job;
       try { job = repo.getJob(row.job_id); } catch { return null; }
       if (!job) { if (row.finished_at === null) return null; continue; }
-      if (["queued", "running"].includes(job.status)) active++;
+      if (["queued", "running"].includes(job.status) || (targetId !== undefined && row.finished_at === null)) active++;
     }
   }
   return active;
@@ -218,7 +223,7 @@ export class RetentionService {
     };
   }
 
-  async audit(rawKey: ResourceKey): Promise<RetentionResourceDetail> {
+  async audit(rawKey: ResourceKey, options: { wholeResource?: boolean } = {}): Promise<RetentionResourceDetail> {
     validateResourceKey(rawKey);
     const key = retentionAuditParamsSchema.parse(rawKey);
     const targetId = Number(key.id);
@@ -234,6 +239,7 @@ export class RetentionService {
     const acquisitions = tables ? rows(tables, "movie_acquisitions").filter((a) => a.target_id === targetId) : [];
     const acquisitionIds = new Set(acquisitions.map((a) => a.id));
     const versionIds = new Set(tables ? rows(tables, "movie_versions").filter((v) => acquisitionIds.has(v.acquisition_id)).map((v) => v.id) : []);
+    const ownsSelected = target.active_version_id === null || versionIds.has(target.active_version_id);
     if (target.active_version_id !== null) versionIds.add(target.active_version_id);
     const associations = tables ? rows(tables, "movie_version_files") : [];
     const fileIds = new Set(associations.filter((a) => versionIds.has(a.version_id)).map((a) => a.file_id));
@@ -262,7 +268,7 @@ export class RetentionService {
         presence: "unknown", ownership: "unknown", physicalId: null, linkCount: null,
         databaseReferences: tables ? [...tables.values()].reduce((total, table) => total +
           (table.columns.includes("file_id") ? table.rows.filter((row) => row.file_id === raw.id).length : 0), 0) : 0,
-        references: "unknown", allocatedBytes: null, verifiedReclaimableBytes: null, reasons: [],
+        references: "unknown", allocatedBytes: null, verifiedReclaimableBytes: null, mtimeNs: null, ctimeNs: null, reasons: [],
       };
       files.push(detail);
       if (!mountVerified || !parsed.success) { detail.reasons.push("Owned mount or canonical database object is unverified."); continue; }
@@ -279,15 +285,18 @@ export class RetentionService {
         if (!found) { detail.presence = "missing"; detail.reasons.push("Pinned mount is present but the expected canonical object is missing."); continue; }
         if (found.stat.size !== BigInt(file.size_bytes)) throw new Error("Canonical size changed");
         const actual: PhysicalFile = {
-          canonicalPath: found.canonicalPath, device: String(found.stat.dev), inode: String(found.stat.ino),
+          id: file.id, canonicalPath: found.canonicalPath, device: String(found.stat.dev), inode: String(found.stat.ino),
           sizeBytes: file.size_bytes, allocatedBytes: Number(found.stat.blocks * 512n), linkCount: Number(found.stat.nlink),
-          ctimeNs: String(found.stat.ctimeNs),
+          ctimeNs: String(found.stat.ctimeNs), mtimeNs: String(found.stat.mtimeNs),
         };
         if (!count.safeParse(actual.allocatedBytes).success || !count.safeParse(actual.linkCount).success) throw new Error("Unsafe allocation counters");
         physical.set(file.id, actual);
         detail.presence = "present"; detail.physicalId = `${actual.device}:${actual.inode}`;
         detail.allocatedBytes = actual.allocatedBytes; detail.linkCount = actual.linkCount;
-        let shared = detail.databaseReferences !== 1 || actual.linkCount !== 1 || Boolean(views?.has(file.relative_path));
+        detail.mtimeNs = actual.mtimeNs; detail.ctimeNs = actual.ctimeNs;
+        let shared = actual.linkCount !== 1 || (options.wholeResource
+          ? associations.some((association) => association.file_id === file.id && !versionIds.has(association.version_id))
+          : detail.databaseReferences !== 1 || Boolean(views?.has(file.relative_path)));
         for (const [name, table] of tables!) {
           if (name !== "movie_version_files" && table.columns.includes("file_id") && table.rows.some((row) => row.file_id === file.id)) shared = true;
         }
@@ -317,29 +326,47 @@ export class RetentionService {
         detail.reasons.push("Canonical object inspection failed or identity/size changed; not verified missing.");
       }
     }
+    if (options.wholeResource) {
+      const retired = new Set(this.repo.retention.retiredFileIds(targetId));
+      const selected = new Set(associations.filter((association) => association.version_id === target.active_version_id).map((association) => association.file_id));
+      for (let index = files.length - 1; index >= 0; index--)
+        if (files[index]!.presence === "missing" && retired.has(files[index]!.id) && !selected.has(files[index]!.id)) files.splice(index, 1);
+    }
     let actualPresence: ActualPresence = "unknown";
     const requiredIds = new Set(associations.filter((a) => a.version_id === target.active_version_id).map((a) => a.file_id));
     const required = files.filter((file) => requiredIds.has(file.id));
     if (mountVerified && tables && fileIds.size === objectRows.length) {
-      if (target.active_version_id === null) reasons.push("No selected canonical version; availability has not been established.");
+      if (options.wholeResource && ownsSelected && files.length) {
+        actualPresence = files.some((file) => file.presence === "unknown") ? "unknown" : files.some((file) => file.presence === "missing") ? "missing" : "present";
+      } else if (target.active_version_id === null) {
+        const retired = stored?.desiredPresence === "evicted" && stored.actualPresence === "missing"
+          ? new Set(this.repo.retention.retiredFileIds(targetId)) : new Set<string>();
+        if (files.length && files.every((file) => file.presence === "missing" && retired.has(file.id))) actualPresence = "missing";
+        else reasons.push("No selected canonical version; availability has not been established.");
+      }
       else if (required.length && required.length === requiredIds.size) {
         if (required.some((file) => file.presence === "unknown")) reasons.push("At least one required object could not be inspected safely.");
         else actualPresence = required.some((file) => file.presence === "missing") ? "missing" : "present";
       } else reasons.push("Selected version has no complete canonical file manifest.");
     }
-    const watch: RetentionResourceDetail["watch"] = { state: "unknown", coverage: "unknown", reason: "Global Plex history across users is unverified; owner viewCount is not all-user evidence." };
+    const watch: RetentionResourceDetail["watch"] = { state: "unknown", coverage: "unknown", reason: "Global Plex history across users is unverified; owner viewCount is not all-user evidence.",
+      playCount: null, lastViewedAt: null, activePlayback: "unknown" };
     if (this.adapters.watchHistory) {
       try {
         const evidence = await this.adapters.watchHistory({ tmdbId: movie.tmdbId, imdbId: movie.imdbId,
           plexUrl: settings.plexUrl, plexToken: settings.plexToken, plexSectionId: settings.plexSectionId });
         if (evidence.coverage === "global-all-users" && ["watched", "unwatched", "unknown"].includes(evidence.state)) {
           watch.state = evidence.state; watch.coverage = "global-all-users";
+          watch.playCount = evidence.playCount !== null && evidence.playCount !== undefined && count.safeParse(evidence.playCount).success ? evidence.playCount : null;
+          watch.lastViewedAt = evidence.lastViewedAt && Number.isFinite(Date.parse(evidence.lastViewedAt)) ? evidence.lastViewedAt : null;
+          watch.activePlayback = evidence.activePlayback ?? "unknown";
           watch.reason = "Server-side Plex global-history adapter supplied all-user coverage; no owner-only counters were used.";
         }
       } catch { watch.reason = "Global Plex history lookup failed; consumption remains unknown."; }
     }
+    if (options.wholeResource && !ownsSelected) { actualPresence = "unknown"; reasons.push("Selected version does not belong to this movie target."); }
     const seeding = await this.seedEvidence(targetId, settings.managedRoot, [...physical.values()]);
-    let active = tables ? activeAcquisitions(this.repo, tables) : null;
+    let active = tables ? activeAcquisitions(this.repo, tables, options.wholeResource ? targetId : undefined) : null;
     try {
       if (!mountVerified) throw new Error("Unverified mount");
       await assertMovieStorage(this.repo, contentRoot);
@@ -359,7 +386,7 @@ export class RetentionService {
       if (JSON.stringify(movieSettings(this.repo)) !== JSON.stringify(settings) ||
           JSON.stringify(this.repo.retention.get(key)) !== JSON.stringify(stored) ||
           !tables || fingerprint(inventory(this.repo)) !== fingerprint(tables)) throw new Error("Inventory changed");
-      active = activeAcquisitions(this.repo, tables);
+      active = activeAcquisitions(this.repo, tables, options.wholeResource ? targetId : undefined);
     } catch {
       actualPresence = "unknown"; active = null;
       for (const file of files) { file.presence = "unknown"; file.ownership = "unknown"; file.references = "unknown"; file.verifiedReclaimableBytes = null; }
@@ -373,7 +400,8 @@ export class RetentionService {
       fileId: file.physicalId ?? `unverified:${file.id}`, ownership: file.ownership,
       references: file.references, verifiedReclaimableBytes: file.verifiedReclaimableBytes,
     }));
-    const audit = auditDeletion({ resource: observed, files: evidence, activeAcquisitions: active, watchState: watch.state,
+    const projectedIntent = options.wholeResource && observed ? { ...observed, desiredPresence: "evicted" as const } : observed;
+    const audit = auditDeletion({ resource: projectedIntent, files: evidence, activeAcquisitions: active, watchState: watch.state,
       seeding: seeding.obligations.length ? { kind: "obligations", obligations: seeding.obligations } : { kind: "unknown" } });
     const verifiedBytes = files.length && files.every((file) => file.verifiedReclaimableBytes !== null)
       ? files.reduce((sum, file) => sum + file.verifiedReclaimableBytes!, 0) : null;
@@ -390,8 +418,9 @@ export class RetentionService {
     };
   }
 
-  private async seedEvidence(targetId: number, root: string, objects: PhysicalFile[]): Promise<RetentionResourceDetail["seeding"]> {
+  async seedEvidence(targetId: number, root: string, objects: PhysicalFile[]): Promise<RetentionResourceDetail["seeding"]> {
     const obligations: SeedObligation[] = [];
+    const objectHashes = new Set<string>(), covered = new Set<string>();
     let reader = this.adapters.transmission;
     try {
       if (reader === undefined) {
@@ -401,10 +430,17 @@ export class RetentionService {
         }) };
       }
       if (!reader || !/^transmission:[a-f0-9-]{36}$/.test(reader.clientId)) throw new Error("Private identity unavailable");
-      const downloads = [...new Map(this.repo.movies.downloads(targetId).map((d) => [d.id, d])).values()];
+      const fileIds = objects.map((object) => object.id ?? path.basename(object.canonicalPath, path.extname(object.canonicalPath)));
+      if (fileIds.some((id) => !z.string().uuid().safeParse(id).success)) throw new Error("Canonical object identities are unknown");
+      const downloads = this.repo.retention.seedDownloads(targetId, fileIds);
       if (!downloads.length || downloads.length > 100) throw new Error("Seed bindings unknown");
       const downloadsRoot = path.join(root, "downloads");
       if ((await fs.realpath(downloadsRoot)) !== downloadsRoot) throw new Error("Noncanonical seed store");
+      for (const object of objects) {
+        const hash = object.sha256 ?? await retentionDigest(object.canonicalPath);
+        if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error("Canonical byte proof is unknown");
+        objectHashes.add(hash);
+      }
       for (const download of downloads) obligations.push({
         id: `${download.client_id}:${download.native_id}`, remainingSeedableCopies: null,
         verifiedSecondsSeeded: null, requiredSecondsSeeded: null, otherRequirements: "unknown",
@@ -432,21 +468,32 @@ export class RetentionService {
           if (torrent.leftUntilDone !== 0 || torrent.error !== 0 || ![0, 5, 6].includes(torrent.status) ||
               !torrent.files.length || torrent.files.length > 1000) throw new Error("Seed copy not verified complete");
           let independent = true;
+          const byteMatches = new Set<string>();
           for (const file of torrent.files) {
             if (file.bytesCompleted !== file.length) throw new Error("Incomplete seed file");
             const found = await physicalFile(downloadsRoot, `${location.relativePath}/${file.name}`);
             if (!found || found.stat.size !== BigInt(file.length)) { independent = false; break; }
             if (objects.some((object) => object.device === String(found.stat.dev) && object.inode === String(found.stat.ino))) independent = false;
+            if (objects.some((object) => object.sizeBytes === file.length)) {
+              const hash = await retentionDigest(found.canonicalPath);
+              const after = await physicalFile(downloadsRoot, `${location.relativePath}/${file.name}`);
+              if (!after || after.stat.dev !== found.stat.dev || after.stat.ino !== found.stat.ino || after.stat.ctimeNs !== found.stat.ctimeNs || after.stat.mtimeNs !== found.stat.mtimeNs)
+                throw new Error("Seed copy changed during byte verification");
+              if (objectHashes.has(hash)) byteMatches.add(hash);
+            }
           }
-          obligation.remainingSeedableCopies = independent && objects.length > 0 ? 1 : 0;
+          obligation.remainingSeedableCopies = independent && byteMatches.size > 0 ? 1 : 0;
+          if (obligation.remainingSeedableCopies === 1) for (const hash of byteMatches) covered.add(hash);
         } catch { /* Unknown ownership, layout, history or files must not become a surviving-copy claim. */ }
       }
     } catch { /* Unavailable private identity/store leaves last-copy safety unverified. */ }
+    if (!objectHashes.size || [...objectHashes].some((hash) => !covered.has(hash)))
+      for (const obligation of obligations) if (obligation.remainingSeedableCopies === 1) obligation.remainingSeedableCopies = null;
     const independent = obligations.length > 0 && obligations.every((obligation) => obligation.remainingSeedableCopies === 1);
     return {
       state: independent ? "verified-independent-seed-store" : "last-copy-or-unknown",
       reason: independent
-        ? "Only canonical objects are in scope; exact owned Transmission bindings retain complete independent seed copies. No seed-store files or registrations would be removed."
+        ? "Every canonical byte proof matches a fresh independently stored file in exact owned complete Transmission bindings. No seed-store files or registrations would be removed."
         : "Seed-store ownership, surviving independent copies, or history is unknown. Last-copy deletion remains blocked; tracker requirements are not inferred.",
       obligations: obligations.map((o) => ({ ...o, otherRequirements: "unknown" })),
     };

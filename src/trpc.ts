@@ -91,6 +91,8 @@ export const appRouter = t.router({
   retention: t.router({
     status: procedure.input(retentionRouter.routes.status.paramsSchema).output(retentionRouter.routes.status.resultSchema).query(({ ctx, input }) => executeMethod(retentionRouter.routes.status, ctx, input)),
     audit: procedure.input(retentionRouter.routes.audit.paramsSchema).output(retentionRouter.routes.audit.resultSchema).query(({ ctx, input }) => executeMethod(retentionRouter.routes.audit, ctx, input)),
+    preview: procedure.input(retentionRouter.routes.preview.paramsSchema).output(retentionRouter.routes.preview.resultSchema).query(({ ctx, input }) => executeMethod(retentionRouter.routes.preview, ctx, input)),
+    evict: procedure.input(retentionRouter.routes.evict.paramsSchema).output(retentionRouter.routes.evict.resultSchema).mutation(({ ctx, input }) => executeMethod(retentionRouter.routes.evict, ctx, input)),
   }),
   tvShadow: t.router({
     status: procedure.input(tvShadowRouter.routes.status.paramsSchema).output(tvShadowRouter.routes.status.resultSchema).query(({ ctx, input }) => executeMethod(tvShadowRouter.routes.status, ctx, input)),

@@ -2,6 +2,7 @@ import { workerLog, type WorkerContext } from "./worker/context";
 import { createJobExecutionRuntime } from "./worker/execution";
 import { randomUUID, createHash } from "node:crypto";
 import { INDEXER_FEED_INTERVAL_MS } from "./worker/indexer-feeds";
+import { RETENTION_PRESSURE_INTERVAL_MS } from "./media/retention-policy-types";
 
 export { pollMsForMedia, selectDownloadPollMs } from "./worker/downloads";
 
@@ -29,6 +30,7 @@ export async function runWorker(
     let nextFeedSync = 0;
     let nextTvSync = 0;
     let nextTvMaintenance = 0;
+    let nextRetention = 0;
     while (!ctx.shouldStop?.()) {
       try {
         if (ctx.repo.hasBooks() && Date.now() >= nextBookMaintenance) {
@@ -87,6 +89,15 @@ export async function runWorker(
             maxAttempts: 2,
           });
           nextMovieMaintenance = Date.now() + 3_600_000;
+        }
+        const movieStorage = ctx.getSettings().movies;
+        if (ctx.repo.movies.hasTargets() && movieStorage.managedRoot && movieStorage.plexViewPath && Date.now() >= nextRetention) {
+          ctx.repo.createJob({
+            type: "retention_cleanup",
+            idempotencyKey: `retention-pressure:${Math.floor(Date.now() / RETENTION_PRESSURE_INTERVAL_MS)}`,
+            maxAttempts: 3,
+          });
+          nextRetention = Date.now() + RETENTION_PRESSURE_INTERVAL_MS;
         }
         await runtime.reconcile();
       } catch (error) {
