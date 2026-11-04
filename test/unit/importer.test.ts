@@ -8,6 +8,8 @@ import path from "node:path";
 import { runMigrations } from "../../src/db";
 import { importReleaseFromPath } from "../../src/library/importer";
 import { BooksRepo } from "../../src/repo";
+import { bookViewEntries } from "../../src/library/book-storage";
+import { lstat, readFile, stat, unlink } from "node:fs/promises";
 
 const tempDirs: string[] = [];
 
@@ -107,8 +109,8 @@ describe("importer path collisions", () => {
     expect(import1.linkedFiles).toHaveLength(1);
     expect(import2.linkedFiles).toHaveLength(1);
     expect(import1.linkedFiles[0]).not.toBe(import2.linkedFiles[0]);
-    expect(path.basename(import1.linkedFiles[0] ?? "")).toBe("Twilight.epub");
-    expect(path.basename(import2.linkedFiles[0] ?? "")).toBe("Twilight (2).epub");
+    expect(import1.linkedFiles[0]).toContain(`${path.sep}.podible${path.sep}content${path.sep}`);
+    expect(import2.linkedFiles[0]).toContain(`${path.sep}.podible${path.sep}content${path.sep}`);
 
     const assets = repo.listAssetsByBook(book.id);
     expect(assets).toHaveLength(2);
@@ -121,6 +123,16 @@ describe("importer path collisions", () => {
     expect(files1[0]?.path).not.toBe(files2[0]?.path);
     expect(files1[0]?.source_path).toBe(sourceA);
     expect(files2[0]?.source_path).toBe(sourceB);
+    const entries = bookViewEntries(repo, libraryRoot);
+    expect(entries).toHaveLength(2);
+    for (const entry of entries) {
+      const view = path.join(libraryRoot, entry.relativePath);
+      expect((await lstat(view)).isSymbolicLink()).toBe(true);
+      expect(await readFile(view)).toEqual(await readFile(entry.contentPath));
+    }
+    expect((await stat(sourceA)).ino).toBe((await stat(files1[0]!.path)).ino);
+    await unlink(sourceA);
+    expect(await readFile(files1[0]!.path)).toEqual(await readFile(path.join(libraryRoot, entries.find((entry) => entry.contentPath === files1[0]!.path)!.relativePath)));
 
     db.close();
   });

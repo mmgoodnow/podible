@@ -34,6 +34,7 @@ export interface DB {
     "duration_ms": number;
     "title": string | null;
     "updated_at": string;
+    "identity_path": string | null;
   };
 
   "assets": {

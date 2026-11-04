@@ -50,6 +50,7 @@ describe("schema migrations", () => {
       CREATE TABLE settings (id INTEGER PRIMARY KEY, value_json TEXT NOT NULL);
       CREATE TABLE manifestations (id INTEGER PRIMARY KEY);
       CREATE TABLE assets (id INTEGER PRIMARY KEY);
+      CREATE TABLE asset_files (id INTEGER PRIMARY KEY);
       CREATE TABLE books (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,

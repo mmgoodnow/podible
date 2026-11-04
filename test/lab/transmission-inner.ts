@@ -9,6 +9,8 @@ import { runSnatch } from "../../src/library/service";
 import { bookDownloadClient } from "../../src/media/book-torrents";
 import { processDownloadJob } from "../../src/worker/downloads";
 import { processImportJob } from "../../src/worker/imports";
+import { bookViewEntries } from "../../src/library/book-storage";
+import { reconcileBookStorage } from "../../src/library/book-publication";
 import {
   prepareTransmission,
   managedTransmission,
@@ -219,6 +221,15 @@ try {
     throw new Error(
       "Book import did not preserve bytes with a same-filesystem hardlink",
     );
+  if ((await fs.lstat(imported.path)).isSymbolicLink() || !imported.path.includes("/.podible/content/"))
+    throw new Error("Book DB must reference canonical content, not a symlink view");
+  const view = bookViewEntries(bookRepo, libraryRoot)[0]!;
+  const viewPath = path.join(libraryRoot, view.relativePath);
+  if (!(await fs.lstat(viewPath)).isSymbolicLink() || !(await fs.readFile(viewPath)).equals(bookBytes))
+    throw new Error("Book view was not a readable symlink to canonical content");
+  await fs.unlink(viewPath);
+  await reconcileBookStorage(bookRepo, libraryRoot);
+  if (!(await fs.readFile(viewPath)).equals(bookBytes)) throw new Error("Book view did not repair itself");
   await stop();
   prepareTransmission(directory);
   await start();

@@ -1,10 +1,12 @@
 import { constants, promises as fs } from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 import { getDurationSeconds } from "../media/probe-cache";
 import { normalizeAudioExt } from "../media/metadata";
 import { computeEpubWordCount } from "./chapter-analysis";
 import { inferLanguageFromReleaseTitles } from "./language";
+import { adoptBookContent, bookViewDirectory, reconcileBookView } from "./book-storage";
 
 import type { BooksRepo } from "../repo";
 import type { AssetKind, MediaType, ReleaseRow } from "../app-types";
@@ -12,9 +14,8 @@ import type { AssetKind, MediaType, ReleaseRow } from "../app-types";
 /**
  * Release importer that materializes downloader output as library assets.
  *
- * Given an rTorrent base path, it discovers files, selects media candidates by
- * release type, hardlinks into `libraryRoot/Author/Title`, and writes
- * immutable asset + asset_file rows.
+ * Downloader output is hardlinked into stable canonical storage. Library names
+ * are a declarative symlink view, never the identity of an imported file.
  */
 type ImportResult = {
   assetId: number;
@@ -45,13 +46,6 @@ type ImportReleaseOptions = {
   importNote?: string | null;
   importKey?: string;
 };
-
-function sanitizePathSegment(value: string): string {
-  return value
-    .replace(/[\\/:*?"<>|]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 async function walkFiles(root: string): Promise<string[]> {
   const stat = await fs.stat(root);
@@ -126,47 +120,6 @@ function selectDiscoveredFiles(
   return chosen;
 }
 
-async function isSameFile(sourcePath: string, destinationPath: string): Promise<boolean> {
-  try {
-    const [sourceStat, destStat] = await Promise.all([fs.stat(sourcePath), fs.stat(destinationPath)]);
-    return sourceStat.dev === destStat.dev && sourceStat.ino === destStat.ino;
-  } catch {
-    return false;
-  }
-}
-
-function withCollisionSuffix(filePath: string, suffix: string): string {
-  const ext = path.extname(filePath);
-  const stem = ext ? filePath.slice(0, -ext.length) : filePath;
-  return `${stem} ${suffix}${ext}`;
-}
-
-async function ensureHardlink(sourcePath: string, destinationPath: string): Promise<string> {
-  await fs.mkdir(path.dirname(destinationPath), { recursive: true });
-  let attempt = 0;
-  while (attempt < 100) {
-    const candidate = attempt === 0 ? destinationPath : withCollisionSuffix(destinationPath, `(${attempt + 1})`);
-    try {
-      await fs.link(sourcePath, candidate);
-      return candidate;
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code === "EEXIST") {
-        if (await isSameFile(sourcePath, candidate)) {
-          return candidate;
-        }
-        attempt += 1;
-        continue;
-      }
-      if (err.code === "EXDEV") {
-        throw new Error(`Hardlink failed with EXDEV: ${sourcePath} -> ${candidate}`);
-      }
-      throw err;
-    }
-  }
-  throw new Error(`Could not allocate unique import path for ${destinationPath}`);
-}
-
 function pickAudioCandidates(files: FileInfo[]): { kind: AssetKind; files: FileInfo[]; mime: string } | null {
   const m4 = files.filter((file) => [".m4b", ".m4a", ".mp4"].includes(file.ext));
   if (m4.length > 0) {
@@ -234,7 +187,7 @@ function chooseFilesForMedia(
 
 /**
  * Build one asset from downloader output and attach it to the release's book.
- * Existing files are never moved; imported files are hardlinked into library.
+ * Source bytes are never moved; view failure can be retried after DB publication.
  */
 export async function importReleaseFromPath(
   repo: BooksRepo,
@@ -248,17 +201,18 @@ export async function importReleaseFromPath(
     throw new Error(`Book ${release.book_id} not found`);
   }
   const existing = options.importKey ? repo.findAssetByImportKey(options.importKey) : null;
-  if (existing) return { assetId: existing.id, linkedFiles: repo.getAssetFiles(existing.id).map((file) => file.path) };
+  if (existing) {
+    await reconcileBookView(repo, libraryRoot);
+    return { assetId: existing.id, linkedFiles: repo.getAssetFiles(existing.id).map((file) => file.path) };
+  }
 
   const baseStat = await fs.stat(basePath);
+  if ((await fs.lstat(basePath)).isSymbolicLink()) throw new Error("Import source must not be a symlink");
   const discovered = await collectFiles(basePath);
   const selectionRoot = baseStat.isFile() ? path.dirname(basePath) : basePath;
   const candidateFiles = selectDiscoveredFiles(discovered, options.selectedPaths, selectionRoot);
   const selected = chooseFilesForMedia(release.media_type, candidateFiles);
 
-  const authorDir = sanitizePathSegment(book.author || "Unknown");
-  const titleDir = sanitizePathSegment(book.title || `book-${book.id}`);
-  const root = path.join(libraryRoot, authorDir, titleDir);
   const linkedFiles: string[] = [];
 
   let cursor = 0;
@@ -275,16 +229,10 @@ export async function importReleaseFromPath(
   }> = [];
 
   for (const [index, file] of selected.files.entries()) {
-    const targetPath = (() => {
-      if (selected.kind === "multi") {
-        const multiDir = path.join(root, titleDir);
-        return path.join(multiDir, path.basename(file.sourcePath));
-      }
-      const ext = file.ext;
-      return path.join(root, `${titleDir}${ext}`);
-    })();
-
-    const linkedPath = await ensureHardlink(file.sourcePath, targetPath);
+    const identity = createHash("sha256").update(JSON.stringify([
+      release.id, index, file.sourcePath, file.size, file.mtimeMs
+    ])).digest("hex");
+    const linkedPath = await adoptBookContent(libraryRoot, await fs.realpath(file.sourcePath), identity);
     linkedFiles.push(linkedPath);
 
     const durationSeconds = release.media_type === "audio" ? (getDurationSeconds(linkedPath, file.mtimeMs) ?? 0) : 0;
@@ -306,13 +254,9 @@ export async function importReleaseFromPath(
   }
 
   const totalSize = assetFiles.reduce((sum, item) => sum + item.size, 0);
-  // Prefer first cover found in target root for /covers endpoint.
-  const coverCandidates = [".jpg", ".jpeg", ".png"];
-  const existingCover = await fs
-    .readdir(root, { withFileTypes: true })
-    .then((entries) =>
-      entries.find((entry) => entry.isFile() && coverCandidates.includes(path.extname(entry.name).toLowerCase()))
-    )
+  const coverRoot = path.join(libraryRoot, bookViewDirectory(book));
+  const existingCover = await fs.readdir(coverRoot, { withFileTypes: true })
+    .then((entries) => entries.find((entry) => entry.isFile() && [".jpg", ".jpeg", ".png"].includes(path.extname(entry.name).toLowerCase())))
     .catch(() => null);
   const wordCount =
     selected.mime === "application/epub+zip" && linkedFiles[0]
@@ -343,16 +287,14 @@ export async function importReleaseFromPath(
       importKey: options.importKey,
       files: assetFiles
     });
-    if (existingCover)
-      repo.updateBookMetadata(book.id, {
-        coverPath: path.join(root, existingCover.name),
-        durationMs: release.media_type === "audio" ? durationMsTotal : book.duration_ms
-      });
+    if (existingCover) repo.updateBookMetadata(book.id, { coverPath: path.join(coverRoot, existingCover.name) });
     if (wordCount !== null) {
       repo.updateBookMetadata(book.id, { wordCount });
     }
     return asset;
   });
+
+  await reconcileBookView(repo, libraryRoot);
 
   return {
     assetId: asset.id,

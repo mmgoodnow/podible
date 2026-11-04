@@ -196,7 +196,11 @@ describe("library scanner metadata hydration", () => {
       expect(assets.length).toBe(1);
       const assetFiles = assets[0] ? repo.getAssetFiles(assets[0].id) : [];
       expect(assetFiles.length).toBe(1);
-      expect(assetFiles[0]?.path).toBe(path.join(bookDir, "Normal People.epub"));
+      expect(assetFiles[0]?.identity_path).toBe(path.join(bookDir, "Normal People.epub"));
+      expect(assetFiles[0]?.path).toContain(`${path.sep}.podible${path.sep}content${path.sep}`);
+      const rescan = await scanLibraryRoot(repo, tmpRoot);
+      expect(rescan.assetsCreated).toBe(0);
+      expect(repo.listAssetsByBook(book!.id)).toHaveLength(1);
     } finally {
       globalThis.fetch = originalFetch;
       db.close();

@@ -1929,7 +1929,8 @@ describe("json-rpc handler", () => {
     expect(assets[0].kind).toBe("single");
     const files = repo.getAssetFiles(assets[0].id);
     expect(files.length).toBe(1);
-    expect(path.basename(files[0].path)).toContain("Box Set.pdf");
+    expect(files[0].path).toContain(`${path.sep}.podible${path.sep}content${path.sep}`);
+    expect(files[0].source_path).toBe(part2);
 
     db.close();
   });

@@ -1323,7 +1323,7 @@ async function fileFingerprintData(files: AssetFileRow[]): Promise<Array<{ path:
     files.map(async (file) => {
       const stat = await Bun.file(file.path).stat();
       return {
-        path: file.path,
+        path: file.identity_path ?? file.path,
         size: file.size,
         mtimeMs: stat.mtimeMs,
       };

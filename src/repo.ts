@@ -122,6 +122,7 @@ type AddAssetInput = {
   files: Array<{
     path: string;
     sourcePath?: string | null;
+    identityPath?: string | null;
     size: number;
     start: number;
     end: number;
@@ -1174,14 +1175,15 @@ export class BooksRepo {
         ) as AssetRow;
 
       const insertFile = this.db.query(
-        `INSERT INTO asset_files (asset_id, path, source_path, size, start, end, duration_ms, title, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO asset_files (asset_id, path, source_path, identity_path, size, start, end, duration_ms, title, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
       for (const file of input.files) {
         insertFile.run(
           asset.id,
           file.path,
           file.sourcePath ?? null,
+          file.identityPath ?? null,
           file.size,
           file.start,
           file.end,
@@ -1359,6 +1361,18 @@ export class BooksRepo {
     return this.db
       .query("SELECT * FROM asset_files WHERE asset_id = ? ORDER BY start ASC, id ASC")
       .all(assetId) as AssetFileRow[];
+  }
+
+  relocateAssetFile(fileId: number, expectedPath: string, canonicalPath: string): void {
+    this.beforeWrite();
+    assertPositiveInt(fileId);
+    const result = this.db.query(
+      "UPDATE asset_files SET identity_path = COALESCE(identity_path, path), path = ? WHERE id = ? AND path = ?"
+    ).run(canonicalPath, fileId, expectedPath);
+    if (!result.changes) {
+      const current = this.db.query("SELECT path FROM asset_files WHERE id = ?").get(fileId) as { path: string } | null;
+      if (current?.path !== canonicalPath) throw new Error("Book file changed during canonical adoption");
+    }
   }
 
   hasAssetFilePath(filePath: string): boolean {

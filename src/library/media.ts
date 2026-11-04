@@ -102,7 +102,7 @@ function flattenAudioFiles(containers: Array<{ asset: AssetRow; files: AssetFile
       const end = start + file.size - 1;
       out.push({
         path: file.path,
-        name: path.basename(file.path),
+        name: path.basename(file.identity_path ?? file.source_path ?? file.path),
         size: file.size,
         start,
         end,
@@ -188,7 +188,8 @@ function stripTerminalPunctuation(text: string): string {
 }
 
 function fallbackFileChapterTitle(file: AssetFileRow): string {
-  const basename = path.basename(file.path, path.extname(file.path)).replace(/[_]+/g, " ").replace(/\s+/g, " ").trim();
+  const original = file.identity_path ?? file.source_path ?? file.path;
+  const basename = path.basename(original, path.extname(original)).replace(/[_]+/g, " ").replace(/\s+/g, " ").trim();
   const cleaned = basename.replace(/^\s*\d+\s*[-_. ]+\s*/u, "").trim();
   if (cleaned && (!file.title || isGenericChapterLabel(file.title)) && /^(chapter|intro|outro|prologue|epilogue)\b/i.test(cleaned)) return cleaned;
   return file.title ?? basename;
@@ -477,7 +478,7 @@ function remuxCacheFingerprint(manifestation: ManifestationRow, containers: Arra
           totalSize: container.asset.total_size,
         },
         files: container.files.map((file) => ({
-          path: file.path,
+          path: file.identity_path ?? file.path,
           size: file.size,
           durationMs: file.duration_ms,
           start: file.start,

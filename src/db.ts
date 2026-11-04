@@ -1160,6 +1160,7 @@ export function runMigrations(db: Database): void {
   });
   apply(43, () => db.exec(BOOK_TORRENTS_SCHEMA_SQL));
   apply(44, () => db.exec("DROP INDEX IF EXISTS ux_releases_provider_guid"));
+  apply(45, () => db.exec("ALTER TABLE asset_files ADD COLUMN identity_path TEXT NULL"));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

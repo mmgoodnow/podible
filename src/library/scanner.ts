@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { getDurationSeconds } from "../media/probe-cache";
 import { computeEpubWordCount } from "./chapter-analysis";
+import { reconcileBookStorage } from "./book-publication";
 
 import { hydrateBookFromOpenLibrary } from "./hydration";
 import type { BooksRepo } from "../repo";
@@ -243,8 +244,12 @@ export async function scanLibraryRoot(repo: BooksRepo, libraryRoot: string, ctx?
         }
         return 0;
       }));
+      const storage = await reconcileBookStorage(repo, libraryRoot, () => ctx?.execution?.assertActive(), book.id);
+      if (storage.failures.length) throw new Error(`Book storage adoption failed: ${JSON.stringify(storage.failures)}`);
     }
   }
 
+  const storage = await reconcileBookStorage(repo, libraryRoot, () => ctx?.execution?.assertActive());
+  if (storage.failures.length) throw new Error(`Book storage adoption failed: ${JSON.stringify(storage.failures)}`);
   return { booksCreated, assetsCreated };
 }

@@ -23,11 +23,20 @@ export async function runWorker(
   try {
     const boot = randomUUID();
     let nextMovieMaintenance = 0;
+    let nextBookMaintenance = 0;
     let nextShadowSync = 0;
     let nextSeerrSync = 0;
     let nextFeedSync = 0;
     while (!ctx.shouldStop?.()) {
       try {
+        if (ctx.repo.hasBooks() && Date.now() >= nextBookMaintenance) {
+          ctx.repo.createJob({
+            type: "reconcile",
+            idempotencyKey: `book-maintenance:${boot}:${Math.floor(Date.now() / 3_600_000)}`,
+            maxAttempts: 2,
+          });
+          nextBookMaintenance = Date.now() + 3_600_000;
+        }
         const prowlarr = ctx.getSettings().prowlarr;
         const feedSettings = ctx.getSettings();
         if ((prowlarr.url || feedSettings.torznab.length) &&

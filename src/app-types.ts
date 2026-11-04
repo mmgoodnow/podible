@@ -188,6 +188,8 @@ export type AssetFileRow = {
   asset_id: number;
   path: string;
   source_path: string | null;
+  // Stable fingerprint identity, retained when storage paths are relocated.
+  identity_path?: string | null;
   size: number;
   start: number;
   end: number;

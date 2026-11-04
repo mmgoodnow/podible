@@ -134,7 +134,7 @@ export function createEbookRoutes(repo: BooksRepo): Hono<HttpEnv> {
     return new Response(file, {
       headers: {
         "Content-Type": target.asset.mime,
-        "Content-Disposition": contentDispositionAttachment(first.path.split("/").pop() ?? `book-${assetId}`),
+        "Content-Disposition": contentDispositionAttachment((first.identity_path ?? first.source_path ?? first.path).split("/").pop() ?? `book-${assetId}`),
       },
     });
   });

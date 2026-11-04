@@ -1,9 +1,12 @@
 import { queueMissingCoverGeneration } from "../library/cover-generation";
 import { scanLibraryRoot } from "../library/scanner";
+import { reconcileBookStorage } from "../library/book-publication";
 import type { JobRow } from "../app-types";
 import { durableStep, type WorkerContext } from "./context";
 
 export async function processReconcileJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
+  const storage = await reconcileBookStorage(ctx.repo, ctx.getSettings().libraryRoot, () => ctx.execution?.assertActive());
+  if (storage.failures.length) throw new Error(`Book storage adoption failed: ${JSON.stringify(storage.failures)}`);
   const releases = await durableStep(ctx, "reconcile-targets", () => ctx.repo.findReleasesDownloadedWithoutAssets());
   for (const release of releases) {
     await durableStep(ctx, `reconcile-import:${release.id}`, () => ctx.repo.transaction(() => {
