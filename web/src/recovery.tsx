@@ -74,7 +74,7 @@ export function RecoveryPage() {
     {recover.isError && <><Failure error={recover.error} />{lastCommand && <button className="secondary" onClick={() => recover.mutate(lastCommand)}>Retry same recovery</button>}</>}
     {recover.data && <section className="media-section" aria-label="Recovery results"><h2>Results</h2>
       {recover.data.results.map(r => <div key={recoveryResourceKey(r)}><strong>{resultTitles[recoveryResourceKey(r)] ?? inventory.data?.resources.find(resource => recoveryResourceKey(resource) === recoveryResourceKey(r))?.title ?? "Selected title"}: {{ repaired: "Links repaired", queued: "Recovery queued", unchanged: "No change needed", blocked: "Recovery blocked" }[r.status]}</strong>
-        {r.jobIds.length > 0 && <p>Queued jobs: {r.jobIds.join(", ")}. Queueing is not confirmation that content has been restored.</p>}
+        {r.jobIds.length > 0 && <p>Recovery is queued. Queueing is not confirmation that content has been restored.</p>}
         <ul>{r.reasons.map(reason => <li key={reason.code}>{reason.message}</li>)}</ul>
       </div>)}
     </section>}

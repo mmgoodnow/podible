@@ -447,7 +447,7 @@ export function MovieRequestDetail({ requestId }: { requestId: number }) {
         Back to library
       </Link>
       <div className="library-toolbar"><h1>{request.movie.title}</h1></div>
-      <p className="muted">{request.movie.year} / Request {request.id}</p>
+      {request.movie.year && <p className="muted">{request.movie.year}</p>}
       <Progress request={request} />
       <div className="actions">
         {request.state === "blocked" && (

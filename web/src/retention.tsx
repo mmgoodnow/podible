@@ -48,12 +48,12 @@ function ResourceAudit({ resource, sourceUpdatedAt }: { resource: Resource; sour
     <summary>
       <strong>{item.title}</strong> / {displayState[item.displayState]}
       <span className="muted" style={{ display: "block", marginTop: "0.35rem" }}>
-        {item.key.namespace}:{item.key.id} / {item.audit.blockers.length} blockers / Reclaimable: {bytes(item.verifiedReclaimableBytes)}
+        {item.audit.eligible ? "Passed safety checks" : "Protected from removal"} / Space that can be freed: {bytes(item.verifiedReclaimableBytes)}
       </span>
     </summary>
     <div className="actions">
       <button type="button" className="secondary" disabled={audit.isFetching} onClick={() => { void audit.refetch(); }}>
-        {audit.isFetching ? "Inspecting resource..." : "Refresh resource audit"}
+        {audit.isFetching ? "Checking..." : "Check again"}
       </button>
       <span className="muted">Observed {timestamp(item.observedAt)}</span>
     </div>
@@ -105,19 +105,19 @@ function ResourceAudit({ resource, sourceUpdatedAt }: { resource: Resource; sour
     <h3>Eviction preview</h3>
     <p>Only canonical movie objects are removed. Torrent registrations and their independent seed-store files remain intact. The server rechecks all safety evidence before acting.</p>
     <button type="button" className="secondary" disabled={preview.isFetching || evict.isPending}
-      onClick={() => { void preview.refetch(); }}>{preview.isFetching ? "Checking eligibility..." : "Preview eviction"}</button>
+      onClick={() => { void preview.refetch(); }}>{preview.isFetching ? "Checking eligibility..." : "Check removal eligibility"}</button>
     {preview.isError && <p role="alert">Eviction preview failed: {preview.error.message}</p>}
     {preview.data && !candidate && <p>No selected canonical movie version can be evaluated for this target.</p>}
     {candidate && <>
       <p>{candidate.eligible ? "Eligible after current checks" : "Not eligible"} / Reclaimable: {bytes(candidate.reclaimableBytes)} / Plays: {known(candidate.playCount)}</p>
       {candidate.blockers.length > 0 && <ul aria-label="Eviction safety blockers">{candidate.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul>}
       {candidate.eligible && candidate.expectedRevision !== null && <button type="button" disabled={evict.isPending} onClick={() => {
-        if (window.confirm(`Remove Podible's canonical copy of ${item.title}? Seed-store data is retained. You can request it again later.`))
+        if (window.confirm(`Remove the library copy of ${item.title}? Original torrent data is retained. You can request it again later.`))
           evict.mutate({ targetId: item.targetId, expectedRevision: candidate.expectedRevision!, reason: "Administrator requested eviction after inspecting eligibility" });
-      }}>{evict.isPending ? "Queueing eviction..." : "Evict canonical copy"}</button>}
+      }}>{evict.isPending ? "Requesting removal..." : "Remove library copy"}</button>}
     </>}
     {evict.isError && <p role="alert">Eviction was not queued: {evict.error.message}</p>}
-    {evict.data && <p role="status">Eviction queued as job {evict.data.jobId}. Queueing is not confirmation that bytes were removed.</p>}
+    {evict.data && <p role="status">Removal requested. This does not yet confirm that space has been freed.</p>}
     <h3>Canonical file facts</h3>
     {!item.files.length && <p>No complete owned-file inventory is available. This is not proof of zero bytes or intentional absence.</p>}
     {item.files.map((file) => <details className="panel" key={file.id}>
@@ -148,13 +148,12 @@ export function RetentionAudit() {
     enabled: false, retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false,
   }));
   return <>
-    <h1>Retention audit</h1>
+    <h1>Free up space</h1>
     <section className="panel" aria-label="Disk-pressure management">
-      <h2>Disk-pressure management</h2>
-      <p>The background worker checks every 5 minutes and reclaims eligible owned movie objects only when free space falls below the configured threshold. It protects recent requests, protected titles, active playback and acquisitions, shared files, and torrent seed data.</p>
-      <p>The default free-space floor is 20 GiB. Movie copies and supported complete single-season TV targets can be reclaimed under pressure; books, foreign libraries and torrent seed files are protected. Pins and thresholds are configured in Settings.</p>
+      <h2>Automatic cleanup</h2>
+      <p>When storage runs low, Podible can remove eligible movie and complete-season library copies. Recent requests, protected titles, active playback, and torrent data stay protected. Limits are configured in Settings.</p>
       <button type="button" disabled={pressure.isFetching} onClick={() => { void pressure.refetch(); }}>
-        {pressure.isFetching ? "Checking disk..." : "Preview disk pressure"}
+        {pressure.isFetching ? "Checking disk..." : "Check storage"}
       </button>
       {pressure.isError && <p role="alert">Disk preview failed: {pressure.error.message}</p>}
       {pressure.data && <>
@@ -164,18 +163,17 @@ export function RetentionAudit() {
       </>}
     </section>
     <section className="panel" aria-label="Read-only audit mode">
-      <h2>Read-only resource observations</h2>
-      <p>Loading or refreshing these audits does not delete files, start downloads, or change intent. Explicit eviction controls appear separately after an eligibility preview.</p>
-      <p>This tab reviews movies; use TV seasons for whole-season TV checks. Watch history, seed history, and reclaimable storage stay unknown until verified.</p>
+      <h2>Review movies</h2>
+      <p>Checking titles does not remove anything. Choose a title to review its watch history, protection, and removal eligibility. Use TV seasons to review a whole season.</p>
       <button type="button" disabled={status.isFetching} onClick={() => { void status.refetch(); }}>
-        {status.isFetching ? "Inspecting page..." : "Refresh page audit"}
+        {status.isFetching ? "Checking titles..." : "Check these titles again"}
       </button>
       <p className="muted">Inspections run on page load or manual refresh, not on a polling timer. Observations are not persisted.</p>
     </section>
     {status.isPending && <p role="status">Loading retention audit...</p>}
     {status.isError && <p role="alert">Could not load the retention audit: {status.error.message}{status.data ? ". Showing the last successful page; refresh to verify current facts." : ""}</p>}
     {status.data && <section aria-label="Resource audits" aria-busy={status.isFetching}>
-      <h2>Movie resources</h2>
+      <h2>Movies</h2>
       {!status.data.resources.length && <p>{afterTargetId ? "No further movie targets on this page." : "No movie targets to audit yet."}</p>}
       {status.data.resources.map((resource) => <ResourceAudit key={`${resource.key.namespace}:${resource.key.id}`}
         resource={resource} sourceUpdatedAt={status.dataUpdatedAt} />)}

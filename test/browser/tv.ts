@@ -75,6 +75,15 @@ try {
   const entry = (await api.catalog.available.query({ query: "Fixture Sequel" })).tv.find(entry => entry.key === request.entry.key)!;
   await adminPage.goto(new URL(`/tv/library/${entry.entryId}`,url).href);
   await adminPage.getByText("1 episodes published in Plex.",{ exact: true }).waitFor();
+  let retentionAudits = 0;
+  adminPage.on("request",item => { if (item.url().includes("tvRetention.audit")) retentionAudits++; });
+  await adminPage.goto(new URL("/tv-retention",url).href);
+  const seasonPicker = adminPage.getByRole("combobox",{ name: "TV title and season", exact: true });
+  await seasonPicker.getByRole("option",{ name: "Fixture Sequel (2020) / Season 2", exact: true }).waitFor({ state: "attached" });
+  assert.deepEqual(await seasonPicker.getByRole("option").allTextContents(),["Choose a title and season","Fixture Sequel (2020) / Season 2"]);
+  await seasonPicker.selectOption({ label: "Fixture Sequel (2020) / Season 2" });
+  assert.equal(retentionAudits,0,"Selecting a published TV title implicitly started retention work");
+  assert.equal(await adminPage.getByRole("spinbutton").count(),0,"Retention still exposes numeric target IDs");
   await admin.close();
   console.log("Native TV browser: private request denied to foreign admin, published library remains accessible");
 

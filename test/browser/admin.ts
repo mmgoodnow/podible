@@ -267,14 +267,14 @@ try {
   const movieStorage = page.getByRole("region", { name: "Storage and links" }).getByRole("article").filter({ has: page.getByRole("heading", { name: "Movies", exact: true }) });
   await movieStorage.getByText("Storage details", { exact: true }).click();
   await movieStorage.getByRole("link", { name: "Review removable titles", exact: true }).click();
-  await page.getByRole("heading", { name: "Disk-pressure management", exact: true }).waitFor();
-  await page.getByRole("button", { name: "Preview disk pressure", exact: true }).click();
+  await page.getByRole("heading", { name: "Free up space", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Check storage", exact: true }).click();
   await page.getByText("No disk pressure", { exact: false }).waitFor();
   const waitingAudit = page.locator("details.panel").filter({ has: page.locator("summary").filter({ hasText: "Fixture Waiting For Offers" }) }).first();
   await waitingAudit.locator("summary").first().click();
-  await waitingAudit.getByRole("button", { name: "Preview eviction", exact: true }).click();
+  await waitingAudit.getByRole("button", { name: "Check removal eligibility", exact: true }).click();
   await waitingAudit.getByText("No selected canonical movie version can be evaluated for this target.", { exact: true }).waitFor();
-  assert.equal(await page.getByRole("button", { name: "Evict canonical copy", exact: true }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: "Remove library copy", exact: true }).count(), 0);
   assert.deepEqual((await rpc("jobs.list", { type: "retention_cleanup" })).result.jobs, cleanupBefore, "Preview queued a destructive job");
   assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false, "Retention overflows mobile viewport");
   await page.screenshot({ path: path.join(artifacts, "admin-retention-mobile.png"), animations: "disabled" });

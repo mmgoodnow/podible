@@ -118,6 +118,13 @@ try {
   assert.ok((await callback.allHeaders())["set-cookie"]?.includes("HttpOnly"));
   await page.waitForURL(link("/library?from=same-window"));
   await page.getByRole("heading", { name: "Library", exact: true }).waitFor();
+  assert.deepEqual(await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link").allTextContents(), ["Library"]);
+  // This fixture has pending books, not imported assets for the publication-only All rails.
+  await page.getByRole("group", { name: "Media type" }).getByRole("button", { name: "Books", exact: true }).click();
+  const bookLink = page.getByRole("region", { name: "Your books", exact: true }).getByRole("link", { name: /Piranesi Susanna Clarke/ });
+  await bookLink.waitFor();
+  assert.match(await bookLink.getAttribute("href") ?? "", /^\/book\/[1-9]\d*$/);
+  await bookLink.click();
   await page.getByRole("heading", { name: "Piranesi", exact: true }).waitFor();
   assert.equal((await rpcMe(success)).result?.user.username, "reader");
   const cookie = (await success.cookies()).find(item => item.name === "podible_session");

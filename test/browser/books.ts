@@ -215,6 +215,7 @@ try {
     .getByRole("button", { name: "Confirm report", exact: true })
     .click();
   await page.getByRole("status").filter({ hasText: "Review queued" }).waitFor();
+  assert.doesNotMatch(await page.getByRole("status").filter({ hasText: "Review queued" }).innerText(), /Job\s+\d+/, "Ordinary review notice exposes a primary job ID");
   await page
     .getByRole("button", { name: "Report wrong ebook", exact: true })
     .click();

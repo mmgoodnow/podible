@@ -90,6 +90,7 @@ try {
   await page
     .getByRole("heading", { name: "Watching for a release", exact: true })
     .waitFor();
+  if (await page.getByText(/\/ Request \d+/).count()) throw new Error("Movie request headline exposes a primary request ID");
   await context.request.post(new URL("/__fixture/add-release", url).href);
   await page.getByText("Choose a release manually", { exact: true }).click();
   await page

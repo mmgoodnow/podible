@@ -160,7 +160,6 @@ function AudioContents({
         <>
           <p role="status">
             <strong>{transcriptLabels[status.data.status]}</strong>
-            {status.data.jobId ? ` · Job ${status.data.jobId}` : ""}
           </p>
           {status.data.status === "missing_config" && (
             <p>
@@ -531,7 +530,6 @@ export function BookDetail({
                     Next attempt: {new Date(latest.nextRunAt).toLocaleString()}
                   </p>
                 )}
-                <small>Job {latest.id}</small>
               </div>
             ) : (
               !activity.isPending &&
@@ -578,7 +576,7 @@ export function BookDetail({
             </div>
             {acquire.isError && <Failure error={acquire.error} />}
             {acquire.isSuccess && (
-              <p role="status">Acquisition queued · Job {acquire.data.jobId}</p>
+              <p role="status">Acquisition queued.</p>
             )}
           </section>
           {(audioReleaseIds.length > 0 || ebook?.releaseId) && (
@@ -650,7 +648,7 @@ export function BookDetail({
               {report.isError && <Failure error={report.error} />}
               {report.isSuccess && (
                 <p role="status">
-                  Review queued · Job {report.data.jobId}. The current edition
+                  Review queued. The current edition
                   is preserved.
                 </p>
               )}

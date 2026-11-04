@@ -176,7 +176,7 @@ export function AddCandidate({ candidate, compact = false }: { candidate: Candid
         {add.isError && <Failure error={add.error} />}
         {add.isSuccess && !add.data.book && (
           <p role="status">
-            Added. Acquisition job {add.data.acquisition_job_id} is queued.{" "}
+            Added. Acquisition is queued.{" "}
             <Link href="/library">Open library</Link>
           </p>
         )}
