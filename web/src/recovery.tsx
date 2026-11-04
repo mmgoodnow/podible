@@ -8,7 +8,8 @@ import { Failure } from "./books";
 type Command = inferRouterInputs<AppRouter>["recovery"]["recover"];
 export function RecoveryPage() {
   const trpc = useTRPC();
-  const [namespace, setNamespace] = useState<"movie-target" | "tv-target">("movie-target");
+  const [namespace, setNamespace] = useState<"movie-target" | "tv-target">(() =>
+    new URLSearchParams(location.search).get("media") === "tv" ? "tv-target" : "movie-target");
   const [afterTargetId, setAfterTargetId] = useState(0);
   const [selected, setSelected] = useState<string[]>([]);
   const [lastCommand, setLastCommand] = useState<Command | null>(null);
@@ -28,17 +29,15 @@ export function RecoveryPage() {
     recover.mutate(command);
   }
   return <>
-    <div className="library-toolbar"><h1>Recovery</h1>
+    <div className="library-toolbar"><h1>Restore missing media</h1>
       <button className="secondary" disabled={inventory.isFetching || recover.isPending} onClick={() => { setSelected([]); void inventory.refetch(); }}>Refresh evidence</button>
     </div>
-    <p>Restore missing presentation links or reacquire wanted media without rebuilding requests. Missing or replaced storage mounts block recovery rather than trigger a download flood.</p>
     <div className="media-filters" role="group" aria-label="Recovery media type">
       {(["movie-target", "tv-target"] as const).map(n => <button key={n} className="secondary" aria-pressed={namespace === n}
         disabled={recover.isPending} onClick={() => { setNamespace(n); setAfterTargetId(0); setSelected([]); }}>
         {n === "movie-target" ? "Movies" : "TV"}
       </button>)}
     </div>
-    <p className="muted">Preview is read-only. Recovery preserves intentional absence, existing request IDs and torrent seed data. At most 20 targets are considered per batch.</p>
     {inventory.isError ? <Failure error={inventory.error} retry={() => void inventory.refetch()} /> : inventory.isPending ? <p role="status">Inspecting owned media...</p> : <>
       <div className="recovery-actions">
         <button className="secondary" disabled={recover.isPending || !actionable.length} onClick={() => setSelected(actionable.map(r => r.key.id))}>Select recoverable</button>
@@ -50,17 +49,21 @@ export function RecoveryPage() {
           <input type="checkbox" checked={selected.includes(r.key.id)} disabled={recover.isPending || r.action === "blocked" || r.action === "none"}
             onChange={e => setSelected(previous => e.target.checked ? [...previous, r.key.id] : previous.filter(id => id !== r.key.id))} />
           <strong>{r.title}</strong>
-        </label><span>{r.action === "repair-view" ? "Repair links" : r.action === "queue-acquisition" ? "Reacquire" : r.action === "none" ? "No action" : "Blocked"}</span></div>
-        <p>Wanted: {r.desiredPresence} · Mount: {r.mount.state} · Content: {r.canonical.state} · View: {r.view.state}</p>
+        </label><span>{r.action === "repair-view" ? "Repair links" : r.action === "queue-acquisition" ? "Retrieve missing files" : r.action === "none" ? "No repair needed" : "Cannot repair yet"}</span></div>
+        <p>{r.action === "repair-view" ? "Your media files are present. Repairing will restore their missing library links."
+          : r.action === "queue-acquisition" ? "Recovery will queue retrieval of missing media while keeping existing requests and surviving files."
+          : r.action === "blocked" ? r.reasons[0]?.message ?? "The required safety checks have not passed."
+          : r.canonical.state === "present" && r.view.state === "present" ? "Media files and library links are present." : "No repair is currently available."}</p>
         {r.activeAcquisitions.length > 0 && <p>{r.activeAcquisitions.length} active acquisition(s); recovery will not duplicate them.</p>}
-        <ul>{r.reasons.map(reason => <li key={reason.code}>{reason.message}</li>)}</ul>
+        <details><summary>Inspection details</summary><p>Wanted: {r.desiredPresence} · Mount: {r.mount.state} · Content: {r.canonical.state} · Library links: {r.view.state}</p>
+          <ul>{r.reasons.map(reason => <li key={reason.code}>{reason.message}</li>)}</ul></details>
       </section>)}
       {inventory.data.nextAfterTargetId !== null && <button className="secondary" disabled={recover.isPending} onClick={() => { setAfterTargetId(inventory.data!.nextAfterTargetId!); setSelected([]); }}>Next 20 targets</button>}
       {afterTargetId > 0 && <button className="secondary" disabled={recover.isPending} onClick={() => { setAfterTargetId(0); setSelected([]); }}>Back to first page</button>}
     </>}
     {recover.isError && <><Failure error={recover.error} />{lastCommand && <button className="secondary" onClick={() => recover.mutate(lastCommand)}>Retry same recovery</button>}</>}
     {recover.data && <section className="media-section" aria-label="Recovery results"><h2>Results</h2>
-      {recover.data.results.map(r => <div key={`${r.key.namespace}:${r.key.id}`}><strong>{r.key.namespace} {r.key.id}: {r.status}</strong>
+      {recover.data.results.map(r => <div key={`${r.key.namespace}:${r.key.id}`}><strong>{inventory.data?.resources.find(resource => resource.key.namespace === r.key.namespace && resource.key.id === r.key.id)?.title ?? "Selected title"}: {{ repaired: "Links repaired", queued: "Recovery queued", unchanged: "No change needed", blocked: "Recovery blocked" }[r.status]}</strong>
         {r.jobIds.length > 0 && <p>Queued jobs: {r.jobIds.join(", ")}. Queueing is not confirmation that content has been restored.</p>}
         <ul>{r.reasons.map(reason => <li key={reason.code}>{reason.message}</li>)}</ul>
       </div>)}

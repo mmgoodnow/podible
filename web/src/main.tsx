@@ -73,20 +73,8 @@ function App() {
           >
             Library
           </Link>
-          {session.data?.user.isAdmin && (
-            <Link
-              href="/movie-dual-write"
-              aria-current={route === "/movie-dual-write" ? "page" : undefined}
-            >
-              Movie sync
-            </Link>
-          )}
+          {session.data?.user.isAdmin && <Link href="/ops" aria-current={route === "/ops" ? "page" : undefined}>Activity</Link>}
           {session.data?.user.isAdmin && <Link href="/settings" aria-current={route === "/settings" ? "page" : undefined}>Settings</Link>}
-          {session.data?.user.isAdmin && <Link href="/ops" aria-current={route === "/ops" ? "page" : undefined}>Ops</Link>}
-          {session.data?.user.isAdmin && <Link href="/tv-sync" aria-current={route === "/tv-sync" ? "page" : undefined}>TV sync</Link>}
-          {session.data?.user.isAdmin && <Link href="/retention" aria-current={route === "/retention" ? "page" : undefined}>Retention</Link>}
-          {session.data?.user.isAdmin && <Link href="/recovery" aria-current={route === "/recovery" ? "page" : undefined}>Recovery</Link>}
-          {session.data?.user.isAdmin && <Link href="/stewardship" aria-current={route === "/stewardship" ? "page" : undefined}>Torrent health</Link>}
         </nav>
         {session.data && <form method="post" action="/logout"><button type="submit">Sign out</button></form>}
       </header>
@@ -153,6 +141,8 @@ function ActorLibrary({ isAdmin, initialLibrary }: {
   return (
     <QueryClientProvider client={actorClient}>
       <TRPCProvider trpcClient={rpc} queryClient={actorClient}>
+        {isAdmin && ["/movie-dual-write", "/tv-sync", "/retention", "/tv-retention", "/recovery", "/stewardship"].includes(route) &&
+          <Link className="back" href="/ops">Back to activity</Link>}
         {["/settings", "/users", "/ops"].includes(route) ? (
           isAdmin ? (route === "/settings" ? <SettingsPage /> : route === "/users" ? <UsersPage /> : <OpsPage />)
             : <p role="alert">Administrator access required.</p>

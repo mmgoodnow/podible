@@ -21,7 +21,7 @@ export function StewardshipPage({ api }: { api: StewardshipPanelApi }) {
   const collect = useMutation({ mutationFn: (operationId: string) => api.collect({ operationId }),
     onSuccess: () => { void cache.invalidateQueries({ queryKey: queryRoot }); } });
   return <>
-    <div className="library-toolbar"><h1>Torrent Stewardship</h1>
+    <div className="library-toolbar"><h1>Torrent health</h1>
       <button className="secondary" disabled={status.isFetching} onClick={() => void status.refetch()}>Refresh saved observations</button>
       <button disabled={collect.isPending} onClick={() => {
         const operationId = crypto.randomUUID(); setLastOperationId(operationId); collect.mutate(operationId);

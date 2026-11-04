@@ -5,6 +5,8 @@ import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../src/trpc";
 import { useTRPC } from "./rpc";
 import { Link } from "./router";
+import "./activity.css";
+import { activityItems, attentionItems, downloadProgress, problemAction, type ActivityDownload } from "./activity-model";
 
 type SettingsDraft = { text: string; base: string } | null;
 const draftKey = ["admin-settings-draft"] as const;
@@ -20,7 +22,7 @@ function parsedSettings(text: string): { value: AppSettings | null; error: strin
 function AdminNavigation({ current }: { current: "settings" | "users" | "ops" }) {
   return <nav aria-label="Administrator pages" style={{ marginBottom: "1rem" }}>
     {(["settings", "users", "ops"] as const).map((page) => <Link key={page} href={`/${page}`} aria-current={current === page ? "page" : undefined}>
-      {page === "ops" ? "Ops" : page === "users" ? "Users" : "Settings"}
+      {page === "ops" ? "Activity" : page === "users" ? "Users" : "Settings"}
     </Link>)}
   </nav>;
 }
@@ -198,72 +200,110 @@ function OpsDiagnostics() {
   </>;
 }
 
+function ActivityProblem({ incident, onRetried }: { incident: Ops["incidents"][number]; onRetried: (id: number) => void }) {
+  const trpc = useTRPC(), cache = useQueryClient();
+  const retry = useMutation(trpc.jobs.retry.mutationOptions({ onSuccess: async () => {
+    onRetried(incident.jobId!);
+    await cache.invalidateQueries({ queryKey: trpc.adminWeb.ops.pathKey() });
+  } }));
+  const retryable = incident.jobId !== null && ["manual-retry", "cancelled"].includes(incident.recovery);
+  const correction = problemAction(incident.code);
+  return <article className="activity-item problem" aria-label={incident.title}>
+    <div className="activity-item-heading"><h3><WorkTitle title={incident.title} href={incident.href} /></h3>
+      <span className="activity-badge">{retryable ? "Stopped" : "Needs attention"}</span></div>
+    <p>{incident.detail}</p>
+    <p><Recovery recovery={incident.recovery} nextWakeAt={incident.nextWakeAt} /></p>
+    {correction && <div className="actions">{correction.href.startsWith("#") ? <a className="button" href={correction.href}>{correction.label}</a>
+      : <Link className="button" href={correction.href}>{correction.label}</Link>}</div>}
+    {retryable && !correction && <div className="actions"><button disabled={retry.isPending} onClick={() => retry.mutate({ jobId: incident.jobId! })}>
+      {retry.isPending ? "Requesting retry..." : "Retry"}</button></div>}
+    {retry.error && <p role="alert">Retry was not queued: {retry.error.message}</p>}
+    <details><summary>Technical details</summary><p>{incident.code}{incident.jobId ? ` / job #${incident.jobId}` : ""}</p>
+      {retryable && correction && <button disabled={retry.isPending} onClick={() => retry.mutate({ jobId: incident.jobId! })}>Retry after resolving the problem</button>}
+    </details>
+  </article>;
+}
+
+function ActivityWork({ work, downloads }: { work: Ops["activeAcquisitions"][number]; downloads: ActivityDownload[] }) {
+  const phase = work.job.recovery === "running" ? work.stage?.replaceAll("_", " ") || "Working" : recoveryLabels[work.job.recovery];
+  const measured = downloadProgress(downloads);
+  return <article className="activity-item" aria-label={work.title}>
+    <div className="activity-item-heading"><h3><WorkTitle title={work.title} href={work.href} /></h3><span className="activity-badge">{phase}</span></div>
+    {measured ? <>
+      <progress aria-label={`Download progress for ${work.title}`} value={measured.done} max={measured.size} />
+      <p>{bytes(measured.done)} of {bytes(measured.size)}{measured.speed !== null && measured.live ? ` / ${bytes(measured.speed)}/s` : ""}{!measured.live ? " / last recorded progress" : ""}</p>
+    </> : downloads.length > 0 && <p>Waiting for download status.</p>}
+    {downloads.length > 1 && <p>{downloads.length} downloads in this request.</p>}
+    {downloads.filter(d => d.problem).map(download => <p key={download.key}>{download.problem!.message}</p>)}
+    {work.job.nextWakeAt && <p>Next attempt: {date(work.job.nextWakeAt)}.</p>}
+    <details><summary>Technical details</summary>
+      <p>{work.media} / job #{work.job.id} / {work.job.type}. Attempts {work.job.attempts}/{work.job.maxAttempts}.</p>
+      {downloads.map(download => <p key={download.key}>Telemetry: {download.telemetry}. Observed {date(download.observedAt)}.</p>)}
+    </details>
+  </article>;
+}
+
 export function OpsPage() {
   const trpc = useTRPC(), cache = useQueryClient();
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [retryNotice, setRetryNotice] = useState<number | null>(null);
   const ops = useQuery(trpc.adminWeb.ops.queryOptions({ includeJobs: false }, { refetchInterval: 5000 }));
   const refresh = useMutation(trpc.adminWeb.refresh.mutationOptions({ onSuccess: () => cache.invalidateQueries({ queryKey: trpc.adminWeb.ops.queryKey() }) }));
-  return <>
-    <h1 style={{ fontSize: "2rem", margin: "0 0 0.5rem" }}>Ops</h1>
-    <AdminNavigation current="ops" />
-    <div className="actions">
-      <button disabled={ops.isFetching} onClick={() => ops.refetch()}>Reload operations</button>
-      <button disabled={refresh.isPending} onClick={() => refresh.mutate({})}>{refresh.isPending ? "Queuing..." : "Queue library refresh"}</button>
-    </div>
-    {refresh.error && <p role="alert">Library refresh was not queued: {refresh.error.message}</p>}
-    {refresh.isSuccess && <p role="status">Library refresh {refresh.data.shared ? "already queued or running" : "queued"} as job #{refresh.data.jobId}.</p>}
+  const work = ops.data ? activityItems(ops.data) : [];
+  const attention = ops.data ? attentionItems(ops.data.incidents) : [];
+  const feedProblems = ops.data?.feeds.filter(feed => feed.state === "unavailable" || feed.gap).length ?? 0;
+  return <div className="activity-page">
+    <div className="activity-heading"><h1>Activity</h1><button className="secondary" disabled={ops.isFetching} onClick={() => ops.refetch()}>Refresh</button></div>
+    {retryNotice !== null && <p role="status">Retry requested for job #{retryNotice}. Its current progress appears below.</p>}
     {ops.isPending ? <p role="status">Loading operations...</p> : ops.isError ? <p role="alert">{ops.error.message}</p> : <>
-      <p>{ops.data.summary.activeAcquisitions} active acquisitions; {ops.data.summary.downloads} downloads; {ops.data.summary.incidents} incidents. Next scheduled wake: {date(ops.data.summary.nextWakeAt)}.</p>
-      <p>{ops.data.summary.waiting} acquisitions waiting for suitable releases or future episodes (informational).</p>
-      {ops.data.diagnostics.warnings.map((warning, index) => <p role="status" key={index}>{warning}</p>)}
-      <section className="panel" aria-label="Active work">
-        <h2>Active work</h2>
-        {!ops.data.activeAcquisitions.length && !ops.data.downloads.length && <p>No active acquisitions or downloads.</p>}
-        {ops.data.activeAcquisitions.map((work) => <article key={work.key} style={{ margin: "1rem 0" }}>
-          <WorkTitle title={work.title} href={work.href} />
-          <p>{work.media}{work.stage ? ` / ${work.stage}` : ""}. <Recovery recovery={work.job.recovery} nextWakeAt={work.job.nextWakeAt} />.</p>
-        </article>)}
-        {ops.data.downloads.map((download) => <article key={download.key} style={{ margin: "1rem 0" }}>
-          <WorkTitle title={download.title} href={download.href} />
-          <p>{bytes(download.bytesDone)} of {bytes(download.sizeBytes)}; {download.bytesPerSecond === null ? "Speed unknown" : `${bytes(download.bytesPerSecond)}/s`}. Telemetry: {download.telemetry}.</p>
-          {download.problem && <p>{download.problem.message} ({download.problem.code}).</p>}
-          <p><Recovery recovery={download.job.recovery} nextWakeAt={download.job.nextWakeAt} />.</p>
-        </article>)}
+      <section className="activity-section" aria-label="Needs attention">
+        <h2>Needs attention <small>{attention.length}</small></h2>
+        {!attention.length ? <p className="muted">Nothing needs your attention.</p> : <div className="activity-items">
+          {attention.map(incident => <ActivityProblem key={incident.key} incident={incident} onRetried={setRetryNotice} />)}</div>}
       </section>
-      <section className="panel" aria-label="Needs attention">
-        <h2>Needs attention</h2>
-        {!ops.data.incidents.length && <p>No operational failures need attention.</p>}
-        {ops.data.incidents.map((incident) => <article key={incident.key} style={{ margin: "1rem 0" }}>
-          <WorkTitle title={incident.title} href={incident.href} />
-          <p>{incident.detail}</p><p><Recovery recovery={incident.recovery} nextWakeAt={incident.nextWakeAt} />. {incident.code}{incident.jobId ? ` / job #${incident.jobId}` : ""}.</p>
-        </article>)}
+      <section className="activity-section" aria-label="Active work">
+        <h2>In progress <small>{work.length}</small></h2>
+        {!work.length ? <p className="muted">No downloads or imports in progress.</p> : <div className="activity-items">
+          {work.map(item => <ActivityWork key={item.work.job.id} work={item.work} downloads={item.downloads} />)}</div>}
+        {ops.data.summary.waiting > 0 && <p className="activity-waiting">{ops.data.summary.waiting} {ops.data.summary.waiting === 1 ? "request is" : "requests are"} waiting for a release or an unaired episode. <Link href="/library">View library</Link></p>}
       </section>
-      <section className="panel" aria-label="Provider state">
-        <h2>Providers and automatic recovery</h2>
-        <p>Waiting for a suitable release is informational, not a failure. A provider cooldown is not proof that an acquisition job has a scheduled wake.</p>
-        {!ops.data.feeds.length && <p>No provider feed observations yet.</p>}
-        {ops.data.feeds.map((feed) => <article key={feed.id} style={{ margin: "1rem 0" }}>
-          <strong>{feed.provider}</strong> / {feed.mediaType}: <strong>{feed.state}</strong>.
-          <p>Last success: {date(feed.lastSuccessAt)}. Next poll: {date(feed.nextPollAt)}. Provider retry boundary: {date(feed.retryAt)}.</p>
-          {feed.error && <p>{feed.error.code}: {feed.error.message}</p>}
-          {feed.gap && <p>Feed history has a gap; discovery coverage is incomplete.</p>}
-        </article>)}
-        <p><Link href="/movie-dual-write">Movie sync</Link> / <Link href="/tv-sync">TV sync</Link></p>
+      {ops.data.diagnostics.warnings.length > 0 && <details className="activity-status"><summary>Some activity status is unavailable</summary>
+        {ops.data.diagnostics.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</details>}
+      <section className="activity-section" id="activity-storage" aria-label="Storage and links">
+        <h2>Storage</h2>
+        <div className="activity-storage">{ops.data.storage.map(storage => <article key={storage.media}>
+          <h3>{storage.media === "book" ? "Books" : storage.media === "movie" ? "Movies" : "TV"}</h3>
+          <p>{storage.capacityState === "known" ? `${bytes(storage.availableBytes)} free` : storage.capacityState === "not-configured" ? "Not configured" : "Capacity unknown"}</p>
+          {storage.totalBytes !== null && storage.totalBytes > 0 && storage.availableBytes !== null &&
+            <meter aria-label={`${storage.media} storage used`} min={0} max={storage.totalBytes} value={storage.totalBytes - storage.availableBytes} />}
+          {storage.identityState !== "verified" && <p>{storage.identityState === "not-configured" ? "Storage not configured" : "Storage could not be verified"}</p>}
+          <details><summary>Storage details</summary><p><code>{storage.root ?? "Not configured"}</code></p><p>{storage.reason}</p>
+            <p>Published links have not been checked by this overview.</p>
+            {storage.media !== "book" && <p><Link href={storage.media === "tv" ? "/tv-retention" : "/retention"}>Review removable titles</Link></p>}
+            {storage.media !== "book" && <p><Link href={`/recovery?media=${storage.media}`}>Inspect missing files and links</Link></p>}
+          </details>
+        </article>)}</div>
       </section>
-      <section className="panel" aria-label="Storage and links">
-        <h2>Storage and links</h2>
-        {ops.data.storage.map((storage) => <article key={storage.media} style={{ margin: "1rem 0" }}>
-          <strong>{storage.media}</strong>: <code>{storage.root ?? "Not configured"}</code>
-          <p>Capacity: {storage.capacityState}; {bytes(storage.availableBytes)} available of {bytes(storage.totalBytes)}. Identity: <strong>{storage.identityState}</strong>.</p>
-          <p>{storage.reason}</p>
-        </article>)}
-        <p>Published link presence is not verified by this snapshot; it is not evidence of missing or healthy content. <Link href="/retention">Open retention audit</Link>.</p>
-      </section>
-      <p className="muted">Observed {date(ops.data.observedAt)}.</p>
+      <details className="activity-status" open={feedProblems > 0}><summary>Connections <small>{feedProblems ? `${feedProblems} need attention` : "Provider status and integration checks"}</small></summary>
+        <div role="region" aria-label="Provider state">
+          <ul className="activity-connections">{ops.data.feeds.map(feed => <li key={feed.id}>
+            <strong>{feed.provider}</strong> / {feed.mediaType}: <strong>{feed.state}</strong>
+            {feed.error && <p>{feed.error.message}</p>}
+            {feed.gap && <p>Some feed history could not be verified.</p>}
+            <details><summary>Connection details</summary><p>Last success: {date(feed.lastSuccessAt)}. Next poll: {date(feed.nextPollAt)}. Provider retry boundary: {date(feed.retryAt)}.</p></details>
+          </li>)}</ul>
+          <div className="activity-tools"><Link href="/settings">Connection settings</Link><Link href="/movie-dual-write">Seerr / Radarr comparisons</Link><Link href="/tv-sync">Seerr / Sonarr comparisons</Link></div>
+        </div>
+      </details>
+      <details className="activity-status"><summary>Torrent health</summary><div><Link href="/stewardship">Inspect private torrent registrations</Link></div></details>
+      <p className="muted">Updated {date(ops.data.observedAt)}.</p>
     </>}
-    <details className="panel" open={diagnosticsOpen} onToggle={(event) => setDiagnosticsOpen(event.currentTarget.open)}>
+    <details className="activity-status" open={diagnosticsOpen} onToggle={(event) => setDiagnosticsOpen(event.currentTarget.open)}>
       <summary>Execution details</summary>
+      <div className="actions"><button disabled={refresh.isPending} onClick={() => refresh.mutate({})}>{refresh.isPending ? "Queuing..." : "Queue library refresh"}</button></div>
+      {refresh.error && <p role="alert">Library refresh was not queued: {refresh.error.message}</p>}
+      {refresh.isSuccess && <p role="status">Library refresh {refresh.data.shared ? "already queued or running" : "queued"} as job #{refresh.data.jobId}.</p>}
       {diagnosticsOpen && <OpsDiagnostics />}
     </details>
-  </>;
+  </div>;
 }

@@ -51,7 +51,9 @@ try {
   await page.getByRole("heading", { name: "TV sync", exact: true }).waitFor();
   await page.getByRole("heading", { name: "Independent TV acquisition", exact: true }).waitFor();
   await page.getByRole("heading", { name: "Sonarr comparison audit", exact: true }).waitFor();
-  await page.getByRole("navigation").getByRole("link", { name: "TV sync", exact: true }).waitFor();
+  const primaryNavigation = page.getByRole("navigation", { name: "Main navigation" });
+  assert.equal(await primaryNavigation.getByRole("link", { name: "Activity", exact: true }).getAttribute("href"), "/ops");
+  assert.equal(await primaryNavigation.getByRole("link", { name: "TV sync", exact: true }).count(), 0);
   const native = page.getByRole("region", { name: "Native TV acquisition", exact: true });
   const audit = page.getByRole("region", { name: "TV comparison cases", exact: true });
   await native.locator("summary").filter({ hasText: "1/2 episodes available" }).waitFor();

@@ -207,7 +207,7 @@ function associatedRows(repo: BooksRepo, table: string): Record<string, unknown>
   return rows;
 }
 
-async function operationalView(repo: BooksRepo, settings: AppSettings, includeJobs: boolean, now: number, transmission?: AdminTransmissionReader | null): Promise<AdminWebOps> {
+async function operationalView(repo: BooksRepo, settings: AppSettings, includeJobs: boolean, now: number, actorUserId: number, transmission?: AdminTransmissionReader | null): Promise<AdminWebOps> {
   const label = labelSanitizer(settings);
   const warnings: string[] = [];
   const incidents: AdminWebOps["incidents"] = [];
@@ -246,10 +246,12 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
       }
     }
     const requests = repo.tv.requests();
+    const requestsById = new Map(requests.map(request => [request.id, request]));
     const tvBindings = associatedRows(repo, "tv_acquisition_downloads");
     for (const targetId of new Set(requests.map((request) => request.target_id))) {
       const target = repo.tv.target(targetId)!;
       const entry = repo.tv.entry(target.entry_id);
+      const sharedHref = entry && repo.tv.availableEpisodeCount(entry.id) > 0 ? `/tv/library/${entry.id}` : null;
       const liveRequests = requests.filter((request) => request.target_id === targetId && !request.withdrawn_at);
       const pending = liveRequests.flatMap((request) => repo.tv.missingEpisodes(request.id));
       const nothingAiredMissing = pending.every((episode) => !episode.airDate || Date.parse(episode.airDate) > now);
@@ -263,8 +265,10 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
         if (nothingAiredMissing || noOffer) waiting++;
       }
       for (const [index, acquisition] of acquisitions.entries()) if (acquisition.job_id) {
+        const request = acquisition.request_id ? requestsById.get(acquisition.request_id) : null;
         contexts.set(acquisition.job_id, { key: `tv:${acquisition.id}`, title: label(entry?.title ?? `TV target ${targetId}`), media: "tv", targetId,
-          href: "/tv-sync", stage: repo.tv.events(targetId).at(-1)?.stage ?? null,
+          href: entry && request?.target_id === targetId && request.user_id === actorUserId ? `/tv/requests/${request.id}` : sharedHref,
+          stage: repo.tv.events(targetId).at(-1)?.stage ?? null,
           suppressIncident: index > 0 || !liveRequests.length || nothingAiredMissing ||
             repo.retention.get({ namespace: "tv-target", id: String(targetId) })?.desiredPresence === "evicted" });
         const ids = new Set(tvBindings.filter((row) => row.acquisition_id === acquisition.id).map((row) => row.torrent_id));
@@ -419,7 +423,7 @@ export function createAdminWebRouter(deps: AdminWebDependencies = {}) {
       } }),
     ops: defineMethod({ auth: "admin", readOnly: true, summary: "Read active media work, genuine failures, provider cooldowns, and verified/unknown storage facts.",
       paramsSchema: z.object({ includeJobs: z.boolean().default(false) }).strict(), resultSchema: adminWebOpsSchema,
-      handler: (ctx, params) => operationalView(ctx.repo, settingsForRead(ctx.repo), params.includeJobs, now(), deps.transmission) }),
+      handler: (ctx, params) => operationalView(ctx.repo, settingsForRead(ctx.repo), params.includeJobs, now(), ctx.session!.user_id, deps.transmission) }),
     refresh: defineMethod({ auth: "admin", summary: "Queue one bounded full-library refresh through the existing transactional outbox.", paramsSchema: empty,
       resultSchema: z.object({ jobId: id, shared: z.boolean() }),
       handler(ctx) {

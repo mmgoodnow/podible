@@ -14,6 +14,8 @@ import type { JobLifecycle } from "../../src/worker/job-journal";
 import type { PlexServerDevice } from "../../src/plex";
 import { defaultMovieQualityPolicy } from "../../src/movies/quality";
 import { prepareMovieStorage } from "../../src/movies/storage";
+import { tvRouter } from "../../src/rpc/tv-router";
+import { catalogRouter } from "../../src/rpc/catalog-router";
 
 const NOW = Date.parse("2026-11-04T12:00:00.000Z");
 const ownerToken = "private-owner-credential";
@@ -408,11 +410,13 @@ describe("operational facts from the execution authority", () => {
   test("TV future episodes remain informational while real TV acquisitions/downloads are visible", async () => {
     await using f = await fixture();
     const rows: ReturnType<typeof liveTorrent>[] = [];
+    let currentRequestId = 0;
     for (const [n, date] of [[301, "2020-01-01"], [302, "2099-01-01"]] as const) {
       const request = f.repo.tv.request(f.user.id, { key: `tvdb:${n}`, tvdbId: n, tmdbId: null, title: `Series ${n}`, aliases: [], year: 2020, anime: false,
         episodes: [{ key: `tvdb:${n}01`, title: "Episode", airDate: date, runtimeMinutes: 30,
           numbering: [{ scheme: "tvdb:aired", season: 1, episode: 1, absolute: null }] }], relations: [] }, {}, [`tvdb:${n}01`]);
       const acquisition = f.repo.tv.startAcquisition(request.targetId, "initial", () => f.job({ type: "tv_acquire" }, { status: n === 301 ? "running" : "succeeded" }).id, request.requestId).acquisition;
+      if (n === 301) currentRequestId = request.requestId;
       if (n === 302) f.repo.tv.finishAcquisition(acquisition.id);
       else {
         const source = await managedSource(f, acquisition.id, "tv", "b".repeat(40), "owned");
@@ -421,9 +425,46 @@ describe("operational facts from the execution authority", () => {
     }
     const result = await liveInventory(f, rows).read();
     expect(result.summary.waiting).toBe(1);
-    expect(result.activeAcquisitions.find((item) => item.media === "tv")).toMatchObject({ title: "Series 301", href: "/tv-sync" });
+    expect(result.activeAcquisitions.find((item) => item.media === "tv")).toMatchObject({ title: "Series 301", href: `/tv/requests/${currentRequestId}` });
     expect(result.downloads.find((item) => item.media === "tv")).toMatchObject({ telemetry: "live", bytesDone: 40, problem: null });
     expect(result.incidents).toEqual([]);
+  });
+
+  test("TV activity links use the actor's exact request, shared published work, or no inaccessible private destination", async () => {
+    await using f = await fixture();
+    const foreign = f.repo.upsertUser({ provider: "local", providerUserId: "activity-foreign", username: "Other viewer", isAdmin: false });
+    const cases: { jobId: number; href: string | null; requestId: number; entryId: number; owner: boolean; published: boolean }[] = [];
+    for (const [index, [owner, published]] of [[true, false], [true, true], [false, false], [false, true]].entries()) {
+      const number = 900 + index;
+      const episodes = [1, 2].map(episode => ({ key: `tvdb:${number}${episode}`, title: "Episode", airDate: "2020-01-01", runtimeMinutes: 30,
+        numbering: [{ scheme: "tvdb:aired", season: 1, episode, absolute: null }] }));
+      const request = f.repo.tv.request(owner ? f.user.id : foreign.id, { key: `tvdb:${number}`, tvdbId: number, tmdbId: null,
+        title: `Activity TV ${number}`, aliases: [], year: 2020, anime: false, episodes, relations: [] }, {}, episodes.map(episode => episode.key));
+      const acquisition = f.repo.tv.startAcquisition(request.targetId, "initial", () => f.job({ type: "tv_acquire" }, { status: "running" }).id, request.requestId).acquisition;
+      if (published) {
+        const fileId = randomUUID();
+        const version = f.repo.tv.recordVersion(acquisition.id, { identityVerified: true }, [{ id: fileId, relativePath: `files/${fileId}.mkv`,
+          sizeBytes: 10, probe: {}, episodeIds: [request.episodeIds[0]!] }]);
+        f.repo.tv.stagePublication(request.targetId, version, 0);
+        f.repo.tv.promotePublication(request.targetId, version, 0);
+        f.repo.tv.clearPublication(request.targetId, version);
+      }
+      cases.push({ jobId: acquisition.job_id!, requestId: request.requestId, entryId: request.entryId, owner, published,
+        href: owner ? `/tv/requests/${request.requestId}` : published ? `/tv/library/${request.entryId}` : null });
+    }
+    const before = f.db.query("SELECT total_changes() AS n").get();
+    const result = await executeMethod(f.router.routes.ops, f.ctx, {});
+    for (const entry of cases) {
+      expect(result.activeAcquisitions.find(work => work.job.id === entry.jobId)?.href).toBe(entry.href);
+      if (entry.owner) expect((await executeMethod(tvRouter.routes.myRequest, f.ctx, { requestId: entry.requestId })).request.requestId).toBe(entry.requestId);
+      else await expect(executeMethod(tvRouter.routes.myRequest, f.ctx, { requestId: entry.requestId })).rejects.toMatchObject({ code: -32003 });
+      if (entry.published) expect((await executeMethod(catalogRouter.routes.tvEntry, f.ctx, { entryId: entry.entryId })).availableEpisodes).toBe(1);
+      else await expect(executeMethod(catalogRouter.routes.tvEntry, f.ctx, { entryId: entry.entryId })).rejects.toMatchObject({ code: -32602 });
+      f.setLifecycle(entry.jobId, { status: "failed", error: "TV source unavailable" });
+    }
+    const failed = await executeMethod(f.router.routes.ops, f.ctx, {});
+    for (const entry of cases) expect(failed.incidents.find(incident => incident.jobId === entry.jobId)?.href).toBe(entry.href);
+    expect(f.db.query("SELECT total_changes() AS n").get()).toEqual(before);
   });
 
   test("pending cancellation cannot masquerade as active acquisition or a future automatic wake", async () => {

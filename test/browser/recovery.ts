@@ -23,7 +23,7 @@ try {
   const errors: string[] = [];
   page.on("pageerror", e => errors.push(e.message));
   await page.goto(new URL("/recovery", origin).href);
-  await page.getByRole("heading", { name: "Recovery", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Restore missing media", exact: true }).waitFor();
   await page.getByText("Repairable movie", { exact: true }).waitFor();
   await page.getByText("Repair links", { exact: true }).waitFor();
   const before = await (await context.request.get(new URL("/__fixture/verify", origin).href)).json();
@@ -31,11 +31,11 @@ try {
   await page.getByRole("button", { name: "Select recoverable" }).click();
   page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "Recover selected (1)", exact: true }).click();
-  await page.getByRole("region", { name: "Recovery results" }).getByText("movie-target 1: repaired", { exact: true }).waitFor();
+  await page.getByRole("region", { name: "Recovery results" }).getByText("Repairable movie: Links repaired", { exact: true }).waitFor();
   const after = await (await context.request.get(new URL("/__fixture/verify", origin).href)).json();
   assert.deepEqual(after, { repaired: true, preserved: true, tvMountStillMissing: true });
   await page.getByRole("group", { name: "Recovery media type" }).getByRole("button", { name: "TV", exact: true }).click();
-  await page.getByText("Blocked", { exact: true }).waitFor();
+  await page.getByText("Cannot repair yet", { exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: "Select recoverable" }).isDisabled(), true);
   const member = await browser.newContext();
   await member.addCookies([{ name: "podible_session", value: "recovery-reader", url: origin, httpOnly: true }]);
@@ -44,8 +44,11 @@ try {
   await memberPage.getByRole("alert").getByText("Administrator access required.", { exact: true }).waitFor();
   const denied = await member.request.post(new URL("/rpc", origin).href, { data: { jsonrpc: "2.0", id: 1, method: "recovery.inventory", params: { namespace: "movie-target" } } });
   assert.equal((await denied.json()).error.code, -32003);
-  await page.getByRole("link", { name: "Torrent health", exact: true }).click();
-  await page.getByRole("heading", { name: "Torrent Stewardship", exact: true }).waitFor();
+  await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Activity", exact: true }).click();
+  await page.getByRole("heading", { name: "Activity", exact: true }).waitFor();
+  await page.getByText("Torrent health", { exact: true }).click();
+  await page.getByRole("link", { name: "Inspect private torrent registrations", exact: true }).click();
+  await page.getByRole("heading", { name: "Torrent health", exact: true }).waitFor();
   await page.getByText("No matching private Transmission bindings on this page.", { exact: true }).waitFor();
   await page.getByRole("heading", { name: "Automatic orphan record retirement", exact: true }).waitFor();
   await page.getByText("No matching private bindings on this page.", { exact: true }).waitFor();

@@ -53,7 +53,9 @@ try {
   await page.getByRole("button",{name:"Poll feeds now",exact:true}).click();
   await page.getByText("Feed polling queued.",{exact:true}).waitFor();
   assert.equal(await page.getByRole("heading", { name: "Seerr dual-write" }).count(), 1);
-  assert.equal(await page.getByRole("navigation").getByRole("link", { name: "Movie sync" }).count(), 1);
+  const primaryNavigation = page.getByRole("navigation", { name: "Main navigation" });
+  assert.equal(await primaryNavigation.getByRole("link", { name: "Activity", exact: true }).getAttribute("href"), "/ops");
+  assert.equal(await primaryNavigation.getByRole("link", { name: "Movie sync", exact: true }).count(), 0);
   assert.equal(await page.getByRole("navigation").getByRole("link", { name: "Shadow audit" }).count(), 0);
   assert.equal(await page.locator("#radarr-audit").getAttribute("open"), null);
   assert.equal(auditRequests.length, 0);

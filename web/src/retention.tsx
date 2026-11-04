@@ -152,7 +152,7 @@ export function RetentionAudit() {
     <section className="panel" aria-label="Disk-pressure management">
       <h2>Disk-pressure management</h2>
       <p>The background worker checks every 5 minutes and reclaims eligible owned movie objects only when free space falls below the configured threshold. It protects recent requests, protected titles, active playback and acquisitions, shared files, and torrent seed data.</p>
-      <p>Policy is in Settings JSON under <code>retention.minimumFreeBytes</code> and <code>retention.protectedMovieTargetIds</code>. The default free-space floor is 20 GiB. TV, books and foreign libraries are not automatically evicted.</p>
+      <p>The default free-space floor is 20 GiB. Movie copies and supported complete single-season TV targets can be reclaimed under pressure; books, foreign libraries and torrent seed files are protected. Pins and thresholds are configured in Settings.</p>
       <button type="button" disabled={pressure.isFetching} onClick={() => { void pressure.refetch(); }}>
         {pressure.isFetching ? "Checking disk..." : "Preview disk pressure"}
       </button>
@@ -166,7 +166,7 @@ export function RetentionAudit() {
     <section className="panel" aria-label="Read-only audit mode">
       <h2>Read-only resource observations</h2>
       <p>Loading or refreshing these audits does not delete files, start downloads, or change intent. Explicit eviction controls appear separately after an eligibility preview.</p>
-      <p>Current scope: canonical movie objects. TV and book retention audits are not available yet. Watch history, seed history, and reclaimable storage stay unknown until verified.</p>
+      <p>This tab reviews movies; use TV seasons for whole-season TV checks. Watch history, seed history, and reclaimable storage stay unknown until verified.</p>
       <button type="button" disabled={status.isFetching} onClick={() => { void status.refetch(); }}>
         {status.isFetching ? "Inspecting page..." : "Refresh page audit"}
       </button>

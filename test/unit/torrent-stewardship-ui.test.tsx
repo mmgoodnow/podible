@@ -29,7 +29,7 @@ test("stewardship panel renders saved unknown/paused health and 30-day protectio
   const cache = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   cache.setQueryData(["torrent-stewardship", "books", 0], status);
   const html = renderToStaticMarkup(createElement(QueryClientProvider, { client: cache }, createElement(StewardshipPage, { api })));
-  expect(html).toContain("Torrent Stewardship"); expect(html).toContain("paused incomplete");
+  expect(html).toContain("Torrent health"); expect(html).toContain("paused incomplete");
   expect(html).toContain("Unknown seed time; protected"); expect(html).toContain("Unknown / no current announce");
   expect(html).toContain("Meeting the minimum seed time does not prove every tracker obligation is satisfied");
   expect(html).toContain("Collect next batch"); expect(html).toContain("Refresh saved observations");
