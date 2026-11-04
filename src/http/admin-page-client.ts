@@ -64,17 +64,6 @@ function renderSettingsScript(): string {
           }
         }
 
-        async function wipeDatabase() {
-          if (!window.confirm("Wipe the entire database? This cannot be undone.")) return;
-          const status = document.getElementById("settings-status");
-          status.textContent = "Wiping database…";
-          try {
-            await rpcCall("admin.wipeDatabase", {});
-            window.location.href = withAuth("/admin");
-          } catch (error) {
-            status.textContent = error instanceof Error ? error.message : String(error);
-          }
-        }
   `;
 }
 
@@ -330,7 +319,6 @@ export function renderManualImportScript(): string {
 function renderSettingsBootstrapScript(): string {
   return `
         document.getElementById("settings-save-btn")?.addEventListener("click", saveSettings);
-        document.getElementById("wipe-db-btn")?.addEventListener("click", wipeDatabase);
   `;
 }
 
@@ -362,7 +350,6 @@ function renderJobsBootstrapScript(): string {
 function renderLegacyAdminBootstrapScript(): string {
   return `
         document.getElementById("settings-save-btn")?.addEventListener("click", saveSettings);
-        document.getElementById("wipe-db-btn")?.addEventListener("click", wipeDatabase);
         document.getElementById("manual-search-btn")?.addEventListener("click", runManualSearch);
         document.getElementById("manual-group-snatch-btn")?.addEventListener("click", snatchCheckedAsManifestation);
         document.getElementById("manual-import-inspect-btn")?.addEventListener("click", inspectManualImport);

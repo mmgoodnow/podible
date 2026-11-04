@@ -187,7 +187,10 @@ describe("podible http", () => {
     expect(settingsBody.includes("Uptime:")).toBe(true);
     expect(settingsBody.includes("settings-editor")).toBe(true);
     expect(settingsBody.includes("Refresh Library")).toBe(false);
-    expect(settingsBody.includes("wipe-db-btn")).toBe(true);
+    expect(settingsBody.includes("wipe-db-btn")).toBe(false);
+    expect(settingsBody.includes("Wipe Entire Database")).toBe(false);
+    expect(settingsBody.includes("wipeDatabase")).toBe(false);
+    expect(settingsBody.includes("settings-save-btn")).toBe(true);
     expect(settingsBody.includes("Manual Search + Snatch")).toBe(false);
     expect(settingsBody.includes("Snatch Checked as One Edition")).toBe(false);
     expect(settingsBody.includes("manual-import-btn")).toBe(false);

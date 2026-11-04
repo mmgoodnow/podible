@@ -418,7 +418,7 @@ describe("json-rpc handler", () => {
     db.close();
   });
 
-  test("admin.wipeDatabase clears mutable tables and preserves settings", async () => {
+  test("admin.wipeDatabase is unavailable to every role and preserves database state and files", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -434,6 +434,8 @@ describe("json-rpc handler", () => {
     await mkdir(path.dirname(assetPath), { recursive: true });
     await writeFile(assetPath, Buffer.from("epub"));
     await writeFile(coverPath, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    const audioPath = path.join(root, "library", "Dune.mp3");
+    await writeFile(audioPath, Buffer.from("audio"));
 
     const book = repo.createBook({ title: "Dune", author: "Frank Herbert" });
     repo.updateBookMetadata(book.id, { coverPath });
@@ -476,7 +478,7 @@ describe("json-rpc handler", () => {
       manifestationId: audioManifestation.id,
       files: [
         {
-          path: path.join(root, "library", "Dune.mp3"),
+          path: audioPath,
           size: 456,
           start: 0,
           end: 455,
@@ -508,41 +510,34 @@ describe("json-rpc handler", () => {
     repo.createJob({ type: "acquire", bookId: book.id });
     repo.setJsonState("probe_cache_v1", [{ file: assetPath, mtimeMs: 123, data: null, error: "boom" }]);
 
-    const wiped = await callRpc(repo, {
-      jsonrpc: "2.0",
-      id: 99,
-      method: "admin.wipeDatabase",
-      params: {},
+    const callers = (["admin", "user", "none"] as const).map((role) => {
+      const request = new Request("http://localhost/rpc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 99, method: "admin.wipeDatabase", params: {} }),
+      });
+      return { request, context: makeRpcContext(repo, request, role) };
     });
-
-    expect(wiped.result.settingsPreserved).toBe(true);
-    expect(wiped.result.deleted.books).toBe(1);
-    expect(wiped.result.deleted.releases).toBe(1);
-    expect(wiped.result.deleted.assets).toBe(2);
-    expect(wiped.result.deleted.assetFiles).toBe(2);
-    expect(wiped.result.deleted.jobs).toBe(1);
-    expect(wiped.result.deleted.chapterAnalysis).toBe(1);
-    expect(wiped.result.deleted.assetTranscripts).toBe(1);
-    expect(wiped.result.deleted.appState).toBe(1);
-    expect(wiped.result.deletedAssetFileCount).toBe(2);
-    expect(wiped.result.deletedAssetPaths).toEqual([assetPath, path.join(root, "library", "Dune.mp3")]);
-    expect(wiped.result.deletedTranscriptFileCount).toBe(0);
-    expect(wiped.result.deletedTranscriptPaths).toEqual([]);
-    expect(wiped.result.deletedCoverFileCount).toBe(1);
-    expect(wiped.result.deletedCoverPaths).toEqual([coverPath]);
-    expect(repo.listBooks(10).items).toHaveLength(0);
-    expect(repo.listReleasesByBook(book.id)).toHaveLength(0);
-    expect(repo.listJobsByType("acquire")).toHaveLength(0);
-    expect(repo.getJsonState("probe_cache_v1")).toBeNull();
-    expect(repo.getHealthSummary().queueSize).toBe(0);
-    expect(repo.getSettings().feed.title).toBe("Books Test Feed");
-    expect(await Bun.file(assetPath).exists()).toBe(false);
-    expect(await Bun.file(coverPath).exists()).toBe(false);
-
-    const nextBook = repo.createBook({ title: "Hyperion", author: "Dan Simmons" });
-    expect(nextBook.id).toBe(1);
-
-    db.close();
+    // Create caller sessions before snapshotting, so even auth rows must remain unchanged.
+    const databaseBefore = db.serialize();
+    const filesBefore = await Promise.all([assetPath, audioPath, coverPath].map(async (filePath) => ({
+      filePath, bytes: await Bun.file(filePath).bytes(),
+    })));
+    try {
+      for (const { request, context } of callers) {
+        const response = await handleRpcRequest(request, context);
+        expect(response.status).toBe(200);
+        const payload = await response.json() as { error?: { code: number; message: string }; result?: unknown };
+        expect(payload.error).toEqual({ code: -32601, message: "Method not found" });
+        expect(payload.result).toBeUndefined();
+        expect(db.serialize()).toEqual(databaseBefore);
+        for (const { filePath, bytes } of filesBefore)
+          expect(await Bun.file(filePath).bytes()).toEqual(bytes);
+      }
+    } finally {
+      db.close();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test("jobs.retry records a retry consumed by Reflow and rejects non-retryable jobs", async () => {

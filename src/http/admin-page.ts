@@ -200,7 +200,6 @@ export function renderAdminSettingsPage(
           <div class="settings-actions-left">
             <button id="settings-save-btn" type="button">Save Settings</button>
           </div>
-          <button id="wipe-db-btn" type="button" style="background: var(--danger); color: var(--danger-contrast); border: 1px solid var(--danger-border);">Wipe Entire Database</button>
         </div>
         <p id="settings-status" class="muted"></p>
         ${messageMarkup(options.notice, options.error)}
