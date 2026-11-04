@@ -25,6 +25,7 @@ export const movieStages = [
   "publishing",
   "available",
   "blocked",
+  "waiting",
   "replacing",
   "retained",
 ] as const;

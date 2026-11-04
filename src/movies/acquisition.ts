@@ -79,6 +79,8 @@ export async function acquireMovie(
       );
     if (!repo.activeRequestCount(target.id))
       throw new Error("All requests for this target were withdrawn");
+    if (ctx.repo.retention.get({ namespace: "movie-target", id: String(target.id) })?.desiredPresence === "evicted")
+      throw new Error("Movie target is intentionally evicted; only an explicit re-request restores demand");
   };
   active();
   const initial = await durableStep(ctx, "movie:target-snapshot", () => ({
@@ -241,9 +243,8 @@ export async function acquireMovie(
     if (!offer) {
       emit(
         "blocked",
-        current ? "retained" : "blocked",
-        selection.reason ||
-          "No suitable release found; try manual release search",
+        current ? "retained" : "waiting",
+        current ? selection.reason : "No suitable release is available yet. Watching incoming indexer releases automatically.",
       );
       await durableStep(ctx, "movie:finish-no-candidate", () =>
         repo.finishAcquisition(acquisition.id),

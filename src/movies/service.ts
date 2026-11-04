@@ -69,6 +69,13 @@ export function movieRequestView(repo: BooksRepo, requestId: number) {
   const job = acquisition?.job_id ? repo.getJob(acquisition.job_id) : null;
   const events = repo.movies.events(target.id);
   const latest = events.at(-1);
+  const decision = acquisition?.decision_json
+    ? (JSON.parse(acquisition.decision_json) as {
+        selection?: { offerKey?: string | null; reason?: string };
+        importDecision?: { reason?: string };
+      }) : null;
+  const waiting = !!acquisition?.finished_at && job?.status !== "failed" && job?.status !== "cancelled" &&
+    (latest?.stage === "waiting" || decision?.selection?.offerKey === null);
   const state = request.withdrawn_at
     ? ("withdrawn" as const)
     : available
@@ -78,7 +85,9 @@ export function movieRequestView(repo: BooksRepo, requestId: number) {
         ? job.status === "running"
           ? ("running" as const)
           : ("queued" as const)
-        : job?.status === "failed" ||
+        : waiting
+          ? ("waiting-for-release" as const)
+          : job?.status === "failed" ||
             job?.status === "cancelled" ||
             acquisition?.finished_at ||
             latest?.stage === "blocked"
@@ -89,12 +98,6 @@ export function movieRequestView(repo: BooksRepo, requestId: number) {
   const observation = repo.movies.downloads(target.id)[0]?.observation_json;
   const snapshot = observation
     ? (JSON.parse(observation) as TorrentSnapshot)
-    : null;
-  const decision = acquisition?.decision_json
-    ? (JSON.parse(acquisition.decision_json) as {
-        selection?: { reason?: string };
-        importDecision?: { reason?: string };
-      })
     : null;
   return {
     id: request.id,
@@ -113,6 +116,8 @@ export function movieRequestView(repo: BooksRepo, requestId: number) {
     stage:
       state === "withdrawn"
         ? null
+        : state === "waiting-for-release"
+          ? ("waiting" as const)
         : job?.status === "failed" || job?.status === "cancelled"
           ? ("blocked" as const)
           : (latest?.stage ?? ("requested" as const)),

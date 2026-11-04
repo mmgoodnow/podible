@@ -53,7 +53,7 @@ test("reconciliation does not search; explicit recovery and upgrades preserve cu
       "initial",
     ).acquisition;
     await acquireMovie(ctx, repo.getJob(first.job_id!)!, fixture.services);
-    expect(movieRequestView(repo, requested.requestId).state).toBe("blocked");
+    expect(movieRequestView(repo, requested.requestId).state).toBe("waiting-for-release");
     fixture.addOffer("available", 1280);
     const recovery = queueMovieAcquisition(
       repo,

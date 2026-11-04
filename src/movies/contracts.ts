@@ -5,7 +5,7 @@ export const movieRequestViewSchema = z.object({
   targetId: z.number(),
   movie: movieSchema,
   createdAt: z.string(),
-  state: z.enum(["queued", "running", "blocked", "available", "withdrawn"]),
+  state: z.enum(["queued", "running", "waiting-for-release", "blocked", "available", "withdrawn"]),
   available: z.boolean(),
   upgrading: z.boolean(),
   stage: z.enum(movieStages).nullable(),

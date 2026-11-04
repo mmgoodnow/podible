@@ -189,8 +189,7 @@ export function MovieRequests() {
   });
   return (
     <>
-      <span className="eyebrow">FROM WANTED TO WATCHING</span>
-      <h1>Your requests.</h1>
+      <div className="library-toolbar"><h1>Requests</h1></div>
       {requests.isError ? (
         <Failure message={requests.error.message} />
       ) : !requests.data ? (
@@ -211,13 +210,13 @@ export function MovieRequests() {
                     ? request.upgrading
                       ? "Available; looking for an upgrade"
                       : "Available in Plex"
-                    : request.state}
+                    : request.state === "waiting-for-release" ? "Waiting for a release" : request.state}
                 </p>
               </div>
               <span className={`state ${request.available ? "ready" : ""}`}>
                 {request.available
                   ? "Ready to watch"
-                  : (request.stage ?? "Withdrawn")}
+                  : request.state === "waiting-for-release" ? "Watching for releases" : (request.stage ?? "Withdrawn")}
               </span>
             </Link>
           ))}
@@ -342,14 +341,16 @@ function Progress({ request }: { request: MovieRequestView }) {
             ? "Request withdrawn"
             : request.available
               ? "Ready to watch in Plex"
-              : request.state === "blocked"
+              : request.state === "waiting-for-release"
+                ? "Waiting for a release"
+                : request.state === "blocked"
                 ? "Needs attention"
                 : "Working on your movie"}
         </h2>
         <span
           className={`state ${request.available && request.state !== "withdrawn" ? "ready" : ""}`}
         >
-          {request.upgrading ? "Upgrade in progress" : request.state}
+          {request.upgrading ? "Upgrade in progress" : request.state === "waiting-for-release" ? "Watching for releases" : request.state}
         </span>
       </div>
       <ol className="stage-tracker">
@@ -381,7 +382,9 @@ function Progress({ request }: { request: MovieRequestView }) {
       )}
       {!request.available && request.state !== "withdrawn" && (
         <p>
-          {request.job?.error ??
+          {request.state === "waiting-for-release"
+            ? "No suitable release is available yet. Podible is watching incoming indexer releases and will try automatically when one appears. You don't need to do anything."
+            : request.job?.error ??
             request.events.at(-1)?.message ??
             "Your request is queued."}
         </p>
@@ -443,10 +446,8 @@ export function MovieRequestDetail({ requestId }: { requestId: number }) {
       <Link href="/requests" className="back">
         All requests
       </Link>
-      <span className="eyebrow">
-        REQUEST {request.id} / {request.movie.year}
-      </span>
-      <h1>{request.movie.title}</h1>
+      <div className="library-toolbar"><h1>{request.movie.title}</h1></div>
+      <p className="muted">{request.movie.year} / Request {request.id}</p>
       <Progress request={request} />
       <div className="actions">
         {request.state === "blocked" && (

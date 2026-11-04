@@ -88,7 +88,7 @@ try {
     .click();
   console.log("Movie browser: submitted request");
   await page
-    .getByRole("heading", { name: "Needs attention", exact: true })
+    .getByRole("heading", { name: "Waiting for a release", exact: true })
     .waitFor();
   await context.request.post(new URL("/__fixture/add-release", url).href);
   await page.getByText("Choose a release manually", { exact: true }).click();
@@ -114,7 +114,7 @@ try {
     .waitFor();
   await page.getByRole("link", { name: "Requests", exact: true }).click();
   await page
-    .getByRole("heading", { name: "Your requests.", exact: true })
+    .getByRole("heading", { name: "Requests", exact: true })
     .waitFor();
   if ((await page.evaluate("window.__spaNavigationProof")) !== 42)
     throw new Error("SPA navigation reloaded the document");
