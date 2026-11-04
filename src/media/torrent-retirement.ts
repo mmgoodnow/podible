@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { BooksRepo } from "../repo";
 import type { JobRow } from "../app-types";
 import type { WorkerContext } from "../worker/context";
-import { stewardshipBinding, stewardshipBindingPage, stewardshipConnection, verifyStewardshipDirectory } from "./torrent-stewardship";
+import { stewardshipBinding, stewardshipStatusPage, stewardshipPageTitles, stewardshipConnection, verifyStewardshipDirectory } from "./torrent-stewardship";
 import { qualifiedRetirementEvidence, readRetirementEvidence, retirementDigest } from "./torrent-retirement-evidence";
 import { eligibleDaemonRecord, privateRetirementDaemon, type RetirementDaemon, type RetirementDaemonSnapshot } from "./torrent-retirement-transmission";
 import { createOrphanRetirementFence } from "./torrent-retirement-admission";
@@ -53,20 +53,34 @@ export class TorrentRetirement {
     const params = retirementPreviewParamsSchema.parse(input), now = (this.adapters.now ?? Date.now)();
     const fence = this.adapters.fence ?? createOrphanRetirementFence(this.repo, { globalMaintenanceHeld: () => false, readIdentityDigest: this.adapters.readIdentityDigest });
     const clientId = this.adapters.daemon === null ? null : this.adapters.daemon?.clientId ?? stewardshipConnection({})?.clientId ?? null;
-    const current = stewardshipBindingPage(this.repo, params.source, params.offset, params.limit, clientId);
+    const current = stewardshipStatusPage(this.repo, params.source, params.offset, params.limit, clientId);
+    const titles = stewardshipPageTitles(this.repo, current);
     return retirementPreviewSchema.parse({ ...params, nextOffset: current.nextOffset, automaticConfigured: !!clientId,
+      sourceRows: current.sourceRows, scannedCount: current.scannedCount, excludedCount: current.excludedCount,
       recordOnly: true, filesDeleted: false, items: current.bindings.map((binding) => {
         const qualified = qualifiedRetirementEvidence(readRetirementEvidence(this.repo, binding.key), binding.bindingDigest, now);
         const blockers: string[] = [];
+        let consumer: RetirementConsumerSnapshot | null = null;
         if (!qualified) blockers.push("Three complete, all-tracker unregistered announcements spaced at least 15 minutes apart with known, nonregressing seed counters are not proven.");
         {
-          try { consumersClear(consumerSchema.parse(fence.inspect(binding)), binding); }
+          try { consumer = consumerSchema.parse(fence.inspect(binding)); consumersClear(consumer, binding); }
           catch { blockers.push("Complete zero-domain-binding/consumer/acquisition/publication proof is unavailable."); }
         }
         const active = this.repo.getJsonState<string>(activeKey(binding.key));
         if (active) blockers.push("A retirement intent or retired binding tombstone already exists.");
-        return { bindingKey: binding.key, media: binding.media, label: binding.label, evidenceQualified: qualified,
-          eligible: blockers.length === 0, blockers };
+        const intent = active ? this.intent(active) : null;
+        const eligible = blockers.length === 0;
+        const disposition = eligible ? "candidate" : intent?.phase === "retired" ? "complete" : intent && intent.phase !== "aborted" ? "pending"
+          : consumer?.completeInventory && (consumer.domainBindings > 0 || consumer.activeConsumers > 0 || consumer.activeAcquisitions > 0 || consumer.activePublications > 0) ? "protected" : "unknown";
+        const explanation = disposition === "candidate" ? "Saved evidence qualifies this unused record for fresh background verification; removal has not been confirmed."
+          : disposition === "protected" ? "Existing library references or active work protect this record."
+            : disposition === "pending" ? "A retirement operation already exists; do not start a second operation."
+              : disposition === "complete" ? "Record retirement was already confirmed; its retained binding history is not a new candidate."
+                : "Required tracker or complete ownership/use evidence could not be verified. No retirement is authorized by this preview.";
+        const ref = current.titleIds.get(binding.key), metadata = ref ? titles.get(`${ref.source}:${ref.id}`) : null;
+        return { bindingKey: binding.key, media: binding.media, label: metadata?.titles[0]?.title ?? "Unavailable title",
+          technicalLabel: binding.label, titles: metadata?.titles ?? [], disposition, explanation, evidenceQualified: qualified,
+          eligible, blockers };
       }) });
   }
   /** The concrete default may remove only under owned durable execution and the participating global writer fence. */

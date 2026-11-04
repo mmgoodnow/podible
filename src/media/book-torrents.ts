@@ -1,7 +1,7 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import type { Database } from "bun:sqlite";
-import { dbSql, typedGet, typedRun } from "../db/typed";
+import { dbSql, typedGet } from "../db/typed";
 import { initializeManagedContent } from "./library-view";
 import type { AppSettings } from "../app-types";
 import type { BooksRepo } from "../repo";
@@ -13,6 +13,7 @@ import {
 import { inspectMetainfo } from "./metainfo";
 import { managedBookTransmission } from "./managed-transmission";
 import { assertTorrentUseWritable, withDatabaseTorrentUse } from "./torrent-use";
+import { TorrentRecordsRepo } from "./torrent-records";
 import type {
   DownloadLocation,
   TorrentClient,
@@ -33,6 +34,11 @@ export type BookTorrentBinding = {
   created_at: string;
 };
 
+export const BOOK_TORRENT_BINDING_SELECT = `SELECT t.native_id AS info_hash,b.book_id,b.release_id,
+  t.backend,t.client_id,t.root_path,t.root_token,json_extract(t.location_json,'$.rootId') AS root_id,
+  json_extract(t.location_json,'$.relativePath') AS relative_path,b.created_at
+  FROM book_torrent_bindings b JOIN media_torrents t ON t.id=b.torrent_id`;
+
 /** Durable ownership, not execution state. Tombstones survive deletion of a book/release. */
 export class BookTorrentsRepo {
   constructor(
@@ -41,15 +47,11 @@ export class BookTorrentsRepo {
   ) {}
 
   get(infoHash: string): BookTorrentBinding | null {
-    const row = typedGet(
-      this.db,
-      dbSql
-        .selectFrom("book_torrents")
-        .selectAll()
-        .where("info_hash", "=", infoHash.toLowerCase()),
-    );
+    const rows = this.db.query(`${BOOK_TORRENT_BINDING_SELECT} WHERE t.native_id=? LIMIT 2`).all(infoHash.toLowerCase()) as BookTorrentBinding[];
+    if (rows.length > 1) throw new Error("Book torrent hash has ambiguous client bindings");
+    const row = rows[0];
     if (!row) return null;
-    if (row.backend !== "transmission" || row.root_id !== "books")
+    if (row.backend !== "transmission" || row.root_id !== "books" || !row.root_path || !row.root_token || row.relative_path !== row.info_hash)
       throw new Error("Unknown book torrent backend or root");
     return { ...row, backend: row.backend, root_id: row.root_id };
   }
@@ -74,31 +76,19 @@ export class BookTorrentsRepo {
       !/^[a-f0-9-]{36}$/.test(input.rootToken)
     )
       throw new Error("Invalid book torrent intent");
-    typedRun(
-      this.db,
-      dbSql
-        .insertInto("book_torrents")
-        .values({
-          info_hash: hash,
-          book_id: input.bookId,
-          backend: "transmission",
-          client_id: input.clientId,
-          root_path: input.rootPath,
-          root_token: input.rootToken,
-          root_id: "books",
-          relative_path: hash,
-          created_at: new Date().toISOString(),
-        })
-        .onConflict((oc) => oc.column("info_hash").doNothing()),
-    );
-    const binding = this.get(hash)!;
-    if (binding.book_id !== input.bookId)
+    const existing = this.get(hash);
+    if (existing && existing.book_id !== input.bookId)
       throw new Error(
-        `Torrent intent already belongs to book ${binding.book_id}`,
+        `Torrent intent already belongs to book ${existing.book_id}`,
       );
-    if (binding.client_id !== input.clientId)
+    if (existing && existing.client_id !== input.clientId)
       throw new Error("Book torrent belongs to another client instance");
-    return binding;
+    const record = new TorrentRecordsRepo(this.db, this.beforeWrite).reserve({ clientId: input.clientId, nativeId: hash },
+      { rootId: "books", relativePath: hash }, "", { backend: "transmission", root_path: input.rootPath,
+        root_token: input.rootToken, ownership_tag: "Podible Books" });
+    this.db.query(`INSERT INTO book_torrent_bindings(torrent_id,book_id,created_at) VALUES(?,?,?) ON CONFLICT(torrent_id) DO NOTHING`)
+      .run(record.id, input.bookId, new Date().toISOString());
+    return this.get(hash)!;
     }).immediate();
   }
 
@@ -123,13 +113,8 @@ export class BookTorrentsRepo {
       throw new Error("Release does not match its book torrent intent");
     if (binding.release_id !== null && binding.release_id !== releaseId)
       throw new Error("Book torrent is already attached to another release");
-    typedRun(
-      this.db,
-      dbSql
-        .updateTable("book_torrents")
-        .set({ release_id: releaseId })
-        .where("info_hash", "=", binding.info_hash),
-    );
+    this.db.query(`UPDATE book_torrent_bindings SET release_id=? WHERE torrent_id=(SELECT id FROM media_torrents WHERE client_id=? AND native_id=?)`)
+      .run(releaseId, binding.client_id, binding.info_hash);
     }).immediate();
   }
 
@@ -169,15 +154,10 @@ export class BookTorrentsRepo {
         )
       )
         throw new Error("Cannot reclaim a torrent for a missing book");
-      typedRun(
-        this.db,
-        dbSql
-          .updateTable("book_torrents")
-          .set({ book_id: bookId })
-          .where("info_hash", "=", binding.info_hash),
-      );
+      this.db.query(`UPDATE book_torrent_bindings SET book_id=? WHERE torrent_id=(SELECT id FROM media_torrents WHERE client_id=? AND native_id=?)`)
+        .run(bookId, binding.client_id, binding.info_hash);
       return this.get(binding.info_hash)!;
-    })();
+    }).immediate();
   }
 
   use<T>(binding: BookTorrentBinding, action: () => Promise<T>) {

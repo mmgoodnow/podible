@@ -6,7 +6,7 @@ import { stewardshipStatusParamsSchema, stewardshipStatusSchema, stewardshipColl
 export function createStewardshipRouter(adapters: StewardshipAdapters = {}) {
   return defineRouter({
     status: defineMethod({ auth: "admin", readOnly: true,
-      summary: "Read durable private-torrent health and seed protection; never collects or writes on page load.",
+      summary: "Read one bounded combined page of private-torrent observations and title links; never collects or writes on page load.",
       paramsSchema: stewardshipStatusParamsSchema, resultSchema: stewardshipStatusSchema,
       handler: (ctx, input) => new TorrentStewardship(ctx.repo, adapters).status(input),
     }),

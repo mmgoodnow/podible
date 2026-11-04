@@ -62,16 +62,10 @@ export interface DB {
     "created_at": string;
   };
 
-  "book_torrents": {
-    "info_hash": string;
+  "book_torrent_bindings": {
+    "torrent_id": Generated<number>;
     "book_id": number;
     "release_id": number | null;
-    "backend": string;
-    "client_id": string;
-    "root_path": string;
-    "root_token": string;
-    "root_id": string;
-    "relative_path": string;
     "created_at": string;
   };
 
@@ -122,6 +116,7 @@ export interface DB {
     "gap_note": string | null;
     "updated_at": string;
     "boundary_json": string | null;
+    "gap_diagnostics_json": string | null;
   };
 
   "job_commands": {
@@ -202,6 +197,10 @@ export interface DB {
     "location_json": string;
     "offer_key": string;
     "observation_json": string | null;
+    "backend": string | null;
+    "root_path": string | null;
+    "root_token": string | null;
+    "ownership_tag": string | null;
   };
 
   "movie_acquisition_downloads": {

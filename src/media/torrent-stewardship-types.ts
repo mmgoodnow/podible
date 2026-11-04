@@ -3,8 +3,9 @@ import { z } from "zod";
 export const MINIMUM_SEED_SECONDS = 30 * 24 * 60 * 60;
 export const STEWARDSHIP_INTERVAL_MS = 5 * 60_000;
 export const stewardshipSourceSchema = z.enum(["books", "screen"]);
+export const stewardshipStatusSourceSchema = z.enum(["all", "books", "screen"]);
 export const stewardshipStatusParamsSchema = z.object({
-  source: stewardshipSourceSchema.default("books"), offset: z.number().int().nonnegative().default(0),
+  source: stewardshipStatusSourceSchema.default("all"), offset: z.number().int().nonnegative().default(0),
   limit: z.number().int().min(1).max(50).default(25),
 }).strict();
 export const stewardshipCollectParamsSchema = z.object({ operationId: z.string().uuid() }).strict();
@@ -26,6 +27,8 @@ export const stewardshipObservationSchema = z.object({
 });
 export const stewardshipItemSchema = z.object({
   key: z.string(), media: z.enum(["books", "movies", "tv"]), label: z.string(),
+  titles: z.array(z.object({ title: z.string(), href: z.string() })).max(3).default([]), titlesTruncated: z.boolean().default(false),
+  technicalLabel: z.string().default(""),
   observation: stewardshipObservationSchema.nullable(), stale: z.boolean(),
   retirementAllowed: z.literal(false), retirementBlockers: z.array(z.string()),
 });
@@ -36,7 +39,7 @@ export const stewardshipCollectResultSchema = z.object({
 });
 export const stewardshipStatusSchema = z.object({
   mode: z.literal("observe-only"), destructiveActionsEnabled: z.literal(false),
-  minimumSeedSeconds: z.literal(MINIMUM_SEED_SECONDS), source: stewardshipSourceSchema,
+  minimumSeedSeconds: z.literal(MINIMUM_SEED_SECONDS), source: stewardshipStatusSourceSchema,
   offset: z.number().int().nonnegative(), sourceRows: z.number().int().nonnegative(),
   scannedCount: z.number().int().nonnegative(), excludedCount: z.number().int().nonnegative(),
   nextOffset: z.number().int().nonnegative().nullable(), engineConfigured: z.boolean(),
@@ -44,6 +47,7 @@ export const stewardshipStatusSchema = z.object({
   items: z.array(stewardshipItemSchema),
 });
 export type StewardshipSource = z.infer<typeof stewardshipSourceSchema>;
+export type StewardshipStatusSource = z.infer<typeof stewardshipStatusSourceSchema>;
 export type StewardshipObservation = z.infer<typeof stewardshipObservationSchema>;
 export type StewardshipStatus = z.infer<typeof stewardshipStatusSchema>;
 export type StewardshipCollectResult = z.infer<typeof stewardshipCollectResultSchema>;

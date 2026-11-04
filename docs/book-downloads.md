@@ -6,10 +6,16 @@ download root. Client credentials and instance identity remain internal; no new
 torrent-client settings are required.
 
 Before adding a torrent, Podible persists its hash, owning book, client identity,
-and destination in `book_torrents`. A retry reconciles that intent by infohash
+and destination in the shared `media_torrents` registry. `book_torrent_bindings`
+holds the book/release association, not a second torrent identity. A retry reconciles that intent by infohash
 rather than starting another download. The release association and downstream
 download job commit together. Ownership records remain after a book is deleted:
 deleting library metadata must not silently delete seeding data.
+
+Migration 53 consolidates existing book records without touching the filesystem
+or torrent daemon. Existing movie/TV record IDs, acquisition links, book root
+markers, health evidence and retirement fences are preserved. Conflicting
+identity/location merges fail atomically instead of choosing a new owner.
 
 An existing release without a Transmission binding is a legacy rTorrent release.
 Progress polling and reimport resolve the backend from that binding, never by

@@ -10,8 +10,9 @@ import { recordRetirementEvidence } from "./torrent-retirement-evidence";
 import {
   MINIMUM_SEED_SECONDS, stewardshipCollectParamsSchema, stewardshipCollectResultSchema,
   stewardshipObservationSchema, stewardshipStatusParamsSchema, stewardshipStatusSchema,
-  type StewardshipSource, type StewardshipObservation, type StewardshipCollectResult,
+  type StewardshipSource, type StewardshipStatusSource, type StewardshipObservation, type StewardshipCollectResult,
 } from "./torrent-stewardship-types";
+import type { StewardshipTitleInput } from "./stewardship-titles";
 
 const PREFIX = "torrent-stewardship:v1:";
 const ANNOUNCEMENT_SPACING_SECONDS = 15 * 60;
@@ -109,11 +110,32 @@ export function stewardshipBinding(repo: BooksRepo, source: StewardshipSource, r
     bindingDigest: digest([source, privateId, hash, root, directory, rootToken,
       source === "books" ? [row.book_id, row.release_id, settings.libraryRoot] : row.id]) };
 }
-export function stewardshipBindingPage(repo: BooksRepo, source: StewardshipSource, offset: number, limit: number, privateId: string | null) {
-  const raw = repo.adminDbTablePage(source === "books" ? "book_torrents" : "media_torrents", limit, offset);
-  const bindings = privateId ? raw.rows.flatMap((row) => { const parsed = stewardshipBinding(repo, source, row, privateId); return parsed ? [parsed] : []; }) : [];
-  return { bindings, scannedCount: raw.rows.length, excludedCount: raw.rows.length - bindings.length,
+function bindingPage(repo: BooksRepo, source: StewardshipStatusSource, offset: number, limit: number, privateId: string | null) {
+  const raw = repo.readStewardshipInventory({ source, offset, limit });
+  const titleIds = new Map<string, { source: StewardshipSource; id: number }>();
+  const bindings = privateId ? raw.rows.flatMap(({ source: provenance, row }) => {
+    const parsed = stewardshipBinding(repo, provenance, row, privateId);
+    if (!parsed) return [];
+    const id = provenance === "books" ? row.book_id : row.id;
+    if (typeof id === "number" && Number.isSafeInteger(id) && id > 0) titleIds.set(parsed.key, { source: provenance, id });
+    return [parsed];
+  }) : [];
+  return { bindings, titleIds, scannedCount: raw.rows.length, excludedCount: raw.rows.length - bindings.length,
     sourceRows: raw.total, nextOffset: offset + raw.rows.length < raw.total ? offset + raw.rows.length : null };
+}
+export function stewardshipBindingPage(repo: BooksRepo, source: StewardshipSource, offset: number, limit: number, privateId: string | null) {
+  return bindingPage(repo, source, offset, limit, privateId);
+}
+
+/** Concatenated raw producer pages: one global offset, never the same offset against both tables. */
+export function stewardshipStatusPage(repo: BooksRepo, source: StewardshipStatusSource, offset: number, limit: number, privateId: string | null) {
+  return bindingPage(repo, source, offset, limit, privateId);
+}
+
+export function stewardshipPageTitles(repo: BooksRepo, current: Pick<ReturnType<typeof stewardshipBindingPage>, "titleIds">) {
+  const input: StewardshipTitleInput = { books: [], screen: [] };
+  for (const ref of current.titleIds.values()) if (!input[ref.source].includes(ref.id)) input[ref.source].push(ref.id);
+  return new Map(repo.readStewardshipTitles(input).map(row => [`${row.source}:${row.id}`, row]));
 }
 async function canonicalDirectory(directory: string) {
   const stat = await fs.lstat(directory);
@@ -206,8 +228,8 @@ function saved(repo: BooksRepo, target: Binding) {
 }
 
 /** Scheduling hint only; collection still verifies private-client ownership. Tombstones retain seed obligations. */
-export function hasTorrentStewardshipBindings(repo: Pick<BooksRepo, "adminDbTablePage">): boolean {
-  return repo.adminDbTablePage("book_torrents", 1, 0).total > 0 || repo.adminDbTablePage("media_torrents", 1, 0).total > 0;
+export function hasTorrentStewardshipBindings(repo: BooksRepo): boolean {
+  return repo.readStewardshipInventory({ source: "all", offset: 0, limit: 1 }).total > 0;
 }
 
 export class TorrentStewardship {
@@ -215,7 +237,8 @@ export class TorrentStewardship {
   status(input: z.input<typeof stewardshipStatusParamsSchema> = {}) {
     const params = stewardshipStatusParamsSchema.parse(input), now = (this.adapters.now ?? Date.now)();
     const engine = stewardshipConnection(this.adapters);
-    const current = stewardshipBindingPage(this.repo, params.source, params.offset, params.limit, engine?.clientId ?? null);
+    const current = stewardshipStatusPage(this.repo, params.source, params.offset, params.limit, engine?.clientId ?? null);
+    const titles = stewardshipPageTitles(this.repo, current);
     const last = stewardshipCollectResultSchema.safeParse(this.repo.getJsonState(lastKey));
     return stewardshipStatusSchema.parse({ mode: "observe-only", destructiveActionsEnabled: false, minimumSeedSeconds: MINIMUM_SEED_SECONDS,
       ...params, sourceRows: current.sourceRows, scannedCount: current.scannedCount, excludedCount: current.excludedCount,
@@ -223,7 +246,9 @@ export class TorrentStewardship {
       unavailableReason: engine ? null : "Private Transmission identity is unavailable; no daemon query was attempted.",
       lastCollection: last.success ? last.data : null, items: current.bindings.map((target) => {
         const latest = saved(this.repo, target)?.latest ?? null;
-        return { key: target.key, media: target.media, label: target.label, observation: latest,
+        const ref = current.titleIds.get(target.key), metadata = ref ? titles.get(`${ref.source}:${ref.id}`) : null;
+        return { key: target.key, media: target.media, label: metadata?.titles[0]?.title ?? "Unavailable title",
+          titles: metadata?.titles ?? [], titlesTruncated: metadata?.truncated ?? false, technicalLabel: target.label, observation: latest,
           stale: !latest || now < Date.parse(latest.observedAt) || now - Date.parse(latest.observedAt) > 60 * 60_000,
           retirementAllowed: false, retirementBlockers: ["Destructive actions are disabled.", "Shared file bindings and all tracker seed obligations are not proven safe to retire."],
         };

@@ -22,7 +22,7 @@ import {
 import { assessMovieUpgrade, evaluateMovieQuality } from "./quality";
 import { RetentionRepo } from "../media/retention-repo";
 import { assertVersionContentAvailable } from "../media/content-loss";
-import { assertTorrentUseWritable } from "../media/torrent-use";
+import { TorrentRecordsRepo, type TorrentRecord } from "../media/torrent-records";
 
 export type MovieTarget = {
   id: number;
@@ -238,29 +238,8 @@ export class MovieRepo {
     offerKey: string,
   ): number {
     return this.transaction(() => {
-      assertTorrentUseWritable(this.db, { clientId: ref.clientId, infoHash: ref.nativeId });
-      const existing = this.db
-        .query("SELECT * FROM media_torrents WHERE client_id=? AND native_id=?")
-        .get(ref.clientId, ref.nativeId) as {
-        id: number;
-        location_json: string;
-      } | null;
-      if (existing && existing.location_json !== JSON.stringify(location))
-        throw new Error("Torrent binding uses another layout");
-      const id =
-        existing?.id ??
-        (
-          this.db
-            .query(
-              "INSERT INTO media_torrents(client_id,native_id,location_json,offer_key) VALUES(?,?,?,?) RETURNING id",
-            )
-            .get(
-              ref.clientId,
-              ref.nativeId,
-              JSON.stringify(location),
-              offerKey,
-            ) as { id: number }
-        ).id;
+      if (!this.acquisition(acquisitionId)) throw new Error("Unknown movie acquisition");
+      const { id } = new TorrentRecordsRepo(this.db, this.beforeWrite).reserve(ref, location, offerKey, { ownership_tag: "Podible Movies" });
       this.db
         .query("INSERT OR IGNORE INTO movie_acquisition_downloads VALUES(?,?)")
         .run(acquisitionId, id);
@@ -268,11 +247,7 @@ export class MovieRepo {
     });
   }
   observeDownload(id: number, snapshot: TorrentSnapshot): void {
-    this.transaction(() =>
-      this.db
-        .query("UPDATE media_torrents SET observation_json=? WHERE id=?")
-        .run(JSON.stringify(snapshot), id),
-    );
+    new TorrentRecordsRepo(this.db, this.beforeWrite).observe(id, snapshot);
   }
   activeTorrentDemand(id: number): number {
     return (
@@ -292,25 +267,10 @@ export class MovieRepo {
         `SELECT t.* FROM media_torrents t JOIN movie_acquisition_downloads d ON d.torrent_id=t.id
       JOIN movie_acquisitions a ON a.id=d.acquisition_id WHERE a.target_id=? ORDER BY a.id DESC,t.id DESC`,
       )
-      .all(targetId) as {
-      id: number;
-      client_id: string;
-      native_id: string;
-      location_json: string;
-      offer_key: string;
-      observation_json: string | null;
-    }[];
+      .all(targetId) as TorrentRecord[];
   }
   torrent(clientId: string, nativeId: string) {
-    return this.db
-      .query("SELECT * FROM media_torrents WHERE client_id=? AND native_id=?")
-      .get(clientId, nativeId) as {
-      id: number;
-      client_id: string;
-      native_id: string;
-      location_json: string;
-      offer_key: string;
-    } | null;
+    return new TorrentRecordsRepo(this.db, this.beforeWrite).get(clientId, nativeId);
   }
   abortPublication(targetId: number, versionId: number): void {
     this.transaction(() => {

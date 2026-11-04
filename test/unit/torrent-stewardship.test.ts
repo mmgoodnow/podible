@@ -104,13 +104,13 @@ test("collection rotates bounded books/movie/TV batches and persists safe actual
 test("only the current private client bindings are queried, never foreign/rTorrent rows or empty ids", async () => {
   const s = await setup();
   try {
-    s.db.query("UPDATE book_torrents SET client_id=?").run(foreignId);
+    s.db.query("UPDATE media_torrents SET client_id=? WHERE native_id=?").run(foreignId, hashes.books);
     s.db.query("UPDATE media_torrents SET client_id=? WHERE native_id=?").run("rtorrent:external", hashes.movies);
     expect(await s.collect()).toMatchObject({ source: "books", observedCount: 0, excludedCount: 1 });
     expect(s.calls).toEqual([]);
     expect(await s.collect()).toMatchObject({ source: "screen", observedCount: 1, excludedCount: 1 });
     expect(s.calls[0]!.ids).toEqual([hashes.tv]);
-    expect(s.service.status().items).toEqual([]);
+    expect(s.service.status({ source: "books" }).items).toEqual([]);
   } finally { await s.close(); }
 });
 
@@ -162,7 +162,7 @@ test("three distinct consistent spaced announcements establish repeated unregist
     s.advance(); s.rows[0]!.trackerStats = [tracker(s.now(), "Torrent not found", false)];
     await s.collectBooks(); expect(s.bookObservation()).toMatchObject({ consistentUnregisteredAnnouncements: 3, repeatedUnregistered: true, seedProtection: "minimum-met" });
     expect(s.service.status().items[0]!.retirementAllowed).toBe(false);
-    expect(s.db.query("SELECT * FROM media_torrents").all()).toHaveLength(2);
+    expect(s.db.query("SELECT * FROM media_torrents").all()).toHaveLength(3);
     expect(await fs.stat(path.join(s.bookRoot, hashes.books))).toBeDefined();
     s.rows[0]!.secondsSeeding = 1;
     s.advance(); s.rows[0]!.trackerStats = [tracker(s.now(), "Unregistered torrent", false)];
@@ -220,7 +220,7 @@ test("binding changes during daemon I/O cannot attribute observations to a rebou
   try {
     const service = new TorrentStewardship(s.repo, { now: s.now, connection: { clientId: privateId, async get(ids, fields) {
       const value = await s.engine.get(ids, fields);
-      s.db.query("UPDATE book_torrents SET book_id=book_id+1").run();
+      s.db.query("UPDATE book_torrent_bindings SET book_id=book_id+1").run();
       return value;
     } } });
     expect(await service.collect({ operationId: randomUUID() })).toMatchObject({ observedCount: 0 });
@@ -287,9 +287,9 @@ test("pagination and collection rotate past fifty rows, and malformed cursors se
       const hash = index.toString(16).padStart(40, "0");
       s.repo.bookTorrents.reserve({ infoHash: hash, bookId: 1, clientId: foreignId, rootPath: s.bookRoot, rootToken: s.token });
     }
-    expect(s.service.status({ limit: 25 })).toMatchObject({ scannedCount: 25, nextOffset: 25, sourceRows: 56 });
+    expect(s.service.status({ source: "books", limit: 25 })).toMatchObject({ scannedCount: 25, nextOffset: 25, sourceRows: 56 });
     expect(await s.collect()).toMatchObject({ source: "books", offset: 0 });
-    expect(await s.collect()).toMatchObject({ source: "books", offset: 50, excludedCount: 6 });
+    expect(await s.collect()).toMatchObject({ source: "books", offset: 50, excludedCount: 5, observedCount: 1 });
     expect(await s.collect()).toMatchObject({ source: "screen", offset: 0, observedCount: 2 });
     s.repo.setJsonState("torrent-stewardship:v1:cursor", { broken: true });
     expect(await s.collect()).toMatchObject({ source: "books", offset: 0 });
@@ -364,8 +364,8 @@ test("real Reflow cancellation during daemon I/O fences all observation/receipt 
     }
     await Bun.sleep(30);
     expect(s.db.query("SELECT * FROM app_state WHERE key LIKE 'torrent-stewardship:%'").all()).toEqual([]);
-    expect(s.db.query("SELECT * FROM book_torrents").all()).toHaveLength(1);
-    expect(s.db.query("SELECT * FROM media_torrents").all()).toHaveLength(2);
+    expect(s.db.query("SELECT * FROM book_torrent_bindings").all()).toHaveLength(1);
+    expect(s.db.query("SELECT * FROM media_torrents").all()).toHaveLength(3);
     expect(s.service.status().items[0]!.observation).toBeNull();
   } finally { release(); await runtime?.stop(); await s.close(); }
 }, 15_000);
@@ -373,10 +373,10 @@ test("real Reflow cancellation during daemon I/O fences all observation/receipt 
 test("scheduler eligibility retains orphaned book seed bindings instead of depending on current books or request targets", async () => {
   const s = await setup();
   try {
-    s.db.query("DELETE FROM books").run(); s.db.query("DELETE FROM media_torrents").run();
+    s.db.query("DELETE FROM books").run(); s.db.query("DELETE FROM media_torrents WHERE id NOT IN (SELECT torrent_id FROM book_torrent_bindings)").run();
     expect(s.repo.hasBooks()).toBe(false); expect(s.repo.movies.hasTargets()).toBe(false); expect(s.repo.tv.hasTargets()).toBe(false);
     expect(hasTorrentStewardshipBindings(s.repo)).toBe(true);
-    s.db.query("DELETE FROM book_torrents").run();
+    s.db.query("DELETE FROM book_torrent_bindings").run();
     expect(hasTorrentStewardshipBindings(s.repo)).toBe(false);
   } finally { await s.close(); }
 });

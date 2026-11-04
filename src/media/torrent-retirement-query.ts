@@ -16,7 +16,10 @@ export function readConsumerCount(db: Database, binding: RetirementBinding): Tor
       path=? OR (path>=? AND path<?) OR source_path=? OR (source_path>=? AND source_path<?)
       OR identity_path=? OR (identity_path>=? AND identity_path<?)`, directory, prefix, upper, directory, prefix, upper, directory, prefix, upper);
     if (binding.media === "books") {
-      const row = get("SELECT * FROM book_torrents WHERE client_id=? AND info_hash=?", binding.clientId, binding.hash);
+      const common = !!get("SELECT 1 FROM sqlite_master WHERE type='table' AND name='book_torrent_bindings'");
+      const row = get(common ? `SELECT b.book_id,b.release_id FROM book_torrent_bindings b
+        JOIN media_torrents t ON t.id=b.torrent_id WHERE t.client_id=? AND t.native_id=?`
+        : "SELECT book_id,release_id FROM book_torrents WHERE client_id=? AND info_hash=?", binding.clientId, binding.hash);
       if (!row) return { complete: false, count, jobIds, activePublications };
       count += number("SELECT EXISTS(SELECT 1 FROM books WHERE id=?) AS n", Number(row.book_id));
       count += Number(row.release_id !== null);

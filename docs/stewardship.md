@@ -13,8 +13,8 @@ daemon, writing state, initializing settings, or collecting on page load.
 tRPC. The admin panel is available at `/stewardship` ("Torrent health"):
 
 - `stewardship.status` is an ADMIN query. Input is
-  `{source?: "books" | "screen", offset?: number, limit?: number}`; defaults are
-  books, 0, 25, with a maximum page size of 50. `screen` includes movies and TV.
+  `{source?: "all" | "books" | "screen", offset?: number, limit?: number}`; defaults are
+  all, 0, 25, with a maximum page size of 50. `screen` includes movies and TV.
 - `stewardship.collect` is an ADMIN mutation with `{operationId: UUID}`. It reads
   the next batch of at most 50 binding rows and returns a durable collection
   receipt. Replaying the UUID returns the same receipt without another query.
@@ -22,6 +22,17 @@ tRPC. The admin panel is available at `/stewardship` ("Torrent health"):
   `minimumSeedSeconds: 2592000`, pagination/coverage, last collection, and items.
   Each item includes media, a binding label, the latest sanitized observation,
   staleness, `retirementAllowed: false`, and the retirement boundary.
+
+The shared torrent registry has one row per client/native ID. Domain associations
+remain separate, and collection provenance retains its stable book/screen keys
+so existing observation digests do not change during migration. Combined status
+uses a single bounded inventory offset, with no duplicated records at the
+producer boundary. Title metadata is resolved in batches. Status and retirement
+previews expose human titles/links separately from diagnostic binding labels.
+
+The UI lists confirmed problems, separately discloses unknown/stale observations,
+and summarizes healthy/protected records. Counts are explicitly page-scoped;
+unseen pages are not claimed healthy. Routine protection is not an action item.
 
 `createStewardshipRouter(adapters)` provides server-side fixture injection;
 there are no client-supplied URLs, daemon credentials, torrent IDs, trackers,

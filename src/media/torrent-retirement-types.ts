@@ -3,7 +3,7 @@ import { z } from "zod";
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const count = z.number().int().nonnegative().safe();
 export const retirementPreviewParamsSchema = z.object({
-  source: z.enum(["books", "screen"]).default("books"), offset: count.default(0),
+  source: z.enum(["all", "books", "screen"]).default("all"), offset: count.default(0),
   limit: z.number().int().min(1).max(20).default(10),
 }).strict();
 export const retirementGetParamsSchema = z.object({ operationId: z.string().uuid() }).strict();
@@ -33,9 +33,12 @@ export const retirementIntentViewSchema = retirementIntentSchema.pick({
 }).extend({ recordOnly: z.literal(true), filesDeleted: z.literal(false) });
 export const retirementPreviewSchema = z.object({
   automaticConfigured: z.boolean(), recordOnly: z.literal(true), filesDeleted: z.literal(false),
-  source: z.enum(["books", "screen"]), offset: count, nextOffset: count.nullable(),
+  source: z.enum(["all", "books", "screen"]), offset: count, nextOffset: count.nullable(),
+  sourceRows: count.default(0), scannedCount: count.default(0), excludedCount: count.default(0),
   items: z.array(z.object({
     bindingKey: digest, media: z.enum(["books", "movies", "tv"]), label: z.string(),
+    titles: z.array(z.object({ title: z.string(), href: z.string() })).max(3).default([]), technicalLabel: z.string().default(""),
+    disposition: z.enum(["candidate", "protected", "unknown", "pending", "complete"]).default("unknown"), explanation: z.string().default(""),
     evidenceQualified: z.boolean(), eligible: z.boolean(), blockers: z.array(z.string()),
   })),
 });

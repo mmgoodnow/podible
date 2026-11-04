@@ -92,7 +92,7 @@ test("orphan checks reject attached books, admitted async producers, source-file
     finishTorrentUse(s.repo, ref, token);
     expect(s.service.preview().items[0]!.eligible).toBe(true);
     const book = s.repo.createBook({ title: "Current owner", author: "Fixture" });
-    s.db.query("UPDATE book_torrents SET book_id=?").run(book.id);
+    s.db.query("UPDATE book_torrent_bindings SET book_id=?").run(book.id);
     expect(s.service.preview().items[0]!.eligible).toBe(false);
     expect(s.removeCount()).toBe(0);
   } finally { await s.close(); }
@@ -187,7 +187,7 @@ test("binding, daemon session, seed-time and all-tracker evidence changes cannot
     try {
       const operationId = randomUUID(); s.rejectBeforeEffect();
       await s.service.execute(s.ctx, s.job, { ...s.locator, operationId });
-      if (change === "binding") s.db.query("UPDATE book_torrents SET root_token=?").run(randomUUID());
+      if (change === "binding") s.db.query("UPDATE media_torrents SET root_token=? WHERE native_id=?").run(randomUUID(), retirementFixtureHash);
       if (change === "session") s.identities.sessionDigest = retirementDigest("replacement daemon session");
       if (change === "seed") s.record()!.secondsSeeding = 1;
       if (change === "tracker") (s.record()!.trackerStats as Record<string, any>[])[1]!.lastAnnounceSucceeded = true;

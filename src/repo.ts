@@ -8,6 +8,8 @@ import { BookTorrentsRepo } from "./media/book-torrents";
 import { TvRepo } from "./tv/repo";
 import { RetentionRepo } from "./media/retention-repo";
 import { readRecoveryInventory, type RecoveryReadInput } from "./media/recovery-query";
+import { readStewardshipInventory, type StewardshipInventoryInput } from "./media/stewardship-inventory";
+import { readStewardshipTitles, type StewardshipTitleInput } from "./media/stewardship-titles";
 import { ContentLossRepo } from "./media/content-loss";
 import { TvRetentionRepo } from "./media/tv-retention-repo";
 import { assertNoPendingTorrentRetirements } from "./media/torrent-retirement-admission";
@@ -265,6 +267,8 @@ export class BooksRepo {
   get contentLoss() { return new ContentLossRepo(this.db, this.beforeWrite, (id) => this.getJob(id)); }
   get tvRetention() { return new TvRetentionRepo(this.db, this.beforeWrite, (id) => this.getJob(id)); }
   readTorrentRetirementConsumers(binding: RetirementBinding) { return readConsumerCount(this.db, binding); }
+  readStewardshipInventory(input: StewardshipInventoryInput) { return readStewardshipInventory(this.db, input); }
+  readStewardshipTitles(input: StewardshipTitleInput) { return readStewardshipTitles(this.db, input); }
   constructor(
     private readonly db: Database,
     private readonly beforeWrite: () => void = () => {},

@@ -9,6 +9,7 @@ import { MOVIE_SHADOW_SCHEMA_SQL } from "./movies/shadow-repo";
 import { MOVIE_SEERR_SCHEMA_SQL } from "./movies/seerr-repo";
 import { RELEASE_INBOX_SCHEMA_SQL } from "./media/release-inbox-schema";
 import { BOOK_TORRENTS_SCHEMA_SQL } from "./media/book-torrents-schema";
+import { consolidateBookTorrentRecords } from "./media/torrent-records-schema";
 import { TV_SCHEMA_SQL } from "./tv/schema";
 import { RETENTION_SCHEMA_SQL } from "./media/retention-schema";
 import { RETENTION_EXECUTION_SCHEMA_SQL } from "./media/retention-execution-schema";
@@ -1175,6 +1176,8 @@ export function runMigrations(db: Database): void {
   apply(50, () => db.exec(RETENTION_EXECUTION_SCHEMA_SQL));
   apply(51, () => db.exec(CONTENT_LOSS_SCHEMA_SQL));
   apply(52, () => db.exec(TV_RETENTION_SCHEMA_SQL));
+  apply(53, () => consolidateBookTorrentRecords(db));
+  apply(54, () => db.exec("ALTER TABLE indexer_feeds ADD COLUMN gap_diagnostics_json TEXT NULL"));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */
