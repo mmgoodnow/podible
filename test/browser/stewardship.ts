@@ -1,0 +1,66 @@
+import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { chromium } from "playwright";
+
+const root = await mkdtemp(path.join(os.tmpdir(), "podible-stewardship-browser-"));
+const server = Bun.spawn([process.execPath, "run", "test/fixtures/stewardship-spa-server.ts"], { stdout: "pipe", stderr: "inherit", env: { ...process.env, CONFIG_DIR: root } });
+let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+try {
+  const reader = server.stdout.getReader(); let output = "", origin = "";
+  while (!origin) {
+    const part = await reader.read(); output += new TextDecoder().decode(part.value);
+    const value = /STEWARDSHIP_FIXTURE=(.+)/.exec(output)?.[1]; if (value) origin = JSON.parse(value).url;
+    if (part.done && !origin) throw new Error("Stewardship fixture exited");
+  }
+  reader.releaseLock(); void (async () => { const drain = server.stdout.getReader(); while (!(await drain.read()).done) {} })();
+  browser = await chromium.launch({ ...(process.env.CI ? {} : { channel: "chrome" }), headless: true });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 1000 }, reducedMotion: "reduce" });
+  context.setDefaultTimeout(15000);
+  await context.addCookies([{ name: "podible_session", value: "steward-admin", url: origin, httpOnly: true }]);
+  const page = await context.newPage(), errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.goto(`${origin}/stewardship`);
+  await page.getByText("2 healthy observations on this page.", { exact: true }).waitFor();
+  const problems = page.getByRole("region", { name: "Torrent problems", exact: true });
+  await problems.getByRole("link", { name: "The Fifth Season", exact: true }).waitFor();
+  await problems.getByRole("link", { name: "Coast at Dusk", exact: true }).waitFor();
+  assert.equal(await page.getByText("Healthy library book", { exact: true }).count(), 0);
+  assert.equal(await page.getByText("Northern Lights", { exact: true }).count(), 0);
+  assert.equal(await page.getByRole("group", { name: /binding source/ }).count(), 0);
+  const unknown = page.locator("details").filter({ has: page.locator("summary", { hasText: "Could not verify (2)" }) });
+  assert.equal(await unknown.getAttribute("open"), null);
+  await unknown.locator(":scope > summary").click();
+  await unknown.getByRole("link", { name: "The Unseen Archive", exact: true }).waitFor();
+  await unknown.getByText("Observation out of date", { exact: true }).waitFor();
+  await unknown.locator(":scope > summary").click();
+  const retirement = page.getByRole("region", { name: "Automatic orphan retirement", exact: true });
+  await retirement.getByText("Protected on this page (6). No action needed.", { exact: true }).waitFor();
+  assert.equal(await retirement.locator("article").count(), 0, "Routine protected records should not duplicate title rows");
+  assert.equal(await page.getByRole("button", { name: /remove|retire|resume|pause/i }).count(), 0);
+  assert.ok(!(await page.locator("body").innerText()).includes("fixture-private-passkey-never-show"));
+  const state = () => context.request.get(`${origin}/__fixture/state`).then(response => response.json());
+  assert.deepEqual(await state(), { calls: [], receipts: 2 }, "Reading health/retirement started collection or torrent controls");
+  await page.screenshot({ path: path.join(os.tmpdir(), "podible-stewardship-desktop.png"), fullPage: true, animations: "disabled" });
+  await problems.getByRole("link", { name: "The Fifth Season", exact: true }).click();
+  await page.getByRole("heading", { name: "The Fifth Season", exact: true }).waitFor();
+  await page.goto(`${origin}/stewardship`);
+  await page.getByRole("button", { name: "Collect next batch", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Collected 4 observation(s)." }).waitFor();
+  assert.deepEqual((await state()).calls, ["torrent-get"]);
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false);
+  await page.screenshot({ path: path.join(os.tmpdir(), "podible-stewardship-mobile.png"), fullPage: true, animations: "disabled" });
+  const anonymous = await browser.newContext();
+  const response = await anonymous.request.post(`${origin}/rpc`, { data: { jsonrpc: "2.0", id: 1, method: "stewardship.status", params: {} } });
+  assert.equal((await response.json()).error.code, -32001);
+  const anonPage = await anonymous.newPage(); await anonPage.goto(`${origin}/stewardship`);
+  assert.equal(await anonPage.getByText("The Fifth Season", { exact: true }).count(), 0);
+  const member = await browser.newContext();
+  await member.addCookies([{ name: "podible_session", value: "steward-member", url: origin, httpOnly: true }]);
+  const denied = await member.request.post(`${origin}/rpc`, { data: { jsonrpc: "2.0", id: 2, method: "torrentRetirement.preview", params: {} } });
+  assert.equal((await denied.json()).error.code, -32003);
+  assert.deepEqual(errors, []);
+  console.log("Stewardship Chrome acceptance passed: combined real RPC/SQLite titles, problem-only rows, unknown disclosure, page-scoped healthy/protected counts, actual title navigation, read-only load, explicit observation-only collection, auth and mobile.");
+} finally { await browser?.close(); server.kill("SIGTERM"); await server.exited; await rm(root, { recursive: true, force: true }); }
