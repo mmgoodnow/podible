@@ -7,6 +7,7 @@ import os from "node:os";
 import { runMigrations, finalizeJobJournalMigration } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { createAdminWebRouter, normalizedAdminError } from "../../src/rpc/admin-web-router";
+import type { AdminTransmissionReader } from "../../src/rpc/admin-torrents";
 import { executeMethod, flattenRouter } from "../../src/rpc/framework";
 import type { RpcContext } from "../../src/rpc/shared";
 import type { JobLifecycle } from "../../src/worker/job-journal";
@@ -47,7 +48,7 @@ async function fixture() {
   let now = NOW;
   let fetches = 0;
   let fetcher: (input: typeof settings) => Promise<PlexServerDevice[]> = async () => [server(), server("server-b", { owned: false, sourceTitle: "Shared owner" })];
-  const router = createAdminWebRouter({ now: () => now, fetchPlexServers: async (input) => { fetches++; return fetcher(input); } });
+  const router = createAdminWebRouter({ now: () => now, transmission: null, fetchPlexServers: async (input) => { fetches++; return fetcher(input); } });
   const setLifecycle = (jobId: number, patch: Partial<JobLifecycle>) => {
     const key = repo.getJobExecution(jobId)?.run_id ?? `fixture:${jobId}`;
     const value = { status: "queued" as const, error: null, attempt_count: 0, next_run_at: null, updated_at: new Date(now).toISOString(), ...lifecycle.get(key), ...patch };
@@ -71,6 +72,32 @@ function movieAcquisition(f: Fixture, n: number, status: JobLifecycle["status"] 
     overview: "", originalLanguage: "en", imdbId: null, posterUrl: null }, defaultMovieQualityPolicy);
   const acquisition = f.repo.movies.startAcquisition(requested.targetId, "initial", () => f.job({ type: "movie_acquire" }, { status }).id).acquisition;
   return { ...requested, acquisition };
+}
+
+const privateClientId = "transmission:11111111-1111-4111-8111-111111111111";
+async function managedSource(f: Fixture, acquisitionId: number, media: "movie" | "tv", hash: string, relativePath: string, clientId = privateClientId) {
+  const location = { rootId: media === "movie" ? "movies" : "tv", relativePath };
+  const directory = path.join(media === "movie" ? f.settings.movies.managedRoot : f.settings.tv.managedRoot, "downloads", relativePath);
+  await fs.mkdir(directory, { recursive: true });
+  const repo = media === "movie" ? f.repo.movies : f.repo.tv;
+  const ref = { clientId, nativeId: hash };
+  const id = repo.bindDownload(acquisitionId, ref, location, `offer:${hash}`);
+  repo.observeDownload(id, { ref, location, state: "downloading", complete: false, bytesDone: 0, sizeBytes: 100,
+    downloadBytesPerSecond: 0, message: `Torrent engine reported a tracker or storage error ${secretUrl}`, observedAt: new Date(NOW - 600_000).toISOString() });
+  return { id, directory, hash, location };
+}
+function liveTorrent(hashString: string, downloadDir: string, overrides: Record<string, unknown> = {}) {
+  return { hashString, downloadDir, labels: ["Podible Movies"], status: 4, leftUntilDone: 60, sizeWhenDone: 100,
+    rateDownload: 5, error: 0, errorString: "", ...overrides };
+}
+function liveInventory(f: Fixture, rows: unknown[], clientId = privateClientId) {
+  const calls: { method: string; args: Record<string, unknown> }[] = [];
+  const reader: AdminTransmissionReader = { clientId, rpc: { call: async (method, args = {}) => {
+    calls.push({ method, args });
+    return { torrents: rows };
+  } } };
+  const router = createAdminWebRouter({ now: () => NOW, transmission: reader });
+  return { calls, read: () => executeMethod(router.routes.ops, f.ctx, {}) };
 }
 
 describe("admin web authorization and metadata", () => {
@@ -207,7 +234,7 @@ describe("Plex discovery and exact selection", () => {
 });
 
 describe("operational facts from the execution authority", () => {
-  test("Ops leads real active work, recorded downloads, failures, scheduled retries and feed cooldowns", async () => {
+  test("Ops leads real active work and failures without treating saved torrent observations as current downloads", async () => {
     await using f = await fixture();
     const book = f.repo.createBook({ title: "Book in flight", author: "Writer" });
     const wake = new Date(NOW + 60_000).toISOString();
@@ -226,7 +253,8 @@ describe("operational facts from the execution authority", () => {
     expect(result.activeAcquisitions.map((item) => item.title)).toContain("Book in flight");
     expect(result.activeAcquisitions.map((item) => item.media)).toContain("movie");
     expect(result.downloads.find((item) => item.job.id === download.id)).toMatchObject({ telemetry: "unknown", bytesDone: null });
-    expect(result.downloads.find((item) => item.media === "movie")).toMatchObject({ telemetry: "recorded", bytesDone: 40, sizeBytes: 100, bytesPerSecond: 5 });
+    expect(result.downloads.find((item) => item.media === "movie")).toBeUndefined();
+    expect(result.diagnostics.warnings.join(" ")).toContain("recorded observations are not counted");
     expect(result.incidents.find((item) => item.jobId === failed.id)).toMatchObject({ recovery: "manual-retry", nextWakeAt: null });
     expect(result.incidents.find((item) => item.jobId === retry.id)).toMatchObject({ code: "provider-unavailable", recovery: "automatic-retry", nextWakeAt: wake });
     expect(result.feeds[0]).toMatchObject({ state: "cooldown", retryAt: new Date(NOW + 120_000).toISOString(), nextPollAt: null });
@@ -263,40 +291,138 @@ describe("operational facts from the execution authority", () => {
     expect(result.incidents.some((incident) => incident.jobId === superseded.id)).toBe(false);
   });
 
-  test("tracker client allowlist errors are actionable; generic observations never invent the exact cause", async () => {
+  test("only live owned tracker errors are actionable and recovery follows execution rather than inventing manual retry", async () => {
     await using f = await fixture();
     const movie = movieAcquisition(f, 401);
-    const torrentId = f.repo.movies.bindDownload(movie.acquisition.id, { clientId: "owned-client", nativeId: "d".repeat(40) }, { rootId: "movies", relativePath: "owned" }, "offer");
-    const snapshot = { ref: { clientId: "owned-client", nativeId: "d".repeat(40) }, location: { rootId: "movies", relativePath: "owned" },
-      state: "downloading" as const, complete: false, bytesDone: 0, sizeBytes: 100, downloadBytesPerSecond: 0, observedAt: new Date(NOW).toISOString(),
-      message: `Tracker rejected: Your client version is not whitelisted. ${secretUrl}` };
-    f.repo.movies.observeDownload(torrentId, snapshot);
-    let result = await executeMethod(f.router.routes.ops, f.ctx, {});
+    const source = await managedSource(f, movie.acquisition.id, "movie", "d".repeat(40), "owned");
+    const rows = [liveTorrent(source.hash, source.directory, { error: 1, errorString: `Tracker rejected: Your client version is not whitelisted. ${secretUrl}` })];
+    const inventory = liveInventory(f, rows);
+    let result = await inventory.read();
     expect(result.downloads[0]!.problem).toMatchObject({ code: "tracker-client-not-allowed" });
+    expect(result.downloads[0]!.telemetry).toBe("live");
     expect(result.incidents[0]!.detail).toContain("allowed client/version list");
+    expect(result.incidents[0]!.recovery).toBe("running");
     expect(JSON.stringify(result)).not.toContain(providerKey);
-    f.repo.movies.observeDownload(torrentId, { ...snapshot, message: "Torrent engine reported a tracker or storage error" });
-    result = await executeMethod(f.router.routes.ops, f.ctx, {});
+    rows[0]!.errorString = "Torrent engine reported a tracker or storage error";
+    result = await inventory.read();
     expect(result.downloads[0]!.problem).toMatchObject({ code: "torrent-tracker-or-storage" });
     expect(result.downloads[0]!.problem!.message).toContain("Exact cause is unknown");
-    expect(result.downloads[0]!.problem!.message).toContain("No private client status lookup");
+    expect(result.downloads[0]!.problem!.message).toContain("private managed client currently reports");
     expect(f.fetches()).toBe(0);
+  });
+
+  test("retained stopped sources cannot create an active download or manual-retry incident while a fallback is downloading", async () => {
+    await using f = await fixture();
+    const movie = movieAcquisition(f, 402);
+    // The healthy fallback deliberately has the lower row ID and appears last in RPC order.
+    const fallback = await managedSource(f, movie.acquisition.id, "movie", "9".repeat(40), "fallback");
+    const retained = await managedSource(f, movie.acquisition.id, "movie", "1".repeat(40), "retained");
+    const inventory = liveInventory(f, [
+      liveTorrent(retained.hash, retained.directory, { status: 0, error: 0, errorString: `Old tracker rejection ${secretUrl}`, rateDownload: 0 }),
+      liveTorrent(fallback.hash, fallback.directory, { leftUntilDone: 2 * 1024 ** 3, sizeWhenDone: 4 * 1024 ** 3,
+        rateDownload: 2 * 1024 ** 2, errorString: "Stale error string with cleared error code" }),
+    ]);
+    const before = f.db.serialize();
+    const result = await inventory.read();
+    expect(result.downloads).toHaveLength(1);
+    expect(result.downloads[0]).toMatchObject({ key: `movie:${movie.acquisition.id}:torrent:${fallback.id}`, telemetry: "live",
+      bytesDone: 2 * 1024 ** 3, sizeBytes: 4 * 1024 ** 3, bytesPerSecond: 2 * 1024 ** 2, observedAt: new Date(NOW).toISOString(), problem: null });
+    expect(result.summary.downloads).toBe(1);
+    expect(result.incidents).toEqual([]);
+    expect(result.activeAcquisitions[0]!.job.recovery).toBe("running");
+    expect(inventory.calls).toHaveLength(1);
+    expect(inventory.calls[0]!.method).toBe("torrent-get");
+    expect(new Set(inventory.calls[0]!.args.ids as string[])).toEqual(new Set([retained.hash, fallback.hash]));
+    expect(f.db.serialize()).toEqual(before);
+    expect(JSON.stringify(result)).not.toContain(providerKey);
+    expect(JSON.stringify(result)).not.toContain(retained.directory);
+    expect(JSON.stringify(result)).not.toContain(privateClientId);
+  });
+
+  test("missing private identity and unavailable RPC leave historical activity and errors unverified, not actionable", async () => {
+    await using f = await fixture();
+    const movie = movieAcquisition(f, 403);
+    await managedSource(f, movie.acquisition.id, "movie", "c".repeat(40), "unavailable");
+    let calls = 0;
+    const unavailable: AdminTransmissionReader = { clientId: privateClientId, rpc: { call: async () => {
+      calls++; throw new Error(`HTTP 503 ${secretUrl} private-transmission-password`);
+    } } };
+    for (const transmission of [null, unavailable]) {
+      const router = createAdminWebRouter({ now: () => NOW, transmission });
+      const before = f.db.serialize();
+      const result = await executeMethod(router.routes.ops, f.ctx, {});
+      expect(result.downloads).toEqual([]);
+      expect(result.incidents).toEqual([]);
+      expect(result.activeAcquisitions).toHaveLength(1);
+      expect(result.diagnostics.warnings.join(" ")).toContain("Current managed torrent activity could not be verified");
+      expect(f.db.serialize()).toEqual(before);
+      expect(JSON.stringify(result)).not.toMatch(/private-transmission-password|private-provider-key|https:\/\//);
+    }
+    expect(calls).toBe(1);
+  });
+
+  test("foreign clients, hashes, labels, roots, layouts and ambiguous or symlinked bindings fail closed", async () => {
+    for (const failure of ["client", "hash", "label", "root", "traversal", "directory", "duplicate", "symlink"] as const) {
+      await using f = await fixture();
+      const movie = movieAcquisition(f, 404);
+      const source = await managedSource(f, movie.acquisition.id, "movie", "d".repeat(40), "guarded",
+        failure === "client" ? "transmission:22222222-2222-4222-8222-222222222222" : privateClientId);
+      const rows = [liveTorrent(source.hash, source.directory, { error: 1, errorString: `Do not expose ${secretUrl}` })];
+      if (failure === "hash") rows[0]!.hashString = "e".repeat(40);
+      if (failure === "label") rows[0]!.labels = ["Podible TV"];
+      if (failure === "directory") rows[0]!.downloadDir = path.join(f.settings.movies.managedRoot, "downloads", "another");
+      if (failure === "duplicate") rows.push({ ...rows[0]! });
+      if (failure === "root" || failure === "traversal")
+        f.db.query("UPDATE media_torrents SET location_json=? WHERE id=?")
+          .run(JSON.stringify(failure === "root" ? { rootId: "tv", relativePath: "guarded" } : { rootId: "movies", relativePath: "../guarded" }), source.id);
+      if (failure === "symlink") {
+        await fs.rename(source.directory, `${source.directory}-real`);
+        await fs.symlink(`${source.directory}-real`, source.directory);
+      }
+      const inventory = liveInventory(f, rows);
+      const before = f.db.serialize();
+      const result = await inventory.read();
+      expect(result.downloads).toEqual([]);
+      expect(result.incidents).toEqual([]);
+      expect(result.diagnostics.warnings.join(" ")).toContain("could not be verified");
+      expect(JSON.stringify(result)).not.toContain(providerKey);
+      expect(f.db.serialize()).toEqual(before);
+      expect(inventory.calls.every((call) => call.method === "torrent-get")).toBe(true);
+    }
+  });
+
+  test("live inventory stops at its global binding budget without choosing a newest source or issuing unbounded reads", async () => {
+    await using f = await fixture();
+    const movie = movieAcquisition(f, 405);
+    for (let n = 0; n < 101; n++) f.repo.movies.bindDownload(movie.acquisition.id,
+      { clientId: privateClientId, nativeId: n.toString(16).padStart(40, "0") }, { rootId: "movies", relativePath: `source-${n}` }, `offer-${n}`);
+    const inventory = liveInventory(f, []);
+    const result = await inventory.read();
+    expect(inventory.calls).toEqual([]);
+    expect(result.downloads).toEqual([]);
+    expect(result.incidents).toEqual([]);
+    expect(result.diagnostics.truncated).toBe(true);
+    expect(result.diagnostics.warnings.join(" ")).toContain("bounded read budget");
   });
 
   test("TV future episodes remain informational while real TV acquisitions/downloads are visible", async () => {
     await using f = await fixture();
+    const rows: ReturnType<typeof liveTorrent>[] = [];
     for (const [n, date] of [[301, "2020-01-01"], [302, "2099-01-01"]] as const) {
       const request = f.repo.tv.request(f.user.id, { key: `tvdb:${n}`, tvdbId: n, tmdbId: null, title: `Series ${n}`, aliases: [], year: 2020, anime: false,
         episodes: [{ key: `tvdb:${n}01`, title: "Episode", airDate: date, runtimeMinutes: 30,
           numbering: [{ scheme: "tvdb:aired", season: 1, episode: 1, absolute: null }] }], relations: [] }, {}, [`tvdb:${n}01`]);
       const acquisition = f.repo.tv.startAcquisition(request.targetId, "initial", () => f.job({ type: "tv_acquire" }, { status: n === 301 ? "running" : "succeeded" }).id, request.requestId).acquisition;
       if (n === 302) f.repo.tv.finishAcquisition(acquisition.id);
-      else f.repo.tv.bindDownload(acquisition.id, { clientId: "private-tv", nativeId: "b".repeat(40) }, { rootId: "tv", relativePath: "owned" }, "offer");
+      else {
+        const source = await managedSource(f, acquisition.id, "tv", "b".repeat(40), "owned");
+        rows.push(liveTorrent(source.hash, source.directory, { labels: ["Podible TV"] }));
+      }
     }
-    const result = await executeMethod(f.router.routes.ops, f.ctx, {});
+    const result = await liveInventory(f, rows).read();
     expect(result.summary.waiting).toBe(1);
     expect(result.activeAcquisitions.find((item) => item.media === "tv")).toMatchObject({ title: "Series 301", href: "/tv-sync" });
-    expect(result.downloads.find((item) => item.media === "tv")).toMatchObject({ telemetry: "unknown", bytesDone: null });
+    expect(result.downloads.find((item) => item.media === "tv")).toMatchObject({ telemetry: "live", bytesDone: 40, problem: null });
     expect(result.incidents).toEqual([]);
   });
 

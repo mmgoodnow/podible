@@ -157,6 +157,7 @@ try {
   const storage = page.getByRole("region", { name: "Storage and links", exact: true });
   await active.getByRole("link", { name: "Fixture Active Book", exact: true }).waitFor();
   await active.getByRole("link", { name: "Fixture Active Download", exact: true }).waitFor();
+  await active.getByText("Telemetry: unknown.", { exact: false }).waitFor();
   await active.getByText("Will retry automatically", { exact: false }).waitFor();
   await attention.getByRole("link", { name: "Fixture Import Failure", exact: true }).waitFor();
   assert.equal(await attention.getByText("Fixture Waiting For Offers", { exact: false }).count(), 0);
@@ -169,6 +170,11 @@ try {
   const baselineOps = (await rpc("adminWeb.ops", { includeJobs: false })).result;
   assert.deepEqual(baselineOps.diagnostics.recentJobs, []);
   assert.equal(baselineOps.summary.waiting, 1);
+  assert.equal(baselineOps.downloads.length, 1);
+  assert.ok(baselineOps.downloads.every((download: { telemetry: string; bytesDone: number | null; bytesPerSecond: number | null; problem: unknown }) =>
+    download.telemetry === "unknown" && download.bytesDone === null && download.bytesPerSecond === null && download.problem === null),
+  "The fixture has execution demand but no verified private engine; it must not invent live measurements or tracker errors");
+  assert.ok(!baselineOps.incidents.some((incident: { key: string }) => incident.key.startsWith("torrent:")));
   assert.ok(!JSON.stringify(baselineOps).includes("admin-fixture-provider-secret"));
   assert.ok(!(await page.locator("body").innerText()).includes("provider.invalid"));
   const diagnostics = await rpc("adminWeb.ops", { includeJobs: true });

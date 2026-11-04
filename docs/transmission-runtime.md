@@ -8,10 +8,9 @@ latest-release lookup.
 
 The reported production Berserk canary received BTN's exact tracker response,
 `Your client is not on the whitelist`, with the beta daemon. A separate AlphaRatio
-canary was accepted. That is a tracker-specific compatibility observation, not
-proof that stable 4.1.4 is on BTN's whitelist. No peer-ID or user-agent spoofing is
-used, and this packaging change does not claim to resolve BTN acceptance until
-an actual production announce with the new daemon is observed.
+canary was accepted. That did not establish stable-version compatibility; the
+production verification below separately observed a successful BTN announce with
+4.1.4. No peer-ID or user-agent spoofing is used.
 
 ## Source And Build
 
@@ -86,3 +85,19 @@ successful image build, a passing local transfer, and tracker acceptance. If BTN
 still rejects the real stable identity, investigate its supported-client policy
 rather than changing the advertised identity or interpreting another tracker's
 success as evidence of BTN acceptance.
+
+## Production Verification (2026-11-03)
+
+Normal CD deployed `1c0db9b`. The private RPC reported
+`4.1.4 (a6d907d9ea)` with the existing client identity and torrent registrations.
+Its identity/settings/resume directory was backed up first under
+`/config/backups/transmission-stable-2026-11-04T04-07-55-092Z/`.
+
+The retained, paused Berserk BTN canary was ownership-checked, briefly started
+for one bounded announce, then returned to its original paused state. A new
+tracker timestamp reported `Success`, `lastAnnounceSucceeded=true`, and 102
+seeders. The final client state was stopped with no tracker error. No torrent
+registration or files were removed, and the independently selected fallback
+download was left running. This proves acceptance of the real stable client by
+that tracker at that time, not completion of the TV import or universal tracker
+compatibility.

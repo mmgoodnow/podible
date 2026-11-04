@@ -85,3 +85,27 @@ and [upstream contracts](tv-upstreams.md).
 TV catalog discovery and user-facing native TV request creation are not yet
 implemented. The unified books/movies/TV omnibar is a separate product step; it
 must not disguise unsupported TV discovery as an empty result set.
+
+## Production Canary Progress (2026-11-03)
+
+The rollout uses the isolated Plex section `16` (TVDB aired order); Sonarr's main
+library remains separate. Native requests were explicitly limited to:
+
+- Breaking Bad, Seerr request `721`: S02E01 only. The season pack completed and
+  the verifier selected its matching 47-minute episode file, not the whole pack.
+- Berserk, Seerr request `713`: its first episode only. The original BTN download
+  was retained after a client-version rejection; autonomous recovery selected a
+  different release which continued downloading. Stable Transmission subsequently
+  passed a separate BTN announce check; see [runtime verification](transmission-runtime.md).
+- Khom Khlang, Seerr request `726`: ten known season-one episode identities,
+  including the future tenth episode. At least two episodes completed canonical
+  adoption and publication; an independent, read-only Plex check confirmed their
+  exact episode IDs and file paths. Missing aired episodes continued through
+  separate recovery acquisitions rather than marking the entire season available.
+
+An episode cap bounds requested/published coverage, **not pack download bytes**.
+The current torrent-client API does not select individual files within a pack;
+the existing per-release byte limit still applies. A fully downloaded pack is
+not proof that any requested episode has passed import and Plex verification.
+The future episode's RSS-driven acquisition remains an observation to complete
+after it airs and a suitable release arrives.

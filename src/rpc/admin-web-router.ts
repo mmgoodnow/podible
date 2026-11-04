@@ -9,6 +9,7 @@ import { defaultSettings, parseSettings } from "../settings";
 import { assertMovieStorage } from "../movies/storage";
 import { defineMethod, defineRouter } from "./framework";
 import { RpcError } from "./shared";
+import { adminTorrentKey, readAdminTorrents, type AdminTorrentBinding, type AdminTorrentSource, type AdminTransmissionReader } from "./admin-torrents";
 
 const empty = z.object({}).strict();
 const id = z.number().int().positive().safe();
@@ -45,7 +46,7 @@ export const adminWebOpsSchema = z.object({
   activeAcquisitions: z.array(workSchema),
   downloads: z.array(workSchema.extend({
     bytesDone: count.nullable(), sizeBytes: count.nullable(), bytesPerSecond: count.nullable(),
-    observedAt: z.string().nullable(), telemetry: z.enum(["recorded", "unknown"]), problem: safeErrorSchema.nullable(),
+    observedAt: z.string().nullable(), telemetry: z.enum(["live", "recorded", "unknown"]), problem: safeErrorSchema.nullable(),
   })),
   incidents: z.array(incidentSchema),
   feeds: z.array(z.object({
@@ -68,6 +69,7 @@ type Context = Omit<Work, "job"> & { suppressIncident: boolean };
 export type AdminWebDependencies = {
   now?: () => number;
   fetchPlexServers?: (settings: AppSettings) => Promise<PlexServerDevice[]>;
+  transmission?: AdminTransmissionReader | null;
 };
 
 const CACHE_KEY = "plex_server_devices";
@@ -76,7 +78,6 @@ const cacheSchema = z.object({ ownerTokenHash: z.string(), fetchedAtMs: count, s
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
 const iso = (value: string | null | undefined) => value && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
 const active = (job: JobRow) => job.status === "queued" || job.status === "running";
-const nullableCount = (value: unknown) => count.safeParse(value).success ? value as number : null;
 
 function settingsForRead(repo: BooksRepo): AppSettings {
   const row = repo.adminDbTablePage("settings", 100, 0).rows.find((row) => row.id === 1);
@@ -206,7 +207,7 @@ function associatedRows(repo: BooksRepo, table: string): Record<string, unknown>
   return rows;
 }
 
-async function operationalView(repo: BooksRepo, settings: AppSettings, includeJobs: boolean, now: number): Promise<AdminWebOps> {
+async function operationalView(repo: BooksRepo, settings: AppSettings, includeJobs: boolean, now: number, transmission?: AdminTransmissionReader | null): Promise<AdminWebOps> {
   const label = labelSanitizer(settings);
   const warnings: string[] = [];
   const incidents: AdminWebOps["incidents"] = [];
@@ -218,7 +219,7 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
       code: "execution-state-unknown", jobId: null, href: null, recovery: "unknown", nextWakeAt: null });
   }
   const contexts = new Map<number, Context>();
-  const torrents = new Map<number, Array<{ id: number; observation_json: string | null }>>();
+  const torrents = new Map<number, AdminTorrentBinding[]>();
   const byId = new Map(jobs.map((job) => [job.id, job]));
   const getJob = (jobId: number) => byId.get(jobId) ?? repo.getJob(jobId);
   const retryPending = new Set(repo.listJobCommands().filter((command) => command.kind === "retry" &&
@@ -272,6 +273,17 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
     }
   } catch { warnings.push("Some movie/TV acquisition associations could not be read; those operational counts may be incomplete."); }
 
+  const sources: AdminTorrentSource[] = [];
+  for (const job of jobs) {
+    const context = contexts.get(job.id);
+    if (!active(job) || repo.isJobCancellationRequested(job.id) || (context?.media !== "movie" && context?.media !== "tv")) continue;
+    for (const binding of torrents.get(job.id) ?? []) sources.push({ media: context.media, binding });
+  }
+  const inventory = await readAdminTorrents(sources, settings, now, transmission);
+  if (inventory.unknown)
+    warnings.push(`Current managed torrent activity could not be verified for ${inventory.unknown} bound source(s); recorded observations are not counted as active downloads or actionable torrent errors.`);
+  if (inventory.truncated) warnings.push("Managed torrent inventory exceeded the bounded read budget; current download counts are incomplete.");
+
   const latestByType = new Map<string, JobRow[]>();
   function contextFor(job: JobRow): Context {
     const associated = contexts.get(job.id);
@@ -299,21 +311,19 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
     if (active(job) && job.type === "download") downloads.push({ ...work, job: view, bytesDone: null, sizeBytes: null,
       bytesPerSecond: null, observedAt: null, telemetry: "unknown", problem: null });
     if (active(job)) for (const torrent of torrents.get(job.id) ?? []) {
-      let snapshot: Record<string, unknown>;
-      try { const parsed = JSON.parse(torrent.observation_json ?? "null"); snapshot = parsed && typeof parsed === "object" ? parsed : {};
-        if (snapshot.complete === true || snapshot.state === "seeding") continue; }
-      catch { snapshot = {}; }
-      const classified = typeof snapshot.message === "string" ? normalizedAdminError(snapshot.message) : null;
-      const problem = classified?.code === "tracker-client-not-allowed" ? classified : snapshot.message
-        ? { code: "torrent-tracker-or-storage", message: "The managed torrent engine reported a tracker or storage problem. Exact cause is unknown from this observation; inspect tracker status, permitted client/version requirements, and local storage. No private client status lookup was performed." }
+      if (work.media !== "movie" && work.media !== "tv") continue;
+      const observed = inventory.observations.get(adminTorrentKey({ media: work.media, binding: torrent }));
+      if (!observed?.active) continue;
+      const classified = normalizedAdminError(observed.error);
+      const problem = classified?.code === "tracker-client-not-allowed" ? classified : observed.error
+        ? { code: "torrent-tracker-or-storage", message: "The private managed client currently reports a tracker or storage problem. Exact cause is unknown from its status; inspect tracker requirements and local storage." }
         : null;
       downloads.push({ ...work, key: `${work.key}:torrent:${torrent.id}`, job: view,
-        bytesDone: nullableCount(snapshot.bytesDone), sizeBytes: nullableCount(snapshot.sizeBytes),
-        bytesPerSecond: nullableCount(snapshot.downloadBytesPerSecond), observedAt: typeof snapshot.observedAt === "string" ? iso(snapshot.observedAt) : null,
-        telemetry: typeof snapshot.observedAt === "string" && iso(snapshot.observedAt) ? "recorded" : "unknown", problem });
+        bytesDone: observed.bytesDone, sizeBytes: observed.sizeBytes, bytesPerSecond: observed.bytesPerSecond,
+        observedAt: observed.observedAt, telemetry: "live", problem });
       if (problem && !suppressIncident && view.error?.code !== problem.code)
         incidents.push({ key: `torrent:${torrent.id}`, title: work.title, detail: problem.message, code: problem.code,
-          jobId: job.id, href: work.href, recovery: "manual-retry", nextWakeAt: view.nextWakeAt });
+          jobId: job.id, href: work.href, recovery: view.recovery, nextWakeAt: view.nextWakeAt });
     }
     if ((job.status !== "failed" && !(active(job) && job.error)) || suppressIncident) continue;
     if (!contexts.has(job.id)) {
@@ -349,7 +359,7 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
   }
   const wakes = jobs.filter((job) => active(job) && !repo.isJobCancellationRequested(job.id))
     .flatMap((job) => iso(job.next_run_at) ? [iso(job.next_run_at)!] : []).sort();
-  const truncated = acquisitions.length > 100 || downloads.length > 100 || incidents.length > 100 || feeds.length > 100;
+  const truncated = inventory.truncated || acquisitions.length > 100 || downloads.length > 100 || incidents.length > 100 || feeds.length > 100;
   return { observedAt: new Date(now).toISOString(), summary: { activeAcquisitions: acquisitions.length, downloads: downloads.length, incidents: incidents.length, waiting, nextWakeAt: wakes[0] ?? null },
     activeAcquisitions: acquisitions.slice(0, 100), downloads: downloads.slice(0, 100), incidents: incidents.slice(0, 100), feeds: feeds.slice(0, 100), storage,
     diagnostics: { recentJobs, warnings: [...new Set(warnings)], truncated } };
@@ -409,7 +419,7 @@ export function createAdminWebRouter(deps: AdminWebDependencies = {}) {
       } }),
     ops: defineMethod({ auth: "admin", readOnly: true, summary: "Read active media work, genuine failures, provider cooldowns, and verified/unknown storage facts.",
       paramsSchema: z.object({ includeJobs: z.boolean().default(false) }).strict(), resultSchema: adminWebOpsSchema,
-      handler: (ctx, params) => operationalView(ctx.repo, settingsForRead(ctx.repo), params.includeJobs, now()) }),
+      handler: (ctx, params) => operationalView(ctx.repo, settingsForRead(ctx.repo), params.includeJobs, now(), deps.transmission) }),
     refresh: defineMethod({ auth: "admin", summary: "Queue one bounded full-library refresh through the existing transactional outbox.", paramsSchema: empty,
       resultSchema: z.object({ jobId: id, shared: z.boolean() }),
       handler(ctx) {
