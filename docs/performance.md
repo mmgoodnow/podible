@@ -15,12 +15,18 @@ cover elements to complete; all 12 also had a nonzero natural width on each run.
 | ad61656, cold | 1295 | 4450 | 0 / 13 | 606769 |
 | ad61656, warm | 1698 | 1707 | 30 / 30 | 0 |
 | ad61656, warm again | 5836 | 5842 | 30 / 30 | 0 |
+| 8344dbb, cold | 461 | 1197 | 0 / 20 | 963894 |
+| 8344dbb, warm | 1125 | 1132 | 30 / 30 | 0 |
+| 8344dbb, warm again | 349 | 357 | 30 / 30 | 0 |
 
-This proves warm browser cover reuse, not consistently fast page loads. The last
-follow-up navigation had 12 ms HTML TTFB but a 3750 ms `auth.me` request followed
+The ad61656 capture proved warm browser cover reuse, not consistently fast page
+loads. Its last navigation had 12 ms HTML TTFB but a 3750 ms `auth.me` request followed
 by a 1665 ms `library.list` request. Another navigation had 1603 ms HTML TTFB.
 There were no page, API HTTP, cover HTTP, or failed-request errors. The single
 console error was the missing favicon (HTTP 404).
+
+Cover resource counts are sampled at visible-image completion; deferred offscreen
+loads can change the count and cold transfer total between captures.
 
 At 2026-11-04 06:50-07:00 UTC, direct container inspection still reported
 `bfa4b2d4688a693ba3c1b6bf2f2757f4882b0b47`; its `server.ts` did not construct a
@@ -42,6 +48,37 @@ did not perform session activity writes and bypassed the CDN/public network. The
 demonstrate server-side pre-handler queueing or scheduling stalls, not an
 exclusively CDN/network problem. They do not establish the precise blocking stack
 or measure the worker-isolated build, which was not deployed during the capture.
+
+### Verified Worker/Bootstrap Follow-Up
+
+At 2026-11-04 07:33 UTC, the production container actually ran
+`8344dbb21b12317a38a8b3e4c7199423bb905110`, a descendant of `9ee32b9`, with worker
+isolation, bootstrap, and nonblocking session activity present and HTTP ready.
+The same SHA was confirmed at session revocation after measurement. The normal
+CI/CD run completed successfully, including the new Library browser acceptance,
+image manifest, and watchtower update; no manual deployment was performed.
+
+All three actual production PWCLI navigations rendered 48 cards and loaded all
+12 visible covers. Each issued exactly one `library.bootstrap` API request:
+74, 62, and 151 ms end-to-end. There was no separate initial `auth.me` or
+`library.list` request. The corresponding server bootstrap handler times were
+26, 11, and 18 ms. Both warm navigations reused 30/30 covers with zero cover bytes
+transferred. There were no page/API/cover/failed-request errors or non-read
+requests; the one console error was the existing favicon HTTP 404.
+
+Twenty new loopback HTML controls completed in 1-4 ms, versus the old capture's
+5289/5227 ms stalls. Eight read-only first-page SQL/playback samples took about
+5-17 ms. Browser HTML TTFB remained variable at 14, 1035, and 146 ms, while the
+corresponding HTML handler times were 2, 1, and 0 ms. This bounded capture did not
+reproduce the old multi-second server stall. It does not prove that all future
+latency is eliminated or identify the exact cause of the remaining external
+HTML delay; handler timing alone cannot rule out pre-handler queueing.
+
+Verification used the approved existing user 36 and an owned PWCLI browser. The
+temporary session 102 was capped at five minutes, then deleted by its exact token
+hash (one row deleted, zero remaining). The owned browser/profile was closed and
+deleted; both credential files were removed and the transfer directory remained
+mode 0700. No cookies, tokens, or raw HAR were printed or retained in the report.
 
 ## Narrow Fixes
 
@@ -67,13 +104,9 @@ read. The returned page seeds only that actor's matching query; filters,
 pagination, and subsequent refreshes retain their own query keys. Non-Library
 routes keep the existing identity query.
 
-These source fixes and local regressions are not a claim of post-deployment
-production responsiveness. Verify the actual running SHA before labeling any
-subsequent browser measurements as worker-isolated or bootstrap-enabled.
-
-The outstanding production gate is the parent-owned commit/normal CD followed by
-running-SHA verification and a new actual PWCLI measurement. Do not mark that gate
-complete based on the successful but superseded worker image build alone.
+The production acceptance gate is complete for the bounded 8344dbb capture above.
+Subsequent performance claims still require actual running-SHA verification;
+a successful image build alone is not deployment or browser evidence.
 
 ## Acceptance
 

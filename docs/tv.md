@@ -124,3 +124,54 @@ A fully downloaded pack is
 not proof that any requested episode has passed import and Plex verification.
 The future episode's RSS-driven acquisition remains an observation to complete
 after it airs and a suitable release arrives.
+
+### Read-Only Verification Snapshot (2026-11-04 07:36 UTC)
+
+Automatic legacy-origin sync expanded the approved requests without a manual
+backfill or request edit:
+
+| Seerr Request | Entry | Approved Scope | Published Episodes |
+| --- | --- | --- | --- |
+| `721` | Breaking Bad | All 13 episodes of season 2 | 13 |
+| `713` | Berserk (`anidb:98`) | All 25 episodes of season 1 | 0 |
+| `726` | Khom Khlang | All 10 known episodes of season 1 | 9 |
+
+The published counts are active selections, not torrent/file counts. Independent
+read-only checks at 07:34 UTC confirmed the canonical/view file sizes and exact
+Plex episode IDs and paths for all 13 Breaking Bad season-two episodes and Khom
+Khlang S01E01-E09.
+
+Breaking Bad recovery acquisition `12`, job `1959`, adopted the 12 missing files
+from the original completed torrent
+`8e0e788574918449df33432d50ce79f3e5a662b7`. Its journal contains 12 completed
+`tv:reuse:0:adopt:*` receipts and the run completed without error. The acquisition
+finished at `2026-11-04T07:09:31.946Z`. Both original and recovery acquisitions
+reference the same recorded torrent, and a private-client query found exactly one Breaking
+Bad torrent and no new-search steps for this recovery. All 13 are now published
+and independently verified. The retained Berserk alternative is still downloading
+(55.6% at 07:36 UTC); full-season canonical adoption and Plex verification
+remain unobserved.
+
+All eight configured TV category feeds last succeeded around 07:33 UTC, with
+five durable anchors each and no current provider error or gap warning. The
+requested Khom Khlang S01E10 has provider air time `2026-11-09T12:00:00Z` and is
+not published. Future-release arrival, semantic routing, acquisition, and exact
+Plex publication remain an end-to-end observation after airing, not a completed
+canary or a reason to start periodic per-title searches.
+
+The initial rollout exposed an ordering failure: both normal CD runs
+[`41784606406`](https://github.com/mmgoodnow/podible/actions/runs/41784606406)
+(`41a88af`) and
+[`41784574337`](https://github.com/mmgoodnow/podible/actions/runs/41784574337)
+(`bfa4b2d`) succeeded, but the older run's Watchtower step finished later and the
+container ran the older build. The guarded normal CD run
+[`41792008135`](https://github.com/mmgoodnow/podible/actions/runs/41792008135)
+subsequently succeeded and the actual container now reports
+`8344dbb21b12317a38a8b3e4c7199423bb905110`, a descendant of the worker commit.
+Worker-gated HTTP startup completed, existing execution heartbeats and a new TV
+feed cycle advanced after startup, and no startup worker error or restart loop
+was observed. Application schema is 49, all 17 existing transcripts remain
+successful, and Transmission reports 4.1.4. The sampled HTTP health read returned
+200 in 29 ms at 07:36 UTC; this is one observation, not a production load benchmark. These
+checks did not mutate production data, control torrents, trigger jobs, or deploy
+manually.

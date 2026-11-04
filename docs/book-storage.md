@@ -54,3 +54,34 @@ resumption. Its durable report allows interrupted runs to be reconciled; report
 success never substitutes for a fresh verification. Failed verification cannot
 fall back to downloading. Original data and stopped rTorrent records are retained,
 not deleted. This command is not a background task or a new configuration surface.
+
+### Production Preparation (2026-11-04 UTC)
+
+At deployed build `8344dbb`, the read-only plan contains all **144** eligible
+Podible/LazyLibrarian releases with **zero exceptions**. They contain about
+47.2 GB of original torrent data. This is source/layout validation, not completed
+Transmission piece verification or an applied transfer.
+
+Five initial exceptions were not missing/corrupt data: four old tracker messages
+coexisted with complete byte counters, and XML-RPC's default whitespace trimming
+removed a trailing space from a real directory name. The client now preserves
+typed strings exactly. Neither fix bypasses the target's complete piece recheck;
+the real-daemon acceptance covers the trailing-space layout, zero downloaded
+bytes, corrupt-byte refusal, restart/replay and retained source records.
+
+Before transfer, all 17 successful transcript fingerprints still exactly match
+`/config/backups/book-storage-2026-11-04T01-36-26-903Z/inventory.json`.
+Repeat that comparison after transfer, and independently inspect the resulting
+bindings, Transmission completion/ownership and original stopped records.
+
+The production container supervises the application and Transmission separately.
+A local Docker rehearsal confirmed that a Docker-host `SIGSTOP` to the exact
+container's PID 1 suspends the supervisor only; the application can then exit
+gracefully while Transmission keeps serving RPC and seeding. Resuming PID 1 with
+`SIGCONT` lets the existing supervisor restart the application. Do not use
+`docker pause`, which freezes the engine too. A confirmed application exit,
+private application/execution/client backups, an independent restore watchdog,
+and unconditional supervisor restoration are prerequisites for using this
+maintenance procedure. Pin the container ID, avoid overlapping deployments, and
+do not proceed on an unconfirmed worker shutdown. The website is unavailable
+during this window; production apply remains pending the approved window.

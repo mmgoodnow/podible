@@ -14,23 +14,26 @@ deleting library metadata must not silently delete seeding data.
 An existing release without a Transmission binding is a legacy rTorrent release.
 Progress polling and reimport resolve the backend from that binding, never by
 guessing from whichever client is currently configured. Existing rTorrent
-downloads and seeding records are not moved, stopped, or re-added.
+downloads and seeding records are not automatically moved, stopped, or re-added.
+The separate [one-off transfer](book-storage.md#one-off-rtorrent-transfer) can
+cut over explicitly verified existing releases, including LazyLibrarian entries.
 
 ## Files
 
 Managed downloads live under `libraryRoot/.podible/downloads/<infohash>`. The
 scanner excludes this hidden directory. The download root shares the library
-filesystem, so book imports continue creating hardlinks under `Author/Title`:
-they do not copy the book or audiobook again.
+filesystem. Imports hardlink download bytes into canonical content and derive
+`Author/Title` symlink views from the asset records; they do not copy the book or
+audiobook again.
 
 There is no archive extraction stage in normal book or movie acquisition.
 Books require supported audio, EPUB, or PDF files; movies require supported
 playable video containers. Reading an EPUB's internal ZIP structure for metadata
 is distinct from unpacking an archived torrent release.
 
-Book filesystem publication remains the existing hardlink importer. Canonical
-content plus declarative symlink views is a separate change, not a prerequisite
-for private torrent ownership or [shared RSS recovery](indexer-feeds.md).
+Canonical content and declarative symlink publication are the normal path, not a
+one-off migration convention. See [book storage](book-storage.md) and
+[shared RSS recovery](indexer-feeds.md).
 
 ## Verification
 
