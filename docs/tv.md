@@ -89,14 +89,79 @@ credential, TV indexer list, public torrent endpoint, or model selector.
 
 ## API And Scope
 
-JSON-RPC and typed tRPC expose admin `tv.status`, `list`, `get`, `sync`,
-`backfill`, and `retry`, plus separate `tvShadow` audit methods. No client-supplied
-download URLs or filesystem evidence are accepted. See [audit details](tv-shadow.md)
-and [upstream contracts](tv-upstreams.md).
+Native catalog/request contract (JSON-RPC names and typed tRPC procedures):
 
-TV catalog discovery and user-facing native TV request creation are not yet
-implemented. The unified books/movies/TV omnibar is a separate product step; it
-must not disguise unsupported TV discovery as an empty result set.
+| Method | Access | Input | Output |
+| --- | --- | --- | --- |
+| `tv.search` | USER query | `{query}` | `{configured, unavailableReason, results}` |
+| `tv.details` | USER query | `{tmdbId}` | `{configured, unavailableReason, series}`; series includes seasons |
+| `tv.request` | USER mutation | `{tmdbId, seasonNumbers: number[]}` | `{request}` |
+| `tv.myRequests` | USER query | `{}` | `{requests}`; own requests only |
+| `tv.myRequest` | USER query | `{requestId}` | `{request}`; own requests only |
+| `tv.withdraw` | USER mutation | `{requestId}` | `{request}`; ownership required even for administrators |
+
+Search results contain `tmdbId`, `title`, `originalTitle`, `year`, `overview`,
+and `posterUrl`. Details add `numberingScheme: "tvdb:aired"` and seasons with
+`seasonNumber`, `title`, `episodeCount`, `airDate`, `requestable`, and
+`unavailableReason`. Season numbers are canonical TVDB aired numbers, not assumed
+equivalents of TMDB season numbers. Specials require an explicit selection of 0.
+Requests require a nonempty, unique selection; there is no episode-level mutation.
+Each normalized season selection is independently idempotent for its user, work
+and quality policy; selecting another scope creates a separate request rather
+than silently expanding or replacing an existing one. Known future episodes are
+included, without an acquisition until an episode has aired. The persisted season
+intent also admits newly cataloged episodes when metadata is refreshed.
+
+The request view retains `requestId`, `targetId`, `entry`, `requestedEpisodes`,
+`availableEpisodes`, `futureEpisodes`, `withdrawn`, `intentionallyAbsent`,
+`acquisitions`, and `events`, and adds `seasonNumbers`. User responses do not expose
+other users' requests, raw acquisition decisions or diagnostic event messages.
+
+Discovery reuses `movies.tmdbAccessToken` (v3 key or bearer token). Canonical episode
+identity comes from the existing GET-only Sonarr catalog, Sonarr's public SkyHook
+full-show metadata, or an injected trusted catalog. Shows do not need to be
+pre-added to Sonarr: when its local catalog cannot resolve a work, Podible reads
+`https://skyhook.sonarr.tv/v1/tvdb/shows/en/{tvdbId}` without any credentials.
+TMDB's explicit TVDB work reference is cross-checked against SkyHook's work and
+episode ownership. Episode TVDB IDs and TVDB aired coordinates come directly
+from that provider response; TMDB season/episode ordinals never establish a
+mapping. Podible never adds a series, changes monitoring, submits a command,
+or mutates Seerr. Missing,
+ambiguous, ephemeral or conflicting identities are unsupported, not guessed from
+season/episode ordinals. A discovery or mapping failure is an actionable response,
+not a successful empty search. Native requests do not require Seerr.
+
+The full-show contract is verified against Sonarr's official
+[request builder](https://github.com/Sonarr/Sonarr/blob/main/src/NzbDrone.Common/Cloud/SonarrCloudRequestBuilder.cs)
+and [SkyHook adapter](https://github.com/Sonarr/Sonarr/blob/main/src/NzbDrone.Core/MetadataSource/SkyHook/SkyHookProxy.cs),
+which maps provider episode IDs separately from numbering. The
+[series lookup response](https://github.com/Sonarr/Sonarr/blob/main/src/Sonarr.Api.V3/Series/SeriesResource.cs)
+does not contain episodes, so lookup alone cannot supply canonical episode
+identity. Both public v1 full-show and v2 official-order routes returned HTTP 200
+for TVDB 81189 during a read-only check on 2026-11-04. This implementation uses
+the stable v1 contract; unavailable or incompatible provider metadata blocks
+requests visibly, rather than falling back to ordinal guesses.
+
+`tv.status`, `list`, `get`, `sync`, `backfill`, and `retry` remain admin-only, alongside separate `tvShadow`
+audit methods. No client-supplied download URLs or filesystem evidence are accepted.
+See [audit details](tv-shadow.md) and [upstream contracts](tv-upstreams.md).
+
+Integration wiring outside this change's scope: the existing JSON-RPC router
+already mounts `tvRouter`, so new methods are discovered automatically. Add tRPC
+query wrappers for `search`, `details`, `myRequests`, `myRequest` and mutation wrappers for `request` and
+`withdraw` in `src/trpc.ts`, following the existing `tv` wrappers with each
+method's `paramsSchema`, `resultSchema`, and `executeMethod`. No `shared.ts`
+context field is necessary: `createTvRouter({catalog})` injects a test catalog.
+The normal `tv_sync` worker refreshes native season metadata before optional Seerr
+intake, and works with Seerr absent. The scheduler enqueues `tv_sync` for active
+native season requests with the shared TMDB credential, independently of Sonarr
+and Seerr. The comparison `tv_shadow_sync` job remains Sonarr-only. The exported
+`refreshNativeTvRequests(repo)` hook rotates bounded batches of 25 requests,
+retains the original policy and stable identities, logs unavailable mappings,
+and admits newly announced episodes and changed air dates for feed routing.
+It never restores intentionally evicted targets or withdrawn requests, and
+never starts acquisition itself. Reads are GET-only with a 15-second deadline,
+8 MiB response limit, eight concurrent requests, and a five-minute bounded cache.
 
 ## Production Canary Progress (2026-11-03)
 

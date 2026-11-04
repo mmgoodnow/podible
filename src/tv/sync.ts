@@ -2,12 +2,14 @@ import { z } from "zod";
 import type { JobRow } from "../app-types";
 import { seerrInstance } from "../movies/seerr";
 import { ensurePresentIntent } from "../media/retention-service";
-import { durableStep, type WorkerContext } from "../worker/context";
+import { durableStep, workerLog, type WorkerContext } from "../worker/context";
 import { queueTvAcquisition, tvUpstreamStep } from "./acquisition";
 import { enrichAnimeEntry, type AnimeCatalogProjection } from "./anime";
 import { SonarrCatalog } from "./sonarr";
 import { approvedSeerrTv, selectedSeerrTvSeasons, SeerrTvClient, type SeerrTvRequest, type SeerrTvSource } from "./upstream";
 import type { TvCatalogEntry } from "./types";
+import { configuredTvCatalog, type TvCatalog } from "./catalog";
+import { nativeTvRequestScope, refreshNativeTvRequests } from "./service";
 
 export const tvSyncPayloadSchema = z.object({
   backfillRequestIds: z.array(z.number().int().positive()).min(1).max(5).optional(),
@@ -26,9 +28,31 @@ export function configuredTvSyncServices(ctx: WorkerContext): TvSyncServices {
     catalog: new SonarrCatalog({ url: settings.tv.sonarrUrl, apiKey: settings.tv.sonarrApiKey }), enrich: enrichAnimeEntry };
 }
 export async function syncTvRequests(ctx: WorkerContext, job: JobRow,
-  services: TvSyncServices = ctx.tvSyncServices ?? configuredTvSyncServices(ctx)): Promise<"done"> {
+  services?: TvSyncServices, nativeCatalog?: TvCatalog): Promise<"done"> {
   const input = tvSyncPayloadSchema.parse(JSON.parse(job.payload_json ?? "{}"));
   const settings = ctx.getSettings();
+  if (!input.backfillRequestIds && ctx.repo.tv.requests().some((request) => !request.withdrawn_at && nativeTvRequestScope(request))) {
+    const nativeConfiguration = () => JSON.stringify([
+      ctx.getSettings().movies.tmdbAccessToken, ctx.getSettings().tv.sonarrUrl, ctx.getSettings().tv.sonarrApiKey,
+    ]);
+    const expected = nativeConfiguration();
+    const assertActive = () => {
+      ctx.execution?.assertActive();
+      if (nativeConfiguration() !== expected) throw new Error("Native TV metadata configuration changed; start a new sync");
+    };
+    const result = await durableStep(ctx, "tv-native:metadata-refresh", () =>
+      refreshNativeTvRequests(ctx.repo, nativeCatalog ?? configuredTvCatalog(settings), { assertActive }));
+    assertActive();
+    for (const error of result.errors) workerLog(ctx, `[tv-native] request=${error.requestId} metadata unavailable: ${error.message}`);
+  }
+  // Native season metadata is independent of the optional Seerr ingestion bridge.
+  const bridgeConfigured = services || ctx.tvSyncServices || (settings.tv.sonarrUrl && settings.tv.sonarrApiKey &&
+    settings.tv.managedRoot && settings.tv.plexSectionId && settings.tv.plexViewPath);
+  if (!settings.movies.seerr.url || !settings.movies.seerr.apiKey || !bridgeConfigured) {
+    if (input.backfillRequestIds) throw new Error("Configure Seerr and the read-only TV bridge before requesting historical TV backfill");
+    return "done";
+  }
+  services ??= ctx.tvSyncServices ?? configuredTvSyncServices(ctx);
   const instance = seerrInstance(settings.movies.seerr.url);
   const configuration = JSON.stringify([settings.tv, settings.movies.seerr.url, settings.movies.qualityPolicy]);
   const expectedConfiguration = await durableStep(ctx, "tv-seerr:configuration", () => configuration);

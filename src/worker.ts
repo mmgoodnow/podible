@@ -60,12 +60,17 @@ export async function runWorker(
         }
         const shadow = ctx.getSettings().movies.shadow;
         const tv = ctx.getSettings().tv;
-        if (tv.sonarrUrl && tv.sonarrApiKey && Date.now() >= nextTvSync) {
+        if (Date.now() >= nextTvSync) {
+          const sonarrConfigured = Boolean(tv.sonarrUrl && tv.sonarrApiKey);
+          const nativeConfigured = Boolean(ctx.getSettings().movies.tmdbAccessToken.trim()) &&
+            ctx.repo.tv.requests().some((request) => !request.withdrawn_at && request.request_key.startsWith("native-seasons:"));
           const slot = Math.floor(Date.now() / (tv.pollIntervalMinutes * 60_000));
-          ctx.repo.createJob({ type: "tv_shadow_sync", idempotencyKey: `tv-shadow:${slot}`, maxAttempts: 3 });
-          if (seerr.url && seerr.apiKey && tv.managedRoot && tv.plexSectionId && tv.plexViewPath)
-            ctx.repo.createJob({ type: "tv_sync", idempotencyKey: `tv-seerr:${seerr.url}:${slot}`, maxAttempts: 3 });
-          nextTvSync = Date.now() + tv.pollIntervalMinutes * 60_000;
+          if (sonarrConfigured)
+            ctx.repo.createJob({ type: "tv_shadow_sync", idempotencyKey: `tv-shadow:${slot}`, maxAttempts: 3 });
+          const seerrConfigured = Boolean(sonarrConfigured && seerr.url && seerr.apiKey && tv.managedRoot && tv.plexSectionId && tv.plexViewPath);
+          if (seerrConfigured || nativeConfigured)
+            ctx.repo.createJob({ type: "tv_sync", idempotencyKey: seerrConfigured ? `tv-seerr:${seerr.url}:${slot}` : `tv-native:${slot}`, maxAttempts: 3 });
+          if (sonarrConfigured || nativeConfigured) nextTvSync = Date.now() + tv.pollIntervalMinutes * 60_000;
         }
         if (ctx.repo.tv.hasTargets() && tv.managedRoot && tv.plexSectionId && tv.plexViewPath && Date.now() >= nextTvMaintenance) {
           ctx.repo.createJob({ type: "tv_reconcile", idempotencyKey: `tv-maintenance:${boot}:${Math.floor(Date.now() / 3_600_000)}`, maxAttempts: 2 });

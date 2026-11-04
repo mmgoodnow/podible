@@ -201,6 +201,21 @@ export class TvRepo {
     });
   }
 
+  /** Keep season intent in the durable request key, independently of known episode membership. */
+  requestSeasons(userId: number, catalog: TvCatalogEntry, policy: TvPolicy, seasonNumbers: number[]): TvRequestResult {
+    const seasons = [...new Set(z.array(z.number().int().nonnegative().safe()).min(1).max(500).parse(seasonNumbers))].sort((a, b) => a - b);
+    const tmdbId = z.number().int().positive().safe().parse(catalog.tmdbId);
+    const selected = catalog.episodes.filter((episode) => episode.numbering.some((n) =>
+      n.scheme === "tvdb:aired" && n.season !== null && seasons.includes(n.season)));
+    if (seasons.some((season) => !selected.some((ep) => ep.numbering.some((n) => n.scheme === "tvdb:aired" && n.season === season))))
+      throw new Error("Selected TV season has no canonical episodes");
+    return this.transaction(() => {
+      const entry = this.upsertEntry(catalog);
+      return this.requestEpisodes(userId, entry.id, policy, this.resolveKeys(entry, selected.map((ep) => ep.key)),
+        undefined, `native-seasons:${tmdbId}:${json(seasons)}`);
+    });
+  }
+
   requestApproved(input: {
     userId: number; entry: TvCatalogEntry; policy: TvPolicy; episodeKeys: string[]; origin: TvRequestOrigin;
   }): TvRequestResult {
@@ -218,7 +233,7 @@ export class TvRepo {
     }));
   }
 
-  requestEpisodes(userId: number, entryId: number, policy: TvPolicy, episodeIds: number[], origin?: TvRequestOrigin): TvRequestResult {
+  requestEpisodes(userId: number, entryId: number, policy: TvPolicy, episodeIds: number[], origin?: TvRequestOrigin, nativeRequestKey?: string): TvRequestResult {
     const selected = ids(episodeIds);
     if (!selected.length) throw new Error("A TV request needs selected episodes resolved upstream");
     const policyJson = json(z.record(z.string(), z.unknown()).parse(policy));
@@ -246,7 +261,7 @@ export class TvRepo {
       const target = this.db.query(`INSERT INTO tv_targets(entry_id,policy_key,policy_json,created_at) VALUES(?,?,?,?)
         ON CONFLICT(entry_id,policy_key) DO UPDATE SET policy_key=excluded.policy_key RETURNING *`)
         .get(entryId, createHash("sha256").update(policyJson).digest("hex"), policyJson, now) as TvTarget;
-      const requestKey = origin ? json(["seerr", origin.instance, origin.externalRequestId]) : "direct";
+      const requestKey = origin ? json(["seerr", origin.instance, origin.externalRequestId]) : nativeRequestKey ?? "direct";
       const request = this.db.query(`INSERT INTO tv_requests(user_id,target_id,request_key,created_at) VALUES(?,?,?,?)
         ON CONFLICT(user_id,target_id,request_key) DO UPDATE SET withdrawn_at=NULL RETURNING *`)
         .get(userId, target.id, requestKey, now) as TvRequest;
