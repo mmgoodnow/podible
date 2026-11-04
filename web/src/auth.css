@@ -1,0 +1,11 @@
+.login-page {
+  display: flow-root;
+  width: min(100%, 520px);
+  min-height: 100svh;
+  margin: 0 auto;
+  padding: max(1.5rem, 12svh) 1.5rem 3rem;
+}
+
+.login-page .library-toolbar {
+  margin-top: 2rem;
+}
