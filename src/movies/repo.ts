@@ -22,6 +22,7 @@ import {
 import { assessMovieUpgrade, evaluateMovieQuality } from "./quality";
 import { RetentionRepo } from "../media/retention-repo";
 import { assertVersionContentAvailable } from "../media/content-loss";
+import { assertTorrentUseWritable } from "../media/torrent-use";
 
 export type MovieTarget = {
   id: number;
@@ -237,6 +238,7 @@ export class MovieRepo {
     offerKey: string,
   ): number {
     return this.transaction(() => {
+      assertTorrentUseWritable(this.db, { clientId: ref.clientId, infoHash: ref.nativeId });
       const existing = this.db
         .query("SELECT * FROM media_torrents WHERE client_id=? AND native_id=?")
         .get(ref.clientId, ref.nativeId) as {

@@ -33,6 +33,7 @@ export async function runWorker(
     let nextTvSync = 0;
     let nextTvMaintenance = 0;
     let nextRetention = 0;
+    let nextTvRetention = 0;
     let nextStewardship = 0;
     while (!ctx.shouldStop?.()) {
       try {
@@ -107,6 +108,10 @@ export async function runWorker(
           nextMovieMaintenance = Date.now() + 3_600_000;
         }
         const movieStorage = ctx.getSettings().movies;
+        if (ctx.repo.tv.hasTargets() && tv.managedRoot && tv.plexViewPath && tv.plexSectionId && Date.now() >= nextTvRetention) {
+          ctx.repo.createJob({ type: "tv_retention_pressure", idempotencyKey: `tv-retention-pressure:${Math.floor(Date.now() / RETENTION_PRESSURE_INTERVAL_MS)}`, maxAttempts: 3 });
+          nextTvRetention = Date.now() + RETENTION_PRESSURE_INTERVAL_MS;
+        }
         if (ctx.repo.movies.hasTargets() && movieStorage.managedRoot && movieStorage.plexViewPath && Date.now() >= nextRetention) {
           ctx.repo.createJob({
             type: "retention_cleanup",

@@ -21,6 +21,8 @@ import { adminWebRouter } from "./rpc/admin-web-router";
 import { recoveryRouter } from "./rpc/recovery-router";
 import { catalogRouter } from "./rpc/catalog-router";
 import { stewardshipRouter } from "./rpc/stewardship-router";
+import { tvRetentionRouter } from "./rpc/tv-retention-router";
+import { torrentRetirementRouter } from "./rpc/torrent-retirement-router";
 
 const t = initTRPC.context<RpcContext>().create();
 const id = z.number().int().positive();
@@ -62,6 +64,15 @@ const procedure = t.procedure.use(async ({ next }) => {
 });
 
 export const appRouter = t.router({
+  tvRetention: t.router({
+    audit: procedure.input(tvRetentionRouter.routes.audit.paramsSchema).output(tvRetentionRouter.routes.audit.resultSchema).query(({ ctx, input }) => executeMethod(tvRetentionRouter.routes.audit, ctx, input)),
+    preview: procedure.input(tvRetentionRouter.routes.preview.paramsSchema).output(tvRetentionRouter.routes.preview.resultSchema).query(({ ctx, input }) => executeMethod(tvRetentionRouter.routes.preview, ctx, input)),
+    evict: procedure.input(tvRetentionRouter.routes.evict.paramsSchema).output(tvRetentionRouter.routes.evict.resultSchema).mutation(({ ctx, input }) => executeMethod(tvRetentionRouter.routes.evict, ctx, input)),
+  }),
+  torrentRetirement: t.router({
+    preview: procedure.input(torrentRetirementRouter.routes.preview.paramsSchema).output(torrentRetirementRouter.routes.preview.resultSchema).query(({ ctx, input }) => executeMethod(torrentRetirementRouter.routes.preview, ctx, input)),
+    get: procedure.input(torrentRetirementRouter.routes.get.paramsSchema).output(torrentRetirementRouter.routes.get.resultSchema).query(({ ctx, input }) => executeMethod(torrentRetirementRouter.routes.get, ctx, input)),
+  }),
   stewardship: t.router({
     status: procedure.input(stewardshipRouter.routes.status.paramsSchema).output(stewardshipRouter.routes.status.resultSchema).query(({ ctx, input }) => executeMethod(stewardshipRouter.routes.status, ctx, input)),
     collect: procedure.input(stewardshipRouter.routes.collect.paramsSchema).output(stewardshipRouter.routes.collect.resultSchema).mutation(({ ctx, input }) => executeMethod(stewardshipRouter.routes.collect, ctx, input)),

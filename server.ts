@@ -82,6 +82,7 @@ export async function startServer(frontend?: HTMLBundle) {
               "/tv/library/:id": frontend,
               "/recovery": frontend,
               "/stewardship": frontend,
+              "/tv-retention": frontend,
               "/movie-dual-write": frontend,
             },
             development: { hmr: true, console: true },

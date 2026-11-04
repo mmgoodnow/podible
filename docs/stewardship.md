@@ -1,7 +1,9 @@
 # Private Torrent Stewardship
 
-This slice observes only Podible's own private Transmission instance and durable
-book/movie/TV bindings. It never controls torrents or deletes records or data.
+Stewardship observes only Podible's own private Transmission instance and durable
+book/movie/TV bindings. The collection/status services never control torrents.
+The background job additionally considers narrowly fenced, unused orphan records
+for record-only retirement; canonical and seed files are never deleted by it.
 Status reads stored observations and current bindings without querying the
 daemon, writing state, initializing settings, or collecting on page load.
 
@@ -97,13 +99,20 @@ Tracker health is independent of torrent progress:
 
 ## Retirement Boundary
 
-No retirement handler is exposed or enabled, even with repeated unregistration
-and at least 30 days actual seed time. Those facts do not prove current tracker
-ratio/time rules, other clients/cross-seeds, active application writers, all shared
-canonical/file references, or independently surviving seed copies. The existing
-`removeRecord` primitive alone cannot establish those obligations. An autonomous
-retirement extension must prove these at execution time and fence changed
-bindings/obligations through a durable intent/outbox before issuing a narrowly
-scoped record-only removal. It must never infer permission to delete seed data.
-Until then, the system continuously observes and retains records, without
-creating a human verification chore for every error.
+The normal five-minute job can retire only complete **orphan** records with no
+domain binding or admitted consumer, after every current tracker (including
+backups) supplies three individually advanced unregistered announcements at
+least 15 minutes apart and actual seed time exceeds 30 days. Generic HTTP errors,
+timeouts, scrape errors and a primary-only failure are insufficient.
+
+Durable admission covers asynchronous book/movie/TV producers and binding
+writes. Retirement holds the global worker lane, persists intent before its
+conditional daemon command, retains a permanent re-add tombstone, and reconciles
+uncertain acknowledgement without widening the operation. Pending claims fence
+configuration changes. Record removal is never an HTTP mutation and never
+requests local-data deletion. The UI exposes safe evidence and protection
+reasons, not a queue of routine human approvals.
+
+Library-bound records remain protected even when trackers reject them. Shared
+seed-data eviction and broader release stewardship still need their own proven
+reference/obligation policies. See [orphan retirement](torrent-retirement.md).

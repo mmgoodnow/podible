@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { BooksRepo } from "../repo";
 import { readTransmissionIdentity } from "./managed-transmission";
 import { TransmissionRpc } from "./transmission-client";
+import { recordRetirementEvidence } from "./torrent-retirement-evidence";
 import {
   MINIMUM_SEED_SECONDS, stewardshipCollectParamsSchema, stewardshipCollectResultSchema,
   stewardshipObservationSchema, stewardshipStatusParamsSchema, stewardshipStatusSchema,
@@ -21,7 +22,7 @@ const hashSchema = z.string().regex(/^[a-f0-9]{40}$/);
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const cursorSchema = z.object({ source: z.enum(["books", "screen"]), offset: count });
 const historySchema = z.object({ latest: stewardshipObservationSchema, history: z.array(stewardshipObservationSchema).max(8) });
-const fields = ["hashString", "downloadDir", "labels", "status", "leftUntilDone", "secondsSeeding", "error", "trackerStats"];
+const fields = ["hashString", "downloadDir", "labels", "status", "leftUntilDone", "secondsSeeding", "error", "trackerStats", "totalSize", "sizeWhenDone", "haveValid", "haveUnchecked"];
 const trackerSchema = z.object({
   id: count, announce: z.string().max(4096), isBackup: z.boolean(), hasAnnounced: z.boolean(),
   lastAnnounceSucceeded: z.boolean(), lastAnnounceTimedOut: z.boolean(), lastAnnounceTime: count,
@@ -33,8 +34,9 @@ const torrentSchema = z.object({
   secondsSeeding: z.number().nullable().optional(), error: z.number().int().min(0).max(3),
   // Incomplete tracker telemetry is unknown, not proof of a tracker error.
   trackerStats: z.unknown().optional(),
+  totalSize: count.optional(), sizeWhenDone: count.optional(), haveValid: count.optional(), haveUnchecked: count.optional(),
 });
-type Binding = { key: string; media: "books" | "movies" | "tv"; label: string; hash: string;
+export type Binding = { key: string; media: "books" | "movies" | "tv"; label: string; hash: string;
   clientId: string; directory: string; root: string; rootToken: string | null; bindingDigest: string };
 export type StewardshipConnection = {
   clientId: string;
@@ -46,10 +48,11 @@ export type StewardshipAdapters = {
   now?: () => number;
   deadlineMs?: number;
   assertActive?: () => void;
+  retirement?: import("./torrent-retirement").TorrentRetirementAdapters;
 };
 
 /** Bound response bytes before the existing private RPC parser sees JSON. */
-const boundedFetch: typeof fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+export const boundedStewardshipFetch: typeof fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
   const response = await fetch(input, init);
   if (!response.ok) return response;
   const reader = response.body?.getReader();
@@ -66,12 +69,12 @@ const boundedFetch: typeof fetch = Object.assign(async (input: Parameters<typeof
   } catch (error) { void reader.cancel().catch(() => {}); throw error; }
   return new Response(Buffer.concat(chunks), { status: response.status, headers: response.headers });
 }, { preconnect: fetch.preconnect });
-function connection(adapters: StewardshipAdapters): StewardshipConnection | null {
+export function stewardshipConnection(adapters: StewardshipAdapters): StewardshipConnection | null {
   if (adapters.connection !== undefined) return adapters.connection;
   try {
     const identity = readTransmissionIdentity();
     const rpc = new TransmissionRpc({ url: "http://127.0.0.1:9091/transmission/rpc", username: identity.username,
-      password: identity.password, timeoutMs: 5000, fetcher: boundedFetch });
+      password: identity.password, timeoutMs: 5000, fetcher: boundedStewardshipFetch });
     return { clientId: `transmission:${identity.id}`, get: (ids, selected) => rpc.call("torrent-get", { ids, fields: selected }) };
   } catch { return null; }
 }
@@ -79,7 +82,7 @@ function safeRelative(value: unknown): value is string {
   return typeof value === "string" && !path.isAbsolute(value) && !/[\\\x00-\x1f]/.test(value) &&
     value.split("/").every((part) => !!part && part !== "." && part !== "..");
 }
-function binding(repo: BooksRepo, source: StewardshipSource, row: Record<string, unknown>, privateId: string): Binding | null {
+export function stewardshipBinding(repo: BooksRepo, source: StewardshipSource, row: Record<string, unknown>, privateId: string): Binding | null {
   const settings = repo.readSettings();
   if (!settings || !clientIdSchema.safeParse(privateId).success || row.client_id !== privateId) return null;
   const hash = source === "books" ? row.info_hash : row.native_id;
@@ -106,9 +109,9 @@ function binding(repo: BooksRepo, source: StewardshipSource, row: Record<string,
     bindingDigest: digest([source, privateId, hash, root, directory, rootToken,
       source === "books" ? [row.book_id, row.release_id, settings.libraryRoot] : row.id]) };
 }
-function page(repo: BooksRepo, source: StewardshipSource, offset: number, limit: number, privateId: string | null) {
+export function stewardshipBindingPage(repo: BooksRepo, source: StewardshipSource, offset: number, limit: number, privateId: string | null) {
   const raw = repo.adminDbTablePage(source === "books" ? "book_torrents" : "media_torrents", limit, offset);
-  const bindings = privateId ? raw.rows.flatMap((row) => { const parsed = binding(repo, source, row, privateId); return parsed ? [parsed] : []; }) : [];
+  const bindings = privateId ? raw.rows.flatMap((row) => { const parsed = stewardshipBinding(repo, source, row, privateId); return parsed ? [parsed] : []; }) : [];
   return { bindings, scannedCount: raw.rows.length, excludedCount: raw.rows.length - bindings.length,
     sourceRows: raw.total, nextOffset: offset + raw.rows.length < raw.total ? offset + raw.rows.length : null };
 }
@@ -125,7 +128,7 @@ async function marker(file: string): Promise<Record<string, unknown>> {
     return z.record(z.string(), z.unknown()).parse(JSON.parse(await handle.readFile("utf8")));
   } finally { await handle.close(); }
 }
-async function verifyDirectory(repo: BooksRepo, target: Binding) {
+export async function verifyStewardshipDirectory(repo: BooksRepo, target: Binding) {
   await canonicalDirectory(target.root); await canonicalDirectory(target.directory);
   if (target.media === "books") {
     const library = await fs.realpath(repo.readSettings()!.libraryRoot);
@@ -211,8 +214,8 @@ export class TorrentStewardship {
   constructor(private repo: BooksRepo, private adapters: StewardshipAdapters = {}) {}
   status(input: z.input<typeof stewardshipStatusParamsSchema> = {}) {
     const params = stewardshipStatusParamsSchema.parse(input), now = (this.adapters.now ?? Date.now)();
-    const engine = connection(this.adapters);
-    const current = page(this.repo, params.source, params.offset, params.limit, engine?.clientId ?? null);
+    const engine = stewardshipConnection(this.adapters);
+    const current = stewardshipBindingPage(this.repo, params.source, params.offset, params.limit, engine?.clientId ?? null);
     const last = stewardshipCollectResultSchema.safeParse(this.repo.getJsonState(lastKey));
     return stewardshipStatusSchema.parse({ mode: "observe-only", destructiveActionsEnabled: false, minimumSeedSeconds: MINIMUM_SEED_SECONDS,
       ...params, sourceRows: current.sourceRows, scannedCount: current.scannedCount, excludedCount: current.excludedCount,
@@ -234,8 +237,8 @@ export class TorrentStewardship {
     const rawCursor = this.repo.getJsonState(cursorKey);
     const cursor = cursorSchema.safeParse(rawCursor);
     const currentCursor = cursor.success ? cursor.data : { source: "books" as const, offset: 0 };
-    const engine = connection(this.adapters), now = (this.adapters.now ?? Date.now)();
-    const current = page(this.repo, currentCursor.source, currentCursor.offset, 50, engine?.clientId ?? null);
+    const engine = stewardshipConnection(this.adapters), now = (this.adapters.now ?? Date.now)();
+    const current = stewardshipBindingPage(this.repo, currentCursor.source, currentCursor.offset, 50, engine?.clientId ?? null);
     let unavailableReason: string | null = engine ? null : "Private Transmission identity is unavailable; no daemon query was attempted.";
     let rows: z.infer<typeof torrentSchema>[] = [];
     if (engine && current.bindings.length) {
@@ -258,7 +261,7 @@ export class TorrentStewardship {
           const row = matches[0]!;
           try {
             if (matches.length !== 1 || row.downloadDir !== target.directory || !row.labels.includes(`Podible ${target.media === "books" ? "Books" : target.media === "movies" ? "Movies" : "TV"}`)) throw new Error("Binding mismatch");
-            await verifyDirectory(this.repo, target);
+            await verifyStewardshipDirectory(this.repo, target);
             observed = observation(target, row, now, saved(this.repo, target)?.latest ?? null);
           } catch { observed = emptyObservation(target, now, "binding-unverified", "Daemon label, exact download layout or filesystem ownership no longer matches the private binding; health is not attributed to this record."); }
         }
@@ -269,7 +272,7 @@ export class TorrentStewardship {
       this.adapters.assertActive?.();
       const replay = stewardshipCollectResultSchema.safeParse(this.repo.getJsonState(receiptKey));
       if (replay.success) return replay.data;
-      const rechecked = page(this.repo, currentCursor.source, currentCursor.offset, 50, engine?.clientId ?? null);
+      const rechecked = stewardshipBindingPage(this.repo, currentCursor.source, currentCursor.offset, 50, engine?.clientId ?? null);
       const valid = new Map(rechecked.bindings.map((target) => [target.key, target]));
       let observedCount = 0;
       for (const target of current.bindings) {
@@ -279,6 +282,14 @@ export class TorrentStewardship {
         if (history && Date.parse(history.latest.observedAt) > now) continue;
         this.repo.setJsonState(PREFIX + "observation:" + target.key,
           { latest: candidate, history: [...(history?.history ?? []), candidate].slice(-8) });
+        recordRetirementEvidence(this.repo, { bindingKey: target.key, bindingDigest: target.bindingDigest,
+          observedAt: candidate.observedAt, ownershipVerified: candidate.ownership === "verified-private-binding",
+          complete: candidate.complete === true && (() => {
+            const row = rows.find((item) => item.hashString.toLowerCase() === target.hash);
+            return !!row?.totalSize && row.haveValid === row.totalSize && row.sizeWhenDone === row.totalSize &&
+              row.haveUnchecked === 0 && [0, 5, 6].includes(row.status) && row.error !== 3;
+          })(), actualSeedSeconds: candidate.actualSeedSeconds,
+          trackerStats: rows.find((row) => row.hashString.toLowerCase() === target.hash)?.trackerStats });
         observedCount++;
       }
       const result = stewardshipCollectResultSchema.parse({ ...params, collectedAt: new Date(now).toISOString(), ...currentCursor,

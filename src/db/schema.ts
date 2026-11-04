@@ -542,6 +542,17 @@ export interface DB {
     "created_at": string;
   };
 
+  "tv_retention_evictions": {
+    "id": string;
+    "target_id": number;
+    "command_hash": string;
+    "plan_json": string;
+    "job_id": number;
+    "created_at": string;
+    "finished_at": string | null;
+    "result_json": string | null;
+  };
+
   "tv_shadow_cases": {
     "id": Generated<number>;
     "input_hash": string;

@@ -12,6 +12,7 @@ import {
 } from "../rtorrent";
 import { inspectMetainfo } from "./metainfo";
 import { managedBookTransmission } from "./managed-transmission";
+import { assertTorrentUseWritable, withDatabaseTorrentUse } from "./torrent-use";
 import type {
   DownloadLocation,
   TorrentClient,
@@ -60,8 +61,10 @@ export class BookTorrentsRepo {
     rootPath: string;
     rootToken: string;
   }): BookTorrentBinding {
+    return this.db.transaction(() => {
     this.beforeWrite();
     const hash = input.infoHash.toLowerCase();
+    assertTorrentUseWritable(this.db, { clientId: input.clientId, infoHash: hash });
     if (
       !/^[a-f0-9]{40}$/.test(hash) ||
       !Number.isSafeInteger(input.bookId) ||
@@ -96,12 +99,15 @@ export class BookTorrentsRepo {
     if (binding.client_id !== input.clientId)
       throw new Error("Book torrent belongs to another client instance");
     return binding;
+    }).immediate();
   }
 
   attach(infoHash: string, releaseId: number) {
+    return this.db.transaction(() => {
     this.beforeWrite();
     const binding = this.get(infoHash);
     if (!binding) throw new Error("Book torrent intent is missing");
+    assertTorrentUseWritable(this.db, { clientId: binding.client_id, infoHash: binding.info_hash });
     const release = typedGet(
       this.db,
       dbSql
@@ -124,6 +130,7 @@ export class BookTorrentsRepo {
         .set({ release_id: releaseId })
         .where("info_hash", "=", binding.info_hash),
     );
+    }).immediate();
   }
 
   reclaimOrphan(
@@ -133,6 +140,7 @@ export class BookTorrentsRepo {
     return this.db.transaction(() => {
       this.beforeWrite();
       const binding = this.get(expected.info_hash);
+      if (binding) assertTorrentUseWritable(this.db, { clientId: binding.client_id, infoHash: binding.info_hash });
       if (
         !binding ||
         binding.client_id !== expected.client_id ||
@@ -170,6 +178,11 @@ export class BookTorrentsRepo {
       );
       return this.get(binding.info_hash)!;
     })();
+  }
+
+  use<T>(binding: BookTorrentBinding, bookId: number, action: () => Promise<T>) {
+    return withDatabaseTorrentUse(this.db, this.beforeWrite, { clientId: binding.client_id, infoHash: binding.info_hash },
+      `book-add:${bookId}`, action);
   }
 }
 
@@ -386,6 +399,9 @@ export async function ensureBookTorrentAdded(
       rootToken,
     });
   }
+  const reserved = binding;
+  return repo.bookTorrents.use(reserved, bookId, async () => {
+  let binding = reserved;
   const reclaim = binding.book_id !== bookId;
   if (
     reclaim &&
@@ -416,6 +432,7 @@ export async function ensureBookTorrentAdded(
   if (snapshot.state !== "checking" && snapshot.state !== "seeding")
     await client.resume(ref);
   return binding;
+  });
 }
 
 /** Missing binding means a pre-Transmission release. Never infer its backend from settings. */

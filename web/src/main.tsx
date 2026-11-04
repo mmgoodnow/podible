@@ -19,6 +19,8 @@ import { BookDetail } from "./book-detail";
 import { UnifiedLibrary } from "./home";
 import { TvDetail, TvLibraryDetail, TvRequestDetail } from "./tv";
 import { RecoveryPage } from "./recovery";
+import { TvRetentionAudit, type TvRetentionClient } from "./tv-retention";
+import { TorrentRetirementStatus } from "./torrent-retirement";
 import { StewardshipPage } from "./stewardship";
 import type { StewardshipPanelApi } from "../../src/media/torrent-stewardship-types";
 import {
@@ -38,6 +40,10 @@ const queryClient = new QueryClient({
 const stewardshipApi: StewardshipPanelApi = {
   status: input => rpc.stewardship.status.query(input),
   collect: input => rpc.stewardship.collect.mutate(input),
+};
+const tvRetentionApi: TvRetentionClient = {
+  audit: input => rpc.tvRetention.audit.query(input),
+  evict: input => rpc.tvRetention.evict.mutate(input),
 };
 
 function App() {
@@ -86,7 +92,7 @@ function App() {
       </header>
       <main
         className={
-          (["/", "/library", "/add", "/movie-dual-write", "/tv-sync", "/retention", "/recovery", "/stewardship", "/settings", "/users", "/ops"].includes(route) || route.startsWith("/requests"))
+          (["/", "/library", "/add", "/movie-dual-write", "/tv-sync", "/retention", "/tv-retention", "/recovery", "/stewardship", "/settings", "/users", "/ops"].includes(route) || route.startsWith("/requests"))
             ? "compact-main"
             : undefined
         }
@@ -151,11 +157,14 @@ function ActorLibrary({ isAdmin, initialLibrary }: {
           isAdmin ? (route === "/settings" ? <SettingsPage /> : route === "/users" ? <UsersPage /> : <OpsPage />)
             : <p role="alert">Administrator access required.</p>
         ) : route === "/stewardship" ? (
-          isAdmin ? <StewardshipPage api={stewardshipApi} /> : <p role="alert">Administrator access required.</p>
+          isAdmin ? <><StewardshipPage api={stewardshipApi} /><TorrentRetirementStatus /></> : <p role="alert">Administrator access required.</p>
         ) : route === "/recovery" ? (
           isAdmin ? <RecoveryPage /> : <p role="alert">Administrator access required.</p>
-        ) : route === "/retention" ? (
-          isAdmin ? <RetentionAudit /> : <p role="alert">Administrator access required.</p>
+        ) : route === "/retention" || route === "/tv-retention" ? (
+          isAdmin ? <>
+            <nav className="actions" aria-label="Retention media"><Link href="/retention">Movies</Link><Link href="/tv-retention">TV seasons</Link></nav>
+            {route === "/tv-retention" ? <TvRetentionAudit client={tvRetentionApi} /> : <RetentionAudit />}
+          </> : <p role="alert">Administrator access required.</p>
         ) : route === "/tv-sync" ? (
           isAdmin ? <TvSync /> : <p role="alert">Administrator access required.</p>
         ) : route === "/movie-dual-write" ? (

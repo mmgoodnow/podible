@@ -88,10 +88,15 @@ upstream release; the application's normal RSS intake remains responsible.
 - [x] Bounded admin recovery inventory, explicit replay-safe link repairs using surviving owned bytes, and supported unselected-target acquisition. Test changed/missing mounts, intent fencing, short writer sections, outbox rollback and unchanged canonical bytes.
 - [x] Continuous five-minute private torrent observations through Reflow, saved-status admin UI, actual 30-day seed-time protection and sanitized repeated tracker evidence. No torrent controls or deletion.
 
-These checks establish local implementation/acceptance, not production rollout
-verification. Normal CD handles deployment. A genuine production quality upgrade
-is still unverified. TV/seed-store eviction, automatic torrent retirement and
-full lost-array rebuild remain unfinished. Confirmed selected-byte loss now has
+These checks establish local implementation/acceptance unless a live build is
+named. Normal CD handles deployment. SPA portability fix 1d15612 passed normal
+CD and the live container reported that exact GIT_COMMIT_SHA.
+A genuine production quality upgrade remains unverified. TV eviction is supported
+only for a fully verified complete single-season target, through explicit admin
+intent or bounded automatic disk-pressure ranking. Multi-season partial eviction
+remains unsupported. Orphan-only record retirement is automatic, but library-bound
+retirement and seed-store deletion are not. Full lost-array orchestration remains
+unfinished. Confirmed selected-byte loss now has
 atomic domain invalidation/outbox recovery (schema 51), including equal-quality
 movie replacement and exact TV file-coverage repair. Unknown/replaced mounts,
 shared selected files and unsupported reselection remain blocked. Intact seed

@@ -33,7 +33,7 @@ export function createSpaRoutes(directory = SPA_BUILD_DIRECTORY) {
     }
     if (
       relative.includes(".") ||
-      !/^(?:|library|add|series|author|movies(?:\/\d+)?|requests(?:\/\d+)?|tv\/(?:(?:requests|library)\/)?\d+|book\/\d+|movie-shadow(?:\/\d+)?|movie-dual-write|tv-sync|retention|recovery|stewardship|settings|users|ops|login(?:\/plex\/(?:loading|result))?)\/?$/.test(
+      !/^(?:|library|add|series|author|movies(?:\/\d+)?|requests(?:\/\d+)?|tv\/(?:(?:requests|library)\/)?\d+|book\/\d+|movie-shadow(?:\/\d+)?|movie-dual-write|tv-sync|retention|tv-retention|recovery|stewardship|settings|users|ops|login(?:\/plex\/(?:loading|result))?)\/?$/.test(
         relative,
       )
     )

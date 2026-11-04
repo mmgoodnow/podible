@@ -19,6 +19,7 @@ import type { MovieOffer } from "../movies/offers";
 import { refreshTvFeedOffer } from "./feed";
 import { completeTvSource, recordedLegacyTvSource, reusableTvSources, tvSourceFiles, tvSourceSchema, type TvSource } from "./source-reuse";
 import { recoverMissingTorrentSource } from "../media/recovery-source";
+import { withTorrentUse } from "../media/torrent-use";
 
 export async function tvUpstreamStep<T>(ctx: WorkerContext, name: string, action: () => Promise<T>): Promise<T> {
   for (let attempt = 0; attempt < (ctx.execution ? Infinity : 3); attempt++) {
@@ -216,10 +217,12 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
         active(); await assertMovieStorage(ctx.repo, roots.contentRoot);
         await fs.mkdir(sourceRoot, { recursive: true });
         if (await fs.realpath(sourceRoot) !== sourceRoot) throw new Error("TV download layout traverses a symlink");
-        const added = await services.client.ensureAdded({ metainfo, location });
-        if (added.clientId !== services.client.id || added.nativeId.toLowerCase() !== metadata.infoHash)
-          throw new Error("TV client returned another torrent identity");
-        active(); repo.bindDownload(acquisition.id, added, location, offer.key); return added;
+        return withTorrentUse(ctx.repo, { clientId: services.client.id, infoHash: metadata.infoHash }, `${acquisition.id}:${prefix}`, async () => {
+          const added = await services.client.ensureAdded({ metainfo, location });
+          if (added.clientId !== services.client.id || added.nativeId.toLowerCase() !== metadata.infoHash)
+            throw new Error("TV client returned another torrent identity");
+          active(); repo.bindDownload(acquisition.id, added, location, offer.key); return added;
+        });
       });
       const downloadId = repo.torrent(ref.clientId, ref.nativeId)!.id;
       if (snapshot.lossRecoveryHashes?.includes(metadata.infoHash))

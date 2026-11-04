@@ -9,6 +9,10 @@ import { TvRepo } from "./tv/repo";
 import { RetentionRepo } from "./media/retention-repo";
 import { readRecoveryInventory, type RecoveryReadInput } from "./media/recovery-query";
 import { ContentLossRepo } from "./media/content-loss";
+import { TvRetentionRepo } from "./media/tv-retention-repo";
+import { assertNoPendingTorrentRetirements } from "./media/torrent-retirement-admission";
+import { readConsumerCount } from "./media/torrent-retirement-query";
+import type { RetirementBinding } from "./media/torrent-retirement-types";
 import { TvShadowRepo } from "./tv/shadow-repo";
 
 import { nowIso, finalizeJobJournalMigration } from "./db";
@@ -259,6 +263,8 @@ export class BooksRepo {
   get tvShadow() { return new TvShadowRepo(this.db, this.beforeWrite, (id) => this.getJob(id)); }
   get retention() { return new RetentionRepo(this.db, this.beforeWrite); }
   get contentLoss() { return new ContentLossRepo(this.db, this.beforeWrite, (id) => this.getJob(id)); }
+  get tvRetention() { return new TvRetentionRepo(this.db, this.beforeWrite, (id) => this.getJob(id)); }
+  readTorrentRetirementConsumers(binding: RetirementBinding) { return readConsumerCount(this.db, binding); }
   constructor(
     private readonly db: Database,
     private readonly beforeWrite: () => void = () => {},
@@ -432,12 +438,15 @@ export class BooksRepo {
   }
 
   updateSettings(next: AppSettings): AppSettings {
-    this.db
-      .query(
-        "INSERT INTO settings (id, value_json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET value_json = excluded.value_json"
-      )
-      .run(stringifySettings(next));
-    return next;
+    return this.transaction(() => {
+      assertNoPendingTorrentRetirements(this);
+      this.db
+        .query(
+          "INSERT INTO settings (id, value_json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET value_json = excluded.value_json"
+        )
+        .run(stringifySettings(next));
+      return next;
+    });
   }
 
   upsertUser(input: UpsertUserInput): UserRow {

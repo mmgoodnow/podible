@@ -62,6 +62,7 @@ export function createPodibleFetchHandler(
     "/retention",
     "/recovery",
     "/stewardship",
+    "/tv-retention",
     "/settings",
     "/users",
     "/ops",

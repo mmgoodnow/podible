@@ -67,6 +67,9 @@ async function start() {
   for (let n = 0; n < 100; n++) {
     try {
       await rpc.call("session-get");
+      const session = await rpc.call("session-get", { fields: ["session-id"] });
+      if (typeof session["session-id"] !== "string" || session["session-id"].length < 16)
+        throw new Error("Stable Transmission does not expose a retirement session identity");
       return;
     } catch {
       await Bun.sleep(100);

@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { assertVersionContentAvailable } from "../media/content-loss";
+import { assertTorrentUseWritable } from "../media/torrent-use";
 import type { JobRow } from "../app-types";
 import type { DownloadLocation, TorrentRef, TorrentSnapshot } from "../media/torrent-client";
 import {
@@ -189,6 +190,7 @@ export class TvRepo {
 
   bindDownload(acquisitionId: number, ref: TorrentRef, location: DownloadLocation, offerKey: string): number {
     return this.transaction(() => {
+      assertTorrentUseWritable(this.db, { clientId: ref.clientId, infoHash: ref.nativeId });
       if (!this.acquisition(acquisitionId)) throw new Error("Unknown TV acquisition");
       const existing = this.torrent(ref.clientId, ref.nativeId);
       if (existing && existing.location_json !== JSON.stringify(location))

@@ -31,6 +31,8 @@ import { adminWebRouter } from "./rpc/admin-web-router";
 import { recoveryRouter } from "./rpc/recovery-router";
 import { catalogRouter } from "./rpc/catalog-router";
 import { stewardshipRouter } from "./rpc/stewardship-router";
+import { tvRetentionRouter } from "./rpc/tv-retention-router";
+import { torrentRetirementRouter } from "./rpc/torrent-retirement-router";
 
 function response(payload: RpcSuccess | RpcFailure): Response {
   return new Response(JSON.stringify(payload, null, 2), {
@@ -83,6 +85,8 @@ const rootRouter = defineRouter({
   retention: retentionRouter,
   recovery: recoveryRouter,
   stewardship: stewardshipRouter,
+  tvRetention: tvRetentionRouter,
+  torrentRetirement: torrentRetirementRouter,
   catalog: catalogRouter,
   tv: tvRouter,
   adminWeb: adminWebRouter,

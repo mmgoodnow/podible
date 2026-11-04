@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { JobRow } from "../app-types";
 import { durableStep, workerLog, type WorkerContext } from "../worker/context";
 import { TorrentStewardship, type StewardshipAdapters } from "./torrent-stewardship";
+import { processTorrentRetirements } from "./torrent-retirement-worker";
 
 const payloadSchema = z.object({ operationId: z.string().uuid().optional() }).strict();
 
@@ -20,5 +21,6 @@ export async function processStewardshipCollection(ctx: WorkerContext, job: JobR
   active();
   if (result.unavailableReason)
     workerLog(ctx, `[stewardship] ${result.unavailableReason} Observation will retry on the next scheduled collection.`);
+  await processTorrentRetirements(ctx, job, { source: result.source, offset: result.offset }, adapters.retirement ?? {});
   return "done";
 }

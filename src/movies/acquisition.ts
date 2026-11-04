@@ -21,6 +21,7 @@ import { readTransmissionIdentity } from "../media/managed-transmission";
 import { movieUpstreamStep } from "./upstream";
 import { refreshMovieFeedOffer } from "./feed-offers";
 import { recoverMissingTorrentSource } from "../media/recovery-source";
+import { withTorrentUse } from "../media/torrent-use";
 
 export const movieAcquisitionPayloadSchema = z.object({
   acquisitionId: z.number().int().positive(),
@@ -310,13 +311,15 @@ export async function acquireMovie(
         await fs.chown(sourceRoot, -1, settings.movies.downloadGroupId);
         await fs.chmod(sourceRoot, 0o2770);
       }
-      const added = await services.client.ensureAdded({
-        metainfo,
-        location: binding.location,
+      return withTorrentUse(ctx.repo, { clientId: services.client.id, infoHash: metadata.infoHash }, `${acquisition.id}:${prefix}`, async () => {
+        const added = await services.client.ensureAdded({
+          metainfo,
+          location: binding.location,
+        });
+        active();
+        repo.bindDownload(acquisition.id, added, binding.location, offer.key);
+        return added;
       });
-      active();
-      repo.bindDownload(acquisition.id, added, binding.location, offer.key);
-      return added;
     });
     const downloadId = repo.torrent(ref.clientId, ref.nativeId)!.id;
     if (initial.lossRecoveryKeys?.includes(offer.key))

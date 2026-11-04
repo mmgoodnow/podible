@@ -14,6 +14,7 @@ import { RETENTION_SCHEMA_SQL } from "./media/retention-schema";
 import { RETENTION_EXECUTION_SCHEMA_SQL } from "./media/retention-execution-schema";
 import { TV_SHADOW_SCHEMA_SQL } from "./tv/shadow-repo";
 import { CONTENT_LOSS_SCHEMA_SQL } from "./media/content-loss";
+import { TV_RETENTION_SCHEMA_SQL } from "./media/tv-retention-repo";
 
 const SCHEMA_MIGRATION_ID = 1;
 const GUID_MIGRATION_ID = 2;
@@ -1173,6 +1174,7 @@ export function runMigrations(db: Database): void {
   apply(49, () => db.exec("ALTER TABLE indexer_feeds ADD COLUMN boundary_json TEXT NULL"));
   apply(50, () => db.exec(RETENTION_EXECUTION_SCHEMA_SQL));
   apply(51, () => db.exec(CONTENT_LOSS_SCHEMA_SQL));
+  apply(52, () => db.exec(TV_RETENTION_SCHEMA_SQL));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

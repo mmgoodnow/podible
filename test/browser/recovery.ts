@@ -47,6 +47,9 @@ try {
   await page.getByRole("link", { name: "Torrent health", exact: true }).click();
   await page.getByRole("heading", { name: "Torrent Stewardship", exact: true }).waitFor();
   await page.getByText("No matching private Transmission bindings on this page.", { exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Automatic orphan record retirement", exact: true }).waitFor();
+  await page.getByText("No matching private bindings on this page.", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: /remove|retire/i }).count(), 0, "Retirement preview exposed a direct removal command");
   const receipts = () => context.request.get(new URL("/__fixture/stewardship", origin).href).then(r => r.json());
   assert.equal((await receipts()).receipts, 0, "Stewardship page load collected or wrote to daemon state");
   await page.getByRole("button", { name: "Collect next batch", exact: true }).click();
@@ -56,8 +59,24 @@ try {
   await memberPage.getByRole("alert").getByText("Administrator access required.", { exact: true }).waitFor();
   const deniedCollection = await member.request.post(new URL("/rpc", origin).href, { data: { jsonrpc: "2.0", id: 2, method: "stewardship.collect", params: { operationId: crypto.randomUUID() } } });
   assert.equal((await deniedCollection.json()).error.code, -32003);
+  const deniedRetirement = await member.request.post(new URL("/rpc", origin).href, { data: { jsonrpc: "2.0", id: 4, method: "torrentRetirement.preview", params: {} } });
+  assert.equal((await deniedRetirement.json()).error.code, -32003);
+  let tvAudits = 0;
+  page.on("request", request => { if (request.url().includes("tvRetention.audit")) tvAudits++; });
+  await page.goto(new URL("/tv-retention", origin).href);
+  await page.getByRole("heading", { name: "Whole-season TV retention", exact: true }).waitFor();
+  assert.equal(tvAudits, 0, "Opening TV retention started an audit without an explicit request");
+  await page.getByRole("spinbutton", { name: "TV target ID", exact: true }).fill("1");
+  await page.getByRole("button", { name: "Audit entire season", exact: true }).click();
+  await page.getByRole("heading", { name: "Season removal blocked", exact: true }).waitFor();
+  assert.equal(tvAudits, 1);
+  assert.equal(await page.getByRole("button", { name: "Evict complete single-season target", exact: true }).count(), 0);
+  await memberPage.goto(new URL("/tv-retention", origin).href);
+  await memberPage.getByRole("alert").getByText("Administrator access required.", { exact: true }).waitFor();
+  const deniedTvAudit = await member.request.post(new URL("/rpc", origin).href, { data: { jsonrpc: "2.0", id: 3, method: "tvRetention.audit", params: { targetId: 1, seasonNumber: 1 } } });
+  assert.equal((await deniedTvAudit.json()).error.code, -32003);
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false);
   assert.deepEqual(errors, []);
-  console.log("Recovery and stewardship Chrome acceptance passed: read-only previews, explicit link repair, preserved bytes/inode, missing-mount blocking, explicit observation receipts, actual RPC authorization, deep links and mobile layout.");
+  console.log("Recovery, stewardship and TV retention Chrome acceptance passed: read-only previews, explicit link repair, preserved bytes/inode, missing-mount blocking, explicit observation receipts, whole-season audit without unsafe eviction, actual RPC authorization, deep links and mobile layout.");
 } finally { await browser?.close(); server.kill("SIGTERM"); await server.exited; }
