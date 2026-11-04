@@ -16,8 +16,8 @@ only after the `verify` gate succeeds. No deployment commands are added here.
   build and runtime-script validation. It uploads `frontend-dist` once.
 - `browser`: three independent runners after `build`, consuming that exact dist.
   Library runs `spa`, `books`, `library-performance`; screen runs `movies`,
-  `movie-shadow`, `tv`, `unified-library`; admin runs `admin`, `auth`, `recovery`.
-  All ten entrypoints run exactly once. Each runner installs Chromium/dependencies
+  `movie-shadow`, `tv`, `unified-library`; admin runs `admin`, `auth`, `recovery`,
+  `stewardship`. All eleven entrypoints run exactly once. Each runner installs Chromium/dependencies
   once, then runs its suites sequentially with a five-minute per-suite timeout.
   Matrix fail-fast is disabled so another group's failure does not erase coverage.
   Library and screen explicitly install ffmpeg, unzip and wamerican: both use
@@ -109,13 +109,30 @@ Keep distinct evidence levels rather than dropping mocks indiscriminately:
 - `test/unit/tv-model.test.ts` exercises real SQLite identity, numbering,
   transactional rollback and publication constraints. The `unit` directory does
   not imply mock-only tests.
+- `test/integration/all-job-execution.test.ts` repeats the same substituted
+  checkpoint handler for all 26 job types in its generic SIGKILL loop. The loop
+  cost about 18 seconds in the measured local run; representative runtime-policy
+  classes could replace it after checking policy equivalence. Keep exhaustive
+  registration checks and the separate real-handler crash suites. This is a
+  deduplication candidate, not evidence of 26 distinct domain recoveries.
+- The basic SPA reader-navigation assertion now checks the actual visible links.
+  Checking only for absence of the removed "Movie sync" label was vacuous after
+  that label disappeared for administrators too.
 - Browser suites exercise rendered UI and actual fixture-server API paths, but
   fixture providers do not prove production TMDB/Sonarr/Plex availability. The
   network-isolated runtime lab proves local daemon behavior, not external tracker
   acceptance. Migration acceptance is useful on migration changes, not every push.
 
-No tests were deleted. The toolchain assertion was updated for equivalent resolved
-YAML configuration; protocol, integration and browser assertions are unchanged.
+Toolchain and reader-navigation assertions check effective configuration and
+visible behavior rather than obsolete literals. The retired Movie sync/TV sync
+pages and their orphaned form-parser tests are removed. Their backend scenarios
+now run in `test/integration/diagnostic-api.test.ts` through the `unit` gate:
+actual HTTP authorization, durable movie review, queue receipts, TV episode
+evidence, published coverage and strict season-only scope. The browser entrypoints
+keep their names: `movie-shadow` verifies legacy redirects and absence of raw
+diagnostic polling; `tv` verifies user-safe native requests, privacy, withdrawal,
+and desktop/mobile screenshots. Backend shadow collection/evaluation, Seerr
+dual-write, protocol and recovery safety coverage is retained.
 
 ## Timing And Validation
 
@@ -145,7 +162,29 @@ Local verification on 2026-11-04 used native Linux arm64 Docker Desktop:
 - Thirteen focused toolchain/packaging/client/capture/replay tests, DB-type check,
   backend/web typecheck, frontend build and runtime-script validation passed.
 
-No GHCR cache/image writes or workflow dispatch were performed for verification.
-The new three-runner browser matrix and remote registry-cache transfer have not
-been executed here. The parent owns the full-suite and browser release gates;
-these local results are not a measured end-to-end CI rollout improvement.
+Those local checks did not write GHCR caches/images or dispatch a workflow. The
+subsequent normal-push GitHub observations are recorded below; the local timings
+alone are not evidence of end-to-end CI improvement.
+
+### Observed GitHub Rollout
+
+Run `41919862928` verified all three browser groups and the real-daemon lab. Its
+runtime image build/load took 32 seconds, compared with 191 seconds in the prior
+uncached verification run. The unit runner correctly failed six HTTP integration
+assertions because its fresh filesystem lacked the SPA assets. It now builds
+those assets before testing; assertions and the publication gate were retained.
+
+Corrected run `41921125639` passed every verification job. From the first job
+starting at 21:59:16 UTC on November 4 to aggregate verification completing at
+22:02:59 UTC, verification took 3m43s, versus 10m51s in run `41913276196`.
+Both architecture builds and manifest checks also passed. Deployment was correctly
+skipped because a newer commit had superseded this run; this timing is not proof
+that its build was deployed. Queue, cache and network variability still apply.
+
+The later UI integration pass on November 4 passed 1,346 tests, generated DB type
+checks, backend/web typechecking, build, runtime entrypoint validation, and all
+eleven Chrome acceptance entrypoints locally. Normal CD exposed stale recovery
+navigation selectors; the home rails also required the auth fixture to open a
+pending book through the Books tab rather than expect it among published rails.
+These selectors were updated against rendered navigation without skipping any
+suite, weakening auth/removal assertions, or bypassing the publication gate.
