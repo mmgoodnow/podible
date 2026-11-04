@@ -1,4 +1,5 @@
 import { chromium } from "playwright";
+import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
@@ -37,15 +38,17 @@ try {
   const page = await context.newPage();
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(new URL("/library", url).href);
+  await page.goto(new URL("/library?media=books", url).href);
   await page
     .getByRole("heading", { name: "The Odyssey", exact: true })
     .waitFor();
-  if (await page.getByRole("navigation").getByRole("link", { name: "Movie sync" }).count())
-    throw new Error("Administrator navigation exposed to a reader");
+  assert.deepEqual(await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link").allTextContents(),
+    ["Library"], "A reader should only see the Library destination");
   await page.goto(new URL("/movie-dual-write", url).href);
+  assert.equal(new URL(page.url()).pathname, "/ops");
   await page.getByRole("alert").getByText("Administrator access required.").waitFor();
   await page.getByRole("navigation").getByRole("link", { name: "Library", exact: true }).click();
+  await page.getByRole("group", { name: "Media type" }).getByRole("button", { name: "Books", exact: true }).click();
   await page.getByRole("heading", { name: "The Odyssey", exact: true }).waitFor();
   await page.getByRole("searchbox").fill("Piranesi");
   await page

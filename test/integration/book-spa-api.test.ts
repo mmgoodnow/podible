@@ -280,7 +280,7 @@ test("SPA routes replace classic without catching auth, RPC, media, or missing a
       "/book/1?edition=1",
       "/movies/42",
       "/requests/1",
-      "/movie-dual-write",
+      "/ops",
       "/series?name=The+House",
       "/author?name=Susanna+Clarke",
     ]) {
@@ -291,9 +291,12 @@ test("SPA routes replace classic without catching auth, RPC, media, or missing a
     const oldBook = await request("/app/book/1?edition=2");
     expect(oldBook.status).toBe(308);
     expect(oldBook.headers.get("location")).toBe("/book/1?edition=2");
-    const oldAudit = await request("/movie-shadow");
-    expect(oldAudit.status).toBe(308);
-    expect(oldAudit.headers.get("location")).toBe("/movie-dual-write#radarr-audit");
+    for (const path of ["/movie-shadow", "/movie-dual-write", "/tv-sync"]) {
+      const oldAudit = await request(path);
+      expect(oldAudit.status).toBe(308);
+      expect(oldAudit.headers.get("location")).toBe("/ops");
+      expect(await oldAudit.text()).not.toContain('<div id="root">');
+    }
     expect((await request("/login")).status).not.toBe(404);
     for (const route of [
       "/not-a-page",

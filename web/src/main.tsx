@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../src/trpc";
 import {
@@ -9,8 +9,6 @@ import {
 } from "@tanstack/react-query";
 import { rpc, TRPCProvider, useTRPC } from "./rpc";
 import { Link, useLocation } from "./router";
-import { MovieSync } from "./movie-sync";
-import { TvSync } from "./tv-sync";
 import { RetentionAudit } from "./retention";
 import { SettingsPage, UsersPage, OpsPage } from "./admin";
 import { LoginScreen } from "./auth";
@@ -49,13 +47,18 @@ const tvRetentionApi: TvRetentionClient = {
 function App() {
   const currentLocation = useLocation();
   const route = currentLocation.split("?")[0]!.replace(/\/+$/, "") || "/";
+  const retiredDiagnostic = /^\/(?:movie-shadow(?:\/\d+)?|movie-dual-write|tv-sync)$/.test(route);
+  useEffect(() => {
+    if (retiredDiagnostic) location.replace("/ops");
+  }, [retiredDiagnostic]);
   const libraryRoute = route === "/" || route === "/library";
   const trpc = useTRPC();
-  const identity = useQuery(trpc.auth.me.queryOptions({}, { enabled: !libraryRoute }));
+  const identity = useQuery(trpc.auth.me.queryOptions({}, { enabled: !libraryRoute && !retiredDiagnostic }));
   const bootstrap = useQuery(trpc.library.bootstrap.queryOptions({
     q: new URLSearchParams(currentLocation.split("?")[1] ?? "").get("q") ?? "", limit: 48,
   }, { enabled: libraryRoute }));
   const session = libraryRoute ? bootstrap : identity;
+  if (retiredDiagnostic) return <p role="status">Opening activity...</p>;
   if (route === "/login" || route === "/login/plex/loading" || route === "/login/plex/result")
     return <LoginScreen key={route} mode={route.endsWith("/loading") ? "loading" : route.endsWith("/result") ? "result" : "login"} />;
   return (
@@ -80,7 +83,7 @@ function App() {
       </header>
       <main
         className={
-          (["/", "/library", "/add", "/movie-dual-write", "/tv-sync", "/retention", "/tv-retention", "/recovery", "/stewardship", "/settings", "/users", "/ops"].includes(route) || route.startsWith("/requests"))
+          (["/", "/library", "/add", "/retention", "/tv-retention", "/recovery", "/stewardship", "/settings", "/users", "/ops"].includes(route) || route.startsWith("/requests"))
             ? "compact-main"
             : undefined
         }
@@ -141,7 +144,7 @@ function ActorLibrary({ isAdmin, initialLibrary }: {
   return (
     <QueryClientProvider client={actorClient}>
       <TRPCProvider trpcClient={rpc} queryClient={actorClient}>
-        {isAdmin && ["/movie-dual-write", "/tv-sync", "/retention", "/tv-retention", "/recovery", "/stewardship"].includes(route) &&
+        {isAdmin && ["/retention", "/tv-retention", "/recovery", "/stewardship"].includes(route) &&
           <Link className="back" href="/ops">Back to activity</Link>}
         {["/settings", "/users", "/ops"].includes(route) ? (
           isAdmin ? (route === "/settings" ? <SettingsPage /> : route === "/users" ? <UsersPage /> : <OpsPage />)
@@ -155,14 +158,6 @@ function ActorLibrary({ isAdmin, initialLibrary }: {
             <nav className="actions" aria-label="Retention media"><Link href="/retention">Movies</Link><Link href="/tv-retention">TV seasons</Link></nav>
             {route === "/tv-retention" ? <TvRetentionAudit client={tvRetentionApi} /> : <RetentionAudit />}
           </> : <p role="alert">Administrator access required.</p>
-        ) : route === "/tv-sync" ? (
-          isAdmin ? <TvSync /> : <p role="alert">Administrator access required.</p>
-        ) : route === "/movie-dual-write" ? (
-          isAdmin ? (
-            <MovieSync />
-          ) : (
-            <p role="alert">Administrator access required.</p>
-          )
         ) : /^\/tv\/library\/\d+$/.test(route) ? (
           <TvLibraryDetail key={route} entryId={Number(route.split("/").at(-1))} />
         ) : /^\/tv\/requests\/\d+$/.test(route) ? (

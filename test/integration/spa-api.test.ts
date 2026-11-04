@@ -192,11 +192,14 @@ test("SPA deep links and immutable assets do not hide missing resources", async 
       ["/app/", "/"],
       ["/app/movies/42?q=hello", "/movies/42?q=hello"],
       ["/app/requests/12", "/requests/12"],
-      ["/movie-shadow", "/movie-dual-write#radarr-audit"],
-      ["/movie-shadow/7?history=1", "/movie-dual-write?history=1#radarr-audit"],
-      ["/app/movie-shadow", "/movie-dual-write#radarr-audit"],
-      ["/app/movie-shadow/7/", "/movie-dual-write#radarr-audit"],
-      ["/app/movie-dual-write", "/movie-dual-write"],
+      ["/movie-shadow", "/ops"],
+      ["/movie-shadow/7?history=1", "/ops"],
+      ["/app/movie-shadow", "/ops"],
+      ["/app/movie-shadow/7/", "/ops"],
+      ["/app/movie-dual-write", "/ops"],
+      ["/movie-dual-write/?requestId=7", "/ops"],
+      ["/tv-sync?targetId=7", "/ops"],
+      ["/app/tv-sync/", "/ops"],
       ["/app/assets/test-123.js", "/web-assets/test-123.js"],
     ]) {
       const redirected = await app.request(`http://localhost${oldPath}`);
@@ -208,6 +211,9 @@ test("SPA deep links and immutable assets do not hide missing resources", async 
       "/web-assets/missing.js",
       "/app/unknown",
       "/app/missing.css",
+      "/tv-sync/arbitrary-path",
+      "/movie-shadow/not-an-id",
+      "/movie-dual-write/7",
     ])
       expect((await app.request(`http://localhost${route}`)).status).toBe(404);
   } finally {

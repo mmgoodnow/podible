@@ -83,7 +83,7 @@ jobs:
             suites: movies movie-shadow tv unified-library
             packages: ffmpeg unzip wamerican
           - group: admin
-            suites: admin auth recovery
+            suites: admin auth recovery stewardship
             packages: openssl
     steps:
       - uses: actions/checkout@v4
@@ -125,6 +125,7 @@ jobs:
             tmp/movies-lab/*.png
             tmp/books-spa/*.png
             /tmp/podible-unified*.png
+            /tmp/podible-stewardship*.png
           if-no-files-found: ignore
           retention-days: 7
 

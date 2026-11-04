@@ -31,15 +31,15 @@ export function createSpaRoutes(directory = SPA_BUILD_DIRECTORY) {
         headers: { "Cache-Control": "public, max-age=31536000, immutable" },
       });
     }
+    if (/^(?:movie-shadow(?:\/\d+)?|movie-dual-write|tv-sync)\/?$/.test(relative))
+      return c.redirect("/ops", 308);
     if (
       relative.includes(".") ||
-      !/^(?:|library|add|series|author|movies(?:\/\d+)?|requests(?:\/\d+)?|tv\/(?:(?:requests|library)\/)?\d+|book\/\d+|movie-shadow(?:\/\d+)?|movie-dual-write|tv-sync|retention|tv-retention|recovery|stewardship|settings|users|ops|login(?:\/plex\/(?:loading|result))?)\/?$/.test(
+      !/^(?:|library|add|series|author|movies(?:\/\d+)?|requests(?:\/\d+)?|tv\/(?:(?:requests|library)\/)?\d+|book\/\d+|retention|tv-retention|recovery|stewardship|settings|users|ops|login(?:\/plex\/(?:loading|result))?)\/?$/.test(
         relative,
       )
     )
       return c.notFound();
-    if (/^movie-shadow(?:\/\d+)?\/?$/.test(relative))
-      return c.redirect(`/movie-dual-write${url.search}#radarr-audit`, 308);
     if (/^\/app(?:\/|$)/.test(pathname))
       return c.redirect(`/${relative}${url.search}`, 308);
     const entry = Bun.file(path.join(directory, "index.html"));
