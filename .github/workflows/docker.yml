@@ -34,6 +34,8 @@ jobs:
           key: ${{ runner.os }}-bun-${{ env.BUN_VERSION }}-${{ hashFiles('bun.lock') }}
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg unzip wamerican
       - run: bun install --frozen-lockfile
+      # HTTP integration tests exercise real SPA shells, including login and TV deep links.
+      - run: bun run build
       - run: bun test
 
   build:

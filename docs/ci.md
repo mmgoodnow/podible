@@ -6,8 +6,12 @@ only after the `verify` gate succeeds. No deployment commands are added here.
 
 ## Job Graph
 
-- `unit`: frozen Bun install, ffmpeg/unzip/dictionary prerequisites, and the full
-  `bun test` suite, including integration tests. It starts independently.
+- `unit`: frozen Bun install, ffmpeg/unzip/dictionary prerequisites, a local
+  frontend build, and the full `bun test` suite, including integration tests.
+  It starts independently. HTTP integration tests require real `web/dist` SPA
+  shells; another runner's build and a developer's ignored local assets are not
+  available here. This small duplicate build preserves parallelism without
+  downloading/waiting for `build`'s artifact.
 - `build`: frozen install, generated DB type check, backend/web typecheck, frontend
   build and runtime-script validation. It uploads `frontend-dist` once.
 - `browser`: three independent runners after `build`, consuming that exact dist.

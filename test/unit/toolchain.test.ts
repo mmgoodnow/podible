@@ -32,6 +32,12 @@ test("runtime, CI and package manager use the same Bun release with native check
     expect(resolved).toBe(version);
   }
   expect(setups).toBeGreaterThan(0);
+  const unitSteps = workflow.jobs.unit?.steps ?? [];
+  const commands = unitSteps.map(step => "run" in step ? String(step.run).trim() : "");
+  const buildIndex = commands.indexOf("bun run build");
+  const testIndex = commands.indexOf("bun test");
+  expect(buildIndex).toBeGreaterThanOrEqual(0);
+  expect(testIndex).toBeGreaterThan(buildIndex);
   const needs = workflow.jobs.docker?.needs;
   expect(Array.isArray(needs) ? needs : [needs]).toEqual(["verify"]);
   expect(pkg.scripts.typecheck).toBe("bun check && bun check -p web");
