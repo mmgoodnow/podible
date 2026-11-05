@@ -2,6 +2,7 @@ import path from "node:path";
 import { configDir } from "../src/config";
 import { prepareTransmission } from "../src/media/managed-transmission";
 import { TransmissionRpc } from "../src/media/transmission-client";
+import { stopSupervisedChildren } from "../src/runtime/child-shutdown";
 
 let stopping = false;
 const children = new Map<string, ReturnType<typeof Bun.spawn>>();
@@ -38,14 +39,10 @@ async function supervise(
 async function shutdown() {
   if (stopping) return;
   stopping = true;
-  // Stop the application before its private engine; bound shutdown for Docker.
+  // Signal the daemon immediately so it can flush resume metadata while the
+  // application drains. Both share Docker's single grace period.
   const running = [children.get("application"), children.get("torrent engine")].filter((child): child is ReturnType<typeof Bun.spawn> => Boolean(child));
-  for (const child of running) {
-    child.kill("SIGTERM");
-    const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
-    await child.exited;
-    clearTimeout(timer);
-  }
+  await stopSupervisedChildren(running);
   process.exit(0);
 }
 process.on("SIGTERM", shutdown);

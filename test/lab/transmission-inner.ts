@@ -291,6 +291,8 @@ try {
   await stop();
   daemon = undefined;
   const config = path.join(root, "supervised");
+  const supervisedRoot = path.join(root, "supervised-tv");
+  let supervisedRef: Awaited<ReturnType<ReturnType<typeof managedTvTransmission>["ensureAdded"]>> | undefined;
   const supervisor = Bun.spawn(
     [process.execPath, "run", "scripts/container.ts"],
     {
@@ -358,15 +360,34 @@ try {
       throw new Error("Restart changed client identity");
     if (!(await healthy()))
       throw new Error("Daemon failure stopped application");
+    // Add immediately before shutdown, before Transmission's periodic resume flush.
+    supervisedRef = await managedTvTransmission(supervisedRoot, path.join(config, "transmission")).ensureAdded({
+      metainfo, location: { rootId: "tv", relativePath: "fresh-before-stop" },
+    });
     console.log(
       "Supervisor acceptance: real app readiness, independent daemon restart, private authenticated RPC, stable identity passed",
     );
   } finally {
+    const shutdownStarted = Date.now();
     supervisor.kill("SIGTERM");
     const timeout = setTimeout(() => supervisor.kill("SIGKILL"), 15_000);
     await supervisor.exited;
     clearTimeout(timeout);
+    if (Date.now() - shutdownStarted >= 10_000)
+      throw new Error("Supervisor exceeded Docker's default total stop grace period");
   }
+  const resumeFiles = await fs.readdir(path.join(config, "transmission", "resume"));
+  if (!resumeFiles.some(name => name.endsWith(".resume")))
+    throw new Error("Graceful shutdown did not persist the freshly added torrent's resume metadata");
+  daemon = Bun.spawn(["transmission-daemon", "--foreground", "--config-dir", path.join(config, "transmission")],
+    { stdout: "ignore", stderr: "ignore" });
+  const restartedTv = managedTvTransmission(supervisedRoot, path.join(config, "transmission"));
+  await until(async () => {
+    try { return (await restartedTv.inspect(supervisedRef!)).location.relativePath === "fresh-before-stop"; }
+    catch { return false; }
+  });
+  await stop(); daemon = undefined;
+  console.log("Supervisor shutdown acceptance: fresh torrent resume, ownership label and exact directory survived restart within Docker's grace period");
   console.log(
     "Transmission acceptance: paused add, actual webseed transfer, multi-file paths, persistent restart, no-delete removal passed",
   );
