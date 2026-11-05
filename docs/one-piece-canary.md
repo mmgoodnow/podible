@@ -131,6 +131,81 @@ REPACK2 1080p CR WEB-DL Dual-Audio DDP 2.0 H.264-Kitsune** after inspecting its
 client error. Its episodes were not yet imported or claimed verified; the eight
 independently verified season-one episodes remained active.
 
+### Newly Exposed Restart Blocker
+
+At **09:15:28 UTC**, after normal CD advanced the running build to parent core
+commit `5cc04e4d71be581cfcf0c0965c5fed85b1d995cc`, a fresh independent check
+still accepted all eight season-one canonical files/symlinks and exact Plex
+episode IDs/paths. However, continuation job **8924** had failed with **"Refusing
+to control an unmanaged torrent"**. Do not describe this continuation as healthy.
+
+Read-only raw Transmission inspection established that S02's record lost its
+`Podible TV` label and owned download directory: it was stopped at the default
+`/home/bun/Downloads`, reporting zero retained bytes. The previously downloaded
+owned-layout data was not removed. S01 retained its correct ownership label,
+directory and completed state. S02 had a persisted `.torrent` file but **no
+`.resume` file**, whereas S01 had both.
+
+At the failure, the container's stop timeout was unset. The supervisor allowed up to
+10 seconds for application exit *before signalling the daemon*, followed by a
+separate 10-second daemon timeout. Docker's default grace period can therefore
+kill the daemon before its recent resume state is flushed. This is a concrete
+shutdown-risk diagnosis, not permission to blindly relabel/control an unknown
+torrent. The parent was notified through progress messages; no separate
+supervisor owner had been assigned. Shared-runtime ownership must be coordinated
+before implementing the tested fix and provenance-safe recovery. No manual
+torrent control, worker stop, or deployment was issued during this diagnosis.
+
+At **09:20:36 UTC**, live build `6487485f51c6ea0e637df8fd38cf39df3c6a6963`
+still had **eight active season-one episodes** and the same failed continuation
+job 8924. S02 remained stopped/unlabelled at the default directory. A resume file
+now existed after the subsequent restart; the original absence is historical
+evidence, not a claim that it remains absent forever. S01 retained its correct
+label/path and complete seeding state. The observation establishes one lost
+recent active-torrent record, not that every daemon restart strips all labels.
+
+### Exact-Record Repair Tool
+
+`scripts/repair-torrent-resume.ts` is a one-off, dry-run-by-default tool pinned to
+request 5, target 5, acquisition 17, job 8924, torrent 167, and S02's exact hash.
+It is not a new generic adoption, automatic recovery, or client-owned RPC surface.
+
+```sh
+bun scripts/repair-torrent-resume.ts --dry-run
+bun scripts/repair-torrent-resume.ts --apply --require-build <FULL_RUNNING_SHA>
+```
+
+Only apply after normal CD deploys the tested supervisor shutdown fix and this
+tool. The supplied full SHA must match the running container. Preconditions join
+the exact registry ownership/location, original acquisition/job/run, persisted
+snatch/location/metainfo receipts, on-disk engine metainfo, live file manifest,
+retained regular files under the real configured owned directory, and historical
+positive owned download progress. The failed job must be quiescent, the request
+retained, and no competing acquisition/pending job command may be active.
+
+An unlabelled stopped record at the private engine's default directory qualifies
+only when it has zero known valid/unchecked data and the default directory has
+no conflicting torrent files. Resume metadata must be absent or explicitly
+confirm the same stopped/default-directory failure and torrent name. A newly
+written damaged resume is not mistaken for an ongoing absence.
+
+Apply durably records intent, fences retirement through existing admission,
+points the exact existing record at the proven owned directory with `move:false`,
+and restores only its proven `Podible TV` label. It then uses the existing adapter
+to recheck/resume, requires recovered hash-valid pieces and new progress, and
+retries **the original job** through authenticated server-local `jobs.retry`.
+No data deletion, torrent removal/addition, file moves/copies, new acquisition,
+title search or weakened global ownership guard is involved. Partial repair can
+resume only with its matching durable intent. Credentials stay server-side.
+
+Guard tests use real file-backed application/runner databases and source files,
+with a synthetic daemon protocol; the actual Transmission adapter enforces the
+restored ownership path. The repair suite passes **13/13**, the combined TV suite
+passes **37/37**, typechecking passes, and normal TV Chrome acceptance passes.
+The parent separately owns shutdown fix `3d40a1c` and reported a passing real
+daemon immediate-stop/restart test. Production dry-run/apply results remain to
+be recorded after normal CD deploys the repair script with that fix.
+
 ## Storage Observation For Reuse Work
 
 Read-only `statfs` and `stat -f` on both configured movie and TV managed roots
