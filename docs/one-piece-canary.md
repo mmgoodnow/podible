@@ -203,8 +203,48 @@ with a synthetic daemon protocol; the actual Transmission adapter enforces the
 restored ownership path. The repair suite passes **13/13**, the combined TV suite
 passes **37/37**, typechecking passes, and normal TV Chrome acceptance passes.
 The parent separately owns shutdown fix `3d40a1c` and reported a passing real
-daemon immediate-stop/restart test. Production dry-run/apply results remain to
-be recorded after normal CD deploys the repair script with that fix.
+daemon immediate-stop/restart test. Production dry-run/apply results follow.
+
+### Repair Completed On Final Held Build
+
+Normal CD **42004954305** succeeded and the container independently reported
+**`22b61eb37a6168a041549e258cd1d5f7de2d0fa8`**, containing both the shutdown fix
+and repair tool `75acf13`. The parent held further pushes during the repair.
+No application code was copied into the running container or deployed manually.
+
+The deployed **dry-run passed**: all **22/22** retained files, exact registry,
+acquisition/run/snatch/location/metainfo proofs, **34,639,702,018 total bytes**,
+**14,117,054,466 bytes** of historical positive progress, and a resume file
+confirming the damaged stopped/default-directory state. It issued no controls.
+
+Authorized apply then completed successfully, with durable redacted receipt
+`/config/repairs/one-piece-s02-resume.json` at **`retry-queued`**. Native recheck
+recovered **13,908,312,064 hash-valid bytes**. The existing adapter resumed the
+same torrent and required new progress beyond the pre-failure counter before
+authenticated server-local `jobs.retry` retried **the same job 8924 / run /
+acquisition 17**. No new request, acquisition, or title search was created; no
+data was deleted, moved, copied, or blindly adopted.
+The final settlement check confirmed the repair lock was absent and its own
+retirement admission had been released; the durable receipt remained
+`retry-queued`.
+
+At **09:57:43 UTC**, the actual running SHA remained `22b61eb`:
+
+- Request **5** still retained **1,179 regular episodes**.
+- Original job **8924** had resumed its normal durable polling (`queued` while
+  sleeping), **error null**, same torrent **167**, correct owned
+  `acquisition-17-0` directory and `Podible TV` label.
+- The saved native observation at **09:57:38 UTC** showed **34,501,912,578 /
+  34,639,702,018 bytes**, downloading at **70,238,208 bytes/s**, no client error.
+- An independent file/identity inspection again accepted **8/8** season-one
+  regular canonical objects with exact persisted sizes, **8/8** exact symlinks,
+  and all eight exact TVDB episode IDs/server paths in Plex section **16**.
+- S02 was healthy continuation, **not yet claimed imported/Plex verified**.
+  The canary did not wait for the 35 GB import or the next packs. This remains
+  **8/1,179 independently verified episodes**, not whole-show completion.
+
+Active operator monitoring stopped after this bounded recovery and final
+verification. No scheduled monitor or periodic per-title search was created.
 
 ## Storage Observation For Reuse Work
 
@@ -214,3 +254,12 @@ reported the same device **2305**, **4096-byte blocks**, ext-family magic
 **ext4**. Do not infer native reflink support from this observation: writable
 cross-seeding variants must explicitly establish the required capability or
 remain unsupported, rather than silently allocating another complete copy.
+
+After the repair, a separately authorized isolated probe created a fresh random
+temporary directory on the configured TV media mount, wrote a **two-byte** file,
+and attempted `fs.copyFile` with **`COPYFILE_EXCL | COPYFILE_FICLONE_FORCE`**.
+The actual runtime returned **`ENOTSUP`**. Only the two newly created probe paths
+and that temporary directory were removed; no production media was touched.
+Native clone support is therefore a **verified unsupported constraint on this
+mount**, not merely an inference from the ext4 type. There was no full-copy
+fallback or new deployment for this probe.
