@@ -10,7 +10,7 @@ import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
 import { inspectMetainfo } from "../../src/media/metainfo";
 import { defaultMovieQualityPolicy } from "../../src/movies/quality";
-import { acquireTv } from "../../src/tv/acquisition";
+import { acquireTv, tvAcquisitionBatch } from "../../src/tv/acquisition";
 import { PlexTvLibrary } from "../../src/tv/plex";
 import { tvRoots, tvViewEntries, type TvPublishedFile } from "../../src/tv/publication";
 import type { TvServices } from "../../src/tv/runtime";
@@ -203,6 +203,34 @@ function seasonCatalog(count: number, future = false) {
     numbering: [{ scheme: "tvdb:aired", season: 2, episode: index + 1, absolute: index + 13, source: "explicit-fixture" }] }));
   return entry;
 }
+
+test("large-series execution is bounded by season without truncating durable requested coverage", async () => {
+  const entry = seasonCatalog(130);
+  for (const [index, episode] of entry.episodes.entries()) {
+    episode.numbering[0]!.season = index < 65 ? 2 : 3;
+    episode.numbering[0]!.episode = index % 65 + 1;
+  }
+  const s = await setup(entry.episodes.map(ep => ep.key), entry);
+  try {
+    s.fixture.addPack("large-series", entry.episodes.map(ep => ep.key));
+    const batches: number[] = [];
+    while (s.repo.tv.missingEpisodes(s.request.requestId).length) {
+      const next = s.enqueue();
+      await acquireTv(s.context, s.repo.getJob(next.job_id!)!, s.fixture.services);
+      batches.push(s.repo.tv.activeEpisodes(s.request.targetId).length);
+    }
+    expect(batches).toEqual([64, 65, 129, 130]);
+    expect(s.repo.tv.requestedEpisodes(s.request.requestId)).toHaveLength(130);
+    expect(s.fixture.selections).toHaveLength(1);
+    expect(s.fixture.selections[0]!.ids).toHaveLength(64);
+    expect(s.fixture.stats.snatches).toBe(1);
+    expect(s.fixture.inspections.every(call => call.ids.length <= 64)).toBe(true);
+    expect(await assertOwnedViews(s)).toHaveLength(130);
+    expect(tvAcquisitionBatch([])).toEqual([]);
+    const all = s.repo.tv.requestedEpisodes(s.request.requestId);
+    expect(tvAcquisitionBatch([...all].reverse()).map(ep => ep.id)).toEqual(all.slice(0, 64).map(ep => ep.id));
+  } finally { await s.close(); }
+});
 
 test("canonical loss invalidates only its exact TV file coverage and reimports a retained pack without replacing surviving episodes", async () => {
   const entry = seasonCatalog(3), s = await setup(entry.episodes.map(ep => ep.key), entry);

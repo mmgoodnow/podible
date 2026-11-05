@@ -87,3 +87,20 @@ test("TV selector research cannot reintroduce excluded or oversized releases", a
   expect(result.deferred?.[0]?.provider).toBe("Offline");
   expect(JSON.stringify(fake.calls[1]?.input)).not.toContain('"index":0');
 });
+
+test("TV agents receive the current episode scope once, not a duplicated whole-series catalog", async () => {
+  const full = { ...entry, episodes: Array.from({ length: 1200 }, (_, index) => ({
+    ...episode, id: 1000 + index, title: `Unrequested catalog member ${index}`,
+  })) };
+  const selector = provider([{ index: 0, reason: "The requested episode is present." }]);
+  await createTvDecider(defaultSettings(), selector.model).select({ entry: full, episodes: [episode], policy: defaultMovieQualityPolicy, offers: [offer] });
+  const verifier = provider([plan]);
+  await createTvDecider(defaultSettings(), verifier.model).inspect({ entry: full, episodes: [episode], policy: defaultMovieQualityPolicy, offer, files });
+  for (const fake of [selector, verifier]) {
+    const text = JSON.stringify(fake.calls[0]?.input);
+    expect(text).not.toContain("Unrequested catalog member");
+    expect(text.match(/First of a sequel/g)).toHaveLength(1);
+    expect(text).toContain("A Prequel");
+    expect(text).toContain("anidb");
+  }
+});

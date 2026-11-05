@@ -30,6 +30,11 @@ Use evidence from release names, metainfo, file names, playable streams and dura
 Keep decisions autonomous: investigate ambiguity with available tools or try a different release; do not ask humans to identify ordinary episodes.
 Explain the factual evidence briefly, not private chain-of-thought.`;
 
+function workEvidence(entry: TvEntry) {
+  const { episodes: _episodes, ...work } = entry;
+  return work;
+}
+
 /** Validate identities independently of the model, including multi-episode files and partial packs. */
 export function validateTvImportPlan(raw: unknown, files: TvFileCandidate[], episodes: TvEpisode[]): TvImportPlan {
   const plan = tvImportPlanSchema.parse(raw);
@@ -88,7 +93,7 @@ export function createTvDecider(settings: AppSettings, modelProvider?: ModelProv
         `Choose one release containing some or all requested episodes, or index:null. Season packs and multi-episode files are allowed; extra pack contents will not be published unless requested.
 Use inspectRelease for unclear contents, and searchReleases for useful aliases/numbering when the initial search does not find suitable releases. Empty initial results are not a reason to skip research.
 Prefer a viable complete release within policy. Never invent an index.`,
-        { entry: input.entry, episodes: input.episodes, policy: input.policy, offers: offers.map(present) }, [inspect, research]);
+        { entry: workEvidence(input.entry), episodes: input.episodes, policy: input.policy, offers: offers.map(present) }, [inspect, research]);
       if (result.index !== null && !offers[result.index]) throw new Error("TV selector returned an unknown release");
       return { offer: result.index === null ? null : offers[result.index]!, reason: result.reason,
         ...(deferred.length ? { deferred } : {}) };
@@ -104,7 +109,7 @@ Prefer a viable complete release within policy. Never invent an index.`,
 Do not assign season-pack names wholesale: identify each file's actual episodes. Consult provider aired/absolute and anime-local numbering, aliases, episode titles and runtimes. Ignore samples, extras, opening clips and unrequested episodes.
 If a combined file also contains an unrequested episode, reject the file rather than mislabeling it as only its requested subset.
 Call assessCandidate for selected files. Actual stream facts override release claims. Return files:[] if nothing can be established. Do not map a truncated episode or an unsupported collection of partial files as a complete episode.`,
-        { entry: input.entry, episodes: input.episodes, policy: input.policy, release: { title: input.offer.title, provider: input.offer.provider }, files: input.files }, [assess]);
+        { entry: workEvidence(input.entry), episodes: input.episodes, policy: input.policy, release: { title: input.offer.title, provider: input.offer.provider }, files: input.files }, [assess]);
       return validateTvImportPlan(plan, input.files, input.episodes);
     },
   };

@@ -14,7 +14,7 @@ import { publishTvVersion, tvRoots } from "./publication";
 import { TvUpstreamError } from "./upstream";
 import { configuredTvServices, type TvServices } from "./runtime";
 import { tvImportPlanSchema, validateTvImportPlan, type TvFileCandidate } from "./agents";
-import type { TvContentFile } from "./types";
+import type { TvContentFile, TvEpisode } from "./types";
 import type { MovieOffer } from "../movies/offers";
 import { refreshTvFeedOffer } from "./feed";
 import { completeTvSource, recordedLegacyTvSource, reusableTvSources, tvSourceFiles, tvSourceSchema, type TvSource } from "./source-reuse";
@@ -44,6 +44,18 @@ export function queueTvAcquisition(repo: BooksRepo, requestId: number, reason: "
     type: "tv_acquire", payload: { acquisitionId }, idempotencyKey: `tv-acquire:${acquisitionId}`, maxAttempts: 5,
   }).id, requestId);
 }
+/** Bound execution, not request intent. Remaining episodes continue after publication. */
+export function tvAcquisitionBatch(episodes: TvEpisode[]): TvEpisode[] {
+  if (!episodes.length) return [];
+  const coordinate = (episode: TvEpisode) => episode.numbering.find(n => n.scheme === "tvdb:aired");
+  const ordered = [...episodes].sort((a, b) => {
+    const left = coordinate(a), right = coordinate(b);
+    return (left?.season ?? Infinity) - (right?.season ?? Infinity) ||
+      (left?.episode ?? Infinity) - (right?.episode ?? Infinity) || a.id - b.id;
+  });
+  const season = coordinate(ordered[0]!)?.season;
+  return ordered.filter(episode => coordinate(episode)?.season === season).slice(0, 64);
+}
 export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvServices = ctx.tvServices ?? configuredTvServices(ctx.getSettings(), ctx.modelProvider)): Promise<"done"> {
   const acquisition = ctx.repo.tv.acquisition(JSON.parse(job.payload_json ?? "{}").acquisitionId);
   if (!acquisition?.request_id || acquisition.job_id !== job.id) throw new Error("Unknown TV acquisition execution");
@@ -70,7 +82,8 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
   };
   active();
   const snapshot = await durableStep(ctx, "tv:target-snapshot", async () => {
-    const episodeIds = repo.missingEpisodes(requestId).filter((episode) => episode.airDate && Date.parse(episode.airDate) <= Date.now()).map((episode) => episode.id);
+    const episodeIds = tvAcquisitionBatch(repo.missingEpisodes(requestId)
+      .filter((episode) => episode.airDate && Date.parse(episode.airDate) <= Date.now())).map((episode) => episode.id);
     const reuse = await reusableTvSources(ctx.repo, target.id, acquisition.id, episodeIds);
     const retry = ctx.repo.contentLoss.retryDownloads({ namespace: "tv-target", id: String(target.id) });
     return { episodeIds, priorKeys: repo.downloads(target.id).map((download) => download.offer_key).filter(key => !retry.some(d => d.offer_key === key)), policy: JSON.parse(target.policy_json),
