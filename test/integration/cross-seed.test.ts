@@ -262,3 +262,35 @@ test("RSS reuse queues every routed release rather than silently dropping the fi
     expect(f.repo.crossSeed.receipts()).toHaveLength(6);
   } finally { await f.cleanup(); }
 });
+
+test("TV reuse reads its own canonical pool and leaves episode publication unchanged", async () => {
+  const f = await fixture();
+  try {
+    const settings = f.repo.getSettings(); settings.tv.managedRoot = f.root; f.repo.updateSettings(settings);
+    const user = f.repo.upsertUser({ provider: "local", providerUserId: "tv-reuse", username: "tv-reuse", isAdmin: true });
+    const request = f.repo.tv.request(user.id, { key: "tvdb:123", tvdbId: 123, tmdbId: null, title: "Fixture TV", year: 2020,
+      aliases: [], anime: false, relations: [], episodes: [{ key: "tvdb:1234", title: "Pilot", airDate: "2020-01-01", runtimeMinutes: 24,
+        numbering: [{ scheme: "tvdb:aired", season: 1, episode: 1, absolute: 1 }] }] }, settings.movies.qualityPolicy, ["tvdb:1234"]);
+    const acquisition = f.repo.tv.startAcquisition(request.targetId, "initial", id => f.repo.createJob({
+      type: "tv_acquire", payload: { acquisitionId: id } }).id, request.requestId).acquisition;
+    const id = randomUUID(), relativePath = `files/${id.slice(0, 2)}/${id}.mkv`;
+    const source = path.join(f.root, "objects", relativePath);
+    await fs.mkdir(path.dirname(source), { recursive: true }); await fs.writeFile(source, "abcdefgh", { mode: 0o444 });
+    const version = f.repo.tv.recordVersion(acquisition.id, { identityVerified: true }, [{ id, relativePath, sizeBytes: 8,
+      probe: {}, episodeIds: request.episodeIds }]);
+    const revision = f.repo.tv.target(request.targetId)!.revision;
+    f.repo.tv.stagePublication(request.targetId, version, revision);
+    f.repo.tv.promotePublication(request.targetId, version, revision);
+    f.repo.tv.clearPublication(request.targetId, version); f.repo.tv.finishAcquisition(acquisition.id);
+    const published = f.repo.tv.activeEpisodes(request.targetId);
+    const entry = f.repo.releaseInbox.entries([f.command.releaseId])[0]!;
+    const now = new Date().toISOString(), feed = f.repo.releaseInbox.ensureFeed("tv-reuse", "Other tracker", "tv", now);
+    const [releaseId] = f.repo.releaseInbox.ingest(feed.id, [{ ...entry.result, mediaType: "tv", guid: "tv-candidate" }], now);
+    f.command.scope = { media: "tv", targetId: request.targetId }; f.command.releaseId = releaseId!;
+    const plan = await crossSeedPlan(f.repo, f.repo.getSettings(), f.command, f.metainfo);
+    expect(plan.files[0]!.source?.id).toBe(id);
+    expect((await execute(f)).outcome?.kind).toBe("seeding");
+    expect(f.repo.tv.activeEpisodes(request.targetId)).toEqual(published);
+    expect(await fs.readFile(source, "utf8")).toBe("abcdefgh");
+  } finally { await f.cleanup(); }
+});
