@@ -86,7 +86,8 @@ export class TransmissionAdapter implements TorrentClient {
   readonly capabilities = {
     pausedAdd: true,
     recheck: true,
-    derivedLayouts: false,
+    // Isolated regular-file/CoW layouts, not a no-write symlink seeding mode.
+    derivedLayouts: true,
     metainfoVersions: [1],
   } as const;
   constructor(

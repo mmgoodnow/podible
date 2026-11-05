@@ -19,6 +19,7 @@ export type WorkerContext = {
   retentionAdapters?: import("../media/retention-policy").RetentionAdapters;
   tvRetentionAdapters?: import("../media/tv-retention").TvRetentionAdapters & { observeDisk?: typeof import("../media/retention-filesystem").observeRetentionDisk };
   stewardshipAdapters?: import("../media/torrent-stewardship").StewardshipAdapters;
+  crossSeedAdapters?: import("../media/cross-seed").CrossSeedAdapters;
   movieShadowServices?: import("../movies/shadow").MovieShadowServices;
   seerrSource?: import("../movies/seerr").SeerrSource;
   movieFeedMatcher?: import("../movies/agents").MovieFeedMatcher;

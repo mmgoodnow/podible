@@ -513,13 +513,13 @@ for (const failureAt of ["second-fanout", "cursor"]) {
       s.db.exec("DROP TRIGGER reject_feed");
       await syncIndexerFeeds(s.context);
       expect(s.count("release_inbox")).toBe(201);
-      expect(s.count("jobs")).toBe(jobs + 2);
-      expect(s.count("job_commands")).toBe(commands + 2);
+      expect(s.count("jobs")).toBe(jobs + 4);
+      expect(s.count("job_commands")).toBe(commands + 4);
       expect(s.repo.releaseInbox.feed(feedId)!.head_key).toBe(
         feedReleaseKey(result("new-0")),
       );
       await syncIndexerFeeds(s.context);
-      expect(s.count("jobs")).toBe(jobs + 2);
+      expect(s.count("jobs")).toBe(jobs + 4);
       expect(s.count("release_inbox")).toBe(201);
     } finally {
       await s.close();
@@ -1008,7 +1008,7 @@ test("a lost dispatch checkpoint replay after successful promotion uses the sour
       s.repo.listExecutionJobs().every((job) => job.status === "succeeded"),
     );
     expect(s.repo.getJobExecution(match.id)!.run_id).toBe(sourceRunId);
-    expect(matches).toBe(1);
+    expect(matches).toBe(2); // Acquisition and retained-content reuse routing; neither replays.
     expect(s.repo.movies.acquisitions(request.targetId)).toHaveLength(2);
     expect(s.count("release_considerations")).toBe(1);
     expect(s.count("movie_versions")).toBe(2);
@@ -1229,7 +1229,7 @@ test("automatic upgrades disabled still allows feed recovery for missing movies,
     };
     s.setRows([fromOffer(s.fixture.addOffer("recovery", 1920))]);
     await s.sync();
-    expect(offeredTargets).toEqual([missing.targetId]);
+    expect(offeredTargets.sort()).toEqual([available.targetId, missing.targetId].sort());
     expect(s.repo.movies.acquisitions(available.targetId)).toHaveLength(1);
     expect(s.repo.movies.target(available.targetId)!.active_version_id).toBe(
       oldId,

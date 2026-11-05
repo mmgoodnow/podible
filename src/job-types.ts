@@ -6,4 +6,5 @@ export const JOB_TYPES = [
   "acquire", "download", "import", "reconcile", "full_library_refresh",
   "chapter_analysis", "cover_generation", "metadata_hydration",
   "retention_cleanup", "tv_retention_cleanup", "tv_retention_pressure", "torrent_stewardship_collect",
+  "torrent_reuse", "torrent_reuse_feed",
 ] as const;

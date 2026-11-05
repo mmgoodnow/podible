@@ -201,6 +201,10 @@ export async function syncIndexerFeeds(
             idempotencyKey: "rss-match:" + id + ":" + ids.join(","),
             maxAttempts: 3,
           });
+          if (media === "movie" || media === "tv") ctx.repo.createJob({
+            type: "torrent_reuse_feed", payload: { releaseIds: ids },
+            idempotencyKey: "rss-reuse:" + id + ":" + ids.join(","), maxAttempts: 3,
+          });
         }
         const boundary = boundedFeedBoundary([...results.map(feedReleaseKey), ...feed.boundaryKeys]);
         const diagnostics: FeedGapDiagnostics | null = gap ? {

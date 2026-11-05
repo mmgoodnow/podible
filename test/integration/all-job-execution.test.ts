@@ -24,6 +24,7 @@ const types = [
   "tv_retention_cleanup",
   "tv_retention_pressure",
   "torrent_stewardship_collect",
+  "torrent_reuse", "torrent_reuse_feed",
 ] as const satisfies readonly JobType[];
 const exhaustive: Exclude<JobType, (typeof types)[number]> extends never ? true : never = true;
 void exhaustive;

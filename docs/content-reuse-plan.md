@@ -1,9 +1,11 @@
 # Content Reuse And Torrent Lifecycle Plan
 
-Proposed next phase, not implemented or production-verified. First build anime
-confidence through the normal One Piece request path (see P14 in the
-[roadmap](feedback-and-roadmap.md)). No new download, daemon change or migration
-is authorized by this document.
+Architecture plan with an initial movie/TV implementation. See the
+[cross-seeding POC](cross-seeding-poc.md) for executable scope, tunable policy,
+verified real-daemon evidence and remaining limitations. One Piece is running
+through the normal production request path; see its separate
+[canary record](one-piece-canary.md). Implementation and production verification
+remain distinct.
 
 ## Desired Outcomes
 

@@ -25,11 +25,15 @@ import { runRetentionCleanup } from "../media/retention-execution";
 import { processStewardshipCollection } from "../media/torrent-stewardship-worker";
 import { runTvRetentionCleanup } from "../media/tv-retention-execution";
 import { runTvRetentionPressure } from "../media/tv-retention-pressure";
+import { processCrossSeed } from "../media/cross-seed";
+import { discoverCrossSeeds } from "../media/cross-seed-feed";
 
 export type JobProcessResult = "done";
 
 /** Domain handlers are code, not a database execution-type enum. */
 export async function processJob(ctx: WorkerContext, job: JobRow): Promise<JobProcessResult> {
+  if (job.type === "torrent_reuse") return processCrossSeed(ctx, job);
+  if (job.type === "torrent_reuse_feed") return discoverCrossSeeds(ctx, job);
   if (job.type === "tv_retention_cleanup") return runTvRetentionCleanup(ctx, job, ctx.tvRetentionAdapters);
   if (job.type === "tv_retention_pressure") return runTvRetentionPressure(ctx, job, ctx.tvRetentionAdapters);
   if (job.type === "torrent_stewardship_collect") return processStewardshipCollection(ctx, job, ctx.stewardshipAdapters);
