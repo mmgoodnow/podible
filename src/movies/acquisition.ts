@@ -22,6 +22,7 @@ import { movieUpstreamStep } from "./upstream";
 import { refreshMovieFeedOffer } from "./feed-offers";
 import { recoverMissingTorrentSource } from "../media/recovery-source";
 import { withTorrentUse } from "../media/torrent-use";
+import { assessConfirmedNukeReplacement } from "../media/release-health";
 
 export const movieAcquisitionPayloadSchema = z.object({
   acquisitionId: z.number().int().positive(),
@@ -92,11 +93,19 @@ export async function acquireMovie(
     current: target.active_version_id
       ? repo.version(target.active_version_id)!.facts
       : null,
+    currentVersionId: target.active_version_id,
     priorKeys: repo.downloads(target.id).map((download) => download.offer_key).filter(key => !retry.has(key)),
     lossRecoveryKeys: [...retry],
   }; });
   const policy = movieQualityPolicySchema.parse(initial.policy);
   const current = initial.current;
+  const replacingNukedCurrent = () => Boolean(current &&
+    ctx.repo.releaseHealth.currentMovieNuke(target.id)?.versionId ===
+      (initial.currentVersionId ?? target.active_version_id));
+  const improvesOrRepairs = (facts: Parameters<typeof evaluateMovieQuality>[1]) => !current ||
+    (replacingNukedCurrent()
+      ? assessConfirmedNukeReplacement(policy, current, facts).allowed
+      : assessMovieUpgrade(policy, current, facts).upgrade);
   const manual = acquisition.decision_json
     ? (JSON.parse(acquisition.decision_json) as {
         manualOffer?: MovieOffer;
@@ -144,7 +153,7 @@ export async function acquireMovie(
             ? "Searching for another release; previous downloads are retained"
             : "Searching movie releases",
     );
-    const { offer, selection } = await (async () => {
+    const { offer, selection, selectedInfoHash } = await (async () => {
       for (let wave = 0; ; wave++) {
         const phase = wave ? `${prefix}:indexer-wave:${wave}` : prefix;
         const search = await movieUpstreamStep<MovieSearch>(
@@ -162,6 +171,7 @@ export async function acquireMovie(
           .filter(
             (offer) =>
               !excluded.has(offer.key) &&
+              !ctx.repo.releaseHealth.isOfferBlocked(offer) &&
               (!priorKeys.has(offer.key) ||
                 manual?.manualOffer?.key === offer.key),
           )
@@ -173,6 +183,7 @@ export async function acquireMovie(
         if (
           attempt === 0 &&
           manual?.manualOffer &&
+          !ctx.repo.releaseHealth.isOfferBlocked(manual.manualOffer) &&
           !candidates.some((offer) => offer.key === manual.manualOffer!.key)
         )
           candidates.push(manual.manualOffer);
@@ -181,9 +192,11 @@ export async function acquireMovie(
           "selecting",
           "Checking movie identity, cut and quality",
         );
+        const repairVersion = replacingNukedCurrent()
+          ? (initial.currentVersionId ?? target.active_version_id) : null;
         const selection = await durableStep(
           ctx,
-          `${phase}:select`,
+          `${phase}:select${repairVersion === null ? "" : `:nuke:${repairVersion}`}`,
           async () => {
             const selected = await services.decider.select({
               movie,
@@ -191,7 +204,8 @@ export async function acquireMovie(
               offers: candidates.map((offer) =>
                 refreshMovieFeedOffer(ctx.repo, offer),
               ),
-              current,
+              // Equal quality may repair a trusted nuke; local gates still prohibit downgrades.
+              current: repairVersion === null ? current : null,
             });
             if (
               manual?.manualOffer &&
@@ -214,6 +228,9 @@ export async function acquireMovie(
             return selected;
           },
         );
+        // A report arriving during selection invalidates the old "no upgrade" decision.
+        if (!selection.offerKey && repairVersion === null && replacingNukedCurrent())
+          continue;
         const offer = candidates.find(
           (entry) => entry.key === selection.offerKey,
         );
@@ -242,9 +259,14 @@ export async function acquireMovie(
           }
           continue;
         }
-        return { offer, selection };
+        return { offer, selection, selectedInfoHash: search.offers.find((entry) => entry.key === selection.offerKey)?.infoHash ?? offer?.infoHash ?? null };
       }
     })();
+    if (selection.offerKey && ctx.repo.releaseHealth.isOfferBlocked({ key: selection.offerKey, infoHash: selectedInfoHash })) {
+      excluded.add(selection.offerKey);
+      emit(`${attempt}:nuked-selection`, "replacing", "Confirmed defective release excluded; looking for another source");
+      continue;
+    }
     if (!offer) {
       emit(
         "blocked",
@@ -261,7 +283,7 @@ export async function acquireMovie(
       provisional.eligibility === "ineligible" ||
       (current &&
         provisional.eligibility === "eligible" &&
-        !assessMovieUpgrade(policy, current, selection.facts).upgrade)
+        !improvesOrRepairs(selection.facts))
     ) {
       excluded.add(offer.key);
       emit(
@@ -282,6 +304,11 @@ export async function acquireMovie(
     );
     const metainfo = Buffer.from(encoded, "base64");
     const metadata = inspectMetainfo(metainfo);
+    if (ctx.repo.releaseHealth.isOfferBlocked({ key: offer.key, infoHash: metadata.infoHash })) {
+      excluded.add(offer.key);
+      emit(`${attempt}:nuked-metainfo`, "replacing", "Torrent identity belongs to a confirmed defective release; trying another source");
+      continue;
+    }
     if (metadata.size > settings.movies.maximumReleaseBytes)
       throw new Error("Torrent exceeds the configured acquisition byte limit");
     const binding = await durableStep(ctx, `${prefix}:download-intent`, () => {
@@ -460,7 +487,8 @@ export async function acquireMovie(
     const assessed = evaluateMovieQuality(policy, facts);
     if (
       assessed.eligibility !== "eligible" ||
-      (current && !assessMovieUpgrade(policy, current, facts).upgrade)
+      !improvesOrRepairs(facts) ||
+      ctx.repo.releaseHealth.isOfferBlocked({ key: offer.key, infoHash: metadata.infoHash })
     ) {
       if (assessed.eligibility !== "eligible")
         feedDownloadFailed = Boolean(manual?.feedOffers);
@@ -494,9 +522,15 @@ export async function acquireMovie(
     });
     const versionId = await durableStep(ctx, `${prefix}:version`, () => {
       active();
-      return repo.recordVersion(acquisition.id, facts, [
-        { ...content, probe: chosen.probe },
-      ]);
+      return ctx.repo.transaction(() => {
+        const versionId = repo.recordVersion(acquisition.id, facts, [
+          { ...content, probe: chosen.probe },
+        ]);
+        if (!repo.version(versionId)?.files.some((file) => file.id === content.id))
+          throw new Error("Movie version belongs to another import attempt; source identity was not changed");
+        ctx.repo.releaseHealth.bindMovieVersionSource(versionId, downloadId);
+        return versionId;
+      });
     });
     emit(
       `${attempt}:publish`,

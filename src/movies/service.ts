@@ -10,6 +10,7 @@ export function queueMovieAcquisition(
   reason: MovieAcquisition["reason"],
   manualOffer?: MovieOffer,
   feedOffers?: MovieOffer[],
+  excludeAcquisitionId?: number,
 ) {
   return repo.transaction(() => {
     const queued = repo.movies.startAcquisition(
@@ -22,6 +23,7 @@ export function queueMovieAcquisition(
           maxAttempts: 3,
           idempotencyKey: `movie-acquisition:${id}`,
         }).id,
+      excludeAcquisitionId,
     );
     if (!queued.shared) {
       repo.movies.event(

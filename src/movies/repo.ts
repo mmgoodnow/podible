@@ -23,6 +23,7 @@ import { assessMovieUpgrade, evaluateMovieQuality } from "./quality";
 import { RetentionRepo } from "../media/retention-repo";
 import { assertVersionContentAvailable } from "../media/content-loss";
 import { TorrentRecordsRepo, type TorrentRecord } from "../media/torrent-records";
+import { canReplaceConfirmedNuke } from "../media/release-health";
 
 export type MovieTarget = {
   id: number;
@@ -299,10 +300,12 @@ export class MovieRepo {
     targetId: number,
     reason: MovieAcquisition["reason"],
     enqueue: (acquisitionId: number) => number,
+    excludeAcquisitionId?: number,
   ) {
     return this.transaction(() => {
       if (!this.target(targetId)) throw new Error("Unknown movie target");
       const existing = this.acquisitions(targetId).find((entry) => {
+        if (entry.id === excludeAcquisitionId) return false;
         if (entry.finished_at) return false;
         const job = entry.job_id === null ? null : this.getJob(entry.job_id);
         return !job || job.status === "queued" || job.status === "running";
@@ -459,6 +462,7 @@ export class MovieRepo {
       if (!target || version?.movie_id !== target.movie_id)
         throw new Error("Version belongs to another movie");
       if (target.active_version_id === versionId) return;
+      canReplaceConfirmedNuke(this.db, targetId, versionId);
       const changed = this.db
         .query(
           "UPDATE movie_targets SET active_version_id=?,revision=revision+1 WHERE id=? AND revision=?",
@@ -503,9 +507,10 @@ export class MovieRepo {
         evaluateMovieQuality(policy, version.facts).eligibility !== "eligible"
       )
         throw new Error("Version does not satisfy quality policy");
+      const nukeReplacement = canReplaceConfirmedNuke(this.db, targetId, versionId);
       if (target.active_version_id && target.active_version_id !== versionId) {
         const current = this.version(target.active_version_id)!;
-        if (!assessMovieUpgrade(policy, current.facts, version.facts).upgrade)
+        if (!assessMovieUpgrade(policy, current.facts, version.facts).upgrade && !nukeReplacement)
           throw new Error("Replacement is not an upgrade");
       }
       const prior = this.publications().find(

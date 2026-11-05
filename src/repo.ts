@@ -5,6 +5,11 @@ import { MovieRepo } from "./movies/repo";
 import { MovieShadowRepo } from "./movies/shadow-repo";
 import { MovieSeerrRepo } from "./movies/seerr-repo";
 import { ReleaseInboxRepo } from "./media/release-inbox";
+import { CrossSeedRepo } from "./media/cross-seed-state";
+import { ReleaseHealthRepo } from "./media/release-health";
+import { TorrentRecordsRepo } from "./media/torrent-records";
+import type { TorrentRef, DownloadLocation } from "./media/torrent-client";
+import type { CrossSeedScope } from "./media/cross-seed-state";
 import { BookTorrentsRepo } from "./media/book-torrents";
 import { TvRepo } from "./tv/repo";
 import { RetentionRepo } from "./media/retention-repo";
@@ -253,6 +258,13 @@ function assertPositiveInt(value: number): void {
 }
 
 export class BooksRepo {
+  get crossSeed() { return new CrossSeedRepo(this.db); }
+  get releaseHealth() { return new ReleaseHealthRepo(this.db, this.beforeWrite); }
+  reuseTorrent(ref: TorrentRef) { return new TorrentRecordsRepo(this.db, this.beforeWrite).get(ref.clientId, ref.nativeId); }
+  reserveReuseTorrent(ref: TorrentRef, location: DownloadLocation, offerKey: string, scope: CrossSeedScope) {
+    return new TorrentRecordsRepo(this.db, this.beforeWrite).reserve(ref, location, offerKey,
+      { ownership_tag: scope.media === "tv" ? "Podible TV" : "Podible Movies" });
+  }
   get movieSeerr() { return new MovieSeerrRepo(this.db, this.beforeWrite); }
   get releaseInbox() { return new ReleaseInboxRepo(this.db, this.beforeWrite); }
   get bookTorrents() { return new BookTorrentsRepo(this.db, this.beforeWrite); }

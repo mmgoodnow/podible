@@ -10,8 +10,9 @@ import type { SearchResult } from "../media/indexer-gateway";
 const payloadSchema = z
   .object({ releaseIds: z.array(z.number().int().positive()).min(1).max(100) })
   .strict();
-function revision(policy: string, version: number) {
-  return createHash("sha256").update(policy).digest("hex") + ":" + version;
+function revision(policy: string, version: number, nukedSourceId?: number) {
+  return createHash("sha256").update(policy).digest("hex") + ":" + version +
+    (nukedSourceId === undefined ? "" : `:nuke:${nukedSourceId}`);
 }
 
 /** RSS is candidate intake, not authority to replace a movie or bypass the existing agent/policy. */
@@ -39,7 +40,8 @@ export async function matchMovieFeed(
           ctx.repo.movies.activeRequestCount(target.id) > 0 &&
           ctx.repo.retention.get({ namespace: "movie-target", id: String(target.id) })?.desiredPresence !== "evicted" &&
           (!target.active_version_id ||
-            ctx.getSettings().movies.automaticUpgrades),
+            ctx.getSettings().movies.automaticUpgrades ||
+            ctx.repo.releaseHealth.currentMovieNuke(target.id)),
       )
       .map((target) => ({
         targetId: target.id,
@@ -78,12 +80,13 @@ export async function matchMovieFeed(
     for (const targetId of pending) {
       ctx.execution?.assertActive();
       const target = ctx.repo.movies.target(targetId);
+      const nuke = ctx.repo.releaseHealth.currentMovieNuke(targetId);
       if (
         !target ||
         !ctx.repo.movies.activeRequestCount(targetId) ||
         ctx.repo.retention.get({ namespace: "movie-target", id: String(targetId) })?.desiredPresence === "evicted" ||
         (target.active_version_id &&
-          !ctx.getSettings().movies.automaticUpgrades)
+          !ctx.getSettings().movies.automaticUpgrades && !nuke)
       )
         continue;
       const unfinished = ctx.repo.movies
@@ -100,7 +103,8 @@ export async function matchMovieFeed(
         busy.push(targetId);
         continue;
       }
-      const targetRevision = revision(target.policy_json, target.revision);
+      // Only the affected source's repair invalidates its prior quality-only consideration.
+      const targetRevision = revision(target.policy_json, target.revision, nuke?.evidence.source.id);
       const matching = matches.filter((match) => match.targetId === targetId);
       const indexes = [
         ...new Set(matching.flatMap((match) => match.releaseIndexes)),
@@ -124,10 +128,13 @@ export async function matchMovieFeed(
         ctx.repo.transaction(() => {
           ctx.execution?.assertActive();
           const current = ctx.repo.movies.target(targetId);
+          const currentNuke = ctx.repo.releaseHealth.currentMovieNuke(targetId);
           if (ctx.repo.retention.get({ namespace: "movie-target", id: String(targetId) })?.desiredPresence === "evicted") return;
+          if (!ctx.repo.movies.activeRequestCount(targetId) ||
+            (current?.active_version_id && !ctx.getSettings().movies.automaticUpgrades && !currentNuke)) return;
           if (
             !current ||
-            revision(current.policy_json, current.revision) !== targetRevision
+            revision(current.policy_json, current.revision, currentNuke?.evidence.source.id) !== targetRevision
           )
             throw new Error(
               "Movie target changed while dispatching RSS candidates",
@@ -137,7 +144,7 @@ export async function matchMovieFeed(
           const queued = queueMovieAcquisition(
             ctx.repo,
             targetId,
-            current.active_version_id ? "upgrade" : "recovery",
+            current.active_version_id && !currentNuke ? "upgrade" : "recovery",
             undefined,
             stillUnseen.map((index) => offers[index]),
           );
