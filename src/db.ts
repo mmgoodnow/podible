@@ -10,6 +10,7 @@ import { MOVIE_SEERR_SCHEMA_SQL } from "./movies/seerr-repo";
 import { RELEASE_INBOX_SCHEMA_SQL } from "./media/release-inbox-schema";
 import { BOOK_TORRENTS_SCHEMA_SQL } from "./media/book-torrents-schema";
 import { consolidateBookTorrentRecords } from "./media/torrent-records-schema";
+import { backfillStewardshipStatusIndex } from "./media/stewardship-status-index";
 import { TV_SCHEMA_SQL } from "./tv/schema";
 import { RETENTION_SCHEMA_SQL } from "./media/retention-schema";
 import { RETENTION_EXECUTION_SCHEMA_SQL } from "./media/retention-execution-schema";
@@ -1178,6 +1179,10 @@ export function runMigrations(db: Database): void {
   apply(52, () => db.exec(TV_RETENTION_SCHEMA_SQL));
   apply(53, () => consolidateBookTorrentRecords(db));
   apply(54, () => db.exec("ALTER TABLE indexer_feeds ADD COLUMN gap_diagnostics_json TEXT NULL"));
+  apply(55, () => {
+    db.exec("ALTER TABLE media_torrents ADD COLUMN stewardship_binding_json TEXT NULL");
+    backfillStewardshipStatusIndex(db);
+  });
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

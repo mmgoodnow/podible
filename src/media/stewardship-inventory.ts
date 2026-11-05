@@ -1,15 +1,20 @@
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
+import { readStewardshipAttention } from "./stewardship-attention-query";
+import type { StewardshipStatus } from "./torrent-stewardship-types";
 
-const schema = z.object({ source: z.enum(["all", "books", "screen"]), offset: z.number().int().nonnegative().safe(), limit: z.number().int().min(1).max(50) }).strict();
+const schema = z.object({ source: z.enum(["all", "books", "screen"]), offset: z.number().int().nonnegative().safe(), limit: z.number().int().min(1).max(50),
+  attention: z.object({ clientId: z.string().nullable(), now: z.iso.datetime(), libraryRoot: z.string().nullable(), movieRoot: z.string().nullable(), tvRoot: z.string().nullable() }).strict().optional() }).strict();
 export type StewardshipInventoryInput = z.input<typeof schema>;
-export type StewardshipInventoryPage = { rows: { source: "books" | "screen"; row: Record<string, unknown> }[]; total: number };
+export type StewardshipInventoryPage = { rows: { source: "books" | "screen"; row: Record<string, unknown>; historyJson?: string; projectionVerified?: boolean }[];
+  total: number; summary?: NonNullable<StewardshipStatus["summary"]> };
 const screenDomain = `(CASE WHEN json_valid(t.location_json) THEN json_extract(t.location_json,'$.rootId') END IN ('movies','tv')
     OR t.id IN (SELECT torrent_id FROM movie_acquisition_downloads UNION SELECT torrent_id FROM tv_acquisition_downloads))`;
 
 /** A single bounded raw page across domain adapters, not a second torrent ownership store. */
 export function readStewardshipInventory(db: Database, input: StewardshipInventoryInput): StewardshipInventoryPage {
-  const { source, offset, limit } = schema.parse(input);
+  const parsed = schema.parse(input), { source, offset, limit } = parsed;
+  if (parsed.attention) return readStewardshipAttention(db, parsed, parsed.attention);
   const common = !!db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='book_torrent_bindings'").get();
   const screenWhere = common ? `NOT EXISTS(SELECT 1 FROM book_torrent_bindings book WHERE book.torrent_id=t.id) AND ${screenDomain}` : screenDomain;
   const counts = db.query(`SELECT (SELECT COUNT(*) FROM ${common ? "book_torrent_bindings" : "book_torrents"}) AS books,

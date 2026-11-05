@@ -78,3 +78,19 @@ suites or weaken deployment gates. Desktop/mobile home and torrent-health visual
 checks passed locally. These are fixture-browser results, separate from the live
 build/schema/data verification above. Future changes must still distinguish a
 push from a verified production rollout.
+
+## Subsequent Pagination Feedback
+
+- [x] Reproduce the Torrent health empty-page cause: raw binding pagination ran
+  before healthy rows were hidden.
+- [x] Filter and prioritize attention records before SQL pagination, retain
+  unknowns separately, and show scoped inventory health totals.
+- [x] Test later-page problems, all-healthy inventories, invalid ownership/index
+  evidence, unchanged historical observations and migration replay.
+- [x] Keep routine raw retirement paging inside its existing technical preview.
+- [ ] Finish normal CD verification for the schema-55 pagination follow-up; the
+  independently verified `b300cbd` rollout above predates this fix.
+
+The full deduplicated history and broader product scope are tracked in
+[feedback-and-roadmap.md](feedback-and-roadmap.md), including partial, optional,
+superseded and deferred requests.

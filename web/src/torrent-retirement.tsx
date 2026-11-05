@@ -38,9 +38,9 @@ export function TorrentRetirementStatus() {
         <p>This page scanned {preview.data.scannedCount} of {preview.data.sourceRows} raw bindings; {preview.data.excludedCount} foreign or unsupported bindings were excluded. Counts apply to this page only.</p>
         <p>Only complete, unused private torrent records qualify: every tracker, including backups, must report unregistration across three advancing announcements at least 15 minutes apart. Library-bound or actively used records remain protected.</p>
         <p>No minimum seed duration applies to this record-only retirement. Ambiguous tracker failures, timeouts and missing evidence do not authorize retirement.</p>
+        {preview.data.nextOffset !== null && <button className="secondary" disabled={preview.isFetching} onClick={() => setOffset(preview.data!.nextOffset!)}>Inspect next raw batch</button>}
+        {offset > 0 && <button className="secondary" onClick={() => setOffset(0)}>Inspect first raw batch</button>}
       </details>
-      {preview.data.nextOffset !== null && <><p>More bindings have not been shown.</p><button className="secondary" disabled={preview.isFetching} onClick={() => setOffset(preview.data!.nextOffset!)}>Next retirement page</button></>}
-      {offset > 0 && <button className="secondary" onClick={() => setOffset(0)}>First retirement page</button>}
     </>}
   </section>;
 }

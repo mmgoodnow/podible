@@ -271,6 +271,11 @@ export class BooksRepo {
   readHomeRecent(input: HomeRecentInput) { return readHomeRecent(this.db, input); }
   readStewardshipInventory(input: StewardshipInventoryInput) { return readStewardshipInventory(this.db, input); }
   readStewardshipTitles(input: StewardshipTitleInput) { return readStewardshipTitles(this.db, input); }
+  setStewardshipBindingProof(clientId: string, hash: string, proof: { key: string; bindingDigest: string; contextJson: string }) {
+    this.beforeWrite();
+    this.db.query("UPDATE media_torrents SET stewardship_binding_json=? WHERE client_id=? AND native_id=?")
+      .run(JSON.stringify(proof), clientId, hash);
+  }
   constructor(
     private readonly db: Database,
     private readonly beforeWrite: () => void = () => {},

@@ -201,6 +201,7 @@ export interface DB {
     "root_path": string | null;
     "root_token": string | null;
     "ownership_tag": string | null;
+    "stewardship_binding_json": string | null;
   };
 
   "movie_acquisition_downloads": {

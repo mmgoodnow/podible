@@ -27,7 +27,7 @@ test("stewardship panel renders saved unknown/paused health and 30-day protectio
   const api: StewardshipPanelApi = { async status() { reads++; return status; },
     async collect() { collected++; throw new Error("Render must never collect"); } };
   const cache = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  cache.setQueryData(["torrent-stewardship", "all", 0], status);
+  cache.setQueryData(["torrent-stewardship", "all", "attention", 0], status);
   const html = renderToStaticMarkup(createElement(QueryClientProvider, { client: cache }, createElement(StewardshipPage, { api })));
   expect(html).toContain("Torrent health"); expect(html).toContain("paused incomplete");
   expect(html).toContain("Unknown seed time; protected"); expect(html).toContain("Download paused");

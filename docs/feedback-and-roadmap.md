@@ -49,7 +49,7 @@ made after that rollout.
 | U19 | Too many `<details>` tags, including trivial explanations/navigation. | **Addressed in touched routes.** Consequential actions/status remain visible; specialized diagnostics can still be disclosed. Not a ban on all disclosures. |
 | U20 | Healthy things should not dominate problem screens; book/job IDs are meaningless. | **Addressed.** Torrent problems use titles/links; healthy/protected rows summarized; primary job/request numbers removed; TV retention uses named requested seasons. |
 | U21 | Recovery should show missing media, not healthy titles or "no retained desired presence" for everything. | **Addressed.** Known healthy resources hidden; uncertain mounts remain distinct. Missing bytes do not silently create new demand. |
-| U22 | Torrent health has empty pages because all 25 healthy rows are hidden. | **In progress.** Current raw-binding pagination precedes UI filtering. Fix must paginate relevant nonhealthy records, preserve unknowns, and avoid client-side crawling of every raw page. |
+| U22 | Torrent health has empty pages because all 25 healthy rows are hidden. | **Fixed locally; rollout pending.** Database filtering precedes pagination; confirmed problems sort before unknowns. Global saved-health counts remain visible, with no health Next button for all-healthy inventories. Raw diagnostic pagination remains backend-accessible; opening the screen does not collect or control torrents. |
 | U23 | Connections need a visual summary, not long repeated text per media type. | **Addressed.** Provider cards aggregate saved feed observations with visual issue counts. Media-specific feed diagnostics remain available. |
 | U24 | Availability may not be segmented by media type in practice. | **Addressed as a modeling/display distinction.** Provider cooldowns can be shared; a feed's saved error/coverage still belongs to that feed. One success does not erase another feed's evidence. |
 | U25 | Login has a weird top strip; always continue in this window. | **Addressed.** Same-window Plex flow, no popup fallback choice, corrected background layout; mobile and callback/session acceptance covered. |
@@ -191,8 +191,10 @@ made after that rollout.
 
 ## What To Finish Before Adding More Scope
 
-1. Fix U22's problem-list pagination and verify it through the real UI, including
-   an all-healthy inventory and a problem beyond the first healthy raw page.
+1. Finish U22's normal CD rollout after real-UI checks of an all-healthy inventory
+   and a problem beyond the first healthy raw page. Migration 55 backfills saved
+   status lookups and registry identity proofs, without altering observations,
+   contacting the daemon, moving files, or rechecking torrents.
 2. Finish reliable activity/status presentation and future gap evidence; do not
    manufacture causes for old warnings or add routine per-title searches.
 3. Collect real production upgrade and next-airing-TV evidence when available.

@@ -5,6 +5,7 @@ export const STEWARDSHIP_INTERVAL_MS = 5 * 60_000;
 export const stewardshipSourceSchema = z.enum(["books", "screen"]);
 export const stewardshipStatusSourceSchema = z.enum(["all", "books", "screen"]);
 export const stewardshipStatusParamsSchema = z.object({
+  view: z.enum(["attention", "all"]).default("all"),
   source: stewardshipStatusSourceSchema.default("all"), offset: z.number().int().nonnegative().default(0),
   limit: z.number().int().min(1).max(50).default(25),
 }).strict();
@@ -40,6 +41,9 @@ export const stewardshipCollectResultSchema = z.object({
 export const stewardshipStatusSchema = z.object({
   mode: z.literal("observe-only"), destructiveActionsEnabled: z.literal(false),
   minimumSeedSeconds: z.literal(MINIMUM_SEED_SECONDS), source: stewardshipStatusSourceSchema,
+  view: z.enum(["attention", "all"]).default("all"),
+  summary: z.object({ scope: z.literal("current-private-bindings"), total: z.number().int().nonnegative(),
+    healthy: z.number().int().nonnegative(), attention: z.number().int().nonnegative(), excluded: z.number().int().nonnegative() }).nullable().default(null),
   offset: z.number().int().nonnegative(), sourceRows: z.number().int().nonnegative(),
   scannedCount: z.number().int().nonnegative(), excludedCount: z.number().int().nonnegative(),
   nextOffset: z.number().int().nonnegative().nullable(), engineConfigured: z.boolean(),
@@ -51,6 +55,13 @@ export type StewardshipStatusSource = z.infer<typeof stewardshipStatusSourceSche
 export type StewardshipObservation = z.infer<typeof stewardshipObservationSchema>;
 export type StewardshipStatus = z.infer<typeof stewardshipStatusSchema>;
 export type StewardshipCollectResult = z.infer<typeof stewardshipCollectResultSchema>;
+export function stewardshipHealth(item: { observation: StewardshipObservation | null; stale: boolean }): "healthy" | "problem" | "unknown" {
+  const o = item.observation;
+  if (!o || item.stale || o.ownership !== "verified-private-binding") return "unknown";
+  if (o.daemonError === "storage-error" || o.trackerState === "confirmed-error" || o.trackerState === "confirmed-unregistered" || o.state === "paused-incomplete") return "problem";
+  if (o.daemonError !== "none" || o.trackerState === "unknown" || o.state === "unknown" || o.seedCounterRegressed || o.actualSeedSeconds === null || o.seedProtection === "unknown") return "unknown";
+  return "healthy";
+}
 export type StewardshipPanelApi = {
   status(input: z.input<typeof stewardshipStatusParamsSchema>): Promise<StewardshipStatus>;
   collect(input: z.input<typeof stewardshipCollectParamsSchema>): Promise<StewardshipCollectResult>;

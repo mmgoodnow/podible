@@ -74,7 +74,7 @@ try {
   await page.getByRole("heading", { name: "Activity", exact: true }).waitFor();
   await page.getByRole("link", { name: "Review torrent problems", exact: true }).click();
   await page.getByRole("heading", { name: "Torrent health", exact: true }).waitFor();
-  await page.getByText("No matching private Transmission bindings on this page.", { exact: true }).waitFor();
+  await page.getByText("No matching private Transmission bindings.", { exact: true }).waitFor();
   await page.getByRole("heading", { name: "Automatic cleanup", exact: true }).waitFor();
   await page.getByText("No matching private bindings on this page.", { exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: /remove|retire/i }).count(), 0, "Retirement preview exposed a direct removal command");

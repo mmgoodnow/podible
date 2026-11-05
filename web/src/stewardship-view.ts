@@ -1,4 +1,5 @@
 import type { StewardshipStatus } from "../../src/media/torrent-stewardship-types";
+import { stewardshipHealth } from "../../src/media/torrent-stewardship-types";
 
 export type StewardshipItem = StewardshipStatus["items"][number];
 export type StewardshipIssue = { title: string; cause: string; action: string; href: string };
@@ -6,7 +7,7 @@ const review = (item: StewardshipItem) => item.titles[0]?.href ?? "/ops";
 
 export function stewardshipIssue(item: StewardshipItem): StewardshipIssue | null {
   const observation = item.observation;
-  if (!observation) return { title: "Not checked yet", cause: "No saved observation is available for this binding.", action: "Collect a fresh observation", href: "#stewardship-collection" };
+  if (!observation) return { title: "Not verified yet", cause: "No current verified observation is available for this binding.", action: "Collect a fresh observation", href: "#stewardship-collection" };
   if (item.stale) return { title: "Observation out of date", cause: "The saved observation cannot establish the current torrent state.", action: "Collect a fresh observation", href: "#stewardship-collection" };
   if (observation.ownership === "engine-unavailable") return { title: "Private client unavailable", cause: "The private torrent client could not be reached or identified.", action: "Review Activity", href: "/ops" };
   if (observation.ownership === "missing-record") return { title: "Torrent record not found", cause: "The exact owned record was absent from the last client response. No replacement was added.", action: "Review title", href: review(item) };
@@ -27,11 +28,9 @@ export function stewardshipView(items: readonly StewardshipItem[]) {
   const problems: StewardshipItem[] = [], unknown: StewardshipItem[] = [];
   let healthyCount = 0;
   for (const item of items) {
-    const observation = item.observation;
-    if (!stewardshipIssue(item)) healthyCount++;
-    else if (!item.stale && observation?.ownership === "verified-private-binding" &&
-      (observation.daemonError === "storage-error" || observation.trackerState === "confirmed-error" ||
-        observation.trackerState === "confirmed-unregistered" || observation.state === "paused-incomplete")) problems.push(item);
+    const health = stewardshipHealth(item);
+    if (health === "healthy") healthyCount++;
+    else if (health === "problem") problems.push(item);
     else unknown.push(item);
   }
   return { problems, unknown, healthyCount };

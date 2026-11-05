@@ -22,10 +22,13 @@ try {
   const page = await context.newPage(), errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.goto(`${origin}/stewardship`);
-  await page.getByText("2 healthy observations on this page.", { exact: true }).waitFor();
+  await page.getByText("32 healthy observations among 36 current private bindings.", { exact: true }).waitFor();
   const problems = page.getByRole("region", { name: "Torrent problems", exact: true });
   await problems.getByRole("link", { name: "The Fifth Season", exact: true }).waitFor();
   await problems.getByRole("link", { name: "Coast at Dusk", exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Next page", exact: true }).count(), 0, "Health must not paginate across hidden healthy bindings");
+  assert.equal(await page.getByText("More problems or unverified observations have not been shown.", { exact: true }).count(), 0,
+    "The first attention page must reach the problem after 31 healthy books without paging through them");
   assert.equal(await page.getByText("Healthy library book", { exact: true }).count(), 0);
   assert.equal(await page.getByText("Northern Lights", { exact: true }).count(), 0);
   assert.equal(await page.getByRole("group", { name: /binding source/ }).count(), 0);
@@ -36,7 +39,7 @@ try {
   await unknown.getByText("Observation out of date", { exact: true }).waitFor();
   await unknown.locator(":scope > summary").click();
   const retirement = page.getByRole("region", { name: "Automatic orphan retirement", exact: true });
-  await retirement.getByText("Protected on this page (6). No action needed.", { exact: true }).waitFor();
+  await retirement.getByText("Protected on this page (20). No action needed.", { exact: true }).waitFor();
   assert.equal(await retirement.locator("article").count(), 0, "Routine protected records should not duplicate title rows");
   assert.equal(await page.getByRole("button", { name: /remove|retire|resume|pause/i }).count(), 0);
   assert.ok(!(await page.locator("body").innerText()).includes("fixture-private-passkey-never-show"));
@@ -47,11 +50,18 @@ try {
   await page.getByRole("heading", { name: "The Fifth Season", exact: true }).waitFor();
   await page.goto(`${origin}/stewardship`);
   await page.getByRole("button", { name: "Collect next batch", exact: true }).click();
-  await page.getByRole("status").filter({ hasText: "Collected 4 observation(s)." }).waitFor();
+  await page.getByRole("status").filter({ hasText: "Collected 34 observation(s)." }).waitFor();
   assert.deepEqual((await state()).calls, ["torrent-get"]);
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false);
   await page.screenshot({ path: path.join(os.tmpdir(), "podible-stewardship-mobile.png"), fullPage: true, animations: "disabled" });
+  await context.request.post(`${origin}/__fixture/all-healthy`);
+  await page.getByRole("button", { name: "Refresh saved observations", exact: true }).click();
+  await page.getByText("36 healthy observations among 36 current private bindings.", { exact: true }).waitFor();
+  await page.getByText("No torrent problems or unverified observations in this inventory.", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("region", { name: "Torrent problems", exact: true }).count(), 0);
+  assert.equal(await page.getByText("More problems or unverified observations have not been shown.", { exact: true }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: "Next page", exact: true }).count(), 0, "All-healthy status must not add a useless Next");
   const anonymous = await browser.newContext();
   const response = await anonymous.request.post(`${origin}/rpc`, { data: { jsonrpc: "2.0", id: 1, method: "stewardship.status", params: {} } });
   assert.equal((await response.json()).error.code, -32001);

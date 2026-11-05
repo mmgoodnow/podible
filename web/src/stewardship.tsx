@@ -34,10 +34,10 @@ export function StewardshipPage({ api }: { api: StewardshipPanelApi }) {
   const cache = useQueryClient();
   const [offset, setOffset] = useState(0);
   const [lastOperationId, setLastOperationId] = useState<string | null>(null);
-  const status = useQuery({ queryKey: [...queryRoot, "all", offset], queryFn: () => api.status({ source: "all", offset, limit: 25 }), refetchInterval: 30_000 });
+  const status = useQuery({ queryKey: [...queryRoot, "all", "attention", offset], queryFn: () => api.status({ source: "all", view: "attention", offset, limit: 25 }), refetchInterval: 30_000 });
   const collect = useMutation({ mutationFn: (operationId: string) => api.collect({ operationId }),
     onSuccess: () => { void cache.invalidateQueries({ queryKey: queryRoot }); } });
-  const { problems, unknown, healthyCount } = stewardshipView(status.data?.items ?? []);
+  const { problems, unknown } = stewardshipView(status.data?.items ?? []);
   const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,22rem),1fr))", gap: "1rem" };
   return <>
     <div className="library-toolbar"><h1>Torrent health</h1>
@@ -49,8 +49,10 @@ export function StewardshipPage({ api }: { api: StewardshipPanelApi }) {
     <p className="muted">Saved observations only. This panel sends no torrent control commands.</p>
     {status.isError ? <Failure error={status.error} retry={() => void status.refetch()} /> : !status.data ? <p role="status">Reading saved observations...</p> : <>
       {status.data.unavailableReason && <p role="status" className="notice">{status.data.unavailableReason}</p>}
-      {!status.data.items.length ? <p>No matching private Transmission bindings on this page.</p> : <>
-        <p>{healthyCount} healthy observations on this page.</p>
+      {status.data.summary && <p>{status.data.summary.healthy} healthy observations among {status.data.summary.total} current private bindings.</p>}
+      {!status.data.items.length ? <p>{status.data.summary?.total === 0 ? "No matching private Transmission bindings."
+        : status.data.summary?.attention === 0 ? "No torrent problems or unverified observations in this inventory."
+          : "No further problems or unverified observations on this page."}</p> : <>
         {problems.length > 0 ? <section aria-label="Torrent problems"><h2>Needs attention ({problems.length})</h2>
           <div style={grid}>{problems.map(item => <TorrentIssue key={item.key} item={item} />)}</div>
         </section> : <p>No confirmed torrent problems on this page.</p>}
@@ -58,10 +60,11 @@ export function StewardshipPage({ api }: { api: StewardshipPanelApi }) {
           <div style={grid}>{unknown.map(item => <TorrentIssue key={item.key} item={item} />)}</div>
         </details>}
       </>}
-      {status.data.nextOffset !== null && <><p>More bindings have not been shown.</p><button className="secondary" disabled={status.isFetching} onClick={() => setOffset(status.data!.nextOffset!)}>Next page</button></>}
+      {status.data.nextOffset !== null && <><p>More problems or unverified observations have not been shown.</p><button className="secondary" disabled={status.isFetching} onClick={() => setOffset(status.data!.nextOffset!)}>Next page</button></>}
       {offset > 0 && <button className="secondary" disabled={status.isFetching} onClick={() => setOffset(0)}>Back to first page</button>}
       <details className="media-section"><summary>Collection details</summary>
-        <p>Read {status.data.scannedCount} raw binding rows from offset {offset}, out of {status.data.sourceRows}. {status.data.excludedCount} foreign or unsupported bindings excluded from this page.</p>
+        <p>Returned {status.data.scannedCount} problem or unverified binding rows from offset {offset}.{status.data.summary &&
+          ` ${status.data.summary.attention} need attention or verification in this inventory; ${status.data.summary.excluded} foreign or unsupported bindings excluded.`}</p>
         <p>Collection rotates through at most 50 records per batch; it does not automatically check every page.</p>
         {status.data.lastCollection && <p>Last collection: <time dateTime={status.data.lastCollection.collectedAt}>{new Date(status.data.lastCollection.collectedAt).toLocaleString()}</time>
           {status.data.lastCollection.unavailableReason && ` · ${status.data.lastCollection.unavailableReason}`}</p>}

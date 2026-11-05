@@ -10,6 +10,7 @@ import { prepareTransmission } from "../../src/media/managed-transmission";
 import { TorrentStewardship, type StewardshipConnection } from "../../src/media/torrent-stewardship";
 import { fixtureMovie } from "./movie-services";
 import { fixtureTvEntry } from "./tv-catalog";
+import { backfillStewardshipStatusIndex } from "../../src/media/stewardship-status-index";
 
 if (!process.env.CONFIG_DIR) throw new Error("Fixture needs an isolated CONFIG_DIR");
 const root = await fs.realpath(process.env.CONFIG_DIR), identity = prepareTransmission(path.join(root, "transmission"));
@@ -29,12 +30,13 @@ function daemonRow(hash: string, directory: string, media: string, override = {}
 }
 const bookRoot = path.join(settings.libraryRoot, ".podible", "downloads"), token = randomUUID();
 await fs.mkdir(bookRoot, { recursive: true }); await fs.writeFile(path.join(bookRoot, ".podible-content.json"), JSON.stringify({ id: token }));
-for (const [index, title] of ["Healthy library book", "The Fifth Season", "The Unseen Archive", "Old saved report"].entries()) {
+const bookTitles = ["Healthy library book", ...Array.from({ length: 30 }, (_, index) => `Routine healthy book ${index + 1}`), "The Fifth Season", "The Unseen Archive", "Old saved report"];
+for (const [index, title] of bookTitles.entries()) {
   const book = repo.createBook({ title, author: "Fixture Author" }), hash = (index + 1).toString(16).padStart(40, "0");
   const directory = path.join(bookRoot, hash); await fs.mkdir(directory);
   await fs.writeFile(path.join(directory, ".podible-book-torrent.json"), JSON.stringify({ rootToken: token, clientId, infoHash: hash }));
   repo.bookTorrents.reserve({ infoHash: hash, bookId: book.id, clientId, rootPath: bookRoot, rootToken: token });
-  rows.push(daemonRow(hash, directory, "Books", index === 1 ? { status: 0, leftUntilDone: 123 } : index === 2 ? { trackerStats: [], secondsSeeding: null } : {}));
+  rows.push(daemonRow(hash, directory, "Books", title === "The Fifth Season" ? { status: 0, leftUntilDone: 123 } : title === "The Unseen Archive" ? { trackerStats: [], secondsSeeding: null } : {}));
 }
 const movie = repo.movies.request(member.id, { ...fixtureMovie, title: "Coast at Dusk" }, settings.movies.qualityPolicy);
 const movieAcquisition = repo.movies.startAcquisition(movie.targetId, "initial", () => repo.createJob({ type: "metadata_hydration", status: "succeeded" }).id).acquisition;
@@ -49,9 +51,10 @@ rows.push(daemonRow("b".repeat(40), tvDirectory, "TV"));
 const connection: StewardshipConnection = { clientId, async get(ids) { return { torrents: rows.filter(row => ids.includes(String(row.hashString))) }; } };
 const service = new TorrentStewardship(repo, { connection, now: () => now });
 await service.collect({ operationId: randomUUID() }); await service.collect({ operationId: randomUUID() });
-const stale = service.status().items.find(item => item.label === "Old saved report")!;
+const stale = service.status({ limit: 50 }).items.find(item => item.label === "Old saved report")!;
 const saved = repo.getJsonState<{ latest: Record<string, unknown>; history: unknown[] }>(`torrent-stewardship:v1:observation:${stale.key}`)!;
 saved.latest.observedAt = new Date(now - 2 * 3600_000).toISOString(); repo.setJsonState(`torrent-stewardship:v1:observation:${stale.key}`, saved);
+backfillStewardshipStatusIndex(db);
 const calls: string[] = [], originalFetch = globalThis.fetch;
 globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
@@ -63,6 +66,17 @@ globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init
 const handler = createPodibleFetchHandler(repo, Date.now());
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => {
   if (new URL(request.url).pathname === "/__fixture/state") return Response.json({ calls, receipts: db.query("SELECT key FROM app_state WHERE key LIKE 'torrent-stewardship:v1:collection:%'").all().length });
+  if (new URL(request.url).pathname === "/__fixture/all-healthy" && request.method === "POST") {
+    const histories = db.query("SELECT key,value_json FROM app_state WHERE key LIKE 'torrent-stewardship:v1:observation:%'").all() as { key: string; value_json: string }[];
+    for (const row of histories) {
+      const value = JSON.parse(row.value_json);
+      Object.assign(value.latest, { observedAt: new Date(now).toISOString(), ownership: "verified-private-binding", state: "seeding",
+        daemonError: "none", trackerState: "healthy", actualSeedSeconds: 86400, seedProtection: "protected", seedCounterRegressed: false });
+      repo.setJsonState(row.key, value);
+    }
+    backfillStewardshipStatusIndex(db);
+    return Response.json({ updated: histories.length });
+  }
   return handler(request);
 } });
 console.log(`STEWARDSHIP_FIXTURE=${JSON.stringify({ url: server.url.origin })}`);

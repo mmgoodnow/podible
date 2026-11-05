@@ -13,13 +13,15 @@ import {
   type StewardshipSource, type StewardshipStatusSource, type StewardshipObservation, type StewardshipCollectResult,
 } from "./torrent-stewardship-types";
 import type { StewardshipTitleInput } from "./stewardship-titles";
+import { stewardshipBindingFromSettings, stewardshipPrivateIdSchema, type Binding } from "./stewardship-binding";
+import { stewardshipStatusIndex } from "./stewardship-status-index";
+import type { StewardshipAttentionScope } from "./stewardship-attention-query";
+export type { Binding } from "./stewardship-binding";
 
 const PREFIX = "torrent-stewardship:v1:";
 const ANNOUNCEMENT_SPACING_SECONDS = 15 * 60;
 const cursorKey = PREFIX + "cursor", lastKey = PREFIX + "last-collection";
 const count = z.number().int().nonnegative().safe();
-const clientIdSchema = z.string().regex(/^transmission:[a-f0-9-]{36}$/);
-const hashSchema = z.string().regex(/^[a-f0-9]{40}$/);
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const cursorSchema = z.object({ source: z.enum(["books", "screen"]), offset: count });
 const historySchema = z.object({ latest: stewardshipObservationSchema, history: z.array(stewardshipObservationSchema).max(8) });
@@ -37,8 +39,6 @@ const torrentSchema = z.object({
   trackerStats: z.unknown().optional(),
   totalSize: count.optional(), sizeWhenDone: count.optional(), haveValid: count.optional(), haveUnchecked: count.optional(),
 });
-export type Binding = { key: string; media: "books" | "movies" | "tv"; label: string; hash: string;
-  clientId: string; directory: string; root: string; rootToken: string | null; bindingDigest: string };
 export type StewardshipConnection = {
   clientId: string;
   /** Deliberately no generic RPC or control capability in the collector's adapter. */
@@ -79,49 +79,26 @@ export function stewardshipConnection(adapters: StewardshipAdapters): Stewardshi
     return { clientId: `transmission:${identity.id}`, get: (ids, selected) => rpc.call("torrent-get", { ids, fields: selected }) };
   } catch { return null; }
 }
-function safeRelative(value: unknown): value is string {
-  return typeof value === "string" && !path.isAbsolute(value) && !/[\\\x00-\x1f]/.test(value) &&
-    value.split("/").every((part) => !!part && part !== "." && part !== "..");
-}
 export function stewardshipBinding(repo: BooksRepo, source: StewardshipSource, row: Record<string, unknown>, privateId: string): Binding | null {
-  const settings = repo.readSettings();
-  if (!settings || !clientIdSchema.safeParse(privateId).success || row.client_id !== privateId) return null;
-  const hash = source === "books" ? row.info_hash : row.native_id;
-  if (!hashSchema.safeParse(hash).success) return null;
-  let media: Binding["media"], root: string, directory: string, rootToken: string | null = null, label: string;
-  if (source === "books") {
-    if (row.backend !== "transmission" || row.root_id !== "books" || row.relative_path !== hash ||
-        typeof row.root_path !== "string" || !path.isAbsolute(row.root_path) || !z.string().uuid().safeParse(row.root_token).success) return null;
-    media = "books"; root = row.root_path; directory = path.join(root, String(hash)); rootToken = String(row.root_token);
-    label = `Book ${Number.isSafeInteger(row.book_id) ? row.book_id : "binding"}`;
-  } else {
-    let location: unknown;
-    try { location = JSON.parse(String(row.location_json)); } catch { return null; }
-    const parsed = z.object({ rootId: z.enum(["movies", "tv"]), relativePath: z.string().refine(safeRelative) }).strict().safeParse(location);
-    if (!parsed.success) return null;
-    media = parsed.data.rootId;
-    const managedRoot = media === "movies" ? settings.movies.managedRoot : settings.tv.managedRoot;
-    if (!managedRoot || !path.isAbsolute(managedRoot)) return null;
-    root = path.join(managedRoot, "downloads"); directory = path.join(root, parsed.data.relativePath);
-    label = `${media === "movies" ? "Movie" : "TV"} torrent ${row.id}`;
-  }
-  const key = digest([source, privateId, hash]);
-  return { key, media, label, hash: String(hash), clientId: privateId, root, directory, rootToken,
-    bindingDigest: digest([source, privateId, hash, root, directory, rootToken,
-      source === "books" ? [row.book_id, row.release_id, settings.libraryRoot] : row.id]) };
+  return stewardshipBindingFromSettings(repo.readSettings(), source, row, privateId);
 }
-function bindingPage(repo: BooksRepo, source: StewardshipStatusSource, offset: number, limit: number, privateId: string | null) {
-  const raw = repo.readStewardshipInventory({ source, offset, limit });
+function bindingPage(repo: BooksRepo, source: StewardshipStatusSource, offset: number, limit: number, privateId: string | null, attention?: StewardshipAttentionScope) {
+  const raw = repo.readStewardshipInventory({ source, offset, limit, ...(attention ? { attention } : {}) });
+  const settings = repo.readSettings();
   const titleIds = new Map<string, { source: StewardshipSource; id: number }>();
-  const bindings = privateId ? raw.rows.flatMap(({ source: provenance, row }) => {
-    const parsed = stewardshipBinding(repo, provenance, row, privateId);
+  const rows = new Map<string, { source: StewardshipSource; row: Record<string, unknown> }>();
+  const indexed = new Map<string, { historyJson?: string; projectionVerified?: boolean }>();
+  const bindings = privateId ? raw.rows.flatMap(({ source: provenance, row, historyJson, projectionVerified }) => {
+    const parsed = stewardshipBindingFromSettings(settings, provenance, row, privateId);
     if (!parsed) return [];
+    rows.set(parsed.key, { source: provenance, row }); indexed.set(parsed.key, { historyJson, projectionVerified });
     const id = provenance === "books" ? row.book_id : row.id;
     if (typeof id === "number" && Number.isSafeInteger(id) && id > 0) titleIds.set(parsed.key, { source: provenance, id });
     return [parsed];
   }) : [];
-  return { bindings, titleIds, scannedCount: raw.rows.length, excludedCount: raw.rows.length - bindings.length,
-    sourceRows: raw.total, nextOffset: offset + raw.rows.length < raw.total ? offset + raw.rows.length : null };
+  const matching = raw.summary?.attention ?? raw.total;
+  return { bindings, titleIds, rows, indexed, summary: raw.summary ?? null, scannedCount: raw.rows.length, excludedCount: raw.rows.length - bindings.length,
+    sourceRows: raw.total, nextOffset: offset + raw.rows.length < matching ? offset + raw.rows.length : null };
 }
 export function stewardshipBindingPage(repo: BooksRepo, source: StewardshipSource, offset: number, limit: number, privateId: string | null) {
   return bindingPage(repo, source, offset, limit, privateId);
@@ -237,15 +214,26 @@ export class TorrentStewardship {
   status(input: z.input<typeof stewardshipStatusParamsSchema> = {}) {
     const params = stewardshipStatusParamsSchema.parse(input), now = (this.adapters.now ?? Date.now)();
     const engine = stewardshipConnection(this.adapters);
-    const current = stewardshipStatusPage(this.repo, params.source, params.offset, params.limit, engine?.clientId ?? null);
+    const settings = this.repo.readSettings(), privateId = stewardshipPrivateIdSchema.safeParse(engine?.clientId);
+    const current = params.view === "attention"
+      ? bindingPage(this.repo, params.source, params.offset, params.limit, privateId.success ? privateId.data : null, {
+        clientId: privateId.success ? privateId.data : null, now: new Date(now).toISOString(), libraryRoot: settings?.libraryRoot ?? null,
+        movieRoot: settings?.movies.managedRoot ?? null, tvRoot: settings?.tv.managedRoot ?? null,
+      }) : stewardshipStatusPage(this.repo, params.source, params.offset, params.limit, engine?.clientId ?? null);
     const titles = stewardshipPageTitles(this.repo, current);
     const last = stewardshipCollectResultSchema.safeParse(this.repo.getJsonState(lastKey));
     return stewardshipStatusSchema.parse({ mode: "observe-only", destructiveActionsEnabled: false, minimumSeedSeconds: MINIMUM_SEED_SECONDS,
-      ...params, sourceRows: current.sourceRows, scannedCount: current.scannedCount, excludedCount: current.excludedCount,
+      ...params, summary: current.summary, sourceRows: current.sourceRows, scannedCount: current.scannedCount, excludedCount: current.excludedCount,
       nextOffset: current.nextOffset, engineConfigured: !!engine,
       unavailableReason: engine ? null : "Private Transmission identity is unavailable; no daemon query was attempted.",
       lastCollection: last.success ? last.data : null, items: current.bindings.map((target) => {
-        const latest = saved(this.repo, target)?.latest ?? null;
+        const index = current.indexed.get(target.key);
+        let latest: StewardshipObservation | null;
+        if (params.view === "attention") {
+          let value: unknown; try { value = JSON.parse(index?.historyJson ?? "{}").latest; } catch { value = null; }
+          const parsed = stewardshipObservationSchema.safeParse(value);
+          latest = index?.projectionVerified && parsed.success && parsed.data.bindingDigest === target.bindingDigest ? parsed.data : null;
+        } else latest = saved(this.repo, target)?.latest ?? null;
         const ref = current.titleIds.get(target.key), metadata = ref ? titles.get(`${ref.source}:${ref.id}`) : null;
         return { key: target.key, media: target.media, label: metadata?.titles[0]?.title ?? "Unavailable title",
           titles: metadata?.titles ?? [], titlesTruncated: metadata?.truncated ?? false, technicalLabel: target.label, observation: latest,
@@ -299,6 +287,7 @@ export class TorrentStewardship {
       if (replay.success) return replay.data;
       const rechecked = stewardshipBindingPage(this.repo, currentCursor.source, currentCursor.offset, 50, engine?.clientId ?? null);
       const valid = new Map(rechecked.bindings.map((target) => [target.key, target]));
+      const settings = this.repo.readSettings();
       let observedCount = 0;
       for (const target of current.bindings) {
         if (valid.get(target.key)?.bindingDigest !== target.bindingDigest) continue;
@@ -307,6 +296,13 @@ export class TorrentStewardship {
         if (history && Date.parse(history.latest.observedAt) > now) continue;
         this.repo.setJsonState(PREFIX + "observation:" + target.key,
           { latest: candidate, history: [...(history?.history ?? []), candidate].slice(-8) });
+        const ref = rechecked.rows.get(target.key);
+        const index = ref && settings ? stewardshipStatusIndex(settings, ref.source, ref.row, target, candidate) : null;
+        if (index) {
+          this.repo.setJsonState(index.key, index.value);
+          this.repo.setStewardshipBindingProof(target.clientId, target.hash,
+            { key: target.key, bindingDigest: target.bindingDigest, contextJson: index.value.contextJson });
+        }
         recordRetirementEvidence(this.repo, { bindingKey: target.key, bindingDigest: target.bindingDigest,
           observedAt: candidate.observedAt, ownershipVerified: candidate.ownership === "verified-private-binding",
           complete: candidate.complete === true && (() => {

@@ -13,8 +13,9 @@ daemon, writing state, initializing settings, or collecting on page load.
 tRPC. The admin panel is available at `/stewardship` ("Torrent health"):
 
 - `stewardship.status` is an ADMIN query. Input is
-  `{source?: "all" | "books" | "screen", offset?: number, limit?: number}`; defaults are
-  all, 0, 25, with a maximum page size of 50. `screen` includes movies and TV.
+  `{source?: "all" | "books" | "screen", view?: "all" | "attention", offset?: number, limit?: number}`;
+  defaults remain all sources, raw `all` view, offset 0 and limit 25 for compatibility,
+  with a maximum page size of 50. `screen` includes movies and TV.
 - `stewardship.collect` is an ADMIN mutation with `{operationId: UUID}`. It reads
   the next batch of at most 50 binding rows and returns a durable collection
   receipt. Replaying the UUID returns the same receipt without another query.
@@ -30,9 +31,50 @@ uses a single bounded inventory offset, with no duplicated records at the
 producer boundary. Title metadata is resolved in batches. Status and retirement
 previews expose human titles/links separately from diagnostic binding labels.
 
-The UI lists confirmed problems, separately discloses unknown/stale observations,
-and summarizes healthy/protected records. Counts are explicitly page-scoped;
-unseen pages are not claimed healthy. Routine protection is not an action item.
+The health UI explicitly requests `view: "attention"`. SQLite counts and filters
+current private bindings **before** LIMIT/OFFSET, across books and screen sources.
+Healthy bindings cannot create empty problem pages. Unknown, stale, missing or
+invalid observations are included in attention pagination, disclosed separately
+from confirmed problems. An entirely healthy inventory has no health Next button.
+An empty out-of-range page does not claim the remaining inventory has no issues.
+
+`summary` in attention mode reports `total`, `healthy`, `attention` and `excluded`
+for the selected source scope and current private client, not just the page. These
+are saved-observation counts at the status read time, not a live daemon check.
+Counts and the limited page are read under one SQLite read snapshot. Only the
+returned page (at most 50 rows) is materialized/validated in JavaScript; title
+lookups are batched. There is no client paging loop or per-request full JS scan.
+Raw status, retirement preview and collection retain their existing bounded raw
+offsets. Retirement protection counts remain explicitly page-scoped.
+
+### Existing observations and rollout
+
+The `app_state` binding-index entries are a status lookup, not new ownership or
+retirement authority. The registry's nullable `stewardship_binding_json` pins the
+key/digest/context derived from that exact binding. SQL joins observations via
+this registry proof, not an index-supplied pointer, and requires index agreement
+before excluding a healthy row. They retain existing observation keys/digests and
+reference the validated latest sanitized observation. Context includes current
+client/hash, source association, layout, root pin and relevant settings; a
+changed context, digest or observation invalidates the lookup. Unknown is never
+counted as healthy. Zero actual seed seconds is a known protected counter, not
+missing telemetry. Future timestamps and observations older than one hour are
+unknown; the exact one-hour boundary remains fresh, matching the shared UI
+classifier and SQLite equivalence tests.
+
+Migration 55 calls `backfillStewardshipStatusIndex(db)` once. It reads existing
+bindings in 100-row chunks, validates matching saved observations and writes only
+lookup entries and registry proofs in the migration transaction. It does not rewrite existing
+observation/history/evidence identities, initialize missing settings, inspect
+files or contact a daemon. Missing or malformed settings leave the lookup empty
+rather than fail startup. Missing/malformed observations remain unknown until
+normal bounded collection produces evidence. Re-running the helper is safe;
+it is never invoked during a status read or render.
+
+Collection refreshes lookup entries in the same transaction as its observation,
+cursor, evidence and receipt. Status never repairs/creates them itself. If the
+migration is omitted, legacy records conservatively appear unverified until
+normal collection refreshes them; this is not a healthy-state inference.
 
 `createStewardshipRouter(adapters)` provides server-side fixture injection;
 there are no client-supplied URLs, daemon credentials, torrent IDs, trackers,

@@ -26,8 +26,9 @@ function fixture(legacy = false) {
       ALTER TABLE media_torrents DROP COLUMN root_path;
       ALTER TABLE media_torrents DROP COLUMN root_token;
       ALTER TABLE media_torrents DROP COLUMN ownership_tag;
+      ALTER TABLE media_torrents DROP COLUMN stewardship_binding_json;
       ALTER TABLE indexer_feeds DROP COLUMN gap_diagnostics_json;
-      DELETE FROM schema_migrations WHERE id IN (53,54);`);
+      DELETE FROM schema_migrations WHERE id IN (53,54,55);`);
     db.exec(BOOK_TORRENTS_SCHEMA_SQL);
   }
   const repo = new BooksRepo(db);
