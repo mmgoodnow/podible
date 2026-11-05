@@ -24,10 +24,12 @@ cloned using **forced native CoW**, never a writable hardlink or an ordinary-cop
 fallback. Sidecars belong to the candidate. Unsupported filesystems produce an
 explicit `unsupported` result before torrent addition. Production filesystem
 capability must be checked separately from the successful APFS canary below.
-Read-only production mount inspection on November 5 identified both media roots
-as ext4; writable reuse therefore remains unsupported unless forced native cloning
-actually succeeds. A reflink-capable storage arrangement or a separately proven
-safe client/storage strategy is needed to use this path there.
+Production mount inspection on November 5 identified both media roots as ext4.
+An isolated two-byte forced-clone probe on the TV mount returned `ENOTSUP`, with
+all probe files cleaned up. Writable reuse is therefore a verified unsupported
+constraint there, not merely a filesystem-type inference. A reflink-capable
+storage arrangement or a separately proven safe client/storage strategy is needed
+to use this path there; no full-copy fallback was used.
 
 This POC independently hashes the bounded candidate pieces, runs the daemon's
 candidate recheck, applies the missing-piece budget, and independently verifies
