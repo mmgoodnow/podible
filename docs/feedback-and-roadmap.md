@@ -151,10 +151,10 @@ made after that rollout.
 | P04 | Plex-facing symlinks into managed content; linking declarative and reconciled, not one-off migrations every code change. | **Addressed.** Owned canonical content, declarative views and exact publication verification. Foreign content is not adopted/deleted casually. |
 | P05 | Run the stack locally for realistic tests, including torrent client/probing/Plex behavior. | **Partial evidence layers.** Real daemon lab, actual files/SQLite/HTTP/browser tests; synthetic catalog/Plex seams are not a full local real-Plex-stack or production playback claim. |
 | P06 | Shadow should independently acquire new Seerr requests, not merely read Radarr decisions. Backfill a few existing titles. | **Addressed.** Independent dual-write leg and read-only Radarr/Sonarr comparisons; isolated Plex libraries. No automatic duplicate historical backfill. |
-| P07 | Agents should resolve ambiguous imports automatically, not create a manual approval queue. Use ffprobe/mediainfo-like facts. | **Partially addressed.** Semantic selection/import plus probe evidence and bounded reacquisition; unsupported identity/mapping/safety cases can still block. Never equate unverified import with success. |
+| P07 | Agents should resolve ambiguous imports automatically, not create a manual approval queue. Use ffprobe/mediainfo-like facts. | **Implemented; wider confidence needed.** Semantic selection/import plus probe evidence and bounded reacquisition. Unsupported identity/mapping/safety cases can still block; never equate unverified import with success. One Piece is the next requested confidence case. |
 | P08 | Discover suitable enabled indexers/categories dynamically through Prowlarr; keep temporary outages retryable. | **Addressed.** Shared gateway/discovery/cooldowns, persisted failure isolation and event-driven retries. Do not mistake Prowlarr's 429 for a proven rate limit. |
 | P09 | No periodic per-title searches. Use RSS plus initial/manual/real-failure searches. | **Addressed.** Shared durable inbox, per-target consideration receipts and bounded feed polling across books/movies/TV. |
-| P10 | RSS should survive deleted anchors, page backward, and explain gaps: volume, downtime, or limited history? | **Partial.** Five anchors, up to ten 100-item pages, durable stop diagnostics. Old causes remain unknown; historic gaps are not automatically exhaustively backfilled or converted to title searches. |
+| P10 | RSS should survive deleted anchors, page backward, and explain gaps: volume, downtime, or limited history? | **Implemented within explicit bounds; warning lifecycle open.** Five anchors, up to ten 100-item pages, durable stop diagnostics. Old causes remain unknown. Historical gaps currently remain visible forever: current feed health must be separated from retained coverage history rather than claim later overlap repaired an older gap. |
 | P11 | Prove RSS with an upcoming real release requested through Seerr, compare Radarr and Podible. | **Completed dated production canary.** A Dog's Perfect Christmas acquired through live feed, exact Plex verification, Radarr comparison in movie-rss-canary.md. Not a controlled speed benchmark. |
 | P12 | TV shadowing soon, including at least one actively airing show. | **Implemented; final arrival observation open.** Breaking Bad 13/13 and Berserk 25/25 verified. Khom Khlang 9 episodes verified; next real release remains unobserved in the recorded evidence. |
 | P13 | Season-only requests; a season pack must not publish only the single initially requested episode. | **Addressed.** Explicit season intent/episode membership and completed-pack reuse; preserve exact identities and requested coverage. |
@@ -169,13 +169,33 @@ made after that rollout.
 | P22 | Conservative minimum seeding, tentatively 30 days; unregistered-before-30-days must not be impossible to retire. | **Addressed scoped exception.** Actual seeding, not age, protects live/unknown obligations; proven all-tracker-unregistered unused record-only retirement does not wait for an impossible seed counter. No seed-byte deletion authority. |
 | P23 | Torrent health/ownership shouldn't have separate book vs movie/TV persistence. | **Addressed.** Shared registry per client/native identity, domain associations separately; current migration verified without file moves/rechecks. Internal import/publication differences remain legitimate. |
 | P24 | rtgc-style scalable administration without exposing raw torrent internals as the product. | **Partial.** Problem-first titled health view and bounded collection. Bulk exception actions/coverage management beyond orphan retirement remain open. Pagination bug U22 is part of this usability gap. |
-| P25 | Cross-seeding discovery, matching, shared-byte rescue and tracker coverage. | **Explicitly deferred.** Keep architectural room; not part of the current POC completion claim. |
-| P26 | Torrent-specific derived symlink layouts, with tracker-specific small sidecars and slightly incompatible torrents. | **Explicitly deferred.** Canonical/view separation leaves room; no materialization/collision/verification policy implemented for this feature. |
+| P25 | Cross-seeding discovery, matching, shared-byte rescue and tracker coverage. | **Agreed next phase after anime confidence; not implemented.** Reuse cross-seed's useful ideas, not its architecture. See the proposed [content reuse policy](content-reuse-plan.md). Not part of the current POC completion claim. |
+| P26 | Torrent-specific derived symlink layouts, with tracker-specific small sidecars and slightly incompatible torrents. | **Agreed next phase; not implemented.** Share identical media bytes; sidecars may remain torrent-specific. Latest preference allows CoW near-identical variants for seed coverage, with equivalent library versions tied by seniority. Filesystem/client CoW safety must be verified; no silent full-copy fallback. |
 | P27 | Subtitles might be useful, but Plex on-demand and embedded WEB-DL subtitles make them lower priority. | **Deprioritized, not canceled.** No complete Bazarr replacement; alignment/embedded-preservation need design when resumed. |
 | P28 | Complete Seerr replacement: approvals, quotas, request administration and notifications. | **Open beyond native base requests.** Independent acquisition and withdrawals are not the full product. |
 | P29 | Single-server deployment is fine; do not overbuild distributed coordination. | **Accepted boundary.** In-process resource lanes and one background worker; horizontal scaling would require new coordination, not assumed safety. |
 | P30 | TMDB for movies/TV; temporarily unblock catalog credentials, later use own key. | **Addressed integration; operator follow-up remains.** TMDB-backed catalog with existing credential paths. Replacing a temporary key with the user's own is not verified complete here; never publish credentials. |
 | P31 | `movies.enabled` should not exist; reuse clear configuration rather than adding arbitrary feature switches. Show the settings surface. | **Addressed.** No top-level movie enable flag; catalog, storage, quality, Plex, comparison and Seerr integration settings have explicit purposes. Integration-specific enable controls are separate from making movies a first-class feature. |
+| P32 | Reuse existing episode files when season packs arrive; prefer a generic coverage policy over a dedicated season-pack feature. | **Agreed next phase; not implemented.** Optimize useful seed coverage against new download/storage cost. Pack consolidation should follow from shared matching/layout/reconciliation rules, not depend solely on episode torrents becoming unregistered. Preserve quality and existing seed obligations. |
+| P33 | Support BitTorrent v2 as well as v1 and hybrid metainfo. | **Requested; not implemented.** Current parser rejects meta-version torrents and the client adapter advertises v1 only. Model full v2 hashes, hybrid aliases, per-file Merkle identities and client capabilities explicitly; backend support must be verified independently. |
+
+## Agreed Next Phase
+
+First request One Piece through the normal season-request path, inspect actual
+acquisition/mapping/import/publication failures, and fix those instead of building
+more speculative anime infrastructure. This confidence run has not been started
+by this roadmap update.
+
+Then treat P16/P20/P21/P25/P26/P32/P33 as one content-reuse and torrent-lifecycle
+phase. Season-pack consolidation, cross-tracker rescue and retirement should be
+outcomes of shared rules over wanted content, available files and torrent
+registrations. A rough size/name match may justify optimistic seeding on a client
+with suitable semantics; it does not become cryptographic proof. Hashing may be
+deferred or cached, but repair must never modify bytes shared by another torrent
+or the library. The initial preference to keep only one byte variant was revised:
+CoW variants are acceptable for seed coverage, and seniority breaks equivalent
+library-version ties. Plex still receives one explicitly selected canonical
+version. See [content reuse plan](content-reuse-plan.md).
 
 ## Historical One-Offs And Unverified Old Incidents
 
