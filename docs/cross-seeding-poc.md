@@ -43,8 +43,11 @@ can affect only the candidate's private CoW variant.
 
 Plans and outcomes are persisted as domain receipts; Reflow owns steps, sleeps,
 leases and retries. Lost add acknowledgments reconcile the same owned hash and
-layout. Replay revalidates layout receipts, changed configuration/demand fences
-execution, and a false daemon completion fails independent piece verification.
+layout. Registrations retain their owning operation, feed retries retain their
+matched target snapshot, and live daemon state is rechecked rather than treating
+a saved start/completion observation as current truth. Replay revalidates layout
+receipts, changed configuration/demand fences execution, and a false daemon
+completion fails independent piece verification.
 
 ## RPC
 

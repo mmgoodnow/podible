@@ -124,6 +124,9 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
     return finish({ kind: "unsupported", reason: "Client cannot safely add paused and verify this derived v1 layout" });
   if (ctx.repo.crossSeed.owns(command.scope, client.id, metadata.infoHash))
     return finish({ kind: "skipped", reason: "Target already owns this torrent identity", infoHash: metadata.infoHash });
+  const identity = { clientId: client.id, nativeId: metadata.infoHash };
+  if (ctx.repo.reuseTorrent(identity) && ctx.repo.crossSeed.registrationOwner(identity) !== operationId)
+    return finish({ kind: "skipped", reason: "Torrent identity already belongs to another registered operation", infoHash: metadata.infoHash });
   const plan = await durableStep(ctx, "reuse:plan", () => crossSeedPlan(ctx.repo, settings, command, bytes));
   const sourceBlocked = () => plan.files.some(file => file.source && ctx.repo.releaseHealth.isContentFileBlocked(file.source.id));
   if (sourceBlocked()) return finish({ kind: "skipped", reason: "Reuse source was confirmed nuked after planning" });
@@ -168,7 +171,7 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
     if (sourceBlocked()) throw new Error("Reuse source was confirmed nuked before torrent addition");
     const result = await client.ensureAdded({ metainfo: bytes, location });
     if (result.clientId !== client.id || result.nativeId !== metadata.infoHash) throw new Error("Reuse client returned another identity");
-    ctx.repo.reserveReuseTorrent(result, location, offerFor(ctx.repo, command).key, command.scope);
+    ctx.repo.reserveReuseTorrent(result, location, offerFor(ctx.repo, command).key, command.scope, operationId);
     return result;
   }));
   const torrent = ctx.repo.reuseTorrent(ref)!;
@@ -184,7 +187,7 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   // Wait for actual verification to run, not just acknowledgement of torrent-verify.
   let checking = false, verified = false;
   for (let i = 0; i < (adapters.maxPolls ?? 1200); i++) {
-    const snapshot = await durableStep(ctx, `reuse:verify-poll:${i}`, check);
+    const snapshot = await check();
     checking ||= snapshot.state === "checking";
     if (checking && snapshot.state !== "checking") { verified = true; break; }
     // Tiny checks can finish between polls; our independent piece proof bounds
@@ -197,18 +200,26 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   const remaining = metadata.size - (initial.bytesDone ?? 0);
   if (remaining > command.policy.maximumExtraBytes || (metadata.size && (initial.bytesDone ?? 0) / metadata.size < command.policy.minimumReuseRatio))
     return finish({ kind: "skipped", reason: "Verified missing pieces exceed the reuse policy; record remains paused", torrentId: torrent.id });
-  await durableStep(ctx, "reuse:resume", () => { active(); return client.resume(ref); });
+  // Running is a reconciled intent, not a once-only effect: error cleanup or an
+  // external stop can undo a previously checkpointed start acknowledgement.
+  await check(); await client.resume(ref);
   for (let poll = 0; poll < (adapters.maxPolls ?? 1200); poll++) {
     if (sourceBlocked() || ctx.repo.releaseHealth.isOfferBlocked({ ...offerFor(ctx.repo, command), infoHash: metadata.infoHash })) {
       await check(); await client.quiesce(ref);
       return finish({ kind: "stalled", reason: "Candidate was confirmed nuked during reuse", torrentId: torrent.id });
     }
-    const snapshot = await durableStep(ctx, `reuse:download:${poll}`, check);
+    const snapshot = await check();
     if (snapshot.complete && snapshot.state !== "checking") {
       const proof = await proveLayout();
       if (proof.summary.verifiedReuseBytes !== metadata.size) {
         await durableStep(ctx, "reuse:stop-unverified", () => client.quiesce(ref));
         return finish({ kind: "stalled", reason: "Engine completion did not match candidate piece hashes", torrentId: torrent.id });
+      }
+      const live = await check();
+      if (live.state === "inactive" && !live.message) await client.resume(ref);
+      if (!live.complete || live.state !== "seeding") {
+        await ctx.execution.sleep(`reuse:confirm-running-wait:${poll}`, adapters.pollMs ?? 500);
+        continue;
       }
       return finish({ kind: "seeding", reason: "Candidate independently verified complete; existing library selection is unchanged",
         torrentId: torrent.id, infoHash: metadata.infoHash, totalBytes: metadata.size,

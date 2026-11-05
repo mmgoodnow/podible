@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
+import type { TorrentRef } from "./torrent-client";
 
 const id = z.number().int().positive().safe();
 export const crossSeedScopeSchema = z.object({ media: z.enum(["movie", "tv"]), targetId: id }).strict();
@@ -25,11 +26,16 @@ export type CrossSeedOutcome = {
 export type CrossSeedReceipt = { command: CrossSeedCommand; commandHash: string; jobId: number; createdAt: string; outcome?: CrossSeedOutcome };
 const prefix = "cross-seed:operation:";
 export const crossSeedStateKey = (id: string) => prefix + z.string().uuid().parse(id);
+export const crossSeedRegistrationKey = (ref: TorrentRef) => "cross-seed:registration:" + createHash("sha256").update(JSON.stringify([ref.clientId, ref.nativeId])).digest("hex");
 export const crossSeedCommandHash = (command: CrossSeedCommand) => createHash("sha256").update(JSON.stringify(crossSeedCommandSchema.parse(command))).digest("hex");
 
 /** Domain intent/results only. Attempts, sleeps and leases remain in Reflow. */
 export class CrossSeedRepo {
   constructor(private db: Database) {}
+  registrationOwner(ref: TorrentRef): string | null {
+    const row = this.db.query("SELECT value_json FROM app_state WHERE key=?").get(crossSeedRegistrationKey(ref)) as { value_json: string } | null;
+    return row ? z.object({ operationId: z.string().uuid() }).parse(JSON.parse(row.value_json)).operationId : null;
+  }
   receipt(operationId: string): CrossSeedReceipt | null {
     const row = this.db.query("SELECT value_json FROM app_state WHERE key=?").get(crossSeedStateKey(operationId)) as { value_json: string } | null;
     return row ? JSON.parse(row.value_json) : null;

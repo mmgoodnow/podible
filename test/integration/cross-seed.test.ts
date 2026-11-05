@@ -45,11 +45,11 @@ async function fixture(original = "abcdefgh", desired = "abcdefgh", sidecar = "!
   const [releaseId] = repo.releaseInbox.ingest(feed.id, [{ mediaType: "movie", title: "A Fixture Film other tracker", provider: "Other tracker",
     url: "https://fixture.invalid/metainfo", guid: "candidate", infoHash: metadata.infoHash, sizeBytes: data.length, seeders: 1, leechers: 0, raw: {} }], new Date().toISOString());
   const scope = { media: "movie" as const, targetId: request.targetId };
-  let location: DownloadLocation, checking = 0, downloaded = false, bytesDone = 0, adds = 0, resumes = 0, stops = 0;
+  let location: DownloadLocation, checking = 0, running = false, downloaded = false, bytesDone = 0, adds = 0, resumes = 0, stops = 0;
   const client: TorrentClient = {
     id: `transmission:${randomUUID()}`, capabilities: { pausedAdd: true, recheck: true, derivedLayouts: true, metainfoVersions: [1] },
     async ensureAdded(input) { adds++; location = input.location; return { clientId: this.id, nativeId: metadata.infoHash }; },
-    async inspect(ref) { return { ref, location, state: checking-- > 0 ? "checking" : downloaded ? "seeding" : "inactive",
+    async inspect(ref) { return { ref, location, state: checking-- > 0 ? "checking" : !running ? "inactive" : downloaded ? "seeding" : "downloading",
       complete: bytesDone === data.length, sizeBytes: data.length, bytesDone, message: null, observedAt: new Date().toISOString(), downloadBytesPerSecond: 0 }; },
     async files() { return files.map((file, index) => ({ index, path: path.join(root, "downloads", location.relativePath, file.path) })); },
     async recheck() {
@@ -57,8 +57,8 @@ async function fixture(original = "abcdefgh", desired = "abcdefgh", sidecar = "!
       const staged = Buffer.concat(await Promise.all(files.map(file => fs.readFile(path.join(root, "downloads", location.relativePath, file.path)).catch(() => Buffer.alloc(file.bytes.length)))));
       for (let i = 0; i < data.length; i += 4) if (staged.subarray(i, i + 4).equals(data.subarray(i, i + 4))) bytesDone += Math.min(4, data.length - i);
     },
-    async resume() { resumes++; for (const file of files) await fs.writeFile(path.join(root, "downloads", location.relativePath, file.path), file.bytes); bytesDone = data.length; downloaded = true; },
-    async quiesce() { stops++; }, async removeRecord() { throw new Error("Reuse must never remove old records"); },
+    async resume() { resumes++; running = true; for (const file of files) await fs.writeFile(path.join(root, "downloads", location.relativePath, file.path), file.bytes); bytesDone = data.length; downloaded = true; },
+    async quiesce() { stops++; running = false; }, async removeRecord() { throw new Error("Reuse must never remove old records"); },
   };
   // Explicit test adapter supplies independent writable storage on Linux too.
   // Native clone correctness/unsupported behavior is covered by reuse-layout tests.
@@ -81,7 +81,7 @@ async function fixture(original = "abcdefgh", desired = "abcdefgh", sidecar = "!
     counts: () => ({ adds, resumes, stops }), cleanup: async () => { db.close(); await fs.rm(root, { recursive: true, force: true }); } };
 }
 
-async function execute(f: Awaited<ReturnType<typeof fixture>>, receipt = queueCrossSeed(f.repo, f.command), wrap = (ctx: WorkerContext) => ctx) {
+async function execute(f: Awaited<ReturnType<typeof fixture>>, receipt = queueCrossSeed(f.repo, f.command), wrap = (ctx: WorkerContext) => ctx, allowFailure = false) {
   const runtime = await createJobExecutionRuntime(f.ctx, path.join(f.root, "execution.sqlite"), {
     retryDelayMs: 1,
     processJob: (ctx, job) => job.type === "torrent_reuse" ? processCrossSeed(wrap(ctx), job) : Promise.resolve("done" as const) });
@@ -91,8 +91,10 @@ async function execute(f: Awaited<ReturnType<typeof fixture>>, receipt = queueCr
     while (!["succeeded", "failed"].includes(f.repo.getJob(receipt.jobId)?.status ?? "")) {
       if (Date.now() > end) throw new Error("Reuse runtime timed out"); await Bun.sleep(10);
     }
-    expect(f.repo.getJob(receipt.jobId)?.error).toBeNull();
-    expect(f.repo.getJob(receipt.jobId)?.status).toBe("succeeded");
+    if (!allowFailure) {
+      expect(f.repo.getJob(receipt.jobId)?.error).toBeNull();
+      expect(f.repo.getJob(receipt.jobId)?.status).toBe("succeeded");
+    }
     return f.repo.crossSeed.receipt(f.command.operationId)!;
   } finally { await runtime.stop(); }
 }
@@ -109,6 +111,7 @@ test("cross-seed durable pipeline reuses renamed media, fetches private sidecar 
     expect(f.repo.movies.target(f.command.scope.targetId)!.active_version_id).toBe(f.version);
     expect(f.counts()).toEqual({ adds: 1, resumes: 1, stops: 0 });
     expect(f.repo.reuseTorrent({ clientId: f.adapters.client!(f.command.scope).id, nativeId: f.metadata.infoHash })?.ownership_tag).toBe("Podible Movies");
+    expect(f.repo.crossSeed.registrationOwner({ nativeId: f.metadata.infoHash, clientId: f.adapters.client!(f.command.scope).id })).toBe(f.command.operationId);
   } finally { await f.cleanup(); }
 });
 
@@ -292,5 +295,101 @@ test("TV reuse reads its own canonical pool and leaves episode publication uncha
     expect((await execute(f)).outcome?.kind).toBe("seeding");
     expect(f.repo.tv.activeEpisodes(request.targetId)).toEqual(published);
     expect(await fs.readFile(source, "utf8")).toBe("abcdefgh");
+  } finally { await f.cleanup(); }
+});
+
+test("retry after cleanup resumes the live record instead of trusting a cached start or completion", async () => {
+  const f = await fixture(); let failed = false;
+  try {
+    const client = f.adapters.client!(f.command.scope), inspect = client.inspect.bind(client);
+    client.inspect = async ref => {
+      if (f.counts().resumes && !failed) { failed = true; throw new Error("Transient observation failure after start"); }
+      return inspect(ref);
+    };
+    const receipt = queueCrossSeed(f.repo, f.command);
+    await execute(f, receipt, ctx => ctx, true);
+    expect(f.repo.getJob(receipt.jobId)?.status).toBe("failed");
+    expect(f.repo.crossSeed.receipt(f.command.operationId)?.outcome).toBeUndefined();
+    expect((await inspect({ clientId: client.id, nativeId: f.metadata.infoHash })).state).toBe("inactive");
+    const run = f.repo.getJobExecution(receipt.jobId)!.run_id;
+    f.repo.retryJob(receipt.jobId);
+    expect((await execute(f, receipt)).outcome?.kind).toBe("seeding");
+    expect(f.repo.getJobExecution(receipt.jobId)!.run_id).toBe(run);
+    expect(f.counts()).toEqual({ adds: 1, resumes: 2, stops: 1 });
+    expect((await inspect({ clientId: client.id, nativeId: f.metadata.infoHash })).state).toBe("seeding");
+  } finally { await f.cleanup(); }
+});
+
+test("another reuse command cannot recheck or relocate an already registered seed", async () => {
+  const f = await fixture();
+  try {
+    expect((await execute(f)).outcome?.kind).toBe("seeding");
+    f.command.operationId = randomUUID(); f.command.policy.maximumExtraBytes++;
+    expect((await execute(f)).outcome).toMatchObject({ kind: "skipped", reason: "Torrent identity already belongs to another registered operation" });
+    expect(f.counts()).toEqual({ adds: 1, resumes: 1, stops: 0 });
+  } finally { await f.cleanup(); }
+});
+
+test("an old operation receipt does not permanently own a registry identity after record retirement", async () => {
+  const f = await fixture();
+  try {
+    await execute(f);
+    const ref = { clientId: f.adapters.client!(f.command.scope).id, nativeId: f.metadata.infoHash };
+    const retired = f.repo.reuseTorrent(ref)!;
+    f.db.query("DELETE FROM media_torrents WHERE id=?").run(retired.id);
+    const operationId = randomUUID();
+    f.repo.reserveReuseTorrent(ref, JSON.parse(retired.location_json), "fresh-retained-offer", f.command.scope, operationId);
+    expect(f.repo.crossSeed.registrationOwner(ref)).toBe(operationId);
+    expect(() => f.repo.reserveReuseTorrent(ref, JSON.parse(retired.location_json), "other", f.command.scope, randomUUID())).toThrow("another operation");
+  } finally { await f.cleanup(); }
+});
+
+test("feed replay keeps its matched scope snapshot while live eviction only fences that target", async () => {
+  const f = await fixture();
+  try {
+    const user = f.repo.upsertUser({ provider: "local", providerUserId: "second", username: "second", isAdmin: true });
+    const second = f.repo.movies.request(user.id, { ...fixtureMovie, tmdbId: 999 }, f.repo.getSettings().movies.qualityPolicy);
+    const acquisition = f.repo.movies.startAcquisition(second.targetId, "initial", () => f.repo.createJob({ type: "movie_acquire" }).id).acquisition;
+    const id = randomUUID(), relativePath = `files/${id.slice(0, 2)}/${id}.mkv`;
+    await fs.mkdir(path.dirname(path.join(f.root, "objects", relativePath)), { recursive: true });
+    await fs.writeFile(path.join(f.root, "objects", relativePath), "ijklmnop", { mode: 0o444 });
+    f.repo.movies.recordVersion(acquisition.id, fixtureFacts(), [{ id, relativePath, sizeBytes: 8, probe: {} }]);
+    f.repo.movies.finishAcquisition(acquisition.id);
+    const job = f.repo.createJob({ type: "torrent_reuse_feed", payload: { releaseIds: [f.command.releaseId] }, maxAttempts: 1 });
+    let interrupted = false, matches = 0;
+    const context: WorkerContext = { ...f.ctx, movieFeedMatcher: async ({ targets }) => {
+      matches++; return targets.map(target => ({ targetId: target.targetId, releaseIndexes: [0], reason: "Fixture routing" }));
+    } };
+    const run = async () => {
+      const runtime = await createJobExecutionRuntime(context, path.join(f.root, "execution.sqlite"), {
+        retryDelayMs: 1, processJob: async (ctx, current) => {
+          if (current.id !== job.id) return "done";
+          const execution = ctx.execution!;
+          return discoverCrossSeeds({ ...ctx, execution: { ...execution,
+            run: <T>(name: string, action: () => T | Promise<T>) => execution.run(name, async () => {
+              const result = await action();
+              if (name.startsWith("reuse-feed:queue:") && !interrupted) {
+                interrupted = true;
+                const key = { namespace: "movie-target" as const, id: String(f.command.scope.targetId) };
+                f.repo.retention.evict(key, { expectedRevision: f.repo.retention.get(key)!.revision, reason: "Fixture eviction" });
+                throw new Error("Lost queue checkpoint after target eviction");
+              }
+              return result;
+            }) } }, current);
+        },
+      });
+      try {
+        await runtime.reconcile(); const deadline = Date.now() + 10_000;
+        while (!["failed", "succeeded"].includes(f.repo.getJob(job.id)?.status ?? "")) {
+          if (Date.now() > deadline) throw new Error("Feed replay timed out"); await Bun.sleep(10);
+        }
+      } finally { await runtime.stop(); }
+    };
+    await run(); expect(f.repo.getJob(job.id)?.status).toBe("failed");
+    f.repo.retryJob(job.id); await run();
+    expect(f.repo.getJob(job.id)?.status).toBe("succeeded");
+    expect(matches).toBe(1);
+    expect(f.repo.crossSeed.receipts().map(r => r.command.scope.targetId).sort()).toEqual([f.command.scope.targetId, second.targetId].sort());
+    expect(f.counts().adds).toBe(0);
   } finally { await f.cleanup(); }
 });

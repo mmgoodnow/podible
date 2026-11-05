@@ -24,8 +24,9 @@ export async function discoverCrossSeeds(ctx: WorkerContext, job: JobRow): Promi
   const eligible = (scope: CrossSeedScope) => ctx.repo.crossSeed.hasFiles(scope) &&
     ctx.repo.retention.get({ namespace: scope.media === "tv" ? "tv-target" : "movie-target", id: String(scope.targetId) })?.desiredPresence !== "evicted";
   const offers = entries.map(entry => ({ ...movieOfferFromResult({ ...entry.result, mediaType: "movie" }), inboxId: entry.id }));
-  const scopes = media === "movie" ? ctx.repo.movies.targets().map(t => ({ media: "movie" as const, targetId: t.id })).filter(eligible)
-    : ctx.repo.tv.targets().map(t => ({ media: "tv" as const, targetId: t.id })).filter(eligible);
+  const scopes = await durableStep(ctx, "reuse-feed:scopes", () => media === "movie"
+    ? ctx.repo.movies.targets().map(t => ({ media: "movie" as const, targetId: t.id })).filter(eligible)
+    : ctx.repo.tv.targets().map(t => ({ media: "tv" as const, targetId: t.id })).filter(eligible));
   for (let offset = 0; offset < scopes.length; offset += 50) {
     const batch = scopes.slice(offset, offset + 50);
     const matches = await durableStep(ctx, `reuse-feed:match:${offset}`, async () => {

@@ -5,7 +5,7 @@ import { MovieRepo } from "./movies/repo";
 import { MovieShadowRepo } from "./movies/shadow-repo";
 import { MovieSeerrRepo } from "./movies/seerr-repo";
 import { ReleaseInboxRepo } from "./media/release-inbox";
-import { CrossSeedRepo } from "./media/cross-seed-state";
+import { CrossSeedRepo, crossSeedRegistrationKey } from "./media/cross-seed-state";
 import { ReleaseHealthRepo } from "./media/release-health";
 import { TorrentRecordsRepo } from "./media/torrent-records";
 import type { TorrentRef, DownloadLocation } from "./media/torrent-client";
@@ -261,9 +261,15 @@ export class BooksRepo {
   get crossSeed() { return new CrossSeedRepo(this.db); }
   get releaseHealth() { return new ReleaseHealthRepo(this.db, this.beforeWrite); }
   reuseTorrent(ref: TorrentRef) { return new TorrentRecordsRepo(this.db, this.beforeWrite).get(ref.clientId, ref.nativeId); }
-  reserveReuseTorrent(ref: TorrentRef, location: DownloadLocation, offerKey: string, scope: CrossSeedScope) {
-    return new TorrentRecordsRepo(this.db, this.beforeWrite).reserve(ref, location, offerKey,
-      { ownership_tag: scope.media === "tv" ? "Podible TV" : "Podible Movies" });
+  reserveReuseTorrent(ref: TorrentRef, location: DownloadLocation, offerKey: string, scope: CrossSeedScope, operationId: string) {
+    return this.transaction(() => {
+      const owner = this.crossSeed.registrationOwner(ref);
+      if (owner && owner !== operationId && this.reuseTorrent(ref)) throw new Error("Reuse registration belongs to another operation");
+      const record = new TorrentRecordsRepo(this.db, this.beforeWrite).reserve(ref, location, offerKey,
+        { ownership_tag: scope.media === "tv" ? "Podible TV" : "Podible Movies" });
+      this.setJsonState(crossSeedRegistrationKey(ref), { operationId });
+      return record;
+    });
   }
   get movieSeerr() { return new MovieSeerrRepo(this.db, this.beforeWrite); }
   get releaseInbox() { return new ReleaseInboxRepo(this.db, this.beforeWrite); }
