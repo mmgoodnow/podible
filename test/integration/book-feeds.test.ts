@@ -236,7 +236,7 @@ test("category-aware RSS discovery retains audiobook/ebook sources, not search-o
   }
 });
 
-test("book RSS only dispatches missing media and preserves every existing edition/container", async () => {
+test("book RSS without a quality reviewer only dispatches missing media and preserves every existing edition/container", async () => {
   const f = setup();
   try {
     const a = f.book(),
@@ -262,7 +262,7 @@ test("book RSS only dispatches missing media and preserves every existing editio
     expect(f.repo.getManifestation(existing.manifestation.id)?.label).toBe(
       "Existing edition",
     );
-    expect(f.repo.listAssetsByBook(a.id)).toEqual([existing.asset]);
+    expect(f.repo.listAssetsByBook(a.id)).toEqual([{ ...existing.asset, manifestation_preferred_score: 0 }]);
     expect(hasWantedBookMedia(f.repo)).toBe(true);
     f.ready(a.id, "ebook");
     f.ready(b.id, "audio");

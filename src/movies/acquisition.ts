@@ -1,4 +1,5 @@
 import path from "node:path";
+import { advanceDownloadProgress, downloadComplete } from "../media/download-lifecycle";
 import { promises as fs } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import { z } from "zod";
@@ -383,21 +384,12 @@ export async function acquireMovie(
           return observation;
         },
       );
-      const observedAt = Date.parse(snapshot.observedAt);
-      if (!Number.isFinite(observedAt))
-        throw new Error("Invalid client observation time");
-      if (!startedAt) startedAt = observedAt;
-      if (snapshot.complete && snapshot.state !== "checking") {
+      const progress = advanceDownloadProgress(snapshot, { lastBytes, progressedAt, startedAt });
+      const observedAt = progress.now;
+      ({ lastBytes, progressedAt, startedAt } = progress);
+      if (downloadComplete(snapshot)) {
         completed = true;
         break;
-      }
-      if (
-        snapshot.bytesDone === null ||
-        snapshot.bytesDone !== lastBytes ||
-        snapshot.state === "checking"
-      ) {
-        lastBytes = snapshot.bytesDone ?? -1;
-        progressedAt = observedAt;
       }
       if (snapshot.state === "inactive")
         await durableStep(ctx, `${prefix}:resume:${poll}`, () => {

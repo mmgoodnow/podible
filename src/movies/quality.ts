@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { assessCompatibleUpgrade } from "../media/quality-decision";
 import { normalizeManifestationLanguageCode } from "../library/language";
 
 const sourceSchema = z.enum(["web", "bluray", "hdtv", "dvd", "cam"]);
@@ -178,17 +179,21 @@ export function assessMovieUpgrade(
 ) {
   const from = evaluateMovieQuality(policy, current);
   const to = evaluateMovieQuality(policy, candidate);
+  const tierGain = to.tier !== null && from.tier !== null ? to.tier - from.tier : 0;
+  const preferenceGain = to.preferenceScore - from.preferenceScore;
+  const { upgrade } = assessCompatibleUpgrade({
+    compatible: to.eligibility === "eligible", verified: to.eligibility === "eligible",
+    improvement: from.eligibility !== "eligible" || tierGain > 0 ||
+      (tierGain === 0 && preferenceGain >= policy.minimumPreferenceGain) ? "better" : tierGain < 0 ? "worse" : "equal",
+  });
   if (to.eligibility !== "eligible")
     return { upgrade: false, reason: to.eligibility, from, to };
   if (from.eligibility !== "eligible")
-    return { upgrade: true, reason: "replace noncompliant version", from, to };
-  const tierGain = to.tier! - from.tier!;
+    return { upgrade, reason: "replace noncompliant version", from, to };
   if (tierGain > 0)
-    return { upgrade: true, reason: "higher quality tier", from, to };
+    return { upgrade, reason: "higher quality tier", from, to };
   if (tierGain < 0)
     return { upgrade: false, reason: "lower quality tier", from, to };
-  const upgrade =
-    to.preferenceScore - from.preferenceScore >= policy.minimumPreferenceGain;
   return {
     upgrade,
     reason: upgrade

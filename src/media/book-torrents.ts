@@ -177,8 +177,21 @@ export class BookTorrentsRepo {
 }
 
 export interface BookDownloadClient {
-  getDownloadState(infoHash: string): Promise<RtorrentDownloadState>;
+  inspect(infoHash: string): Promise<TorrentSnapshot>;
+  resume(infoHash: string): Promise<void>;
   getImportSource(infoHash: string): Promise<RtorrentImportSource>;
+}
+
+/** Legacy transport and old durable checkpoints end at this boundary. */
+export function legacyBookSnapshot(state: RtorrentDownloadState, hash: string): TorrentSnapshot {
+  return {
+    ref: { clientId: "legacy-rtorrent", nativeId: hash },
+    location: { rootId: "legacy", relativePath: hash },
+    state: !state.isActive ? "inactive" : state.complete ? "seeding" : "downloading",
+    complete: state.complete, bytesDone: state.bytesDone, sizeBytes: state.sizeBytes,
+    downloadBytesPerSecond: state.downRate, message: state.message,
+    observedAt: new Date().toISOString(),
+  };
 }
 
 type BookRepo = Pick<BooksRepo, "findReleaseByInfoHash" | "getBookRow"> & {
@@ -458,31 +471,22 @@ export function bookDownloadClient(
     return binding;
   };
   return {
-    async getDownloadState(hash) {
+    async inspect(hash) {
       const binding = bindingFor(hash);
-      if (!binding) return legacy.getDownloadState(hash);
+      if (!binding) return legacyBookSnapshot(await legacy.getDownloadState(hash), hash);
       const snapshot = await clientFor(binding, override).inspect(
         refFor(binding),
       );
       validateSnapshot(binding, snapshot);
-      const directory = directoryFor(binding);
-      return {
-        hash: binding.info_hash,
-        name: null,
-        complete: snapshot.complete && snapshot.state !== "checking",
-        isActive: snapshot.state !== "inactive",
-        basePath: directory,
-        directory,
-        isMultiFile: true,
-        bytesDone: snapshot.bytesDone,
-        sizeBytes: snapshot.sizeBytes,
-        leftBytes:
-          snapshot.sizeBytes === null || snapshot.bytesDone === null
-            ? null
-            : Math.max(0, snapshot.sizeBytes - snapshot.bytesDone),
-        downRate: snapshot.downloadBytesPerSecond,
-        message: snapshot.message,
-      };
+      return snapshot;
+    },
+    async resume(hash) {
+      const binding = bindingFor(hash);
+      // Historical rTorrent records remain read-only; never adopt/control them.
+      if (!binding) return;
+      const client = clientFor(binding, override);
+      validateSnapshot(binding, await client.inspect(refFor(binding)));
+      await client.resume(refFor(binding));
     },
     async getImportSource(hash) {
       const binding = bindingFor(hash);

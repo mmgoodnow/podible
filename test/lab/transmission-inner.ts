@@ -204,7 +204,7 @@ try {
   const downloadClient = bookDownloadClient(bookRepo, settings, bookClient);
   const bookDeadline = Date.now() + 90_000;
   while (
-    !(await downloadClient.getDownloadState(snatch.release.info_hash)).complete
+    !(await downloadClient.inspect(snatch.release.info_hash)).complete
   ) {
     if (Date.now() > bookDeadline)
       throw new Error("Book webseed transfer timed out");
@@ -266,7 +266,7 @@ try {
         bookRepo,
         settings,
         restartedBookClient,
-      ).getDownloadState(snatch.release.info_hash)
+      ).inspect(snatch.release.info_hash)
     ).complete
   )
     throw new Error("Daemon restart lost the book's download binding");

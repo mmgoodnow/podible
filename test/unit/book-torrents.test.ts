@@ -228,7 +228,7 @@ test("book deletion retains an ownership tombstone and never removes a seeding t
     expect(record.snapshot.state).toBe("seeding");
     expect(f.client.controls).toHaveLength(0);
     await expect(
-      bookDownloadClient(f.repo, f.settings, f.client).getDownloadState(
+      bookDownloadClient(f.repo, f.settings, f.client).inspect(
         binding.info_hash,
       ),
     ).rejects.toThrow("binding");
@@ -306,7 +306,7 @@ test("delete and re-add reclaims only an orphaned owned torrent without another 
     f.repo.bookTorrents.attach(binding.info_hash, release.id);
     expect(
       (
-        await bookDownloadClient(f.repo, f.settings, f.client).getDownloadState(
+        await bookDownloadClient(f.repo, f.settings, f.client).inspect(
           binding.info_hash,
         )
       ).complete,
@@ -425,11 +425,10 @@ test("managed progress remains backend aware and checking is not import-ready", 
     const { binding, record } = await f.attach();
     Object.assign(record.snapshot, { bytesDone: 4, downloadBytesPerSecond: 2 });
     const downloads = bookDownloadClient(f.repo, f.settings, f.client);
-    expect(await downloads.getDownloadState(binding.info_hash)).toMatchObject({
+    expect(await downloads.inspect(binding.info_hash)).toMatchObject({
       bytesDone: 4,
       sizeBytes: 10,
-      leftBytes: 6,
-      downRate: 2,
+      downloadBytesPerSecond: 2,
       complete: false,
     });
     Object.assign(record.snapshot, {
@@ -437,9 +436,7 @@ test("managed progress remains backend aware and checking is not import-ready", 
       complete: true,
       bytesDone: 10,
     });
-    expect((await downloads.getDownloadState(binding.info_hash)).complete).toBe(
-      false,
-    );
+    expect((await downloads.inspect(binding.info_hash)).state).toBe("checking");
     await expect(downloads.getImportSource(binding.info_hash)).rejects.toThrow(
       "not complete",
     );

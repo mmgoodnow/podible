@@ -14,6 +14,8 @@ import { releaseOfferFromResult } from "../media/release-offer";
 import { rememberSelectedCopies } from "../media/selected-copies";
 import { queueSelectedCrossSeeds } from "../media/cross-seed";
 import { z } from "zod";
+import { bookManualSelectionKey, stageBookUpgrade, stageBookRepair, type BookUpgradeBaseline } from "./quality-state";
+import type { BookQualityAssessment } from "./quality";
 
 type SearchRequest = {
   query: string;
@@ -74,6 +76,10 @@ type AutoAcquireOptions = {
 };
 
 type SnatchRuntimeOptions = {
+  /** Worker-owned acquisition only; public/manual snatches establish a replacement hold. */
+  automatic?: boolean;
+  bookUpgrade?: { baseline: BookUpgradeBaseline; preflight: BookQualityAssessment };
+  bookRepair?: { reviewJobId: number };
   onLog?: (message: string) => void;
   preferAgentImport?: boolean;
   execution?: WorkerContext["execution"];
@@ -277,6 +283,11 @@ export async function runSnatch(
   if (!book) {
     throw new Error(`Book ${request.bookId} not found`);
   }
+  const retainManualChoice = () => {
+    if (!runtime.automatic) repo.setJsonState(bookManualSelectionKey(book.id, request.mediaType), {
+      releaseTitle: request.title, selectedAt: new Date().toISOString(),
+    });
+  };
   const evidence = runtime.selectedCopies;
   if (evidence && (evidence.selected.mediaType !== request.mediaType || evidence.selected.provider !== request.provider ||
     evidence.selected.title !== request.title || (evidence.selected.guid?.trim() || null) !== (request.providerGuid?.trim() || null) ||
@@ -351,6 +362,7 @@ export async function runSnatch(
       `[snatch] dedupe reason=derived_hash release=${existingByDerived.id} info_hash=${existingByDerived.info_hash} provider_guid=${JSON.stringify(existingByDerived.provider_guid)}`
     );
     return repo.transaction(() => {
+      retainManualChoice();
       for (const evidence of retainedEvidence) retainBookSelectedCopies(repo, existingByDerived, evidence);
       if (repo.listAssetsByBook(existingByDerived.book_id).some(asset => asset.source_release_id === existingByDerived.id))
         queueBookSelectedCopies(repo, existingByDerived);
@@ -371,6 +383,7 @@ export async function runSnatch(
   }
 
   return repo.transaction(() => {
+    retainManualChoice();
     const existing = repo.findReleaseByInfoHash(derivedHash);
     if (existing) {
       if (existing.book_id !== request.bookId) throw new Error(`Infohash already linked to book ${existing.book_id}`);
@@ -413,7 +426,8 @@ export async function runSnatch(
         infoHash: release.info_hash,
         preferAgentImport: runtime.preferAgentImport === true,
         manifestationId,
-        sequenceInManifestation
+        sequenceInManifestation,
+        repairReviewJobId: runtime.bookRepair?.reviewJobId
       }
     });
     snatchLog(`[snatch] created release=${release.id} download_job=${job.id} info_hash=${release.info_hash}`);
@@ -436,6 +450,8 @@ export async function runSnatchGroup(
     throw new Error("At least one release is required");
   }
   const needsExplicitManifestation =
+    runtime.bookUpgrade !== undefined ||
+    runtime.bookRepair !== undefined ||
     request.forceManifestation === true ||
     request.parts.length > 1 ||
     request.manifestation.label !== null ||
@@ -451,7 +467,8 @@ export async function runSnatchGroup(
       label: request.manifestation.label,
       editionNote: request.manifestation.editionNote,
       selectionNote: request.manifestation.selectionNote ?? null,
-      language
+      language,
+      preferredScore: runtime.bookUpgrade || runtime.bookRepair ? -1 : 0
     };
     return runtime.operationKey
       ? repo.ensureManifestation(runtime.operationKey, input).id
@@ -464,6 +481,20 @@ export async function runSnatchGroup(
       : createManifestation()
     : null;
   const results: SnatchResult[] = [];
+  if (runtime.bookRepair && manifestationId !== null) {
+    const repair = runtime.bookRepair, candidateId = manifestationId;
+    const stage = () => stageBookRepair(repo, { bookId: request.bookId, media: request.mediaType,
+      candidateId, parts: request.parts.length, ...repair });
+    if (runtime.execution) await runtime.execution.run(`${prefix}:stage-repair`, stage);
+    else stage();
+  }
+  if (runtime.bookUpgrade && manifestationId !== null) {
+    const upgrade = runtime.bookUpgrade, candidateId = manifestationId;
+    const stage = () => stageBookUpgrade(repo, { bookId: request.bookId, media: request.mediaType,
+      candidateId, parts: request.parts.length, ...upgrade });
+    if (runtime.execution) await runtime.execution.run(`${prefix}:stage-upgrade`, stage);
+    else stage();
+  }
   try {
     for (const [index, part] of request.parts.entries()) {
       const snatch = () =>

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { advanceDownloadProgress, downloadComplete } from "../media/download-lifecycle";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { JobRow } from "../app-types";
@@ -267,16 +268,13 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
         const observation = await durableStep(ctx, `${prefix}:poll:${poll}`, async () => {
           const observed = await services.client.inspect(ref); active(); repo.observeDownload(downloadId, observed); return observed;
         });
-        const now = Date.parse(observation.observedAt);
+        const progress = advanceDownloadProgress(observation, { lastBytes, progressedAt, startedAt });
+        const now = progress.now;
         if (observation.ref.clientId !== ref.clientId || observation.ref.nativeId !== ref.nativeId ||
             observation.location.rootId !== location.rootId || observation.location.relativePath !== location.relativePath)
           throw new Error("TV torrent observation changed identity or layout");
-        if (!Number.isFinite(now)) throw new Error("TV engine returned an invalid observation time");
-        startedAt ||= now;
-        if (observation.complete && observation.state !== "checking") { complete = true; break; }
-        if (observation.bytesDone === null || observation.bytesDone !== lastBytes || observation.state === "checking") {
-          lastBytes = observation.bytesDone ?? -1; progressedAt = now;
-        }
+        ({ lastBytes, progressedAt, startedAt } = progress);
+        if (downloadComplete(observation)) { complete = true; break; }
         if (observation.state === "inactive") await durableStep(ctx, `${prefix}:resume:${poll}`, () => { active(); return services.client.resume(ref); });
         const stallMs = services.timing?.stallMs ?? settings.recovery.stalledTorrentMinutes * 60_000;
         if ((stallMs > 0 && now - progressedAt >= stallMs) || now - startedAt > 86_400_000) break;

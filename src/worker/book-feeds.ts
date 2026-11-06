@@ -9,6 +9,7 @@ import {
 } from "../library/feed-matcher";
 import type { TorznabResult } from "../library/torznab";
 import { durableStep, type WorkerContext } from "./context";
+import { bookAutomaticUpgradeAllowed } from "../library/quality-state";
 
 const payloadSchema = z
   .object({
@@ -20,13 +21,16 @@ export type BookFeedContext = WorkerContext & {
   bookFeedMatcher?: BookFeedMatcher;
 };
 
-/** All current library books want both media; there is deliberately no book upgrade policy. */
+/** Missing slots plus compatible RSS upgrades; no recurring per-title searches. */
 export function hasWantedBookMedia(repo: BooksRepo): boolean {
+  const canReview = !!repo.getSettings().agents.apiKey.trim();
   return repo
     .listAllBooks()
     .some(
       (book) =>
-        book.audioStatus !== "imported" || book.ebookStatus !== "imported",
+        book.audioStatus !== "imported" || book.ebookStatus !== "imported" ||
+        (canReview && ["audio", "ebook"].some(media =>
+          bookAutomaticUpgradeAllowed(repo, book.id, media as MediaType))),
     );
 }
 
@@ -38,7 +42,9 @@ export function bookFeedRevision(
   const book = ctx.repo.getBook(bookId);
   if (
     !book ||
-    (media === "audio" ? book.audioStatus : book.ebookStatus) === "imported"
+    ((media === "audio" ? book.audioStatus : book.ebookStatus) === "imported" &&
+      (!bookAutomaticUpgradeAllowed(ctx.repo, bookId, media) ||
+        (!ctx.modelProvider && !ctx.getSettings().agents.apiKey.trim())))
   )
     return null;
   return createHash("sha256")
@@ -123,7 +129,9 @@ export async function matchBookFeed(
   const targets = await durableStep(ctx, "book-rss:targets", () =>
     ctx.repo.listAllBooks().flatMap((book) =>
       [...media].flatMap((kind): BookFeedTarget[] =>
-        (kind === "audio" ? book.audioStatus : book.ebookStatus) === "imported"
+        (kind === "audio" ? book.audioStatus : book.ebookStatus) === "imported" &&
+          (!bookAutomaticUpgradeAllowed(ctx.repo, book.id, kind) ||
+            (!ctx.modelProvider && !ctx.getSettings().agents.apiKey.trim()))
           ? []
           : [
               {
@@ -255,6 +263,8 @@ export async function matchBookFeed(
                 media: [target.media],
                 feedCandidateIds: poolIds,
                 feedRoutingNote: note,
+                considerUpgrade: (target.media === "audio"
+                  ? ctx.repo.getBook(target.bookId)?.audioStatus : ctx.repo.getBook(target.bookId)?.ebookStatus) === "imported",
                 forceAgent: true,
                 rejectedUrls: rejected.map((release) => release.url),
                 rejectedGuids: rejected.flatMap((release) =>

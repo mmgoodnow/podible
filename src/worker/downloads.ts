@@ -1,40 +1,25 @@
 import { nowIso } from "../db";
-import { bookDownloadClient } from "../media/book-torrents";
-import type { RtorrentDownloadState } from "../rtorrent";
+import { bookDownloadClient, legacyBookSnapshot } from "../media/book-torrents";
+import { downloadComplete, downloadRemainingBytes, downloadPollDecision } from "../media/download-lifecycle";
+import type { TorrentSnapshot } from "../media/torrent-client";
 import type { AppSettings, JobRow, MediaType } from "../app-types";
 import { durableStep, type WorkerContext } from "./context";
 
 const FAST_POLL_MS = 500;
-const MID_POLL_MS = 2_000;
 const EBOOK_MAX_POLL_MS = 1_000;
-const ETA_FAST_WINDOW_SECONDS = 30;
-const ETA_MID_WINDOW_SECONDS = 120;
 
 type DownloadJobPayload = {
   infoHash?: string;
   preferAgentImport?: boolean;
   manifestationId?: number | null;
   sequenceInManifestation?: number | null;
+  repairReviewJobId?: number;
   telemetry?: {
     lastBytesDone?: number | null;
     stagnantSince?: string | null;
   };
 };
 
-type PollDecision = {
-  pollMs: number;
-  reason:
-    | "fallback_no_left_bytes"
-    | "fallback_no_down_rate"
-    | "fallback_nonpositive_rate"
-    | "fallback_invalid_eta"
-    | "eta_fast"
-    | "eta_mid"
-    | "eta_slow";
-  leftBytes: number | null;
-  downRate: number | null;
-  etaSeconds: number | null;
-};
 
 type DownloadIssueDecision =
   | {
@@ -55,15 +40,7 @@ function logMessage(ctx: WorkerContext, message: string): void {
   console.log(message);
 }
 
-function derivedLeftBytes(state: RtorrentDownloadState): number | null {
-  if (typeof state.leftBytes === "number" && Number.isFinite(state.leftBytes)) {
-    return Math.max(0, state.leftBytes);
-  }
-  if (typeof state.sizeBytes === "number" && typeof state.bytesDone === "number") {
-    return Math.max(0, state.sizeBytes - state.bytesDone);
-  }
-  return null;
-}
+const derivedLeftBytes = downloadRemainingBytes;
 
 function trimMessage(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
@@ -71,13 +48,13 @@ function trimMessage(value: string | null | undefined): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
-function describeDownloadIssue(prefix: string, state: RtorrentDownloadState, detail?: string | null): string {
+function describeDownloadIssue(prefix: string, state: TorrentSnapshot, detail?: string | null): string {
   const leftBytes = derivedLeftBytes(state);
   const parts = [
     prefix,
-    `active=${state.isActive ? 1 : 0}`,
+    `state=${state.state}`,
     `leftBytes=${leftBytes ?? "null"}`,
-    `downRate=${state.downRate ?? "null"}`
+    `downRate=${state.downloadBytesPerSecond ?? "null"}`
   ];
   const message = trimMessage(detail ?? state.message);
   if (message) {
@@ -87,7 +64,7 @@ function describeDownloadIssue(prefix: string, state: RtorrentDownloadState, det
 }
 
 function analyzeDownloadIssue(
-  state: RtorrentDownloadState,
+  state: TorrentSnapshot,
   payload: DownloadJobPayload,
   settings: AppSettings
 ): DownloadIssueDecision {
@@ -99,7 +76,7 @@ function analyzeDownloadIssue(
     typeof currentBytesDone === "number" && typeof lastBytesDone === "number"
       ? currentBytesDone > lastBytesDone
       : false;
-  const activeTransfer = (typeof state.downRate === "number" && state.downRate > 0) || progressed;
+  const activeTransfer = (state.downloadBytesPerSecond ?? 0) > 0 || progressed || state.state === "checking";
   const incomplete = leftBytes === null || leftBytes > 0;
   let stagnantSince = payload.telemetry?.stagnantSince ?? null;
 
@@ -115,7 +92,7 @@ function analyzeDownloadIssue(
   };
 
   const message = trimMessage(state.message);
-  if (message) {
+  if (message && !activeTransfer && !downloadComplete(state)) {
     return {
       action: "recover",
       nextPayload,
@@ -154,76 +131,9 @@ function analyzeDownloadIssue(
   };
 }
 
-function selectDownloadPollDecision(state: RtorrentDownloadState, configuredPollMs: number): PollDecision {
-  const maxPollMs = Math.max(FAST_POLL_MS, Math.trunc(configuredPollMs || 5000));
-  const leftBytes = derivedLeftBytes(state);
-  const downRate = typeof state.downRate === "number" && Number.isFinite(state.downRate) ? state.downRate : null;
-  if (leftBytes === null) {
-    return {
-      pollMs: maxPollMs,
-      reason: "fallback_no_left_bytes",
-      leftBytes,
-      downRate,
-      etaSeconds: null
-    };
-  }
-  if (downRate === null) {
-    return {
-      pollMs: maxPollMs,
-      reason: "fallback_no_down_rate",
-      leftBytes,
-      downRate,
-      etaSeconds: null
-    };
-  }
-  if (downRate <= 0) {
-    return {
-      pollMs: maxPollMs,
-      reason: "fallback_nonpositive_rate",
-      leftBytes,
-      downRate,
-      etaSeconds: null
-    };
-  }
+const selectDownloadPollDecision = downloadPollDecision;
 
-  const etaSeconds = leftBytes / downRate;
-  if (!Number.isFinite(etaSeconds) || etaSeconds < 0) {
-    return {
-      pollMs: maxPollMs,
-      reason: "fallback_invalid_eta",
-      leftBytes,
-      downRate,
-      etaSeconds: null
-    };
-  }
-  if (etaSeconds <= ETA_FAST_WINDOW_SECONDS) {
-    return {
-      pollMs: FAST_POLL_MS,
-      reason: "eta_fast",
-      leftBytes,
-      downRate,
-      etaSeconds
-    };
-  }
-  if (etaSeconds <= ETA_MID_WINDOW_SECONDS) {
-    return {
-      pollMs: Math.min(maxPollMs, MID_POLL_MS),
-      reason: "eta_mid",
-      leftBytes,
-      downRate,
-      etaSeconds
-    };
-  }
-  return {
-    pollMs: maxPollMs,
-    reason: "eta_slow",
-    leftBytes,
-    downRate,
-    etaSeconds
-  };
-}
-
-export function selectDownloadPollMs(state: RtorrentDownloadState, configuredPollMs: number): number {
+export function selectDownloadPollMs(state: TorrentSnapshot, configuredPollMs: number): number {
   return selectDownloadPollDecision(state, configuredPollMs).pollMs;
 }
 
@@ -249,8 +159,10 @@ export async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promi
   const client = bookDownloadClient(ctx.repo, settings, ctx.bookTorrentClient);
 
   for (let poll = 0; ; poll++) {
-    const { state, issue, decision } = await durableStep(ctx, `download:poll:${poll}`, async () => {
-      const state = await client.getDownloadState(release.info_hash);
+    const polled = await durableStep(ctx, `download:poll:${poll}`, async () => {
+      ctx.execution?.assertActive();
+      const state = await client.inspect(release.info_hash);
+      ctx.execution?.assertActive();
       const issue = analyzeDownloadIssue(state, payload, settings);
       const decision = selectDownloadPollDecision(
         state,
@@ -258,7 +170,11 @@ export async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promi
       );
       return { state, issue, decision };
     });
-    if (!state.complete) {
+    // Pre-consolidation successful checkpoints remain replayable without another RPC.
+    const state = "observedAt" in polled.state ? polled.state :
+      legacyBookSnapshot(polled.state as unknown as Parameters<typeof legacyBookSnapshot>[0], release.info_hash);
+    const { issue, decision } = polled;
+    if (!downloadComplete(state)) {
       if (issue.action === "recover") {
         await durableStep(ctx, "download:recover", () =>
           ctx.repo.transaction(() => {
@@ -272,6 +188,7 @@ export async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promi
                 media: [release.media_type],
                 forceAgent: true,
                 priorFailure: true,
+                repairReviewJobId: payload.repairReviewJobId,
                 requireResult: true,
                 notifyOnFailure: true,
                 failureContext: `Auto-reacquire after stalled torrent for release ${release.id}`,
@@ -298,6 +215,10 @@ export async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promi
       );
       const pollMs = decision.pollMs;
       if (!ctx.execution) throw new Error("Download polling requires durable execution");
+      if (state.state === "inactive") await durableStep(ctx, `download:resume:${poll}`, () => {
+        ctx.execution?.assertActive();
+        return client.resume(release.info_hash);
+      });
       payload = issue.nextPayload;
       await ctx.execution.sleep(`download:wait:${poll}`, pollMs);
       continue;
@@ -322,7 +243,8 @@ export async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promi
             infoHash: release.info_hash,
             preferAgentFirst: payload.preferAgentImport === true,
             manifestationId: payload.manifestationId ?? null,
-            sequenceInManifestation: payload.sequenceInManifestation ?? null
+            sequenceInManifestation: payload.sequenceInManifestation ?? null,
+            repairReviewJobId: payload.repairReviewJobId
           }
         });
       })

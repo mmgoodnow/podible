@@ -950,17 +950,14 @@ describe("download ETA polling", () => {
   test("uses fast poll near completion", () => {
     const pollMs = selectDownloadPollMs(
       {
-        name: null,
-        hash: null,
+        ref: { clientId: "fixture", nativeId: "a".repeat(40) },
+        location: { rootId: "books", relativePath: "a".repeat(40) },
+        observedAt: "2026-11-06T00:00:00.000Z",
+        state: "downloading",
         complete: false,
-        isActive: true,
-        basePath: null,
-        directory: null,
-        isMultiFile: false,
         bytesDone: 90,
         sizeBytes: 100,
-        leftBytes: 10,
-        downRate: 1,
+        downloadBytesPerSecond: 1,
         message: null
       },
       5000
@@ -971,17 +968,14 @@ describe("download ETA polling", () => {
   test("uses medium poll for mid ETA window", () => {
     const pollMs = selectDownloadPollMs(
       {
-        name: null,
-        hash: null,
+        ref: { clientId: "fixture", nativeId: "a".repeat(40) },
+        location: { rootId: "books", relativePath: "a".repeat(40) },
+        observedAt: "2026-11-06T00:00:00.000Z",
+        state: "downloading",
         complete: false,
-        isActive: true,
-        basePath: null,
-        directory: null,
-        isMultiFile: false,
         bytesDone: 0,
         sizeBytes: 500,
-        leftBytes: 500,
-        downRate: 5,
+        downloadBytesPerSecond: 5,
         message: null
       },
       5000
@@ -992,17 +986,14 @@ describe("download ETA polling", () => {
   test("falls back to configured poll when rate is unavailable", () => {
     const pollMs = selectDownloadPollMs(
       {
-        name: null,
-        hash: null,
+        ref: { clientId: "fixture", nativeId: "a".repeat(40) },
+        location: { rootId: "books", relativePath: "a".repeat(40) },
+        observedAt: "2026-11-06T00:00:00.000Z",
+        state: "downloading",
         complete: false,
-        isActive: true,
-        basePath: null,
-        directory: null,
-        isMultiFile: false,
         bytesDone: 50,
         sizeBytes: 100,
-        leftBytes: 50,
-        downRate: 0,
+        downloadBytesPerSecond: 0,
         message: null
       },
       5000
@@ -1013,17 +1004,14 @@ describe("download ETA polling", () => {
   test("derives left bytes when not provided", () => {
     const pollMs = selectDownloadPollMs(
       {
-        name: null,
-        hash: null,
+        ref: { clientId: "fixture", nativeId: "a".repeat(40) },
+        location: { rootId: "books", relativePath: "a".repeat(40) },
+        observedAt: "2026-11-06T00:00:00.000Z",
+        state: "downloading",
         complete: false,
-        isActive: true,
-        basePath: null,
-        directory: null,
-        isMultiFile: false,
         bytesDone: 960,
         sizeBytes: 1000,
-        leftBytes: null,
-        downRate: 2,
+        downloadBytesPerSecond: 2,
         message: null
       },
       5000

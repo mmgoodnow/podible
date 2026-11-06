@@ -2,9 +2,12 @@ import type { AssetRow, ManifestationRow } from "../app-types";
 
 export function selectPreferredDownloadableEbookAsset(assets: AssetRow[]): AssetRow | null {
   const ebooks = assets.filter(
-    (asset) => asset.mime === "application/epub+zip" || asset.mime === "application/pdf"
+    (asset) => (asset.manifestation_preferred_score ?? 0) >= 0 &&
+      (asset.mime === "application/epub+zip" || asset.mime === "application/pdf")
   );
   return ebooks.sort((a, b) => {
+    const preference = (b.manifestation_preferred_score ?? 0) - (a.manifestation_preferred_score ?? 0);
+    if (preference !== 0) return preference;
     const score = Number(b.mime === "application/epub+zip") - Number(a.mime === "application/epub+zip");
     if (score !== 0) return score;
     if (a.created_at !== b.created_at) return b.created_at.localeCompare(a.created_at);
@@ -57,9 +60,12 @@ export type ManifestationWithContainers = {
 export function selectPreferredAudioManifestation(
   manifestations: ManifestationWithContainers[]
 ): ManifestationWithContainers | null {
-  const audio = manifestations.filter((entry) => entry.manifestation.kind === "audio" && entry.containers.length > 0);
+  const audio = manifestations.filter((entry) => entry.manifestation.kind === "audio" &&
+    entry.manifestation.preferred_score >= 0 && entry.containers.length > 0);
   if (audio.length === 0) return null;
   return [...audio].sort((a, b) => {
+    const preference = b.manifestation.preferred_score - a.manifestation.preferred_score;
+    if (preference !== 0) return preference;
     const aScore = scoreAudioManifestation(a.containers) + a.manifestation.preferred_score;
     const bScore = scoreAudioManifestation(b.containers) + b.manifestation.preferred_score;
     if (aScore !== bScore) return bScore - aScore;

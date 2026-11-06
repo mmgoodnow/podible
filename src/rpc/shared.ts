@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { downloadRemainingBytes } from "../media/download-lifecycle";
 import { rm } from "node:fs/promises";
 
 import { z } from "zod";
@@ -126,11 +127,11 @@ export async function enrichDownload(
   }
 
   try {
-    const state = await client.getDownloadState(download.info_hash);
+    const state = await client.inspect(download.info_hash);
     const fraction = computeDownloadFraction({
       bytesDone: state.bytesDone,
       sizeBytes: state.sizeBytes,
-      leftBytes: state.leftBytes,
+      leftBytes: downloadRemainingBytes(state),
     });
     return {
       ...download,
@@ -138,8 +139,8 @@ export async function enrichDownload(
       downloadProgress: {
         bytesDone: state.bytesDone,
         sizeBytes: state.sizeBytes,
-        leftBytes: state.leftBytes,
-        downRate: state.downRate,
+        leftBytes: downloadRemainingBytes(state),
+        downRate: state.downloadBytesPerSecond,
         fraction,
         percent: fraction === null ? null : Math.round(fraction * 100),
       },
@@ -182,11 +183,11 @@ async function liveFractionForMedia(
   let best: number | null = null;
   for (const release of downloading) {
     try {
-      const state = await client.getDownloadState(release.info_hash);
+      const state = await client.inspect(release.info_hash);
       const fraction = computeDownloadFraction({
         bytesDone: state.bytesDone,
         sizeBytes: state.sizeBytes,
-        leftBytes: state.leftBytes,
+        leftBytes: downloadRemainingBytes(state),
       });
       if (fraction !== null) {
         best = best === null ? fraction : Math.max(best, fraction);

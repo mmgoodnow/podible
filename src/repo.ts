@@ -1323,6 +1323,15 @@ export class BooksRepo {
     );
   }
 
+  setManifestationPreference(manifestationId: number, score: number): void {
+    this.beforeWrite();
+    assertPositiveInt(manifestationId);
+    if (!Number.isSafeInteger(score)) throw new Error("Invalid manifestation preference");
+    if (!this.getManifestation(manifestationId)) throw new Error("Manifestation not found");
+    this.db.query("UPDATE manifestations SET preferred_score = ?, updated_at = ? WHERE id = ?")
+      .run(score, nowIso(), manifestationId);
+  }
+
   ensureManifestation(key: string, input: AddManifestationInput): ManifestationRow {
     return this.transaction(() => {
       const existing = this.db
@@ -1430,7 +1439,9 @@ export class BooksRepo {
   listAssetsByBook(bookId: number): AssetRow[] {
     assertPositiveInt(bookId);
     return this.db
-      .query("SELECT * FROM assets WHERE book_id = ? ORDER BY created_at DESC, id DESC")
+      .query(`SELECT a.*, m.preferred_score AS manifestation_preferred_score FROM assets a
+        LEFT JOIN manifestations m ON m.id = a.manifestation_id
+        WHERE a.book_id = ? ORDER BY a.created_at DESC, a.id DESC`)
       .all(bookId) as AssetRow[];
   }
 

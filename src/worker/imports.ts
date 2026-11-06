@@ -2,6 +2,7 @@ import { selectManualImportPaths } from "../library/agents";
 import { importReleaseFromPath, inspectImportPath, type ImportInspectionFile } from "../library/importer";
 import { bookDownloadClient } from "../media/book-torrents";
 import { isRunControlError } from "reflow-ts";
+import { finalizeBookUpgrade, stageBookRepair } from "../library/quality-state";
 import type { JobRow } from "../app-types";
 import { durableStep, workerLog, type WorkerContext } from "./context";
 
@@ -11,6 +12,7 @@ type ImportJobPayload = {
   selectedPaths?: string[];
   reason?: string;
   userReportedIssue?: boolean;
+  repairReviewJobId?: number;
   rejectedSourcePaths?: string[];
   preferAgentFirst?: boolean;
   manifestationId?: number | null;
@@ -37,7 +39,7 @@ function importNote(
   return `${context}: ${mode}${trigger}${confidence}: ${detail.reason}${selectedText}`;
 }
 
-export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
+async function importJobBody(ctx: WorkerContext, job: JobRow): Promise<"done"> {
   if (!job.release_id) {
     throw new Error("Import job missing release_id");
   }
@@ -99,11 +101,27 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
         agentDecisionError = decision.error;
 
         if (decision.selectedPaths.length > 0) {
+          const repaired = await durableStep(ctx, "import:review:manifestation", () => {
+            // A pre-staging publish checkpoint may already own this import identity.
+            const published = ctx.repo.findAssetByImportKey(`import:${job.id}`);
+            if (published) {
+              if (published.book_id !== release.book_id || published.source_release_id !== release.id || !published.manifestation_id)
+                throw new Error("Repair publication belongs to another book or release");
+              return published.manifestation_id;
+            }
+            const candidate = ctx.repo.ensureManifestation(`book-repair:${job.id}`, {
+              bookId: release.book_id, kind: release.media_type, preferredScore: -1,
+              selectionNote: importNote("wrong_file_review", decision),
+            });
+            stageBookRepair(ctx.repo, { bookId: release.book_id, media: release.media_type,
+              candidateId: candidate.id, parts: 1, reviewJobId: job.id });
+            return candidate.id;
+          });
           await durableStep(ctx, "import:review:publish", () =>
             importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, {
               selectedPaths: decision.selectedPaths,
-              manifestationId: payload.manifestationId ?? null,
-              sequenceInManifestation: payload.sequenceInManifestation ?? null,
+              manifestationId: repaired,
+              sequenceInManifestation: 0,
               importNote: importNote("wrong_file_review", decision),
               importKey: `import:${job.id}`
             })
@@ -138,6 +156,7 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
             bookId: release.book_id,
             media: [release.media_type],
             priorFailure: true,
+            repairReviewJobId: job.id,
             forceAgent: true,
             rejectedUrls: [release.url],
             rejectedGuids: release.provider_guid ? [release.provider_guid] : [],
@@ -281,6 +300,7 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
             media: [release.media_type],
             priorFailure: true,
             forceAgent: true,
+            repairReviewJobId: payload.repairReviewJobId,
             rejectedUrls: [release.url],
             rejectedGuids: release.provider_guid ? [release.provider_guid] : [],
             rejectedInfoHashes: release.info_hash ? [release.info_hash] : []
@@ -292,4 +312,16 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
     workerLog(ctx, `[import] job=${job.id} release=${release.id} agent_recovery=none queued_acquire_forced_agent=1`);
     return "done";
   }
+}
+
+export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
+  const result = await importJobBody(ctx, job);
+  const release = job.release_id === null ? null : ctx.repo.getRelease(job.release_id);
+  if (release?.status === "imported") {
+    const asset = ctx.repo.findAssetByImportKey(`import:${job.id}`);
+    if (asset?.manifestation_id) await durableStep(ctx, "import:quality:review", () =>
+      finalizeBookUpgrade(ctx.repo, ctx.getSettings(), asset.manifestation_id!, ctx.modelProvider,
+        () => ctx.execution?.assertActive()));
+  }
+  return result;
 }

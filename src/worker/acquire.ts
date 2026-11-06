@@ -1,5 +1,8 @@
 import { selectSearchCandidates } from "../library/agents";
 import { runSnatchGroup } from "../library/service";
+import { currentBookQualityBaseline, bookAutomaticUpgradeAllowed, validateBookRepair } from "../library/quality-state";
+import { assessBookUpgrade } from "../library/quality-agent";
+import { assessBookQuality } from "../library/quality";
 import type { JobRow, MediaType } from "../app-types";
 import { durableStep, workerLog, type WorkerContext } from "./context";
 import { isRunControlError } from "reflow-ts";
@@ -21,6 +24,9 @@ export type AcquirePayload = {
   /** Server-owned durable inbox references; never accepted from search/snatch RPC payloads. */
   feedCandidateIds?: number[];
   feedRoutingNote?: string;
+  /** New RSS dispatch deliberately considers an already imported slot; old jobs retain missing-only semantics. */
+  considerUpgrade?: boolean;
+  repairReviewJobId?: number;
 };
 
 const feedCandidateSchema = z.array(z.number().int().positive()).min(1).max(1000);
@@ -33,9 +39,12 @@ function currentFeedCandidates(ctx: WorkerContext, ids: number[], media: MediaTy
   return entries.map((entry) => ({ id: entry.id, result: entry.result as TorznabResult }));
 }
 
-function mediaReady(ctx: WorkerContext, bookId: number, media: MediaType): boolean {
+function mediaReady(ctx: WorkerContext, bookId: number, media: MediaType, considerUpgrade = false): boolean {
   const current = ctx.repo.getBook(bookId);
-  return !current || (media === "audio" ? current.audioStatus : current.ebookStatus) === "imported";
+  if (!current) return true;
+  const ready = (media === "audio" ? current.audioStatus : current.ebookStatus) === "imported";
+  return ready && (!considerUpgrade || !bookAutomaticUpgradeAllowed(ctx.repo, bookId, media) ||
+    (!ctx.modelProvider && !ctx.getSettings().agents.apiKey.trim()));
 }
 
 function selectionNote(media: MediaType, decision: { mode: string; trigger: string; confidence: number; reason: string }): string {
@@ -72,9 +81,13 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
       };
 
       const feedEligible = payload.feedCandidateIds
-        ? await durableStep(ctx, `${media}:feed-eligibility`, () => !mediaReady(ctx, book.id, media))
+        ? await durableStep(ctx, `${media}:feed-eligibility`, () => !mediaReady(ctx, book.id, media, payload.considerUpgrade))
         : true;
       if (!feedEligible) return result;
+      const repair = payload.repairReviewJobId === undefined ? null :
+        validateBookRepair(ctx.repo, book.id, media, payload.repairReviewJobId);
+      const baseline = await durableStep(ctx, `${media}:quality-baseline`, () => repair ? null : currentBookQualityBaseline(ctx.repo, book.id, media));
+      if (!repair && baseline && !bookAutomaticUpgradeAllowed(ctx.repo, book.id, media)) return result;
 
       const query = `${book.title} ${book.author}`.trim();
       const select = (results: TorznabResult[]) => selectSearchCandidates(
@@ -129,7 +142,7 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
       try {
         for (const [selectionIndex, selection] of decision.selections.entries()) {
           const groupEligible = payload.feedCandidateIds
-            ? await durableStep(ctx, `${media}:feed-group:${selectionIndex}:eligibility`, () => !mediaReady(ctx, book.id, media))
+            ? await durableStep(ctx, `${media}:feed-group:${selectionIndex}:eligibility`, () => !mediaReady(ctx, book.id, media, payload.considerUpgrade))
             : true;
           if (!groupEligible) return result;
           // Resolve server-owned IDs again after agent work/replay: feed polling may
@@ -145,6 +158,26 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
             )} trigger=${decision.trigger} parts=${selection.parts.length} reason=${JSON.stringify(decision.reason)}`
           );
 
+          let bookUpgrade;
+          if (baseline) {
+            const currentReleases = ctx.repo.listAssetsByManifestation(baseline.id)
+              .flatMap(asset => asset.source_release_id === null ? [] : [ctx.repo.getRelease(asset.source_release_id)])
+              .filter(release => release !== null);
+            if (parts.some(part => currentReleases.some(release =>
+              (part.infoHash && part.infoHash.toLowerCase() === release.info_hash.toLowerCase()) || part.url === release.url))) continue;
+            const assessment = await durableStep(ctx, `${media}:selection:${selectionIndex}:quality`, () => assessBookUpgrade(settings, {
+              title: book.title, author: book.author, description: book.description?.slice(0, 8000) ?? null,
+              media, editionPreference: settings.agents.editionPreference, phase: "release", current: baseline.facts,
+              candidate: { manifestation: selection.manifestation, parts: parts.map(part => ({
+                title: part.title, provider: part.provider, sizeBytes: part.sizeBytes,
+              })) },
+            }, ctx.modelProvider));
+            if (!assessment || !assessBookQuality(assessment).upgrade) {
+              result.noResultReason = assessment?.reason ?? "No book quality reviewer configured";
+              continue;
+            }
+            bookUpgrade = { baseline, preflight: assessment };
+          }
           const group = await runSnatchGroup(
             ctx.repo,
             settings,
@@ -168,6 +201,9 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
               })),
             },
             {
+              automatic: true,
+              bookUpgrade,
+              bookRepair: repair ? { reviewJobId: payload.repairReviewJobId! } : undefined,
               onLog: (line) => workerLog(ctx, `[acquire] job=${job.id} book=${book.id} media=${media} ${line}`),
               preferAgentImport: decision.mode === "agent",
               bookTorrentClient: ctx.bookTorrentClient,

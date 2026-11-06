@@ -146,6 +146,8 @@ export type AssetRow = {
   duration_ms: number | null;
   source_release_id: number | null;
   manifestation_id: number | null;
+  /** Query projection, not an assets column. Negative preferences are staged upgrades. */
+  manifestation_preferred_score?: number;
   sequence_in_manifestation: number;
   import_note: string | null;
   created_at: string;
