@@ -77,33 +77,11 @@ export class TransferMetricsRepo {
       UNION SELECT a.target_id,'tv' FROM tv_acquisition_downloads d JOIN tv_acquisitions a ON a.id=d.acquisition_id WHERE d.torrent_id=?`).all(row.id, row.id) as { target_id: number; media: "movie" | "tv" }[];
     return refs.flatMap(ref => this.contents(row, { command: { scope: { media: ref.media, targetId: ref.target_id } } } as CrossSeedReceipt));
   }
-  provider(row: MetricInventory, receipt?: CrossSeedReceipt): string | null {
-    if (receipt?.command.releaseId) {
-      const found = this.db.query("SELECT json_extract(payload_json,'$.provider') AS provider FROM release_inbox WHERE id=?").get(receipt.command.releaseId) as { provider: string } | null;
-      if (found) return found.provider;
-    }
-    const release = this.db.query("SELECT DISTINCT provider FROM releases WHERE info_hash=? LIMIT 2").all(row.native_id) as { provider: string }[];
-    if (release.length === 1) return release[0]!.provider;
-    const evidence = this.db.query(`SELECT value_json FROM app_state WHERE key LIKE 'cross-seed:selected-copy:%' AND
-      (json_extract(value_json,'$.offer.key')=? OR json_extract(value_json,'$.selectedOfferKey')=?) LIMIT 2`).all(row.offer_key, row.offer_key) as { value_json: string }[];
-    const names = [...new Set(evidence.map(item => { const copy = JSON.parse(item.value_json); return copy.offer.key === row.offer_key ? copy.offer.provider : null; }).filter(Boolean))];
-    if (!names.length) {
-      const selected = this.db.query(`SELECT json_extract(value_json,'$.selected.provider') AS provider FROM app_state
-        WHERE key LIKE 'release-selection:%' AND json_extract(value_json,'$.selected.key')=? LIMIT 2`).all(row.offer_key) as { provider: string }[];
-      names.push(...new Set(selected.map(item => item.provider).filter(Boolean)));
-    }
-    if (!names.length) {
-      const acquired = this.db.query(`SELECT json_extract(a.decision_json,'$.provider') AS provider FROM movie_acquisitions a
-        JOIN movie_acquisition_downloads d ON d.acquisition_id=a.id WHERE d.torrent_id=?
-        UNION SELECT json_extract(a.decision_json,'$.provider') FROM tv_acquisitions a
-        JOIN tv_acquisition_downloads d ON d.acquisition_id=a.id WHERE d.torrent_id=?`).all(row.id, row.id) as { provider: string | null }[];
-      names.push(...new Set(acquired.map(item => item.provider).filter((name): name is string => !!name)));
-    }
-    return names.length === 1 ? names[0] : null;
-  }
   learnMetainfo(bytes: Uint8Array, provider: string | null, now = new Date().toISOString()) {
     if (!provider) return;
-    for (const host of metainfoTrackerHosts(bytes)) this.inferTracker(host, provider, now);
+    const hosts = metainfoTrackerHosts(bytes);
+    // Distribution by an indexer does not prove all announces in a multi-tracker torrent belong to it.
+    for (const host of hosts) this.inferTracker(host, hosts.length === 1 ? provider : null, now);
   }
   /** Gradual local backfill; never downloads metainfo or scans the filesystem on a dashboard read. */
   learnCachedTrackers(now: string) {
@@ -170,6 +148,7 @@ export class TransferMetricsRepo {
     const seeding = fresh.filter(row => row.state === "seeding" && row.complete);
     const totals = all.map(row => JSON.parse(row.snapshot_json) as MetricRecord);
     const freshIds = new Set(fresh.map(row => row.id));
+    const liveIds = new Set(current.map(row => row.record.id));
     const mappings = this.mappings(), mapped = new Map(mappings.map(row => [row.host, row]));
     const trackerGroups = new Map<string, { hosts: Set<string>; name: string; rows: MetricRecord[] }>();
     const identity = (host: string) => mapped.get(host)?.source !== "unknown" && mapped.get(host) ? `name:${mapped.get(host)!.name.toLowerCase()}` : `host:${host}`;
@@ -180,13 +159,14 @@ export class TransferMetricsRepo {
     }
     const trackers = [...trackerGroups.entries()].map(([key, group]) => {
       const seeds = group.rows.filter(row => freshIds.has(row.id) && row.state === "seeding" && row.complete);
-      const unambiguous = group.rows.every(row => row.attributionStable && new Set(row.trackers.map(t => identity(t.host))).size === 1);
+      const completeGroup = group.rows.every(row => !liveIds.has(row.id) || freshIds.has(row.id));
+      const unambiguous = group.rows.every(row => row.attributionStable && new Set(row.trackers.map(t => t.host)).size === 1);
       const uploadedBytes = unambiguous ? sum(group.rows.map(row => row.uploadedBytes)) : null;
       const downloadedBytes = unambiguous ? sum(group.rows.map(row => row.downloadedBytes)) : null;
-      return { host: [...group.hosts].sort()[0]!, name: group.name, seedBytes: seeds.reduce((n, row) => n + row.sizeBytes!, 0),
-        seedingTorrents: seeds.length, uploadedBytes, downloadedBytes, seedSeconds: sum(group.rows.map(row => row.seedSeconds)),
-        uploadBytesPerSecond: completeSample && unambiguous ? sum(group.rows.filter(row => freshIds.has(row.id)).map(row => row.uploadBytesPerSecond)) : null,
-        downloadBytesPerSecond: completeSample && unambiguous ? sum(group.rows.filter(row => freshIds.has(row.id)).map(row => row.downloadBytesPerSecond)) : null,
+      return { host: [...group.hosts].sort()[0]!, name: group.name, seedBytes: completeGroup ? seeds.reduce((n, row) => n + row.sizeBytes!, 0) : null,
+        seedingTorrents: completeGroup ? seeds.length : null, uploadedBytes, downloadedBytes, seedSeconds: sum(group.rows.map(row => row.seedSeconds)),
+        uploadBytesPerSecond: completeGroup && unambiguous ? sum(group.rows.filter(row => freshIds.has(row.id)).map(row => row.uploadBytesPerSecond)) : null,
+        downloadBytesPerSecond: completeGroup && unambiguous ? sum(group.rows.filter(row => freshIds.has(row.id)).map(row => row.downloadBytesPerSecond)) : null,
         ratio: uploadedBytes !== null && downloadedBytes !== null && downloadedBytes > 0 ? uploadedBytes / downloadedBytes : null };
     });
     const units = new Set(fresh.flatMap(row => row.contents.map(content => `${content.media}:${content.targetId}`)));

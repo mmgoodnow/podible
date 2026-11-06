@@ -17,11 +17,10 @@ test("automatic tracker identity reads announces, strips credentials and ignores
 test("metainfo cache learns tracker names automatically and conflicting evidence stays unknown", () => {
   const db = new Database(":memory:"); runMigrations(db); const repo = new BooksRepo(db);
   try {
-    const bytes = bencode.encode({ announce: "https://a.example/PRIVATE", "announce-list": [["https://b.example/PASSKEY"]] });
+    const bytes = bencode.encode({ announce: "https://a.example/PRIVATE" });
     repo.putTorrentCache({ key: "test", provider: "Friendly tracker", url: "https://indexer.example/private", torrentBytes: bytes });
     expect(repo.transferMetrics.mappings()).toEqual([
       { host: "a.example", name: "Friendly tracker", source: "inferred" },
-      { host: "b.example", name: "Friendly tracker", source: "inferred" },
     ]);
     db.query("DELETE FROM transfer_tracker_mappings").run();
     repo.transferMetrics.learnCachedTrackers(new Date().toISOString());
@@ -30,5 +29,16 @@ test("metainfo cache learns tracker names automatically and conflicting evidence
     repo.transferMetrics.learnMetainfo(bytes, "Friendly tracker");
     expect(repo.transferMetrics.mappings().every(row => row.source === "unknown")).toBe(true);
     expect(JSON.stringify(db.query("SELECT * FROM transfer_tracker_mappings").all())).not.toMatch(/PRIVATE|PASSKEY|https/);
+  } finally { db.close(); }
+});
+
+test("multi-tracker metainfo cannot name independent announces after its supplying indexer", () => {
+  const db = new Database(":memory:"); runMigrations(db); const repo = new BooksRepo(db);
+  try {
+    repo.transferMetrics.learnMetainfo(bencode.encode({ announce: "https://a.example/SECRET", "announce-list": [["https://b.example/PRIVATE"]] }), "Alpha");
+    expect(repo.transferMetrics.mappings()).toEqual([
+      { host: "a.example", name: "Unknown tracker", source: "unknown" },
+      { host: "b.example", name: "Unknown tracker", source: "unknown" },
+    ]);
   } finally { db.close(); }
 });

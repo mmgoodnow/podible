@@ -83,7 +83,8 @@ test("collector persists all registered movie/book reuse telemetry, sanitizes tr
     expect(partial.stale).toBe(true); expect(partial.summary!.seedingTorrents).toBeNull();
     expect(partial.summary!.uploadBytesPerSecond).toBeNull(); expect(partial.summary!.uploadedBytes).toBe(3350);
     expect(partial.history).toHaveLength(3);
-    expect(partial.trackers.every(tracker => tracker.uploadBytesPerSecond === null)).toBe(true);
+    expect(partial.trackers.find(tracker => tracker.host === "tracker.example")!.uploadBytesPerSecond).toBeNull();
+    expect(partial.trackers.find(tracker => tracker.host === "book.example")!.uploadBytesPerSecond).toBe(20);
   } finally { await f.close(); }
 });
 
@@ -100,9 +101,24 @@ test("ownership mismatches and selected-zero byte telemetry never produce seedin
     expect(f.repo.transferMetrics.status({}, f.now()).summary!.seedBytes).toBe(200);
     f.advance(181);
     expect(f.repo.transferMetrics.status({}, f.now()).summary!.seedBytes).toBeNull();
+    expect(f.repo.transferMetrics.status({}, f.now()).trackers[0]).toMatchObject({ seedBytes: null, seedingTorrents: null, uploadBytesPerSecond: null });
     await collectTransferMetrics(f.repo, { ...f.adapters, connection: null });
     expect(f.repo.transferMetrics.status({}, f.now()).unavailableReason).toContain("unavailable");
     expect(f.repo.transferMetrics.status({}, f.now()).summary!.uploadedBytes).toBe(2000);
+  } finally { await f.close(); }
+});
+
+test("equal display names never make multi-announce transfer attribution unambiguous", async () => {
+  const f = await fixture();
+  try {
+    await f.add(1, ["alpha.example", "beta.example"]);
+    f.repo.transferMetrics.inferTracker("alpha.example", "Shared name", new Date(f.now()).toISOString());
+    f.repo.transferMetrics.inferTracker("beta.example", "Shared name", new Date(f.now()).toISOString());
+    await collectTransferMetrics(f.repo, f.adapters);
+    const status = f.repo.transferMetrics.status({}, f.now());
+    expect(status.trackers).toHaveLength(1);
+    expect(status.trackers[0]).toMatchObject({ seedBytes: 100, seedingTorrents: 1, uploadedBytes: null, downloadedBytes: null, uploadBytesPerSecond: null });
+    expect(status.summary!.uploadedBytes).toBe(1000);
   } finally { await f.close(); }
 });
 

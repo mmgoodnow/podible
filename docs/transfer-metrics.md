@@ -51,13 +51,19 @@ ratio is not the tracker's credited account ratio, freeleech or bonus accounting
 
 **Tracker totals** use hostname-to-name mappings learned from the announce and
 announce-list fields of metainfo fetched from a known indexer. This runs for book,
-movie, TV and reuse acquisitions; the collector gradually backfills the retained
+movie, TV and reuse acquisitions; only a single distinct announce host establishes
+an unambiguous name. Multi-host torrents do not establish tracker aliases; each
+host needs independent evidence. The collector gradually backfills the retained
 local metainfo cache without new network requests. Hosts sharing one name are grouped.
+Mutable daemon tracker lists never establish a name. Legacy hosts without retained
+metainfo keep their hostname until a later verified source supplies the evidence.
 There is no manual naming UI or mutation API; old manual overrides are ignored.
 Conflicting provider evidence leaves the hostname unnamed instead of guessing.
 Only hostnames are persisted, never announce paths, passkeys or raw tracker error
 text. Upload/download attribution is unknown for multi-tracker or changed-tracker
-registrations rather than assigning their full counters to each tracker. Seed
+registrations rather than assigning their full counters to each tracker. Matching
+display names never make multi-host traffic attributable. Stale per-tracker
+seed-size/count/rate gauges are unknown, not zero. Seed
 size and seed time can overlap between tracker totals. These are association
 totals, not proof that a tracker credited the corresponding minimum seed time.
 Historical group identity is the saved grouping at sample time; regrouping does

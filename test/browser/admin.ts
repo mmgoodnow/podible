@@ -176,6 +176,14 @@ try {
   assert.equal(await chart.locator("svg path").count(), 1);
   await bookSeries.click();
   await chart.getByLabel("Chart measure").selectOption("uploadedBytes");
+  await bookSeries.click();
+  const weekResponse = page.waitForResponse(response => response.url().includes("transferMetrics.status") && new URL(response.url()).searchParams.get("input")?.includes("168") === true);
+  await chart.getByRole("button", { name: "7d", exact: true }).click();
+  assert.equal((await weekResponse).status(), 200);
+  assert.equal(await chart.getByLabel("Chart measure").inputValue(), "uploadedBytes", "Changing the time range reset the selected measure");
+  assert.equal(await bookSeries.getAttribute("aria-pressed"), "false", "Changing the time range reset tracker visibility");
+  await bookSeries.click();
+  await chart.getByRole("button", { name: "24h", exact: true }).click();
   assert.equal(await chart.locator("svg path").count(), 2);
   const paths = await chart.locator("svg path").evaluateAll(nodes => nodes.map(node => node.getAttribute("d")));
   assert.ok(paths.every(path => path && new Set([...path.matchAll(/,([\d.]+)/g)].map(match => match[1])).size > 1), "Growing upload counters must not be drawn as flat lines");

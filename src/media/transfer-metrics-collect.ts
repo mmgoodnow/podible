@@ -131,7 +131,6 @@ export async function collectTransferMetrics(repo: BooksRepo, adapters: Transfer
       repo.transaction(() => {
         metrics.writeRecord(record, metric);
         if (metric.verified) {
-          if (metric.trackers.length === 1) metrics.inferTracker(metric.trackers[0]!.host, metrics.provider(record, receipt), at);
           for (const tracker of metric.trackers) metrics.inferTracker(tracker.host, null, at);
         }
       });

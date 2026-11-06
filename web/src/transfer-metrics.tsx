@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { TransferMetricsStatus } from "../../src/media/transfer-metrics-types";
 import { useTRPC } from "./rpc";
 import { Link } from "./router";
@@ -13,13 +13,13 @@ const date = (value: string) => new Date(value).toLocaleString(undefined, { mont
 const speed = (value: number | null) => value === null ? "Unknown" : `${metricBytes(value)}/s`;
 
 function TrackerTable({ data }: { data: TransferMetricsStatus }) {
-  const maximum = Math.max(1, ...data.trackers.map(row => row.seedBytes));
+  const maximum = Math.max(1, ...data.trackers.map(row => row.seedBytes ?? 0));
   return <section className="transfer-trackers" aria-label="Seeding by tracker">
     <h3>By tracker</h3>
     {!data.trackers.length ? <p className="muted">Trackers appear after the first verified torrent observation.</p> : <div className="transfer-table-scroll"><table>
       <thead><tr><th>Tracker</th><th>Seed size{data.stale ? " (partial)" : ""}</th><th>Torrents</th><th>Uploaded</th><th>Downloaded</th><th>Ratio</th><th>Seed time</th></tr></thead>
-      <tbody>{[...data.trackers].sort((a, b) => b.seedBytes - a.seedBytes).map(row => <tr key={row.host}>
-        <th scope="row"><span>{row.name === "Unknown tracker" ? row.host : row.name}</span><span className="transfer-tracker-bar" style={{ width: `${row.seedBytes / maximum * 100}%` }} /></th>
+      <tbody>{[...data.trackers].sort((a, b) => (b.seedBytes ?? -1) - (a.seedBytes ?? -1)).map(row => <tr key={row.host}>
+        <th scope="row"><span>{row.name === "Unknown tracker" ? row.host : row.name}</span>{row.seedBytes !== null && <span className="transfer-tracker-bar" style={{ width: `${row.seedBytes / maximum * 100}%` }} />}</th>
         <td>{metricBytes(row.seedBytes)}</td><td>{count(row.seedingTorrents)}</td><td>{metricBytes(row.uploadedBytes)}</td>
         <td>{metricBytes(row.downloadedBytes)}</td><td>{row.ratio === null ? "—" : `${row.ratio.toFixed(2)}×`}</td><td>{metricDays(row.seedSeconds)}</td>
       </tr>)}</tbody>
@@ -31,9 +31,9 @@ function TrackerTable({ data }: { data: TransferMetricsStatus }) {
 export function TransferMetrics() {
   const trpc = useTRPC();
   const [hours, setHours] = useState<24 | 168 | 720 | 2160>(24);
-  const metrics = useQuery(trpc.transferMetrics.status.queryOptions({ hours }, { refetchInterval: 60_000 }));
+  const metrics = useQuery(trpc.transferMetrics.status.queryOptions({ hours }, { refetchInterval: 60_000, placeholderData: keepPreviousData }));
   const data = metrics.data, summary = data?.summary;
-  return <section className="activity-section transfer-dashboard" aria-label="Sharing and transfers">
+  return <section className="activity-section transfer-dashboard" aria-label="Sharing and transfers" aria-busy={metrics.isFetching}>
     <div className="transfer-heading"><h2>Sharing &amp; transfers</h2>{data?.observedAt && <span className={`transfer-live ${data.stale ? "transfer-stale" : ""}`}>
       {data.stale ? "Some readings unavailable" : "Updated"} {date(data.observedAt)}</span>}</div>
     <LibraryInventoryStats />
