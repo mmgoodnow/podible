@@ -37,8 +37,7 @@
 .transfer-crosshair { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
 .transfer-chart-axis { display: flex; justify-content: space-between; color: var(--muted); font-size: .7rem; margin-left: 5.6rem; }
 .transfer-chart-empty { min-height: 120px; display: grid; place-items: center; color: var(--muted); text-align: center; font-size: .85rem; }
-.transfer-chart-scrubber { display: flex; gap: .75rem; align-items: center; font-size: .75rem; color: var(--muted); margin: .75rem 0; }
-.transfer-chart-scrubber input { flex: 1; min-width: 0; accent-color: var(--ink); }
+.transfer-chart-reading { font-size: .75rem; color: var(--muted); margin: .75rem 0; min-height: 1.2em; }
 .transfer-chart-legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: .35rem; margin-top: .75rem; }
 .transfer-chart-legend button { display: grid; grid-template-columns: .8rem minmax(0, 1fr) auto; align-items: center; column-gap: .35rem; padding: .45rem .5rem; background: transparent; color: var(--ink); border: 1px solid var(--line); text-align: left; font-size: .75rem; }
 .transfer-chart-legend button[aria-pressed=false] { opacity: .45; }

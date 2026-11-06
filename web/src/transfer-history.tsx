@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from "react";
+import { useId, useState, type CSSProperties } from "react";
 import type { TransferMetricsStatus } from "../../src/media/transfer-metrics-types";
 import { chartDomain, chartSegments, metricBytes, metricDays, seriesChange } from "./transfer-metrics-model";
 
@@ -20,6 +20,7 @@ const colors = ["#326853", "#bd5834", "#386b96", "#986c20", "#8a5270", "#467e7b"
 const shortDate = (at: string) => new Date(at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
 export function TransferHistory({ data, hours, setHours }: { data: TransferMetricsStatus; hours: 24 | 168 | 720 | 2160; setHours: (hours: 24 | 168 | 720 | 2160) => void }) {
+  const instructionsId = useId();
   const [mode, setMode] = useState<Mode>("seedBytes"), [hidden, setHidden] = useState<Set<string>>(new Set());
   const [zoom, setZoom] = useState(false), [focused, setFocused] = useState<number | null>(null);
   const config = modes[mode], history = data.history;
@@ -45,12 +46,19 @@ export function TransferHistory({ data, hours, setHours }: { data: TransferMetri
       <div className="transfer-ranges" aria-label="History range">{([[24, "24h"], [168, "7d"], [720, "30d"], [2160, "90d"]] as const).map(([value, title]) =>
         <button key={value} aria-pressed={hours === value} onClick={() => { setHours(value); setFocused(null); }}>{title}</button>)}</div>
     </div></div>
-    <div className="transfer-chart-caption"><span>{!hasReadings ? "No readings for this measure yet" : noChange ? "No change in this window" : "Select a point to inspect values"}</span>
+    <div className="transfer-chart-caption"><span>{!hasReadings ? "No readings for this measure yet" : noChange ? "No change in this window" : "Hover to inspect values"}</span>
       <label><input type="checkbox" checked={zoom} onChange={event => setZoom(event.target.checked)} /> Zoom vertical scale</label></div>
     {history.length < 2 ? <p className="transfer-chart-empty">History builds with each minute of observation.</p> : !hasReadings ? <p className="transfer-chart-empty">{visible.length ? "Unavailable readings are gaps, not zero activity." : "Select a tracker below to show its history."}</p> : <>
       <div className="transfer-chart-plot">
         <div className="transfer-chart-yaxis">{[domain.maximum, (domain.maximum + domain.minimum) / 2, domain.minimum].map((value, index) => <span key={index}>{config.format(value)}</span>)}</div>
-        <svg viewBox="-2 -8 804 196" role="img" aria-label={`${config.label} by tracker; missing readings appear as gaps`} preserveAspectRatio="none"
+        <svg viewBox="-2 -8 804 196" role="img" tabIndex={0} aria-describedby={instructionsId} aria-label={`${config.label} by tracker; missing readings appear as gaps`} preserveAspectRatio="none"
+          onKeyDown={event => {
+            const current = focused ?? history.length - 1;
+            const next = event.key === "ArrowLeft" ? Math.max(0, current - 1) : event.key === "ArrowRight" ? Math.min(history.length - 1, current + 1) : event.key === "Home" ? 0 : event.key === "End" ? history.length - 1 : event.key === "Escape" ? null : undefined;
+            if (next !== undefined) { event.preventDefault(); setFocused(next); }
+          }}
+          onBlur={() => setFocused(null)}
+          onPointerLeave={event => { if (event.currentTarget.ownerDocument.activeElement !== event.currentTarget) setFocused(null); }}
           onPointerMove={event => { const bounds = event.currentTarget.getBoundingClientRect(), fraction = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
             const time = Date.parse(history[0]!.at) + fraction * (Date.parse(history.at(-1)!.at) - Date.parse(history[0]!.at));
             let nearest = 0; for (let i = 1; i < history.length; i++) if (Math.abs(Date.parse(history[i]!.at) - time) < Math.abs(Date.parse(history[nearest]!.at) - time)) nearest = i; setFocused(nearest); }}>
@@ -61,7 +69,8 @@ export function TransferHistory({ data, hours, setHours }: { data: TransferMetri
         </svg>
       </div>
       <div className="transfer-chart-axis"><span>{shortDate(history[0]!.at)}</span><span>{shortDate(history.at(-1)!.at)}</span></div>
-      <label className="transfer-chart-scrubber">{label}<input aria-label="History sample" type="range" min="0" max={history.length - 1} value={focused ?? history.length - 1} onChange={event => setFocused(Number(event.target.value))} /></label>
+      <p className="transfer-chart-reading" aria-label="Inspected sample">{label}</p>
+      <p id={instructionsId} className="visually-hidden">Use left and right arrow keys to inspect samples, Home and End for the first and last sample, and Escape for the latest readings.</p>
     </>}
     <div className="transfer-chart-legend" aria-label="Chart series">{series.map(row => {
       const value = row.points[focused ?? row.points.length - 1]?.value ?? null, change = seriesChange(row.points);
