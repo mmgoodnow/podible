@@ -176,6 +176,85 @@ test("Tom and Jerry year/ordinal mismatch is retained per-show while healthy req
   } finally { await s.close(); }
 });
 
+test("Tom and Jerry episode crosswalk preserves all 161 approved identities across three incompatible provider groups and survives restart", async () => {
+  const s = await setup();
+  try {
+    await s.sync();
+    const tom: TvCatalogEntry = { ...catalog(true), key: "tvdb:72860", tvdbId: 72860, tmdbId: 340782, title: "Tom and Jerry", anime: false,
+      episodes: Array.from({ length: 177 }, (_, index) => {
+        const season = index < 46 ? 1940 : index < 114 ? 1950 : index < 161 ? 1960 : 0;
+        const title = index === 1 ? "The Yankee Doodle Mouse" : index === 2 ? "The Zoot Cat" : index === 3 ? "The Hollywood Bowl" : `Short ${index}`;
+        return { key: `tvdb:${7286000 + index}`, title, airDate: "2000-01-01", runtimeMinutes: 7,
+          numbering: [{ scheme: "tvdb:aired", season, episode: index + 1, absolute: null }] };
+      }) };
+    s.records.set(734, sourceRequest(734, { media: { tmdbId: 340782, tvdbId: 72860, externalServiceId: 834 },
+      seasons: [1, 2, 3].map(seasonNumber => ({ seasonNumber, status: 2 })) }));
+    s.setCatalog(tom);
+    const seasonFor = (index: number) => index < 114 ? 1 : index < 127 ? 2 : 3;
+    s.services.source.season = async (tmdbId, seasonNumber) => ({ tmdbId, seasonNumber,
+      episodes: tom.episodes.slice(0, 161).flatMap((ep, index) => seasonFor(index) === seasonNumber ? [{
+        id: 8051000 + index, seasonNumber, episodeNumber: index + 1,
+        title: index === 1 ? "Yankee Doodle Mouse" : index === 2 ? "Zoot Cat" : index === 3 ? "Tom and Jerry in the Hollywood Bowl" : ep.title,
+        airDate: ep.airDate, runtimeMinutes: ep.runtimeMinutes, overview: "", tvdbId: null,
+      }] : []) });
+    let researched = 0;
+    s.services.researchEpisodes = async input => { researched += input.sources.length; return input.sources.map(ep => ({ sourceId: ep.id,
+      targetKey: `tvdb:${7286000 + ep.id - 8051000}`, reason: "Distinct title variant with the same date inside the verified work." })); };
+    await s.sync();
+    const origin = s.repo.tv.origins(s.instance, 734)[0]!;
+    expect(s.repo.tv.requestedEpisodes(origin.requestId)).toHaveLength(161);
+    expect(researched).toBe(3);
+    expect(tvSeerrMappingIssues(s.repo, s.instance)).toEqual([]);
+    const stored = s.repo.tv.entry(origin.entryId)!;
+    expect(stored.episodes.filter(ep => ep.correspondences?.length)).toHaveLength(161);
+    expect(stored.episodes.find(ep => ep.key === "tvdb:7286003")!.numbering).toMatchObject([
+      { scheme: "tmdb:aired", season: 1, episode: 4 }, { scheme: "tvdb:aired", season: 1940, episode: 4 },
+    ]);
+    const queued = s.repo.listJobsByType("tv_acquire").length;
+    expect(queued).toBeGreaterThan(0);
+    s.reopen();
+    await s.sync();
+    expect(researched).toBe(3);
+    expect(s.repo.tv.origins(s.instance, 734)).toHaveLength(1);
+    expect(s.repo.listJobsByType("tv_acquire")).toHaveLength(queued);
+    expect(s.repo.tv.requestedEpisodes(origin.requestId).some(ep => ep.numbering.some(n => n.scheme === "tvdb:aired" && n.season === 0))).toBe(false);
+  } finally { await s.close(); }
+});
+
+test("matching season ordinals cannot broaden a partial provider season to a different canonical group", async () => {
+  const s = await setup();
+  try {
+    await s.sync();
+    const entry = { ...catalog(true), anime: false };
+    s.setCatalog(entry);
+    s.records.set(101, sourceRequest(101, { seasons: [{ seasonNumber: 1, status: 2 }] }));
+    const source = entry.episodes.find(ep => ep.key === "tvdb:201")!;
+    s.services.source.season = async (tmdbId, seasonNumber) => ({ tmdbId, seasonNumber, episodes: [{ id: 99,
+      seasonNumber, episodeNumber: 1, title: source.title, airDate: source.airDate, runtimeMinutes: source.runtimeMinutes, overview: "", tvdbId: 201 }] });
+    await s.sync();
+    const origin = s.repo.tv.origins(s.instance, 101)[0]!;
+    expect(s.repo.tv.requestedEpisodes(origin.requestId).map(ep => ep.key)).toEqual(["tvdb:201"]);
+  } finally { await s.close(); }
+});
+
+test("unresolved episode research retains the whole approval without blocking a healthy sibling", async () => {
+  const s = await setup();
+  try {
+    await s.sync();
+    s.setCatalog({ ...catalog(true), anime: false });
+    s.records.set(101, sourceRequest(101)); s.records.set(102, sourceRequest(102));
+    let read = 0;
+    s.services.source.season = async (tmdbId, seasonNumber) => ({ tmdbId, seasonNumber, episodes: [{
+      id: ++read, seasonNumber, episodeNumber: 1, title: "Metadata variant", airDate: "2099-01-01", runtimeMinutes: 24, overview: "", tvdbId: null,
+    }] });
+    s.services.researchEpisodes = async input => input.sources.map(ep => ({ sourceId: ep.id, targetKey: ep.id === 1 ? null : "tvdb:101", reason: "Reviewed metadata." }));
+    await s.sync();
+    expect(s.repo.tv.origins(s.instance, 101)).toEqual([]);
+    expect(s.repo.tv.origins(s.instance, 102)).toHaveLength(1);
+    expect(tvSeerrMappingIssues(s.repo, s.instance).map(issue => issue.requestId)).toEqual([101]);
+  } finally { await s.close(); }
+});
+
 test("one unresolved approved season cannot silently truncate a partially matching Seerr approval", async () => {
   const s = await setup();
   try {
@@ -433,28 +512,52 @@ test("a second anime fanout outbox failure rolls back both origins, memberships,
   } finally { await s.close(); }
 });
 
-test("real Reflow retries a failed durable TV cursor after fanout without refetching metadata or duplicating future requests", async () => {
+test("real Reflow retries a failed durable TV cursor after crosswalk/fanout without repeating research or duplicating requests", async () => {
   const s = await setup();
   let runtime: Awaited<ReturnType<typeof createJobExecutionRuntime>> | undefined;
   try {
     const before = { baselineId: 100, cursor: new Date().toISOString() };
     s.repo.setJsonState(s.feedKey, before);
     s.setCatalog(catalog(true));
+    let seasonReads = 0, researchCalls = 0;
+    s.services.source.season = async (tmdbId, seasonNumber) => {
+      seasonReads++;
+      return { tmdbId, seasonNumber, episodes: catalog(true).episodes.filter(ep => ep.numbering.some(n => n.scheme === "tvdb:aired" && n.season === seasonNumber)).map(ep => ({
+        id: Number(ep.key.slice(5)), seasonNumber, episodeNumber: ep.numbering[0]!.episode!, title: `Metadata variant: ${ep.title}`,
+        airDate: ep.airDate, runtimeMinutes: ep.runtimeMinutes, overview: "", tvdbId: null,
+      })) };
+    };
+    s.services.researchEpisodes = async input => {
+      researchCalls++;
+      return input.sources.map(ep => ({ sourceId: ep.id, targetKey: `tvdb:${ep.id}`, reason: "Independently reviewed the provider title variant." }));
+    };
     s.records.set(101, sourceRequest(101, { seasons: [{ seasonNumber: 1, status: 2 }, { seasonNumber: 2, status: 2 }] }));
     s.db.exec(`CREATE TRIGGER fail_tv_cursor BEFORE UPDATE ON app_state WHEN NEW.key='${s.feedKey}'
       BEGIN SELECT RAISE(ABORT,'injected TV cursor failure'); END`);
+    s.db.exec(`CREATE TRIGGER fail_tv_crosswalk_import BEFORE INSERT ON tv_request_origins
+      BEGIN SELECT RAISE(ABORT,'injected crosswalk import failure'); END`);
     const job = s.repo.createJob({ type: "tv_sync", maxAttempts: 1 });
     const executionPath = path.join(s.root, "execution.sqlite");
     runtime = await createJobExecutionRuntime(s.context, executionPath, { retryDelayMs: 1 });
-    const until = async (status: "failed" | "succeeded") => {
+    const until = async (status: "failed" | "succeeded", errorIncludes?: string) => {
       const deadline = Date.now() + 7000;
-      while (s.repo.getJob(job.id)?.status !== status) {
+      while (s.repo.getJob(job.id)?.status !== status || (errorIncludes && !s.repo.getJob(job.id)?.error?.includes(errorIncludes))) {
         await runtime!.reconcile();
         if (Date.now() > deadline) throw new Error(`TV sync did not become ${status}: ${JSON.stringify(s.repo.getJob(job.id))}`);
         await Bun.sleep(15);
       }
     };
-    await until("failed");
+    await until("failed", "crosswalk import failure");
+    expect(s.repo.getJob(job.id)!.error).toContain("crosswalk import failure");
+    expect(s.repo.tv.origins(s.instance, 101)).toEqual([]);
+    expect(s.count("tv_episodes")).toBe(0);
+    expect(researchCalls).toBe(1);
+    s.db.exec("DROP TRIGGER fail_tv_crosswalk_import");
+    await runtime.stop(); runtime = undefined;
+    s.reopen();
+    s.repo.retryJob(job.id);
+    runtime = await createJobExecutionRuntime(s.context, executionPath, { retryDelayMs: 1 });
+    await until("failed", "TV cursor failure");
     expect(s.repo.getJob(job.id)!.error).toContain("TV cursor failure");
     const runId = s.repo.getJobExecution(job.id)!.run_id;
     const origins = s.repo.tv.origins(s.instance, 101);
@@ -471,6 +574,9 @@ test("real Reflow retries a failed durable TV cursor after fanout without refetc
     expect(s.repo.tv.origins(s.instance, 101)).toEqual(origins);
     expect(s.calls.catalogs).toEqual([101]);
     expect(s.calls.enrich).toBe(1);
+    expect(seasonReads).toBe(2);
+    expect(researchCalls).toBe(1);
+    expect(s.repo.tv.requestedEpisodes(origins[0]!.requestId)[0]!.correspondences).toHaveLength(1);
     expect(s.repo.tv.requests()).toHaveLength(2);
     expect(s.repo.listJobsByType("tv_acquire")).toEqual([]);
     expect(s.repo.getJsonState<{ baselineId: number; cursor: string }>(s.feedKey)!.cursor > before.cursor).toBe(true);

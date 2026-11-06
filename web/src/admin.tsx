@@ -189,7 +189,7 @@ function ActivityProblem({ incident, onRetried }: { incident: Ops["incidents"][n
     <div className="activity-item-heading"><h3><WorkTitle title={incident.title} href={incident.href} /></h3>
       <span className="activity-badge">{mapping ? "Episode mapping needed" : comparison ? "Comparison stopped" : retryable ? "Stopped" : "Needs attention"}</span></div>
     <p>{incident.detail}</p>
-    <p>{mapping ? "Episode metadata is rechecked automatically. Retrying a download will not resolve different numbering systems." : <Recovery recovery={incident.recovery} nextWakeAt={incident.nextWakeAt} />}</p>
+    <p>{mapping ? "Podible researches episode correspondences and retries automatically. There is no need to retry the download." : <Recovery recovery={incident.recovery} nextWakeAt={incident.nextWakeAt} />}</p>
     {correction && <div className="actions">{correction.href.startsWith("#") ? <a className="button" href={correction.href}>{correction.label}</a>
       : <Link className="button" href={correction.href}>{correction.label}</Link>}</div>}
     {retryable && !correction && <div className="actions"><button disabled={retry.isPending} onClick={() => retry.mutate({ jobId: incident.jobId! })}>

@@ -58,6 +58,13 @@ export const tvCatalogEpisodeSchema = z.object({
     stability: z.enum(["provider", "ephemeral"]),
     source: z.string().min(1),
   }).optional(),
+  correspondences: z.array(z.object({
+    provider: z.literal("tmdb"), workId: z.number().int().positive(), episodeId: z.number().int().positive(),
+    season: z.number().int().nonnegative(), episode: z.number().int().positive(),
+    fingerprint: z.string().regex(/^[a-f0-9]{64}$/), method: z.enum(["provider_id", "title_date", "agent"]),
+    contextFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+    reason: z.string().min(1).max(2000), model: z.string().nullable(),
+  })).optional(),
 }).refine((ep) => !ep.key.startsWith("ephemeral:") || ep.identity?.stability !== "provider", {
   message: "An ephemeral episode key cannot claim provider-stable identity",
 });

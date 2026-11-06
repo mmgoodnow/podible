@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import type { JobRow } from "../app-types";
 import { seerrInstance } from "../movies/seerr";
 import { ensurePresentIntent } from "../media/retention-service";
@@ -6,11 +7,13 @@ import { durableStep, workerLog, type WorkerContext } from "../worker/context";
 import { queueTvSeasons, tvUpstreamStep } from "./acquisition";
 import { enrichAnimeEntry, type AnimeCatalogProjection } from "./anime";
 import { SonarrCatalog } from "./sonarr";
-import { approvedSeerrTv, selectedSeerrTvSeasons, SeerrTvClient, TvUpstreamError, type SeerrTvRequest, type SeerrTvSource } from "./upstream";
+import { approvedSeerrTv, selectedSeerrTvSeasons, SeerrTvClient, TvUpstreamError, type SeerrTvRequest, type SeerrTvSource, type SeerrTvSeason } from "./upstream";
 import type { TvCatalogEntry } from "./types";
 import type { BooksRepo } from "../repo";
 import { configuredTvCatalog, type TvCatalog } from "./catalog";
 import { nativeTvRequestScope, refreshNativeTvRequests } from "./service";
+import { EpisodeMappingError, mapRequestedEpisodes, type EpisodeMappingResearch } from "./episode-crosswalk";
+import { createEpisodeMappingResearch } from "./episode-mapping-agent";
 
 export const tvSyncPayloadSchema = z.object({
   backfillRequestIds: z.array(z.number().int().positive()).min(1).max(5).optional(),
@@ -33,6 +36,7 @@ export type TvSyncServices = {
   source: SeerrTvSource;
   catalog: Pick<SonarrCatalog, "resolveSeerr"> & Partial<Pick<SonarrCatalog, "poster" | "instance">>;
   enrich: (entry: TvCatalogEntry) => Promise<AnimeCatalogProjection>;
+  researchEpisodes?: EpisodeMappingResearch;
 };
 
 /** Backfill old, unchanged works without loading episodes or doing HTTP on Library reads. */
@@ -73,7 +77,8 @@ export async function hydrateMissingTvArtwork(ctx: WorkerContext, supplied?: TvS
 export function configuredTvSyncServices(ctx: WorkerContext): TvSyncServices {
   const settings = ctx.getSettings();
   return { source: new SeerrTvClient(settings.movies.seerr),
-    catalog: new SonarrCatalog({ url: settings.tv.sonarrUrl, apiKey: settings.tv.sonarrApiKey }), enrich: enrichAnimeEntry };
+    catalog: new SonarrCatalog({ url: settings.tv.sonarrUrl, apiKey: settings.tv.sonarrApiKey }), enrich: enrichAnimeEntry,
+    researchEpisodes: createEpisodeMappingResearch(settings) };
 }
 export async function syncTvRequests(ctx: WorkerContext, job: JobRow,
   services?: TvSyncServices, nativeCatalog?: TvCatalog): Promise<"done"> {
@@ -104,12 +109,12 @@ export async function syncTvRequests(ctx: WorkerContext, job: JobRow,
   }
   services ??= ctx.tvSyncServices ?? configuredTvSyncServices(ctx);
   const instance = seerrInstance(settings.movies.seerr.url);
-  const configuration = JSON.stringify([settings.tv, settings.movies.seerr.url, settings.movies.qualityPolicy]);
+  const configuration = createHash("sha256").update(JSON.stringify([settings.tv, settings.movies.seerr, settings.movies.qualityPolicy])).digest("hex");
   const expectedConfiguration = await durableStep(ctx, "tv-seerr:configuration", () => configuration);
   const active = () => {
     ctx.execution?.assertActive();
     const now = ctx.getSettings();
-    if (JSON.stringify([now.tv, now.movies.seerr.url, now.movies.qualityPolicy]) !== expectedConfiguration)
+    if (createHash("sha256").update(JSON.stringify([now.tv, now.movies.seerr, now.movies.qualityPolicy])).digest("hex") !== expectedConfiguration)
       throw new Error("TV request configuration changed; start a new sync");
   };
   const savedFeed = ctx.repo.getJsonState(tvSeerrFeedKey(instance));
@@ -181,24 +186,60 @@ export async function syncTvRequests(ctx: WorkerContext, job: JobRow,
       });
       continue;
     }
-    const catalog = await tvUpstreamStep(ctx, `tv-seerr:catalog:${request.id}`, () => services.catalog.resolveSeerr(request));
+    let catalog = await tvUpstreamStep(ctx, `tv-seerr:catalog:${request.id}`, () => services.catalog.resolveSeerr(request));
     const seasons = new Set(selectedSeerrTvSeasons(request));
     const catalogSeasons = [...new Set(catalog.episodes.flatMap(episode => episode.numbering
       .filter(number => number.scheme === "tvdb:aired" && number.season !== null).map(number => number.season!)))].sort((a, b) => a - b);
-    if ([...seasons].some(season => !catalogSeasons.includes(season))) {
+    let selectedKeys: string[] | null = null, mappingProblem: string | null = null;
+    if (services.source.season) {
+      try {
+        const metadata: SeerrTvSeason[] = [];
+        for (const season of seasons) metadata.push(await tvUpstreamStep(ctx, `tv-seerr:season:${request.id}:${season}`,
+          () => services.source.season!(request.media.tmdbId, season)));
+        const previous = [...new Map([...(ctx.repo.tv.entryByKey(catalog.key)?.episodes ?? []), ...ctx.repo.tv.origins(instance, request.id)
+          .flatMap(origin => ctx.repo.tv.entry(origin.entryId)?.episodes ?? [])].map(ep => [ep.key, ep])).values()];
+        const mapped = await mapRequestedEpisodes({
+          entry: catalog, tmdbId: request.media.tmdbId, seasons: [...seasons], metadata, previous,
+          research: async input => {
+            const fingerprint = createHash("sha256").update(JSON.stringify(input)).digest("hex");
+            const outcome = await durableStep(ctx, `tv-seerr:episode-research:${request.id}:${fingerprint}`, async () => {
+              workerLog(ctx, `[tv-episode-mapping] request=${request.id} researching ${input.sources.length} episodes (${fingerprint.slice(0, 8)})`);
+              try {
+                const decisions = await (services.researchEpisodes ?? createEpisodeMappingResearch(settings))(input);
+                workerLog(ctx, `[tv-episode-mapping] request=${request.id} researched ${decisions.length} episodes; ${decisions.filter(d => d.targetKey === null).length} unresolved`);
+                return { decisions };
+              }
+              catch (error) {
+                if (!(error instanceof EpisodeMappingError)) throw error;
+                return { error: error.message };
+              }
+            });
+            if (!outcome.decisions) throw new EpisodeMappingError(outcome.error);
+            return outcome.decisions;
+          },
+        });
+        catalog = mapped.entry; selectedKeys = mapped.selectedKeys;
+      } catch (error) {
+        if (!(error instanceof EpisodeMappingError)) throw error;
+        mappingProblem = error.message;
+      }
+    } else if ([...seasons].some(season => !catalogSeasons.includes(season))) {
+      mappingProblem = "Explicit provider episode mapping is required; season metadata is unavailable.";
+    }
+    if (mappingProblem) {
       await durableStep(ctx, `tv-seerr:mapping-unresolved:${request.id}`, () => ctx.repo.transaction(() => {
         active();
         const previous = tvSeerrMappingIssues(ctx.repo, instance), now = new Date().toISOString();
         const issue = tvSeerrMappingIssueSchema.parse({ requestId: request.id, title: catalog.title,
           tmdbId: request.media.tmdbId, tvdbId: catalog.tvdbId, approvedSeasons: [...seasons], catalogSeasons,
           firstSeenAt: previous.find(item => item.requestId === request.id)?.firstSeenAt ?? now, lastAttemptAt: now,
-          reason: `Approved Seerr seasons ${[...seasons].join(", ")} do not all exist in TVDB aired seasons ${catalogSeasons.join(", ")}. Explicit provider episode mapping is required; approval retained, no ordinal remapping or download performed.` });
+          reason: `${mappingProblem} Approval retained; no partial request, ordinal remapping or download performed.` });
         ctx.repo.setJsonState(tvSeerrMappingKey(instance), [...previous.filter(item => item.requestId !== request.id), issue]);
         workerLog(ctx, `[tv-seerr] request=${request.id} title=${JSON.stringify(issue.title)} tmdb=${issue.tmdbId} tvdb=${issue.tvdbId}: ${issue.reason}`);
       }));
       continue;
     }
-    const selected = catalog.episodes.filter((episode) => episode.numbering.some((number) =>
+    const selected = catalog.episodes.filter((episode) => selectedKeys ? selectedKeys.includes(episode.key) : episode.numbering.some((number) =>
       number.scheme === "tvdb:aired" && number.season !== null && seasons.has(number.season)));
     if (!selected.length) throw new Error(`Seerr request ${request.id} has no explicitly mapped episodes in its approved seasons`);
     const origins = ctx.repo.tv.origins(instance, request.id);

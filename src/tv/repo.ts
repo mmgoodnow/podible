@@ -83,8 +83,12 @@ export class TvRepo {
           source,
         };
         const episode = this.db.query(`INSERT INTO tv_episodes(episode_key,metadata_json,updated_at) VALUES(?,?,?)
-          ON CONFLICT(episode_key) DO UPDATE SET metadata_json=excluded.metadata_json,updated_at=excluded.updated_at RETURNING id`)
-          .get(ep.key, json({ key: ep.key, title: ep.title, airDate: ep.airDate, runtimeMinutes: ep.runtimeMinutes, identity }), now) as { id: number };
+          ON CONFLICT(episode_key) DO UPDATE SET metadata_json=CASE
+            WHEN json_type(excluded.metadata_json,'$.correspondences') IS NULL AND json_type(tv_episodes.metadata_json,'$.correspondences')='array'
+            THEN json_set(excluded.metadata_json,'$.correspondences',json_extract(tv_episodes.metadata_json,'$.correspondences'))
+            ELSE excluded.metadata_json END,updated_at=excluded.updated_at RETURNING id`)
+          .get(ep.key, json({ key: ep.key, title: ep.title, airDate: ep.airDate, runtimeMinutes: ep.runtimeMinutes, identity,
+            ...(ep.correspondences !== undefined ? { correspondences: ep.correspondences } : {}) }), now) as { id: number };
         this.db.query("INSERT OR IGNORE INTO tv_entry_episodes(entry_id,episode_id) VALUES(?,?)").run(row.id, episode.id);
         const ref = keyRef(ep.key, identity.source);
         this.storeRefs("episode", episode.id, [...(ref ? [ref] : []), ...ep.refs]);

@@ -13,6 +13,14 @@ sequels, related entries, specials and alternative provider groupings. Sonarr's
 anime classification is only an enrichment hint. Provider seasons and absolute
 numbers do not establish episode identity.
 
+Seerr approval is interpreted using TMDB episode membership, not matching season
+numbers. A persisted episode crosswalk can split or combine provider season
+groups while leaving TVDB/Plex identities unchanged. Exact provider IDs and
+unique title/date anchors avoid unnecessary research; tool-first agent batches
+resolve title/date disagreements and retain their evidence on episode metadata.
+Incomplete mappings preserve the whole approval for automatic retry, not a
+partial download. See [Tom and Jerry crosswalk](tom-and-jerry-shadow.md).
+
 An episode has stable provider references. Multiple works may reference an
 episode, with entry-scoped numbering. Explicit AniDB/TVDB mappings and AniList
 relationships can split an aggregate into logical works; unknown mappings retain

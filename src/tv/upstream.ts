@@ -144,10 +144,16 @@ export const seerrTvRequestSchema = seerrRequestSchema.extend({
 });
 export type SeerrTvRequest = z.infer<typeof seerrTvRequestSchema>;
 export type SeerrTvSettings = z.infer<typeof seerrSettingsSchema>;
+export type SeerrTvSeason = {
+  tmdbId: number; seasonNumber: number;
+  episodes: { id: number; seasonNumber: number; episodeNumber: number; title: string;
+    airDate: string | null; runtimeMinutes: number | null; overview: string; tvdbId: number | null }[];
+};
 export interface SeerrTvSource {
   latest(): Promise<SeerrTvRequest | null>;
   changes(since: string): Promise<{ requests: SeerrTvRequest[]; through: string }>;
   request(id: number): Promise<SeerrTvRequest>;
+  season?(tmdbId: number, seasonNumber: number): Promise<SeerrTvSeason>;
 }
 
 const approved = (status: number) => [2, 4, 5].includes(status);
@@ -218,5 +224,27 @@ export class SeerrTvClient implements SeerrTvSource {
     if (result.id !== requestId)
       throw new TvUpstreamError("seerr", "different request identity; cursor was not advanced");
     return result;
+  }
+
+  async season(tmdbId: number, seasonNumber: number): Promise<SeerrTvSeason> {
+    tvWire("seerr", id, tmdbId);
+    tvWire("seerr", z.number().int().nonnegative(), seasonNumber);
+    const result = tvWire("seerr", z.object({
+      seasonNumber: z.number().int().nonnegative(),
+      episodes: z.array(z.object({
+        id, showId: id.optional(), seasonNumber: z.number().int().nonnegative(), episodeNumber: id,
+        name: z.string().max(2000), airDate: z.union([z.iso.date(), z.literal("")]).nullable().optional(),
+        runtime: z.number().nonnegative().nullable().optional(), overview: z.string().default(""),
+        externalIds: z.object({ tvdbId: id.nullable().optional() }).optional(),
+      })).max(2000),
+    }), await this.#http.get(`tv/${tmdbId}/season/${seasonNumber}`));
+    if (result.seasonNumber !== seasonNumber || result.episodes.some(ep => ep.seasonNumber !== seasonNumber || (ep.showId !== undefined && ep.showId !== tmdbId)) ||
+        new Set(result.episodes.map(ep => ep.id)).size !== result.episodes.length ||
+        new Set(result.episodes.map(ep => ep.episodeNumber)).size !== result.episodes.length)
+      throw new TvUpstreamError("seerr", "conflicting season/episode ownership or identity");
+    return { tmdbId, seasonNumber, episodes: result.episodes.map(ep => ({
+      id: ep.id, seasonNumber, episodeNumber: ep.episodeNumber, title: this.#http.clean(ep.name),
+      airDate: ep.airDate || null, runtimeMinutes: ep.runtime || null, overview: this.#http.clean(ep.overview), tvdbId: ep.externalIds?.tvdbId ?? null,
+    })) };
   }
 }

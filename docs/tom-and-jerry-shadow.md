@@ -109,3 +109,52 @@ preserving the provider-specific season memberships and Plex publication order.
 
 This is metadata research, not an implemented mapping or downloaded-file identity
 verification. No production request, torrent, settings or database data changed.
+
+## Crosswalk Implementation
+
+Seerr intake now reads the episode list for each approved TMDB season, including
+when season ordinals happen to exist in both providers. It never expands one
+TMDB season to the entire same-numbered TVDB season merely by ordinal equality.
+
+`mapRequestedEpisodes` anchors explicit TVDB IDs and unique normalized titles with
+matching air dates within the verified work. Remaining identities go to a
+tool-first `TvEpisodeMapper` in batches of at most twelve sources. It can page
+and search the canonical catalog and inspect source/target pairs. Every proposed
+pair must be inspected before `submitEpisodeMappings` accepts a complete,
+non-conflicting result. Null decisions retain the entire approval for later
+research rather than silently downloading a partial or guessed scope.
+
+Episode domain metadata retains the correspondence, factual reason, method/model
+and exact input fingerprint. Refreshes preserve that evidence; later mapping
+only reuses it when both providers' evidence still matches the fingerprint.
+The canonical TVDB episode key and Plex numbering stay unchanged; `tmdb:aired`
+numbering and a TMDB episode reference are added. No new database table or manual
+mapping setting is needed.
+
+The existing sync transaction atomically persists episodes, requested membership
+and acquisition outbox intent. Validated research batches are durable steps, so
+a restart does not repeat completed model research. A failed correspondence
+retains the approval and lets healthy sibling requests continue. This code does
+not itself prove production acquisition or Plex publication.
+
+### Live Model Evaluation
+
+On November 6 the local implementation processed the GET-only production metadata
+with the existing GPT-6 Luna model. Sonarr omitted this work's TMDB ID, so the
+explicit Seerr TMDB/TVDB work link supplied that missing association; conflicting
+work IDs are still rejected. No production requests or downloads changed.
+
+- All 161 requested regular episodes mapped exactly once; 16 specials excluded.
+- 113 unique title/date anchors and 48 agent-reviewed episodes in four batches.
+- Grouping: TMDB 1 -> TVDB 1940 (46) + 1950 (68); TMDB 2 -> TVDB 1960 (13);
+  TMDB 3 -> TVDB 1960 (34).
+- Live model evaluation took 133,943 ms. Every assignment agreed with the
+  independent metadata comparison: 158 normalized titles and three reviewed
+  variants. This is metadata correspondence evidence, not file verification.
+- Replaying unchanged evidence with the final cache implementation required zero
+  additional model research. New title ambiguity invalidates deterministic
+  evidence; changed canonical context invalidates agent evidence.
+
+The real Reflow regression test also interrupts the atomic import after research,
+reopens both databases, retries without repeating season reads/model research,
+then interrupts the feed cursor and verifies idempotent request replay.

@@ -63,6 +63,32 @@ async function failure(action: Promise<unknown>): Promise<TvUpstreamError> {
 }
 
 describe("TV GET transport", () => {
+  test("an approved Seerr TVDB work link supplies a missing Sonarr TMDB ID without using titles", async () => {
+    const f = catalogFixture([{ ...series, tmdbId: null }]);
+    const result = await new SonarrCatalog(connection, f.fetcher).resolveSeerr(request());
+    expect(result.tmdbId).toBe(67075);
+    expect(result.refs).toContainEqual({ provider: "tmdb", id: "67075", instance: null, source: "seerr:request:726:tvdb-work-link" });
+  });
+  test("Seerr season reads preserve episode IDs and reject foreign or duplicate coordinates", async () => {
+    const ep = { id: 1001, showId: 67075, seasonNumber: 1, episodeNumber: 1, name: "The First", airDate: "1940-02-10", overview: "A short." };
+    const f = fixture(() => ({ seasonNumber: 1, episodes: [ep] }));
+    const client = new SeerrTvClient(seerrSettings, f.fetcher);
+    expect(await client.season(67075, 1)).toEqual({ tmdbId: 67075, seasonNumber: 1, episodes: [{
+      id: 1001, seasonNumber: 1, episodeNumber: 1, title: "The First", airDate: "1940-02-10", overview: "A short.", runtimeMinutes: null, tvdbId: null,
+    }] });
+    expect(f.calls[0]!.url.pathname).toBe("/seerr/api/v1/tv/67075/season/1");
+    expect(f.calls[0]!.init?.method).toBe("GET");
+    for (const value of [
+      { seasonNumber: 2, episodes: [ep] }, { seasonNumber: 1, episodes: [{ ...ep, showId: 99 }] },
+      { seasonNumber: 1, episodes: [{ ...ep, seasonNumber: 2 }] }, { seasonNumber: 1, episodes: [ep, ep] },
+      { seasonNumber: 1, episodes: [ep, { ...ep, id: 1002 }] },
+    ]) {
+      await expect(new SeerrTvClient(seerrSettings, fixture(() => value).fetcher).season(67075, 1)).rejects.toBeInstanceOf(TvUpstreamError);
+    }
+    expect(await new SeerrTvClient(seerrSettings, fixture(() => ({ seasonNumber: 1, episodes: [] })).fetcher).season(67075, 1))
+      .toEqual({ tmdbId: 67075, seasonNumber: 1, episodes: [] });
+  });
+
   test("artwork-only reads use exact Sonarr identity, public remote images and no episode or search requests", async () => {
     const f = catalogFixture();
     const catalog = new SonarrCatalog(connection, f.fetcher);

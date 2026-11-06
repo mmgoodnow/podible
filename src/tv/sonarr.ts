@@ -189,14 +189,20 @@ export class SonarrCatalog {
     return this.#catalog(await this.#series(Number(local[2])));
   }
 
-  resolveSeerr(request: SeerrTvRequest): Promise<TvCatalogEntry> {
+  async resolveSeerr(request: SeerrTvRequest): Promise<TvCatalogEntry> {
     if (!approvedSeerrTv(request)) throw new TvUpstreamError("seerr", "request has no explicitly approved seasons");
-    return this.resolve({
+    const entry = await this.resolve({
       tvdbId: request.media.tvdbId,
       tmdbId: request.media.tmdbId,
       // Seerr keeps separate Sonarr associations for standard and 4K requests.
       sonarrSeriesId: request.is4k ? request.media.externalServiceId4k : request.media.externalServiceId,
     });
+    // The approved request supplies an explicit work-level bridge even when Sonarr omits TMDB.
+    if (entry.tmdbId === null && request.media.tvdbId === entry.tvdbId)
+      return { ...entry, tmdbId: request.media.tmdbId, refs: [...(entry.refs ?? []), {
+        provider: "tmdb", id: String(request.media.tmdbId), instance: null, source: `seerr:request:${request.id}:tvdb-work-link`,
+      }] };
+    return entry;
   }
 }
 
