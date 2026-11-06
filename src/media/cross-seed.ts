@@ -15,7 +15,7 @@ import { withTorrentUse } from "./torrent-use";
 import { crossSeedCommandSchema, crossSeedCommandHash, crossSeedStateKey,
   type CrossSeedCommand, type CrossSeedReceipt, type CrossSeedScope, type CrossSeedOutcome } from "./cross-seed-state";
 import { planContentReuse, type ReuseCandidateManifest, type ReusePlan, type ReuseSourceFile } from "./reuse-plan";
-import { captureReuseFile, captureReuseRoot, materializeReuseLayout, prepareReuseLayoutRoot, verifyContentReuse } from "./reuse-layout";
+import { captureReuseFile, captureReuseRoot, materializeReuseLayout, prepareReuseLayoutRoot, verifyContentReuse, publishedReuseLayoutCapabilities } from "./reuse-layout";
 import { selectedCopies, selectedCopyOffer, selectedCopyId } from "./selected-copies";
 
 export type CrossSeedAdapters = {
@@ -163,15 +163,40 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   // Revalidate layout receipts on every retry, including a lost stage checkpoint.
   active();
   const destinationRoot = await captureReuseRoot({ rootPath: destination, markerName: ".podible-reuse-root.json", ownerId: client.id });
-  const stage = () => (adapters.materialize ?? materializeReuseLayout)({
-    plan, root: destinationRoot, capabilities: { cow: "clone-force", symlinkMode: "never" }, verification: "client" });
-  const staged = await durableStep(ctx, "reuse:layout", stage);
+  const materialize = (readOnly: boolean) => (adapters.materialize ?? materializeReuseLayout)({
+    plan, root: destinationRoot, capabilities: readOnly
+      ? { cow: "unavailable", symlinkMode: "verified-read-only" }
+      : { cow: "clone-force", symlinkMode: "never" }, verification: "client" });
+  const staged = await durableStep(ctx, "reuse:layout", async () => {
+    const previous = await publishedReuseLayoutCapabilities(destinationRoot, plan);
+    if (previous?.symlinkMode === "verified-read-only") {
+      if (!client.capabilities.readOnlySeeding || !client.resumeSeedOnly)
+        return { status: "unsupported" as const, readOnly: false, reason: "Client cannot safely resume the existing seed-only symlink layout" };
+      return { ...await materialize(true), readOnly: true };
+    }
+    const cow = await materialize(false);
+    if (cow.status !== "unsupported" || !client.capabilities.readOnlySeeding || !client.resumeSeedOnly)
+      return { ...cow, readOnly: false };
+    const verified = await verifyContentReuse(plan);
+    if (verified.status !== "ready" || verified.summary.verifiedReuseBytes !== metadata.size)
+      return { status: "unsupported" as const, readOnly: false,
+        reason: "CoW is unavailable and candidate bytes are not a complete exact match; shared files were not linked" };
+    return { ...await materialize(true), readOnly: true };
+  });
   if (staged.status !== "ready") return finish({ kind: staged.status === "unsupported" ? "unsupported" : "skipped", reason: staged.reason });
+  const readOnly = staged.readOnly ?? false;
+  const stage = () => materialize(readOnly);
   const replay = await stage();
   if (replay.status !== "ready" || replay.dataPath !== staged.dataPath) throw new Error("Reuse layout changed after staging");
   const dataPath = await fs.realpath(staged.dataPath);
   if (!dataPath.startsWith(destination + path.sep)) throw new Error("Reuse layout escaped its pinned root");
   const proveLayout = async () => {
+    if (readOnly) {
+      const current = await stage();
+      if (current.status !== "ready" || current.dataPath !== staged.dataPath)
+        throw new Error("Verified symlink layout changed");
+      return verifyContentReuse(plan);
+    }
     const files: ReuseSourceFile[] = [], bindings: { candidatePath: string; sourceId: string }[] = [];
     for (let index = 0; index < plan.candidate.files.length; index++) {
       const file = plan.candidate.files[index]!;
@@ -190,17 +215,19 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   const ref = await durableStep(ctx, "reuse:add", () => withTorrentUse(ctx.repo, { clientId: client.id, infoHash: metadata.infoHash }, async () => {
     active();
     if (sourceBlocked()) throw new Error("Reuse source was confirmed nuked before torrent addition");
-    const result = await client.ensureAdded({ metainfo: bytes, location });
+    const result = await client.ensureAdded({ metainfo: bytes, location, ...(readOnly ? { seedOnly: true } : {}) });
     if (result.clientId !== client.id || result.nativeId !== metadata.infoHash) throw new Error("Reuse client returned another identity");
     ctx.repo.reserveReuseTorrent(result, location, crossSeedOffer(ctx.repo, command).key, command.scope, operationId);
     return result;
   }));
   const torrent = ctx.repo.reuseTorrent(ref)!;
-  const check = async () => {
-    active(); const snapshot = await client.inspect(ref);
+  const check = async (requireSeedOnly = true) => {
+    active();
+    const snapshot = await client.inspect(ref);
     if (snapshot.ref.clientId !== ref.clientId || snapshot.ref.nativeId !== ref.nativeId ||
       snapshot.location.rootId !== location.rootId || snapshot.location.relativePath !== location.relativePath ||
       snapshot.sizeBytes !== metadata.size) throw new Error("Reuse client observation changed identity or layout");
+    if (requireSeedOnly && readOnly && snapshot.seedOnly !== true) throw new Error("Shared torrent lost its no-download file selection");
     return snapshot;
   };
   try {
@@ -218,12 +245,15 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   }
   if (!verified) return finish({ kind: "stalled", reason: "Client did not finish the bounded candidate check", torrentId: torrent.id });
   const initial = await check();
+  if (readOnly && !initial.complete)
+    return finish({ kind: "skipped", reason: "Symlink source is no longer fully verified; seed-only record remains paused", torrentId: torrent.id });
   const remaining = metadata.size - (initial.bytesDone ?? 0);
   if (remaining > command.policy.maximumExtraBytes || (metadata.size && (initial.bytesDone ?? 0) / metadata.size < command.policy.minimumReuseRatio))
     return finish({ kind: "skipped", reason: "Verified missing pieces exceed the reuse policy; record remains paused", torrentId: torrent.id });
   // Running is a reconciled intent, not a once-only effect: error cleanup or an
   // external stop can undo a previously checkpointed start acknowledgement.
-  await check(); await client.resume(ref);
+  const resume = () => readOnly ? client.resumeSeedOnly!(ref) : client.resume(ref);
+  await check(); await resume();
   for (let poll = 0; poll < (adapters.maxPolls ?? 1200); poll++) {
     if (sourceBlocked() || ctx.repo.releaseHealth.isOfferBlocked({ ...crossSeedOffer(ctx.repo, command), infoHash: metadata.infoHash })) {
       await check(); await client.quiesce(ref);
@@ -237,7 +267,7 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
         return finish({ kind: "stalled", reason: "Engine completion did not match candidate piece hashes", torrentId: torrent.id });
       }
       const live = await check();
-      if (live.state === "inactive" && !live.message) await client.resume(ref);
+      if (live.state === "inactive" && !live.message) await resume();
       if (!live.complete || live.state !== "seeding") {
         await ctx.execution.sleep(`reuse:confirm-running-wait:${poll}`, adapters.pollMs ?? 500);
         continue;
@@ -258,7 +288,7 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   } catch (error) {
     // Retry must not leave an unmonitored writable transfer running. Never stop
     // a foreign layout or act after this execution has lost its lease.
-    try { await check(); await client.quiesce(ref); } catch { /* Next attempt reconciles ambiguous ownership. */ }
+    try { await check(false); await client.quiesce(ref); } catch { /* Next attempt reconciles ambiguous ownership. */ }
     throw error;
   }
 }

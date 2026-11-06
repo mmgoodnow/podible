@@ -252,6 +252,26 @@ function isCloneUnsupported(error: unknown) {
   return ["ENOTSUP", "EOPNOTSUPP", "EXDEV", "ENOSYS", "EINVAL"].includes((error as NodeJS.ErrnoException).code ?? "");
 }
 
+/** Recover a published mode after a lost journal checkpoint; materialization still fully validates it. */
+export async function publishedReuseLayoutCapabilities(root: ReuseRootSnapshot, plan: ReusePlan): Promise<ReuseLayoutCapabilities | null> {
+  await assertRoot(root);
+  const pointer = path.join(root.path, plan.id);
+  if (!await maybeStat(pointer)) return null;
+  const target = await fs.readlink(pointer);
+  if (!new RegExp(`^\\.podible-reuse-${plan.id}-[a-f0-9-]{36}$`).test(target))
+    throw new Error("Reuse layout collision: foreign generation");
+  const generation = path.join(root.path, target);
+  const stat = await directory(generation);
+  const receipt = (await readOwnedJson(path.join(generation, LAYOUT_MARKER), 32 * 1024 * 1024)).value as LayoutReceipt;
+  if (receipt.version !== 1 || receipt.planId !== plan.id ||
+    receipt.generation.device !== String(stat.dev) || receipt.generation.inode !== String(stat.ino) ||
+    !["never", "verified-read-only"].includes(receipt.capabilities?.symlinkMode) ||
+    !["clone-force", "unavailable"].includes(receipt.capabilities?.cow) ||
+    receipt.definitionDigest !== reuseDigest({ id: plan.id, root, capabilities: receipt.capabilities }))
+    throw new Error("Reuse layout receipt or generation identity changed");
+  return receipt.capabilities;
+}
+
 /** Publishes one fully staged generation through an exclusive deterministic pointer. */
 export async function materializeReuseLayout(input: {
   plan: ReusePlan; root: ReuseRootSnapshot; capabilities: ReuseLayoutCapabilities;

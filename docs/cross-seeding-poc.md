@@ -54,23 +54,32 @@ active reuse transfers to one without globally locking unrelated acquisitions.
 ## Storage And Verification
 
 Transmission receives a paused torrent in an isolated derived layout. Media is
-cloned using **forced native CoW**, never a writable hardlink or an ordinary-copy
-fallback. Sidecars belong to the candidate. Unsupported filesystems produce an
-explicit `unsupported` result before torrent addition. Production filesystem
-capability must be checked separately from the successful APFS canary below.
+cloned using **forced native CoW** first, never a writable hardlink or an
+ordinary-copy fallback. Sidecars belong to the candidate. If CoW is unsupported,
+a complete independently hash-verified match can use symlinks with the private
+client's application-level seed-only safeguard. Mismatching or incomplete
+candidates remain unsupported without CoW; they are never linked for repair.
 Production mount inspection on November 5 identified both media roots as ext4.
 An isolated two-byte forced-clone probe on the TV mount returned `ENOTSUP`, with
-all probe files cleaned up. Writable reuse is therefore a verified unsupported
-constraint there, not merely a filesystem-type inference. A reflink-capable
-storage arrangement or a separately proven safe client/storage strategy is needed
-to use this path there; no full-copy fallback was used.
+all probe files cleaned up. Writable reuse remains unsupported there. The new
+exact-match symlink fallback is locally verified, not yet production verified.
+There is still no full-copy fallback.
 
 This POC independently hashes the bounded candidate pieces, runs the daemon's
 candidate recheck, applies the missing-piece budget, and independently verifies
 completion. It does not recheck the entire library, but it is **not yet a
-recheck-free implementation**. The pure core supports verified read-only
-symlinks; the Transmission runtime intentionally does not advertise the no-write
-guarantee necessary to use them.
+recheck-free implementation**. Linked candidates are added paused with every
+file unwanted. Every application resume reapplies and checks that selection.
+Completeness uses actual verified bytes, not wanted-byte progress, which would
+incorrectly report zero-byte unwanted downloads as complete.
+
+An independent per-hash seed-only intent is fsynced before torrent addition.
+Before every supervised daemon launch, the startup guard verifies metainfo
+identity and restores unwanted flags, destination and ownership labels. Missing
+or damaged resume files are rebuilt paused, without inventing piece proofs.
+This is an application safeguard, **not OS-enforced read-only access**. Symlink
+permissions do not protect their targets; bypassing the private application's
+control path can invalidate these assumptions.
 
 Adding another torrent does not create or promote a library version. Plex keeps
 its explicitly selected existing version, including equivalent-version seniority.
@@ -86,6 +95,15 @@ receipts, changed configuration/demand fences execution, and a false daemon
 completion fails independent piece verification.
 
 ## RPC
+
+The non-CoW Linux application lab (`test/lab/symlink-reuse-inner.ts`) executes
+the actual selected-copy/Reflow path: exact symlink publication, zero downloaded
+bytes, unchanged canonical bytes and library selection, then supervised restart.
+It is a required runtime CI gate. The separate two-daemon
+`symlink-seeding-inner.ts` lab also proves actual peer upload, no repair of a
+corrupted shared target, and safe pre-spawn restoration of damaged DND/labels,
+missing resume files and malformed resume files. These are local synthetic
+checks, not production download evidence.
 
 All methods below require admin authentication and use both JSON-RPC and typed
 tRPC through the existing router. Operation/report UUIDs are immutable idempotency

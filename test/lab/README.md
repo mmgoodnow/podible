@@ -60,3 +60,26 @@ inspection, because deletion of just-transferred records is not a safe cleanup
 assumption for the lab's rTorrent 0.9.8. `docker compose -f test/lab/compose.yml down`
 stops the services without deleting volumes. Never mount production paths here.
 No cross-seed service is included.
+
+## Seed-Only Symlink Reuse
+
+Build the current runtime image, then run the real application/Reflow path with
+tmpfs forcing native CoW to be unavailable. All metainfo and bytes are synthetic;
+no production paths, credentials or external network are used.
+
+```sh
+docker run --rm --network none --tmpfs /tmp:rw,size=128m -v "$PWD/test:/app/test:ro" --entrypoint bun podible-movies-poc:local run test/lab/symlink-reuse-inner.ts
+```
+
+This checks exact-byte symlink fallback, zero downloads, unchanged canonical
+bytes/selected version, and seed-only restart through the actual startup guard.
+CI runs it against the freshly built runtime image.
+
+The lower-level peer-to-peer probe additionally proves a second daemon can
+download the linked bytes, and corruption does not cause the seeder to repair
+shared files. It requires a disposable bridge network (Transmission filters
+loopback peers); its tracker, webseed and peers are entirely local.
+
+```sh
+docker run --rm --network bridge -e TRANSMISSION_BINARY=/usr/local/bin/transmission-daemon -v "$PWD/test:/app/test:ro" --entrypoint bun podible-movies-poc:local run test/lab/symlink-seeding-inner.ts
+```

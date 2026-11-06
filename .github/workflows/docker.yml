@@ -158,6 +158,8 @@ jobs:
           cache-to: type=registry,ref=${{ env.IMAGE }}:cache-lab-amd64,mode=max
       - name: Real daemon runtime acceptance (no external networking)
         run: docker run --rm --network none -v "$PWD/test:/app/test:ro" --entrypoint bun podible-transmission-test:ci run test/lab/transmission-inner.ts
+      - name: Non-CoW symlink reuse and restart acceptance
+        run: docker run --rm --network none --tmpfs /tmp:rw,size=128m -v "$PWD/test:/app/test:ro" --entrypoint bun podible-transmission-test:ci run test/lab/symlink-reuse-inner.ts
       - name: Legacy book migration lab (manual opt-in only)
         if: github.event_name == 'workflow_dispatch' && inputs.book_migration_lab
         run: docker run --rm --network none -v "$PWD/test:/app/test:ro" --entrypoint bun podible-transmission-test:ci run test/lab/book-migration-inner.ts

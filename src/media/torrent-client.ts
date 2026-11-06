@@ -10,6 +10,7 @@ export type TorrentSnapshot = {
   downloadBytesPerSecond: number | null;
   message: string | null;
   observedAt: string;
+  seedOnly?: boolean;
 };
 
 export interface TorrentClient {
@@ -19,10 +20,12 @@ export interface TorrentClient {
     recheck: boolean;
     derivedLayouts: boolean;
     metainfoVersions: readonly number[];
+    readOnlySeeding?: boolean;
   };
   ensureAdded(input: {
     metainfo: Uint8Array;
     location: DownloadLocation;
+    seedOnly?: boolean;
   }): Promise<TorrentRef>;
   inspect(ref: TorrentRef): Promise<TorrentSnapshot>;
   files(ref: TorrentRef): Promise<{ index: number; path: string }[]>;
@@ -30,4 +33,6 @@ export interface TorrentClient {
   recheck(ref: TorrentRef): Promise<void>;
   resume(ref: TorrentRef): Promise<void>;
   removeRecord(ref: TorrentRef): Promise<void>;
+  /** Persist no-download file selection before starting an exact-match symlink layout. */
+  resumeSeedOnly?(ref: TorrentRef): Promise<void>;
 }

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { z } from "zod";
 import { inspectMetainfo } from "./metainfo";
+import { persistSeedOnlyIntent, readSeedOnlyIntent } from "./seed-only-state";
 import type {
   TorrentClient,
   TorrentRef,
@@ -78,24 +79,30 @@ const torrentSchema = z.object({
   files: z.array(
     z.object({ name: z.string(), length: z.number().nonnegative() }),
   ),
+  fileStats: z.array(z.object({ wanted: z.boolean() })).optional(),
+  totalSize: z.number().nonnegative().optional(),
+  haveValid: z.number().nonnegative().optional(),
+  haveUnchecked: z.number().nonnegative().optional(),
 });
+const SEED_ONLY_LABEL = "Podible Seed Only";
 export class TransmissionAdapter implements TorrentClient {
   get id() {
     return this.options.clientId;
   }
-  readonly capabilities = {
+  get capabilities() { return {
     pausedAdd: true,
     recheck: true,
-    // Isolated regular-file/CoW layouts, not a no-write symlink seeding mode.
     derivedLayouts: true,
     metainfoVersions: [1],
-  } as const;
+    readOnlySeeding: Boolean(this.options.seedOnlyIntentDirectory),
+  } as const; }
   constructor(
     private options: {
       clientId: string;
       roots: Record<string, string>;
       ownershipTag: string;
       rpc: TransmissionRpc;
+      seedOnlyIntentDirectory?: string;
     },
   ) {}
   private directory(location: DownloadLocation) {
@@ -147,6 +154,7 @@ export class TransmissionAdapter implements TorrentClient {
         "error",
         "errorString",
         "files",
+        "fileStats", "totalSize", "haveValid", "haveUnchecked",
       ],
     });
     const torrents = z.array(torrentSchema).parse(result.torrents);
@@ -168,18 +176,33 @@ export class TransmissionAdapter implements TorrentClient {
   async ensureAdded(input: {
     metainfo: Uint8Array;
     location: DownloadLocation;
+    seedOnly?: boolean;
   }): Promise<TorrentRef> {
     const metadata = inspectMetainfo(input.metainfo);
     const directory = this.directory(input.location);
     const ref = { clientId: this.id, nativeId: metadata.infoHash };
-    if (!(await this.get(ref))) {
+    const existing = await this.get(ref);
+    if (input.seedOnly && existing && (path.normalize(existing.downloadDir) !== directory ||
+      !this.isSeedOnly(existing) || existing.files.length !== metadata.files.length ||
+      existing.files.some((file, index) => file.name !== metadata.files[index]!.path || file.length !== metadata.files[index]!.size)))
+      throw new Error("Refusing to adopt an existing torrent as a seed-only layout");
+    if (input.seedOnly) {
+      if (!this.options.seedOnlyIntentDirectory)
+        throw new Error("Seed-only seeding requires durable startup protection");
+      await persistSeedOnlyIntent(this.options.seedOnlyIntentDirectory, {
+        infoHash: metadata.infoHash, destination: directory,
+        fileCount: metadata.files.length, ownershipTag: this.options.ownershipTag,
+      });
+    }
+    if (!existing) {
       let failed: unknown;
       try {
         await this.options.rpc.call("torrent-add", {
           metainfo: Buffer.from(input.metainfo).toString("base64"),
           "download-dir": directory,
           paused: true,
-          labels: [this.options.ownershipTag],
+          labels: [this.options.ownershipTag, ...(input.seedOnly ? [SEED_ONLY_LABEL] : [])],
+          ...(input.seedOnly ? { "files-unwanted": metadata.files.map((_, index) => index) } : {}),
         });
       } catch (error) {
         failed = error;
@@ -189,6 +212,8 @@ export class TransmissionAdapter implements TorrentClient {
         throw failed ?? new Error("Torrent addition was not observed");
     }
     const row = await this.owned(ref);
+    if (input.seedOnly && !this.isSeedOnly(row))
+      throw new Error("Torrent engine did not retain seed-only file selection");
     if (path.normalize(row.downloadDir) !== directory)
       throw new Error("Existing torrent uses another layout");
     if (
@@ -204,6 +229,8 @@ export class TransmissionAdapter implements TorrentClient {
   }
   async inspect(ref: TorrentRef): Promise<TorrentSnapshot> {
     const row = await this.owned(ref);
+    const seedOnly = row.labels.includes(SEED_ONLY_LABEL) || Boolean(this.seedIntent(ref));
+    const physicalBytesKnown = row.totalSize !== undefined && row.haveValid !== undefined && row.haveUnchecked !== undefined;
     if (![0, 1, 2, 3, 4, 5, 6].includes(row.status))
       throw new Error("Unknown torrent engine state");
     return {
@@ -216,9 +243,10 @@ export class TransmissionAdapter implements TorrentClient {
           : [5, 6].includes(row.status)
             ? "seeding"
             : "downloading",
-      complete: row.leftUntilDone === 0,
-      bytesDone: row.sizeWhenDone - row.leftUntilDone,
-      sizeBytes: row.sizeWhenDone,
+      complete: physicalBytesKnown ? row.haveValid === row.totalSize && row.haveUnchecked === 0 : !seedOnly && row.leftUntilDone === 0,
+      bytesDone: seedOnly && !physicalBytesKnown ? 0 : row.haveValid !== undefined ? row.haveValid + (row.haveUnchecked ?? 0) : row.sizeWhenDone - row.leftUntilDone,
+      sizeBytes: row.totalSize ?? row.sizeWhenDone,
+      ...(seedOnly ? { seedOnly: this.isSeedOnly(row) } : {}),
       downloadBytesPerSecond: row.rateDownload,
       message: row.error
         ? "Torrent engine reported a tracker or storage error"
@@ -261,9 +289,31 @@ export class TransmissionAdapter implements TorrentClient {
     await this.options.rpc.call("torrent-verify", { ids: [ref.nativeId] });
   }
   async resume(ref: TorrentRef) {
-    await this.owned(ref);
+    const row = await this.owned(ref);
+    if (row.labels.includes(SEED_ONLY_LABEL) || this.seedIntent(ref)) return this.resumeSeedOnly(ref);
     if ((await this.inspect(ref)).state === "checking")
       throw new Error("Cannot resume a torrent during recheck");
+    await this.options.rpc.call("torrent-start", { ids: [ref.nativeId] });
+  }
+  private isSeedOnly(row: z.infer<typeof torrentSchema>): boolean {
+    return row.labels.includes(SEED_ONLY_LABEL) && row.fileStats?.length === row.files.length &&
+      row.fileStats.every(file => !file.wanted);
+  }
+  private seedIntent(ref: TorrentRef) {
+    this.validateRef(ref);
+    return this.options.seedOnlyIntentDirectory ? readSeedOnlyIntent(this.options.seedOnlyIntentDirectory, ref.nativeId) : null;
+  }
+  async resumeSeedOnly(ref: TorrentRef) {
+    const row = await this.owned(ref);
+    const intent = this.seedIntent(ref);
+    if (!intent || intent.destination !== path.normalize(row.downloadDir) ||
+      intent.fileCount !== row.files.length || intent.ownershipTag !== this.options.ownershipTag)
+      throw new Error("Seed-only startup protection is missing or differs from this torrent");
+    if (!row.labels.includes(SEED_ONLY_LABEL)) throw new Error("Refusing to change an ordinary download to seed-only");
+    await this.options.rpc.call("torrent-set", { ids: [ref.nativeId], "files-unwanted": row.files.map((_, index) => index) });
+    const protectedRow = await this.owned(ref);
+    if (!this.isSeedOnly(protectedRow) || [1, 2].includes(protectedRow.status))
+      throw new Error("Seed-only file selection is missing or verification is still running");
     await this.options.rpc.call("torrent-start", { ids: [ref.nativeId] });
   }
   async removeRecord(ref: TorrentRef) {

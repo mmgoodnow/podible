@@ -21,6 +21,7 @@ import { jobLockKeys, lockSetsConflict } from "../../src/worker/locks";
 import { inspectMetainfo } from "../../src/media/metainfo";
 import type { TorrentClient, TorrentRef, DownloadLocation } from "../../src/media/torrent-client";
 import type { WorkerContext } from "../../src/worker/context";
+import { materializeReuseLayout } from "../../src/media/reuse-layout";
 
 async function fixture(original = "abcdefgh", desired = "abcdefgh", sidecar = "!!") {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "podible-cross-seed-")));
@@ -47,19 +48,21 @@ async function fixture(original = "abcdefgh", desired = "abcdefgh", sidecar = "!
   const [releaseId] = repo.releaseInbox.ingest(feed.id, [{ mediaType: "movie", title: "A Fixture Film other tracker", provider: "Other tracker",
     url: "https://fixture.invalid/metainfo", guid: "candidate", infoHash: metadata.infoHash, sizeBytes: data.length, seeders: 1, leechers: 0, raw: {} }], new Date().toISOString());
   const scope = { media: "movie" as const, targetId: request.targetId };
-  let location: DownloadLocation, checking = 0, running = false, downloaded = false, bytesDone = 0, adds = 0, resumes = 0, stops = 0;
+  let location: DownloadLocation, checking = 0, running = false, downloaded = false, bytesDone = 0, adds = 0, resumes = 0, stops = 0, seedOnly = false;
   const client: TorrentClient = {
     id: `transmission:${randomUUID()}`, capabilities: { pausedAdd: true, recheck: true, derivedLayouts: true, metainfoVersions: [1] },
-    async ensureAdded(input) { adds++; location = input.location; return { clientId: this.id, nativeId: metadata.infoHash }; },
+    async ensureAdded(input) { adds++; location = input.location; seedOnly = Boolean(input.seedOnly); return { clientId: this.id, nativeId: metadata.infoHash }; },
     async inspect(ref) { return { ref, location, state: checking-- > 0 ? "checking" : !running ? "inactive" : downloaded ? "seeding" : "downloading",
-      complete: bytesDone === data.length, sizeBytes: data.length, bytesDone, message: null, observedAt: new Date().toISOString(), downloadBytesPerSecond: 0 }; },
+      complete: bytesDone === data.length, sizeBytes: data.length, bytesDone, message: null, observedAt: new Date().toISOString(), downloadBytesPerSecond: 0,
+      ...(seedOnly ? { seedOnly: true } : {}) }; },
     async files() { return files.map((file, index) => ({ index, path: path.join(root, "downloads", location.relativePath, file.path) })); },
     async recheck() {
       checking = 1; bytesDone = 0;
       const staged = Buffer.concat(await Promise.all(files.map(file => fs.readFile(path.join(root, "downloads", location.relativePath, file.path)).catch(() => Buffer.alloc(file.bytes.length)))));
       for (let i = 0; i < data.length; i += 4) if (staged.subarray(i, i + 4).equals(data.subarray(i, i + 4))) bytesDone += Math.min(4, data.length - i);
     },
-    async resume() { resumes++; running = true; for (const file of files) await fs.writeFile(path.join(root, "downloads", location.relativePath, file.path), file.bytes); bytesDone = data.length; downloaded = true; },
+    async resume() { resumes++; running = true; if (!seedOnly) for (const file of files) await fs.writeFile(path.join(root, "downloads", location.relativePath, file.path), file.bytes); bytesDone = data.length; downloaded = true; },
+    async resumeSeedOnly(ref) { if (!seedOnly) throw new Error("Not seed-only"); return this.resume(ref); },
     async quiesce() { stops++; running = false; }, async removeRecord() { throw new Error("Reuse must never remove old records"); },
   };
   // Explicit test adapter supplies independent writable storage on Linux too.
@@ -100,6 +103,84 @@ async function execute(f: Awaited<ReturnType<typeof fixture>>, receipt = queueCr
     return f.repo.crossSeed.receipt(f.command.operationId)!;
   } finally { await runtime.stop(); }
 }
+
+test("CoW remains preferred; unsupported CoW falls back to verified seed-only symlinks and recovers a lost layout checkpoint", async () => {
+  const f = await fixture("abcdefgh", "abcdefgh", "");
+  try {
+    Object.assign(f.adapters.client!(f.command.scope).capabilities, { readOnlySeeding: true });
+    let cows = 0, links = 0, crashed = false;
+    f.adapters.materialize = async input => {
+      if (input.capabilities.cow === "clone-force") { cows++; return { status: "unsupported", reason: "Fixture filesystem has no CoW" }; }
+      links++; return materializeReuseLayout(input);
+    };
+    const result = await execute(f, undefined, ctx => ({ ...ctx, execution: { ...ctx.execution!,
+      run: (name, handler) => ctx.execution!.run(name, async () => {
+        const value = await handler();
+        if (name === "reuse:layout" && !crashed) { crashed = true; throw new Error("Lost layout checkpoint"); }
+        return value;
+      }),
+    } }));
+    expect(result.outcome?.kind).toBe("seeding");
+    expect(result.outcome?.downloadedBytes).toBe(0);
+    expect(cows).toBe(1);
+    expect(links).toBeGreaterThan(1);
+    const ref = { clientId: f.adapters.client!(f.command.scope).id, nativeId: f.metadata.infoHash };
+    const linked = (await f.adapters.client!(f.command.scope).files(ref))[0]!.path;
+    expect((await fs.lstat(linked)).isSymbolicLink()).toBe(true);
+    expect(await fs.readlink(linked)).toBe(f.canonical);
+    expect(await fs.readFile(f.canonical, "utf8")).toBe("abcdefgh");
+  } finally { await f.cleanup(); }
+});
+
+test("lost seed-only flags after resume still quiesce the exact owned symlink torrent", async () => {
+  const f = await fixture("abcdefgh", "abcdefgh", "");
+  try {
+    const client = f.adapters.client!(f.command.scope);
+    Object.assign(client.capabilities, { readOnlySeeding: true });
+    f.adapters.materialize = async input => input.capabilities.cow === "clone-force"
+      ? { status: "unsupported", reason: "Fixture filesystem has no CoW" } : materializeReuseLayout(input);
+    const inspect = client.inspect.bind(client), quiesce = client.quiesce.bind(client);
+    const stopped: TorrentRef[] = [];
+    let lostFlags = false;
+    client.inspect = async ref => {
+      const snapshot = await inspect(ref);
+      if (f.counts().resumes) {
+        lostFlags = true;
+        return { ...snapshot, seedOnly: false };
+      }
+      return snapshot;
+    };
+    client.quiesce = async ref => { stopped.push(ref); await quiesce(ref); };
+    const receipt = queueCrossSeed(f.repo, f.command);
+    await execute(f, receipt, ctx => ctx, true);
+    const ref = { clientId: client.id, nativeId: f.metadata.infoHash };
+    expect(lostFlags).toBe(true);
+    expect(f.repo.getJob(receipt.jobId)).toMatchObject({ status: "failed", error: expect.stringContaining("no-download file selection") });
+    expect(f.repo.crossSeed.receipt(f.command.operationId)?.outcome).toBeUndefined();
+    expect(stopped).toEqual([ref]);
+    expect(f.counts()).toEqual({ adds: 1, resumes: 1, stops: 1 });
+    expect((await inspect(ref)).state).toBe("inactive");
+    const linked = (await client.files(ref))[0]!.path;
+    expect((await fs.lstat(linked)).isSymbolicLink()).toBe(true);
+    expect(await fs.readlink(linked)).toBe(f.canonical);
+    expect(await fs.readFile(f.canonical, "utf8")).toBe("abcdefgh");
+    expect(f.repo.movies.target(f.command.scope.targetId)!.active_version_id).toBe(f.version);
+  } finally { await f.cleanup(); }
+});
+
+test("unsupported CoW never falls back to symlinks for a tail mismatch", async () => {
+  const f = await fixture("abcdefgX", "abcdefgh", "");
+  try {
+    Object.assign(f.adapters.client!(f.command.scope).capabilities, { readOnlySeeding: true });
+    f.adapters.materialize = async input => {
+      expect(input.capabilities.symlinkMode).toBe("never");
+      return { status: "unsupported", reason: "No CoW" };
+    };
+    expect((await execute(f)).outcome?.kind).toBe("unsupported");
+    expect(f.counts().adds).toBe(0);
+    expect(await fs.readFile(f.canonical, "utf8")).toBe("abcdefgX");
+  } finally { await f.cleanup(); }
+});
 
 test("selection-discovered copies use the same verified executor without an RSS entry or duplicate jobs", async () => {
   const f = await fixture();

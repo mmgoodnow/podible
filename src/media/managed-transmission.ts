@@ -10,6 +10,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { configDir } from "../config";
 import { TransmissionAdapter, TransmissionRpc } from "./transmission-client";
+import { prepareSeedOnlyResumes, seedOnlyIntentDirectory } from "./seed-only-state";
 const identitySchema = z.object({
   id: z.string().uuid(),
   username: z.string().min(1),
@@ -81,6 +82,7 @@ export function prepareTransmission(
   const temporary = path.join(directory, "settings.json.tmp");
   writeFileSync(temporary, JSON.stringify(settings), { mode: 0o600 });
   renameSync(temporary, path.join(directory, "settings.json"));
+  prepareSeedOnlyResumes(directory, seedOnlyIntentDirectory(directory));
   return identity;
 }
 export function managedTransmission(
@@ -92,6 +94,7 @@ export function managedTransmission(
     clientId: `transmission:${identity.id}`,
     roots: { movies: path.join(root, "downloads") },
     ownershipTag: "Podible Movies",
+    seedOnlyIntentDirectory: seedOnlyIntentDirectory(directory),
     rpc: new TransmissionRpc({
       url: "http://127.0.0.1:9091/transmission/rpc",
       username: identity.username,
@@ -109,6 +112,7 @@ export function managedBookTransmission(
     clientId: `transmission:${identity.id}`,
     roots: { books: downloadsRoot },
     ownershipTag: "Podible Books",
+    seedOnlyIntentDirectory: seedOnlyIntentDirectory(directory),
     rpc: new TransmissionRpc({
       url: "http://127.0.0.1:9091/transmission/rpc",
       username: identity.username,
@@ -123,6 +127,7 @@ export function managedTvTransmission(root: string, directory = path.join(config
     clientId: `transmission:${identity.id}`,
     roots: { tv: path.join(root, "downloads") },
     ownershipTag: "Podible TV",
+    seedOnlyIntentDirectory: seedOnlyIntentDirectory(directory),
     rpc: new TransmissionRpc({ url: "http://127.0.0.1:9091/transmission/rpc", username: identity.username, password: identity.password }),
   });
 }
