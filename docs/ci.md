@@ -109,12 +109,23 @@ Keep distinct evidence levels rather than dropping mocks indiscriminately:
 - `test/unit/tv-model.test.ts` exercises real SQLite identity, numbering,
   transactional rollback and publication constraints. The `unit` directory does
   not imply mock-only tests.
-- `test/integration/all-job-execution.test.ts` repeats the same substituted
-  checkpoint handler for all 26 job types in its generic SIGKILL loop. The loop
-  cost about 18 seconds in the measured local run; representative runtime-policy
-  classes could replace it after checking policy equivalence. Keep exhaustive
-  registration checks and the separate real-handler crash suites. This is a
-  deduplication candidate, not evidence of 26 distinct domain recoveries.
+- `test/integration/all-job-execution.test.ts` now keeps exhaustive runtime and
+  compile-time job registration coverage, but runs its substituted-handler
+  SIGKILL/restart scenario for six representative policy shapes rather than every
+  job name. Those cases cover serialized book-media work, two-wide manifestation
+  work, wide release work with a long retry budget, wide unscoped work, and both
+  serialized/wide global maintenance. Fixtures assert their real lock keys and
+  exponential/linear retry policy. Separate live blocking tests exercise actual
+  workflow limits 1, 2, and 16. A new workflow policy/locking shape needs a new
+  representative; adding another job name still requires exhaustive registration
+  coverage but not an identical child-process pair.
+- The three **real-handler** SIGKILL cases in that same file remain unchanged:
+  cover generation, metadata hydration, and reconciliation retain domain effects
+  across process death. `media-execution-crash.test.ts` still interrupts the real
+  book pipeline at search/selection, external snatch, download handoff and asset
+  publication, including cancellation and ownership takeover. Movie upgrade and
+  Seerr fanout crash suites remain intact too. Reducing the generic loop is not
+  permission to replace these with a substituted handler.
 - The basic SPA reader-navigation assertion now checks the actual visible links.
   Checking only for absence of the removed "Movie sync" label was vacuous after
   that label disappeared for administrators too.
@@ -133,6 +144,30 @@ keep their names: `movie-shadow` verifies legacy redirects and absence of raw
 diagnostic polling; `tv` verifies user-safe native requests, privacy, withdrawal,
 and desktop/mobile screenshots. Backend shadow collection/evaluation, Seerr
 dual-write, protocol and recovery safety coverage is retained.
+
+### Audit Decisions
+
+The useful distinction is observable application behavior versus rehearsing a
+mock's configured response, not the presence of mocks or the directory name.
+
+| Surface | Decision | Evidence retained |
+| --- | --- | --- |
+| Generic per-job process-death loop | Consolidate to six policy shapes | Saved step not rerun, run ID preserved, one publication after actual SIGKILL/restart; every registered job still executes in the exhaustive test |
+| Real-handler crash/replay and command outbox | Keep | Domain/filesystem effects, durable ownership, cancellation and transactional receipts across process boundaries |
+| Client protocol fault injection | Keep | Uncertain add acknowledgments, authentication/session challenges and stop/resume races are difficult to reproduce reliably with a live daemon |
+| Real Transmission/image labs | Keep on normal CI | Actual daemon compatibility, transfer/restart, canonical inode/layout and packaging behavior; mocked HTTP cannot replace them |
+| Migration-only daemon lab | Keep opt-in | The one-off migration is complete; it does not justify repeating an expensive migration rehearsal on unrelated pushes |
+| Workflow/toolchain assertions | Keep as narrow configuration contracts | Version alignment, required gates and exhaustive suite assignment; do not claim these prove deployment or rendered UI |
+| Browser acceptance | Keep the three isolated CI groups | Real rendered actions and fixture API/auth boundaries; remove assertions for obsolete copy, not meaningful user flows |
+
+Connections regressions now prove historical gap evidence survives the real
+backend diagnostic RPC while none of it appears in collapsed or expanded UI.
+They still assert current errors/cooldowns, unknown data and keyboard disclosure.
+This deliberately replaces the old positive assertions for permanent gap badges;
+it does not erase backend history or weaken provider-failure handling tests.
+
+No broad mock-test purge was justified by this bounded audit. The removed cost is
+duplicated generic process orchestration, not domain safety or protocol evidence.
 
 ## Timing And Validation
 

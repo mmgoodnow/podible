@@ -6,7 +6,8 @@ import path from "node:path";
 import type { JobType } from "../../src/app-types";
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
-import { createJobExecutionRuntime } from "../../src/worker/execution";
+import { createJobExecutionRuntime, EXECUTION_JOB_TYPES, executionRetryPolicy } from "../../src/worker/execution";
+import { jobLockKeys } from "../../src/worker/locks";
 
 const types = [
   "indexer_feed_sync", "movie_feed_match", "book_feed_match",
@@ -47,6 +48,7 @@ async function until(check: () => boolean | Promise<boolean>) {
 }
 
 test("all registered job types use checkpointed execution without claiming or resetting rows", async () => {
+  expect([...types].sort()).toEqual([...EXECUTION_JOB_TYPES].sort());
   const f = await fixture();
   const seen: string[] = [];
   const jobs = types.map((type) => f.repo.createJob({ type }));
@@ -220,10 +222,28 @@ for (const type of ["cover_generation", "metadata_hydration", "reconcile"] as co
   }, 15000);
 }
 
-for (const type of types) {
-  test(`${type} survives real process death after a saved step`, async () => {
+// Registration stays exhaustive above; these share the same substituted handler, not domain recovery.
+const crashPolicies = [
+  { type: "acquire", name: "serialized book-media lane", maxAttempts: 5, backoff: "exponential", locks: ["book:1:media:audio"] },
+  { type: "chapter_analysis", name: "two-wide manifestation lane", maxAttempts: 5, backoff: "exponential", locks: ["manifestation:1", "book:1:media:audio"] },
+  { type: "download", name: "wide release lane with long retry budget", maxAttempts: 20, backoff: "linear", locks: ["release:1", "book:1:media:audio"] },
+  { type: "metadata_hydration", name: "wide unscoped work", maxAttempts: 5, backoff: "exponential", locks: [] },
+  { type: "retention_cleanup", name: "wide exclusive maintenance", maxAttempts: 5, backoff: "exponential", locks: ["*"] },
+  { type: "torrent_stewardship_collect", name: "serialized exclusive maintenance", maxAttempts: 20, backoff: "linear", locks: ["*"] },
+] as const satisfies readonly { type: JobType; name: string; maxAttempts: number; backoff: string; locks: readonly string[] }[];
+
+for (const policy of crashPolicies) {
+  test(`${policy.name} survives real process death after a saved step`, async () => {
     const f = await fixture();
-    const job = f.repo.createJob({ type });
+    const book = f.repo.createBook({ title: "Policy fixture", author: "Fixture" });
+    const manifestation = f.repo.addManifestation({ bookId: book.id, kind: "audio" });
+    const release = f.repo.createRelease({ bookId: book.id, mediaType: "audio", provider: "Fixture", title: "Policy fixture",
+      infoHash: "a".repeat(40), url: "https://fixture.invalid/unused" });
+    const job = f.repo.createJob({ type: policy.type, bookId: book.id, maxAttempts: policy.maxAttempts,
+      releaseId: policy.type === "download" ? release.id : null,
+      payload: { bookId: book.id, media: ["audio"], manifestationId: manifestation.id } });
+    expect(jobLockKeys(f.repo, job)).toEqual([...policy.locks]);
+    expect(executionRetryPolicy(job.max_attempts).backoff).toBe(policy.backoff);
     const launch = (stopAt = "") =>
       Bun.spawn([process.execPath, "run", "test/fixtures/all-job-execution-process.ts", f.root, stopAt], {
         cwd: path.resolve(import.meta.dir, "../.."),
@@ -299,7 +319,8 @@ test("unsupported names fail visibly without blocking registered jobs", async ()
 
 for (const [type, limit] of [
   ["acquire", 1],
-  ["chapter_analysis", 2]
+  ["chapter_analysis", 2],
+  ["metadata_hydration", 16]
 ] as const) {
   test(`${type} workflow limit ${limit} leaves room for nonconflicting work`, async () => {
     const f = await fixture();
@@ -308,7 +329,7 @@ for (const [type, limit] of [
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const jobs = [0, 1, 2].map(() => f.repo.createJob({ type }));
+    const jobs = Array.from({ length: limit + 1 }, () => f.repo.createJob({ type }));
     const runtime = await createJobExecutionRuntime(f.ctx, path.join(f.root, "execution.sqlite"), {
       processJob: async (ctx, job) => {
         await ctx.execution!.run("work", async () => {
@@ -321,7 +342,7 @@ for (const [type, limit] of [
     try {
       await runtime.reconcile();
       await until(() => entered.length === limit);
-      const unrelated = f.repo.createJob({ type: "metadata_hydration" });
+      const unrelated = f.repo.createJob({ type: type === "metadata_hydration" ? "cover_generation" : "metadata_hydration" });
       await runtime.reconcile();
       await until(() => f.repo.getJob(unrelated.id)?.status === "succeeded");
       expect(entered.filter((id) => jobs.some((job) => job.id === id))).toHaveLength(limit);
