@@ -14,9 +14,11 @@ export const crossSeedPolicySchema = z.object({
 }).strict();
 export type CrossSeedPolicy = z.infer<typeof crossSeedPolicySchema>;
 export const crossSeedCommandSchema = z.object({
-  operationId: z.string().uuid(), scope: crossSeedScopeSchema, releaseId: id,
+  operationId: z.string().uuid(), scope: crossSeedScopeSchema, releaseId: id.optional(),
+  selectionCopyId: z.string().uuid().optional(),
   policy: crossSeedPolicySchema.default(() => crossSeedPolicySchema.parse({})),
-}).strict();
+}).strict().refine(command => Number(command.releaseId !== undefined) + Number(command.selectionCopyId !== undefined) === 1,
+  "Provide exactly one retained release or server-owned selected copy");
 export type CrossSeedCommand = z.infer<typeof crossSeedCommandSchema>;
 export type CrossSeedOutcome = {
   kind: "seeding" | "skipped" | "unsupported" | "stalled";
@@ -58,6 +60,15 @@ export class CrossSeedRepo {
     return !!this.db.query(`SELECT 1 FROM ${scope.media}_versions v JOIN ${scope.media}_version_files f ON f.version_id=v.id
       JOIN ${scope.media}_acquisitions a ON a.id=v.acquisition_id
       WHERE a.target_id=? AND NOT EXISTS(SELECT 1 FROM media_content_losses l WHERE l.file_id=f.file_id) LIMIT 1`).get(scope.targetId);
+  }
+  contentRevision(scope: CrossSeedScope): string {
+    crossSeedScopeSchema.parse(scope);
+    const row = this.db.query(`SELECT COALESCE(MAX(v.id),0) AS newest, COUNT(DISTINCT f.file_id) AS files
+      FROM ${scope.media}_versions v JOIN ${scope.media}_version_files f ON f.version_id=v.id
+      JOIN ${scope.media}_acquisitions a ON a.id=v.acquisition_id
+      WHERE a.target_id=? AND NOT EXISTS(SELECT 1 FROM media_content_losses l WHERE l.file_id=f.file_id)`)
+      .get(scope.targetId) as { newest: number; files: number };
+    return `${row.newest}:${row.files}`;
   }
   files(scope: CrossSeedScope, sizes: number[]) {
     crossSeedScopeSchema.parse(scope);

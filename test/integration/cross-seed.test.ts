@@ -11,7 +11,8 @@ import { prepareMovieStorage } from "../../src/movies/storage";
 import { fixtureMovie, fixtureFacts } from "../fixtures/movie-services";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
 import { crossSeedCommandSchema } from "../../src/media/cross-seed-state";
-import { queueCrossSeed, processCrossSeed, crossSeedPlan, type CrossSeedAdapters } from "../../src/media/cross-seed";
+import { queueCrossSeed, processCrossSeed, crossSeedPlan, crossSeedOffer, queueSelectedCrossSeeds, type CrossSeedAdapters } from "../../src/media/cross-seed";
+import { rememberSelectedCopies, selectedCopyOffer } from "../../src/media/selected-copies";
 import { discoverCrossSeeds } from "../../src/media/cross-seed-feed";
 import { hashSessionToken } from "../../src/auth";
 import { createPodibleFetchHandler } from "../../src/http";
@@ -98,6 +99,57 @@ async function execute(f: Awaited<ReturnType<typeof fixture>>, receipt = queueCr
     return f.repo.crossSeed.receipt(f.command.operationId)!;
   } finally { await runtime.stop(); }
 }
+
+test("selection-discovered copies use the same verified executor without an RSS entry or duplicate jobs", async () => {
+  const f = await fixture();
+  try {
+    const selected = { key: "primary", title: "A Fixture Film", provider: "Primary", sizeBytes: 10, seeders: 1,
+      url: "https://primary.invalid/private", infoHash: null, attributes: {} };
+    const copy = { ...selected, key: "selected-copy", provider: "Other", infoHash: f.metadata.infoHash };
+    const group = rememberSelectedCopies(f.repo, f.command.scope, 1, selected, [selected, copy, copy]);
+    expect(group.copies).toHaveLength(1);
+    expect(rememberSelectedCopies(f.repo, f.command.scope, 1, selected, []).copies).toEqual(group.copies);
+    const [receipt] = queueSelectedCrossSeeds(f.repo, f.command.scope, 1, selected.key);
+    expect(queueSelectedCrossSeeds(f.repo, f.command.scope, 1, selected.key)[0]?.jobId).toBe(receipt!.jobId);
+    expect(f.repo.crossSeed.receipts()).toHaveLength(1);
+    f.command = receipt!.command;
+    expect(f.command.releaseId).toBeUndefined();
+    expect(crossSeedOffer(new BooksRepo(f.db), f.command)).toEqual(copy);
+    expect(() => selectedCopyOffer(f.repo, { media: "tv", targetId: 1 }, group.copies[0]!.id)).toThrow("another target");
+    expect(() => queueCrossSeed(f.repo, { ...f.command, selectionCopyId: randomUUID() })).toThrow();
+    expect(() => crossSeedCommandSchema.parse({ ...f.command, releaseId: 1 })).toThrow("exactly one");
+    const result = await execute(f, receipt!);
+    expect(result.outcome?.kind).toBe("seeding");
+    expect(await fs.readFile(f.canonical, "utf8")).toBe("abcdefgh");
+    expect(f.repo.movies.target(f.command.scope.targetId)!.active_version_id).toBe(f.version);
+  } finally { await f.cleanup(); }
+});
+
+test("later imports inherit source copies and reconsider a skipped reuse plan once registered coverage grows", async () => {
+  const f = await fixture("abcdefgh", "abcdefghijklmnop", "");
+  try {
+    const primary = { key: "pack", title: "A Fixture Film pack", provider: "Primary", sizeBytes: 16, seeders: 1,
+      url: "https://primary.invalid/private", infoHash: null, attributes: {} };
+    const copy = { ...primary, key: "other-pack", provider: "Other", infoHash: f.metadata.infoHash };
+    rememberSelectedCopies(f.repo, f.command.scope, 1, primary, [copy]);
+    const [first] = queueSelectedCrossSeeds(f.repo, f.command.scope, 1, primary.key);
+    f.command = first!.command;
+    expect((await execute(f, first!)).outcome?.kind).toBe("skipped");
+    // Another acquisition adopts more of the same retained source (e.g. the next TV import batch).
+    const acquisition = f.repo.movies.startAcquisition(f.command.scope.targetId, "upgrade", () => f.repo.createJob({ type: "movie_acquire" }).id).acquisition;
+    const id = randomUUID(), relativePath = `files/${id.slice(0, 2)}/${id}.mkv`;
+    await fs.mkdir(path.dirname(path.join(f.root, "objects", relativePath)), { recursive: true });
+    await fs.writeFile(path.join(f.root, "objects", relativePath), "abcdefghijklmnop");
+    f.repo.movies.recordVersion(acquisition.id, fixtureFacts(), [{ id, relativePath, sizeBytes: 16, probe: {} }]);
+    const [second] = queueSelectedCrossSeeds(f.repo, f.command.scope, acquisition.id, primary.key);
+    expect(second!.jobId).not.toBe(first!.jobId);
+    expect(queueSelectedCrossSeeds(f.repo, f.command.scope, acquisition.id, primary.key)[0]?.jobId).toBe(second!.jobId);
+    f.command = second!.command;
+    expect((await execute(f, second!)).outcome?.kind).toBe("seeding");
+    expect(f.repo.crossSeed.receipts()).toHaveLength(2);
+    expect(await fs.readFile(f.canonical, "utf8")).toBe("abcdefgh");
+  } finally { await f.cleanup(); }
+});
 
 test("cross-seed durable pipeline reuses renamed media, fetches private sidecar and never changes library selection", async () => {
   const f = await fixture();
@@ -255,7 +307,7 @@ test("RSS reuse queues every routed release rather than silently dropping the fi
   const f = await fixture();
   try {
     const now = new Date().toISOString();
-    const entry = f.repo.releaseInbox.entries([f.command.releaseId])[0]!;
+    const entry = f.repo.releaseInbox.entries([f.command.releaseId!])[0]!;
     const ids = f.repo.releaseInbox.ingest(entry.feed_id, Array.from({ length: 6 }, (_, i) => ({
       ...entry.result, guid: `extra-${i}`, infoHash: null,
     })), now);
@@ -286,7 +338,7 @@ test("TV reuse reads its own canonical pool and leaves episode publication uncha
     f.repo.tv.promotePublication(request.targetId, version, revision);
     f.repo.tv.clearPublication(request.targetId, version); f.repo.tv.finishAcquisition(acquisition.id);
     const published = f.repo.tv.activeEpisodes(request.targetId);
-    const entry = f.repo.releaseInbox.entries([f.command.releaseId])[0]!;
+    const entry = f.repo.releaseInbox.entries([f.command.releaseId!])[0]!;
     const now = new Date().toISOString(), feed = f.repo.releaseInbox.ensureFeed("tv-reuse", "Other tracker", "tv", now);
     const [releaseId] = f.repo.releaseInbox.ingest(feed.id, [{ ...entry.result, mediaType: "tv", guid: "tv-candidate" }], now);
     f.command.scope = { media: "tv", targetId: request.targetId }; f.command.releaseId = releaseId!;

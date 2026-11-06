@@ -12,7 +12,8 @@ import { TransmissionAdapter, TransmissionRpc } from "../../src/media/transmissi
 import { inspectMetainfo } from "../../src/media/metainfo";
 import { prepareMovieStorage } from "../../src/movies/storage";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
-import { processCrossSeed, queueCrossSeed } from "../../src/media/cross-seed";
+import { processCrossSeed, queueCrossSeed, queueSelectedCrossSeeds } from "../../src/media/cross-seed";
+import { rememberSelectedCopies } from "../../src/media/selected-copies";
 import { fixtureMovie, fixtureFacts } from "../fixtures/movie-services";
 import { reconcileLibraryView } from "../../src/media/library-view";
 
@@ -85,12 +86,24 @@ try {
   const old = await client.ensureAdded({ metainfo: meta("Original", [{ path: "old.mkv", bytes: original }]), location: oldLocation });
   repo.movies.bindDownload(acquisition.id, old, oldLocation, "stalled-original");
   const candidate = meta("Pack", files), metadata = inspectMetainfo(candidate);
-  repo.releaseInbox.ensureFeed("lab", "Another tracker", "movie", new Date().toISOString());
-  const [releaseId] = repo.releaseInbox.ingest("lab", [{ title: "Fixture pack on another tracker", provider: "Another tracker", mediaType: "movie",
-    sizeBytes: metadata.size, url: "https://fixture.invalid/metainfo", guid: "lab-candidate", infoHash: metadata.infoHash, seeders: 1, leechers: 0, raw: {} }], new Date().toISOString());
-  const command = { operationId: randomUUID(), scope: { media: "movie" as const, targetId: request.targetId }, releaseId,
-    policy: { minimumReuseRatio: 0.9, maximumExtraBytes: 64 * 1024 } };
-  const receipt = queueCrossSeed(repo, command);
+  const scope = { media: "movie" as const, targetId: request.targetId };
+  const discovery = process.env.PODIBLE_LAB_DISCOVERY ?? "rss";
+  const receipt = (() => {
+    if (discovery === "selection") {
+      const selected = { key: "original", title: "Fixture film", provider: "Original tracker", sizeBytes: original.length,
+        url: "https://fixture.invalid/original", infoHash: old.nativeId, seeders: 1, attributes: {} };
+      rememberSelectedCopies(repo, scope, acquisition.id, selected, [{ ...selected, key: "other-tracker",
+        provider: "Another tracker", sizeBytes: metadata.size, infoHash: metadata.infoHash }]);
+      return queueSelectedCrossSeeds(repo, scope, acquisition.id, selected.key)[0]!;
+    }
+    if (discovery !== "rss") throw new Error("Unknown lab discovery mode");
+    repo.releaseInbox.ensureFeed("lab", "Another tracker", "movie", new Date().toISOString());
+    const [releaseId] = repo.releaseInbox.ingest("lab", [{ title: "Fixture pack on another tracker", provider: "Another tracker", mediaType: "movie",
+      sizeBytes: metadata.size, url: "https://fixture.invalid/metainfo", guid: "lab-candidate", infoHash: metadata.infoHash, seeders: 1, leechers: 0, raw: {} }], new Date().toISOString());
+    return queueCrossSeed(repo, { operationId: randomUUID(), scope, releaseId,
+      policy: { minimumReuseRatio: 0.9, maximumExtraBytes: 64 * 1024 } });
+  })();
+  const command = receipt.command;
   const ctx = { repo, getSettings: () => repo.getSettings(), crossSeedAdapters: { client: () => client, fetchMetainfo: async () => candidate, pollMs: 100, maxPolls: 1200 } };
   runtime = await createJobExecutionRuntime(ctx, path.join(base, "execution.sqlite"), {
     processJob: (context, job) => job.type === "torrent_reuse" ? processCrossSeed(context, job) : Promise.resolve("done" as const) });
@@ -108,7 +121,7 @@ try {
   const fields = await rpc.call("torrent-get", { ids: [metadata.infoHash], fields: ["downloadedEver", "totalSize", "trackerStats"] });
   const tracker = (fields.torrents as { trackerStats: { lastAnnounceSucceeded: boolean }[]; downloadedEver: number; totalSize: number }[])[0]!;
   if (tracker.downloadedEver >= original.length / 2) throw new Error("Candidate redownloaded the media instead of reusing it");
-  console.log(JSON.stringify({ result: "passed", outcome: current.outcome, downloadedEver: tracker.downloadedEver,
+  console.log(JSON.stringify({ result: "passed", discovery, outcome: current.outcome, downloadedEver: tracker.downloadedEver,
     canonicalUnchanged: true, plexSelectionUnchanged: true, oldStalledRecordRetained: true, nativeCow: true,
     trackerAnnouncements: tracker.trackerStats.map(t => t.lastAnnounceSucceeded) }, null, 2));
 } finally {

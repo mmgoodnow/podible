@@ -9,6 +9,8 @@ import { defaultSettings } from "../../src/settings";
 import { defaultMovieQualityPolicy as policy } from "../../src/movies/quality";
 import { acquireMovie } from "../../src/movies/acquisition";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
+import { crossSeedOffer, queueSelectedCrossSeeds } from "../../src/media/cross-seed";
+import { selectedCopies } from "../../src/media/selected-copies";
 import {
   createFixtureMovieServices,
   fixtureMovie,
@@ -67,6 +69,46 @@ async function setup(requestedPolicy = policy) {
     },
   };
 }
+test("movie completion queues selected tracker copies before Plex, without duplicate dispatch", async () => {
+  const s = await setup();
+  try {
+    const primary = s.fixture.addOffer("primary", 1280);
+    const copy = { ...primary, key: "other-tracker", provider: "Other", url: "https://other.invalid/private" };
+    const select = s.fixture.services.decider.select;
+    s.fixture.services.search = async () => ({ offers: [primary, copy], warnings: [] });
+    s.fixture.services.decider.select = async input => ({ ...await select(input), matchingOffers: [copy] });
+    s.fixture.setPlexVerified(false);
+    const acquisition = s.enqueue();
+    const job = s.repo.getJob(acquisition.job_id!)!;
+    await expect(acquireMovie(s.context, job, s.fixture.services)).rejects.toThrow("Plex did not verify");
+    const [receipt] = s.repo.crossSeed.receipts();
+    expect(receipt).toBeDefined();
+    expect(receipt!.command.selectionCopyId).toBeDefined();
+    expect(receipt!.command.releaseId).toBeUndefined();
+    expect(crossSeedOffer(s.repo, receipt!.command).key).toBe(copy.key);
+    expect(s.fixture.stats.snatches).toBe(1);
+    expect(s.repo.movies.target(s.request.targetId)!.active_version_id).toBeNull();
+    expect(queueSelectedCrossSeeds(s.repo, { media: "movie", targetId: s.request.targetId }, acquisition.id, primary.key)[0]?.jobId).toBe(receipt!.jobId);
+    expect(s.repo.crossSeed.receipts()).toHaveLength(1);
+    expect(s.fixture.stats.snatches).toBe(1);
+  } finally { await s.close(); }
+});
+test("a completed download that fails import review never dispatches its selected copies", async () => {
+  const s = await setup();
+  try {
+    const primary = s.fixture.addOffer("primary", 1280);
+    const copy = { ...primary, key: "other", provider: "Other" };
+    const select = s.fixture.services.decider.select;
+    s.fixture.services.search = async () => ({ offers: [primary, copy], warnings: [] });
+    s.fixture.services.decider.select = async input => ({ ...await select(input), matchingOffers: [copy] });
+    s.fixture.services.decider.inspect = async () => { throw new Error("Synthetic import review failure"); };
+    const acquisition = s.enqueue();
+    await expect(acquireMovie(s.context, s.repo.getJob(acquisition.job_id!)!, s.fixture.services)).rejects.toThrow("import review failure");
+    expect(selectedCopies(s.repo, { media: "movie", targetId: s.request.targetId }, acquisition.id, primary.key)).toHaveLength(1);
+    expect(s.repo.crossSeed.receipts()).toHaveLength(0);
+    expect(s.fixture.stats.snatches).toBe(1);
+  } finally { await s.close(); }
+});
 test("movie acquisition publishes, upgrades without losing old bytes, and retains equal-quality versions", async () => {
   const s = await setup();
   try {

@@ -2,8 +2,8 @@ import { z } from "zod";
 import { defineMethod, defineRouter } from "./framework";
 import { crossSeedCommandSchema } from "../media/cross-seed-state";
 import { confirmedReleaseNukeSchema, reportConfirmedReleaseNuke } from "../media/release-health";
-import { crossSeedPlan, queueCrossSeed } from "../media/cross-seed";
-import { fetchMovieMetainfo, movieOfferFromResult } from "../movies/offers";
+import { crossSeedPlan, queueCrossSeed, crossSeedOffer } from "../media/cross-seed";
+import { fetchMovieMetainfo } from "../movies/offers";
 
 const outcome = z.object({ kind: z.enum(["seeding", "skipped", "unsupported", "stalled"]), reason: z.string(), at: z.string(),
   torrentId: z.number().optional(), infoHash: z.string().optional(), reusedBytes: z.number().optional(), downloadedBytes: z.number().optional(), totalBytes: z.number().optional() });
@@ -20,9 +20,7 @@ export const crossSeedRouter = defineRouter({
     paramsSchema: crossSeedCommandSchema, resultSchema: z.object({ candidateHash: z.string().optional(), status: z.string(),
       likelyReuseBytes: z.number(), totalBytes: z.number(), reasons: z.array(z.string()), verification: z.string() }),
     handler: async (ctx, command) => {
-      const entry = ctx.repo.releaseInbox.entries([command.releaseId])[0];
-      if (!entry || entry.result.mediaType !== command.scope.media) throw new Error("Unknown retained candidate");
-      const bytes = await (ctx.movieServices?.fetchMetainfo ?? fetchMovieMetainfo)(movieOfferFromResult({ ...entry.result, mediaType: "movie" }));
+      const bytes = await (ctx.movieServices?.fetchMetainfo ?? fetchMovieMetainfo)(crossSeedOffer(ctx.repo, command));
       const plan = await crossSeedPlan(ctx.repo, ctx.repo.getSettings(), command, bytes);
       return { candidateHash: plan.candidate.identity.v1, status: plan.status, ...plan.summary, reasons: plan.reasons, verification: plan.verification };
     },

@@ -11,6 +11,8 @@ import { factsFromMovieProbe } from "../movies/probe";
 import { evaluateMovieQuality, movieQualityPolicySchema } from "../movies/quality";
 import { MovieIndexerError } from "../movies/offers";
 import { publishTvVersion, tvRoots } from "./publication";
+import { rememberSelectedCopies } from "../media/selected-copies";
+import { queueSelectedCrossSeeds } from "../media/cross-seed";
 import { TvUpstreamError } from "./upstream";
 import { configuredTvServices, type TvServices } from "./runtime";
 import { tvImportPlanSchema, validateTvImportPlan, type TvFileCandidate } from "./agents";
@@ -103,6 +105,12 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
   const excludedHashes = new Set(snapshot.priorHashes ?? []);
   if (snapshot.consumedSources) emit("sources-consumed", "retained", `Skipped ${snapshot.consumedSources} verified source(s): no unused playable members for missing requested episodes`);
   const publish = async (prefix: string, versionId: number) => {
+    const facts = repo.version(versionId)?.facts as { selectedOfferKey?: string; source?: { offerKey?: string } } | undefined;
+    const selectedKey = facts?.selectedOfferKey ?? facts?.source?.offerKey;
+    if (selectedKey) await durableStep(ctx, `${prefix}:cross-seed-copies`, () => {
+      active();
+      return queueSelectedCrossSeeds(ctx.repo, { media: "tv", targetId: target.id }, acquisition.id, selectedKey);
+    });
     const eventKey = prefix.startsWith("tv:attempt:") ? prefix.slice("tv:attempt:".length) : prefix;
     emit(`${eventKey}:publishing`, "publishing", "Publishing an isolated TV view and verifying each episode in Plex");
     for (let scan = 0; ; scan++) {
@@ -198,6 +206,12 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
           const result = await services.decider(entry).select({ entry, episodes, policy, excludedOfferKeys: [...excluded], maximumReleaseBytes: settings.tv.maximumReleaseBytes,
             offers: search.offers.filter((offer) => !excluded.has(offer.key) && (offer.sizeBytes === null || offer.sizeBytes <= settings.tv.maximumReleaseBytes)) });
           if (result.offer && excluded.has(result.offer.key)) throw new Error("TV selector repeated a retained failed release");
+          if (result.offer) {
+            active();
+            rememberSelectedCopies(ctx.repo, { media: "tv", targetId: target.id }, acquisition.id, result.offer,
+              (result.matchingOffers ?? []).filter(copy => !excluded.has(copy.key) &&
+                (copy.sizeBytes === null || copy.sizeBytes <= settings.tv.maximumReleaseBytes)));
+          }
           active(); repo.decision(acquisition.id, { ...intake, selection: { title: result.offer?.title ?? null, provider: result.offer?.provider ?? null, reason: result.reason }, attempt });
           return result;
         });
@@ -324,7 +338,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
     }
     await tvSourceFiles(source, services.client, settings.tv.managedRoot);
     const facts = {
-      identityVerified: true, plan, provider: releaseEvidence.provider, releaseTitle: releaseEvidence.title,
+      identityVerified: true, plan, provider: releaseEvidence.provider, releaseTitle: releaseEvidence.title, selectedOfferKey: releaseEvidence.key,
       ...(snapshot.sourceReuse ? { source, attemptKey: prefix } : {}),
     };
     const versionId = await durableStep(ctx, `${prefix}:version`, () => { active(); return repo.recordVersion(acquisition.id, facts, content); });

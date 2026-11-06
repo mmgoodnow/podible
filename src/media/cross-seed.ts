@@ -16,6 +16,7 @@ import { crossSeedCommandSchema, crossSeedCommandHash, crossSeedStateKey,
   type CrossSeedCommand, type CrossSeedReceipt, type CrossSeedScope, type CrossSeedOutcome } from "./cross-seed-state";
 import { planContentReuse, type ReuseCandidateManifest, type ReusePlan, type ReuseSourceFile } from "./reuse-plan";
 import { captureReuseFile, captureReuseRoot, materializeReuseLayout, prepareReuseLayoutRoot, verifyContentReuse } from "./reuse-layout";
+import { selectedCopies, selectedCopyOffer, selectedCopyId } from "./selected-copies";
 
 export type CrossSeedAdapters = {
   client?: (scope: CrossSeedScope) => TorrentClient;
@@ -36,7 +37,9 @@ export function assertCrossSeedDemand(repo: BooksRepo, scope: CrossSeedScope) {
   if (!target || intent?.desiredPresence === "evicted") throw new Error("Reuse target is missing or intentionally evicted");
 }
 
-function offerFor(repo: BooksRepo, command: Pick<CrossSeedCommand, "scope" | "releaseId">) {
+export function crossSeedOffer(repo: BooksRepo, command: Pick<CrossSeedCommand, "scope" | "releaseId" | "selectionCopyId">) {
+  if (command.selectionCopyId) return selectedCopyOffer(repo, command.scope, command.selectionCopyId);
+  if (!command.releaseId) throw new Error("Missing reuse candidate");
   const entry = repo.releaseInbox.entries([command.releaseId])[0];
   if (!entry || entry.result.mediaType !== command.scope.media) throw new Error("Reuse release is not a retained result for this media type");
   return movieOfferFromResult({ ...entry.result, mediaType: "movie" });
@@ -50,12 +53,28 @@ export function queueCrossSeed(repo: BooksRepo, raw: z.input<typeof crossSeedCom
       if (previous.commandHash !== commandHash) throw new Error("Reuse operation UUID belongs to another command");
       return previous;
     }
-    assertCrossSeedDemand(repo, command.scope); offerFor(repo, command);
+    assertCrossSeedDemand(repo, command.scope); crossSeedOffer(repo, command);
     const job = repo.createJob({ type: "torrent_reuse", payload: { operationId: command.operationId },
       idempotencyKey: `torrent-reuse:${command.operationId}`, maxAttempts: 3 });
     const receipt: CrossSeedReceipt = { command, commandHash, jobId: job.id, createdAt: new Date().toISOString() };
     repo.setJsonState(crossSeedStateKey(command.operationId), receipt);
     return receipt;
+  });
+}
+
+/** Called after canonical import, before Plex verification; each copy is independently recoverable. */
+export function queueSelectedCrossSeeds(repo: BooksRepo, scope: CrossSeedScope, acquisitionId: number, selectedKey: string) {
+  return repo.transaction(() => {
+    const revision = repo.crossSeed.contentRevision(scope);
+    return selectedCopies(repo, scope, acquisitionId, selectedKey).map(copy => {
+      const pointer = `cross-seed:selected-latest:${copy.id}`;
+      const previousId = repo.getJsonState<string>(pointer);
+      const previous = previousId ? repo.crossSeed.receipt(previousId) : null;
+      if (previous && (!previous.outcome || previous.outcome.kind === "seeding" || previous.outcome.kind === "unsupported")) return previous;
+      const receipt = queueCrossSeed(repo, { operationId: selectedCopyId(`${copy.id}:${revision}`), scope, selectionCopyId: copy.id });
+      repo.setJsonState(pointer, receipt.command.operationId);
+      return receipt;
+    });
   });
 }
 
@@ -115,10 +134,10 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   };
   active();
   const services = command.scope.media === "movie" ? ctx.movieServices : ctx.tvServices;
-  const encoded = await durableStep(ctx, "reuse:metainfo", async () => Buffer.from(await (adapters.fetchMetainfo ?? services?.fetchMetainfo ?? fetchMovieMetainfo)(offerFor(ctx.repo, command))).toString("base64"));
+  const encoded = await durableStep(ctx, "reuse:metainfo", async () => Buffer.from(await (adapters.fetchMetainfo ?? services?.fetchMetainfo ?? fetchMovieMetainfo)(crossSeedOffer(ctx.repo, command))).toString("base64"));
   const bytes = Buffer.from(encoded, "base64"), metadata = inspectMetainfo(bytes);
   const client = adapters.client?.(command.scope) ?? services?.client ?? configuredClient(settings, command.scope);
-  if (ctx.repo.releaseHealth.isOfferBlocked({ ...offerFor(ctx.repo, command), infoHash: metadata.infoHash }))
+  if (ctx.repo.releaseHealth.isOfferBlocked({ ...crossSeedOffer(ctx.repo, command), infoHash: metadata.infoHash }))
     return finish({ kind: "skipped", reason: "Candidate is a confirmed nuked release" });
   if (!client.capabilities.pausedAdd || !client.capabilities.recheck || !client.capabilities.derivedLayouts || !client.capabilities.metainfoVersions.includes(1))
     return finish({ kind: "unsupported", reason: "Client cannot safely add paused and verify this derived v1 layout" });
@@ -171,7 +190,7 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
     if (sourceBlocked()) throw new Error("Reuse source was confirmed nuked before torrent addition");
     const result = await client.ensureAdded({ metainfo: bytes, location });
     if (result.clientId !== client.id || result.nativeId !== metadata.infoHash) throw new Error("Reuse client returned another identity");
-    ctx.repo.reserveReuseTorrent(result, location, offerFor(ctx.repo, command).key, command.scope, operationId);
+    ctx.repo.reserveReuseTorrent(result, location, crossSeedOffer(ctx.repo, command).key, command.scope, operationId);
     return result;
   }));
   const torrent = ctx.repo.reuseTorrent(ref)!;
@@ -204,7 +223,7 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   // external stop can undo a previously checkpointed start acknowledgement.
   await check(); await client.resume(ref);
   for (let poll = 0; poll < (adapters.maxPolls ?? 1200); poll++) {
-    if (sourceBlocked() || ctx.repo.releaseHealth.isOfferBlocked({ ...offerFor(ctx.repo, command), infoHash: metadata.infoHash })) {
+    if (sourceBlocked() || ctx.repo.releaseHealth.isOfferBlocked({ ...crossSeedOffer(ctx.repo, command), infoHash: metadata.infoHash })) {
       await check(); await client.quiesce(ref);
       return finish({ kind: "stalled", reason: "Candidate was confirmed nuked during reuse", torrentId: torrent.id });
     }

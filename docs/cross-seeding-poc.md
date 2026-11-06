@@ -6,8 +6,40 @@ Movie and TV RSS entries also route to retained content, independently of missin
 episodes and quality upgrades. The semantic agent identifies plausible works;
 the server then fetches the original retained candidate metainfo and builds its
 actual file layout from registered canonical objects. There are no virtual-season
-torrents, periodic per-title searches, arbitrary client download URLs, or new
+torrents, periodic per-title searches, arbitrary client download URLs, or hardcoded
 release-group preferences.
+
+Movie and TV acquisition selectors also identify likely copies of the selected
+release during search. `assessCrossSeedability` counts distinct normalized tracker
+names in agent-proposed groups, rather than counting duplicate search results.
+Semantic grouping must preserve encode, edition, tracks and episode coverage;
+size and hash diagnostics are estimates, not permission to seed unverified bytes.
+Among otherwise equivalent viable options, greater estimated tracker coverage is
+preferred. Within that group, known lower download-volume factors/freeleech can
+break a source tie. This is not a quality improvement and cannot replace an
+equivalent existing playback version.
+
+`movies.crossSeedPreference` is `"tie-break"` by default or `"off"` to disable
+this ranking for both movie and TV selectors. It is a selection setting, not part
+of quality-policy/target identity. No particular group (including NTb) gets a bonus.
+The selector still records known matching copies when ranking is off.
+
+The chosen source and other matching offers are captured server-side before the
+download starts. After canonical import, **before waiting for Plex verification**,
+each alternate gets an idempotent reuse job. Those jobs use the same verified
+executor as RSS and do not block publication on unsuccessful/unsupported reuse.
+They survive app restarts without depending on an RSS row or a repeated search.
+Retained TV packs carry that source association across later import batches.
+Skipped/stalled copies can be reconsidered once registered file coverage grows;
+the same content revision cannot enqueue duplicate attempts. Pending, successful
+and filesystem-unsupported attempts are not requeued for every import batch.
+Snapshots keep provider download URLs private; commands reference opaque retained
+IDs. A failed/unplayable primary download does not dispatch its copies.
+
+These are complementary triggers: completed acquisitions cover new local bytes,
+and RSS covers new indexer releases against existing local bytes. This is not an
+exhaustive discovery guarantee: search omissions, RSS gaps, undiscovered older
+copies and unsupported storage/client capabilities remain possible.
 
 The reuse command snapshots a versioned policy. Defaults require 80% reusable
 bytes, at most 512 MiB of missing pieces, and at most a 100 GiB candidate. Admin
@@ -55,13 +87,16 @@ completion fails independent piece verification.
 
 All methods below require admin authentication and use both JSON-RPC and typed
 tRPC through the existing router. Operation/report UUIDs are immutable idempotency
-keys. `releaseId` is a server-retained RSS inbox ID, not a URL.
+keys. Supply exactly one of `releaseId` (a server-retained RSS inbox ID) or
+`selectionCopyId` (a server-retained acquisition-copy UUID), never a URL.
 
 ```ts
 crossSeed.preview({ operationId, scope: { media: "movie" | "tv", targetId }, releaseId, policy? })
 // Read-only candidate plan; no layout or daemon writes.
 crossSeed.create({ operationId, scope, releaseId, policy? })
 // Durable intent/outbox receipt with jobId.
+crossSeed.create({ operationId, scope, selectionCopyId, policy? })
+// The same executor for a copy retained during release selection.
 crossSeed.status({ operationId?, limit? })
 // Saved intents/outcomes only; no daemon I/O.
 crossSeed.reportNuked({ reportId, sourceTorrentId, reason })
@@ -81,6 +116,10 @@ are not implemented by this POC.
 in Docker against host-native APFS CoW files, with synthetic metainfo, HTTP
 trackers and a webseed. It uses only temporary isolated roots and removes its
 container and files afterward. The image defaults to `podible-ci-lab:verify`.
+`PODIBLE_LAB_DISCOVERY=selection bun run test/lab/cross-seed-host.ts` exercises
+the persisted search-selection/completion trigger instead of the RSS candidate
+receipt. The selected-copy variant was also verified November 5 with the same
+2,097,152 reused / 238 downloaded bytes and unchanged canonical/Plex selection.
 
 November 5, 2026, repeated successful runs demonstrated:
 
@@ -111,8 +150,11 @@ season-pack manifest, including piece boundaries crossing files.
 - Existing confirmed-orphan record retirement remains in force; this change does
   not detach library-bound registrations, delete seed bytes, or claim physical
   CoW extent/reclaimability accounting.
-- New discovery comes from RSS or explicit retained-candidate commands, not an
-  exhaustive historical cross-tracker search.
+- Discovery comes from RSS, acquisition search/selection and explicit retained
+  candidate commands, not an exhaustive historical cross-tracker search.
+- An already-owned infohash is not registered twice. Automatically merging
+  additional private tracker announcements into that registration is not yet
+  supported; such attempts report `skipped`, not new tracker coverage.
 - Planner identities leave room for v1/v2/hybrid; actual metainfo validation,
   piece proof and Transmission execution remain v1-only.
 

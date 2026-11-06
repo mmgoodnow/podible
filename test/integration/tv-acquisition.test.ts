@@ -22,6 +22,7 @@ import { createJobExecutionRuntime } from "../../src/worker/execution";
 import { createFixtureMovieServices, fixtureMovie } from "../fixtures/movie-services";
 import { RecoveryService } from "../../src/media/recovery";
 import { randomUUID } from "node:crypto";
+import { crossSeedOffer } from "../../src/media/cross-seed";
 
 function catalog(): TvCatalogEntry {
   return {
@@ -169,6 +170,32 @@ async function setup(keys = ["tvdb:201", "tvdb:202", "tvdb:203", "tvdb:204"], in
 }
 
 type Runtime = Awaited<ReturnType<typeof createJobExecutionRuntime>>;
+test("TV completion retains researched copies and queues them before publication, including restart", async () => {
+  const s = await setup(["tvdb:201"]);
+  try {
+    const primary = s.fixture.addRelease("primary", ["tvdb:201"]);
+    const copy = { ...primary, key: "research-copy", provider: "Other", url: "https://other.invalid/private" };
+    const decider = s.fixture.services.decider;
+    s.fixture.services.decider = entry => {
+      const original = decider(entry);
+      return { ...original, select: async input => ({ ...await original.select(input), matchingOffers: [copy] }) };
+    };
+    s.fixture.setPlexVerified(false);
+    const acquisition = s.enqueue();
+    const job = s.repo.getJob(acquisition.job_id!)!;
+    await expect(acquireTv(s.context, job, s.fixture.services)).rejects.toThrow("Plex did not verify");
+    const [receipt] = s.repo.crossSeed.receipts();
+    expect(receipt).toBeDefined();
+    expect(crossSeedOffer(s.repo, receipt!.command).key).toBe(copy.key);
+    expect(s.fixture.stats.snatches).toBe(1);
+    s.reopen();
+    s.fixture.setPlexVerified(true);
+    await acquireTv(s.context, s.repo.getJob(job.id)!, s.fixture.services);
+    expect(s.repo.crossSeed.receipts()).toHaveLength(1);
+    expect(s.fixture.stats.snatches).toBe(1);
+    expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(1);
+  } finally { await s.close(); }
+});
 async function until(runtime: Runtime, predicate: () => boolean, description: () => string) {
   const deadline = Date.now() + 8000;
   while (!predicate()) {
@@ -212,12 +239,21 @@ test("large-series execution is bounded by season without truncating durable req
   }
   const s = await setup(entry.episodes.map(ep => ep.key), entry);
   try {
-    s.fixture.addPack("large-series", entry.episodes.map(ep => ep.key));
+    const primary = s.fixture.addPack("large-series", entry.episodes.map(ep => ep.key));
+    const copy = { ...primary, key: "same-pack-other-tracker", provider: "Other" };
+    const decider = s.fixture.services.decider;
+    s.fixture.services.decider = entry => {
+      const original = decider(entry);
+      return { ...original, select: async input => ({ ...await original.select(input), matchingOffers: [copy] }) };
+    };
     const batches: number[] = [];
     while (s.repo.tv.missingEpisodes(s.request.requestId).length) {
       const next = s.enqueue();
       await acquireTv(s.context, s.repo.getJob(next.job_id!)!, s.fixture.services);
       batches.push(s.repo.tv.activeEpisodes(s.request.targetId).length);
+      const receipts = s.repo.crossSeed.receipts();
+      expect(receipts).toHaveLength(1);
+      expect(crossSeedOffer(s.repo, receipts[0]!.command).key).toBe(copy.key);
     }
     expect(batches).toEqual([64, 65, 129, 130]);
     expect(s.repo.tv.requestedEpisodes(s.request.requestId)).toHaveLength(130);

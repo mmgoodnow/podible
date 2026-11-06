@@ -23,6 +23,8 @@ import { refreshMovieFeedOffer } from "./feed-offers";
 import { recoverMissingTorrentSource } from "../media/recovery-source";
 import { withTorrentUse } from "../media/torrent-use";
 import { assessConfirmedNukeReplacement } from "../media/release-health";
+import { rememberSelectedCopies } from "../media/selected-copies";
+import { queueSelectedCrossSeeds } from "../media/cross-seed";
 
 export const movieAcquisitionPayloadSchema = z.object({
   acquisitionId: z.number().int().positive(),
@@ -220,6 +222,16 @@ export async function acquireMovie(
               !candidates.some((offer) => offer.key === selected.offerKey)
             )
               throw new Error("Selection references an unknown release");
+            if (selected.offerKey) {
+              active();
+              const selectedOffer = candidates.find(offer => offer.key === selected.offerKey)!;
+              const copies = (selected.matchingOffers ?? []).map(copy => {
+                const known = candidates.find(offer => offer.key === copy.key);
+                if (!known) throw new Error("Selection copy references an unknown release");
+                return known;
+              });
+              rememberSelectedCopies(ctx.repo, { media: "movie", targetId: target.id }, acquisition.id, selectedOffer, copies);
+            }
             repo.decision(acquisition.id, {
               ...manual,
               selection: selected,
@@ -531,6 +543,10 @@ export async function acquireMovie(
         ctx.repo.releaseHealth.bindMovieVersionSource(versionId, downloadId);
         return versionId;
       });
+    });
+    await durableStep(ctx, `${prefix}:cross-seed-copies`, () => {
+      active();
+      return queueSelectedCrossSeeds(ctx.repo, { media: "movie", targetId: target.id }, acquisition.id, offer.key);
     });
     emit(
       `${attempt}:publish`,
