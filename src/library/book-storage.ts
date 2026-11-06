@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants, promises as fs, type BigIntStats } from "node:fs";
 import path from "node:path";
+import { finalizedCanonicalObject } from "../media/canonical-download";
 import { z } from "zod";
 import {
   initializeManagedContent,
@@ -180,6 +181,7 @@ export async function adoptBookContent(libraryRoot: string, sourcePath: string, 
     throw new Error("Book content stable key must be a nonempty string");
   const contentRoot = await prepareBookStorage(libraryRoot);
   const source = path.resolve(sourcePath);
+  if (await finalizedCanonicalObject(contentRoot, source)) return source;
   // A hardlinked leaf's realpath can name its peer on macOS; validate parents and lstat the leaf.
   if ((await fs.realpath(path.dirname(source))) !== path.dirname(source) || !(await fs.lstat(source)).isFile())
     throw new Error("Book source must be a canonical regular file without symlink traversal");

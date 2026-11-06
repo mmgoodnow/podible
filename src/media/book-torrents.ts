@@ -12,6 +12,8 @@ import {
 } from "../rtorrent";
 import { inspectMetainfo } from "./metainfo";
 import { managedBookTransmission } from "./managed-transmission";
+import { bookContentRoot, prepareBookStorage } from "../library/book-storage";
+import { prepareCanonicalDownload, resolveDownloadFile, sealCanonicalDownload, finalizeCanonicalDownloadFile, readCanonicalDownload } from "./canonical-download";
 import { assertTorrentUseWritable, withDatabaseTorrentUse } from "./torrent-use";
 import { TorrentRecordsRepo } from "./torrent-records";
 import type {
@@ -62,6 +64,7 @@ export class BookTorrentsRepo {
     clientId: string;
     rootPath: string;
     rootToken: string;
+    canonicalDownload?: boolean;
   }): BookTorrentBinding {
     return this.db.transaction(() => {
     this.beforeWrite();
@@ -88,8 +91,15 @@ export class BookTorrentsRepo {
         root_token: input.rootToken, ownership_tag: "Podible Books" });
     this.db.query(`INSERT INTO book_torrent_bindings(torrent_id,book_id,created_at) VALUES(?,?,?) ON CONFLICT(torrent_id) DO NOTHING`)
       .run(record.id, input.bookId, new Date().toISOString());
+    if (!existing && input.canonicalDownload) this.db.query(`INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?)`)
+      .run(`canonical-book-download:${input.clientId}:${hash}`, JSON.stringify({ rootToken: input.rootToken }), new Date().toISOString());
     return this.get(hash)!;
     }).immediate();
+  }
+
+  usesCanonicalDownload(binding: BookTorrentBinding): boolean {
+    const row = this.db.query("SELECT value_json FROM app_state WHERE key=?").get(`canonical-book-download:${binding.client_id}:${binding.info_hash}`) as { value_json: string } | null;
+    return row ? JSON.parse(row.value_json).rootToken === binding.root_token : false;
   }
 
   attach(infoHash: string, releaseId: number) {
@@ -298,6 +308,7 @@ async function validateDirectory(binding: BookTorrentBinding, create = false) {
 async function validateDownloadTree(
   directory: string,
   metadata: ReturnType<typeof inspectMetainfo>,
+  contentRoot: string,
 ) {
   const files = new Set(metadata.files.map((file) => file.path));
   const directories = new Set(
@@ -315,8 +326,14 @@ async function validateDownloadTree(
       if (!relative && entry.name === ".podible-book-torrent.json") continue;
       const name = relative ? relative + "/" + entry.name : entry.name;
       const absolute = path.join(directory, name);
-      if (entry.isSymbolicLink() || (await fs.realpath(absolute)) !== absolute)
-        throw new Error("Unsafe managed book download file");
+      if (entry.isSymbolicLink()) {
+        const file = metadata.files.find(file => file.path === name);
+        const plan = await readCanonicalDownload(contentRoot, directory);
+        if (!file || !plan) throw new Error("Unsafe managed book download file");
+        await resolveDownloadFile(contentRoot, directory, absolute, plan.sealed ? file.size : undefined);
+        continue;
+      }
+      if ((await fs.realpath(absolute)) !== absolute) throw new Error("Unsafe managed book download file");
       if (entry.isDirectory() && directories.has(name)) await walk(name);
       else if (!entry.isFile() || !files.has(name))
         throw new Error("Unexpected file in managed book download directory");
@@ -377,6 +394,7 @@ export async function ensureBookTorrentAdded(
       clientId: client.id,
       rootPath,
       rootToken,
+      canonicalDownload: Boolean(client.capabilities.canonicalDownloads),
     });
   }
   const reserved = binding;
@@ -392,7 +410,12 @@ export async function ensureBookTorrentAdded(
     );
   const client = clientFor(binding, options.bookTorrentClient);
   const directory = await validateDirectory(binding, !reclaim);
-  await validateDownloadTree(directory, metadata);
+  const originalLibraryRoot = path.resolve(binding.root_path, "../..");
+  const contentRoot = repo.bookTorrents.usesCanonicalDownload(binding)
+    ? await prepareBookStorage(originalLibraryRoot) : bookContentRoot(originalLibraryRoot);
+  await prepareCanonicalDownload({ contentRoot, sourceRoot: directory, clientId: client.id, metainfo,
+    allowCreate: repo.bookTorrents.usesCanonicalDownload(binding), assertActive: options.assertActive });
+  await validateDownloadTree(directory, metadata, contentRoot);
   options.assertActive?.();
   if (reclaim) {
     const snapshot = await client.inspect(refFor(binding));
@@ -470,8 +493,13 @@ export function bookDownloadClient(
       if (!snapshot.complete || snapshot.state === "checking")
         throw new Error("Managed book download is not complete");
       const directory = await validateDirectory(binding);
+      const contentRoot = bookContentRoot(path.resolve(binding.root_path, "../.."));
+      await sealCanonicalDownload(contentRoot, directory, client, refFor(binding));
+      const canonical = await readCanonicalDownload(contentRoot, directory);
       const files = await client.files(refFor(binding));
       if (!files.length) throw new Error("Managed book torrent has no files");
+      if (canonical && (files.length !== canonical.files.length || new Set(files.map(file => file.index)).size !== files.length))
+        throw new Error("Managed book torrent manifest changed");
       const selectedPaths: string[] = [];
       for (const file of files) {
         const relative = path.relative(directory, file.path);
@@ -480,11 +508,13 @@ export function bookDownloadClient(
           relative === ".." ||
           relative.startsWith(`..${path.sep}`) ||
           path.isAbsolute(relative) ||
-          /[\x00-\x1f\\]/.test(relative) ||
-          (await fs.realpath(file.path)) !== file.path ||
-          !(await fs.lstat(file.path)).isFile()
+          /[\x00-\x1f\\]/.test(relative)
         )
           throw new Error("Book torrent file escaped its managed layout");
+        const expected = canonical?.files[file.index];
+        if (canonical && (!expected || expected.path !== relative)) throw new Error("Book torrent member differs from its manifest");
+        await resolveDownloadFile(contentRoot, directory, file.path, expected?.size);
+        if (expected?.relativePath) await finalizeCanonicalDownloadFile(contentRoot, directory, file.path, expected.size);
         selectedPaths.push(file.path);
       }
       return { basePath: directory, selectedPaths };

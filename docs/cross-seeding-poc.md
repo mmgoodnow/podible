@@ -64,6 +64,12 @@ active reuse transfers to one without globally locking unrelated acquisitions.
 
 ## Storage And Verification
 
+New initial downloads also use canonical-first torrent symlink views, rather than
+copying a completed movie/TV into canonical storage. Their objects remain private
+while downloading and surrender writer authority before becoming reuse sources.
+See [canonical downloads](canonical-downloads.md). Existing initial downloads are
+not migrated automatically.
+
 Transmission receives a paused torrent in an isolated derived layout. Media is
 cloned using **forced native CoW** first, never a writable hardlink or an
 ordinary-copy fallback. Sidecars belong to the candidate. If CoW is unsupported,

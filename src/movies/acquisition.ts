@@ -25,6 +25,7 @@ import { withTorrentUse } from "../media/torrent-use";
 import { assessConfirmedNukeReplacement } from "../media/release-health";
 import { rememberSelectedCopies } from "../media/selected-copies";
 import { queueSelectedCrossSeeds } from "../media/cross-seed";
+import { prepareCanonicalDownload, resolveDownloadFile, sealCanonicalDownload } from "../media/canonical-download";
 
 export const movieAcquisitionPayloadSchema = z.object({
   acquisitionId: z.number().int().positive(),
@@ -331,7 +332,7 @@ export async function acquireMovie(
             rootId: "movies",
             relativePath: `acquisition-${acquisition.id}-${attempt}`,
           };
-      return { location };
+      return { location, canonicalDownload: !prior && Boolean(services.client.capabilities.canonicalDownloads) };
     });
     const downloadRoot = path.join(settings.movies.managedRoot, "downloads");
     const sourceRoot = path.resolve(
@@ -351,6 +352,8 @@ export async function acquireMovie(
         await fs.chmod(sourceRoot, 0o2770);
       }
       return withTorrentUse(ctx.repo, { clientId: services.client.id, infoHash: metadata.infoHash }, async () => {
+        await prepareCanonicalDownload({ contentRoot: roots.contentRoot, sourceRoot, clientId: services.client.id,
+          metainfo, allowCreate: binding.canonicalDownload ?? false, assertActive: active });
         const added = await services.client.ensureAdded({
           metainfo,
           location: binding.location,
@@ -429,6 +432,7 @@ export async function acquireMovie(
       );
       continue;
     }
+    await durableStep(ctx, `${prefix}:seal-download`, () => sealCanonicalDownload(roots.contentRoot, sourceRoot, services.client, ref, active));
     emit(
       `${attempt}:verify`,
       "verifying",
@@ -441,10 +445,10 @@ export async function acquireMovie(
         const expected = metadata.files[file.index];
         if (
           !expected ||
-          !path.resolve(file.path).startsWith(`${sourceRoot}${path.sep}`) ||
-          (await fs.realpath(file.path)) !== path.resolve(file.path)
+          path.resolve(file.path) !== path.resolve(sourceRoot, expected.path)
         )
           throw new Error("Client file mapping escaped its layout");
+        await resolveDownloadFile(roots.contentRoot, sourceRoot, file.path, expected.size);
         if (
           ![".mkv", ".mp4", ".m4v", ".avi", ".mov", ".ts"].includes(
             path.extname(file.path).toLowerCase(),

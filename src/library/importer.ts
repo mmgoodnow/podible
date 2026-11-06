@@ -6,7 +6,8 @@ import { getDurationSeconds } from "../media/probe-cache";
 import { normalizeAudioExt } from "../media/metadata";
 import { computeEpubWordCount } from "./chapter-analysis";
 import { inferLanguageFromReleaseTitles } from "./language";
-import { adoptBookContent, bookViewDirectory, reconcileBookView } from "./book-storage";
+import { adoptBookContent, bookViewDirectory, reconcileBookView, prepareBookStorage } from "./book-storage";
+import { readCanonicalDownload, resolveDownloadFile } from "../media/canonical-download";
 import { queueBookSelectedCopies } from "./service";
 
 import type { BooksRepo } from "../repo";
@@ -15,7 +16,7 @@ import type { AssetKind, MediaType, ReleaseRow } from "../app-types";
 /**
  * Release importer that materializes downloader output as library assets.
  *
- * Downloader output is hardlinked into stable canonical storage. Library names
+ * Reserved downloader objects are finalized in place; legacy files are hardlinked. Library names
  * are a declarative symlink view, never the identity of an imported file.
  */
 type ImportResult = {
@@ -48,7 +49,7 @@ type ImportReleaseOptions = {
   importKey?: string;
 };
 
-async function walkFiles(root: string): Promise<string[]> {
+async function walkFiles(root: string, allowDeclaredLinks = false): Promise<string[]> {
   const stat = await fs.stat(root);
   if (stat.isFile()) {
     return [root];
@@ -58,19 +59,26 @@ async function walkFiles(root: string): Promise<string[]> {
   const out: string[] = [];
   for (const entry of entries) {
     const full = path.join(root, entry.name);
-    if (entry.isFile()) {
+    if (entry.isFile() || (allowDeclaredLinks && entry.isSymbolicLink())) {
       out.push(full);
     } else if (entry.isDirectory()) {
-      out.push(...(await walkFiles(full)));
+      out.push(...(await walkFiles(full, allowDeclaredLinks)));
     }
   }
   return out;
 }
 
-async function collectFiles(basePath: string): Promise<FileInfo[]> {
-  const files = await walkFiles(basePath);
+async function collectFiles(basePath: string, contentRoot?: string): Promise<FileInfo[]> {
+  const declared = contentRoot ? await readCanonicalDownload(contentRoot, basePath) : null;
+  const files = await walkFiles(basePath, Boolean(declared));
   const out: FileInfo[] = [];
   for (const file of files) {
+    if (declared) {
+      if (file === path.join(basePath, ".podible-book-torrent.json")) continue;
+      const expected = declared.files.find(entry => path.join(basePath, entry.path) === file);
+      if (!expected) throw new Error("Unexpected file in canonical download layout");
+      await resolveDownloadFile(contentRoot!, basePath, file, expected.size);
+    }
     const stat = await fs.stat(file);
     if (!stat.isFile()) continue;
     out.push({
@@ -212,7 +220,7 @@ export async function importReleaseFromPath(
 
   const baseStat = await fs.stat(basePath);
   if ((await fs.lstat(basePath)).isSymbolicLink()) throw new Error("Import source must not be a symlink");
-  const discovered = await collectFiles(basePath);
+  const discovered = await collectFiles(basePath, await prepareBookStorage(libraryRoot));
   const selectionRoot = baseStat.isFile() ? path.dirname(basePath) : basePath;
   const candidateFiles = selectDiscoveredFiles(discovered, options.selectedPaths, selectionRoot);
   const selected = chooseFilesForMedia(release.media_type, candidateFiles);
@@ -311,11 +319,11 @@ export async function ensurePathReadable(value: string): Promise<void> {
   await fs.access(value, constants.R_OK);
 }
 
-export async function inspectImportPath(basePath: string): Promise<ImportInspectionFile[]> {
+export async function inspectImportPath(basePath: string, libraryRoot?: string): Promise<ImportInspectionFile[]> {
   await ensurePathReadable(basePath);
   const stat = await fs.stat(basePath);
   const root = stat.isFile() ? path.dirname(basePath) : basePath;
-  const discovered = await collectFiles(basePath);
+  const discovered = await collectFiles(basePath, libraryRoot ? await prepareBookStorage(libraryRoot) : undefined);
   return discovered
     .sort((a, b) => a.sourcePath.localeCompare(b.sourcePath))
     .map((file) => ({

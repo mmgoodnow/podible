@@ -5,6 +5,7 @@ import { SQLiteStorage } from "reflow-ts/sqlite-bun";
 import type { BooksRepo } from "../repo";
 import type { TorrentClient, TorrentSnapshot } from "../media/torrent-client";
 import { inspectMetainfo } from "../media/metainfo";
+import { resolveDownloadFile } from "../media/canonical-download";
 
 const relative = z.string().min(1).refine((value) => !path.isAbsolute(value) && !/[\\\x00-\x1f\x7f]/.test(value) &&
   value.split("/").every((part) => part && part !== "." && part !== ".."));
@@ -53,7 +54,8 @@ async function legacyVersionSource(repo: BooksRepo, row: VersionSource, journal:
   const binding = downloads.find((download) => download.client_id === ref.clientId && download.native_id === ref.nativeId);
   if (!binding) return null;
   const prior = labels.parse(version.facts);
-  const source = tvSourceSchema.parse({ ref, location: intent.output, manifest, offerKey: binding.offer_key, title: prior.releaseTitle, provider: prior.provider });
+  const intentOutput = intent.output as { location?: unknown } | null;
+  const source = tvSourceSchema.parse({ ref, location: intentOutput?.location ?? intent.output, manifest, offerKey: binding.offer_key, title: prior.releaseTitle, provider: prior.provider });
   return bound(source, downloads) ? { source, prefix, version } : null;
 }
 
@@ -149,9 +151,10 @@ export async function tvSourceFiles(source: TvSource, client: TorrentClient, man
   for (const file of files) {
     const expected = source.manifest.files[file.index];
     if (!Number.isInteger(file.index) || !expected || path.resolve(file.path) !== path.resolve(sourceRoot, expected.path) ||
-      !path.resolve(file.path).startsWith(sourceRoot + path.sep) || await fs.realpath(file.path) !== path.resolve(file.path))
+      !path.resolve(file.path).startsWith(sourceRoot + path.sep))
       throw new Error("TV client file escaped metainfo layout");
-    const stat = await fs.lstat(file.path);
+    const resolved = await resolveDownloadFile(path.join(managedRoot, "objects"), sourceRoot, file.path, expected.size);
+    const stat = await fs.lstat(resolved.path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== expected.size) throw new Error("Completed TV file size differs from metainfo");
     const current = { mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, device: stat.dev, inode: stat.ino };
     if (expected.identity && Object.keys(current).some((key) => current[key as keyof typeof current] !== expected.identity![key as keyof typeof current]))

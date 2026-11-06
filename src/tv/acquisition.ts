@@ -22,6 +22,7 @@ import { refreshTvFeedOffer } from "./feed";
 import { completeTvSource, recordedLegacyTvSource, reusableTvSources, tvSourceFiles, tvSourceSchema, type TvSource } from "./source-reuse";
 import { recoverMissingTorrentSource } from "../media/recovery-source";
 import { withTorrentUse } from "../media/torrent-use";
+import { prepareCanonicalDownload, resolveDownloadFile, sealCanonicalDownload } from "../media/canonical-download";
 
 export async function tvUpstreamStep<T>(ctx: WorkerContext, name: string, action: () => Promise<T>): Promise<T> {
   for (let attempt = 0; attempt < (ctx.execution ? Infinity : 3); attempt++) {
@@ -233,11 +234,14 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       if (excludedHashes.has(metadata.infoHash)) {
         excluded.add(offer.key); emit(`${attempt}:retained-source`, "replacing", "Previously attempted torrent identity remains excluded from new downloads"); continue;
       }
-      const location = await durableStep(ctx, `${prefix}:download-intent`, () => {
+      const binding = await durableStep(ctx, `${prefix}:download-intent`, () => {
         const previous = repo.torrent(services.client.id, metadata.infoHash);
-        return previous ? JSON.parse(previous.location_json) as { rootId: string; relativePath: string }
-          : { rootId: "tv", relativePath: `acquisition-${acquisition.id}-${attempt}` };
+        return { location: previous ? JSON.parse(previous.location_json) as { rootId: string; relativePath: string }
+          : { rootId: "tv", relativePath: `acquisition-${acquisition.id}-${attempt}` },
+          canonicalDownload: !previous && Boolean(services.client.capabilities.canonicalDownloads) };
       });
+      // In-flight pre-canonical jobs retain their original intent and regular-file layout.
+      const location = "location" in binding ? binding.location : binding as { rootId: string; relativePath: string };
       const sourceRoot = path.resolve(settings.tv.managedRoot, "downloads", location.relativePath);
       if (location.rootId !== "tv" || !sourceRoot.startsWith(path.resolve(settings.tv.managedRoot, "downloads") + path.sep)) throw new Error("TV download escaped its owned root");
       const ref = await durableStep(ctx, `${prefix}:snatch`, async () => {
@@ -245,6 +249,8 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
         await fs.mkdir(sourceRoot, { recursive: true });
         if (await fs.realpath(sourceRoot) !== sourceRoot) throw new Error("TV download layout traverses a symlink");
         return withTorrentUse(ctx.repo, { clientId: services.client.id, infoHash: metadata.infoHash }, async () => {
+          await prepareCanonicalDownload({ contentRoot: roots.contentRoot, sourceRoot, clientId: services.client.id, metainfo,
+            allowCreate: "canonicalDownload" in binding && binding.canonicalDownload, assertActive: active });
           const added = await services.client.ensureAdded({ metainfo, location });
           if (added.clientId !== services.client.id || added.nativeId.toLowerCase() !== metadata.infoHash)
             throw new Error("TV client returned another torrent identity");
@@ -281,6 +287,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
         await durableStep(ctx, `${prefix}:retain-stalled`, () => { active(); return services.client.quiesce(ref); });
         excluded.add(offer.key); excludedHashes.add(ref.nativeId); emit(`${attempt}:stalled`, "replacing", "Retained a stalled TV download and searching another release"); continue;
       }
+      await durableStep(ctx, `${prefix}:seal-download`, () => sealCanonicalDownload(roots.contentRoot, sourceRoot, services.client, ref, active));
       prepared = await tvSourceFiles(tvSourceSchema.parse({ ref, location, offerKey: offer.key, title: offer.title, provider: offer.provider, manifest: metadata }), services.client, settings.tv.managedRoot);
     }
     const source = snapshot.sourceReuse
@@ -323,7 +330,8 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
         const selected = (await services.client.files(ref)).find((file) => file.index === mapping.fileIndex);
         const expectedFile = source.manifest.files[mapping.fileIndex]!;
         if (!selected || path.resolve(selected.path) !== path.resolve(sourceRoot, expectedFile.path)) throw new Error("Selected TV file changed layout");
-        const stat = await fs.lstat(selected.path), identity = expectedFile.identity!;
+        const resolved = await resolveDownloadFile(roots.contentRoot, sourceRoot, selected.path, expectedFile.size);
+        const stat = await fs.lstat(resolved.path), identity = expectedFile.identity!;
         if (stat.size !== expectedFile.size || stat.mtimeMs !== identity.mtimeMs || stat.ctimeMs !== identity.ctimeMs || stat.dev !== identity.device || stat.ino !== identity.inode)
           throw new Error("Selected TV file changed after verification");
         return adoptContentFile({ contentRoot: roots.contentRoot, sourceRoot, sourcePath: selected.path, fileId: id, expectedSize: candidate.sizeBytes, assertActive: active });

@@ -23,6 +23,7 @@ import { createFixtureMovieServices, fixtureMovie } from "../fixtures/movie-serv
 import { RecoveryService } from "../../src/media/recovery";
 import { randomUUID } from "node:crypto";
 import { crossSeedOffer } from "../../src/media/cross-seed";
+import { readCanonicalDownload } from "../../src/media/canonical-download";
 
 function catalog(): TvCatalogEntry {
   return {
@@ -170,6 +171,31 @@ async function setup(keys = ["tvdb:201", "tvdb:202", "tvdb:203", "tvdb:204"], in
 }
 
 type Runtime = Awaited<ReturnType<typeof createJobExecutionRuntime>>;
+test("new TV packs reserve one canonical object per member and publish without a payload copy", async () => {
+  const s = await setup(["tvdb:201", "tvdb:202"]);
+  try {
+    s.fixture.services.client.capabilities.canonicalDownloads = true;
+    let sealed = 0; s.fixture.services.client.sealDownload = async () => { sealed++; };
+    s.fixture.addPack("canonical-pack", ["tvdb:201", "tvdb:202", "tvdb:203"]);
+    const acquisition = s.enqueue();
+    await acquireTv(s.context, s.repo.getJob(acquisition.job_id!)!, s.fixture.services);
+    const download = s.repo.tv.downloads(s.request.targetId)[0]!;
+    const sourceRoot = path.join(s.root, "downloads", JSON.parse(download.location_json).relativePath);
+    const plan = (await readCanonicalDownload(s.roots.contentRoot, sourceRoot))!;
+    expect(plan.sealed).toBe(true); expect(sealed).toBe(1);
+    expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(2);
+    const version = s.repo.tv.versionSources(s.request.targetId)[0]!.version;
+    for (const file of version.files) {
+      expect(plan.files.some(member => member.id === file.id)).toBe(true);
+      const member = plan.files.find(member => member.id === file.id)!;
+      const canonical = path.join(s.roots.contentRoot, file.relativePath);
+      expect(await fs.realpath(path.join(sourceRoot, member.path))).toBe(canonical);
+      expect((await fs.stat(canonical)).nlink).toBe(1);
+    }
+    expect(plan.files).toHaveLength(3); // Unrequested members remain reserved, not published.
+    expect(version.files).toHaveLength(2);
+  } finally { await s.close(); }
+});
 test("TV completion retains researched copies and queues them before publication, including restart", async () => {
   const s = await setup(["tvdb:201"]);
   try {

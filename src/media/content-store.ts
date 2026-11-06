@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
+import { finalizeCanonicalDownloadFile, readCanonicalDownload } from "./canonical-download";
 
 async function digest(file: string) {
   const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -29,7 +30,7 @@ async function realDirectory(directory: string) {
     throw new Error("Managed directory traverses a symlink");
 }
 
-/** Canonical bytes are independent of the client's writable seeding layout. */
+/** Finalize reservations in place; pre-canonical client layouts retain isolated legacy adoption. */
 export async function adoptContentFile(input: {
   contentRoot: string;
   sourceRoot: string;
@@ -39,6 +40,9 @@ export async function adoptContentFile(input: {
   assertActive?: () => void;
 }) {
   const active = input.assertActive ?? (() => {});
+  const reserved = await readCanonicalDownload(input.contentRoot, input.sourceRoot)
+    ? await finalizeCanonicalDownloadFile(input.contentRoot, input.sourceRoot, input.sourcePath, input.expectedSize, active) : null;
+  if (reserved) return reserved;
   const id = z.string().uuid().parse(input.fileId);
   const size = z.number().int().nonnegative().safe().parse(input.expectedSize);
   const root = path.resolve(input.contentRoot);

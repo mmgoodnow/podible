@@ -20,6 +20,8 @@ import {
 import { MockBookTorrentClient } from "../mocks/book-torrents";
 import { processDownloadJob } from "../../src/worker/downloads";
 import { processImportJob } from "../../src/worker/imports";
+import { bookContentRoot } from "../../src/library/book-storage";
+import { readCanonicalDownload } from "../../src/media/canonical-download";
 import {
   enrichDownload,
   enrichLibraryBookProgress,
@@ -84,6 +86,38 @@ async function fixture() {
     },
   };
 }
+
+test("new managed book torrents reserve canonical bytes before add and import without a hardlink copy", async () => {
+  const f = await fixture();
+  try {
+    Object.assign(f.client.capabilities, { canonicalDownloads: true });
+    let sealed = 0;
+    Object.assign(f.client, { sealDownload: async () => { sealed++; } });
+    f.client.beforeAdd = hash => {
+      // The asynchronous setup is asserted after add below; the hash itself remains unchanged.
+      expect(hash).toHaveLength(40);
+    };
+    const { release, binding, record } = await f.attach();
+    const contentRoot = bookContentRoot(f.root), sourceRoot = path.join(binding.root_path, binding.relative_path);
+    const plan = (await readCanonicalDownload(contentRoot, sourceRoot))!;
+    const file = record.files[0]!.path;
+    expect((await fs.lstat(file)).isSymbolicLink()).toBe(true);
+    const canonical = await fs.realpath(file), before = await fs.stat(canonical);
+    await fs.writeFile(file, "0123456789");
+    record.snapshot.complete = true; record.snapshot.bytesDone = 10; record.snapshot.state = "seeding";
+    const source = await bookDownloadClient(f.repo, f.settings, f.client).getImportSource(binding.info_hash);
+    expect(source.selectedPaths).toEqual([file]); expect(sealed).toBe(1);
+    const manifestation = f.repo.addManifestation({ bookId: f.book.id, kind: "audio" });
+    const { importReleaseFromPath } = await import("../../src/library/importer");
+    const imported = await importReleaseFromPath(f.repo, release, source.basePath!, f.root, { selectedPaths: source.selectedPaths, manifestationId: manifestation.id });
+    expect(imported.linkedFiles).toEqual([canonical]);
+    expect((await fs.stat(canonical)).ino).toBe(before.ino);
+    expect((await fs.stat(canonical)).nlink).toBe(1);
+    expect(plan.files[0]!.relativePath).toBe(path.relative(contentRoot, canonical));
+    expect((await f.reserve()).info_hash).toBe(binding.info_hash);
+    expect(f.client.adds).toHaveLength(1);
+  } finally { await f.close(); }
+});
 
 test("books share the durable private engine identity without adopting movie ownership", async () => {
   const f = await fixture();

@@ -11,6 +11,7 @@ import { acquireMovie } from "../../src/movies/acquisition";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
 import { crossSeedOffer, queueSelectedCrossSeeds } from "../../src/media/cross-seed";
 import { selectedCopies } from "../../src/media/selected-copies";
+import { readCanonicalDownload } from "../../src/media/canonical-download";
 import {
   createFixtureMovieServices,
   fixtureMovie,
@@ -69,6 +70,30 @@ async function setup(requestedPolicy = policy) {
     },
   };
 }
+test("new movie downloads write straight into canonical objects and publish the same inode", async () => {
+  const s = await setup();
+  try {
+    s.fixture.services.client.capabilities.canonicalDownloads = true;
+    let sealed = 0;
+    s.fixture.services.client.sealDownload = async () => { sealed++; };
+    s.fixture.addOffer("canonical-first", 1280);
+    const acquisition = s.enqueue();
+    await acquireMovie(s.context, s.repo.getJob(acquisition.job_id!)!, s.fixture.services);
+    const [download] = s.repo.movies.downloads(s.request.targetId);
+    const location = JSON.parse(download!.location_json);
+    const sourceRoot = path.join(s.root, "downloads", location.relativePath);
+    const plan = (await readCanonicalDownload(path.join(s.root, "objects"), sourceRoot))!;
+    expect(plan.sealed).toBe(true); expect(sealed).toBe(1);
+    const version = s.repo.movies.version(s.repo.movies.target(s.request.targetId)!.active_version_id!)!;
+    expect(version.files[0]!.id).toBe(plan.files[0]!.id);
+    const view = path.join(sourceRoot, plan.files[0]!.path), canonical = path.join(s.root, "objects", version.files[0]!.relativePath);
+    expect((await fs.lstat(view)).isSymbolicLink()).toBe(true);
+    expect(await fs.realpath(view)).toBe(canonical);
+    expect((await fs.stat(view)).ino).toBe((await fs.stat(canonical)).ino);
+    expect((await fs.stat(canonical)).nlink).toBe(1);
+    expect(s.fixture.stats.snatches).toBe(1);
+  } finally { await s.close(); }
+});
 test("movie completion queues selected tracker copies before Plex, without duplicate dispatch", async () => {
   const s = await setup();
   try {

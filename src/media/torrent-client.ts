@@ -21,6 +21,7 @@ export interface TorrentClient {
     derivedLayouts: boolean;
     metainfoVersions: readonly number[];
     readOnlySeeding?: boolean;
+    canonicalDownloads?: boolean;
   };
   ensureAdded(input: {
     metainfo: Uint8Array;
@@ -35,4 +36,6 @@ export interface TorrentClient {
   removeRecord(ref: TorrentRef): Promise<void>;
   /** Persist no-download file selection before starting an exact-match symlink layout. */
   resumeSeedOnly?(ref: TorrentRef): Promise<void>;
+  /** Permanently surrender write authority after a canonical initial download completes. */
+  sealDownload?(ref: TorrentRef): Promise<void>;
 }

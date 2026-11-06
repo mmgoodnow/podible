@@ -95,6 +95,7 @@ export class TransmissionAdapter implements TorrentClient {
     derivedLayouts: true,
     metainfoVersions: [1],
     readOnlySeeding: Boolean(this.options.seedOnlyIntentDirectory),
+    canonicalDownloads: Boolean(this.options.seedOnlyIntentDirectory),
   } as const; }
   constructor(
     private options: {
@@ -322,5 +323,18 @@ export class TransmissionAdapter implements TorrentClient {
       ids: [ref.nativeId],
       "delete-local-data": false,
     });
+  }
+  async sealDownload(ref: TorrentRef) {
+    if (!this.options.seedOnlyIntentDirectory) throw new Error("Canonical downloads require durable startup protection");
+    await this.quiesce(ref);
+    const row = await this.owned(ref);
+    if (row.totalSize === undefined || row.haveValid !== row.totalSize || row.haveUnchecked !== 0)
+      throw new Error("Cannot seal an incomplete or unchecked canonical download");
+    // Persist before changing flags: an interrupted transition is repaired before daemon startup.
+    await persistSeedOnlyIntent(this.options.seedOnlyIntentDirectory, { infoHash: ref.nativeId,
+      destination: path.normalize(row.downloadDir), fileCount: row.files.length, ownershipTag: this.options.ownershipTag });
+    await this.options.rpc.call("torrent-set", { ids: [ref.nativeId],
+      labels: [...new Set([...row.labels, SEED_ONLY_LABEL])], "files-unwanted": row.files.map((_, index) => index) });
+    await this.resumeSeedOnly(ref);
   }
 }

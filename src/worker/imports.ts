@@ -75,7 +75,7 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
     let agentDecisionReason = "not_attempted";
     let agentDecisionError: string | null = null;
     try {
-      const files = await durableStep(ctx, "import:review:inspect", () => inspectImportPath(basePath));
+      const files = await durableStep(ctx, "import:review:inspect", () => inspectImportPath(basePath, settings.libraryRoot));
       const importableFiles = importableFilesForMedia(files, release.media_type);
       if (importableFiles.length <= 1) {
         agentDecisionReason = `deterministic:no_alternative_single_importable_file:${importableFiles.length}`;
@@ -157,7 +157,7 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
   if (payload.preferAgentFirst === true) {
     let agentFirstError: string | null = null;
     try {
-      const files = await durableStep(ctx, "import:agent-first:inspect", () => inspectImportPath(basePath));
+      const files = await durableStep(ctx, "import:agent-first:inspect", () => inspectImportPath(basePath, settings.libraryRoot));
       const book = ctx.repo.getBookRow(release.book_id);
       const decision = await durableStep(ctx, "import:agent-first:select", () =>
         selectManualImportPaths(
@@ -226,7 +226,7 @@ export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise
     let agentDecisionReason = "not_attempted";
     let agentDecisionError: string | null = null;
     try {
-      const files = await durableStep(ctx, "import:recovery:inspect", () => inspectImportPath(basePath));
+      const files = await durableStep(ctx, "import:recovery:inspect", () => inspectImportPath(basePath, settings.libraryRoot));
       const book = ctx.repo.getBookRow(release.book_id);
       const decision = await durableStep(ctx, "import:recovery:select", () =>
         selectManualImportPaths(

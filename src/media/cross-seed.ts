@@ -9,6 +9,7 @@ import { durableStep, type WorkerContext } from "../worker/context";
 import { inspectMetainfo } from "./metainfo";
 import { managedTransmission, managedTvTransmission, managedBookTransmission } from "./managed-transmission";
 import { adoptBookContent } from "../library/book-storage";
+import { finalizedCanonicalObject } from "./canonical-download";
 import { fetchMovieMetainfo } from "../movies/offers";
 import { releaseOfferFromResult, type ReleaseOffer } from "./release-offer";
 import { assertMovieStorage } from "../movies/storage";
@@ -124,7 +125,8 @@ export async function crossSeedPlan(repo: BooksRepo, settings: AppSettings, comm
         sourcePath = file.relative_path;
         const relative = path.relative(contentRoot, sourcePath);
         if (!path.isAbsolute(sourcePath) || path.resolve(sourcePath) !== sourcePath ||
-          !/^files\/[a-f0-9]{2}\/[a-f0-9]{64}\/content(?:\.[a-z0-9]{1,16})?$/.test(relative))
+          (!/^files\/[a-f0-9]{2}\/[a-f0-9]{64}\/content(?:\.[a-z0-9]{1,16})?$/.test(relative) &&
+            !await finalizedCanonicalObject(contentRoot, sourcePath)))
           throw new Error("Reuse book source is not registered canonical content");
         // The existing helper validates its per-file ownership record. Only an
         // already-canonical path is allowed here, never its adoption branch.

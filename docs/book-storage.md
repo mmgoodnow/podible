@@ -9,18 +9,28 @@ libraryRoot/
   .podible/
     downloads/<infohash>/<original torrent layout>
     content/files/<prefix>/<object identity>/content.<extension>
+    content/files/<prefix>/<uuid>.<extension>
   <Author>/<Title>/<Title> [m<manifestation>-a<asset>].<extension>
 ```
 
-Downloads and canonical content are regular files sharing an inode through a
-hardlink. Presentation files are relative symlinks to canonical content. Removing
-a download directory or rebuilding the view cannot remove the canonical link.
-Hardlink adoption requires the same filesystem; there is no implicit copying or
-archive extraction.
+New private Transmission downloads reserve canonical UUID objects from metainfo
+**before** adding the torrent. The original torrent layout symlinks to those
+objects; the daemon writes directly into canonical storage. Tracker-specific
+sidecars remain regular files in the torrent layout. Completed objects are sealed
+against further application-authorized download/repair before import publishes
+them. See [canonical downloads](canonical-downloads.md) for the persisted intent,
+crash boundaries and safety rules.
+
+Existing/migrated downloads keep their regular-file/hardlinked layout and content
+identities. Their legacy adoption path still requires the same filesystem; it
+does not implicitly copy or extract archives. Presentation files are symlinks to
+canonical content in either case. Removing a torrent view or rebuilding the
+presentation view does not delete canonical bytes.
 
 ## Publication And Recovery
 
-1. Claim a stable content object and fsync its identity before hardlinking bytes.
+1. Finalize the reserved canonical object in place, or adopt legacy regular
+   sources by hardlink with an fsynced identity record.
 2. Publish the asset and canonical file paths together in the application DB.
 3. Derive desired view entries from current book, manifestation, asset, and file
    records; reconcile links without changing target bytes.

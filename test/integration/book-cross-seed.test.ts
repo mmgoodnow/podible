@@ -7,7 +7,8 @@ import bencode from "bencode";
 import { createHash, randomUUID } from "node:crypto";
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
-import { adoptBookContent } from "../../src/library/book-storage";
+import { adoptBookContent, bookContentRoot } from "../../src/library/book-storage";
+import { prepareCanonicalDownload, sealCanonicalDownload, finalizeCanonicalDownloadFile } from "../../src/media/canonical-download";
 import { crossSeedCommandSchema } from "../../src/media/cross-seed-state";
 import { assertCrossSeedDemand, crossSeedOffer, crossSeedPlan, processCrossSeed, queueCrossSeed, queueSelectedCrossSeeds } from "../../src/media/cross-seed";
 import { rememberSelectedCopies, selectedCopyOffer } from "../../src/media/selected-copies";
@@ -108,6 +109,42 @@ for (const media of ["audio", "ebook"] as const) test(`${media} reuses owned har
     expect(f.repo.getAssetFiles(f.asset.id)).toEqual(before);
     expect(f.repo.listManifestationsByBook(f.book.id)).toEqual(manifests);
     expect(queueCrossSeed(f.repo, f.command)).toMatchObject({ jobId: receipt.jobId });
+  } finally { await f.close(); }
+});
+
+for (const media of ["audio", "ebook"] as const) test(`${media} initial canonical UUID objects feed the same cross-seed executor`, async () => {
+  const f = await fixture(media);
+  try {
+    const sourceRoot = path.join(f.root, "initial-view"); await fs.mkdir(sourceRoot);
+    const contentRoot = bookContentRoot(f.settings.libraryRoot);
+    const initial = bencode.encode({ info: { name: media === "audio" ? "initial.mp3" : "initial.epub", length: 8,
+      "piece length": 16384, pieces: createHash("sha1").update("abcdefgh").digest() } });
+    const plan = (await prepareCanonicalDownload({ contentRoot, sourceRoot, metainfo: initial, clientId: "original-client", allowCreate: true }))!;
+    const file = plan.files[0]!, view = path.join(sourceRoot, file.path), canonical = path.join(contentRoot, file.relativePath!);
+    await fs.writeFile(view, "abcdefgh");
+    await sealCanonicalDownload(contentRoot, sourceRoot, { id: "original-client", sealDownload: async () => {} } as unknown as TorrentClient,
+      { clientId: "original-client", nativeId: plan.infoHash });
+    await finalizeCanonicalDownloadFile(contentRoot, sourceRoot, view, 8);
+    f.db.query("UPDATE asset_files SET path=?,source_path=? WHERE asset_id=?").run(canonical, view, f.asset.id);
+    expect((await crossSeedPlan(f.repo, f.settings, f.command, f.metainfo)).sources.map(source => source.path)).toEqual([canonical]);
+    const receipt = queueCrossSeed(f.repo, f.command);
+    const runtime = await createJobExecutionRuntime(f.ctx, path.join(f.root, "execution.sqlite"), {
+      retryDelayMs: 1, processJob: (ctx, job) => processCrossSeed(ctx, job),
+    });
+    try {
+      await runtime.reconcile();
+      const deadline = Date.now() + 5000;
+      while (!["failed", "succeeded"].includes(f.repo.getJob(receipt.jobId)!.status)) {
+        if (Date.now() > deadline) throw new Error("Initial canonical book reuse timed out");
+        await Bun.sleep(10);
+      }
+      expect(f.repo.getJob(receipt.jobId)).toMatchObject({ status: "succeeded", error: null });
+    } finally { await runtime.stop(); }
+    expect(f.repo.crossSeed.receipt(f.command.operationId)!.outcome).toMatchObject({ kind: "seeding", reusedBytes: 8, downloadedBytes: 0 });
+    const linked = (await f.client.files({ clientId: f.client.id, nativeId: f.metadata.infoHash }))[0]!.path;
+    expect(await fs.readlink(linked)).toBe(canonical);
+    expect(await fs.readFile(canonical, "utf8")).toBe("abcdefgh");
+    expect((await fs.stat(canonical)).nlink).toBe(1);
   } finally { await f.close(); }
 });
 
