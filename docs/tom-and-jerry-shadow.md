@@ -158,3 +158,21 @@ work IDs are still rejected. No production requests or downloads changed.
 The real Reflow regression test also interrupts the atomic import after research,
 reopens both databases, retries without repeating season reads/model research,
 then interrupts the feed cursor and verifies idempotent request replay.
+
+### Production Rollout Verification
+
+Normal CD run `42305101263` succeeded for
+`d02f3620a8ba4fd113e384819522d161d0837787`; that exact SHA was then read from
+`GIT_COMMIT_SHA` in the running application container on November 6.
+
+The normal sync automatically consumed the retained Seerr 734 approval without
+manual backfill or a request mutation. Read-only database inspection confirmed:
+
+- Native request/target 2284 for canonical work `tvdb:72860`.
+- 161 requested, distinct canonical episode keys; zero specials.
+- 113 `title_date` and 48 `agent` correspondences persisted on episode metadata.
+- The four provider-group counts agree with the independent comparison above.
+- The pending mapping issue is gone and the latest TV sync succeeded.
+- Four acquisition jobs were queued (20497-20500). At inspection, zero episodes
+  were published. Download/import/Plex verification is a separate remaining
+  acquisition outcome, not implied by mapping or queueing success.
