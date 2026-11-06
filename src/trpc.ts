@@ -23,6 +23,7 @@ import { catalogRouter } from "./rpc/catalog-router";
 import { stewardshipRouter } from "./rpc/stewardship-router";
 import { tvRetentionRouter } from "./rpc/tv-retention-router";
 import { torrentRetirementRouter } from "./rpc/torrent-retirement-router";
+import { transferMetricsRouter } from "./rpc/transfer-metrics-router";
 
 const t = initTRPC.context<RpcContext>().create();
 const id = z.number().int().positive();
@@ -64,6 +65,10 @@ const procedure = t.procedure.use(async ({ next }) => {
 });
 
 export const appRouter = t.router({
+  transferMetrics: t.router({
+    status: procedure.input(transferMetricsRouter.routes.status.paramsSchema).output(transferMetricsRouter.routes.status.resultSchema).query(({ ctx, input }) => executeMethod(transferMetricsRouter.routes.status, ctx, input)),
+    mapTracker: procedure.input(transferMetricsRouter.routes.mapTracker.paramsSchema).output(transferMetricsRouter.routes.mapTracker.resultSchema).mutation(({ ctx, input }) => executeMethod(transferMetricsRouter.routes.mapTracker, ctx, input)),
+  }),
   tvRetention: t.router({
     audit: procedure.input(tvRetentionRouter.routes.audit.paramsSchema).output(tvRetentionRouter.routes.audit.resultSchema).query(({ ctx, input }) => executeMethod(tvRetentionRouter.routes.audit, ctx, input)),
     preview: procedure.input(tvRetentionRouter.routes.preview.paramsSchema).output(tvRetentionRouter.routes.preview.resultSchema).query(({ ctx, input }) => executeMethod(tvRetentionRouter.routes.preview, ctx, input)),

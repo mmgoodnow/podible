@@ -26,6 +26,7 @@ import { createRpcRoutes } from "./http/rpc-routes";
 import { createTrpcRoutes } from "./http/trpc-routes";
 import { createSpaRoutes } from "./http/spa-routes";
 import { createActivityRoutes } from "./http/activity-routes";
+import { createMetricsRoutes } from "./http/metrics-routes";
 
 export function createPodibleFetchHandler(
   repo: BooksRepo,
@@ -80,6 +81,7 @@ export function createPodibleFetchHandler(
   app.route("/admin", createAdminRoutes(repo, startTime, buildInfo));
   app.route("/rpc", createRpcRoutes(repo, startTime, dependencies));
   app.route("/api/trpc", createTrpcRoutes(repo, startTime, dependencies));
+  app.route("/metrics", createMetricsRoutes(repo));
   app.route("/app", spa);
   app.route("/web-assets", spa);
   app.route("/assets", createAssetsIndexRoutes(repo));

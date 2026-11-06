@@ -6,6 +6,7 @@ import { MovieShadowRepo } from "./movies/shadow-repo";
 import { MovieSeerrRepo } from "./movies/seerr-repo";
 import { ReleaseInboxRepo } from "./media/release-inbox";
 import { CrossSeedRepo, crossSeedRegistrationKey } from "./media/cross-seed-state";
+import { TransferMetricsRepo } from "./media/transfer-metrics";
 import { ReleaseHealthRepo } from "./media/release-health";
 import { TorrentRecordsRepo } from "./media/torrent-records";
 import type { TorrentRef, DownloadLocation } from "./media/torrent-client";
@@ -258,6 +259,7 @@ function assertPositiveInt(value: number): void {
 }
 
 export class BooksRepo {
+  get transferMetrics() { return new TransferMetricsRepo(this.db, this.beforeWrite, id => this.getJob(id)); }
   get crossSeed() { return new CrossSeedRepo(this.db); }
   get releaseHealth() { return new ReleaseHealthRepo(this.db, this.beforeWrite); }
   reuseTorrent(ref: TorrentRef) { return new TorrentRecordsRepo(this.db, this.beforeWrite).get(ref.clientId, ref.nativeId); }

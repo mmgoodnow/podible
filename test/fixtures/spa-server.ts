@@ -18,6 +18,7 @@ import type { TvCatalogEntry } from "../../src/tv/types";
 import { tvShadowInputSchema } from "../../src/tv/shadow-types";
 import { createHash } from "node:crypto";
 import { safeReturnPath } from "../../src/redirects";
+import { seedTransferMetricsFixture } from "./transfer-metrics";
 
 const db = new Database(":memory:");
 runMigrations(db);
@@ -86,6 +87,7 @@ if (process.env.ADMIN_FIXTURE) {
   repo.releaseInbox.succeed("admin-fixture-tv", "fixture-head", null, new Date().toISOString());
   repo.releaseInbox.ensureFeed("admin-fixture-gap", "History provider", "movie", new Date().toISOString());
   repo.releaseInbox.succeed("admin-fixture-gap", "fixture-head", "Earlier history could not be verified", new Date().toISOString());
+  seedTransferMetricsFixture(repo, activeBook.id);
 }
 if (process.env.SHADOW_FIXTURE) {
   settings.prowlarr={url:"https://fixture-prowlarr.invalid",apiKey:"fixture-private-key"};

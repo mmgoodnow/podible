@@ -17,6 +17,7 @@ import { RETENTION_EXECUTION_SCHEMA_SQL } from "./media/retention-execution-sche
 import { TV_SHADOW_SCHEMA_SQL } from "./tv/shadow-repo";
 import { CONTENT_LOSS_SCHEMA_SQL } from "./media/content-loss";
 import { TV_RETENTION_SCHEMA_SQL } from "./media/tv-retention-repo";
+import { TRANSFER_METRICS_SCHEMA_SQL } from "./media/transfer-metrics-schema";
 
 const SCHEMA_MIGRATION_ID = 1;
 const GUID_MIGRATION_ID = 2;
@@ -1183,6 +1184,7 @@ export function runMigrations(db: Database): void {
     db.exec("ALTER TABLE media_torrents ADD COLUMN stewardship_binding_json TEXT NULL");
     backfillStewardshipStatusIndex(db);
   });
+  apply(56, () => db.exec(TRANSFER_METRICS_SCHEMA_SQL));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

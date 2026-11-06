@@ -5,6 +5,7 @@ import { INDEXER_FEED_INTERVAL_MS } from "./worker/indexer-feeds";
 import { RETENTION_PRESSURE_INTERVAL_MS } from "./media/retention-policy-types";
 import { STEWARDSHIP_INTERVAL_MS } from "./media/torrent-stewardship-types";
 import { hasTorrentStewardshipBindings } from "./media/torrent-stewardship";
+import { TRANSFER_METRICS_INTERVAL_MS } from "./media/transfer-metrics-types";
 
 export { pollMsForMedia, selectDownloadPollMs } from "./worker/downloads";
 
@@ -35,8 +36,14 @@ export async function runWorker(
     let nextRetention = 0;
     let nextTvRetention = 0;
     let nextStewardship = 0;
+    let nextTransferMetrics = 0;
     while (!ctx.shouldStop?.()) {
       try {
+        if (Date.now() >= nextTransferMetrics) {
+          ctx.repo.createJob({ type: "torrent_metrics_collect",
+            idempotencyKey: `torrent-metrics:${Math.floor(Date.now() / TRANSFER_METRICS_INTERVAL_MS)}`, maxAttempts: 2 });
+          nextTransferMetrics = Date.now() + TRANSFER_METRICS_INTERVAL_MS;
+        }
         if (Date.now() >= nextStewardship) {
           if (hasTorrentStewardshipBindings(ctx.repo)) ctx.repo.createJob({
               type: "torrent_stewardship_collect",

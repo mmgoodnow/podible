@@ -32,6 +32,7 @@ import { recoveryRouter } from "./rpc/recovery-router";
 import { catalogRouter } from "./rpc/catalog-router";
 import { stewardshipRouter } from "./rpc/stewardship-router";
 import { crossSeedRouter } from "./rpc/cross-seed-router";
+import { transferMetricsRouter } from "./rpc/transfer-metrics-router";
 import { tvRetentionRouter } from "./rpc/tv-retention-router";
 import { torrentRetirementRouter } from "./rpc/torrent-retirement-router";
 
@@ -87,6 +88,7 @@ const rootRouter = defineRouter({
   recovery: recoveryRouter,
   stewardship: stewardshipRouter,
   crossSeed: crossSeedRouter,
+  transferMetrics: transferMetricsRouter,
   tvRetention: tvRetentionRouter,
   torrentRetirement: torrentRetirementRouter,
   catalog: catalogRouter,

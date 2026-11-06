@@ -8,6 +8,7 @@ import { Link } from "./router";
 import "./activity.css";
 import { activityItems, attentionItems, downloadProgress, problemAction, type ActivityDownload } from "./activity-model";
 import { Connections } from "./connections";
+import { TransferMetrics } from "./transfer-metrics";
 
 type SettingsDraft = { text: string; base: string } | null;
 const draftKey = ["admin-settings-draft"] as const;
@@ -249,6 +250,7 @@ export function OpsPage() {
       </section>}
       {ops.data.diagnostics.warnings.length > 0 && <details className="activity-status"><summary>Some activity status is unavailable</summary>
         {ops.data.diagnostics.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</details>}
+      <TransferMetrics />
       <section className="activity-section" id="activity-storage" aria-label="Storage and links">
         <h2>Storage</h2>
         <div className="activity-storage">{ops.data.storage.map(storage => <article key={storage.media}>

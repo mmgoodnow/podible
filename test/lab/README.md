@@ -44,6 +44,9 @@ online catalog matching/authentication requires separate authorized credentials.
 
 ## Smaller Contracts
 
+- `test/lab/transfer-metrics-inner.ts` (inside the runtime container, network none):
+  saved metrics from real private movie/TV/book transfers, paused-copy exclusion,
+  and unknown-not-zero outage handling. No external tracker or credentials.
 - `bun run test/lab/plex-acceptance.ts`: relative links, indexing and byte ranges,
   plus retained Plex identity/watch-state after declarative naming changes.
 - `bun run test/lab/torrent-acceptance.ts`: neutral adapter against rTorrent,

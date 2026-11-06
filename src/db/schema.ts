@@ -425,6 +425,27 @@ export interface DB {
     "updated_at": string;
   };
 
+  "transfer_metric_records": {
+    "torrent_id": Generated<number>;
+    "binding_digest": string;
+    "observed_at": string;
+    "snapshot_json": string;
+  };
+
+  "transfer_metric_samples": {
+    "resolution": string;
+    "bucket": string;
+    "observed_at": string;
+    "snapshot_json": string;
+  };
+
+  "transfer_tracker_mappings": {
+    "hostname": string;
+    "inferred_name": string | null;
+    "manual_name": string | null;
+    "updated_at": string;
+  };
+
   "tv_acquisition_downloads": {
     "acquisition_id": number;
     "torrent_id": number;

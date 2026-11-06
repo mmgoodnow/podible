@@ -6,7 +6,9 @@ import { crossSeedPlan, queueCrossSeed, crossSeedOffer } from "../media/cross-se
 import { fetchMovieMetainfo } from "../movies/offers";
 
 const outcome = z.object({ kind: z.enum(["seeding", "skipped", "unsupported", "stalled"]), reason: z.string(), at: z.string(),
-  torrentId: z.number().optional(), infoHash: z.string().optional(), reusedBytes: z.number().optional(), downloadedBytes: z.number().optional(), totalBytes: z.number().optional() });
+  torrentId: z.number().optional(), infoHash: z.string().optional(), reusedBytes: z.number().optional(), downloadedBytes: z.number().optional(), totalBytes: z.number().optional(),
+  accountingVersion: z.literal(1).optional(), sidecarDownloadBytes: z.number().nonnegative().optional(),
+  contentRepairBytes: z.number().nonnegative().optional(), contentFileCount: z.number().int().nonnegative().optional() });
 const receipt = z.object({ command: crossSeedCommandSchema, commandHash: z.string(), jobId: z.number(), createdAt: z.string(), outcome: outcome.optional() });
 
 export const crossSeedRouter = defineRouter({

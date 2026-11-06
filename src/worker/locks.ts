@@ -31,6 +31,7 @@ function releaseLockKeys(repo: BooksRepo, releaseId: number | null | undefined):
 }
 
 export function jobLockKeys(repo: BooksRepo, job: JobRow): string[] {
+  if (job.type === "torrent_metrics_collect") return ["torrent-metrics"];
   if (job.type === "torrent_reuse") {
     const payload = parseJson<{ operationId?: string }>(job.payload_json);
     const scope = payload?.operationId ? repo.crossSeed.receipt(payload.operationId)?.command.scope : null;

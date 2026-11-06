@@ -36,7 +36,7 @@ try {
   };
   const anonymous = await browser.newContext({ ignoreHTTPSErrors: true }), readerContext = await browser.newContext({ ignoreHTTPSErrors: true });
   await readerContext.addCookies([{ name: "podible_session", value: "admin-reader-fixture", url, httpOnly: true }]);
-  for (const method of ["settings.get", "settings.update", "adminWeb.users", "adminWeb.ops", "adminWeb.plexServers", "adminWeb.selectPlexServer", "adminWeb.refresh", "jobs.retry", "retention.preview", "retention.evict"]) {
+  for (const method of ["settings.get", "settings.update", "adminWeb.users", "adminWeb.ops", "adminWeb.plexServers", "adminWeb.selectPlexServer", "adminWeb.refresh", "jobs.retry", "retention.preview", "retention.evict", "transferMetrics.status", "transferMetrics.mapTracker"]) {
     assert.equal((await rpc(method, {}, anonymous.request)).error?.code, -32001);
     assert.equal((await rpc(method, {}, readerContext.request)).error?.code, -32003);
   }
@@ -159,6 +159,21 @@ try {
   await adminNavigation.getByRole("link", { name: "Activity", exact: true }).click();
   console.log("Admin browser: checking operational triage");
   await page.getByRole("heading", { name: "Activity", exact: true }).waitFor();
+  const sharing = page.getByRole("region", { name: "Sharing and transfers", exact: true });
+  await sharing.getByText("200 GiB", { exact: true }).waitFor();
+  await sharing.getByRole("img", { name: "Transfer speed history; gaps indicate missing observations" }).waitFor();
+  await sharing.getByLabel("Chart measure").selectOption("volume");
+  await sharing.getByLabel("Chart tracker").selectOption("books.tracker.example");
+  await sharing.getByRole("img", { name: "Seed size history; gaps indicate missing observations" }).waitFor();
+  await sharing.getByRole("button", { name: "Edit tracker names", exact: true }).click();
+  await sharing.getByLabel("Name for books.tracker.example", { exact: true }).fill("Reading tracker");
+  await sharing.locator("form").filter({ has: page.getByLabel("Name for books.tracker.example", { exact: true }) }).getByRole("button", { name: "Save", exact: true }).click();
+  await sharing.getByText("Tracker name saved.", { exact: true }).waitFor();
+  await sharing.getByRole("rowheader", { name: "Reading tracker", exact: true }).waitFor();
+  await sharing.getByRole("button", { name: "Done", exact: true }).click();
+  const scrape = await context.request.get(new URL("/metrics", url).href);
+  assert.equal(scrape.status(), 200);
+  assert.ok((await scrape.text()).includes("podible_seeding_torrents 2"));
   assert.deepEqual(await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link").allTextContents(), ["Library", "Activity", "Settings"]);
   const active = page.getByRole("region", { name: "Active work", exact: true });
   const waiting = page.getByRole("region", { name: "Waiting work", exact: true });
@@ -251,9 +266,11 @@ try {
   assert.equal((await rpc("jobs.list", { type: "full_library_refresh" })).result.jobs.length, 1);
   const artifacts = path.resolve("tmp/movies-lab");
   await mkdir(artifacts, { recursive: true });
+  await sharing.screenshot({ path: path.join(artifacts, "transfer-metrics-desktop.png"), animations: "disabled" });
   await page.screenshot({ path: path.join(artifacts, "admin-ops-desktop.png"), fullPage: true, animations: "disabled" });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false, "Ops overflows mobile viewport");
+  await sharing.screenshot({ path: path.join(artifacts, "transfer-metrics-mobile.png"), animations: "disabled" });
   await waiting.scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(artifacts, "admin-ops-mobile.png"), animations: "disabled" });
   await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Settings", exact: true }).click();

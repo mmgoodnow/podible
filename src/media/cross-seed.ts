@@ -308,6 +308,10 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
       }
       return finish({ kind: "seeding", reason: "Candidate independently verified complete; existing library selection is unchanged",
         torrentId: torrent.id, infoHash: metadata.infoHash, totalBytes: metadata.size,
+        accountingVersion: 1,
+        sidecarDownloadBytes: initialProof.files.filter(file => file.role === "sidecar").reduce((sum, file) => sum + file.size - file.verifiedBytes, 0),
+        contentRepairBytes: initialProof.files.filter(file => file.role === "content").reduce((sum, file) => sum + file.size - file.verifiedBytes, 0),
+        contentFileCount: initialProof.files.filter(file => file.role === "content").length,
         reusedBytes: initialProof.summary.verifiedReuseBytes, downloadedBytes: metadata.size - initialProof.summary.verifiedReuseBytes });
     }
     // One tracker warning must not stop a transfer that can still make progress.

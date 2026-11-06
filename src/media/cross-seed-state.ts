@@ -26,6 +26,9 @@ export type CrossSeedOutcome = {
   kind: "seeding" | "skipped" | "unsupported" | "stalled";
   reason: string; at: string; torrentId?: number; infoHash?: string;
   reusedBytes?: number; downloadedBytes?: number; totalBytes?: number;
+  /** Verified payload accounting, not network counters (which include retries/overhead). */
+  accountingVersion?: 1; sidecarDownloadBytes?: number; contentRepairBytes?: number;
+  contentFileCount?: number;
 };
 export type CrossSeedReceipt = { command: CrossSeedCommand; commandHash: string; jobId: number; createdAt: string; outcome?: CrossSeedOutcome };
 const prefix = "cross-seed:operation:";
