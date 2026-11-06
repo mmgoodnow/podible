@@ -33,7 +33,7 @@
 .connections-overview [data-state="unavailable"], .connections-counts [data-state="unavailable"] {
   color: #9a492e;
 }
-.connections-overview [data-state="cooldown"], .connections-counts [data-state="cooldown"], .connections-overview [data-state="gap"] {
+.connections-overview [data-state="cooldown"], .connections-counts [data-state="cooldown"] {
   color: #8c652d;
 }
 .connections-counts [data-state="healthy"] {
@@ -110,7 +110,7 @@
   font-size: .78rem;
   font-weight: 600;
 }
-.connections-media, .connections-gap {
+.connections-media {
   display: block;
   margin-top: .5rem;
   font-size: .85rem;
@@ -119,23 +119,12 @@
 .connections-media, .connections-provider__foot {
   color: var(--muted, #687368);
 }
-.connections-gap {
-  color: #82542d;
-}
 .connections-counts {
   display: flex;
   flex-wrap: wrap;
   gap: .5rem 1rem;
   margin-top: .6rem;
   font-size: .8rem;
-}
-.connections-gap--badge {
-  display: inline-flex;
-  align-items: center;
-  gap: .3rem;
-  border-radius: 3px;
-  background: #f4e8cf;
-  padding: .2rem .4rem;
 }
 .connections-provider__foot {
   display: flex;
@@ -177,12 +166,7 @@
   margin: 0;
   font-size: .95rem;
 }
-.connections-feed .connections-gap, .connections-coverage {
-  margin-block: .5rem;
-  font-size: .8rem;
-  line-height: 1.5;
-}
-.connections-coverage, .connections-feed dt {
+.connections-feed dt {
   color: var(--muted, #687368);
 }
 .connections-feed dl {

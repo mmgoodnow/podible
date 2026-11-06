@@ -202,6 +202,12 @@ try {
   await providers.getByText("Fixture provider", { exact: true }).waitFor();
   await providers.getByText("2 providers", { exact: true }).waitFor();
   await providers.getByText("Mixed reports", { exact: true }).waitFor();
+  const historyCard = providers.locator("details.connections-provider").filter({ has: page.getByText("History provider", { exact: true }) });
+  await historyCard.getByText("Success recorded", { exact: true }).waitFor();
+  await historyCard.locator("summary").click();
+  assert.equal(await providers.locator(".connections-gap, [data-state='gap']").count(), 0);
+  assert.doesNotMatch(await providers.innerText(), /feed gaps?|history gap|complete feed history|could not be verified/i);
+  await historyCard.locator("summary").click();
   const providerCard = providers.locator("details.connections-provider").filter({ has: page.getByText("Fixture provider", { exact: true }) });
   assert.equal(await providerCard.count(), 1, "One provider should not repeat for each media type");
   assert.equal(await providerCard.getByRole("article", { name: "Movies feed checkpoints" }).isVisible(), false);
@@ -209,6 +215,8 @@ try {
   await page.keyboard.press("Enter");
   await providerCard.getByRole("article", { name: "Movies feed checkpoints" }).waitFor();
   await providerCard.getByRole("article", { name: "TV feed checkpoints" }).waitFor();
+  await providerCard.getByText("A cooldown was reported.", { exact: false }).waitFor();
+  assert.doesNotMatch(await providerCard.innerText(), /feed gaps?|history gap|complete feed history/i);
   assert.equal(await providerCard.locator("time[datetime]").count() > 0, true);
   await providerCard.locator("summary").focus();
   await page.keyboard.press("Enter");
@@ -217,6 +225,12 @@ try {
   assert.equal(await storage.locator("code:visible").count(), 0, "Filesystem paths belong in storage details, not the overview");
   assert.equal(diagnosticsRequests, 0, "Primary Ops view loaded the raw job history");
   const baselineOps = (await rpc("adminWeb.ops", { includeJobs: false })).result;
+  assert.equal(baselineOps.feeds.find((feed: { provider: string }) => feed.provider === "History provider")?.gap, true,
+    "Hiding historical UI noise must not erase saved backend evidence");
+  const feedDiagnostics = (await rpc("indexerFeeds.status")).result;
+  const historyFeed = feedDiagnostics.feeds.find((feed: { provider: string }) => feed.provider === "History provider");
+  assert.ok(historyFeed?.gapSince);
+  assert.equal(historyFeed.gapNote, "Earlier history could not be verified");
   assert.deepEqual(baselineOps.diagnostics.recentJobs, []);
   assert.equal(baselineOps.summary.waiting, 1);
   assert.equal(baselineOps.downloads.length, 1);

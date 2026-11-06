@@ -51,36 +51,33 @@ test("navigation and scope caveats are not hidden behind empty disclosures", () 
   expect(html).not.toContain("connections-help\"><summary");
 });
 
-test("historical gaps admit unknown cause while new gaps show recorded stop evidence", () => {
-  expect(render([feed({ gap: true, gapSince: now })])).toContain("The cause was not captured for this older gap.");
-  const html = render([feed({ gap: true, gapSince: now, gapDiagnostics: {
-    version: 1, detectedAt: now, reason: "page-budget-exhausted", previousSuccessAt: now, previousPollAt: now,
+test("historical gap metadata remains untouched but adds no count, warning, badge or detail", () => {
+  const observed = feed({ gap: true, gapSince: "2001-01-01T00:00:00Z", gapDiagnostics: {
+    version: 1, detectedAt: "2002-01-01T00:00:00Z", reason: "page-budget-exhausted", previousSuccessAt: now, previousPollAt: now,
     previousPollFailed: true, pagesFetched: 10, resultsFetched: 1000, distinctResults: 1000, anchorsExpected: 5,
     pageSize: 100, pageBudget: 10, supportsPagination: true, reportedTotal: 2000,
-  } })]);
-  expect(html).toContain("The 10-page retrieval limit was reached");
-  expect(html).toContain("10 pages returned 1000 entries");
-  expect(html).toContain("The preceding poll failed.");
-  expect(html).not.toContain("cause was not captured");
-});
-
-test("a successful transport observation with a history gap does not become a provider outage", () => {
-  const observed = feed({ gap: true });
+  } });
+  const before = structuredClone(observed);
   const provider = connectionProviders([observed])[0]!;
-  expect(provider).toMatchObject({ label: "Success recorded", tone: "healthy", gapCount: 1 });
-  const html = render([observed]);
-  expect(html).toContain("1 feed gap");
-  expect(html).toContain("1 with feed gaps");
+  expect(provider).toMatchObject({ label: "Success recorded", tone: "healthy" });
+  expect(provider).not.toHaveProperty("gapCount");
+  const html = render([observed, feed({ id: "old", gap: true, gapSince: "2000-01-01T00:00:00Z" })]);
+  expect(html).not.toMatch(/feed gaps?|history gap|complete feed history|preceding poll failed|retrieval limit|cause was not captured/i);
+  expect(html).not.toContain("connections-gap");
+  expect(html).not.toContain("2001-01-01");
+  expect(html).not.toContain("2002-01-01");
   expect(html).not.toContain("with poll errors");
   expect(html).not.toContain("Cooling down");
+  expect(observed).toEqual(before);
+  expect(provider.feeds[0]!.gapDiagnostics).toEqual(before.gapDiagnostics);
 });
 
-test("problem-first ordering prioritizes poll errors, cooldowns and gaps without mutating inputs", () => {
+test("problem-first ordering uses only current poll state, never historical gaps", () => {
   const feeds = [feed({ provider: "Success" }), feed({ provider: "Unknown", state: "unknown" }),
     feed({ provider: "Cooldown", state: "cooldown" }), feed({ provider: "Gapped", gap: true }),
     feed({ provider: "Error", state: "unavailable" })];
   const before = structuredClone(feeds);
-  expect(connectionProviders(feeds).map(provider => provider.name)).toEqual(["Error", "Gapped", "Cooldown", "Unknown", "Success"]);
+  expect(connectionProviders(feeds).map(provider => provider.name)).toEqual(["Error", "Cooldown", "Unknown", "Gapped", "Success"]);
   expect(feeds).toEqual(before);
 });
 
@@ -93,7 +90,7 @@ test("overview problem counts count providers, not duplicated media feed observa
   expect(html).toContain("Recorded for Movies, TV.");
 });
 
-test("feed drilldown preserves independent attempts, successes, retry boundaries and gaps", () => {
+test("feed drilldown preserves independent attempts, successes and retry boundaries without historical warnings", () => {
   const feeds = [feed({ gap: true, retryAt: "2026-11-04T13:00:00Z" }),
     feed({ id: "two", mediaType: "tv", lastPolledAt: "2026-11-04T11:30:00Z", lastSuccessAt: null, nextPollAt: "2026-11-04T14:00:00Z" })];
   const html = render(feeds);
@@ -101,9 +98,7 @@ test("feed drilldown preserves independent attempts, successes, retry boundaries
     expect(html).toContain(`dateTime="${value}"`);
   expect(html).toContain("aria-label=\"Movies feed checkpoints\"");
   expect(html).toContain("aria-label=\"TV feed checkpoints\"");
-  expect(html).toContain("History gap recorded. Some feed history could not be verified.");
-  expect(html).toContain("No history gap recorded.");
-  expect(html.match(/A successful poll does not prove complete feed history\./g)).toHaveLength(1);
+  expect(html).not.toMatch(/history gap|complete feed history/i);
   expect(html).toContain("Not recorded");
   expect(html).toContain("Shared feed sync wake");
 });

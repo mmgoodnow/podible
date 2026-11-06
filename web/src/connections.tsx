@@ -2,7 +2,6 @@ import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../src/trpc";
 import { Link } from "./router";
 import "./connections.css";
-import { feedGapReasons } from "../../src/media/feed-gap";
 
 export type ConnectionFeed = inferRouterOutputs<AppRouter>["adminWeb"]["ops"]["feeds"][number];
 type State = ConnectionFeed["state"];
@@ -30,7 +29,6 @@ export function connectionProviders(feeds: readonly ConnectionFeed[]) {
   }
   return [...groups].map(([name, rows]) => {
     const states = [...new Set(rows.map(feed => feed.state))].sort((a, b) => order[a] - order[b]);
-    const gapCount = rows.filter(feed => feed.gap).length;
     const errors = new Map<string, { message: string; media: string[] }>();
     for (const feed of rows) if (feed.error) {
       const key = JSON.stringify([feed.error.code, feed.error.message]);
@@ -42,13 +40,11 @@ export function connectionProviders(feeds: readonly ConnectionFeed[]) {
       name, feeds: [...rows].sort((a, b) => a.mediaType.localeCompare(b.mediaType) || a.id.localeCompare(b.id)),
       states, mixed: states.length > 1, label: states.length > 1 ? "Mixed reports" : labels[states[0]!],
       reports: states.map(state => ({ state, count: rows.filter(feed => feed.state === state).length })),
-      tone: states[0]!, gapCount, errors: [...errors.values()],
+      tone: states[0]!, errors: [...errors.values()],
       media: [...new Set(rows.map(feed => mediaLabel(feed.mediaType)))],
       lastPollAt: latestTime(rows.map(feed => feed.lastPolledAt)),
-      // Feed history can be incomplete even when every saved poll succeeded.
-      rank: Math.min(order[states[0]!], gapCount ? 1 : 3),
     };
-  }).sort((a, b) => a.rank - b.rank || Number(b.gapCount > 0) - Number(a.gapCount > 0) || a.name.localeCompare(b.name));
+  }).sort((a, b) => order[a.tone] - order[b.tone] || a.name.localeCompare(b.name));
 }
 
 function Timestamp({ value }: { value: string | null }) {
@@ -56,12 +52,10 @@ function Timestamp({ value }: { value: string | null }) {
   return <time dateTime={value!}>{new Date(value!).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time>;
 }
 
-function StateIcon({ state }: { state: State | "gap" }) {
+function StateIcon({ state }: { state: State }) {
   return <svg className="connections-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-    {state === "gap" ? <><path d="M2 4h5v8H2zM10 4h4v8h-4M7 8h3" /></> : <>
-      <circle cx="8" cy="8" r="6.2" />
-      {state === "healthy" ? <path d="m4.7 8 2.2 2.2 4.5-4.5" /> : state === "cooldown" ? <path d="M6 5v6M10 5v6" /> : state === "unavailable" ? <path d="M8 4.7v4M8 11.2v.1" /> : <path d="M6.2 5.5a2 2 0 0 1 3.8.9c0 1.5-2 1.5-2 3M8 11.5v.1" />}
-    </>}
+    <circle cx="8" cy="8" r="6.2" />
+    {state === "healthy" ? <path d="m4.7 8 2.2 2.2 4.5-4.5" /> : state === "cooldown" ? <path d="M6 5v6M10 5v6" /> : state === "unavailable" ? <path d="M8 4.7v4M8 11.2v.1" /> : <path d="M6.2 5.5a2 2 0 0 1 3.8.9c0 1.5-2 1.5-2 3M8 11.5v.1" />}
   </svg>;
 }
 
@@ -73,13 +67,11 @@ export function Connections({ feeds, observedAt, truncated = false }: {
   const providers = connectionProviders(feeds);
   const pollErrors = providers.filter(provider => provider.states.includes("unavailable")).length;
   const cooldowns = providers.filter(provider => provider.states.includes("cooldown")).length;
-  const gaps = providers.filter(provider => provider.gapCount > 0).length;
   return <section className="connections" aria-label="Connections">
     <div className="connections-heading"><h2>Connections</h2><span>{providers.length} {providers.length === 1 ? "provider" : "providers"}{truncated ? " shown" : ""}</span></div>
-    {(pollErrors > 0 || cooldowns > 0 || gaps > 0) && <ul className="connections-overview" aria-label="Provider observation summary">
+    {(pollErrors > 0 || cooldowns > 0) && <ul className="connections-overview" aria-label="Provider observation summary">
       {pollErrors > 0 && <li data-state="unavailable"><StateIcon state="unavailable" />{pollErrors} with poll errors</li>}
       {cooldowns > 0 && <li data-state="cooldown"><StateIcon state="cooldown" />{cooldowns} cooling down</li>}
-      {gaps > 0 && <li data-state="gap"><StateIcon state="gap" />{gaps} with feed gaps</li>}
     </ul>}
     {truncated && <p className="connections-limit" role="status">This overview is bounded; some provider observations may not be shown. Counts refer only to the saved feeds shown here.</p>}
     {!providers.length ? <p className="connections-empty">No saved feed observations. Provider availability is unknown.</p> :
@@ -91,22 +83,13 @@ export function Connections({ feeds, observedAt, truncated = false }: {
             {provider.mixed && <span className="connections-counts" aria-label="Saved feed reports">{provider.reports.map(report => <span key={report.state} data-state={report.state}>
               <StateIcon state={report.state} /><span>{report.count} {countLabel(report.state, report.count)}</span>
             </span>)}</span>}
-            {provider.gapCount > 0 && <span className="connections-gap connections-gap--badge"><StateIcon state="gap" />{provider.gapCount} {provider.gapCount === 1 ? "feed gap" : "feed gaps"}</span>}
             <span className="connections-provider__foot"><span>Last poll <Timestamp value={provider.lastPollAt} /></span><span className="connections-disclosure">Feed details ({provider.feeds.length})</span></span>
           </summary>
           <div className="connections-provider__details">
             {provider.states.includes("cooldown") && <p className="connections-explanation">A cooldown was reported. It does not establish the upstream cause or prove rate limiting.</p>}
             {provider.errors.map((error, index) => <p className="connections-error" key={index}>{error.message} <span>Recorded for {error.media.join(", ")}.</span></p>)}
-            <p className="connections-explanation">A successful poll does not prove complete feed history.</p>
             {provider.feeds.map(feed => <article className="connections-feed" key={feed.id} aria-label={`${mediaLabel(feed.mediaType)} feed checkpoints`}>
               <h3>{mediaLabel(feed.mediaType)}</h3>
-              <p className={feed.gap ? "connections-gap" : "connections-coverage"}>{feed.gap ? "History gap recorded. Some feed history could not be verified." : "No history gap recorded."}</p>
-              {feed.gap && (feed.gapDiagnostics ? <p className="connections-explanation">
-                {feedGapReasons[feed.gapDiagnostics.reason]} {feed.gapDiagnostics.pagesFetched} pages returned {feed.gapDiagnostics.resultsFetched} entries.
-                {" "}Recorded <Timestamp value={feed.gapDiagnostics.detectedAt} />; previous success <Timestamp value={feed.gapDiagnostics.previousSuccessAt} />.
-                {feed.gapDiagnostics.previousPollFailed && " The preceding poll failed."}
-                {" "}Missing checkpoints do not establish that releases were deleted.
-              </p> : <p className="connections-explanation">Recorded <Timestamp value={feed.gapSince} />. The cause was not captured for this older gap.</p>)}
               <dl>
                 <div><dt>Last poll attempt</dt><dd><Timestamp value={feed.lastPolledAt} /></dd></div>
                 <div><dt>Last successful poll</dt><dd><Timestamp value={feed.lastSuccessAt} /></dd></div>
@@ -118,6 +101,6 @@ export function Connections({ feeds, observedAt, truncated = false }: {
         </details>
       </li>)}</ul>}
     <div className="connections-footer"><Link href="/settings">Connection settings</Link><span>Overview updated <Timestamp value={observedAt} /></span></div>
-    <p className="connections-help">Saved poll results, not a live connection test. Feed gaps indicate unverified history, not an outage.</p>
+    <p className="connections-help">Saved poll results, not a live connection test.</p>
   </section>;
 }
