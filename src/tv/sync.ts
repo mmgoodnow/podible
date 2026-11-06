@@ -6,8 +6,9 @@ import { durableStep, workerLog, type WorkerContext } from "../worker/context";
 import { queueTvSeasons, tvUpstreamStep } from "./acquisition";
 import { enrichAnimeEntry, type AnimeCatalogProjection } from "./anime";
 import { SonarrCatalog } from "./sonarr";
-import { approvedSeerrTv, selectedSeerrTvSeasons, SeerrTvClient, type SeerrTvRequest, type SeerrTvSource } from "./upstream";
+import { approvedSeerrTv, selectedSeerrTvSeasons, SeerrTvClient, TvUpstreamError, type SeerrTvRequest, type SeerrTvSource } from "./upstream";
 import type { TvCatalogEntry } from "./types";
+import type { BooksRepo } from "../repo";
 import { configuredTvCatalog, type TvCatalog } from "./catalog";
 import { nativeTvRequestScope, refreshNativeTvRequests } from "./service";
 
@@ -17,6 +18,17 @@ export const tvSyncPayloadSchema = z.object({
 const feedSchema = z.object({ baselineId: z.number().int().nonnegative(), cursor: z.string().datetime() });
 const legacyOriginSourceSchema = z.object({ episodeLimit: z.number() });
 export function tvSeerrFeedKey(instance: string) { return `tv-seerr-feed:${instance}`; }
+export function tvSeerrMappingKey(instance: string) { return `tv-seerr-season-mapping:${instance}`; }
+export const tvSeerrMappingIssueSchema = z.object({
+  requestId: z.number().int().positive(), title: z.string(), tmdbId: z.number().int().positive(),
+  tvdbId: z.number().int().positive().nullable(), approvedSeasons: z.array(z.number().int().nonnegative()),
+  catalogSeasons: z.array(z.number().int().nonnegative()), reason: z.string(),
+  firstSeenAt: z.iso.datetime(), lastAttemptAt: z.iso.datetime(),
+});
+/** Server diagnostics plus retry intent, separate from a feed cursor or acquisition scope. */
+export function tvSeerrMappingIssues(repo: BooksRepo, instance: string) {
+  return z.array(tvSeerrMappingIssueSchema).parse(repo.getJsonState(tvSeerrMappingKey(instance)) ?? []);
+}
 export type TvSyncServices = {
   source: SeerrTvSource;
   catalog: Pick<SonarrCatalog, "resolveSeerr"> & Partial<Pick<SonarrCatalog, "poster" | "instance">>;
@@ -134,11 +146,58 @@ export async function syncTvRequests(ctx: WorkerContext, job: JobRow,
       requests.push(request);
     }
   }
+  if (!input.backfillRequestIds) {
+    const seen = new Set(requests.map(request => request.id));
+    // Metadata-only retries. Advancing the feed must not forget a genuinely unresolved approval.
+    const pending = tvSeerrMappingIssues(ctx.repo, instance).filter(issue => !seen.has(issue.requestId))
+      .sort((a, b) => a.lastAttemptAt.localeCompare(b.lastAttemptAt) || a.requestId - b.requestId).slice(0, 8);
+    for (const issue of pending) {
+      const outcome = await durableStep(ctx, `tv-seerr:mapping-read:${issue.requestId}`, async () => {
+        try { return { request: await services.source.request(issue.requestId) }; }
+        catch (error) {
+          if (!(error instanceof TvUpstreamError)) throw error;
+          return { request: null, status: error.status };
+        }
+      });
+      if (!outcome.request) {
+        await durableStep(ctx, `tv-seerr:mapping-read-unavailable:${issue.requestId}`, () => {
+          active();
+          ctx.repo.setJsonState(tvSeerrMappingKey(instance), tvSeerrMappingIssues(ctx.repo, instance).map(item =>
+            item.requestId === issue.requestId ? { ...item, lastAttemptAt: new Date().toISOString() } : item));
+          workerLog(ctx, `[tv-seerr] request=${issue.requestId} title=${JSON.stringify(issue.title)} metadata unavailable${outcome.status ? ` (HTTP ${outcome.status})` : ""}; approved season mapping remains pending`);
+        });
+        continue;
+      }
+      const request = outcome.request;
+      if (request.id !== issue.requestId) throw new Error("Deferred Seerr request returned another identity");
+      requests.push(request);
+    }
+  }
   for (const request of requests) {
     active();
-    if (!approvedSeerrTv(request)) continue;
+    if (!approvedSeerrTv(request)) {
+      await durableStep(ctx, `tv-seerr:mapping-revoked:${request.id}`, () => {
+        active(); ctx.repo.setJsonState(tvSeerrMappingKey(instance), tvSeerrMappingIssues(ctx.repo, instance).filter(issue => issue.requestId !== request.id));
+      });
+      continue;
+    }
     const catalog = await tvUpstreamStep(ctx, `tv-seerr:catalog:${request.id}`, () => services.catalog.resolveSeerr(request));
     const seasons = new Set(selectedSeerrTvSeasons(request));
+    const catalogSeasons = [...new Set(catalog.episodes.flatMap(episode => episode.numbering
+      .filter(number => number.scheme === "tvdb:aired" && number.season !== null).map(number => number.season!)))].sort((a, b) => a - b);
+    if ([...seasons].some(season => !catalogSeasons.includes(season))) {
+      await durableStep(ctx, `tv-seerr:mapping-unresolved:${request.id}`, () => ctx.repo.transaction(() => {
+        active();
+        const previous = tvSeerrMappingIssues(ctx.repo, instance), now = new Date().toISOString();
+        const issue = tvSeerrMappingIssueSchema.parse({ requestId: request.id, title: catalog.title,
+          tmdbId: request.media.tmdbId, tvdbId: catalog.tvdbId, approvedSeasons: [...seasons], catalogSeasons,
+          firstSeenAt: previous.find(item => item.requestId === request.id)?.firstSeenAt ?? now, lastAttemptAt: now,
+          reason: `Approved Seerr seasons ${[...seasons].join(", ")} do not all exist in TVDB aired seasons ${catalogSeasons.join(", ")}. Explicit provider episode mapping is required; approval retained, no ordinal remapping or download performed.` });
+        ctx.repo.setJsonState(tvSeerrMappingKey(instance), [...previous.filter(item => item.requestId !== request.id), issue]);
+        workerLog(ctx, `[tv-seerr] request=${request.id} title=${JSON.stringify(issue.title)} tmdb=${issue.tmdbId} tvdb=${issue.tvdbId}: ${issue.reason}`);
+      }));
+      continue;
+    }
     const selected = catalog.episodes.filter((episode) => episode.numbering.some((number) =>
       number.scheme === "tvdb:aired" && number.season !== null && seasons.has(number.season)));
     if (!selected.length) throw new Error(`Seerr request ${request.id} has no explicitly mapped episodes in its approved seasons`);
@@ -181,6 +240,9 @@ export async function syncTvRequests(ctx: WorkerContext, job: JobRow,
       }
       if (covered.size !== wantedKeys.size) throw new Error("Anime projection lost requested episode identities");
     }));
+    await durableStep(ctx, `tv-seerr:mapping-resolved:${request.id}`, () => {
+      active(); ctx.repo.setJsonState(tvSeerrMappingKey(instance), tvSeerrMappingIssues(ctx.repo, instance).filter(issue => issue.requestId !== request.id));
+    });
   }
   if (changed) await durableStep(ctx, "tv-seerr:cursor", () => {
     active(); const current = feedSchema.parse(ctx.repo.getJsonState(tvSeerrFeedKey(instance)));

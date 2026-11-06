@@ -17,6 +17,8 @@ import { prepareMovieStorage } from "../../src/movies/storage";
 import { tvRouter } from "../../src/rpc/tv-router";
 import { catalogRouter } from "../../src/rpc/catalog-router";
 import { fixtureTvEntry } from "../fixtures/tv-catalog";
+import { tvSeerrMappingKey } from "../../src/tv/sync";
+import { seerrInstance } from "../../src/movies/seerr";
 
 const NOW = Date.parse("2026-11-04T12:00:00.000Z");
 const ownerToken = "private-owner-credential";
@@ -237,6 +239,25 @@ describe("Plex discovery and exact selection", () => {
 });
 
 describe("operational facts from the execution authority", () => {
+  test("deferred TV season disagreement stays visible by show even after a healthy sync", async () => {
+    await using f = await fixture();
+    const settings = f.repo.getSettings(); settings.movies.seerr.url = "http://seerr:5055"; f.repo.updateSettings(settings);
+    const key = tvSeerrMappingKey(seerrInstance(settings.movies.seerr.url));
+    f.repo.setJsonState(key, [{ requestId: 734, title: "Tom and Jerry", tmdbId: 340782, tvdbId: 72860,
+      approvedSeasons: [1, 2, 3], catalogSeasons: [0, 1940, 1950, 1960], reason: `Internal evidence ${secretUrl}`,
+      firstSeenAt: new Date(NOW).toISOString(), lastAttemptAt: new Date(NOW).toISOString() }]);
+    f.job({ type: "tv_sync" }, { status: "succeeded" });
+    const before = f.db.query("SELECT total_changes() AS n").get();
+    const result = await executeMethod(f.router.routes.ops, f.ctx, {});
+    const issue = result.incidents.find(item => item.title === "Tom and Jerry");
+    expect(issue).toMatchObject({ code: "tv-season-mapping", jobId: null, href: "/tv/340782", recovery: "unknown" });
+    expect(issue!.detail).toContain("1940, 1950, 1960");
+    expect(issue!.detail).toContain("Other requests can continue");
+    expect(JSON.stringify(result)).not.toContain(secretUrl);
+    expect(f.db.query("SELECT total_changes() AS n").get()).toEqual(before);
+    f.repo.setJsonState(key, []);
+    expect((await executeMethod(f.router.routes.ops, f.ctx, {})).incidents.some(item => item.code === "tv-season-mapping")).toBe(false);
+  });
   test("TV sync season-numbering failures explain the cause without exposing raw diagnostics", async () => {
     await using f = await fixture();
     const job = f.job({ type: "tv_sync" }, { status: "failed",

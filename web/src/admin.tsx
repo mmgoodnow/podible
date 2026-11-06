@@ -184,19 +184,20 @@ function ActivityProblem({ incident, onRetried }: { incident: Ops["incidents"][n
   const retryable = incident.jobId !== null && ["manual-retry", "cancelled"].includes(incident.recovery);
   const correction = problemAction(incident.code);
   const comparison = incident.code === "comparison-failed";
+  const mapping = incident.code === "tv-season-mapping" && incident.jobId === null;
   return <article className="activity-item problem" aria-label={incident.title}>
     <div className="activity-item-heading"><h3><WorkTitle title={incident.title} href={incident.href} /></h3>
-      <span className="activity-badge">{comparison ? "Comparison stopped" : retryable ? "Stopped" : "Needs attention"}</span></div>
+      <span className="activity-badge">{mapping ? "Episode mapping needed" : comparison ? "Comparison stopped" : retryable ? "Stopped" : "Needs attention"}</span></div>
     <p>{incident.detail}</p>
-    <p><Recovery recovery={incident.recovery} nextWakeAt={incident.nextWakeAt} /></p>
+    <p>{mapping ? "Episode metadata is rechecked automatically. Retrying a download will not resolve different numbering systems." : <Recovery recovery={incident.recovery} nextWakeAt={incident.nextWakeAt} />}</p>
     {correction && <div className="actions">{correction.href.startsWith("#") ? <a className="button" href={correction.href}>{correction.label}</a>
       : <Link className="button" href={correction.href}>{correction.label}</Link>}</div>}
     {retryable && !correction && <div className="actions"><button disabled={retry.isPending} onClick={() => retry.mutate({ jobId: incident.jobId! })}>
       {retry.isPending ? "Requesting retry..." : comparison ? "Retry comparison" : "Retry"}</button></div>}
     {retry.error && <p role="alert">Could not confirm the retry: {retry.error.message}. Check the refreshed status before trying again.</p>}
-    <details><summary>Technical details</summary><p>{incident.code}{incident.jobId ? ` / job #${incident.jobId}` : ""}</p>
+    {!mapping && <details><summary>Technical details</summary><p>{incident.code}{incident.jobId ? ` / job #${incident.jobId}` : ""}</p>
       {retryable && correction && <button disabled={retry.isPending} onClick={() => retry.mutate({ jobId: incident.jobId! })}>Retry after resolving the problem</button>}
-    </details>
+    </details>}
   </article>;
 }
 

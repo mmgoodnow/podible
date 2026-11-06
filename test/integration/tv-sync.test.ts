@@ -8,9 +8,9 @@ import { finalizeJobJournalMigration, runMigrations } from "../../src/db";
 import { createPodibleFetchHandler } from "../../src/http";
 import { seerrInstance } from "../../src/movies/seerr";
 import { BooksRepo } from "../../src/repo";
-import { hydrateMissingTvArtwork, syncTvRequests, tvSeerrFeedKey, tvSyncPayloadSchema, type TvSyncServices } from "../../src/tv/sync";
+import { hydrateMissingTvArtwork, syncTvRequests, tvSeerrFeedKey, tvSeerrMappingIssues, tvSeerrMappingKey, tvSyncPayloadSchema, type TvSyncServices } from "../../src/tv/sync";
 import { SonarrCatalog } from "../../src/tv/sonarr";
-import { sonarrInstance } from "../../src/tv/upstream";
+import { sonarrInstance, TvUpstreamError } from "../../src/tv/upstream";
 import type { TvCatalogEntry } from "../../src/tv/types";
 import type { SeerrTvRequest } from "../../src/tv/upstream";
 import type { WorkerContext } from "../../src/worker/context";
@@ -128,6 +128,128 @@ test("TV sync activation never backfills history and future-only approved season
     expect(s.calls.latest).toBe(1);
     expect(s.calls.requests).toEqual([]);
     expect(s.repo.getJsonState<{ baselineId: number }>(s.feedKey)!.baselineId).toBe(100);
+  } finally { await s.close(); }
+});
+
+test("Tom and Jerry year/ordinal mismatch is retained per-show while healthy requests and cursor progress; metadata retry survives restart", async () => {
+  const s = await setup();
+  try {
+    await s.sync();
+    const tom = { ...catalog(true), key: "tvdb:72860", tvdbId: 72860, tmdbId: 340782, title: "Tom and Jerry", anime: false };
+    tom.episodes = [0, 1940, 1950, 1960].map((season, index) => ({
+      key: `tvdb:${7286000 + index}`, title: "Provider episode", airDate: "2099-01-01", runtimeMinutes: 7,
+      numbering: [{ scheme: "tvdb:aired", season, episode: 1, absolute: index + 1, source: "sonarr:explicit-year-seasons" }],
+    }));
+    s.records.set(734, sourceRequest(734, { media: { tmdbId: 340782, tvdbId: 72860, externalServiceId: 834 },
+      seasons: [1, 2, 3].map(seasonNumber => ({ seasonNumber, status: 2 })) }));
+    s.records.set(735, sourceRequest(735));
+    let resolved = false;
+    s.services.catalog.resolveSeerr = async request => request.id === 734 ? structuredClone(resolved ? { ...tom,
+      episodes: tom.episodes.slice(1).map((ep, index) => ({ ...ep, numbering: [{ ...ep.numbering[0]!, season: index + 1,
+        source: "fixture:corrected-explicit-provider-numbering" }] })) } : tom) : catalog(true);
+    await s.sync();
+    expect(s.repo.tv.origins(s.instance, 734)).toEqual([]);
+    expect(s.repo.tv.origins(s.instance, 735)).toHaveLength(1);
+    const issue = tvSeerrMappingIssues(s.repo, s.instance)[0]!;
+    expect(issue).toMatchObject({ requestId: 734, title: "Tom and Jerry", tmdbId: 340782, tvdbId: 72860,
+      approvedSeasons: [1, 2, 3], catalogSeasons: [0, 1940, 1950, 1960] });
+    expect(issue.reason).toContain("Explicit provider episode mapping is required");
+    expect(s.repo.getJsonState<{ cursor: string }>(s.feedKey)!.cursor).toBe(s.records.get(735)!.updatedAt);
+    expect(s.repo.listJobsByType("tv_acquire")).toEqual([]);
+    expect(JSON.stringify(issue)).not.toContain("private");
+    s.reopen(); s.calls.requests.length = 0;
+    s.services.source.changes = async since => ({ requests: [], through: new Date(Date.parse(since) + 60_000).toISOString() });
+    await s.sync();
+    expect(s.calls.requests).toEqual([734]);
+    expect(tvSeerrMappingIssues(s.repo, s.instance)[0]!.firstSeenAt).toBe(issue.firstSeenAt);
+    resolved = true;
+    await s.sync();
+    expect(s.calls.requests).toEqual([734, 734]);
+    expect(tvSeerrMappingIssues(s.repo, s.instance)).toEqual([]);
+    const origins = s.repo.tv.origins(s.instance, 734);
+    expect(origins).toHaveLength(1);
+    expect(s.repo.tv.requestedEpisodes(origins[0]!.requestId)).toHaveLength(3);
+    await s.sync();
+    expect(s.calls.requests).toEqual([734, 734]);
+    expect(s.repo.tv.origins(s.instance, 734)).toEqual(origins);
+    expect(s.repo.listJobsByType("tv_acquire")).toEqual([]);
+  } finally { await s.close(); }
+});
+
+test("one unresolved approved season cannot silently truncate a partially matching Seerr approval", async () => {
+  const s = await setup();
+  try {
+    await s.sync();
+    s.records.set(101, sourceRequest(101, { seasons: [{ seasonNumber: 1, status: 2 }, { seasonNumber: 9, status: 2 }] }));
+    await s.sync();
+    expect(s.repo.tv.origins(s.instance, 101)).toEqual([]);
+    expect(s.nativeOutbox()).toEqual([]);
+    expect(tvSeerrMappingIssues(s.repo, s.instance)[0]!.approvedSeasons).toEqual([1, 9]);
+    s.services.source.changes = async since => ({ requests: [], through: since });
+    s.records.set(101, sourceRequest(101, { status: 3 }));
+    await s.sync();
+    expect(tvSeerrMappingIssues(s.repo, s.instance)).toEqual([]);
+    expect(s.repo.getJsonState<unknown[]>(tvSeerrMappingKey(s.instance))).toEqual([]);
+  } finally { await s.close(); }
+});
+
+test("deferred mapping read failures retain approval without blocking another healthy request", async () => {
+  const s = await setup();
+  try {
+    await s.sync();
+    s.records.set(101, sourceRequest(101, { seasons: [{ seasonNumber: 1940, status: 2 }] }));
+    await s.sync();
+    const before = tvSeerrMappingIssues(s.repo, s.instance)[0]!;
+    s.records.set(102, sourceRequest(102));
+    s.setCatalog(catalog(true));
+    const healthy = s.records.get(102)!;
+    s.services.source.changes = async () => ({ requests: [structuredClone(healthy)], through: healthy.updatedAt });
+    s.services.source.request = async id => { s.calls.requests.push(id); throw new TvUpstreamError("seerr", "HTTP 404", 404); };
+    await s.sync();
+    expect(s.repo.tv.origins(s.instance, 102)).toHaveLength(1);
+    expect(s.repo.tv.origins(s.instance, 101)).toEqual([]);
+    expect(tvSeerrMappingIssues(s.repo, s.instance)[0]).toMatchObject({ requestId: 101, firstSeenAt: before.firstSeenAt, approvedSeasons: [1940] });
+    expect(s.calls.requests).toEqual([101]);
+    expect(s.repo.getJsonState<{ cursor: string }>(s.feedKey)!.cursor).toBe(s.records.get(102)!.updatedAt);
+  } finally { await s.close(); }
+});
+
+test("mapping retry metadata reads are bounded and oldest unprocessed approval is not starved", async () => {
+  const s = await setup();
+  try {
+    await s.sync();
+    const stamp = "2000-01-01T00:00:00.000Z";
+    const issues = Array.from({ length: 10 }, (_, i) => ({ requestId: 101 + i, title: `Unmapped ${i}`, tmdbId: 101,
+      tvdbId: 307375, approvedSeasons: [1940], catalogSeasons: [1, 2, 3], reason: "Explicit provider mapping needed", firstSeenAt: stamp, lastAttemptAt: stamp }));
+    for (const issue of issues) s.records.set(issue.requestId, sourceRequest(issue.requestId, { seasons: [{ seasonNumber: 1940, status: 2 }] }));
+    s.repo.setJsonState(tvSeerrMappingKey(s.instance), issues);
+    s.services.source.changes = async since => ({ requests: [], through: since });
+    await s.sync();
+    expect(s.calls.requests).toEqual([101, 102, 103, 104, 105, 106, 107, 108]);
+    await s.sync();
+    expect(s.calls.requests.slice(8, 10)).toEqual([109, 110]);
+    expect(s.calls.requests).toHaveLength(16);
+    expect(tvSeerrMappingIssues(s.repo, s.instance)).toHaveLength(10);
+    expect(s.nativeOutbox()).toEqual([]);
+  } finally { await s.close(); }
+});
+
+test("failure to persist unresolved mapping prevents cursor advancement and does not discard approval", async () => {
+  const s = await setup();
+  try {
+    await s.sync();
+    const feed = s.repo.getJsonState<{ cursor: string }>(s.feedKey);
+    s.records.set(101, sourceRequest(101, { seasons: [{ seasonNumber: 1940, status: 2 }] }));
+    s.db.exec(`CREATE TRIGGER fail_mapping_intent BEFORE INSERT ON app_state
+      WHEN NEW.key LIKE 'tv-seerr-season-mapping:%'
+      BEGIN SELECT RAISE(ABORT,'mapping intent persistence failure'); END`);
+    await expect(s.sync()).rejects.toThrow("mapping intent persistence failure");
+    expect(s.repo.getJsonState<{ cursor: string }>(s.feedKey)).toEqual(feed);
+    expect(s.repo.tv.origins(s.instance, 101)).toEqual([]);
+    s.db.exec("DROP TRIGGER fail_mapping_intent");
+    await s.sync();
+    expect(tvSeerrMappingIssues(s.repo, s.instance)[0]!.requestId).toBe(101);
+    expect(s.repo.getJsonState<{ cursor: string }>(s.feedKey)!.cursor).toBe(s.records.get(101)!.updatedAt);
   } finally { await s.close(); }
 });
 

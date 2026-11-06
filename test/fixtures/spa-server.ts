@@ -10,7 +10,7 @@ import { createFixtureMovieServices } from "./movie-services";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
 import { fixtureMovie } from "./movie-services";
 import { seerrInstance } from "../../src/movies/seerr";
-import { tvSeerrFeedKey } from "../../src/tv/sync";
+import { tvSeerrFeedKey, tvSeerrMappingKey } from "../../src/tv/sync";
 import { observedFiles } from "../../src/media/observed-files";
 import { factsFromMovieProbe } from "../../src/movies/probe";
 import { evaluateMovieQuality } from "../../src/movies/quality";
@@ -88,6 +88,10 @@ if (process.env.ADMIN_FIXTURE) {
   repo.releaseInbox.ensureFeed("admin-fixture-gap", "History provider", "movie", new Date().toISOString());
   repo.releaseInbox.succeed("admin-fixture-gap", "fixture-head", "Earlier history could not be verified", new Date().toISOString());
   seedTransferMetricsFixture(repo, activeBook.id);
+  settings.movies.seerr.url = "http://seerr:5055"; repo.updateSettings(settings);
+  repo.setJsonState(tvSeerrMappingKey(seerrInstance(settings.movies.seerr.url)), [{ requestId: 734,
+    title: "Tom and Jerry", tmdbId: 340782, tvdbId: 72860, approvedSeasons: [1, 2, 3], catalogSeasons: [0, 1940, 1950, 1960],
+    reason: "Synthetic unresolved provider mapping", firstSeenAt: new Date().toISOString(), lastAttemptAt: new Date().toISOString() }]);
 }
 if (process.env.SHADOW_FIXTURE) {
   settings.prowlarr={url:"https://fixture-prowlarr.invalid",apiKey:"fixture-private-key"};

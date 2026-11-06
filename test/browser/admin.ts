@@ -192,6 +192,11 @@ try {
   const active = page.getByRole("region", { name: "Active work", exact: true });
   const waiting = page.getByRole("region", { name: "Waiting work", exact: true });
   const attention = page.getByRole("region", { name: "Needs attention", exact: true });
+  const mapping = attention.getByRole("article", { name: "Tom and Jerry", exact: true });
+  await mapping.getByText("Episode mapping needed", { exact: true }).waitFor();
+  assert.ok((await mapping.innerText()).includes("1940, 1950, 1960"));
+  assert.equal(await mapping.getByRole("button", { name: "Retry", exact: true }).count(), 0);
+  assert.equal(await mapping.getByText("Recovery state unknown", { exact: true }).count(), 0);
   const providers = page.getByRole("region", { name: "Connections", exact: true });
   const storage = page.getByRole("region", { name: "Storage and links", exact: true });
   await waiting.getByRole("link", { name: "Fixture Active Book", exact: true }).waitFor();

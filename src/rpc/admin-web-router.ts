@@ -11,6 +11,8 @@ import { defineMethod, defineRouter } from "./framework";
 import { RpcError } from "./shared";
 import { adminTorrentKey, readAdminTorrents, type AdminTorrentBinding, type AdminTorrentSource, type AdminTransmissionReader } from "./admin-torrents";
 import { feedGapDiagnosticsSchema, readFeedGapDiagnostics } from "../media/feed-gap";
+import { seerrInstance } from "../movies/seerr";
+import { tvSeerrMappingIssues } from "../tv/sync";
 
 const empty = z.object({}).strict();
 const id = z.number().int().positive().safe();
@@ -370,6 +372,12 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
       jobId: job.id, href: work.href, recovery: view.recovery, nextWakeAt: view.nextWakeAt });
   }
   let feeds: AdminWebOps["feeds"] = [];
+  try {
+    if (settings.movies.seerr.url) for (const issue of tvSeerrMappingIssues(repo, seerrInstance(settings.movies.seerr.url)))
+      incidents.push({ key: `tv-season-mapping:${issue.requestId}`, title: label(issue.title), code: "tv-season-mapping",
+        detail: `Seerr requested seasons ${issue.approvedSeasons.join(", ")}, but the TV catalog uses ${issue.catalogSeasons.filter(season => season !== 0).join(", ") || "no regular seasons yet"}. Podible has kept the request without guessing which episodes to download. Other requests can continue.`,
+        jobId: null, href: `/tv/${issue.tmdbId}`, recovery: "unknown", nextWakeAt: null });
+  } catch { warnings.push("Unresolved TV season mappings could not be read; the saved approvals remain unchanged."); }
   try {
     const feedJob = repo.latestJobByType("indexer_feed_sync");
     const nextPollAt = feedJob && active(feedJob) ? iso(feedJob.next_run_at) : null;
