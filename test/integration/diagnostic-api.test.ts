@@ -127,9 +127,9 @@ test("TV approved-season backfill, sync and retry queue without manufacturing ep
   }
   const sync = await api.tv.sync.mutate({});
   expect((await api.tv.status.query({})).lastSync).toEqual({ jobId: sync.jobId, status: "queued" });
-  const retry = await api.tv.retry.mutate({ requestId: before.requestId });
+  await expect(api.tv.retry.mutate({ requestId: before.requestId })).rejects.toMatchObject({data:{code:"BAD_REQUEST"}});
   const after = await api.tv.get.query({ requestId: before.requestId });
-  expect(after.acquisitions.find(acquisition => acquisition.jobId === retry.jobId)?.status).toBe("queued");
+  expect(after.acquisitions).toHaveLength(before.acquisitions.length); // Only an unaired episode remains; no pointless search.
   expect(after.availableEpisodes).toBe(before.availableEpisodes);
   expect(after.futureEpisodes).toBe(before.futureEpisodes);
   const observation = await api.tvShadow.sync.mutate({});

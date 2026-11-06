@@ -3,7 +3,7 @@ import type { JobRow } from "../app-types";
 import { seerrInstance } from "../movies/seerr";
 import { ensurePresentIntent } from "../media/retention-service";
 import { durableStep, workerLog, type WorkerContext } from "../worker/context";
-import { queueTvAcquisition, tvUpstreamStep } from "./acquisition";
+import { queueTvSeasons, tvUpstreamStep } from "./acquisition";
 import { enrichAnimeEntry, type AnimeCatalogProjection } from "./anime";
 import { SonarrCatalog } from "./sonarr";
 import { approvedSeerrTv, selectedSeerrTvSeasons, SeerrTvClient, type SeerrTvRequest, type SeerrTvSource } from "./upstream";
@@ -177,7 +177,7 @@ export async function syncTvRequests(ctx: WorkerContext, job: JobRow,
         if (!ctx.repo.retention.get(key)) ensurePresentIntent(ctx.repo, key, "Approved Seerr TV request");
         if (ctx.repo.retention.get(key)?.desiredPresence === "evicted") continue;
         if (ctx.repo.tv.missingEpisodes(native.requestId).some((episode) => !previouslyAired.has(episode.id) && episode.airDate && Date.parse(episode.airDate) <= Date.now()))
-          queueTvAcquisition(ctx.repo, native.requestId);
+          queueTvSeasons(ctx.repo, native.requestId);
       }
       if (covered.size !== wantedKeys.size) throw new Error("Anime projection lost requested episode identities");
     }));

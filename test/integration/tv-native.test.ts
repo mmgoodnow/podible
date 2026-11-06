@@ -45,7 +45,7 @@ test("USER TV catalog/request methods authenticate before provider access and le
   const s = await setup();
   try {
     for (const [method, input] of [["search", { query: "show" }], ["details", { tmdbId: 70 }],
-      ["request", { tmdbId: 70, seasonNumbers: [1] }], ["myRequests", {}], ["myRequest", { requestId: 1 }], ["withdraw", { requestId: 1 }]] as const) {
+      ["request", { tmdbId: 70, seasonNumbers: [1] }], ["myRequests", {}], ["myRequest", { requestId: 1 }], ["withdraw", { requestId: 1 }], ["retryMyRequest", { requestId: 1 }]] as const) {
       await expect(s.call(method, input, "invalid")).rejects.toMatchObject({ code: -32001 });
       expect(s.router.routes[method].auth).toBe("user");
     }
@@ -59,6 +59,24 @@ test("USER TV catalog/request methods authenticate before provider access and le
     expect(await s.call("details", { tmdbId: 70 })).toMatchObject({ series: { numberingScheme: "tvdb:aired", seasons: [
       { seasonNumber: 0, requestable: true }, { seasonNumber: 1, requestable: true }, { seasonNumber: 2, requestable: true },
     ] } });
+  } finally { await s.close(); }
+});
+
+test("own-request progress groups exact season coverage, omits private evidence, and retries cannot touch another user's request", async () => {
+  const s = await setup();
+  try {
+    const entry = s.fixture.entry(); entry.episodes.at(-1)!.airDate = "2020-01-01"; s.fixture.setEntry(entry);
+    const requested = (await s.call("request", { tmdbId: 70, seasonNumbers: [1,2] }) as any).request;
+    expect(requested.progress.seasons.map((season: any) => season.seasonNumber)).toEqual([1,2]);
+    expect(requested.progress.seasons[0]).toMatchObject({ total: 3, available: 0, future: 2, stage: "queued" });
+    expect(requested.progress.activeBatches).toBe(2);
+    const count = s.count("tv_acquisitions");
+    await expect(s.call("retryMyRequest", { requestId: requested.requestId }, "two")).rejects.toMatchObject({ code: -32003 });
+    await s.call("retryMyRequest", { requestId: requested.requestId });
+    expect(s.count("tv_acquisitions")).toBe(count);
+    await s.call("withdraw", { requestId: requested.requestId });
+    await expect(s.call("retryMyRequest", { requestId: requested.requestId })).rejects.toThrow("withdrawn");
+    expect(JSON.stringify(requested.progress)).not.toContain("decision_json");
   } finally { await s.close(); }
 });
 

@@ -1,5 +1,27 @@
 # One Piece Production Canary
 
+## Latest November 6 Diagnosis
+
+On running build `9228c66332ba87acbbfdf902921d5c6fa003e293`, at 18:24 UTC,
+independent read-only verification accepted **91 canonical files, 91 exact
+symlinks and all 91 TVDB episode GUID/server paths** in Plex section 16.
+Request 5 still retained all **1,179** episodes; **1,088** remained missing.
+Earlier eight-episode snapshots below are historical, not current coverage.
+
+The most recent acquisition 22 / job 9522 succeeded as an execution but selected
+no release for absolute episodes 92-130. This was **not proof of absent releases**:
+the saved search included a 53.678 GiB S07 Alabasta pack with 78 reported seeders.
+Its freshly inspected 39-file metainfo matches that episode span by titles.
+The 40 GiB POC limit removed it before the agent saw it. A serial earliest-season
+continuation then prevented later seasons from proceeding.
+
+After observing 54 TiB free, normal authenticated settings RPC changed only
+`tv.maximumReleaseBytes` to **512 GiB**. This queued no acquisition by itself.
+Independent season scheduling, tool-first bounded agent evidence and a clearer
+season-progress UI are being validated locally; deployment and post-retry
+progress must be independently confirmed before claiming this incident closed.
+See [the evidence architecture and filter audit](tv-agent-evidence.md).
+
 ## Authorized Scope
 
 Use normal user TV requests and normal CD. Independently acquire all regular aired

@@ -13,7 +13,8 @@ export async function reconcileTv(ctx: WorkerContext): Promise<"done"> {
   await durableStep(ctx, "tv-maintenance:storage", () => prepareMovieStorage(ctx.repo, roots.contentRoot));
   await assertMovieStorage(ctx.repo, roots.contentRoot);
   for (const publication of repo.publications()) {
-    const owned = repo.acquisitions(publication.target_id).some((acquisition) => !acquisition.finished_at && acquisition.job_id &&
+    const ownerId = repo.version(publication.version_id)?.acquisitionId;
+    const owned = repo.acquisitions(publication.target_id).some((acquisition) => acquisition.id === ownerId && !acquisition.finished_at && acquisition.job_id &&
       ["queued", "running"].includes(ctx.repo.getJob(acquisition.job_id)?.status ?? ""));
     if (owned) continue;
     await durableStep(ctx, `tv-maintenance:publication:${publication.target_id}`, async () => {

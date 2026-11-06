@@ -537,7 +537,7 @@ test("generic TV requests include whole approved seasons beyond 50 episodes and 
     expect(withFuture).toHaveLength(65);
     expect(withFuture.some((ep) => ep.key === "tvdb:10063")).toBe(true);
     expect(withFuture.some((ep) => ["tvdb:301", "tvdb:302"].includes(ep.key))).toBe(false);
-    expect(s.repo.listJobsByType("tv_acquire")).toHaveLength(1);
+    expect(s.repo.listJobsByType("tv_acquire")).toHaveLength(2);
     entry.episodes.find((ep) => ep.key === "tvdb:10063")!.airDate = "2016-01-01";
     entry.episodes.find((ep) => ep.key === "tvdb:10060")!.airDate = "2016-01-01";
     s.setCatalog(entry);
@@ -547,8 +547,8 @@ test("generic TV requests include whole approved seasons beyond 50 episodes and 
     for (const episode of s.repo.tv.requestedEpisodes(origin.requestId)) {
       if (initialIds.has(episode.key)) expect(episode.id).toBe(initialIds.get(episode.key)!);
     }
-    expect(s.repo.listJobsByType("tv_acquire")).toHaveLength(2);
-    expect(s.nativeOutbox()).toHaveLength(2);
+    expect(s.repo.listJobsByType("tv_acquire")).toHaveLength(4);
+    expect(s.nativeOutbox()).toHaveLength(4);
     expect(s.calls.enrich).toBe(0);
     expect(s.repo.tv.origins(s.instance, 100)[0]!.source).not.toHaveProperty("episodeLimit");
   } finally { await s.close(); }

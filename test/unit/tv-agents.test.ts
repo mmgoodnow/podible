@@ -6,6 +6,9 @@ import { TEXT_AGENT_MODEL } from "../../src/ai-models";
 import { createTvFeedMatcher } from "../../src/tv/feed-agent";
 import { defaultMovieQualityPolicy } from "../../src/movies/quality";
 import type { TvEntry, TvEpisode } from "../../src/tv/types";
+import bencode from "bencode";
+import { createHash } from "node:crypto";
+import { evidencePage } from "../../src/tv/agent-evidence";
 
 const episode: TvEpisode = { id: 12, key: "tvdb:1001", title: "First of a sequel", airDate: "2020-01-01", runtimeMinutes: 24,
   refs: [], identity: { stability: "provider", source: "fixture" },
@@ -86,7 +89,8 @@ test("TV selector research cannot reintroduce excluded or oversized releases", a
   })).select({ entry, episodes: [episode], policy: defaultMovieQualityPolicy, offers: [], excludedOfferKeys: [offer.key], maximumReleaseBytes: 2000 });
   expect(result.offer).toBeNull();
   expect(result.deferred?.[0]?.provider).toBe("Offline");
-  expect(JSON.stringify(fake.calls[1]?.input)).not.toContain('"index":0');
+  expect(JSON.stringify(fake.calls[1]?.input)).toContain("previously-attempted");
+  expect(JSON.stringify(fake.calls[1]?.input)).toContain("release-size-limit");
 });
 
 test("TV agents receive the current episode scope once, not a duplicated whole-series catalog", async () => {
@@ -153,4 +157,74 @@ test("TV off records semantic copies but cannot return unknown or filtered match
     await expect(createTvDecider(defaultSettings(), bad.model).select({ entry, episodes: [episode],
       policy: defaultMovieQualityPolicy, offers: [offer, other], excludedOfferKeys: [other.key] })).rejects.toThrow();
   }
+});
+
+test("selector retrieves late candidates and episode evidence in pages and caches metainfo across pages", async () => {
+  const bytes=Buffer.from("0123456789"), metainfo=bencode.encode({ announce:"https://tracker.invalid/private-passkey", info:{name:"pack",
+    files:Array.from({length:10},(_,i)=>({length:1,path:[`episode-${i+1}.mkv`]})),"piece length":16384,
+    pieces:createHash("sha1").update(bytes).digest()}});
+  let requests=0;
+  const server=Bun.serve({port:0,hostname:"127.0.0.1",fetch:()=>{ requests++; return new Response(metainfo); }});
+  const candidates=Array.from({length:50},(_,i)=>({...offer,key:`candidate-${i}`,title:`Candidate ${i}`,
+    sizeBytes:i===1?5000:1234,url:`http://127.0.0.1:${server.port}/private?secret=hidden`}));
+  const episodes=Array.from({length:64},(_,i)=>({...episode,id:100+i,title:`Requested episode ${i}`}));
+  const call=(name:string,args:unknown)=>[{type:"function_call",name,callId:name+JSON.stringify(args),arguments:JSON.stringify(args),status:"completed"}];
+  const fake=provider([
+    call("listReleases",{offset:10,limit:20,query:null}),
+    call("getRequestedEpisodes",{offset:4,limit:10}),
+    call("inspectRelease",{index:15,offset:0,limit:5}),
+    call("inspectRelease",{index:15,offset:5,limit:5}),
+    {index:15,reason:"Late candidate's actual file list matches requested identities."},
+  ]);
+  try {
+    const result=await createTvDecider(defaultSettings(),fake.model).select({entry:{...entry,episodes},episodes,policy:defaultMovieQualityPolicy,
+      offers:candidates,maximumReleaseBytes:2000,excludedOfferKeys:[candidates[2]!.key]});
+    expect(result.offer?.key).toBe("candidate-15"); expect(requests).toBe(1);
+    const initial=JSON.stringify(fake.calls[0]!.input);
+    expect(initial).not.toContain('"title":"Candidate 15"');
+    expect(initial).not.toContain("Requested episode 63");
+    expect(initial).toContain("release-size-limit"); expect(initial).toContain("previously-attempted");
+    expect(initial.length).toBeLessThan(10_000);
+    expect(JSON.stringify(fake.calls[1]!.input)).toContain("Candidate 15");
+    expect(JSON.stringify(fake.calls[2]!.input)).toContain("Requested episode 13");
+    expect(JSON.stringify(fake.calls[3]!.input)).toContain("episode-5.mkv");
+    expect(JSON.stringify(fake.calls[3]!.input)).not.toContain("episode-6.mkv");
+    expect(JSON.stringify(fake.calls[4]!.input)).toContain("episode-10.mkv");
+    expect(JSON.stringify(fake.calls)).not.toContain("hidden");
+    expect(JSON.stringify(fake.calls)).not.toContain("private-passkey");
+  } finally { await server.stop(true); }
+});
+
+test("import verifier retrieves file/probe evidence without receiving a whole manifest or arbitrary probe tags upfront",async()=>{
+  const candidates=Array.from({length:50},(_,i)=>({...files[0]!,index:i,name:`Playable file ${i}.mkv`,
+    probe:{...files[0]!.probe,format:{duration:"1440",irrelevant:"x".repeat(100_000)}}}));
+  const fake=provider([
+    [{type:"function_call",name:"listFiles",callId:"files",arguments:'{"offset":10,"limit":10}',status:"completed"}],
+    [{type:"function_call",name:"getFileProbe",callId:"probe",arguments:'{"fileIndex":15,"offset":0,"limit":10}',status:"completed"}],
+    [{type:"function_call",name:"assessCandidate",callId:"quality",arguments:JSON.stringify({fileIndex:15,facts:claims}),status:"completed"}],
+    {...plan,files:[{...plan.files[0]!,fileIndex:15}]},
+  ]);
+  await createTvDecider(defaultSettings(),fake.model).inspect({entry,episodes:[episode],policy:defaultMovieQualityPolicy,offer,files:candidates});
+  expect(JSON.stringify(fake.calls[0]!.input)).not.toContain("Playable file 15");
+  expect(JSON.stringify(fake.calls[1]!.input)).toContain("Playable file 15");
+  const history=fake.calls[2]!.input;
+  if(!Array.isArray(history)) throw new Error("Expected probe tool history");
+  const probe=history.find(item=>item.type==="function_call_result"&&item.name==="getFileProbe");
+  if(probe?.type!=="function_call_result"||Array.isArray(probe.output)||typeof probe.output==="string"||probe.output.type!=="text") throw new Error("Missing probe evidence");
+  expect(JSON.parse(probe.output.text).format.duration).toBe("1440");
+  expect(JSON.stringify(fake.calls)).not.toContain("irrelevant");
+});
+
+test("size exclusions are visible but neither selected nor retained as usable copies",async()=>{
+  const fake=provider([{index:0,reason:"Attempt to ignore configured admission limit"}]);
+  await expect(createTvDecider(defaultSettings(),fake.model).select({entry,episodes:[episode],policy:defaultMovieQualityPolicy,
+    offers:[offer],maximumReleaseBytes:1000})).rejects.toThrow("policy-blocked");
+  expect(JSON.stringify(fake.calls[0]!.input)).toContain("release-size-limit");
+});
+
+test("evidence pages honor a character budget without silently dropping records",()=>{
+  const values=Array.from({length:10},(_,i)=>({i,text:"x".repeat(4000)}));
+  const first=evidencePage(values,0,10,value=>value);
+  expect(first.items).toHaveLength(2);expect(first.total).toBe(10);expect(first.nextOffset).toBe(2);
+  expect(evidencePage(values,first.nextOffset!,10,value=>value).items[0]).toEqual(values[2]);
 });

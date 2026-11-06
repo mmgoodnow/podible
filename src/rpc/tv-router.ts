@@ -5,10 +5,11 @@ import { RpcError, type RpcContext } from "./shared";
 import { seerrInstance } from "../movies/seerr";
 import { tvCatalogEntrySchema } from "../tv/types";
 import { tvSeerrFeedKey } from "../tv/sync";
-import { queueTvAcquisition } from "../tv/acquisition";
+import { queueTvSeasons } from "../tv/acquisition";
 import { ensurePresentIntent } from "../media/retention-service";
 import { configuredTvCatalog, TvCatalogError, tvSearchResultSchema, tvSeriesDetailsSchema, type TvCatalog } from "../tv/catalog";
 import { nativeTvRequestScope, requestTvSeasons, tvSeasonSelectionSchema, withdrawTvRequest } from "../tv/service";
+import { tvRequestProgress, tvRequestProgressSchema } from "../tv/request-progress";
 
 const id = z.number().int().positive();
 const empty = z.object({}).strict();
@@ -18,6 +19,7 @@ const view = z.object({
   availableEpisodes: z.number().int().nonnegative(), futureEpisodes: z.number().int().nonnegative(),
   withdrawn: z.boolean(), intentionallyAbsent: z.boolean(),
   seasonNumbers: z.array(z.number().int().nonnegative()),
+  progress: tvRequestProgressSchema,
   acquisitions: z.array(z.object({ id, jobId: id.nullable(), status: z.string(), error: z.string().nullable(), reason: z.string(), decision: z.unknown() })),
   events: z.array(z.object({ stage: z.string(), message: z.string(), createdAt: z.string() })),
 });
@@ -26,13 +28,15 @@ function requestView(ctx: RpcContext, requestId: number, userSafe = false): z.in
   if (!request) throw new RpcError(-32602, "TV request not found");
   const target = repo.target(request.target_id)!;
   const entry = repo.entry(target.entry_id)!;
-  const episodes = repo.requestedEpisodes(requestId);
+  const requestedIds = new Set(repo.requestedEpisodeIds(requestId));
+  const episodes = entry.episodes.filter(episode=>requestedIds.has(episode.id));
   const active = new Set(repo.activeEpisodes(target.id).map((episode) => episode.episode_id));
   const acquisitions = repo.acquisitions(target.id).filter((acquisition) => !userSafe || acquisition.request_id === requestId);
   const acquisitionIds = new Set(acquisitions.map((a) => a.id));
+  const events = repo.events(target.id);
   return { requestId, targetId: target.id,
     externalRequestId: userSafe ? null : repo.origins().find((origin) => origin.requestId === requestId)?.externalRequestId ?? null,
-    entry, requestedEpisodes: episodes.length, availableEpisodes: episodes.filter((episode) => active.has(episode.id)).length,
+    entry, progress: tvRequestProgress(ctx.repo,{episodes,available:active,events,acquisitions:acquisitions.filter(a=>a.request_id===requestId)}), requestedEpisodes: episodes.length, availableEpisodes: episodes.filter((episode) => active.has(episode.id)).length,
     futureEpisodes: episodes.filter((episode) => !episode.airDate || Date.parse(episode.airDate) > Date.now()).length,
     withdrawn: request.withdrawn_at !== null,
     seasonNumbers: nativeTvRequestScope(request)?.seasonNumbers ?? [...new Set(episodes.flatMap((ep) => ep.numbering
@@ -43,7 +47,7 @@ function requestView(ctx: RpcContext, requestId: number, userSafe = false): z.in
       return { id: acquisition.id, jobId: acquisition.job_id, status: job?.status ?? "unknown", reason: acquisition.reason,
         error: job?.error ? "TV acquisition failed; inspect server diagnostics" : null,
         decision: !userSafe && acquisition.decision_json ? JSON.parse(acquisition.decision_json) as unknown : null };
-    }), events: repo.events(target.id).filter((event) => !userSafe || (event.acquisitionId !== null && acquisitionIds.has(event.acquisitionId)))
+    }), events: events.filter((event) => !userSafe || (event.acquisitionId !== null && acquisitionIds.has(event.acquisitionId)))
       .map((event) => ({ stage: event.stage, message: userSafe ? `TV acquisition: ${event.stage}` : event.message, createdAt: event.createdAt })),
   };
 }
@@ -108,6 +112,17 @@ export function createTvRouter(services: { catalog?: TvCatalog } = {}) {
   withdraw: defineMethod({ auth: "user", summary: "Withdraw only the current user's request, preserving media and other demand.",
     paramsSchema: z.object({ requestId: id }).strict(), resultSchema: z.object({ request: view }),
     handler(ctx, p) { owned(ctx, p.requestId); withdrawTvRequest(ctx.repo, p.requestId); return { request: requestView(ctx, p.requestId, true) }; } }),
+  retryMyRequest: defineMethod({ auth: "user", summary: "Search missing aired seasons for the current user's active request; share existing work.",
+    paramsSchema: z.object({ requestId: id }).strict(), resultSchema: z.object({ request: view }),
+    handler(ctx, p) {
+      const request = owned(ctx, p.requestId);
+      if (request.withdrawn_at) throw new RpcError(-32602, "This request has been withdrawn");
+      return ctx.repo.transaction(() => {
+        ensurePresentIntent(ctx.repo, { namespace: "tv-target", id: String(request.target_id) }, "User explicitly resumed their TV request");
+        queueTvSeasons(ctx.repo, p.requestId, "recovery");
+        return { request: requestView(ctx, p.requestId, true) };
+      });
+    } }),
   status: defineMethod({ auth: "admin", readOnly: true, summary: "Inspect independent TV acquisition and its no-backfill activation boundary.",
     paramsSchema: empty,
     resultSchema: z.object({ configured: z.boolean(), plexSectionId: z.string(), baselineId: z.number().nullable(), cursor: z.string().nullable(),
@@ -138,7 +153,9 @@ export function createTvRouter(services: { catalog?: TvCatalog } = {}) {
       if (!request || request.withdrawn_at) throw new RpcError(-32602, "Active TV request not found");
       return ctx.repo.transaction(() => {
         ensurePresentIntent(ctx.repo, { namespace: "tv-target", id: String(request.target_id) }, "Administrator explicitly re-requested TV seasons");
-        return { jobId: queueTvAcquisition(ctx.repo, p.requestId, "recovery").acquisition.job_id! };
+        const queued = queueTvSeasons(ctx.repo, p.requestId, "recovery");
+        if (!queued.length) throw new RpcError(-32602, "All aired requested episodes are already available");
+        return { jobId: queued[0]!.acquisition.job_id! };
       });
     } }),
   });

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { BooksRepo } from "../repo";
 import { ensurePresentIntent } from "../media/retention-service";
-import { queueTvAcquisition } from "./acquisition";
+import { queueTvSeasons } from "./acquisition";
 import { canonicalTvSeasons, configuredTvCatalog, TvCatalogError, type TvCatalog } from "./catalog";
 import type { TvRequest } from "./types";
 
@@ -37,7 +37,7 @@ export async function requestTvSeasons(repo: BooksRepo, catalog: TvCatalog, user
     const key = { namespace: "tv-target", id: String(request.targetId) };
     if (repo.retention.get(key)?.desiredPresence !== "present")
       ensurePresentIntent(repo, key, "User explicitly requested TV seasons");
-    if (repo.tv.missingEpisodes(request.requestId).some(aired)) queueTvAcquisition(repo, request.requestId);
+    if (repo.tv.missingEpisodes(request.requestId).some(aired)) queueTvSeasons(repo, request.requestId);
     return request;
   });
 }

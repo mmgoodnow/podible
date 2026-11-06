@@ -87,11 +87,11 @@ export function assessReleaseCrossSeedability(offers: readonly MovieOffer[], ind
 }
 
 export function createCrossSeedabilityTool(offers: () => readonly MovieOffer[],
-  preference: MovieSettings["crossSeedPreference"]) {
+  preference: MovieSettings["crossSeedPreference"], maximumIndexes = 2000) {
   return tool({
     name: "assessCrossSeedability",
     description: "Assess a proposed semantic same-release group using distinct tracker names and safe size/hash/download-volume diagnostics. No network requests or downloads.",
-    parameters: z.object({ indexes: indexesSchema.min(1) }),
+    parameters: z.object({ indexes: indexesSchema.min(1).max(maximumIndexes) }),
     async execute({ indexes }) {
       try { return assessReleaseCrossSeedability(offers(), indexes, preference); }
       catch { return { error: "Supply unique known release indexes for one semantic group." }; }

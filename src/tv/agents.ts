@@ -9,6 +9,7 @@ import { fetchMovieMetainfo, type MovieOffer, type MovieSearch } from "../movies
 import { movieFactsSchema, evaluateMovieQuality, type MovieQualityPolicy } from "../movies/quality";
 import { factsFromMovieProbe, type MovieProbe } from "../movies/probe";
 import type { TvEntry, TvEpisode } from "./types";
+import { evidencePage, tvEpisodeEvidence, tvFileEvidence, tvProbeEvidence, tvWorkEvidence } from "./agent-evidence";
 
 const claimsSchema = movieFactsSchema.pick({ identityVerified: true, cut: true, source: true, proper: true });
 export const tvImportPlanSchema = z.object({
@@ -31,10 +32,10 @@ Use evidence from release names, metainfo, file names, playable streams and dura
 Keep decisions autonomous: investigate ambiguity with available tools or try a different release; do not ask humans to identify ordinary episodes.
 Explain the factual evidence briefly, not private chain-of-thought.`;
 
-function workEvidence(entry: TvEntry) {
-  const { episodes: _episodes, ...work } = entry;
-  return work;
-}
+const pageParams = { offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(30).default(20) };
+const episodeTool = (episodes: TvEpisode[]) => tool({ name: "getRequestedEpisodes",
+  description: "Page through target episode identities, titles, runtimes and sourced alternative numbering. Only this task's requested batch is returned.",
+  parameters: z.object(pageParams), execute: async ({ offset, limit }) => evidencePage(episodes,offset,limit,tvEpisodeEvidence) });
 
 /** Validate identities independently of the model, including multi-episode files and partial packs. */
 export function validateTvImportPlan(raw: unknown, files: TvFileCandidate[], episodes: TvEpisode[]): TvImportPlan {
@@ -62,7 +63,7 @@ export function createTvDecider(settings: AppSettings, modelProvider?: ModelProv
     try {
       const runner = new Runner({ modelProvider: modelProvider ?? provider!, tracingDisabled: true, traceIncludeSensitiveData: false });
       const agent = new Agent({ name, model: TEXT_AGENT_MODEL, instructions: instructions + "\n" + extra, outputType, tools });
-      const result = await runner.run(agent, JSON.stringify(input), { maxTurns: 16,
+      const result = await runner.run(agent, JSON.stringify(input), { maxTurns: 32,
         signal: AbortSignal.timeout(Math.max(120_000, settings.agents.timeoutMs)), toolExecution: { maxFunctionToolConcurrency: 1 } });
       return outputType.parse(result.finalOutput);
     } finally { await provider?.close().catch(() => {}); }
@@ -72,49 +73,90 @@ export function createTvDecider(settings: AppSettings, modelProvider?: ModelProv
       const excluded = new Set(input.excludedOfferKeys ?? []);
       const allowed = (offer: MovieOffer) => !excluded.has(offer.key) &&
         (offer.sizeBytes === null || offer.sizeBytes <= (input.maximumReleaseBytes ?? Infinity));
-      const offers = input.offers.filter(allowed);
+      const offers = [...input.offers];
       const deferred: NonNullable<MovieSearch["deferred"]> = [];
-      const present = (offer: MovieOffer, index: number) => ({ index, title: offer.title, provider: offer.provider, sizeBytes: offer.sizeBytes, seeders: offer.seeders });
+      const present = (offer: MovieOffer) => ({ index: offers.indexOf(offer), title: offer.title, provider: offer.provider, sizeBytes: offer.sizeBytes, seeders: offer.seeders,
+        blockers: [...(excluded.has(offer.key) ? ["previously-attempted"] : []), ...(offer.sizeBytes !== null && offer.sizeBytes > (input.maximumReleaseBytes ?? Infinity) ? ["release-size-limit"] : [])] });
+      const listing = (offset: number, limit: number, query: string | null = null) => evidencePage(offers.filter(offer =>
+        !query || query.toLowerCase().split(/\s+/).every(word => offer.title.toLowerCase().includes(word))),offset,limit,present);
+      const list = tool({ name: "listReleases", description: "Page/filter all known candidates, including policy-blocked ones with explicit reasons. Indexes stay stable. Query is an optional literal title-word filter, not a new indexer request.",
+        parameters: z.object({ ...pageParams, query: z.string().max(200).nullable().default(null) }),
+        execute: async ({ offset, limit, query }) => listing(offset,limit,query) });
       let inspections = 0, searches = 0;
+      const manifests = new Map<number, ReturnType<typeof inspectMetainfo>>();
       const inspect = tool({ name: "inspectRelease", description: "Inspect validated torrent filenames and sizes without starting a download.",
-        parameters: z.object({ index: z.number().int().nonnegative() }), async execute({ index }) {
-          if (!offers[index] || ++inspections > 5) return { error: "Unknown release or exhausted inspection budget" };
-          const metadata = inspectMetainfo(await fetchMovieMetainfo(offers[index]!));
-          return { files: metadata.files.slice(0, 300), fileCount: metadata.files.length, sizeBytes: metadata.size };
+        parameters: z.object({ index: z.number().int().nonnegative(), ...pageParams }), async execute({ index, offset, limit }) {
+          if (!offers[index]) return { error: "Unknown release" };
+          if (!manifests.has(index)) {
+            if (++inspections > 8) return { error: "Metainfo request budget exhausted", maximumDistinctReleases: 8 };
+            manifests.set(index,inspectMetainfo(await fetchMovieMetainfo(offers[index]!)));
+          }
+          const metadata = manifests.get(index)!;
+          return { ...evidencePage(metadata.files,offset,limit,file => ({ name: file.path, sizeBytes: file.size })), sizeBytes: metadata.size,
+            blockers: [...(metadata.size > (input.maximumReleaseBytes ?? Infinity) ? ["release-size-limit"] : []), ...(metadata.files.length > 300 ? ["file-count-limit"] : [])] };
         } });
       const research = tool({ name: "searchReleases", errorFunction: null, description: "Search a better title/alias or provider numbering when initial results are empty or ambiguous. URLs remain server-side.",
         parameters: z.object({ query: z.string().trim().min(1).max(250) }), async execute({ query }) {
           if (!search || ++searches > 3) return { error: "Additional search is unavailable or its budget is exhausted" };
           const found = await search(query);
           deferred.push(...found.deferred ?? []);
-          for (const offer of found.offers) if (allowed(offer) && !offers.some((known) => known.key === offer.key)) offers.push(offer);
-          return { offers: offers.map(present), warnings: found.warnings, deferred: found.deferred ?? [] };
+          const firstNewIndex=offers.length;
+          for (const offer of found.offers) if (!offers.some((known) => known.key === offer.key)) offers.push(offer);
+          return { candidates: listing(firstNewIndex,20), firstNewIndex, addedCount:offers.length-firstNewIndex,
+            knownCandidates: offers.length, warnings: found.warnings, deferred: found.deferred ?? [] };
         } });
       const result = await run("TvReleaseSelector", z.object({ index: z.number().int().nonnegative().nullable(), matchingIndexes: matchingIndexesSchema, reason: z.string().min(1).max(2000) }),
         `Choose one release containing some or all requested episodes, or index:null. Season packs and multi-episode files are allowed; extra pack contents will not be published unless requested.
-Use inspectRelease for unclear contents, and searchReleases for useful aliases/numbering when the initial search does not find suitable releases. Empty initial results are not a reason to skip research.
+The initial context is only an overview, not the complete search or catalog. Use listReleases to dig through candidates, getRequestedEpisodes for exact mapping, and paginated inspectRelease to compare real filenames against titles/absolute numbers. Repeated manifest pages are cached and do not spend new metainfo requests.
+Use searchReleases for useful aliases/numbering when initial candidates do not establish a match. Before concluding index:null, research at least one useful alternate query when the tool is available and inspect plausible matches. Do not confuse a release's season number with canonical episode identity.
+Policy-blocked candidates remain visible for diagnosis but cannot be downloaded. Explain whether matching content exists but exceeds a limit, was previously attempted, is ambiguous, or could not be found after research. Do not describe a policy exclusion as an absent/unreleased episode.
 Prefer a viable complete release within policy. Never invent an index.
 ${releaseSelectionInstructions}`,
-        { entry: workEvidence(input.entry), episodes: input.episodes,
-          policy: input.policy, selectionPreference: settings.movies.crossSeedPreference ?? "tie-break", offers: offers.map(present) },
-        [inspect, research, createCrossSeedabilityTool(() => offers, settings.movies.crossSeedPreference ?? "tie-break")]);
-      if (result.index !== null && !offers[result.index]) throw new Error("TV selector returned an unknown release");
+        { entry: tvWorkEvidence(input.entry), episodeCount: input.episodes.length, episodes: input.episodes.slice(0,4).map(tvEpisodeEvidence),
+          policy: input.policy, limits: { maximumReleaseBytes: input.maximumReleaseBytes ?? null, maximumFiles: 300, distinctMetainfoRequests: 8, additionalSearches: 3 },
+          selectionPreference: settings.movies.crossSeedPreference ?? "tie-break", candidates: listing(0,10) },
+        [list, episodeTool(input.episodes), inspect, research, createCrossSeedabilityTool(() => offers, settings.movies.crossSeedPreference ?? "tie-break",30)]);
+      if (result.index !== null && (!offers[result.index] || !allowed(offers[result.index]!))) throw new Error("TV selector returned an unknown or policy-blocked release");
+      if (result.matchingIndexes.some(index => offers[index] && !allowed(offers[index]!))) throw new Error("TV selector returned a policy-blocked matching release");
       return { offer: result.index === null ? null : offers[result.index]!, reason: result.reason,
         matchingOffers: matchingSelectionOffers(offers, result.index, result.matchingIndexes),
         ...(deferred.length ? { deferred } : {}) };
     },
     async inspect(input) {
+      const fileList = tool({ name: "listFiles", description: "Page through downloaded playable filenames and sizes. These are actual probed files, not release-title guesses.",
+        parameters: z.object(pageParams), execute: async ({ offset, limit }) => evidencePage(input.files,offset,limit,tvFileEvidence) });
+      const probe = tool({ name: "getFileProbe", description: "Read actual duration, video/audio/subtitle stream facts for a file. Stream lists are paginated; arbitrary container tags are not model evidence.",
+        parameters: z.object({ fileIndex: z.number().int().nonnegative(), ...pageParams }), execute: async ({ fileIndex, offset, limit }) => {
+          const file = input.files.find(file => file.index === fileIndex);
+          return file ? tvProbeEvidence(file,offset,limit) : { error: "Unknown file" };
+        } });
+      const probes = tool({ name: "getFileProbes", description: "Read compact probe evidence for up to twelve pack members at once. If any members do not fit the response budget, remainingFileIndexes names them; getFileProbe can page a longer stream list.",
+        parameters: z.object({ fileIndexes: z.array(z.number().int().nonnegative()).min(1).max(12) }),
+        execute: async ({ fileIndexes }) => {
+          const selected=fileIndexes.map(index=>input.files.find(file=>file.index===index));
+          if(selected.some(file=>!file)) return {error:"Unknown file index"};
+          const page=evidencePage(selected as TvFileCandidate[],0,12,file=>tvProbeEvidence(file));
+          return {files:page.items,remainingFileIndexes:fileIndexes.slice(page.items.length)};
+        } });
       const assess = tool({ name: "assessCandidate", description: "Assess actual probe-derived quality under the supplied policy before mapping a file to episodes.",
         parameters: z.object({ fileIndex: z.number().int().nonnegative(), facts: claimsSchema }), async execute({ fileIndex, facts }) {
           const file = input.files.find((candidate) => candidate.index === fileIndex);
           return file ? evaluateMovieQuality(input.policy, factsFromMovieProbe(file.probe, facts)) : { error: "Unknown file" };
         } });
+      const assessments = tool({ name: "assessCandidates", description: "Assess probe-derived quality for up to sixteen pack members in one call. Policies and probe facts remain authoritative; include factual identity/source claims for each member.",
+        parameters: z.object({ candidates:z.array(z.object({fileIndex:z.number().int().nonnegative(),facts:claimsSchema})).min(1).max(16) }),
+        execute: async ({candidates})=>candidates.map(({fileIndex,facts})=>{
+          const file=input.files.find(file=>file.index===fileIndex);
+          return {fileIndex,assessment:file?evaluateMovieQuality(input.policy,factsFromMovieProbe(file.probe,facts)):{error:"Unknown file"}};
+        }) });
       const plan = await run("TvEpisodeImportVerifier", tvImportPlanSchema,
         `Map only requested episode IDs to complete playable files. Each episode may be assigned once. A file can contain several whole episodes; assign all of their IDs together. Partial packs may map only the episodes genuinely present.
 Do not assign season-pack names wholesale: identify each file's actual episodes. Consult provider aired/absolute and anime-local numbering, aliases, episode titles and runtimes. Ignore samples, extras, opening clips and unrequested episodes.
 If a combined file also contains an unrequested episode, reject the file rather than mislabeling it as only its requested subset.
-Call assessCandidate for selected files. Actual stream facts override release claims. Return files:[] if nothing can be established. Do not map a truncated episode or an unsupported collection of partial files as a complete episode.`,
-        { entry: workEvidence(input.entry), episodes: input.episodes, policy: input.policy, release: { title: input.offer.title, provider: input.offer.provider }, files: input.files }, [assess]);
+The initial input is only an overview. Page through listFiles and getRequestedEpisodes as needed. Use getFileProbes/getFileProbe for duration, languages and subtitle/video streams; assessCandidates/assessCandidate check selected files against policy. Prefer the bulk tools for packs so one-file-per-turn research does not exhaust your budget. Actual stream facts override release claims. Return files:[] if nothing can be established. Do not map a truncated episode or an unsupported collection of partial files as a complete episode.`,
+        { entry: tvWorkEvidence(input.entry), episodeCount: input.episodes.length, episodes: input.episodes.slice(0,4).map(tvEpisodeEvidence), policy: input.policy,
+          release: { title: input.offer.title, provider: input.offer.provider }, files: evidencePage(input.files,0,10,tvFileEvidence) },
+        [fileList, probe, probes, episodeTool(input.episodes), assess, assessments]);
       return validateTvImportPlan(plan, input.files, input.episodes);
     },
   };

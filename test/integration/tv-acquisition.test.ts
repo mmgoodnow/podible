@@ -10,7 +10,7 @@ import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
 import { inspectMetainfo } from "../../src/media/metainfo";
 import { defaultMovieQualityPolicy } from "../../src/movies/quality";
-import { acquireTv, tvAcquisitionBatch } from "../../src/tv/acquisition";
+import { acquireTv, tvAcquisitionBatch, queueTvSeasons } from "../../src/tv/acquisition";
 import { PlexTvLibrary } from "../../src/tv/plex";
 import { tvRoots, tvViewEntries, type TvPublishedFile } from "../../src/tv/publication";
 import type { TvServices } from "../../src/tv/runtime";
@@ -100,10 +100,10 @@ function fixtureServices(root: string) {
     },
     timing: { pollMs: 1, stallMs: 1500, plexAttempts: 2, plexRetryMs: 1 },
     decider: () => ({
-      select: async ({ episodes, offers }) => {
+      select: async ({ episodes, offers, excludedOfferKeys = [], maximumReleaseBytes = Infinity }) => {
         selections.push({ ids: episodes.map((ep) => ep.id), keys: episodes.map((ep) => ep.key),
           absolute: episodes.map((ep) => ep.numbering.find((n) => n.scheme === "tvdb:aired")!.absolute) });
-        return { offer: offers.find((offer) => coverage.get(offer.key)?.some((key) => episodes.some((ep) => ep.key === key))) ?? null,
+        return { offer: offers.find((offer) => !excludedOfferKeys.includes(offer.key) && (offer.sizeBytes === null || offer.sizeBytes <= maximumReleaseBytes) && coverage.get(offer.key)?.some((key) => episodes.some((ep) => ep.key === key))) ?? null,
           reason: "Fixture selection by explicit stable episode-key membership" };
       },
       inspect: async ({ offer, episodes, files }) => {
@@ -256,6 +256,97 @@ function seasonCatalog(count: number, future = false) {
     numbering: [{ scheme: "tvdb:aired", season: 2, episode: index + 1, absolute: index + 13, source: "explicit-fixture" }] }));
   return entry;
 }
+
+test("explicit multi-season acquisition queues every batch once; a no-match season cannot starve later seasons", async () => {
+  const entry = seasonCatalog(4);
+  entry.episodes.forEach((ep, i) => { ep.numbering[0]!.season = i < 2 ? 1 : 2; ep.numbering[0]!.episode = i % 2 + 1; });
+  const s = await setup(entry.episodes.map(ep => ep.key), entry);
+  try {
+    s.fixture.addPack("second-season", entry.episodes.slice(2).map(ep => ep.key));
+    const queued = queueTvSeasons(s.repo, s.request.requestId);
+    expect(queued).toHaveLength(2);
+    expect(new Set(queued.map(q => q.acquisition.id)).size).toBe(2);
+    expect(queueTvSeasons(s.repo, s.request.requestId).map(q => q.acquisition.id).sort()).toEqual(queued.map(q => q.acquisition.id).sort());
+    const decider = s.fixture.services.decider;
+    s.fixture.services.decider = entry => {
+      const original = decider(entry);
+      return { ...original, select: input => input.episodes.some(ep => ep.numbering.some(n => n.season === 1))
+        ? Promise.resolve({ offer: null, reason: "No verified matching release for this season" }) : original.select(input) };
+    };
+    await acquireTv(s.context, s.repo.getJob(queued[0]!.acquisition.job_id!)!, s.fixture.services);
+    expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(0);
+    s.reopen();
+    await acquireTv(s.context, s.repo.getJob(queued[1]!.acquisition.job_id!)!, s.fixture.services);
+    expect(s.repo.tv.activeEpisodes(s.request.targetId).map(ep => ep.episode_id).sort()).toEqual(
+      s.repo.tv.requestedEpisodes(s.request.requestId).slice(2).map(ep => ep.id).sort());
+    expect(s.repo.tv.acquisitions(s.request.targetId)).toHaveLength(2);
+    expect(s.repo.tv.missingEpisodes(s.request.requestId)).toHaveLength(2);
+    expect(await assertOwnedViews(s)).toHaveLength(2);
+  } finally { await s.close(); }
+});
+
+test("season fan-out is transactional and splits large seasons without losing episode intent", async () => {
+  const entry = seasonCatalog(130), s = await setup(entry.episodes.map(ep => ep.key), entry);
+  try {
+    const queued = queueTvSeasons(s.repo, s.request.requestId);
+    expect(queued.map(q => JSON.parse(q.acquisition.decision_json!).batchEpisodeIds.length)).toEqual([64,64,2]);
+    const scopes = queued.flatMap(q => JSON.parse(q.acquisition.decision_json!).batchEpisodeIds);
+    expect(new Set(scopes).size).toBe(130);
+    expect(queueTvSeasons(s.repo, s.request.requestId).every(q => q.shared)).toBe(true);
+    expect(s.repo.tv.requestedEpisodes(s.request.requestId)).toHaveLength(130);
+  } finally { await s.close(); }
+});
+
+test("real Reflow starts another season while the first download is pending, then verifies both publications", async () => {
+  const entry = seasonCatalog(2);
+  entry.episodes.forEach((ep,i) => { ep.numbering[0]!.season=i+1; ep.numbering[0]!.episode=1; });
+  const s=await setup(entry.episodes.map(ep=>ep.key),entry);
+  let runtime: Runtime | undefined;
+  try {
+    s.fixture.addPack("season-one",[entry.episodes[0]!.key]);
+    s.fixture.addPack("season-two",[entry.episodes[1]!.key]);
+    const inspect=s.fixture.services.client.inspect;
+    s.fixture.services.client.inspect=async ref=>{
+      const observed=await inspect(ref);
+      return s.fixture.stats.snatches<2 ? {...observed,complete:false,state:"downloading",bytesDone:0} : observed;
+    };
+    const queued=queueTvSeasons(s.repo,s.request.requestId);
+    let searches=0;
+    const search=s.fixture.services.search;
+    s.fixture.services.search=async(...args)=>{ searches++; return search(...args); };
+    runtime=await createJobExecutionRuntime(s.context,path.join(s.root,"execution.sqlite"),{retryDelayMs:1});
+    await until(runtime,()=>queued.every(q=>s.repo.getJob(q.acquisition.job_id!)?.status==="succeeded"),
+      ()=>JSON.stringify(queued.map(q=>s.repo.getJob(q.acquisition.job_id!))));
+    expect(s.fixture.stats.snatches).toBe(2);
+    expect(searches).toBe(1); // Siblings share one persisted title-search wave, not one query per season.
+    expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(2);
+    expect(s.repo.tv.publications()).toEqual([]);
+    expect(await assertOwnedViews(s)).toHaveLength(2);
+  } finally { await runtime?.stop(); await s.close(); }
+});
+
+test("parallel batches wait for a shared large pack and reuse all remaining members without a second download or title search",async()=>{
+  const entry=seasonCatalog(130),s=await setup(entry.episodes.map(ep=>ep.key),entry);
+  let runtime:Runtime|undefined;
+  try{
+    s.fixture.addPack("whole-large-season",entry.episodes.map(ep=>ep.key));
+    const inspect=s.fixture.services.client.inspect;
+    s.fixture.services.client.inspect=async ref=>{
+      const value=await inspect(ref);
+      return s.fixture.selections.length<2 ? {...value,complete:false,state:"downloading",bytesDone:0}:value;
+    };
+    let searches=0;const search=s.fixture.services.search;
+    s.fixture.services.search=async(...args)=>{searches++;return search(...args);};
+    const queued=queueTvSeasons(s.repo,s.request.requestId);
+    runtime=await createJobExecutionRuntime(s.context,path.join(s.root,"execution.sqlite"),{retryDelayMs:1});
+    await until(runtime,()=>queued.every(q=>s.repo.getJob(q.acquisition.job_id!)?.status==="succeeded"),
+      ()=>JSON.stringify(queued.map(q=>s.repo.getJob(q.acquisition.job_id!))));
+    expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(130);
+    expect(s.fixture.stats.snatches).toBe(1);expect(searches).toBe(1);
+    expect(await assertOwnedViews(s)).toHaveLength(130);
+    expect(s.repo.tv.events(s.request.targetId).some(e=>e.message.includes("owned pack to finish"))).toBe(true);
+  }finally{await runtime?.stop();await s.close();}
+},15000);
 
 test("large-series execution is bounded by season without truncating durable requested coverage", async () => {
   const entry = seasonCatalog(130);

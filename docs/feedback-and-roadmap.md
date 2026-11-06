@@ -154,12 +154,12 @@ made after that rollout.
 | P07 | Agents should resolve ambiguous imports automatically, not create a manual approval queue. Use ffprobe/mediainfo-like facts. | **Implemented; wider confidence needed.** Semantic selection/import plus probe evidence and bounded reacquisition. Unsupported identity/mapping/safety cases can still block; never equate unverified import with success. One Piece is the next requested confidence case. |
 | P08 | Discover suitable enabled indexers/categories dynamically through Prowlarr; keep temporary outages retryable. | **Addressed.** Shared gateway/discovery/cooldowns, persisted failure isolation and event-driven retries. Do not mistake Prowlarr's 429 for a proven rate limit. |
 | P09 | No periodic per-title searches. Use RSS plus initial/manual/real-failure searches. | **Addressed.** Shared durable inbox, per-target consideration receipts and bounded feed polling across books/movies/TV. |
-| P10 | RSS should survive deleted anchors, page backward, and explain gaps: volume, downtime, or limited history? | **Implemented within explicit bounds; warning lifecycle open.** Five anchors, up to ten 100-item pages, durable stop diagnostics. Old causes remain unknown. Historical gaps currently remain visible forever: current feed health must be separated from retained coverage history rather than claim later overlap repaired an older gap. |
+| P10 | RSS should survive deleted anchors, page backward, and explain gaps: volume, downtime, or limited history? | **Addressed within explicit bounds.** Five anchors, up to ten 100-item pages, durable stop diagnostics. Historical gap badges/counts/warnings are removed from current connection health; evidence remains in the backend. Current outages/cooldowns still surface. Old causes remain unknown; hiding nonactionable history does not claim the gap was repaired. |
 | P11 | Prove RSS with an upcoming real release requested through Seerr, compare Radarr and Podible. | **Completed dated production canary.** A Dog's Perfect Christmas acquired through live feed, exact Plex verification, Radarr comparison in movie-rss-canary.md. Not a controlled speed benchmark. |
 | P12 | TV shadowing soon, including at least one actively airing show. | **Implemented; final arrival observation open.** Breaking Bad 13/13 and Berserk 25/25 verified. Khom Khlang 9 episodes verified; next real release remains unobserved in the recorded evidence. |
 | P13 | Season-only requests; a season pack must not publish only the single initially requested episode. | **Addressed.** Explicit season intent/episode membership and completed-pack reuse; preserve exact identities and requested coverage. |
 | P14 | Model connected works, cours, specials and alternative numbering without forcing everything into Western seasons; not inherently an anime distinction. | **Partial.** General work/episode/numbering/relations model plus sourced anime sidecar. Broad live mapping coverage and related-work UX remain unproven; do not classify by animation alone. |
-| P15 | Domino's-style request progress with natural drill-in. | **Addressed base flow.** Request/search/download/verify/Plex status and contextual actions. Progress must not invent telemetry for unknown multipart members. Notifications are separate unfinished work. |
+| P15 | Domino's-style request progress with natural drill-in. | **Updated base flow, rollout pending.** TV now has per-season exact coverage and current queued/search/download/check/publication stages, collapsed completed seasons and owned-request retry. Raw worker events are removed. A failed selection is not called proof of an unreleased/absent title. Notifications remain separate unfinished work. |
 | P16 | Stalled downloads and failed imports should trigger alternatives; someday shared-byte tracker rescue. | **Acquisition recovery plus reuse POC.** Real-daemon rescue reused retained canonical bytes while another torrent remained incomplete, without replacing old files/views. Arbitrary unpublished partial-download reuse remains open; production ext4 cannot be assumed CoW-capable. See cross-seeding-poc.md. |
 | P17 | Disk pressure should evict low-use media from Plex watch totals, preferably without Tautulli; protect new requests and seed obligations. | **Partial, functioning narrow policy.** Movie and verified single-season TV eviction, global retained Plex history, pins, active-playback/seed/reference fences. Seed-store and multi-season eviction remain unsupported. |
 | P18 | Deleted/evicted titles must be requestable again; don't repeat Seerr's stuck deleted state. | **Addressed within native lifecycle.** Retained demand vs current presence, intentional-absence fencing and re-request recovery. Not all external Seerr workflows are replaced. |
@@ -186,8 +186,12 @@ made after that rollout.
 First request One Piece through the normal season-request path, inspect actual
 acquisition/mapping/import/publication failures, and fix those instead of building
 more speculative anime infrastructure. The production request now retains all
-1,179 regular aired episodes; the first eight are independently verified and
-normal continuation is downloading the next pack. See [One Piece evidence](one-piece-canary.md).
+1,179 regular aired episodes; **91** were independently verified November 6.
+Selection then stopped because a valid-looking 53.7 GiB Alabasta pack was hidden
+by the 40 GiB POC cap, followed by serial earliest-season starvation. The cap was
+raised through settings; independent season work and tool-first evidence are
+being rolled out. See [One Piece evidence](one-piece-canary.md) and the
+[agent evidence/filter audit](tv-agent-evidence.md).
 
 P16/P20/P21/P25/P26 now have a [working scoped POC](cross-seeding-poc.md).
 Treat these and P32/P33 as one content-reuse and torrent-lifecycle

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTRPC } from "./rpc";
 import { Failure } from "./books";
 import { Link, navigate } from "./router";
+import "./tv.css";
 
 export function TvLibraryDetail({ entryId }: { entryId: number }) {
   const trpc = useTRPC();
@@ -61,6 +62,10 @@ export function TvRequestDetail({ requestId }: { requestId: number }) {
   const trpc = useTRPC();
   const cache = useQueryClient();
   const result = useQuery(trpc.tv.myRequest.queryOptions({ requestId }, { refetchInterval: 5000 }));
+  const [showReady, setShowReady] = useState(false);
+  const retry = useMutation(trpc.tv.retryMyRequest.mutationOptions({ onSuccess: () => {
+    void cache.invalidateQueries({ queryKey: trpc.tv.myRequest.pathKey() });
+  } }));
   const withdraw = useMutation(trpc.tv.withdraw.mutationOptions({ onSuccess: () => {
     void cache.invalidateQueries({ queryKey: trpc.tv.myRequest.pathKey() });
     void cache.invalidateQueries({ queryKey: trpc.tv.myRequests.pathKey() });
@@ -69,28 +74,52 @@ export function TvRequestDetail({ requestId }: { requestId: number }) {
   if (!result.data) return <p role="status">Loading TV request...</p>;
   const r = result.data.request;
   const complete = r.requestedEpisodes > 0 && r.availableEpisodes === r.requestedEpisodes;
-  const active = r.acquisitions.some(a => a.status === "running" || a.status === "queued");
-  const title = r.withdrawn ? "Request withdrawn" : r.intentionallyAbsent ? "Intentionally unavailable" : complete ? "Ready in Plex" : active ? "Acquiring episodes" : r.futureEpisodes ? "Waiting for upcoming episodes" : "Waiting for suitable releases";
+  const active = r.progress.activeBatches > 0;
+  const missingAired = Math.max(0, r.requestedEpisodes - r.availableEpisodes - r.futureEpisodes);
+  const title = r.withdrawn ? "Request withdrawn" : r.intentionallyAbsent ? "Removed from the library" : complete ? "Ready in Plex" : active ? "Adding more episodes" : !missingAired ? "Waiting for upcoming episodes" : "More episodes needed";
+  const readySeasons = r.progress.seasons.filter(s => s.stage === "ready");
+  const seasons = r.progress.seasons.filter(s => showReady || s.stage !== "ready");
+  const labels = { ready: "Ready in Plex", queued: "Queued", searching: "Finding a release", downloading: "Downloading", verifying: "Checking episodes", publishing: "Adding to Plex", "pack-pending": "Waiting for pack", waiting: "No match selected", failed: "Acquisition stopped", upcoming: "Not aired yet" };
+  const stamp = (value: string) => new Date(value).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   return <>
     <Link href="/library?media=tv" className="back">Back to library</Link>
-    <h1>{r.entry.title}</h1>
-    <section className="media-section"><h2>{title}</h2>
-      <p>Seasons {r.seasonNumbers.join(", ")}</p>
-      <progress value={r.availableEpisodes} max={Math.max(1, r.requestedEpisodes)} aria-label="Available TV episodes" />
-      <p>{r.availableEpisodes} of {r.requestedEpisodes} episodes verified in Plex.</p>
-      {r.futureEpisodes > 0 && <p>{r.futureEpisodes} episodes have not aired or do not yet have an air date. Suitable releases will be picked up from indexer feeds.</p>}
-      {!active && !complete && !r.withdrawn && !r.intentionallyAbsent && <p>New releases are monitored automatically; no action is needed while a suitable release is unavailable.</p>}
+    <section className="tv-request-hero">
+      {r.entry.posterUrl && <img className="tv-request-poster" src={r.entry.posterUrl} alt="" />}
+      <div className="tv-request-summary">
+        <p className="tv-request-meta">TV series{r.entry.year ? ` · ${r.entry.year}` : ""} · {r.seasonNumbers.length} {r.seasonNumbers.length === 1 ? "season" : "seasons"} requested</p>
+        <h1>{r.entry.title}</h1><h2>{title}</h2>
+        <p className="tv-request-count"><strong>{r.availableEpisodes.toLocaleString()}</strong> / {r.requestedEpisodes.toLocaleString()} episodes ready</p>
+        <progress value={r.availableEpisodes} max={Math.max(1, r.requestedEpisodes)} aria-label="Available TV episodes" />
+        <p>{r.availableEpisodes} of {r.requestedEpisodes} episodes verified in Plex.</p>
+        {r.progress.lastPublishedAt && <p className="tv-request-meta">Last added {stamp(r.progress.lastPublishedAt)}</p>}
+      </div>
+    </section>
+    {!r.withdrawn && !complete && <section className={`tv-request-update${!active && missingAired ? " tv-request-paused" : ""}`} aria-label="Current acquisition status">
+      <h3>{r.intentionallyAbsent ? "Downloads are paused" : active ? `${r.progress.activeBatches} episode ${r.progress.activeBatches === 1 ? "batch" : "batches"} in progress` : missingAired ? "The last search did not find a verified match" : "Caught up with aired episodes"}</h3>
+      <p>{r.intentionallyAbsent ? "This title was intentionally removed. Search again to restore your request." : active ? "Seasons are queued independently. A difficult season does not prevent the others from being acquired." : missingAired ? `${missingAired.toLocaleString()} aired episodes are still missing. This is not a claim that releases don't exist: the available results could not be matched and verified. New releases are still monitored.` : "New episodes will be acquired when suitable releases arrive."}</p>
+      {r.progress.lastAttemptAt && !active && <p className="tv-request-meta">Last search started {stamp(r.progress.lastAttemptAt)}</p>}
+      {!active && (missingAired > 0 || r.intentionallyAbsent) && <button disabled={retry.isPending} onClick={() => retry.mutate({ requestId })}>{retry.isPending ? "Queuing searches..." : "Search remaining seasons"}</button>}
+      {retry.isError && <Failure error={retry.error} />}
+    </section>}
+    {r.futureEpisodes > 0 && <p className="tv-request-meta">{r.futureEpisodes} episodes have not aired or do not yet have an air date. Releases are monitored automatically.</p>}
+    <section className="tv-request-seasons" aria-label="Season progress">
+      <div className="tv-request-section-heading"><h2>Episodes by season</h2>
+        {readySeasons.length > 0 && <button className="secondary" onClick={() => setShowReady(value => !value)}>{showReady ? "Hide completed seasons" : `Show ${readySeasons.length} completed ${readySeasons.length === 1 ? "season" : "seasons"}`}</button>}
+      </div>
+      {seasons.length ? <div className="tv-season-grid">{seasons.map(s => <article className={`tv-season-card tv-season-${s.stage}`} key={s.seasonNumber}>
+        <div><h3>{s.seasonNumber === 0 ? "Specials" : `Season ${s.seasonNumber}`}</h3><span className="tv-season-stage">{labels[s.stage]}</span></div>
+        <p><strong>{s.available}</strong> / {s.total} ready{s.future > 0 ? ` · ${s.future} upcoming` : ""}</p>
+        <progress value={s.available} max={Math.max(1,s.total)} aria-label={`Season ${s.seasonNumber} available episodes`} />
+      </article>)}</div> : <p>All requested seasons are ready in Plex.</p>}
+    </section>
+    <div className="tv-request-actions">
       {!r.withdrawn && <button className="secondary" disabled={withdraw.isPending} onClick={() => {
         if (window.confirm("Withdraw this request? Existing media and other users' requests will be kept.")) withdraw.mutate({ requestId });
       }}>{withdraw.isPending ? "Withdrawing..." : "Withdraw my request"}</button>}
       {withdraw.isError && <Failure error={withdraw.error} />}
-    </section>
+    </div>
     {r.entry.relations.length > 0 && <section className="media-section"><h2>Related works</h2><ul>{r.entry.relations.map(work => <li key={`${work.key}:${work.relation}`}>
       {work.title} · {work.relation}
     </li>)}</ul></section>}
-    <section className="media-section"><h2>Activity</h2>
-      {r.events.length ? <ol>{r.events.map((event, i) => <li key={`${event.createdAt}:${i}`}><time dateTime={event.createdAt}>{new Date(event.createdAt).toLocaleString()}</time> · {event.message}</li>)}</ol> : <p>No acquisition activity yet.</p>}
-      {r.acquisitions.map(a => <p key={a.id}>{a.reason}: {a.status}{a.error ? ` · ${a.error}` : ""}</p>)}
-    </section>
   </>;
 }

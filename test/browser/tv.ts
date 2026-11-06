@@ -40,10 +40,12 @@ try {
   await page.goto(new URL(`/tv/requests/${request.requestId}`,url).href);
   await page.getByRole("heading",{ name: "Fixture Sequel", exact: true }).waitFor();
   await page.getByRole("heading",{ name: "Waiting for upcoming episodes", exact: true }).waitFor();
-  await page.getByText("Seasons 2",{ exact: true }).waitFor();
+  await page.getByRole("heading",{ name: "Season 2", exact: true }).waitFor();
   await page.getByText("1 of 2 episodes verified in Plex.",{ exact: true }).waitFor();
   await page.getByText("1 episodes have not aired or do not yet have an air date.",{ exact: false }).waitFor();
   assert.equal(await page.getByRole("progressbar",{ name: "Available TV episodes" }).getAttribute("value"),"1");
+  assert.equal(await page.getByRole("heading",{ name: "Activity", exact: true }).count(),0,"Request page displays a raw execution history");
+  assert.equal(await page.getByRole("button",{ name: "Search remaining seasons" }).count(),0,"Future-only intent should not invite searches");
   await page.getByText("Fixture Prequel · PREQUEL",{ exact: true }).waitFor();
   for (const hidden of ["Would import","native-selected-file.mkv","sonarr:fixture:queue:1","h264","tv-fixture-seerr-private","tv-fixture-agent-private","tv-fixture-sonarr-private"])
     assert.ok(!(await page.locator("body").innerText()).includes(hidden),`${hidden} leaked into a user-safe request`);

@@ -228,6 +228,11 @@ export class TvRepo {
       JOIN tv_acquisitions a ON a.id=d.acquisition_id WHERE a.target_id=? ORDER BY a.id DESC,t.id DESC`).all(targetId) as TorrentRecord[];
   }
 
+  acquisitionDownloads(acquisitionId: number) {
+    return this.db.query(`SELECT t.* FROM media_torrents t JOIN tv_acquisition_downloads d ON d.torrent_id=t.id
+      WHERE d.acquisition_id=? ORDER BY t.id`).all(acquisitionId) as TorrentRecord[];
+  }
+
   request(userId: number, catalog: TvCatalogEntry, policy: TvPolicy, episodeKeys: string[]): TvRequestResult {
     return this.transaction(() => {
       const entry = this.upsertEntry(catalog);
@@ -366,7 +371,7 @@ export class TvRepo {
     return this.db.query("SELECT * FROM tv_acquisitions WHERE target_id=? ORDER BY id DESC").all(targetId) as TvAcquisition[];
   }
 
-  startAcquisition(targetId: number, reason: TvAcquisition["reason"], enqueue: (id: number) => number, requestId?: number) {
+  startAcquisition(targetId: number, reason: TvAcquisition["reason"], enqueue: (id: number) => number, requestId?: number, batchEpisodeIds?: number[]) {
     return this.transaction(() => {
       if (!this.target(targetId)) throw new Error("Unknown TV target");
       if (requestId !== undefined) {
@@ -374,16 +379,25 @@ export class TvRepo {
         if (!request || request.target_id !== targetId || request.withdrawn_at !== null)
           throw new Error("Acquisition request does not belong to the active target");
       }
+      if (batchEpisodeIds) {
+        batchEpisodeIds = ids(z.array(z.number().int().positive()).min(1).max(64).parse(batchEpisodeIds));
+        const requested = new Set(requestId ? this.requestedEpisodeIds(requestId) : []);
+        if (batchEpisodeIds.some(id => !requested.has(id))) throw new Error("Episode batch is outside this request");
+      }
       const existing = this.acquisitions(targetId).find((a) => {
         if (a.request_id !== (requestId ?? null) || a.finished_at) return false;
         const job = a.job_id === null ? null : this.getJob(a.job_id);
-        return !job || job.status === "queued" || job.status === "running";
+        if (job && job.status !== "queued" && job.status !== "running") return false;
+        const scope = a.decision_json ? JSON.parse(a.decision_json).batchEpisodeIds as number[] | undefined : undefined;
+        // Legacy/unscoped work owns the whole request; scoped work only reserves its episode batch.
+        return !batchEpisodeIds || !scope || scope.some(id => batchEpisodeIds!.includes(id));
       });
       if (existing) return { acquisition: existing, shared: true };
       const row = this.db.query("INSERT INTO tv_acquisitions(target_id,request_id,reason,created_at) VALUES(?,?,?,?) RETURNING id")
         .get(targetId, requestId ?? null, reason, new Date().toISOString()) as { id: number };
       const jobId = z.number().int().positive().parse(enqueue(row.id));
       this.db.query("UPDATE tv_acquisitions SET job_id=? WHERE id=?").run(jobId, row.id);
+      if (batchEpisodeIds) this.decision(row.id, { batchEpisodeIds });
       return { acquisition: this.acquisition(row.id)!, shared: false };
     });
   }

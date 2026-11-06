@@ -41,12 +41,38 @@ export async function tvUpstreamStep<T>(ctx: WorkerContext, name: string, action
   }
   throw new Error("TV upstream retry budget exhausted");
 }
-export function queueTvAcquisition(repo: BooksRepo, requestId: number, reason: "initial" | "recovery" = "initial") {
+export function queueTvAcquisition(repo: BooksRepo, requestId: number, reason: "initial" | "recovery" = "initial", batchEpisodeIds?: number[]) {
   const request = repo.tv.requestById(requestId);
   if (!request || request.withdrawn_at) throw new Error("Unknown active TV request");
   return repo.tv.startAcquisition(request.target_id, reason, (acquisitionId) => repo.createJob({
     type: "tv_acquire", payload: { acquisitionId }, idempotencyKey: `tv-acquire:${acquisitionId}`, maxAttempts: 5,
-  }).id, requestId);
+  }).id, requestId, batchEpisodeIds);
+}
+/** Explicit requests/retries fan out once. A failed season waits for RSS, not a title-search timer. */
+export function queueTvSeasons(repo: BooksRepo, requestId: number, reason: "initial" | "recovery" = "initial", episodeIds?: number[]) {
+  return repo.transaction(() => {
+    const request = repo.tv.requestById(requestId);
+    if (!request || request.withdrawn_at) throw new Error("Unknown active TV request");
+    let remaining = repo.tv.missingEpisodes(requestId).filter(ep => (!episodeIds || episodeIds.includes(ep.id)) && ep.airDate && Date.parse(ep.airDate) <= Date.now());
+    const queued: ReturnType<typeof queueTvAcquisition>[] = [];
+    const searchGroup = randomUUID();
+    for (const acquisition of repo.tv.acquisitions(request.target_id)) {
+      if (acquisition.request_id !== requestId || acquisition.finished_at || !acquisition.job_id ||
+        !["queued", "running"].includes(repo.getJob(acquisition.job_id)?.status ?? "")) continue;
+      const scope = acquisition.decision_json ? JSON.parse(acquisition.decision_json).batchEpisodeIds as number[] | undefined : undefined;
+      if (!scope || remaining.some(ep => scope.includes(ep.id))) queued.push({ acquisition, shared: true });
+      remaining = scope ? remaining.filter(ep => !scope.includes(ep.id)) : [];
+    }
+    while (remaining.length) {
+      const ids = tvAcquisitionBatch(remaining).map(ep => ep.id);
+      const work=queueTvAcquisition(repo, requestId, reason, ids);
+      if(!work.shared) repo.tv.decision(work.acquisition.id,{...JSON.parse(work.acquisition.decision_json!),searchGroup});
+      queued.push(work);
+      const batch = new Set(ids);
+      remaining = remaining.filter(ep => !batch.has(ep.id));
+    }
+    return queued;
+  });
 }
 /** Bound execution, not request intent. Remaining episodes continue after publication. */
 export function tvAcquisitionBatch(episodes: TvEpisode[]): TvEpisode[] {
@@ -67,7 +93,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
   const target = repo.target(acquisition.target_id)!;
   const entry = repo.entry(target.entry_id)!;
   const requestId = acquisition.request_id;
-  const intake = acquisition.decision_json ? JSON.parse(acquisition.decision_json) as { feedOffers?: MovieOffer[]; feedEvidence?: unknown } : {};
+  const intake = acquisition.decision_json ? JSON.parse(acquisition.decision_json) as { batchEpisodeIds?: number[]; searchGroup?: string; feedOffers?: MovieOffer[]; feedEvidence?: unknown } : {};
   const settings = ctx.getSettings();
   const roots = tvRoots(settings.tv.managedRoot, settings.tv.plexViewPath);
   const configuration = () => createHash("sha256").update(JSON.stringify([
@@ -84,10 +110,20 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
   const emit = (key: string, stage: Parameters<typeof repo.event>[3], message: string) => {
     active(); repo.event(target.id, acquisition.id, `tv-acquisition:${acquisition.id}:${key}`, stage, message);
   };
+  const sharedSearch = async (wave: string) => {
+    const key=intake.searchGroup ? `tv-search:${intake.searchGroup}:${wave}` : null;
+    const fingerprint=createHash("sha256").update(JSON.stringify([ctx.getSettings(),entry.key,entry.title])).digest("hex");
+    const saved=key ? ctx.repo.getJsonState<{fingerprint:string;capturedAt:number;value:Awaited<ReturnType<TvServices["search"]>>}>(key) : null;
+    if(saved?.fingerprint===fingerprint && Date.now()-saved.capturedAt>=0 && Date.now()-saved.capturedAt<30*60_000) return saved.value;
+    const value=await services.search(entry);
+    active();
+    if(key) ctx.repo.setJsonState(key,{fingerprint,capturedAt:Date.now(),value});
+    return value;
+  };
   active();
   const snapshot = await durableStep(ctx, "tv:target-snapshot", async () => {
     const episodeIds = tvAcquisitionBatch(repo.missingEpisodes(requestId)
-      .filter((episode) => episode.airDate && Date.parse(episode.airDate) <= Date.now())).map((episode) => episode.id);
+      .filter((episode) => (!intake.batchEpisodeIds || intake.batchEpisodeIds.includes(episode.id)) && episode.airDate && Date.parse(episode.airDate) <= Date.now())).map((episode) => episode.id);
     const reuse = await reusableTvSources(ctx.repo, target.id, acquisition.id, episodeIds);
     const retry = ctx.repo.contentLoss.retryDownloads({ namespace: "tv-target", id: String(target.id) });
     return { episodeIds, priorKeys: repo.downloads(target.id).map((download) => download.offer_key).filter(key => !retry.some(d => d.offer_key === key)), policy: JSON.parse(target.policy_json),
@@ -117,6 +153,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
     emit(`${eventKey}:publishing`, "publishing", "Publishing an isolated TV view and verifying each episode in Plex");
     for (let scan = 0; ; scan++) {
       const published = await durableStep(ctx, `${prefix}:publish:${scan}`, async () => {
+        if (repo.publications().some(item => item.target_id === target.id && item.version_id !== versionId)) return false;
         try { active(); await publishTvVersion({ repo, roots, library: services.library, targetId: target.id, versionId, assertActive: active }); return true; }
         catch (error) {
           active();
@@ -135,7 +172,12 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
     }
     await durableStep(ctx, "tv:finish", () => ctx.repo.transaction(() => {
       active(); repo.finishAcquisition(acquisition.id);
-      if (repo.missingEpisodes(requestId).some((episode) => episode.airDate && Date.parse(episode.airDate) <= Date.now())) queueTvAcquisition(ctx.repo, requestId, "recovery");
+      const remaining = repo.missingEpisodes(requestId).filter(episode =>
+        (!intake.batchEpisodeIds || intake.batchEpisodeIds.includes(episode.id)) && episode.airDate && Date.parse(episode.airDate) <= Date.now());
+      if (remaining.length) {
+        if (intake.batchEpisodeIds) queueTvSeasons(ctx.repo, requestId, "recovery", remaining.map(ep => ep.id));
+        else queueTvAcquisition(ctx.repo, requestId, "recovery");
+      }
     }));
     return "done" as const;
   };
@@ -179,7 +221,9 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
     ...(snapshot.sourceReuse ? snapshot.reuseSources ?? [] : []).map(({ source, skipFileIndexes }, attempt) => ({ source: source as TvSource | null, skipFileIndexes, attempt, prefix: `tv:reuse:${attempt}` })),
     ...Array.from({ length: 3 }, (_, attempt) => ({ source: null as TvSource | null, skipFileIndexes: [] as number[], attempt, prefix: `tv:attempt:${attempt}` })),
   ];
-  for (const { source: reusable, skipFileIndexes, attempt, prefix } of attempts) {
+  const triedSources=new Set((snapshot.reuseSources??[]).map(item=>`${item.source.ref.clientId}:${item.source.ref.nativeId}`));
+  let reuseSequence=(snapshot.reuseSources??[]).length;
+  for (const [position,{ source: reusable, skipFileIndexes, attempt, prefix }] of attempts.entries()) {
     let releaseEvidence: Pick<MovieOffer, "key" | "title" | "provider">;
     let prepared: Awaited<ReturnType<typeof tvSourceFiles>>;
     if (reusable) {
@@ -201,12 +245,12 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       emit(`${attempt}:searching`, "searching", `Searching releases for ${entry.title}`);
       let search = await tvUpstreamStep(ctx, `${prefix}:search`, () => attempt === 0 && intake.feedOffers?.length
         ? Promise.resolve({ offers: intake.feedOffers.map((offer) => refreshTvFeedOffer(ctx.repo, offer)), warnings: [] })
-        : services.search(entry));
+        : sharedSearch(`${attempt}:initial`));
       let selection;
       for (let wave = 0; ; wave++) {
         selection = await durableStep(ctx, `${prefix}:select:${wave}`, async () => {
           const result = await services.decider(entry).select({ entry, episodes, policy, excludedOfferKeys: [...excluded], maximumReleaseBytes: settings.tv.maximumReleaseBytes,
-            offers: search.offers.filter((offer) => !excluded.has(offer.key) && (offer.sizeBytes === null || offer.sizeBytes <= settings.tv.maximumReleaseBytes)) });
+            offers: search.offers });
           if (result.offer && excluded.has(result.offer.key)) throw new Error("TV selector repeated a retained failed release");
           if (result.offer) {
             active();
@@ -222,9 +266,39 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
         const retryAt = Math.min(...deferred.map((provider) => Date.parse(provider.retryAt)).filter(Number.isFinite));
         if (!ctx.execution) throw new Error("Deferred TV indexers require durable execution");
         await ctx.execution.sleep(`${prefix}:indexer-wait:${wave}`, Math.max(1000, Math.min(3_600_000, retryAt - Date.now() || 60_000)));
-        search = await tvUpstreamStep(ctx, `${prefix}:search-wave:${wave}`, () => services.search(entry));
+        search = await tvUpstreamStep(ctx, `${prefix}:search-wave:${wave}`, () => sharedSearch(`${attempt}:retry:${wave}`));
       }
-      if (!selection.offer) { emit("blocked", "blocked", selection.reason); repo.finishAcquisition(acquisition.id); return "done"; }
+      if (!selection.offer) {
+        let handoff=false;
+        for(let wave=0;wave<20_000;wave++) {
+          const retained=await durableStep(ctx,`${prefix}:sibling-sources:${wave}`,async()=>{
+            active();
+            const found=await reusableTvSources(ctx.repo,target.id,acquisition.id,snapshot.episodeIds);
+            const sources=found.sources.filter(item=>!triedSources.has(`${item.source.ref.clientId}:${item.source.ref.nativeId}`));
+            const pending=repo.acquisitions(target.id).some(other=>other.id!==acquisition.id && !other.finished_at && other.job_id!==null &&
+              ["queued","running"].includes(ctx.repo.getJob(other.job_id)?.status??"") &&
+              !(other.decision_json && JSON.parse(other.decision_json).waitingForSources===true) && repo.acquisitionDownloads(other.id).length>0);
+            const previous=repo.acquisition(acquisition.id)!.decision_json;
+            repo.decision(acquisition.id,{...(previous?JSON.parse(previous):{}),waitingForSources:sources.length===0&&pending});
+            return {sources,pending};
+          });
+          if(retained.sources.length) {
+            const follow=retained.sources.map(({source,skipFileIndexes})=>{
+              triedSources.add(`${source.ref.clientId}:${source.ref.nativeId}`);
+              const next=reuseSequence++;
+              return {source,skipFileIndexes,attempt:next,prefix:`tv:reuse:${next}`};
+            });
+            // Research was exhausted. Only inspect newly completed owned bytes, not another title search.
+            attempts.splice(position+1,attempts.length-position-1,...follow);
+            handoff=true;break;
+          }
+          if(!retained.pending || !ctx.execution) break;
+          emit(`${attempt}:sibling-wait`,"verifying","Waiting for an owned pack to finish before checking its remaining episodes");
+          await ctx.execution.sleep(`${prefix}:sibling-wait:${wave}`,services.timing?.pollMs??5000);
+        }
+        if(handoff) continue;
+        emit("blocked", "blocked", selection.reason); repo.finishAcquisition(acquisition.id); return "done";
+      }
       const offer = selection.offer;
       releaseEvidence = offer;
       const encoded = await tvUpstreamStep(ctx, `${prefix}:metainfo`, async () => Buffer.from(await services.fetchMetainfo(offer)).toString("base64"));
