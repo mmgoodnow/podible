@@ -74,6 +74,9 @@ docker run --rm --network none --tmpfs /tmp:rw,size=128m -v "$PWD/test:/app/test
 This checks exact-byte symlink fallback, zero downloads, unchanged canonical
 bytes/selected version, and seed-only restart through the actual startup guard.
 CI runs it against the freshly built runtime image.
+Pass `--audio` or `--ebook` to exercise the same pipeline using actual registered
+book canonical hardlinks, format-scoped inventory, and book Transmission ownership.
+Both book modes also run in CI and leave manifestations/selected editions intact.
 
 The lower-level peer-to-peer probe additionally proves a second daemon can
 download the linked bytes, and corruption does not cause the seeder to repair

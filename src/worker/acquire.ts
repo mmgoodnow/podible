@@ -174,6 +174,10 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
               execution: ctx.execution,
               operationKey: `acquire:${ctx.execution?.key ?? job.id}:${media}:${selectionIndex}`,
               stepPrefix: `${media}:selection:${selectionIndex}`,
+              selectedCopiesByPart: parts.map((part, index) => ({
+                selected: part,
+                alternatives: selection.matchingCopies?.[index] ?? [],
+              })),
             }
           );
           for (const [partIndex, snatch] of group.results.entries()) {

@@ -10,7 +10,6 @@ import type { DiscoveredIndexer } from "../media/prowlarr";
 import { IndexerError, indexerFailure, type IndexerFailure } from "../media/indexer-errors";
 import { boundedFeedBoundary, feedIdentity, feedReleaseKey } from "../media/release-inbox";
 import { durableStep, type WorkerContext } from "./context";
-import { hasWantedBookMedia } from "./book-feeds";
 import type { FeedGapDiagnostics } from "../media/feed-gap";
 
 export const INDEXER_FEED_INTERVAL_MS = 15 * 60_000;
@@ -58,7 +57,7 @@ export async function syncIndexerFeeds(
       : [
           ...(ctx.repo.movies.hasTargets() ? ["movie" as const] : []),
           ...(ctx.repo.tv.hasTargets() ? ["tv" as const] : []),
-          ...(hasWantedBookMedia(ctx.repo)
+          ...(ctx.repo.hasBooks()
             ? ["audio" as const, "ebook" as const]
             : []),
         ];
@@ -201,7 +200,7 @@ export async function syncIndexerFeeds(
             idempotencyKey: "rss-match:" + id + ":" + ids.join(","),
             maxAttempts: 3,
           });
-          if (media === "movie" || media === "tv") ctx.repo.createJob({
+          ctx.repo.createJob({
             type: "torrent_reuse_feed", payload: { releaseIds: ids },
             idempotencyKey: "rss-reuse:" + id + ":" + ids.join(","), maxAttempts: 3,
           });

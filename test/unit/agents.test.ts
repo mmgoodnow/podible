@@ -92,6 +92,39 @@ class FakeModelProvider implements ModelProvider {
 }
 
 describe("agent decisions", () => {
+  test("book selector resolves equivalent copies per ordered part from server evidence", async () => {
+    const results: TorznabResult[] = [0, 1, 2, 3].map(index => ({
+      title: "Dune Frank Herbert [MP3]", provider: `provider-${index}`, mediaType: "audio",
+      sizeBytes: 1000, url: `https://example.com/${index}`, guid: `g${index}`, infoHash: null,
+      seeders: 10 - index, leechers: 0, raw: {},
+    }));
+    const provider = new FakeModelProvider([textModelResponse(JSON.stringify({
+      selections: [{ parts: [2, 0], matchingIndexes: [[3], [1]] }], confidence: 0.9, reason: "Exact copies of each ordered part",
+    }))]);
+    const decision = await selectSearchCandidates(defaultSettings({ agents: agentSettings() }), {
+      query: "Dune Frank Herbert", media: "audio", results, forceAgent: true,
+    }, { modelProvider: provider });
+    expect(decision.selections[0]!.parts).toEqual([results[2]!, results[0]!]);
+    expect(decision.selections[0]!.matchingCopies).toEqual([[results[3]!], [results[1]!]]);
+    expect(JSON.stringify(provider.requests[0])).toContain("same text/translation");
+  });
+
+  test("book selector rejects fabricated, selected, repeated or misaligned copy indexes", async () => {
+    const results: TorznabResult[] = [0, 1, 2].map(index => ({
+      title: "Dune Frank Herbert [MP3]", provider: `provider-${index}`, mediaType: "audio",
+      sizeBytes: 1000, url: `https://example.com/${index}`, guid: `g${index}`, infoHash: null,
+      seeders: 10 - index, leechers: 0, raw: {},
+    }));
+    for (const matchingIndexes of [[[99], []], [[0], []], [[1], [1]], [[1]], [["https://evil.invalid/torrent"], []]]) {
+      const provider = new FakeModelProvider([textModelResponse(JSON.stringify({
+        selections: [{ parts: [0, 2], matchingIndexes }], confidence: 0.9, reason: "Invalid evidence",
+      }))]);
+      await expect(selectSearchCandidates(defaultSettings({ agents: agentSettings() }), {
+        query: "Dune Frank Herbert", media: "audio", results, forceAgent: true,
+      }, { modelProvider: provider })).rejects.toThrow("Agent search selection failed");
+    }
+  });
+
   test("search selection is deterministic by default", async () => {
     const settings = defaultSettings();
 

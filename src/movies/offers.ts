@@ -1,20 +1,9 @@
 import { ProwlarrDiscovery, type DiscoveredIndexer } from "../media/prowlarr";
-import { IndexerGateway, indexerGateway, releaseIdentity, type SearchResult } from "../media/indexer-gateway";
+import { IndexerGateway, indexerGateway } from "../media/indexer-gateway";
 import { inspectMetainfo } from "../media/metainfo";
 import type { Movie } from "./types";
-import { createHash } from "node:crypto";
-
-export type MovieOffer = {
-  inboxId?: number;
-  key: string;
-  title: string;
-  provider: string;
-  sizeBytes: number | null;
-  seeders: number | null;
-  url: string;
-  infoHash: string | null;
-  attributes: Record<string, unknown>;
-};
+import { releaseOfferFromResult as movieOfferFromResult, type ReleaseOffer as MovieOffer } from "../media/release-offer";
+export { movieOfferFromResult, type MovieOffer };
 export type MovieSearch = {
   offers: MovieOffer[];
   warnings: string[];
@@ -83,21 +72,6 @@ export class MovieIndexers {
       ...(deferred.length ? { deferred } : {}),
     };
   }
-}
-
-export function movieOfferFromResult(result: SearchResult<"movie">): MovieOffer {
-  return {
-    key: createHash("sha256")
-      .update(JSON.stringify([releaseIdentity(result), result.infoHash, result.sizeBytes, result.title]))
-      .digest("hex"),
-    title: result.title,
-    provider: result.provider,
-    sizeBytes: result.sizeBytes,
-    seeders: result.seeders,
-    url: result.url,
-    infoHash: result.infoHash,
-    attributes: result.raw,
-  };
 }
 
 export class DiscoveredMovieIndexers {

@@ -34,7 +34,8 @@ export function jobLockKeys(repo: BooksRepo, job: JobRow): string[] {
   if (job.type === "torrent_reuse") {
     const payload = parseJson<{ operationId?: string }>(job.payload_json);
     const scope = payload?.operationId ? repo.crossSeed.receipt(payload.operationId)?.command.scope : null;
-    return scope ? ["torrent-reuse", `${scope.media}-target:${scope.targetId}`] : ["torrent-reuse"];
+    return scope ? ["torrent-reuse", scope.media === "audio" || scope.media === "ebook"
+      ? mediaLaneKey(scope.targetId, scope.media)! : `${scope.media}-target:${scope.targetId}`] : ["torrent-reuse"];
   }
   if (job.type === "tv_acquire") {
     const payload = parseJson<{ acquisitionId?: number }>(job.payload_json);

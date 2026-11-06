@@ -38,6 +38,7 @@ type SearchSelection = {
     language: string | null;
   };
   parts: TorznabResult[];
+  matchingCopies?: TorznabResult[][];
 };
 
 type ManualImportSelectionResult = {
@@ -88,6 +89,7 @@ type SearchAgentOutput = {
       language?: string | null;
     } | null;
     parts?: number[];
+    matchingIndexes?: number[][];
   }>;
   confidence: number;
   reason: string;
@@ -285,6 +287,21 @@ function parseSearchAgentSelections(output: SearchAgentOutput, ranked: ReturnTyp
       selectedParts.push(ranked[index]!.result);
     }
     if (selectedParts.length === 0) continue;
+    let matchingCopies: TorznabResult[][] | undefined;
+    if (selection.matchingIndexes !== undefined) {
+      if (!Array.isArray(selection.matchingIndexes) || selection.matchingIndexes.length !== parts.length)
+        throw new Error("Matching copy indexes must align with the ordered parts");
+      const claimed = new Set<number>();
+      matchingCopies = selection.matchingIndexes.map(indexes => {
+        if (!Array.isArray(indexes)) throw new Error("Invalid matching copy indexes");
+        return indexes.map(index => {
+          if (!Number.isInteger(index) || index < 0 || index >= ranked.length || seen.has(index) || claimed.has(index))
+            throw new Error("Agent selected invalid or repeated matching copy index");
+          claimed.add(index);
+          return ranked[index]!.result;
+        });
+      });
+    }
     const manifestation = selection?.manifestation ?? null;
     const label = typeof manifestation?.label === "string" && manifestation.label.trim() ? manifestation.label.trim() : null;
     const rawEditionNote = manifestation?.editionNote ?? manifestation?.edition_note;
@@ -295,6 +312,7 @@ function parseSearchAgentSelections(output: SearchAgentOutput, ranked: ReturnTyp
     selections.push({
       manifestation: { label, editionNote, language },
       parts: selectedParts,
+      ...(matchingCopies ? { matchingCopies } : {}),
     });
   }
 
@@ -468,6 +486,7 @@ function buildSearchAgentPrompt(trigger: DecisionTrigger, input: SearchSelection
   lines.push("`selections` is an array. Use an empty array when no safe candidate exists.");
   lines.push("For normal single-release acquisitions, return one selection with one candidate index in `parts`.");
   lines.push("If the preferred edition is split across multiple releases, return one selection whose ordered `parts` array contains each release index.");
+  lines.push("Each selection may include `matchingIndexes`, an array of index arrays aligned with its ordered `parts`. Each inner array lists other known copies of THAT exact selected release part; use [] when none are known. Copies must match the same text/translation, language, narrator/performance, abridgement, edition and part coverage, with evidence of the same files/encode. Similar book titles, file sizes, or different editions are not enough. Never include a selected part as a copy, or assign one copy to multiple parts. These are reuse candidates, not verified byte matches.");
   lines.push(
     "Each selection may include `manifestation.label`, `manifestation.editionNote`, and `manifestation.language`; use null when there is no meaningful edition label or clear language."
   );

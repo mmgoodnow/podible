@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { BooksRepo } from "../repo";
-import type { MovieOffer } from "../movies/offers";
-import { crossSeedScopeSchema, type CrossSeedScope } from "./cross-seed-state";
+import type { ReleaseOffer } from "./release-offer";
+import { crossSeedScopeSchema, isBookCrossSeedScope, type CrossSeedScope } from "./cross-seed-state";
 
 const offerSchema = z.object({
   key: z.string().min(1), title: z.string().min(1), provider: z.string(),
@@ -32,9 +32,14 @@ export function selectedCopyId(value: string): string {
 
 /** Server-owned search evidence, captured before downloading, independent of RSS retention. */
 export function rememberSelectedCopies(repo: BooksRepo, scope: CrossSeedScope, acquisitionId: number,
-  selected: MovieOffer, alternatives: MovieOffer[] = []) {
+  selected: ReleaseOffer, alternatives: ReleaseOffer[] = []) {
   crossSeedScopeSchema.parse(scope);
   z.number().int().positive().parse(acquisitionId);
+  if (isBookCrossSeedScope(scope)) {
+    const release = repo.getRelease(acquisitionId);
+    if (!release || release.book_id !== scope.targetId || release.media_type !== scope.media)
+      throw new Error("Selected copies require the book's matching-format release association");
+  }
   const key = groupKey(scope, acquisitionId, selected.key);
   return repo.transaction(() => {
     const previous = repo.getJsonState<unknown>(key);
@@ -53,7 +58,7 @@ export function rememberSelectedCopies(repo: BooksRepo, scope: CrossSeedScope, a
   });
 }
 
-export function selectedCopyOffer(repo: BooksRepo, scope: CrossSeedScope, id: string): MovieOffer {
+export function selectedCopyOffer(repo: BooksRepo, scope: CrossSeedScope, id: string): ReleaseOffer {
   const copy = copySchema.parse(repo.getJsonState(copyKey(id)));
   if (copy.scope.media !== scope.media || copy.scope.targetId !== scope.targetId)
     throw new Error("Selected copy belongs to another target");

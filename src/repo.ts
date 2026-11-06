@@ -266,7 +266,7 @@ export class BooksRepo {
       const owner = this.crossSeed.registrationOwner(ref);
       if (owner && owner !== operationId && this.reuseTorrent(ref)) throw new Error("Reuse registration belongs to another operation");
       const record = new TorrentRecordsRepo(this.db, this.beforeWrite).reserve(ref, location, offerKey,
-        { ownership_tag: scope.media === "tv" ? "Podible TV" : "Podible Movies" });
+        { ownership_tag: scope.media === "tv" ? "Podible TV" : scope.media === "movie" ? "Podible Movies" : "Podible Books" });
       this.setJsonState(crossSeedRegistrationKey(ref), { operationId });
       return record;
     });

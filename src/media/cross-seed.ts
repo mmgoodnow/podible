@@ -7,12 +7,14 @@ import type { BooksRepo } from "../repo";
 import type { AppSettings, JobRow } from "../app-types";
 import { durableStep, type WorkerContext } from "../worker/context";
 import { inspectMetainfo } from "./metainfo";
-import { managedTransmission, managedTvTransmission } from "./managed-transmission";
-import { movieOfferFromResult, fetchMovieMetainfo, type MovieOffer } from "../movies/offers";
+import { managedTransmission, managedTvTransmission, managedBookTransmission } from "./managed-transmission";
+import { adoptBookContent } from "../library/book-storage";
+import { fetchMovieMetainfo } from "../movies/offers";
+import { releaseOfferFromResult, type ReleaseOffer } from "./release-offer";
 import { assertMovieStorage } from "../movies/storage";
 import type { TorrentClient } from "./torrent-client";
 import { withTorrentUse } from "./torrent-use";
-import { crossSeedCommandSchema, crossSeedCommandHash, crossSeedStateKey,
+import { crossSeedCommandSchema, crossSeedCommandHash, crossSeedStateKey, isBookCrossSeedScope,
   type CrossSeedCommand, type CrossSeedReceipt, type CrossSeedScope, type CrossSeedOutcome } from "./cross-seed-state";
 import { planContentReuse, type ReuseCandidateManifest, type ReusePlan, type ReuseSourceFile } from "./reuse-plan";
 import { captureReuseFile, captureReuseRoot, materializeReuseLayout, prepareReuseLayoutRoot, verifyContentReuse, publishedReuseLayoutCapabilities } from "./reuse-layout";
@@ -20,18 +22,31 @@ import { selectedCopies, selectedCopyOffer, selectedCopyId } from "./selected-co
 
 export type CrossSeedAdapters = {
   client?: (scope: CrossSeedScope) => TorrentClient;
-  fetchMetainfo?: (offer: MovieOffer) => Promise<Uint8Array>;
+  fetchMetainfo?: (offer: ReleaseOffer) => Promise<Uint8Array>;
   materialize?: typeof materializeReuseLayout;
   pollMs?: number;
   maxPolls?: number;
 };
-const root = (settings: AppSettings, scope: CrossSeedScope) => path.resolve(scope.media === "tv" ? settings.tv.managedRoot : settings.movies.managedRoot);
-const configuredClient = (settings: AppSettings, scope: CrossSeedScope) => scope.media === "tv"
-  ? managedTvTransmission(settings.tv.managedRoot) : managedTransmission(settings.movies.managedRoot);
+const root = (settings: AppSettings, scope: CrossSeedScope) => path.resolve(isBookCrossSeedScope(scope)
+  ? settings.libraryRoot : scope.media === "tv" ? settings.tv.managedRoot : settings.movies.managedRoot);
+const storageRoots = async (settings: AppSettings, scope: CrossSeedScope) => {
+  if (isBookCrossSeedScope(scope)) {
+    const libraryRoot = await fs.realpath(root(settings, scope));
+    return { contentRoot: path.join(libraryRoot, ".podible", "content"), downloadRoot: path.join(libraryRoot, ".podible", "downloads") };
+  }
+  return { contentRoot: path.join(root(settings, scope), "objects"), downloadRoot: path.join(root(settings, scope), "downloads") };
+};
+const configuredClient = async (settings: AppSettings, scope: CrossSeedScope) => isBookCrossSeedScope(scope)
+  ? managedBookTransmission((await storageRoots(settings, scope)).downloadRoot) : scope.media === "tv"
+    ? managedTvTransmission(settings.tv.managedRoot) : managedTransmission(settings.movies.managedRoot);
 const configuration = (settings: AppSettings, scope: CrossSeedScope) => createHash("sha256")
   .update(JSON.stringify([root(settings, scope), settings.prowlarr, settings.torznab])).digest("hex");
 
 export function assertCrossSeedDemand(repo: BooksRepo, scope: CrossSeedScope) {
+  if (isBookCrossSeedScope(scope)) {
+    if (!repo.getBookRow(scope.targetId)) throw new Error("Reuse book is missing");
+    return;
+  }
   const intent = repo.retention.get({ namespace: scope.media === "tv" ? "tv-target" : "movie-target", id: String(scope.targetId) });
   const target = scope.media === "tv" ? repo.tv.target(scope.targetId) : repo.movies.target(scope.targetId);
   if (!target || intent?.desiredPresence === "evicted") throw new Error("Reuse target is missing or intentionally evicted");
@@ -42,7 +57,7 @@ export function crossSeedOffer(repo: BooksRepo, command: Pick<CrossSeedCommand, 
   if (!command.releaseId) throw new Error("Missing reuse candidate");
   const entry = repo.releaseInbox.entries([command.releaseId])[0];
   if (!entry || entry.result.mediaType !== command.scope.media) throw new Error("Reuse release is not a retained result for this media type");
-  return movieOfferFromResult({ ...entry.result, mediaType: "movie" });
+  return releaseOfferFromResult(entry.result);
 }
 
 export function queueCrossSeed(repo: BooksRepo, raw: z.input<typeof crossSeedCommandSchema>) {
@@ -96,19 +111,33 @@ export async function crossSeedPlan(repo: BooksRepo, settings: AppSettings, comm
   assertCrossSeedDemand(repo, command.scope);
   const candidate = reuseCandidate(bytes), total = candidate.files.reduce((sum, file) => sum + file.size, 0);
   if (total > command.policy.maximumCandidateBytes || candidate.files.length > 2000) throw new Error("Reuse candidate exceeds policy bounds");
-  const contentRoot = path.join(root(settings, command.scope), "objects");
-  await assertMovieStorage(repo, contentRoot);
+  const { contentRoot } = await storageRoots(settings, command.scope);
+  if (!isBookCrossSeedScope(command.scope)) await assertMovieStorage(repo, contentRoot);
   const ownedRoot = await captureReuseRoot({ rootPath: contentRoot, markerName: ".podible-content.json" });
   const files = repo.crossSeed.files(command.scope, [...new Set(candidate.files.map(file => file.size))]);
   if (files.length > 2000) throw new Error("Reuse source inventory exceeds the bounded plan");
   const sources: ReuseSourceFile[] = [];
   for (const file of files) {
-    if (repo.releaseHealth.isContentFileBlocked(file.id)) continue;
-    z.string().uuid().parse(file.id);
-    if (!file.relative_path.startsWith(`files/${file.id.slice(0, 2)}/${file.id}.`)) throw new Error("Reuse source is not in its registered UUID layout");
     try {
+      let sourcePath: string;
+      if (isBookCrossSeedScope(command.scope)) {
+        sourcePath = file.relative_path;
+        const relative = path.relative(contentRoot, sourcePath);
+        if (!path.isAbsolute(sourcePath) || path.resolve(sourcePath) !== sourcePath ||
+          !/^files\/[a-f0-9]{2}\/[a-f0-9]{64}\/content(?:\.[a-z0-9]{1,16})?$/.test(relative))
+          throw new Error("Reuse book source is not registered canonical content");
+        // The existing helper validates its per-file ownership record. Only an
+        // already-canonical path is allowed here, never its adoption branch.
+        if (await adoptBookContent(settings.libraryRoot, sourcePath) !== sourcePath)
+          throw new Error("Reuse book source ownership changed");
+      } else {
+        if (repo.releaseHealth.isContentFileBlocked(file.id)) continue;
+        z.string().uuid().parse(file.id);
+        if (!file.relative_path.startsWith(`files/${file.id.slice(0, 2)}/${file.id}.`)) throw new Error("Reuse source is not in its registered UUID layout");
+        sourcePath = path.resolve(contentRoot, file.relative_path);
+      }
       const source = await captureReuseFile({ root: ownedRoot, sourceId: file.id,
-        sourcePath: path.resolve(contentRoot, file.relative_path) });
+        sourcePath });
       if (source.size === file.size_bytes) sources.push(source);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -135,10 +164,10 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
     return "done" as const;
   };
   active();
-  const services = command.scope.media === "movie" ? ctx.movieServices : ctx.tvServices;
+  const services = command.scope.media === "movie" ? ctx.movieServices : command.scope.media === "tv" ? ctx.tvServices : undefined;
   const encoded = await durableStep(ctx, "reuse:metainfo", async () => Buffer.from(await (adapters.fetchMetainfo ?? services?.fetchMetainfo ?? fetchMovieMetainfo)(crossSeedOffer(ctx.repo, command))).toString("base64"));
   const bytes = Buffer.from(encoded, "base64"), metadata = inspectMetainfo(bytes);
-  const client = adapters.client?.(command.scope) ?? services?.client ?? configuredClient(settings, command.scope);
+  const client = adapters.client?.(command.scope) ?? services?.client ?? await configuredClient(settings, command.scope);
   if (ctx.repo.releaseHealth.isOfferBlocked({ ...crossSeedOffer(ctx.repo, command), infoHash: metadata.infoHash }))
     return finish({ kind: "skipped", reason: "Candidate is a confirmed nuked release" });
   if (!client.capabilities.pausedAdd || !client.capabilities.recheck || !client.capabilities.derivedLayouts || !client.capabilities.metainfoVersions.includes(1))
@@ -152,10 +181,13 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   const sourceBlocked = () => plan.files.some(file => file.source && ctx.repo.releaseHealth.isContentFileBlocked(file.source.id));
   if (sourceBlocked()) return finish({ kind: "skipped", reason: "Reuse source was confirmed nuked after planning" });
   if (plan.status === "rejected" || !plan.summary.likelyReuseBytes) return finish({ kind: "skipped", reason: plan.reasons.join("; ") || "No reusable registered files" });
-  const downloadRoot = path.join(root(settings, command.scope), "downloads");
+  const { downloadRoot, contentRoot } = await storageRoots(settings, command.scope);
   const destination = path.join(downloadRoot, "reuse");
   await durableStep(ctx, "reuse:prepare", async () => {
-    active(); await assertMovieStorage(ctx.repo, path.join(root(settings, command.scope), "objects"));
+    active();
+    if (isBookCrossSeedScope(command.scope)) {
+      await captureReuseRoot({ rootPath: contentRoot, markerName: ".podible-content.json" });
+    } else await assertMovieStorage(ctx.repo, contentRoot);
     await fs.mkdir(downloadRoot, { recursive: true });
     if (await fs.realpath(downloadRoot) !== downloadRoot) throw new Error("Reuse download root traverses a symlink");
     return prepareReuseLayoutRoot({ rootPath: destination, ownerId: client.id });
@@ -211,7 +243,7 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   // This is also the fallback when a daemon check completes between observations.
   const initialProof = await durableStep(ctx, "reuse:piece-proof", proveLayout);
   if (initialProof.status === "rejected") return finish({ kind: "skipped", reason: initialProof.reasons.join("; ") });
-  const location = { rootId: command.scope.media === "tv" ? "tv" : "movies", relativePath: path.relative(downloadRoot, dataPath) };
+  const location = { rootId: isBookCrossSeedScope(command.scope) ? "books" : command.scope.media === "tv" ? "tv" : "movies", relativePath: path.relative(downloadRoot, dataPath) };
   const ref = await durableStep(ctx, "reuse:add", () => withTorrentUse(ctx.repo, { clientId: client.id, infoHash: metadata.infoHash }, async () => {
     active();
     if (sourceBlocked()) throw new Error("Reuse source was confirmed nuked before torrent addition");

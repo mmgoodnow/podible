@@ -4,8 +4,10 @@ import { z } from "zod";
 import type { TorrentRef } from "./torrent-client";
 
 const id = z.number().int().positive().safe();
-export const crossSeedScopeSchema = z.object({ media: z.enum(["movie", "tv"]), targetId: id }).strict();
+export const crossSeedScopeSchema = z.object({ media: z.enum(["movie", "tv", "audio", "ebook"]), targetId: id }).strict();
 export type CrossSeedScope = z.infer<typeof crossSeedScopeSchema>;
+export const isBookCrossSeedScope = (scope: CrossSeedScope): scope is CrossSeedScope & { media: "audio" | "ebook" } =>
+  scope.media === "audio" || scope.media === "ebook";
 export const crossSeedPolicySchema = z.object({
   version: z.literal(1).default(1),
   minimumReuseRatio: z.number().min(0.01).max(1).default(0.8),
@@ -49,6 +51,10 @@ export class CrossSeedRepo {
   }
   owns(scope: CrossSeedScope, clientId: string, nativeId: string): boolean {
     crossSeedScopeSchema.parse(scope);
+    if (isBookCrossSeedScope(scope)) return !!this.db.query(`SELECT 1 FROM media_torrents t
+      JOIN book_torrent_bindings b ON b.torrent_id=t.id JOIN releases r ON r.id=b.release_id
+      WHERE b.book_id=? AND r.book_id=b.book_id AND r.media_type=? AND t.client_id=? AND t.native_id=? LIMIT 1`)
+      .get(scope.targetId, scope.media, clientId, nativeId);
     return !!this.db.query(`SELECT 1 FROM media_torrents t
       JOIN ${scope.media}_acquisition_downloads d ON d.torrent_id=t.id
       JOIN ${scope.media}_acquisitions a ON a.id=d.acquisition_id
@@ -57,12 +63,21 @@ export class CrossSeedRepo {
   }
   hasFiles(scope: CrossSeedScope): boolean {
     crossSeedScopeSchema.parse(scope);
+    if (isBookCrossSeedScope(scope)) return !!this.db.query(`SELECT 1 FROM asset_files f
+      JOIN assets a ON a.id=f.asset_id JOIN manifestations m ON m.id=a.manifestation_id AND m.book_id=a.book_id
+      WHERE a.book_id=? AND m.kind=? LIMIT 1`).get(scope.targetId, scope.media);
     return !!this.db.query(`SELECT 1 FROM ${scope.media}_versions v JOIN ${scope.media}_version_files f ON f.version_id=v.id
       JOIN ${scope.media}_acquisitions a ON a.id=v.acquisition_id
       WHERE a.target_id=? AND NOT EXISTS(SELECT 1 FROM media_content_losses l WHERE l.file_id=f.file_id) LIMIT 1`).get(scope.targetId);
   }
   contentRevision(scope: CrossSeedScope): string {
     crossSeedScopeSchema.parse(scope);
+    if (isBookCrossSeedScope(scope)) {
+      const rows = this.db.query(`SELECT f.id,f.path,f.size,f.updated_at FROM asset_files f
+        JOIN assets a ON a.id=f.asset_id JOIN manifestations m ON m.id=a.manifestation_id AND m.book_id=a.book_id
+        WHERE a.book_id=? AND m.kind=? ORDER BY f.id`).all(scope.targetId, scope.media);
+      return createHash("sha256").update(JSON.stringify(rows)).digest("hex");
+    }
     const row = this.db.query(`SELECT COALESCE(MAX(v.id),0) AS newest, COUNT(DISTINCT f.file_id) AS files
       FROM ${scope.media}_versions v JOIN ${scope.media}_version_files f ON f.version_id=v.id
       JOIN ${scope.media}_acquisitions a ON a.id=v.acquisition_id
@@ -74,6 +89,11 @@ export class CrossSeedRepo {
     crossSeedScopeSchema.parse(scope);
     z.array(z.number().int().nonnegative().safe()).max(2000).parse(sizes);
     if (!sizes.length) return [];
+    if (isBookCrossSeedScope(scope)) return this.db.query(`SELECT 'book-file:' || f.id AS id,
+      f.path AS relative_path,f.size AS size_bytes FROM asset_files f
+      JOIN assets a ON a.id=f.asset_id JOIN manifestations m ON m.id=a.manifestation_id AND m.book_id=a.book_id
+      WHERE a.book_id=? AND m.kind=? AND f.size IN (${sizes.map(() => "?").join(",")})
+      ORDER BY f.id LIMIT 2001`).all(scope.targetId, scope.media, ...sizes) as { id: string; relative_path: string; size_bytes: number }[];
     return this.db.query(`SELECT DISTINCT f.id,f.relative_path,f.size_bytes FROM managed_content_files f
       JOIN ${scope.media}_version_files vf ON vf.file_id=f.id
       JOIN ${scope.media}_versions v ON v.id=vf.version_id

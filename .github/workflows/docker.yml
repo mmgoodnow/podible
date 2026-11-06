@@ -160,6 +160,11 @@ jobs:
         run: docker run --rm --network none -v "$PWD/test:/app/test:ro" --entrypoint bun podible-transmission-test:ci run test/lab/transmission-inner.ts
       - name: Non-CoW symlink reuse and restart acceptance
         run: docker run --rm --network none --tmpfs /tmp:rw,size=128m -v "$PWD/test:/app/test:ro" --entrypoint bun podible-transmission-test:ci run test/lab/symlink-reuse-inner.ts
+      - name: Non-CoW audiobook and ebook reuse acceptance
+        run: |
+          for media in audio ebook; do
+            docker run --rm --network none --tmpfs /tmp:rw,size=128m -v "$PWD/test:/app/test:ro" --entrypoint bun podible-transmission-test:ci run test/lab/symlink-reuse-inner.ts "--$media"
+          done
       - name: Legacy book migration lab (manual opt-in only)
         if: github.event_name == 'workflow_dispatch' && inputs.book_migration_lab
         run: docker run --rm --network none -v "$PWD/test:/app/test:ro" --entrypoint bun podible-transmission-test:ci run test/lab/book-migration-inner.ts

@@ -7,6 +7,7 @@ import { normalizeAudioExt } from "../media/metadata";
 import { computeEpubWordCount } from "./chapter-analysis";
 import { inferLanguageFromReleaseTitles } from "./language";
 import { adoptBookContent, bookViewDirectory, reconcileBookView } from "./book-storage";
+import { queueBookSelectedCopies } from "./service";
 
 import type { BooksRepo } from "../repo";
 import type { AssetKind, MediaType, ReleaseRow } from "../app-types";
@@ -202,7 +203,10 @@ export async function importReleaseFromPath(
   }
   const existing = options.importKey ? repo.findAssetByImportKey(options.importKey) : null;
   if (existing) {
+    if (existing.book_id !== release.book_id || existing.source_release_id !== release.id)
+      throw new Error("Import replay belongs to another book or release");
     await reconcileBookView(repo, libraryRoot);
+    queueBookSelectedCopies(repo, release);
     return { assetId: existing.id, linkedFiles: repo.getAssetFiles(existing.id).map((file) => file.path) };
   }
 
@@ -295,6 +299,7 @@ export async function importReleaseFromPath(
   });
 
   await reconcileBookView(repo, libraryRoot);
+  queueBookSelectedCopies(repo, release);
 
   return {
     assetId: asset.id,

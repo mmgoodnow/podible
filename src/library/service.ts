@@ -10,6 +10,10 @@ import { inferLanguageFromReleaseTitles, normalizeManifestationLanguageCode } fr
 import type { IndexerSearchBatch, TorznabResult } from "./torznab";
 import type { AppSettings, MediaType, ReleaseRow } from "../app-types";
 import type { WorkerContext } from "../worker/context";
+import { releaseOfferFromResult } from "../media/release-offer";
+import { rememberSelectedCopies } from "../media/selected-copies";
+import { queueSelectedCrossSeeds } from "../media/cross-seed";
+import { z } from "zod";
 
 type SearchRequest = {
   query: string;
@@ -76,7 +80,72 @@ type SnatchRuntimeOptions = {
   operationKey?: string;
   stepPrefix?: string;
   bookTorrentClient?: TorrentClient;
+  /** Internal server search evidence only; never exposed on snatch RPC inputs. */
+  selectedCopies?: { selected: TorznabResult; alternatives: TorznabResult[] };
+  selectedCopiesByPart?: Array<{ selected: TorznabResult; alternatives: TorznabResult[] }>;
 };
+
+const bookSelectionKey = (releaseId: number) => `book-release-selection:${releaseId}`;
+const selectionResultSchema = z.object({
+  title: z.string(), provider: z.string(), mediaType: z.enum(["audio", "ebook"]),
+  sizeBytes: z.number().int().nullable(), url: z.url(), guid: z.string().nullable(),
+  infoHash: z.string().nullable(), seeders: z.number().int().nullable(), leechers: z.number().int().nullable(),
+  raw: z.record(z.string(), z.unknown()),
+});
+const selectionIntentSchema = z.object({
+  version: z.literal(1), bookId: z.number().int().positive(), media: z.enum(["audio", "ebook"]),
+  infoHash: z.string().regex(/^[a-f0-9]{40}$/), selectedOfferKey: z.string().regex(/^[a-f0-9]{64}$/),
+  selected: selectionResultSchema, alternatives: z.array(selectionResultSchema).min(1).max(2000),
+}).strict();
+
+/** Independent of Reflow: internal/manual callers can crash after resume but before release publication. */
+function retainBookSelectionIntent(repo: BooksRepo, request: SnatchRequest, infoHash: string,
+  evidence: SnatchRuntimeOptions["selectedCopies"]) {
+  const prefix = `book-selected-intent:${request.bookId}:${request.mediaType}:${infoHash}:`;
+  const index = `book-selected-intents:${request.bookId}:${request.mediaType}:${infoHash}`;
+  return repo.transaction(() => {
+    const keys = z.array(z.string().regex(/^[a-f0-9]{64}$/)).parse(repo.getJsonState(index) ?? []);
+    if (evidence?.alternatives.length) {
+      const key = releaseOfferFromResult(evidence.selected).key;
+      // First-write-wins: later searches cannot mutate already dispatched evidence.
+      if (repo.getJsonState(prefix + key) === null) repo.setJsonState(prefix + key, selectionIntentSchema.parse({
+        version: 1, bookId: request.bookId, media: request.mediaType, infoHash, selectedOfferKey: key,
+        selected: evidence.selected, alternatives: evidence.alternatives,
+      }));
+      if (!keys.includes(key)) keys.push(key);
+      repo.setJsonState(index, keys);
+    }
+    return keys.map(key => {
+      const intent = selectionIntentSchema.parse(repo.getJsonState(prefix + key));
+      if (intent.bookId !== request.bookId || intent.media !== request.mediaType || intent.infoHash !== infoHash ||
+        intent.selectedOfferKey !== key || releaseOfferFromResult(intent.selected).key !== key ||
+        intent.selected.mediaType !== request.mediaType || intent.alternatives.some(copy => copy.mediaType !== request.mediaType))
+        throw new Error("Retained book selection intent changed identity");
+      return { selected: intent.selected, alternatives: intent.alternatives };
+    });
+  });
+}
+
+function retainBookSelectedCopies(repo: BooksRepo, release: ReleaseRow, evidence: SnatchRuntimeOptions["selectedCopies"]) {
+  if (!evidence || !evidence.alternatives.length) return;
+  if (evidence.selected.mediaType !== release.media_type)
+    throw new Error("Book copy evidence has another release media type");
+  const selected = evidence.selected;
+  const offer = releaseOfferFromResult(selected);
+  rememberSelectedCopies(repo, { media: release.media_type, targetId: release.book_id }, release.id,
+    offer, evidence.alternatives.map(copy => releaseOfferFromResult(copy)));
+  const keys = z.array(z.string().min(1)).parse(repo.getJsonState(bookSelectionKey(release.id)) ?? []);
+  repo.setJsonState(bookSelectionKey(release.id), [...new Set([...keys, offer.key])]);
+}
+
+/** Imported data may predate newly retained search evidence; import replay must reconsider it too. */
+export function queueBookSelectedCopies(repo: BooksRepo, release: ReleaseRow) {
+  return repo.transaction(() => {
+    const keys = z.array(z.string().min(1)).parse(repo.getJsonState(bookSelectionKey(release.id)) ?? []);
+    return keys.flatMap(key => queueSelectedCrossSeeds(repo,
+      { media: release.media_type, targetId: release.book_id }, release.id, key));
+  });
+}
 
 type RankedSearchResult = {
   result: TorznabResult;
@@ -208,6 +277,11 @@ export async function runSnatch(
   if (!book) {
     throw new Error(`Book ${request.bookId} not found`);
   }
+  const evidence = runtime.selectedCopies;
+  if (evidence && (evidence.selected.mediaType !== request.mediaType || evidence.selected.provider !== request.provider ||
+    evidence.selected.title !== request.title || (evidence.selected.guid?.trim() || null) !== (request.providerGuid?.trim() || null) ||
+    evidence.selected.url !== request.url || evidence.alternatives.some(copy => copy.mediaType !== request.mediaType)))
+    throw new Error("Book copy evidence does not belong to the selected release");
   if (isMagnet(request.url)) {
     throw new Error("Magnet URLs are not supported for snatch; provide a .torrent URL");
   }
@@ -267,6 +341,7 @@ export async function runSnatch(
     torrentBytes
   });
 
+  const retainedEvidence = retainBookSelectionIntent(repo, request, derivedHash, runtime.selectedCopies);
   const existingByDerived = repo.findReleaseByInfoHash(derivedHash);
   if (existingByDerived) {
     if (existingByDerived.book_id !== request.bookId) {
@@ -275,7 +350,12 @@ export async function runSnatch(
     snatchLog(
       `[snatch] dedupe reason=derived_hash release=${existingByDerived.id} info_hash=${existingByDerived.info_hash} provider_guid=${JSON.stringify(existingByDerived.provider_guid)}`
     );
-    return idempotentResult(repo, existingByDerived);
+    return repo.transaction(() => {
+      for (const evidence of retainedEvidence) retainBookSelectedCopies(repo, existingByDerived, evidence);
+      if (repo.listAssetsByBook(existingByDerived.book_id).some(asset => asset.source_release_id === existingByDerived.id))
+        queueBookSelectedCopies(repo, existingByDerived);
+      return idempotentResult(repo, existingByDerived);
+    });
   }
 
   snatchLog(`[snatch] private Transmission add begin`);
@@ -294,6 +374,9 @@ export async function runSnatch(
     const existing = repo.findReleaseByInfoHash(derivedHash);
     if (existing) {
       if (existing.book_id !== request.bookId) throw new Error(`Infohash already linked to book ${existing.book_id}`);
+      for (const evidence of retainedEvidence) retainBookSelectedCopies(repo, existing, evidence);
+      if (repo.listAssetsByBook(existing.book_id).some(asset => asset.source_release_id === existing.id))
+        queueBookSelectedCopies(repo, existing);
       return idempotentResult(repo, existing);
     }
     if (manifestationId === null) {
@@ -320,6 +403,7 @@ export async function runSnatch(
       status: "snatched"
     });
     repo.bookTorrents.attach(derivedHash, release.id);
+    for (const evidence of retainedEvidence) retainBookSelectedCopies(repo, release, evidence);
 
     const job = repo.createJob({
       type: "download",
@@ -394,7 +478,7 @@ export async function runSnatchGroup(
             sequenceInManifestation: needsExplicitManifestation ? index : null,
             manifestationLanguage: language
           },
-          runtime
+          { ...runtime, selectedCopies: runtime.selectedCopiesByPart?.[index] ?? runtime.selectedCopies }
         );
       results.push(await (runtime.execution ? runtime.execution.run(`${prefix}:part:${index}`, snatch) : snatch()));
     }

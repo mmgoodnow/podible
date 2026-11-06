@@ -2,8 +2,8 @@
 
 ## Implemented Scope
 
-Movie and TV RSS entries also route to retained content, independently of missing
-episodes and quality upgrades. The semantic agent identifies plausible works;
+Book, movie and TV RSS entries also route to retained content, independently of
+missing formats, episodes and quality upgrades. The semantic agent identifies plausible works;
 the server then fetches the original retained candidate metainfo and builds its
 actual file layout from registered canonical objects. There are no virtual-season
 torrents, periodic per-title searches, arbitrary client download URLs, or hardcoded
@@ -30,6 +30,17 @@ each alternate gets an idempotent reuse job. Those jobs use the same verified
 executor as RSS and do not block publication on unsuccessful/unsupported reuse.
 They survive app restarts without depending on an RSS row or a repeated search.
 Retained TV packs carry that source association across later import batches.
+Book selectors retain equivalent candidates separately for each ordered release
+part, preserving translation, narration, edition and part coverage. Audio and
+ebook use separate book-scoped inventories. Their source association is the
+book release ID, and import replay queues retained copies idempotently without
+creating additional manifestations or changing existing selections. Manual
+snatches do not invent matching copies absent server-owned selection evidence.
+Book copy evidence is committed independently before client dispatch, then
+associated atomically with the published release/download job. A crash before
+publication can recover it even without Reflow or the original runtime input.
+Already-imported books keep consuming category feeds for reuse, without starting
+new title searches or missing-format acquisitions.
 Copies skipped before registration can be reconsidered once registered file coverage grows;
 the same content revision cannot enqueue duplicate attempts. Pending, successful
 and filesystem-unsupported attempts are not requeued for every import batch.
@@ -104,6 +115,10 @@ It is a required runtime CI gate. The separate two-daemon
 corrupted shared target, and safe pre-spawn restoration of damaged DND/labels,
 missing resume files and malformed resume files. These are local synthetic
 checks, not production download evidence.
+The same application lab also runs with `--audio` and `--ebook`: actual book
+canonical hardlinks, format-scoped source inventory and book ownership go
+through the same planner, materializer, client and restart guard. Both passed
+with zero downloaded bytes and unchanged manifests on a non-CoW Linux tmpfs.
 
 All methods below require admin authentication and use both JSON-RPC and typed
 tRPC through the existing router. Operation/report UUIDs are immutable idempotency
@@ -160,7 +175,7 @@ season-pack manifest, including piece boundaries crossing files.
 
 ## Deliberate POC Limits
 
-- The runtime file pool is registered movie/TV canonical content. Unpublished
+- The runtime file pool is registered book/movie/TV canonical content. Unpublished
   partial-download bytes and newly created seed-only variants are not yet fed
   back into discovery. The rescue canary uses retained canonical bytes while
   another torrent is incomplete; it does not establish arbitrary partial-torrent
