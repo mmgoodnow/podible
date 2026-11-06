@@ -237,6 +237,35 @@ describe("Plex discovery and exact selection", () => {
 });
 
 describe("operational facts from the execution authority", () => {
+  test("TV sync season-numbering failures explain the cause without exposing raw diagnostics", async () => {
+    await using f = await fixture();
+    const job = f.job({ type: "tv_sync" }, { status: "failed",
+      error: `Seerr request 734 has no explicitly mapped episodes in its approved seasons ${secretUrl} ${ownerToken}` });
+    const before = f.db.query("SELECT total_changes() AS n").get();
+    const result = await executeMethod(f.router.routes.ops, f.ctx, { includeJobs: true });
+    expect(result.incidents).toContainEqual(expect.objectContaining({ jobId: job.id, title: "TV request sync",
+      code: "tv-season-mapping", detail: expect.stringContaining("do not match Sonarr's episode numbering"), recovery: "manual-retry" }));
+    expect(result.incidents.find(item => item.jobId === job.id)!.detail).toContain("Existing downloads and Plex content are unchanged");
+    expect(result.diagnostics.recentJobs.find(item => item.id === job.id)?.error?.code).toBe("tv-season-mapping");
+    expect(JSON.stringify(result)).not.toContain(secretUrl);
+    expect(JSON.stringify(result)).not.toContain(ownerToken);
+    expect(JSON.stringify(result)).not.toContain("734");
+    expect(f.db.query("SELECT total_changes() AS n").get()).toEqual(before);
+  });
+
+  test("only the current TV sync failure is actionable and a newer successful sync clears it", async () => {
+    await using f = await fixture();
+    const error = "Seerr request 734 has no explicitly mapped episodes in its approved seasons";
+    const historical = f.job({ type: "tv_sync" }, { status: "failed", error });
+    const latest = f.job({ type: "tv_sync" }, { status: "failed", error });
+    let result = await executeMethod(f.router.routes.ops, f.ctx, {});
+    expect(result.incidents.filter(item => item.code === "tv-season-mapping").map(item => item.jobId)).toEqual([latest.id]);
+    expect(result.incidents.some(item => item.jobId === historical.id)).toBe(false);
+    f.job({ type: "tv_sync" }, { status: "succeeded" });
+    result = await executeMethod(f.router.routes.ops, f.ctx, {});
+    expect(result.incidents.some(item => item.code === "tv-season-mapping")).toBe(false);
+  });
+
   test("Ops leads real active work and failures without treating saved torrent observations as current downloads", async () => {
     await using f = await fixture();
     const book = f.repo.createBook({ title: "Book in flight", author: "Writer" });

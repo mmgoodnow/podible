@@ -107,6 +107,8 @@ function labelSanitizer(settings: AppSettings) {
 export function normalizedAdminError(raw: string | null): z.infer<typeof safeErrorSchema> | null {
   if (!raw) return null;
   const signal = raw.replace(/https?:\/\/\S+/gi, "[URL]");
+  if (/\bSeerr request [1-9]\d* has no explicitly mapped episodes in its approved seasons\b/i.test(signal))
+    return { code: "tv-season-mapping", message: "The seasons approved in Seerr do not match Sonarr's episode numbering. Check the show's season mapping in both services before retrying. Existing downloads and Plex content are unchanged." };
   if (/(?:client|version).*(?:not (?:on (?:the )?)?(?:white|allow)[ -]?list|not allowed|not permitted|banned|unsupported|unapproved)|(?:white|allow)[ -]?list.*(?:client|version)/i.test(signal))
     return { code: "tracker-client-not-allowed", message: "A tracker rejected the torrent client or version. Check that tracker's allowed client/version list and the managed client's tracker status before retrying." };
   if (/\b(?:401|403)\b|HTTP (?:400|404|405|422)\b|authentication.*(?:fail|reject)|invalid (?:provider )?(?:credential|api.?key|token)|unauthori[sz]ed|forbidden/i.test(signal))
@@ -297,6 +299,8 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
   function contextFor(job: JobRow): Context {
     const associated = contexts.get(job.id);
     if (associated) return associated;
+    if (job.type === "tv_sync") return { key: `job:${job.id}`, title: "TV request sync", media: "system", targetId: null,
+      href: null, stage: "Import approved Seerr TV seasons", suppressIncident: false };
     if (job.type === "tv_shadow_evaluate" || job.type === "movie_shadow_evaluate") {
       let caseId: number | null = null;
       try { const payload = JSON.parse(job.payload_json ?? "{}"); if (id.safeParse(payload.caseId).success) caseId = payload.caseId; } catch { /* Unknown case identity stays unnamed. */ }
