@@ -71,3 +71,41 @@ not a general exception-swallowing framework or a new provider mapping system.
 
 The corrected-provider fixture is an explicit upstream input change for testing
 the retry lifecycle. It does not demonstrate a real Tom and Jerry identity bridge.
+
+## Episode Comparison Follow-Up
+
+A subsequent GET-only production comparison on November 6, running
+`b48bd9fe4fb58f038768d746a35eae962fbbe255`, compared every approved TMDB
+episode with Sonarr's TVDB catalog. The earlier requirement for explicit
+external-ID bridges was too restrictive: the available metadata supports an
+episode crosswalk without equating the providers' season numbers.
+
+| Requested TMDB group | Corresponding TVDB aired group |
+| --- | --- |
+| Season 1, 114 episodes | 1940: 46; 1950: 68 |
+| Season 2, 13 episodes | 1960: 13 |
+| Season 3, 34 episodes | 1960: remaining 34 |
+
+There are 158 unique normalized-title matches without duplicate assignments:
+113 also have identical dates, while 45 have conflicting dates. The remaining
+three title variants each have a unique matching-date candidate:
+
+- "Yankee Doodle Mouse" / "The Yankee Doodle Mouse".
+- "Zoot Cat" / "The Zoot Cat".
+- "Tom and Jerry in the Hollywood Bowl" / "The Hollywood Bowl".
+
+Together these account for all 161 regular episodes, excluding the 16 TVDB
+specials. TMDB supplies no episode synopses and a runtime for only one episode,
+so those fields cannot independently corroborate most pairs. Dates should be
+supporting evidence rather than a veto: even corresponding titles such as
+"Baby Puss" and "Baby Butch" have conflicting provider dates.
+
+The implementation direction is a persisted episode-ID crosswalk with evidence,
+not season offsets or a Tom and Jerry exception. Unique title matches can anchor
+the comparison; an agent should inspect title variants, date conflicts and
+ambiguous candidates within the identified work. Validate complete approved
+coverage, known IDs and non-conflicting assignments before acquisition, while
+preserving the provider-specific season memberships and Plex publication order.
+
+This is metadata research, not an implemented mapping or downloaded-file identity
+verification. No production request, torrent, settings or database data changed.
