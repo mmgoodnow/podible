@@ -12,6 +12,7 @@ export type AdminTorrentBinding = {
 export type AdminTorrentSource = { media: "movie" | "tv"; binding: AdminTorrentBinding };
 export type AdminTorrentObservation = {
   active: boolean; bytesDone: number; sizeBytes: number; bytesPerSecond: number; observedAt: string; error: string | null;
+  state: "checking" | "download-queued" | "downloading" | "stopped" | "seeding";
 };
 const count = z.number().int().nonnegative().safe();
 const rowSchema = z.object({
@@ -72,6 +73,7 @@ export async function readAdminTorrents(
         active: [1, 2, 3, 4].includes(row.status) && (row.leftUntilDone > 0 || row.status === 1 || row.status === 2),
         bytesDone: row.sizeWhenDone - row.leftUntilDone, sizeBytes: row.sizeWhenDone, bytesPerSecond: row.rateDownload,
         observedAt: new Date(now).toISOString(), error: row.error ? row.errorString || "Torrent engine reported a tracker or storage error" : null,
+        state: row.status === 1 || row.status === 2 ? "checking" : row.status === 3 ? "download-queued" : row.status === 4 ? "downloading" : row.status === 5 || row.status === 6 ? "seeding" : "stopped",
       });
     }
   } catch { /* Transport failures never promote recorded activity/errors into current facts. */ }

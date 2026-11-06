@@ -39,6 +39,7 @@ export const adminWebJobSchema = z.object({
 const workSchema = z.object({
   key: z.string(), title: z.string(), media: z.enum(["book", "movie", "tv", "system"]),
   targetId: id.nullable(), href: z.string().nullable(), stage: z.string().nullable(), job: adminWebJobSchema,
+  scope: z.string().nullable().optional(),
 });
 const incidentSchema = z.object({
   key: z.string(), title: z.string(), detail: z.string(), code: z.string(), jobId: id.nullable(), href: z.string().nullable(),
@@ -50,6 +51,7 @@ export const adminWebOpsSchema = z.object({
   downloads: z.array(workSchema.extend({
     bytesDone: count.nullable(), sizeBytes: count.nullable(), bytesPerSecond: count.nullable(),
     observedAt: z.string().nullable(), telemetry: z.enum(["live", "recorded", "unknown"]), problem: safeErrorSchema.nullable(),
+    state: z.enum(["checking", "download-queued", "downloading", "stopped", "seeding"]).nullable().optional(),
   })),
   incidents: z.array(incidentSchema),
   feeds: z.array(z.object({
@@ -237,6 +239,7 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
       const movie = repo.movies.movie(target.movie_id);
       const acquisitions = repo.movies.acquisitions(target.id);
       const downloads = repo.movies.downloads(target.id);
+      const events = repo.movies.events(target.id);
       const latest = acquisitions[0];
       if (latest?.finished_at && latest.job_id && getJob(latest.job_id)?.status === "succeeded" &&
           target.active_version_id === null && repo.movies.activeRequestCount(target.id) > 0 &&
@@ -244,7 +247,7 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
           repo.retention.get({ namespace: "movie-target", id: String(target.id) })?.desiredPresence !== "evicted") waiting++;
       for (const [index, acquisition] of acquisitions.entries()) if (acquisition.job_id) {
         contexts.set(acquisition.job_id, { key: `movie:${acquisition.id}`, title: label(movie?.title ?? `Movie target ${target.id}`), media: "movie", targetId: target.id,
-          href: movie ? `/movies/${movie.tmdbId}` : null, stage: repo.movies.events(target.id).at(-1)?.stage ?? null,
+          href: movie ? `/movies/${movie.tmdbId}` : null, stage: events.filter(event => event.acquisitionId === acquisition.id).at(-1)?.stage ?? null,
           suppressIncident: index > 0 || target.active_version_id !== null || !repo.movies.activeRequestCount(target.id) ||
             repo.retention.get({ namespace: "movie-target", id: String(target.id) })?.desiredPresence === "evicted" });
         const ids = new Set(bindings.filter((row) => row.acquisition_id === acquisition.id).map((row) => row.torrent_id));
@@ -263,6 +266,7 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
       const nothingAiredMissing = pending.every((episode) => !episode.airDate || Date.parse(episode.airDate) > now);
       const downloads = repo.tv.downloads(targetId);
       const acquisitions = repo.tv.acquisitions(targetId);
+      const events = repo.tv.events(targetId);
       const latest = acquisitions[0];
       if (latest?.finished_at && latest.job_id && getJob(latest.job_id)?.status === "succeeded" && liveRequests.length && pending.length &&
           repo.retention.get({ namespace: "tv-target", id: String(targetId) })?.desiredPresence !== "evicted") {
@@ -272,9 +276,14 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
       }
       for (const [index, acquisition] of acquisitions.entries()) if (acquisition.job_id) {
         const request = acquisition.request_id ? requestsById.get(acquisition.request_id) : null;
+        const parsed = z.object({ batchEpisodeIds: z.array(id).optional(), waitingForSources: z.boolean().optional() })
+          .safeParse(acquisition.decision_json ? JSON.parse(acquisition.decision_json) : {});
+        const batch = parsed.success && parsed.data.batchEpisodeIds ? entry?.episodes.filter(ep => parsed.data.batchEpisodeIds!.includes(ep.id)) ?? [] : [];
+        const seasons = [...new Set(batch.flatMap(ep => ep.numbering.filter(n => n.scheme === "tvdb:aired" && n.season !== null).map(n => n.season!)))].sort((a,b) => a-b);
+        const scope = batch.length ? `${seasons.length === 1 ? seasons[0] === 0 ? "Specials" : `Season ${seasons[0]}` : seasons.length ? `Seasons ${seasons.join(", ")}` : "Episode batch"} · ${batch.length} ${batch.length === 1 ? "episode" : "episodes"}` : null;
         contexts.set(acquisition.job_id, { key: `tv:${acquisition.id}`, title: label(entry?.title ?? `TV target ${targetId}`), media: "tv", targetId,
           href: entry && request?.target_id === targetId && request.user_id === actorUserId ? `/tv/requests/${request.id}` : sharedHref,
-          stage: repo.tv.events(targetId).at(-1)?.stage ?? null,
+          scope, stage: parsed.success && parsed.data.waitingForSources ? "pack-pending" : events.filter(event => event.acquisitionId === acquisition.id).at(-1)?.stage ?? null,
           suppressIncident: index > 0 || !liveRequests.length || nothingAiredMissing ||
             repo.retention.get({ namespace: "tv-target", id: String(targetId) })?.desiredPresence === "evicted" });
         const ids = new Set(tvBindings.filter((row) => row.acquisition_id === acquisition.id).map((row) => row.torrent_id));
@@ -352,7 +361,7 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
         : null;
       downloads.push({ ...work, key: `${work.key}:torrent:${torrent.id}`, job: view,
         bytesDone: observed.bytesDone, sizeBytes: observed.sizeBytes, bytesPerSecond: observed.bytesPerSecond,
-        observedAt: observed.observedAt, telemetry: "live", problem });
+        observedAt: observed.observedAt, telemetry: "live", problem, state: observed.state });
       if (problem && !suppressIncident && view.error?.code !== problem.code)
         incidents.push({ key: `torrent:${torrent.id}`, title: work.title, detail: problem.message, code: problem.code,
           jobId: job.id, href: work.href, recovery: view.recovery, nextWakeAt: view.nextWakeAt });

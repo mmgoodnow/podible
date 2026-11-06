@@ -482,6 +482,28 @@ describe("operational facts from the execution authority", () => {
     expect(result.incidents).toEqual([]);
   });
 
+  test("parallel TV batches retain their own stage, season scope and torrent observations despite later sibling events", async () => {
+    await using f = await fixture();
+    const input = fixtureTvEntry();
+    input.episodes = [1, 2, 3].map(season => ({ ...input.episodes[0]!, key: `tvdb:${30100 + season}`,
+      numbering: [{ scheme: "tvdb:aired", season, episode: 1, absolute: null }] }));
+    const request = f.repo.tv.request(f.user.id, input, {}, input.episodes.map(ep => ep.key));
+    const members = f.repo.tv.requestedEpisodes(request.requestId);
+    const batches = members.map(ep => f.repo.tv.startAcquisition(request.targetId, "initial", () =>
+      f.job({ type: "tv_acquire" }, { status: "queued", next_run_at: new Date(NOW + 30000).toISOString() }).id,
+      request.requestId, [ep.id]).acquisition);
+    f.repo.tv.event(request.targetId, batches[0]!.id, "parallel:downloading", "downloading", "Downloading selected release");
+    f.repo.tv.event(request.targetId, batches[1]!.id, "parallel:publishing", "publishing", "Publishing completed files");
+    f.repo.tv.event(request.targetId, batches[2]!.id, "parallel:blocked", "blocked", "No suitable match");
+    const source = await managedSource(f, batches[0]!.id, "tv", "e".repeat(40), "parallel");
+    const result = await liveInventory(f, [liveTorrent(source.hash, source.directory, { labels: ["Podible TV"] })]).read();
+    expect(result.activeAcquisitions.find(w => w.job.id === batches[0]!.job_id)).toMatchObject({ stage: "downloading", scope: "Season 1 · 1 episode", job: { recovery: "scheduled-wake" } });
+    expect(result.activeAcquisitions.find(w => w.job.id === batches[1]!.job_id)).toMatchObject({ stage: "publishing", scope: "Season 2 · 1 episode" });
+    expect(result.activeAcquisitions.find(w => w.job.id === batches[2]!.job_id)).toMatchObject({ stage: "blocked" });
+    expect(result.downloads).toHaveLength(1);
+    expect(result.downloads[0]).toMatchObject({ stage: "downloading", state: "downloading", job: { id: batches[0]!.job_id }, sizeBytes: 100 });
+  });
+
   test("TV activity links use the actor's exact request, shared published work, or no inaccessible private destination", async () => {
     await using f = await fixture();
     const foreign = f.repo.upsertUser({ provider: "local", providerUserId: "activity-foreign", username: "Other viewer", isAdmin: false });

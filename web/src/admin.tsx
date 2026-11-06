@@ -6,7 +6,7 @@ import type { AppRouter } from "../../src/trpc";
 import { useTRPC } from "./rpc";
 import { Link } from "./router";
 import "./activity.css";
-import { activityItems, attentionItems, downloadProgress, problemAction, type ActivityDownload } from "./activity-model";
+import { activityItems, activityPhase, attentionItems, downloadProgress, problemAction, type ActivityDownload } from "./activity-model";
 import { Connections } from "./connections";
 import { TransferMetrics } from "./transfer-metrics";
 
@@ -202,20 +202,23 @@ function ActivityProblem({ incident, onRetried }: { incident: Ops["incidents"][n
 }
 
 function ActivityWork({ work, downloads }: { work: Ops["activeAcquisitions"][number]; downloads: ActivityDownload[] }) {
-  const phase = work.job.recovery === "running" ? "Working" : recoveryLabels[work.job.recovery];
+  const phase = activityPhase(work, downloads);
   const measured = downloadProgress(downloads);
   return <article className="activity-item" aria-label={work.title}>
-    <div className="activity-item-heading"><h3><WorkTitle title={work.title} href={work.href} /></h3><span className="activity-badge">{phase}</span></div>
-    {work.stage && <p>{work.stage.replaceAll("_", " ")}</p>}
+    <div className="activity-item-heading"><h3><WorkTitle title={work.title} href={work.href} /></h3><span className="activity-badge">{phase.label}</span></div>
+    {work.scope && <p>{work.scope}</p>}
+    {work.media === "book" && work.stage && <p>{work.stage}</p>}
     {measured ? <>
+      {phase.transferLabel !== "Download progress" && <p>{phase.transferLabel}</p>}
       <progress aria-label={`Download progress for ${work.title}`} value={measured.done} max={measured.size} />
       <p>{bytes(measured.done)} of {bytes(measured.size)}{measured.speed !== null && measured.live ? ` / ${bytes(measured.speed)}/s` : ""}{!measured.live ? " / last recorded progress" : ""}</p>
     </> : downloads.length > 0 && <p>Waiting for download status.</p>}
-    {downloads.length > 1 && <p>{downloads.length} downloads in this request.</p>}
+    {downloads.length > 1 && <p>{downloads.length} downloads attached to this batch.</p>}
     {downloads.filter(d => d.problem).map(download => <p key={download.key}>{download.problem!.message}</p>)}
-    {work.job.nextWakeAt && <p>Next attempt: {date(work.job.nextWakeAt)}.</p>}
+    {phase.showWake && work.job.nextWakeAt && <p>Next check: {date(work.job.nextWakeAt)}.</p>}
     <details><summary>Technical details</summary>
       <p>{work.media} / job #{work.job.id} / {work.job.type}. Attempts {work.job.attempts}/{work.job.maxAttempts}.</p>
+      {work.stage && <p>Workflow stage: {work.stage}</p>}
       {downloads.map(download => <p key={download.key}>Telemetry: {download.telemetry}. Observed {date(download.observedAt)}.</p>)}
     </details>
   </article>;
@@ -227,8 +230,8 @@ export function OpsPage() {
   const ops = useQuery(trpc.adminWeb.ops.queryOptions({ includeJobs: false }, { refetchInterval: 5000 }));
   const refresh = useMutation(trpc.adminWeb.refresh.mutationOptions({ onSuccess: () => cache.invalidateQueries({ queryKey: trpc.adminWeb.ops.queryKey() }) }));
   const work = ops.data ? activityItems(ops.data) : [];
-  const running = work.filter(item => item.work.job.recovery === "running");
-  const waiting = work.filter(item => item.work.job.recovery !== "running");
+  const running = work.filter(item => activityPhase(item.work, item.downloads).active);
+  const waiting = work.filter(item => !activityPhase(item.work, item.downloads).active);
   const attention = ops.data ? attentionItems(ops.data.incidents) : [];
   return <div className="activity-page">
     <div className="activity-heading"><h1>Activity</h1><button className="secondary" disabled={ops.isFetching} onClick={() => ops.refetch()}>Refresh</button></div>

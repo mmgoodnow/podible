@@ -228,7 +228,7 @@ try {
   await waiting.getByRole("link", { name: "Fixture Active Download", exact: true }).waitFor();
   await waiting.getByText("Waiting for download status.", { exact: true }).waitFor();
   assert.equal(await waiting.getByText("Telemetry: unknown.", { exact: false }).first().isVisible(), false, "Raw telemetry should not lead the activity view");
-  await page.getByRole("region", { name: "Waiting work", exact: true }).getByText("Will retry automatically", { exact: false }).waitFor();
+  await page.getByRole("region", { name: "Waiting work", exact: true }).getByText("Retry scheduled", { exact: true }).waitFor();
   assert.equal(await active.getByText("Fixture Automatic Retry", { exact: true }).count(), 0, "Sleeping work must not be presented as running");
   await waiting.getByText("Finding audiobook editions", { exact: true }).first().waitFor();
   await active.getByText("No downloads or imports in progress.", { exact: true }).waitFor();

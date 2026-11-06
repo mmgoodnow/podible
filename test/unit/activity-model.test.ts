@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { activityItems, attentionItems, downloadProgress, problemAction, type ActivityDownload } from "../../web/src/activity-model";
+import { activityItems, activityPhase, attentionItems, downloadProgress, problemAction, type ActivityDownload } from "../../web/src/activity-model";
 
 function download(key: string, overrides: Partial<ActivityDownload> = {}): ActivityDownload {
   return { key, title: "A season", media: "tv", targetId: 1, href: "/tv-sync", stage: "downloading",
@@ -13,6 +13,16 @@ test("one activity card retains every download belonging to the same acquisition
   expect(rows).toHaveLength(1);
   expect(rows[0]!.downloads).toEqual([first, second]);
   expect(downloadProgress(rows[0]!.downloads)).toEqual({ done: 100, size: 300, speed: 10, live: true });
+});
+test("a sleeping download poll remains active downloading, not a blocked or waiting workflow", () => {
+  const item = download("one", { stage: "downloading", state: "downloading",
+    job: { ...download("one").job, recovery: "scheduled-wake", status: "queued", nextWakeAt: "2099-01-01T00:00:00Z" } });
+  expect(activityPhase(item, [item])).toMatchObject({ label: "Downloading", active: true, showWake: false });
+  expect(activityPhase({ ...item, stage: "blocked" }, [item])).toMatchObject({ label: "Downloading", active: true });
+  expect(activityPhase({ ...item, stage: "publishing" }, [item])).toMatchObject({ label: "Adding to Plex", active: true, transferLabel: "Other attached downloads" });
+  expect(activityPhase({ ...item, stage: "blocked" }, [])).toMatchObject({ label: "Waiting for a suitable release", active: false });
+  expect(activityPhase(item, [{ ...item, state: "checking", bytesPerSecond: 0 }])).toMatchObject({ label: "Checking download", active: true });
+  expect(activityPhase(item, [{ ...item, telemetry: "recorded" }])).toMatchObject({ label: "Waiting for download status", active: false });
 });
 test("unknown or inconsistent member progress cannot masquerade as whole-request progress", () => {
   expect(downloadProgress([download("one"), download("two", { telemetry: "unknown", bytesDone: null })])).toBeNull();

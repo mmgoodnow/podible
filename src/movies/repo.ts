@@ -356,10 +356,11 @@ export class MovieRepo {
   events(targetId: number) {
     return this.db
       .query(
-        "SELECT id,stage,message,created_at AS createdAt FROM movie_events WHERE target_id=? ORDER BY id",
+        "SELECT id,acquisition_id AS acquisitionId,stage,message,created_at AS createdAt FROM movie_events WHERE target_id=? ORDER BY id",
       )
       .all(targetId) as {
       id: number;
+      acquisitionId: number | null;
       stage: MovieStage;
       message: string;
       createdAt: string;
