@@ -10,6 +10,7 @@ export type MovieSelection = {
   offerKey: string | null;
   facts: MovieFacts;
   reason: string;
+  matchingOffers?: MovieOffer[];
 };
 export type MovieFileCandidate = {
   index: number;

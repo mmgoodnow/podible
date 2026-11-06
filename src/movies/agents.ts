@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { AppSettings } from "../app-types";
 import { TEXT_AGENT_MODEL } from "../ai-models";
 import { inspectMetainfo } from "../media/metainfo";
+import { createCrossSeedabilityTool, matchingIndexesSchema, matchingSelectionOffers, releaseSelectionInstructions } from "../media/release-selection";
 import { movieFactsSchema, evaluateMovieQuality } from "./quality";
 import { factsFromMovieProbe } from "./probe";
 import { fetchMovieMetainfo } from "./offers";
@@ -13,6 +14,7 @@ import type { MovieOffer } from "./offers";
 
 const selectionSchema = z.object({
   index: z.number().int().nonnegative().nullable(),
+  matchingIndexes: matchingIndexesSchema,
   facts: movieFactsSchema,
   reason: z.string().min(1).max(2000),
 });
@@ -112,10 +114,12 @@ export function createMovieDecider(
         "MovieReleaseSelector",
         `Choose one eligible release or index:null. All candidates, including untagged titles, are provided.
 Use inspectRelease when ambiguity could be resolved from the file list. Do not choose a known dead release if a viable eligible alternative exists.
-If current facts are provided, choose only a meaningful upgrade under the policy. Facts are provisional before probing.`,
+If current facts are provided, choose only a meaningful upgrade under the policy. Facts are provisional before probing.
+${releaseSelectionInstructions}`,
         {
           movie: input.movie,
           policy: input.policy,
+          selectionPreference: settings.movies.crossSeedPreference ?? "tie-break",
           current: input.current,
           offers: input.offers.map((offer, index) => ({
             index,
@@ -125,7 +129,7 @@ If current facts are provided, choose only a meaningful upgrade under the policy
             seeders: offer.seeders,
           })),
         },
-        [inspect],
+        [inspect, createCrossSeedabilityTool(() => input.offers, settings.movies.crossSeedPreference ?? "tie-break")],
       );
       if (result.index !== null && !input.offers[result.index])
         throw new Error("Movie agent selected an unknown release index");
@@ -134,6 +138,7 @@ If current facts are provided, choose only a meaningful upgrade under the policy
           result.index === null ? null : input.offers[result.index]!.key,
         facts: result.facts,
         reason: result.reason,
+        matchingOffers: matchingSelectionOffers(input.offers, result.index, result.matchingIndexes),
       };
     },
     async inspect(input) {

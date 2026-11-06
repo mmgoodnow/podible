@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { AppSettings } from "../app-types";
 import { TEXT_AGENT_MODEL } from "../ai-models";
 import { inspectMetainfo } from "../media/metainfo";
+import { createCrossSeedabilityTool, matchingIndexesSchema, matchingSelectionOffers, releaseSelectionInstructions } from "../media/release-selection";
 import { fetchMovieMetainfo, type MovieOffer, type MovieSearch } from "../movies/offers";
 import { movieFactsSchema, evaluateMovieQuality, type MovieQualityPolicy } from "../movies/quality";
 import { factsFromMovieProbe, type MovieProbe } from "../movies/probe";
@@ -19,7 +20,7 @@ export type TvFileCandidate = { index: number; name: string; sizeBytes: number; 
 export type TvImportPlan = z.infer<typeof tvImportPlanSchema>;
 export interface TvDecider {
   select(input: { entry: TvEntry; episodes: TvEpisode[]; policy: MovieQualityPolicy; offers: MovieOffer[];
-    excludedOfferKeys?: string[]; maximumReleaseBytes?: number }): Promise<{ offer: MovieOffer | null; reason: string; deferred?: MovieSearch["deferred"] }>;
+    excludedOfferKeys?: string[]; maximumReleaseBytes?: number }): Promise<{ offer: MovieOffer | null; reason: string; matchingOffers?: MovieOffer[]; deferred?: MovieSearch["deferred"] }>;
   inspect(input: { entry: TvEntry; episodes: TvEpisode[]; policy: MovieQualityPolicy; offer: Pick<MovieOffer, "key" | "title" | "provider">; files: TvFileCandidate[] }): Promise<TvImportPlan>;
 }
 const instructions = `You acquire and independently verify TV episodes, including anime, for a private library.
@@ -89,13 +90,17 @@ export function createTvDecider(settings: AppSettings, modelProvider?: ModelProv
           for (const offer of found.offers) if (allowed(offer) && !offers.some((known) => known.key === offer.key)) offers.push(offer);
           return { offers: offers.map(present), warnings: found.warnings, deferred: found.deferred ?? [] };
         } });
-      const result = await run("TvReleaseSelector", z.object({ index: z.number().int().nonnegative().nullable(), reason: z.string().min(1).max(2000) }),
+      const result = await run("TvReleaseSelector", z.object({ index: z.number().int().nonnegative().nullable(), matchingIndexes: matchingIndexesSchema, reason: z.string().min(1).max(2000) }),
         `Choose one release containing some or all requested episodes, or index:null. Season packs and multi-episode files are allowed; extra pack contents will not be published unless requested.
 Use inspectRelease for unclear contents, and searchReleases for useful aliases/numbering when the initial search does not find suitable releases. Empty initial results are not a reason to skip research.
-Prefer a viable complete release within policy. Never invent an index.`,
-        { entry: workEvidence(input.entry), episodes: input.episodes, policy: input.policy, offers: offers.map(present) }, [inspect, research]);
+Prefer a viable complete release within policy. Never invent an index.
+${releaseSelectionInstructions}`,
+        { entry: workEvidence(input.entry), episodes: input.episodes,
+          policy: input.policy, selectionPreference: settings.movies.crossSeedPreference ?? "tie-break", offers: offers.map(present) },
+        [inspect, research, createCrossSeedabilityTool(() => offers, settings.movies.crossSeedPreference ?? "tie-break")]);
       if (result.index !== null && !offers[result.index]) throw new Error("TV selector returned an unknown release");
       return { offer: result.index === null ? null : offers[result.index]!, reason: result.reason,
+        matchingOffers: matchingSelectionOffers(offers, result.index, result.matchingIndexes),
         ...(deferred.length ? { deferred } : {}) };
     },
     async inspect(input) {

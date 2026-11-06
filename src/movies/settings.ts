@@ -35,6 +35,7 @@ export const movieSettingsSchema = z
     plexSectionId: z.string().default(""),
     plexViewPath: z.string().default(""),
     automaticUpgrades: z.boolean().default(true),
+    crossSeedPreference: z.enum(["off", "tie-break"]).default("tie-break"),
     maximumReleaseBytes: z
       .number()
       .int()

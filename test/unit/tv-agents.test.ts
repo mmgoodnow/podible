@@ -43,6 +43,7 @@ test("TV selector researches an empty initial search without leaking server-owne
   }).select({ entry, episodes: [episode], policy: defaultMovieQualityPolicy, offers: [] });
   expect(searches).toEqual(["An Aggregate Series S02"]);
   expect(result.offer?.key).toBe(offer.key);
+  expect(result.matchingOffers).toEqual([]);
   expect(fake.selectedModel()).toBe(TEXT_AGENT_MODEL);
   expect(JSON.stringify(fake.calls)).not.toContain("hidden");
   expect(JSON.stringify(fake.calls)).toContain("anidb");
@@ -102,5 +103,54 @@ test("TV agents receive the current episode scope once, not a duplicated whole-s
     expect(text.match(/First of a sequel/g)).toHaveLength(1);
     expect(text).toContain("A Prequel");
     expect(text).toContain("anidb");
+  }
+});
+
+test("TV expanded research candidates participate in the shared evidence tool and final semantic group", async () => {
+  const offers = [{ ...offer, provider: "Tracker A" }, { ...offer, key: "same-tracker-copy", provider: " TRACKER A " }];
+  const expanded = { ...offer, key: "new-tracker-copy", provider: "Tracker B", infoHash: "c".repeat(40),
+    attributes: { attr: [{ name: "downloadvolumefactor", value: "0.25" }, { name: "secret", value: "hidden" }] } };
+  const fake = provider([
+    [{ type: "function_call", name: "searchReleases", callId: "search", arguments: '{"query":"A Sequel S02"}', status: "completed" }],
+    [{ type: "function_call", name: "assessCrossSeedability", callId: "coverage", arguments: '{"indexes":[0,1,2]}', status: "completed" }],
+    { index: 2, matchingIndexes: [0, 1, 2], reason: "Same episode coverage and encode; source has discounted download volume." },
+  ]);
+  const queries: string[] = [];
+  const result = await createTvDecider(defaultSettings(), fake.model, async query => {
+    queries.push(query); return { offers: [offers[0]!, expanded], warnings: [] };
+  }).select({ entry, episodes: [episode], policy: defaultMovieQualityPolicy, offers });
+  expect(queries).toEqual(["A Sequel S02"]);
+  expect(result.offer).toBe(expanded);
+  expect(result.matchingOffers).toEqual(offers);
+  expect(fake.calls).toHaveLength(3);
+  const input = fake.calls[2]!.input;
+  if (!Array.isArray(input)) throw new Error("Expected SDK tool history");
+  const assessment = input.find(item => item.type === "function_call_result" && item.name === "assessCrossSeedability");
+  if (assessment?.type !== "function_call_result") throw new Error("Missing tool evidence");
+  const output = typeof assessment.output === "string" ? assessment.output
+    : !Array.isArray(assessment.output) && assessment.output.type === "text" ? assessment.output.text : "null";
+  expect(JSON.parse(output)).toMatchObject({ distinctTrackerCount: 2,
+    offers: [{ index: 0 }, { index: 1 }, { index: 2, downloadVolumeFactor: 0.25 }] });
+  expect(JSON.stringify(fake.calls)).not.toContain("hidden");
+  expect(JSON.stringify(fake.calls[0]!.systemInstructions)).toContain("episode coverage always win");
+});
+
+test("TV off records semantic copies but cannot return unknown or filtered matching indexes", async () => {
+  const other = { ...offer, key: "other", provider: "Other" };
+  const fake = provider([
+    [{ type: "function_call", name: "assessCrossSeedability", callId: "coverage", arguments: '{"indexes":[0,1]}', status: "completed" }],
+    { index: 0, matchingIndexes: [1], reason: "Keep source selection independent of tracker counts." },
+  ]);
+  const settings = defaultSettings();
+  settings.movies.crossSeedPreference = "off";
+  const selected = await createTvDecider(settings, fake.model).select({ entry, episodes: [episode],
+    policy: defaultMovieQualityPolicy, offers: [offer, other] });
+  expect(selected.offer).toBe(offer);
+  expect(selected.matchingOffers).toEqual([other]);
+  expect(JSON.stringify(fake.calls[1]?.input)).toContain("off");
+  for (const matchingIndexes of [[1], [0, 0]]) {
+    const bad = provider([{ index: 0, matchingIndexes, reason: "Invalid matching group." }]);
+    await expect(createTvDecider(defaultSettings(), bad.model).select({ entry, episodes: [episode],
+      policy: defaultMovieQualityPolicy, offers: [offer, other], excludedOfferKeys: [other.key] })).rejects.toThrow();
   }
 });
