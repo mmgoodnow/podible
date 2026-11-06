@@ -28,12 +28,14 @@ settings.movies.managedRoot = root; settings.libraryRoot = root; repo.updateSett
 const data = Buffer.alloc(2 * 1024 ** 2 + 217, 43), pieceLength = 16384, pieces: Buffer[] = [];
 for (let offset = 0; offset < data.length; offset += pieceLength)
   pieces.push(createHash("sha1").update(data.subarray(offset, offset + pieceLength)).digest());
-let requests = 0;
+let requests = 0, scrapes = 0;
 const requestedPaths: string[] = [];
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
   const pathname = new URL(request.url).pathname;
   requestedPaths.push(pathname);
   if (pathname === "/announce") return new Response(bencode.encode({ interval: 60, peers: Buffer.alloc(0), complete: 1, incomplete: 0 }));
+  if (pathname === "/scrape") { scrapes++; return new Response(bencode.encode({ files: {} })); }
+  if (pathname !== "/data") return new Response(null, { status: 404 });
   requests++; return new Response(data);
 } });
 const endpoint = `http://127.0.0.1:${server.port}`;
@@ -113,9 +115,10 @@ try {
   await client.resumeSeedOnly(ref);
   await until(async () => (await client.inspect(ref)).state === "seeding", "Seed-only registration did not resume");
   assert.equal((await client.inspect(ref)).seedOnly, true);
-  assert.equal(requests, 0, `Unexpected non-announce requests: ${JSON.stringify(requestedPaths)}`);
+  assert.equal(requests, 0, `Unexpected payload requests: ${JSON.stringify(requestedPaths)}`);
+  assert.ok(requestedPaths.every(value => ["/announce", "/scrape"].includes(value)), `Unexpected HTTP path: ${JSON.stringify(requestedPaths)}`);
   console.log(JSON.stringify({ result: "passed", media: scope.media, cow: "unavailable", layout: "symlink", downloadedBytes: 0,
-    restartedSeedOnly: true, canonicalUnchanged: true, selectedVersionUnchanged: true }));
+    restartedSeedOnly: true, canonicalUnchanged: true, selectedVersionUnchanged: true, trackerScrapes: scrapes }));
 } finally {
   await runtime?.stop(); daemon?.kill("SIGTERM"); await daemon?.exited;
   server.stop(true); db.close(); await fs.rm(base, { recursive: true, force: true });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type BrowserContext, type Page } from "playwright";
+import { chromium, type BrowserContext, type Page, type Response as BrowserResponse } from "playwright";
 import { capturePage } from "./capture";
 
 const server = Bun.spawn([process.execPath, "run", "test/fixtures/spa-server.ts"], {
@@ -23,6 +23,7 @@ try {
   browser = await chromium.launch({ ...(process.env.CI ? {} : { channel: "chrome" }), headless: true });
   const pageErrors: string[] = [], networkErrors: string[] = [];
   const networkChecks: Promise<void>[] = [];
+  const responseHandlers = new WeakMap<Page, (response: BrowserResponse) => void>();
   let popups = 0;
   const artifacts = path.resolve("tmp/movies-lab");
   await mkdir(artifacts, { recursive: true });
@@ -33,18 +34,29 @@ try {
     page.on("requestfailed", request => {
       if (!request.failure()?.errorText.includes("ERR_ABORTED")) networkErrors.push(`${mode}: ${request.url()} ${request.failure()?.errorText}`);
     });
-    page.on("response", response => {
+    const responseHandler = (response: BrowserResponse) => {
       if (!response.url().includes("/api/trpc/") && !response.url().includes("/login/plex/start")) return;
       if (response.status() < 400) return;
       if (response.status() === 401 && ["/api/trpc/auth.me", "/api/trpc/library.bootstrap"].includes(new URL(response.url()).pathname)) {
         networkChecks.push(response.request().allHeaders().then(headers => {
           if (/(?:^|;\s*)podible_session=/.test(headers.cookie ?? "")) networkErrors.push(`${mode}: Authenticated request returned HTTP 401 ${response.url()}`);
-        }));
+        }).catch(error => { networkErrors.push(`${mode}: Could not inspect authentication response headers: ${String(error)}`); }));
         return;
       }
       if (mode === "start-error" && response.status() === 502 && response.url().includes("/login/plex/start")) return;
       networkErrors.push(`${mode}: HTTP ${response.status()} ${response.url()}`);
-    });
+    };
+    responseHandlers.set(page, responseHandler);
+    page.on("response", responseHandler);
+  };
+  const closeContext = async (context: BrowserContext) => {
+    // Finish every started authentication assertion before destroying its protocol objects.
+    for (const page of context.pages()) {
+      const handler = responseHandlers.get(page);
+      if (handler) page.off("response", handler);
+    }
+    await Promise.all(networkChecks);
+    await context.close();
   };
   const fixtureContext = async (mode: string, mobile = false) => {
     const context = await browser!.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 } });
@@ -137,7 +149,7 @@ try {
   assert.equal((await success.cookies()).some(item => item.name === "podible_session"), false);
   assert.equal((await rpcMe(success)).error?.code, -32001);
   assert.equal(success.pages().length, 1);
-  await success.close();
+  await closeContext(success);
   console.log("Auth browser: default same-window mobile login, callback cookie, safe redirect and POST logout passed");
 
   const denied = await fixtureContext("error"), deniedPage = await denied.newPage();
@@ -150,7 +162,7 @@ try {
   await deniedPage.getByRole("link", { name: "Try again", exact: true }).click();
   await deniedPage.getByRole("button", { name: "Continue with Plex", exact: true }).waitFor();
   assert.equal(denied.pages().length, 1);
-  await denied.close();
+  await closeContext(denied);
 
   const noCookie = await fixtureContext("no-cookie"), noCookiePage = await noCookie.newPage();
   await noCookiePage.goto(link("/login?redirectTo=%2Flibrary"));
@@ -161,7 +173,7 @@ try {
   assert.equal((await rpcMe(noCookie)).error?.code, -32001);
   assert.equal(await noCookiePage.getByRole("heading", { name: "Library", exact: true }).count(), 0);
   assert.equal(noCookie.pages().length, 1);
-  await noCookie.close();
+  await closeContext(noCookie);
 
   for (const [mode, message] of [["start-error", "Fixture could not start Plex sign-in"], ["invalid-origin", "Unexpected Plex sign-in destination."]] as const) {
     const context = await fixtureContext(mode), page = await context.newPage();
@@ -171,7 +183,7 @@ try {
     assert.equal(await page.getByRole("button", { name: "Continue with Plex", exact: true }).isEnabled(), true);
     assert.equal(page.url(), loginUrl); assert.equal(context.pages().length, 1);
     assert.equal((await rpcMe(context)).error?.code, -32001);
-    await context.close();
+    await closeContext(context);
   }
 
   const safe = await fixtureContext("success"), safePage = await safe.newPage();
@@ -185,7 +197,7 @@ try {
   await safePage.getByRole("link", { name: "Finish fixture sign-in", exact: true }).click();
   await safePage.waitForURL(link("/"));
   await safePage.getByRole("heading", { name: "Library", exact: true }).waitFor();
-  await safe.close();
+  await closeContext(safe);
 
   const timed = await fixtureContext("success"), timedPage = await timed.newPage();
   await timedPage.goto(link("/login"));
@@ -202,7 +214,7 @@ try {
     assert.equal(await timedPage.getByRole("button", { name: "Continue with Plex", exact: true }).isEnabled(), true);
     assert.equal(timedPage.url(), link("/login")); assert.equal(timed.pages().length, 1);
     assert.equal((await rpcMe(timed)).error?.code, -32001);
-  } finally { stalled.resolve(); await timed.unrouteAll({ behavior: "wait" }); await timed.close(); }
+  } finally { stalled.resolve(); await timed.unrouteAll({ behavior: "wait" }); await closeContext(timed); }
 
   const trailing = await fixtureContext("success"), trailingPage = await trailing.newPage();
   const trailingEntry = await trailingPage.goto(link("/login/?redirectTo=%2Flibrary"));
@@ -210,7 +222,7 @@ try {
   await trailingPage.getByRole("heading", { name: "Sign in", exact: true }).waitFor();
   await trailingPage.goto(link("/login/plex/loading"));
   await trailingPage.getByRole("status").getByText("Connecting to Plex...", { exact: true }).waitFor();
-  await trailing.close();
+  await closeContext(trailing);
   await Promise.all(networkChecks);
   assert.equal(popups, 0, "Authentication opened a popup");
   assert.deepEqual(pageErrors, [], "Auth UI page errors");

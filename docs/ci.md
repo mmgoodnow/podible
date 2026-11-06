@@ -169,6 +169,14 @@ it does not erase backend history or weaken provider-failure handling tests.
 No broad mock-test purge was justified by this bounded audit. The removed cost is
 duplicated generic process orchestration, not domain safety or protocol evidence.
 
+The November 6 Linux failures exposed two additional assertion/lifecycle issues:
+the no-payload reuse lab must distinguish tracker `/scrape` traffic from webseed
+payload requests (the recorded failing path was only `/scrape`), and auth browser
+response-header assertions must finish before their browser context closes.
+Neither change allows payload downloads or suppresses authenticated HTTP 401s.
+Diagnostic redaction checks inspect the diagnostic fields, not unrelated disk
+capacity counters that can coincidentally contain the same request-ID digits.
+
 ## Timing And Validation
 
 Expected warm critical path is approximately
