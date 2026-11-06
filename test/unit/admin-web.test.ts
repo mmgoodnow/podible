@@ -249,7 +249,8 @@ describe("operational facts from the execution authority", () => {
     expect(result.diagnostics.recentJobs.find(item => item.id === job.id)?.error?.code).toBe("tv-season-mapping");
     expect(JSON.stringify(result)).not.toContain(secretUrl);
     expect(JSON.stringify(result)).not.toContain(ownerToken);
-    expect(JSON.stringify(result)).not.toContain("734");
+    // Storage capacity can coincidentally contain these digits; inspect diagnostic text, not unrelated counters.
+    expect(JSON.stringify({ incidents: result.incidents, diagnostics: result.diagnostics })).not.toContain("734");
     expect(f.db.query("SELECT total_changes() AS n").get()).toEqual(before);
   });
 

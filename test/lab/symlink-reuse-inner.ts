@@ -29,8 +29,11 @@ const data = Buffer.alloc(2 * 1024 ** 2 + 217, 43), pieceLength = 16384, pieces:
 for (let offset = 0; offset < data.length; offset += pieceLength)
   pieces.push(createHash("sha1").update(data.subarray(offset, offset + pieceLength)).digest());
 let requests = 0;
+const requestedPaths: string[] = [];
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
-  if (new URL(request.url).pathname === "/announce") return new Response(bencode.encode({ interval: 60, peers: Buffer.alloc(0), complete: 1, incomplete: 0 }));
+  const pathname = new URL(request.url).pathname;
+  requestedPaths.push(pathname);
+  if (pathname === "/announce") return new Response(bencode.encode({ interval: 60, peers: Buffer.alloc(0), complete: 1, incomplete: 0 }));
   requests++; return new Response(data);
 } });
 const endpoint = `http://127.0.0.1:${server.port}`;
@@ -110,7 +113,7 @@ try {
   await client.resumeSeedOnly(ref);
   await until(async () => (await client.inspect(ref)).state === "seeding", "Seed-only registration did not resume");
   assert.equal((await client.inspect(ref)).seedOnly, true);
-  assert.equal(requests, 0);
+  assert.equal(requests, 0, `Unexpected non-announce requests: ${JSON.stringify(requestedPaths)}`);
   console.log(JSON.stringify({ result: "passed", media: scope.media, cow: "unavailable", layout: "symlink", downloadedBytes: 0,
     restartedSeedOnly: true, canonicalUnchanged: true, selectedVersionUnchanged: true }));
 } finally {
