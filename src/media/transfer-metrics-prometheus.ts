@@ -35,6 +35,8 @@ export function transferMetricsPrometheus(status: TransferMetricsStatus): string
     ["uploaded_bytes_total", "Client upload attributable to one tracker only, not account credit.", "uploadedBytes", "counter"],
     ["downloaded_bytes_total", "Client download attributable to one tracker only, not account credit.", "downloadedBytes", "counter"],
     ["seed_seconds_total", "Torrent seed time associated with each tracker; totals may overlap.", "seedSeconds", "counter"],
+    ["upload_bytes_per_second", "Sampled upload attributable to one tracker; unknown observations omitted.", "uploadBytesPerSecond", "gauge"],
+    ["download_bytes_per_second", "Sampled download attributable to one tracker; unknown observations omitted.", "downloadBytesPerSecond", "gauge"],
   ] as const) metric(`tracker_${name}`, description, type, status.trackers.map(tracker => ({
     labels: { tracker: tracker.name, host: tracker.host }, value: status.stale && type === "gauge" ? null : tracker[field],
   })));

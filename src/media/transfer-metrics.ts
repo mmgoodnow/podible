@@ -1,7 +1,9 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { transferMetricsStatusSchema, transferMetricsStatusParamsSchema, mapTrackerSchema, type TransferMetricsStatus } from "./transfer-metrics-types";
+import { transferMetricsStatusSchema, transferMetricsStatusParamsSchema, type TransferMetricsStatus } from "./transfer-metrics-types";
+import { metainfoTrackerHosts, normalizeTrackerHost } from "./tracker-identity";
+export { normalizeTrackerHost } from "./tracker-identity";
 import type { CrossSeedReceipt } from "./cross-seed-state";
 
 export type MetricContent = { media: "audio" | "ebook" | "movie" | "tv"; targetId: number; title: string; href: string };
@@ -17,12 +19,6 @@ export type MetricInventory = { id: number; client_id: string; native_id: string
   ownership_tag: string | null; root_path: string | null; root_token: string | null;
   book_id: number | null; release_id: number | null; offer_key: string };
 export const metricDigest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
-export function normalizeTrackerHost(raw: string): string {
-  const host = raw.trim().toLowerCase().replace(/\.$/, "");
-  if (host.length > 253 || !host.includes(".") || !host.split(".").every(part => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(part)))
-    throw new Error("Provide a tracker hostname, not an announce URL or credential");
-  return host;
-}
 export function advanceTransferCounter(previousRaw: number | null, previousTotal: number | null, raw: number | null) {
   if (raw === null) return previousTotal;
   if (previousRaw === null || previousTotal === null) return raw;
@@ -96,7 +92,36 @@ export class TransferMetricsRepo {
         WHERE key LIKE 'release-selection:%' AND json_extract(value_json,'$.selected.key')=? LIMIT 2`).all(row.offer_key) as { provider: string }[];
       names.push(...new Set(selected.map(item => item.provider).filter(Boolean)));
     }
+    if (!names.length) {
+      const acquired = this.db.query(`SELECT json_extract(a.decision_json,'$.provider') AS provider FROM movie_acquisitions a
+        JOIN movie_acquisition_downloads d ON d.acquisition_id=a.id WHERE d.torrent_id=?
+        UNION SELECT json_extract(a.decision_json,'$.provider') FROM tv_acquisitions a
+        JOIN tv_acquisition_downloads d ON d.acquisition_id=a.id WHERE d.torrent_id=?`).all(row.id, row.id) as { provider: string | null }[];
+      names.push(...new Set(acquired.map(item => item.provider).filter((name): name is string => !!name)));
+    }
     return names.length === 1 ? names[0] : null;
+  }
+  learnMetainfo(bytes: Uint8Array, provider: string | null, now = new Date().toISOString()) {
+    if (!provider) return;
+    for (const host of metainfoTrackerHosts(bytes)) this.inferTracker(host, provider, now);
+  }
+  /** Gradual local backfill; never downloads metainfo or scans the filesystem on a dashboard read. */
+  learnCachedTrackers(now: string) {
+    const state = this.db.query("SELECT value_json FROM app_state WHERE key='transfer-metrics:tracker-cache-cursor'").get() as { value_json: string } | null;
+    const after = state ? JSON.parse(state.value_json) as string : "";
+    const rows = this.db.query("SELECT key,provider,length(torrent_bytes) AS size FROM torrent_cache WHERE key>? ORDER BY key LIMIT 100").all(after) as { key: string; provider: string | null; size: number }[];
+    let processed = 0, budget = 0, last = after;
+    for (const row of rows) {
+      if (processed && budget + row.size > 16 * 1024 * 1024) break;
+      processed++; last = row.key;
+      if (!row.provider || row.size > 8 * 1024 * 1024) continue;
+      const cached = this.db.query("SELECT torrent_bytes FROM torrent_cache WHERE key=?").get(row.key) as { torrent_bytes: Uint8Array };
+      this.learnMetainfo(cached.torrent_bytes, row.provider, now); budget += row.size;
+    }
+    this.beforeWrite();
+    this.db.query(`INSERT INTO app_state(key,value_json,updated_at) VALUES('transfer-metrics:tracker-cache-cursor',?,?)
+      ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`)
+      .run(JSON.stringify(processed < rows.length || rows.length === 100 ? last : ""), now);
   }
   inferTracker(host: string, name: string | null, now: string) {
     if (name !== null && (!name.trim() || name.length > 100 || /[\x00-\x1f]|:\/\//.test(name))) return;
@@ -106,19 +131,10 @@ export class TransferMetricsRepo {
         WHEN inferred_name=excluded.inferred_name OR inferred_name IS NULL THEN excluded.inferred_name ELSE '' END,updated_at=excluded.updated_at`)
       .run(normalizeTrackerHost(host), name?.trim() ?? null, now);
   }
-  mapTracker(input: { host: string; name: string | null }) {
-    const parsed = mapTrackerSchema.parse(input), host = normalizeTrackerHost(parsed.host);
-    if (parsed.name && /[\x00-\x1f]|:\/\//.test(parsed.name)) throw new Error("Tracker name must not contain a URL or control characters");
-    this.beforeWrite();
-    this.db.query(`INSERT INTO transfer_tracker_mappings(hostname,manual_name,updated_at) VALUES(?,?,?)
-      ON CONFLICT(hostname) DO UPDATE SET manual_name=excluded.manual_name,updated_at=excluded.updated_at`)
-      .run(host, parsed.name, new Date().toISOString());
-    return this.mappings();
-  }
   mappings() {
-    return (this.db.query("SELECT * FROM transfer_tracker_mappings ORDER BY hostname").all() as { hostname: string; inferred_name: string | null; manual_name: string | null }[])
-      .map(row => ({ host: row.hostname, name: row.manual_name || row.inferred_name || "Unknown tracker",
-        source: row.manual_name ? "manual" as const : row.inferred_name ? "inferred" as const : "unknown" as const }));
+    return (this.db.query("SELECT hostname,inferred_name FROM transfer_tracker_mappings ORDER BY hostname").all() as { hostname: string; inferred_name: string | null }[])
+      .map(row => ({ host: row.hostname, name: row.inferred_name || "Unknown tracker",
+        source: row.inferred_name ? "inferred" as const : "unknown" as const }));
   }
   finishCollection(now: string, unavailableReason: string | null) {
     this.beforeWrite();
@@ -169,6 +185,8 @@ export class TransferMetricsRepo {
       const downloadedBytes = unambiguous ? sum(group.rows.map(row => row.downloadedBytes)) : null;
       return { host: [...group.hosts].sort()[0]!, name: group.name, seedBytes: seeds.reduce((n, row) => n + row.sizeBytes!, 0),
         seedingTorrents: seeds.length, uploadedBytes, downloadedBytes, seedSeconds: sum(group.rows.map(row => row.seedSeconds)),
+        uploadBytesPerSecond: completeSample && unambiguous ? sum(group.rows.filter(row => freshIds.has(row.id)).map(row => row.uploadBytesPerSecond)) : null,
+        downloadBytesPerSecond: completeSample && unambiguous ? sum(group.rows.filter(row => freshIds.has(row.id)).map(row => row.downloadBytesPerSecond)) : null,
         ratio: uploadedBytes !== null && downloadedBytes !== null && downloadedBytes > 0 ? uploadedBytes / downloadedBytes : null };
     });
     const units = new Set(fresh.flatMap(row => row.contents.map(content => `${content.media}:${content.targetId}`)));

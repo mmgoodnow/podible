@@ -169,6 +169,8 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   const services = command.scope.media === "movie" ? ctx.movieServices : command.scope.media === "tv" ? ctx.tvServices : undefined;
   const encoded = await durableStep(ctx, "reuse:metainfo", async () => Buffer.from(await (adapters.fetchMetainfo ?? services?.fetchMetainfo ?? fetchMovieMetainfo)(crossSeedOffer(ctx.repo, command))).toString("base64"));
   const bytes = Buffer.from(encoded, "base64"), metadata = inspectMetainfo(bytes);
+  active();
+  ctx.repo.transferMetrics.learnMetainfo(bytes, crossSeedOffer(ctx.repo, command).provider);
   const client = adapters.client?.(command.scope) ?? services?.client ?? await configuredClient(settings, command.scope);
   if (ctx.repo.releaseHealth.isOfferBlocked({ ...crossSeedOffer(ctx.repo, command), infoHash: metadata.infoHash }))
     return finish({ kind: "skipped", reason: "Candidate is a confirmed nuked release" });

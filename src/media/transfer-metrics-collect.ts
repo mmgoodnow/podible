@@ -76,6 +76,8 @@ async function ownedDirectory(repo: BooksRepo, record: MetricInventory, clientId
 /** Bounded batches of every registered identity, independent of domain acquisition tables. No controls. */
 export async function collectTransferMetrics(repo: BooksRepo, adapters: TransferMetricsAdapters = {}) {
   const now = (adapters.now ?? Date.now)(), at = new Date(now).toISOString(), metrics = repo.transferMetrics;
+  adapters.assertActive?.();
+  repo.transaction(() => metrics.learnCachedTrackers(at));
   const connection = stewardshipConnection({ connection: adapters.connection });
   const receipts = metrics.receipts(), byOwner = new Map(receipts.map(receipt => [receipt.command.operationId, receipt]));
   let after = 0, scanned = 0, unavailableReason: string | null = connection ? null : "Private Transmission telemetry is unavailable.";

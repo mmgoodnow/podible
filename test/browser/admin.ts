@@ -36,7 +36,7 @@ try {
   };
   const anonymous = await browser.newContext({ ignoreHTTPSErrors: true }), readerContext = await browser.newContext({ ignoreHTTPSErrors: true });
   await readerContext.addCookies([{ name: "podible_session", value: "admin-reader-fixture", url, httpOnly: true }]);
-  for (const method of ["settings.get", "settings.update", "adminWeb.users", "adminWeb.ops", "adminWeb.plexServers", "adminWeb.selectPlexServer", "adminWeb.refresh", "jobs.retry", "retention.preview", "retention.evict", "transferMetrics.status", "transferMetrics.mapTracker"]) {
+  for (const method of ["settings.get", "settings.update", "adminWeb.users", "adminWeb.ops", "adminWeb.plexServers", "adminWeb.selectPlexServer", "adminWeb.refresh", "jobs.retry", "retention.preview", "retention.evict", "transferMetrics.status", "transferMetrics.library"]) {
     assert.equal((await rpc(method, {}, anonymous.request)).error?.code, -32001);
     assert.equal((await rpc(method, {}, readerContext.request)).error?.code, -32003);
   }
@@ -161,16 +161,30 @@ try {
   await page.getByRole("heading", { name: "Activity", exact: true }).waitFor();
   const sharing = page.getByRole("region", { name: "Sharing and transfers", exact: true });
   await sharing.getByText("200 GiB", { exact: true }).waitFor();
-  await sharing.getByRole("img", { name: "Transfer speed history; gaps indicate missing observations" }).waitFor();
-  await sharing.getByLabel("Chart measure").selectOption("volume");
-  await sharing.getByLabel("Chart tracker").selectOption("books.tracker.example");
-  await sharing.getByRole("img", { name: "Seed size history; gaps indicate missing observations" }).waitFor();
-  await sharing.getByRole("button", { name: "Edit tracker names", exact: true }).click();
-  await sharing.getByLabel("Name for books.tracker.example", { exact: true }).fill("Reading tracker");
-  await sharing.locator("form").filter({ has: page.getByLabel("Name for books.tracker.example", { exact: true }) }).getByRole("button", { name: "Save", exact: true }).click();
-  await sharing.getByText("Tracker name saved.", { exact: true }).waitFor();
-  await sharing.getByRole("rowheader", { name: "Reading tracker", exact: true }).waitFor();
-  await sharing.getByRole("button", { name: "Done", exact: true }).click();
+  const inventory = sharing.getByRole("region", { name: "Library inventory", exact: true });
+  for (const name of ["Books", "eBooks", "Audiobooks"]) {
+    const row = inventory.getByRole("rowheader", { name, exact: true }).locator("..");
+    assert.equal(await row.getByRole("cell").first().innerText(), "1");
+  }
+  const chart = sharing.getByRole("region", { name: "Tracker history", exact: true });
+  await chart.getByRole("img", { name: "Seed size by tracker; missing readings appear as gaps" }).waitFor();
+  assert.equal(await chart.locator("svg path").count(), 2, "Both tracker series must be visible together");
+  assert.equal(await sharing.getByLabel("Chart tracker").count(), 0);
+  assert.equal(await sharing.getByRole("button", { name: "Edit tracker names", exact: true }).count(), 0);
+  const bookSeries = chart.getByRole("button", { name: /Book tracker/ });
+  await bookSeries.click();
+  assert.equal(await chart.locator("svg path").count(), 1);
+  await bookSeries.click();
+  await chart.getByLabel("Chart measure").selectOption("uploadedBytes");
+  assert.equal(await chart.locator("svg path").count(), 2);
+  const paths = await chart.locator("svg path").evaluateAll(nodes => nodes.map(node => node.getAttribute("d")));
+  assert.ok(paths.every(path => path && new Set([...path.matchAll(/,([\d.]+)/g)].map(match => match[1])).size > 1), "Growing upload counters must not be drawn as flat lines");
+  await chart.getByLabel("History sample", { exact: true }).fill("0");
+  await chart.getByLabel("Zoom vertical scale", { exact: true }).check();
+  await chart.getByLabel("Chart measure").selectOption("seedBytes");
+  await chart.getByLabel("Chart measure").selectOption("seedingTorrents");
+  await chart.getByText("No change in this window", { exact: true }).waitFor();
+  await chart.getByLabel("Chart measure").selectOption("uploadedBytes");
   const scrape = await context.request.get(new URL("/metrics", url).href);
   assert.equal(scrape.status(), 200);
   assert.ok((await scrape.text()).includes("podible_seeding_torrents 2"));

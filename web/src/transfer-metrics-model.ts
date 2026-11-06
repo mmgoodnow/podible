@@ -1,7 +1,8 @@
 export type ChartPoint = { at: string; value: number | null };
 
 // Break lines at missing observations and polling gaps instead of inventing activity.
-export function chartSegments(points: ChartPoint[], cadenceMs: number, width = 800, height = 180) {
+export function chartSegments(points: ChartPoint[], cadenceMs: number, width = 800, height = 180,
+  domain?: { minimum: number; maximum: number }) {
   const valid = points.filter(point => Number.isFinite(Date.parse(point.at)));
   if (!valid.length) return { paths: [] as string[], maximum: 0, start: null, end: null };
   const start = Date.parse(valid[0]!.at), end = Date.parse(valid.at(-1)!.at);
@@ -19,12 +20,26 @@ export function chartSegments(points: ChartPoint[], cadenceMs: number, width = 8
       path = "";
     }
     const x = end === start ? width / 2 : (at - start) / (end - start) * width;
-    const y = height - point.value / (maximum || 1) * height;
+    const floor = domain?.minimum ?? 0, ceiling = domain?.maximum ?? maximum;
+    const y = height - (point.value - floor) / (ceiling - floor || 1) * height;
     path += `${path ? " L" : "M"}${x.toFixed(2)},${y.toFixed(2)}`;
     previous = at;
   }
   if (path) paths.push(path);
   return { paths, maximum, start, end };
+}
+
+export function chartDomain(series: ChartPoint[][], zoom: boolean) {
+  const values = series.flatMap(points => points.flatMap(point => point.value !== null && Number.isFinite(point.value) ? [point.value] : []));
+  const low = values.length ? Math.min(...values) : 0, high = values.length ? Math.max(...values) : 0;
+  if (!zoom || high === low) return { minimum: 0, maximum: high || 1 };
+  const pad = (high - low) * .1;
+  return { minimum: Math.max(0, low - pad), maximum: high + pad };
+}
+
+export function seriesChange(points: ChartPoint[]) {
+  const values = points.flatMap(point => point.value === null ? [] : [point.value]);
+  return values.length < 2 ? null : values.at(-1)! - values[0]!;
 }
 
 export function metricBytes(value: number | null): string {

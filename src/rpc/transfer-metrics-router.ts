@@ -1,5 +1,7 @@
 import { defineMethod, defineRouter } from "./framework";
-import { transferMetricsStatusParamsSchema, transferMetricsStatusSchema, mapTrackerSchema, trackerMappingsSchema } from "../media/transfer-metrics-types";
+import { transferMetricsStatusParamsSchema, transferMetricsStatusSchema } from "../media/transfer-metrics-types";
+import { z } from "zod";
+import { libraryInventorySchema, readLibraryInventory } from "../media/library-inventory";
 
 export const transferMetricsRouter = defineRouter({
   status: defineMethod({ auth: "admin", readOnly: true,
@@ -7,9 +9,9 @@ export const transferMetricsRouter = defineRouter({
     paramsSchema: transferMetricsStatusParamsSchema, resultSchema: transferMetricsStatusSchema,
     handler: (ctx, input) => ctx.repo.transferMetrics.status(input),
   }),
-  mapTracker: defineMethod({ auth: "admin",
-    summary: "Name a tracker hostname without storing announce credentials.",
-    paramsSchema: mapTrackerSchema, resultSchema: trackerMappingsSchema,
-    handler: (ctx, input) => ({ mappings: ctx.repo.transferMetrics.mapTracker(input) }),
+  library: defineMethod({ auth: "admin", readOnly: true,
+    summary: "Inspect published managed library counts and canonical file allocation; no tree scans or daemon calls.",
+    paramsSchema: z.object({}).strict(), resultSchema: libraryInventorySchema,
+    handler: ctx => readLibraryInventory(ctx.repo),
   }),
 });

@@ -65,11 +65,13 @@ test("collector persists all registered movie/book reuse telemetry, sanitizes tr
       downloadedBytes: 300, uploadBytesPerSecond: 60, crossSeedUploadedBytes: 2000, seedSeconds: 600, contentUnits: 1, averageCopies: 1 });
     expect(status.reuse).toMatchObject({ attempts: 2, successful: 2, matchRate: 1, verifiedReusedBytes: 192, sidecarDownloadBytes: 4, contentRepairBytes: 4 });
     expect(status.trackers.find(t => t.host === "tracker.example")!.uploadedBytes).toBeNull();
+    expect(status.trackers.find(t => t.host === "tracker.example")!.uploadBytesPerSecond).toBeNull();
     expect(status.trackers.find(t => t.host === "book.example")!.uploadedBytes).toBe(1000);
+    expect(status.trackers.find(t => t.host === "book.example")!.uploadBytesPerSecond).toBe(20);
     expect(f.repo.transferMetrics.record(book.record.id)?.verified).toBe(true);
     const persisted = JSON.stringify(f.db.query("SELECT * FROM transfer_metric_records").all()) + JSON.stringify(status);
     for (const secret of ["PRIVATE-PASSKEY", "SECRET", "user:secret", "announce?", "PRIVATE ERROR"]) expect(persisted).not.toContain(secret);
-    f.repo.transferMetrics.mapTracker({ host: "tracker.example", name: "Friendly tracker" });
+    f.repo.transferMetrics.inferTracker("tracker.example", "Friendly tracker", new Date(f.now()).toISOString());
     expect(f.repo.transferMetrics.status({}, f.now()).trackers.some(t => t.name === "Friendly tracker")).toBe(true);
     f.advance(); first.row.uploadedEver = 1200; second.row.uploadedEver = 50; book.row.uploadedEver = 1100;
     await collectTransferMetrics(f.repo, f.adapters);
@@ -81,6 +83,7 @@ test("collector persists all registered movie/book reuse telemetry, sanitizes tr
     expect(partial.stale).toBe(true); expect(partial.summary!.seedingTorrents).toBeNull();
     expect(partial.summary!.uploadBytesPerSecond).toBeNull(); expect(partial.summary!.uploadedBytes).toBe(3350);
     expect(partial.history).toHaveLength(3);
+    expect(partial.trackers.every(tracker => tracker.uploadBytesPerSecond === null)).toBe(true);
   } finally { await f.close(); }
 });
 
@@ -130,10 +133,10 @@ test("tracker changes lose traffic attribution, retirement preserves totals, and
     await collectTransferMetrics(f.repo, f.adapters);
     f.repo.transferMetrics.inferTracker("tracker.example", "Configured provider", new Date(f.now()).toISOString());
     expect(f.repo.transferMetrics.status({}, f.now()).mappings[0]).toMatchObject({ name: "Configured provider", source: "inferred" });
-    f.repo.transferMetrics.mapTracker({ host: "tracker.example", name: "Manual name" });
+    // Legacy overrides cannot affect automatic tracker identity.
+    f.db.query("UPDATE transfer_tracker_mappings SET manual_name='Manual name' WHERE hostname='tracker.example'").run();
+    expect(f.repo.transferMetrics.status({}, f.now()).mappings[0]).toMatchObject({ name: "Configured provider", source: "inferred" });
     f.repo.transferMetrics.inferTracker("tracker.example", "Changed source", new Date(f.now()).toISOString());
-    expect(f.repo.transferMetrics.status({}, f.now()).mappings[0]).toMatchObject({ name: "Manual name", source: "manual" });
-    f.repo.transferMetrics.mapTracker({ host: "tracker.example", name: null });
     expect(f.repo.transferMetrics.status({}, f.now()).mappings[0]?.source).toBe("unknown");
     torrent.row.trackerStats = [{ ...torrent.row.trackerStats[0]!, announce: "https://different.example/private" }];
     torrent.row.uploadedEver = 1100; f.advance(); await collectTransferMetrics(f.repo, f.adapters);

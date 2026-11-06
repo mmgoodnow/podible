@@ -318,6 +318,8 @@ export async function acquireMovie(
     );
     const metainfo = Buffer.from(encoded, "base64");
     const metadata = inspectMetainfo(metainfo);
+    active();
+    ctx.repo.transferMetrics.learnMetainfo(metainfo, offer.provider);
     if (ctx.repo.releaseHealth.isOfferBlocked({ key: offer.key, infoHash: metadata.infoHash })) {
       excluded.add(offer.key);
       emit(`${attempt}:nuked-metainfo`, "replacing", "Torrent identity belongs to a confirmed defective release; trying another source");

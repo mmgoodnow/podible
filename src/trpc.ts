@@ -67,7 +67,7 @@ const procedure = t.procedure.use(async ({ next }) => {
 export const appRouter = t.router({
   transferMetrics: t.router({
     status: procedure.input(transferMetricsRouter.routes.status.paramsSchema).output(transferMetricsRouter.routes.status.resultSchema).query(({ ctx, input }) => executeMethod(transferMetricsRouter.routes.status, ctx, input)),
-    mapTracker: procedure.input(transferMetricsRouter.routes.mapTracker.paramsSchema).output(transferMetricsRouter.routes.mapTracker.resultSchema).mutation(({ ctx, input }) => executeMethod(transferMetricsRouter.routes.mapTracker, ctx, input)),
+    library: procedure.input(transferMetricsRouter.routes.library.paramsSchema).output(transferMetricsRouter.routes.library.resultSchema).query(({ ctx, input }) => executeMethod(transferMetricsRouter.routes.library, ctx, input)),
   }),
   tvRetention: t.router({
     audit: procedure.input(tvRetentionRouter.routes.audit.paramsSchema).output(tvRetentionRouter.routes.audit.resultSchema).query(({ ctx, input }) => executeMethod(tvRetentionRouter.routes.audit, ctx, input)),

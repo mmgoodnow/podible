@@ -1,59 +1,83 @@
-.transfer-dashboard { min-width: 0; }
-.transfer-heading, .transfer-chart-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.transfer-dashboard { min-width: 0; font-variant-numeric: tabular-nums; }
+.transfer-heading, .transfer-chart-heading { display: flex; justify-content: space-between; align-items: center; gap: .7rem; flex-wrap: wrap; }
 .transfer-heading h2, .transfer-chart-heading h3 { margin: 0; }
-.transfer-ranges { display: flex; gap: .25rem; }
-.transfer-ranges button { padding: .35rem .7rem; background: transparent; color: var(--ink); border-color: transparent; font-size: .95rem; }
-.transfer-ranges button[aria-pressed=true] { background: var(--ink); color: var(--paper); }
-.transfer-live { color: var(--muted); font-size: .9rem; margin: .75rem 0 1.25rem; }
-.transfer-live::before { content: ""; display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; background: #397454; margin-right: .5rem; }
+.transfer-dashboard h3 { font-size: 1.05rem; }
+.transfer-library { margin-top: 1rem; padding: 1rem; border: 1px solid var(--line); border-radius: .6rem; }
+.transfer-library-total { font-size: 1.05rem; }
+.transfer-library table { width: 100%; border-collapse: collapse; text-align: right; font-size: .85rem; }
+.transfer-library th, .transfer-library td { padding: .4rem .6rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.transfer-library th:first-child { text-align: left; padding-left: 0; }
+.transfer-library thead th { font-size: .7rem; color: var(--muted); font-weight: normal; }
+.inventory-subrow th:first-child { padding-left: 1rem; font-weight: normal; }
+.inventory-subrow td, .inventory-subrow th { color: var(--muted); font-size: .8rem; }
+.transfer-library small { font-size: .65rem; }
+.transfer-library-warning { font-size: .8rem; color: #a54325; }
+.transfer-live { color: var(--muted); font-size: .8rem; }
+.transfer-live::before { content: ""; display: inline-block; width: .45rem; height: .45rem; border-radius: 50%; background: #397454; margin-right: .4rem; }
 .transfer-stale::before { background: #a77937; }
-.transfer-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-block: 1px solid var(--line); }
-.transfer-stats article { padding: 1.25rem 1rem 1.25rem 0; min-width: 0; }
-.transfer-stats h3 { font-weight: normal; font-size: .95rem; margin: 0 0 .75rem; color: var(--muted); }
-.transfer-stats strong { display: block; font-size: clamp(1.65rem, 3vw, 2.5rem); font-weight: normal; font-variant-numeric: tabular-nums; }
-.transfer-stats small { display: block; font-size: .8rem; color: var(--muted); margin-top: .6rem; max-width: 25ch; }
-.transfer-traffic { display: flex; flex-wrap: wrap; gap: 2rem 4rem; padding: 1.5rem 0; }
-.transfer-traffic div { display: grid; gap: .3rem; }
-.transfer-traffic span, .transfer-traffic small { color: var(--muted); font-size: .9rem; }
-.transfer-traffic strong { font-size: 1.35rem; font-weight: normal; font-variant-numeric: tabular-nums; }
-.transfer-chart { background: color-mix(in srgb, var(--ink) 3%, transparent); padding: 1.25rem; border-radius: .5rem; }
-.transfer-chart-heading label { display: flex; align-items: center; gap: .5rem; color: var(--muted); font-size: .9rem; }
-.transfer-chart-heading select { padding: .4rem; font-size: .95rem; max-width: 100%; }
-.transfer-chart svg { display: block; width: 100%; height: 190px; overflow: visible; margin-top: .75rem; }
+.transfer-overview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: .6rem; margin-top: 1rem; overflow: hidden; }
+.transfer-overview article { min-width: 0; padding: 1rem; border-right: 1px solid var(--line); }
+.transfer-overview article:last-child { border-right: 0; }
+.transfer-overview h3 { font-size: .82rem; font-weight: normal; margin: 0 0 .35rem; color: var(--muted); }
+.transfer-overview strong { display: block; font-size: clamp(1.5rem, 2.4vw, 2.1rem); font-weight: normal; line-height: 1.2; }
+.transfer-overview small { display: block; font-size: .75rem; color: var(--muted); margin-top: .4rem; line-height: 1.45; }
+.transfer-chart { border: 1px solid var(--line); background: color-mix(in srgb, var(--paper) 70%, transparent); padding: 1rem; border-radius: .6rem; margin-top: 1.25rem; }
+.transfer-chart-controls { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.transfer-chart-controls select { padding: .35rem .5rem; font-size: .85rem; max-width: 100%; }
+.transfer-ranges { display: flex; gap: .15rem; }
+.transfer-ranges button { padding: .3rem .5rem; background: transparent; color: var(--ink); border-color: transparent; font-size: .8rem; }
+.transfer-ranges button[aria-pressed=true] { background: var(--ink); color: var(--paper); }
+.transfer-chart-caption { display: flex; justify-content: space-between; gap: .5rem; flex-wrap: wrap; font-size: .75rem; color: var(--muted); margin: .75rem 0; }
+.transfer-chart-caption label { display: flex; gap: .35rem; align-items: center; }
+.transfer-chart-caption input { accent-color: var(--ink); }
+.transfer-chart-plot { display: grid; grid-template-columns: 5rem minmax(0, 1fr); gap: .6rem; }
+.transfer-chart-yaxis { display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; padding: .5rem 0; color: var(--muted); font-size: .7rem; }
+.transfer-chart svg { display: block; width: 100%; height: 180px; overflow: visible; touch-action: pan-y; }
 .transfer-grid-line { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
-.transfer-series-0 { color: #316c55; }
-.transfer-series-1 { color: #ba6139; }
-.transfer-chart-legend { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; align-items: center; margin-top: 1rem; font-size: .9rem; }
-.transfer-chart-legend span::before { content: ""; display: inline-block; background: currentColor; height: 2px; width: 1rem; vertical-align: middle; margin-right: .4rem; }
-.transfer-chart-legend small { margin-left: auto; color: var(--muted); }
-.transfer-chart-axis { display: flex; justify-content: space-between; color: var(--muted); font-size: .8rem; }
-.transfer-chart-empty { min-height: 120px; display: grid; place-items: center; color: var(--muted); text-align: center; }
-.transfer-reuse, .transfer-trackers, .transfer-downloads { margin-top: 1.75rem; }
-.transfer-reuse h3, .transfer-downloads h3 { margin-bottom: .75rem; }
-.transfer-reuse-values { display: flex; flex-wrap: wrap; align-items: baseline; gap: .6rem 1.75rem; font-size: .95rem; }
-.transfer-reuse-values strong { font-size: 1.5rem; font-weight: normal; }
-.transfer-footnote { color: var(--muted); font-size: .85rem; line-height: 1.5; }
-.transfer-table-scroll { overflow-x: auto; margin-top: 1rem; }
-.transfer-trackers table { width: 100%; border-collapse: collapse; font-size: .95rem; text-align: left; }
-.transfer-trackers th, .transfer-trackers td { padding: .8rem .65rem; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.transfer-trackers thead th { color: var(--muted); font-weight: normal; font-size: .85rem; }
-.transfer-trackers th:first-child { padding-left: 0; min-width: 10rem; }
-.transfer-tracker-bar { display: block; height: 3px; background: #589174; margin-top: .5rem; max-width: 10rem; }
-button.transfer-text-button { color: var(--ink); background: transparent; border: 0; text-decoration: underline; padding: .4rem 0; font-size: .9rem; }
-.transfer-name-editor { margin-top: 1rem; padding: 1rem; border: 1px solid var(--line); border-radius: .5rem; }
-.transfer-name-editor form { display: flex; gap: .75rem; align-items: end; margin-top: .75rem; }
-.transfer-name-editor label { display: grid; gap: .25rem; min-width: 0; flex: 1; overflow-wrap: anywhere; font-size: .9rem; }
-.transfer-name-editor input { width: 100%; min-width: 0; padding: .5rem; }
-.transfer-name-editor button { padding: .5rem .75rem; }
-.transfer-downloads article { padding: .75rem 0; border-bottom: 1px solid var(--line); }
+.transfer-crosshair { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.transfer-chart-axis { display: flex; justify-content: space-between; color: var(--muted); font-size: .7rem; margin-left: 5.6rem; }
+.transfer-chart-empty { min-height: 120px; display: grid; place-items: center; color: var(--muted); text-align: center; font-size: .85rem; }
+.transfer-chart-scrubber { display: flex; gap: .75rem; align-items: center; font-size: .75rem; color: var(--muted); margin: .75rem 0; }
+.transfer-chart-scrubber input { flex: 1; min-width: 0; accent-color: var(--ink); }
+.transfer-chart-legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: .35rem; margin-top: .75rem; }
+.transfer-chart-legend button { display: grid; grid-template-columns: .8rem minmax(0, 1fr) auto; align-items: center; column-gap: .35rem; padding: .45rem .5rem; background: transparent; color: var(--ink); border: 1px solid var(--line); text-align: left; font-size: .75rem; }
+.transfer-chart-legend button[aria-pressed=false] { opacity: .45; }
+.transfer-series-swatch { background: var(--series-color); height: 3px; width: .8rem; }
+.transfer-series-name { overflow-wrap: anywhere; }
+.transfer-chart-legend strong { font-weight: normal; }
+.transfer-chart-legend small { grid-column: 2 / -1; font-size: .65rem; color: var(--muted); }
+.transfer-footnote { color: var(--muted); font-size: .75rem; line-height: 1.5; margin: .6rem 0; }
+.transfer-reuse { margin-top: 1.25rem; }
+.transfer-reuse h3 { margin: 0 0 .75rem; }
+.transfer-reuse dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .8rem 1rem; padding: 1rem; margin: 0; border-block: 1px solid var(--line); }
+.transfer-reuse dt { font-size: .75rem; color: var(--muted); }
+.transfer-reuse dd { margin: .25rem 0 0; font-size: 1.05rem; }
+.transfer-reuse dd small { font-size: .7rem; color: var(--muted); }
+.transfer-trackers { margin-top: 1.25rem; }
+.transfer-trackers h3 { margin-bottom: .5rem; }
+.transfer-table-scroll { overflow-x: auto; }
+.transfer-trackers table { width: 100%; border-collapse: collapse; font-size: .8rem; text-align: right; }
+.transfer-trackers th, .transfer-trackers td { padding: .65rem .5rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.transfer-trackers thead th { color: var(--muted); font-weight: normal; font-size: .7rem; }
+.transfer-trackers th:first-child { padding-left: 0; text-align: left; min-width: 9rem; }
+.transfer-tracker-bar { display: block; height: 3px; background: #589174; margin-top: .35rem; max-width: 9rem; }
+.transfer-downloads { margin-top: 1.25rem; }
+.transfer-downloads article { padding: .6rem 0; border-bottom: 1px solid var(--line); font-size: .85rem; }
 .transfer-downloads article > div { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .5rem; }
-.transfer-downloads article span, .transfer-downloads article small { color: var(--muted); font-size: .85rem; }
-.transfer-downloads progress { width: 100%; height: .35rem; accent-color: #316c55; margin: .65rem 0 .3rem; }
+.transfer-downloads article span, .transfer-downloads article small { color: var(--muted); font-size: .75rem; }
+.transfer-downloads progress { width: 100%; height: .3rem; accent-color: #316c55; margin: .5rem 0 .2rem; }
 @media (max-width: 700px) {
-  .transfer-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .transfer-stats article:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
-  .transfer-traffic { gap: 1.5rem 2rem; }
-  .transfer-chart { padding: .85rem; }
+  .transfer-library { padding: .7rem; }
+  .transfer-library th, .transfer-library td { padding: .4rem .35rem; font-size: .75rem; }
+  .transfer-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .transfer-overview article:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+  .transfer-overview article:nth-child(2) { border-right: 0; }
+  .transfer-overview article { padding: .75rem; }
+  .transfer-chart { padding: .7rem; }
   .transfer-chart svg { height: 150px; }
-  .transfer-chart-legend small { margin-left: 0; }
+  .transfer-chart-plot { grid-template-columns: 3.7rem minmax(0, 1fr); gap: .3rem; }
+  .transfer-chart-axis { margin-left: 4rem; font-size: .6rem; }
+  .transfer-chart-yaxis { font-size: .6rem; }
+  .transfer-reuse dl { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: .75rem 0; }
+  .transfer-chart-legend { grid-template-columns: 1fr; }
 }

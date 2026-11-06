@@ -33,16 +33,41 @@ try {
   });
   page.on("requestfailed", request => networkErrors.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText}`));
   page.on("response", response => { if (response.url().includes("/api/trpc/") && response.status() >= 400) networkErrors.push(`${response.status()} ${response.url()}`); });
+  // Keep the dashboard request behind the shell to exercise navigation-before-load races.
+  await page.route("**/api/trpc/**", async route => {
+    if (/transferMetrics\.(status|library)/.test(new URL(route.request().url()).pathname)) await Bun.sleep(150);
+    await route.continue();
+  });
   for (const retired of ["/movie-dual-write", "/movie-shadow?history=1", "/movie-shadow/1", "/tv-sync?targetId=1",
     "/app/movie-dual-write/", "/app/movie-shadow/1/", "/app/tv-sync"]) {
     const redirect = await context.request.get(new URL(retired,url).href,{ maxRedirects: 0 });
     assert.equal(redirect.status(),308);
     assert.equal(redirect.headers().location,"/ops");
     assert.ok(!(await redirect.text()).includes('<div id="root">'),"Retired diagnostic URL rendered a page");
-    await page.goto(new URL(retired,url).href);
+    const [metricsResponse, inventoryResponse] = await Promise.all([
+      page.waitForResponse(response => new URL(response.url()).pathname.includes("/api/trpc/") &&
+        new URL(response.url()).pathname.includes("transferMetrics.status")),
+      page.waitForResponse(response => new URL(response.url()).pathname.includes("/api/trpc/") &&
+        new URL(response.url()).pathname.includes("transferMetrics.library")),
+      page.goto(new URL(retired,url).href),
+    ]);
+    assert.equal(metricsResponse.status(),200,"Activity metrics request failed");
+    assert.equal(await metricsResponse.finished(),null,"Activity metrics response did not finish");
+    const payload = await metricsResponse.json();
+    assert.ok((Array.isArray(payload) ? payload : [payload]).every(item => item.result && !item.error),
+      "Activity metrics returned an RPC error");
+    assert.equal(inventoryResponse.status(),200,"Library inventory request failed");
+    assert.equal(await inventoryResponse.finished(),null,"Library inventory response did not finish");
+    const inventoryPayload = await inventoryResponse.json();
+    assert.ok((Array.isArray(inventoryPayload) ? inventoryPayload : [inventoryPayload]).every(item => item.result && !item.error),
+      "Library inventory returned an RPC error");
     assert.equal(new URL(page.url()).pathname,"/ops");
     assert.equal(new URL(page.url()).search,"");
     await page.getByRole("heading",{ name: "Activity", exact: true }).waitFor();
+    const dashboard = page.getByRole("region",{ name: "Sharing and transfers" });
+    await dashboard.waitFor();
+    await dashboard.getByText("Loading transfer metrics...",{ exact: true }).waitFor({ state: "hidden" });
+    assert.equal(await dashboard.getByRole("alert").count(),0,"Activity metrics failed to render");
     for (const label of ["Movie sync","TV sync","Radarr comparison audit","Sonarr comparison audit","Seerr dual-write"])
       assert.equal(await page.getByText(label,{ exact: true }).count(),0,`${label} remains in the Activity UI`);
   }

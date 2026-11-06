@@ -719,7 +719,7 @@ export class BooksRepo {
     torrentBytes: Uint8Array;
   }): TorrentCacheRow {
     const now = nowIso();
-    return this.db
+    const cached = this.db
       .query(
         `INSERT INTO torrent_cache (key, provider, provider_guid, url, info_hash, torrent_bytes, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -742,6 +742,8 @@ export class BooksRepo {
         now,
         now
       ) as TorrentCacheRow;
+    this.transferMetrics.learnMetainfo(input.torrentBytes, input.provider ?? null, now);
+    return cached;
   }
 
   createReleaseSearch(input: CreateReleaseSearchInput): ReleaseSearchRow {

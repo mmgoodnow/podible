@@ -7,7 +7,7 @@ import { createPodibleFetchHandler } from "../../src/http";
 import { transferMetricsPrometheus } from "../../src/media/transfer-metrics-prometheus";
 import { transferMetricsStatusSchema } from "../../src/media/transfer-metrics-types";
 
-test("metrics and tracker mapping use existing admin authentication across HTTP and RPC; reads have no daemon side effects", async () => {
+test("metrics use admin authentication, expose no tracker editor, and reads have no daemon side effects", async () => {
   const db = new Database(":memory:"); runMigrations(db); const repo = new BooksRepo(db); repo.ensureSettings();
   try {
     const admin = repo.upsertUser({ provider: "local", providerUserId: "metrics-admin", username: "Administrator", isAdmin: true });
@@ -27,16 +27,15 @@ test("metrics and tracker mapping use existing admin authentication across HTTP 
     const text = await scrape.text(); expect(text).toContain("podible_transfer_metrics_fresh 0\n");
     expect(text).not.toMatch(/^podible_seed_bytes /m);
     for (const [token, code] of [[undefined, -32001], ["metrics-reader-token", -32003]] as const) {
-      for (const method of ["transferMetrics.status", "transferMetrics.mapTracker"]) {
+      for (const method of ["transferMetrics.status"]) {
         const response = await request("/rpc", token, { jsonrpc: "2.0", id: 1, method, params: {} });
         expect((await response.json() as any).error.code).toBe(code);
       }
     }
     const call = async (method: string, params: unknown) => (await (await request("/rpc", "metrics-admin-token", { jsonrpc: "2.0", id: 1, method, params })).json()) as any;
     expect((await call("transferMetrics.status", {})).result.summary).toBeNull();
-    expect((await call("transferMetrics.mapTracker", { host: "tracker.example", name: "Example" })).result.mappings)
-      .toEqual([{ host: "tracker.example", name: "Example", source: "manual" }]);
-    expect((await call("transferMetrics.mapTracker", { host: "https://tracker.example/PRIVATE-PASSKEY", name: "Bad" })).error).toBeDefined();
+    expect((await call("transferMetrics.mapTracker", { host: "tracker.example", name: "Example" })).error.code).toBe(-32601);
+    expect((await request("/api/trpc/transferMetrics.mapTracker", "metrics-admin-token", { host: "tracker.example", name: "Example" })).status).toBe(404);
     expect((await call("transferMetrics.status", { hours: 1 })).error).toBeDefined();
     expect(db.query("SELECT COUNT(*) AS n FROM jobs").get()).toEqual({ n: 0 });
   } finally { db.close(); }

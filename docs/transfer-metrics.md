@@ -4,6 +4,8 @@ Activity (`/ops`, administrators only) shows sharing totals, transfer speed,
 historical charts, tracker totals, reuse outcomes and current downloads. Books,
 movies and TV all come from the same `media_torrents` registry and collector.
 Opening the page or scraping metrics never queries or controls the daemon.
+The separate library inventory read stats registered canonical files, with eight
+concurrent inspections, never a recursive directory walk.
 
 ## Collection and retention
 
@@ -47,8 +49,12 @@ excluded. This is not the proportion of the entire indexer catalog that matches.
 measure how much upload would otherwise have been missed. Likewise the client
 ratio is not the tracker's credited account ratio, freeleech or bonus accounting.
 
-**Tracker totals** use hostname-to-name mappings inferred from retained provider
-evidence. Names can be edited on Activity; hosts sharing one name are grouped.
+**Tracker totals** use hostname-to-name mappings learned from the announce and
+announce-list fields of metainfo fetched from a known indexer. This runs for book,
+movie, TV and reuse acquisitions; the collector gradually backfills the retained
+local metainfo cache without new network requests. Hosts sharing one name are grouped.
+There is no manual naming UI or mutation API; old manual overrides are ignored.
+Conflicting provider evidence leaves the hostname unnamed instead of guessing.
 Only hostnames are persisted, never announce paths, passkeys or raw tracker error
 text. Upload/download attribution is unknown for multi-tracker or changed-tracker
 registrations rather than assigning their full counters to each tracker. Seed
@@ -63,9 +69,30 @@ Typed tRPC and existing JSON-RPC share the same admin methods:
 
 ```ts
 transferMetrics.status({ hours?: 24 | 168 | 720 | 2160 })
-transferMetrics.mapTracker({ host: string, name: string | null })
-// A null name removes an override and restores inferred naming.
+transferMetrics.library({}) // published counts and canonical file allocation
 ```
+
+## Dashboard and library inventory
+
+The dashboard separates published library size from logical seeding, traffic,
+and reuse. Books, eBooks, audiobooks, movies, TV shows, seasons and episodes count
+available published units, not wanted catalog entries. A season with any available
+episode counts once. Multiple manifestations count once per book/format. Canonical
+files deduplicate by device/inode across hardlinks and multi-episode files, both
+per category and globally. Category rollups overlap and are not additive.
+
+File size is the actual logical file length; on-disk size is `stat.blocks * 512`,
+not an exclusive physical-block or reclaimable-byte measurement. Sparse allocation
+can differ from logical size; reflink-shared extents cannot be measured exclusively
+from stat. Pending downloads, obsolete versions, torrent sidecars and derived
+caches are outside this published-library inventory. Missing or unreadable files
+produce incomplete totals, never fabricated zero storage or healthy counts.
+
+Tracker charts show multiple series on one shared scale with clickable legends,
+numeric axes, a pointer/keyboard sample inspector and an optional vertical zoom.
+Unchanged samples are explicitly labelled; unavailable historic speed observations
+are gaps, not reconstructed zero rates. Tracker rates start with new collections.
+Historical snapshots retain the grouping and attribution known at sample time.
 
 `GET /metrics` exposes Prometheus text format using the existing admin session
 authentication (Bearer app token or browser cookie). Anonymous requests return
