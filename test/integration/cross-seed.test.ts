@@ -11,6 +11,7 @@ import { prepareMovieStorage } from "../../src/movies/storage";
 import { fixtureMovie, fixtureFacts } from "../fixtures/movie-services";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
 import { crossSeedCommandSchema } from "../../src/media/cross-seed-state";
+import { crossSeedStateKey } from "../../src/media/cross-seed-state";
 import { queueCrossSeed, processCrossSeed, crossSeedPlan, crossSeedOffer, queueSelectedCrossSeeds, type CrossSeedAdapters } from "../../src/media/cross-seed";
 import { rememberSelectedCopies, selectedCopyOffer } from "../../src/media/selected-copies";
 import { discoverCrossSeeds } from "../../src/media/cross-seed-feed";
@@ -146,6 +147,18 @@ test("later imports inherit source copies and reconsider a skipped reuse plan on
     expect(queueSelectedCrossSeeds(f.repo, f.command.scope, acquisition.id, primary.key)[0]?.jobId).toBe(second!.jobId);
     f.command = second!.command;
     expect((await execute(f, second!)).outcome?.kind).toBe("seeding");
+    expect(f.repo.crossSeed.receipts()).toHaveLength(2);
+    f.repo.movies.finishAcquisition(acquisition.id);
+    const previousRevision = f.repo.crossSeed.contentRevision(f.command.scope);
+    const thirdAcquisition = f.repo.movies.startAcquisition(f.command.scope.targetId, "upgrade", () => f.repo.createJob({ type: "movie_acquire" }).id).acquisition;
+    // Model a post-registration failure; the registered layout must keep its original owner.
+    const registered = f.repo.crossSeed.receipt(second!.command.operationId)!;
+    f.repo.setJsonState(crossSeedStateKey(registered.command.operationId), { ...registered,
+      outcome: { ...registered.outcome, kind: "stalled", reason: "Registered transfer timed out" } });
+    const more = randomUUID();
+    f.repo.movies.recordVersion(thirdAcquisition.id, fixtureFacts(), [{ id: more, relativePath: `files/${more.slice(0, 2)}/${more}.mkv`, sizeBytes: 20, probe: {} }]);
+    expect(f.repo.crossSeed.contentRevision(f.command.scope)).not.toBe(previousRevision);
+    expect(queueSelectedCrossSeeds(f.repo, f.command.scope, thirdAcquisition.id, primary.key)[0]?.jobId).toBe(second!.jobId);
     expect(f.repo.crossSeed.receipts()).toHaveLength(2);
     expect(await fs.readFile(f.canonical, "utf8")).toBe("abcdefgh");
   } finally { await f.cleanup(); }

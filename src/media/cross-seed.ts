@@ -70,7 +70,9 @@ export function queueSelectedCrossSeeds(repo: BooksRepo, scope: CrossSeedScope, 
       const pointer = `cross-seed:selected-latest:${copy.id}`;
       const previousId = repo.getJsonState<string>(pointer);
       const previous = previousId ? repo.crossSeed.receipt(previousId) : null;
-      if (previous && (!previous.outcome || previous.outcome.kind === "seeding" || previous.outcome.kind === "unsupported")) return previous;
+      // Never transfer an existing daemon registration/layout to a new operation UUID.
+      if (previous && (!previous.outcome || previous.outcome.torrentId !== undefined || previous.outcome.infoHash !== undefined ||
+        previous.outcome.kind === "seeding" || previous.outcome.kind === "unsupported")) return previous;
       const receipt = queueCrossSeed(repo, { operationId: selectedCopyId(`${copy.id}:${revision}`), scope, selectionCopyId: copy.id });
       repo.setJsonState(pointer, receipt.command.operationId);
       return receipt;

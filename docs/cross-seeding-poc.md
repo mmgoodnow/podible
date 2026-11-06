@@ -30,9 +30,11 @@ each alternate gets an idempotent reuse job. Those jobs use the same verified
 executor as RSS and do not block publication on unsuccessful/unsupported reuse.
 They survive app restarts without depending on an RSS row or a repeated search.
 Retained TV packs carry that source association across later import batches.
-Skipped/stalled copies can be reconsidered once registered file coverage grows;
+Copies skipped before registration can be reconsidered once registered file coverage grows;
 the same content revision cannot enqueue duplicate attempts. Pending, successful
 and filesystem-unsupported attempts are not requeued for every import batch.
+Already registered skipped/stalled attempts retain their original operation and
+layout ownership; automatic recovery of those transfers is not implemented here.
 Snapshots keep provider download URLs private; commands reference opaque retained
 IDs. A failed/unplayable primary download does not dispatch its copies.
 
