@@ -86,8 +86,10 @@ export async function readLibraryInventory(repo: BooksRepo): Promise<LibraryInve
   await Promise.all(Array.from({ length: Math.min(8, pending.length) }, async () => {
     while (next < pending.length) {
       const [key, file] = pending[next++]!;
+      let rootVerified = false;
       try {
         const root = await rootPath(file.root), original = path.resolve(file.file);
+        rootVerified = true;
         const requestedRoot = path.resolve(file.root);
         const relative = inside(requestedRoot, original) ? path.relative(requestedRoot, original)
           : inside(root, original) ? path.relative(root, original) : null;
@@ -100,7 +102,7 @@ export async function readLibraryInventory(repo: BooksRepo): Promise<LibraryInve
         if (!Number.isSafeInteger(size) || !Number.isSafeInteger(allocated) || size < 0 || allocated < 0) throw new Error("Unsafe byte count");
         observations.set(key, { state: size === file.size ? "complete" : "partial", identity: `${stat.dev}:${stat.ino}`, size, allocated });
       } catch (error) {
-        observations.set(key, { state: (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "unknown" });
+        observations.set(key, { state: rootVerified && (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "unknown" });
       }
     }
   }));

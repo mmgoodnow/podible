@@ -135,6 +135,18 @@ test("multipart books require every part, but a complete alternative keeps the t
   } finally { await f.close(); }
 });
 
+test("an unavailable content root is unknown storage, not confirmed individual file loss", async () => {
+  const f = await fixture();
+  try {
+    const file = await f.file("books", 123); f.book("ebook", [file]);
+    await fs.rename(f.roots.books, `${f.roots.books}-temporarily-unavailable`);
+    const inventory = await readLibraryInventory(f.repo);
+    expect(inventory.categories.ebooks).toMatchObject({ count: 0, unknownCount: 1, unavailableCount: 0,
+      missingFiles: 0, unreadableFiles: 1, onDiskBytes: null });
+    expect(inventory.complete).toBe(false);
+  } finally { await f.close(); }
+});
+
 test("configured root aliases are allowed without following internal directory symlinks", async () => {
   const f = await fixture();
   try {
