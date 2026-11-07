@@ -50,12 +50,15 @@ async function legacyVersionSource(repo: BooksRepo, row: VersionSource, journal:
     .filter((result) => result.success);
   if (!snatch || !intent || metainfo.length !== 1) return null;
   const manifest = inspectMetainfo(Buffer.from(metainfo[0]!.data!.value, "base64"));
-  const ref = z.object({ clientId: z.string(), nativeId: z.string() }).parse(snatch.output);
+  const refSchema = z.object({ clientId: z.string(), nativeId: z.string() });
+  const receipt = z.union([z.object({ ref: refSchema, location: z.unknown() }), refSchema]).parse(snatch.output);
+  const ref = "ref" in receipt ? receipt.ref : receipt;
   const binding = downloads.find((download) => download.client_id === ref.clientId && download.native_id === ref.nativeId);
   if (!binding) return null;
   const prior = labels.parse(version.facts);
   const intentOutput = intent.output as { location?: unknown } | null;
-  const source = tvSourceSchema.parse({ ref, location: intentOutput?.location ?? intent.output, manifest, offerKey: binding.offer_key, title: prior.releaseTitle, provider: prior.provider });
+  const source = tvSourceSchema.parse({ ref, location: "ref" in receipt ? receipt.location : intentOutput?.location ?? intent.output,
+    manifest, offerKey: binding.offer_key, title: prior.releaseTitle, provider: prior.provider });
   return bound(source, downloads) ? { source, prefix, version } : null;
 }
 

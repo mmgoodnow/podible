@@ -24,6 +24,7 @@ import { RecoveryService } from "../../src/media/recovery";
 import { randomUUID } from "node:crypto";
 import { crossSeedOffer } from "../../src/media/cross-seed";
 import { readCanonicalDownload } from "../../src/media/canonical-download";
+import { prepareMovieStorage } from "../../src/movies/storage";
 
 function catalog(): TvCatalogEntry {
   return {
@@ -348,6 +349,81 @@ test("parallel batches wait for a shared large pack and reuse all remaining memb
   }finally{await runtime?.stop();await s.close();}
 },15000);
 
+test("simultaneous TV batches with stale directory intents register one canonical pack layout", async () => {
+  const entry = seasonCatalog(2);
+  entry.episodes.forEach((ep, i) => { ep.numbering[0]!.season = i + 1; ep.numbering[0]!.episode = 1; });
+  const s = await setup(entry.episodes.map(ep => ep.key), entry);
+  try {
+    await prepareMovieStorage(s.repo, s.roots.contentRoot);
+    s.fixture.services.client.capabilities.canonicalDownloads = true;
+    const offer = s.fixture.addPack("shared-racing-pack", entry.episodes.map(ep => ep.key));
+    let selections = 0;
+    let release!: () => void;
+    const bothSelected = new Promise<void>(resolve => { release = resolve; });
+    s.fixture.services.decider = () => ({
+      select: async () => { if (++selections === 2) release(); await bothSelected; return { offer, reason: "Same pack covers both batches." }; },
+      inspect: async () => { throw new Error("Unexpected import"); },
+    });
+    const locations: DownloadLocation[] = [];
+    const add = s.fixture.services.client.ensureAdded;
+    s.fixture.services.client.ensureAdded = async input => {
+      locations.push(input.location);
+      if (locations.length > 1 && JSON.stringify(locations[0]) !== JSON.stringify(input.location))
+        throw new Error("Existing torrent uses another layout");
+      await Bun.sleep(20); // Let the sibling save its different early directory intent.
+      return add(input);
+    };
+    s.fixture.services.client.inspect = async () => { throw new Error("Fixture stop after registration"); };
+    const queued = queueTvSeasons(s.repo, s.request.requestId);
+    const results = await Promise.allSettled(queued.map(q => acquireTv(s.context, s.repo.getJob(q.acquisition.job_id!)!, s.fixture.services)));
+    expect(results.every(r => r.status === "rejected" && r.reason.message === "Fixture stop after registration")).toBe(true);
+    expect(locations).toHaveLength(2);
+    expect(locations[1]).toEqual(locations[0]);
+    expect(s.fixture.stats.snatches).toBe(1);
+    const downloads = queued.map(q => s.repo.tv.acquisitionDownloads(q.acquisition.id));
+    expect(downloads.map(rows => rows.length)).toEqual([1, 1]);
+    expect(downloads[0]![0]!.id).toBe(downloads[1]![0]!.id);
+    const source = path.join(s.root, "downloads", locations[0]!.relativePath);
+    const plan = (await readCanonicalDownload(s.roots.contentRoot, source))!;
+    expect(plan.files).toHaveLength(2);
+    for (const file of plan.files) expect((await fs.lstat(path.join(source, file.path))).isSymbolicLink()).toBe(true);
+    expect(await fs.readdir(path.join(s.root, "downloads"))).toEqual([locations[0]!.relativePath]);
+  } finally { await s.close(); }
+});
+
+test("lost TV snatch checkpoint reconciles a sibling registration instead of replaying its stale directory", async () => {
+  const s = await setup(["tvdb:201"]);
+  try {
+    const offer = s.fixture.addPack("already-registered", ["tvdb:201"]);
+    const metadata = inspectMetainfo(s.fixture.packs.get(offer.infoHash!)!.metainfo);
+    const acquisition = s.enqueue(), job = s.repo.getJob(acquisition.job_id!)!;
+    const intendedLocation = { rootId: "tv", relativePath: "stale-early-intent" };
+    const effectiveLocation = { rootId: "tv", relativePath: "sibling-winner" };
+    const saved = new Map<string, unknown>();
+    const context: WorkerContext = { ...s.context, execution: {
+      key: "lost-snatch-fixture", assertActive() {}, sleep: async () => {},
+      async run<T>(name: string, handler: () => T | Promise<T>): Promise<T> {
+        if (saved.has(name)) return saved.get(name) as T;
+        if (name === "tv:attempt:0:snatch") {
+          // Another execution bound the same hash after this execution saved its intent.
+          await fs.mkdir(path.join(s.root, "downloads", effectiveLocation.relativePath), { recursive: true });
+          await s.fixture.services.client.ensureAdded({ metainfo: metadataBytes, location: effectiveLocation });
+          s.repo.tv.bindDownload(acquisition.id, { clientId: s.fixture.services.client.id, nativeId: metadata.infoHash }, effectiveLocation, offer.key);
+        }
+        const value = name === "tv:attempt:0:download-intent" ? { location: intendedLocation, canonicalDownload: true } : await handler();
+        saved.set(name, value); return value as T;
+      },
+    } };
+    const metadataBytes = s.fixture.packs.get(offer.infoHash!)!.metainfo;
+    await acquireTv(context, job, s.fixture.services);
+    expect(saved.get("tv:attempt:0:snatch")).toMatchObject({ location: effectiveLocation });
+    expect(await fs.stat(path.join(s.root, "downloads", intendedLocation.relativePath)).catch(() => null)).toBeNull();
+    expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(1);
+    expect(s.fixture.stats.snatches).toBe(1);
+    expect(await readCanonicalDownload(s.roots.contentRoot, path.join(s.root, "downloads", effectiveLocation.relativePath))).toBeNull();
+  } finally { await s.close(); }
+});
+
 test("large-series execution is bounded by season without truncating durable requested coverage", async () => {
   const entry = seasonCatalog(130);
   for (const [index, episode] of entry.episodes.entries()) {
@@ -526,6 +602,9 @@ test("an old cached workflow retries delayed Plex without regenerating its plan,
       const prior = JSON.parse(row.output);
       journal.query("UPDATE workflow_steps SET output=? WHERE run_id=? AND name='tv:target-snapshot'")
         .run(JSON.stringify({ episodeIds: prior.episodeIds, priorKeys: prior.priorKeys, policy: prior.policy }), runId);
+      const snatch = journal.query("SELECT output FROM workflow_steps WHERE run_id=? AND name='tv:attempt:0:snatch'").get(runId) as { output: string };
+      journal.query("UPDATE workflow_steps SET output=? WHERE run_id=? AND name='tv:attempt:0:snatch'")
+        .run(JSON.stringify(JSON.parse(snatch.output).ref), runId); // Original ref-only checkpoint format.
     } finally { journal.close(); }
     extendRequest(s, ["tvdb:201", "tvdb:202"]);
     s.fixture.clearOffers();

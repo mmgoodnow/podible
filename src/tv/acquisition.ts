@@ -22,7 +22,8 @@ import type { MovieOffer } from "../movies/offers";
 import { refreshTvFeedOffer } from "./feed";
 import { completeTvSource, recordedLegacyTvSource, reusableTvSources, tvSourceFiles, tvSourceSchema, type TvSource } from "./source-reuse";
 import { recoverMissingTorrentSource } from "../media/recovery-source";
-import { withTorrentUse } from "../media/torrent-use";
+import { withTorrentRegistration } from "../media/torrent-use";
+import type { DownloadLocation, TorrentRef } from "../media/torrent-client";
 import { prepareCanonicalDownload, resolveDownloadFile, sealCanonicalDownload } from "../media/canonical-download";
 
 export async function tvUpstreamStep<T>(ctx: WorkerContext, name: string, action: () => Promise<T>): Promise<T> {
@@ -318,22 +319,31 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
           canonicalDownload: !previous && Boolean(services.client.capabilities.canonicalDownloads) };
       });
       // In-flight pre-canonical jobs retain their original intent and regular-file layout.
-      const location = "location" in binding ? binding.location : binding as { rootId: string; relativePath: string };
-      const sourceRoot = path.resolve(settings.tv.managedRoot, "downloads", location.relativePath);
-      if (location.rootId !== "tv" || !sourceRoot.startsWith(path.resolve(settings.tv.managedRoot, "downloads") + path.sep)) throw new Error("TV download escaped its owned root");
-      const ref = await durableStep(ctx, `${prefix}:snatch`, async () => {
-        active(); await assertMovieStorage(ctx.repo, roots.contentRoot);
-        await fs.mkdir(sourceRoot, { recursive: true });
-        if (await fs.realpath(sourceRoot) !== sourceRoot) throw new Error("TV download layout traverses a symlink");
-        return withTorrentUse(ctx.repo, { clientId: services.client.id, infoHash: metadata.infoHash }, async () => {
+      const intendedLocation = "location" in binding ? binding.location : binding as DownloadLocation;
+      const registered = await durableStep<TorrentRef | { ref: TorrentRef; location: DownloadLocation }>(ctx, `${prefix}:snatch`, () =>
+        withTorrentRegistration(ctx.repo, { clientId: services.client.id, infoHash: metadata.infoHash }, async () => {
+          active(); await assertMovieStorage(ctx.repo, roots.contentRoot);
+          // A sibling may have registered this identity after our earlier intent was checkpointed.
+          const existing = repo.torrent(services.client.id, metadata.infoHash);
+          if (existing && existing.ownership_tag !== "Podible TV") throw new Error("TV torrent ownership conflicts with another domain");
+          const location: DownloadLocation = existing ? JSON.parse(existing.location_json) : intendedLocation;
+          const sourceRoot = path.resolve(settings.tv.managedRoot, "downloads", location.relativePath);
+          if (location.rootId !== "tv" || !sourceRoot.startsWith(path.resolve(settings.tv.managedRoot, "downloads") + path.sep)) throw new Error("TV download escaped its owned root");
+          await fs.mkdir(sourceRoot, { recursive: true });
+          if (await fs.realpath(sourceRoot) !== sourceRoot) throw new Error("TV download layout traverses a symlink");
           await prepareCanonicalDownload({ contentRoot: roots.contentRoot, sourceRoot, clientId: services.client.id, metainfo,
-            allowCreate: "canonicalDownload" in binding && binding.canonicalDownload, assertActive: active });
+            allowCreate: !existing && "canonicalDownload" in binding && binding.canonicalDownload, assertActive: active });
           const added = await services.client.ensureAdded({ metainfo, location });
           if (added.clientId !== services.client.id || added.nativeId.toLowerCase() !== metadata.infoHash)
             throw new Error("TV client returned another torrent identity");
-          active(); repo.bindDownload(acquisition.id, added, location, offer.key); return added;
-        });
-      });
+          active(); repo.bindDownload(acquisition.id, added, location, offer.key);
+          return { ref: added, location };
+        }));
+      // Completed pre-change checkpoints contain only the ref and retain their original location.
+      const ref = "ref" in registered ? registered.ref : registered;
+      const location = "ref" in registered ? registered.location : intendedLocation;
+      const sourceRoot = path.resolve(settings.tv.managedRoot, "downloads", location.relativePath);
+      if (location.rootId !== "tv" || !sourceRoot.startsWith(path.resolve(settings.tv.managedRoot, "downloads") + path.sep)) throw new Error("TV download escaped its owned root");
       const downloadId = repo.torrent(ref.clientId, ref.nativeId)!.id;
       if (snapshot.lossRecoveryHashes?.includes(metadata.infoHash))
         await recoverMissingTorrentSource({ ctx, client: services.client, ref, sourceRoot, metadata, prefix, active });

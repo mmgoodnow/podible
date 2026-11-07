@@ -35,6 +35,17 @@ export async function withTorrentUse<T>(repo: Parameters<typeof admitTorrentUse>
   return result;
 }
 
+const registrations = new Map<string, Promise<unknown>>();
+/** Serialize prepare/add/bind, not the download itself. Retirement admission alone is not a mutex. */
+export async function withTorrentRegistration<T>(repo: Parameters<typeof admitTorrentUse>[0], ref: TorrentRecordRef,
+  action: () => Promise<T>): Promise<T> {
+  const key = JSON.stringify([ref.clientId, ref.infoHash]);
+  const next = (registrations.get(key) ?? Promise.resolve()).catch(() => {}).then(() => withTorrentUse(repo, ref, action));
+  registrations.set(key, next);
+  try { return await next; }
+  finally { if (registrations.get(key) === next) registrations.delete(key); }
+}
+
 export function withDatabaseTorrentUse<T>(db: Database, beforeWrite: () => void, ref: TorrentRecordRef,
   action: () => Promise<T>) {
   return withTorrentUse(store(db, beforeWrite), ref, action);
