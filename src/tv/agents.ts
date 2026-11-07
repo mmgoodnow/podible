@@ -1,5 +1,5 @@
 import { Agent, OpenAIProvider, Runner, tool } from "@openai/agents";
-import type { ModelProvider } from "@openai/agents-core";
+import type { AgentInputItem, ModelProvider } from "@openai/agents-core";
 import { z } from "zod";
 import type { AppSettings } from "../app-types";
 import { TEXT_AGENT_MODEL } from "../ai-models";
@@ -57,15 +57,25 @@ export function validateTvImportPlan(raw: unknown, files: TvFileCandidate[], epi
 
 export function createTvDecider(settings: AppSettings, modelProvider?: ModelProvider, search?: (query: string) => Promise<MovieSearch>): TvDecider {
   async function run<T extends z.ZodObject>(name: string, outputType: T, extra: string, input: unknown,
-    tools: ConstructorParameters<typeof Agent>[0]["tools"] = []): Promise<z.output<T>> {
+    tools: ConstructorParameters<typeof Agent>[0]["tools"] = [],
+    validate?: (output: z.output<T>) => string | null): Promise<z.output<T>> {
     if (!modelProvider && !settings.agents.apiKey.trim()) throw new Error("Configure the existing agent API key for TV review");
     const provider = modelProvider ? null : new OpenAIProvider({ apiKey: settings.agents.apiKey, useResponses: true });
     try {
       const runner = new Runner({ modelProvider: modelProvider ?? provider!, tracingDisabled: true, traceIncludeSensitiveData: false });
       const agent = new Agent({ name, model: TEXT_AGENT_MODEL, instructions: instructions + "\n" + extra, outputType, tools });
-      const result = await runner.run(agent, JSON.stringify(input), { maxTurns: 32,
-        signal: AbortSignal.timeout(Math.max(120_000, settings.agents.timeoutMs)), toolExecution: { maxFunctionToolConcurrency: 1 } });
-      return outputType.parse(result.finalOutput);
+      const signal = AbortSignal.timeout(Math.max(120_000, settings.agents.timeoutMs));
+      let history: string | AgentInputItem[] = JSON.stringify(input);
+      for (let correction = 0; ; correction++) {
+        const result: { finalOutput?: unknown; history: AgentInputItem[] } = await runner.run(agent, history, { maxTurns: 32,
+          signal, toolExecution: { maxFunctionToolConcurrency: 1 } });
+        const output = outputType.parse(result.finalOutput);
+        const error = validate?.(output);
+        if (!error) return output;
+        if (correction >= 2) throw new Error(error);
+        // Preserve inspected evidence and stable candidate indexes while the agent corrects its choice.
+        history = [...result.history, { role: "user", content: `Selection rejected: ${error}. Use the tools to choose an eligible primary release, or return index:null if none is suitable. Previously inspected evidence remains valid.` }];
+      }
     } finally { await provider?.close().catch(() => {}); }
   }
   return {
@@ -111,15 +121,19 @@ The initial context is only an overview, not the complete search or catalog. Use
 Use searchReleases for useful aliases/numbering when initial candidates do not establish a match. Before concluding index:null, research at least one useful alternate query when the tool is available and inspect plausible matches. Do not confuse a release's season number with canonical episode identity.
 Policy-blocked candidates remain visible for diagnosis but cannot be downloaded. Explain whether matching content exists but exceeds a limit, was previously attempted, is ambiguous, or could not be found after research. Do not describe a policy exclusion as an absent/unreleased episode.
 Prefer a viable complete release within policy. Never invent an index.
-${releaseSelectionInstructions}`,
+${releaseSelectionInstructions}
+For this task, matchingIndexes should include only eligible copies; omit ones marked previously-attempted or release-size-limit. Optional copies never justify choosing a blocked primary.`,
         { entry: tvWorkEvidence(input.entry), episodeCount: input.episodes.length, episodes: input.episodes.slice(0,4).map(tvEpisodeEvidence),
           policy: input.policy, limits: { maximumReleaseBytes: input.maximumReleaseBytes ?? null, maximumFiles: 300, distinctMetainfoRequests: 8, additionalSearches: 3 },
           selectionPreference: settings.movies.crossSeedPreference ?? "tie-break", candidates: listing(0,10) },
-        [list, episodeTool(input.episodes), inspect, research, createCrossSeedabilityTool(() => offers, settings.movies.crossSeedPreference ?? "tie-break",30)]);
-      if (result.index !== null && (!offers[result.index] || !allowed(offers[result.index]!))) throw new Error("TV selector returned an unknown or policy-blocked release");
-      if (result.matchingIndexes.some(index => offers[index] && !allowed(offers[index]!))) throw new Error("TV selector returned a policy-blocked matching release");
+        [list, episodeTool(input.episodes), inspect, research, createCrossSeedabilityTool(() => offers, settings.movies.crossSeedPreference ?? "tie-break",30)],
+        output => output.index !== null && (!offers[output.index] || !allowed(offers[output.index]!))
+          ? `TV selector returned an unknown or policy-blocked release at index ${output.index}` : null);
+      // An optional registration must not poison a valid primary acquisition or bypass its policy.
+      const matchingIndexes = result.index === null ? [] : [...new Set(result.matchingIndexes)]
+        .filter(index => offers[index] && allowed(offers[index]!));
       return { offer: result.index === null ? null : offers[result.index]!, reason: result.reason,
-        matchingOffers: matchingSelectionOffers(offers, result.index, result.matchingIndexes),
+        matchingOffers: matchingSelectionOffers(offers, result.index, matchingIndexes),
         ...(deferred.length ? { deferred } : {}) };
     },
     async inspect(input) {

@@ -139,7 +139,7 @@ test("TV expanded research candidates participate in the shared evidence tool an
   expect(JSON.stringify(fake.calls[0]!.systemInstructions)).toContain("episode coverage always win");
 });
 
-test("TV off records semantic copies but cannot return unknown or filtered matching indexes", async () => {
+test("TV off records eligible semantic copies independently of source preference", async () => {
   const other = { ...offer, key: "other", provider: "Other" };
   const fake = provider([
     [{ type: "function_call", name: "assessCrossSeedability", callId: "coverage", arguments: '{"indexes":[0,1]}', status: "completed" }],
@@ -152,11 +152,54 @@ test("TV off records semantic copies but cannot return unknown or filtered match
   expect(selected.offer).toBe(offer);
   expect(selected.matchingOffers).toEqual([other]);
   expect(JSON.stringify(fake.calls[1]?.input)).toContain("off");
-  for (const matchingIndexes of [[1], [0, 0]]) {
-    const bad = provider([{ index: 0, matchingIndexes, reason: "Invalid matching group." }]);
-    await expect(createTvDecider(defaultSettings(), bad.model).select({ entry, episodes: [episode],
-      policy: defaultMovieQualityPolicy, offers: [offer, other], excludedOfferKeys: [other.key] })).rejects.toThrow();
-  }
+});
+
+test("ineligible optional copies cannot poison a valid TV primary selection", async () => {
+  const copies = [{ ...offer, key: "excluded" }, { ...offer, key: "oversized", sizeBytes: 5000 },
+    { ...offer, key: "eligible", provider: "Other" }];
+  const fake = provider([{ index: 0, matchingIndexes: [0, 0, 1, 2, 3, 3, 999], reason: "Copies of the same episode release." }]);
+  const result = await createTvDecider(defaultSettings(), fake.model).select({ entry, episodes: [episode],
+    policy: defaultMovieQualityPolicy, offers: [offer, ...copies], excludedOfferKeys: ["excluded"], maximumReleaseBytes: 2000 });
+  expect(result.offer).toBe(offer);
+  expect(result.matchingOffers).toEqual([copies[2]!]);
+  expect(fake.calls).toHaveLength(1);
+});
+
+test("TV primary rejection returns feedback and preserves tool research for correction", async () => {
+  const fake = provider([
+    [{ type: "function_call", name: "searchReleases", callId: "search", arguments: '{"query":"A Sequel"}', status: "completed" }],
+    { index: 0, reason: "Attempted source." },
+    { index: 999, reason: "Invented index." },
+    { index: 1, matchingIndexes: [0], reason: "Eligible alternate discovered by research." },
+  ]);
+  let searches = 0;
+  const alternate = { ...offer, key: "alternate" };
+  const result = await createTvDecider(defaultSettings(), fake.model, async () => {
+    searches++; return { offers: [alternate], warnings: [] };
+  }).select({ entry, episodes: [episode], policy: defaultMovieQualityPolicy, offers: [offer], excludedOfferKeys: [offer.key] });
+  expect(result.offer).toEqual(alternate);
+  expect(result.matchingOffers).toEqual([]);
+  expect(searches).toBe(1);
+  expect(fake.calls).toHaveLength(4);
+  const history = JSON.stringify(fake.calls[3]!.input);
+  expect(history).toContain("Selection rejected");
+  expect(history).toContain("searchReleases");
+  expect(history).not.toContain("hidden");
+});
+
+test("TV invalid primary correction is bounded and cannot bypass policy", async () => {
+  const fake = provider(Array.from({ length: 3 }, () => ({ index: 0, reason: "Still blocked." })));
+  await expect(createTvDecider(defaultSettings(), fake.model).select({ entry, episodes: [episode],
+    policy: defaultMovieQualityPolicy, offers: [offer], maximumReleaseBytes: 100 })).rejects.toThrow("policy-blocked");
+  expect(fake.calls).toHaveLength(3);
+});
+
+test("TV no-match selection ignores optional copies rather than failing the search", async () => {
+  const fake = provider([{ index: null, matchingIndexes: [0, 999], reason: "No suitable primary." }]);
+  const result = await createTvDecider(defaultSettings(), fake.model).select({ entry, episodes: [episode],
+    policy: defaultMovieQualityPolicy, offers: [offer] });
+  expect(result.offer).toBeNull();
+  expect(result.matchingOffers).toEqual([]);
 });
 
 test("selector retrieves late candidates and episode evidence in pages and caches metainfo across pages", async () => {
@@ -216,7 +259,7 @@ test("import verifier retrieves file/probe evidence without receiving a whole ma
 });
 
 test("size exclusions are visible but neither selected nor retained as usable copies",async()=>{
-  const fake=provider([{index:0,reason:"Attempt to ignore configured admission limit"}]);
+  const fake=provider(Array.from({length:3},()=>({index:0,reason:"Attempt to ignore configured admission limit"})));
   await expect(createTvDecider(defaultSettings(),fake.model).select({entry,episodes:[episode],policy:defaultMovieQualityPolicy,
     offers:[offer],maximumReleaseBytes:1000})).rejects.toThrow("policy-blocked");
   expect(JSON.stringify(fake.calls[0]!.input)).toContain("release-size-limit");
