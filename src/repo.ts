@@ -311,10 +311,11 @@ export class BooksRepo {
   }
 
   transaction<T>(fn: () => T): T {
+    // Reserve the writer before reading: a WAL snapshot cannot be upgraded after another writer commits.
     return this.db.transaction(() => {
       this.beforeWrite();
       return fn();
-    })();
+    }).immediate();
   }
 
   forExecution(beforeWrite: () => void): BooksRepo {

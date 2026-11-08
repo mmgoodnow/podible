@@ -32,6 +32,11 @@ Reflow remains execution authority. Application jobs, durable outbox transaction
 command receipts, run IDs, generations, cancellation, owner-token fencing, and
 the single worker's domain lanes are unchanged. HTTP continues writing intent to
 the application outbox; it does not call or message an engine to enqueue jobs.
+Repository transactions reserve write intent with `BEGIN IMMEDIATE` before
+reading state. This lets the busy timeout apply before a snapshot is taken,
+instead of failing a later read-to-write upgrade after another thread commits.
+Transactions remain synchronous and bounded; network and filesystem awaits
+stay outside them. Nested operations retain SQLite savepoint rollback semantics.
 
 ## Deadlines And Recovery
 
