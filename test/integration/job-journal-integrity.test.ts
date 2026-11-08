@@ -92,6 +92,26 @@ test("idle reconciliation checks terminal linkage without hydrating history or r
   } finally { await f.close(); }
 });
 
+test("link integrity ignores orphan links but still rejects missing runs for existing jobs", async () => {
+  const f = await fixture();
+  try {
+    const runtime = await f.start();
+    const domain = new Database(path.join(path.dirname(f.repo.executionDatabasePath()), "books.sqlite"));
+    try {
+      // Simulate legacy debris without changing the production foreign-key policy.
+      domain.exec("PRAGMA foreign_keys=OFF");
+      domain.query("INSERT INTO job_executions(job_id,run_id) VALUES (?,?)").run(999_999, "orphan-run");
+    } finally { domain.close(); }
+    await runtime.reconcile();
+    const job = f.repo.createJob({ type: "metadata_hydration", payload: { marker: "retained" } });
+    const runId = await complete(runtime, f.repo, job.id);
+    await Bun.sleep(10);
+    expect(await runtime.engine.prune({ olderThan: 0, statuses: ["completed"] })).toBe(1);
+    await expect(runtime.reconcile()).rejects.toThrow(`Missing execution ${runId} for job ${job.id}`);
+    expect(f.effects).toEqual(["retained"]);
+  } finally { await f.close(); }
+});
+
 test("wipe preserves job ID high-water and never reuses a surviving journal run", async () => {
   const f = await fixture();
   try {

@@ -48,8 +48,11 @@ export function jobJournalReader(filename: string): JobJournalReader {
       try {
         const uri = pathToFileURL(filename); uri.searchParams.set("mode", "ro");
         db.query("ATTACH DATABASE ? AS execution_integrity").run(uri.toString());
-        const missing = db.query(`SELECT e.job_id,e.run_id FROM job_executions e JOIN jobs j ON j.id=e.job_id
-          LEFT JOIN execution_integrity.workflow_runs r ON r.id=e.run_id WHERE r.id IS NULL LIMIT 1`)
+        // Only inspect a job row when its run is missing; healthy history needs
+        // just the small covering indexes, not every job's payload pages.
+        const missing = db.query(`SELECT e.job_id,e.run_id FROM job_executions e
+          LEFT JOIN execution_integrity.workflow_runs r ON r.id=e.run_id
+          WHERE r.id IS NULL AND EXISTS(SELECT 1 FROM jobs j WHERE j.id=e.job_id) LIMIT 1`)
           .get() as { job_id: number; run_id: string } | null;
         if (missing) throw new Error(`Missing execution ${missing.run_id} for job ${missing.job_id}`);
       } finally { db.close(); }
