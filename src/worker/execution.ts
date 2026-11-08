@@ -3,6 +3,7 @@ import { createEngine, createWorkflow, LeaseExpiredError, RunCancelledError } fr
 import { SQLiteStorage } from "reflow-ts/sqlite-bun";
 import { z } from "zod";
 import { Database } from "bun:sqlite";
+import { setImmediate as yieldToIo } from "node:timers/promises";
 
 import { processJob } from "./dispatcher";
 import { notifyJobFailure } from "./failure";
@@ -170,9 +171,12 @@ export async function createJobExecutionRuntime(
         ctx.repo.attachJobExecution(input.jobId, runId, input.generation);
         if (!ctx.repo.ownJobExecution(input.jobId, runId, token)) throw new RunCancelledError(runId);
         const queuedJob = ctx.repo.getJob(input.jobId)!;
+        const priorSteps = await storage.getStepResults(runId);
+        const completedSteps = new Set(priorSteps.filter(row => row.status === "completed" && (!row.kind || row.kind === "step")).map(row => row.name));
+        let replayedSteps = 0;
         const prefix = periodicPrefix({ ...queuedJob, dedupe_key: ctx.repo.jobDedupeKey(queuedJob.id) });
         const newer = prefix ? ctx.repo.latestJobByDedupePrefix(queuedJob.type, prefix) : null;
-        if (newer && newer.id > queuedJob.id && (await storage.getStepResults(runId)).every(s => s.name === "job-input"))
+        if (newer && newer.id > queuedJob.id && priorSteps.every(s => s.name === "job-input"))
           return { jobId: queuedJob.id, coalescedInto: newer.id };
         const signals = new Set<AbortSignal>();
         const cancelRequestedRun = async () => {
@@ -214,6 +218,17 @@ export async function createJobExecutionRuntime(
               await cancelRequestedRun();
               throw new RunCancelledError(runId);
             }
+            if (completedSteps.has(name)) {
+              // Cached results perform no effects and must not wait for their
+              // former resource lane. Reflow still owns output/order replay.
+              if (++replayedSteps % 16 === 0) await yieldToIo();
+              assertActive();
+              const cached = await step.run<unknown>(name, () => {
+                throw new Error(`Completed execution checkpoint disappeared: ${name}`);
+              });
+              assertActive();
+              return cached as T;
+            }
             const current = ctx.repo.getJob(input.jobId);
             const keys = [...(current ? jobLockKeys(ctx.repo, current) : []), `execution:${token}`];
             // Wait outside the handler: a durable sleep releases Reflow's run slot.
@@ -221,6 +236,9 @@ export async function createJobExecutionRuntime(
             for (let wait = 0; lockSetsConflict(
               new Set([...activeLocks].filter(key => laneOwners.get(key)?.owner !== token)), keys
             ); wait++) {
+              // Cached durable sleeps only yield microtasks in Reflow. Let
+              // filesystem completions and timers run during a long replay.
+              if (wait > 0 && wait % 16 === 0) await yieldToIo();
               assertActive();
               await step.sleep(`podible:lane:${name}:${wait}`, 1000);
             }

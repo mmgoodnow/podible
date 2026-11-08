@@ -123,6 +123,11 @@ synchronously at admission and released when the actual handler finishes,
 including retry backoff and cancellation. Cached step results retain their old
 names and do not repeat effects. An immediate in-process retry must reacquire its
 lane before doing work; it never runs an effect under another owner's lock.
+Completed checkpoints bypass lane admission entirely: replaying a saved result is
+not another side effect. This also skips historical lane-wait sleeps preceding
+that checkpoint, without deleting or rewriting them. Long replay sequences yield
+to the I/O loop periodically so filesystem callbacks and timers can run. Fresh
+effects still reserve their resource lanes normally.
 
 Scheduled latest-state observations reuse an outstanding periodic job across
 wall-clock slots and restarts. Existing obsolete periodic runs with no effects

@@ -161,6 +161,108 @@ test("all registered job types use checkpointed execution without claiming or re
   }
 });
 
+test("restart replays completed input and effects without admission while a competitor holds their lane", async () => {
+  const f = await fixture(), journalPath = path.join(f.root, "execution.sqlite");
+  const book = f.repo.createBook({ title: "Cached lane replay", author: "Fixture" });
+  const original = f.repo.createJob({ type: "chapter_analysis", bookId: book.id, payload: { manifestationId: 1 } });
+  let effects = 0, replayed = false, fresh = false, competitorEntered = false, release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  let competitorId = 0;
+  const processJob = async (ctx: import("../../src/worker/context").WorkerContext, job: import("../../src/app-types").JobRow) => {
+    if (job.id === competitorId) {
+      await ctx.execution!.run("hold-lane", async () => { competitorEntered = true; await hold; });
+    } else {
+      await ctx.execution!.run("cached-effect", () => { effects++; return "recorded"; });
+      replayed = true;
+      await ctx.execution!.sleep("restart-boundary", 600_000);
+      await ctx.execution!.run("fresh-effect", () => { fresh = true; });
+    }
+    return "done" as const;
+  };
+  let runtime = await createJobExecutionRuntime(f.ctx, journalPath, { processJob });
+  try {
+    await runtime.reconcile();
+    const runId = f.repo.getJobExecution(original.id)!.run_id;
+    await until(async () => (await runtime.engine.getRunStatus(runId))?.run.status === "sleeping");
+    await runtime.stop();
+    // Model historical waits preceding a completed job-input checkpoint. Skipping
+    // these named operations must not strand Reflow's ordered replay results.
+    const db = new Database(journalPath);
+    try {
+      const input = db.query("SELECT created_at FROM workflow_steps WHERE run_id=? AND name='job-input'").get(runId) as { created_at: number };
+      const insert = db.prepare(`INSERT INTO workflow_steps(id,run_id,name,status,output,attempts,created_at,updated_at,kind)
+        VALUES(?,?,?,'completed','null',0,?,?,'sleep')`);
+      db.transaction(() => {
+        for (let i = 0; i < 128; i++) insert.run(randomUUID(), runId, `podible:lane:job-input:${i}`, input.created_at - 256 + i, input.created_at - 256 + i);
+      })();
+    } finally { db.close(); }
+    replayed = false;
+    competitorId = f.repo.createJob({ type: "chapter_analysis", bookId: book.id, payload: { manifestationId: 1 } }).id;
+    runtime = await createJobExecutionRuntime(f.ctx, journalPath, { processJob });
+    await runtime.reconcile(); await until(() => competitorEntered);
+    const wake = new Database(journalPath);
+    try {
+      wake.query("UPDATE workflow_steps SET output=? WHERE run_id=? AND name='restart-boundary'").run(String(Date.now() - 1), runId);
+      wake.query("UPDATE workflow_runs SET wake_at=? WHERE id=?").run(Date.now() - 1, runId);
+    } finally { wake.close(); }
+    await until(() => replayed);
+    expect(effects).toBe(1);
+    expect(fresh).toBe(false);
+    expect(runtime.diagnostics().reservations).toBe(1);
+    release(); await until(() => f.repo.getJobStatus(original.id) === "succeeded");
+    expect(fresh).toBe(true);
+    expect(effects).toBe(1);
+  } finally { release(); await runtime.stop(); f.db.close(); await rm(f.root, { recursive: true, force: true }); }
+}, 15000);
+
+test("long cached lane histories yield to filesystem completion before exhausting historical waits", async () => {
+  const f = await fixture(), journalPath = path.join(f.root, "execution.sqlite");
+  const book = f.repo.createBook({ title: "Fair lane replay", author: "Fixture" });
+  const original = f.repo.createJob({ type: "chapter_analysis", bookId: book.id, payload: { manifestationId: 1 } });
+  let competitorId = 0, competitorEntered = false, resumed = false, ioFinished = false, fresh = false, release!: () => void;
+  let ioTask: Promise<void> | undefined;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const historyLength = 1024;
+  const processJob = async (ctx: import("../../src/worker/context").WorkerContext, job: import("../../src/app-types").JobRow) => {
+    if (job.id === competitorId) await ctx.execution!.run("hold-lane", async () => { competitorEntered = true; await hold; });
+    else {
+      await ctx.execution!.sleep("restart-boundary", 600_000);
+      if (resumed) ioTask = readFile(path.join(f.root, "books.sqlite")).then(() => { ioFinished = true; release(); });
+      await ctx.execution!.run("fresh-effect", () => { fresh = true; });
+    }
+    return "done" as const;
+  };
+  let runtime = await createJobExecutionRuntime(f.ctx, journalPath, { processJob });
+  try {
+    await runtime.reconcile();
+    const runId = f.repo.getJobExecution(original.id)!.run_id;
+    await until(async () => (await runtime.engine.getRunStatus(runId))?.run.status === "sleeping");
+    await runtime.stop();
+    const seed = new Database(journalPath);
+    try {
+      const insert = seed.prepare(`INSERT INTO workflow_steps(id,run_id,name,status,output,attempts,created_at,updated_at,kind)
+        VALUES(?,?,?,'completed','null',0,?,?,'sleep')`);
+      const base = Date.now();
+      seed.transaction(() => {
+        for (let i = 0; i < historyLength; i++) insert.run(randomUUID(), runId, `podible:lane:fresh-effect:${i}`, base + i, base + i);
+      })();
+    } finally { seed.close(); }
+    competitorId = f.repo.createJob({ type: "chapter_analysis", bookId: book.id, payload: { manifestationId: 1 } }).id;
+    resumed = true;
+    runtime = await createJobExecutionRuntime(f.ctx, journalPath, { processJob });
+    await runtime.reconcile(); await until(() => competitorEntered);
+    const wake = new Database(journalPath);
+    try {
+      wake.query("UPDATE workflow_steps SET output=? WHERE run_id=? AND name='restart-boundary'").run(String(Date.now() - 1), runId);
+      wake.query("UPDATE workflow_runs SET wake_at=? WHERE id=?").run(Date.now() - 1, runId);
+    } finally { wake.close(); }
+    await until(() => f.repo.getJobStatus(original.id) === "succeeded");
+    expect(ioFinished).toBe(true); expect(fresh).toBe(true);
+    const status = await runtime.engine.getRunStatus(runId);
+    expect(status!.steps.some(step => step.name === `podible:lane:fresh-effect:${historyLength}`)).toBe(false);
+  } finally { release(); await ioTask; await runtime.stop(); f.db.close(); await rm(f.root, { recursive: true, force: true }); }
+}, 15000);
+
 test("lock-blocked maintenance parks durably instead of starving unrelated foreground work", async () => {
   const f = await fixture();
   const book = f.repo.createBook({ title: "Active work", author: "Fixture" });
