@@ -171,7 +171,7 @@ export async function verifyContentReuse(plan: ReusePlan): Promise<ReusePlan> {
   const manifest = rebuilt.candidate.v1;
   if (!manifest) return applyReusePieceEvidence(rebuilt, []);
   const pieces: ReusePieceEvidence[] = [];
-  const buffer = Buffer.alloc(1024 * 1024);
+  const buffer = Buffer.alloc(Math.min(16 * 1024 * 1024, manifest.pieceLength));
   let fileIndex = 0;
   for (let index = 0; index < manifest.pieceHashes.length; index++) {
     const start = index * manifest.pieceLength;

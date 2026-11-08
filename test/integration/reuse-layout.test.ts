@@ -97,6 +97,29 @@ test("an actual same-size changed tail detects the precise mismatching original 
   expect(await fs.readFile(destination, "utf8")).toBe("abcdefgh");
 });
 
+test("large original pieces are read in bounded piece-sized chunks including a cross-file tail", async () => {
+  const fixture = await setup(), text = "x".repeat(17 * 1024 * 1024 + 13);
+  const first = await fixture.source("large", "large.mkv", text);
+  const tail = await fixture.source("tail", "tail.mkv", "end");
+  const candidate = manifest([{ name: "large.mkv", text }, { name: "tail.mkv", text: "end" }], 16 * 1024 * 1024);
+  const open = fs.open.bind(fs);
+  let reads = 0;
+  fs.open = (async (...args: Parameters<typeof fs.open>) => {
+    const handle = await open(...args);
+    if ([first.path, tail.path].includes(String(args[0]))) {
+      const read = handle.read.bind(handle);
+      handle.read = ((...readArgs: unknown[]) => { reads++; return Reflect.apply(read, handle, readArgs); }) as typeof handle.read;
+    }
+    return handle;
+  }) as typeof fs.open;
+  try {
+    const proof = await verifyContentReuse(fixture.plan(candidate, [first, tail], 0));
+    expect(proof.summary.verifiedReuseBytes).toBe(text.length + 3);
+    expect(proof.pieces.every(piece => piece.status === "verified")).toBe(true);
+    expect(reads).toBe(3);
+  } finally { fs.open = open; }
+});
+
 test("journal proof replays an exact seed-only layout without rereading payload, but rejects changed sources", async () => {
   const fixture = await setup();
   const source = await fixture.source("1", "canonical.mkv", "abcdefgh", true);
