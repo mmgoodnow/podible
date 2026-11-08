@@ -4,12 +4,13 @@ import type { JobRow } from "../app-types";
 import { durableStep, workerLog, type WorkerContext } from "../worker/context";
 import { TorrentStewardship, type StewardshipAdapters } from "./torrent-stewardship";
 import { processTorrentRetirements } from "./torrent-retirement-worker";
+import { processOptimisticCrossSeeds, type CrossSeedMonitorAdapters } from "./cross-seed-monitor";
 
 const payloadSchema = z.object({ operationId: z.string().uuid().optional() }).strict();
 
 /** Parent registers torrent_stewardship_collect; this handler never owns execution lifecycle or controls torrents. */
 export async function processStewardshipCollection(ctx: WorkerContext, job: JobRow,
-  adapters: StewardshipAdapters = {}): Promise<"done"> {
+  adapters: StewardshipAdapters & { optimistic?: CrossSeedMonitorAdapters } = {}): Promise<"done"> {
   if (!ctx.execution) throw new Error("Torrent stewardship collection requires durable execution");
   const payload = payloadSchema.parse(JSON.parse(job.payload_json ?? "{}"));
   const active = () => { ctx.execution!.assertActive(); adapters.assertActive?.(); };
@@ -22,5 +23,6 @@ export async function processStewardshipCollection(ctx: WorkerContext, job: JobR
   if (result.unavailableReason)
     workerLog(ctx, `[stewardship] ${result.unavailableReason} Observation will retry on the next scheduled collection.`);
   await processTorrentRetirements(ctx, job, { source: result.source, offset: result.offset }, adapters.retirement ?? {});
+  await processOptimisticCrossSeeds(ctx, adapters.optimistic);
   return "done";
 }

@@ -14,12 +14,12 @@ function fixture() {
   const repo = new BooksRepo(db), jobs = new Map<number, { status: string }>();
   const metrics = new TransferMetricsRepo(db, () => {}, id => jobs.get(id) ?? null);
   let nextJob = 1;
-  const add = (status: string | null, outcome?: CrossSeedOutcome["kind"], bytes = 0) => {
+  const add = (status: string | null, outcome?: CrossSeedOutcome["kind"], bytes = 0, verification?: CrossSeedOutcome["verification"]) => {
     const operationId = randomUUID(), jobId = nextJob++;
     if (status) jobs.set(jobId, { status });
     const command = crossSeedCommandSchema.parse({ operationId, scope: { media: "tv", targetId: 1 }, releaseId: 1 });
     repo.setJsonState(crossSeedStateKey(operationId), { command, jobId, commandHash: "fixture", createdAt: new Date().toISOString(),
-      ...(outcome ? { outcome: { kind: outcome, at: new Date().toISOString(), reason: "Fixture", reusedBytes: bytes } } : {}) });
+      ...(outcome ? { outcome: { kind: outcome, at: new Date().toISOString(), reason: "Fixture", reusedBytes: bytes, verification } } : {}) });
     return jobId;
   };
   return { db, metrics, add, jobs };
@@ -37,6 +37,16 @@ test("28 skipped candidates and five pending operations are not reported as 33 f
     expect(html).toContain("<dt>Pending</dt><dd>5</dd>");
     expect(html).toContain("<dt>Skipped</dt><dd>28</dd>");
     for (const absent of ["of 33", "Success rate", "Combined seed time", "<dt>Failed</dt>"]) expect(html).not.toContain(absent);
+  } finally { f.db.close(); }
+});
+
+test("optimistic seeds count as seeds, not independently verified download savings", () => {
+  const f = fixture();
+  try {
+    f.add("succeeded", "seeding", 1000, "assumed");
+    f.add("succeeded", "seeding", 20, "verified");
+    f.add("succeeded", "incompatible", 1000, "assumed");
+    expect(f.metrics.status().reuse).toMatchObject({ successful: 2, failed: 1, verifiedReusedBytes: 20 });
   } finally { f.db.close(); }
 });
 

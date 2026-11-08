@@ -3,6 +3,9 @@ import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import type { TorrentRef } from "./torrent-client";
 import type { TorrentRecord } from "./torrent-records-schema";
+import type { DownloadLocation } from "./torrent-client";
+import { immediateTransaction } from "../db-transaction";
+import { reuseDigest, type ReusePlan } from "./reuse-plan";
 
 const id = z.number().int().positive().safe();
 export const crossSeedScopeSchema = z.object({ media: z.enum(["movie", "tv", "audio", "ebook"]), targetId: id }).strict();
@@ -24,22 +27,126 @@ export const crossSeedCommandSchema = z.object({
   "Provide exactly one retained release or server-owned selected copy");
 export type CrossSeedCommand = z.infer<typeof crossSeedCommandSchema>;
 export type CrossSeedOutcome = {
-  kind: "seeding" | "skipped" | "unsupported" | "stalled";
+  kind: "seeding" | "skipped" | "unsupported" | "stalled" | "incompatible";
   reason: string; at: string; torrentId?: number; infoHash?: string;
   reusedBytes?: number; downloadedBytes?: number; totalBytes?: number;
   /** Verified payload accounting, not network counters (which include retries/overhead). */
   accountingVersion?: 1; sidecarDownloadBytes?: number; contentRepairBytes?: number;
   contentFileCount?: number;
+  planId?: string; verification?: "assumed" | "verified";
 };
 export type CrossSeedReceipt = { command: CrossSeedCommand; commandHash: string; jobId: number; createdAt: string; outcome?: CrossSeedOutcome };
 const prefix = "cross-seed:operation:";
+const optimisticPrefix = "cross-seed:optimistic:";
+const hashSchema = z.string().regex(/^[a-f0-9]{40}$/), planIdSchema = z.string().regex(/^[a-f0-9]{64}$/);
+export type OptimisticRegistration = {
+  operationId: string; planId: string; ref: TorrentRef; location: DownloadLocation; plan: ReusePlan;
+  torrentId: number; status: "monitoring" | "removing" | "removed"; recordedAt: string;
+};
 export const crossSeedStateKey = (id: string) => prefix + z.string().uuid().parse(id);
 export const crossSeedRegistrationKey = (ref: TorrentRef) => "cross-seed:registration:" + createHash("sha256").update(JSON.stringify([ref.clientId, ref.nativeId])).digest("hex");
 export const crossSeedCommandHash = (command: CrossSeedCommand) => createHash("sha256").update(JSON.stringify(crossSeedCommandSchema.parse(command))).digest("hex");
 
 /** Domain intent/results only. Attempts, sleeps and leases remain in Reflow. */
 export class CrossSeedRepo {
-  constructor(private db: Database) {}
+  constructor(private db: Database, private beforeWrite: () => void = () => {}) {}
+  private save(key: string, value: unknown) {
+    this.db.query(`INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?)
+      ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`)
+      .run(key, JSON.stringify(value), new Date().toISOString());
+  }
+  isIncompatible(candidateHash: string, planId: string): boolean {
+    hashSchema.parse(candidateHash); planIdSchema.parse(planId);
+    return !!this.db.query("SELECT 1 FROM app_state WHERE key=?")
+      .get("cross-seed:incompatible:" + reuseDigest([candidateHash, planId]));
+  }
+  markIncompatible(candidateHash: string, planId: string, reason: string): void {
+    hashSchema.parse(candidateHash); planIdSchema.parse(planId); z.string().trim().min(1).max(500).parse(reason);
+    immediateTransaction(this.db, this.beforeWrite, () => {
+      const at = new Date().toISOString();
+      this.save("cross-seed:incompatible:" + reuseDigest([candidateHash, planId]), { candidateHash, planId, reason, at });
+      const rows = this.db.query(`SELECT value_json FROM app_state WHERE key>=? AND key<?
+        AND json_extract(value_json,'$.ref.nativeId')=? AND json_extract(value_json,'$.planId')=?
+        AND json_extract(value_json,'$.status')!='removed'`).all(optimisticPrefix, optimisticPrefix + "~", candidateHash, planId) as { value_json: string }[];
+      for (const row of rows) {
+        const registration = JSON.parse(row.value_json) as OptimisticRegistration;
+        this.save(optimisticPrefix + registration.operationId, { ...registration, status: "removing" });
+        const receipt = this.receipt(registration.operationId);
+        if (receipt) this.save(crossSeedStateKey(registration.operationId), { ...receipt, outcome: {
+          ...receipt.outcome, kind: "incompatible", reason, at, planId, verification: "assumed",
+          torrentId: registration.torrentId, infoHash: candidateHash
+        } });
+      }
+    });
+  }
+  recordOptimistic(operationId: string, input: { planId: string; ref: TorrentRef; location: DownloadLocation; plan: ReusePlan }): void {
+    z.string().uuid().parse(operationId); planIdSchema.parse(input.planId); hashSchema.parse(input.ref.nativeId);
+    if (input.planId !== input.plan.id || input.plan.candidate.identity.v1 !== input.ref.nativeId ||
+      input.plan.files.length !== input.plan.candidate.files.length || input.plan.files.length > 2000 || !input.plan.files.length ||
+      input.plan.files.some((file, index) => !file.source || file.source.size !== file.size ||
+        file.candidatePath !== input.plan.candidate.files[index]!.path || file.size !== input.plan.candidate.files[index]!.size) ||
+      JSON.stringify(input).length > 32 * 1024 * 1024) throw new Error("Optimistic registration needs a bounded fully mapped plan");
+    immediateTransaction(this.db, this.beforeWrite, () => {
+      const receipt = this.receipt(operationId);
+      const record = this.db.query("SELECT * FROM media_torrents WHERE client_id=? AND native_id=?")
+        .get(input.ref.clientId, input.ref.nativeId) as TorrentRecord | null;
+      if (!receipt || !record || this.registrationOwner(input.ref) !== operationId || this.owns(receipt.command.scope, input.ref.clientId, input.ref.nativeId) ||
+        reuseDigest(JSON.parse(record.location_json)) !== reuseDigest(input.location)) throw new Error("Optimistic registration is not exclusively owned");
+      const previous = this.optimisticRegistration(operationId);
+      if (previous) {
+        if (reuseDigest({ ...previous, status: "monitoring", recordedAt: "" }) !== reuseDigest({ ...input,
+          operationId, torrentId: record.id, status: "monitoring", recordedAt: "" })) throw new Error("Optimistic registration intent changed");
+        return;
+      }
+      this.save(optimisticPrefix + operationId, { ...input, operationId, torrentId: record.id,
+        status: this.isIncompatible(input.ref.nativeId, input.planId) ? "removing" : "monitoring", recordedAt: new Date().toISOString() });
+    });
+  }
+  optimisticRegistration(operationId: string): OptimisticRegistration | null {
+    z.string().uuid().parse(operationId);
+    const row = this.db.query("SELECT value_json FROM app_state WHERE key=?").get(optimisticPrefix + operationId) as { value_json: string } | null;
+    return row ? JSON.parse(row.value_json) : null;
+  }
+  optimisticRegistrations(limit = 25, afterOperationId = ""): OptimisticRegistration[] {
+    z.number().int().min(1).max(25).parse(limit);
+    if (afterOperationId) z.string().uuid().parse(afterOperationId);
+    return (this.db.query(`SELECT value_json FROM app_state WHERE key>? AND key<?
+      AND json_extract(value_json,'$.status')!='removed' ORDER BY key LIMIT ?`)
+      .all(optimisticPrefix + afterOperationId, optimisticPrefix + "~", limit) as { value_json: string }[]).map(row => JSON.parse(row.value_json));
+  }
+  ownsOptimisticRegistration(operationId: string): boolean {
+    const registration = this.optimisticRegistration(operationId);
+    if (!registration || registration.status === "removed" || this.registrationOwner(registration.ref) !== operationId) return false;
+    const row = this.db.query("SELECT * FROM media_torrents WHERE id=?").get(registration.torrentId) as TorrentRecord | null;
+    const receipt = this.receipt(operationId);
+    const tag = receipt?.command.scope.media === "tv" ? "Podible TV" : receipt?.command.scope.media === "movie" ? "Podible Movies" : "Podible Books";
+    if (!row || !receipt || row.backend !== "transmission" || row.ownership_tag !== tag ||
+      row.client_id !== registration.ref.clientId || row.native_id !== registration.ref.nativeId ||
+      reuseDigest(JSON.parse(row.location_json)) !== reuseDigest(registration.location)) return false;
+    return !this.db.query(`SELECT 1 FROM book_torrent_bindings WHERE torrent_id=?
+      UNION ALL SELECT 1 FROM movie_acquisition_downloads WHERE torrent_id=?
+      UNION ALL SELECT 1 FROM tv_acquisition_downloads WHERE torrent_id=? LIMIT 1`)
+      .get(registration.torrentId, registration.torrentId, registration.torrentId);
+  }
+  completeOptimisticRemoval(operationId: string): void {
+    immediateTransaction(this.db, this.beforeWrite, () => {
+      const registration = this.optimisticRegistration(operationId);
+      if (!registration || registration.status === "removed") return;
+      if (registration.status !== "removing" || !this.isIncompatible(registration.ref.nativeId, registration.planId) ||
+        this.registrationOwner(registration.ref) !== operationId) throw new Error("Optimistic removal ownership changed");
+      const row = this.db.query("SELECT * FROM media_torrents WHERE id=?").get(registration.torrentId) as TorrentRecord | null;
+      if (row && (row.client_id !== registration.ref.clientId || row.native_id !== registration.ref.nativeId ||
+        reuseDigest(JSON.parse(row.location_json)) !== reuseDigest(registration.location))) throw new Error("Optimistic removal registry changed");
+      const bound = this.db.query(`SELECT 1 FROM book_torrent_bindings WHERE torrent_id=?
+        UNION ALL SELECT 1 FROM movie_acquisition_downloads WHERE torrent_id=?
+        UNION ALL SELECT 1 FROM tv_acquisition_downloads WHERE torrent_id=? LIMIT 1`)
+        .get(registration.torrentId, registration.torrentId, registration.torrentId);
+      if (bound) throw new Error("Primary torrent cannot be removed by optimistic monitoring");
+      if (row) this.db.query("DELETE FROM media_torrents WHERE id=?").run(registration.torrentId);
+      this.db.query("DELETE FROM app_state WHERE key=?").run(crossSeedRegistrationKey(registration.ref));
+      this.save(optimisticPrefix + operationId, { ...registration, status: "removed" });
+    });
+  }
   registrationOwner(ref: TorrentRef): string | null {
     const row = this.db.query("SELECT value_json FROM app_state WHERE key=?").get(crossSeedRegistrationKey(ref)) as { value_json: string } | null;
     return row ? z.object({ operationId: z.string().uuid() }).parse(JSON.parse(row.value_json)).operationId : null;

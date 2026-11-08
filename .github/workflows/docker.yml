@@ -160,6 +160,8 @@ jobs:
         run: docker run --rm --network none -v "$PWD/test:/app/test:ro" --entrypoint bun podible-transmission-test:ci run test/lab/transmission-inner.ts
       - name: Non-CoW symlink reuse and restart acceptance
         run: docker run --rm --network none --tmpfs /tmp:rw,size=128m -v "$PWD/test:/app/test:ro" --entrypoint bun podible-transmission-test:ci run test/lab/symlink-reuse-inner.ts
+      - name: Optimistic seeding and lazy mismatch acceptance (synthetic local peers)
+        run: docker run --rm --network bridge --tmpfs /tmp:rw,size=128m -v "$PWD/test:/app/test:ro" --entrypoint bun podible-transmission-test:ci run test/lab/symlink-seeding-inner.ts
       - name: Canonical initial download and restart acceptance
         run: docker run --rm --network none --tmpfs /tmp:rw,size=128m -v "$PWD/test:/app/test:ro" --entrypoint bun podible-transmission-test:ci run test/lab/canonical-download-inner.ts
       - name: Cross-media transfer metrics acceptance

@@ -1,5 +1,8 @@
 export type TorrentRef = { clientId: string; nativeId: string };
 export type DownloadLocation = { rootId: string; relativePath: string };
+export class TorrentNotFoundError extends Error {
+  constructor() { super("Managed torrent record is missing"); this.name = "TorrentNotFoundError"; }
+}
 export type TorrentSnapshot = {
   ref: TorrentRef;
   location: DownloadLocation;
@@ -11,6 +14,7 @@ export type TorrentSnapshot = {
   message: string | null;
   /** Tracker availability is independent of local file integrity; absent classification is not proof of safety. */
   errorKind?: "tracker" | "storage" | "unknown" | null;
+  integrityError?: "piece-mismatch" | null;
   observedAt: string;
   seedOnly?: boolean;
 };
@@ -24,6 +28,7 @@ export interface TorrentClient {
     metainfoVersions: readonly number[];
     readOnlySeeding?: boolean;
     canonicalDownloads?: boolean;
+    optimisticSeeding?: boolean;
   };
   ensureAdded(input: {
     metainfo: Uint8Array;
@@ -36,6 +41,8 @@ export interface TorrentClient {
   recheck(ref: TorrentRef): Promise<void>;
   resume(ref: TorrentRef): Promise<void>;
   removeRecord(ref: TorrentRef): Promise<void>;
+  /** Retire only an exact seed-only intent after confirmed daemon absence. Caller serializes registration. */
+  forgetSeedOnlyIntent?(ref: TorrentRef, location: DownloadLocation): Promise<void>;
   /** Persist no-download file selection before starting an exact-match symlink layout. */
   resumeSeedOnly?(ref: TorrentRef): Promise<void>;
   /** Permanently surrender write authority after a canonical initial download completes. */

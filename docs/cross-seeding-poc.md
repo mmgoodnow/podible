@@ -13,7 +13,7 @@ Movie and TV acquisition selectors also identify likely copies of the selected
 release during search. `assessCrossSeedability` counts distinct normalized tracker
 names in agent-proposed groups, rather than counting duplicate search results.
 Semantic grouping must preserve encode, edition, tracks and episode coverage;
-size and hash diagnostics are estimates, not permission to seed unverified bytes.
+size and identity diagnostics are estimates, not proof of matching payload bytes.
 Among otherwise equivalent viable options, greater estimated tracker coverage is
 preferred. Within that group, known lower download-volume factors/freeleech can
 break a source tie. This is not a quality improvement and cannot replace an
@@ -26,7 +26,7 @@ The selector still records known matching copies when ranking is off.
 
 The chosen source and other matching offers are captured server-side before the
 download starts. After canonical import, **before waiting for Plex verification**,
-each alternate gets an idempotent reuse job. Those jobs use the same verified
+each alternate gets an idempotent reuse job. Those jobs use the same optimistic
 executor as RSS and do not block publication on unsuccessful/unsupported reuse.
 They survive app restarts without depending on an RSS row or a repeated search.
 Retained TV packs carry that source association across later import batches.
@@ -73,9 +73,9 @@ active backfill.
 
 A new explicit pass can reconsider old failed/skipped attempts. Pending attempts
 and seeding receipts with an existing owning registration are not queued again.
-Candidates still go through the normal metainfo, ownership, piece-verification
+Candidates still go through the normal metainfo, ownership, seed-only admission
 and client safeguards; **queued candidates are not successful seeds**. Stopping
-the search does not cancel already queued verification jobs or remove torrents.
+the search does not cancel already queued reuse jobs or remove torrents.
 
 Searches default to at most 150 results per query/provider, configurable from
 1 to 150 in the start command. The existing reuse-policy and supported-client
@@ -87,11 +87,10 @@ The reuse command snapshots a versioned policy. Defaults require 80% reusable
 bytes, at most 512 MiB of missing pieces, and at most a 100 GiB candidate. Admin
 RPC callers can tune these independently per command. Those are POC defaults,
 not an asserted optimal objective function. Identity, path ownership, isolation,
-verified completion, retained demand, and publication rules are safety checks,
+retained demand and publication rules are safety checks,
 not tunable scores. Feed matching queues all matches durably; execution limits
 active reuse transfers to two independent targets, with same-target work
-serialized. A long initial hash pass cannot monopolize every other target's
-completion. Per-client/hash registration is serialized separately so concurrent
+serialized. There is no initial full payload hash pass. Per-client/hash registration is serialized separately so concurrent
 targets cannot overwrite each other's seed-only intent or layout ownership.
 
 ## Storage And Verification
@@ -102,41 +101,33 @@ while downloading and surrender writer authority before becoming reuse sources.
 See [canonical downloads](canonical-downloads.md). Existing initial downloads are
 not migrated automatically.
 
-Transmission receives a paused torrent in an isolated derived layout. Media is
-cloned using **forced native CoW** first, never a writable hardlink or an
-ordinary-copy fallback. Sidecars belong to the candidate. If CoW is unsupported,
-a complete independently hash-verified match can use symlinks with the private
-client's application-level seed-only safeguard. Mismatching or incomplete
-candidates remain unsupported without CoW; they are never linked for repair.
-Production mount inspection on November 5 identified both media roots as ext4.
-An isolated two-byte forced-clone probe on the TV mount returned `ENOTSUP`, with
-all probe files cleaned up. Writable reuse remains unsupported there. The new
-exact-match symlink fallback is locally verified, not yet production verified.
-There is still no full-copy fallback.
+Transmission receives a paused torrent in an isolated symlink layout, with every
+file unwanted. The executor does not hash payloads or request a daemon recheck.
+It requires every candidate member to have an exact-size source and waits until
+file mtimes satisfy Transmission's native fast-seed admission. Transmission
+checks the first piece on admission, then checks other pieces when peers request
+them. This is **optimistic seeding**, not independent full-payload verification.
+Incomplete layouts and missing sidecars are explicitly unsupported by this
+no-bulk-check adapter; it never silently falls back to a scan or full copy.
 
 Completed, sealed canonical download members can enter the reuse pool before
 every member has been imported or published. The inventory opens only registered
 owned layouts and requires finalized-object or saved source-identity evidence;
 it does not enumerate arbitrary directories or adopt legacy regular downloads.
-Candidate piece verification remains mandatory. A partially published pack is
-not treated as a partially downloaded pack.
+Sources must be complete. A partially published pack is not treated as a
+partially downloaded pack.
 
-The server journals the exact-match staging proof. Subsequent seed-only wakes
-validate that proof, source mount/inode/size/mtime/ctime, and every published
-layout link without rereading the payload. Changed sources or layouts reject the
-replay; a journal proof cannot create a replacement layout. Writable CoW layouts
-still require a fresh final piece proof after repair.
-Initial verification retains one read handle across adjacent pieces, checks
-its identity before and after use, and closes it on failure. Every original
-piece is still hashed, including pieces that cross source-file boundaries.
+The server journals source mount/inode/size/mtime/ctime and every published link;
+replay validates these identities without rereading payloads. Receipts explicitly
+mark admission as `verification: "assumed"`; assumed reuse does not inflate the
+independently verified download-savings counter. Existing explicit verification
+helpers remain available to tests, but automatic reuse does not invoke them.
 
-This POC independently hashes the bounded candidate pieces, runs the daemon's
-candidate recheck, applies the missing-piece budget, and independently verifies
-completion. It does not recheck the entire library, but it is **not yet a
-recheck-free implementation**. Linked candidates are added paused with every
-file unwanted. Every application resume reapplies and checks that selection.
-Completeness uses actual verified bytes, not wanted-byte progress, which would
-incorrectly report zero-byte unwanted downloads as complete.
+Scheduled stewardship monitors precise lazy piece-mismatch errors, not ordinary
+tracker warnings or corrupt network downloads. It persists a candidate/source-plan
+blacklist before stopping and removing that exclusively owned reuse registration.
+Removal is reconciled across crashes and never deletes files or primary torrent
+bindings. Changed source identity produces a new plan and may be tried again.
 
 An independent per-hash seed-only intent is fsynced before torrent addition.
 Before every supervised daemon launch, the startup guard verifies metainfo
@@ -148,16 +139,16 @@ control path can invalidate these assumptions.
 
 Adding another torrent does not create or promote a library version. Plex keeps
 its explicitly selected existing version, including equivalent-version seniority.
-The original torrent, canonical bytes and Plex view remain intact. Repair writes
-can affect only the candidate's private CoW variant.
+The original torrent, canonical bytes and Plex view remain intact. This adapter
+drops incompatible registrations rather than repairing shared files.
 
 Plans and outcomes are persisted as domain receipts; Reflow owns steps, sleeps,
 leases and retries. Lost add acknowledgments reconcile the same owned hash and
 layout. Registrations retain their owning operation, feed retries retain their
 matched target snapshot, and live daemon state is rechecked rather than treating
 a saved start/completion observation as current truth. Replay revalidates layout
-receipts, changed configuration/demand fences execution, and a false daemon
-completion fails independent piece verification.
+receipts, and changed configuration/demand fences execution. Daemon admission is
+not represented as independent piece verification.
 
 ## RPC
 
@@ -210,6 +201,11 @@ is **not** enough to assert a nuke. Automatic nuke discovery and TV nuke replace
 are not implemented by this POC.
 
 ## Verified Local Evidence
+
+Current no-bulk-check acceptance uses the Linux application and two-peer labs
+above. The following November 5 evidence describes the former explicit-verification
+CoW implementation, not the current automatic executor; partial repair is not
+supported by the current optimistic adapter.
 
 `bun run test/lab/cross-seed-host.ts` runs a real stable Transmission 4.1.4 daemon
 in Docker against host-native APFS CoW files, with synthetic metainfo, HTTP

@@ -1,8 +1,10 @@
 import path from "node:path";
+import { closeSync, fsyncSync, openSync, unlinkSync } from "node:fs";
 import { currentEffects } from "../runtime/execution-effects";
 import { z } from "zod";
 import { inspectMetainfo } from "./metainfo";
 import { persistSeedOnlyIntent, readSeedOnlyIntent } from "./seed-only-state";
+import { TorrentNotFoundError } from "./torrent-client";
 import type {
   TorrentClient,
   TorrentRef,
@@ -99,6 +101,7 @@ export class TransmissionAdapter implements TorrentClient {
     metainfoVersions: [1],
     readOnlySeeding: Boolean(this.options.seedOnlyIntentDirectory),
     canonicalDownloads: Boolean(this.options.seedOnlyIntentDirectory),
+    optimisticSeeding: Boolean(this.options.seedOnlyIntentDirectory),
   } as const; }
   constructor(
     private options: {
@@ -174,7 +177,7 @@ export class TransmissionAdapter implements TorrentClient {
   }
   private async owned(ref: TorrentRef) {
     const row = await this.get(ref);
-    if (!row) throw new Error("Managed torrent record is missing");
+    if (!row) throw new TorrentNotFoundError();
     return row;
   }
   async ensureAdded(input: {
@@ -255,6 +258,8 @@ export class TransmissionAdapter implements TorrentClient {
       ...(seedOnly ? { seedOnly: this.isSeedOnly(row) } : {}),
       downloadBytesPerSecond: row.rateDownload,
       errorKind,
+      integrityError: row.error === 3 && /^Please Verify Local Data! Piece #[0-9]+ is corrupt\.$/.test(row.errorString)
+        ? "piece-mismatch" : null,
       message: errorKind === "tracker" ? "Torrent tracker reported a warning or error"
         : errorKind === "storage" ? "Torrent engine reported a local storage error"
         : errorKind === "unknown" ? "Torrent engine reported an unknown error" : null,
@@ -324,11 +329,26 @@ export class TransmissionAdapter implements TorrentClient {
     await this.options.rpc.call("torrent-start", { ids: [ref.nativeId] });
   }
   async removeRecord(ref: TorrentRef) {
+    const row = await this.owned(ref);
     await this.quiesce(ref);
     await this.options.rpc.call("torrent-remove", {
       ids: [ref.nativeId],
       "delete-local-data": false,
     });
+    if (this.seedIntent(ref)) await this.forgetSeedOnlyIntent(ref, this.location(row.downloadDir));
+  }
+  async forgetSeedOnlyIntent(ref: TorrentRef, location: DownloadLocation) {
+    this.validateRef(ref);
+    if (await this.get(ref)) throw new Error("Cannot retire seed-only protection for an existing torrent");
+    const intent = this.seedIntent(ref);
+    if (!intent) return;
+    if (!this.options.seedOnlyIntentDirectory || intent.destination !== this.directory(location) ||
+      intent.ownershipTag !== this.options.ownershipTag) throw new Error("Seed-only removal intent differs from the owned layout");
+    // All participating registration writers hold the same per-infohash mutex.
+    // Only configuration metadata is retired; candidate and source bytes remain.
+    unlinkSync(path.join(this.options.seedOnlyIntentDirectory, ref.nativeId + ".json"));
+    const parent = openSync(this.options.seedOnlyIntentDirectory, "r");
+    try { fsyncSync(parent); } finally { closeSync(parent); }
   }
   async sealDownload(ref: TorrentRef) {
     if (!this.options.seedOnlyIntentDirectory) throw new Error("Canonical downloads require durable startup protection");

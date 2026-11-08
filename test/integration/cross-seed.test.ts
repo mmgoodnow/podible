@@ -19,12 +19,12 @@ import { hashSessionToken } from "../../src/auth";
 import { createPodibleFetchHandler } from "../../src/http";
 import { jobLockKeys, lockSetsConflict } from "../../src/worker/locks";
 import { inspectMetainfo } from "../../src/media/metainfo";
-import type { TorrentClient, TorrentRef, DownloadLocation } from "../../src/media/torrent-client";
+import { TorrentNotFoundError, type TorrentClient, type TorrentRef, type DownloadLocation } from "../../src/media/torrent-client";
 import type { WorkerContext } from "../../src/worker/context";
 import { materializeReuseLayout } from "../../src/media/reuse-layout";
 import { publishTvVersion, tvRoots, tvViewEntries } from "../../src/tv/publication";
 
-async function fixture(original = "abcdefgh", desired = "abcdefgh", sidecar = "!!") {
+async function fixture(original = "abcdefgh", desired = "abcdefgh", sidecar = "") {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "podible-cross-seed-")));
   const db = new Database(path.join(root, "app.sqlite")); runMigrations(db);
   const repo = new BooksRepo(db), settings = repo.ensureSettings();
@@ -49,36 +49,22 @@ async function fixture(original = "abcdefgh", desired = "abcdefgh", sidecar = "!
   const [releaseId] = repo.releaseInbox.ingest(feed.id, [{ mediaType: "movie", title: "A Fixture Film other tracker", provider: "Other tracker",
     url: "https://fixture.invalid/metainfo", guid: "candidate", infoHash: metadata.infoHash, sizeBytes: data.length, seeders: 1, leechers: 0, raw: {} }], new Date().toISOString());
   const scope = { media: "movie" as const, targetId: request.targetId };
-  let location: DownloadLocation, checking = 0, running = false, downloaded = false, bytesDone = 0, adds = 0, resumes = 0, stops = 0, seedOnly = false;
+  let location: DownloadLocation, checking = 0, running = false, downloaded = false, bytesDone = 0, adds = 0, resumes = 0, stops = 0, seedOnly = false, removed = false;
   const client: TorrentClient = {
-    id: `transmission:${randomUUID()}`, capabilities: { pausedAdd: true, recheck: true, derivedLayouts: true, metainfoVersions: [1] },
-    async ensureAdded(input) { adds++; location = input.location; seedOnly = Boolean(input.seedOnly); return { clientId: this.id, nativeId: metadata.infoHash }; },
-    async inspect(ref) { return { ref, location, state: checking-- > 0 ? "checking" : !running ? "inactive" : downloaded ? "seeding" : "downloading",
+    id: `transmission:${randomUUID()}`, capabilities: { pausedAdd: true, recheck: true, derivedLayouts: true, metainfoVersions: [1], readOnlySeeding: true, optimisticSeeding: true },
+    async ensureAdded(input) { adds++; location = input.location; seedOnly = Boolean(input.seedOnly); bytesDone = data.length; downloaded = true; return { clientId: this.id, nativeId: metadata.infoHash }; },
+    async inspect(ref) { if (removed) throw new TorrentNotFoundError(); return { ref, location, state: checking-- > 0 ? "checking" : !running ? "inactive" : downloaded ? "seeding" : "downloading",
       complete: bytesDone === data.length, sizeBytes: data.length, bytesDone, message: null, observedAt: new Date().toISOString(), downloadBytesPerSecond: 0,
       ...(seedOnly ? { seedOnly: true } : {}) }; },
     async files() { return files.map((file, index) => ({ index, path: path.join(root, "downloads", location.relativePath, file.path) })); },
-    async recheck() {
-      checking = 1; bytesDone = 0;
-      const staged = Buffer.concat(await Promise.all(files.map(file => fs.readFile(path.join(root, "downloads", location.relativePath, file.path)).catch(() => Buffer.alloc(file.bytes.length)))));
-      for (let i = 0; i < data.length; i += 4) if (staged.subarray(i, i + 4).equals(data.subarray(i, i + 4))) bytesDone += Math.min(4, data.length - i);
-    },
-    async resume() { resumes++; running = true; if (!seedOnly) for (const file of files) await fs.writeFile(path.join(root, "downloads", location.relativePath, file.path), file.bytes); bytesDone = data.length; downloaded = true; },
+    async recheck() { throw new Error("Optimistic reuse must not request a bulk hash scan"); },
+    async resume() { expect(seedOnly).toBe(true); resumes++; running = true; },
     async resumeSeedOnly(ref) { if (!seedOnly) throw new Error("Not seed-only"); return this.resume(ref); },
-    async quiesce() { stops++; running = false; }, async removeRecord() { throw new Error("Reuse must never remove old records"); },
+    async quiesce() { stops++; running = false; }, async removeRecord(ref) { expect(ref.nativeId).toBe(metadata.infoHash); running = false; removed = true; },
   };
   // Explicit test adapter supplies independent writable storage on Linux too.
   // Native clone correctness/unsupported behavior is covered by reuse-layout tests.
-  const materialize: NonNullable<CrossSeedAdapters["materialize"]> = async ({ plan, root: destination }) => {
-    const dataPath = path.join(destination.path, plan.id, "data"); await fs.mkdir(dataPath, { recursive: true });
-    for (const file of plan.files) {
-      const target = path.join(dataPath, file.candidatePath); await fs.mkdir(path.dirname(target), { recursive: true });
-      if (file.source) {
-        try { await fs.writeFile(target, await fs.readFile(file.source.path), { flag: "wx" }); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-      }
-    }
-    return { status: "ready", dataPath, layoutPath: path.dirname(dataPath), plan, replay: false };
-  };
+  const materialize = materializeReuseLayout;
   const adapters: CrossSeedAdapters = { client: () => client, fetchMetainfo: async () => metainfo, materialize, pollMs: 1, maxPolls: 20 };
   const ctx: WorkerContext = { repo, getSettings: () => repo.getSettings(), crossSeedAdapters: adapters };
   const command = crossSeedCommandSchema.parse({ operationId: randomUUID(), scope, releaseId,
@@ -105,7 +91,7 @@ async function execute(f: Awaited<ReturnType<typeof fixture>>, receipt = queueCr
   } finally { await runtime.stop(); }
 }
 
-test("CoW remains preferred; unsupported CoW falls back to verified seed-only symlinks and recovers a lost layout checkpoint", async () => {
+test("optimistic seed-only symlinks avoid CoW and recover a lost layout checkpoint without hashing", async () => {
   const f = await fixture("abcdefgh", "abcdefgh", "");
   try {
     Object.assign(f.adapters.client!(f.command.scope).capabilities, { readOnlySeeding: true });
@@ -117,13 +103,13 @@ test("CoW remains preferred; unsupported CoW falls back to verified seed-only sy
     const result = await execute(f, undefined, ctx => ({ ...ctx, execution: { ...ctx.execution!,
       run: (name, handler) => ctx.execution!.run(name, async () => {
         const value = await handler();
-        if (name === "reuse:layout" && !crashed) { crashed = true; throw new Error("Lost layout checkpoint"); }
+        if (name === "reuse:optimistic:layout" && !crashed) { crashed = true; throw new Error("Lost layout checkpoint"); }
         return value;
       }),
     } }));
     expect(result.outcome?.kind).toBe("seeding");
     expect(result.outcome?.downloadedBytes).toBe(0);
-    expect(cows).toBe(1);
+    expect(cows).toBe(0);
     expect(links).toBeGreaterThan(1);
     const ref = { clientId: f.adapters.client!(f.command.scope).id, nativeId: f.metadata.infoHash };
     const linked = (await f.adapters.client!(f.command.scope).files(ref))[0]!.path;
@@ -169,16 +155,16 @@ test("lost seed-only flags after resume still quiesce the exact owned symlink to
   } finally { await f.cleanup(); }
 });
 
-test("unsupported CoW never falls back to symlinks for a tail mismatch", async () => {
+test("tail differences do not trigger an up-front hash or repair of shared files", async () => {
   const f = await fixture("abcdefgX", "abcdefgh", "");
   try {
     Object.assign(f.adapters.client!(f.command.scope).capabilities, { readOnlySeeding: true });
     f.adapters.materialize = async input => {
-      expect(input.capabilities.symlinkMode).toBe("never");
-      return { status: "unsupported", reason: "No CoW" };
+      expect(input.verification).toBe("optimistic");
+      return materializeReuseLayout(input);
     };
-    expect((await execute(f)).outcome?.kind).toBe("unsupported");
-    expect(f.counts().adds).toBe(0);
+    expect((await execute(f)).outcome).toMatchObject({ kind: "seeding", verification: "assumed" });
+    expect(f.counts().adds).toBe(1);
     expect(await fs.readFile(f.canonical, "utf8")).toBe("abcdefgX");
   } finally { await f.cleanup(); }
 });
@@ -246,14 +232,15 @@ test("later imports inherit source copies and reconsider a skipped reuse plan on
   } finally { await f.cleanup(); }
 });
 
-test("cross-seed durable pipeline reuses renamed media, fetches private sidecar and never changes library selection", async () => {
+test("cross-seed durable pipeline reuses renamed media without a full scan or changing library selection", async () => {
   const f = await fixture();
   try {
     const first = queueCrossSeed(f.repo, f.command);
     expect(queueCrossSeed(f.repo, f.command).jobId).toBe(first.jobId);
     expect(() => queueCrossSeed(f.repo, { ...f.command, policy: { ...f.command.policy, maximumExtraBytes: 2 } })).toThrow("another command");
     const result = await execute(f, first);
-    expect(result.outcome).toMatchObject({ kind: "seeding", reusedBytes: 8, downloadedBytes: 2, totalBytes: 10 });
+    expect(result.outcome).toMatchObject({ kind: "seeding", reusedBytes: 8, downloadedBytes: 0, totalBytes: 8, verification: "assumed" });
+    expect(result.outcome?.accountingVersion).toBeUndefined();
     expect(await fs.readFile(f.canonical, "utf8")).toBe("abcdefgh");
     expect(f.repo.movies.target(f.command.scope.targetId)!.active_version_id).toBe(f.version);
     expect(f.counts()).toEqual({ adds: 1, resumes: 1, stops: 0 });
@@ -262,11 +249,22 @@ test("cross-seed durable pipeline reuses renamed media, fetches private sidecar 
   } finally { await f.cleanup(); }
 });
 
-test("same-length tail mismatch repairs only an isolated variant, retaining the original source", async () => {
+test("missing sidecars do not silently cause a full client scan", async () => {
+  const f = await fixture("abcdefgh", "abcdefgh", "!!");
+  try {
+    expect((await execute(f)).outcome).toMatchObject({ kind: "unsupported", reason: expect.stringContaining("incomplete layout") });
+    expect(f.counts().adds).toBe(0);
+  } finally { await f.cleanup(); }
+});
+
+test("same-length tail mismatch removes only its incompatible registration when the client detects it", async () => {
   const f = await fixture("abcdefgX", "abcdefgh", "");
   try {
+    const client = f.adapters.client!(f.command.scope), inspect = client.inspect.bind(client);
+    client.inspect = async ref => ({ ...await inspect(ref), ...(f.counts().resumes ? { integrityError: "piece-mismatch" as const } : {}) });
     const result = await execute(f);
-    expect(result.outcome).toMatchObject({ kind: "seeding", reusedBytes: 4, downloadedBytes: 4 });
+    expect(result.outcome).toMatchObject({ kind: "incompatible" });
+    expect(f.repo.crossSeed.isIncompatible(f.metadata.infoHash, result.outcome!.planId!)).toBe(true);
     expect(await fs.readFile(f.canonical, "utf8")).toBe("abcdefgX");
     expect(f.repo.movies.target(f.command.scope.targetId)!.active_version_id).toBe(f.version);
   } finally { await f.cleanup(); }
@@ -280,7 +278,7 @@ test("a lost add checkpoint reconciles the same owned record and never repeats p
       return { ...ctx, execution: { ...execution, run: <T>(name: string, action: () => T | Promise<T>): Promise<T> =>
         execution.run(name, async () => {
           const value = await action();
-          if (name === "reuse:add" && !lost) { lost = true; throw new Error("lost add checkpoint"); }
+          if (name === "reuse:optimistic:add" && !lost) { lost = true; throw new Error("lost add checkpoint"); }
           return value;
         }) } };
     });
@@ -292,16 +290,12 @@ test("a lost add checkpoint reconciles the same owned record and never repeats p
   } finally { await f.cleanup(); }
 });
 
-test("daemon completion with wrong bytes is stopped rather than accepted as a successful seed", async () => {
+test("a client-initiated bulk check is paused rather than allowed to scan the shared source", async () => {
   const f = await fixture();
   try {
-    const client = f.adapters.client!(f.command.scope), resume = client.resume.bind(client);
-    client.resume = async ref => {
-      await resume(ref);
-      const [file] = await client.files(ref);
-      await fs.writeFile(file!.path, "WRONGBYT");
-    };
-    expect((await execute(f)).outcome).toMatchObject({ kind: "stalled", reason: "Engine completion did not match candidate piece hashes" });
+    const client = f.adapters.client!(f.command.scope), inspect = client.inspect.bind(client);
+    client.inspect = async ref => ({ ...await inspect(ref), state: "checking" });
+    expect((await execute(f)).outcome).toMatchObject({ kind: "stalled", reason: expect.stringContaining("bulk check") });
     expect(f.counts().stops).toBe(1);
     expect(await fs.readFile(f.canonical, "utf8")).toBe("abcdefgh");
   } finally { await f.cleanup(); }
@@ -390,7 +384,7 @@ test("TV publication advances selection while same-target reuse proofs remain se
         if (job.type === "torrent_reuse") return processCrossSeed({ ...ctx, execution: { ...ctx.execution!,
           run: (name, action) => ctx.execution!.run(name, async () => {
             entered.add(job.id);
-            if (job.id === first.jobId && name === "reuse:layout") { firstHeld = true; await hold; }
+            if (job.id === first.jobId && name === "reuse:optimistic:layout") { firstHeld = true; await hold; }
             return action();
           }) } }, job);
         if (job.type === "tv_acquire") {
@@ -462,7 +456,7 @@ test("parallel targets with the same torrent hash cannot overwrite the winning a
       retryDelayMs: 1,
       processJob: (ctx, job) => job.type !== "torrent_reuse" ? Promise.resolve("done" as const) : processCrossSeed({ ...ctx,
         execution: { ...ctx.execution!, run: (name, handler) => ctx.execution!.run(name, async () => {
-          const result = await handler(); if (name === "reuse:layout") staged.add(job.id); return result;
+          const result = await handler(); if (name === "reuse:optimistic:layout") staged.add(job.id); return result;
         }) },
       }, job),
     });

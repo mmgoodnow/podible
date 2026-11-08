@@ -6,7 +6,6 @@ import { z } from "zod";
 import type { BooksRepo } from "../repo";
 import type { AppSettings, JobRow } from "../app-types";
 import { durableStep, type WorkerContext } from "../worker/context";
-import { effectPhase } from "../runtime/execution-effects";
 import { inspectMetainfo } from "./metainfo";
 import { managedTransmission, managedTvTransmission, managedBookTransmission } from "./managed-transmission";
 import { adoptBookContent } from "../library/book-storage";
@@ -14,12 +13,12 @@ import { finalizedCanonicalObject } from "./canonical-download";
 import { fetchMovieMetainfo } from "../movies/offers";
 import { releaseOfferFromResult, type ReleaseOffer } from "./release-offer";
 import { assertMovieStorage } from "../movies/storage";
-import type { TorrentClient } from "./torrent-client";
+import { TorrentNotFoundError, type TorrentClient } from "./torrent-client";
 import { withTorrentRegistration } from "./torrent-use";
 import { crossSeedCommandSchema, crossSeedCommandHash, crossSeedStateKey, isBookCrossSeedScope,
   type CrossSeedCommand, type CrossSeedReceipt, type CrossSeedScope, type CrossSeedOutcome } from "./cross-seed-state";
 import { planContentReuse, type ReuseCandidateManifest, type ReusePlan, type ReuseSourceFile } from "./reuse-plan";
-import { captureReuseFile, captureReuseRoot, materializeReuseLayout, prepareReuseLayoutRoot, verifyContentReuse, publishedReuseLayoutCapabilities } from "./reuse-layout";
+import { captureReuseFile, captureReuseRoot, materializeReuseLayout, prepareReuseLayoutRoot, publishedReuseLayoutCapabilities } from "./reuse-layout";
 import { selectedCopies, selectedCopyOffer, selectedCopyId } from "./selected-copies";
 import { completedCanonicalReuseSources } from "./reuse-source-inventory";
 
@@ -89,7 +88,7 @@ export function queueSelectedCrossSeeds(repo: BooksRepo, scope: CrossSeedScope, 
       const previousId = repo.getJsonState<string>(pointer);
       const previous = previousId ? repo.crossSeed.receipt(previousId) : null;
       // Never transfer an existing daemon registration/layout to a new operation UUID.
-      if (previous && (!previous.outcome || previous.outcome.torrentId !== undefined || previous.outcome.infoHash !== undefined ||
+      if (previous && previous.outcome?.kind !== "incompatible" && (!previous.outcome || previous.outcome.torrentId !== undefined || previous.outcome.infoHash !== undefined ||
         previous.outcome.kind === "seeding" || previous.outcome.kind === "unsupported")) return previous;
       const receipt = queueCrossSeed(repo, { operationId: selectedCopyId(`${copy.id}:${revision}`), scope, selectionCopyId: copy.id });
       repo.setJsonState(pointer, receipt.command.operationId);
@@ -182,8 +181,8 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   const client = adapters.client?.(command.scope) ?? services?.client ?? await configuredClient(settings, command.scope);
   if (ctx.repo.releaseHealth.isOfferBlocked({ ...crossSeedOffer(ctx.repo, command), infoHash: metadata.infoHash }))
     return finish({ kind: "skipped", reason: "Candidate is a confirmed nuked release" });
-  if (!client.capabilities.pausedAdd || !client.capabilities.recheck || !client.capabilities.derivedLayouts || !client.capabilities.metainfoVersions.includes(1))
-    return finish({ kind: "unsupported", reason: "Client cannot safely add paused and verify this derived v1 layout" });
+  if (!client.capabilities.pausedAdd || !client.capabilities.derivedLayouts || !client.capabilities.metainfoVersions.includes(1))
+    return finish({ kind: "unsupported", reason: "Client cannot safely add this paused derived v1 layout" });
   if (ctx.repo.crossSeed.owns(command.scope, client.id, metadata.infoHash))
     return finish({ kind: "skipped", reason: "Target already owns this torrent identity", infoHash: metadata.infoHash });
   const identity = { clientId: client.id, nativeId: metadata.infoHash };
@@ -207,145 +206,100 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   // Revalidate layout receipts on every retry, including a lost stage checkpoint.
   active();
   const destinationRoot = await captureReuseRoot({ rootPath: destination, markerName: ".podible-reuse-root.json", ownerId: client.id });
-  const materialize = (readOnly: boolean, savedProof?: ReusePlan) => (adapters.materialize ?? materializeReuseLayout)({
-    plan: savedProof ?? plan, root: destinationRoot, capabilities: readOnly
-      ? { cow: "unavailable", symlinkMode: "verified-read-only" }
-      : { cow: "clone-force", symlinkMode: "never" }, verification: savedProof ? "journal-v1-pieces" : "client" });
-  const staged = await durableStep(ctx, "reuse:layout", async () => {
-    effectPhase("reuse:layout-receipt");
-    const previous = await publishedReuseLayoutCapabilities(destinationRoot, plan);
-    if (previous?.symlinkMode === "verified-read-only") {
-      if (!client.capabilities.readOnlySeeding || !client.resumeSeedOnly)
-        return { status: "unsupported" as const, readOnly: false, reason: "Client cannot safely resume the existing seed-only symlink layout" };
-      effectPhase("reuse:symlink-layout");
-      return { ...await materialize(true), readOnly: true };
-    }
-    effectPhase("reuse:clone-layout");
-    const cow = await materialize(false);
-    if (cow.status !== "unsupported" || !client.capabilities.readOnlySeeding || !client.resumeSeedOnly)
-      return { ...cow, readOnly: false };
-    effectPhase("reuse:piece-proof");
-    const verified = await verifyContentReuse(plan);
-    if (verified.status !== "ready" || verified.summary.verifiedReuseBytes !== metadata.size)
-      return { status: "unsupported" as const, readOnly: false,
-        reason: "CoW is unavailable and candidate bytes are not a complete exact match; shared files were not linked" };
-    effectPhase("reuse:symlink-layout");
-    return { ...await materialize(true), readOnly: true };
-  });
-  if (staged.status !== "ready") return finish({ kind: staged.status === "unsupported" ? "unsupported" : "skipped", reason: staged.reason });
-  const readOnly = staged.readOnly ?? false;
-  const stage = () => materialize(readOnly, readOnly ? staged.plan : undefined);
-  const replay = await stage();
-  if (replay.status !== "ready" || replay.dataPath !== staged.dataPath) throw new Error("Reuse layout changed after staging");
-  const dataPath = await fs.realpath(staged.dataPath);
-  if (!dataPath.startsWith(destination + path.sep)) throw new Error("Reuse layout escaped its pinned root");
-  const proveLayout = async () => {
-    if (readOnly) {
-      const current = await stage();
-      if (current.status !== "ready" || current.dataPath !== staged.dataPath)
-        throw new Error("Verified symlink layout changed");
-      return current.plan;
-    }
-    const files: ReuseSourceFile[] = [], bindings: { candidatePath: string; sourceId: string }[] = [];
-    for (let index = 0; index < plan.candidate.files.length; index++) {
-      const file = plan.candidate.files[index]!;
-      try {
-        const captured = await captureReuseFile({ root: destinationRoot, sourceId: String(index), sourcePath: path.join(dataPath, file.path) });
-        if (captured.size === file.size) { files.push(captured); bindings.push({ candidatePath: file.path, sourceId: captured.id }); }
-      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    }
-    return verifyContentReuse(planContentReuse({ candidate: plan.candidate, sources: files, bindings, policy: plan.policy }));
-  };
-  // POC proves only this isolated candidate's pieces, never rechecks the library.
-  // This is also the fallback when a daemon check completes between observations.
-  const initialProof = await durableStep(ctx, "reuse:piece-proof", proveLayout);
-  if (initialProof.status === "rejected") return finish({ kind: "skipped", reason: initialProof.reasons.join("; ") });
-  const location = { rootId: isBookCrossSeedScope(command.scope) ? "books" : command.scope.media === "tv" ? "tv" : "movies", relativePath: path.relative(downloadRoot, dataPath) };
-  const ref = await durableStep(ctx, "reuse:add", () => withTorrentRegistration(ctx.repo, { clientId: client.id, infoHash: metadata.infoHash }, async () => {
-    active();
-    if (ctx.repo.reuseTorrent(identity) && ctx.repo.crossSeed.registrationOwner(identity) !== operationId)
-      return { skipped: true as const };
-    if (sourceBlocked()) throw new Error("Reuse source was confirmed nuked before torrent addition");
-    const result = await client.ensureAdded({ metainfo: bytes, location, ...(readOnly ? { seedOnly: true } : {}) });
-    if (result.clientId !== client.id || result.nativeId !== metadata.infoHash) throw new Error("Reuse client returned another identity");
-    ctx.repo.reserveReuseTorrent(result, location, crossSeedOffer(ctx.repo, command).key, command.scope, operationId);
-    return result;
-  }));
-  if ("skipped" in ref) return finish({ kind: "skipped", reason: "Torrent identity already belongs to another registered operation", infoHash: metadata.infoHash });
-  const torrent = ctx.repo.reuseTorrent(ref)!;
-  const check = async (requireSeedOnly = true) => {
-    active();
-    const snapshot = await client.inspect(ref);
-    if (snapshot.ref.clientId !== ref.clientId || snapshot.ref.nativeId !== ref.nativeId ||
-      snapshot.location.rootId !== location.rootId || snapshot.location.relativePath !== location.relativePath ||
-      snapshot.sizeBytes !== metadata.size) throw new Error("Reuse client observation changed identity or layout");
-    if (requireSeedOnly && readOnly && snapshot.seedOnly !== true) throw new Error("Shared torrent lost its no-download file selection");
-    return snapshot;
-  };
-  try {
-  await durableStep(ctx, "reuse:verify", () => { active(); return client.recheck(ref); });
-  // Wait for actual verification to run, not just acknowledgement of torrent-verify.
-  let checking = false, verified = false;
-  for (let i = 0; i < (adapters.maxPolls ?? 1200); i++) {
-    const snapshot = await check();
-    checking ||= snapshot.state === "checking";
-    if (checking && snapshot.state !== "checking") { verified = true; break; }
-    // Tiny checks can finish between polls; our independent piece proof bounds
-    // repair and final proof below is required even if the daemon says complete.
-    if (snapshot.state !== "checking" && i >= 10) { verified = true; break; }
-    await ctx.execution.sleep(`reuse:verify-wait:${i}`, adapters.pollMs ?? 500);
-  }
-  if (!verified) return finish({ kind: "stalled", reason: "Client did not finish the bounded candidate check", torrentId: torrent.id });
-  const initial = await check();
-  if (readOnly && !initial.complete)
-    return finish({ kind: "skipped", reason: "Symlink source is no longer fully verified; seed-only record remains paused", torrentId: torrent.id });
-  const remaining = metadata.size - (initial.bytesDone ?? 0);
-  if (remaining > command.policy.maximumExtraBytes || (metadata.size && (initial.bytesDone ?? 0) / metadata.size < command.policy.minimumReuseRatio))
-    return finish({ kind: "skipped", reason: "Verified missing pieces exceed the reuse policy; record remains paused", torrentId: torrent.id });
-  // Running is a reconciled intent, not a once-only effect: error cleanup or an
-  // external stop can undo a previously checkpointed start acknowledgement.
-  const resume = () => readOnly ? client.resumeSeedOnly!(ref) : client.resume(ref);
-  await check(); await resume();
-  for (let poll = 0; poll < (adapters.maxPolls ?? 1200); poll++) {
-    if (sourceBlocked() || ctx.repo.releaseHealth.isOfferBlocked({ ...crossSeedOffer(ctx.repo, command), infoHash: metadata.infoHash })) {
-      await check(); await client.quiesce(ref);
-      return finish({ kind: "stalled", reason: "Candidate was confirmed nuked during reuse", torrentId: torrent.id });
-    }
-    const snapshot = await check();
-    if (snapshot.complete && snapshot.state !== "checking") {
-      const proof = await proveLayout();
-      if (proof.summary.verifiedReuseBytes !== metadata.size) {
-        await durableStep(ctx, "reuse:stop-unverified", () => client.quiesce(ref));
-        return finish({ kind: "stalled", reason: "Engine completion did not match candidate piece hashes", torrentId: torrent.id });
+  if (client.capabilities.optimisticSeeding) {
+    if (!client.capabilities.readOnlySeeding || !client.resumeSeedOnly)
+      return finish({ kind: "unsupported", reason: "Optimistic reuse requires persistent no-download protection" });
+    if (ctx.repo.crossSeed.isIncompatible(metadata.infoHash, plan.id))
+      return finish({ kind: "incompatible", reason: "This candidate and source layout previously failed a client piece check", planId: plan.id });
+    if (plan.files.some(file => !file.source || file.source.size !== file.size))
+      return finish({ kind: "unsupported", reason: "Client cannot seed an incomplete layout without a bulk check; no hash scan was requested" });
+    const materializeOptimistic = async () => (adapters.materialize ?? materializeReuseLayout)({ plan, root: destinationRoot,
+      capabilities: await publishedReuseLayoutCapabilities(destinationRoot, plan) ?? { cow: "unavailable", symlinkMode: "optimistic-read-only" },
+      verification: "optimistic" });
+    const staged = await durableStep(ctx, "reuse:optimistic:layout", materializeOptimistic);
+    if (staged.status !== "ready") return finish({ kind: staged.status === "unsupported" ? "unsupported" : "skipped", reason: staged.reason });
+    const replay = await materializeOptimistic();
+    if (replay.status !== "ready" || replay.dataPath !== staged.dataPath) throw new Error("Optimistic reuse layout changed");
+    const dataPath = await fs.realpath(staged.dataPath);
+    if (!dataPath.startsWith(destination + path.sep)) throw new Error("Optimistic reuse escaped its pinned root");
+    const location = { rootId: isBookCrossSeedScope(command.scope) ? "books" : command.scope.media === "tv" ? "tv" : "movies",
+      relativePath: path.relative(downloadRoot, dataPath) };
+    // Transmission's native fast-add requires file mtimes strictly older than its second-resolution added date.
+    const latestMtime = Math.max(...await Promise.all(plan.files.map(async file =>
+      Number((await fs.stat(path.join(dataPath, file.candidatePath), { bigint: true })).mtimeNs / 1_000_000n))));
+    const wait = Math.ceil(latestMtime / 1000) * 1000 + 1000 - Date.now();
+    if (wait > 60_000) return finish({ kind: "unsupported", reason: "Source modification time is in the future; refused a bulk client check" });
+    if (wait > 0) await ctx.execution.sleep("reuse:optimistic:older-files", wait);
+    const ref = await durableStep(ctx, "reuse:optimistic:add", () => withTorrentRegistration(ctx.repo, { clientId: client.id, infoHash: metadata.infoHash }, async () => {
+      active();
+      if (ctx.repo.crossSeed.isIncompatible(metadata.infoHash, plan.id) || sourceBlocked()) throw new Error("Optimistic reuse source is no longer eligible");
+      const owner = ctx.repo.crossSeed.registrationOwner(identity);
+      if (ctx.repo.reuseTorrent(identity) && owner !== operationId) return { skipped: true as const };
+      const result = await client.ensureAdded({ metainfo: bytes, location, seedOnly: true });
+      if (result.clientId !== client.id || result.nativeId !== metadata.infoHash) throw new Error("Optimistic client returned another identity");
+      ctx.repo.reserveReuseTorrent(result, location, crossSeedOffer(ctx.repo, command).key, command.scope, operationId);
+      return result;
+    }));
+    if ("skipped" in ref) return finish({ kind: "skipped", reason: "Torrent identity already belongs to another registered operation", infoHash: metadata.infoHash });
+    const torrent = ctx.repo.reuseTorrent(ref)!;
+    ctx.repo.crossSeed.recordOptimistic(operationId, { planId: plan.id, ref, location, plan });
+    const check = async (requireSeedOnly = true) => {
+      active();
+      if (ctx.repo.crossSeed.registrationOwner(ref) !== operationId) throw new Error("Optimistic registration ownership changed");
+      if (sourceBlocked() || ctx.repo.crossSeed.isIncompatible(metadata.infoHash, plan.id)) throw new Error("Optimistic registration is no longer eligible");
+      const observation = await client.inspect(ref);
+      if (observation.ref.clientId !== ref.clientId || observation.ref.nativeId !== ref.nativeId ||
+        observation.location.rootId !== location.rootId || observation.location.relativePath !== location.relativePath ||
+        observation.sizeBytes !== metadata.size)
+        throw new Error("Optimistic registration lost its identity or layout");
+      if (requireSeedOnly && observation.seedOnly !== true) throw new Error("Shared torrent lost its no-download file selection");
+      return observation;
+    };
+    try {
+      for (let poll = 0; poll < (adapters.maxPolls ?? 1200); poll++) {
+        const observed = await check();
+        if (observed.integrityError === "piece-mismatch") {
+          await durableStep(ctx, "reuse:optimistic:incompatible", () => withTorrentRegistration(ctx.repo, { clientId: ref.clientId, infoHash: ref.nativeId }, async () => {
+            active();
+            if (ctx.repo.crossSeed.registrationOwner(ref) !== operationId) throw new Error("Optimistic registration ownership changed");
+            ctx.repo.crossSeed.markIncompatible(metadata.infoHash, plan.id, "Client reported a piece mismatch for this source layout");
+            await client.quiesce(ref); await client.removeRecord(ref);
+            try {
+              await client.inspect(ref);
+              throw new Error("Incompatible registration remains in the client after removal");
+            } catch (error) { if (!(error instanceof TorrentNotFoundError)) throw error; }
+            ctx.repo.crossSeed.completeOptimisticRemoval(operationId);
+          }));
+          return finish({ kind: "incompatible", reason: "Client reported a piece mismatch; only the incompatible registration was removed",
+            infoHash: metadata.infoHash, torrentId: torrent.id, planId: plan.id, verification: "assumed" });
+        }
+        if (observed.state === "checking") {
+          await client.quiesce(ref);
+          return finish({ kind: "stalled", reason: "Client attempted a bulk check instead of optimistic seeding; registration paused",
+            infoHash: metadata.infoHash, torrentId: torrent.id, planId: plan.id, verification: "assumed" });
+        }
+        if (observed.complete && observed.state === "seeding")
+          return finish({ kind: "seeding", reason: "Seeding without a bulk hash scan; client checks requested pieces lazily",
+            infoHash: metadata.infoHash, torrentId: torrent.id, planId: plan.id, verification: "assumed", totalBytes: metadata.size,
+            reusedBytes: metadata.size, downloadedBytes: 0 });
+        if (observed.complete && observed.state === "inactive" && observed.errorKind !== "storage" && observed.errorKind !== "unknown") {
+          await materializeOptimistic();
+          await check(); await client.resumeSeedOnly(ref);
+        } else if (observed.errorKind === "storage" || observed.errorKind === "unknown") {
+          await client.quiesce(ref);
+          return finish({ kind: "stalled", reason: "Local engine error while admitting optimistic seed; registration paused",
+            infoHash: metadata.infoHash, torrentId: torrent.id, planId: plan.id, verification: "assumed" });
+        }
+        await ctx.execution.sleep(`reuse:optimistic:wait:${poll}`, adapters.pollMs ?? 500);
       }
-      const live = await check();
-      if (live.state === "inactive" && !live.message) await resume();
-      if (!live.complete || live.state !== "seeding") {
-        await ctx.execution.sleep(`reuse:confirm-running-wait:${poll}`, adapters.pollMs ?? 500);
-        continue;
-      }
-      return finish({ kind: "seeding", reason: "Candidate independently verified complete; existing library selection is unchanged",
-        torrentId: torrent.id, infoHash: metadata.infoHash, totalBytes: metadata.size,
-        accountingVersion: 1,
-        sidecarDownloadBytes: initialProof.files.filter(file => file.role === "sidecar").reduce((sum, file) => sum + file.size - file.verifiedBytes, 0),
-        contentRepairBytes: initialProof.files.filter(file => file.role === "content").reduce((sum, file) => sum + file.size - file.verifiedBytes, 0),
-        contentFileCount: initialProof.files.filter(file => file.role === "content").length,
-        reusedBytes: initialProof.summary.verifiedReuseBytes, downloadedBytes: metadata.size - initialProof.summary.verifiedReuseBytes });
+      await client.quiesce(ref);
+      return finish({ kind: "stalled", reason: "Client did not admit the optimistic seed within its bounded window",
+        infoHash: metadata.infoHash, torrentId: torrent.id, planId: plan.id, verification: "assumed" });
+    } catch (error) {
+      try { await check(false); await client.quiesce(ref); } catch { /* Keep the original identity/cancellation failure. */ }
+      throw error;
     }
-    // One tracker warning must not stop a transfer that can still make progress.
-    if (snapshot.message && snapshot.state === "inactive") {
-      await durableStep(ctx, "reuse:stop-error", () => client.quiesce(ref));
-      return finish({ kind: "stalled", reason: "Candidate engine reports a tracker/storage error; retained for later recovery", torrentId: torrent.id });
-    }
-    await ctx.execution.sleep(`reuse:download-wait:${poll}`, adapters.pollMs ?? 5000);
   }
-  await durableStep(ctx, "reuse:stop-stalled", () => client.quiesce(ref));
-  return finish({ kind: "stalled", reason: "Candidate exceeded the bounded transfer window; old torrents and library remain intact", torrentId: torrent.id });
-  } catch (error) {
-    // Retry must not leave an unmonitored writable transfer running. Never stop
-    // a foreign layout or act after this execution has lost its lease.
-    try { await check(false); await client.quiesce(ref); } catch { /* Next attempt reconciles ambiguous ownership. */ }
-    throw error;
-  }
+  return finish({ kind: "unsupported", reason: "Client does not support optimistic seed-only admission; no bulk hash scan was requested" });
 }
 

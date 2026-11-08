@@ -8,7 +8,7 @@ import bencode from "bencode";
 import { persistSeedOnlyIntent, prepareSeedOnlyResumes, seedOnlyIntentDirectory } from "../../src/media/seed-only-state";
 
 if (process.platform !== "linux") throw new Error("Run this lab inside the Linux Transmission 4.1.4 build image");
-const binary = process.env.TRANSMISSION_BINARY ?? "/opt/transmission/bin/transmission-daemon";
+const binary = process.env.TRANSMISSION_BINARY ?? "/usr/local/bin/transmission-daemon";
 const root = await fs.mkdtemp("/tmp/symlink-seeding-");
 const bytes = randomBytes(2 * 1024 ** 2 + 213), pieceLength = 16384;
 const digest = (data: Uint8Array) => createHash("sha256").update(data).digest("hex");
@@ -46,10 +46,10 @@ function metainfo(name: string, webseed: boolean) {
   return { hash: createHash("sha1").update(encode(info)).digest("hex"),
     data: encode({ announce: `${endpoint}/announce`, ...(webseed ? { "url-list": [`${endpoint}/seed/`] } : {}), info }) };
 }
-type Snapshot = { status: number; percentComplete: number; downloadedEver: number; uploadedEver: number;
+type Snapshot = { status: number; error: number; percentComplete: number; downloadedEver: number; uploadedEver: number;
   haveValid: number; leftUntilDone: number; fileStats: { wanted: boolean }[]; errorString: string;
   labels: string[]; downloadDir: string };
-const fields = ["status", "percentComplete", "downloadedEver", "uploadedEver", "haveValid", "leftUntilDone", "fileStats", "errorString", "labels", "downloadDir"];
+const fields = ["status", "error", "percentComplete", "downloadedEver", "uploadedEver", "haveValid", "leftUntilDone", "fileStats", "errorString", "labels", "downloadDir"];
 async function engine(name: string, rpcPort: number, peerPort: number) {
   const config = path.join(root, name), downloads = path.join(root, `${name}-downloads`);
   await fs.mkdir(config); await fs.mkdir(downloads);
@@ -101,19 +101,22 @@ async function until(check: () => Promise<boolean>, description: string, timeout
   const deadline = Date.now() + timeout;
   while (!await check()) { if (Date.now() > deadline) throw new Error(`Timed out: ${description}`); await Bun.sleep(100); }
 }
-const candidate = metainfo("Pack", true), canonical = path.join(root, "canonical", "movie.mkv");
+let candidate = metainfo("Pack", true);
+const canonical = path.join(root, "canonical", "movie.mkv");
 try {
   const version = Bun.spawnSync([binary, "--version"]);
   assert.match(Buffer.from(version.stdout).toString() + Buffer.from(version.stderr).toString(), /4\.1\.4/);
   await fs.mkdir(path.dirname(canonical)); await fs.writeFile(canonical, bytes);
+  await fs.utimes(canonical, new Date(Date.now() - 10_000), new Date(Date.now() - 10_000));
   await fs.mkdir(path.join(seed.downloads, "Pack"));
   const link = path.join(seed.downloads, "Pack", "movie.mkv"); await fs.symlink(canonical, link);
   assert.equal((await fs.lstat(link)).isSymbolicLink(), true);
   await seed.start();
   await seed.rpc("torrent-add", { metainfo: candidate.data.toString("base64"), "download-dir": seed.downloads, paused: true, "files-unwanted": [0] });
   await seed.rpc("torrent-set", { ids: [candidate.hash], "files-unwanted": [0] });
-  await seed.rpc("torrent-verify", { ids: [candidate.hash] });
-  await until(async () => (await seed.snapshot(candidate.hash)).haveValid === bytes.length, "verify exact symlink");
+  const assumed = await seed.snapshot(candidate.hash);
+  assert.equal(assumed.haveValid, bytes.length, "native fast-seed must recognize the complete layout without a bulk verification");
+  assert.ok(assumed.status !== 1 && assumed.status !== 2);
   await seed.rpc("torrent-start", { ids: [candidate.hash] });
   await until(async () => (await seed.snapshot(candidate.hash)).status === 6, "exact unwanted torrent seeding");
   const exact = await seed.snapshot(candidate.hash);
@@ -135,17 +138,32 @@ try {
   await seed.rpc("torrent-set", { ids: [candidate.hash], "files-unwanted": [0] });
   await seed.rpc("torrent-start", { ids: [candidate.hash] });
   await until(async () => (await seed.snapshot(candidate.hash)).status === 6, "seeding after restart");
-  // Corrupt a previously complete shared target while the daemon is stopped.
+  // A fresh registration has no previously checked piece cache. Its first piece
+  // matches, but the tail must be checked lazily when a peer requests it.
+  await seed.rpc("torrent-remove", { ids: [candidate.hash], "delete-local-data": false });
   await seed.stop();
   const corrupted = Buffer.from(bytes); corrupted[corrupted.length - 1] ^= 1;
   await fs.writeFile(canonical, corrupted);
+  await fs.utimes(canonical, new Date(Date.now() - 10_000), new Date(Date.now() - 10_000));
+  candidate = metainfo("BadPack", true);
+  await fs.mkdir(path.join(seed.downloads, "BadPack"));
+  await fs.symlink(canonical, path.join(seed.downloads, "BadPack", "movie.mkv"));
   const before = await fs.stat(canonical, { bigint: true }), wantedDigest = digest(corrupted), requestsBefore = webseedRequests;
   await seed.start();
+  await seed.rpc("torrent-add", { metainfo: candidate.data.toString("base64"), "download-dir": seed.downloads, paused: true, "files-unwanted": [0] });
   assert.ok((await seed.snapshot(candidate.hash)).fileStats.every(file => !file.wanted));
-  await seed.rpc("torrent-set", { ids: [candidate.hash], "files-unwanted": [0] });
-  await seed.rpc("torrent-verify", { ids: [candidate.hash] });
-  await until(async () => { const s = await seed.snapshot(candidate.hash); return s.status !== 1 && s.status !== 2 && s.haveValid < bytes.length; }, "detect corrupted piece");
+  assert.equal((await seed.snapshot(candidate.hash)).haveValid, bytes.length);
   await seed.rpc("torrent-start", { ids: [candidate.hash] });
+  await leech.start();
+  await leech.rpc("torrent-add", { metainfo: metainfo("BadPack", false).data.toString("base64"), "download-dir": leech.downloads, paused: false });
+  await until(async () => {
+    const s = await seed.snapshot(candidate.hash);
+    assert.ok(s.status !== 1 && s.status !== 2, "must not request a bulk verification");
+    return s.error === 3 && /Please Verify Local Data! Piece #\d+ is corrupt\./.test(s.errorString);
+  }, "lazy upload detects the corrupted tail");
+  assert.ok((await leech.snapshot(candidate.hash)).percentComplete < 1);
+  await leech.stop();
+  console.log("Lazy upload detected the incompatible tail without an upfront full hash pass");
   for (let i = 0; i < 50; i++) {
     const s = await seed.snapshot(candidate.hash);
     assert.ok(s.fileStats.every(file => !file.wanted)); assert.equal(s.downloadedEver, 0);

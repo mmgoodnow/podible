@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import {
   applyReusePieceEvidence, assertReusePath, planContentReuse, reuseDigest,
-  type ReuseFileIdentity, type ReusePieceEvidence, type ReusePlan,
+  type ReuseFileIdentity, type ReusePieceEvidence, type ReusePlan, type ReusePlanFile,
   type ReuseRootSnapshot, type ReuseSourceFile,
 } from "./reuse-plan";
 
@@ -228,7 +228,7 @@ export async function verifyContentReuse(plan: ReusePlan): Promise<ReusePlan> {
 
 export interface ReuseLayoutCapabilities {
   /** This means the adapter guarantees no repair/download writes, not just a paused torrent. */
-  symlinkMode: "never" | "verified-read-only";
+  symlinkMode: "never" | "verified-read-only" | "optimistic-read-only";
   cow: "clone-force" | "unavailable";
 }
 
@@ -281,7 +281,7 @@ export async function publishedReuseLayoutCapabilities(root: ReuseRootSnapshot, 
   const receipt = (await readOwnedJson(path.join(generation, LAYOUT_MARKER), 32 * 1024 * 1024)).value as LayoutReceipt;
   if (receipt.version !== 1 || receipt.planId !== plan.id ||
     receipt.generation.device !== String(stat.dev) || receipt.generation.inode !== String(stat.ino) ||
-    !["never", "verified-read-only"].includes(receipt.capabilities?.symlinkMode) ||
+    !["never", "verified-read-only", "optimistic-read-only"].includes(receipt.capabilities?.symlinkMode) ||
     !["clone-force", "unavailable"].includes(receipt.capabilities?.cow) ||
     receipt.definitionDigest !== reuseDigest({ id: plan.id, root, capabilities: receipt.capabilities }))
     throw new Error("Reuse layout receipt or generation identity changed");
@@ -292,26 +292,33 @@ export async function publishedReuseLayoutCapabilities(root: ReuseRootSnapshot, 
 export async function materializeReuseLayout(input: {
   plan: ReusePlan; root: ReuseRootSnapshot; capabilities: ReuseLayoutCapabilities;
   /** Client mode stages likely bytes without pre-reading them; parent enforces the post-check budget. */
-  verification?: "client" | "v1-pieces" | "journal-v1-pieces";
+  verification?: "client" | "v1-pieces" | "journal-v1-pieces" | "optimistic";
 }): Promise<ReuseLayoutResult> {
   const { root, capabilities } = input;
   // Only the server's persisted staging result may supply this proof. It is
   // reusable while every captured source identity and the published layout agree.
   const journalProof = input.verification === "journal-v1-pieces";
-  const checkSource = (source: ReuseSourceFile) => assertSource(source, !journalProof);
-  if (!["never", "verified-read-only"].includes(capabilities.symlinkMode) ||
+  const optimistic = input.verification === "optimistic";
+  const checkSource = (source: ReuseSourceFile) => assertSource(source, !journalProof && !optimistic);
+  if (!["never", "verified-read-only", "optimistic-read-only"].includes(capabilities.symlinkMode) ||
     !["clone-force", "unavailable"].includes(capabilities.cow)) throw new Error("Invalid reuse client capabilities");
   await assertRoot(root);
   for (const source of input.plan.sources)
     if (source.root.path === root.path || source.root.path.startsWith(`${root.path}${path.sep}`) ||
       root.path.startsWith(`${source.root.path}${path.sep}`)) throw new Error("Reuse source and destination roots must be separate");
-  const plan = journalProof ? applyReusePieceEvidence(rebuildPlan(input.plan), input.plan.pieces) :
+  if (capabilities.symlinkMode === "optimistic-read-only" && !optimistic)
+    throw new Error("Optimistic links require the seed-only optimistic path");
+  const plan = optimistic ? rebuildPlan(input.plan) : journalProof ? applyReusePieceEvidence(rebuildPlan(input.plan), input.plan.pieces) :
     input.verification === "v1-pieces" || capabilities.symlinkMode === "verified-read-only"
       ? await verifyContentReuse(input.plan) : rebuildPlan(input.plan);
   if (journalProof && (capabilities.symlinkMode !== "verified-read-only" || input.plan.verification !== "v1-pieces" ||
     reuseDigest(plan) !== reuseDigest(input.plan) || plan.summary.verifiedReuseBytes !== plan.summary.totalBytes))
     throw new Error("Journal reuse proof is not a complete verified staging result");
   if (plan.status === "rejected") return { status: "rejected", reason: plan.reasons.join("; "), plan };
+  if (optimistic && plan.files.some(file => !file.source || file.source.size !== file.size))
+    return { status: "unsupported", reason: "Optimistic seeding needs a complete exact-size layout; partial layouts require a client check" };
+  const canLink = (file: ReusePlanFile) => capabilities.symlinkMode === "optimistic-read-only" ||
+    (capabilities.symlinkMode === "verified-read-only" && (optimistic || file.proof === "verified-full"));
   for (const source of new Map(plan.files.flatMap((file) => file.source ? [[file.source.id, file.source] as const] : [])).values())
     await checkSource(source);
   const layoutPath = path.join(root.path, plan.id);
@@ -343,7 +350,7 @@ export async function materializeReuseLayout(input: {
       if (recorded.kind === "missing" && !output) continue;
       if (!output) throw new Error("Reuse layout file disappeared");
       if (recorded.kind === "symlink") {
-        if (capabilities.symlinkMode !== "verified-read-only" || file.proof !== "verified-full" ||
+        if (!canLink(file) ||
           !output.isSymbolicLink() || (await fs.readlink(destination)) !== file.source?.path)
           throw new Error("Reuse symlink changed or is no longer verified");
       } else if ((recorded.kind !== "clone" && recorded.kind !== "missing") ||
@@ -359,8 +366,7 @@ export async function materializeReuseLayout(input: {
   const existing = await replay();
   if (existing) return existing;
   if (journalProof) throw new Error("Journal reuse proof requires its existing published layout");
-  if (plan.files.some((file) => file.source && !(file.proof === "verified-full" &&
-    capabilities.symlinkMode === "verified-read-only")) && capabilities.cow === "unavailable")
+  if (plan.files.some((file) => file.source && !canLink(file)) && capabilities.cow === "unavailable")
     return { status: "unsupported", reason: "Writable reuse requires filesystem CoW cloning; full copies are not allowed" };
 
   const generation = path.join(root.path, `.podible-reuse-${plan.id}-${randomUUID()}`);
@@ -378,7 +384,7 @@ export async function materializeReuseLayout(input: {
       const destination = path.join(data, file.candidatePath);
       if (!file.source) { files.push({ path: file.candidatePath, kind: "missing" }); continue; }
       await checkSource(file.source);
-      if (file.proof === "verified-full" && capabilities.symlinkMode === "verified-read-only") {
+      if (canLink(file)) {
         await fs.symlink(file.source.path, destination);
         files.push({ path: file.candidatePath, kind: "symlink" });
         continue;

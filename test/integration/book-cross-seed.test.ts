@@ -49,13 +49,13 @@ async function fixture(media: "audio" | "ebook") {
   let location: DownloadLocation, running = false, checking = 0, complete = false, seedOnly = false, adds = 0, resumes = 0;
   const client: TorrentClient = {
     id: `transmission:${randomUUID()}`,
-    capabilities: { pausedAdd: true, recheck: true, derivedLayouts: true, metainfoVersions: [1], readOnlySeeding: true },
-    async ensureAdded(input) { adds++; location = input.location; seedOnly = Boolean(input.seedOnly); return { clientId: this.id, nativeId: metadata.infoHash }; },
+    capabilities: { pausedAdd: true, recheck: true, derivedLayouts: true, metainfoVersions: [1], readOnlySeeding: true, optimisticSeeding: true },
+    async ensureAdded(input) { adds++; location = input.location; seedOnly = Boolean(input.seedOnly); complete = true; return { clientId: this.id, nativeId: metadata.infoHash }; },
     async inspect(ref) { return { ref, location, complete, sizeBytes: 8, bytesDone: complete ? 8 : 0,
       state: checking-- > 0 ? "checking" : running ? "seeding" : "inactive", seedOnly,
       message: null, observedAt: new Date().toISOString(), downloadBytesPerSecond: 0 }; },
     async files() { return [{ index: 0, path: path.join(downloadRoot, location.relativePath, name) }]; },
-    async recheck() { checking = 1; complete = (await fs.readFile(path.join(downloadRoot, location.relativePath, name))).equals(bytes); },
+    async recheck() { throw new Error("Optimistic book reuse must not request a bulk hash scan"); },
     async resume() { throw new Error("Shared book bytes must never use writable resume"); },
     async resumeSeedOnly() { expect(seedOnly).toBe(true); resumes++; running = true; },
     async quiesce() { running = false; }, async removeRecord() { throw new Error("No removal"); },

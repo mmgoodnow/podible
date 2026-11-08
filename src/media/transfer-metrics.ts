@@ -174,7 +174,7 @@ export class TransferMetricsRepo {
     const outcomeCounts = { seeding: 0, pending: 0, skipped: 0, failed: 0, stalled: 0, cancelled: 0, unsupported: 0 };
     for (const receipt of receipts) {
       // Durable validated outcomes take precedence over a later execution-state change.
-      if (receipt.outcome) outcomeCounts[receipt.outcome.kind]++;
+      if (receipt.outcome) outcomeCounts[receipt.outcome.kind === "incompatible" ? "failed" : receipt.outcome.kind]++;
       else {
         const status = this.jobState(receipt.jobId)?.status;
         outcomeCounts[status === "failed" || status === "cancelled" ? status : "pending"]++;
@@ -205,7 +205,8 @@ export class TransferMetricsRepo {
         skipped: outcomeCounts.skipped, failed: outcomeCounts.failed, stalled: outcomeCounts.stalled,
         cancelled: outcomeCounts.cancelled, unsupported: outcomeCounts.unsupported,
         matchRate: terminalCount ? successes.length / terminalCount : null,
-        verifiedReusedBytes: successes.reduce((n, row) => n + (row.outcome?.reusedBytes ?? 0), 0),
+        verifiedReusedBytes: successes.filter(row => row.outcome?.verification !== "assumed")
+          .reduce((n, row) => n + (row.outcome?.reusedBytes ?? 0), 0),
         sidecarDownloadBytes: accounted.length === successes.length ? accounted.reduce((n, row) => n + (row.outcome?.sidecarDownloadBytes ?? 0), 0) : null,
         contentRepairBytes: accounted.length === successes.length ? accounted.reduce((n, row) => n + (row.outcome?.contentRepairBytes ?? 0), 0) : null,
         tvMultiFileReusedBytes: accounted.filter(row => row.command.scope.media === "tv" && (row.outcome?.contentFileCount ?? 0) > 1).reduce((n, row) => n + (row.outcome?.reusedBytes ?? 0), 0) },

@@ -7,7 +7,8 @@ import { fetchMovieMetainfo } from "../movies/offers";
 import { startCrossSeedBackfill, crossSeedBackfillStatus, backfillStartSchema, backfillSummarySchema,
   backfillStatusParamsSchema, backfillStatusSchema, latestCrossSeedBackfill, cancelCrossSeedBackfill } from "../media/cross-seed-backfill";
 
-const outcome = z.object({ kind: z.enum(["seeding", "skipped", "unsupported", "stalled"]), reason: z.string(), at: z.string(),
+const outcome = z.object({ kind: z.enum(["seeding", "skipped", "unsupported", "stalled", "incompatible"]), reason: z.string(), at: z.string(),
+  planId: z.string().optional(), verification: z.enum(["assumed", "verified"]).optional(),
   torrentId: z.number().optional(), infoHash: z.string().optional(), reusedBytes: z.number().optional(), downloadedBytes: z.number().optional(), totalBytes: z.number().optional(),
   accountingVersion: z.literal(1).optional(), sidecarDownloadBytes: z.number().nonnegative().optional(),
   contentRepairBytes: z.number().nonnegative().optional(), contentFileCount: z.number().int().nonnegative().optional() });
@@ -41,7 +42,7 @@ export const crossSeedRouter = defineRouter({
       return { candidateHash: plan.candidate.identity.v1, status: plan.status, ...plan.summary, reasons: plan.reasons, verification: plan.verification };
     },
   }),
-  create: defineMethod({ auth: "admin", summary: "Queue an idempotent verified CoW reuse attempt without changing Plex selection.",
+  create: defineMethod({ auth: "admin", summary: "Queue an optimistic seed-only reuse attempt without bulk hashing or changing Plex selection.",
     paramsSchema: crossSeedCommandSchema, resultSchema: receipt,
     handler: (ctx, command) => queueCrossSeed(ctx.repo, command) }),
   status: defineMethod({ auth: "admin", readOnly: true, summary: "Read bounded reuse intents and outcomes; never polls or controls the daemon.",

@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, test, spyOn } from "bun:test";
 import { constants, promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -52,6 +52,31 @@ async function setup() {
 
 const writable = { symlinkMode: "never", cow: "clone-force" } as const;
 const readOnly = { symlinkMode: "verified-read-only", cow: "unavailable" } as const;
+
+test("optimistic layouts never read payload bytes and do not label a same-size tail mismatch verified", async () => {
+  const f = await setup(), source = await f.source("one", "movie.mkv", "abcdefgX", true);
+  const plan = f.plan(manifest([{ name: "movie.mkv", text: "abcdefgh" }]), [source], 0);
+  const open = fs.open.bind(fs);
+  const guard = spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+    const handle = await open(...args);
+    if (args[0] !== source.path) return handle;
+    return new Proxy(handle, { get(target, key) {
+      if (key === "read" || key === "readFile") return () => { throw new Error("Unexpected payload read"); };
+      const value = Reflect.get(target, key, target); return typeof value === "function" ? value.bind(target) : value;
+    } });
+  });
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await materializeReuseLayout({ plan, root: f.root, verification: "optimistic",
+        capabilities: { symlinkMode: "optimistic-read-only", cow: "unavailable" } });
+      expect(result.status).toBe("ready");
+      if (result.status !== "ready") throw Error("Expected optimistic layout");
+      expect(result.plan.verification).toBe("pending");
+      expect(result.plan.summary.verifiedReuseBytes).toBe(0);
+      expect(await fs.readlink(path.join(result.dataPath, "pack/movie.mkv"))).toBe(source.path);
+    }
+  } finally { guard.mockRestore(); }
+});
 
 test("real original metainfo verifies renamed media and combines episodes across torrent sources", async () => {
   const fixture = await setup();

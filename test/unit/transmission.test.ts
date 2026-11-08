@@ -9,6 +9,7 @@ import {
   TransmissionAdapter,
 } from "../../src/media/transmission-client";
 import { inspectMetainfo } from "../../src/media/metainfo";
+import { persistSeedOnlyIntent, readSeedOnlyIntent } from "../../src/media/seed-only-state";
 import {
   prepareTransmission,
   readTransmissionIdentity,
@@ -21,6 +22,26 @@ const metainfo = bencode.encode({
     "piece length": 16384,
     pieces: createHash("sha1").update(bytes).digest(),
   },
+});
+test("only the exact Transmission local corrupt-piece error signals integrity mismatch", async () => {
+  let error = 3, errorString = "Please Verify Local Data! Piece #123 is corrupt.";
+  const hash = inspectMetainfo(metainfo).infoHash;
+  const rpc = new TransmissionRpc({ url: "http://127.0.0.1", username: "fixture", password: "fixture", fetcher: (async (_url, _init) =>
+    Response.json({ result: "success", arguments: { torrents: [{ hashString: hash, downloadDir: "/managed/case",
+      labels: ["Podible TV"], status: 0, leftUntilDone: 0, sizeWhenDone: 7, totalSize: 7, haveValid: 7,
+      haveUnchecked: 0, rateDownload: 0, error, errorString, files: [{ name: "film.mkv", length: 7 }] }] } })) as typeof fetch });
+  const client = new TransmissionAdapter({ clientId: "engine", roots: { tv: "/managed" }, ownershipTag: "Podible TV", rpc });
+  const inspect = () => client.inspect({ clientId: "engine", nativeId: hash });
+  expect((await inspect()).integrityError).toBe("piece-mismatch");
+  for (const message of ["Please Verify Local Data! Piece #123 is corrupt. extra", "Please Verify Local Data! Piece #x is corrupt.",
+    "Please Verify Local Data!", "No space left on device", "https://tracker.invalid/private-passkey"]) {
+    errorString = message;
+    const snapshot = await inspect(); expect(snapshot.integrityError).toBeNull();
+    expect(JSON.stringify(snapshot)).not.toContain(message);
+  }
+  errorString = "Please Verify Local Data! Piece #123 is corrupt."; error = 2;
+  expect((await inspect()).integrityError).toBeNull();
+  expect((await inspect()).errorKind).toBe("tracker");
 });
 test("Transmission classifies tracker errors separately from local faults without exposing tracker credentials", async () => {
   let error = 0;
@@ -85,6 +106,16 @@ test("seed-only adds disable every file before start and completeness uses actua
   await expect(client.resumeSeedOnly(ref)).rejects.toThrow("ordinary download");
   await expect(client.resume(ref)).rejects.toThrow("ordinary download");
   expect(calls.filter(call => call.method === "torrent-start")).toHaveLength(starts);
+  await expect(client.forgetSeedOnlyIntent(ref, { rootId: "movies", relativePath: "case" })).rejects.toThrow("existing torrent");
+  added = false;
+  await expect(client.forgetSeedOnlyIntent(ref, { rootId: "movies", relativePath: "different" })).rejects.toThrow("differs");
+  await client.forgetSeedOnlyIntent(ref, { rootId: "movies", relativePath: "case" });
+  await client.forgetSeedOnlyIntent(ref, { rootId: "movies", relativePath: "case" });
+  expect(readSeedOnlyIntent(path.join(root, "intents"), hash)).toBeNull();
+  await fs.mkdir(path.join(root, "new-plan"));
+  await persistSeedOnlyIntent(path.join(root, "intents"), { infoHash: hash, destination: path.join(root, "new-plan"),
+    fileCount: 1, ownershipTag: "Podible Movies" });
+  expect(readSeedOnlyIntent(path.join(root, "intents"), hash)?.destination).toBe(path.join(root, "new-plan"));
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 test("Transmission uses private handshake, reconciles uncertain adds, and never removes content", async () => {
