@@ -13,6 +13,7 @@ import { archiveLegacyJob, importLegacyJob, jobJournalReader, JournalCommands } 
 import { workerLog, type WorkerContext } from "./context";
 import { jobLockKeys, lockSetsConflict } from "./locks";
 import { JOB_TYPES } from "../job-types";
+import { periodicPrefix } from "./periodic";
 
 export const EXECUTION_JOB_TYPES = JOB_TYPES;
 
@@ -125,6 +126,11 @@ export async function createJobExecutionRuntime(
         const token = randomUUID();
         ctx.repo.attachJobExecution(input.jobId, runId, input.generation);
         if (!ctx.repo.ownJobExecution(input.jobId, runId, token)) throw new RunCancelledError(runId);
+        const queuedJob = ctx.repo.getJob(input.jobId)!;
+        const prefix = periodicPrefix({ ...queuedJob, dedupe_key: ctx.repo.jobDedupeKey(queuedJob.id) });
+        const newer = prefix ? ctx.repo.latestJobByDedupePrefix(queuedJob.type, prefix) : null;
+        if (newer && newer.id > queuedJob.id && (await storage.getStepResults(runId)).every(s => s.name === "job-input"))
+          return { jobId: queuedJob.id, coalescedInto: newer.id };
         const signals = new Set<AbortSignal>();
         const cancelRequestedRun = async () => {
           await engine.cancel(runId);
@@ -155,52 +161,60 @@ export async function createJobExecutionRuntime(
         const execution: NonNullable<WorkerContext["execution"]> = {
           key: runId,
           assertActive,
-          run: <T>(name: string, handler: () => T | Promise<T>): Promise<T> => {
+          run: async <T>(name: string, handler: () => T | Promise<T>): Promise<T> => {
             if (ctx.repo.isJobCancellationRequested(input.jobId)) {
-              return cancelRequestedRun().then(() => {
-                throw new RunCancelledError(runId);
-              });
+              await cancelRequestedRun();
+              throw new RunCancelledError(runId);
             }
-            return step.run<unknown>(name, {
+            const current = ctx.repo.getJob(input.jobId);
+            const keys = [...(current ? jobLockKeys(ctx.repo, current) : []), `execution:${token}`];
+            // Wait outside the handler: a durable sleep releases Reflow's run slot.
+            // Reserve synchronously before entering step.run so another callback cannot race admission.
+            for (let wait = 0; lockSetsConflict(
+              new Set([...activeLocks].filter(key => laneOwners.get(key)?.owner !== token)), keys
+            ); wait++) {
+              assertActive();
+              await step.sleep(`podible:lane:${name}:${wait}`, 1000);
+            }
+            assertActive();
+            let reserved = false;
+            const reserve = () => {
+              if (reserved) return;
+              if (lockSetsConflict(new Set([...activeLocks].filter(key => laneOwners.get(key)?.owner !== token)), keys))
+                throw new Error("Resource lane became busy during step retry");
+              for (const key of keys) {
+                const lane = laneOwners.get(key);
+                laneOwners.set(key, { owner: token, count: (lane?.count ?? 0) + 1 });
+                activeLocks.add(key);
+              }
+              reserved = true;
+            };
+            reserve();
+            const release = () => {
+              if (!reserved) return;
+              reserved = false;
+              for (const key of keys) {
+                const lane = laneOwners.get(key)!;
+                if (--lane.count === 0) { laneOwners.delete(key); activeLocks.delete(key); }
+              }
+            };
+            try { return await step.run<unknown>(name, {
               retry: executionRetryPolicy(ctx.repo.getJob(input.jobId)?.max_attempts ?? 5, options.retryDelayMs),
               handler: async ({ signal }) => {
                 signals.add(signal);
-                const current = ctx.repo.getJob(input.jobId);
-                // The execution key also makes jobs without domain lanes visible
-                // to an exclusive filesystem refresh. Sibling callbacks share lanes.
-                const keys = [...(current ? jobLockKeys(ctx.repo, current) : []), `execution:${token}`];
-                let locked = false;
                 try {
                   assertActive();
-                  while (
-                    lockSetsConflict(
-                      new Set([...activeLocks].filter((key) => laneOwners.get(key)?.owner !== token)),
-                      keys
-                    )
-                  ) {
-                    assertActive();
-                    await Bun.sleep(30);
-                  }
-                  for (const key of keys) {
-                    const lane = laneOwners.get(key);
-                    laneOwners.set(key, { owner: token, count: (lane?.count ?? 0) + 1 });
-                    activeLocks.add(key);
-                  }
-                  locked = true;
+                  reserve();
                   return await handler();
                 } finally {
-                  if (locked)
-                    for (const key of keys) {
-                      const lane = laneOwners.get(key)!;
-                      if (--lane.count === 0) {
-                        laneOwners.delete(key);
-                        activeLocks.delete(key);
-                      }
-                    }
                   signals.delete(signal);
+                  // Suspended/cancelled Reflow operations need not settle their
+                  // caller promise. Release at the actual side-effect boundary.
+                  release();
                 }
               }
-            }) as Promise<T>;
+            }) as T; }
+            finally { release(); }
           },
           sleep: (name, milliseconds) => step.sleep(name, milliseconds)
         };

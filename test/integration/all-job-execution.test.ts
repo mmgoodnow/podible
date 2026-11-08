@@ -78,6 +78,40 @@ test("all registered job types use checkpointed execution without claiming or re
   }
 });
 
+test("lock-blocked maintenance parks durably instead of starving unrelated foreground work", async () => {
+  const f = await fixture();
+  const book = f.repo.createBook({ title: "Active work", author: "Fixture" });
+  const held = f.repo.createJob({ type: "chapter_analysis", bookId: book.id, payload: { manifestationId: 1 } });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let holding = false, foreground = false;
+  const runtime = await createJobExecutionRuntime(f.ctx, path.join(f.root, "execution.sqlite"), {
+    processJob: async (ctx, job) => {
+      await ctx.execution!.run("work", async () => {
+        if (job.id === held.id) { holding = true; await gate; }
+        if (job.type === "cover_generation") foreground = true;
+      });
+      return "done";
+    },
+  });
+  try {
+    await runtime.reconcile(); await until(() => holding);
+    for (let i = 0; i < 25; i++) {
+      f.repo.createJob({ type: "retention_cleanup" });
+      f.repo.createJob({ type: "tv_retention_pressure" });
+    }
+    await runtime.reconcile(); await Bun.sleep(400);
+    const job = f.repo.createJob({ type: "cover_generation" });
+    await runtime.reconcile();
+    await until(() => foreground);
+    expect(f.repo.getJob(held.id)?.status).toBe("running");
+    await until(() => f.repo.getJob(job.id)?.status === "succeeded");
+  } finally {
+    release(); await runtime.stop(); f.db.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+}, 15000);
+
 test.each(["full_library_refresh", "reconcile", "retention_cleanup"] as const)("same execution parallel steps overlap, conflicting jobs and %s do not", async (maintenanceType) => {
   const f = await fixture();
   const book = f.repo.createBook({ title: "Parallel", author: "Fixture" });

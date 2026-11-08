@@ -74,6 +74,23 @@ block for the configured two seconds, then fail. Deferred write transactions can
 also surface `SQLITE_BUSY_SNAPSHOT`; there is intentionally no new retry policy.
 WAL readers normally continue while the worker holds a write transaction.
 
+## Resource Admission
+
+Resource-lane contention parks a run with a durable Reflow sleep **before**
+entering its next step handler. Waiting maintenance must not consume all 20 run
+slots and starve unrelated acquisition, import, or reuse work. A lane is reserved
+synchronously at admission and released when the actual handler finishes,
+including retry backoff and cancellation. Cached step results retain their old
+names and do not repeat effects. An immediate in-process retry must reacquire its
+lane before doing work; it never runs an effect under another owner's lock.
+
+Scheduled latest-state observations reuse an outstanding periodic job across
+wall-clock slots and restarts. Existing obsolete periodic runs with no effects
+are completed with a `coalescedInto` receipt. Runs with prior step history,
+explicit commands, scoped jobs and backfill payloads are not discarded. This
+drains old scheduler backlog without deleting journal history or cancelling
+requested acquisitions.
+
 Long synchronous work can still delay the worker's own Reflow heartbeat. A native
 crash can affect the shared process, and forced termination cannot undo external
 filesystem/network effects. Existing durable steps and fences remain essential.

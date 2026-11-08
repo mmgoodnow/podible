@@ -94,6 +94,8 @@ for (const { boundary, mode } of scenarios) {
         await writeFile(`${root}/resume`, "yes");
         if (boundary === "asset-publication") first.kill("SIGCONT");
         const exit = await Promise.race([first.exited, Bun.sleep(5_000).then(() => -1)]);
+        if (exit === -1) throw new Error(JSON.stringify({ jobs: repo.listRecentJobs(100),
+          log: await readFile(`${root}/worker.log`, "utf8").catch(() => "") }));
         expect(exit).toBe(0);
         expect(repo.getJob(target)?.status).toBe("cancelled");
         if (boundary !== "asset-publication") {

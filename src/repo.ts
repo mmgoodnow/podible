@@ -1583,6 +1583,13 @@ export class BooksRepo {
   latestJobByType(type: JobType): JobRow | null {
     return this.jobRows("WHERE j.type = ? ORDER BY j.id DESC LIMIT 1", [type])[0] ?? null;
   }
+  latestJobByDedupePrefix(type: JobType, prefix: string): JobRow | null {
+    return this.jobRows("WHERE j.type = ? AND substr(j.dedupe_key,1,?) = ? AND j.book_id IS NULL AND j.release_id IS NULL AND (j.payload_json IS NULL OR j.payload_json='{}') ORDER BY j.id DESC LIMIT 1",
+      [type, prefix.length, prefix])[0] ?? null;
+  }
+  jobDedupeKey(jobId: number): string | null {
+    return (this.db.query("SELECT dedupe_key FROM jobs WHERE id=?").get(jobId) as { dedupe_key: string | null } | null)?.dedupe_key ?? null;
+  }
   listRecentJobs(limit = 25): JobRow[] {
     return this.jobRows("ORDER BY j.id DESC LIMIT ?", [Math.max(1, Math.trunc(limit))]);
   }

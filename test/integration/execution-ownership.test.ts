@@ -72,7 +72,7 @@ test("durable import respects the filesystem-refresh lane", async () => {
   try {
     await runtime.reconcile();
     await Bun.sleep(100);
-    expect(repo.getJob(job.id)?.status).toBe("running");
+    expect(repo.getJob(job.id)?.status).toBe("queued"); // Durable lane wait releases the engine slot.
     expect(repo.listAssetsByBook(book.id)).toHaveLength(0);
     activeLocks.clear();
     const deadline = Date.now() + 3_000;

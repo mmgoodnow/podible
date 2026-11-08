@@ -6,6 +6,7 @@ import { RETENTION_PRESSURE_INTERVAL_MS } from "./media/retention-policy-types";
 import { STEWARDSHIP_INTERVAL_MS } from "./media/torrent-stewardship-types";
 import { hasTorrentStewardshipBindings } from "./media/torrent-stewardship";
 import { TRANSFER_METRICS_INTERVAL_MS } from "./media/transfer-metrics-types";
+import { queuePeriodicJob } from "./worker/periodic";
 
 export { pollMsForMedia, selectDownloadPollMs } from "./worker/downloads";
 
@@ -25,6 +26,7 @@ export async function runWorker(
       options,
     ));
   try {
+    const schedule = (input: Parameters<typeof ctx.repo.createJob>[0]) => queuePeriodicJob(ctx.repo, input);
     const boot = randomUUID();
     let nextMovieMaintenance = 0;
     let nextBookMaintenance = 0;
@@ -40,12 +42,12 @@ export async function runWorker(
     while (!ctx.shouldStop?.()) {
       try {
         if (Date.now() >= nextTransferMetrics) {
-          ctx.repo.createJob({ type: "torrent_metrics_collect",
+          schedule({ type: "torrent_metrics_collect",
             idempotencyKey: `torrent-metrics:${Math.floor(Date.now() / TRANSFER_METRICS_INTERVAL_MS)}`, maxAttempts: 2 });
           nextTransferMetrics = Date.now() + TRANSFER_METRICS_INTERVAL_MS;
         }
         if (Date.now() >= nextStewardship) {
-          if (hasTorrentStewardshipBindings(ctx.repo)) ctx.repo.createJob({
+          if (hasTorrentStewardshipBindings(ctx.repo)) schedule({
               type: "torrent_stewardship_collect",
               idempotencyKey: `torrent-stewardship:${Math.floor(Date.now() / STEWARDSHIP_INTERVAL_MS)}`,
               maxAttempts: 3,
@@ -53,7 +55,7 @@ export async function runWorker(
           nextStewardship = Date.now() + STEWARDSHIP_INTERVAL_MS;
         }
         if (ctx.repo.hasBooks() && Date.now() >= nextBookMaintenance) {
-          ctx.repo.createJob({
+          schedule({
             type: "reconcile",
             idempotencyKey: `book-maintenance:${boot}:${Math.floor(Date.now() / 3_600_000)}`,
             maxAttempts: 2,
@@ -65,7 +67,7 @@ export async function runWorker(
         if ((prowlarr.url || feedSettings.torznab.length) &&
             (ctx.repo.movies.hasTargets() || ctx.repo.tv.hasTargets() || ctx.repo.hasBooks()) && Date.now() >= nextFeedSync) {
           const key = createHash("sha256").update(JSON.stringify([prowlarr, feedSettings.torznab])).digest("hex");
-          ctx.repo.createJob({
+          schedule({
             type: "indexer_feed_sync",
             idempotencyKey: "indexer-feeds:" + key + ":" + Math.floor(Date.now() / INDEXER_FEED_INTERVAL_MS),
             maxAttempts: 3,
@@ -74,7 +76,7 @@ export async function runWorker(
         }
         const seerr = ctx.getSettings().movies.seerr;
         if (seerr.url && seerr.apiKey && Date.now() >= nextSeerrSync) {
-          ctx.repo.createJob({ type: "movie_dual_write_sync", idempotencyKey: `movie-seerr:${seerr.url}:${Math.floor(Date.now()/(seerr.pollIntervalMinutes*60_000))}`, maxAttempts: 3 });
+          schedule({ type: "movie_dual_write_sync", idempotencyKey: `movie-seerr:${seerr.url}:${Math.floor(Date.now()/(seerr.pollIntervalMinutes*60_000))}`, maxAttempts: 3 });
           nextSeerrSync = Date.now() + seerr.pollIntervalMinutes * 60_000;
         }
         const shadow = ctx.getSettings().movies.shadow;
@@ -85,18 +87,18 @@ export async function runWorker(
             ctx.repo.tv.requests().some((request) => !request.withdrawn_at && request.request_key.startsWith("native-seasons:"));
           const slot = Math.floor(Date.now() / (tv.pollIntervalMinutes * 60_000));
           if (sonarrConfigured)
-            ctx.repo.createJob({ type: "tv_shadow_sync", idempotencyKey: `tv-shadow:${slot}`, maxAttempts: 3 });
+            schedule({ type: "tv_shadow_sync", idempotencyKey: `tv-shadow:${slot}`, maxAttempts: 3 });
           const seerrConfigured = Boolean(sonarrConfigured && seerr.url && seerr.apiKey && tv.managedRoot && tv.plexSectionId && tv.plexViewPath);
           if (seerrConfigured || nativeConfigured)
-            ctx.repo.createJob({ type: "tv_sync", idempotencyKey: seerrConfigured ? `tv-seerr:${seerr.url}:${slot}` : `tv-native:${slot}`, maxAttempts: 3 });
+            schedule({ type: "tv_sync", idempotencyKey: seerrConfigured ? `tv-seerr:${seerr.url}:${slot}` : `tv-native:${slot}`, maxAttempts: 3 });
           if (sonarrConfigured || nativeConfigured) nextTvSync = Date.now() + tv.pollIntervalMinutes * 60_000;
         }
         if (ctx.repo.tv.hasTargets() && tv.managedRoot && tv.plexSectionId && tv.plexViewPath && Date.now() >= nextTvMaintenance) {
-          ctx.repo.createJob({ type: "tv_reconcile", idempotencyKey: `tv-maintenance:${boot}:${Math.floor(Date.now() / 3_600_000)}`, maxAttempts: 2 });
+          schedule({ type: "tv_reconcile", idempotencyKey: `tv-maintenance:${boot}:${Math.floor(Date.now() / 3_600_000)}`, maxAttempts: 2 });
           nextTvMaintenance = Date.now() + 3_600_000;
         }
         if (shadow.enabled && Date.now() >= nextShadowSync) {
-          ctx.repo.createJob({
+          schedule({
             type: "movie_shadow_sync",
             idempotencyKey: `movie-shadow-sync:${Math.floor(Date.now() / (shadow.pollIntervalMinutes * 60_000))}`,
             maxAttempts: 3,
@@ -107,7 +109,7 @@ export async function runWorker(
           ctx.repo.movies.hasTargets() &&
           Date.now() >= nextMovieMaintenance
         ) {
-          ctx.repo.createJob({
+          schedule({
             type: "movie_reconcile",
             idempotencyKey: `movie-maintenance:${boot}:${Math.floor(Date.now() / 3_600_000)}`,
             maxAttempts: 2,
@@ -116,11 +118,11 @@ export async function runWorker(
         }
         const movieStorage = ctx.getSettings().movies;
         if (ctx.repo.tv.hasTargets() && tv.managedRoot && tv.plexViewPath && tv.plexSectionId && Date.now() >= nextTvRetention) {
-          ctx.repo.createJob({ type: "tv_retention_pressure", idempotencyKey: `tv-retention-pressure:${Math.floor(Date.now() / RETENTION_PRESSURE_INTERVAL_MS)}`, maxAttempts: 3 });
+          schedule({ type: "tv_retention_pressure", idempotencyKey: `tv-retention-pressure:${Math.floor(Date.now() / RETENTION_PRESSURE_INTERVAL_MS)}`, maxAttempts: 3 });
           nextTvRetention = Date.now() + RETENTION_PRESSURE_INTERVAL_MS;
         }
         if (ctx.repo.movies.hasTargets() && movieStorage.managedRoot && movieStorage.plexViewPath && Date.now() >= nextRetention) {
-          ctx.repo.createJob({
+          schedule({
             type: "retention_cleanup",
             idempotencyKey: `retention-pressure:${Math.floor(Date.now() / RETENTION_PRESSURE_INTERVAL_MS)}`,
             maxAttempts: 3,
