@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import type { TorrentRef } from "./torrent-client";
+import type { TorrentRecord } from "./torrent-records-schema";
 
 const id = z.number().int().positive().safe();
 export const crossSeedScopeSchema = z.object({ media: z.enum(["movie", "tv", "audio", "ebook"]), targetId: id }).strict();
@@ -104,5 +105,24 @@ export class CrossSeedRepo {
       WHERE a.target_id=? AND f.size_bytes IN (${sizes.map(() => "?").join(",")})
       AND NOT EXISTS(SELECT 1 FROM media_content_losses l WHERE l.file_id=f.id)
       ORDER BY f.created_at,f.id LIMIT 2001`).all(scope.targetId, ...sizes) as { id: string; relative_path: string; size_bytes: number }[];
+  }
+  sourceDownloads(scope: CrossSeedScope): TorrentRecord[] {
+    crossSeedScopeSchema.parse(scope);
+    if (isBookCrossSeedScope(scope)) return this.db.query(`SELECT DISTINCT t.* FROM media_torrents t
+      JOIN book_torrent_bindings b ON b.torrent_id=t.id JOIN releases r ON r.id=b.release_id
+      WHERE b.book_id=? AND r.book_id=b.book_id AND r.media_type=? ORDER BY t.id LIMIT 129`)
+      .all(scope.targetId, scope.media) as TorrentRecord[];
+    return this.db.query(`SELECT DISTINCT t.* FROM media_torrents t
+      JOIN ${scope.media}_acquisition_downloads d ON d.torrent_id=t.id
+      JOIN ${scope.media}_acquisitions a ON a.id=d.acquisition_id
+      WHERE a.target_id=? ORDER BY t.id LIMIT 129`).all(scope.targetId) as TorrentRecord[];
+  }
+  sourceProofs(scope: CrossSeedScope, torrentId: number): { job_id: number | null; source_json: string | null }[] {
+    crossSeedScopeSchema.parse(scope);
+    if (isBookCrossSeedScope(scope)) return [];
+    return this.db.query(`SELECT DISTINCT a.job_id,json_extract(v.facts_json,'$.source') AS source_json
+      FROM ${scope.media}_acquisition_downloads d JOIN ${scope.media}_acquisitions a ON a.id=d.acquisition_id
+      LEFT JOIN ${scope.media}_versions v ON v.acquisition_id=a.id
+      WHERE a.target_id=? AND d.torrent_id=? LIMIT 33`).all(scope.targetId, torrentId) as { job_id: number | null; source_json: string | null }[];
   }
 }

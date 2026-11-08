@@ -82,6 +82,19 @@ all probe files cleaned up. Writable reuse remains unsupported there. The new
 exact-match symlink fallback is locally verified, not yet production verified.
 There is still no full-copy fallback.
 
+Completed, sealed canonical download members can enter the reuse pool before
+every member has been imported or published. The inventory opens only registered
+owned layouts and requires finalized-object or saved source-identity evidence;
+it does not enumerate arbitrary directories or adopt legacy regular downloads.
+Candidate piece verification remains mandatory. A partially published pack is
+not treated as a partially downloaded pack.
+
+The server journals the exact-match staging proof. Subsequent seed-only wakes
+validate that proof, source mount/inode/size/mtime/ctime, and every published
+layout link without rereading the payload. Changed sources or layouts reject the
+replay; a journal proof cannot create a replacement layout. Writable CoW layouts
+still require a fresh final piece proof after repair.
+
 This POC independently hashes the bounded candidate pieces, runs the daemon's
 candidate recheck, applies the missing-piece budget, and independently verifies
 completion. It does not recheck the entire library, but it is **not yet a

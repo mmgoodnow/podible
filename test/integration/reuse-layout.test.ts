@@ -97,6 +97,55 @@ test("an actual same-size changed tail detects the precise mismatching original 
   expect(await fs.readFile(destination, "utf8")).toBe("abcdefgh");
 });
 
+test("journal proof replays an exact seed-only layout without rereading payload, but rejects changed sources", async () => {
+  const fixture = await setup();
+  const source = await fixture.source("1", "canonical.mkv", "abcdefgh", true);
+  const plan = fixture.plan(manifest([{ name: "E01.mkv", text: "abcdefgh" }]), [source], 0);
+  const open = fs.open.bind(fs);
+  let payloadReads = 0;
+  fs.open = (async (...args: Parameters<typeof fs.open>) => {
+    const handle = await open(...args);
+    if (String(args[0]) === source.path) {
+      const read = handle.read.bind(handle);
+      handle.read = ((...readArgs: unknown[]) => {
+        payloadReads++;
+        return Reflect.apply(read, handle, readArgs);
+      }) as typeof handle.read;
+    }
+    return handle;
+  }) as typeof fs.open;
+  try {
+    const staged = await materializeReuseLayout({ root: fixture.root, plan, capabilities: readOnly });
+    if (staged.status !== "ready") throw new Error("Expected exact seed-only layout");
+    expect(payloadReads).toBeGreaterThan(0);
+    const initialReads = payloadReads;
+    const replay = await materializeReuseLayout({ root: fixture.root, plan: staged.plan, capabilities: readOnly,
+      verification: "journal-v1-pieces" });
+    expect(replay).toMatchObject({ status: "ready", replay: true, dataPath: staged.dataPath });
+    expect(payloadReads).toBe(initialReads);
+    const fabricated = structuredClone(staged.plan); fabricated.pieces[0]!.actualSha1 = "f".repeat(40);
+    await expect(materializeReuseLayout({ root: fixture.root, plan: fabricated, capabilities: readOnly,
+      verification: "journal-v1-pieces" })).rejects.toThrow("Invalid piece evidence");
+    await fs.chmod(source.path, 0o600); await fs.writeFile(source.path, "abcdefgX");
+    await expect(materializeReuseLayout({ root: fixture.root, plan: staged.plan, capabilities: readOnly,
+      verification: "journal-v1-pieces" })).rejects.toThrow("identity or digest changed");
+  } finally { fs.open = open; }
+});
+
+test("journal proof cannot create a replacement layout or accept a replaced symlink", async () => {
+  const fixture = await setup();
+  const source = await fixture.source("1", "canonical.mkv", "abcdefgh");
+  const proof = await verifyContentReuse(fixture.plan(manifest([{ name: "E01.mkv", text: "abcdefgh" }]), [source], 0));
+  await expect(materializeReuseLayout({ root: fixture.root, plan: proof, capabilities: readOnly,
+    verification: "journal-v1-pieces" })).rejects.toThrow("existing published layout");
+  const staged = await materializeReuseLayout({ root: fixture.root, plan: proof, capabilities: readOnly });
+  if (staged.status !== "ready") throw new Error("Expected seed-only layout");
+  const view = path.join(staged.dataPath, "pack/E01.mkv");
+  await fs.unlink(view); await fs.symlink(path.join(fixture.base, "foreign"), view);
+  await expect(materializeReuseLayout({ root: fixture.root, plan: staged.plan, capabilities: readOnly,
+    verification: "journal-v1-pieces" })).rejects.toThrow("Reuse symlink changed");
+});
+
 test("default likely staging skips target hashes, isolates client repair and keeps sidecars private", async () => {
   const fixture = await setup();
   const original = await fixture.source("1", "canonical.mkv", "abcdefgX");

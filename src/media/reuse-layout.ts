@@ -139,10 +139,10 @@ export async function captureReuseFile(input: {
     sourceTorrentId: input.sourceTorrentId, root: structuredClone(input.root), identity };
 }
 
-async function assertSource(source: ReuseSourceFile) {
+async function assertSource(source: ReuseSourceFile, hash = true) {
   const current = await captureReuseFile({ root: source.root, sourceId: source.id,
     sourcePath: source.path, sourceTorrentId: source.sourceTorrentId,
-    sha256: source.identity.sha256, hash: source.identity.sha256 != null });
+    sha256: source.identity.sha256, hash: hash && source.identity.sha256 != null });
   if (reuseDigest(current) !== reuseDigest(source)) throw new Error("Owned reuse source identity or digest changed");
 }
 
@@ -276,20 +276,28 @@ export async function publishedReuseLayoutCapabilities(root: ReuseRootSnapshot, 
 export async function materializeReuseLayout(input: {
   plan: ReusePlan; root: ReuseRootSnapshot; capabilities: ReuseLayoutCapabilities;
   /** Client mode stages likely bytes without pre-reading them; parent enforces the post-check budget. */
-  verification?: "client" | "v1-pieces";
+  verification?: "client" | "v1-pieces" | "journal-v1-pieces";
 }): Promise<ReuseLayoutResult> {
   const { root, capabilities } = input;
+  // Only the server's persisted staging result may supply this proof. It is
+  // reusable while every captured source identity and the published layout agree.
+  const journalProof = input.verification === "journal-v1-pieces";
+  const checkSource = (source: ReuseSourceFile) => assertSource(source, !journalProof);
   if (!["never", "verified-read-only"].includes(capabilities.symlinkMode) ||
     !["clone-force", "unavailable"].includes(capabilities.cow)) throw new Error("Invalid reuse client capabilities");
   await assertRoot(root);
   for (const source of input.plan.sources)
     if (source.root.path === root.path || source.root.path.startsWith(`${root.path}${path.sep}`) ||
       root.path.startsWith(`${source.root.path}${path.sep}`)) throw new Error("Reuse source and destination roots must be separate");
-  const plan = input.verification === "v1-pieces" || capabilities.symlinkMode === "verified-read-only"
-    ? await verifyContentReuse(input.plan) : rebuildPlan(input.plan);
+  const plan = journalProof ? applyReusePieceEvidence(rebuildPlan(input.plan), input.plan.pieces) :
+    input.verification === "v1-pieces" || capabilities.symlinkMode === "verified-read-only"
+      ? await verifyContentReuse(input.plan) : rebuildPlan(input.plan);
+  if (journalProof && (capabilities.symlinkMode !== "verified-read-only" || input.plan.verification !== "v1-pieces" ||
+    reuseDigest(plan) !== reuseDigest(input.plan) || plan.summary.verifiedReuseBytes !== plan.summary.totalBytes))
+    throw new Error("Journal reuse proof is not a complete verified staging result");
   if (plan.status === "rejected") return { status: "rejected", reason: plan.reasons.join("; "), plan };
   for (const source of new Map(plan.files.flatMap((file) => file.source ? [[file.source.id, file.source] as const] : [])).values())
-    await assertSource(source);
+    await checkSource(source);
   const layoutPath = path.join(root.path, plan.id);
   const definitionDigest = reuseDigest({ id: plan.id, root, capabilities });
 
@@ -334,6 +342,7 @@ export async function materializeReuseLayout(input: {
 
   const existing = await replay();
   if (existing) return existing;
+  if (journalProof) throw new Error("Journal reuse proof requires its existing published layout");
   if (plan.files.some((file) => file.source && !(file.proof === "verified-full" &&
     capabilities.symlinkMode === "verified-read-only")) && capabilities.cow === "unavailable")
     return { status: "unsupported", reason: "Writable reuse requires filesystem CoW cloning; full copies are not allowed" };
@@ -352,7 +361,7 @@ export async function materializeReuseLayout(input: {
       await regularDirectories(data, file.candidatePath);
       const destination = path.join(data, file.candidatePath);
       if (!file.source) { files.push({ path: file.candidatePath, kind: "missing" }); continue; }
-      await assertSource(file.source);
+      await checkSource(file.source);
       if (file.proof === "verified-full" && capabilities.symlinkMode === "verified-read-only") {
         await fs.symlink(file.source.path, destination);
         files.push({ path: file.candidatePath, kind: "symlink" });
@@ -387,7 +396,7 @@ export async function materializeReuseLayout(input: {
       } finally { await output.close(); }
       files.push({ path: file.candidatePath, kind: "clone", device: clone.device, inode: clone.inode });
     }
-    for (const file of plan.files) if (file.source) await assertSource(file.source);
+    for (const file of plan.files) if (file.source) await checkSource(file.source);
     const receipt: LayoutReceipt = { version: 1, planId: plan.id, definitionDigest, capabilities,
       generation: { device: String(generationStat.dev), inode: String(generationStat.ino) }, files };
     const marker = await fs.open(path.join(generation, LAYOUT_MARKER), "wx", 0o600);

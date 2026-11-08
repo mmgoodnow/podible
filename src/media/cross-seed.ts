@@ -20,6 +20,7 @@ import { crossSeedCommandSchema, crossSeedCommandHash, crossSeedStateKey, isBook
 import { planContentReuse, type ReuseCandidateManifest, type ReusePlan, type ReuseSourceFile } from "./reuse-plan";
 import { captureReuseFile, captureReuseRoot, materializeReuseLayout, prepareReuseLayoutRoot, verifyContentReuse, publishedReuseLayoutCapabilities } from "./reuse-layout";
 import { selectedCopies, selectedCopyOffer, selectedCopyId } from "./selected-copies";
+import { completedCanonicalReuseSources } from "./reuse-source-inventory";
 
 export type CrossSeedAdapters = {
   client?: (scope: CrossSeedScope) => TorrentClient;
@@ -145,7 +146,13 @@ export async function crossSeedPlan(repo: BooksRepo, settings: AppSettings, comm
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
-  return planContentReuse({ candidate, sources, policy: { version: 1,
+  const completed = await completedCanonicalReuseSources({ repo, scope: command.scope, root: ownedRoot,
+    downloadRoot: (await storageRoots(settings, command.scope)).downloadRoot,
+    sizes: [...new Set(candidate.files.map(file => file.size))] });
+  const byPath = new Map(sources.map(source => [source.path, source]));
+  for (const source of completed) if (!byPath.has(source.path)) byPath.set(source.path, source);
+  if (byPath.size > 2000) throw new Error("Reuse source inventory exceeds the bounded plan");
+  return planContentReuse({ candidate, sources: [...byPath.values()], policy: { version: 1,
     minReuseRatio: command.policy.minimumReuseRatio, maxExtraDownloadBytes: command.policy.maximumExtraBytes } });
 }
 
@@ -199,10 +206,10 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   // Revalidate layout receipts on every retry, including a lost stage checkpoint.
   active();
   const destinationRoot = await captureReuseRoot({ rootPath: destination, markerName: ".podible-reuse-root.json", ownerId: client.id });
-  const materialize = (readOnly: boolean) => (adapters.materialize ?? materializeReuseLayout)({
-    plan, root: destinationRoot, capabilities: readOnly
+  const materialize = (readOnly: boolean, savedProof?: ReusePlan) => (adapters.materialize ?? materializeReuseLayout)({
+    plan: savedProof ?? plan, root: destinationRoot, capabilities: readOnly
       ? { cow: "unavailable", symlinkMode: "verified-read-only" }
-      : { cow: "clone-force", symlinkMode: "never" }, verification: "client" });
+      : { cow: "clone-force", symlinkMode: "never" }, verification: savedProof ? "journal-v1-pieces" : "client" });
   const staged = await durableStep(ctx, "reuse:layout", async () => {
     const previous = await publishedReuseLayoutCapabilities(destinationRoot, plan);
     if (previous?.symlinkMode === "verified-read-only") {
@@ -221,7 +228,7 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   });
   if (staged.status !== "ready") return finish({ kind: staged.status === "unsupported" ? "unsupported" : "skipped", reason: staged.reason });
   const readOnly = staged.readOnly ?? false;
-  const stage = () => materialize(readOnly);
+  const stage = () => materialize(readOnly, readOnly ? staged.plan : undefined);
   const replay = await stage();
   if (replay.status !== "ready" || replay.dataPath !== staged.dataPath) throw new Error("Reuse layout changed after staging");
   const dataPath = await fs.realpath(staged.dataPath);
@@ -231,7 +238,7 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
       const current = await stage();
       if (current.status !== "ready" || current.dataPath !== staged.dataPath)
         throw new Error("Verified symlink layout changed");
-      return verifyContentReuse(plan);
+      return current.plan;
     }
     const files: ReuseSourceFile[] = [], bindings: { candidatePath: string; sourceId: string }[] = [];
     for (let index = 0; index < plan.candidate.files.length; index++) {
