@@ -170,7 +170,18 @@ export class TransferMetricsRepo {
         ratio: uploadedBytes !== null && downloadedBytes !== null && downloadedBytes > 0 ? uploadedBytes / downloadedBytes : null };
     });
     const units = new Set(fresh.flatMap(row => row.contents.map(content => `${content.media}:${content.targetId}`)));
-    const receipts = this.receipts(), terminal = receipts.filter(row => row.outcome || ["failed", "cancelled"].includes(this.jobState(row.jobId)?.status ?? "")), successes = terminal.filter(row => row.outcome?.kind === "seeding");
+    const receipts = this.receipts();
+    const outcomeCounts = { seeding: 0, pending: 0, skipped: 0, failed: 0, stalled: 0, cancelled: 0, unsupported: 0 };
+    for (const receipt of receipts) {
+      // Durable validated outcomes take precedence over a later execution-state change.
+      if (receipt.outcome) outcomeCounts[receipt.outcome.kind]++;
+      else {
+        const status = this.jobState(receipt.jobId)?.status;
+        outcomeCounts[status === "failed" || status === "cancelled" ? status : "pending"]++;
+      }
+    }
+    const terminalCount = receipts.length - outcomeCounts.pending;
+    const successes = receipts.filter(row => row.outcome?.kind === "seeding");
     const accounted = successes.filter(row => row.outcome?.accountingVersion === 1 &&
       row.outcome.sidecarDownloadBytes !== undefined && row.outcome.contentRepairBytes !== undefined && row.outcome.contentFileCount !== undefined);
     const points = collection ? this.db.query(`SELECT observed_at,snapshot_json FROM transfer_metric_samples WHERE resolution=? AND observed_at>=? ORDER BY observed_at LIMIT 2160`)
@@ -190,8 +201,10 @@ export class TransferMetricsRepo {
           crossSeedUploadedBytes: previous.summary?.crossSeedUploadedBytes ?? null, seedSeconds: previous.summary?.seedSeconds ?? null,
           averageCopies: previous.summary?.averageCopies ?? null, reusedBytes: previous.reuse.verifiedReusedBytes,
           trackers: previous.stale ? [] : previous.trackers }; }),
-      reuse: { attempts: receipts.length, successful: successes.length, pending: receipts.length - terminal.length,
-        unsupported: terminal.filter(row => row.outcome?.kind === "unsupported").length, matchRate: terminal.length ? successes.length / terminal.length : null,
+      reuse: { attempts: receipts.length, successful: successes.length, pending: outcomeCounts.pending,
+        skipped: outcomeCounts.skipped, failed: outcomeCounts.failed, stalled: outcomeCounts.stalled,
+        cancelled: outcomeCounts.cancelled, unsupported: outcomeCounts.unsupported,
+        matchRate: terminalCount ? successes.length / terminalCount : null,
         verifiedReusedBytes: successes.reduce((n, row) => n + (row.outcome?.reusedBytes ?? 0), 0),
         sidecarDownloadBytes: accounted.length === successes.length ? accounted.reduce((n, row) => n + (row.outcome?.sidecarDownloadBytes ?? 0), 0) : null,
         contentRepairBytes: accounted.length === successes.length ? accounted.reduce((n, row) => n + (row.outcome?.contentRepairBytes ?? 0), 0) : null,

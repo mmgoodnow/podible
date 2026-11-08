@@ -47,7 +47,8 @@ test("Prometheus counters preserve units, escape bounded tracker labels, omit un
       crossSeedUploadedBytes: 2000, seedSeconds: 100, contentUnits: 1, averageCopies: 2 },
     trackers: [{ host: "tracker.example", name: 'A "tracker"\\label', seedBytes: 1024, seedingTorrents: 2, uploadedBytes: null, downloadedBytes: null, seedSeconds: 100, ratio: null }],
     history: [], mappings: [], warnings: [], downloads: [{ id: 12345, title: "Private book title", state: "downloading", bytesDone: 0, sizeBytes: 10, downloadBytesPerSecond: 0, href: "/book/12345" }],
-    reuse: { attempts: 2, successful: 1, pending: 1, unsupported: 0, matchRate: 1, verifiedReusedBytes: 100, sidecarDownloadBytes: 2, contentRepairBytes: 1, tvMultiFileReusedBytes: 0 } });
+    reuse: { attempts: 2, successful: 1, pending: 1, skipped: 0, failed: 0, stalled: 0, cancelled: 0,
+      unsupported: 0, matchRate: 1, verifiedReusedBytes: 100, sidecarDownloadBytes: 2, contentRepairBytes: 1, tvMultiFileReusedBytes: 0 } });
   const text = transferMetricsPrometheus(status);
   expect(text).toContain("# TYPE podible_uploaded_bytes_total counter\npodible_uploaded_bytes_total 4096");
   expect(text).toContain('podible_tracker_seed_bytes{tracker="A \\"tracker\\"\\\\label",host="tracker.example"} 1024');

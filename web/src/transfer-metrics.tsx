@@ -28,6 +28,23 @@ function TrackerTable({ data }: { data: TransferMetricsStatus }) {
   </section>;
 }
 
+export function CrossSeedMetrics({ reuse }: { reuse: TransferMetricsStatus["reuse"] }) {
+  return <section className="transfer-reuse" aria-label="Cross-seeding"><h3>Cross-seeding</h3>
+    <dl>
+      <div><dt>Seeds created</dt><dd>{count(reuse.successful)}</dd></div>
+      <div><dt>Pending</dt><dd>{count(reuse.pending)}</dd></div>
+      <div><dt>Skipped</dt><dd>{count(reuse.skipped)}</dd></div>
+      {reuse.failed > 0 && <div><dt>Failed</dt><dd>{count(reuse.failed)}</dd></div>}
+      {reuse.stalled > 0 && <div><dt>Stalled</dt><dd>{count(reuse.stalled)}</dd></div>}
+      {reuse.unsupported > 0 && <div><dt>Unsupported</dt><dd>{count(reuse.unsupported)}</dd></div>}
+      {reuse.cancelled > 0 && <div><dt>Cancelled</dt><dd>{count(reuse.cancelled)}</dd></div>}
+      <div><dt>Side files downloaded</dt><dd>{metricBytes(reuse.sidecarDownloadBytes)}</dd></div>
+      <div><dt>Content repairs</dt><dd>{metricBytes(reuse.contentRepairBytes)}</dd></div>
+    </dl>
+    {reuse.skipped > 0 && <p className="transfer-footnote">Skipped candidates are not failed cross-seeds.</p>}
+  </section>;
+}
+
 export function TransferMetrics() {
   const trpc = useTRPC();
   const [hours, setHours] = useState<24 | 168 | 720 | 2160>(24);
@@ -40,7 +57,8 @@ export function TransferMetrics() {
     {metrics.isPending ? <p role="status">Loading transfer metrics...</p> : metrics.isError ? <p role="alert">Transfer metrics unavailable. <button onClick={() => metrics.refetch()}>Try again</button></p> : data && <>
       {!summary ? <p className="muted">Waiting for the first transfer sample. Collection runs every minute.</p> : <>
         <div className="transfer-overview">
-          <article><h3>Seeding</h3><strong>{metricBytes(summary.seedBytes)}</strong><small>{count(summary.seedingTorrents)} torrents · {count(summary.averageCopies)} copies on average</small></article>
+          <article><h3>Seeding</h3><strong>{metricBytes(summary.seedBytes)}</strong><small>{count(summary.seedingTorrents)} torrents · {count(summary.averageCopies)} copies on average</small>
+            <small>{metricDays(summary.seedSeconds)} combined seed time across all managed torrents</small></article>
           <article><h3>Download avoided</h3><strong>{metricBytes(data.reuse.verifiedReusedBytes)}</strong><small>Verified existing bytes reused</small></article>
           <article><h3>Uploaded</h3><strong>{metricBytes(summary.uploadedBytes)}</strong><small>{speed(summary.uploadBytesPerSecond)} now · {metricBytes(summary.crossSeedUploadedBytes)} from cross-seeds</small></article>
           <article><h3>Downloaded</h3><strong>{metricBytes(summary.downloadedBytes)}</strong><small>{speed(summary.downloadBytesPerSecond)} now</small></article>
@@ -52,14 +70,7 @@ export function TransferMetrics() {
           <small>{metricBytes(download.bytesDone)} / {metricBytes(download.sizeBytes)}</small>
         </article>)}</section>}
         <TransferHistory data={data} hours={hours} setHours={setHours} />
-        <div className="transfer-reuse"><h3>Cross-seeding</h3><dl>
-          <div><dt>Completed</dt><dd>{count(data.reuse.successful)} <small>of {count(data.reuse.attempts)} attempts</small></dd></div>
-          <div><dt>Success rate</dt><dd>{data.reuse.matchRate === null ? "—" : `${(data.reuse.matchRate * 100).toFixed(1)}%`}</dd></div>
-          <div><dt>In progress</dt><dd>{count(data.reuse.pending)}</dd></div>
-          <div><dt>Side files downloaded</dt><dd>{metricBytes(data.reuse.sidecarDownloadBytes)}</dd></div>
-          <div><dt>Content repairs</dt><dd>{metricBytes(data.reuse.contentRepairBytes)}</dd></div>
-          <div><dt>Combined seed time</dt><dd>{metricDays(summary.seedSeconds)}</dd></div>
-        </dl></div>
+        <CrossSeedMetrics reuse={data.reuse} />
         <TrackerTable data={data} />
         <p className="transfer-footnote">History since {data.trackingSince ? date(data.trackingSince) : "collection began"} · {hours === 24 ? "Minute samples" : "Hourly samples"} · Missing observations remain gaps</p>
       </>}

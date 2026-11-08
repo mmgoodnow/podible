@@ -161,6 +161,11 @@ try {
   await page.getByRole("heading", { name: "Activity", exact: true }).waitFor();
   const sharing = page.getByRole("region", { name: "Sharing and transfers", exact: true });
   await sharing.getByText("200 GiB", { exact: true }).waitFor();
+  const reuse = sharing.getByRole("region", { name: "Cross-seeding", exact: true });
+  for (const label of ["Seeds created", "Pending", "Skipped"]) await reuse.getByText(label, { exact: true }).waitFor();
+  assert.ok(!(await reuse.innerText()).includes("Success rate"));
+  assert.ok(!(await reuse.innerText()).includes("seed time"), "All-torrent seed time was attributed to cross-seeding");
+  await sharing.getByText(/combined seed time across all managed torrents/).waitFor();
   const inventory = sharing.getByRole("region", { name: "Library inventory", exact: true });
   for (const name of ["Books", "eBooks", "Audiobooks"]) {
     const row = inventory.getByRole("rowheader", { name, exact: true }).locator("..");
