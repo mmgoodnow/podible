@@ -91,6 +91,26 @@ throw immediately. FIFO waiters can be cancelled without unlocking the active
 callback; even an aborted owner retains the mutex until its callback exits.
 `mutexDiagnostics` exposes held times and waiter counts for backend diagnostics.
 
+Effect handlers execute in an async-local scope with a cancellation signal,
+cooperative progress checkpoints and stable per-invocation operation identities.
+Starting another workflow step or durable sleep inside a handler (or while holding
+a keyed mutex) fails before reserving lanes. Transmission requests and queued
+mutex waits inherit the effect's cancellation signal. Optional step deadlines
+request cancellation but never race a still-running callback or free its locks.
+
+The worker reports scalar liveness every second. Main reports a failed worker
+after 60 seconds without a heartbeat and still refuses replacement until exit
+is confirmed. A handler without a checkpoint for five minutes is diagnosed once,
+not automatically unlocked or retried: a slow external operation is not proof
+of deadlock. Internal runtime diagnostics identify the step, held mutexes and
+waiter counts. Healthy heartbeats do not erase stalled-effect evidence.
+
+Failed torrent-use calls retain their durable retirement protection. Replays of
+the same step reuse the same admission identity, including after a process
+restart, and remove it only after the operation succeeds. Sibling calls and new
+cancelled-job generations have distinct identities. Old unknown admissions are
+not released by a TTL, a worker heartbeat, or another operation's success.
+
 Resource-lane contention parks a run with a durable Reflow sleep **before**
 entering its next step handler. Waiting maintenance must not consume all 20 run
 slots and starve unrelated acquisition, import, or reuse work. A lane is reserved

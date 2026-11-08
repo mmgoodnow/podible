@@ -14,6 +14,8 @@ import { workerLog, type WorkerContext } from "./context";
 import { jobLockKeys, lockSetsConflict } from "./locks";
 import { JOB_TYPES } from "../job-types";
 import { periodicPrefix } from "./periodic";
+import { assertWorkflowBoundary, effectCheckpoint, executionDiagnostics, withExecutionEffects } from "../runtime/execution-effects";
+import { assertNoMutexHeld, mutexDiagnostics } from "../runtime/keyed-mutex";
 
 export const EXECUTION_JOB_TYPES = JOB_TYPES;
 
@@ -36,6 +38,7 @@ export async function createJobExecutionRuntime(
     processJob?: (ctx: WorkerContext, job: import("../app-types").JobRow) => Promise<"done" | void>;
     afterHistoryCopy?: () => Promise<void>;
     onCheckpoint?: (jobId: number, stepName: string) => Promise<void>;
+    stallTimeoutMs?: number;
   } = {}
 ) {
   const leaseMs = options.leaseMs ?? 30_000;
@@ -43,6 +46,7 @@ export async function createJobExecutionRuntime(
   const activeLocks = (ctx.activeLocks ??= new Set<string>());
   const laneOwners = new Map<string, { owner: string; count: number }>();
   const reservations = new Set<{ runId: string; jobId: number; token: string; entered: boolean; release: () => void }>();
+  const stalledReported = new Set<string>();
   if (databasePath === ":memory:") {
     const directory = mkdtempSync(path.join(os.tmpdir(), "podible-execution-"));
     databasePath = path.join(directory, "execution.sqlite");
@@ -147,6 +151,7 @@ export async function createJobExecutionRuntime(
           }
         };
         const assertActive = () => {
+          effectCheckpoint();
           if (stopping) throw new LeaseExpiredError(runId);
           for (const signal of signals) signal.throwIfAborted();
           if (ctx.repo.isJobCancellationRequested(input.jobId)) {
@@ -162,7 +167,11 @@ export async function createJobExecutionRuntime(
         const execution: NonNullable<WorkerContext["execution"]> = {
           key: runId,
           assertActive,
-          run: async <T>(name: string, handler: () => T | Promise<T>): Promise<T> => {
+          run: async <T>(name: string, handler: () => T | Promise<T>, stepOptions?: { timeoutMs?: number }): Promise<T> => {
+            assertWorkflowBoundary();
+            assertNoMutexHeld();
+            if (stepOptions?.timeoutMs !== undefined && (!Number.isSafeInteger(stepOptions.timeoutMs) || stepOptions.timeoutMs <= 0))
+              throw new Error("Step timeout must be a positive integer");
             if (ctx.repo.isJobCancellationRequested(input.jobId)) {
               await cancelRequestedRun();
               throw new RunCancelledError(runId);
@@ -210,7 +219,8 @@ export async function createJobExecutionRuntime(
                 try {
                   assertActive();
                   reserve();
-                  return await handler();
+                  return await withExecutionEffects({ jobId: input.jobId, runId, stepName: name, signal,
+                    timeoutMs: stepOptions?.timeoutMs }, handler);
                 } finally {
                   signals.delete(signal);
                   // Suspended/cancelled Reflow operations need not settle their
@@ -221,7 +231,11 @@ export async function createJobExecutionRuntime(
             }) as T; }
             finally { release(); }
           },
-          sleep: (name, milliseconds) => step.sleep(name, milliseconds)
+          sleep: (name, milliseconds) => {
+            assertWorkflowBoundary();
+            assertNoMutexHeld();
+            return step.sleep(name, milliseconds);
+          }
         };
         const job = await execution.run("job-input", () => ctx.repo.getJob(input.jobId)!);
         const ownedRepo = ctx.repo.forExecution(assertActive);
@@ -258,7 +272,21 @@ export async function createJobExecutionRuntime(
   await engine.start(300);
   return {
     engine,
+    diagnostics() {
+      return { effects: executionDiagnostics(Date.now(), options.stallTimeoutMs), mutexes: mutexDiagnostics(),
+        reservations: reservations.size, lanes: activeLocks.size };
+    },
     async reconcile() {
+      const effects = executionDiagnostics(Date.now(), options.stallTimeoutMs);
+      for (const effect of effects) {
+        const key = `${effect.runId}:${effect.stepName}:${effect.startedAt}`;
+        if (effect.stalled && !stalledReported.has(key)) {
+          stalledReported.add(key);
+          workerLog(ctx, `[execution] stalled job=${effect.jobId} run=${effect.runId} step=${effect.stepName}; no cooperative progress, resources retained until callback exit`);
+        }
+      }
+      const currentStalls = new Set(effects.map(effect => `${effect.runId}:${effect.stepName}:${effect.startedAt}`));
+      for (const key of stalledReported) if (!currentStalls.has(key)) stalledReported.delete(key);
       // Cancellation/lease loss can cut off stepStart before the handler ever
       // enters. Reflow may leave that operation promise pending, so neither
       // caller nor handler finally is sufficient for an unentered reservation.

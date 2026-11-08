@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { currentEffects } from "./execution-effects";
 
 const ranks = { registration: 10, storage: 20, publication: 30 } as const;
 type Resource = { kind: keyof typeof ranks; key: string };
@@ -13,8 +14,14 @@ export class LockOrderError extends Error {
   constructor(message: string) { super(message); this.name = "LockOrderError"; }
 }
 
+export function assertNoMutexHeld() {
+  if (held.getStore()?.some(lock => lock.active))
+    throw new LockOrderError("Workflow operations cannot wait while holding a mutex");
+}
+
 /** All callers share one order: registration -> storage -> publication, then key. */
 export async function withKeyedMutex<T>(resource: Resource, action: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  signal ??= currentEffects()?.signal;
   signal?.throwIfAborted();
   const ancestors = (held.getStore() ?? []).filter(lock => lock.active);
   for (const lock of ancestors) {

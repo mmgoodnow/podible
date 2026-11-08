@@ -37,6 +37,7 @@ export async function bootBackgroundWorker(options: {
   let runtime: Awaited<ReturnType<typeof createJobExecutionRuntime>> | undefined;
   let loopOwnsRuntime = false;
   let maintenance: Promise<void> | undefined;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
   try {
     db = openDatabase(data.databasePath);
     const repo = new BooksRepo(db);
@@ -47,6 +48,11 @@ export async function bootBackgroundWorker(options: {
     if (stopping) return;
     post({ type: "ready", pid: process.pid, threadId,
       busyTimeoutMs: (db.query("PRAGMA busy_timeout").get() as { timeout: number }).timeout });
+    heartbeat = setInterval(() => {
+      const diagnostics = runtime!.diagnostics();
+      post({ type: "heartbeat", stalledEffects: diagnostics.effects.filter(effect => effect.stalled).length,
+        activeEffects: diagnostics.effects.length, reservations: diagnostics.reservations });
+    }, 1000);
     loopOwnsRuntime = true;
     const loop = runWorker(context, { runtime });
     maintenance = options.startupMaintenance === false ? Promise.resolve()
@@ -57,6 +63,7 @@ export async function bootBackgroundWorker(options: {
     throw error;
   } finally {
     stopping = true;
+    clearInterval(heartbeat);
     if (runtime && !loopOwnsRuntime) await runtime.stop();
     await maintenance;
     db?.close();

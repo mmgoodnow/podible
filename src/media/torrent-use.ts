@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { immediateTransaction, type SyncTransactionCallback } from "../db-transaction";
 import { randomUUID } from "node:crypto";
 import { withKeyedMutex } from "../runtime/keyed-mutex";
+import { effectCheckpoint, effectOperationId } from "../runtime/execution-effects";
 import { admitTorrentUse, assertTorrentDatabaseWritable, finishTorrentUse, type TorrentRecordRef } from "./torrent-retirement-admission";
 
 function store(db: Database, beforeWrite: () => void) {
@@ -30,9 +31,13 @@ export function assertTorrentUseWritable(db: Database, ref: TorrentRecordRef) {
 export async function withTorrentUse<T>(repo: Parameters<typeof admitTorrentUse>[0], ref: TorrentRecordRef,
   action: () => Promise<T>): Promise<T> {
   if (!privateRef(ref)) return action();
-  // Logical retries can overlap: each invocation must retain independent protection.
-  const token = admitTorrentUse(repo, ref, randomUUID());
+  effectCheckpoint();
+  // A failed step resumes the same admission, but sibling calls and new runs
+  // retain independent protection. Ambiguous effects never expire by age.
+  const operationId = effectOperationId(JSON.stringify(["torrent-use", ref.clientId, ref.infoHash])) ?? randomUUID();
+  const token = admitTorrentUse(repo, ref, operationId);
   const result = await action();
+  effectCheckpoint();
   finishTorrentUse(repo, ref, token);
   return result;
 }

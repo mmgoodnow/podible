@@ -1,4 +1,5 @@
 import path from "node:path";
+import { currentEffects } from "../runtime/execution-effects";
 import { z } from "zod";
 import { inspectMetainfo } from "./metainfo";
 import { persistSeedOnlyIntent, readSeedOnlyIntent } from "./seed-only-state";
@@ -30,7 +31,8 @@ export class TransmissionRpc {
         response = await (this.options.fetcher ?? fetch)(this.options.url, {
           method: "POST",
           redirect: "error",
-          signal: AbortSignal.timeout(this.options.timeoutMs ?? 15_000),
+          signal: AbortSignal.any([AbortSignal.timeout(this.options.timeoutMs ?? 15_000),
+            ...(currentEffects() ? [currentEffects()!.signal] : [])]),
           headers: {
             "Content-Type": "application/json",
             "X-Transmission-Session-Id": this.sessionId,
@@ -39,6 +41,7 @@ export class TransmissionRpc {
           body: JSON.stringify({ method, arguments: args }),
         });
       } catch {
+        currentEffects()?.signal.throwIfAborted();
         throw new Error("Private torrent engine is unavailable");
       }
       if (response.status === 409) {

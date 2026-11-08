@@ -12,27 +12,10 @@ import { jobLockKeys } from "../../src/worker/locks";
 import { jobJournalReader } from "../../src/worker/job-journal";
 import { randomUUID } from "node:crypto";
 import { crossSeedCommandSchema, crossSeedStateKey } from "../../src/media/cross-seed-state";
+import { currentEffects } from "../../src/runtime/execution-effects";
+import { withKeyedMutex } from "../../src/runtime/keyed-mutex";
 
-const types = [
-  "indexer_feed_sync", "movie_feed_match", "book_feed_match",
-  "movie_acquire", "movie_reconcile", "movie_shadow_sync", "movie_shadow_evaluate", "movie_dual_write_sync",
-  "tv_acquire", "tv_sync", "tv_reconcile", "tv_shadow_sync", "tv_shadow_evaluate", "tv_feed_match",
-  "acquire",
-  "download",
-  "import",
-  "reconcile",
-  "full_library_refresh",
-  "chapter_analysis",
-  "cover_generation",
-  "metadata_hydration",
-  "retention_cleanup",
-  "tv_retention_cleanup",
-  "tv_retention_pressure",
-  "torrent_stewardship_collect",
-  "torrent_reuse", "torrent_reuse_feed", "torrent_metrics_collect",
-] as const satisfies readonly JobType[];
-const exhaustive: Exclude<JobType, (typeof types)[number]> extends never ? true : never = true;
-void exhaustive;
+const types = EXECUTION_JOB_TYPES;
 
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "podible-all-execution-"));
@@ -211,6 +194,54 @@ test("lock-blocked maintenance parks durably instead of starving unrelated foreg
     await rm(f.root, { recursive: true, force: true });
   }
 }, 15000);
+
+test("workflow operations fail fast inside effects or held mutexes without leaking lane reservations", async () => {
+  const f = await fixture(); let checked = false;
+  const runtime = await createJobExecutionRuntime(f.ctx, path.join(f.root, "execution.sqlite"), {
+    processJob: async ctx => {
+      await ctx.execution!.run("outer", async () => {
+        await expect(ctx.execution!.run("inner", async () => {})).rejects.toThrow("outside effect handlers");
+        expect(() => ctx.execution!.sleep("inner-sleep", 1)).toThrow("outside effect handlers");
+      });
+      await withKeyedMutex({ kind: "storage", key: "workflow-fixture" }, async () => {
+        await expect(ctx.execution!.run("under-mutex", async () => {})).rejects.toThrow("holding a mutex");
+        expect(() => ctx.execution!.sleep("under-mutex-sleep", 1)).toThrow("holding a mutex");
+      });
+      checked = true; return "done";
+    },
+  });
+  try {
+    const job = f.repo.createJob({ type: "retention_cleanup" });
+    await runtime.reconcile(); await until(() => f.repo.getJobStatus(job.id) === "succeeded");
+    expect(checked).toBe(true); expect(runtime.diagnostics().reservations).toBe(0);
+  } finally { await runtime.stop(); f.db.close(); await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("step deadline signals a hung owner without allowing conflicting effects before callback exit", async () => {
+  const f = await fixture(); let release!: () => void, signal: AbortSignal | undefined, foreground = false;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const logs: string[] = [];
+  const runtime = await createJobExecutionRuntime({ ...f.ctx, onLog: line => logs.push(line) }, path.join(f.root, "execution.sqlite"), {
+    stallTimeoutMs: 10,
+    processJob: async (ctx, job) => {
+      await ctx.execution!.run("work", async () => {
+        if (job.type === "retention_cleanup") { signal = currentEffects()!.signal; await hold; }
+        else foreground = true;
+      }, { timeoutMs: job.type === "retention_cleanup" ? 10 : 1000 });
+      return "done";
+    },
+  });
+  try {
+    f.repo.createJob({ type: "retention_cleanup", maxAttempts: 1 });
+    await runtime.reconcile(); await until(() => signal?.aborted === true);
+    const next = f.repo.createJob({ type: "cover_generation" }); await runtime.reconcile();
+    await Bun.sleep(30); await runtime.reconcile(); await runtime.reconcile();
+    expect(foreground).toBe(false); expect(runtime.diagnostics().effects[0]?.stalled).toBe(true);
+    expect(logs.filter(line => line.includes("stalled job="))).toHaveLength(1);
+    release(); await until(() => f.repo.getJobStatus(next.id) === "succeeded");
+    expect(foreground).toBe(true); expect(runtime.diagnostics().effects).toEqual([]);
+  } finally { release(); await runtime.stop(); f.db.close(); await rm(f.root, { recursive: true, force: true }); }
+});
 
 test("cancellation after admission but before handler entry releases the global reservation on reconcile", async () => {
   const f = await fixture(), activeLocks = new Set<string>();

@@ -32,7 +32,7 @@ export type WorkerContext = {
   activeLocks?: Set<string>;
   execution?: {
     key: string;
-    run<T>(name: string, handler: () => T | Promise<T>): Promise<T>;
+    run<T>(name: string, handler: () => T | Promise<T>, options?: { timeoutMs?: number }): Promise<T>;
     sleep(name: string, milliseconds: number): Promise<void>;
     assertActive(): void;
   };

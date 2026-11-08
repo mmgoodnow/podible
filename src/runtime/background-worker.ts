@@ -10,6 +10,7 @@ export interface BackgroundWorkerOptions {
   startupTimeoutMs?: number;
   shutdownTimeoutMs?: number;
   terminateTimeoutMs?: number;
+  heartbeatTimeoutMs?: number;
   onFailure?: (error: Error) => void;
 }
 const owners = new Map<string, BackgroundWorker>();
@@ -23,16 +24,19 @@ export class BackgroundWorker {
   private restarting?: Promise<BackgroundWorkerReady>;
   private plannedStop = false;
   private currentState: BackgroundWorkerState = "idle";
+  private watchdog?: ReturnType<typeof setInterval>;
+  private progress = { activeEffects: 0, stalledEffects: 0, reservations: 0, observedAt: 0 };
   private readonly databasePath: string;
   constructor(private readonly options: BackgroundWorkerOptions) {
     if (!options.databasePath || options.databasePath === ":memory:")
       throw new Error("Background execution requires a persistent app database");
     this.databasePath = path.resolve(options.databasePath);
-    for (const value of [options.startupTimeoutMs, options.shutdownTimeoutMs, options.terminateTimeoutMs])
+    for (const value of [options.startupTimeoutMs, options.shutdownTimeoutMs, options.terminateTimeoutMs, options.heartbeatTimeoutMs])
       if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0 || value > 120_000))
         throw new Error("Invalid background worker deadline");
   }
   get state(): BackgroundWorkerState { return this.currentState; }
+  get diagnostics() { return { ...this.progress }; }
 
   start(): Promise<BackgroundWorkerReady> {
     if (this.starting && (this.currentState === "starting" || this.currentState === "ready")) return this.starting;
@@ -63,6 +67,7 @@ export class BackgroundWorker {
       this.worker = worker;
       this.exited = new Promise(resolve => worker.once("exit", (code: number) => {
         clearTimeout(timer);
+        clearInterval(this.watchdog);
         this.worker = undefined;
         if (owners.get(this.databasePath) === this) owners.delete(this.databasePath);
         this.currentState = this.plannedStop ? "stopped" : "failed";
@@ -79,7 +84,18 @@ export class BackgroundWorker {
           ready = true;
           clearTimeout(timer);
           this.currentState = "ready";
+          this.progress = { activeEffects: 0, stalledEffects: 0, reservations: 0, observedAt: Date.now() };
+          const heartbeatTimeout = this.options.heartbeatTimeoutMs ?? 60_000;
+          this.watchdog = setInterval(() => {
+            if (!this.plannedStop && Date.now() - this.progress.observedAt > heartbeatTimeout)
+              failed("Background worker stopped responding; refusing a second engine until confirmed exit");
+          }, Math.min(1000, heartbeatTimeout));
+          this.watchdog.unref();
           resolveReady(message);
+        } else if (message?.type === "heartbeat" && ready && !this.plannedStop) {
+          if ([message.activeEffects, message.stalledEffects, message.reservations].every(value => Number.isSafeInteger(value) && value >= 0))
+            this.progress = { activeEffects: message.activeEffects, stalledEffects: message.stalledEffects,
+              reservations: message.reservations, observedAt: Date.now() };
         } else if (message?.type === "failed") {
           failed("Background worker initialization or execution failed");
         }
@@ -101,6 +117,7 @@ export class BackgroundWorker {
     if (this.stopping) return this.stopping;
     if (!this.worker) { this.starting = undefined; return Promise.resolve({ forced: false }); }
     this.plannedStop = true;
+    clearInterval(this.watchdog);
     this.currentState = "stopping";
     const worker = this.worker, exited = this.exited!;
     try { worker.postMessage({ type: "stop" }); } catch { /* Exit may already be queued. */ }

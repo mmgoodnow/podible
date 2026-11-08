@@ -151,6 +151,25 @@ test("app DB writes stop waiting at the configured 2000ms instead of an unbounde
   await until(() => f.repo.getJob(job.id)?.status === "succeeded");
 }), 10_000);
 
+test("missing worker heartbeats report failure once without allowing an overlapping replacement", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "podible-worker-watchdog-"));
+  const databasePath = path.join(root, "app.sqlite"), failures: string[] = [];
+  const stuck = new BackgroundWorker({ databasePath,
+    entrypoint: new URL("../fixtures/background-worker-ignore-stop.ts", import.meta.url),
+    heartbeatTimeoutMs: 30, shutdownTimeoutMs: 50, terminateTimeoutMs: 500,
+    onFailure: error => failures.push(error.message) });
+  const replacement = new BackgroundWorker({ databasePath, entrypoint });
+  try {
+    await stuck.start(); await until(() => failures.length > 0);
+    expect(stuck.state).toBe("failed");
+    expect(failures[0]).toContain("stopped responding");
+    await Bun.sleep(80); expect(failures).toHaveLength(1);
+    await expect(replacement.start()).rejects.toThrow("already owns");
+    await stuck.stop(); await replacement.start();
+    await until(() => replacement.diagnostics.observedAt > 0);
+  } finally { await stuck.stop(); await replacement.stop(); await rm(root, { recursive: true, force: true }); }
+});
+
 test("startup errors/timeouts release ownership only after the failed thread exits", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "podible-background-failure-"));
   const databasePath = path.join(root, "app.sqlite");
