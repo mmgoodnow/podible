@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { inspectMetainfo } from "./metainfo";
 import type { TorrentClient, TorrentRef } from "./torrent-client";
+import { withKeyedMutex } from "../runtime/keyed-mutex";
 
 const relative = z.string().min(1).refine(value => !path.isAbsolute(value) &&
   !/[\\\x00-\x1f\x7f]/.test(value) && value.split("/").every(part => part && part !== "." && part !== ".."));
@@ -82,11 +83,8 @@ type PrepareInput = {
   contentRoot: string; sourceRoot: string; clientId: string; metainfo: Uint8Array;
   allowCreate: boolean; assertActive?: () => void;
 };
-const preparations = new Map<string, Promise<unknown>>();
 async function serialized<T>(key: string, action: () => Promise<T>): Promise<T> {
-  const next = (preparations.get(key) ?? Promise.resolve()).catch(() => {}).then(action);
-  preparations.set(key, next);
-  try { return await next; } finally { if (preparations.get(key) === next) preparations.delete(key); }
+  return withKeyedMutex({ kind: "storage", key: `canonical:${key}` }, action);
 }
 export function prepareCanonicalDownload(input: PrepareInput): Promise<CanonicalDownload | null> {
   return serialized(input.sourceRoot, () => prepare(input));

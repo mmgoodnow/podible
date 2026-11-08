@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, promises as fs } from "node:fs";
 import { Database } from "bun:sqlite";
 import { Usage, type ModelProvider } from "@openai/agents-core";
 import { BooksRepo } from "../../src/repo";
+import type { SyncTransactionCallback } from "../../src/db-transaction";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
 import { connectBookTorrentFixture } from "../mocks/book-torrent";
 
@@ -24,7 +25,7 @@ fs.readdir = (async (...args: Parameters<typeof fs.readdir>) => {
 }) as typeof fs.readdir;
 const transaction = BooksRepo.prototype.transaction;
 const transactionDepth = new WeakMap<BooksRepo, number>();
-BooksRepo.prototype.transaction = function <T>(fn: () => T): T {
+BooksRepo.prototype.transaction = function <T>(fn: SyncTransactionCallback<T>): T {
   const depth = (transactionDepth.get(this) ?? 0) + 1;
   transactionDepth.set(this, depth);
   let value: T;

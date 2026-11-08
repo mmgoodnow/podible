@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants, promises as fs, type BigIntStats } from "node:fs";
 import path from "node:path";
+import { withKeyedMutex } from "../runtime/keyed-mutex";
 import { finalizedCanonicalObject } from "../media/canonical-download";
 import { z } from "zod";
 import {
@@ -37,21 +38,11 @@ const recordSchema = z.object({
 });
 const roots = new Map<string, string>();
 const owners = new Map<string, string>();
-const queues = new Map<string, Promise<void>>();
 
 async function serialized<T>(key: string, action: () => Promise<T>): Promise<T> {
-  const previous = queues.get(key) ?? Promise.resolve();
-  let release!: () => void;
-  const pending = new Promise<void>((resolve) => { release = resolve; });
-  const tail = previous.then(() => pending);
-  queues.set(key, tail);
-  await previous;
-  try {
-    return await action();
-  } finally {
-    release();
-    if (queues.get(key) === tail) queues.delete(key);
-  }
+  return withKeyedMutex(key.startsWith("view:")
+    ? { kind: "publication", key: path.resolve(key.slice(5)) }
+    : { kind: "storage", key }, action);
 }
 
 async function lstat(file: string) {

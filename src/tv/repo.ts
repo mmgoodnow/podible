@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { immediateTransaction, type SyncTransactionCallback } from "../db-transaction";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { assertVersionContentAvailable } from "../media/content-loss";
@@ -46,11 +47,8 @@ export class TvRepo {
     private getJob: (id: number) => Pick<JobRow, "status"> | null,
   ) {}
 
-  transaction<T>(fn: () => T): T {
-    return this.db.transaction(() => {
-      this.beforeWrite();
-      return fn();
-    })();
+  transaction<T>(fn: SyncTransactionCallback<T>): T {
+    return immediateTransaction(this.db, this.beforeWrite, fn);
   }
 
   upsertEntry(input: TvCatalogEntry): TvEntry {

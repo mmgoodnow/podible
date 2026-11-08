@@ -37,6 +37,9 @@ reading state. This lets the busy timeout apply before a snapshot is taken,
 instead of failing a later read-to-write upgrade after another thread commits.
 Transactions remain synchronous and bounded; network and filesystem awaits
 stay outside them. Nested operations retain SQLite savepoint rollback semantics.
+Application, movie, TV and torrent-use adapters share `immediateTransaction`.
+Async callbacks are rejected before entry; returned promises/thenables roll back
+instead of silently committing work before its continuation finishes.
 
 ## Deadlines And Recovery
 
@@ -80,6 +83,13 @@ also surface `SQLITE_BUSY_SNAPSHOT`; there is intentionally no new retry policy.
 WAL readers normally continue while the worker holds a write transaction.
 
 ## Resource Admission
+
+Registration, canonical storage and publication use the shared owner-aware
+`withKeyedMutex` primitive. Nested acquisition must follow registration -> storage
+-> publication, then ascending key within a class. Reentry and order inversions
+throw immediately. FIFO waiters can be cancelled without unlocking the active
+callback; even an aborted owner retains the mutex until its callback exits.
+`mutexDiagnostics` exposes held times and waiter counts for backend diagnostics.
 
 Resource-lane contention parks a run with a durable Reflow sleep **before**
 entering its next step handler. Waiting maintenance must not consume all 20 run

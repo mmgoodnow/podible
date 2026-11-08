@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { MovieRepo } from "./repo";
 import type { Movie } from "./types";
+import { withKeyedMutex } from "../runtime/keyed-mutex";
 import {
   reconcileLibraryView,
   type LibraryViewEntry,
@@ -15,26 +16,12 @@ export type MovieViewRoots = {
   viewRoot: string;
   serverViewRoot: string;
 };
-const queues = new Map<string, Promise<void>>();
 
 async function serialized<T>(
   key: string,
   action: () => Promise<T>,
 ): Promise<T> {
-  const previous = queues.get(key) ?? Promise.resolve();
-  let release!: () => void;
-  const pending = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const tail = previous.then(() => pending);
-  queues.set(key, tail);
-  await previous;
-  try {
-    return await action();
-  } finally {
-    release();
-    if (queues.get(key) === tail) queues.delete(key);
-  }
+  return withKeyedMutex({ kind: "publication", key }, action);
 }
 function safeTitle(value: string) {
   return (

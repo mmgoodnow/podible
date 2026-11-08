@@ -1,10 +1,12 @@
 import type { Database } from "bun:sqlite";
+import { immediateTransaction, type SyncTransactionCallback } from "../db-transaction";
 import { randomUUID } from "node:crypto";
+import { withKeyedMutex } from "../runtime/keyed-mutex";
 import { admitTorrentUse, assertTorrentDatabaseWritable, finishTorrentUse, type TorrentRecordRef } from "./torrent-retirement-admission";
 
 function store(db: Database, beforeWrite: () => void) {
   return {
-    transaction<T>(action: () => T): T { return db.transaction(() => { beforeWrite(); return action(); })(); },
+    transaction<T>(action: SyncTransactionCallback<T>): T { return immediateTransaction(db, beforeWrite, action); },
     getJsonState<T>(key: string): T | null {
       const row = db.query("SELECT value_json FROM app_state WHERE key=?").get(key) as { value_json: string } | null;
       return row ? JSON.parse(row.value_json) as T : null;
@@ -35,15 +37,11 @@ export async function withTorrentUse<T>(repo: Parameters<typeof admitTorrentUse>
   return result;
 }
 
-const registrations = new Map<string, Promise<unknown>>();
 /** Serialize prepare/add/bind, not the download itself. Retirement admission alone is not a mutex. */
 export async function withTorrentRegistration<T>(repo: Parameters<typeof admitTorrentUse>[0], ref: TorrentRecordRef,
   action: () => Promise<T>): Promise<T> {
   const key = JSON.stringify([ref.clientId, ref.infoHash]);
-  const next = (registrations.get(key) ?? Promise.resolve()).catch(() => {}).then(() => withTorrentUse(repo, ref, action));
-  registrations.set(key, next);
-  try { return await next; }
-  finally { if (registrations.get(key) === next) registrations.delete(key); }
+  return withKeyedMutex({ kind: "registration", key }, () => withTorrentUse(repo, ref, action));
 }
 
 export function withDatabaseTorrentUse<T>(db: Database, beforeWrite: () => void, ref: TorrentRecordRef,

@@ -25,6 +25,7 @@ import type { RetirementBinding } from "./media/torrent-retirement-types";
 import { TvShadowRepo } from "./tv/shadow-repo";
 
 import { nowIso, finalizeJobJournalMigration } from "./db";
+import { immediateTransaction, type SyncTransactionCallback } from "./db-transaction";
 import { randomUUID } from "node:crypto";
 import { jobJournalReader, type JobJournalReader, type JobCommand } from "./worker/job-journal";
 import { pseudoProgressForBook } from "./library/progress";
@@ -310,12 +311,8 @@ export class BooksRepo {
     }
   }
 
-  transaction<T>(fn: () => T): T {
-    // Reserve the writer before reading: a WAL snapshot cannot be upgraded after another writer commits.
-    return this.db.transaction(() => {
-      this.beforeWrite();
-      return fn();
-    }).immediate();
+  transaction<T>(fn: SyncTransactionCallback<T>): T {
+    return immediateTransaction(this.db, this.beforeWrite, fn);
   }
 
   forExecution(beforeWrite: () => void): BooksRepo {

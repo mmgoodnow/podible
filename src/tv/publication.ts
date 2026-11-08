@@ -1,4 +1,5 @@
 import path from "node:path";
+import { withKeyedMutex } from "../runtime/keyed-mutex";
 import { reconcileLibraryView, type LibraryViewEntry } from "../media/library-view";
 import type { TvRepo } from "./repo";
 import type { TvEntry, TvEpisode, TvVersion } from "./types";
@@ -13,14 +14,8 @@ export function tvRoots(root: string, serverViewRoot: string): TvRoots {
   if (!path.isAbsolute(root) || !path.isAbsolute(serverViewRoot)) throw new Error("TV roots must be absolute");
   return { contentRoot: path.join(root, "objects"), viewRoot: path.join(root, "views", "plex", "tv"), serverViewRoot };
 }
-const queues = new Map<string, Promise<void>>();
 async function serialized<T>(root: string, action: () => Promise<T>): Promise<T> {
-  const previous = queues.get(root) ?? Promise.resolve();
-  let release!: () => void;
-  const pending = new Promise<void>((resolve) => { release = resolve; });
-  const tail = previous.then(() => pending);
-  queues.set(root, tail); await previous;
-  try { return await action(); } finally { release(); if (queues.get(root) === tail) queues.delete(root); }
+  return withKeyedMutex({ kind: "publication", key: path.resolve(root) }, action);
 }
 function safe(value: string) {
   return value.normalize("NFC").replace(/[<>:"/\\|?*\x00-\x1f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 90) || "Series";
