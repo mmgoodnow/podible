@@ -36,7 +36,8 @@ try {
   };
   const anonymous = await browser.newContext({ ignoreHTTPSErrors: true }), readerContext = await browser.newContext({ ignoreHTTPSErrors: true });
   await readerContext.addCookies([{ name: "podible_session", value: "admin-reader-fixture", url, httpOnly: true }]);
-  for (const method of ["settings.get", "settings.update", "adminWeb.users", "adminWeb.ops", "adminWeb.plexServers", "adminWeb.selectPlexServer", "adminWeb.refresh", "jobs.retry", "retention.preview", "retention.evict", "transferMetrics.status", "transferMetrics.library"]) {
+  for (const method of ["settings.get", "settings.update", "adminWeb.users", "adminWeb.ops", "adminWeb.plexServers", "adminWeb.selectPlexServer", "adminWeb.refresh", "jobs.retry", "retention.preview", "retention.evict", "transferMetrics.status", "transferMetrics.library",
+    "crossSeed.startBackfill", "crossSeed.backfillLatest", "crossSeed.backfillStatus", "crossSeed.cancelBackfill"]) {
     assert.equal((await rpc(method, {}, anonymous.request)).error?.code, -32001);
     assert.equal((await rpc(method, {}, readerContext.request)).error?.code, -32003);
   }
@@ -165,6 +166,14 @@ try {
   for (const label of ["Seeds created", "Pending", "Skipped"]) await reuse.getByText(label, { exact: true }).waitFor();
   assert.ok(!(await reuse.innerText()).includes("Success rate"));
   assert.ok(!(await reuse.innerText()).includes("seed time"), "All-torrent seed time was attributed to cross-seeding");
+  const backfill = sharing.getByRole("region", { name: "Find more seeds", exact: true });
+  await backfill.getByRole("button", { name: "Search library", exact: true }).click();
+  await backfill.getByRole("status").getByText("Preparing library search", { exact: true }).waitFor();
+  await page.reload();
+  await backfill.getByRole("button", { name: "Stop search", exact: true }).waitFor();
+  await backfill.getByRole("button", { name: "Stop search", exact: true }).click();
+  await backfill.getByRole("status").getByText("Library search stopped", { exact: true }).waitFor();
+  assert.ok((await backfill.innerText()).includes("count as seeds only after verification"));
   await sharing.getByText(/combined seed time across all managed torrents/).waitFor();
   const inventory = sharing.getByRole("region", { name: "Library inventory", exact: true });
   for (const name of ["Books", "eBooks", "Audiobooks"]) {
@@ -338,6 +347,7 @@ try {
   await page.screenshot({ path: path.join(artifacts, "admin-ops-mobile.png"), animations: "disabled" });
   await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Settings", exact: true }).click();
   await editor.waitFor();
+  await page.waitForFunction("Boolean(document.querySelector('#admin-settings-json')?.value.trim())");
   assert.equal(JSON.parse(await editor.inputValue()).auth.plex.machineId, "fixture-cyprus");
   assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false, "Settings overflows mobile viewport");
   await page.getByLabel("Plex access server", { exact: true }).scrollIntoViewIfNeeded();

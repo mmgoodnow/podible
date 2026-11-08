@@ -24,6 +24,7 @@ import { stewardshipRouter } from "./rpc/stewardship-router";
 import { tvRetentionRouter } from "./rpc/tv-retention-router";
 import { torrentRetirementRouter } from "./rpc/torrent-retirement-router";
 import { transferMetricsRouter } from "./rpc/transfer-metrics-router";
+import { crossSeedRouter } from "./rpc/cross-seed-router";
 
 const t = initTRPC.context<RpcContext>().create();
 const id = z.number().int().positive();
@@ -65,6 +66,12 @@ const procedure = t.procedure.use(async ({ next }) => {
 });
 
 export const appRouter = t.router({
+  crossSeed: t.router({
+    startBackfill: procedure.input(crossSeedRouter.routes.startBackfill.paramsSchema).output(crossSeedRouter.routes.startBackfill.resultSchema).mutation(({ ctx, input }) => executeMethod(crossSeedRouter.routes.startBackfill, ctx, input)),
+    backfillLatest: procedure.input(crossSeedRouter.routes.backfillLatest.paramsSchema).output(crossSeedRouter.routes.backfillLatest.resultSchema).query(({ ctx, input }) => executeMethod(crossSeedRouter.routes.backfillLatest, ctx, input)),
+    backfillStatus: procedure.input(crossSeedRouter.routes.backfillStatus.paramsSchema).output(crossSeedRouter.routes.backfillStatus.resultSchema).query(({ ctx, input }) => executeMethod(crossSeedRouter.routes.backfillStatus, ctx, input)),
+    cancelBackfill: procedure.input(crossSeedRouter.routes.cancelBackfill.paramsSchema).output(crossSeedRouter.routes.cancelBackfill.resultSchema).mutation(({ ctx, input }) => executeMethod(crossSeedRouter.routes.cancelBackfill, ctx, input)),
+  }),
   transferMetrics: t.router({
     status: procedure.input(transferMetricsRouter.routes.status.paramsSchema).output(transferMetricsRouter.routes.status.resultSchema).query(({ ctx, input }) => executeMethod(transferMetricsRouter.routes.status, ctx, input)),
     library: procedure.input(transferMetricsRouter.routes.library.paramsSchema).output(transferMetricsRouter.routes.library.resultSchema).query(({ ctx, input }) => executeMethod(transferMetricsRouter.routes.library, ctx, input)),

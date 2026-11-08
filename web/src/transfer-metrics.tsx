@@ -6,6 +6,7 @@ import { Link } from "./router";
 import { metricBytes, metricDays } from "./transfer-metrics-model";
 import { TransferHistory } from "./transfer-history";
 import { LibraryInventoryStats } from "./library-inventory";
+import { CrossSeedBackfill } from "./cross-seed-backfill";
 import "./transfer-metrics.css";
 
 const count = (value: number | null) => value === null ? "Unknown" : value.toLocaleString(undefined, { maximumFractionDigits: 2 });
@@ -71,6 +72,7 @@ export function TransferMetrics() {
         </article>)}</section>}
         <TransferHistory data={data} hours={hours} setHours={setHours} />
         <CrossSeedMetrics reuse={data.reuse} />
+        <CrossSeedBackfill />
         <TrackerTable data={data} />
         <p className="transfer-footnote">History since {data.trackingSince ? date(data.trackingSince) : "collection began"} · {hours === 24 ? "Minute samples" : "Hourly samples"} · Missing observations remain gaps</p>
       </>}

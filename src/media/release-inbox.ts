@@ -137,6 +137,35 @@ export class ReleaseInboxRepo {
       result: inboxResultSchema.parse(JSON.parse(row.payload_json)),
     }));
   }
+  /** Explicit backfills pin an inbox high-water mark without moving RSS boundaries. */
+  retainedHighWater(): number {
+    return (this.db.query("SELECT COALESCE(MAX(id),0) AS id FROM release_inbox").get() as { id: number }).id;
+  }
+  retainedPage(media: IndexerMedia, afterId: number, throughId: number, limit = 100) {
+    z.enum(["audio", "ebook", "movie", "tv"]).parse(media);
+    for (const value of [afterId, throughId]) z.number().int().nonnegative().safe().parse(value);
+    z.number().int().min(1).max(1000).parse(limit);
+    const rows = typedAll(this.db, dbSql.selectFrom("release_inbox")
+      .innerJoin("indexer_feeds", "indexer_feeds.id", "release_inbox.feed_id")
+      .selectAll("release_inbox").where("indexer_feeds.media_type", "=", media)
+      .where("release_inbox.id", ">", afterId).where("release_inbox.id", "<=", throughId)
+      .orderBy("release_inbox.id").limit(limit));
+    return rows.map(row => ({ ...row, result: inboxResultSchema.parse(JSON.parse(row.payload_json)) }));
+  }
+  /** Retain server search results, returning existing IDs too; never updates a feed cursor. */
+  retainSearchResults(feedId: string, results: SearchResult<IndexerMedia>[], now: string) {
+    if (results.length > 150) throw new Error("Search retention batch exceeds 150 results");
+    const feed = this.feed(feedId);
+    if (!feed || results.some(result => result.mediaType !== feed.media_type)) throw new Error("Search retention media does not match its feed");
+    this.ingest(feedId, results, now);
+    return results.map(result => {
+      const row = typedGet(this.db, dbSql.selectFrom("release_inbox").selectAll()
+        .where("feed_id", "=", feedId).where("release_key", "=", feedReleaseKey(result))
+        .where("content_key", "=", digest(JSON.stringify([result.title, result.sizeBytes, result.infoHash]))));
+      if (!row) throw new Error("Search result was not retained");
+      return { ...row, result: inboxResultSchema.parse(JSON.parse(row.payload_json)) };
+    });
+  }
   ingest(feedId: string, results: SearchResult<IndexerMedia>[], now: string) {
     this.beforeWrite();
     const inserted: number[] = [];

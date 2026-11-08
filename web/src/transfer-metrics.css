@@ -53,6 +53,13 @@
 .transfer-reuse dd { margin: .25rem 0 0; font-size: 1.05rem; }
 .transfer-reuse dd small { font-size: .7rem; color: var(--muted); }
 .transfer-trackers { margin-top: 1.25rem; }
+.transfer-backfill { padding: .9rem 0; border-bottom: 1px solid var(--line); font-size: .8rem; }
+.transfer-backfill h4 { margin: 0; font-size: .9rem; }
+.transfer-backfill p { margin: .4rem 0; }
+.transfer-backfill [role=status] span { color: var(--muted); }
+.transfer-backfill button { font-size: .8rem; padding: .4rem .7rem; }
+.transfer-backfill progress { width: 100%; height: .3rem; accent-color: var(--ink); }
+.transfer-backfill-error { color: #a54325; }
 .transfer-trackers h3 { margin-bottom: .5rem; }
 .transfer-table-scroll { overflow-x: auto; }
 .transfer-trackers table { width: 100%; border-collapse: collapse; font-size: .8rem; text-align: right; }

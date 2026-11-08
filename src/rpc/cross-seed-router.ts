@@ -4,6 +4,8 @@ import { crossSeedCommandSchema } from "../media/cross-seed-state";
 import { confirmedReleaseNukeSchema, reportConfirmedReleaseNuke } from "../media/release-health";
 import { crossSeedPlan, queueCrossSeed, crossSeedOffer } from "../media/cross-seed";
 import { fetchMovieMetainfo } from "../movies/offers";
+import { startCrossSeedBackfill, crossSeedBackfillStatus, backfillStartSchema, backfillSummarySchema,
+  backfillStatusParamsSchema, backfillStatusSchema, latestCrossSeedBackfill, cancelCrossSeedBackfill } from "../media/cross-seed-backfill";
 
 const outcome = z.object({ kind: z.enum(["seeding", "skipped", "unsupported", "stalled"]), reason: z.string(), at: z.string(),
   torrentId: z.number().optional(), infoHash: z.string().optional(), reusedBytes: z.number().optional(), downloadedBytes: z.number().optional(), totalBytes: z.number().optional(),
@@ -12,6 +14,18 @@ const outcome = z.object({ kind: z.enum(["seeding", "skipped", "unsupported", "s
 const receipt = z.object({ command: crossSeedCommandSchema, commandHash: z.string(), jobId: z.number(), createdAt: z.string(), outcome: outcome.optional() });
 
 export const crossSeedRouter = defineRouter({
+  startBackfill: defineMethod({ auth: "admin", summary: "Explicitly snapshot and search the retained library for cross-seed candidates.",
+    paramsSchema: backfillStartSchema, resultSchema: backfillSummarySchema,
+    handler: (ctx, input) => startCrossSeedBackfill(ctx.repo, input) }),
+  backfillStatus: defineMethod({ auth: "admin", readOnly: true, summary: "Read paginated cross-seed backfill progress without polling providers or torrents.",
+    paramsSchema: backfillStatusParamsSchema, resultSchema: backfillStatusSchema,
+    handler: (ctx, input) => crossSeedBackfillStatus(ctx.repo, input) }),
+  backfillLatest: defineMethod({ auth: "admin", readOnly: true, summary: "Read the latest or active explicit cross-seed backfill.",
+    paramsSchema: z.object({}).strict(), resultSchema: z.object({ backfill: backfillSummarySchema.nullable() }),
+    handler: ctx => latestCrossSeedBackfill(ctx.repo) }),
+  cancelBackfill: defineMethod({ auth: "admin", summary: "Cancel one explicit cross-seed backfill without cancelling its already queued child attempts.",
+    paramsSchema: z.object({ requestId: z.string().uuid() }).strict(), resultSchema: backfillSummarySchema,
+    handler: (ctx, input) => cancelCrossSeedBackfill(ctx.repo, input.requestId) }),
   reportNuked: defineMethod({ auth: "admin", summary: "Record a confirmed release defect and queue replacement without withdrawing the playable version.",
     paramsSchema: confirmedReleaseNukeSchema,
     resultSchema: z.object({ commandHash: z.string(), evidence: z.object({ source: z.object({ id: z.number() }).passthrough() }).passthrough(),

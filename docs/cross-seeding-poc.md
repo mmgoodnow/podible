@@ -54,6 +54,35 @@ and RSS covers new indexer releases against existing local bytes. This is not an
 exhaustive discovery guarantee: search omissions, RSS gaps, undiscovered older
 copies and unsupported storage/client capabilities remain possible.
 
+## Explicit Library Backfill
+
+Activity's **Find more seeds** control starts a durable, admin-only library
+backfill. It snapshots every eligible retained audiobook/ebook, movie target and
+TV target, including libraries larger than 100 targets. The snapshot and inbox
+high-water mark survive retries and restarts; cancellation/retry does not quietly
+expand the original scope.
+
+It first considers retained candidates in 25-release batches, then searches the
+configured indexers explicitly. Identical media/query/provider searches are
+shared across targets (for example, seasons of the same show). Search results
+and per-target/provider progress are saved incrementally. Provider failures are
+isolated: healthy formats/providers and retained candidates continue, while
+temporary failures sleep durably until their retry time. Completed searches are
+not repeated when retrying unfinished work. Repeated start clicks reuse the
+active backfill.
+
+A new explicit pass can reconsider old failed/skipped attempts. Pending attempts
+and seeding receipts with an existing owning registration are not queued again.
+Candidates still go through the normal metainfo, ownership, piece-verification
+and client safeguards; **queued candidates are not successful seeds**. Stopping
+the search does not cancel already queued verification jobs or remove torrents.
+
+Searches default to at most 150 results per query/provider, configurable from
+1 to 150 in the start command. The existing reuse-policy and supported-client
+bounds remain in force. This is an explicit bounded historical search, not an
+exhaustive tracker archive crawl or a scheduled per-title search. No RSS cursor
+or historical gap is reset or declared repaired by this operation.
+
 The reuse command snapshots a versioned policy. Defaults require 80% reusable
 bytes, at most 512 MiB of missing pieces, and at most a 100 GiB candidate. Admin
 RPC callers can tune these independently per command. Those are POC defaults,
@@ -145,8 +174,8 @@ canonical hardlinks, format-scoped source inventory and book ownership go
 through the same planner, materializer, client and restart guard. Both passed
 with zero downloaded bytes and unchanged manifests on a non-CoW Linux tmpfs.
 
-All methods below require admin authentication and use both JSON-RPC and typed
-tRPC through the existing router. Operation/report UUIDs are immutable idempotency
+All methods below require admin authentication. The library-backfill methods
+also have typed tRPC bindings for Activity. Operation/report UUIDs are immutable idempotency
 keys. Supply exactly one of `releaseId` (a server-retained RSS inbox ID) or
 `selectionCopyId` (a server-retained acquisition-copy UUID), never a URL.
 
@@ -161,6 +190,16 @@ crossSeed.status({ operationId?, limit? })
 // Saved intents/outcomes only; no daemon I/O.
 crossSeed.reportNuked({ reportId, sourceTorrentId, reason })
 // Trusted defect evidence; queues normal movie replacement where demand remains.
+crossSeed.startBackfill({ requestId, limitPerProvider? })
+// Saved library-search intent/progress. Repeated clicks share active work.
+crossSeed.backfillLatest({})
+// Latest summary, including after reloading Activity.
+crossSeed.backfillStatus({ requestId, offset?, limit? })
+// Per-target/provider progress, paginated independently of search execution.
+crossSeed.cancelBackfill({ requestId })
+// Stop searching; already queued reuse attempts continue.
+jobs.retry({ jobId })
+// Resume failed/cancelled backfill without repeating completed provider searches.
 ```
 
 Confirmed nuke reports preserve source lineage, exclude the defective hash/offer
@@ -210,8 +249,8 @@ season-pack manifest, including piece boundaries crossing files.
 - Existing confirmed-orphan record retirement remains in force; this change does
   not detach library-bound registrations, delete seed bytes, or claim physical
   CoW extent/reclaimability accounting.
-- Discovery comes from RSS, acquisition search/selection and explicit retained
-  candidate commands, not an exhaustive historical cross-tracker search.
+- Discovery comes from RSS, acquisition search/selection, explicit retained
+  candidate commands and bounded library backfill, not an exhaustive tracker crawl.
 - An already-owned infohash is not registered twice. Automatically merging
   additional private tracker announcements into that registration is not yet
   supported; such attempts report `skipped`, not new tracker coverage.

@@ -27,6 +27,7 @@ import { runTvRetentionCleanup } from "../media/tv-retention-execution";
 import { runTvRetentionPressure } from "../media/tv-retention-pressure";
 import { processCrossSeed } from "../media/cross-seed";
 import { discoverCrossSeeds } from "../media/cross-seed-feed";
+import { processCrossSeedBackfill } from "../media/cross-seed-backfill";
 import { processTransferMetrics } from "../media/transfer-metrics-collect";
 
 export type JobProcessResult = "done";
@@ -36,6 +37,7 @@ export async function processJob(ctx: WorkerContext, job: JobRow): Promise<JobPr
   if (job.type === "torrent_metrics_collect") return processTransferMetrics(ctx, job);
   if (job.type === "torrent_reuse") return processCrossSeed(ctx, job);
   if (job.type === "torrent_reuse_feed") return discoverCrossSeeds(ctx, job);
+  if (job.type === "torrent_reuse_backfill") return processCrossSeedBackfill(ctx, job);
   if (job.type === "tv_retention_cleanup") return runTvRetentionCleanup(ctx, job, ctx.tvRetentionAdapters);
   if (job.type === "tv_retention_pressure") return runTvRetentionPressure(ctx, job, ctx.tvRetentionAdapters);
   if (job.type === "torrent_stewardship_collect") return processStewardshipCollection(ctx, job, ctx.stewardshipAdapters);

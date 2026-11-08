@@ -48,6 +48,21 @@ export class CrossSeedRepo {
     const row = this.db.query("SELECT value_json FROM app_state WHERE key=?").get(crossSeedStateKey(operationId)) as { value_json: string } | null;
     return row ? JSON.parse(row.value_json) : null;
   }
+  attemptsForRelease(scope: CrossSeedScope, releaseId: number): CrossSeedReceipt[] {
+    crossSeedScopeSchema.parse(scope); id.parse(releaseId);
+    return (this.db.query(`SELECT value_json FROM app_state WHERE key>=? AND key<?
+      AND json_extract(value_json,'$.command.scope.media')=?
+      AND json_extract(value_json,'$.command.scope.targetId')=?
+      AND json_extract(value_json,'$.command.releaseId')=?`)
+      .all(prefix, prefix + "~", scope.media, scope.targetId, releaseId) as { value_json: string }[])
+      .map(row => JSON.parse(row.value_json));
+  }
+  hasRegistration(receipt: CrossSeedReceipt): boolean {
+    if (receipt.outcome?.torrentId === undefined) return false;
+    const ref = this.db.query("SELECT client_id,native_id FROM media_torrents WHERE id=?")
+      .get(receipt.outcome.torrentId) as { client_id: string; native_id: string } | null;
+    return !!ref && this.registrationOwner({ clientId: ref.client_id, nativeId: ref.native_id }) === receipt.command.operationId;
+  }
   receipts(limit = 25): CrossSeedReceipt[] {
     z.number().int().min(1).max(100).parse(limit);
     return (this.db.query("SELECT value_json FROM app_state WHERE key>=? AND key<? ORDER BY updated_at DESC,key LIMIT ?")
