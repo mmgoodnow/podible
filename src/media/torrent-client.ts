@@ -9,6 +9,8 @@ export type TorrentSnapshot = {
   sizeBytes: number | null;
   downloadBytesPerSecond: number | null;
   message: string | null;
+  /** Tracker availability is independent of local file integrity; absent classification is not proof of safety. */
+  errorKind?: "tracker" | "storage" | "unknown" | null;
   observedAt: string;
   seedOnly?: boolean;
 };

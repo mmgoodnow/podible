@@ -237,6 +237,8 @@ export class TransmissionAdapter implements TorrentClient {
     const physicalBytesKnown = row.totalSize !== undefined && row.haveValid !== undefined && row.haveUnchecked !== undefined;
     if (![0, 1, 2, 3, 4, 5, 6].includes(row.status))
       throw new Error("Unknown torrent engine state");
+    // Transmission's tr_stat_errtype: 1/2 are tracker responses, 3 is a local error.
+    const errorKind = row.error === 0 ? null : row.error === 1 || row.error === 2 ? "tracker" : row.error === 3 ? "storage" : "unknown";
     return {
       ref,
       location: this.location(row.downloadDir),
@@ -252,9 +254,10 @@ export class TransmissionAdapter implements TorrentClient {
       sizeBytes: row.totalSize ?? row.sizeWhenDone,
       ...(seedOnly ? { seedOnly: this.isSeedOnly(row) } : {}),
       downloadBytesPerSecond: row.rateDownload,
-      message: row.error
-        ? "Torrent engine reported a tracker or storage error"
-        : null,
+      errorKind,
+      message: errorKind === "tracker" ? "Torrent tracker reported a warning or error"
+        : errorKind === "storage" ? "Torrent engine reported a local storage error"
+        : errorKind === "unknown" ? "Torrent engine reported an unknown error" : null,
       observedAt: new Date().toISOString(),
     };
   }

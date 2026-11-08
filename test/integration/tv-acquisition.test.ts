@@ -727,7 +727,7 @@ test.each(["replaced-copies", "missing-receipt"])("legacy recorded publication r
   } finally { await runtime?.stop(); await s.close(); }
 }, 15_000);
 
-test("real Reflow restart publishes an already recorded reused pack version without extra searches, probes, sources or versions", async () => {
+test.each([false, true])("real Reflow restart publishes a recorded reused pack without extra work, tracker error=%s", async (trackerError) => {
   const s = await setup(["tvdb:201"]);
   let runtime: Runtime | undefined;
   try {
@@ -745,6 +745,10 @@ test("real Reflow restart publishes an already recorded reused pack version with
     expect((s.repo.tv.version(staged.version_id)!.facts as { attemptKey: string }).attemptKey).toBe("tv:reuse:0");
     await runtime.stop(); runtime = undefined;
     s.reopen(); s.fixture.setPlexVerified(true); s.repo.retryJob(recovery.job_id!);
+    if (trackerError) {
+      const inspect = s.fixture.services.client.inspect;
+      s.fixture.services.client.inspect = async ref => ({ ...await inspect(ref), errorKind: "tracker", message: "Tracker unavailable" });
+    }
     runtime = await createJobExecutionRuntime(s.context, executionPath, { retryDelayMs: 1 });
     await until(runtime, () => s.repo.getJob(recovery.job_id!)?.status === "succeeded", () => "waiting for recorded-source replay");
     expect({ searches: s.fixture.stats.searches, probes: s.fixture.stats.probes, adds: s.fixture.sourceAdds, versions: s.repo.tv.versionSources(s.request.targetId).length }).toEqual(before);

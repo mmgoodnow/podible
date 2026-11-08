@@ -10,9 +10,9 @@ import type { PersistedValue } from "reflow-ts";
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { inspectMetainfo } from "../../src/media/metainfo";
-import type { TorrentClient } from "../../src/media/torrent-client";
+import type { TorrentClient, TorrentSnapshot } from "../../src/media/torrent-client";
 import { defaultMovieQualityPolicy } from "../../src/movies/quality";
-import { recordedLegacyTvSource, reusableTvSources, tvSourceFiles, tvSourceSchema } from "../../src/tv/source-reuse";
+import { completeTvSource, recordedLegacyTvSource, reusableTvSources, tvSourceFiles, tvSourceSchema } from "../../src/tv/source-reuse";
 
 async function fixture() {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "tv-source-proof-")));
@@ -45,6 +45,30 @@ async function fixture() {
   return { root, db, repo, request, acquisition, source, metainfo, bind, record,
     close: async () => { db.close(); await fs.rm(root, { recursive: true, force: true }); } };
 }
+
+test("complete TV sources tolerate explicit tracker failures, never storage faults or incomplete ownership evidence", async () => {
+  const f = await fixture();
+  try {
+    const snapshot: TorrentSnapshot = { ref: f.source.ref, location: f.source.location,
+      state: "seeding", complete: true, bytesDone: f.source.manifest.size, sizeBytes: f.source.manifest.size,
+      downloadBytesPerSecond: 0, message: null, observedAt: new Date().toISOString() };
+    expect(completeTvSource(f.source, snapshot)).toBe(true);
+    const tracker: TorrentSnapshot = { ...snapshot, errorKind: "tracker", message: "Tracker unavailable" };
+    expect(completeTvSource(f.source, tracker)).toBe(true);
+    for (const errorKind of ["storage", "unknown"] as const) {
+      expect(completeTvSource(f.source, { ...snapshot, errorKind, message: "Engine error" })).toBe(false);
+      expect(completeTvSource(f.source, { ...snapshot, errorKind })).toBe(false);
+    }
+    expect(completeTvSource(f.source, { ...snapshot, message: "Legacy unclassified error" })).toBe(false);
+    for (const partial of [
+      { complete: false }, { state: "checking" as const }, { bytesDone: 1 }, { sizeBytes: 1 },
+      { bytesDone: null }, { sizeBytes: null },
+      { ref: { ...snapshot.ref, clientId: "foreign" } }, { ref: { ...snapshot.ref, nativeId: "a".repeat(40) } },
+      { location: { ...snapshot.location, rootId: "foreign" } },
+      { location: { ...snapshot.location, relativePath: "foreign" } },
+    ]) expect(completeTvSource(f.source, { ...tracker, ...partial })).toBe(false);
+  } finally { await f.close(); }
+});
 
 test("reusable TV source provenance never chooses failed sibling torrent bindings", async () => {
   const f = await fixture();

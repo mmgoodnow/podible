@@ -22,6 +22,25 @@ const metainfo = bencode.encode({
     pieces: createHash("sha1").update(bytes).digest(),
   },
 });
+test("Transmission classifies tracker errors separately from local faults without exposing tracker credentials", async () => {
+  let error = 0;
+  const hash = inspectMetainfo(metainfo).infoHash;
+  const rpc = new TransmissionRpc({ url: "http://127.0.0.1", username: "a", password: "b",
+    fetcher: (async (_url, _init) => Response.json({ result: "success", arguments: { torrents: [{
+      hashString: hash, downloadDir: "/managed/case", labels: ["Podible TV"], status: 6,
+      leftUntilDone: 0, sizeWhenDone: 7, totalSize: 7, haveValid: 7, haveUnchecked: 0, rateDownload: 0,
+      error, errorString: "https://tracker.invalid/secret-passkey/announce failed",
+      files: [{ name: "film.mkv", length: 7 }],
+    }] } })) as typeof fetch });
+  const client = new TransmissionAdapter({ clientId: "engine", roots: { tv: "/managed" }, ownershipTag: "Podible TV", rpc });
+  for (const [code, expected] of [[0, null], [1, "tracker"], [2, "tracker"], [3, "storage"], [99, "unknown"]] as const) {
+    error = code;
+    const snapshot = await client.inspect({ clientId: "engine", nativeId: hash });
+    expect(snapshot).toMatchObject({ complete: true, bytesDone: 7, sizeBytes: 7, errorKind: expected });
+    expect(snapshot.message === null).toBe(code === 0);
+    expect(JSON.stringify(snapshot)).not.toContain("secret-passkey");
+  }
+});
 test("seed-only adds disable every file before start and completeness uses actual verified bytes", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "seed-only-adapter-")));
   await fs.mkdir(path.join(root, "case"));

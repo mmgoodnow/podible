@@ -135,9 +135,10 @@ export async function reusableTvSources(repo: BooksRepo, targetId: number, acqui
 }
 
 export function completeTvSource(source: TvSource, observation: TorrentSnapshot) {
+  const safeHealth = observation.errorKind === "tracker" || (observation.errorKind == null && observation.message === null);
   return observation.ref.clientId === source.ref.clientId && observation.ref.nativeId === source.ref.nativeId &&
     observation.location.rootId === source.location.rootId && observation.location.relativePath === source.location.relativePath &&
-    observation.complete && observation.state !== "checking" && observation.message === null &&
+    observation.complete && observation.state !== "checking" && safeHealth &&
     observation.bytesDone === source.manifest.size && observation.sizeBytes === source.manifest.size;
 }
 
