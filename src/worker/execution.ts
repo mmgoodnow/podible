@@ -12,7 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { archiveLegacyJob, importLegacyJob, jobJournalReader, JournalCommands } from "./job-journal";
 import { workerLog, type WorkerContext } from "./context";
-import { jobLockKeys, lockSetsConflict } from "./locks";
+import { jobAdmissionBlocked, jobLockKeys, lockSetsConflict } from "./locks";
 import { JOB_TYPES } from "../job-types";
 import { periodicPrefix } from "./periodic";
 import { assertWorkflowBoundary, effectCheckpoint, executionDiagnostics, withExecutionEffects } from "../runtime/execution-effects";
@@ -235,7 +235,7 @@ export async function createJobExecutionRuntime(
             // Reserve synchronously before entering step.run so another callback cannot race admission.
             for (let wait = 0; lockSetsConflict(
               new Set([...activeLocks].filter(key => laneOwners.get(key)?.owner !== token)), keys
-            ); wait++) {
+            ) || (current !== null && jobAdmissionBlocked(ctx.repo, current)); wait++) {
               // Cached durable sleeps only yield microtasks in Reflow. Let
               // filesystem completions and timers run during a long replay.
               if (wait > 0 && wait % 16 === 0) await yieldToIo();
@@ -248,7 +248,8 @@ export async function createJobExecutionRuntime(
               reservedAt: Date.now(), entered: false, release: () => release() };
             const reserve = () => {
               if (reserved) return;
-              if (lockSetsConflict(new Set([...activeLocks].filter(key => laneOwners.get(key)?.owner !== token)), keys))
+              if (lockSetsConflict(new Set([...activeLocks].filter(key => laneOwners.get(key)?.owner !== token)), keys) ||
+                (current !== null && jobAdmissionBlocked(ctx.repo, current)))
                 throw new Error("Resource lane became busy during step retry");
               for (const key of keys) {
                 const lane = laneOwners.get(key);

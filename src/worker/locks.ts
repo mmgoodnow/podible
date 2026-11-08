@@ -30,6 +30,17 @@ function releaseLockKeys(repo: BooksRepo, releaseId: number | null | undefined):
   return unique([`release:${release.id}`, mediaLaneKey(release.book_id, release.media_type)]);
 }
 
+/** A staged publisher gets the next target admission, not an interrupt of active effects. */
+export function jobAdmissionBlocked(repo: BooksRepo, job: JobRow): boolean {
+  if (job.type !== "tv_acquire") return false;
+  const payload = parseJson<{ acquisitionId?: number }>(job.payload_json);
+  const acquisition = payload?.acquisitionId ? repo.tv.acquisition(payload.acquisitionId) : null;
+  if (!acquisition) return false;
+  const owner = repo.tv.publicationAcquisitionId(acquisition.target_id);
+  // Maintenance does not use this fence and can reconcile abandoned staged rows.
+  return owner !== null && owner !== acquisition.id;
+}
+
 export function jobLockKeys(repo: BooksRepo, job: JobRow): string[] {
   if (job.type === "torrent_metrics_collect") return ["torrent-metrics"];
   if (job.type === "torrent_reuse") {

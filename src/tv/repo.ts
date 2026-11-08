@@ -497,6 +497,12 @@ export class TvRepo {
     return this.db.query("SELECT * FROM tv_publications ORDER BY target_id").all() as TvPublication[];
   }
 
+  publicationAcquisitionId(targetId: number): number | null {
+    const row = this.db.query(`SELECT v.acquisition_id FROM tv_publications p
+      JOIN tv_versions v ON v.id=p.version_id WHERE p.target_id=?`).get(targetId) as { acquisition_id: number } | null;
+    return row?.acquisition_id ?? null;
+  }
+
   private ownedVersion(targetId: number, versionId: number): { target: TvTarget; version: TvVersion } {
     const target = this.target(targetId);
     const version = this.version(versionId);

@@ -136,6 +136,13 @@ protect add/bind races, and global retention remains exclusive. Movie/book reuse
 keeps its existing acquisition lanes pending the equivalent registration-fence
 audit; this is not a blanket relaxation of content ownership protection.
 
+A persisted TV publication reserves its target's next acquisition-step admission
+for the acquisition that owns that publication. Sibling acquisitions sleep
+outside handlers until the publication clears, including when selection already
+succeeded but finalization has not. Running effects are never interrupted or
+unlocked. Maintenance is not subject to this preference and can still reconcile
+an abandoned publication; completed checkpoint replay remains admission-free.
+
 Scheduled latest-state observations reuse an outstanding periodic job across
 wall-clock slots and restarts. Existing obsolete periodic runs with no effects
 are completed with a `coalescedInto` receipt. Runs with prior step history,
