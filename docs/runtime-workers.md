@@ -129,6 +129,13 @@ that checkpoint, without deleting or rewriting them. Long replay sequences yield
 to the I/O loop periodically so filesystem callbacks and timers can run. Fresh
 effects still reserve their resource lanes normally.
 
+TV cross-seeding has a separate per-target reuse lane, so a long read-only
+piece proof cannot block episode import or Plex publication for that show.
+Same-target reuse attempts still serialize, per-infohash registration mutexes
+protect add/bind races, and global retention remains exclusive. Movie/book reuse
+keeps its existing acquisition lanes pending the equivalent registration-fence
+audit; this is not a blanket relaxation of content ownership protection.
+
 Scheduled latest-state observations reuse an outstanding periodic job across
 wall-clock slots and restarts. Existing obsolete periodic runs with no effects
 are completed with a `coalescedInto` receipt. Runs with prior step history,

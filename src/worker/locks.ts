@@ -35,6 +35,11 @@ export function jobLockKeys(repo: BooksRepo, job: JobRow): string[] {
   if (job.type === "torrent_reuse") {
     const payload = parseJson<{ operationId?: string }>(job.payload_json);
     const scope = payload?.operationId ? repo.crossSeed.receipt(payload.operationId)?.command.scope : null;
+    // TV add/bind uses the per-infohash registration mutex. Its read-only
+    // reuse proof must not hold up episode import or Plex publication.
+    // Movies/books retain their primary lane until prepare/add/bind also uses
+    // that mutex; retirement admission alone does not serialize same-hash adds.
+    if (scope?.media === "tv") return [`reuse:tv:${scope.targetId}`];
     return scope ? [scope.media === "audio" || scope.media === "ebook"
       ? mediaLaneKey(scope.targetId, scope.media)! : `${scope.media}-target:${scope.targetId}`] : [GLOBAL_LOCK_KEY];
   }

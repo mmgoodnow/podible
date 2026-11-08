@@ -22,6 +22,7 @@ import { inspectMetainfo } from "../../src/media/metainfo";
 import type { TorrentClient, TorrentRef, DownloadLocation } from "../../src/media/torrent-client";
 import type { WorkerContext } from "../../src/worker/context";
 import { materializeReuseLayout } from "../../src/media/reuse-layout";
+import { publishTvVersion, tvRoots, tvViewEntries } from "../../src/tv/publication";
 
 async function fixture(original = "abcdefgh", desired = "abcdefgh", sidecar = "!!") {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "podible-cross-seed-")));
@@ -335,6 +336,101 @@ test("reuse holds its target lane, not a global lock that blocks unrelated acqui
     expect(lockSetsConflict(new Set(keys), ["*"])).toBe(true);
   } finally { await f.cleanup(); }
 });
+
+test("TV reuse has an independent per-target lane while retention and unknown scopes remain exclusive", async () => {
+  const f = await fixture();
+  try {
+    const command = crossSeedCommandSchema.parse({ ...f.command, scope: { media: "tv", targetId: 123 } });
+    const job = f.repo.createJob({ type: "torrent_reuse", payload: { operationId: command.operationId } });
+    f.repo.setJsonState(crossSeedStateKey(command.operationId), { command, jobId: job.id });
+    const keys = jobLockKeys(f.repo, f.repo.getJob(job.id)!);
+    expect(keys).toEqual(["reuse:tv:123"]);
+    expect(lockSetsConflict(new Set(keys), ["tv-target:123"])).toBe(false);
+    expect(lockSetsConflict(new Set(keys), ["reuse:tv:123"])).toBe(true);
+    expect(lockSetsConflict(new Set(keys), ["reuse:tv:124"])).toBe(false);
+    expect(lockSetsConflict(new Set(keys), ["*"])).toBe(true);
+    expect(lockSetsConflict(new Set(["*"]), keys)).toBe(true);
+    const unknown = f.repo.createJob({ type: "torrent_reuse", payload: { operationId: randomUUID() } });
+    expect(jobLockKeys(f.repo, f.repo.getJob(unknown.id)!)).toEqual(["*"]);
+  } finally { await f.cleanup(); }
+});
+
+test("TV publication advances selection while same-target reuse proofs remain serialized and preserve their source", async () => {
+  const f = await fixture("abcdefgh", "abcdefgh", "");
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  let runtime: Awaited<ReturnType<typeof createJobExecutionRuntime>> | undefined;
+  try {
+    const settings = f.repo.getSettings(); settings.tv.managedRoot = f.root; settings.tv.plexViewPath = "/server/tv";
+    f.repo.updateSettings(settings);
+    const user = f.repo.upsertUser({ provider: "local", providerUserId: "reuse", username: "reuse", isAdmin: true });
+    const request = f.repo.tv.request(user.id, { key: "tvdb:701", tvdbId: 701, tmdbId: null, title: "Concurrent publication",
+      aliases: [], year: 2020, anime: false, relations: [], episodes: [{ key: "tvdb:70101", title: "Episode one",
+        airDate: "2020-01-01", runtimeMinutes: 24, refs: [{ provider: "tvdb", id: "70101", source: "fixture" }],
+        numbering: [{ scheme: "tvdb:aired", season: 1, episode: 1, absolute: 1 }] }] }, settings.movies.qualityPolicy, ["tvdb:70101"]);
+    const oldAcquisition = f.repo.tv.startAcquisition(request.targetId, "initial", () =>
+      f.repo.createJob({ type: "metadata_hydration" }).id, request.requestId).acquisition;
+    const oldId = randomUUID(), oldPath = `files/${oldId.slice(0, 2)}/${oldId}.mkv`;
+    const oldSource = path.join(f.root, "objects", oldPath);
+    await fs.mkdir(path.dirname(oldSource), { recursive: true }); await fs.writeFile(oldSource, "abcdefgh", { mode: 0o444 });
+    const oldFile = { id: oldId, relativePath: oldPath, sizeBytes: 8, probe: {} };
+    const oldVersion = f.repo.tv.recordVersion(oldAcquisition.id, { identityVerified: true }, [{ ...oldFile, episodeIds: request.episodeIds }]);
+    f.repo.tv.stagePublication(request.targetId, oldVersion, 0);
+    f.repo.tv.promotePublication(request.targetId, oldVersion, 0); f.repo.tv.clearPublication(request.targetId, oldVersion);
+    f.repo.tv.finishAcquisition(oldAcquisition.id);
+    const feed = f.repo.releaseInbox.ensureFeed("tv-concurrent-reuse", "Other tracker", "tv", new Date().toISOString());
+    const [releaseId] = f.repo.releaseInbox.ingest(feed.id, [{ ...f.repo.releaseInbox.entries([f.command.releaseId!])[0]!.result,
+      mediaType: "tv", guid: "tv-concurrent-copy" }], new Date().toISOString());
+    const command = crossSeedCommandSchema.parse({ ...f.command, operationId: randomUUID(), scope: { media: "tv", targetId: request.targetId }, releaseId });
+    const first = queueCrossSeed(f.repo, command);
+    const entered = new Set<number>();
+    let firstHeld = false;
+    runtime = await createJobExecutionRuntime(f.ctx, path.join(f.root, "execution.sqlite"), {
+      processJob: async (ctx, job) => {
+        if (job.type === "torrent_reuse") return processCrossSeed({ ...ctx, execution: { ...ctx.execution!,
+          run: (name, action) => ctx.execution!.run(name, async () => {
+            entered.add(job.id);
+            if (job.id === first.jobId && name === "reuse:layout") { firstHeld = true; await hold; }
+            return action();
+          }) } }, job);
+        if (job.type === "tv_acquire") {
+          await ctx.execution!.run("publish-selected", () => publishTvVersion({ repo: ctx.repo.tv,
+            roots: tvRoots(f.root, "/server/tv"), targetId: request.targetId, versionId: nextVersion,
+            assertActive: () => ctx.execution!.assertActive(),
+            library: { scan: async () => {}, verify: async (_entry, files) => files.length === 1 &&
+              files[0]!.episodes[0]!.refs.some(ref => ref.provider === "tvdb" && ref.id === "70101") } }));
+        }
+        return "done";
+      }
+    });
+    const until = async (check: () => boolean) => {
+      const end = Date.now() + 4000;
+      while (!check()) { if (Date.now() > end) throw new Error("Concurrent TV publication timed out"); await Bun.sleep(10); }
+    };
+    await runtime.reconcile(); await until(() => firstHeld);
+    const second = queueCrossSeed(f.repo, { ...command, operationId: randomUUID() });
+    const publication = f.repo.tv.startAcquisition(request.targetId, "recovery", id =>
+      f.repo.createJob({ type: "tv_acquire", payload: { acquisitionId: id } }).id, request.requestId).acquisition;
+    const id = randomUUID(), relativePath = `files/${id.slice(0, 2)}/${id}.mkv`, replacement = "replacement episode";
+    await fs.mkdir(path.dirname(path.join(f.root, "objects", relativePath)), { recursive: true });
+    await fs.writeFile(path.join(f.root, "objects", relativePath), replacement, { mode: 0o444 });
+    const nextVersion = f.repo.tv.recordVersion(publication.id, { identityVerified: true }, [{ id, relativePath,
+      sizeBytes: replacement.length, probe: {}, episodeIds: request.episodeIds }]);
+    await runtime.reconcile();
+    await until(() => f.repo.getJobStatus(publication.job_id!) === "succeeded");
+    expect(entered.has(second.jobId)).toBe(false);
+    expect(f.repo.tv.activeEpisodes(request.targetId)).toEqual([{ episode_id: request.episodeIds[0]!, version_id: nextVersion }]);
+    const [entry] = tvViewEntries(f.repo.tv, tvRoots(f.root, "/server/tv"));
+    expect(await fs.realpath(path.join(tvRoots(f.root, "/server/tv").viewRoot, entry!.relativePath))).toBe(path.join(f.root, "objects", relativePath));
+    expect(await fs.readFile(oldSource, "utf8")).toBe("abcdefgh");
+    release();
+    await until(() => [first, second].every(receipt => f.repo.getJobStatus(receipt.jobId) === "succeeded"));
+    expect(f.repo.crossSeed.receipt(command.operationId)!.outcome?.kind).toBe("seeding");
+    expect(f.counts().adds).toBe(1);
+    expect(f.repo.tv.activeEpisodes(request.targetId)[0]!.version_id).toBe(nextVersion);
+    expect(await fs.readFile(oldSource, "utf8")).toBe("abcdefgh");
+  } finally { release(); await runtime?.stop(); await f.cleanup(); }
+}, 15000);
 
 test("parallel targets with the same torrent hash cannot overwrite the winning add intent or owner", async () => {
   const f = await fixture("abcdefgh", "abcdefgh", "");

@@ -81,7 +81,7 @@ test("two independent reuse targets run while same-target work parks and a third
     for (const media of ["audio", "ebook", "movie", "tv"] as const) {
       const operationId = randomUUID(), job = f.repo.createJob({ type: "torrent_reuse", payload: { operationId } });
       f.repo.setJsonState(crossSeedStateKey(operationId), { command: { scope: { media, targetId: 7 } } });
-      expect(jobLockKeys(f.repo, job)).toEqual([media === "audio" || media === "ebook" ? `book:7:media:${media}` : `${media}-target:7`]);
+      expect(jobLockKeys(f.repo, job)).toEqual([media === "tv" ? "reuse:tv:7" : media === "audio" || media === "ebook" ? `book:7:media:${media}` : `${media}-target:7`]);
     }
   } finally {
     releaseFirst(); releaseSecond(); await runtime.stop(); f.db.close();
