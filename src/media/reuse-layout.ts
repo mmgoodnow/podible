@@ -172,25 +172,41 @@ export async function verifyContentReuse(plan: ReusePlan): Promise<ReusePlan> {
   if (!manifest) return applyReusePieceEvidence(rebuilt, []);
   const pieces: ReusePieceEvidence[] = [];
   const buffer = Buffer.alloc(Math.min(16 * 1024 * 1024, manifest.pieceLength));
+  let opened: { source: ReuseSourceFile; handle: Awaited<ReturnType<typeof fs.open>> } | undefined;
+  const checkHandle = async (entry: NonNullable<typeof opened>) => {
+    const { sha256: _digest, ...expected } = entry.source.identity;
+    if (reuseDigest(statIdentity(await entry.handle.stat({ bigint: true }))) !== reuseDigest(expected))
+      throw new Error("Reuse source changed during piece verification");
+  };
+  const close = async () => {
+    if (!opened) return;
+    const entry = opened; opened = undefined;
+    try { await checkHandle(entry); } finally { await entry.handle.close(); }
+  };
+  const sourceHandle = async (source: ReuseSourceFile) => {
+    if (opened?.source.id !== source.id) {
+      await close();
+      opened = { source, handle: await fs.open(source.path, READ) };
+      await checkHandle(opened);
+    }
+    return opened!.handle;
+  };
   let fileIndex = 0;
-  for (let index = 0; index < manifest.pieceHashes.length; index++) {
-    const start = index * manifest.pieceLength;
-    const end = Math.min(rebuilt.summary.totalBytes, start + manifest.pieceLength);
-    const hash = createHash("sha1");
-    let available = true;
-    while (fileIndex < rebuilt.files.length &&
-      rebuilt.files[fileIndex].offset + rebuilt.files[fileIndex].size <= start) fileIndex++;
-    for (let i = fileIndex; i < rebuilt.files.length && rebuilt.files[i].offset < end; i++) {
-      const file = rebuilt.files[i];
-      const from = Math.max(start, file.offset) - file.offset;
-      const until = Math.min(end, file.offset + file.size) - file.offset;
-      if (until <= from) continue;
-      if (!file.source || file.source.size < until) { available = false; break; }
-      const handle = await fs.open(file.source.path, READ);
-      try {
-        const { sha256: _digest, ...expected } = file.source.identity;
-        if (reuseDigest(statIdentity(await handle.stat({ bigint: true }))) !== reuseDigest(expected))
-          throw new Error("Reuse source changed during piece verification");
+  try {
+    for (let index = 0; index < manifest.pieceHashes.length; index++) {
+      const start = index * manifest.pieceLength;
+      const end = Math.min(rebuilt.summary.totalBytes, start + manifest.pieceLength);
+      const hash = createHash("sha1");
+      let available = true;
+      while (fileIndex < rebuilt.files.length &&
+        rebuilt.files[fileIndex].offset + rebuilt.files[fileIndex].size <= start) fileIndex++;
+      for (let i = fileIndex; i < rebuilt.files.length && rebuilt.files[i].offset < end; i++) {
+        const file = rebuilt.files[i];
+        const from = Math.max(start, file.offset) - file.offset;
+        const until = Math.min(end, file.offset + file.size) - file.offset;
+        if (until <= from) continue;
+        if (!file.source || file.source.size < until) { available = false; break; }
+        const handle = await sourceHandle(file.source);
         let position = from;
         while (position < until) {
           const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, until - position), position);
@@ -198,14 +214,14 @@ export async function verifyContentReuse(plan: ReusePlan): Promise<ReusePlan> {
           hash.update(buffer.subarray(0, bytesRead));
           position += bytesRead;
         }
-      } finally { await handle.close(); }
+      }
+      if (!available) pieces.push({ index, status: "unavailable" });
+      else {
+        const actualSha1 = hash.digest("hex");
+        pieces.push({ index, status: actualSha1 === manifest.pieceHashes[index] ? "verified" : "mismatch", actualSha1 });
+      }
     }
-    if (!available) pieces.push({ index, status: "unavailable" });
-    else {
-      const actualSha1 = hash.digest("hex");
-      pieces.push({ index, status: actualSha1 === manifest.pieceHashes[index] ? "verified" : "mismatch", actualSha1 });
-    }
-  }
+  } finally { await close(); }
   for (const source of selected) await assertSource(source);
   return applyReusePieceEvidence(rebuilt, pieces);
 }

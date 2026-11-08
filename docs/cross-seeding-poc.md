@@ -60,7 +60,10 @@ RPC callers can tune these independently per command. Those are POC defaults,
 not an asserted optimal objective function. Identity, path ownership, isolation,
 verified completion, retained demand, and publication rules are safety checks,
 not tunable scores. Feed matching queues all matches durably; execution limits
-active reuse transfers to one without globally locking unrelated acquisitions.
+active reuse transfers to two independent targets, with same-target work
+serialized. A long initial hash pass cannot monopolize every other target's
+completion. Per-client/hash registration is serialized separately so concurrent
+targets cannot overwrite each other's seed-only intent or layout ownership.
 
 ## Storage And Verification
 
@@ -94,6 +97,9 @@ validate that proof, source mount/inode/size/mtime/ctime, and every published
 layout link without rereading the payload. Changed sources or layouts reject the
 replay; a journal proof cannot create a replacement layout. Writable CoW layouts
 still require a fresh final piece proof after repair.
+Initial verification retains one read handle across adjacent pieces, checks
+its identity before and after use, and closes it on failure. Every original
+piece is still hashed, including pieces that cross source-file boundaries.
 
 This POC independently hashes the bounded candidate pieces, runs the daemon's
 candidate recheck, applies the missing-piece budget, and independently verifies

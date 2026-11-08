@@ -14,7 +14,7 @@ import { fetchMovieMetainfo } from "../movies/offers";
 import { releaseOfferFromResult, type ReleaseOffer } from "./release-offer";
 import { assertMovieStorage } from "../movies/storage";
 import type { TorrentClient } from "./torrent-client";
-import { withTorrentUse } from "./torrent-use";
+import { withTorrentRegistration } from "./torrent-use";
 import { crossSeedCommandSchema, crossSeedCommandHash, crossSeedStateKey, isBookCrossSeedScope,
   type CrossSeedCommand, type CrossSeedReceipt, type CrossSeedScope, type CrossSeedOutcome } from "./cross-seed-state";
 import { planContentReuse, type ReuseCandidateManifest, type ReusePlan, type ReuseSourceFile } from "./reuse-plan";
@@ -255,14 +255,17 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   const initialProof = await durableStep(ctx, "reuse:piece-proof", proveLayout);
   if (initialProof.status === "rejected") return finish({ kind: "skipped", reason: initialProof.reasons.join("; ") });
   const location = { rootId: isBookCrossSeedScope(command.scope) ? "books" : command.scope.media === "tv" ? "tv" : "movies", relativePath: path.relative(downloadRoot, dataPath) };
-  const ref = await durableStep(ctx, "reuse:add", () => withTorrentUse(ctx.repo, { clientId: client.id, infoHash: metadata.infoHash }, async () => {
+  const ref = await durableStep(ctx, "reuse:add", () => withTorrentRegistration(ctx.repo, { clientId: client.id, infoHash: metadata.infoHash }, async () => {
     active();
+    if (ctx.repo.reuseTorrent(identity) && ctx.repo.crossSeed.registrationOwner(identity) !== operationId)
+      return { skipped: true as const };
     if (sourceBlocked()) throw new Error("Reuse source was confirmed nuked before torrent addition");
     const result = await client.ensureAdded({ metainfo: bytes, location, ...(readOnly ? { seedOnly: true } : {}) });
     if (result.clientId !== client.id || result.nativeId !== metadata.infoHash) throw new Error("Reuse client returned another identity");
     ctx.repo.reserveReuseTorrent(result, location, crossSeedOffer(ctx.repo, command).key, command.scope, operationId);
     return result;
   }));
+  if ("skipped" in ref) return finish({ kind: "skipped", reason: "Torrent identity already belongs to another registered operation", infoHash: metadata.infoHash });
   const torrent = ctx.repo.reuseTorrent(ref)!;
   const check = async (requireSeedOnly = true) => {
     active();

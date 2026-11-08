@@ -329,12 +329,67 @@ test("reuse holds its target lane, not a global lock that blocks unrelated acqui
   try {
     const queued = queueCrossSeed(f.repo, f.command);
     const keys = jobLockKeys(f.repo, f.repo.getJob(queued.jobId)!);
-    expect(keys).toEqual(["torrent-reuse", `movie-target:${f.command.scope.targetId}`]);
+    expect(keys).toEqual([`movie-target:${f.command.scope.targetId}`]);
     expect(lockSetsConflict(new Set(keys), ["tv-target:99"])).toBe(false);
     expect(lockSetsConflict(new Set(keys), [`movie-target:${f.command.scope.targetId}`])).toBe(true);
     expect(lockSetsConflict(new Set(keys), ["*"])).toBe(true);
   } finally { await f.cleanup(); }
 });
+
+test("parallel targets with the same torrent hash cannot overwrite the winning add intent or owner", async () => {
+  const f = await fixture("abcdefgh", "abcdefgh", "");
+  let releaseAdd!: () => void;
+  const addGate = new Promise<void>(resolve => { releaseAdd = resolve; });
+  let runtime: Awaited<ReturnType<typeof createJobExecutionRuntime>> | undefined;
+  try {
+    const settings = f.repo.getSettings();
+    const user = f.repo.upsertUser({ provider: "local", providerUserId: "reuse", username: "reuse", isAdmin: true });
+    const request = f.repo.movies.request(user.id, { ...fixtureMovie, tmdbId: 102 }, settings.movies.qualityPolicy);
+    const acquisition = f.repo.movies.startAcquisition(request.targetId, "initial", () => f.repo.createJob({ type: "movie_acquire" }).id).acquisition;
+    const fileId = randomUUID(), relativePath = `files/${fileId.slice(0, 2)}/${fileId}.mkv`;
+    const canonical = path.join(f.root, "objects", relativePath);
+    await fs.mkdir(path.dirname(canonical), { recursive: true }); await fs.writeFile(canonical, "abcdefgh", { mode: 0o444 });
+    const version = f.repo.movies.recordVersion(acquisition.id, fixtureFacts(), [{ id: fileId, relativePath, sizeBytes: 8, probe: {} }]);
+    f.repo.movies.selectVersion(request.targetId, version, f.repo.movies.target(request.targetId)!.revision);
+    f.repo.movies.finishAcquisition(acquisition.id);
+    const secondCommand = crossSeedCommandSchema.parse({ ...f.command, operationId: randomUUID(), scope: { media: "movie", targetId: request.targetId } });
+    const first = queueCrossSeed(f.repo, f.command), second = queueCrossSeed(f.repo, secondCommand);
+    const client = f.adapters.client!(f.command.scope), ensureAdded = client.ensureAdded.bind(client);
+    let calls = 0, winningLocation: DownloadLocation | undefined;
+    client.ensureAdded = async input => {
+      calls++; winningLocation = structuredClone(input.location);
+      await addGate;
+      return ensureAdded(input);
+    };
+    const staged = new Set<number>();
+    runtime = await createJobExecutionRuntime(f.ctx, path.join(f.root, "execution.sqlite"), {
+      retryDelayMs: 1,
+      processJob: (ctx, job) => job.type !== "torrent_reuse" ? Promise.resolve("done" as const) : processCrossSeed({ ...ctx,
+        execution: { ...ctx.execution!, run: (name, handler) => ctx.execution!.run(name, async () => {
+          const result = await handler(); if (name === "reuse:layout") staged.add(job.id); return result;
+        }) },
+      }, job),
+    });
+    await runtime.reconcile();
+    const until = async (check: () => boolean) => {
+      const deadline = Date.now() + 8000;
+      while (!check()) { if (Date.now() > deadline) throw new Error("Parallel reuse acceptance timed out"); await Bun.sleep(10); }
+    };
+    await until(() => staged.size === 2 && calls === 1);
+    const initialIntent = structuredClone(winningLocation);
+    releaseAdd();
+    await until(() => [first, second].every(receipt => f.repo.getJobStatus(receipt.jobId) === "succeeded"));
+    expect(calls).toBe(1); expect(f.counts().adds).toBe(1);
+    expect(winningLocation).toEqual(initialIntent);
+    const receipts = [f.repo.crossSeed.receipt(f.command.operationId)!, f.repo.crossSeed.receipt(secondCommand.operationId)!];
+    expect(receipts.map(receipt => receipt.outcome?.kind).sort()).toEqual(["seeding", "skipped"]);
+    const winner = receipts.find(receipt => receipt.outcome?.kind === "seeding")!;
+    const ref = { clientId: client.id, nativeId: f.metadata.infoHash };
+    expect(f.repo.crossSeed.registrationOwner(ref)).toBe(winner.command.operationId);
+    expect(JSON.parse(f.repo.reuseTorrent(ref)!.location_json)).toEqual(initialIntent);
+    expect(receipts.find(receipt => receipt.outcome?.kind === "skipped")!.outcome?.reason).toContain("another registered operation");
+  } finally { releaseAdd(); await runtime?.stop(); await f.cleanup(); }
+}, 15_000);
 
 test("an unsupported CoW filesystem has an explicit no-action outcome, not a full-copy fallback", async () => {
   const f = await fixture();

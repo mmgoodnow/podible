@@ -10,6 +10,8 @@ import { BooksRepo } from "../../src/repo";
 import { createJobExecutionRuntime, EXECUTION_JOB_TYPES, executionRetryPolicy } from "../../src/worker/execution";
 import { jobLockKeys } from "../../src/worker/locks";
 import { jobJournalReader } from "../../src/worker/job-journal";
+import { randomUUID } from "node:crypto";
+import { crossSeedCommandSchema, crossSeedStateKey } from "../../src/media/cross-seed-state";
 
 const types = [
   "indexer_feed_sync", "movie_feed_match", "book_feed_match",
@@ -48,6 +50,61 @@ async function until(check: () => boolean | Promise<boolean>) {
     await Bun.sleep(15);
   }
 }
+
+test("two independent reuse targets run while same-target work parks and a third handler waits", async () => {
+  const f = await fixture();
+  const queue = (targetId: number) => {
+    const operationId = randomUUID();
+    const job = f.repo.createJob({ type: "torrent_reuse", payload: { operationId } });
+    const command = crossSeedCommandSchema.parse({ operationId, scope: { media: "tv", targetId }, releaseId: 1 });
+    f.repo.setJsonState(crossSeedStateKey(operationId), { command, jobId: job.id });
+    return job;
+  };
+  const first = queue(1);
+  let releaseFirst!: () => void, releaseSecond!: () => void;
+  const firstGate = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const secondGate = new Promise<void>(resolve => { releaseSecond = resolve; });
+  let secondHeldId = 0, active = 0, peak = 0;
+  const entered = new Set<number>();
+  const runtime = await createJobExecutionRuntime(f.ctx, path.join(f.root, "execution.sqlite"), {
+    processJob: async (ctx, job) => {
+      await ctx.execution!.run("reuse:guarded-work", async () => {
+        entered.add(job.id); active++; peak = Math.max(peak, active);
+        try {
+          if (job.id === first.id) await firstGate;
+          if (job.id === secondHeldId) await secondGate;
+        } finally { active--; }
+      });
+      return "done";
+    },
+  });
+  try {
+    await runtime.reconcile(); await until(() => entered.has(first.id));
+    const same = queue(1), independent = queue(2);
+    await runtime.reconcile(); await until(() => f.repo.getJobStatus(independent.id) === "succeeded");
+    expect(entered.has(same.id)).toBe(false);
+    const secondHeld = queue(3); secondHeldId = secondHeld.id;
+    await runtime.reconcile(); await until(() => entered.has(secondHeld.id));
+    const third = queue(4);
+    await runtime.reconcile(); await Bun.sleep(400);
+    expect(active).toBe(2); expect(entered.has(third.id)).toBe(false);
+    expect(entered.has(same.id)).toBe(false);
+    releaseSecond(); await until(() => f.repo.getJobStatus(third.id) === "succeeded");
+    expect(entered.has(same.id)).toBe(false);
+    releaseFirst(); await until(() => f.repo.getJobStatus(same.id) === "succeeded");
+    expect(peak).toBe(2);
+    const unknown = f.repo.createJob({ type: "torrent_reuse", payload: { operationId: randomUUID() } });
+    expect(jobLockKeys(f.repo, unknown)).toEqual(["*"]);
+    for (const media of ["audio", "ebook", "movie", "tv"] as const) {
+      const operationId = randomUUID(), job = f.repo.createJob({ type: "torrent_reuse", payload: { operationId } });
+      f.repo.setJsonState(crossSeedStateKey(operationId), { command: { scope: { media, targetId: 7 } } });
+      expect(jobLockKeys(f.repo, job)).toEqual([media === "audio" || media === "ebook" ? `book:7:media:${media}` : `${media}-target:7`]);
+    }
+  } finally {
+    releaseFirst(); releaseSecond(); await runtime.stop(); f.db.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+}, 15_000);
 
 test("active fences avoid history while observing external ownership, status and cancellation changes", async () => {
   const f = await fixture();

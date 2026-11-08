@@ -120,6 +120,66 @@ test("large original pieces are read in bounded piece-sized chunks including a c
   } finally { fs.open = open; }
 });
 
+test("adjacent pieces reuse one read handle per source and still handle short reads", async () => {
+  const fixture = await setup();
+  const first = await fixture.source("first", "first.mkv", "a".repeat(101));
+  const second = await fixture.source("second", "second.mkv", "b".repeat(99));
+  const candidate = manifest([{ name: "first.mkv", text: "a".repeat(101) }, { name: "second.mkv", text: "b".repeat(99) }]);
+  const open = fs.open.bind(fs), readHandles = new Set<unknown>();
+  let closedReadHandles = 0;
+  fs.open = (async (...args: Parameters<typeof fs.open>) => {
+    const handle = await open(...args);
+    if ([first.path, second.path].includes(String(args[0]))) {
+      const read = handle.read.bind(handle), close = handle.close.bind(handle);
+      handle.read = ((...readArgs: unknown[]) => {
+        readHandles.add(handle);
+        readArgs[2] = Math.min(Number(readArgs[2]), 2);
+        return Reflect.apply(read, handle, readArgs);
+      }) as typeof handle.read;
+      handle.close = async () => { if (readHandles.has(handle)) closedReadHandles++; await close(); };
+    }
+    return handle;
+  }) as typeof fs.open;
+  try {
+    const proof = await verifyContentReuse(fixture.plan(candidate, [first, second], 0));
+    expect(proof.pieces).toHaveLength(50);
+    expect(proof.summary.verifiedReuseBytes).toBe(200);
+    expect(readHandles.size).toBe(2);
+    expect(closedReadHandles).toBe(2);
+  } finally { fs.open = open; }
+});
+
+test("a source changed between pieces is rejected and its retained handle is closed", async () => {
+  const fixture = await setup();
+  const original = await fixture.source("first", "first.mkv", "abcdefgh");
+  await fs.chmod(original.path, 0o600);
+  const source = await captureReuseFile({ root: fixture.sourcesRoot, sourceId: original.id, sourcePath: original.path,
+    sourceTorrentId: original.sourceTorrentId });
+  const open = fs.open.bind(fs);
+  let reads = 0, closed = false;
+  fs.open = (async (...args: Parameters<typeof fs.open>) => {
+    const handle = await open(...args);
+    if (String(args[0]) === source.path) {
+      const read = handle.read.bind(handle), close = handle.close.bind(handle);
+      let used = false;
+      handle.read = (async (...readArgs: unknown[]) => {
+        used = true;
+        const result = await Reflect.apply(read, handle, readArgs);
+        if (++reads === 1) await fs.writeFile(source.path, "abcdefgh");
+        return result;
+      }) as typeof handle.read;
+      handle.close = async () => { if (used) closed = true; await close(); };
+    }
+    return handle;
+  }) as typeof fs.open;
+  try {
+    await expect(verifyContentReuse(fixture.plan(manifest([{ name: "first.mkv", text: "abcdefgh" }]), [source], 0)))
+      .rejects.toThrow("Reuse source changed during piece verification");
+    expect(reads).toBe(2);
+    expect(closed).toBe(true);
+  } finally { fs.open = open; }
+});
+
 test("journal proof replays an exact seed-only layout without rereading payload, but rejects changed sources", async () => {
   const fixture = await setup();
   const source = await fixture.source("1", "canonical.mkv", "abcdefgh", true);
