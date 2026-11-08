@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
+import { LeaseExpiredError, RunCancelledError } from "reflow-ts";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,7 @@ import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { createJobExecutionRuntime, EXECUTION_JOB_TYPES, executionRetryPolicy } from "../../src/worker/execution";
 import { jobLockKeys } from "../../src/worker/locks";
+import { jobJournalReader } from "../../src/worker/job-journal";
 
 const types = [
   "indexer_feed_sync", "movie_feed_match", "book_feed_match",
@@ -46,6 +48,47 @@ async function until(check: () => boolean | Promise<boolean>) {
     await Bun.sleep(15);
   }
 }
+
+test("active fences avoid history while observing external ownership, status and cancellation changes", async () => {
+  const f = await fixture();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let assertActive: (() => void) | undefined;
+  const runtime = await createJobExecutionRuntime(f.ctx, path.join(f.root, "execution.sqlite"), {
+    processJob: async ctx => {
+      await ctx.execution!.run("guarded-read", async () => {
+        assertActive = ctx.execution!.assertActive;
+        await gate;
+      });
+      return "done";
+    },
+  });
+  const domainWriter = new Database(path.join(f.root, "books.sqlite"));
+  const journalWriter = new Database(path.join(f.root, "execution.sqlite"));
+  try {
+    const job = f.repo.createJob({ type: "metadata_hydration" });
+    await runtime.reconcile(); await until(() => !!assertActive);
+    const reader = jobJournalReader(f.repo.executionDatabasePath());
+    f.repo.bindJobJournalReader({ ...reader, read() { throw new Error("Active fence hydrated history"); } });
+    expect(() => assertActive!()).not.toThrow();
+    const owner = f.repo.getJobExecution(job.id)!;
+    domainWriter.query("UPDATE job_executions SET owner_token='replacement' WHERE job_id=?").run(job.id);
+    expect(() => assertActive!()).toThrow(LeaseExpiredError);
+    domainWriter.query("UPDATE job_executions SET owner_token=? WHERE job_id=?").run(owner.owner_token, job.id);
+    expect(() => assertActive!()).not.toThrow();
+    journalWriter.query("UPDATE workflow_runs SET status='cancelled' WHERE id=?").run(owner.run_id);
+    expect(() => assertActive!()).toThrow(RunCancelledError);
+    journalWriter.query("UPDATE workflow_runs SET status='running' WHERE id=?").run(owner.run_id);
+    expect(() => assertActive!()).not.toThrow();
+    domainWriter.query(`INSERT INTO job_commands(job_id,kind,generation,run_id,created_at)
+      VALUES (?,'cancel',?,?,?)`).run(job.id, f.repo.jobExecutionGeneration(job.id), owner.run_id, new Date().toISOString());
+    expect(() => assertActive!()).toThrow(RunCancelledError);
+  } finally {
+    f.repo.bindJobJournalReader(jobJournalReader(f.repo.executionDatabasePath()));
+    release(); await runtime.stop(); domainWriter.close(); journalWriter.close(); f.db.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
 
 test("all registered job types use checkpointed execution without claiming or resetting rows", async () => {
   expect([...types].sort()).toEqual([...EXECUTION_JOB_TYPES].sort());

@@ -8,6 +8,7 @@ export type JobLifecycle = Pick<JobRow, "status" | "error" | "attempt_count" | "
 export type JobWait = { reason: "provider-search"; media: "audio" | "ebook" };
 export type JobJournalReader = {
   read(runIds: string[]): Map<string, JobLifecycle>;
+  readStatus?(runId: string): JobStatus | null;
   assertLinks?(domainFilename: string): void;
   waits?(runIds: string[]): Map<string, JobWait[]>;
 };
@@ -42,6 +43,16 @@ function errorMessage(value: string | null): string | null {
 /** Read-only, synchronous batch adapter for the pinned Reflow SQLite schema. */
 export function jobJournalReader(filename: string): JobJournalReader {
   return {
+    readStatus(runId) {
+      const db = new Database(filename, { readonly: true });
+      db.exec("PRAGMA query_only=ON; PRAGMA busy_timeout=5000");
+      try {
+        const row = db.query("SELECT status FROM workflow_runs WHERE id=?").get(runId) as { status: string } | null;
+        if (!row) return null;
+        if (!statusMap[row.status]) throw new Error(`Unknown Reflow status: ${row.status}`);
+        return statusMap[row.status];
+      } finally { db.close(); }
+    },
     assertLinks(domainFilename) {
       const db = new Database(domainFilename, constants.SQLITE_OPEN_READONLY | constants.SQLITE_OPEN_URI);
       db.exec("PRAGMA query_only=ON; PRAGMA busy_timeout=5000");

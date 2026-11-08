@@ -1590,6 +1590,21 @@ export class BooksRepo {
     assertPositiveInt(jobId);
     return this.jobRows("WHERE j.id = ?", [jobId])[0] ?? null;
   }
+  /** Fresh execution fence, without reading payloads, step attempts or history. */
+  getJobStatus(jobId: number): JobStatus | null {
+    assertPositiveInt(jobId);
+    this.refreshJobSchema();
+    if (this.journalState.legacy) return this.getJob(jobId)?.status ?? null;
+    const row = this.db.query(`SELECT e.run_id FROM jobs j LEFT JOIN job_executions e ON e.job_id=j.id WHERE j.id=?`)
+      .get(jobId) as { run_id: string | null } | null;
+    if (!row) return null;
+    const reader = this.journalState.reader;
+    if (!reader) throw new Error("Job journal is not initialized");
+    if (!row.run_id) return "queued";
+    const status = reader.readStatus ? reader.readStatus(row.run_id) : reader.read([row.run_id]).get(row.run_id)?.status;
+    if (!status) throw new Error(`Missing execution ${row.run_id} for job ${jobId}`);
+    return status;
+  }
   listJobsByType(type: JobType): JobRow[] {
     return this.jobRows("WHERE j.type = ? ORDER BY j.id DESC", [type]);
   }

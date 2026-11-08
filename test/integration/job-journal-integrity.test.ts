@@ -92,6 +92,37 @@ test("idle reconciliation checks terminal linkage without hydrating history or r
   } finally { await f.close(); }
 });
 
+test("status-only fences read fresh journal state and fail closed without hydrating steps", async () => {
+  const f = await fixture();
+  try {
+    const runtime = await f.start();
+    const job = f.repo.createJob({ type: "metadata_hydration", payload: { marker: "status" } });
+    const runId = await complete(runtime, f.repo, job.id);
+    const reader = jobJournalReader(f.repo.executionDatabasePath());
+    f.repo.bindJobJournalReader({ ...reader, read() { throw new Error("History must not be read for a status fence"); } });
+    expect(f.repo.getJobStatus(job.id)).toBe("succeeded");
+    expect(f.repo.getJobStatus(job.id + 1000)).toBeNull();
+    const writer = new Database(f.repo.executionDatabasePath());
+    try {
+      for (const [stored, expected] of [["running", "running"], ["sleeping", "queued"], ["cancelled", "cancelled"], ["failed", "failed"]] as const) {
+        writer.query("UPDATE workflow_runs SET status=? WHERE id=?").run(stored, runId);
+        expect(f.repo.getJobStatus(job.id)).toBe(expected);
+      }
+      writer.query("UPDATE workflow_runs SET status='invalid' WHERE id=?").run(runId);
+      expect(() => f.repo.getJobStatus(job.id)).toThrow("Unknown Reflow status: invalid");
+      writer.query("UPDATE workflow_runs SET status='completed' WHERE id=?").run(runId);
+    } finally { writer.close(); }
+    f.repo.bindJobJournalReader({ read: reader.read });
+    expect(f.repo.getJobStatus(job.id)).toBe("succeeded");
+    f.repo.bindJobJournalReader({ read: () => new Map() });
+    expect(() => f.repo.getJobStatus(job.id)).toThrow(`Missing execution ${runId} for job ${job.id}`);
+    f.repo.bindJobJournalReader(reader);
+    await Bun.sleep(10);
+    expect(await runtime.engine.prune({ olderThan: 0, statuses: ["completed"] })).toBe(1);
+    expect(() => f.repo.getJobStatus(job.id)).toThrow(`Missing execution ${runId} for job ${job.id}`);
+  } finally { await f.close(); }
+});
+
 test("link integrity ignores orphan links but still rejects missing runs for existing jobs", async () => {
   const f = await fixture();
   try {

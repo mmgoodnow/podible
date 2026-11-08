@@ -155,8 +155,8 @@ export async function createJobExecutionRuntime(
           }
           const owner = ctx.repo.getJobExecution(input.jobId);
           if (owner?.run_id !== runId || owner.owner_token !== token) throw new LeaseExpiredError(runId);
-          const job = ctx.repo.getJob(input.jobId);
-          if (!job || job.status === "cancelled" || ctx.repo.isJobCancellationRequested(input.jobId))
+          const status = ctx.repo.getJobStatus(input.jobId);
+          if (!status || status === "cancelled" || ctx.repo.isJobCancellationRequested(input.jobId))
             throw new RunCancelledError(runId);
         };
         const execution: NonNullable<WorkerContext["execution"]> = {
