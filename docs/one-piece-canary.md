@@ -1,5 +1,22 @@
 # One Piece Production Canary
 
+## November 8 Replay Stall
+
+At 17:49 UTC on running build `6b74b4a`, a fresh read-only check verified
+**545 canonical files, 545 symlinks, and all 545 exact Plex episode IDs/paths**.
+This is not whole-show completion: request 5 still has 1,179 requested episodes.
+
+Job 29976 had a completed `tv:reuse:0:probe:0` checkpoint at 10:29 UTC but
+no subsequent step for hours, despite fresh lease heartbeats. After normal CD
+restarted the worker, it advanced through all 192 probes and started adopting
+the next 52 requested episodes. Restart recovery alone does not establish that
+the original stall is fixed. A local regression reproduced the exact failure:
+skipped historical resource-admission sleeps stranded Reflow's ordered handover
+after a slow step's callback had exited. It timed out under the old wrapper.
+The generic fix replays retained admission sleeps before fresh/cached steps and
+starts new wait names beyond existing history. The reproduction now completes,
+including when a competing lane is busy; publication/cancellation fences remain.
+
 ## Latest November 6 Diagnosis
 
 On running build `9228c66332ba87acbbfdf902921d5c6fa003e293`, at 18:24 UTC,

@@ -173,6 +173,18 @@ export async function createJobExecutionRuntime(
         const queuedJob = ctx.repo.getJob(input.jobId)!;
         const priorSteps = await storage.getStepResults(runId);
         const completedSteps = new Set(priorSteps.filter(row => row.status === "completed" && (!row.kind || row.kind === "step")).map(row => row.name));
+        const priorLaneSleeps = new Map<string, Array<{ name: string; index: number }>>();
+        for (const row of priorSteps) {
+          const match = /^podible:lane:(.+):(0|[1-9][0-9]*)$/.exec(row.name);
+          if (!match) continue;
+          const index = Number(match[2]);
+          if ((row.kind && row.kind !== "sleep") || !Number.isSafeInteger(index) || index >= 200_000)
+            throw new Error("Invalid retained resource admission sleep");
+          const name = match[1]!;
+          const sleeps = priorLaneSleeps.get(name) ?? [];
+          sleeps.push({ name: row.name, index }); priorLaneSleeps.set(name, sleeps);
+        }
+        for (const sleeps of priorLaneSleeps.values()) sleeps.sort((a, b) => a.index - b.index);
         let replayedSteps = 0;
         const prefix = periodicPrefix({ ...queuedJob, dedupe_key: ctx.repo.jobDedupeKey(queuedJob.id) });
         const newer = prefix ? ctx.repo.latestJobByDedupePrefix(queuedJob.type, prefix) : null;
@@ -218,6 +230,16 @@ export async function createJobExecutionRuntime(
               await cancelRequestedRun();
               throw new RunCancelledError(runId);
             }
+            // Reflow holds ordered-result stamps for completed operations until
+            // reached. Skipping former admission sleeps can strand a later slow
+            // fresh effect after its callback exits, even with no lane conflict.
+            const retainedSleeps = priorLaneSleeps.get(name) ?? [];
+            for (const sleep of retainedSleeps) {
+              if (++replayedSteps % 16 === 0) await yieldToIo();
+              assertActive();
+              await step.sleep(sleep.name, 1000);
+              assertActive();
+            }
             if (completedSteps.has(name)) {
               // Cached results perform no effects and must not wait for their
               // former resource lane. Reflow still owns output/order replay.
@@ -233,7 +255,7 @@ export async function createJobExecutionRuntime(
             const keys = [...(current ? jobLockKeys(ctx.repo, current) : []), `execution:${token}`];
             // Wait outside the handler: a durable sleep releases Reflow's run slot.
             // Reserve synchronously before entering step.run so another callback cannot race admission.
-            for (let wait = 0; lockSetsConflict(
+            for (let wait = (retainedSleeps.at(-1)?.index ?? -1) + 1; lockSetsConflict(
               new Set([...activeLocks].filter(key => laneOwners.get(key)?.owner !== token)), keys
             ) || (current !== null && jobAdmissionBlocked(ctx.repo, current)); wait++) {
               // Cached durable sleeps only yield microtasks in Reflow. Let

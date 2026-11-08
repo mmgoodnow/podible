@@ -26,8 +26,8 @@ async function fixture() {
   return { root, db, repo, ctx: { repo, getSettings: () => repo.getSettings(), onLog: () => {} } };
 }
 
-async function until(check: () => boolean | Promise<boolean>) {
-  const deadline = Date.now() + 5000;
+async function until(check: () => boolean | Promise<boolean>, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
   while (!(await check())) {
     if (Date.now() > deadline) throw new Error("Runtime acceptance timed out");
     await Bun.sleep(15);
@@ -148,7 +148,9 @@ test("all registered job types use checkpointed execution without claiming or re
   });
   try {
     await runtime.reconcile();
-    await until(() => jobs.every((job) => f.repo.getJob(job.id)?.status === "succeeded"));
+    // Retained pending admission sleeps keep their original wake deadline.
+    // Many exclusive policy classes can therefore require several one-second wakes.
+    await until(() => jobs.every((job) => f.repo.getJob(job.id)?.status === "succeeded"), 10_000);
     for (const job of jobs) {
       const status = await runtime.engine.getRunStatus(f.repo.getJobExecution(job.id)!.run_id);
       expect(status?.steps.some((step) => step.name === "publish")).toBe(true);
@@ -159,7 +161,7 @@ test("all registered job types use checkpointed execution without claiming or re
     f.db.close();
     await rm(f.root, { recursive: true, force: true });
   }
-});
+}, 15_000);
 
 test("restart replays completed input and effects without admission while a competitor holds their lane", async () => {
   const f = await fixture(), journalPath = path.join(f.root, "execution.sqlite");
@@ -213,6 +215,57 @@ test("restart replays completed input and effects without admission while a comp
     expect(fresh).toBe(true);
     expect(effects).toBe(1);
   } finally { release(); await runtime.stop(); f.db.close(); await rm(f.root, { recursive: true, force: true }); }
+}, 15000);
+
+test.each([[false, "sleep"], [true, "sleep"], [false, null]] as const)("retained admission sleeps release a slow fresh result; busy=%s kind=%s", async (laneBusy, kind) => {
+  const f = await fixture(), journalPath = path.join(f.root, "execution.sqlite");
+  const job = f.repo.createJob({ type: "chapter_analysis", payload: { manifestationId: 1 } });
+  const activeLocks = new Set<string>(), context = { ...f.ctx, activeLocks };
+  let entered = 0, exited = 0, next = 0, resumed = false;
+  const processJob = async (ctx: import("../../src/worker/context").WorkerContext) => {
+    if (!resumed) await ctx.execution!.sleep("restart-boundary", 600_000);
+    await ctx.execution!.run("slow-probe", async () => {
+      entered++; await Bun.sleep(100); exited++; return "probed";
+    });
+    await ctx.execution!.run("next-inspect", () => { next++; });
+    return "done" as const;
+  };
+  let runtime = await createJobExecutionRuntime(context, journalPath, { processJob });
+  try {
+    await runtime.reconcile();
+    const runId = f.repo.getJobExecution(job.id)!.run_id;
+    await until(async () => (await runtime.engine.getRunStatus(runId))?.run.status === "sleeping");
+    await runtime.stop();
+    const seed = new Database(journalPath);
+    try {
+      const at = Date.now();
+      const insert = seed.prepare(`INSERT INTO workflow_steps(id,run_id,name,status,output,attempts,created_at,updated_at,kind)
+        VALUES(?,?,?,'completed','null',0,?,?,?)`);
+      for (let i = 0; i < 4; i++) insert.run(randomUUID(), runId, `podible:lane:slow-probe:${i}`, at + i, at + i, kind);
+      seed.query("UPDATE workflow_steps SET output=? WHERE run_id=? AND name='restart-boundary'").run(String(Date.now() - 1), runId);
+      seed.query("UPDATE workflow_runs SET wake_at=? WHERE id=?").run(Date.now() - 1, runId);
+    } finally { seed.close(); }
+    resumed = true;
+    if (laneBusy) activeLocks.add("manifestation:1");
+    runtime = await createJobExecutionRuntime(context, journalPath, { processJob });
+    await runtime.reconcile();
+    if (laneBusy) {
+      await until(async () => (await runtime.engine.getRunStatus(runId))?.run.status === "sleeping");
+      const parked = await runtime.engine.getRunStatus(runId);
+      expect(parked!.steps.find(step => step.name === "podible:lane:slow-probe:4")?.kind).toBe("sleep");
+      expect(entered).toBe(0);
+      activeLocks.clear();
+      const wake = new Database(journalPath);
+      try {
+        wake.query("UPDATE workflow_steps SET output=? WHERE run_id=? AND name='podible:lane:slow-probe:4'").run(String(Date.now() - 1), runId);
+        wake.query("UPDATE workflow_runs SET wake_at=? WHERE id=?").run(Date.now() - 1, runId);
+      } finally { wake.close(); }
+    }
+    await until(() => exited === 1);
+    // The effect really finished; only result handover can prevent the next step.
+    await until(() => f.repo.getJobStatus(job.id) === "succeeded");
+    expect(entered).toBe(1); expect(exited).toBe(1); expect(next).toBe(1);
+  } finally { activeLocks.clear(); await runtime.stop(); f.db.close(); await rm(f.root, { recursive: true, force: true }); }
 }, 15000);
 
 test("long cached lane histories yield to filesystem completion before exhausting historical waits", async () => {

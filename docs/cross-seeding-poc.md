@@ -56,6 +56,12 @@ copies and unsupported storage/client capabilities remain possible.
 
 ## Explicit Library Backfill
 
+On November 8, normal CD deployed optimistic reuse as running build `6b74b4a`.
+The authenticated `crossSeed.startBackfill` call at 17:39 UTC created request
+`9a544937-e239-4a06-afda-c17d00ffafb7`, job 34787, with 150 results per provider.
+Its durable snapshot contains 141 eligible format/content targets. This records
+the start of the explicit pass, not a claim that every search or seed completed.
+
 Activity's **Find more seeds** control starts a durable, admin-only library
 backfill. It snapshots every eligible retained audiobook/ebook, movie target and
 TV target, including libraries larger than 100 targets. The snapshot and inbox
