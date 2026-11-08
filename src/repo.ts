@@ -423,6 +423,19 @@ export class BooksRepo {
   listExecutionJobs(): JobRow[] {
     return this.jobRows("ORDER BY j.id").filter((job) => job.status !== "succeeded");
   }
+  assertJobExecutionLinks(): void {
+    this.refreshJobSchema();
+    if (this.journalState.legacy) { this.listExecutionJobs(); return; }
+    const reader = this.journalState.reader;
+    if (!reader) throw new Error("Job journal is not initialized");
+    if (reader.assertLinks && this.db.filename !== ":memory:") { reader.assertLinks(this.db.filename); return; }
+    const links = this.db.query(`SELECT e.job_id,e.run_id FROM job_executions e JOIN jobs j ON j.id=e.job_id`)
+      .all() as { job_id: number; run_id: string }[];
+    const ids = links.map(link => link.run_id);
+    const existing = new Set(reader.read(ids).keys());
+    for (const link of links)
+      if (!existing.has(link.run_id)) throw new Error(`Missing execution ${link.run_id} for job ${link.job_id}`);
+  }
 
   executionDatabasePath(): string {
     return this.db.filename === ":memory:" ? ":memory:" : path.join(path.dirname(this.db.filename), "execution.sqlite");

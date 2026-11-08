@@ -271,7 +271,7 @@ export async function createJobExecutionRuntime(
       }
       // Fail closed on broken linkage, including terminal jobs; never recreate
       // a lost journal from domain input and accidentally replay its effects.
-      ctx.repo.listExecutionJobs();
+      ctx.repo.assertJobExecutionLinks();
       for (const command of ctx.repo.listJobCommands()) {
         const job = ctx.repo.getJob(command.job_id);
         if (!job) {

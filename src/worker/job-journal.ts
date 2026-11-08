@@ -1,5 +1,6 @@
-import { Database } from "bun:sqlite";
+import { Database, constants } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import type { JobRow, JobStatus } from "../app-types";
 import type { SQLiteStorage } from "reflow-ts/sqlite-bun";
 
@@ -7,6 +8,7 @@ export type JobLifecycle = Pick<JobRow, "status" | "error" | "attempt_count" | "
 export type JobWait = { reason: "provider-search"; media: "audio" | "ebook" };
 export type JobJournalReader = {
   read(runIds: string[]): Map<string, JobLifecycle>;
+  assertLinks?(domainFilename: string): void;
   waits?(runIds: string[]): Map<string, JobWait[]>;
 };
 export type JobCommand = {
@@ -40,6 +42,18 @@ function errorMessage(value: string | null): string | null {
 /** Read-only, synchronous batch adapter for the pinned Reflow SQLite schema. */
 export function jobJournalReader(filename: string): JobJournalReader {
   return {
+    assertLinks(domainFilename) {
+      const db = new Database(domainFilename, constants.SQLITE_OPEN_READONLY | constants.SQLITE_OPEN_URI);
+      db.exec("PRAGMA query_only=ON; PRAGMA busy_timeout=5000");
+      try {
+        const uri = pathToFileURL(filename); uri.searchParams.set("mode", "ro");
+        db.query("ATTACH DATABASE ? AS execution_integrity").run(uri.toString());
+        const missing = db.query(`SELECT e.job_id,e.run_id FROM job_executions e JOIN jobs j ON j.id=e.job_id
+          LEFT JOIN execution_integrity.workflow_runs r ON r.id=e.run_id WHERE r.id IS NULL LIMIT 1`)
+          .get() as { job_id: number; run_id: string } | null;
+        if (missing) throw new Error(`Missing execution ${missing.run_id} for job ${missing.job_id}`);
+      } finally { db.close(); }
+    },
     waits(runIds) {
       const out = new Map<string, JobWait[]>();
       if (!runIds.length) return out;

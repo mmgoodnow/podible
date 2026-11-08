@@ -7,6 +7,7 @@ import path from "node:path";
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
+import { jobJournalReader } from "../../src/worker/job-journal";
 
 type Runtime = Awaited<ReturnType<typeof createJobExecutionRuntime>>;
 
@@ -74,6 +75,22 @@ async function complete(runtime: Runtime, repo: BooksRepo, jobId: number): Promi
   }
   throw new Error(`Job ${jobId} did not complete within the acceptance deadline`);
 }
+
+test("idle reconciliation checks terminal linkage without hydrating history or reading step attempts", async () => {
+  const f = await fixture();
+  try {
+    const runtime = await f.start();
+    const job = f.repo.createJob({ type: "metadata_hydration", payload: { marker: "terminal" } });
+    const runId = await complete(runtime, f.repo, job.id);
+    const reader = jobJournalReader(f.repo.executionDatabasePath());
+    f.repo.bindJobJournalReader({ ...reader, read() { throw new Error("Full history hydration is forbidden on the idle pump"); } });
+    await runtime.reconcile();
+    await Bun.sleep(10);
+    expect(await runtime.engine.prune({ olderThan: 0, statuses: ["completed"] })).toBe(1);
+    await expect(runtime.reconcile()).rejects.toThrow(`Missing execution ${runId} for job ${job.id}`);
+    expect(f.effects).toEqual(["terminal"]);
+  } finally { await f.close(); }
+});
 
 test("wipe preserves job ID high-water and never reuses a surviving journal run", async () => {
   const f = await fixture();
