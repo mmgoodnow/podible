@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createEngine, createWorkflow, LeaseExpiredError, RunCancelledError } from "reflow-ts";
 import { SQLiteStorage } from "reflow-ts/sqlite-bun";
 import { z } from "zod";
@@ -18,6 +18,18 @@ import { assertWorkflowBoundary, effectCheckpoint, executionDiagnostics, withExe
 import { assertNoMutexHeld, mutexDiagnostics } from "../runtime/keyed-mutex";
 
 export const EXECUTION_JOB_TYPES = JOB_TYPES;
+
+// Log only code-shaped identifiers; filesystem mutex keys and unexpected text
+// remain correlatable without exposing paths, URLs, credentials or payloads.
+function diagnosticId(value: string): string {
+  return /^[a-zA-Z0-9_.:-]{1,160}$/.test(value) ? value
+    : `sha256:${createHash("sha256").update(value).digest("hex").slice(0, 16)}`;
+}
+function diagnosticLane(value: string): string {
+  return value === "*" || /^(?:tv-target|movie-target|release|manifestation):\d+$/.test(value) ||
+    /^book:\d+:media:(?:audio|ebook)$/.test(value) ? value
+    : `sha256:${createHash("sha256").update(value).digest("hex").slice(0, 16)}`;
+}
 
 export function executionRetryPolicy(maxAttempts: number, initialDelay?: number) {
   const longBudget = maxAttempts > 8;
@@ -45,8 +57,34 @@ export async function createJobExecutionRuntime(
   let stopping = false;
   const activeLocks = (ctx.activeLocks ??= new Set<string>());
   const laneOwners = new Map<string, { owner: string; count: number }>();
-  const reservations = new Set<{ runId: string; jobId: number; token: string; entered: boolean; release: () => void }>();
+  const reservations = new Set<{ runId: string; jobId: number; token: string; stepName: string; keys: string[];
+    reservedAt: number; entered: boolean; release: () => void }>();
   const stalledReported = new Set<string>();
+  const coordinationDiagnostics = (jobId: number) => {
+    const mutexes = mutexDiagnostics().sort((a, b) => Number(b.owner.jobId === jobId || b.waiting.some(waiter => waiter.jobId === jobId)) -
+      Number(a.owner.jobId === jobId || a.waiting.some(waiter => waiter.jobId === jobId)));
+    const pending = [...reservations].sort((a, b) => Number(b.jobId === jobId) - Number(a.jobId === jobId));
+    const identity = (item: { jobId: number | null; runId: string | null; stepName: string | null }) => ({
+      jobId: item.jobId, runId: item.runId === null ? null : diagnosticId(item.runId),
+      stepName: item.stepName === null ? null : diagnosticId(item.stepName) });
+    return {
+      mutexCount: mutexes.length,
+      mutexes: mutexes.slice(0, 24).map(lock => ({ kind: lock.kind,
+        key: `sha256:${createHash("sha256").update(lock.key).digest("hex").slice(0, 16)}`,
+        heldSince: lock.heldSince, waiters: lock.waiters,
+        owner: { ...identity(lock.owner), requestedAt: lock.owner.requestedAt, acquiredAt: lock.owner.acquiredAt },
+        waiting: [...lock.waiting].sort((a, b) => Number(b.jobId === jobId) - Number(a.jobId === jobId)).slice(0, 8)
+          .map(waiter => ({ ...identity(waiter), requestedAt: waiter.requestedAt })) })),
+      laneCount: activeLocks.size,
+      lanes: [...activeLocks].slice(0, 24).map(key => {
+        const lane = laneOwners.get(key), owner = pending.find(item => item.token === lane?.owner);
+        return { key: diagnosticLane(key), count: lane?.count ?? null, owner: owner ? identity(owner) : null };
+      }),
+      reservationCount: pending.length,
+      reservations: pending.slice(0, 24).map(item => ({ ...identity(item), entered: item.entered,
+        reservedAt: item.reservedAt, keys: item.keys.slice(0, 8).map(diagnosticLane) }))
+    };
+  };
   if (databasePath === ":memory:") {
     const directory = mkdtempSync(path.join(os.tmpdir(), "podible-execution-"));
     databasePath = path.join(directory, "execution.sqlite");
@@ -188,7 +226,8 @@ export async function createJobExecutionRuntime(
             }
             assertActive();
             let reserved = false;
-            const reservation = { runId, jobId: input.jobId, token, entered: false, release: () => release() };
+            const reservation = { runId, jobId: input.jobId, token, stepName: name, keys,
+              reservedAt: Date.now(), entered: false, release: () => release() };
             const reserve = () => {
               if (reserved) return;
               if (lockSetsConflict(new Set([...activeLocks].filter(key => laneOwners.get(key)?.owner !== token)), keys))
@@ -199,6 +238,7 @@ export async function createJobExecutionRuntime(
                 activeLocks.add(key);
               }
               reserved = true;
+              reservation.reservedAt = Date.now();
               reservations.add(reservation);
             };
             reserve();
@@ -282,7 +322,9 @@ export async function createJobExecutionRuntime(
         const key = `${effect.runId}:${effect.stepName}:${effect.startedAt}`;
         if (effect.stalled && !stalledReported.has(key)) {
           stalledReported.add(key);
-          workerLog(ctx, `[execution] stalled job=${effect.jobId} run=${effect.runId} step=${effect.stepName}; no cooperative progress, resources retained until callback exit`);
+          workerLog(ctx, `[execution] stalled job=${effect.jobId} run=${diagnosticId(effect.runId)} step=${diagnosticId(effect.stepName)}; no cooperative progress, resources retained until callback exit diagnostics=${JSON.stringify({
+            phases: effect.phases.map(phase => ({ ...phase, name: diagnosticId(phase.name) })), ...coordinationDiagnostics(effect.jobId)
+          })}`);
         }
       }
       const currentStalls = new Set(effects.map(effect => `${effect.runId}:${effect.stepName}:${effect.startedAt}`));

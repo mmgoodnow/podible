@@ -3,10 +3,11 @@ import { createHash } from "node:crypto";
 
 type Effects = {
   jobId: number; runId: string; stepName: string; signal: AbortSignal;
-  progress(): void; sequence: number;
+  progress(): void; phase(name: string): void; sequence: number;
 };
+type Phase = { name: string; startedAt: number; finishedAt?: number };
 const scope = new AsyncLocalStorage<Effects>();
-const active = new Set<{ effects: Effects; startedAt: number; progressAt: number; controller: AbortController }>();
+const active = new Set<{ effects: Effects; startedAt: number; progressAt: number; controller: AbortController; phases: Phase[] }>();
 
 export class StepDeadlineError extends Error {
   constructor(message: string) { super(message); this.name = "StepDeadlineError"; }
@@ -20,6 +21,14 @@ export function effectCheckpoint() {
   const effects = scope.getStore();
   effects?.signal.throwIfAborted();
   effects?.progress();
+}
+
+/** Code-defined labels only: never put URLs, credentials or domain payloads here. */
+export function effectPhase(name: string) {
+  if (!/^[a-z][a-z0-9:-]{0,79}$/.test(name)) throw new Error("Invalid execution phase label");
+  const effects = scope.getStore();
+  effects?.signal.throwIfAborted();
+  effects?.phase(name);
 }
 
 /** Stable within a step replay, independent for siblings within the step. */
@@ -36,8 +45,15 @@ export async function withExecutionEffects<T>(input: {
 }, handler: () => T | Promise<T>): Promise<T> {
   const controller = new AbortController();
   const effects: Effects = { ...input, sequence: 0,
-    signal: AbortSignal.any([input.signal, controller.signal]), progress: () => { record.progressAt = Date.now(); } };
-  const record = { effects, startedAt: Date.now(), progressAt: Date.now(), controller };
+    signal: AbortSignal.any([input.signal, controller.signal]), progress: () => { record.progressAt = Date.now(); },
+    phase: name => {
+      const now = Date.now(), previous = record.phases.at(-1);
+      if (previous) previous.finishedAt = now;
+      record.phases.push({ name, startedAt: now });
+      if (record.phases.length > 12) record.phases.shift();
+      record.progressAt = now;
+    } };
+  const record = { effects, startedAt: Date.now(), progressAt: Date.now(), controller, phases: [] as Phase[] };
   active.add(record);
   const timer = input.timeoutMs === undefined ? undefined : setTimeout(() =>
     controller.abort(new StepDeadlineError("Step exceeded its execution deadline")), input.timeoutMs);
@@ -55,8 +71,9 @@ export async function withExecutionEffects<T>(input: {
 
 /** Progress age, not merely an engine lease heartbeat. Unknown external effects stay fenced. */
 export function executionDiagnostics(now = Date.now(), stallMs = 5 * 60_000) {
-  return [...active].map(({ effects, startedAt, progressAt }) => {
+  return [...active].map(({ effects, startedAt, progressAt, phases }) => {
     return { jobId: effects.jobId, runId: effects.runId, stepName: effects.stepName,
-      startedAt, progressAt, aborted: effects.signal.aborted, stalled: now - progressAt >= stallMs };
+      startedAt, progressAt, phases: phases.map(phase => ({ ...phase })),
+      aborted: effects.signal.aborted, stalled: now - progressAt >= stallMs };
   });
 }

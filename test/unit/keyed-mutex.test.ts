@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { LockOrderError, mutexDiagnostics, withKeyedMutex } from "../../src/runtime/keyed-mutex";
+import { withExecutionEffects } from "../../src/runtime/execution-effects";
 
 function gate() {
   let release!: () => void;
@@ -65,5 +66,45 @@ test("aborted non-cooperative callback retains ownership until it actually exits
   await Bun.sleep(10); expect(entered).toBe(false);
   hold.release(); await Promise.all([first, second]);
   expect(entered).toBe(true);
+  expect(mutexDiagnostics()).toEqual([]);
+});
+
+test("diagnostics capture effect owners, FIFO wait identities, handoff timestamps and cancellation", async () => {
+  const firstGate = gate(), secondGate = gate(), enteredSecond = gate();
+  const resource = { kind: "publication", key: "diagnostic-view" } as const;
+  const firstController = new AbortController(), cancelled = new AbortController();
+  const effect = (jobId: number, signal: AbortSignal, action: () => Promise<void>) => withExecutionEffects({
+    jobId, runId: `run-${jobId}`, stepName: `publish:${jobId}`, signal
+  }, action);
+  const first = effect(1, firstController.signal, () => withKeyedMutex(resource, () => firstGate.promise));
+  // The owner rejection is observed immediately, even though it cannot exit yet.
+  const firstResult = first.catch(error => error);
+  const rejected = effect(2, cancelled.signal, () => withKeyedMutex(resource, async () => {}));
+  const rejectedResult = rejected.catch(error => error);
+  const second = effect(3, new AbortController().signal, () => withKeyedMutex(resource, async () => {
+    enteredSecond.release(); await secondGate.promise;
+  }));
+  try {
+    const initial = mutexDiagnostics().find(lock => lock.key === resource.key)!;
+    expect(initial.owner).toMatchObject({ jobId: 1, runId: "run-1", stepName: "publish:1", acquiredAt: initial.heldSince });
+    expect(initial.owner.requestedAt).toBeLessThanOrEqual(initial.heldSince);
+    expect(initial.waiting.map(waiter => waiter.jobId)).toEqual([2, 3]);
+    expect(initial.waiting.every(waiter => waiter.requestedAt >= initial.owner.requestedAt)).toBe(true);
+    initial.owner.jobId = 999;
+    firstController.abort(new Error("owner cancelled")); cancelled.abort(new Error("waiter cancelled"));
+    expect((await rejectedResult).message).toBe("waiter cancelled");
+    const held = mutexDiagnostics().find(lock => lock.key === resource.key)!;
+    expect(held.owner.jobId).toBe(1);
+    expect(held.waiting.map(waiter => waiter.jobId)).toEqual([3]);
+    expect(held.waiters).toBe(1);
+    firstGate.release(); await enteredSecond.promise;
+    const handed = mutexDiagnostics().find(lock => lock.key === resource.key)!;
+    expect(handed.owner).toMatchObject({ jobId: 3, runId: "run-3", stepName: "publish:3", acquiredAt: handed.heldSince });
+    expect(handed.owner.requestedAt).toBe(initial.waiting[1]!.requestedAt);
+    expect(handed.heldSince).toBeGreaterThanOrEqual(initial.heldSince);
+    expect(handed.waiters).toBe(0);
+  } finally {
+    firstGate.release(); secondGate.release(); await Promise.all([firstResult, rejectedResult, second]);
+  }
   expect(mutexDiagnostics()).toEqual([]);
 });

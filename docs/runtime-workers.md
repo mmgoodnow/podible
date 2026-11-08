@@ -89,7 +89,8 @@ Registration, canonical storage and publication use the shared owner-aware
 -> publication, then ascending key within a class. Reentry and order inversions
 throw immediately. FIFO waiters can be cancelled without unlocking the active
 callback; even an aborted owner retains the mutex until its callback exits.
-`mutexDiagnostics` exposes held times and waiter counts for backend diagnostics.
+`mutexDiagnostics` exposes held times, owner job/run/step identities and queued
+waiter identities for backend diagnostics.
 
 Effect handlers execute in an async-local scope with a cancellation signal,
 cooperative progress checkpoints and stable per-invocation operation identities.
@@ -102,8 +103,12 @@ The worker reports scalar liveness every second. Main reports a failed worker
 after 60 seconds without a heartbeat and still refuses replacement until exit
 is confirmed. A handler without a checkpoint for five minutes is diagnosed once,
 not automatically unlocked or retried: a slow external operation is not proof
-of deadlock. Internal runtime diagnostics identify the step, held mutexes and
-waiter counts. Healthy heartbeats do not erase stalled-effect evidence.
+of deadlock. Stall reports include bounded owner/waiter and lane-reservation
+snapshots. TV publication records timestamped subphases (mutex wait, view
+reconciliation, scan, verification, promotion and cleanup), so a generic
+"publishing" domain event is not mistaken for a live Plex request. Phase labels
+are code-defined, never URLs or payloads. Healthy heartbeats do not erase
+stalled-effect evidence.
 
 Failed torrent-use calls retain their durable retirement protection. Replays of
 the same step reuse the same admission identity, including after a process

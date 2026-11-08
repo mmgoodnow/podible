@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { BooksRepo } from "../repo";
 import type { AppSettings, JobRow } from "../app-types";
 import { durableStep, type WorkerContext } from "../worker/context";
+import { effectPhase } from "../runtime/execution-effects";
 import { inspectMetainfo } from "./metainfo";
 import { managedTransmission, managedTvTransmission, managedBookTransmission } from "./managed-transmission";
 import { adoptBookContent } from "../library/book-storage";
@@ -211,19 +212,24 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
       ? { cow: "unavailable", symlinkMode: "verified-read-only" }
       : { cow: "clone-force", symlinkMode: "never" }, verification: savedProof ? "journal-v1-pieces" : "client" });
   const staged = await durableStep(ctx, "reuse:layout", async () => {
+    effectPhase("reuse:layout-receipt");
     const previous = await publishedReuseLayoutCapabilities(destinationRoot, plan);
     if (previous?.symlinkMode === "verified-read-only") {
       if (!client.capabilities.readOnlySeeding || !client.resumeSeedOnly)
         return { status: "unsupported" as const, readOnly: false, reason: "Client cannot safely resume the existing seed-only symlink layout" };
+      effectPhase("reuse:symlink-layout");
       return { ...await materialize(true), readOnly: true };
     }
+    effectPhase("reuse:clone-layout");
     const cow = await materialize(false);
     if (cow.status !== "unsupported" || !client.capabilities.readOnlySeeding || !client.resumeSeedOnly)
       return { ...cow, readOnly: false };
+    effectPhase("reuse:piece-proof");
     const verified = await verifyContentReuse(plan);
     if (verified.status !== "ready" || verified.summary.verifiedReuseBytes !== metadata.size)
       return { status: "unsupported" as const, readOnly: false,
         reason: "CoW is unavailable and candidate bytes are not a complete exact match; shared files were not linked" };
+    effectPhase("reuse:symlink-layout");
     return { ...await materialize(true), readOnly: true };
   });
   if (staged.status !== "ready") return finish({ kind: staged.status === "unsupported" ? "unsupported" : "skipped", reason: staged.reason });

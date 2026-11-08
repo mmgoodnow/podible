@@ -12,6 +12,7 @@ import { defaultMovieQualityPolicy } from "../../src/movies/quality";
 import { PlexTvLibrary } from "../../src/tv/plex";
 import { publishTvVersion, reconcileTvView, tvRoots, tvViewEntries, type TvPublishedFile } from "../../src/tv/publication";
 import type { TvCatalogEntry } from "../../src/tv/types";
+import { executionDiagnostics, withExecutionEffects } from "../../src/runtime/execution-effects";
 
 const catalog: TvCatalogEntry = {
   key: "anidb:11826", tvdbId: 307375, tmdbId: null, title: "Anime / Sequel", aliases: [], year: 2019, anime: true,
@@ -56,6 +57,28 @@ async function setup() {
 }
 
 const verifiedLibrary = { scan: async () => {}, verify: async () => true };
+
+test("publication diagnostics distinguish a real Plex verification wait from view reconciliation", async () => {
+  const s = await setup();
+  let release!: () => void, entered!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const verifying = new Promise<void>(resolve => { entered = resolve; });
+  let pending: Promise<void> | undefined;
+  try {
+    const versionId = await s.makeVersion([[s.request.episodeIds[0]!]]);
+    pending = withExecutionEffects({ jobId: 1, runId: "publication-fixture", stepName: "publish", signal: new AbortController().signal }, async () => {
+      await publishTvVersion({ repo: s.repo.tv, roots: s.roots, targetId: s.request.targetId, versionId,
+        library: { scan: async () => {}, verify: async () => { entered(); await hold; return true; } } });
+      expect(executionDiagnostics().find(effect => effect.runId === "publication-fixture")?.phases.at(-1)?.name).toBe("publication:complete");
+    });
+    await verifying;
+    const phases = executionDiagnostics().find(effect => effect.runId === "publication-fixture")!.phases;
+    expect(phases.map(phase => phase.name)).toEqual(["publication:mutex-wait", "publication:stage", "publication:reconcile", "publication:scan", "publication:verify"]);
+    expect(phases.slice(0, -1).every(phase => phase.finishedAt !== undefined)).toBe(true);
+    expect(phases.at(-1)?.finishedAt).toBeUndefined();
+    release(); await pending;
+  } finally { release(); await pending; await s.close(); }
+});
 
 test("Plex TV requires exact episode GUID plus path, not matching anime/absolute or aired ordinals", async () => {
   const s = await setup();

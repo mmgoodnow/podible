@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { assertWorkflowBoundary, currentEffects, effectCheckpoint, effectOperationId, executionDiagnostics, withExecutionEffects } from "../../src/runtime/execution-effects";
+import { assertWorkflowBoundary, currentEffects, effectCheckpoint, effectPhase, effectOperationId, executionDiagnostics, withExecutionEffects } from "../../src/runtime/execution-effects";
 
 const input = { jobId: 1, runId: "fixture", stepName: "work", signal: new AbortController().signal };
 test("effect scope rejects workflow nesting, propagates cancellation, and clears after exit", async () => {
@@ -38,6 +38,22 @@ test("watchdog distinguishes checkpoints from lease heartbeats and never release
     expect(currentEffects()?.signal.aborted).toBe(false);
     effectCheckpoint();
     expect(executionDiagnostics()[0]?.stalled).toBe(false);
+  });
+  expect(executionDiagnostics()).toEqual([]);
+});
+
+test("phase diagnostics retain bounded completed intervals and isolate snapshots", async () => {
+  await withExecutionEffects(input, async () => {
+    effectPhase("publication:mutex-wait");
+    const snapshot = executionDiagnostics()[0]!;
+    effectPhase("publication:reconcile");
+    const phases = executionDiagnostics()[0]!.phases;
+    expect(phases[0]?.finishedAt).toBeNumber();
+    expect(phases[1]?.name).toBe("publication:reconcile");
+    expect(snapshot.phases[0]?.finishedAt).toBeUndefined();
+    for (let index = 0; index < 20; index++) effectPhase(`phase:${index}`);
+    expect(executionDiagnostics()[0]!.phases).toHaveLength(12);
+    expect(() => effectPhase("https://secret.example/token")).toThrow("Invalid execution phase");
   });
   expect(executionDiagnostics()).toEqual([]);
 });

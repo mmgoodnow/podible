@@ -12,7 +12,7 @@ import { jobLockKeys } from "../../src/worker/locks";
 import { jobJournalReader } from "../../src/worker/job-journal";
 import { randomUUID } from "node:crypto";
 import { crossSeedCommandSchema, crossSeedStateKey } from "../../src/media/cross-seed-state";
-import { currentEffects } from "../../src/runtime/execution-effects";
+import { currentEffects, effectPhase } from "../../src/runtime/execution-effects";
 import { withKeyedMutex } from "../../src/runtime/keyed-mutex";
 
 const types = EXECUTION_JOB_TYPES;
@@ -225,19 +225,34 @@ test("step deadline signals a hung owner without allowing conflicting effects be
     stallTimeoutMs: 10,
     processJob: async (ctx, job) => {
       await ctx.execution!.run("work", async () => {
-        if (job.type === "retention_cleanup") { signal = currentEffects()!.signal; await hold; }
+        if (job.type === "retention_cleanup") await withKeyedMutex({ kind: "publication", key: "/private/view?token=secret-never-log" }, async () => {
+          effectPhase("fixture:holding-publication");
+          signal = currentEffects()!.signal; await hold;
+        });
         else foreground = true;
       }, { timeoutMs: job.type === "retention_cleanup" ? 10 : 1000 });
       return "done";
     },
   });
   try {
-    f.repo.createJob({ type: "retention_cleanup", maxAttempts: 1 });
+    const owner = f.repo.createJob({ type: "retention_cleanup", maxAttempts: 1 });
     await runtime.reconcile(); await until(() => signal?.aborted === true);
     const next = f.repo.createJob({ type: "cover_generation" }); await runtime.reconcile();
     await Bun.sleep(30); await runtime.reconcile(); await runtime.reconcile();
     expect(foreground).toBe(false); expect(runtime.diagnostics().effects[0]?.stalled).toBe(true);
     expect(logs.filter(line => line.includes("stalled job="))).toHaveLength(1);
+    const diagnosticLog = logs.find(line => line.includes("stalled job="))!;
+    const diagnostic = JSON.parse(diagnosticLog.split(" diagnostics=")[1]!);
+    expect(diagnostic.phases).toEqual([expect.objectContaining({ name: "fixture:holding-publication", startedAt: expect.any(Number) })]);
+    expect(diagnostic.mutexes).toHaveLength(1);
+    expect(diagnostic.mutexes[0]).toMatchObject({ kind: "publication", waiters: 0,
+      owner: { jobId: owner.id, stepName: "work" } });
+    expect(diagnostic.mutexes[0].owner.runId).toBe(f.repo.getJobExecution(owner.id)!.run_id);
+    expect(diagnostic.lanes.find((lane: { key: string }) => lane.key === "*").owner.jobId).toBe(owner.id);
+    expect(diagnostic.reservations).toContainEqual(expect.objectContaining({ jobId: owner.id, stepName: "work", entered: true }));
+    expect(diagnosticLog).not.toContain("secret-never-log");
+    expect(diagnosticLog).not.toContain("/private/view");
+    expect(diagnostic.reservations.flatMap((item: { keys: string[] }) => item.keys).some((key: string) => key.startsWith("execution:"))).toBe(false);
     release(); await until(() => f.repo.getJobStatus(next.id) === "succeeded");
     expect(foreground).toBe(true); expect(runtime.diagnostics().effects).toEqual([]);
   } finally { release(); await runtime.stop(); f.db.close(); await rm(f.root, { recursive: true, force: true }); }
