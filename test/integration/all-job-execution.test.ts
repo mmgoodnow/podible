@@ -112,6 +112,84 @@ test("lock-blocked maintenance parks durably instead of starving unrelated foreg
   }
 }, 15000);
 
+test("cancellation after admission but before handler entry releases the global reservation on reconcile", async () => {
+  const f = await fixture(), activeLocks = new Set<string>();
+  let runtime: Awaited<ReturnType<typeof createJobExecutionRuntime>> | undefined;
+  let cancellation: Promise<boolean> | undefined;
+  let enteredCancelledHandler = false, foregroundEntered = false;
+  const ctx = { ...f.ctx, activeLocks, onLog(line: string) {
+    if (line.endsWith("step=cancel-before-handler") && !cancellation) {
+      const runId = /run=(\S+)/.exec(line)![1]!;
+      cancellation = runtime!.engine.cancel(runId);
+    }
+  } };
+  runtime = await createJobExecutionRuntime(ctx, path.join(f.root, "execution.sqlite"), {
+    processJob: async (context, job) => {
+      if (job.type === "retention_cleanup")
+        await context.execution!.run("cancel-before-handler", () => { enteredCancelledHandler = true; });
+      else await context.execution!.run("foreground", () => { foregroundEntered = true; });
+      return "done";
+    },
+  });
+  try {
+    const cancelled = f.repo.createJob({ type: "retention_cleanup" });
+    await runtime.reconcile();
+    await until(() => cancellation !== undefined);
+    await cancellation;
+    await until(() => f.repo.getJob(cancelled.id)?.status === "cancelled");
+    expect(enteredCancelledHandler).toBe(false);
+    // Production pumps reconcile after cancellation commands; operation promises need not settle.
+    await runtime.reconcile();
+    expect([...activeLocks]).toEqual([]);
+    const foreground = f.repo.createJob({ type: "cover_generation" });
+    await runtime.reconcile();
+    await until(() => f.repo.getJob(foreground.id)?.status === "succeeded");
+    expect(foregroundEntered).toBe(true);
+    expect([...activeLocks]).toEqual([]);
+  } finally {
+    await runtime.stop(); f.db.close(); await rm(f.root, { recursive: true, force: true });
+  }
+}, 10000);
+
+test("terminal-run cleanup never releases an entered handler's global lane before its actual exit", async () => {
+  const f = await fixture(), activeLocks = new Set<string>();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let entered = false, exited = false, foregroundEntered = false;
+  const runtime = await createJobExecutionRuntime({ ...f.ctx, activeLocks }, path.join(f.root, "execution.sqlite"), {
+    processJob: async (ctx, job) => {
+      await ctx.execution!.run("work", async () => {
+        if (job.type === "retention_cleanup") {
+          entered = true;
+          await gate; // Model an external side effect that ignores cancellation until it returns.
+          exited = true;
+        } else foregroundEntered = true;
+      });
+      return "done";
+    },
+  });
+  try {
+    const cancelled = f.repo.createJob({ type: "retention_cleanup" });
+    await runtime.reconcile(); await until(() => entered);
+    await runtime.engine.cancel(f.repo.getJobExecution(cancelled.id)!.run_id);
+    await runtime.reconcile();
+    expect(f.repo.getJob(cancelled.id)?.status).toBe("cancelled");
+    expect(activeLocks.has("*")).toBe(true);
+    const foreground = f.repo.createJob({ type: "cover_generation" });
+    await runtime.reconcile(); await Bun.sleep(150); await runtime.reconcile();
+    expect(foregroundEntered).toBe(false);
+    expect(exited).toBe(false);
+    expect(activeLocks.has("*")).toBe(true);
+    release();
+    await until(() => f.repo.getJob(foreground.id)?.status === "succeeded");
+    expect(exited).toBe(true);
+    expect(foregroundEntered).toBe(true);
+    expect([...activeLocks]).toEqual([]);
+  } finally {
+    release(); await runtime.stop(); f.db.close(); await rm(f.root, { recursive: true, force: true });
+  }
+}, 10000);
+
 test.each(["full_library_refresh", "reconcile", "retention_cleanup"] as const)("same execution parallel steps overlap, conflicting jobs and %s do not", async (maintenanceType) => {
   const f = await fixture();
   const book = f.repo.createBook({ title: "Parallel", author: "Fixture" });

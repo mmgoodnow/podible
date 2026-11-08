@@ -42,6 +42,7 @@ export async function createJobExecutionRuntime(
   let stopping = false;
   const activeLocks = (ctx.activeLocks ??= new Set<string>());
   const laneOwners = new Map<string, { owner: string; count: number }>();
+  const reservations = new Set<{ runId: string; jobId: number; token: string; entered: boolean; release: () => void }>();
   if (databasePath === ":memory:") {
     const directory = mkdtempSync(path.join(os.tmpdir(), "podible-execution-"));
     databasePath = path.join(directory, "execution.sqlite");
@@ -178,6 +179,7 @@ export async function createJobExecutionRuntime(
             }
             assertActive();
             let reserved = false;
+            const reservation = { runId, jobId: input.jobId, token, entered: false, release: () => release() };
             const reserve = () => {
               if (reserved) return;
               if (lockSetsConflict(new Set([...activeLocks].filter(key => laneOwners.get(key)?.owner !== token)), keys))
@@ -188,11 +190,13 @@ export async function createJobExecutionRuntime(
                 activeLocks.add(key);
               }
               reserved = true;
+              reservations.add(reservation);
             };
             reserve();
             const release = () => {
               if (!reserved) return;
               reserved = false;
+              reservations.delete(reservation);
               for (const key of keys) {
                 const lane = laneOwners.get(key)!;
                 if (--lane.count === 0) { laneOwners.delete(key); activeLocks.delete(key); }
@@ -201,6 +205,7 @@ export async function createJobExecutionRuntime(
             try { return await step.run<unknown>(name, {
               retry: executionRetryPolicy(ctx.repo.getJob(input.jobId)?.max_attempts ?? 5, options.retryDelayMs),
               handler: async ({ signal }) => {
+                reservation.entered = true;
                 signals.add(signal);
                 try {
                   assertActive();
@@ -254,6 +259,16 @@ export async function createJobExecutionRuntime(
   return {
     engine,
     async reconcile() {
+      // Cancellation/lease loss can cut off stepStart before the handler ever
+      // enters. Reflow may leave that operation promise pending, so neither
+      // caller nor handler finally is sufficient for an unentered reservation.
+      for (const reservation of reservations) {
+        if (reservation.entered) continue;
+        const owner = ctx.repo.getJobExecution(reservation.jobId);
+        const run = await storage.getRun(reservation.runId);
+        if (!reservation.entered && (!run || run.status !== "running" || owner?.owner_token !== reservation.token ||
+          ctx.repo.isJobCancellationRequested(reservation.jobId))) reservation.release();
+      }
       // Fail closed on broken linkage, including terminal jobs; never recreate
       // a lost journal from domain input and accidentally replay its effects.
       ctx.repo.listExecutionJobs();
@@ -316,6 +331,7 @@ export async function createJobExecutionRuntime(
     },
     async stop() {
       stopping = true;
+      for (const reservation of reservations) if (!reservation.entered) reservation.release();
       await engine.stop();
       commands.close();
       await storage.close();
