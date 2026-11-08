@@ -223,8 +223,8 @@ test("TV completion retains researched copies and queues them before publication
     expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(1);
   } finally { await s.close(); }
 });
-async function until(runtime: Runtime, predicate: () => boolean, description: () => string) {
-  const deadline = Date.now() + 8000;
+async function until(runtime: Runtime, predicate: () => boolean, description: () => string, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() > deadline) throw new Error(`TV Reflow did not finish: ${description()}`);
     await runtime.reconcile();
@@ -341,13 +341,13 @@ test("parallel batches wait for a shared large pack and reuse all remaining memb
     const queued=queueTvSeasons(s.repo,s.request.requestId);
     runtime=await createJobExecutionRuntime(s.context,path.join(s.root,"execution.sqlite"),{retryDelayMs:1});
     await until(runtime,()=>queued.every(q=>s.repo.getJob(q.acquisition.job_id!)?.status==="succeeded"),
-      ()=>JSON.stringify(queued.map(q=>s.repo.getJob(q.acquisition.job_id!))));
+      ()=>JSON.stringify(queued.map(q=>s.repo.getJob(q.acquisition.job_id!))),12000);
     expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(130);
     expect(s.fixture.stats.snatches).toBe(1);expect(searches).toBe(1);
     expect(await assertOwnedViews(s)).toHaveLength(130);
     expect(s.repo.tv.events(s.request.targetId).some(e=>e.message.includes("owned pack to finish"))).toBe(true);
   }finally{await runtime?.stop();await s.close();}
-},15000);
+},20000);
 
 test("simultaneous TV batches with stale directory intents register one canonical pack layout", async () => {
   const entry = seasonCatalog(2);

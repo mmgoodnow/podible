@@ -161,7 +161,8 @@ async function main(root: string) {
         const { acquisitionId } = JSON.parse(job.payload_json!);
         if (repo.movies.acquisition(acquisitionId)?.reason !== "upgrade") return;
         const marker = checkpointFile(root, name);
-        writeFileSync(marker, JSON.stringify({ jobId, name, pid: process.pid }));
+        writeFileSync(`${marker}.tmp`, JSON.stringify({ jobId, name, pid: process.pid }));
+        renameSync(`${marker}.tmp`, marker);
         while (!existsSync(`${marker}.continue`)) await Bun.sleep(10);
       },
     },
@@ -171,9 +172,10 @@ async function main(root: string) {
   });
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handler });
   writeFileSync(
-    path.join(root, "ready.json"),
+    path.join(root, "ready.json.tmp"),
     JSON.stringify({ port: server.port, pid: process.pid }),
   );
+  renameSync(path.join(root, "ready.json.tmp"), path.join(root, "ready.json"));
   try {
     while (true) {
       await runtime.reconcile();

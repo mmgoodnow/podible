@@ -115,7 +115,8 @@ test("same-size mutation and replaced inodes of unpublished members are not trus
     await fs.writeFile(path.join(f.contentRoot, f.plan.files[1]!.relativePath!), "xxxxx");
     expect((await f.inventory()).map(file => file.size)).toEqual([4, 6]);
     const replacement = path.join(f.contentRoot, f.plan.files[2]!.relativePath!);
-    await fs.unlink(replacement); await fs.writeFile(replacement, "CCCCCC");
+    // Retain the old inode so Linux cannot immediately reuse it for the new file.
+    await fs.rename(replacement, replacement + ".old"); await fs.writeFile(replacement, "CCCCCC");
     await expect(f.inventory()).rejects.toThrow("canonical regular object");
   } finally { await f.close(); }
 });
