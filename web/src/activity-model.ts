@@ -10,15 +10,15 @@ export function activityPhase(work: ActivityWork, downloads: ActivityDownload[])
   const live = downloads.filter(d => d.telemetry === "live");
   const transferring = live.some(d => d.state === "downloading" || (d.state == null && (d.bytesPerSecond ?? 0) > 0));
   const checking = live.some(d => d.state === "checking");
-  const publication = work.stage === "publishing" || work.stage === "available";
+  const publication = work.stage === "publishing" || work.stage === "publication-queued" || work.stage === "available";
   const labels: Record<string, string> = { searching: "Finding a release", selecting: "Choosing a release", replacing: "Trying another release",
-    verifying: "Checking episodes", publishing: "Adding to Plex", available: "Confirming availability", retained: "Finishing up",
+    verifying: "Checking episodes", publishing: "Publication pending", "publication-queued": "Waiting to publish", available: "Confirming availability", retained: "Finishing up",
     downloading: "Downloading", "pack-pending": "Waiting for pack to finish", blocked: "Waiting for a suitable release" };
   const label = publication ? labels[work.stage!]! : transferring ? "Downloading" : checking ? "Checking download"
     : live.some(d => d.state === "download-queued") ? "Download queued" : work.job.recovery === "automatic-retry" ? "Retry scheduled"
     : work.stage === "downloading" ? "Waiting for download status" : labels[work.stage ?? ""] ?? (work.job.recovery === "running" ? "Working" : "Queued");
-  const active = transferring || checking || work.job.recovery === "running" || work.stage === "publishing" || work.stage === "verifying";
-  return { label, active, showWake: !transferring && !checking && work.stage !== "publishing" && work.stage !== "verifying",
+  const active = transferring || checking || work.job.recovery === "running" || work.stage === "verifying";
+  return { label, active, showWake: !transferring && !checking && work.stage !== "verifying",
     transferLabel: publication ? "Other attached downloads" : "Download progress" };
 }
 

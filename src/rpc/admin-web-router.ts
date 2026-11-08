@@ -257,6 +257,7 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
     const requests = repo.tv.requests();
     const requestsById = new Map(requests.map(request => [request.id, request]));
     const tvBindings = associatedRows(repo, "tv_acquisition_downloads");
+    const publications = new Map(repo.tv.publications().map(publication => [publication.target_id, publication]));
     for (const targetId of new Set(requests.map((request) => request.target_id))) {
       const target = repo.tv.target(targetId)!;
       const entry = repo.tv.entry(target.entry_id);
@@ -281,9 +282,13 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
         const batch = parsed.success && parsed.data.batchEpisodeIds ? entry?.episodes.filter(ep => parsed.data.batchEpisodeIds!.includes(ep.id)) ?? [] : [];
         const seasons = [...new Set(batch.flatMap(ep => ep.numbering.filter(n => n.scheme === "tvdb:aired" && n.season !== null).map(n => n.season!)))].sort((a,b) => a-b);
         const scope = batch.length ? `${seasons.length === 1 ? seasons[0] === 0 ? "Specials" : `Season ${seasons[0]}` : seasons.length ? `Seasons ${seasons.join(", ")}` : "Episode batch"} · ${batch.length} ${batch.length === 1 ? "episode" : "episodes"}` : null;
+        const lastStage = events.filter(event => event.acquisitionId === acquisition.id).at(-1)?.stage ?? null;
+        const publication = publications.get(targetId);
+        const stage = lastStage === "publishing" && (!publication || repo.tv.version(publication.version_id)?.acquisitionId !== acquisition.id)
+          ? "publication-queued" : lastStage;
         contexts.set(acquisition.job_id, { key: `tv:${acquisition.id}`, title: label(entry?.title ?? `TV target ${targetId}`), media: "tv", targetId,
           href: entry && request?.target_id === targetId && request.user_id === actorUserId ? `/tv/requests/${request.id}` : sharedHref,
-          scope, stage: parsed.success && parsed.data.waitingForSources ? "pack-pending" : events.filter(event => event.acquisitionId === acquisition.id).at(-1)?.stage ?? null,
+          scope, stage: parsed.success && parsed.data.waitingForSources ? "pack-pending" : stage,
           suppressIncident: index > 0 || !liveRequests.length || nothingAiredMissing ||
             repo.retention.get({ namespace: "tv-target", id: String(targetId) })?.desiredPresence === "evicted" });
         const ids = new Set(tvBindings.filter((row) => row.acquisition_id === acquisition.id).map((row) => row.torrent_id));

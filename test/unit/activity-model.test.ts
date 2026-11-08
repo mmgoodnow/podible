@@ -19,10 +19,15 @@ test("a sleeping download poll remains active downloading, not a blocked or wait
     job: { ...download("one").job, recovery: "scheduled-wake", status: "queued", nextWakeAt: "2099-01-01T00:00:00Z" } });
   expect(activityPhase(item, [item])).toMatchObject({ label: "Downloading", active: true, showWake: false });
   expect(activityPhase({ ...item, stage: "blocked" }, [item])).toMatchObject({ label: "Downloading", active: true });
-  expect(activityPhase({ ...item, stage: "publishing" }, [item])).toMatchObject({ label: "Adding to Plex", active: true, transferLabel: "Other attached downloads" });
+  expect(activityPhase({ ...item, stage: "publishing" }, [item])).toMatchObject({ label: "Publication pending", active: true, transferLabel: "Other attached downloads" });
   expect(activityPhase({ ...item, stage: "blocked" }, [])).toMatchObject({ label: "Waiting for a suitable release", active: false });
   expect(activityPhase(item, [{ ...item, state: "checking", bytesPerSecond: 0 }])).toMatchObject({ label: "Checking download", active: true });
   expect(activityPhase(item, [{ ...item, telemetry: "recorded" }])).toMatchObject({ label: "Waiting for download status", active: false });
+});
+test("a historical publication event alone does not claim active Plex work", () => {
+  const item = download("one", { stage: "publishing", job: { ...download("one").job, recovery: "scheduled-wake", status: "queued" } });
+  expect(activityPhase(item, [])).toMatchObject({ label: "Publication pending", active: false, showWake: true });
+  expect(activityPhase({ ...item, stage: "publication-queued" }, [])).toMatchObject({ label: "Waiting to publish", active: false });
 });
 test("unknown or inconsistent member progress cannot masquerade as whole-request progress", () => {
   expect(downloadProgress([download("one"), download("two", { telemetry: "unknown", bytesDone: null })])).toBeNull();

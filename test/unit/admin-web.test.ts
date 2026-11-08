@@ -498,10 +498,18 @@ describe("operational facts from the execution authority", () => {
     const source = await managedSource(f, batches[0]!.id, "tv", "e".repeat(40), "parallel");
     const result = await liveInventory(f, [liveTorrent(source.hash, source.directory, { labels: ["Podible TV"] })]).read();
     expect(result.activeAcquisitions.find(w => w.job.id === batches[0]!.job_id)).toMatchObject({ stage: "downloading", scope: "Season 1 · 1 episode", job: { recovery: "scheduled-wake" } });
-    expect(result.activeAcquisitions.find(w => w.job.id === batches[1]!.job_id)).toMatchObject({ stage: "publishing", scope: "Season 2 · 1 episode" });
+    expect(result.activeAcquisitions.find(w => w.job.id === batches[1]!.job_id)).toMatchObject({ stage: "publication-queued", scope: "Season 2 · 1 episode" });
     expect(result.activeAcquisitions.find(w => w.job.id === batches[2]!.job_id)).toMatchObject({ stage: "blocked" });
     expect(result.downloads).toHaveLength(1);
     expect(result.downloads[0]).toMatchObject({ stage: "downloading", state: "downloading", job: { id: batches[0]!.job_id }, sizeBytes: 100 });
+    const fileId = randomUUID();
+    const version = f.repo.tv.recordVersion(batches[1]!.id, { identityVerified: true }, [{ id: fileId,
+      relativePath: `files/${fileId}.mkv`, sizeBytes: 100, probe: {}, episodeIds: [members[1]!.id] }]);
+    f.repo.tv.stagePublication(request.targetId, version);
+    f.repo.tv.event(request.targetId, batches[2]!.id, "parallel:queued-publication", "publishing", "Waiting for publication");
+    const staged = await liveInventory(f, [liveTorrent(source.hash, source.directory, { labels: ["Podible TV"] })]).read();
+    expect(staged.activeAcquisitions.find(w => w.job.id === batches[1]!.job_id)?.stage).toBe("publishing");
+    expect(staged.activeAcquisitions.find(w => w.job.id === batches[2]!.job_id)?.stage).toBe("publication-queued");
   });
 
   test("TV activity links use the actor's exact request, shared published work, or no inaccessible private destination", async () => {
