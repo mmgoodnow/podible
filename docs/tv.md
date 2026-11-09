@@ -95,6 +95,9 @@ credential, TV indexer list, public torrent endpoint, or model selector.
   Future requested episodes remain wanted. Routine discovery
   is event-driven via category RSS, not periodic searches per title. Feed routing
   uses the normal selector/importer and durable per-target/source receipts.
+  New RSS acquisitions reserve only their assigned single-season episode batch
+  (at most 64 episodes). A manual search can queue other missing episodes
+  without duplicating the RSS batch. Existing unscoped jobs finish unchanged.
 - Reflow owns execution/retries/checkpoints. Application transactions retain
   request scope, source evidence and outbox intent. A retry rechecks failed Plex
   observations without repeating successful source adds or canonical adoption.

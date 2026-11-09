@@ -4,7 +4,7 @@ import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { MovieIndexerError, type MovieOffer } from "../../src/movies/offers";
 import { matchTvFeed, refreshTvFeedOffer, type TvFeedContext, type TvFeedMatcher } from "../../src/tv/feed";
-import { queueTvAcquisition } from "../../src/tv/acquisition";
+import { queueTvAcquisition, queueTvSeasons } from "../../src/tv/acquisition";
 import type { TvCatalogEntry } from "../../src/tv/types";
 import type { IndexerMedia, SearchResult } from "../../src/media/indexer-gateway";
 
@@ -282,6 +282,30 @@ test("busy targets defer without receipts, then dispatch after durable waiting",
   expect(f.acquisitions()).toHaveLength(2);
   expect(f.receipts()).toHaveLength(2);
 }));
+
+for (const manualFirst of [false, true]) {
+  test(`RSS and manual search share only overlapping TV episodes (${manualFirst ? "manual" : "RSS"} first)`, () => fixture(async f => {
+    f.repo.tv.withdrawRequest(f.requested.requestId);
+    const entry = catalog("tvdb:900", 900);
+    entry.tvdbId = 900;
+    const template = entry.episodes[0]!;
+    entry.episodes = Array.from({ length: 65 }, (_, i) => ({ ...template, key: `tvdb:${901 + i}`, title: `Episode ${i + 1}`,
+      numbering: [{ ...template.numbering[0]!, season: i < 64 ? 1 : 2, episode: i < 64 ? i + 1 : 1 }] }));
+    const request = f.repo.tv.request(f.users[0]!.id, entry, f.settings.movies.qualityPolicy, entry.episodes.map(ep => ep.key));
+    const scope = (a: { decision_json: string | null }) => JSON.parse(a.decision_json!).batchEpisodeIds as number[];
+    if (manualFirst) queueTvAcquisition(f.repo, request.requestId, "recovery", [request.episodeIds[64]!]);
+    await matchTvFeed(f.ctx, f.job(), f.matches);
+    const rss = f.repo.tv.acquisitions(request.targetId).find(a => JSON.parse(a.decision_json!).feedOffers)!;
+    expect(scope(rss)).toEqual(request.episodeIds.slice(0, 64));
+    expect(f.receipts()).toHaveLength(2);
+    const manual = queueTvSeasons(f.repo, request.requestId, "recovery");
+    expect(manual.find(work => work.acquisition.id === rss.id)?.shared).toBe(true);
+    const other = manual.find(work => work.acquisition.id !== rss.id)!;
+    expect(scope(other.acquisition)).toEqual(request.episodeIds.slice(64));
+    expect(other.shared).toBe(manualFirst);
+    expect(f.repo.tv.acquisitions(request.targetId)).toHaveLength(2);
+  }));
+}
 
 test("execution ownership loss after semantic work prevents dispatch and receipts", () => fixture(async f => {
   execution(f);

@@ -4,7 +4,7 @@ import type { JobRow } from "../app-types";
 import type { BooksRepo } from "../repo";
 import { movieOfferFromResult, type MovieOffer } from "../movies/offers";
 import { durableStep, type WorkerContext } from "../worker/context";
-import { queueTvAcquisition } from "./acquisition";
+import { queueTvAcquisition, tvAcquisitionBatch } from "./acquisition";
 import type { TvEntry, TvEpisode } from "./types";
 import { createTvFeedMatcher } from "./feed-agent";
 
@@ -68,6 +68,14 @@ type Scope = TvFeedTarget & {
   requests: { requestId: number; episodeIds: number[] }[];
   revision: string;
 };
+function acquisitionBatches(target: Scope) {
+  return target.requests.flatMap(request => {
+    const requested = new Set(request.episodeIds);
+    const episodes = tvAcquisitionBatch(target.episodes.filter(ep => requested.has(ep.id)));
+    return episodes.length ? [{ requestId: request.requestId, episodes, ids: episodes.map(ep => ep.id) }] : [];
+  });
+}
+
 function scope(ctx: TvFeedContext, targetId: number): Scope | null {
   const target = ctx.repo.tv.target(targetId);
   const retention = ctx.repo.retention.get({ namespace: "tv-target", id: String(targetId) });
@@ -140,8 +148,15 @@ export async function matchTvFeed(ctx: TvFeedContext, job: JobRow, injectedMatch
       const indexes = [...new Set(matching.flatMap(m => m.releaseIndexes))];
       const unseen = indexes.filter(i => !seen(i, current));
       if (!unseen.length) continue;
-      const unfinished = ctx.repo.tv.acquisitions(targetId).some(a => !a.finished_at &&
-        (a.job_id === null || ["queued", "running"].includes(ctx.repo.getJob(a.job_id)?.status ?? "")));
+      const batches = acquisitionBatches(current);
+      const active = ctx.repo.tv.acquisitions(targetId).filter(a => !a.finished_at);
+      const statuses = ctx.repo.getJobStatuses(active.flatMap(a => a.job_id === null ? [] : [a.job_id]));
+      const unfinished = active.some(a => {
+        const batch = batches.find(batch => batch.requestId === a.request_id);
+        if (!batch || (a.job_id !== null && !["queued", "running"].includes(statuses.get(a.job_id) ?? ""))) return false;
+        const reserved = a.decision_json ? JSON.parse(a.decision_json).batchEpisodeIds as number[] | undefined : undefined;
+        return !reserved || batch.ids.some(id => reserved.includes(id));
+      });
       if (unfinished) { busy.push(targetId); continue; }
       await durableStep(ctx, `tv-rss:dispatch:${releaseRevision}:${targetId}:${current.revision}`, () => ctx.repo.transaction(() => {
         ctx.execution?.assertActive();
@@ -155,14 +170,14 @@ export async function matchTvFeed(ctx: TvFeedContext, job: JobRow, injectedMatch
         const sources = stillUnseen.map(i => ({ inboxId: entries[i]!.id, feedId: entries[i]!.feed_id,
           releaseKey: entries[i]!.release_key, contentKey: entries[i]!.content_key, firstSeenAt: entries[i]!.first_seen_at }));
         const queuedJobs: number[] = [];
-        for (const request of latest.requests) {
-          const queued = queueTvAcquisition(ctx.repo, request.requestId, "recovery");
+        for (const batch of batches) {
+          const queued = queueTvAcquisition(ctx.repo, batch.requestId, "recovery", batch.ids);
           if (queued.shared || queued.acquisition.job_id === null) throw new Error("TV acquisition became active before RSS dispatch");
           const savedDecision = ctx.repo.tv.acquisition(queued.acquisition.id)!.decision_json;
           ctx.repo.tv.decision(queued.acquisition.id, { ...(savedDecision ? JSON.parse(savedDecision) : {}), feedOffers, feedEvidence: {
             source: "release-inbox", sourceJobId: job.id, targetId, targetRevision: latest.revision,
-            entryKey: latest.entry.key, requestId: request.requestId, requestedEpisodeIds: request.episodeIds,
-            episodes: latest.episodes.filter(ep => request.episodeIds.includes(ep.id)).map(ep =>
+            entryKey: latest.entry.key, requestId: batch.requestId, requestedEpisodeIds: batch.ids,
+            episodes: batch.episodes.map(ep =>
               ({ id: ep.id, key: ep.key, numbering: ep.numbering })), releases: sources, reasons,
           } });
           queuedJobs.push(queued.acquisition.job_id);
