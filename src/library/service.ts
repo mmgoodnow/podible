@@ -361,6 +361,7 @@ export async function runSnatch(
   snatchLog(`[snatch] private Transmission add begin`);
   try {
     await ensureBookTorrentAdded(repo, settings, request.bookId, torrentBytes, {
+      currentMetainfo: () => repo.trackerAnnounces.currentMetainfo(request.provider, torrentBytes),
       bookTorrentClient: runtime.bookTorrentClient,
       assertActive: () => runtime.execution?.assertActive(),
     });

@@ -270,7 +270,10 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
       if (ctx.repo.crossSeed.isIncompatible(metadata.infoHash, plan.id) || sourceBlocked()) throw new Error("Optimistic reuse source is no longer eligible");
       const owner = ctx.repo.crossSeed.registrationOwner(identity);
       if (ctx.repo.reuseTorrent(identity) && owner !== operationId) return { skipped: true as const };
-      const result = await client.ensureAdded({ metainfo: bytes, location, seedOnly: true });
+      const result = await client.ensureAdded({
+        metainfo: ctx.repo.trackerAnnounces.currentMetainfo(crossSeedOffer(ctx.repo, command).provider, bytes),
+        location, seedOnly: true,
+      });
       if (result.clientId !== client.id || result.nativeId !== metadata.infoHash) throw new Error("Optimistic client returned another identity");
       ctx.repo.reserveReuseTorrent(result, location, crossSeedOffer(ctx.repo, command).key, command.scope, operationId);
       return result;

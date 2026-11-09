@@ -145,9 +145,8 @@ export async function getOrFetchCachedTorrentBytes(
       recordIndexerTraffic(repo, purpose, "metainfo_failure");
       throw error;
     }
-    repo.putTorrentCache({ key: cacheKey, provider: identity.provider, providerGuid: identity.providerGuid,
-      url: identity.url, infoHash, torrentBytes: bytes });
-    return bytes;
+    return repo.putTorrentCache({ key: cacheKey, provider: identity.provider, providerGuid: identity.providerGuid,
+      url: identity.url, infoHash, torrentBytes: bytes, observedFetch: true }).torrent_bytes!;
   })();
   pending.set(requestKey, request);
   let bytes: Uint8Array;

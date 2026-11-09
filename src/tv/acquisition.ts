@@ -433,7 +433,9 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
           }
           await prepareCanonicalDownload({ contentRoot: roots.contentRoot, sourceRoot, clientId: services.client.id, metainfo,
             allowCreate: canonical, assertActive: active });
-          const added = await services.client.ensureAdded({ metainfo, location });
+          const added = await services.client.ensureAdded({
+            metainfo: ctx.repo.trackerAnnounces.currentMetainfo(offer.provider, metainfo), location,
+          });
           if (added.clientId !== services.client.id || added.nativeId.toLowerCase() !== metadata.infoHash)
             throw new Error("TV client returned another torrent identity");
           active(); repo.transaction(() => {

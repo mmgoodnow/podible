@@ -4,6 +4,8 @@ import bencode from "bencode";
 import { infoHashFromTorrentBytes, readTorrentAnnounces } from "../../src/library/torrent";
 import { rotateTrackerAnnounces } from "../../src/media/tracker-rotation";
 import { runMigrations } from "../../src/db";
+import { BooksRepo } from "../../src/repo";
+import { getOrFetchCachedTorrentBytes } from "../../src/library/torrent-cache";
 
 const old = "https://old.invalid/key/announce";
 const primary = "https://new.invalid/new-key/announce";
@@ -94,4 +96,59 @@ test("refuses a donor shared by another provider before issuing any RPC", async 
       rpc: { async call() { throw new Error("RPC should not be called"); } },
     })).rejects.toThrow("attributed to another provider");
   } finally { db.close(); }
+});
+
+test("real fetches trigger durable reconciliation only after independent confirmation", async () => {
+  using db = new Database(":memory:");
+  runMigrations(db);
+  const provider = "automatic";
+  const oldBytes = bencode.encode({ announce: old, info: { name: "first" } });
+  const sample = (name: string) => bencode.encode({ announce: primary, "announce-list": newTiers, info: { name } });
+  const hash = infoHashFromTorrentBytes(oldBytes);
+  const download = async (key: string, bytes: Uint8Array) => {
+    const repo = new BooksRepo(db);
+    return (await getOrFetchCachedTorrentBytes(repo, { provider, providerGuid: key, url: `https://indexer.invalid/${key}` },
+      { revalidate: true, fetchBytes: async () => bytes })).bytes;
+  };
+  // An existing cache row from before the feature is also valid baseline evidence.
+  new BooksRepo(db).putTorrentCache({ key: "pg:automatic:original", provider, providerGuid: "original",
+    url: "https://indexer.invalid/original", infoHash: hash, torrentBytes: oldBytes });
+  await download("original", sample("first"));
+  await download("mirror", sample("first"));
+  expect(new BooksRepo(db).trackerAnnounces.pendingProvider()).toBeNull();
+  await download("independent", sample("second"));
+  const state = () => new BooksRepo(db).trackerAnnounces;
+  expect(state().pendingProvider()).toBe(provider);
+  expect(state().currentMetainfo(provider, oldBytes)).toEqual(oldBytes);
+  db.query(`INSERT INTO media_torrents(client_id,native_id,location_json,offer_key,backend,ownership_tag)
+    VALUES('client',?,'{"rootId":"tv","relativePath":"slot"}','','transmission','Podible TV')`).run(hash);
+  const row = { id: 1, hashString: hash, downloadDir: "/managed/slot", labels: ["Podible TV"], trackerList: old };
+  let unavailable = true;
+  const reconcile = () => state().reconcile(provider, {
+    clientId: "client", roots: { tv: "/managed" },
+    rpc: { async call(method, args) {
+      if (unavailable) throw new Error("daemon unavailable");
+      if (method === "torrent-get") return { torrents: [row] };
+      if (method !== "torrent-set") throw new Error("Unexpected mutation");
+      row.trackerList = String(args?.trackerList);
+      return {};
+    } },
+  });
+  await expect(reconcile()).rejects.toThrow("daemon unavailable");
+  expect(state().pendingProvider()).toBe(provider);
+  unavailable = false;
+  expect(await reconcile()).toMatchObject({ registered: 1, remaining: false });
+  expect(row.trackerList).toBe(newList);
+  expect(state().pendingProvider()).toBeNull();
+  const replay = state().currentMetainfo(provider, oldBytes);
+  expect(readTorrentAnnounces(replay).tiers).toEqual(newTiers);
+  expect(infoHashFromTorrentBytes(replay)).toBe(hash);
+  expect(state().currentMetainfo("another", oldBytes)).toEqual(oldBytes);
+  expect(readTorrentAnnounces(await download("stale", oldBytes)).tiers).toEqual(newTiers);
+  expect(state().pendingProvider()).toBeNull();
+  const saved = db.query<{ value_json: string }, []>(
+    "SELECT value_json FROM app_state WHERE key='tracker-announces:v1:automatic'",
+  ).get()!.value_json;
+  expect(saved).not.toContain("://");
+  expect(saved).not.toContain("new-key");
 });

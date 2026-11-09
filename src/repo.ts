@@ -7,6 +7,7 @@ import { MovieSeerrRepo } from "./movies/seerr-repo";
 import { ReleaseInboxRepo } from "./media/release-inbox";
 import { CrossSeedRepo, crossSeedRegistrationKey } from "./media/cross-seed-state";
 import { TransferMetricsRepo } from "./media/transfer-metrics";
+import { TrackerAnnounceState } from "./media/tracker-announce-state";
 import { ReleaseHealthRepo } from "./media/release-health";
 import { TorrentRecordsRepo } from "./media/torrent-records";
 import type { TorrentRef, DownloadLocation } from "./media/torrent-client";
@@ -261,6 +262,7 @@ function assertPositiveInt(value: number): void {
 }
 
 export class BooksRepo {
+  get trackerAnnounces() { return new TrackerAnnounceState(this.db, this.beforeWrite); }
   get activityReads() { return new ActivityReads(this.db); }
   get transferMetrics() { return new TransferMetricsRepo(this.db, this.beforeWrite, id => this.getJob(id)); }
   get crossSeed() { return new CrossSeedRepo(this.db, this.beforeWrite); }
@@ -768,7 +770,22 @@ export class BooksRepo {
     url: string;
     infoHash?: string | null;
     torrentBytes: Uint8Array;
+    observedFetch?: boolean;
   }): TorrentCacheRow {
+    if (input.observedFetch && input.provider) {
+      const provider = input.provider;
+      return this.transaction(() => {
+        this.trackerAnnounces.initialize(provider, input.torrentBytes);
+        const row = this.putTorrentCache({ ...input, observedFetch: false });
+        this.trackerAnnounces.recordFetch(provider, input.key, input.torrentBytes);
+        const current = this.trackerAnnounces.currentMetainfo(provider, input.torrentBytes);
+        if (current !== input.torrentBytes) {
+          this.db.query("UPDATE torrent_cache SET torrent_bytes=? WHERE key=?").run(current, input.key);
+          return { ...row, torrent_bytes: current };
+        }
+        return row;
+      });
+    }
     const now = nowIso();
     const cached = this.db
       .query(

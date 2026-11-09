@@ -383,6 +383,7 @@ export async function ensureBookTorrentAdded(
   options: {
     bookTorrentClient?: TorrentClient;
     assertActive?: () => void;
+    currentMetainfo?: () => Uint8Array;
   } = {},
 ) {
   const metadata = inspectMetainfo(metainfo);
@@ -437,7 +438,7 @@ export async function ensureBookTorrentAdded(
     binding = repo.bookTorrents.reclaimOrphan(binding, bookId);
   }
   const ref = await client.ensureAdded({
-    metainfo,
+    metainfo: options.currentMetainfo?.() ?? metainfo,
     location: locationFor(binding),
   });
   if (ref.clientId !== binding.client_id || ref.nativeId !== binding.info_hash)

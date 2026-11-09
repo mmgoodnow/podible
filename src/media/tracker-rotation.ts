@@ -1,9 +1,12 @@
 import type { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { readTorrentAnnounces, rewriteTorrentAnnounces } from "../library/torrent";
 import { torrentLocation, type TorrentRecord } from "./torrent-records-schema";
 import type { TransmissionRpc } from "./transmission-client";
+import type { AppSettings } from "../app-types";
 
 const ownershipTags = { books: "Podible Books", movies: "Podible Movies", tv: "Podible TV" };
 type RootId = keyof typeof ownershipTags;
@@ -25,26 +28,44 @@ const safeUrl = (value: string) => {
       Boolean(url.hostname) && !url.username && !url.password && !url.hash;
   } catch { return false; }
 };
+const effectiveTiers = ({ primary, tiers }: ReturnType<typeof readTorrentAnnounces>) =>
+  tiers.length ? tiers : primary ? [[primary]] : [];
+export function announceDigest(trackerList: string) {
+  // The order of backups within a tier is not stable across clients.
+  return createHash("sha256").update(renderTiers(trackerTiers(trackerList).map(tier => tier.sort()))).digest("hex");
+}
+export function usableAnnounces(bytes: Uint8Array) {
+  const announces = readTorrentAnnounces(bytes), tiers = effectiveTiers(announces), list = renderTiers(tiers);
+  if (!list || !urls(announces).every(safeUrl) || new Set(tiers.flat()).size !== tiers.flat().length)
+    throw new TrackerRotationError("Cached torrent has no usable announce list");
+  return { announces, digest: announceDigest(list), list };
+}
+
+export function trackerRotationRoots({ libraryRoot, movies, tv }: AppSettings) {
+  let books: string | undefined;
+  try { books = path.join(realpathSync(libraryRoot), ".podible", "downloads"); } catch { /* No verified book root. */ }
+  return { books, movies: path.isAbsolute(movies.managedRoot) ? path.join(movies.managedRoot, "downloads") : undefined,
+    tv: path.isAbsolute(tv.managedRoot) ? path.join(tv.managedRoot, "downloads") : undefined };
+}
 
 export async function rotateTrackerAnnounces(input: {
   db: Database; rpc: Pick<TransmissionRpc, "call">; clientId: string; provider: string; apply: boolean;
   roots: Partial<Record<RootId, string>>;
+  confirmed?: { donor: CacheRow; digest: string; previous: string[]; assertCurrent: () => void };
+  maxWrites?: number;
 }) {
-  const { db, rpc, clientId, provider, apply, roots } = input;
+  const { db, rpc, clientId, provider, apply, roots, confirmed } = input;
   const newest = db.query<CacheRow, [string]>(
     "SELECT key,provider,torrent_bytes,updated_at FROM torrent_cache WHERE provider=? ORDER BY updated_at DESC,rowid DESC LIMIT 1",
   );
-  const donor = newest.get(provider);
+  const donor = confirmed?.donor ?? newest.get(provider);
   if (!donor) throw new TrackerRotationError("No cached metainfo for that provider");
-  const announces = readTorrentAnnounces(donor.torrent_bytes);
+  const { announces, list: target, digest } = usableAnnounces(donor.torrent_bytes);
+  if (confirmed && confirmed.digest !== digest) throw new TrackerRotationError("Confirmed announce evidence changed");
   const newUrls = urls(announces);
-  const tiers = announces.tiers.length ? announces.tiers : announces.primary ? [[announces.primary]] : [];
-  const target = renderTiers(tiers);
-  if (!target || !newUrls.every(safeUrl) || new Set(tiers.flat()).size !== tiers.flat().length)
-    throw new TrackerRotationError("Newest cached torrent has no usable announce list");
 
   const result = { donorFetchedAt: donor.updated_at, trackerUrls: newUrls.length,
-    cached: 0, registered: 0, skippedCache: 0, skippedRegistrations: 0 };
+    cached: 0, registered: 0, skippedCache: 0, skippedRegistrations: 0, remaining: false };
   const cacheRows = db.query<CacheRow, []>("SELECT key,provider,torrent_bytes,updated_at FROM torrent_cache");
   // URLs are credential-bearing evidence, not hostname aliases. Never log them.
   const owned = new Set<string>(), other = new Set<string>();
@@ -57,7 +78,9 @@ export async function rotateTrackerAnnounces(input: {
   }
   if (newUrls.some(url => other.has(url)))
     throw new TrackerRotationError("Newest announce list is also attributed to another provider");
-  const belongs = (list: string[]) => list.length > 0 && list.every(url => owned.has(url) && !other.has(url));
+  const belongs = (list: string[], fingerprint: string) => list.length > 0 &&
+    list.every(url => !other.has(url) && (confirmed || owned.has(url))) &&
+    (!confirmed || confirmed.previous.includes(fingerprint));
 
   const rows = z.array(torrentSchema).parse((await rpc.call("torrent-get", { fields })).torrents);
   const binding = db.query<TorrentRecord, [string, string]>("SELECT * FROM media_torrents WHERE client_id=? AND native_id=?");
@@ -75,6 +98,7 @@ export async function rotateTrackerAnnounces(input: {
       row.downloadDir === path.join(root, relativePath);
   }
   function assertDonorUnchanged() {
+    if (confirmed) return confirmed.assertCurrent();
     const latest = newest.get(provider);
     if (!latest || latest.key !== donor!.key || latest.updated_at !== donor!.updated_at ||
         !Buffer.from(latest.torrent_bytes).equals(donor!.torrent_bytes))
@@ -86,10 +110,13 @@ export async function rotateTrackerAnnounces(input: {
 
   // Leave old cache provenance available for a retry until all client writes are acknowledged.
   for (const row of rows) {
-    if (!row.trackerList.trim() || row.trackerList.trim() === target) continue;
+    if (!row.trackerList.trim()) continue;
+    const fingerprint = announceDigest(row.trackerList);
+    if (fingerprint === digest) continue;
     const current = trackerTiers(row.trackerList).flat();
-    if (!current.some(url => owned.has(url))) continue;
-    if (!belongs(current) || !isOwned(row)) { result.skippedRegistrations++; continue; }
+    if (!current.some(url => owned.has(url)) && !confirmed?.previous.includes(fingerprint)) continue;
+    if (!belongs(current, fingerprint) || !isOwned(row)) { result.skippedRegistrations++; continue; }
+    if (result.registered >= (input.maxWrites ?? Infinity)) return { ...result, remaining: true };
     if (apply) {
       const fresh = await read(row.hashString);
       if (!fresh || fresh.hashString !== row.hashString || fresh.id !== row.id ||
@@ -99,7 +126,7 @@ export async function rotateTrackerAnnounces(input: {
       await rpc.call("torrent-set", { ids: [row.hashString], trackerList: target });
       const changed = await read(row.hashString);
       if (!changed || changed.hashString !== row.hashString || changed.id !== row.id ||
-          changed.trackerList.trim() !== target || !isOwned(changed))
+          announceDigest(changed.trackerList) !== digest || !isOwned(changed))
         throw new TrackerRotationError("Transmission did not confirm the tracker change; preview again");
     }
     result.registered++;
@@ -116,7 +143,8 @@ export async function rotateTrackerAnnounces(input: {
     let previous;
     try { previous = readTorrentAnnounces(row.torrent_bytes); } catch { continue; }
     if (JSON.stringify(previous) === JSON.stringify(announces)) continue;
-    if (!belongs(urls(previous))) { result.skippedCache++; continue; }
+    if (!belongs(urls(previous), announceDigest(renderTiers(effectiveTiers(previous))))) { result.skippedCache++; continue; }
+    if (result.cached >= (input.maxWrites ?? Infinity)) return { ...result, remaining: true };
     if (apply) {
       assertDonorUnchanged();
       if (update.run(rewriteTorrentAnnounces(row.torrent_bytes, announces), row.key, provider, row.torrent_bytes, row.updated_at).changes !== 1)

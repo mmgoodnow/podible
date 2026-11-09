@@ -19,7 +19,6 @@ import {
   readTransmissionIdentity,
 } from "../../src/media/managed-transmission";
 import { TransmissionRpc } from "../../src/media/transmission-client";
-import { rotateTrackerAnnounces } from "../../src/media/tracker-rotation";
 import { infoHashFromTorrentBytes, rewriteTorrentAnnounces } from "../../src/library/torrent";
 const root = await fs.mkdtemp("/tmp/transmission-acceptance-");
 const directory = path.join(root, "engine");
@@ -131,15 +130,17 @@ try {
     const primary = "http://127.0.0.1:18080/new/announce";
     const backup = "http://127.0.0.2:18080/new/announce";
     const donor = rewriteTorrentAnnounces(metainfo, { primary, tiers: [[primary], [backup]] });
-    for (const [key, bytes] of [["old", metainfo], ["new", donor]] as const)
+    const independent = bencode.encode({ announce: primary, "announce-list": [[primary], [backup]], info: { name: "independent" } });
+    for (const [key, bytes] of [["old", metainfo], ["new", donor], ["independent", independent]] as const)
       rotationRepo.putTorrentCache({ key, provider: "Loopback", url: "http://127.0.0.1:18080/torrent",
-        infoHash: infoHashFromTorrentBytes(bytes), torrentBytes: bytes });
+        infoHash: infoHashFromTorrentBytes(bytes), torrentBytes: bytes, observedFetch: key !== "old" });
     rotationDb.query(`INSERT INTO media_torrents(client_id,native_id,location_json,offer_key,backend,ownership_tag)
       VALUES(?,?,?,'','transmission','Podible Movies')`)
       .run(ref.clientId, ref.nativeId, JSON.stringify({ rootId: "movies", relativePath: "one" }));
-    const rotation = await rotateTrackerAnnounces({ db: rotationDb, rpc, clientId: ref.clientId,
-      provider: "Loopback", apply: true, roots: { movies: path.join(root, "downloads") } });
-    if (rotation.cached !== 1 || rotation.registered !== 1)
+    const provider = rotationRepo.trackerAnnounces.pendingProvider();
+    const rotation = provider && await rotationRepo.trackerAnnounces.reconcile(provider,
+      { rpc, clientId: ref.clientId, roots: { movies: path.join(root, "downloads") } });
+    if (!rotation || rotation.cached !== 1 || rotation.registered !== 1)
       throw new Error("Announce rotation did not update the cached and registered torrent");
     await stop();
     prepareTransmission(directory);

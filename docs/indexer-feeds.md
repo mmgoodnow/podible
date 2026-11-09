@@ -144,19 +144,21 @@ expire 30 minutes after fetch. Entries pinned to a verified hash have no age
 limit. Confirmed nukes, already-owned identities and unsupported client
 operations are skipped before downloading metainfo.
 
-After updating the tracker/indexer credentials, make sure Podible has freshly
-fetched a torrent from that provider using the new credentials. In Podible's
-runtime (inside the Podible container if using Docker), run
-`bun run rotate:tracker-announces --provider "Exact provider name"` to preview,
-then repeat with `--apply`. Verify the preview's donor fetch time. The newest
-cached torrent provides the full replacement announce list, including tiers and
-domains. The command updates both the provider's cached metainfo and matching
-Podible-owned registrations without changing infohashes or rechecking files.
-It skips registrations with unknown or mixed tracker URLs; a hostname alone
-does not prove which account or provider owns a registration. Credentials are
-never printed. Run when acquisitions and cross-seed registrations for that
-provider are idle: the command does not rewrite metainfo already checkpointed
-by a running job.
+Passkey and announce domain changes are picked up automatically from ordinary
+metainfo fetches. A changed complete announce list must agree across two
+distinct infohashes from the same provider before background stewardship
+rewrites cached metainfo and matching Podible-owned Transmission registrations.
+This does not send extra indexer requests, re-add torrents, or recheck files.
+An exact previously observed tracker list is required; a hostname alone is
+not evidence of ownership. Known retired lists are also replaced when a
+checkpointed acquisition is about to register a torrent. If a provider is
+idle, rotation waits for new metainfo. Podible cannot update the credentials
+in the upstream indexer itself.
+
+For a manual recovery, `bun run rotate:tracker-announces --provider "Exact provider name"`
+still previews the newest cached list, and `--apply` applies it. Use this
+override only after verifying the donor fetch time and while acquisitions
+for that provider are idle. Neither path prints credentials.
 
 The admin metrics endpoint reports `podible_indexer_traffic_total` by purpose
 and event. Only wire requests count as `search_id`, `search_text` or

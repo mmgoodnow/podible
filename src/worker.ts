@@ -47,7 +47,7 @@ export async function runWorker(
           nextTransferMetrics = Date.now() + TRANSFER_METRICS_INTERVAL_MS;
         }
         if (Date.now() >= nextStewardship) {
-          if (hasTorrentStewardshipBindings(ctx.repo)) schedule({
+          if (hasTorrentStewardshipBindings(ctx.repo) || ctx.repo.trackerAnnounces.pendingProvider()) schedule({
               type: "torrent_stewardship_collect",
               idempotencyKey: `torrent-stewardship:${Math.floor(Date.now() / STEWARDSHIP_INTERVAL_MS)}`,
               maxAttempts: 3,

@@ -368,7 +368,7 @@ export async function acquireMovie(
         await prepareCanonicalDownload({ contentRoot: roots.contentRoot, sourceRoot, clientId: services.client.id,
           metainfo, allowCreate: binding.canonicalDownload ?? false, assertActive: active });
         const added = await services.client.ensureAdded({
-          metainfo,
+          metainfo: ctx.repo.trackerAnnounces.currentMetainfo(offer.provider, metainfo),
           location: binding.location,
         });
         active();
