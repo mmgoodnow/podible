@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import type { JobRow, JobStatus } from "../app-types";
 import type { SQLiteStorage } from "reflow-ts/sqlite-bun";
+import { activityJobIds } from "../activity-reads";
 
 export type JobLifecycle = Pick<JobRow, "status" | "error" | "attempt_count" | "next_run_at" | "updated_at">;
 export type JobWait = { reason: "provider-search"; media: "audio" | "ebook" };
@@ -11,6 +12,7 @@ export type JobJournalReader = {
   readStatus?(runId: string): JobStatus | null;
   assertLinks?(domainFilename: string): void;
   waits?(runIds: string[]): Map<string, JobWait[]>;
+  activityJobIds?(domainFilename: string): number[];
 };
 export type JobCommand = {
   id: number;
@@ -43,6 +45,7 @@ function errorMessage(value: string | null): string | null {
 /** Read-only, synchronous batch adapter for the pinned Reflow SQLite schema. */
 export function jobJournalReader(filename: string): JobJournalReader {
   return {
+    activityJobIds: domainFilename => activityJobIds(domainFilename, filename),
     readStatus(runId) {
       const db = new Database(filename, { readonly: true });
       db.exec("PRAGMA query_only=ON; PRAGMA busy_timeout=5000");

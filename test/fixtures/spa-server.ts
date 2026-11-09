@@ -19,14 +19,15 @@ import { tvShadowInputSchema } from "../../src/tv/shadow-types";
 import { createHash } from "node:crypto";
 import { safeReturnPath } from "../../src/redirects";
 import { seedTransferMetricsFixture } from "./transfer-metrics";
+import { seedActivityHistory } from "./ops-scale";
 
-const db = new Database(":memory:");
-runMigrations(db);
-const repo = new BooksRepo(db);
-repo.ensureSettings();
 const root = await fs.realpath(
   await fs.mkdtemp(path.join(os.tmpdir(), "movie-spa-")),
 );
+const db = new Database(process.env.OPS_SCALE_FIXTURE ? path.join(root, "podible.sqlite") : ":memory:");
+runMigrations(db);
+const repo = new BooksRepo(db);
+repo.ensureSettings();
 const settings = repo.getSettings();
 settings.movies = {
   ...settings.movies,
@@ -170,6 +171,7 @@ const runtime = await createJobExecutionRuntime(
   },
   path.join(root, "execution.sqlite"),
 );
+if (process.env.OPS_SCALE_FIXTURE) seedActivityHistory(db, repo.executionDatabasePath());
 let pumping = false;
 const interval = setInterval(async () => {
   // TV browser actions exercise real queue receipts, never external acquisition.

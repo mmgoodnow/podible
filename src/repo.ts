@@ -23,6 +23,7 @@ import { assertNoPendingTorrentRetirements } from "./media/torrent-retirement-ad
 import { readConsumerCount } from "./media/torrent-retirement-query";
 import type { RetirementBinding } from "./media/torrent-retirement-types";
 import { TvShadowRepo } from "./tv/shadow-repo";
+import { ActivityReads } from "./activity-reads";
 
 import { nowIso, finalizeJobJournalMigration } from "./db";
 import { immediateTransaction, type SyncTransactionCallback } from "./db-transaction";
@@ -260,6 +261,7 @@ function assertPositiveInt(value: number): void {
 }
 
 export class BooksRepo {
+  get activityReads() { return new ActivityReads(this.db); }
   get transferMetrics() { return new TransferMetricsRepo(this.db, this.beforeWrite, id => this.getJob(id)); }
   get crossSeed() { return new CrossSeedRepo(this.db, this.beforeWrite); }
   get releaseHealth() { return new ReleaseHealthRepo(this.db, this.beforeWrite); }
@@ -420,6 +422,20 @@ export class BooksRepo {
   }
   listExecutionJobs(): JobRow[] {
     return this.jobRows("ORDER BY j.id").filter((job) => job.status !== "succeeded");
+  }
+  listActivityJobs(): JobRow[] {
+    this.refreshJobSchema();
+    const reader = this.journalState.reader;
+    const relevant = (job: JobRow) => job.status !== "succeeded" && job.status !== "cancelled";
+    if (this.journalState.legacy || this.db.filename === ":memory:" || !reader?.activityJobIds)
+      return this.listExecutionJobs().filter(relevant);
+    const ids = reader.activityJobIds(this.db.filename);
+    const jobs: JobRow[] = [];
+    for (let offset = 0; offset < ids.length; offset += 500) {
+      const batch = ids.slice(offset, offset + 500);
+      jobs.push(...this.jobRows(`WHERE j.id IN (${batch.map(() => "?").join(",")}) ORDER BY j.id`, batch).filter(relevant));
+    }
+    return jobs;
   }
   assertJobExecutionLinks(): void {
     this.refreshJobSchema();

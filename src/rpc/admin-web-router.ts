@@ -220,7 +220,7 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
   const warnings: string[] = [];
   const incidents: AdminWebOps["incidents"] = [];
   let jobs: JobRow[] = [];
-  try { jobs = repo.listExecutionJobs(); }
+  try { jobs = repo.listActivityJobs(); }
   catch {
     warnings.push("Execution journal could not be read; active work and failure counts are incomplete.");
     incidents.push({ key: "execution-authority", title: "Execution state unavailable", detail: "The execution journal cannot be read; do not infer an empty queue or successful execution.",
@@ -229,7 +229,8 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
   const contexts = new Map<number, Context>();
   const torrents = new Map<number, AdminTorrentBinding[]>();
   const byId = new Map(jobs.map((job) => [job.id, job]));
-  const getJob = (jobId: number) => byId.get(jobId) ?? repo.getJob(jobId);
+  const jobStatus = (jobId: number) => byId.get(jobId)?.status ?? repo.getJobStatus(jobId);
+  const reads = repo.activityReads;
   const retryPending = new Set(repo.listJobCommands().filter((command) => command.kind === "retry" &&
     command.generation === repo.jobExecutionGeneration(command.job_id)).map((command) => command.job_id));
   let waiting = 0;
@@ -241,11 +242,11 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
       const downloads = repo.movies.downloads(target.id);
       const events = repo.movies.events(target.id);
       const latest = acquisitions[0];
-      if (latest?.finished_at && latest.job_id && getJob(latest.job_id)?.status === "succeeded" &&
-          target.active_version_id === null && repo.movies.activeRequestCount(target.id) > 0 &&
-          repo.movies.events(target.id).at(-1)?.stage === "waiting" &&
+      if (latest?.finished_at && latest.job_id &&
+          target.active_version_id === null && events.at(-1)?.stage === "waiting" &&
+          repo.movies.activeRequestCount(target.id) > 0 && jobStatus(latest.job_id) === "succeeded" &&
           repo.retention.get({ namespace: "movie-target", id: String(target.id) })?.desiredPresence !== "evicted") waiting++;
-      for (const [index, acquisition] of acquisitions.entries()) if (acquisition.job_id) {
+      for (const [index, acquisition] of acquisitions.entries()) if (acquisition.job_id && byId.has(acquisition.job_id)) {
         contexts.set(acquisition.job_id, { key: `movie:${acquisition.id}`, title: label(movie?.title ?? `Movie target ${target.id}`), media: "movie", targetId: target.id,
           href: movie ? `/movies/${movie.tmdbId}` : null, stage: events.filter(event => event.acquisitionId === acquisition.id).at(-1)?.stage ?? null,
           suppressIncident: index > 0 || target.active_version_id !== null || !repo.movies.activeRequestCount(target.id) ||
@@ -260,36 +261,35 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
     const publications = new Map(repo.tv.publications().map(publication => [publication.target_id, publication]));
     for (const targetId of new Set(requests.map((request) => request.target_id))) {
       const target = repo.tv.target(targetId)!;
-      const entry = repo.tv.entry(target.entry_id);
-      const sharedHref = entry && repo.tv.availableEpisodeCount(entry.id) > 0 ? `/tv/library/${entry.id}` : null;
-      const liveRequests = requests.filter((request) => request.target_id === targetId && !request.withdrawn_at);
-      const pending = liveRequests.flatMap((request) => repo.tv.missingEpisodes(request.id));
-      const nothingAiredMissing = pending.every((episode) => !episode.airDate || Date.parse(episode.airDate) > now);
+      const title = reads.tvTitle(target.entry_id);
+      const sharedHref = title !== null && repo.tv.availableEpisodeCount(target.entry_id) > 0 ? `/tv/library/${target.entry_id}` : null;
+      const hasLiveRequest = requests.some((request) => request.target_id === targetId && !request.withdrawn_at);
+      const pending = reads.tvMissingAirDates(targetId);
+      const nothingAiredMissing = pending.every(airDate => !airDate || Date.parse(airDate) > now);
       const downloads = repo.tv.downloads(targetId);
       const acquisitions = repo.tv.acquisitions(targetId);
       const events = repo.tv.events(targetId);
       const latest = acquisitions[0];
-      if (latest?.finished_at && latest.job_id && getJob(latest.job_id)?.status === "succeeded" && liveRequests.length && pending.length &&
-          repo.retention.get({ namespace: "tv-target", id: String(targetId) })?.desiredPresence !== "evicted") {
+      if (latest?.finished_at && latest.job_id && pending.length) {
         let noOffer = false;
         try { noOffer = JSON.parse(latest.decision_json ?? "{}").selection?.title === null; } catch { /* No inferred waiting from malformed evidence. */ }
-        if (nothingAiredMissing || noOffer) waiting++;
+        if ((nothingAiredMissing || noOffer) && jobStatus(latest.job_id) === "succeeded" &&
+            repo.retention.get({ namespace: "tv-target", id: String(targetId) })?.desiredPresence !== "evicted") waiting++;
       }
-      for (const [index, acquisition] of acquisitions.entries()) if (acquisition.job_id) {
+      for (const [index, acquisition] of acquisitions.entries()) if (acquisition.job_id && byId.has(acquisition.job_id)) {
         const request = acquisition.request_id ? requestsById.get(acquisition.request_id) : null;
         const parsed = z.object({ batchEpisodeIds: z.array(id).optional(), waitingForSources: z.boolean().optional() })
           .safeParse(acquisition.decision_json ? JSON.parse(acquisition.decision_json) : {});
-        const batch = parsed.success && parsed.data.batchEpisodeIds ? entry?.episodes.filter(ep => parsed.data.batchEpisodeIds!.includes(ep.id)) ?? [] : [];
-        const seasons = [...new Set(batch.flatMap(ep => ep.numbering.filter(n => n.scheme === "tvdb:aired" && n.season !== null).map(n => n.season!)))].sort((a,b) => a-b);
-        const scope = batch.length ? `${seasons.length === 1 ? seasons[0] === 0 ? "Specials" : `Season ${seasons[0]}` : seasons.length ? `Seasons ${seasons.join(", ")}` : "Episode batch"} · ${batch.length} ${batch.length === 1 ? "episode" : "episodes"}` : null;
+        const scope = parsed.success && parsed.data.batchEpisodeIds?.length
+          ? reads.tvBatchScope(target.entry_id, parsed.data.batchEpisodeIds) : null;
         const lastStage = events.filter(event => event.acquisitionId === acquisition.id).at(-1)?.stage ?? null;
         const publication = publications.get(targetId);
         const stage = lastStage === "publishing" && (!publication || repo.tv.version(publication.version_id)?.acquisitionId !== acquisition.id)
           ? "publication-queued" : lastStage;
-        contexts.set(acquisition.job_id, { key: `tv:${acquisition.id}`, title: label(entry?.title ?? `TV target ${targetId}`), media: "tv", targetId,
-          href: entry && request?.target_id === targetId && request.user_id === actorUserId ? `/tv/requests/${request.id}` : sharedHref,
+        contexts.set(acquisition.job_id, { key: `tv:${acquisition.id}`, title: label(title ?? `TV target ${targetId}`), media: "tv", targetId,
+          href: title !== null && request?.target_id === targetId && request.user_id === actorUserId ? `/tv/requests/${request.id}` : sharedHref,
           scope, stage: parsed.success && parsed.data.waitingForSources ? "pack-pending" : stage,
-          suppressIncident: index > 0 || !liveRequests.length || nothingAiredMissing ||
+          suppressIncident: index > 0 || !hasLiveRequest || nothingAiredMissing ||
             repo.retention.get({ namespace: "tv-target", id: String(targetId) })?.desiredPresence === "evicted" });
         const ids = new Set(tvBindings.filter((row) => row.acquisition_id === acquisition.id).map((row) => row.torrent_id));
         torrents.set(acquisition.job_id, downloads.filter((download) => ids.has(download.id)));
@@ -308,7 +308,6 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
     warnings.push(`Current managed torrent activity could not be verified for ${inventory.unknown} bound source(s); recorded observations are not counted as active downloads or actionable torrent errors.`);
   if (inventory.truncated) warnings.push("Managed torrent inventory exceeded the bounded read budget; current download counts are incomplete.");
 
-  const latestByType = new Map<string, JobRow[]>();
   let jobWaits = new Map<number, import("../worker/job-journal").JobWait[]>();
   try { jobWaits = repo.jobWaits(jobs.filter(job => active(job) && job.type === "acquire" && job.book_id).slice(0, 100).map(job => job.id)); }
   catch { warnings.push("Some scheduled search reasons could not be read; no provider wait is inferred."); }
@@ -349,6 +348,9 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
   const acquisitions: Work[] = [], downloads: AdminWebOps["downloads"] = [];
   for (const job of jobs) {
     if (repo.isJobCancellationRequested(job.id)) continue;
+    const mayHaveIncident = job.status === "failed" || (active(job) && Boolean(job.error));
+    const superseded = mayHaveIncident && !contexts.has(job.id) && reads.hasNewerJob(job);
+    if (!active(job) && (!mayHaveIncident || superseded)) continue;
     let context: Context;
     try { context = contextFor(job); } catch { warnings.push("An operation's domain metadata is unavailable."); continue; }
     const { suppressIncident, ...work } = context;
@@ -371,12 +373,7 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
         incidents.push({ key: `torrent:${torrent.id}`, title: work.title, detail: problem.message, code: problem.code,
           jobId: job.id, href: work.href, recovery: view.recovery, nextWakeAt: view.nextWakeAt });
     }
-    if ((job.status !== "failed" && !(active(job) && job.error)) || suppressIncident) continue;
-    if (!contexts.has(job.id)) {
-      if (!latestByType.has(job.type)) latestByType.set(job.type, repo.listJobsByType(job.type));
-      const newer = latestByType.get(job.type)!.some((other) => other.id > job.id && other.book_id === job.book_id && other.release_id === job.release_id);
-      if (newer) continue;
-    }
+    if (!mayHaveIncident || suppressIncident || superseded) continue;
     const comparison = job.type === "tv_shadow_evaluate" || job.type === "movie_shadow_evaluate";
     const error = comparison ? { code: "comparison-failed", message: job.type === "tv_shadow_evaluate"
       ? "The independent Sonarr comparison could not finish inspecting episode mappings. This comparison does not change downloads or your Plex library."
