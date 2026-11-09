@@ -2,7 +2,7 @@ import { ProwlarrDiscovery, type DiscoveredIndexer } from "../media/prowlarr";
 import { IndexerGateway, indexerGateway, type SearchOptions } from "../media/indexer-gateway";
 import { inspectMetainfo } from "../media/metainfo";
 import type { BooksRepo } from "../repo";
-import { getOrFetchCachedTorrentBytes, unpinnedMetainfoMaxAgeMs } from "../library/torrent-cache";
+import { getOrFetchCachedTorrentBytes } from "../library/torrent-cache";
 import type { TrafficPurpose } from "../media/indexer-traffic";
 import type { Movie } from "./types";
 import { releaseOfferFromResult as movieOfferFromResult, type ReleaseOffer as MovieOffer } from "../media/release-offer";
@@ -151,7 +151,6 @@ export async function cachedMovieMetainfo(repo: BooksRepo, offer: MovieOffer, pu
     ? guid["#text"] : null;
   return (await getOrFetchCachedTorrentBytes(repo, { provider: offer.provider, providerGuid, url: offer.url, infoHash: offer.infoHash }, {
     purpose,
-    maxAgeMs: offer.infoHash ? undefined : unpinnedMetainfoMaxAgeMs,
     fetchBytes: fetchMetainfoResponse,
     validate: bytes => validateMetainfo(bytes, offer.infoHash),
   })).bytes;

@@ -1,7 +1,7 @@
 import { BooksRepo } from "../repo";
 import { ensureBookTorrentAdded } from "../media/book-torrents";
 import type { TorrentClient } from "../media/torrent-client";
-import { getOrFetchCachedTorrentBytes, torrentCacheKeyFor, unpinnedMetainfoMaxAgeMs } from "./torrent-cache";
+import { getOrFetchCachedTorrentBytes } from "./torrent-cache";
 import { infoHashFromTorrentBytes, normalizeInfoHash } from "./torrent";
 import { searchTorznabBatch } from "./torznab";
 import { bookIndexerSources } from "./indexer-discovery";
@@ -334,24 +334,11 @@ export async function runSnatch(
       onLog: (line) => snatchLog(line),
       // Reacquisition must still check mutable provider listings for changed content.
       revalidate: existingByGuid !== null || existingByClaimedHash !== null,
-      maxAgeMs: explicitHash === null ? unpinnedMetainfoMaxAgeMs : undefined,
     }
   );
   snatchLog(`[snatch] fetch_torrent ok bytes=${torrentBytes.byteLength} cache_hit=${cacheHit}`);
   const derivedHash = infoHashFromTorrentBytes(torrentBytes);
   snatchLog(`[snatch] derived_hash=${derivedHash}`);
-  repo.putTorrentCache({
-    key: torrentCacheKeyFor({
-      provider: request.provider,
-      providerGuid,
-      url: request.url
-    }),
-    provider: request.provider,
-    providerGuid,
-    url: request.url,
-    infoHash: derivedHash,
-    torrentBytes
-  });
 
   const retainedEvidence = retainBookSelectionIntent(repo, request, derivedHash, runtime.selectedCopies);
   const existingByDerived = repo.findReleaseByInfoHash(derivedHash);

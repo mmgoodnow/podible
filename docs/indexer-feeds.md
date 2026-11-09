@@ -139,8 +139,12 @@ alternate requests. Backfill requests one page of 50 results by default, or
 fewer if the provider advertises a lower maximum.
 
 Inspection, acquisition and cross-seeding share cached metainfo for the same
-provider listing and exact download URL. Unknown-hash acquisitions only reuse
-recent entries. Confirmed nukes, already-owned identities and unsupported
+provider listing and exact download URL. Entries expire 30 minutes after fetch
+without an advertised infohash, or after 24 hours with one. Announce URLs can
+change without changing the infohash, so even hash-pinned entries expire. An
+expired entry is refreshed on demand, not by polling the indexer, and is not
+used if the refresh fails. This does not rewrite trackers on existing client
+registrations. Confirmed nukes, already-owned identities and unsupported
 client operations are skipped before downloading metainfo.
 
 The admin metrics endpoint reports `podible_indexer_traffic_total` by purpose
