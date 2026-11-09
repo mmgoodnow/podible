@@ -19,6 +19,8 @@ import {
   readTransmissionIdentity,
 } from "../../src/media/managed-transmission";
 import { TransmissionRpc } from "../../src/media/transmission-client";
+import { rotateTrackerAnnounces } from "../../src/media/tracker-rotation";
+import { infoHashFromTorrentBytes, rewriteTorrentAnnounces } from "../../src/library/torrent";
 const root = await fs.mkdtemp("/tmp/transmission-acceptance-");
 const directory = path.join(root, "engine");
 const identity = prepareTransmission(directory);
@@ -89,7 +91,9 @@ for (let i = 0; i < data.length; i += 16384)
       .update(data.subarray(i, i + 16384))
       .digest(),
   );
+const originalAnnounce = "http://127.0.0.1:18080/old/announce";
 const metainfo = bencode.encode({
+  announce: originalAnnounce,
   "url-list": ["http://127.0.0.1:18080/seed/"],
   info: {
     name: "Bundle",
@@ -120,9 +124,31 @@ try {
   for (const [index, file] of files.entries())
     if (!(await fs.readFile(paths[index]!.path)).equals(file.bytes))
       throw new Error("Transferred bytes differ");
-  await stop();
-  prepareTransmission(directory);
-  await start();
+  {
+    using rotationDb = new Database(":memory:");
+    runMigrations(rotationDb);
+    const rotationRepo = new BooksRepo(rotationDb);
+    const primary = "http://127.0.0.1:18080/new/announce";
+    const backup = "http://127.0.0.2:18080/new/announce";
+    const donor = rewriteTorrentAnnounces(metainfo, { primary, tiers: [[primary], [backup]] });
+    for (const [key, bytes] of [["old", metainfo], ["new", donor]] as const)
+      rotationRepo.putTorrentCache({ key, provider: "Loopback", url: "http://127.0.0.1:18080/torrent",
+        infoHash: infoHashFromTorrentBytes(bytes), torrentBytes: bytes });
+    rotationDb.query(`INSERT INTO media_torrents(client_id,native_id,location_json,offer_key,backend,ownership_tag)
+      VALUES(?,?,?,'','transmission','Podible Movies')`)
+      .run(ref.clientId, ref.nativeId, JSON.stringify({ rootId: "movies", relativePath: "one" }));
+    const rotation = await rotateTrackerAnnounces({ db: rotationDb, rpc, clientId: ref.clientId,
+      provider: "Loopback", apply: true, roots: { movies: path.join(root, "downloads") } });
+    if (rotation.cached !== 1 || rotation.registered !== 1)
+      throw new Error("Announce rotation did not update the cached and registered torrent");
+    await stop();
+    prepareTransmission(directory);
+    await start();
+    const current = await rpc.call("torrent-get", { ids: [ref.nativeId], fields: ["trackerList"] });
+    const trackers = (current.torrents as { trackerList: string }[])[0]?.trackerList.trim();
+    if (trackers !== `${primary}\n\n${backup}` || !(await client.inspect(ref)).complete)
+      throw new Error("Restart lost rotated tracker tiers or completed data");
+  }
   const resumed = managedTransmission(root, directory);
   const same = await resumed.ensureAdded({
     metainfo,

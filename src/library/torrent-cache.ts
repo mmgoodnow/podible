@@ -99,8 +99,6 @@ export function inspectTorrentFiles(bytes: Uint8Array): TorrentFileEntry[] {
 
 const pendingByDatabase = new WeakMap<object, Map<string, Promise<Uint8Array>>>();
 const unpinnedMetainfoMaxAgeMs = 30 * 60_000;
-// The infohash pins the payload, not the announce URLs or their credentials.
-const pinnedMetainfoMaxAgeMs = 24 * 60 * 60_000;
 
 export async function getOrFetchCachedTorrentBytes(
   repo: BooksRepo,
@@ -111,7 +109,7 @@ export async function getOrFetchCachedTorrentBytes(
   const cacheKey = torrentCacheKeyFor(identity);
   const cached = repo.getTorrentCache(cacheKey);
   const age = cached ? Date.now() - Date.parse(cached.updated_at) : Infinity;
-  const fresh = age >= 0 && age <= (identity.infoHash ? pinnedMetainfoMaxAgeMs : unpinnedMetainfoMaxAgeMs);
+  const fresh = identity.infoHash || (age >= 0 && age <= unpinnedMetainfoMaxAgeMs);
   let cachedHash: string | null = null;
   if (cached?.torrent_bytes && fresh && !options.revalidate) {
     try {

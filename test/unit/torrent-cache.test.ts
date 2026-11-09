@@ -27,33 +27,10 @@ async function fixture(run: (repo: BooksRepo, calls: string[], db: Database) => 
 
 const identity = { provider: "fixture", providerGuid: "reused", url: "https://fixture.invalid/download" };
 
-test("hash-pinned metainfo refreshes rotated announce credentials without a new GUID or URL", async () => fixture(async (repo, _, db) => {
-  const makeTorrent = (passkey: string) => bencode.encode({ announce: `https://tracker.invalid/${passkey}/announce`, info: {
-    name: "episode.mkv", length: 10, "piece length": 16384, pieces: Buffer.from("12345678901234567890"),
-  } });
-  const previous = makeTorrent("old-key"), current = makeTorrent("new-key");
-  const infoHash = infoHashFromTorrentBytes(previous);
-  expect(infoHashFromTorrentBytes(current)).toBe(infoHash);
-  const key = torrentCacheKeyFor(identity);
-  repo.putTorrentCache({ key, ...identity, infoHash, torrentBytes: previous });
-  const cached = () => repo.getTorrentCache(key)!;
-  db.query("UPDATE torrent_cache SET updated_at = ? WHERE key = ?").run(new Date(Date.now() - 25 * 3_600_000).toISOString(), key);
-  const offer = { ...identity, key: "fixture", title: "Fixture", sizeBytes: 10, seeders: 1, infoHash, attributes: { guid: identity.providerGuid } };
-  let downloads = 0;
-  globalThis.fetch = (async (_input: unknown) => ++downloads === 1 ? new Response(null, { status: 403 }) : new Response(current)) as typeof fetch;
-  await expect(cachedMovieMetainfo(repo, offer, "acquisition")).rejects.toThrow();
-  expect(cached().torrent_bytes).toEqual(previous);
-  expect(await cachedMovieMetainfo(repo, offer, "acquisition")).toEqual(current);
-  const refreshedAt = cached().updated_at;
-  expect(await cachedMovieMetainfo(repo, offer, "reuse")).toEqual(current);
-  expect(downloads).toBe(2);
-  expect(cached().updated_at).toBe(refreshedAt);
-}));
-
-test("unpinned metainfo expires sooner than hash-pinned metainfo", async () => fixture(async (repo, calls, db) => {
+test("old metainfo is kept when pinned by infohash but refreshed when unpinned", async () => fixture(async (repo, calls, db) => {
   const bytes = torrent("current.mp3"), infoHash = infoHashFromTorrentBytes(bytes), key = torrentCacheKeyFor(identity);
   repo.putTorrentCache({ key, ...identity, infoHash, torrentBytes: bytes });
-  const fetchedAt = new Date(Date.now() - 3_600_000).toISOString();
+  const fetchedAt = new Date(Date.now() - 25 * 3_600_000).toISOString();
   db.query("UPDATE torrent_cache SET updated_at = ? WHERE key = ?").run(fetchedAt, key);
   expect((await getOrFetchCachedTorrentBytes(repo, { ...identity, infoHash })).cacheHit).toBe(true);
   expect(repo.getTorrentCache(key)?.updated_at).toBe(fetchedAt);

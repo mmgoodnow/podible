@@ -139,13 +139,24 @@ alternate requests. Backfill requests one page of 50 results by default, or
 fewer if the provider advertises a lower maximum.
 
 Inspection, acquisition and cross-seeding share cached metainfo for the same
-provider listing and exact download URL. Entries expire 30 minutes after fetch
-without an advertised infohash, or after 24 hours with one. Announce URLs can
-change without changing the infohash, so even hash-pinned entries expire. An
-expired entry is refreshed on demand, not by polling the indexer, and is not
-used if the refresh fails. This does not rewrite trackers on existing client
-registrations. Confirmed nukes, already-owned identities and unsupported
-client operations are skipped before downloading metainfo.
+provider listing and exact download URL. Entries without an advertised infohash
+expire 30 minutes after fetch. Entries pinned to a verified hash have no age
+limit. Confirmed nukes, already-owned identities and unsupported client
+operations are skipped before downloading metainfo.
+
+After updating the tracker/indexer credentials, make sure Podible has freshly
+fetched a torrent from that provider using the new credentials. In Podible's
+runtime (inside the Podible container if using Docker), run
+`bun run rotate:tracker-announces --provider "Exact provider name"` to preview,
+then repeat with `--apply`. Verify the preview's donor fetch time. The newest
+cached torrent provides the full replacement announce list, including tiers and
+domains. The command updates both the provider's cached metainfo and matching
+Podible-owned registrations without changing infohashes or rechecking files.
+It skips registrations with unknown or mixed tracker URLs; a hostname alone
+does not prove which account or provider owns a registration. Credentials are
+never printed. Run when acquisitions and cross-seed registrations for that
+provider are idle: the command does not rewrite metainfo already checkpointed
+by a running job.
 
 The admin metrics endpoint reports `podible_indexer_traffic_total` by purpose
 and event. Only wire requests count as `search_id`, `search_text` or
