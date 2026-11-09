@@ -207,15 +207,6 @@ async function storageView(repo: BooksRepo, settings: AppSettings): Promise<Admi
   return result;
 }
 
-function associatedRows(repo: BooksRepo, table: string): Record<string, unknown>[] {
-  const first = repo.adminDbTablePage(table, 100, 0);
-  if (first.total > 10_000) throw new Error("Bounded association inventory exceeded");
-  const rows = first.rows;
-  for (let offset = rows.length; offset < first.total; offset += 100) rows.push(...repo.adminDbTablePage(table, 100, offset).rows);
-  if (rows.length !== first.total) throw new Error("Association inventory changed");
-  return rows;
-}
-
 async function operationalView(repo: BooksRepo, settings: AppSettings, includeJobs: boolean, now: number, actorUserId: number, transmission?: AdminTransmissionReader | null): Promise<AdminWebOps> {
   const label = labelSanitizer(settings);
   const warnings: string[] = [];
@@ -229,79 +220,61 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
   }
   const contexts = new Map<number, Context>();
   const torrents = new Map<number, AdminTorrentBinding[]>();
-  const byId = new Map(jobs.map((job) => [job.id, job]));
-  const jobStatus = (jobId: number) => byId.get(jobId)?.status ?? repo.getJobStatus(jobId);
+  const byId = new Map(jobs.map(job => [job.id, job]));
   const reads = repo.activityReads;
-  const retryPending = new Set(repo.listJobCommands().filter((command) => command.kind === "retry" &&
-    command.generation === repo.jobExecutionGeneration(command.job_id)).map((command) => command.job_id));
+  const commands = reads.jobCommands();
+  const retryPending = new Set(commands.filter(command => command.kind === "retry").map(command => command.job_id));
+  const canceled = new Set(commands.filter(command => command.kind === "cancel").map(command => command.job_id));
+  const activeIds = jobs.filter(job => active(job) && !canceled.has(job.id)).map(job => job.id);
+  const relevantIds = jobs.map(job => job.id);
   let waiting = 0;
   try {
-    const bindings = associatedRows(repo, "movie_acquisition_downloads");
-    for (const target of repo.movies.targets()) {
-      const movie = repo.movies.movie(target.movie_id);
-      const acquisitions = repo.movies.acquisitions(target.id);
-      const downloads = repo.movies.downloads(target.id);
-      const events = repo.movies.events(target.id);
-      const latest = acquisitions[0];
-      if (latest?.finished_at && latest.job_id &&
-          target.active_version_id === null && events.at(-1)?.stage === "waiting" &&
-          repo.movies.activeRequestCount(target.id) > 0 && jobStatus(latest.job_id) === "succeeded" &&
-          repo.retention.get({ namespace: "movie-target", id: String(target.id) })?.desiredPresence !== "evicted") waiting++;
-      for (const [index, acquisition] of acquisitions.entries()) if (acquisition.job_id && byId.has(acquisition.job_id)) {
-        contexts.set(acquisition.job_id, { key: `movie:${acquisition.id}`, title: label(movie?.title ?? `Movie target ${target.id}`), media: "movie", targetId: target.id,
-          href: movie ? `/movies/${movie.tmdbId}` : null, stage: events.filter(event => event.acquisitionId === acquisition.id).at(-1)?.stage ?? null,
-          suppressIncident: index > 0 || target.active_version_id !== null || !repo.movies.activeRequestCount(target.id) ||
-            repo.retention.get({ namespace: "movie-target", id: String(target.id) })?.desiredPresence === "evicted" });
-        const ids = new Set(bindings.filter((row) => row.acquisition_id === acquisition.id).map((row) => row.torrent_id));
-        torrents.set(acquisition.job_id, downloads.filter((download) => ids.has(download.id)));
-      }
+    const waitIds = new Set<number>();
+    const batches: Parameters<typeof reads.tvBatchScopes>[0] = [];
+    for (const row of reads.movieAcquisitions(relevantIds)) {
+      const suppressed = !row.latest || row.available || !row.active_request || row.evicted;
+      if (!suppressed && row.finished_at && row.target_stage === "waiting") waitIds.add(row.job_id);
+      if (byId.has(row.job_id)) contexts.set(row.job_id, {
+        key: `movie:${row.id}`, title: label(row.title ?? `Movie target ${row.target_id}`), media: "movie", targetId: row.target_id,
+        href: row.tmdb_id ? `/movies/${row.tmdb_id}` : null, stage: row.stage, suppressIncident: Boolean(suppressed),
+      });
     }
-    const requests = repo.tv.requests();
-    const requestsById = new Map(requests.map(request => [request.id, request]));
-    const tvBindings = associatedRows(repo, "tv_acquisition_downloads");
-    const publications = new Map(repo.tv.publications().map(publication => [publication.target_id, publication]));
-    for (const targetId of new Set(requests.map((request) => request.target_id))) {
-      const target = repo.tv.target(targetId)!;
-      const title = reads.tvTitle(target.entry_id);
-      const sharedHref = title !== null && repo.tv.availableEpisodeCount(target.entry_id) > 0 ? `/tv/library/${target.entry_id}` : null;
-      const hasLiveRequest = requests.some((request) => request.target_id === targetId && !request.withdrawn_at);
-      const pending = reads.tvMissingAirDates(targetId);
+    const decisionSchema = z.object({ batchEpisodeIds: z.array(id).optional(), waitingForSources: z.boolean().optional() });
+    for (const row of reads.tvAcquisitions(relevantIds)) {
+      const pending = JSON.parse(row.missing_dates) as (string | null)[];
       const nothingAiredMissing = pending.every(airDate => !airDate || Date.parse(airDate) > now);
-      const downloads = repo.tv.downloads(targetId);
-      const acquisitions = repo.tv.acquisitions(targetId);
-      const events = repo.tv.events(targetId);
-      const latest = acquisitions[0];
-      if (latest?.finished_at && latest.job_id && pending.length) {
-        let noOffer = false;
-        try { noOffer = JSON.parse(latest.decision_json ?? "{}").selection?.title === null; } catch { /* No inferred waiting from malformed evidence. */ }
-        if ((nothingAiredMissing || noOffer) && jobStatus(latest.job_id) === "succeeded" &&
-            repo.retention.get({ namespace: "tv-target", id: String(targetId) })?.desiredPresence !== "evicted") waiting++;
-      }
-      for (const [index, acquisition] of acquisitions.entries()) if (acquisition.job_id && byId.has(acquisition.job_id)) {
-        const request = acquisition.request_id ? requestsById.get(acquisition.request_id) : null;
-        const parsed = z.object({ batchEpisodeIds: z.array(id).optional(), waitingForSources: z.boolean().optional() })
-          .safeParse(acquisition.decision_json ? JSON.parse(acquisition.decision_json) : {});
-        const scope = parsed.success && parsed.data.batchEpisodeIds?.length
-          ? reads.tvBatchScope(target.entry_id, parsed.data.batchEpisodeIds) : null;
-        const lastStage = events.filter(event => event.acquisitionId === acquisition.id).at(-1)?.stage ?? null;
-        const publication = publications.get(targetId);
-        const stage = lastStage === "publishing" && (!publication || repo.tv.version(publication.version_id)?.acquisitionId !== acquisition.id)
-          ? "publication-queued" : lastStage;
-        contexts.set(acquisition.job_id, { key: `tv:${acquisition.id}`, title: label(title ?? `TV target ${targetId}`), media: "tv", targetId,
-          href: title !== null && request?.target_id === targetId && request.user_id === actorUserId ? `/tv/requests/${request.id}` : sharedHref,
-          scope, stage: parsed.success && parsed.data.waitingForSources ? "pack-pending" : stage,
-          suppressIncident: index > 0 || !hasLiveRequest || nothingAiredMissing ||
-            repo.retention.get({ namespace: "tv-target", id: String(targetId) })?.desiredPresence === "evicted" });
-        const ids = new Set(tvBindings.filter((row) => row.acquisition_id === acquisition.id).map((row) => row.torrent_id));
-        torrents.set(acquisition.job_id, downloads.filter((download) => ids.has(download.id)));
+      let decision: unknown = {};
+      try { decision = JSON.parse(row.decision_json ?? "{}"); } catch { /* Invalid evidence cannot establish waiting or scope. */ }
+      const noOffer = (decision as { selection?: { title?: unknown } } | null)?.selection?.title === null;
+      if (row.latest && row.finished_at && !row.evicted && pending.length && (nothingAiredMissing || noOffer)) waitIds.add(row.job_id);
+      if (!byId.has(row.job_id)) continue;
+      const parsed = decisionSchema.safeParse(decision);
+      if (parsed.success && parsed.data.batchEpisodeIds?.length)
+        batches.push({ jobId: row.job_id, entryId: row.entry_id, episodeIds: parsed.data.batchEpisodeIds });
+      const stage = row.stage === "publishing" && row.publishing_acquisition !== row.id ? "publication-queued" : row.stage;
+      contexts.set(row.job_id, {
+        key: `tv:${row.id}`, title: label(row.title ?? `TV target ${row.target_id}`), media: "tv", targetId: row.target_id,
+        href: row.title === null ? null : row.request_user_id === actorUserId ? `/tv/requests/${row.request_id}`
+          : row.available ? `/tv/library/${row.entry_id}` : null,
+        stage: parsed.success && parsed.data.waitingForSources ? "pack-pending" : stage,
+        suppressIncident: !row.latest || !row.active_request || nothingAiredMissing || Boolean(row.evicted),
+      });
+    }
+    for (const [jobId, scope] of reads.tvBatchScopes(batches)) contexts.get(jobId)!.scope = scope;
+    for (const media of ["movie", "tv"] as const) {
+      for (const { job_id, ...torrent } of reads.acquisitionTorrents(media, activeIds.filter(jobId => contexts.get(jobId)?.media === media))) {
+        const bindings = torrents.get(job_id) ?? [];
+        bindings.push(torrent);
+        torrents.set(job_id, bindings);
       }
     }
+    waiting = [...repo.activityJobStatuses([...waitIds]).values()].filter(status => status === "succeeded").length;
   } catch { warnings.push("Some movie/TV acquisition associations could not be read; those operational counts may be incomplete."); }
 
   const sources: AdminTorrentSource[] = [];
   for (const job of jobs) {
     const context = contexts.get(job.id);
-    if (!active(job) || repo.isJobCancellationRequested(job.id) || (context?.media !== "movie" && context?.media !== "tv")) continue;
+    if (!active(job) || canceled.has(job.id) || (context?.media !== "movie" && context?.media !== "tv")) continue;
     for (const binding of torrents.get(job.id) ?? []) sources.push({ media: context.media, binding });
   }
   const inventory = await readAdminTorrents(sources, settings, now, transmission);
@@ -312,6 +285,7 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
   let jobWaits = new Map<number, import("../worker/job-journal").JobWait[]>();
   try { jobWaits = repo.jobWaits(jobs.filter(job => active(job) && job.type === "acquire" && job.book_id).slice(0, 100).map(job => job.id)); }
   catch { warnings.push("Some scheduled search reasons could not be read; no provider wait is inferred."); }
+  const bookJobs = reads.bookJobs(jobs.filter(job => job.book_id).map(job => job.id));
   function contextFor(job: JobRow): Context {
     const associated = contexts.get(job.id);
     if (associated) return associated;
@@ -329,28 +303,29 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
         suppressIncident: !!(tvCase?.result || movieCase?.result) };
     }
     if (job.book_id) {
-      const book = repo.getBook(job.book_id);
-      const release = job.release_id ? repo.getRelease(job.release_id) : null;
-      let media: string[] = release ? [release.media_type] : ["audio", "ebook"];
-      try { const payload = JSON.parse(job.payload_json ?? "{}"); if (!release && Array.isArray(payload.media) && payload.media.length) media = payload.media; } catch { /* Unknown payload is not returned. */ }
-      const available = !!book && media.every((kind) => kind === "audio" ? book.audioStatus === "imported" : kind === "ebook" && book.ebookStatus === "imported");
+      const book = bookJobs.get(job.id);
+      let media: string[] = book?.media_type ? [book.media_type] : ["audio", "ebook"];
+      try { const payload = JSON.parse(job.payload_json ?? "{}"); if (!book?.media_type && Array.isArray(payload.media) && payload.media.length) media = payload.media; } catch { /* Unknown payload is not returned. */ }
+      const ready = (kind: string) => kind === "audio" ? Boolean(book?.audio_ready) : kind === "ebook" && Boolean(book?.ebook_ready);
+      const available = book?.title != null && media.every(ready);
       const formats = media.map(kind => kind === "audio" ? "audiobook" : kind === "ebook" ? "ebook" : "edition").join(" and ");
-      const waits = (jobWaits.get(job.id) ?? []).filter(wait =>
-        wait.media === "audio" ? book?.audioStatus !== "imported" : book?.ebookStatus !== "imported");
+      const waits = (jobWaits.get(job.id) ?? []).filter(wait => !ready(wait.media));
       const stage = waits.length ? `Waiting for providers before retrying the ${waits.map(wait => wait.media === "audio" ? "audiobook" : "ebook").join(" and ")} search.`
         : job.type === "acquire" ? `Finding ${formats} editions`
         : job.type === "import" ? `Importing the ${formats}` : job.type === "download" ? `Downloading the ${formats}` : "Updating this book";
       return { key: `job:${job.id}`, title: label(book?.title ?? "Unavailable book title"), media: "book", targetId: job.book_id,
-        href: book ? `/book/${job.book_id}` : null, stage,
+        href: book?.title != null ? `/book/${job.book_id}` : null, stage,
         suppressIncident: ["acquire", "download", "import"].includes(job.type) && available };
     }
     return { key: `job:${job.id}`, title: job.type.replaceAll("_", " "), media: "system", targetId: null, href: null, stage: job.type, suppressIncident: false };
   }
   const acquisitions: Work[] = [], downloads: AdminWebOps["downloads"] = [];
+  const supersededJobs = reads.newerJobs(jobs.filter(job => !contexts.has(job.id) &&
+    (job.status === "failed" || (active(job) && Boolean(job.error)))).map(job => job.id));
   for (const job of jobs) {
-    if (repo.isJobCancellationRequested(job.id)) continue;
+    if (canceled.has(job.id)) continue;
     const mayHaveIncident = job.status === "failed" || (active(job) && Boolean(job.error));
-    const superseded = mayHaveIncident && !contexts.has(job.id) && reads.hasNewerJob(job);
+    const superseded = supersededJobs.has(job.id);
     if (!active(job) && (!mayHaveIncident || superseded)) continue;
     let context: Context;
     try { context = contextFor(job); } catch { warnings.push("An operation's domain metadata is unavailable."); continue; }
@@ -413,7 +388,7 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
     try { recentJobs = repo.listRecentJobs(30).map((job) => publicJob(job, now, retryPending.has(job.id))); }
     catch { warnings.push("Recent execution diagnostics could not be read."); }
   }
-  const wakes = jobs.filter((job) => active(job) && !repo.isJobCancellationRequested(job.id))
+  const wakes = jobs.filter((job) => active(job) && !canceled.has(job.id))
     .flatMap((job) => iso(job.next_run_at) ? [iso(job.next_run_at)!] : []).sort();
   const truncated = inventory.truncated || acquisitions.length > 100 || downloads.length > 100 || incidents.length > 100 || feeds.length > 100;
   return { observedAt: new Date(now).toISOString(), summary: { activeAcquisitions: acquisitions.length, downloads: downloads.length, incidents: incidents.length, waiting, nextWakeAt: wakes[0] ?? null },

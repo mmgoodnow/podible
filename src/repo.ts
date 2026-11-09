@@ -441,6 +441,24 @@ export class BooksRepo {
     const link = this.getJobExecution(jobId);
     return link ? this.journalState.reader?.activityReuseMetainfoFailure?.(link.run_id) ?? null : null;
   }
+  activityJobStatuses(ids: number[]): Map<number, JobStatus> {
+    if (!ids.length) return new Map();
+    this.refreshJobSchema();
+    const encoded = JSON.stringify(ids);
+    if (this.journalState.legacy) return new Map(this.jobRows(
+      "WHERE j.id IN (SELECT value FROM json_each(?))", [encoded]).map(job => [job.id, job.status]));
+    const reader = this.journalState.reader;
+    if (!reader) throw new Error("Job journal is not initialized");
+    const rows = this.db.query<{ id: number; run_id: string | null }, [string]>(`SELECT j.id,e.run_id
+      FROM json_each(?) ids JOIN jobs j ON j.id=ids.value LEFT JOIN job_executions e ON e.job_id=j.id`).all(encoded);
+    const runs = rows.flatMap(row => row.run_id ? [row.run_id] : []);
+    const statuses = reader.readStatuses?.(runs) ?? new Map([...reader.read(runs)].map(([run, job]) => [run, job.status]));
+    return new Map(rows.map(row => {
+      const status = row.run_id ? statuses.get(row.run_id) : "queued";
+      if (!status) throw new Error(`Missing execution ${row.run_id} for job ${row.id}`);
+      return [row.id, status];
+    }));
+  }
   assertJobExecutionLinks(): void {
     this.refreshJobSchema();
     if (this.journalState.legacy) { this.listExecutionJobs(); return; }

@@ -43,7 +43,7 @@ test("Activity hydrates only relevant disk journal runs and still reports broken
       [queued.id, "queued"], [jobs.get("sleeping"), "queued"], [jobs.get("failed"), "failed"],
     ]);
     expect(hydrated).toEqual(["sleeping", "failed"]);
-    expect(reader.activityReads.hasNewerJob(repo.getJob(jobs.get("sleeping"))!)).toBe(true);
+    expect(reader.activityReads.newerJobs([jobs.get("sleeping")]).has(jobs.get("sleeping"))).toBe(true);
 
     const broken = repo.createJob({ type: "indexer_feed_sync" });
     repo.attachJobExecution(broken.id, "missing");

@@ -10,6 +10,7 @@ export type JobWait = { reason: "provider-search"; media: "audio" | "ebook" };
 export type JobJournalReader = {
   read(runIds: string[]): Map<string, JobLifecycle>;
   readStatus?(runId: string): JobStatus | null;
+  readStatuses?(runIds: string[]): Map<string, JobStatus>;
   assertLinks?(domainFilename: string): void;
   waits?(runIds: string[]): Map<string, JobWait[]>;
   activityJobIds?(domainFilename: string): number[];
@@ -47,6 +48,17 @@ function errorMessage(value: string | null): string | null {
 export function jobJournalReader(filename: string): JobJournalReader {
   return {
     activityJobIds: domainFilename => activityJobIds(domainFilename, filename),
+    readStatuses(runIds) {
+      if (!runIds.length) return new Map();
+      using db = new Database(filename, { readonly: true });
+      db.exec("PRAGMA busy_timeout=5000");
+      const rows = db.query<{ id: string; status: string }, [string]>(`SELECT r.id,r.status
+        FROM json_each(?) ids JOIN workflow_runs r ON r.id=ids.value`).all(JSON.stringify(runIds));
+      return new Map(rows.map(row => {
+        if (!statusMap[row.status]) throw new Error(`Unknown Reflow status: ${row.status}`);
+        return [row.id, statusMap[row.status]!];
+      }));
+    },
     activityReuseMetainfoFailure(runId) {
       using db = new Database(filename, { readonly: true });
       // Use only the step that actually stopped this run, not an older attempt.

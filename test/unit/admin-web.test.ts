@@ -549,6 +549,45 @@ describe("operational facts from the execution authority", () => {
     expect(f.db.query("SELECT total_changes() AS n").get()).toEqual(before);
   });
 
+  test("Activity issues a fixed number of domain queries as book, movie and TV acquisitions grow", async () => {
+    await using f = await fixture();
+    const seed = (n: number) => {
+      const book = f.repo.createBook({ title: `Activity book ${n}`, author: "Writer" });
+      f.job({ type: "acquire", bookId: book.id }, { status: "running" });
+      movieAcquisition(f, n);
+      const episodes = [1, 2].map(episode => ({
+        key: `tvdb:${n * 10 + episode}`, title: `Episode ${episode}`, airDate: "2020-01-01", runtimeMinutes: 30,
+        numbering: [{ scheme: "tvdb:aired", season: 1, episode, absolute: null }],
+      }));
+      const request = f.repo.tv.request(f.user.id, { key: `tvdb:${n}`, tvdbId: n, tmdbId: null,
+        title: `Activity TV ${n}`, aliases: [], year: 2020, anime: false, episodes, relations: [] }, {}, episodes.map(ep => ep.key));
+      f.repo.tv.startAcquisition(request.targetId, "initial", () => f.job({ type: "tv_acquire" }, { status: "running" }).id,
+        request.requestId, request.episodeIds);
+    };
+    const measure = async () => {
+      const query = f.db.query;
+      let calls = 0;
+      f.db.query = function (this: Database, ...args: Parameters<typeof query>) {
+        calls++;
+        return query.apply(this, args);
+      } as typeof query;
+      try {
+        const result = await executeMethod(f.router.routes.ops, f.ctx, {});
+        expect(result.diagnostics.warnings).toEqual([]);
+        return { result, calls };
+      } finally { f.db.query = query; }
+    };
+    seed(1000);
+    const small = await measure();
+    for (let n = 1001; n < 1033; n++) seed(n);
+    const large = await measure();
+    expect(small.result.summary.activeAcquisitions).toBe(3);
+    expect(large.result.summary.activeAcquisitions).toBe(99);
+    expect(large.result.activeAcquisitions.filter(row => row.scope === "Season 1 · 2 episodes")).toHaveLength(33);
+    expect(large.calls).toBe(small.calls);
+    expect(large.calls).toBeLessThan(30);
+  });
+
   test("pending cancellation cannot masquerade as active acquisition or a future automatic wake", async () => {
     await using f = await fixture();
     const job = f.job({ type: "acquire" }, { next_run_at: new Date(NOW + 60_000).toISOString(), error: "Old retry error" });
