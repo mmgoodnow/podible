@@ -176,6 +176,11 @@ async function setup(keys = ["tvdb:201", "tvdb:202", "tvdb:203", "tvdb:204"], in
 }
 
 type Runtime = Awaited<ReturnType<typeof createJobExecutionRuntime>>;
+
+// Real filesystem publication and Reflow polling can slow down on shared runners.
+const publicationWaitMs = 25_000;
+const publicationTestTimeoutMs = 40_000;
+
 test("new TV packs reserve one canonical object per member and publish without a payload copy", async () => {
   const s = await setup(["tvdb:201", "tvdb:202"]);
   try {
@@ -200,7 +205,7 @@ test("new TV packs reserve one canonical object per member and publish without a
     expect(plan.files).toHaveLength(301); // Unrequested members remain reserved, not published.
     expect(version.files).toHaveLength(2);
   } finally { await s.close(); }
-});
+}, publicationTestTimeoutMs);
 test("TV completion retains researched copies and queues them before publication, including restart", async () => {
   const s = await setup(["tvdb:201"]);
   try {
@@ -339,14 +344,14 @@ test("real Reflow starts another season while the first download is pending, the
     s.fixture.services.search=async(...args)=>{ searches++; return search(...args); };
     runtime=await createJobExecutionRuntime(s.context,path.join(s.root,"execution.sqlite"),{retryDelayMs:1});
     await until(runtime,()=>queued.every(q=>s.repo.getJob(q.acquisition.job_id!)?.status==="succeeded"),
-      ()=>JSON.stringify(queued.map(q=>s.repo.getJob(q.acquisition.job_id!))));
+      ()=>JSON.stringify(queued.map(q=>s.repo.getJob(q.acquisition.job_id!))), publicationWaitMs);
     expect(s.fixture.stats.snatches).toBe(2);
     expect(searches).toBe(1); // Siblings share one persisted title-search wave, not one query per season.
     expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(2);
     expect(s.repo.tv.publications()).toEqual([]);
     expect(await assertOwnedViews(s)).toHaveLength(2);
   } finally { await runtime?.stop(); await s.close(); }
-});
+}, publicationTestTimeoutMs);
 
 test("parallel batches wait for a shared large pack and reuse all remaining members without a second download or title search",async()=>{
   const entry=seasonCatalog(130),s=await setup(entry.episodes.map(ep=>ep.key),entry);
@@ -365,13 +370,13 @@ test("parallel batches wait for a shared large pack and reuse all remaining memb
     const queued=queueTvSeasons(s.repo,s.request.requestId);
     runtime=await createJobExecutionRuntime(s.context,path.join(s.root,"execution.sqlite"),{retryDelayMs:1});
     await until(runtime,()=>queued.every(q=>s.repo.getJob(q.acquisition.job_id!)?.status==="succeeded"),
-      ()=>JSON.stringify(queued.map(q=>s.repo.getJob(q.acquisition.job_id!))),12000);
+      ()=>JSON.stringify(queued.map(q=>s.repo.getJob(q.acquisition.job_id!))), publicationWaitMs);
     expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(130);
     expect(s.fixture.stats.snatches).toBe(1);expect(searches).toBe(1);
     expect(await assertOwnedViews(s)).toHaveLength(130);
     expect(hasWaited).toBe(true);
   }finally{await runtime?.stop();await s.close();}
-},20000);
+}, publicationTestTimeoutMs);
 
 test("simultaneous TV batches with stale directory intents register one canonical pack layout", async () => {
   const entry = seasonCatalog(2);
