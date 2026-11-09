@@ -10,7 +10,7 @@ const delta = (metric: string) => `increase(${series(metric)}[$__range])`;
 const rolling = (metric: string) => `increase(${series(metric)}[1h])`;
 type Query = [expression: string, legend?: string];
 function panel(type: "stat" | "timeseries" | "table", title: string, description: string, unit: string,
-  position: ReturnType<typeof grid>, queries: Query[], extra: object = {}, decimals?: number) {
+  position: ReturnType<typeof grid>, queries: Query[], decimals?: number, statusLabels?: readonly [string, string]) {
   const instant = type !== "timeseries";
   panels.push({
     id: panels.length + 1, type, title, description, gridPos: position, datasource,
@@ -19,15 +19,19 @@ function panel(type: "stat" | "timeseries" | "table", title: string, description
       ...(type === "table" ? { format: "table" } : {}),
     })),
     fieldConfig: { defaults: {
-      unit, decimals, noValue: "Not observed", color: { mode: type === "stat" ? "fixed" : "palette-classic", fixedColor: "green" },
+      unit, decimals, noValue: "Not observed",
+      color: type === "stat" ? { mode: "fixed", fixedColor: "gray" } : { mode: "palette-classic" },
+      ...(statusLabels ? { mappings: [{ type: "value", options: {
+        0: { text: statusLabels[0], color: "red", index: 0 },
+        1: { text: statusLabels[1], color: "green", index: 1 },
+      } }] } : {}),
       ...(type === "timeseries" ? { min: 0, custom: { lineWidth: 2, fillOpacity: 8, spanNulls: false } } : {}),
     }, overrides: [] },
-    options: type === "stat" ? { colorMode: "value", graphMode: "none", justifyMode: "auto", textMode: "value",
+    options: type === "stat" ? { colorMode: statusLabels ? "value" : "none", graphMode: "none", justifyMode: "auto", textMode: "value",
       reduceOptions: { calcs: ["lastNotNull"], fields: "", values: false } } : type === "timeseries" ? {
       legend: { showLegend: true, placement: "bottom", displayMode: "table", calcs: ["lastNotNull"] },
       tooltip: { mode: "multi", sort: "desc" },
     } : { showHeader: true },
-    ...extra,
   });
 }
 function row(title: string) {
@@ -39,7 +43,9 @@ function note(text: string) {
   y += 3;
 }
 const stat = (x: number, title: string, description: string, unit: string, expr: string, decimals?: number) =>
-  panel("stat", title, description, unit, grid(x, 6, 4), [[expr]], {}, decimals);
+  panel("stat", title, description, unit, grid(x, 6, 4), [[expr]], decimals);
+const status = (x: number, title: string, description: string, expr: string, labels: readonly [string, string]) =>
+  panel("stat", title, description, "none", grid(x, 6, 4), [[expr]], 0, labels);
 const chart = (x: number, title: string, description: string, unit: string, queries: Query[]) =>
   panel("timeseries", title, description, unit, grid(x, 12, 9), queries);
 const items = (kind: string) => `podible_published_library_items{job="podible",kind="${kind}"}`;
@@ -99,10 +105,10 @@ chart(12, "Transfer speed by tracker", "Only traffic uniquely attributable to on
 y += 9;
 
 row("Telemetry");
-stat(0, "Prometheus scrape", "1 means the latest scrape succeeded; 0 means it failed.", "none", 'up{job="podible"}', 0);
+status(0, "Prometheus scrape", "Whether the latest scrape succeeded.", 'up{job="podible"}', ["Scrape failed", "Scraping"]);
 stat(6, "Transfer snapshot age", "Age of the observation, not the age of the HTTP response.", "dtdurations",
   `clamp_min(time() - ${series("transfer_metrics_observed_timestamp_seconds")}, 0)`);
-stat(12, "Complete transfer telemetry", "1 means all registered torrents were observed and verified recently; 0 means incomplete or stale.", "none", series("transfer_metrics_fresh"), 0);
+status(12, "Transfer telemetry", "Complete means all registered torrents were observed and verified recently.", series("transfer_metrics_fresh"), ["Incomplete", "Complete"]);
 stat(18, "Reuse attempts pending", "Attempts without a recorded outcome.", "none", series("reuse_pending"));
 y += 4;
 note("History starts with the first successful Prometheus scrape. Missing series are not zero. Publication counts reflect Podible records; they do not prove files still exist. Tracker traffic does not represent account credit.");
