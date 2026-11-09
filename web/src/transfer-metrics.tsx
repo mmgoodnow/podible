@@ -5,8 +5,6 @@ import { useTRPC } from "./rpc";
 import { Link } from "./router";
 import { metricBytes, metricDays } from "./transfer-metrics-model";
 import { TransferHistory } from "./transfer-history";
-import { LibraryInventoryStats } from "./library-inventory";
-import { CrossSeedBackfill } from "./cross-seed-backfill";
 import "./transfer-metrics.css";
 
 const count = (value: number | null) => value === null ? "Unknown" : value.toLocaleString(undefined, { maximumFractionDigits: 2 });
@@ -46,36 +44,64 @@ export function CrossSeedMetrics({ reuse }: { reuse: TransferMetricsStatus["reus
   </section>;
 }
 
-export function TransferMetrics() {
+export function useSharingMetrics() {
   const trpc = useTRPC();
   const [hours, setHours] = useState<24 | 168 | 720 | 2160>(24);
-  const metrics = useQuery(trpc.transferMetrics.status.queryOptions({ hours }, { refetchInterval: 60_000, placeholderData: keepPreviousData }));
-  const data = metrics.data, summary = data?.summary;
-  return <section className="activity-section transfer-dashboard" aria-label="Sharing and transfers" aria-busy={metrics.isFetching}>
-    <div className="transfer-heading"><h2>Sharing &amp; transfers</h2>{data?.observedAt && <span className={`transfer-live ${data.stale ? "transfer-stale" : ""}`}>
-      {data.stale ? "Some readings unavailable" : "Updated"} {date(data.observedAt)}</span>}</div>
-    <LibraryInventoryStats />
-    {metrics.isPending ? <p role="status">Loading transfer metrics...</p> : metrics.isError ? <p role="alert">Transfer metrics unavailable. <button onClick={() => metrics.refetch()}>Try again</button></p> : data && <>
-      {!summary ? <p className="muted">Waiting for the first transfer sample. Collection runs every minute.</p> : <>
-        <div className="transfer-overview">
-          <article><h3>Seeding</h3><strong>{metricBytes(summary.seedBytes)}</strong><small>{count(summary.seedingTorrents)} torrents · {count(summary.averageCopies)} copies on average</small>
-            <small>{metricDays(summary.seedSeconds)} combined seed time across all managed torrents</small></article>
-          <article><h3>Download avoided</h3><strong>{metricBytes(data.reuse.verifiedReusedBytes)}</strong><small>Verified existing bytes reused</small></article>
-          <article><h3>Uploaded</h3><strong>{metricBytes(summary.uploadedBytes)}</strong><small>{speed(summary.uploadBytesPerSecond)} now · {metricBytes(summary.crossSeedUploadedBytes)} from cross-seeds</small></article>
-          <article><h3>Downloaded</h3><strong>{metricBytes(summary.downloadedBytes)}</strong><small>{speed(summary.downloadBytesPerSecond)} now</small></article>
-        </div>
-        <p className="transfer-footnote">Seeding counts shared bytes once per torrent, not disk space. Transfer totals include client activity before tracking began.</p>
-        {data.downloads.length > 0 && <section className="transfer-downloads" aria-label="Current transfers"><h3>Downloading <span className="muted">{data.downloads.length}</span></h3>{data.downloads.map(download => <article key={download.id}>
-          <div>{download.href ? <Link href={download.href}>{download.title}</Link> : <strong>{download.title}</strong>}<span>{download.state === "checking" ? "Checking existing files" : download.state === "download-queued" ? "Queued" : speed(download.downloadBytesPerSecond)}</span></div>
-          {download.sizeBytes !== null && download.sizeBytes > 0 && download.bytesDone !== null && <progress aria-label={`${download.title} download`} max={download.sizeBytes} value={download.bytesDone} />}
-          <small>{metricBytes(download.bytesDone)} / {metricBytes(download.sizeBytes)}</small>
-        </article>)}</section>}
-        <TransferHistory data={data} hours={hours} setHours={setHours} />
-        <CrossSeedMetrics reuse={data.reuse} />
-        <CrossSeedBackfill />
-        <TrackerTable data={data} />
-        <p className="transfer-footnote">History since {data.trackingSince ? date(data.trackingSince) : "collection began"} · {hours === 24 ? "Minute samples" : "Hourly samples"} · Missing observations remain gaps</p>
-      </>}
-    </>}
+  const query = useQuery(trpc.transferMetrics.status.queryOptions({ hours }, { refetchInterval: 60_000, placeholderData: keepPreviousData }));
+  return { query, hours, setHours };
+}
+
+export function SharingOverview({ metrics }: { metrics: ReturnType<typeof useSharingMetrics> }) {
+  const { query } = metrics;
+  const data = query.data, summary = data?.summary;
+  return <section id="activity-sharing" className="activity-section transfer-dashboard" aria-label="Sharing and transfers">
+    <div className="transfer-heading"><h2>Sharing</h2>{data &&
+      <div className="activity-heading-meta">
+        {data.observedAt && <span className="transfer-live">{data.stale ? "Live readings incomplete · Last sample" : "Sampled"} {date(data.observedAt)}</span>}
+        <a href="#activity-sharing-history">View history</a>
+      </div>}</div>
+    {data ? <div className="transfer-overview">
+      <article><h3>Seeding</h3><strong>{metricBytes(summary?.seedBytes ?? null)}</strong>
+        <small>{summary?.seedingTorrents != null ? `${count(summary.seedingTorrents)} active torrents` : "Current seed size not verified"}
+          {summary?.averageCopies != null ? ` · ${count(summary.averageCopies)} copies per target` : ""}</small></article>
+      <article><h3>Cross-seeds started</h3><strong>{count(data.reuse.successful)}</strong><small>{metricBytes(data.reuse.verifiedReusedBytes)} of verified payload reused</small></article>
+      <article><h3>Uploaded</h3><strong>{metricBytes(summary?.uploadedBytes ?? null)}</strong><small>{summary?.crossSeedUploadedBytes != null
+        ? `${metricBytes(summary.crossSeedUploadedBytes)} from cross-seeded torrents` : "Cross-seed traffic not observed"}</small></article>
+      <article><h3>Download speed</h3><strong>{speed(summary?.downloadBytesPerSecond ?? null)}</strong><small>{summary?.uploadBytesPerSecond != null
+        ? `${speed(summary.uploadBytesPerSecond)} uploading at last sample` : "Upload speed not observed"}</small></article>
+    </div> : query.isError ? <p role="alert">Sharing readings unavailable. <button className="secondary" onClick={() => query.refetch()}>Try again</button></p>
+      : <p role="status">Loading sharing readings...</p>}
+    {query.isRefetchError && <p className="muted">Could not refresh sharing readings. Showing the last response.</p>}
+  </section>;
+}
+
+export function SharingHistory({ metrics }: { metrics: ReturnType<typeof useSharingMetrics> }) {
+  const { query, hours, setHours } = metrics;
+  const data = query.data;
+  if (!data) return null;
+  return <section id="activity-sharing-history" className="activity-section transfer-dashboard" aria-label="Sharing history">
+    <h2>Sharing over time</h2>
+    <TransferHistory data={data} hours={hours} setHours={setHours} />
+    <p className="transfer-footnote">History since {data.trackingSince ? date(data.trackingSince) : "collection began"} · {hours === 24 ? "Minute samples" : "Hourly samples"}</p>
+    <details className="activity-disclosure"><summary>Tracker totals and cross-seed outcomes</summary>
+      <TrackerTable data={data} />
+      <CrossSeedMetrics reuse={data.reuse} />
+      <p className="transfer-footnote">{metricDays(data.summary?.seedSeconds ?? null)} combined seed time across all managed torrents.
+        Seed size counts shared bytes once per torrent, not physical disk space. Transfer totals can include activity from before tracking began.</p>
+    </details>
+  </section>;
+}
+
+export function RecordedDownloads({ downloads }: { downloads: TransferMetricsStatus["downloads"] }) {
+  if (!downloads.length) return null;
+  return <section className="transfer-downloads" aria-label="Other transfers">
+    <h3>Other transfers <small>{downloads.length}</small></h3>
+    {downloads.map(download => <article key={download.id}>
+      <div>{download.href ? <Link href={download.href}>{download.title}</Link> : <strong>{download.title}</strong>}
+        <span>{download.state === "checking" ? "Checking files" : download.state === "download-queued" ? "Queued" : speed(download.downloadBytesPerSecond)}</span></div>
+      {download.sizeBytes !== null && download.sizeBytes > 0 && download.bytesDone !== null &&
+        <progress aria-label={`${download.title} download`} max={download.sizeBytes} value={download.bytesDone} />}
+      <small>{metricBytes(download.bytesDone)} / {metricBytes(download.sizeBytes)} · Last sample</small>
+    </article>)}
   </section>;
 }

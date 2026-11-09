@@ -1,9 +1,21 @@
 .activity-page h1 { font-size: 2rem; margin: 0; }
-.activity-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; }
+.activity-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .9rem; }
 .activity-heading .secondary { padding: .5rem .8rem; font-size: .9rem; }
+.activity-jumps { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1.1rem; padding: .65rem 0; border-bottom: 1px solid var(--line); }
+.activity-jumps a { font-size: .9rem; text-underline-offset: .2em; }
+.activity-jumps .activity-issues { margin-inline-start: auto; padding: .25rem .7rem; border-radius: .25rem; color: #953e24; background: #f8e7df; }
+.activity-heading-meta { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .85rem; font-size: .8rem; }
+.activity-heading-meta a { text-decoration: underline; text-underline-offset: .2em; }
 .activity-section { margin: 2rem 0; }
-.activity-section > h2 { font-size: 1.25rem; margin-bottom: 1rem; }
-.activity-section h2 small { margin-left: .6rem; font-size: .85rem; color: var(--muted, #69756c); font-weight: normal; }
+.activity-section[id] { scroll-margin-block-start: 1rem; }
+.activity-section > h2, .activity-section > .transfer-heading h2 { font-size: 1.35rem; }
+.activity-section h3 small { margin-left: .4rem; font-size: .85rem; color: var(--muted); font-weight: normal; }
+.activity-work, .activity-system { border-top: 1px solid var(--line); padding-top: 1rem; }
+.activity-work > .activity-section, .activity-system > .activity-section { margin: 1rem 0; }
+.activity-work h3, .activity-system h3 { font-size: 1rem; }
+.activity-disclosure { margin-top: .75rem; }
+.activity-disclosure > summary { cursor: pointer; font-size: .85rem; width: fit-content; }
+.activity-disclosure[open] > summary { margin-bottom: .75rem; }
 .activity-items { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .activity-item { padding: 1.2rem; border: 1px solid #d9dccf; border-radius: .7rem; background: #fffdf7; min-width: 0; }
 .activity-item h3 { font-size: 1.1rem; margin: 0; }
@@ -34,6 +46,7 @@
 .activity-tools { display: flex; gap: 1rem; flex-wrap: wrap; padding: 1rem 0; font-size: .95rem; }
 .activity-page .notice { font-size: .95rem; }
 @media (max-width: 700px) {
+  .activity-jumps .activity-issues { margin-inline-start: 0; }
   .activity-items, .activity-storage { grid-template-columns: 1fr; }
   .activity-item-heading { flex-wrap: wrap; }
   .activity-heading { align-items: start; }

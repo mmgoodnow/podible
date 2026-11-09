@@ -13,13 +13,12 @@
 .transfer-library small { font-size: .65rem; }
 .transfer-library-warning { font-size: .8rem; color: #a54325; }
 .transfer-live { color: var(--muted); font-size: .8rem; }
-.transfer-live::before { content: ""; display: inline-block; width: .45rem; height: .45rem; border-radius: 50%; background: #397454; margin-right: .4rem; }
-.transfer-stale::before { background: #a77937; }
-.transfer-overview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: .6rem; margin-top: 1rem; overflow: hidden; }
+.transfer-overview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: .6rem; margin-top: .75rem; overflow: hidden; background: color-mix(in srgb, var(--paper) 65%, transparent); font-variant-numeric: tabular-nums; }
+.library-overview { border-top: 3px solid var(--ink); }
 .transfer-overview article { min-width: 0; padding: 1rem; border-right: 1px solid var(--line); }
 .transfer-overview article:last-child { border-right: 0; }
 .transfer-overview h3 { font-size: .82rem; font-weight: normal; margin: 0 0 .35rem; color: var(--muted); }
-.transfer-overview strong { display: block; font-size: clamp(1.5rem, 2.4vw, 2.1rem); font-weight: normal; line-height: 1.2; }
+.transfer-overview strong { display: block; font-size: clamp(1.45rem, 2.4vw, 2.1rem); font-weight: normal; line-height: 1.2; overflow-wrap: anywhere; }
 .transfer-overview small { display: block; font-size: .75rem; color: var(--muted); margin-top: .4rem; line-height: 1.45; }
 .transfer-chart { border: 1px solid var(--line); background: color-mix(in srgb, var(--paper) 70%, transparent); padding: 1rem; border-radius: .6rem; margin-top: 1.25rem; }
 .transfer-chart-controls { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }

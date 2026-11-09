@@ -30,22 +30,29 @@ try {
   page.on("pageerror", error => errors.push(error.message));
   page.on("requestfailed", request => errors.push(request.failure()?.errorText ?? request.url()));
   page.on("response", response => { if (response.status() >= 400) errors.push(`${response.status()} ${response.url()}`); });
+  let measurements = 0;
   await page.route("**/api/trpc/**", async route => {
-    if (new URL(route.request().url()).pathname.includes("transferMetrics.library")) await inventory.promise;
+    if (new URL(route.request().url()).pathname.includes("transferMetrics.library")) {
+      measurements++;
+      await inventory.promise;
+    }
     await route.continue();
   });
-  const requestedInventory = page.waitForRequest(request => request.url().includes("transferMetrics.library"));
   await page.goto(new URL("/ops", url).href);
-  await requestedInventory;
+  await page.getByRole("region", { name: "Published library" }).getByText("1 ebook · 1 audiobook", { exact: true }).waitFor();
   await page.getByRole("region", { name: "Waiting work" }).getByText("Fixture Active Book").waitFor();
   await page.getByRole("region", { name: "Tracker history" }).getByRole("img").waitFor();
+  assert.equal(measurements, 0, "The overview should not measure files");
+  const requestedInventory = page.waitForRequest(request => request.url().includes("transferMetrics.library"));
+  await page.getByText("Disk usage by media type", { exact: true }).click();
+  await requestedInventory;
   const library = page.getByRole("region", { name: "Library inventory" });
   assert.equal(await library.getByRole("status").textContent(), "Measuring library...");
   inventory.resolve();
   await library.getByRole("table").waitFor();
   assert.deepEqual(await page.getByRole("alert").allTextContents(), []);
   assert.deepEqual(errors, []);
-  console.log("Activity acceptance passed: work and chart render with 40,000 historical jobs while inventory is held.");
+  console.log("Activity acceptance passed: published totals, work and history render with 40,000 jobs; file measurement is on demand.");
 } finally {
   inventory.resolve();
   await browser?.close();

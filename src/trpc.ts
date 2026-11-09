@@ -73,6 +73,7 @@ export const appRouter = t.router({
     cancelBackfill: procedure.input(crossSeedRouter.routes.cancelBackfill.paramsSchema).output(crossSeedRouter.routes.cancelBackfill.resultSchema).mutation(({ ctx, input }) => executeMethod(crossSeedRouter.routes.cancelBackfill, ctx, input)),
   }),
   transferMetrics: t.router({
+    published: procedure.input(transferMetricsRouter.routes.published.paramsSchema).output(transferMetricsRouter.routes.published.resultSchema).query(({ ctx, input }) => executeMethod(transferMetricsRouter.routes.published, ctx, input)),
     status: procedure.input(transferMetricsRouter.routes.status.paramsSchema).output(transferMetricsRouter.routes.status.resultSchema).query(({ ctx, input }) => executeMethod(transferMetricsRouter.routes.status, ctx, input)),
     library: procedure.input(transferMetricsRouter.routes.library.paramsSchema).output(transferMetricsRouter.routes.library.resultSchema).query(({ ctx, input }) => executeMethod(transferMetricsRouter.routes.library, ctx, input)),
   }),

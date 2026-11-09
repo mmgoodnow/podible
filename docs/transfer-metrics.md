@@ -80,10 +80,13 @@ transferMetrics.library({}) // published counts and canonical file allocation
 
 ## Dashboard and library inventory
 
-The dashboard separates published library size from logical seeding, traffic,
-and reuse. Books, eBooks, audiobooks, movies, TV shows, seasons and episodes count
-available published units, not wanted catalog entries. A season with any available
-episode counts once. Multiple manifestations count once per book/format. Canonical
+Activity leads with published record counts and sharing outcomes. The counts
+match the Grafana publication counters and do not measure files. Open **Disk
+usage by media type** for independently measured counts and file allocation.
+That measurement is separate from logical seeding, traffic and reuse. Books,
+eBooks, audiobooks, movies, TV shows, seasons and episodes count available
+published units, not wanted catalog entries. A season with any available episode
+counts once. Multiple manifestations count once per book/format. Canonical
 files deduplicate by device/inode across hardlinks and multi-episode files, both
 per category and globally. Category rollups overlap and are not additive.
 

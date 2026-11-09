@@ -8,7 +8,9 @@ import { Link } from "./router";
 import "./activity.css";
 import { activityItems, activityPhase, attentionItems, downloadProgress, problemAction, type ActivityDownload } from "./activity-model";
 import { Connections } from "./connections";
-import { TransferMetrics } from "./transfer-metrics";
+import { RecordedDownloads, SharingHistory, SharingOverview, useSharingMetrics } from "./transfer-metrics";
+import { LibraryOverview } from "./library-inventory";
+import { CrossSeedBackfill } from "./cross-seed-backfill";
 
 type SettingsDraft = { text: string; base: string } | null;
 const draftKey = ["admin-settings-draft"] as const;
@@ -229,35 +231,63 @@ export function OpsPage() {
   const trpc = useTRPC(), cache = useQueryClient();
   const [retryNotice, setRetryNotice] = useState<string | null>(null);
   const ops = useQuery(trpc.adminWeb.ops.queryOptions({ includeJobs: false }, { refetchInterval: 5000 }));
+  const sharing = useSharingMetrics();
   const refresh = useMutation(trpc.adminWeb.refresh.mutationOptions({ onSuccess: () => cache.invalidateQueries({ queryKey: trpc.adminWeb.ops.queryKey() }) }));
   const work = ops.data ? activityItems(ops.data) : [];
   const running = work.filter(item => activityPhase(item.work, item.downloads).active);
   const waiting = work.filter(item => !activityPhase(item.work, item.downloads).active);
   const attention = ops.data ? attentionItems(ops.data.incidents) : [];
+  const incomplete = ops.isError || ops.data?.diagnostics.truncated || Boolean(ops.data?.diagnostics.warnings.length);
+  const displayedTorrentIds = new Set(ops.data?.downloads.map(download => download.torrentId));
+  const otherDownloads = ops.data ? sharing.query.data?.downloads.filter(download => !displayedTorrentIds.has(download.id)) ?? [] : [];
+  const refreshOverview = () => {
+    void ops.refetch();
+    void sharing.query.refetch();
+    void cache.invalidateQueries({ queryKey: trpc.transferMetrics.published.queryKey() });
+    void cache.invalidateQueries({ queryKey: trpc.transferMetrics.library.queryKey() });
+  };
   return <div className="activity-page">
-    <div className="activity-heading"><h1>Activity</h1><button className="secondary" disabled={ops.isFetching} onClick={() => ops.refetch()}>Refresh</button></div>
-    {retryNotice !== null && <p role="status">Retry requested for {retryNotice}. Its current progress appears below.</p>}
-    {ops.isPending ? <p role="status">Loading operations...</p> : ops.isError ? <p role="alert">{ops.error.message}</p> : <>
-      <section className="activity-section" aria-label="Needs attention">
-        <h2>Needs attention <small>{attention.length}</small></h2>
-        {!attention.length ? <p className="muted">Nothing needs your attention.</p> : <div className="activity-items">
-          {attention.map(incident => <ActivityProblem key={incident.key} incident={incident} onRetried={setRetryNotice} />)}</div>}
-      </section>
+    <div className="activity-heading"><h1>Activity</h1><button className="secondary" disabled={ops.isFetching} onClick={refreshOverview}>Refresh</button></div>
+    <nav className="activity-jumps" aria-label="Activity sections">
+      <a href="#activity-library">Library</a><a href="#activity-sharing">Sharing</a><a href="#activity-work">Current work</a><a href="#activity-system">System</a>
+      {attention.length > 0 ? <a className="activity-issues" href="#activity-attention">{attention.length}{incomplete ? "+" : ""} to review</a>
+        : incomplete && <a className="activity-issues" href="#activity-work">Status incomplete</a>}
+    </nav>
+    <LibraryOverview />
+    <SharingOverview metrics={sharing} />
+    <section className="activity-section activity-work" id="activity-work" aria-label="Current work">
+      <div className="transfer-heading"><h2>Current work</h2>{ops.data && <span className="transfer-live">Checked {date(ops.data.observedAt)}</span>}</div>
+      {retryNotice !== null && <p role="status">Retry requested for {retryNotice}. Its current progress appears below.</p>}
+      {!ops.data ? ops.isError ? <p role="alert">Could not load current work. <button className="secondary" onClick={() => ops.refetch()}>Try again</button></p>
+        : <p role="status">Loading current work...</p> : <>
+      {ops.isRefetchError && <p className="muted">Could not refresh current work. Showing the last response.</p>}
       <section className="activity-section" aria-label="Active work">
-        <h2>In progress <small>{running.length}</small></h2>
-        {!running.length ? <p className="muted">No downloads or imports in progress.</p> : <div className="activity-items">
+        <h3>In progress <small>{running.length || ""}</small></h3>
+        {!running.length ? <p className="muted">{incomplete ? "No active requests could be confirmed."
+          : otherDownloads.length ? "No requests in progress." : "No downloads or imports in progress."}</p> : <div className="activity-items">
           {running.map(item => <ActivityWork key={item.work.job.id} work={item.work} downloads={item.downloads} />)}</div>}
       </section>
+      <RecordedDownloads downloads={otherDownloads} />
       {(waiting.length > 0 || ops.data.summary.waiting > 0) && <section className="activity-section" aria-label="Waiting work">
-        <h2>Waiting</h2>
+        <h3>Waiting</h3>
         <div className="activity-items">{waiting.map(item => <ActivityWork key={item.work.job.id} work={item.work} downloads={item.downloads} />)}</div>
         {ops.data.summary.waiting > 0 && <p className="activity-waiting">{ops.data.summary.waiting} {ops.data.summary.waiting === 1 ? "request is" : "requests are"} waiting for a release or an unaired episode. <Link href="/library">View library</Link></p>}
       </section>}
+      {attention.length > 0 && <section className="activity-section" id="activity-attention" aria-label="Needs attention">
+        <h3>Needs attention <small>{attention.length}</small></h3>
+        <div className="activity-items">{attention.map(incident => <ActivityProblem key={incident.key} incident={incident} onRetried={setRetryNotice} />)}</div>
+      </section>}
+      {ops.data.diagnostics.truncated && <p className="muted">Some work is not shown in this overview.</p>}
       {ops.data.diagnostics.warnings.length > 0 && <details className="activity-status"><summary>Some activity status is unavailable</summary>
         {ops.data.diagnostics.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</details>}
-      <TransferMetrics />
+      </>}
+    </section>
+    <SharingHistory metrics={sharing} />
+    <section className="activity-section activity-system" id="activity-system" aria-label="System">
+      <div className="transfer-heading"><h2>System</h2><Link href="/stewardship">Review torrent problems</Link></div>
+      {ops.data && <>
       <section className="activity-section" id="activity-storage" aria-label="Storage and links">
-        <h2>Storage</h2>
+        <h3>Storage</h3>
         <div className="activity-storage">{ops.data.storage.map(storage => <article key={storage.media}>
           <h3>{storage.media === "book" ? "Books" : storage.media === "movie" ? "Movies" : "TV"}</h3>
           <p>{storage.capacityState === "known" ? `${bytes(storage.availableBytes)} free` : storage.capacityState === "not-configured" ? "Not configured" : "Capacity unknown"}</p>
@@ -272,14 +302,14 @@ export function OpsPage() {
         </article>)}</div>
       </section>
       <Connections feeds={ops.data.feeds} observedAt={ops.data.observedAt} truncated={ops.data.feeds.length >= 100} />
-      <section className="activity-section"><h2>Torrent health</h2><Link href="/stewardship">Review torrent problems</Link></section>
-      <p className="muted">Updated {date(ops.data.observedAt)}.</p>
-    </>}
+      </>}
+    <CrossSeedBackfill />
     <section className="activity-section" aria-label="Library maintenance">
-      <h2>Library maintenance</h2>
+      <h3>Library maintenance</h3>
       <button className="secondary" disabled={refresh.isPending} onClick={() => refresh.mutate({})}>{refresh.isPending ? "Requesting refresh..." : "Refresh library metadata"}</button>
       {refresh.error && <p role="alert">Library refresh was not queued: {refresh.error.message}</p>}
       {refresh.isSuccess && <p role="status">Library refresh {refresh.data.shared ? "already queued or running" : "queued"}.</p>}
+    </section>
     </section>
   </div>;
 }

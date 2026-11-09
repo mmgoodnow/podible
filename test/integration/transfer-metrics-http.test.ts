@@ -31,13 +31,17 @@ test("metrics use admin authentication, expose no tracker editor, and reads have
     const text = await scrape.text(); expect(text).toContain("podible_transfer_metrics_fresh 0\n");
     expect(text).not.toMatch(/^podible_seed_bytes /m);
     for (const [token, code] of [[undefined, -32001], ["metrics-reader-token", -32003]] as const) {
-      for (const method of ["transferMetrics.status"]) {
+      for (const method of ["transferMetrics.status", "transferMetrics.published"]) {
         const response = await request("/rpc", token, { jsonrpc: "2.0", id: 1, method, params: {} });
         expect((await response.json() as any).error.code).toBe(code);
       }
     }
     const call = async (method: string, params: unknown) => (await (await request("/rpc", "metrics-admin-token", { jsonrpc: "2.0", id: 1, method, params })).json()) as any;
     expect((await call("transferMetrics.status", {})).result.summary).toBeNull();
+    repo.createBook({ title: "Wanted book", author: "Reader" });
+    expect((await call("transferMetrics.published", {})).result).toEqual({
+      books: 0, ebooks: 0, audiobooks: 0, movies: 0, shows: 0, seasons: 0, episodes: 0,
+    });
     expect((await call("transferMetrics.mapTracker", { host: "tracker.example", name: "Example" })).error.code).toBe(-32601);
     expect((await request("/api/trpc/transferMetrics.mapTracker", "metrics-admin-token", { host: "tracker.example", name: "Example" })).status).toBe(404);
     expect((await call("transferMetrics.status", { hours: 1 })).error).toBeDefined();

@@ -51,6 +51,7 @@ export const adminWebOpsSchema = z.object({
   observedAt: z.string(), summary: z.object({ activeAcquisitions: count, downloads: count, incidents: count, waiting: count, nextWakeAt: z.string().nullable() }),
   activeAcquisitions: z.array(workSchema),
   downloads: z.array(workSchema.extend({
+    torrentId: id.optional(),
     bytesDone: count.nullable(), sizeBytes: count.nullable(), bytesPerSecond: count.nullable(),
     observedAt: z.string().nullable(), telemetry: z.enum(["live", "recorded", "unknown"]), problem: safeErrorSchema.nullable(),
     state: z.enum(["checking", "download-queued", "downloading", "stopped", "seeding"]).nullable().optional(),
@@ -346,7 +347,7 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
       const problem = classified?.code === "tracker-client-not-allowed" ? classified : observed.error
         ? { code: "torrent-tracker-or-storage", message: "The private managed client currently reports a tracker or storage problem. Exact cause is unknown from its status; inspect tracker requirements and local storage." }
         : null;
-      downloads.push({ ...work, key: `${work.key}:torrent:${torrent.id}`, job: view,
+      downloads.push({ ...work, key: `${work.key}:torrent:${torrent.id}`, job: view, torrentId: torrent.id,
         bytesDone: observed.bytesDone, sizeBytes: observed.sizeBytes, bytesPerSecond: observed.bytesPerSecond,
         observedAt: observed.observedAt, telemetry: "live", problem, state: observed.state });
       if (problem && !suppressIncident && view.error?.code !== problem.code)

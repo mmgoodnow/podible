@@ -162,11 +162,18 @@ try {
   await page.getByRole("heading", { name: "Activity", exact: true }).waitFor();
   const sharing = page.getByRole("region", { name: "Sharing and transfers", exact: true });
   await sharing.getByText("200 GiB", { exact: true }).waitFor();
-  const reuse = sharing.getByRole("region", { name: "Cross-seeding", exact: true });
+  const published = page.getByRole("region", { name: "Published library", exact: true });
+  await published.getByText("1 ebook · 1 audiobook", { exact: true }).waitFor();
+  assert.ok(await page.evaluate("Boolean(document.getElementById('activity-library').compareDocumentPosition(document.getElementById('activity-work')) & Node.DOCUMENT_POSITION_FOLLOWING)"));
+  const history = page.getByRole("region", { name: "Sharing history", exact: true });
+  await sharing.getByRole("link", { name: "View history", exact: true }).click();
+  assert.equal(new URL(page.url()).hash, "#activity-sharing-history");
+  await history.getByText("Tracker totals and cross-seed outcomes", { exact: true }).click();
+  const reuse = history.getByRole("region", { name: "Cross-seeding", exact: true });
   for (const label of ["Seeds created", "Pending", "Skipped"]) await reuse.getByText(label, { exact: true }).waitFor();
   assert.ok(!(await reuse.innerText()).includes("Success rate"));
   assert.ok(!(await reuse.innerText()).includes("seed time"), "All-torrent seed time was attributed to cross-seeding");
-  const backfill = sharing.getByRole("region", { name: "Find more seeds", exact: true });
+  const backfill = page.getByRole("region", { name: "System", exact: true }).getByRole("region", { name: "Find more seeds", exact: true });
   await backfill.getByRole("button", { name: "Search library", exact: true }).click();
   await backfill.getByRole("status").getByText("Preparing library search", { exact: true }).waitFor();
   await page.reload();
@@ -174,17 +181,20 @@ try {
   await backfill.getByRole("button", { name: "Stop search", exact: true }).click();
   await backfill.getByRole("status").getByText("Library search stopped", { exact: true }).waitFor();
   assert.ok((await backfill.innerText()).includes("count as seeds only after verification"));
-  await sharing.getByText(/combined seed time across all managed torrents/).waitFor();
-  const inventory = sharing.getByRole("region", { name: "Library inventory", exact: true });
+  await history.getByText("Tracker totals and cross-seed outcomes", { exact: true }).click();
+  await history.getByText(/combined seed time across all managed torrents/).waitFor();
+  await published.getByText("Disk usage by media type", { exact: true }).click();
+  const inventory = published.getByRole("region", { name: "Library inventory", exact: true });
   for (const name of ["Books", "eBooks", "Audiobooks"]) {
     const row = inventory.getByRole("rowheader", { name, exact: true }).locator("..");
     assert.equal(await row.getByRole("cell").first().innerText(), "1");
   }
-  const chart = sharing.getByRole("region", { name: "Tracker history", exact: true });
+  await published.getByText("Disk usage by media type", { exact: true }).click();
+  const chart = history.getByRole("region", { name: "Tracker history", exact: true });
   await chart.getByRole("img", { name: "Seed size by tracker; missing readings appear as gaps" }).waitFor();
   assert.equal(await chart.locator("svg path").count(), 2, "Both tracker series must be visible together");
-  assert.equal(await sharing.getByLabel("Chart tracker").count(), 0);
-  assert.equal(await sharing.getByRole("button", { name: "Edit tracker names", exact: true }).count(), 0);
+  assert.equal(await history.getByLabel("Chart tracker").count(), 0);
+  assert.equal(await history.getByRole("button", { name: "Edit tracker names", exact: true }).count(), 0);
   const bookSeries = chart.getByRole("button", { name: /Book tracker/ });
   await bookSeries.click();
   assert.equal(await chart.locator("svg path").count(), 1);

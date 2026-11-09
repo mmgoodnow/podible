@@ -6,7 +6,7 @@ export const rpc = createTRPCClient<AppRouter>({
   links: [splitLink({
     // Do not put independent provider reads or Activity panels behind a shared response barrier.
     condition: operation => ["openlibrary.search", "movies.search", "tv.search", "catalog.discovery",
-      "adminWeb.ops", "transferMetrics.library", "transferMetrics.status"].includes(operation.path),
+      "adminWeb.ops", "transferMetrics.published", "transferMetrics.library", "transferMetrics.status"].includes(operation.path),
     true: httpLink({ url: "/api/trpc" }),
     false: httpBatchLink({ url: "/api/trpc" }),
   })],
