@@ -4,7 +4,7 @@ import { movieViewEntries } from "../movies/publication";
 import type { MovieAcquisition } from "../movies/repo";
 import { queueMovieAcquisition } from "../movies/service";
 import { tvRoots, tvViewEntries } from "../tv/publication";
-import { queueTvAcquisition } from "../tv/acquisition";
+import { queueTvSeasons } from "../tv/acquisition";
 import type { LibraryViewEntry } from "./library-view";
 import {
   observeRecoveryFile, observeRecoveryMount, observeRecoveryView, recoveryDigest, recoveryViewFence, repairRecoveryView,
@@ -111,9 +111,10 @@ export class RecoveryService {
           jobIds.push(queued.acquisition.job_id);
         } else {
           for (const requestId of fresh.queueRequestIds) {
-            const queued = queueTvAcquisition(this.repo, requestId, "recovery");
-            if (!queued.acquisition.job_id) throw new Error("Recovery acquisition has no durable job");
-            jobIds.push(queued.acquisition.job_id);
+            for (const { acquisition } of queueTvSeasons(this.repo, requestId, "recovery")) {
+              if (!acquisition.job_id) throw new Error("Recovery acquisition has no durable job");
+              jobIds.push(acquisition.job_id);
+            }
           }
           if (!jobIds.length) throw new Error("Recovery has no actionable TV request");
         }

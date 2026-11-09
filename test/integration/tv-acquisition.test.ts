@@ -561,10 +561,17 @@ test("large-series execution is bounded by season without truncating durable req
       return { ...original, select: async input => ({ ...await original.select(input), matchingOffers: [copy] }) };
     };
     const batches: number[] = [];
+    const legacy = s.enqueue();
     while (s.repo.tv.missingEpisodes(s.request.requestId).length) {
-      const next = s.enqueue();
+      const next = s.repo.tv.acquisitions(s.request.targetId).filter(a => !a.finished_at).at(-1)!;
       await acquireTv(s.context, s.repo.getJob(next.job_id!)!, s.fixture.services);
       batches.push(s.repo.tv.activeEpisodes(s.request.targetId).length);
+      if (next.id === legacy.id) {
+        const followUps = s.repo.tv.acquisitions(s.request.targetId).filter(a => !a.finished_at).reverse();
+        expect(followUps.map(a => JSON.parse(a.decision_json!).batchEpisodeIds)).toEqual([
+          s.request.episodeIds.slice(64, 65), s.request.episodeIds.slice(65, 129), s.request.episodeIds.slice(129),
+        ]);
+      }
       const receipts = s.repo.crossSeed.receipts();
       expect(receipts).toHaveLength(1);
       expect(crossSeedOffer(s.repo, receipts[0]!.command).key).toBe(copy.key);
@@ -601,6 +608,7 @@ test("canonical loss invalidates only its exact TV file coverage and reimports a
     expect(result.results[0]!.status).toBe("queued");
     expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(2);
     expect(s.repo.tv.missingEpisodes(s.request.requestId).map(ep => ep.id)).toEqual(missing.episodeIds);
+    expect(JSON.parse(s.repo.tv.acquisitions(s.request.targetId)[0]!.decision_json!).batchEpisodeIds).toEqual(missing.episodeIds);
     await until(runtime, () => result.results[0]!.jobIds.every(id => s.repo.getJob(id)?.status === "succeeded"), () => "TV loss recovery");
     expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(3);
     expect(s.repo.tv.missingEpisodes(s.request.requestId)).toHaveLength(0);

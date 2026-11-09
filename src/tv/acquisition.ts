@@ -228,10 +228,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       active(); repo.finishAcquisition(acquisition.id);
       const remaining = repo.missingEpisodes(requestId).filter(episode =>
         (!intake.batchEpisodeIds || intake.batchEpisodeIds.includes(episode.id)) && episode.airDate && Date.parse(episode.airDate) <= Date.now());
-      if (remaining.length) {
-        if (intake.batchEpisodeIds) queueTvSeasons(ctx.repo, requestId, "recovery", remaining.map(ep => ep.id));
-        else queueTvAcquisition(ctx.repo, requestId, "recovery");
-      }
+      if (remaining.length) queueTvSeasons(ctx.repo, requestId, "recovery", remaining.map(ep => ep.id));
     }));
     return "done" as const;
   };
