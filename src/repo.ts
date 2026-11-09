@@ -437,6 +437,10 @@ export class BooksRepo {
     }
     return jobs;
   }
+  activityReuseMetainfoFailure(jobId: number): { httpStatus: number | null } | null {
+    const link = this.getJobExecution(jobId);
+    return link ? this.journalState.reader?.activityReuseMetainfoFailure?.(link.run_id) ?? null : null;
+  }
   assertJobExecutionLinks(): void {
     this.refreshJobSchema();
     if (this.journalState.legacy) { this.listExecutionJobs(); return; }

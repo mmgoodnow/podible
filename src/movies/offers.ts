@@ -21,6 +21,14 @@ export class MovieIndexerError extends Error {
     super(message);
   }
 }
+class MetainfoHttpError extends MovieIndexerError {
+  readonly code: string;
+  constructor(status: number, retryAfterMs: number) {
+    super(`Metainfo retrieval returned HTTP ${status}`, retryAfterMs,
+      status === 408 || status === 425 || status === 429 || status >= 500);
+    this.code = `podible:metainfo-http:${status}`;
+  }
+}
 function retryDelay(value: string | null): number {
   if (!value) return 60_000;
   const seconds = Number(value);
@@ -104,11 +112,7 @@ async function fetchMetainfoResponse(downloadUrl: string): Promise<Uint8Array> {
     throw new Error("Unsupported metainfo retrieval protocol");
   const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
   if (!response.ok)
-    throw new MovieIndexerError(
-      `Metainfo retrieval returned HTTP ${response.status}`,
-      retryDelay(response.headers.get("retry-after")),
-      response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500,
-    );
+    throw new MetainfoHttpError(response.status, retryDelay(response.headers.get("retry-after")));
   if (!response.body) throw new Error("Metainfo response has no body");
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];

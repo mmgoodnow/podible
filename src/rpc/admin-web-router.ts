@@ -13,6 +13,7 @@ import { adminTorrentKey, readAdminTorrents, type AdminTorrentBinding, type Admi
 import { feedGapDiagnosticsSchema, readFeedGapDiagnostics } from "../media/feed-gap";
 import { seerrInstance } from "../movies/seerr";
 import { tvSeerrMappingIssues } from "../tv/sync";
+import { describeReuseIncident } from "./activity-reuse-incident";
 
 const empty = z.object({}).strict();
 const id = z.number().int().positive().safe();
@@ -379,8 +380,9 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
       ? "The independent Sonarr comparison could not finish inspecting episode mappings. This comparison does not change downloads or your Plex library."
       : "The independent Radarr comparison could not finish. This comparison does not change downloads or your Plex library." }
       : view.error ?? normalizedAdminError("Operation failed")!;
-    incidents.push({ key: `job:${job.id}`, title: work.title, detail: error.message, code: error.code,
-      jobId: job.id, href: work.href, recovery: view.recovery, nextWakeAt: view.nextWakeAt });
+    const reuse = describeReuseIncident(repo, settings, job, label);
+    incidents.push({ key: `job:${job.id}`, title: reuse?.title ?? work.title, detail: reuse?.detail ?? error.message, code: reuse?.code ?? error.code,
+      jobId: job.id, href: reuse ? reuse.href : work.href, recovery: view.recovery, nextWakeAt: view.nextWakeAt });
   }
   let feeds: AdminWebOps["feeds"] = [];
   try {
