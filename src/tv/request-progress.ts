@@ -6,6 +6,7 @@ import type { TvAcquisition, TvEpisode, TvEvent } from "./types";
 const stage = z.enum(["ready", "queued", "searching", "downloading", "verifying", "publishing", "pack-pending", "waiting", "failed", "upcoming"]);
 export const tvRequestProgressSchema = z.object({
   activeBatches: z.number().int().nonnegative(),
+  searchableAiredEpisodes: z.number().int().nonnegative(),
   lastAttemptAt: z.string().nullable(), lastPublishedAt: z.string().nullable(),
   seasons: z.array(z.object({ seasonNumber: z.number().int().nonnegative(), total: z.number().int().nonnegative(),
     available: z.number().int().nonnegative(), future: z.number().int().nonnegative(), stage })),
@@ -27,11 +28,18 @@ export function tvRequestProgress(repo: Pick<BooksRepo, "getJob">, input: {
     const last = events.filter(e => e.acquisitionId === a.id).at(-1);
     const runningStage = scoped.success && scoped.data.waitingForSources ? "pack-pending" : last?.stage === "downloading" || last?.stage === "verifying" || last?.stage === "publishing"
       ? last.stage : last?.stage === "searching" || last?.stage === "selecting" || last?.stage === "replacing" ? "searching" : "queued";
-    return { ids, current, stage: current ? runningStage : job?.status === "failed" ? "failed" : "waiting" } as const;
+    return { ids, current, unscoped: !scoped.success || !scoped.data.batchEpisodeIds,
+      stage: current ? runningStage : job?.status === "failed" ? "failed" : "waiting" } as const;
   });
+  const activeWork = work.filter(w => w.current);
+  const queuedIds = new Set(activeWork.flatMap(w => w.ids));
+  const now = Date.now();
+  const searchableAiredEpisodes = activeWork.some(w => w.unscoped) ? 0 : missing.filter(ep =>
+    ep.airDate && Date.parse(ep.airDate) <= now && !queuedIds.has(ep.id)).length;
   const seasons = [...new Set(episodes.flatMap(ep => ep.numbering.filter(n => n.scheme === "tvdb:aired" && n.season !== null).map(n => n.season!)))].sort((a,b) => a-b);
   return {
-    activeBatches: work.filter(w => w.current).length,
+    activeBatches: activeWork.length,
+    searchableAiredEpisodes,
     lastAttemptAt: events.filter(e => e.stage === "searching" && e.acquisitionId !== null && acquisitions.some(a => a.id === e.acquisitionId)).at(-1)?.createdAt ?? null,
     lastPublishedAt: events.filter(e => e.stage === "available").at(-1)?.createdAt ?? null,
     seasons: seasons.map(seasonNumber => {

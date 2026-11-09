@@ -30,7 +30,9 @@ try {
   await context.addCookies([{ name: "podible_session", value: "tv-reader-fixture", url, httpOnly: true }]);
   const api = createTRPCClient<AppRouter>({ links: [httpLink({ url: new URL("/api/trpc",url).href,
     headers: { cookie: "podible_session=tv-reader-fixture", origin: new URL(url).origin } })] });
-  const request = (await api.tv.myRequests.query({})).requests[0]!;
+  const { requests } = await api.tv.myRequests.query({});
+  const request = requests.find(r => r.entry.title === "Fixture Sequel")!;
+  const withGaps = requests.find(r => r.entry.title === "Fixture with gaps")!;
   const page = await context.newPage(), errors: string[] = [], networkErrors: string[] = [], diagnostics: string[] = [];
   activePage = page;
   page.on("pageerror",error => errors.push(error.message));
@@ -45,7 +47,7 @@ try {
   await page.getByText("1 episodes have not aired or do not yet have an air date.",{ exact: false }).waitFor();
   assert.equal(await page.getByRole("progressbar",{ name: "Available TV episodes" }).getAttribute("value"),"1");
   assert.equal(await page.getByRole("heading",{ name: "Activity", exact: true }).count(),0,"Request page displays a raw execution history");
-  assert.equal(await page.getByRole("button",{ name: "Search remaining seasons" }).count(),0,"Future-only intent should not invite searches");
+  assert.equal(await page.getByRole("button",{ name: "Search missing episodes" }).count(),0,"Future-only intent should not invite searches");
   await page.getByText("Fixture Prequel · PREQUEL",{ exact: true }).waitFor();
   for (const hidden of ["Would import","native-selected-file.mkv","sonarr:fixture:queue:1","h264","tv-fixture-seerr-private","tv-fixture-agent-private","tv-fixture-sonarr-private"])
     assert.ok(!(await page.locator("body").innerText()).includes(hidden),`${hidden} leaked into a user-safe request`);
@@ -66,6 +68,16 @@ try {
   await page.screenshot({ path: path.join(artifacts,"tv-request-mobile.png"), animations: "disabled" });
   console.log("Native TV browser: persisted coverage and desktop/mobile screenshots verified");
 
+  await page.goto(new URL(`/tv/requests/${withGaps.requestId}`,url).href);
+  await page.getByRole("heading", { name: "1 episode batch in progress" }).waitFor();
+  await page.getByRole("button", { name: "Search missing episodes", exact: true }).click();
+  await page.getByRole("heading", { name: "2 episode batches in progress" }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Search missing episodes" }).count(), 0);
+  const afterSearch = (await api.tv.myRequest.query({ requestId: withGaps.requestId })).request;
+  assert.equal(afterSearch.acquisitions.length, 2, "Retry did not share the already queued batch");
+  assert.equal(afterSearch.progress.searchableAiredEpisodes, 0);
+  await page.goto(new URL(`/tv/requests/${request.requestId}`,url).href);
+
   const admin = await browser.newContext();
   admin.setDefaultTimeout(15_000);
   await admin.addCookies([{ name: "podible_session", value: "spa-browser-fixture", url, httpOnly: true }]);
@@ -82,7 +94,8 @@ try {
   await adminPage.goto(new URL("/tv-retention",url).href);
   const seasonPicker = adminPage.getByRole("combobox",{ name: "TV title and season", exact: true });
   await seasonPicker.getByRole("option",{ name: "Fixture Sequel (2020) / Season 2", exact: true }).waitFor({ state: "attached" });
-  assert.deepEqual(await seasonPicker.getByRole("option").allTextContents(),["Choose a title and season","Fixture Sequel (2020) / Season 2"]);
+  assert.deepEqual(await seasonPicker.getByRole("option").allTextContents(), ["Choose a title and season", "Fixture Sequel (2020) / Season 2",
+    "Fixture with gaps (2020) / Season 1", "Fixture with gaps (2020) / Season 2"]);
   await seasonPicker.selectOption({ label: "Fixture Sequel (2020) / Season 2" });
   assert.equal(retentionAudits,0,"Selecting a published TV title implicitly started retention work");
   assert.equal(await adminPage.getByRole("spinbutton").count(),0,"Retention still exposes numeric target IDs");

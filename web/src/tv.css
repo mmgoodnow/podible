@@ -3,6 +3,7 @@
 .tv-request-summary { flex: 1; min-width: 0; }
 .tv-request-summary h1 { font-size: clamp(2rem, 4vw, 3.8rem); line-height: 1.1; margin: .4rem 0 1rem; }
 .tv-request-summary h2 { font-size: 1.25rem; margin: 0 0 1rem; }
+.tv-request-search { margin-top: 1rem; }
 .tv-request-meta { color: var(--muted); font-size: .9rem; margin: .6rem 0; }
 .tv-request-count { font-size: 1.25rem; }
 .tv-request-count strong { font-size: 2rem; }
@@ -11,7 +12,6 @@
 .tv-request-update { border-left: 3px solid var(--ink); padding: 1.1rem 1.5rem; background: #25433208; margin: 1.5rem 0; }
 .tv-request-update h3 { margin: 0; font-size: 1.2rem; }
 .tv-request-update p { max-width: 78ch; margin: .7rem 0; }
-.tv-request-update button { margin-top: .5rem; }
 .tv-request-paused { border-color: var(--accent); }
 .tv-request-seasons { margin: 2rem 0; }
 .tv-request-section-heading { display: flex; gap: 1rem; align-items: center; justify-content: space-between; margin-bottom: 1rem; }

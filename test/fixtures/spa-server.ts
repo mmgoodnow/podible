@@ -15,6 +15,7 @@ import { observedFiles } from "../../src/media/observed-files";
 import { factsFromMovieProbe } from "../../src/movies/probe";
 import { evaluateMovieQuality } from "../../src/movies/quality";
 import type { TvCatalogEntry } from "../../src/tv/types";
+import { queueTvAcquisition } from "../../src/tv/acquisition";
 import { tvShadowInputSchema } from "../../src/tv/shadow-types";
 import { createHash } from "node:crypto";
 import { safeReturnPath } from "../../src/redirects";
@@ -127,6 +128,11 @@ if (process.env.TV_FIXTURE) {
   };
   const native = repo.tv.requestApproved({ userId: owner.id, entry: catalog, policy: settings.movies.qualityPolicy,
     episodeKeys: catalog.episodes.map((episode) => episode.key), origin: { instance, externalRequestId: 726, source: { fixture: true } } });
+  const missingCatalog: TvCatalogEntry = { ...catalog, key: "tvdb:200", tvdbId: 200, title: "Fixture with gaps", relations: [],
+    episodes: catalog.episodes.map((episode, index) => ({ ...episode, key: `tvdb:${2001 + index}`, airDate: "2020-01-01",
+      numbering: [{ scheme: "tvdb:aired", season: index + 1, episode: 1, absolute: null, source: "fixture:aired" }] })) };
+  const withGaps = repo.tv.request(owner.id, missingCatalog, settings.movies.qualityPolicy, missingCatalog.episodes.map(ep => ep.key));
+  queueTvAcquisition(repo, withGaps.requestId, "initial", [withGaps.episodeIds[0]!]);
   const acquisition = repo.tv.startAcquisition(native.targetId, "initial", (id) => repo.createJob({
     type: "tv_acquire", payload: { acquisitionId: id }, status: "succeeded", idempotencyKey: "tv-browser-seed",
   }).id, native.requestId).acquisition;
@@ -160,7 +166,7 @@ if (process.env.TV_FIXTURE) {
     unmappedEpisodeIds: [], probes: [{ index: 0, name: "tv-audit.mkv", probe }], probeErrors: [], model: "fixture", evaluatedAt: now });
 }
 const fixture = createFixtureMovieServices(root);
-const runtime = await createJobExecutionRuntime(
+const runtime = process.env.TV_FIXTURE ? null : await createJobExecutionRuntime(
   {
     repo,
     getSettings: () => repo.getSettings(),
@@ -175,7 +181,7 @@ if (process.env.OPS_SCALE_FIXTURE) seedActivityHistory(db, repo.executionDatabas
 let pumping = false;
 const interval = setInterval(async () => {
   // TV browser actions exercise real queue receipts, never external acquisition.
-  if (pumping || process.env.TV_FIXTURE || process.env.ADMIN_FIXTURE || process.env.AUTH_FIXTURE) return;
+  if (!runtime || pumping || process.env.ADMIN_FIXTURE || process.env.AUTH_FIXTURE) return;
   pumping = true;
   try {
     await runtime.reconcile();
@@ -266,7 +272,7 @@ console.log(`SPA_FIXTURE_URL=${server.url}`);
 process.on("SIGTERM", async () => {
   clearInterval(interval);
   server.stop(true);
-  await runtime.stop();
+  await runtime?.stop();
   db.close();
   await fs.rm(root, { recursive: true, force: true });
   process.exit(0);

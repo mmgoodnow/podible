@@ -63,7 +63,8 @@ export function TvRequestDetail({ requestId }: { requestId: number }) {
   const cache = useQueryClient();
   const result = useQuery(trpc.tv.myRequest.queryOptions({ requestId }, { refetchInterval: 5000 }));
   const [showReady, setShowReady] = useState(false);
-  const retry = useMutation(trpc.tv.retryMyRequest.mutationOptions({ onSuccess: () => {
+  const retry = useMutation(trpc.tv.retryMyRequest.mutationOptions({ onSuccess: (data) => {
+    cache.setQueryData(trpc.tv.myRequest.queryKey({ requestId }), data);
     void cache.invalidateQueries({ queryKey: trpc.tv.myRequest.pathKey() });
   } }));
   const withdraw = useMutation(trpc.tv.withdraw.mutationOptions({ onSuccess: () => {
@@ -92,14 +93,18 @@ export function TvRequestDetail({ requestId }: { requestId: number }) {
         <progress value={r.availableEpisodes} max={Math.max(1, r.requestedEpisodes)} aria-label="Available TV episodes" />
         <p>{r.availableEpisodes} of {r.requestedEpisodes} episodes verified in Plex.</p>
         {r.progress.lastPublishedAt && <p className="tv-request-meta">Last added {stamp(r.progress.lastPublishedAt)}</p>}
+        {!r.withdrawn && !complete && r.progress.searchableAiredEpisodes > 0 && <div className="tv-request-search">
+          <button disabled={retry.isPending} onClick={() => retry.mutate({ requestId })}>
+            {retry.isPending ? "Queuing search..." : r.intentionallyAbsent ? "Search and restore" : "Search missing episodes"}
+          </button>
+          {retry.isError && <Failure error={retry.error} />}
+        </div>}
       </div>
     </section>
     {!r.withdrawn && !complete && <section className={`tv-request-update${!active && missingAired ? " tv-request-paused" : ""}`} aria-label="Current acquisition status">
-      <h3>{r.intentionallyAbsent ? "Downloads are paused" : active ? `${r.progress.activeBatches} episode ${r.progress.activeBatches === 1 ? "batch" : "batches"} in progress` : missingAired ? "The last search did not find a verified match" : "Caught up with aired episodes"}</h3>
-      <p>{r.intentionallyAbsent ? "This title was intentionally removed. Search again to restore your request." : active ? "Seasons are queued independently. A difficult season does not prevent the others from being acquired." : missingAired ? `${missingAired.toLocaleString()} aired episodes are still missing. This is not a claim that releases don't exist: the available results could not be matched and verified. New releases are still monitored.` : "New episodes will be acquired when suitable releases arrive."}</p>
+      <h3>{r.intentionallyAbsent ? "Downloads are paused" : active ? `${r.progress.activeBatches} episode ${r.progress.activeBatches === 1 ? "batch" : "batches"} in progress` : missingAired ? "Waiting for matching releases" : "Caught up with aired episodes"}</h3>
+      <p>{r.intentionallyAbsent ? "This title was intentionally removed." : active && r.progress.searchableAiredEpisodes > 0 ? `${r.progress.searchableAiredEpisodes.toLocaleString()} aired episodes aren't queued. You can search for them without interrupting current downloads.` : active ? "Podible is working on the missing episodes." : missingAired ? `${missingAired.toLocaleString()} aired episodes are still missing. Podible is watching for new releases. You can also search existing releases now.` : "New episodes will be acquired when suitable releases arrive."}</p>
       {r.progress.lastAttemptAt && !active && <p className="tv-request-meta">Last search started {stamp(r.progress.lastAttemptAt)}</p>}
-      {!active && (missingAired > 0 || r.intentionallyAbsent) && <button disabled={retry.isPending} onClick={() => retry.mutate({ requestId })}>{retry.isPending ? "Queuing searches..." : "Search remaining seasons"}</button>}
-      {retry.isError && <Failure error={retry.error} />}
     </section>}
     {r.futureEpisodes > 0 && <p className="tv-request-meta">{r.futureEpisodes} episodes have not aired or do not yet have an air date. Releases are monitored automatically.</p>}
     <section className="tv-request-seasons" aria-label="Season progress">
