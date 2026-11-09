@@ -128,11 +128,13 @@ if (process.env.TV_FIXTURE) {
   };
   const native = repo.tv.requestApproved({ userId: owner.id, entry: catalog, policy: settings.movies.qualityPolicy,
     episodeKeys: catalog.episodes.map((episode) => episode.key), origin: { instance, externalRequestId: 726, source: { fixture: true } } });
-  const missingCatalog: TvCatalogEntry = { ...catalog, key: "tvdb:200", tvdbId: 200, title: "Fixture with gaps", relations: [],
-    episodes: catalog.episodes.map((episode, index) => ({ ...episode, key: `tvdb:${2001 + index}`, airDate: "2020-01-01",
-      numbering: [{ scheme: "tvdb:aired", season: index + 1, episode: 1, absolute: null, source: "fixture:aired" }] })) };
-  const withGaps = repo.tv.request(owner.id, missingCatalog, settings.movies.qualityPolicy, missingCatalog.episodes.map(ep => ep.key));
-  queueTvAcquisition(repo, withGaps.requestId, "initial", [withGaps.episodeIds[0]!]);
+  if (process.env.TV_SEARCH_FIXTURE) {
+    const missingCatalog: TvCatalogEntry = { ...catalog, key: "tvdb:200", tvdbId: 200, title: "Fixture with gaps", relations: [],
+      episodes: catalog.episodes.map((episode, index) => ({ ...episode, key: `tvdb:${2001 + index}`, airDate: "2020-01-01",
+        numbering: [{ scheme: "tvdb:aired", season: index + 1, episode: 1, absolute: null, source: "fixture:aired" }] })) };
+    const withGaps = repo.tv.request(owner.id, missingCatalog, settings.movies.qualityPolicy, missingCatalog.episodes.map(ep => ep.key));
+    queueTvAcquisition(repo, withGaps.requestId, "initial", [withGaps.episodeIds[0]!]);
+  }
   const acquisition = repo.tv.startAcquisition(native.targetId, "initial", (id) => repo.createJob({
     type: "tv_acquire", payload: { acquisitionId: id }, status: "succeeded", idempotencyKey: "tv-browser-seed",
   }).id, native.requestId).acquisition;

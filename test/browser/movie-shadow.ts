@@ -35,7 +35,7 @@ try {
   page.on("response", response => { if (response.url().includes("/api/trpc/") && response.status() >= 400) networkErrors.push(`${response.status()} ${response.url()}`); });
   // Keep the dashboard request behind the shell to exercise navigation-before-load races.
   await page.route("**/api/trpc/**", async route => {
-    if (/transferMetrics\.(status|library)/.test(new URL(route.request().url()).pathname)) await Bun.sleep(150);
+    if (/transferMetrics\.(status|published)/.test(new URL(route.request().url()).pathname)) await Bun.sleep(150);
     await route.continue();
   });
   for (const retired of ["/movie-dual-write", "/movie-shadow?history=1", "/movie-shadow/1", "/tv-sync?targetId=1",
@@ -44,11 +44,11 @@ try {
     assert.equal(redirect.status(),308);
     assert.equal(redirect.headers().location,"/ops");
     assert.ok(!(await redirect.text()).includes('<div id="root">'),"Retired diagnostic URL rendered a page");
-    const [metricsResponse, inventoryResponse] = await Promise.all([
+    const [metricsResponse, publishedResponse] = await Promise.all([
       page.waitForResponse(response => new URL(response.url()).pathname.includes("/api/trpc/") &&
         new URL(response.url()).pathname.includes("transferMetrics.status")),
       page.waitForResponse(response => new URL(response.url()).pathname.includes("/api/trpc/") &&
-        new URL(response.url()).pathname.includes("transferMetrics.library")),
+        new URL(response.url()).pathname.includes("transferMetrics.published")),
       page.goto(new URL(retired,url).href),
     ]);
     assert.equal(metricsResponse.status(),200,"Activity metrics request failed");
@@ -56,11 +56,11 @@ try {
     const payload = await metricsResponse.json();
     assert.ok((Array.isArray(payload) ? payload : [payload]).every(item => item.result && !item.error),
       "Activity metrics returned an RPC error");
-    assert.equal(inventoryResponse.status(),200,"Library inventory request failed");
-    assert.equal(await inventoryResponse.finished(),null,"Library inventory response did not finish");
-    const inventoryPayload = await inventoryResponse.json();
-    assert.ok((Array.isArray(inventoryPayload) ? inventoryPayload : [inventoryPayload]).every(item => item.result && !item.error),
-      "Library inventory returned an RPC error");
+    assert.equal(publishedResponse.status(),200,"Published counts request failed");
+    assert.equal(await publishedResponse.finished(),null,"Published counts response did not finish");
+    const publishedPayload = await publishedResponse.json();
+    assert.ok((Array.isArray(publishedPayload) ? publishedPayload : [publishedPayload]).every(item => item.result && !item.error),
+      "Published counts returned an RPC error");
     assert.equal(new URL(page.url()).pathname,"/ops");
     assert.equal(new URL(page.url()).search,"");
     await page.getByRole("heading",{ name: "Activity", exact: true }).waitFor();

@@ -6,7 +6,7 @@ import { createTRPCClient, httpLink } from "@trpc/client";
 import type { AppRouter } from "../../src/trpc";
 
 const server = Bun.spawn([process.execPath,"run","test/fixtures/spa-server.ts"],{
-  stdout: "pipe", stderr: "inherit", env: { ...process.env, PORT: "0", TV_FIXTURE: "1", SHADOW_FIXTURE: "",
+  stdout: "pipe", stderr: "inherit", env: { ...process.env, PORT: "0", TV_FIXTURE: "1", TV_SEARCH_FIXTURE: "1", SHADOW_FIXTURE: "",
     ADMIN_FIXTURE: "", AUTH_FIXTURE: "", FIXTURE_TLS_KEY: "", FIXTURE_TLS_CERT: "" },
 });
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
