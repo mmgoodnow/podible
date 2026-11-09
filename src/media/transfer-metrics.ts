@@ -131,6 +131,29 @@ export class TransferMetricsRepo {
     this.db.query("DELETE FROM transfer_metric_samples WHERE resolution='raw' AND observed_at<?").run(new Date(Date.parse(now) - 24 * 3600_000).toISOString());
     this.db.query("DELETE FROM transfer_metric_samples WHERE resolution='hourly' AND observed_at<?").run(new Date(Date.parse(now) - 90 * 24 * 3600_000).toISOString());
   }
+  scrapeSnapshot(now = Date.now()): TransferMetricsStatus | null {
+    const row = this.db.query(`SELECT snapshot_json FROM transfer_metric_samples
+      WHERE resolution='raw' ORDER BY bucket DESC LIMIT 1`).get() as { snapshot_json: string } | null;
+    if (!row) return null;
+    const sample = JSON.parse(row.snapshot_json) as TransferMetricsStatus;
+    const age = sample.observedAt ? now - Date.parse(sample.observedAt) : NaN;
+    return { ...sample, stale: sample.stale || !(age >= 0 && age <= 180_000) };
+  }
+  publishedCounts() {
+    return this.db.query(`WITH published_books AS (
+      SELECT m.book_id,m.kind FROM manifestations m JOIN assets a ON a.manifestation_id=m.id
+      JOIN asset_files f ON f.asset_id=a.id WHERE m.preferred_score>=0 GROUP BY m.book_id,m.kind
+    )
+    SELECT (SELECT count(DISTINCT book_id) FROM published_books) AS books,
+      (SELECT count(*) FROM published_books WHERE kind='ebook') AS ebooks,
+      (SELECT count(*) FROM published_books WHERE kind='audio') AS audiobooks,
+      (SELECT count(DISTINCT movie_id) FROM movie_targets WHERE active_version_id IS NOT NULL) AS movies,
+      (SELECT count(DISTINCT entry_id) FROM tv_active_episodes) AS shows,
+      (SELECT count(*) FROM (SELECT DISTINCT a.entry_id,n.season FROM tv_active_episodes a
+        JOIN tv_episode_numbering n ON n.entry_id=a.entry_id AND n.episode_id=a.episode_id
+        WHERE n.scheme='tvdb:aired' AND n.season IS NOT NULL)) AS seasons,
+      (SELECT count(DISTINCT episode_id) FROM tv_active_episodes) AS episodes`).get() as Record<string, number>;
+  }
   status(input: { hours?: 24 | 168 | 720 | 2160 } = {}, now = Date.now()): TransferMetricsStatus {
     const { hours } = transferMetricsStatusParamsSchema.parse(input);
     const saved = this.db.query("SELECT value_json FROM app_state WHERE key='transfer-metrics:collection'").get() as { value_json: string } | null;

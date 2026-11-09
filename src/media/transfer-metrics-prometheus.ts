@@ -2,7 +2,7 @@ import type { TransferMetricsStatus } from "./transfer-metrics-types";
 
 const quoted = (text: string) => `"${text.replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/"/g, '\\"')}"`;
 /** Saved low-cardinality telemetry only. Scraping must never collect or control torrents. */
-export function transferMetricsPrometheus(status: TransferMetricsStatus): string {
+export function transferMetricsPrometheus(status: TransferMetricsStatus | null, publishedCounts: Record<string, number> = {}): string {
   const lines: string[] = [];
   const metric = (name: string, description: string, type: "gauge" | "counter", rows: { value: number | null; labels?: Record<string, string> }[]) => {
     lines.push(`# HELP podible_${name} ${description}`, `# TYPE podible_${name} ${type}`);
@@ -10,14 +10,22 @@ export function transferMetricsPrometheus(status: TransferMetricsStatus): string
       lines.push(`podible_${name}${labels ? `{${Object.entries(labels).map(([key, text]) => `${key}=${quoted(text)}`).join(",")}}` : ""} ${value}`);
   };
   const one = (value: number | null | undefined) => [{ value: value ?? null }];
-  metric("transfer_metrics_fresh", "Whether every registered torrent has current verified telemetry.", "gauge", one(Number(!status.stale)));
+  metric("published_library_items", "Recorded published library entries by kind; not a live filesystem check. Kinds overlap.", "gauge",
+    Object.entries(publishedCounts).map(([kind, value]) => ({ value, labels: { kind } })));
+  metric("transfer_metrics_fresh", "Whether every registered torrent has current verified telemetry.", "gauge", one(Number(status !== null && !status.stale)));
+  if (!status) return lines.join("\n") + "\n";
   metric("transfer_metrics_observed_timestamp_seconds", "Last saved collection timestamp; not scrape time.", "gauge", one(status.observedAt ? Date.parse(status.observedAt) / 1000 : null));
-  metric("seed_bytes", "Logical complete torrent bytes actively seeding, not physical disk usage.", "gauge", one(status.summary?.seedBytes));
-  metric("seeding_torrents", "Complete torrent registrations actively seeding.", "gauge", one(status.summary?.seedingTorrents));
-  metric("seeding_copies_per_content_target", "Actively seeding associations per observed owned content target, not episodes/files.", "gauge", one(status.summary?.averageCopies));
+  const current = status.stale ? null : status.summary;
+  metric("seed_bytes", "Logical complete torrent bytes actively seeding, not physical disk usage.", "gauge", one(current?.seedBytes));
+  metric("seeding_torrents", "Complete torrent registrations actively seeding.", "gauge", one(current?.seedingTorrents));
+  metric("seeding_copies_per_content_target", "Actively seeding associations per observed owned content target, not episodes/files.", "gauge", one(current?.averageCopies));
+  metric("active_downloads", "Observed owned registrations by download stage, excluding seeding.", "gauge",
+    status.stale ? [] : ["downloading", "checking", "download-queued"].map(state => ({
+      labels: { state }, value: status.downloads.filter(row => row.state === state).length,
+    })));
   for (const [direction, bytes, rate] of [
-    ["upload", status.summary?.uploadedBytes, status.summary?.uploadBytesPerSecond],
-    ["download", status.summary?.downloadedBytes, status.summary?.downloadBytesPerSecond],
+    ["upload", status.summary?.uploadedBytes, current?.uploadBytesPerSecond],
+    ["download", status.summary?.downloadedBytes, current?.downloadBytesPerSecond],
   ] as const) {
     metric(`${direction}ed_bytes_total`, "Observed client traffic, accumulated across counter resets and removed registrations.", "counter", one(bytes));
     metric(`${direction}_bytes_per_second`, "Latest sampled client transfer speed.", "gauge", one(rate));
@@ -26,6 +34,8 @@ export function transferMetricsPrometheus(status: TransferMetricsStatus): string
   metric("seed_seconds_total", "Observed cumulative torrent seed time, summed across registrations.", "counter", one(status.summary?.seedSeconds));
   metric("reuse_attempts_total", "Persisted reuse attempts including pending and unsupported cases.", "counter", one(status.reuse.attempts));
   metric("reuse_completed_total", "Reuse attempts that independently verified complete and started seeding.", "counter", one(status.reuse.successful));
+  metric("reuse_pending", "Reuse attempts that have not reached a recorded outcome.", "gauge", one(status.reuse.pending));
+  metric("reuse_tv_multifile_reused_bytes_total", "Reusable payload recorded in completed multi-file TV matches, including assumed matches.", "counter", one(status.reuse.tvMultiFileReusedBytes));
   metric("reuse_verified_bytes_total", "Verified payload reused by completed registrations; not physical bytes saved.", "counter", one(status.reuse.verifiedReusedBytes));
   metric("reuse_sidecar_payload_bytes_total", "Missing sidecar payload required by completed reuse; excludes protocol/retry overhead.", "counter", one(status.reuse.sidecarDownloadBytes));
   metric("reuse_repair_payload_bytes_total", "Missing content payload required by completed reuse; excludes protocol/retry overhead.", "counter", one(status.reuse.contentRepairBytes));

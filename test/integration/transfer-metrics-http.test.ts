@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { createHash, randomBytes } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { hashSessionToken } from "../../src/auth";
@@ -59,4 +63,61 @@ test("Prometheus counters preserve units, escape bounded tracker labels, omit un
   expect(stale).not.toMatch(/^podible_tracker_seed_bytes\{/m);
   expect(stale).not.toMatch(/^podible_seed_bytes /m);
   expect(stale).toContain("podible_uploaded_bytes_total 4096");
+});
+
+test("scrape token grants only metrics access and can be rotated without restarting", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "podible-metrics-auth-"));
+  const digestPath = join(dir, "metrics-token.sha256");
+  const db = new Database(":memory:");
+  try {
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    repo.ensureSettings();
+    const fetch = createPodibleFetchHandler(repo, Date.now(), null, { metricsTokenDigestPath: digestPath });
+    const token = randomBytes(32).toString("hex");
+    const request = (path: string, body?: object) => fetch(new Request(`http://fixture.invalid${path}`, {
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      ...(body ? { method: "POST", body: JSON.stringify(body) } : {}),
+    }));
+    expect((await request("/metrics")).status).toBe(401);
+    await writeFile(digestPath, createHash("sha256").update(token).digest("hex") + "\n");
+    expect((await request("/metrics")).status).toBe(200);
+    const rpc = await request("/rpc", { jsonrpc: "2.0", id: 1, method: "transferMetrics.status", params: {} });
+    expect(await rpc.json()).toMatchObject({ error: { code: -32001 } });
+    expect((await request("/api/trpc/transferMetrics.status?input=%7B%7D")).status).toBe(401);
+    await writeFile(digestPath, createHash("sha256").update(randomBytes(32)).digest("hex"));
+    expect((await request("/metrics")).status).toBe(401);
+  } finally {
+    db.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("scrapes use one saved transfer sample and distinguish stale gauges from observed counters", () => {
+  const db = new Database(":memory:");
+  try {
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    repo.ensureSettings();
+    const now = Date.parse("2026-11-08T10:00:00Z");
+    expect(repo.transferMetrics.scrapeSnapshot(now)).toBeNull();
+    const sample = repo.transferMetrics.status({}, now);
+    sample.observedAt = new Date(now).toISOString();
+    sample.stale = false;
+    sample.summary = { seedBytes: 500, seedingTorrents: 1, uploadedBytes: 300, downloadedBytes: 100,
+      uploadBytesPerSecond: 10, downloadBytesPerSecond: 0, crossSeedUploadedBytes: 30,
+      seedSeconds: 400, contentUnits: 1, averageCopies: 1 };
+    db.query("INSERT INTO transfer_metric_samples VALUES('raw',?,?,?)")
+      .run(sample.observedAt.slice(0, 16), sample.observedAt, JSON.stringify(sample));
+    const fresh = transferMetricsPrometheus(repo.transferMetrics.scrapeSnapshot(now + 1), repo.transferMetrics.publishedCounts());
+    expect(fresh).toContain("podible_seed_bytes 500\n");
+    expect(fresh).toContain("podible_transfer_metrics_fresh 1\n");
+    expect(fresh).toContain('podible_published_library_items{kind="episodes"} 0\n');
+    const stale = transferMetricsPrometheus(repo.transferMetrics.scrapeSnapshot(now + 180_001));
+    expect(stale).toContain("podible_transfer_metrics_fresh 0\n");
+    expect(stale).toContain("podible_uploaded_bytes_total 300\n");
+    expect(stale).not.toMatch(/^podible_(seed_bytes|upload_bytes_per_second) /m);
+  } finally {
+    db.close();
+  }
 });

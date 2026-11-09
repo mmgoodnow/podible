@@ -35,6 +35,7 @@ export function createPodibleFetchHandler(
   dependencies: {
     movieServices?: import("./movies/operations").MovieServices;
     bookTorrentClient?: import("./media/torrent-client").TorrentClient;
+    metricsTokenDigestPath?: string;
   } = {},
 ): (request: Request) => Promise<Response> {
   const app = new Hono<HttpEnv>();
@@ -81,7 +82,7 @@ export function createPodibleFetchHandler(
   app.route("/admin", createAdminRoutes(repo, startTime, buildInfo));
   app.route("/rpc", createRpcRoutes(repo, startTime, dependencies));
   app.route("/api/trpc", createTrpcRoutes(repo, startTime, dependencies));
-  app.route("/metrics", createMetricsRoutes(repo));
+  app.route("/metrics", createMetricsRoutes(repo, dependencies.metricsTokenDigestPath));
   app.route("/app", spa);
   app.route("/web-assets", spa);
   app.route("/assets", createAssetsIndexRoutes(repo));

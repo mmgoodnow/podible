@@ -100,11 +100,16 @@ Unchanged samples are explicitly labelled; unavailable historic speed observatio
 are gaps, not reconstructed zero rates. Tracker rates start with new collections.
 Historical snapshots retain the grouping and attribution known at sample time.
 
-`GET /metrics` exposes Prometheus text format using the existing admin session
-authentication (Bearer app token or browser cookie). Anonymous requests return
-401, non-admins 403. Responses are not browser-cached. No public monitoring port
-or separate credential setting is introduced. Keep the session token in the
-scraper's secret file, not this repository or a dashboard URL.
+`GET /metrics` exposes Prometheus text format. Use a dedicated Bearer token for
+scraping: generate 32 random bytes as 64 hex characters, put the token in
+Prometheus's private credentials file, and write the SHA-256 hex digest of the
+token (no trailing newline in the input to the hash) to
+`$CONFIG_DIR/metrics-token.sha256`. Podible reads the digest on demand, so an
+atomic replacement rotates the credential without a restart. This token cannot
+sign into Podible or call its RPCs. Existing admin sessions still work for
+interactive access; anonymous requests return 401 and non-admins 403. Use HTTPS
+or an isolated trusted network for scrapes. Keep the token out of dashboards,
+URLs, and source control.
 
 ```yaml
 scrape_configs:
@@ -116,10 +121,17 @@ scrape_configs:
       - targets: [podible.example.com]
     authorization:
       type: Bearer
-      credentials_file: /run/secrets/podible-admin-app-token
+      credentials_file: /run/secrets/podible-metrics-token
 ```
 
-Grafana can use the existing Prometheus data source. Suggested panels:
+Grafana uses the existing Prometheus data source and never needs the Podible
+credential. Generate the dashboard JSON with
+`bun run scripts/grafana-dashboard.ts <prometheus-datasource-uid>`, then import
+or provision it in Grafana. Prometheus collects from the first successful scrape;
+it does not replay the app's saved history. The endpoint reads the latest stored
+transfer snapshot without rescanning torrent records. Library counts describe
+published records, not a new verification of files or physical disk use. Some
+categories overlap, so don't sum them. Suggested PromQL:
 
 | Panel | PromQL | Unit |
 | --- | --- | --- |
