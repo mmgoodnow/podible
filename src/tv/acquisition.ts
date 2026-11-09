@@ -87,7 +87,7 @@ export function tvAcquisitionBatch(episodes: TvEpisode[]): TvEpisode[] {
   const season = coordinate(ordered[0]!)?.season;
   return ordered.filter(episode => coordinate(episode)?.season === season).slice(0, 64);
 }
-export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvServices = ctx.tvServices ?? configuredTvServices(ctx.getSettings(), ctx.modelProvider)): Promise<"done"> {
+export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvServices = ctx.tvServices ?? configuredTvServices(ctx.getSettings(), ctx.modelProvider, ctx.repo)): Promise<"done"> {
   const acquisition = ctx.repo.tv.acquisition(JSON.parse(job.payload_json ?? "{}").acquisitionId);
   if (!acquisition?.request_id || acquisition.job_id !== job.id) throw new Error("Unknown TV acquisition execution");
   const repo = ctx.repo.tv;
@@ -116,7 +116,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
     const fingerprint=createHash("sha256").update(JSON.stringify([ctx.getSettings(),entry.key,entry.title])).digest("hex");
     const saved=key ? ctx.repo.getJsonState<{fingerprint:string;capturedAt:number;value:Awaited<ReturnType<TvServices["search"]>>}>(key) : null;
     if(saved?.fingerprint===fingerprint && Date.now()-saved.capturedAt>=0 && Date.now()-saved.capturedAt<30*60_000) return saved.value;
-    const value=await services.search(entry);
+    const value=await services.search(entry, undefined, intake.searchGroup ? undefined : episodes);
     active();
     if(key) ctx.repo.setJsonState(key,{fingerprint,capturedAt:Date.now(),value});
     return value;

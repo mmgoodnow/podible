@@ -8,7 +8,7 @@ import type { BooksRepo } from "../repo";
 import { rankSearchResults } from "./service";
 import { inferLanguageFromReleaseTitles, normalizeManifestationLanguageCode } from "./language";
 import type { TorznabResult } from "./torznab";
-import { getOrFetchCachedTorrentBytes, inspectTorrentFiles } from "./torrent-cache";
+import { getOrFetchCachedTorrentBytes, inspectTorrentFiles, unpinnedMetainfoMaxAgeMs } from "./torrent-cache";
 import { normalizeInfoHash } from "./torrent";
 import type { AppSettings, MediaType, ReleaseRow } from "../app-types";
 
@@ -606,7 +606,7 @@ function createSearchAgent(
           providerGuid: candidate.guid ?? null,
           url: candidate.url,
           infoHash: candidate.infoHash ?? null,
-        });
+        }, { purpose: "inspection", maxAgeMs: candidate.infoHash ? undefined : unpinnedMetainfoMaxAgeMs });
         const files = inspectTorrentFiles(bytes).map((file) => ({
           path: file.path,
           size: humanSize(file.size) ?? file.size,

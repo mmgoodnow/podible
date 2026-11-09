@@ -721,6 +721,8 @@ export class BooksRepo {
     return (this.db.query("SELECT * FROM torrent_cache WHERE key = ?").get(key) as TorrentCacheRow | null) ?? null;
   }
 
+  torrentCacheNamespace(): object { return this.db; }
+
   putTorrentCache(input: {
     key: string;
     provider?: string | null;

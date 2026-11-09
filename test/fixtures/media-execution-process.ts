@@ -50,6 +50,14 @@ bookTorrentClient.ensureAdded = async (input) => {
 const modelProvider: ModelProvider = {
   getModel: () => ({
     getResponse: async (request) => {
+      if (JSON.stringify(request).includes("primaryQuery")) {
+        const input = typeof request.input === "string" ? request.input : request.input
+          .flatMap(item => item.type === "message" && item.role === "user"
+            ? typeof item.content === "string" ? [item.content] : item.content.flatMap(part => part.type === "input_text" ? [part.text] : [])
+            : []).join("");
+        return { usage: new Usage(), output: [{ type: "message", role: "assistant", status: "completed",
+          content: [{ type: "output_text", text: JSON.stringify({ primaryQuery: JSON.parse(input).query, alternateQuery: null }) }] }] };
+      }
       const importing = JSON.stringify(request).includes("selectedIndices");
       await checkpoint(importing ? "import-agent" : "search-agent");
       let selectedIndices: number[] = [];

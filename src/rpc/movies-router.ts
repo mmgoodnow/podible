@@ -4,7 +4,7 @@ import { RpcError, type RpcContext } from "./shared";
 import { positiveIntSchema, emptyParamsSchema } from "./schemas";
 import { catalogMovieSchema } from "../movies/types";
 import { movieRequestViewSchema } from "../movies/contracts";
-import { movieCatalog, movieIndexers } from "../movies/runtime";
+import { movieCatalog, searchMovieReleases } from "../movies/runtime";
 import { movieRequestView, queueMovieAcquisition } from "../movies/service";
 
 function owned(ctx: RpcContext, requestId: number) {
@@ -216,7 +216,7 @@ export const movieRequestsRouter = defineRouter({
       const movie = ctx.repo.movies.movie(target.movie_id)!;
       const found = await (ctx.movieServices
         ? ctx.movieServices.search(movie, input.query)
-        : movieIndexers(ctx.repo.getSettings()).search(movie, input.query));
+        : searchMovieReleases(ctx.repo, ctx.repo.getSettings(), movie, input.query));
       return {
         searchId: ctx.repo.movies.saveReleaseSearch(
           ctx.session!.user_id,

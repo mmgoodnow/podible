@@ -8,7 +8,7 @@ export async function reconcileTv(ctx: WorkerContext): Promise<"done"> {
   if (!ctx.repo.tv.hasTargets()) return "done";
   const settings = ctx.getSettings(), repo = ctx.repo.tv;
   const roots = tvRoots(settings.tv.managedRoot, settings.tv.plexViewPath);
-  const services = ctx.tvServices ?? configuredTvServices(settings, ctx.modelProvider);
+  const services = ctx.tvServices ?? configuredTvServices(settings, ctx.modelProvider, ctx.repo);
   const active = () => ctx.execution?.assertActive();
   await durableStep(ctx, "tv-maintenance:storage", () => prepareMovieStorage(ctx.repo, roots.contentRoot));
   await assertMovieStorage(ctx.repo, roots.contentRoot);

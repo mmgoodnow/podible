@@ -3,6 +3,8 @@ import { IndexerSearchError, type IndexerFailure } from "../library/indexer-erro
 import { runSearchBatch } from "../library/service";
 import type { TorznabResult } from "../library/torznab";
 import { durableStep, workerLog, type WorkerContext } from "./context";
+import { planIndexerQuery } from "../media/indexer-query-plan";
+import { recordIndexerTraffic } from "../media/indexer-traffic";
 
 type SearchCheckpoint = TorznabResult[] | {
   kind: "indexer-search-deferred";
@@ -21,7 +23,11 @@ export async function selectWithIndexerRecovery<T extends { selections: unknown[
     let searched = false;
     const checkpoint = await durableStep<SearchCheckpoint>(ctx, `${request.media}:search${suffix}`, async () => {
       searched = true;
-      const batch = await runSearchBatch(ctx.getSettings(), request);
+      const settings = ctx.getSettings();
+      const book = ctx.repo.getBookRow(request.bookId);
+      const plan = await planIndexerQuery(settings, { media: request.media, query: request.query, title: book?.title, author: book?.author }, ctx.modelProvider);
+      const batch = await runSearchBatch(settings, { ...request, query: plan.primaryQuery }, { alternateQuery: plan.alternateQuery,
+        onRequest: () => recordIndexerTraffic(ctx.repo, "acquisition", "search_text") });
       return batch.failures.length ? { kind: "indexer-search-deferred", ...batch } : batch.results;
     });
     const { results, failures } = Array.isArray(checkpoint) ? { results: checkpoint, failures: [] } : checkpoint;

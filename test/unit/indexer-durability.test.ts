@@ -326,7 +326,8 @@ describe("book discovery and durable search phases", () => {
     try {
       for (const kind of ["configuration", "unavailable"] as const) {
         const cancelled = new RunCancelledError("fixture");
-        const ctx = { onLog() {}, getSettings: () => defaultSettings({ torznab: [{ name: "MAM", baseUrl: server.url.origin }] }), execution: {
+        const ctx = { onLog() {}, repo: { getBookRow: () => null, transaction: (fn: () => void) => fn(), getJsonState: () => null, setJsonState() {} },
+          getSettings: () => defaultSettings({ torznab: [{ name: "MAM", baseUrl: server.url.origin }] }), execution: {
           key: "fixture", assertActive() {}, async sleep() { throw cancelled; },
           async run<T>(_name: string, handler: () => T | Promise<T>) {
             if (kind === "configuration") return handler();

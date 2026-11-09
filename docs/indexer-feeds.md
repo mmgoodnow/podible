@@ -128,6 +128,27 @@ forwarded to normal selection. A failed content hash stays excluded. A known
 different hash can be reconsidered when a provider reuses the failed GUID and/or
 download URL; snatching still validates the actual metainfo identity.
 
+## Search and Metainfo Traffic
+
+Automatic searches and cross-seed backfills use the existing agent key to plan a
+primary title query and one optional alias. The gateway prefers a catalog ID
+when the provider advertises support, using only catalog-backed numbering for
+scoped TV searches. An empty ID search can fall back to the primary text query;
+an empty text-only search can try the alias. Provider errors do not trigger
+alternate requests. Backfill requests one page of 50 results by default, or
+fewer if the provider advertises a lower maximum.
+
+Inspection, acquisition and cross-seeding share cached metainfo for the same
+provider listing and exact download URL. Unknown-hash acquisitions only reuse
+recent entries. Confirmed nukes, already-owned identities and unsupported
+client operations are skipped before downloading metainfo.
+
+The admin metrics endpoint reports `podible_indexer_traffic_total` by purpose
+and event. Only wire requests count as `search_id`, `search_text` or
+`metainfo_fetch`; cache hits, joined requests, failures and prefetch skips are
+separate counters. The reuse bucket includes RSS and other reuse triggers as
+well as backfill, so it is not an exact measure of snatches per backfill search.
+
 New matched releases are pooled with earlier considered evidence for that book
 and media (up to 1,000 recent IDs, prioritizing the current batch). Thus a part
 rejected because its companion was missing can be reconsidered when that companion

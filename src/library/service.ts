@@ -1,7 +1,7 @@
 import { BooksRepo } from "../repo";
 import { ensureBookTorrentAdded } from "../media/book-torrents";
 import type { TorrentClient } from "../media/torrent-client";
-import { getOrFetchCachedTorrentBytes, torrentCacheKeyFor } from "./torrent-cache";
+import { getOrFetchCachedTorrentBytes, torrentCacheKeyFor, unpinnedMetainfoMaxAgeMs } from "./torrent-cache";
 import { infoHashFromTorrentBytes, normalizeInfoHash } from "./torrent";
 import { searchTorznabBatch } from "./torznab";
 import { bookIndexerSources } from "./indexer-discovery";
@@ -256,7 +256,7 @@ export async function runSearch(settings: AppSettings, request: SearchRequest) {
   return batch.results;
 }
 
-export async function runSearchBatch(settings: AppSettings, request: SearchRequest): Promise<IndexerSearchBatch> {
+export async function runSearchBatch(settings: AppSettings, request: SearchRequest, options?: import("../media/indexer-gateway").SearchOptions): Promise<IndexerSearchBatch> {
   let sources;
   try {
     sources = await bookIndexerSources(settings, request.media);
@@ -264,7 +264,7 @@ export async function runSearchBatch(settings: AppSettings, request: SearchReque
     if (!(error instanceof IndexerError)) throw error;
     return { results: [], failures: [error.failure] };
   }
-  const batch = await searchTorznabBatch(sources, request.query, request.media);
+  const batch = await searchTorznabBatch(sources, request.query, request.media, options);
   return { ...batch, results: rankSearchResults(request.query, request.media, batch.results).map((entry) => entry.result) };
 }
 
@@ -332,8 +332,9 @@ export async function runSnatch(
     },
     {
       onLog: (line) => snatchLog(line),
-      // GUIDs and supplied hashes are hints, not proof that a mutable URL still has the same content.
-      revalidate: explicitHash === null || existingByGuid !== null || existingByClaimedHash !== null,
+      // Reacquisition must still check mutable provider listings for changed content.
+      revalidate: existingByGuid !== null || existingByClaimedHash !== null,
+      maxAgeMs: explicitHash === null ? unpinnedMetainfoMaxAgeMs : undefined,
     }
   );
   snatchLog(`[snatch] fetch_torrent ok bytes=${torrentBytes.byteLength} cache_hit=${cacheHit}`);

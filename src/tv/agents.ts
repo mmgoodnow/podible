@@ -55,7 +55,8 @@ export function validateTvImportPlan(raw: unknown, files: TvFileCandidate[], epi
   return plan;
 }
 
-export function createTvDecider(settings: AppSettings, modelProvider?: ModelProvider, search?: (query: string) => Promise<MovieSearch>): TvDecider {
+export function createTvDecider(settings: AppSettings, modelProvider?: ModelProvider, search?: (query: string) => Promise<MovieSearch>,
+  fetchMetainfo = fetchMovieMetainfo): TvDecider {
   async function run<T extends z.ZodObject>(name: string, outputType: T, extra: string, input: unknown,
     tools: ConstructorParameters<typeof Agent>[0]["tools"] = [],
     validate?: (output: z.output<T>) => string | null): Promise<z.output<T>> {
@@ -99,7 +100,7 @@ export function createTvDecider(settings: AppSettings, modelProvider?: ModelProv
           if (!offers[index]) return { error: "Unknown release" };
           if (!manifests.has(index)) {
             if (++inspections > 8) return { error: "Metainfo request budget exhausted", maximumDistinctReleases: 8 };
-            manifests.set(index,inspectMetainfo(await fetchMovieMetainfo(offers[index]!)));
+            manifests.set(index,inspectMetainfo(await fetchMetainfo(offers[index]!)));
           }
           const metadata = manifests.get(index)!;
           return { ...evidencePage(metadata.files,offset,limit,file => ({ name: file.path, sizeBytes: file.size })), sizeBytes: metadata.size,

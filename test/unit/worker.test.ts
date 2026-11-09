@@ -269,6 +269,7 @@ describe("worker acquire auto-acquire retries", () => {
     });
 
     const fakeProvider = new FakeModelProvider([
+      textModelResponse(JSON.stringify({ primaryQuery: "Red Rising Pierce Brown", alternateQuery: null })),
       textModelResponse(
         JSON.stringify({
           selections: [
@@ -314,7 +315,7 @@ describe("worker acquire auto-acquire retries", () => {
         { manifestationId: manifestations[0]?.id, sequenceInManifestation: 0, preferAgentImport: true },
         { manifestationId: manifestations[0]?.id, sequenceInManifestation: 1, preferAgentImport: true }
       ]);
-      expect(JSON.stringify(fakeProvider.requests[0]?.input)).toContain("prefer GraphicAudio");
+      expect(JSON.stringify(fakeProvider.requests[1]?.input)).toContain("prefer GraphicAudio");
       expect(logs.some((line) => line.includes("parts=2"))).toBe(true);
     } finally {
       torznab.stop();

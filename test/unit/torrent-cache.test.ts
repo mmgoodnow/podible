@@ -5,6 +5,8 @@ import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { getOrFetchCachedTorrentBytes, torrentCacheKeyFor } from "../../src/library/torrent-cache";
 import { infoHashFromTorrentBytes } from "../../src/library/torrent";
+import { cachedMovieMetainfo } from "../../src/movies/offers";
+import { indexerTrafficPrometheus } from "../../src/media/indexer-traffic";
 
 const torrent = (name: string) => bencode.encode({ info: {
   name, length: 10, "piece length": 16384, pieces: Buffer.from("12345678901234567890"),
@@ -72,4 +74,19 @@ test("corrupt legacy metainfo is refetched rather than treated as a cache hit", 
   expect(result.cacheHit).toBe(false);
   expect(result.bytes).toEqual(torrent("current.mp3"));
   expect(calls).toHaveLength(1);
+}));
+
+test("video inspection and acquisition share one fetch, then reuse the persisted bytes", async () => fixture(async (repo, calls) => {
+  const offer = { ...identity, key: "fixture", title: "Fixture", sizeBytes: 10, seeders: 1,
+    infoHash: infoHashFromTorrentBytes(torrent("current.mp3")), attributes: { guid: identity.providerGuid } };
+  const first = cachedMovieMetainfo(repo, offer, "inspection");
+  const second = cachedMovieMetainfo(repo, offer, "acquisition");
+  expect(await first).toEqual(await second);
+  expect(await cachedMovieMetainfo(repo, offer, "reuse")).toEqual(torrent("current.mp3"));
+  expect(calls).toHaveLength(1);
+  const metrics = indexerTrafficPrometheus(repo);
+  expect(metrics).toContain('purpose="inspection",event="metainfo_fetch"} 1');
+  expect(metrics).toContain('purpose="acquisition",event="metainfo_coalesced"} 1');
+  expect(metrics).toContain('purpose="reuse",event="metainfo_cache_hit"} 1');
+  expect(metrics).not.toContain(identity.url);
 }));

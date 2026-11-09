@@ -2,6 +2,7 @@ import bencode from "bencode";
 
 import type { BooksRepo } from "../repo";
 import { infoHashFromTorrentBytes, normalizeInfoHash } from "./torrent";
+import { recordIndexerTraffic, type TrafficPurpose } from "../media/indexer-traffic";
 
 type TorrentCacheIdentity = {
   provider?: string | null;
@@ -96,33 +97,61 @@ export function inspectTorrentFiles(bytes: Uint8Array): TorrentFileEntry[] {
   return out;
 }
 
+const pendingByDatabase = new WeakMap<object, Map<string, Promise<Uint8Array>>>();
+export const unpinnedMetainfoMaxAgeMs = 30 * 60_000;
+
 export async function getOrFetchCachedTorrentBytes(
   repo: BooksRepo,
   identity: TorrentCacheIdentity,
-  options: { onLog?: (message: string) => void; revalidate?: boolean } = {}
+  options: { onLog?: (message: string) => void; revalidate?: boolean; maxAgeMs?: number; purpose?: TrafficPurpose;
+    fetchBytes?: (url: string) => Promise<Uint8Array>; validate?: (bytes: Uint8Array) => void } = {}
 ): Promise<{ bytes: Uint8Array; cacheKey: string; cacheHit: boolean }> {
   const cacheKey = torrentCacheKeyFor(identity);
   const cached = repo.getTorrentCache(cacheKey);
+  const fresh = options.maxAgeMs === undefined || !!cached && Date.now() - Date.parse(cached.updated_at) <= options.maxAgeMs;
   let cachedHash: string | null = null;
-  if (cached?.torrent_bytes && !options.revalidate) {
-    try { cachedHash = infoHashFromTorrentBytes(cached.torrent_bytes); } catch { /* Refetch corrupt legacy cache entries. */ }
+  if (cached?.torrent_bytes && fresh && !options.revalidate) {
+    try {
+      options.validate?.(cached.torrent_bytes);
+      cachedHash = infoHashFromTorrentBytes(cached.torrent_bytes);
+    } catch { /* Refetch corrupt legacy cache entries. */ }
   }
   if (cached?.torrent_bytes && cachedHash && !options.revalidate && cached.url === identity.url &&
       (!identity.infoHash || cachedHash === normalizeInfoHash(identity.infoHash))) {
-    options.onLog?.(`[torrent_cache] hit key=${JSON.stringify(cacheKey)} bytes=${cached.torrent_bytes.byteLength}`);
+    options.onLog?.(`[torrent_cache] hit bytes=${cached.torrent_bytes.byteLength}`);
+    recordIndexerTraffic(repo, options.purpose ?? "acquisition", "metainfo_cache_hit");
     return { bytes: cached.torrent_bytes, cacheKey, cacheHit: true };
   }
-  options.onLog?.(`[torrent_cache] miss key=${JSON.stringify(cacheKey)} fetch_url=${JSON.stringify(identity.url)}`);
-  const bytes = await fetchTorrentBytes(identity.url);
-  repo.putTorrentCache({
-    key: cacheKey,
-    provider: identity.provider ?? null,
-    providerGuid: identity.providerGuid ?? null,
-    url: identity.url,
-    infoHash: infoHashFromTorrentBytes(bytes),
-    torrentBytes: bytes,
-  });
-  options.onLog?.(`[torrent_cache] stored key=${JSON.stringify(cacheKey)} bytes=${bytes.byteLength}`);
+  const purpose = options.purpose ?? "acquisition";
+  const namespace = repo.torrentCacheNamespace();
+  let pending = pendingByDatabase.get(namespace);
+  if (!pending) pendingByDatabase.set(namespace, pending = new Map());
+  const requestKey = JSON.stringify([cacheKey, identity.url, identity.infoHash, Boolean(options.validate)]);
+  const existing = pending.get(requestKey);
+  if (existing) {
+    recordIndexerTraffic(repo, purpose, "metainfo_coalesced");
+    return { bytes: await existing, cacheKey, cacheHit: false };
+  }
+  options.onLog?.("[torrent_cache] miss");
+  const request = (async () => {
+    recordIndexerTraffic(repo, purpose, "metainfo_fetch");
+    let bytes: Uint8Array, infoHash: string;
+    try {
+      bytes = await (options.fetchBytes ?? fetchTorrentBytes)(identity.url);
+      options.validate?.(bytes);
+      infoHash = infoHashFromTorrentBytes(bytes);
+    } catch (error) {
+      recordIndexerTraffic(repo, purpose, "metainfo_failure");
+      throw error;
+    }
+    repo.putTorrentCache({ key: cacheKey, provider: identity.provider, providerGuid: identity.providerGuid,
+      url: identity.url, infoHash, torrentBytes: bytes });
+    return bytes;
+  })();
+  pending.set(requestKey, request);
+  let bytes: Uint8Array;
+  try { bytes = await request; } finally { pending.delete(requestKey); }
+  options.onLog?.(`[torrent_cache] stored bytes=${bytes.byteLength}`);
   return { bytes, cacheKey, cacheHit: false };
 }
 

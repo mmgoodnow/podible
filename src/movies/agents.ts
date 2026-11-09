@@ -88,6 +88,7 @@ function movieAgentRunner(
 export function createMovieDecider(
   settings: AppSettings,
   modelProvider?: ModelProvider,
+  fetchMetainfo = fetchMovieMetainfo,
 ): MovieDecider {
   const run = movieAgentRunner(settings, modelProvider);
   return {
@@ -102,7 +103,7 @@ export function createMovieDecider(
           const offer = input.offers[index];
           if (!offer || ++inspections > 5)
             return { error: "Unknown index or inspection budget exhausted" };
-          const metadata = inspectMetainfo(await fetchMovieMetainfo(offer));
+          const metadata = inspectMetainfo(await fetchMetainfo(offer));
           return {
             files: metadata.files.slice(0, 200),
             totalSize: metadata.size,

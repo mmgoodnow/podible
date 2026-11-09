@@ -10,7 +10,9 @@ import { inspectMetainfo } from "./metainfo";
 import { managedTransmission, managedTvTransmission, managedBookTransmission } from "./managed-transmission";
 import { adoptBookContent } from "../library/book-storage";
 import { finalizedCanonicalObject } from "./canonical-download";
-import { fetchMovieMetainfo } from "../movies/offers";
+import { cachedMovieMetainfo } from "../movies/offers";
+import { torrentFileRole } from "./content-file-role";
+import { recordIndexerTraffic } from "./indexer-traffic";
 import { releaseOfferFromResult, type ReleaseOffer } from "./release-offer";
 import { assertMovieStorage } from "../movies/storage";
 import { TorrentNotFoundError, type TorrentClient } from "./torrent-client";
@@ -112,7 +114,7 @@ export function reuseCandidate(bytes: Uint8Array): ReuseCandidateManifest {
   const pieces = Buffer.from(decoded.info.pieces), pieceHashes: string[] = [];
   for (let i = 0; i < pieces.length; i += 20) pieceHashes.push(pieces.subarray(i, i + 20).toString("hex"));
   return { identity: { v1: meta.infoHash }, files: meta.files.map(file => ({ ...file,
-    role: /\.(mkv|mp4|m4v|avi|mov|ts|mp3|m4b|m4a|epub|pdf)$/i.test(file.path) ? "content" : "sidecar" })),
+    role: torrentFileRole(file.path) })),
     v1: { pieceLength: decoded.info["piece length"], pieceHashes } };
 }
 
@@ -183,17 +185,31 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   };
   active();
   const services = command.scope.media === "movie" ? ctx.movieServices : command.scope.media === "tv" ? ctx.tvServices : undefined;
-  const encoded = await durableStep(ctx, "reuse:metainfo", async () => Buffer.from(await (adapters.fetchMetainfo ?? services?.fetchMetainfo ?? fetchMovieMetainfo)(crossSeedOffer(ctx.repo, command))).toString("base64"));
+  const offer = crossSeedOffer(ctx.repo, command);
+  const client = adapters.client?.(command.scope) ?? services?.client ?? await configuredClient(settings, command.scope);
+  const advertisedHash = /^[a-f0-9]{40}$/i.test(offer.infoHash ?? "") ? offer.infoHash!.toLowerCase() : null;
+  const prefetchedSkip = ctx.repo.releaseHealth.isOfferBlocked(offer) ? "Candidate is a confirmed nuked release" :
+    advertisedHash && ctx.repo.crossSeed.owns(command.scope, client.id, advertisedHash) ? "Target already owns this torrent identity" :
+    advertisedHash && ctx.repo.reuseTorrent({ clientId: client.id, nativeId: advertisedHash }) &&
+      ctx.repo.crossSeed.registrationOwner({ clientId: client.id, nativeId: advertisedHash }) !== operationId
+      ? "Torrent identity already belongs to another registered operation" : null;
+  if (prefetchedSkip) {
+    recordIndexerTraffic(ctx.repo, "reuse", "metainfo_prefiltered");
+    return finish({ kind: "skipped", reason: prefetchedSkip, ...(advertisedHash ? { infoHash: advertisedHash } : {}) });
+  }
+  if (!client.capabilities.pausedAdd || !client.capabilities.derivedLayouts || !client.capabilities.metainfoVersions.includes(1)) {
+    recordIndexerTraffic(ctx.repo, "reuse", "metainfo_prefiltered");
+    return finish({ kind: "unsupported", reason: "Client cannot safely add this paused derived v1 layout" });
+  }
+  const encoded = await durableStep(ctx, "reuse:metainfo", async () => Buffer.from(await
+    (adapters.fetchMetainfo?.(offer) ?? services?.fetchMetainfo(offer) ?? cachedMovieMetainfo(ctx.repo, offer, "reuse"))).toString("base64"));
   const bytes = Buffer.from(encoded, "base64"), metadata = inspectMetainfo(bytes);
   active();
   if (metadata.files.length > maximumReuseFiles)
     return finish({ kind: "unsupported", reason: candidateMetadataLimit(metadata.files.length) });
   ctx.repo.transferMetrics.learnMetainfo(bytes, crossSeedOffer(ctx.repo, command).provider);
-  const client = adapters.client?.(command.scope) ?? services?.client ?? await configuredClient(settings, command.scope);
   if (ctx.repo.releaseHealth.isOfferBlocked({ ...crossSeedOffer(ctx.repo, command), infoHash: metadata.infoHash }))
     return finish({ kind: "skipped", reason: "Candidate is a confirmed nuked release" });
-  if (!client.capabilities.pausedAdd || !client.capabilities.derivedLayouts || !client.capabilities.metainfoVersions.includes(1))
-    return finish({ kind: "unsupported", reason: "Client cannot safely add this paused derived v1 layout" });
   if (ctx.repo.crossSeed.owns(command.scope, client.id, metadata.infoHash))
     return finish({ kind: "skipped", reason: "Target already owns this torrent identity", infoHash: metadata.infoHash });
   const identity = { clientId: client.id, nativeId: metadata.infoHash };

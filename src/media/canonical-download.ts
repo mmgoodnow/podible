@@ -3,6 +3,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { inspectMetainfo } from "./metainfo";
+import { torrentFileRole } from "./content-file-role";
 import type { TorrentClient, TorrentRef } from "./torrent-client";
 import { withKeyedMutex } from "../runtime/keyed-mutex";
 
@@ -16,7 +17,6 @@ const schema = z.object({
     relativePath: relative.nullable(), device: z.string().optional(), inode: z.string().optional() })).min(1).max(100_000),
 }).strict();
 export type CanonicalDownload = z.infer<typeof schema>;
-const mediaExtensions = new Set([".mkv", ".mp4", ".m4v", ".avi", ".mov", ".ts", ".m4b", ".m4a", ".mp3", ".flac", ".ogg", ".opus", ".wav", ".aac", ".epub", ".pdf", ".mobi", ".azw", ".azw3", ".djvu", ".cbz", ".cbr"]);
 const manifestPath = (contentRoot: string, sourceRoot: string) => path.join(contentRoot, ".podible-downloads",
   createHash("sha256").update(sourceRoot).digest("hex") + ".json");
 async function stat(file: string) {
@@ -107,7 +107,7 @@ async function prepare(input: PrepareInput): Promise<CanonicalDownload | null> {
       contentRoot, contentOwner: await owner(contentRoot), sourceRoot, ready: false, sealed: false,
       files: metadata.files.map(file => {
         const id = randomUUID();
-        return { ...file, id, relativePath: mediaExtensions.has(path.extname(file.path).toLowerCase())
+        return { ...file, id, relativePath: torrentFileRole(file.path) === "content"
           ? `files/${id.slice(0, 2)}/${id}${path.extname(file.path).toLowerCase()}` : null };
       }) };
     active(); await directory(contentRoot, ".podible-downloads", true);

@@ -73,17 +73,17 @@ async function fixture() {
     async close() { db.close(); await rm(root, { recursive: true, force: true }); } };
 }
 
-test("backfill snapshots all formats, shares identical TV searches, and exposes no credentials", async () => {
+test("backfill snapshots all formats, separates same-title TV identities, and exposes no credentials", async () => {
   const f = await fixture();
   try {
     f.book("audio"); f.book("ebook"); f.movie(); const first = f.tv(123), second = f.tv(124);
     const requests: string[] = [], id = randomUUID();
     await f.run(id, { sources: async () => [source], gateway: gateway(async (_, query, media, limit) => {
-      requests.push(`${media}:${query}`); expect(limit).toBe(150); return { results: [result(media)], failures: [] };
+      requests.push(`${media}:${query}`); expect(limit).toBe(50); return { results: [result(media)], failures: [] };
     }) });
     const status = crossSeedBackfillStatus(f.repo, { requestId: id });
     expect(status).toMatchObject({ status: "completed", total: 5, scanned: 5, queued: 5, errors: 0 });
-    expect(requests.filter(request => request === "tv:Same Series")).toHaveLength(1);
+    expect(requests.filter(request => request === "tv:Same Series S01E01")).toHaveLength(2);
     expect(f.repo.listJobsByType("torrent_reuse")).toHaveLength(5);
     expect(new Set(f.repo.crossSeed.receipts().filter(r => r.command.scope.media === "tv").map(r => r.command.scope.targetId))).toEqual(new Set([first, second]));
     expect(JSON.stringify(status)).not.toContain("private-secret"); expect(JSON.stringify(status)).not.toContain("fixture.invalid");

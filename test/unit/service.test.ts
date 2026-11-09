@@ -277,6 +277,7 @@ describe("snatch transport", () => {
         provider: "fixture", providerGuid: "inspected", url,
         infoHash: infoHashFromTorrentBytes(makeTorrentBytes("stale.mp3")), torrentBytes: makeTorrentBytes("stale.mp3"),
       });
+      f.db.query("UPDATE torrent_cache SET updated_at=? WHERE provider_guid=?").run("2020-01-01T00:00:00.000Z", "inspected");
       const current = makeTorrentBytes("current.mp3");
       f.torrents.set(url, current);
       const result = await f.snatch({ providerGuid: "inspected", url, infoHash: null });

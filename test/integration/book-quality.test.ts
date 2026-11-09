@@ -258,7 +258,8 @@ test("user-reported wrong-file repair can replace a held manual edition without 
       provider: offer.provider, providerGuid: offer.guid, url: offer.url, infoHash: offer.infoHash, torrentBytes: torrent });
     search = spyOn(service, "runSearchBatch").mockResolvedValue({ results: [offer], failures: [] });
     const client = new MockBookTorrentClient(path.join(f.root, ".podible", "downloads"));
-    const review = model([{ selections: [{ parts: [0], manifestation: { label: "Correct edition", editionNote: null, language: "en" } }], confidence: 1, reason: "Actual requested book" },
+    const review = model([{ primaryQuery: "A complete book Author", alternateQuery: null },
+      { selections: [{ parts: [0], manifestation: { label: "Correct edition", editionNote: null, language: "en" } }], confidence: 1, reason: "Actual requested book" },
       { selectedIndices: [0], confidence: 1, reason: "Complete correct PDF" }]);
     const ctx = { repo: f.repo, getSettings: () => f.settings, modelProvider: review.provider, bookTorrentClient: client, onLog() {} };
     await processImportJob(ctx, f.repo.getJob(report.jobId)!);
@@ -276,10 +277,10 @@ test("user-reported wrong-file repair can replace a held manual edition without 
     expect(f.repo.listAssetsByManifestation(old.id)).toHaveLength(1);
     expect(await fs.readFile(file.path, "utf8")).toContain("Verified fixture bytes");
     expect(f.repo.getJsonState<unknown>(bookManualSelectionKey(f.book.id, "ebook"))).toEqual(hold);
-    expect(review.calls).toHaveLength(2); // Search and import, never invalid-incumbent equivalence.
+    expect(review.calls).toHaveLength(3); // Query plan, selection and import, never invalid-incumbent equivalence.
     const ordinaryRetry = f.repo.createJob({ type: "acquire", bookId: f.book.id, payload: { bookId: f.book.id, media: ["ebook"], priorFailure: true } });
     await processAcquireJob(ctx, ordinaryRetry);
-    expect(client.adds).toHaveLength(1); expect(review.calls).toHaveLength(2);
+    expect(client.adds).toHaveLength(1); expect(review.calls).toHaveLength(3);
     const fakeRepair = f.repo.createJob({ type: "acquire", bookId: f.book.id,
       payload: { bookId: f.book.id, media: ["ebook"], repairReviewJobId: imported.id } });
     await expect(processAcquireJob(ctx, fakeRepair)).rejects.toThrow("repair provenance");

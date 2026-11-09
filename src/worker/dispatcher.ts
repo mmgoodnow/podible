@@ -54,7 +54,7 @@ export async function processJob(ctx: WorkerContext, job: JobRow): Promise<JobPr
   if (job.type === "movie_dual_write_sync") return syncSeerrRequests(ctx, job);
   if (job.type === "movie_shadow_sync") return syncMovieShadow(ctx);
   if (job.type === "movie_shadow_evaluate") return evaluateMovieShadow(ctx, job);
-  if (job.type === "movie_acquire") return acquireMovie(ctx, job, ctx.movieServices ?? configuredMovieServices(ctx.getSettings(), ctx.modelProvider));
+  if (job.type === "movie_acquire") return acquireMovie(ctx, job, ctx.movieServices ?? configuredMovieServices(ctx.getSettings(), ctx.modelProvider, ctx.repo));
   if (job.type === "movie_reconcile") return reconcileMovies(ctx);
   if (job.type === "download") {
     return processDownloadJob(ctx, job);

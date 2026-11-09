@@ -12,7 +12,8 @@ import { fixtureMovie, fixtureFacts } from "../fixtures/movie-services";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
 import { crossSeedCommandSchema, crossSeedCommandHash } from "../../src/media/cross-seed-state";
 import { crossSeedStateKey } from "../../src/media/cross-seed-state";
-import { queueCrossSeed, processCrossSeed, crossSeedPlan, crossSeedOffer, queueSelectedCrossSeeds, type CrossSeedAdapters } from "../../src/media/cross-seed";
+import { queueCrossSeed, processCrossSeed, crossSeedPlan, crossSeedOffer, queueSelectedCrossSeeds, reuseCandidate, type CrossSeedAdapters } from "../../src/media/cross-seed";
+import { indexerTrafficPrometheus } from "../../src/media/indexer-traffic";
 import { rememberSelectedCopies, selectedCopyOffer } from "../../src/media/selected-copies";
 import { discoverCrossSeeds } from "../../src/media/cross-seed-feed";
 import { hashSessionToken } from "../../src/auth";
@@ -320,6 +321,25 @@ test("a lost default-policy enqueue acknowledgement replays across versions with
     expect(f.repo.crossSeed.receipt(legacy.operationId)?.command.policy).toEqual(policy);
     expect(f.repo.crossSeed.receipts()).toHaveLength(1);
   } finally { await f.cleanup(); }
+});
+
+test("reuse does not snatch a release with an already-registered advertised identity", async () => {
+  const f = await fixture();
+  try {
+    const ref = { clientId: f.adapters.client!(f.command.scope).id, nativeId: f.metadata.infoHash };
+    f.repo.reserveReuseTorrent(ref, { rootId: "movies", relativePath: "existing" }, "existing", f.command.scope, randomUUID());
+    f.adapters.fetchMetainfo = async () => { throw new Error("Unexpected upstream fetch"); };
+    expect((await execute(f)).outcome).toMatchObject({ kind: "skipped", infoHash: ref.nativeId });
+    expect(indexerTrafficPrometheus(f.repo)).toContain('purpose="reuse",event="metainfo_prefiltered"} 1');
+  } finally { await f.cleanup(); }
+});
+
+test("reuse recognizes the same book and audio formats as canonical downloads", () => {
+  for (const ext of ["FLAC", "opus", "mobi", "azw3", "nfo"]) {
+    const candidate = reuseCandidate(bencode.encode({ info: { name: `example.${ext}`, length: 8,
+      "piece length": 16384, pieces: Buffer.alloc(20) } }));
+    expect(candidate.files[0]?.role).toBe(ext === "nfo" ? "sidecar" : "content");
+  }
 });
 
 test("oversized metadata is unsupported rather than repeatedly failing a reuse job", async () => {

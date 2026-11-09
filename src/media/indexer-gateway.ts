@@ -1,4 +1,5 @@
 import { XMLParser } from "fast-xml-parser";
+import type { DiscoveredIndexer } from "./prowlarr";
 import { createHash } from "node:crypto";
 import { isRunControlError } from "reflow-ts";
 
@@ -138,11 +139,13 @@ function buildSearchUrl(source: TorznabSource, request: IndexerRequest): URL {
   } else if (!url.pathname.endsWith("/api")) {
     url.pathname = `${url.pathname}/api`;
   }
-  url.searchParams.set("t", "search");
+  for (const key of ["imdbid", "tmdbid", "tvdbid", "season", "ep"]) url.searchParams.delete(key);
+  if (request.mode === "caps") for (const key of ["cat", "offset", "limit"]) url.searchParams.delete(key);
+  url.searchParams.set("t", request.mode ?? "search");
   if (request.query?.trim()) url.searchParams.set("q", request.query.trim());
   else url.searchParams.delete("q");
   const category = request.media === "movie" ? "2000" : request.media === "tv" ? "5000" : request.media === "audio" ? source.categories?.audio : source.categories?.ebook;
-  if (category) {
+  if (category && request.mode !== "caps") {
     url.searchParams.set("cat", category);
   }
   if (source.apiKey) {
@@ -150,12 +153,27 @@ function buildSearchUrl(source: TorznabSource, request: IndexerRequest): URL {
   }
   if (request.offset !== undefined) url.searchParams.set("offset", String(request.offset));
   if (request.limit !== undefined) url.searchParams.set("limit", String(request.limit));
+  if (request.id) url.searchParams.set(request.id.key, request.id.value);
+  if (request.season !== undefined) url.searchParams.set("season", String(request.season));
+  if (request.episode !== undefined) url.searchParams.set("ep", String(request.episode));
   return url;
 }
 
 export type IndexerSearchBatch = { results: TorznabResult[]; failures: IndexerFailure[] };
-export type SearchSource = TorznabSource & { availableAfter?: number; supportsPagination?: boolean };
-export type IndexerRequest = { media: IndexerMedia; query?: string; offset?: number; limit?: number };
+export type SearchSource = DiscoveredIndexer;
+export type SearchIdKey = "imdbid" | "tmdbid" | "tvdbid";
+export type SearchCoordinates = { season: number; episode?: number };
+export type SearchOptions = {
+  limit?: number;
+  ids?: Partial<Record<SearchIdKey, string>>;
+  coordinates?: Partial<Record<SearchIdKey, SearchCoordinates>>;
+  requireCoordinates?: boolean;
+  alternateQuery?: string | null;
+  onRequest?: (mode: "id" | "text") => void;
+};
+export type IndexerRequest = { media: IndexerMedia; query?: string; offset?: number; limit?: number;
+  mode?: "caps" | "movie" | "tvsearch"; id?: { key: SearchIdKey; value: string };
+  season?: number; episode?: number; onRequest?: SearchOptions["onRequest"] };
 const MAX_ENTRIES = 128;
 const MAX_XML_BYTES = 8 * 1024 * 1024;
 const MAX_CACHE_BYTES = 32 * 1024 * 1024;
@@ -205,6 +223,17 @@ export class IndexerGateway {
     this.cache.delete(key);
   }
 
+  private rememberXml(key: string, xml: string, ttl: number): string {
+    const bytes = Buffer.byteLength(xml), now = this.now();
+    this.evictCache(key);
+    for (const [key, entry] of this.cache) if (entry.until <= now) this.evictCache(key);
+    while (this.cache.size >= MAX_ENTRIES || this.cacheBytes + bytes > MAX_CACHE_BYTES)
+      this.evictCache(this.cache.keys().next().value!);
+    this.cache.set(key, { until: now + ttl, xml, bytes });
+    this.cacheBytes += bytes;
+    return xml;
+  }
+
   private async xml(source: SearchSource, criteria: IndexerRequest): Promise<string> {
     let url: URL;
     try {
@@ -216,7 +245,7 @@ export class IndexerGateway {
     url.searchParams.sort();
     const requestKey = digest(url.href);
     const identity = new URL(url);
-    for (const key of ["q", "t", "cat", "offset", "limit"]) identity.searchParams.delete(key);
+    for (const key of ["q", "t", "cat", "offset", "limit", "imdbid", "tmdbid", "tvdbid", "season", "ep"]) identity.searchParams.delete(key);
     const providerKey = digest(identity.href);
     const blocked = this.backoff.get(providerKey);
     const availableAt = Math.max(source.availableAfter ?? 0, blocked?.until ?? 0);
@@ -234,31 +263,29 @@ export class IndexerGateway {
     if (this.inflight.size >= MAX_ENTRIES) {
       throw new IndexerError(indexerFailure(source.name, null, this.now() + INDEXER_RETRY_MS));
     }
+    if (criteria.mode !== "caps") criteria.onRequest?.(criteria.id ? "id" : "text");
     const request = (async () => {
       try {
         const response = await this.fetcher(url, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(20_000) });
         if (!response.ok) {
           const delay = Math.max(INDEXER_RETRY_MS, parseIndexerRetryAfter(response.headers.get("retry-after"), this.now()) ?? 0);
           await response.body?.cancel().catch(() => {});
+          if (criteria.mode === "caps" && [400, 404, 405, 501].includes(response.status)) {
+            return this.rememberXml(requestKey, "<caps/>", 3_600_000);
+          }
           throw new IndexerError(indexerFailure(source.name, response.status, this.now() + delay));
         }
         const xml = await this.readXml(response);
         const doc = parser.parse(xml) as Record<string, unknown>;
         if (doc.error) {
           const code = Number((doc.error as Record<string, unknown>).code);
+          if (criteria.mode === "caps" && code === 203) return this.rememberXml(requestKey, "<caps/>", 3_600_000);
           throw new IndexerError(indexerFailure(source.name, code >= 100 && code <= 102 ? 401 : null, this.now() + INDEXER_RETRY_MS));
         }
-        if (!doc.rss || typeof doc.rss !== "object" || !Object.hasOwn(doc.rss, "channel")) throw new Error("Invalid Torznab response");
+        if (criteria.mode !== "caps" && (!doc.rss || typeof doc.rss !== "object" || !Object.hasOwn(doc.rss, "channel"))) throw new Error("Invalid Torznab response");
         // A concurrent healthy category must not erase a newer failure/cooldown.
         if (this.backoff.get(providerKey) === blocked) this.backoff.delete(providerKey);
-        const bytes = Buffer.byteLength(xml);
-        for (const [key, entry] of this.cache) if (entry.until <= this.now()) this.evictCache(key);
-        while (this.cache.size >= MAX_ENTRIES || this.cacheBytes + bytes > MAX_CACHE_BYTES) {
-          this.evictCache(this.cache.keys().next().value!);
-        }
-        this.cache.set(requestKey, { until: this.now() + 30_000, xml, bytes });
-        this.cacheBytes += bytes;
-        return xml;
+        return this.rememberXml(requestKey, xml, criteria.mode === "caps" ? 3_600_000 : 30_000);
       } catch (error) {
         if (isRunControlError(error)) throw error;
         const failure = error instanceof IndexerError ? error.failure : indexerFailure(source.name, null, this.now() + INDEXER_RETRY_MS);
@@ -280,11 +307,39 @@ export class IndexerGateway {
     }
   }
 
-  async search<T extends IndexerMedia>(sources: SearchSource[], query: string, media: T, options: { limit?: number } = {}): Promise<{ results: SearchResult<T>[]; failures: IndexerFailure[] }> {
+  private async idSearch(source: SearchSource, media: IndexerMedia, options: SearchOptions): Promise<Partial<IndexerRequest> | null> {
+    if ((media !== "movie" && media !== "tv") || !Object.keys(options.ids ?? {}).length) return null;
+    let params = source.searchParams?.[media];
+    if (!params) {
+      const xml = await this.xml(source, { media, mode: "caps" });
+      const doc = parser.parse(xml) as { caps?: { searching?: Record<string, { available?: string; supportedParams?: string }> } };
+      const technique = doc.caps?.searching?.[media === "movie" ? "movie-search" : "tv-search"];
+      params = technique?.available === "yes" && typeof technique.supportedParams === "string" ? technique.supportedParams.split(",") : [];
+    }
+    const advertised = new Set(params.map(param => param.trim().toLowerCase()));
+    const order: SearchIdKey[] = media === "movie" ? ["imdbid", "tmdbid"] : ["tvdbid", "tmdbid", "imdbid"];
+    for (const key of order) {
+      const value = options.ids?.[key], coordinates = options.coordinates?.[key];
+      if (!value || !(key === "imdbid" ? /^tt[0-9]+$/i : /^[1-9][0-9]*$/).test(value) || !advertised.has(key)) continue;
+      if (options.requireCoordinates && !coordinates) continue;
+      if (coordinates && (!advertised.has("season") || coordinates.episode !== undefined && !advertised.has("ep"))) continue;
+      return { mode: media === "movie" ? "movie" : "tvsearch", id: { key, value }, ...coordinates };
+    }
+    return null;
+  }
+
+  async search<T extends IndexerMedia>(sources: SearchSource[], query: string, media: T, options: SearchOptions = {}): Promise<{ results: SearchResult<T>[]; failures: IndexerFailure[] }> {
     const batches = await Promise.all(sources.map(async (source): Promise<{ results: SearchResult<T>[]; failures: IndexerFailure[] }> => {
       try {
-        const xml = await this.xml(source, { query, media, ...options });
-        return { results: parseTorznabSearch(xml, source.name, media), failures: [] };
+        const limit = options.limit === undefined ? undefined : Math.min(options.limit, source.maximumSearchResults ?? Infinity);
+        const request = { media, limit, onRequest: options.onRequest };
+        const idRequest = await this.idSearch(source, media, options);
+        const run = async (criteria: IndexerRequest) => parseTorznabSearch(await this.xml(source, criteria), source.name, media);
+        let results = await run(idRequest ? { ...request, ...idRequest } : { ...request, query });
+        if (!results.length && idRequest && query.trim()) results = await run({ ...request, query });
+        else if (!results.length && options.alternateQuery && options.alternateQuery !== query)
+          results = await run({ ...request, query: options.alternateQuery });
+        return { results, failures: [] };
       } catch (error) {
         if (isRunControlError(error)) throw error;
         if (!(error instanceof IndexerError)) throw error;
@@ -312,8 +367,8 @@ export class IndexerGateway {
 export { IndexerGateway as TorznabSearchClient };
 export const indexerGateway = new IndexerGateway();
 
-export function searchTorznabBatch(sources: SearchSource[], query: string, media: MediaType): Promise<IndexerSearchBatch> {
-  return indexerGateway.search(sources, query, media);
+export function searchTorznabBatch(sources: SearchSource[], query: string, media: MediaType, options?: SearchOptions): Promise<IndexerSearchBatch> {
+  return indexerGateway.search(sources, query, media, options);
 }
 
 export async function searchTorznab(sources: TorznabSource[], query: string, mediaType: MediaType): Promise<TorznabResult[]> {

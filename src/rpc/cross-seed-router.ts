@@ -3,7 +3,7 @@ import { defineMethod, defineRouter } from "./framework";
 import { crossSeedCommandSchema } from "../media/cross-seed-state";
 import { confirmedReleaseNukeSchema, reportConfirmedReleaseNuke } from "../media/release-health";
 import { crossSeedPlan, queueCrossSeed, crossSeedOffer } from "../media/cross-seed";
-import { fetchMovieMetainfo } from "../movies/offers";
+import { cachedMovieMetainfo } from "../movies/offers";
 import { startCrossSeedBackfill, crossSeedBackfillStatus, backfillStartSchema, backfillSummarySchema,
   backfillStatusParamsSchema, backfillStatusSchema, latestCrossSeedBackfill, cancelCrossSeedBackfill } from "../media/cross-seed-backfill";
 
@@ -37,7 +37,8 @@ export const crossSeedRouter = defineRouter({
     paramsSchema: crossSeedCommandSchema, resultSchema: z.object({ candidateHash: z.string().optional(), status: z.string(),
       likelyReuseBytes: z.number(), totalBytes: z.number(), reasons: z.array(z.string()), verification: z.string() }),
     handler: async (ctx, command) => {
-      const bytes = await (ctx.movieServices?.fetchMetainfo ?? fetchMovieMetainfo)(crossSeedOffer(ctx.repo, command));
+      const offer = crossSeedOffer(ctx.repo, command);
+      const bytes = await (ctx.movieServices?.fetchMetainfo(offer) ?? cachedMovieMetainfo(ctx.repo, offer, "preview"));
       const plan = await crossSeedPlan(ctx.repo, ctx.repo.getSettings(), command, bytes);
       return { candidateHash: plan.candidate.identity.v1, status: plan.status, ...plan.summary, reasons: plan.reasons, verification: plan.verification };
     },

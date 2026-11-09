@@ -16,6 +16,8 @@ import { releaseOfferFromResult } from "./release-offer";
 import { crossSeedScopeSchema, type CrossSeedScope } from "./cross-seed-state";
 import { queueCrossSeed } from "./cross-seed";
 import { selectedCopyId } from "./selected-copies";
+import { movieQueryEvidence, movieSearchIds, planIndexerQuery, tvSearchEvidence } from "./indexer-query-plan";
+import { recordIndexerTraffic } from "./indexer-traffic";
 
 const prefix = "cross-seed:backfill:";
 const latestKey = prefix + "latest";
@@ -32,7 +34,7 @@ export const backfillSummarySchema = z.object({ requestId: z.string().uuid(), jo
   status: z.enum(["queued", "running", "waiting", "completed", "cancelled", "failed"]),
   scanned: count, total: count, queued: count, skipped: count, errors: count,
   limitPerProvider: z.number().int().min(1).max(150), createdAt: z.string(), updatedAt: z.string() });
-export const backfillStartSchema = z.object({ requestId: z.string().uuid(), limitPerProvider: z.number().int().min(1).max(150).default(150) }).strict();
+export const backfillStartSchema = z.object({ requestId: z.string().uuid(), limitPerProvider: z.number().int().min(1).max(150).default(50) }).strict();
 export const backfillStatusParamsSchema = z.object({ requestId: z.string().uuid(), offset: count.default(0), limit: z.number().int().min(1).max(100).default(25) }).strict();
 export const backfillStatusSchema = backfillSummarySchema.extend({ targets: z.array(targetSchema), nextOffset: count.nullable() });
 type Summary = z.infer<typeof backfillSummarySchema>;
@@ -276,7 +278,18 @@ export async function processCrossSeedBackfill(ctx: WorkerContext, job: JobRow, 
         if (progress.status === "completed") continue;
         const attempt = await durableStep(ctx, step, async () => {
           active();
-          const cacheKey = `${key(id)}:search:${createHash("sha256").update(JSON.stringify([target.scope.media, target.query, provider.key])).digest("hex")}`;
+          const { media, targetId } = target.scope;
+          const movieTarget = media === "movie" ? ctx.repo.movies.target(targetId) : null;
+          const movie = movieTarget ? ctx.repo.movies.movie(movieTarget.movie_id) : null;
+          const tvTarget = media === "tv" ? ctx.repo.tv.target(targetId) : null;
+          const entry = tvTarget ? ctx.repo.tv.entry(tvTarget.entry_id) : null;
+          const book = media === "audio" || media === "ebook" ? ctx.repo.getBookRow(targetId) : null;
+          const owned = new Set(entry ? ctx.repo.tv.activeEpisodes(targetId).map(ep => ep.episode_id) : []);
+          const tv = entry ? tvSearchEvidence(entry, entry.episodes.filter(ep => owned.has(ep.id))) : null;
+          const evidence = movie ? movieQueryEvidence(movie) : tv?.evidence ??
+            { media, query: target.query, title: target.title, author: book?.author };
+          const options = movie ? { ids: movieSearchIds(movie) } : tv?.options;
+          const cacheKey = `${key(id)}:search:${createHash("sha256").update(JSON.stringify([evidence, options, provider.key])).digest("hex")}`;
           type Cached = { generation: number | null; round: number; entries: ReturnType<BooksRepo["releaseInbox"]["retainSearchResults"]>; failure: import("./indexer-errors").IndexerFailure | null };
           const cached = ctx.repo.getJsonState<Cached>(cacheKey);
           if (cached && (!cached.failure || cached.failure.retryAt !== null && cached.failure.retryAt > Date.now() || cached.failure.retryAt === null && cached.generation === generation && cached.round >= round))
@@ -288,7 +301,10 @@ export async function processCrossSeedBackfill(ctx: WorkerContext, job: JobRow, 
           try {
             const source = (await sourceList(target.scope.media)).find(source => feedIdentity(source, target.scope.media) === provider.key);
             if (!source) return remember([], indexerFailure(provider.provider, 400, null));
-            batch = await gateway.search([source], target.query, target.scope.media, { limit: state.limitPerProvider });
+            const plan = await planIndexerQuery(ctx.getSettings(), evidence, ctx.modelProvider);
+            batch = await gateway.search([source], plan.primaryQuery, media, { limit: state.limitPerProvider,
+              ...options, alternateQuery: plan.alternateQuery,
+              onRequest: mode => recordIndexerTraffic(ctx.repo, "reuse", mode === "id" ? "search_id" : "search_text") });
           } catch (error) { if (isRunControlError(error)) throw error; return remember([], error instanceof IndexerError ? error.failure : indexerFailure(provider.provider, null, Date.now() + 60_000)); }
           active();
           return ctx.repo.transaction(() => {

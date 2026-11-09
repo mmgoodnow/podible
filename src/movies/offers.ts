@@ -1,6 +1,9 @@
 import { ProwlarrDiscovery, type DiscoveredIndexer } from "../media/prowlarr";
-import { IndexerGateway, indexerGateway } from "../media/indexer-gateway";
+import { IndexerGateway, indexerGateway, type SearchOptions } from "../media/indexer-gateway";
 import { inspectMetainfo } from "../media/metainfo";
+import type { BooksRepo } from "../repo";
+import { getOrFetchCachedTorrentBytes, unpinnedMetainfoMaxAgeMs } from "../library/torrent-cache";
+import type { TrafficPurpose } from "../media/indexer-traffic";
 import type { Movie } from "./types";
 import { releaseOfferFromResult as movieOfferFromResult, type ReleaseOffer as MovieOffer } from "../media/release-offer";
 export { movieOfferFromResult, type MovieOffer };
@@ -45,11 +48,11 @@ export class MovieIndexers {
   updateSources(sources: DiscoveredIndexer[]) {
     this.sources = sources;
   }
-  async search(movie: Movie, query?: string): Promise<MovieSearch> {
+  async search(movie: Movie, query?: string, options?: SearchOptions): Promise<MovieSearch> {
     if (!this.sources.length)
       throw new MovieIndexerError("No indexers are configured", 60_000, false);
     const q = query?.trim() || (movie.title + (movie.year ? " " + movie.year : ""));
-    const batch = await this.gateway.search(this.sources, q, "movie", { limit: 100 });
+    const batch = await this.gateway.search(this.sources, q, "movie", { limit: 100, ...options });
     if (batch.failures.length === this.sources.length ||
         (!batch.results.length && batch.failures.some(f => f.kind === "configuration"))) {
       const times = batch.failures.flatMap(f => f.retryAt === null ? [] : [f.retryAt]);
@@ -82,7 +85,7 @@ export class DiscoveredMovieIndexers {
   ) {
     this.searcher = new MovieIndexers([], fetcher);
   }
-  async search(movie: Movie, query?: string) {
+  async search(movie: Movie, query?: string, options?: SearchOptions) {
     try {
       this.searcher.updateSources(await this.discovery.sources("movie"));
     } catch {
@@ -91,14 +94,12 @@ export class DiscoveredMovieIndexers {
         60_000,
       );
     }
-    return this.searcher.search(movie, query);
+    return this.searcher.search(movie, query, options);
   }
 }
 
-export async function fetchMovieMetainfo(
-  offer: MovieOffer,
-): Promise<Uint8Array> {
-  const url = new URL(offer.url);
+async function fetchMetainfoResponse(downloadUrl: string): Promise<Uint8Array> {
+  const url = new URL(downloadUrl);
   if (!["http:", "https:"].includes(url.protocol))
     throw new Error("Unsupported metainfo retrieval protocol");
   const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
@@ -106,6 +107,7 @@ export async function fetchMovieMetainfo(
     throw new MovieIndexerError(
       `Metainfo retrieval returned HTTP ${response.status}`,
       retryDelay(response.headers.get("retry-after")),
+      response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500,
     );
   if (!response.body) throw new Error("Metainfo response has no body");
   const reader = response.body.getReader();
@@ -122,11 +124,31 @@ export async function fetchMovieMetainfo(
   } finally {
     await reader.cancel().catch(() => {});
   }
-  const bytes = new Uint8Array(Buffer.concat(chunks));
+  return new Uint8Array(Buffer.concat(chunks));
+}
+
+function validateMetainfo(bytes: Uint8Array, advertisedHash: string | null) {
   const inspected = inspectMetainfo(bytes);
-  if (offer.infoHash && inspected.infoHash !== offer.infoHash.toLowerCase())
+  if (advertisedHash && inspected.infoHash !== advertisedHash.toLowerCase())
     throw new Error(
       "Indexer metainfo hash does not match its advertised identity",
     );
+}
+
+export async function fetchMovieMetainfo(offer: MovieOffer): Promise<Uint8Array> {
+  const bytes = await fetchMetainfoResponse(offer.url);
+  validateMetainfo(bytes, offer.infoHash);
   return bytes;
+}
+
+export async function cachedMovieMetainfo(repo: BooksRepo, offer: MovieOffer, purpose: TrafficPurpose): Promise<Uint8Array> {
+  const guid = offer.attributes.guid;
+  const providerGuid = typeof guid === "string" ? guid : guid && typeof guid === "object" && "#text" in guid && typeof guid["#text"] === "string"
+    ? guid["#text"] : null;
+  return (await getOrFetchCachedTorrentBytes(repo, { provider: offer.provider, providerGuid, url: offer.url, infoHash: offer.infoHash }, {
+    purpose,
+    maxAgeMs: offer.infoHash ? undefined : unpinnedMetainfoMaxAgeMs,
+    fetchBytes: fetchMetainfoResponse,
+    validate: bytes => validateMetainfo(bytes, offer.infoHash),
+  })).bytes;
 }

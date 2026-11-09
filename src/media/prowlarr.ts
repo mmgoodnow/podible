@@ -19,7 +19,12 @@ const indexerSchema = z.object({
   supportsPagination: z.boolean().optional(),
   protocol: z.enum(["torrent", "usenet"]),
   capabilities: z
-    .object({ categories: z.array(categorySchema).nullable().optional() })
+    .object({
+      categories: z.array(categorySchema).nullable().optional(),
+      movieSearchParams: z.array(z.string()).nullish().catch(null),
+      tvSearchParams: z.array(z.string()).nullish().catch(null),
+      limitsMax: z.number().int().positive().nullish().catch(null),
+    })
     .nullable()
     .optional(),
   status: z
@@ -27,7 +32,11 @@ const indexerSchema = z.object({
     .nullable()
     .optional(),
 });
-export type DiscoveredIndexer = TorznabSource & { availableAfter?: number; supportsPagination?: boolean };
+export type DiscoveredIndexer = TorznabSource & {
+  availableAfter?: number; supportsPagination?: boolean;
+  searchParams?: { movie: string[]; tv: string[] };
+  maximumSearchResults?: number;
+};
 
 /** Configured categories and temporary health are separate: outages never remove a source. */
 export class ProwlarrDiscovery {
@@ -137,6 +146,8 @@ export class ProwlarrDiscovery {
         baseUrl: new URL(`${i.id}/api`, this.base()).href,
         apiKey: this.settings.apiKey,
         supportsPagination: i.supportsPagination,
+        searchParams: { movie: i.capabilities?.movieSearchParams ?? [], tv: i.capabilities?.tvSearchParams ?? [] },
+        maximumSearchResults: i.capabilities?.limitsMax ?? undefined,
         // Missing capabilities may be a provider outage, not proof of no category support.
         availableAfter:
           Math.max(

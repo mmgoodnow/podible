@@ -17,7 +17,7 @@ export async function reconcileMovies(ctx: WorkerContext): Promise<"done"> {
   );
   await assertMovieStorage(ctx.repo, roots.contentRoot);
   const services =
-    ctx.movieServices ?? configuredMovieServices(settings, ctx.modelProvider);
+    ctx.movieServices ?? configuredMovieServices(settings, ctx.modelProvider, ctx.repo);
   for (const target of ctx.repo.movies.targets()) {
     if (ctx.repo.movies.activeRequestCount(target.id)) continue;
     for (const torrent of ctx.repo.movies.downloads(target.id)) {
