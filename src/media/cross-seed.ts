@@ -29,6 +29,9 @@ export type CrossSeedAdapters = {
   pollMs?: number;
   maxPolls?: number;
 };
+const maximumReuseFiles = 2000;
+const candidateMetadataLimit = (files: number) =>
+  `Candidate has ${files} files; supported reuse metadata limit is ${maximumReuseFiles} files`;
 const root = (settings: AppSettings, scope: CrossSeedScope) => path.resolve(isBookCrossSeedScope(scope)
   ? settings.libraryRoot : scope.media === "tv" ? settings.tv.managedRoot : settings.movies.managedRoot);
 const storageRoots = async (settings: AppSettings, scope: CrossSeedScope) => {
@@ -67,7 +70,13 @@ export function queueCrossSeed(repo: BooksRepo, raw: z.input<typeof crossSeedCom
   return repo.transaction(() => {
     const previous = repo.crossSeed.receipt(command.operationId);
     if (previous) {
-      if (previous.commandHash !== commandHash) throw new Error("Reuse operation UUID belongs to another command");
+      // A lost enqueue acknowledgement may replay after policy defaults change.
+      // Preserve the original receipt when only the retired total-size cap differs.
+      const sameBudgets = previous.command.policy.version === 1 && command.policy.version === 2 &&
+        previous.command.policy.minimumReuseRatio === command.policy.minimumReuseRatio &&
+        previous.command.policy.maximumExtraBytes === command.policy.maximumExtraBytes &&
+        crossSeedCommandHash({ ...command, policy: previous.command.policy }) === previous.commandHash;
+      if (previous.commandHash !== commandHash && !sameBudgets) throw new Error("Reuse operation UUID belongs to another command");
       return previous;
     }
     assertCrossSeedDemand(repo, command.scope); crossSeedOffer(repo, command);
@@ -111,8 +120,8 @@ export function reuseCandidate(bytes: Uint8Array): ReuseCandidateManifest {
 export async function crossSeedPlan(repo: BooksRepo, settings: AppSettings, command: CrossSeedCommand,
   bytes: Uint8Array): Promise<ReusePlan> {
   assertCrossSeedDemand(repo, command.scope);
-  const candidate = reuseCandidate(bytes), total = candidate.files.reduce((sum, file) => sum + file.size, 0);
-  if (total > command.policy.maximumCandidateBytes || candidate.files.length > 2000) throw new Error("Reuse candidate exceeds policy bounds");
+  const candidate = reuseCandidate(bytes);
+  if (candidate.files.length > maximumReuseFiles) throw new Error(candidateMetadataLimit(candidate.files.length));
   const { contentRoot } = await storageRoots(settings, command.scope);
   if (!isBookCrossSeedScope(command.scope)) await assertMovieStorage(repo, contentRoot);
   const ownedRoot = await captureReuseRoot({ rootPath: contentRoot, markerName: ".podible-content.json" });
@@ -177,6 +186,8 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   const encoded = await durableStep(ctx, "reuse:metainfo", async () => Buffer.from(await (adapters.fetchMetainfo ?? services?.fetchMetainfo ?? fetchMovieMetainfo)(crossSeedOffer(ctx.repo, command))).toString("base64"));
   const bytes = Buffer.from(encoded, "base64"), metadata = inspectMetainfo(bytes);
   active();
+  if (metadata.files.length > maximumReuseFiles)
+    return finish({ kind: "unsupported", reason: candidateMetadataLimit(metadata.files.length) });
   ctx.repo.transferMetrics.learnMetainfo(bytes, crossSeedOffer(ctx.repo, command).provider);
   const client = adapters.client?.(command.scope) ?? services?.client ?? await configuredClient(settings, command.scope);
   if (ctx.repo.releaseHealth.isOfferBlocked({ ...crossSeedOffer(ctx.repo, command), infoHash: metadata.infoHash }))

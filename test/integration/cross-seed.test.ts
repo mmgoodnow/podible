@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { test, expect } from "bun:test";
+import { test, expect, spyOn } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -10,7 +10,7 @@ import { BooksRepo } from "../../src/repo";
 import { prepareMovieStorage } from "../../src/movies/storage";
 import { fixtureMovie, fixtureFacts } from "../fixtures/movie-services";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
-import { crossSeedCommandSchema } from "../../src/media/cross-seed-state";
+import { crossSeedCommandSchema, crossSeedCommandHash } from "../../src/media/cross-seed-state";
 import { crossSeedStateKey } from "../../src/media/cross-seed-state";
 import { queueCrossSeed, processCrossSeed, crossSeedPlan, crossSeedOffer, queueSelectedCrossSeeds, type CrossSeedAdapters } from "../../src/media/cross-seed";
 import { rememberSelectedCopies, selectedCopyOffer } from "../../src/media/selected-copies";
@@ -249,6 +249,92 @@ test("cross-seed durable pipeline reuses renamed media without a full scan or ch
   } finally { await f.cleanup(); }
 });
 
+test("a 400 GiB reusable source is admitted without reading its payload; extra downloads remain bounded", async () => {
+  const f = await fixture(), size = 400 * 1024 ** 3, pieceLength = 16 * 1024 ** 2;
+  const open = fs.open.bind(fs);
+  let guard: ReturnType<typeof spyOn> | undefined;
+  try {
+    await fs.chmod(f.canonical, 0o600); await fs.truncate(f.canonical, size);
+    const file = f.repo.movies.version(f.version)!.files[0]!;
+    f.db.query("UPDATE managed_content_files SET size_bytes=? WHERE id=?").run(size, file.id);
+    guard = spyOn(fs, "open").mockImplementation((async (...args: Parameters<typeof fs.open>) => {
+      const handle = await open(...args);
+      if (String(args[0]) === f.canonical) {
+        handle.read = (() => { throw new Error("Planner read sparse payload"); }) as typeof handle.read;
+        handle.readFile = (() => { throw new Error("Planner read sparse payload"); }) as typeof handle.readFile;
+      }
+      return handle;
+    }) as typeof fs.open);
+    const candidate = (missing = 0) => new Uint8Array(bencode.encode({ info: { name: "LargePack", "piece length": pieceLength,
+      pieces: Buffer.alloc(Math.ceil((size + missing) / pieceLength) * 20),
+      files: [{ path: ["movie.mkv"], length: size }, ...(missing ? [{ path: ["missing.mkv"], length: missing }] : [])] } }));
+    const command = crossSeedCommandSchema.parse({ ...f.command, policy: { maximumExtraBytes: 512 * 1024 ** 2 } });
+    expect(command.policy).toEqual({ version: 2, minimumReuseRatio: 0.8, maximumExtraBytes: 512 * 1024 ** 2 });
+    const plan = await crossSeedPlan(f.repo, f.repo.getSettings(), command, candidate());
+    expect(plan.status).toBe("verification-required");
+    expect(plan.summary).toMatchObject({ totalBytes: size, likelyReuseBytes: size, missingFileBytes: 0, verifiedReuseBytes: 0 });
+    const overBudget = await crossSeedPlan(f.repo, f.repo.getSettings(), command, candidate(1024 ** 3));
+    expect(overBudget.status).toBe("rejected");
+    expect(overBudget.reasons).toContain("Extra download exceeds policy budget");
+    expect(f.counts().adds).toBe(0);
+    expect((await fs.stat(f.canonical)).blocks * 512).toBeLessThan(1024 ** 2);
+  } finally { guard?.mockRestore(); await f.cleanup(); }
+});
+
+test("retrying a size-rejected historical command preserves identity and reuses cached metainfo", async () => {
+  const f = await fixture();
+  try {
+    const legacy = { ...f.command, policy: { version: 1 as const, minimumReuseRatio: 0.4, maximumExtraBytes: 8, maximumCandidateBytes: 1 } };
+    f.command.policy = legacy.policy;
+    const oldHash = createHash("sha256").update(JSON.stringify(legacy)).digest("hex");
+    expect(crossSeedCommandHash(f.command)).toBe(oldHash);
+    let fetches = 0;
+    f.adapters.fetchMetainfo = async () => { fetches++; return f.metainfo; };
+    const receipt = queueCrossSeed(f.repo, f.command);
+    await execute(f, receipt, ctx => ({ ...ctx, execution: { ...ctx.execution!,
+      run: (name, handler) => ctx.execution!.run(name, name === "reuse:plan"
+        ? () => { throw new Error("Reuse candidate exceeds policy bounds"); } : handler),
+    } }), true);
+    expect(f.repo.getJob(receipt.jobId)?.status).toBe("failed");
+    const runId = f.repo.getJobExecution(receipt.jobId)!.run_id;
+    f.repo.retryJob(receipt.jobId);
+    expect((await execute(f, receipt)).outcome?.kind).toBe("seeding");
+    expect(fetches).toBe(1);
+    expect(f.repo.getJobExecution(receipt.jobId)!.run_id).toBe(runId);
+    expect(queueCrossSeed(f.repo, legacy).jobId).toBe(receipt.jobId);
+    expect(queueCrossSeed(f.repo, { ...legacy, policy: { version: 2, minimumReuseRatio: 0.4, maximumExtraBytes: 8 } }).jobId).toBe(receipt.jobId);
+    expect(f.repo.crossSeed.receipt(f.command.operationId)?.commandHash).toBe(oldHash);
+    expect(f.repo.crossSeed.receipt(f.command.operationId)?.command).toEqual(legacy);
+  } finally { await f.cleanup(); }
+});
+
+test("a lost default-policy enqueue acknowledgement replays across versions without changing the stored command", async () => {
+  const f = await fixture();
+  try {
+    const legacy = { ...f.command, policy: { version: 1 as const, minimumReuseRatio: 0.8,
+      maximumExtraBytes: 512 * 1024 ** 2, maximumCandidateBytes: 100 * 1024 ** 3 } };
+    const before = queueCrossSeed(f.repo, legacy), { policy, ...implicit } = legacy;
+    expect(queueCrossSeed(f.repo, implicit)).toEqual(before);
+    expect(() => queueCrossSeed(f.repo, { ...implicit, scope: { ...implicit.scope, targetId: 999 } })).toThrow("another command");
+    expect(() => queueCrossSeed(f.repo, { ...implicit, policy: { maximumExtraBytes: 1 } })).toThrow("another command");
+    expect(f.repo.crossSeed.receipt(legacy.operationId)?.command.policy).toEqual(policy);
+    expect(f.repo.crossSeed.receipts()).toHaveLength(1);
+  } finally { await f.cleanup(); }
+});
+
+test("oversized metadata is unsupported rather than repeatedly failing a reuse job", async () => {
+  const f = await fixture();
+  try {
+    const metainfo = new Uint8Array(bencode.encode({ info: { name: "LargeList", "piece length": 16384,
+      pieces: Buffer.alloc(20), files: Array.from({ length: 2001 }, (_, i) => ({ path: [`file-${i}.mkv`], length: 1 })) } }));
+    f.adapters.fetchMetainfo = async () => metainfo;
+    const result = await execute(f);
+    expect(result.outcome).toMatchObject({ kind: "unsupported", reason: "Candidate has 2001 files; supported reuse metadata limit is 2000 files" });
+    expect(f.repo.getJobStatus(result.jobId)).toBe("succeeded");
+    expect(f.counts()).toEqual({ adds: 0, resumes: 0, stops: 0 });
+  } finally { await f.cleanup(); }
+});
+
 test("missing sidecars do not silently cause a full client scan", async () => {
   const f = await fixture("abcdefgh", "abcdefgh", "!!");
   try {
@@ -419,7 +505,12 @@ test("TV publication advances selection while same-target reuse proofs remain se
     expect(await fs.readFile(oldSource, "utf8")).toBe("abcdefgh");
     release();
     await until(() => [first, second].every(receipt => f.repo.getJobStatus(receipt.jobId) === "succeeded"));
-    expect(f.repo.crossSeed.receipt(command.operationId)!.outcome?.kind).toBe("seeding");
+    // A durable mtime wait releases the lane; either job may win registration.
+    const results = [first, second].map(receipt => f.repo.crossSeed.receipt(receipt.command.operationId)!);
+    expect(results.map(receipt => receipt.outcome?.kind).sort()).toEqual(["seeding", "skipped"]);
+    const winner = results.find(receipt => receipt.outcome?.kind === "seeding")!;
+    expect(f.repo.crossSeed.registrationOwner({ clientId: f.adapters.client!(command.scope).id,
+      nativeId: f.metadata.infoHash })).toBe(winner.command.operationId);
     expect(f.counts().adds).toBe(1);
     expect(f.repo.tv.activeEpisodes(request.targetId)[0]!.version_id).toBe(nextVersion);
     expect(await fs.readFile(oldSource, "utf8")).toBe("abcdefgh");

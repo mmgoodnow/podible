@@ -12,12 +12,18 @@ export const crossSeedScopeSchema = z.object({ media: z.enum(["movie", "tv", "au
 export type CrossSeedScope = z.infer<typeof crossSeedScopeSchema>;
 export const isBookCrossSeedScope = (scope: CrossSeedScope): scope is CrossSeedScope & { media: "audio" | "ebook" } =>
   scope.media === "audio" || scope.media === "ebook";
-export const crossSeedPolicySchema = z.object({
-  version: z.literal(1).default(1),
+const reuseBudgets = {
   minimumReuseRatio: z.number().min(0.01).max(1).default(0.8),
   maximumExtraBytes: z.number().int().nonnegative().safe().max(10 * 1024 ** 3).default(512 * 1024 ** 2),
-  maximumCandidateBytes: id.max(1024 ** 4).default(100 * 1024 ** 3),
-}).strict();
+};
+export const crossSeedPolicySchema = z.union([
+  z.object({ version: z.literal(2).default(2), ...reuseBudgets }).strict(),
+  // Preserve immutable historical command hashes; execution no longer applies
+  // this retired total-size field. New commands default to the uncapped policy.
+  z.object({ version: z.literal(1), ...reuseBudgets,
+    maximumCandidateBytes: id.max(1024 ** 4).default(100 * 1024 ** 3),
+  }).strict(),
+]);
 export type CrossSeedPolicy = z.infer<typeof crossSeedPolicySchema>;
 export const crossSeedCommandSchema = z.object({
   operationId: z.string().uuid(), scope: crossSeedScopeSchema, releaseId: id.optional(),

@@ -90,14 +90,23 @@ exhaustive tracker archive crawl or a scheduled per-title search. No RSS cursor
 or historical gap is reset or declared repaired by this operation.
 
 The reuse command snapshots a versioned policy. Defaults require 80% reusable
-bytes, at most 512 MiB of missing pieces, and at most a 100 GiB candidate. Admin
-RPC callers can tune these independently per command. Those are POC defaults,
+bytes and at most 512 MiB of additional download. There is no total-torrent-size
+cap: a large fully reusable pack does not allocate or download that size again.
+Version 2 omits the retired total-size setting; historical version 1 receipts
+retain their original command hashes, but their size cap is no longer enforced.
+Admin RPC callers can tune the remaining budgets per command. Those are POC defaults,
 not an asserted optimal objective function. Identity, path ownership, isolation,
 retained demand and publication rules are safety checks,
 not tunable scores. Feed matching queues all matches durably; execution limits
 active reuse transfers to two independent targets, with same-target work
 serialized. There is no initial full payload hash pass. Per-client/hash registration is serialized separately so concurrent
 targets cannot overwrite each other's seed-only intent or layout ownership.
+
+Metadata work remains bounded: metainfo is at most 8 MiB, candidates have at most
+2,000 files, and source inventories are bounded independently. A larger file list
+gets an explicit unsupported outcome with its actual count, not a transient job
+failure or a misleading total-size rejection. The current seed-only adapter also
+requires every member to be present; it never downloads into shared canonical files.
 
 ## Storage And Verification
 
