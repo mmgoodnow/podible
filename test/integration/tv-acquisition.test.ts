@@ -177,7 +177,7 @@ test("new TV packs reserve one canonical object per member and publish without a
   try {
     s.fixture.services.client.capabilities.canonicalDownloads = true;
     let sealed = 0; s.fixture.services.client.sealDownload = async () => { sealed++; };
-    s.fixture.addPack("canonical-pack", ["tvdb:201", "tvdb:202", "tvdb:203"]);
+    s.fixture.addPack("canonical-pack", ["tvdb:201", "tvdb:202", ...Array.from({ length: 299 }, (_, i) => `unrequested:${i}`)]);
     const acquisition = s.enqueue();
     await acquireTv(s.context, s.repo.getJob(acquisition.job_id!)!, s.fixture.services);
     const download = s.repo.tv.downloads(s.request.targetId)[0]!;
@@ -193,7 +193,7 @@ test("new TV packs reserve one canonical object per member and publish without a
       expect(await fs.realpath(path.join(sourceRoot, member.path))).toBe(canonical);
       expect((await fs.stat(canonical)).nlink).toBe(1);
     }
-    expect(plan.files).toHaveLength(3); // Unrequested members remain reserved, not published.
+    expect(plan.files).toHaveLength(301); // Unrequested members remain reserved, not published.
     expect(version.files).toHaveLength(2);
   } finally { await s.close(); }
 });
@@ -220,6 +220,24 @@ test("TV completion retains researched copies and queues them before publication
     await acquireTv(s.context, s.repo.getJob(job.id)!, s.fixture.services);
     expect(s.repo.crossSeed.receipts()).toHaveLength(1);
     expect(s.fixture.stats.snatches).toBe(1);
+    expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(1);
+  } finally { await s.close(); }
+});
+
+test("TV uses verified byte requirements, rejecting a pack that cannot fit before adding an alternative", async () => {
+  const s = await setup(["tvdb:201"]);
+  try {
+    const tooLarge = s.fixture.addPack("capacity-rejected", ["tvdb:201"]);
+    s.fixture.addPack("capacity-fallback", ["tvdb:201"]);
+    const fetch = s.fixture.services.fetchMetainfo;
+    const length = 1024 ** 5;
+    s.fixture.services.fetchMetainfo = offer => offer.key === tooLarge.key
+      ? Promise.resolve(bencode.encode({ info: { name: "enormous.mkv", length, "piece length": length, pieces: Buffer.alloc(20) } }))
+      : fetch(offer);
+    const acquisition = s.enqueue();
+    await acquireTv(s.context, s.repo.getJob(acquisition.job_id!)!, s.fixture.services);
+    expect(s.fixture.sourceAdds).toBe(1);
+    expect(s.repo.tv.downloads(s.request.targetId).map(download => download.offer_key)).toEqual(["capacity-fallback"]);
     expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(1);
   } finally { await s.close(); }
 });

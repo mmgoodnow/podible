@@ -1,4 +1,5 @@
 import path from "node:path";
+import { downloadCapacityProblem } from "../media/download-capacity";
 import { advanceDownloadProgress, downloadComplete } from "../media/download-lifecycle";
 import { promises as fs } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
@@ -137,6 +138,7 @@ export async function acquireMovie(
   };
   const priorKeys = new Set(initial.priorKeys);
   const excluded = new Set<string>();
+  let capacityProblem: string | undefined;
   let feedDownloadFailed = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     active();
@@ -182,7 +184,7 @@ export async function acquireMovie(
           .filter(
             (offer) =>
               offer.sizeBytes === null ||
-              offer.sizeBytes <= settings.movies.maximumReleaseBytes,
+              offer.sizeBytes <= (settings.movies.maximumReleaseBytes ?? Infinity),
           );
         if (
           attempt === 0 &&
@@ -284,8 +286,8 @@ export async function acquireMovie(
     if (!offer) {
       emit(
         "blocked",
-        current ? "retained" : "waiting",
-        current ? selection.reason : "No matching release has been found yet. Watching incoming indexer releases automatically.",
+        current ? "retained" : capacityProblem ? "blocked" : "waiting",
+        capacityProblem ?? (current ? selection.reason : "No matching release has been found yet. Watching incoming indexer releases automatically."),
       );
       await durableStep(ctx, "movie:finish-no-candidate", () =>
         repo.finishAcquisition(acquisition.id),
@@ -325,8 +327,11 @@ export async function acquireMovie(
       emit(`${attempt}:nuked-metainfo`, "replacing", "Torrent identity belongs to a confirmed defective release; trying another source");
       continue;
     }
-    if (metadata.size > settings.movies.maximumReleaseBytes)
-      throw new Error("Torrent exceeds the configured acquisition byte limit");
+    if (metadata.size > (settings.movies.maximumReleaseBytes ?? Infinity)) {
+      excluded.add(offer.key);
+      emit(`${attempt}:oversize`, "replacing", "Release exceeds the configured size limit; trying another release");
+      continue;
+    }
     const binding = await durableStep(ctx, `${prefix}:download-intent`, () => {
       const prior = repo.torrent(services.client.id, metadata.infoHash);
       const location: DownloadLocation = prior
@@ -355,6 +360,11 @@ export async function acquireMovie(
         await fs.chmod(sourceRoot, 0o2770);
       }
       return withTorrentUse(ctx.repo, { clientId: services.client.id, infoHash: metadata.infoHash }, async () => {
+        if (!repo.torrent(services.client.id, metadata.infoHash)) {
+          const noSpace = await downloadCapacityProblem({ contentRoot: roots.contentRoot, sourceRoot,
+            canonical: binding.canonicalDownload ?? false, files: metadata.files });
+          if (noSpace) return { noSpace };
+        }
         await prepareCanonicalDownload({ contentRoot: roots.contentRoot, sourceRoot, clientId: services.client.id,
           metainfo, allowCreate: binding.canonicalDownload ?? false, assertActive: active });
         const added = await services.client.ensureAdded({
@@ -366,6 +376,12 @@ export async function acquireMovie(
         return added;
       });
     });
+    if ("noSpace" in ref) {
+      capacityProblem = ref.noSpace;
+      excluded.add(offer.key);
+      emit(`${attempt}:disk-space`, "replacing", ref.noSpace);
+      continue;
+    }
     const downloadId = repo.torrent(ref.clientId, ref.nativeId)!.id;
     if (initial.lossRecoveryKeys?.includes(offer.key))
       await recoverMissingTorrentSource({ ctx, client: services.client, ref, sourceRoot, metadata, prefix, active });
@@ -604,7 +620,7 @@ export async function acquireMovie(
   emit(
     "blocked",
     current ? "retained" : "blocked",
-    "Acquisition attempts exhausted; inspect releases or retry to search again",
+    capacityProblem ?? "Acquisition attempts exhausted; inspect releases or retry to search again",
   );
   await durableStep(ctx, "movie:finish-exhausted", () =>
     repo.finishAcquisition(acquisition.id),

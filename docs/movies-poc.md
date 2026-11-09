@@ -90,7 +90,9 @@ was added. Configure:
   the private Docker-managed Transmission engine. Existing book releases retain
   their `rtorrent` connection; see [book download ownership](book-downloads.md).
 - `movies.qualityPolicy`, `automaticUpgrades` (RSS-driven),
-  and `maximumReleaseBytes` (default 40 GiB).
+  and optional `maximumReleaseBytes` (default `null`). Before a new download, Podible
+  checks the target volume's available space against verified metainfo, with
+  headroom. This is a live check, not a reservation against concurrent writers.
 
 New releases arrive through the shared [RSS inbox](indexer-feeds.md); there are
 no scheduled per-title searches. Reconciliation repairs existing views only.

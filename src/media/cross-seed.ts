@@ -17,12 +17,13 @@ import { releaseOfferFromResult, type ReleaseOffer } from "./release-offer";
 import { assertMovieStorage } from "../movies/storage";
 import { TorrentNotFoundError, type TorrentClient } from "./torrent-client";
 import { withTorrentRegistration } from "./torrent-use";
-import { crossSeedCommandSchema, crossSeedCommandHash, crossSeedStateKey, isBookCrossSeedScope,
+import { crossSeedCommandSchema, crossSeedCommandHash, crossSeedStateKey, isBookCrossSeedScope, optimisticRegistrationFits,
   type CrossSeedCommand, type CrossSeedReceipt, type CrossSeedScope, type CrossSeedOutcome } from "./cross-seed-state";
-import { planContentReuse, type ReuseCandidateManifest, type ReusePlan, type ReuseSourceFile } from "./reuse-plan";
+import { planContentReuse, reuseDigest, type ReuseCandidateManifest, type ReusePlan, type ReuseSourceFile } from "./reuse-plan";
 import { captureReuseFile, captureReuseRoot, materializeReuseLayout, prepareReuseLayoutRoot, publishedReuseLayoutCapabilities } from "./reuse-layout";
 import { selectedCopies, selectedCopyOffer, selectedCopyId } from "./selected-copies";
 import { completedCanonicalReuseSources } from "./reuse-source-inventory";
+import { effectCheckpoint } from "../runtime/execution-effects";
 
 export type CrossSeedAdapters = {
   client?: (scope: CrossSeedScope) => TorrentClient;
@@ -31,9 +32,6 @@ export type CrossSeedAdapters = {
   pollMs?: number;
   maxPolls?: number;
 };
-const maximumReuseFiles = 2000;
-const candidateMetadataLimit = (files: number) =>
-  `Candidate has ${files} files; supported reuse metadata limit is ${maximumReuseFiles} files`;
 const root = (settings: AppSettings, scope: CrossSeedScope) => path.resolve(isBookCrossSeedScope(scope)
   ? settings.libraryRoot : scope.media === "tv" ? settings.tv.managedRoot : settings.movies.managedRoot);
 const storageRoots = async (settings: AppSettings, scope: CrossSeedScope) => {
@@ -120,51 +118,54 @@ export function reuseCandidate(bytes: Uint8Array): ReuseCandidateManifest {
 
 /** Read a bounded pool of exact registered objects, not a synthetic season/torrent. */
 export async function crossSeedPlan(repo: BooksRepo, settings: AppSettings, command: CrossSeedCommand,
-  bytes: Uint8Array): Promise<ReusePlan> {
+  bytes: Uint8Array, ctx?: WorkerContext): Promise<ReusePlan> {
   assertCrossSeedDemand(repo, command.scope);
   const candidate = reuseCandidate(bytes);
-  if (candidate.files.length > maximumReuseFiles) throw new Error(candidateMetadataLimit(candidate.files.length));
   const { contentRoot } = await storageRoots(settings, command.scope);
   if (!isBookCrossSeedScope(command.scope)) await assertMovieStorage(repo, contentRoot);
   const ownedRoot = await captureReuseRoot({ rootPath: contentRoot, markerName: ".podible-content.json" });
-  const files = repo.crossSeed.files(command.scope, [...new Set(candidate.files.map(file => file.size))]);
-  if (files.length > 2000) throw new Error("Reuse source inventory exceeds the bounded plan");
+  const sizes = [...new Set(candidate.files.map(file => file.size))];
   const sources: ReuseSourceFile[] = [];
-  for (const file of files) {
-    try {
-      let sourcePath: string;
-      if (isBookCrossSeedScope(command.scope)) {
-        sourcePath = file.relative_path;
-        const relative = path.relative(contentRoot, sourcePath);
-        if (!path.isAbsolute(sourcePath) || path.resolve(sourcePath) !== sourcePath ||
-          (!/^files\/[a-f0-9]{2}\/[a-f0-9]{64}\/content(?:\.[a-z0-9]{1,16})?$/.test(relative) &&
-            !await finalizedCanonicalObject(contentRoot, sourcePath)))
-          throw new Error("Reuse book source is not registered canonical content");
-        // The existing helper validates its per-file ownership record. Only an
-        // already-canonical path is allowed here, never its adoption branch.
-        if (await adoptBookContent(settings.libraryRoot, sourcePath) !== sourcePath)
-          throw new Error("Reuse book source ownership changed");
-      } else {
-        if (repo.releaseHealth.isContentFileBlocked(file.id)) continue;
-        z.string().uuid().parse(file.id);
-        if (!file.relative_path.startsWith(`files/${file.id.slice(0, 2)}/${file.id}.`)) throw new Error("Reuse source is not in its registered UUID layout");
-        sourcePath = path.resolve(contentRoot, file.relative_path);
+  const run = <T>(name: string, work: () => Promise<T> | T) => ctx ? durableStep(ctx, name, work) : Promise.resolve().then(work);
+  for (const page of repo.crossSeed.filePages(command.scope, sizes)) {
+    sources.push(...await run(`reuse:inventory:files:${reuseDigest([ownedRoot, page])}`, async () => {
+      const members: ReuseSourceFile[] = [];
+      for (const file of page) {
+        effectCheckpoint();
+        try {
+          let sourcePath: string;
+          if (isBookCrossSeedScope(command.scope)) {
+            sourcePath = file.relative_path;
+            const relative = path.relative(contentRoot, sourcePath);
+            if (!path.isAbsolute(sourcePath) || path.resolve(sourcePath) !== sourcePath ||
+              (!/^files\/[a-f0-9]{2}\/[a-f0-9]{64}\/content(?:\.[a-z0-9]{1,16})?$/.test(relative) &&
+                !await finalizedCanonicalObject(contentRoot, sourcePath)))
+              throw new Error("Reuse book source is not registered canonical content");
+            // Verify existing ownership without entering the helper's adoption branch.
+            if (await adoptBookContent(settings.libraryRoot, sourcePath) !== sourcePath)
+              throw new Error("Reuse book source ownership changed");
+          } else {
+            if (repo.releaseHealth.isContentFileBlocked(file.id)) continue;
+            z.string().uuid().parse(file.id);
+            if (!file.relative_path.startsWith(`files/${file.id.slice(0, 2)}/${file.id}.`)) throw new Error("Reuse source is not in its registered UUID layout");
+            sourcePath = path.resolve(contentRoot, file.relative_path);
+          }
+          const source = await captureReuseFile({ root: ownedRoot, sourceId: file.id, sourcePath });
+          if (source.size === file.size_bytes) members.push(source);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
       }
-      const source = await captureReuseFile({ root: ownedRoot, sourceId: file.id,
-        sourcePath });
-      if (source.size === file.size_bytes) sources.push(source);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
+      return members;
+    }));
   }
   const completed = await completedCanonicalReuseSources({ repo, scope: command.scope, root: ownedRoot,
     downloadRoot: (await storageRoots(settings, command.scope)).downloadRoot,
-    sizes: [...new Set(candidate.files.map(file => file.size))] });
+    sizes, run });
   const byPath = new Map(sources.map(source => [source.path, source]));
   for (const source of completed) if (!byPath.has(source.path)) byPath.set(source.path, source);
-  if (byPath.size > 2000) throw new Error("Reuse source inventory exceeds the bounded plan");
-  return planContentReuse({ candidate, sources: [...byPath.values()], policy: { version: 1,
-    minReuseRatio: command.policy.minimumReuseRatio, maxExtraDownloadBytes: command.policy.maximumExtraBytes } });
+  return run("reuse:plan:assemble", () => planContentReuse({ candidate, sources: [...byPath.values()], policy: { version: 1,
+    minReuseRatio: command.policy.minimumReuseRatio, maxExtraDownloadBytes: command.policy.maximumExtraBytes } }));
 }
 
 export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
@@ -205,8 +206,6 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
     (adapters.fetchMetainfo?.(offer) ?? services?.fetchMetainfo(offer) ?? cachedMovieMetainfo(ctx.repo, offer, "reuse"))).toString("base64"));
   const bytes = Buffer.from(encoded, "base64"), metadata = inspectMetainfo(bytes);
   active();
-  if (metadata.files.length > maximumReuseFiles)
-    return finish({ kind: "unsupported", reason: candidateMetadataLimit(metadata.files.length) });
   ctx.repo.transferMetrics.learnMetainfo(bytes, crossSeedOffer(ctx.repo, command).provider);
   if (ctx.repo.releaseHealth.isOfferBlocked({ ...crossSeedOffer(ctx.repo, command), infoHash: metadata.infoHash }))
     return finish({ kind: "skipped", reason: "Candidate is a confirmed nuked release" });
@@ -215,7 +214,9 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   const identity = { clientId: client.id, nativeId: metadata.infoHash };
   if (ctx.repo.reuseTorrent(identity) && ctx.repo.crossSeed.registrationOwner(identity) !== operationId)
     return finish({ kind: "skipped", reason: "Torrent identity already belongs to another registered operation", infoHash: metadata.infoHash });
-  const plan = await durableStep(ctx, "reuse:plan", () => crossSeedPlan(ctx.repo, settings, command, bytes));
+  // Preserve any completed legacy plan and its layout identity across upgrades.
+  const saved = await durableStep<ReusePlan | null>(ctx, "reuse:plan", () => null);
+  const plan = saved ?? await crossSeedPlan(ctx.repo, settings, command, bytes, ctx);
   const sourceBlocked = () => plan.files.some(file => file.source && ctx.repo.releaseHealth.isContentFileBlocked(file.source.id));
   if (sourceBlocked()) return finish({ kind: "skipped", reason: "Reuse source was confirmed nuked after planning" });
   if (plan.status === "rejected" || !plan.summary.likelyReuseBytes) return finish({ kind: "skipped", reason: plan.reasons.join("; ") || "No reusable registered files" });
@@ -251,9 +252,16 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
     if (!dataPath.startsWith(destination + path.sep)) throw new Error("Optimistic reuse escaped its pinned root");
     const location = { rootId: isBookCrossSeedScope(command.scope) ? "books" : command.scope.media === "tv" ? "tv" : "movies",
       relativePath: path.relative(downloadRoot, dataPath) };
+    if (!optimisticRegistrationFits({ planId: plan.id, ref: identity, location, plan }))
+      return finish({ kind: "unsupported", reason: "Reuse plan exceeds the 32 MiB ownership record limit", planId: plan.id });
     // Transmission's native fast-add requires file mtimes strictly older than its second-resolution added date.
-    const latestMtime = Math.max(...await Promise.all(plan.files.map(async file =>
-      Number((await fs.stat(path.join(dataPath, file.candidatePath), { bigint: true })).mtimeNs / 1_000_000n))));
+    let latestMtime = -Infinity;
+    for (let start = 0; start < plan.files.length; start += 32) {
+      active();
+      const times = await Promise.all(plan.files.slice(start, start + 32).map(async file =>
+        Number((await fs.stat(path.join(dataPath, file.candidatePath), { bigint: true })).mtimeNs / 1_000_000n)));
+      latestMtime = Math.max(latestMtime, ...times);
+    }
     const wait = Math.ceil(latestMtime / 1000) * 1000 + 1000 - Date.now();
     if (wait > 60_000) return finish({ kind: "unsupported", reason: "Source modification time is in the future; refused a bulk client check" });
     if (wait > 0) await ctx.execution.sleep("reuse:optimistic:older-files", wait);

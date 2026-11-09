@@ -5,7 +5,7 @@ import { SQLiteStorage } from "reflow-ts/sqlite-bun";
 import type { BooksRepo } from "../repo";
 import type { TorrentClient, TorrentSnapshot } from "../media/torrent-client";
 import { inspectMetainfo } from "../media/metainfo";
-import { resolveDownloadFile } from "../media/canonical-download";
+import { readCanonicalDownload, resolveDownloadMembers } from "../media/canonical-download";
 
 const relative = z.string().min(1).refine((value) => !path.isAbsolute(value) && !/[\\\x00-\x1f\x7f]/.test(value) &&
   value.split("/").every((part) => part && part !== "." && part !== ".."));
@@ -16,7 +16,7 @@ export const tvSourceSchema = z.object({
   location: z.object({ rootId: z.literal("tv"), relativePath: relative }),
   offerKey: z.string().min(1), title: z.string(), provider: z.string(),
   manifest: z.object({ infoHash: z.string().regex(/^[a-f0-9]{40}$/), name: relative, size: count,
-    files: z.array(z.object({ path: relative, size: count, identity: identity.optional() })).min(1).max(300) }),
+    files: z.array(z.object({ path: relative, size: count, identity: identity.optional() })).min(1).max(100_000) }),
 }).refine((source) => source.ref.nativeId === source.manifest.infoHash &&
   source.manifest.files.reduce((sum, file) => sum + file.size, 0) === source.manifest.size &&
   new Set(source.manifest.files.map((file) => file.path.normalize("NFC").toLowerCase())).size === source.manifest.files.length);
@@ -152,18 +152,24 @@ export async function tvSourceFiles(source: TvSource, client: TorrentClient, man
   if (files.length !== source.manifest.files.length || new Set(files.map((file) => file.index)).size !== files.length)
     throw new Error("TV client file manifest changed");
   const manifest = structuredClone(source.manifest);
+  const contentRoot = path.join(managedRoot, "objects");
+  const reservation = await readCanonicalDownload(contentRoot, sourceRoot);
+  const resolve = resolveDownloadMembers(contentRoot, sourceRoot, reservation);
   for (const file of files) {
     const expected = source.manifest.files[file.index];
     if (!Number.isInteger(file.index) || !expected || path.resolve(file.path) !== path.resolve(sourceRoot, expected.path) ||
       !path.resolve(file.path).startsWith(sourceRoot + path.sep))
       throw new Error("TV client file escaped metainfo layout");
-    const resolved = await resolveDownloadFile(path.join(managedRoot, "objects"), sourceRoot, file.path, expected.size);
+    const resolved = await resolve(file.path, expected.size);
     const stat = await fs.lstat(resolved.path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== expected.size) throw new Error("Completed TV file size differs from metainfo");
+    if (!stat.isFile() || stat.size !== expected.size || BigInt(stat.dev) !== resolved.stat.dev || BigInt(stat.ino) !== resolved.stat.ino)
+      throw new Error("Completed TV file changed during verification");
     const current = { mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, device: stat.dev, inode: stat.ino };
     if (expected.identity && Object.keys(current).some((key) => current[key as keyof typeof current] !== expected.identity![key as keyof typeof current]))
       throw new Error("Previously verified TV source file changed");
     manifest.files[file.index]!.identity = current;
   }
+  if (JSON.stringify(await readCanonicalDownload(contentRoot, sourceRoot)) !== JSON.stringify(reservation))
+    throw new Error("TV canonical source reservation changed");
   return { files, sourceRoot, source: tvSourceSchema.parse({ ...source, manifest }) };
 }

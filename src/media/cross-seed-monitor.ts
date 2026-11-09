@@ -18,7 +18,7 @@ const layoutReceiptSchema = z.object({
     symlinkMode: z.enum(["never", "verified-read-only", "optimistic-read-only"]) }),
   generation: z.object({ device: z.string(), inode: z.string() }),
   files: z.array(z.object({ path: z.string(), kind: z.enum(["symlink", "clone", "missing"]),
-    device: z.string().optional(), inode: z.string().optional() })).max(2000),
+    device: z.string().optional(), inode: z.string().optional() })).max(100_000),
 });
 
 async function readLayoutReceipt(generation: string) {

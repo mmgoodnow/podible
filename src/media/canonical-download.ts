@@ -153,10 +153,22 @@ async function prepare(input: PrepareInput): Promise<CanonicalDownload | null> {
 
 /** Return the only allowed real file behind a client path. Legacy regular layouts remain readable. */
 export async function resolveDownloadFile(contentRoot: string, sourceRoot: string, sourcePath: string, expectedSize?: number) {
+  const plan = await readCanonicalDownload(contentRoot, sourceRoot);
+  return resolveMember(contentRoot, sourceRoot, plan, relativePath => plan?.files.find(file => file.path === relativePath), sourcePath, expectedSize);
+}
+
+/** Use one validated manifest per scan; each member's path and inode are still checked. */
+export function resolveDownloadMembers(contentRoot: string, sourceRoot: string, plan: CanonicalDownload | null) {
+  const index = new Map(plan?.files.map(file => [file.path, file]));
+  return (sourcePath: string, expectedSize?: number) =>
+    resolveMember(contentRoot, sourceRoot, plan, key => index.get(key), sourcePath, expectedSize);
+}
+
+async function resolveMember(contentRoot: string, sourceRoot: string, plan: CanonicalDownload | null,
+  lookup: (path: string) => CanonicalDownload["files"][number] | undefined, sourcePath: string, expectedSize?: number) {
   const relativePath = path.relative(sourceRoot, path.resolve(sourcePath));
   relative.parse(relativePath); await directory(sourceRoot, path.dirname(relativePath) === "." ? "" : path.dirname(relativePath));
-  const plan = await readCanonicalDownload(contentRoot, sourceRoot);
-  const file = plan?.files.find(file => file.path === relativePath);
+  const file = lookup(relativePath);
   let canonical = sourcePath;
   if (plan) {
     if (!plan.ready || !file || (expectedSize !== undefined && expectedSize !== file.size)) throw new Error("File is not declared by the canonical download");
@@ -184,8 +196,10 @@ async function seal(contentRoot: string, sourceRoot: string, client: TorrentClie
   if (!plan) return;
   if (plan.clientId !== ref.clientId || plan.infoHash !== ref.nativeId || client.id !== ref.clientId || !client.sealDownload)
     throw new Error("Cannot surrender canonical download writer authority");
+  const resolve = resolveDownloadMembers(contentRoot, sourceRoot, plan);
   for (const file of plan.files) {
-    if (file.relativePath) await resolveDownloadFile(contentRoot, sourceRoot, path.join(sourceRoot, file.path));
+    active();
+    if (file.relativePath) await resolve(path.join(sourceRoot, file.path));
     else {
       const existing = await stat(path.join(sourceRoot, file.path));
       if (existing && (!existing.isFile() || existing.isSymbolicLink())) throw new Error("Invalid torrent-specific sidecar");
@@ -193,7 +207,9 @@ async function seal(contentRoot: string, sourceRoot: string, client: TorrentClie
   }
   active(); await client.sealDownload(ref); active();
   // stop flushes the daemon's verified-but-buffered pieces into the reserved objects.
-  for (const file of plan.files) await resolveDownloadFile(contentRoot, sourceRoot, path.join(sourceRoot, file.path), file.size);
+  for (const file of plan.files) { active(); await resolve(path.join(sourceRoot, file.path), file.size); }
+  if (JSON.stringify(await readCanonicalDownload(contentRoot, sourceRoot)) !== JSON.stringify(plan))
+    throw new Error("Canonical download reservation changed during sealing");
   plan.sealed = true; await writeJson(manifestPath(contentRoot, sourceRoot), plan);
 }
 

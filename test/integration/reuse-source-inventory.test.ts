@@ -17,7 +17,7 @@ import { captureReuseRoot, verifyContentReuse } from "../../src/media/reuse-layo
 import type { TorrentClient } from "../../src/media/torrent-client";
 import type { TvCatalogEntry } from "../../src/tv/types";
 
-async function fixture(options: { sealed?: boolean; published?: boolean; journal?: boolean } = {}) {
+async function fixture(options: { sealed?: boolean; published?: boolean; journal?: boolean; oldTorrents?: number; oldProofs?: number } = {}) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "reuse-source-inventory-")));
   const db = new Database(path.join(root, "app.sqlite")); runMigrations(db);
   const repo = new BooksRepo(db), settings = repo.ensureSettings();
@@ -42,6 +42,9 @@ async function fixture(options: { sealed?: boolean; published?: boolean; journal
   for (const [i, file] of plan.files.entries()) await fs.writeFile(path.join(sourceRoot, file.path), payloads[i]!);
   const ref = { clientId, nativeId: plan.infoHash }, location = { rootId: "tv", relativePath: "pack" };
   if (options.sealed !== false) await sealCanonicalDownload(contentRoot, sourceRoot, { id: clientId, sealDownload: async () => {} } as unknown as TorrentClient, ref);
+  for (let i = 0; i < (options.oldTorrents ?? 0); i++)
+    repo.tv.bindDownload(acquisition.id, { clientId, nativeId: i.toString(16).padStart(40, "0") },
+      { rootId: "tv", relativePath: `older-${i}` }, `older-${i}`);
   const torrentId = repo.tv.bindDownload(acquisition.id, ref, location, "primary-offer");
   repo.tv.observeDownload(torrentId, { ref, location, state: "inactive", complete: true, bytesDone: data.length,
     sizeBytes: data.length, message: null, downloadBytesPerSecond: 0, observedAt: new Date().toISOString() });
@@ -61,7 +64,10 @@ async function fixture(options: { sealed?: boolean; published?: boolean; journal
     const runId = randomUUID(), now = Date.now();
     await journal.createRun({ id: runId, workflow: "media-tv_acquire-v1", input: { jobId: acquisition.job_id! }, status: "completed",
       createdAt: now, updatedAt: now, startedAt: now, finishedAt: now, output: null, error: null, wakeAt: null, waitingFor: null, idempotencyKey: null });
-    await journal.saveStepResult({ id: randomUUID(), runId, name: "tv:attempt:0:source-evidence", status: "completed",
+    for (let i = 0; i < (options.oldProofs ?? 0); i++)
+      await journal.saveStepResult({ id: randomUUID(), runId, name: `tv:attempt:${i}:source-evidence`, status: "completed",
+        output: {}, error: null, attempts: 1, createdAt: now, updatedAt: now, startedAt: now, history: [], kind: "step" });
+    await journal.saveStepResult({ id: randomUUID(), runId, name: "tv:attempt:999:source-evidence", status: "completed",
       output: source, error: null, attempts: 1, createdAt: now, updatedAt: now, startedAt: now, history: [], kind: "step" });
     repo.attachJobExecution(acquisition.job_id!, runId, 0); await journal.close();
   }
@@ -89,10 +95,11 @@ test("complete canonical pack with only one published episode supplies all membe
   } finally { await f.close(); }
 });
 
-test("completed pre-publication pack uses bounded durable source evidence without a version", async () => {
-  const f = await fixture({ published: false, journal: true });
+test("completed pre-publication pack can be found past 128 registrations and 32 journal proof rows", async () => {
+  const f = await fixture({ published: false, journal: true, oldTorrents: 128, oldProofs: 40 });
   try {
     expect(f.repo.crossSeed.files(f.scope, [4, 5, 6])).toHaveLength(0);
+    expect([...f.repo.crossSeed.sourceDownloadPages(f.scope)].map(page => page.length)).toEqual([128, 1]);
     expect(await f.inventory()).toHaveLength(3);
   } finally { await f.close(); }
 });

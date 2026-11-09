@@ -342,14 +342,15 @@ test("reuse recognizes the same book and audio formats as canonical downloads", 
   }
 });
 
-test("oversized metadata is unsupported rather than repeatedly failing a reuse job", async () => {
+test("a manifest over 2000 files is evaluated and skipped when no members match", async () => {
   const f = await fixture();
   try {
     const metainfo = new Uint8Array(bencode.encode({ info: { name: "LargeList", "piece length": 16384,
       pieces: Buffer.alloc(20), files: Array.from({ length: 2001 }, (_, i) => ({ path: [`file-${i}.mkv`], length: 1 })) } }));
     f.adapters.fetchMetainfo = async () => metainfo;
     const result = await execute(f);
-    expect(result.outcome).toMatchObject({ kind: "unsupported", reason: "Candidate has 2001 files; supported reuse metadata limit is 2000 files" });
+    expect(result.outcome?.kind).toBe("skipped");
+    expect(result.outcome?.reason).not.toContain("limit");
     expect(f.repo.getJobStatus(result.jobId)).toBe("succeeded");
     expect(f.counts()).toEqual({ adds: 0, resumes: 0, stops: 0 });
   } finally { await f.cleanup(); }

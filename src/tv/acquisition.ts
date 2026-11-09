@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { downloadCapacityProblem } from "../media/download-capacity";
 import { advanceDownloadProgress, downloadComplete } from "../media/download-lifecycle";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -141,6 +142,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
   await durableStep(ctx, "tv:storage", () => { active(); return prepareMovieStorage(ctx.repo, roots.contentRoot); });
   await assertMovieStorage(ctx.repo, roots.contentRoot);
   const excluded = new Set(snapshot.priorKeys);
+  let capacityProblem: string | undefined;
   const excludedHashes = new Set(snapshot.priorHashes ?? []);
   if (snapshot.consumedSources) emit("sources-consumed", "retained", `Skipped ${snapshot.consumedSources} verified source(s): no unused playable members for missing requested episodes`);
   const publish = async (prefix: string, versionId: number) => {
@@ -231,7 +233,6 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       let observation;
       try {
         active();
-        if (reusable.manifest.size > settings.tv.maximumReleaseBytes) throw new Error("Retained TV source exceeds acquisition limits");
         observation = await services.client.inspect(reusable.ref);
         if (!completeTvSource(reusable, observation)) throw new Error("Retained TV source is not complete and owned");
         prepared = await tvSourceFiles(reusable, services.client, settings.tv.managedRoot);
@@ -250,14 +251,14 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       let selection;
       for (let wave = 0; ; wave++) {
         selection = await durableStep(ctx, `${prefix}:select:${wave}`, async () => {
-          const result = await services.decider(entry).select({ entry, episodes, policy, excludedOfferKeys: [...excluded], maximumReleaseBytes: settings.tv.maximumReleaseBytes,
+          const result = await services.decider(entry).select({ entry, episodes, policy, excludedOfferKeys: [...excluded], maximumReleaseBytes: settings.tv.maximumReleaseBytes ?? undefined,
             offers: search.offers });
           if (result.offer && excluded.has(result.offer.key)) throw new Error("TV selector repeated a retained failed release");
           if (result.offer) {
             active();
             rememberSelectedCopies(ctx.repo, { media: "tv", targetId: target.id }, acquisition.id, result.offer,
               (result.matchingOffers ?? []).filter(copy => !excluded.has(copy.key) &&
-                (copy.sizeBytes === null || copy.sizeBytes <= settings.tv.maximumReleaseBytes)));
+                (copy.sizeBytes === null || copy.sizeBytes <= (settings.tv.maximumReleaseBytes ?? Infinity))));
           }
           active(); repo.decision(acquisition.id, { ...intake, selection: { title: result.offer?.title ?? null, provider: result.offer?.provider ?? null, reason: result.reason }, attempt });
           return result;
@@ -298,7 +299,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
           await ctx.execution.sleep(`${prefix}:sibling-wait:${wave}`,services.timing?.pollMs??5000);
         }
         if(handoff) continue;
-        emit("blocked", "blocked", selection.reason); repo.finishAcquisition(acquisition.id); return "done";
+        emit("blocked", "blocked", capacityProblem ?? selection.reason); repo.finishAcquisition(acquisition.id); return "done";
       }
       const offer = selection.offer;
       releaseEvidence = offer;
@@ -306,8 +307,8 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       const metainfo = Buffer.from(encoded, "base64"), metadata = inspectMetainfo(metainfo);
       active();
       ctx.repo.transferMetrics.learnMetainfo(metainfo, offer.provider);
-      if (metadata.size > settings.tv.maximumReleaseBytes || metadata.files.length > 300) {
-        excluded.add(offer.key); emit(`${attempt}:oversize`, "replacing", "Release exceeds bounded TV acquisition limits; selecting another release"); continue;
+      if (metadata.size > (settings.tv.maximumReleaseBytes ?? Infinity)) {
+        excluded.add(offer.key); emit(`${attempt}:oversize`, "replacing", "Release exceeds the configured size limit; selecting another release"); continue;
       }
       if (excludedHashes.has(metadata.infoHash)) {
         excluded.add(offer.key); emit(`${attempt}:retained-source`, "replacing", "Previously attempted torrent identity remains excluded from new downloads"); continue;
@@ -320,7 +321,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       });
       // In-flight pre-canonical jobs retain their original intent and regular-file layout.
       const intendedLocation = "location" in binding ? binding.location : binding as DownloadLocation;
-      const registered = await durableStep<TorrentRef | { ref: TorrentRef; location: DownloadLocation }>(ctx, `${prefix}:snatch`, () =>
+      const registered = await durableStep<TorrentRef | { ref: TorrentRef; location: DownloadLocation } | { noSpace: string }>(ctx, `${prefix}:snatch`, () =>
         withTorrentRegistration(ctx.repo, { clientId: services.client.id, infoHash: metadata.infoHash }, async () => {
           active(); await assertMovieStorage(ctx.repo, roots.contentRoot);
           // A sibling may have registered this identity after our earlier intent was checkpointed.
@@ -331,8 +332,13 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
           if (location.rootId !== "tv" || !sourceRoot.startsWith(path.resolve(settings.tv.managedRoot, "downloads") + path.sep)) throw new Error("TV download escaped its owned root");
           await fs.mkdir(sourceRoot, { recursive: true });
           if (await fs.realpath(sourceRoot) !== sourceRoot) throw new Error("TV download layout traverses a symlink");
+          const canonical = !existing && "canonicalDownload" in binding && binding.canonicalDownload;
+          if (!existing) {
+            const noSpace = await downloadCapacityProblem({ contentRoot: roots.contentRoot, sourceRoot, canonical, files: metadata.files });
+            if (noSpace) return { noSpace };
+          }
           await prepareCanonicalDownload({ contentRoot: roots.contentRoot, sourceRoot, clientId: services.client.id, metainfo,
-            allowCreate: !existing && "canonicalDownload" in binding && binding.canonicalDownload, assertActive: active });
+            allowCreate: canonical, assertActive: active });
           const added = await services.client.ensureAdded({ metainfo, location });
           if (added.clientId !== services.client.id || added.nativeId.toLowerCase() !== metadata.infoHash)
             throw new Error("TV client returned another torrent identity");
@@ -340,6 +346,10 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
           return { ref: added, location };
         }));
       // Completed pre-change checkpoints contain only the ref and retain their original location.
+      if ("noSpace" in registered) {
+        capacityProblem = registered.noSpace;
+        excluded.add(offer.key); emit(`${attempt}:disk-space`, "replacing", registered.noSpace); continue;
+      }
       const ref = "ref" in registered ? registered.ref : registered;
       const location = "ref" in registered ? registered.location : intendedLocation;
       const sourceRoot = path.resolve(settings.tv.managedRoot, "downloads", location.relativePath);
@@ -437,6 +447,6 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
     if (!snapshot.sourceReuse) { active(); if (repo.recordVersion(acquisition.id, facts, content) !== versionId) throw new Error("Legacy TV version differs from fresh verification"); }
     return publish(prefix, versionId);
   }
-  emit("blocked", "blocked", "TV acquisition alternatives exhausted; current episodes and completed torrent data retained");
+  emit("blocked", "blocked", capacityProblem ?? "TV acquisition alternatives exhausted; current episodes and completed torrent data retained");
   repo.finishAcquisition(acquisition.id); return "done";
 }

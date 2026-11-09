@@ -14,6 +14,18 @@ function indexExists(db: Database, name: string): boolean {
 }
 
 describe("schema migrations", () => {
+  test("removes only the obsolete default release size cap", () => {
+    const db = new Database(":memory:");
+    try {
+      runMigrations(db);
+      db.exec("DELETE FROM schema_migrations WHERE id=57");
+      db.query("INSERT INTO settings (id,value_json) VALUES (1,?)")
+        .run(JSON.stringify({ movies: { maximumReleaseBytes: 40 * 1024 ** 3 }, tv: { maximumReleaseBytes: 512 * 1024 ** 3 } }));
+      runMigrations(db);
+      const row = db.query<{ value_json: string }, []>("SELECT value_json FROM settings WHERE id=1").get()!;
+      expect(JSON.parse(row.value_json)).toEqual({ movies: { maximumReleaseBytes: null }, tv: { maximumReleaseBytes: 512 * 1024 ** 3 } });
+    } finally { db.close(); }
+  });
   test("creates required tables and indexes", () => {
     const db = new Database(":memory:");
     runMigrations(db);

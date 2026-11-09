@@ -102,10 +102,11 @@ active reuse transfers to two independent targets, with same-target work
 serialized. There is no initial full payload hash pass. Per-client/hash registration is serialized separately so concurrent
 targets cannot overwrite each other's seed-only intent or layout ownership.
 
-Metadata work remains bounded: metainfo is at most 8 MiB, candidates have at most
-2,000 files, and source inventories are bounded independently. A larger file list
-gets an explicit unsupported outcome with its actual count, not a transient job
-failure or a misleading total-size rejection. The current seed-only adapter also
+Metadata work remains bounded by the 8 MiB metainfo limit and 32 MiB ownership
+record limit. Reuse scans source files, registered torrents and proof records in
+pages and checkpoints verified file batches and completed source torrents. The
+old 2,000-file, 128-torrent and 32-proof cutoffs no longer reject large inventories.
+The current seed-only adapter also
 requires every member to be present; it never downloads into shared canonical files.
 
 ## Storage And Verification

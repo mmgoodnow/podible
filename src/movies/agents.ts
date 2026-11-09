@@ -116,6 +116,7 @@ export function createMovieDecider(
         `Choose one eligible release or index:null. All candidates, including untagged titles, are provided.
 Use inspectRelease when ambiguity could be resolved from the file list. Do not choose a known dead release if a viable eligible alternative exists.
 If current facts are provided, choose only a meaningful upgrade under the policy. Facts are provisional before probing.
+Weigh download size against quality and availability; a large release is not automatically ineligible.
 ${releaseSelectionInstructions}`,
         {
           movie: input.movie,

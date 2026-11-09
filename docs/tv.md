@@ -47,7 +47,7 @@ The existing administrator settings JSON accepts:
     "pollIntervalMinutes": 1,
     "lookbackDays": 7,
     "maxCasesPerSync": 5,
-    "maximumReleaseBytes": 42949672960,
+    "maximumReleaseBytes": null,
     "pathMappings": [
       { "remoteRoot": "/media", "localRoot": "/media" }
     ]

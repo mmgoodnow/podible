@@ -104,7 +104,7 @@ export function createTvDecider(settings: AppSettings, modelProvider?: ModelProv
           }
           const metadata = manifests.get(index)!;
           return { ...evidencePage(metadata.files,offset,limit,file => ({ name: file.path, sizeBytes: file.size })), sizeBytes: metadata.size,
-            blockers: [...(metadata.size > (input.maximumReleaseBytes ?? Infinity) ? ["release-size-limit"] : []), ...(metadata.files.length > 300 ? ["file-count-limit"] : [])] };
+            blockers: metadata.size > (input.maximumReleaseBytes ?? Infinity) ? ["release-size-limit"] : [] };
         } });
       const research = tool({ name: "searchReleases", errorFunction: null, description: "Search a better title/alias or provider numbering when initial results are empty or ambiguous. URLs remain server-side.",
         parameters: z.object({ query: z.string().trim().min(1).max(250) }), async execute({ query }) {
@@ -121,11 +121,11 @@ export function createTvDecider(settings: AppSettings, modelProvider?: ModelProv
 The initial context is only an overview, not the complete search or catalog. Use listReleases to dig through candidates, getRequestedEpisodes for exact mapping, and paginated inspectRelease to compare real filenames against titles/absolute numbers. Repeated manifest pages are cached and do not spend new metainfo requests.
 Use searchReleases for useful aliases/numbering when initial candidates do not establish a match. Before concluding index:null, research at least one useful alternate query when the tool is available and inspect plausible matches. Do not confuse a release's season number with canonical episode identity.
 Policy-blocked candidates remain visible for diagnosis but cannot be downloaded. Explain whether matching content exists but exceeds a limit, was previously attempted, is ambiguous, or could not be found after research. Do not describe a policy exclusion as an absent/unreleased episode.
-Prefer a viable complete release within policy. Never invent an index.
+Prefer a viable complete release within policy. Weigh download size against coverage, quality and availability rather than treating large packs as automatically ineligible. Never invent an index.
 ${releaseSelectionInstructions}
 For this task, matchingIndexes should include only eligible copies; omit ones marked previously-attempted or release-size-limit. Optional copies never justify choosing a blocked primary.`,
         { entry: tvWorkEvidence(input.entry), episodeCount: input.episodes.length, episodes: input.episodes.slice(0,4).map(tvEpisodeEvidence),
-          policy: input.policy, limits: { maximumReleaseBytes: input.maximumReleaseBytes ?? null, maximumFiles: 300, distinctMetainfoRequests: 8, additionalSearches: 3 },
+          policy: input.policy, limits: { maximumReleaseBytes: input.maximumReleaseBytes ?? null, distinctMetainfoRequests: 8, additionalSearches: 3 },
           selectionPreference: settings.movies.crossSeedPreference ?? "tie-break", candidates: listing(0,10) },
         [list, episodeTool(input.episodes), inspect, research, createCrossSeedabilityTool(() => offers, settings.movies.crossSeedPreference ?? "tie-break",30)],
         output => output.index !== null && (!offers[output.index] || !allowed(offers[output.index]!))

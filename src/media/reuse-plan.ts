@@ -152,6 +152,8 @@ export function planContentReuse(input: {
   safeSize(policy.maxExtraDownloadBytes);
   const sources = structuredClone(input.sources).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   const byId = new Map<string, ReuseSourceFile>();
+  const bySize = new Map<number, ReuseSourceFile[]>();
+  const bySizeAndName = new Map<number, Map<string, ReuseSourceFile | null>>();
   for (const source of sources) {
     safeSize(source.size);
     if (!source.id || byId.has(source.id) || source.size !== source.identity.size ||
@@ -161,25 +163,33 @@ export function planContentReuse(input: {
       !source.path.startsWith(`${source.root.path}${path.sep}`))
       throw new Error("Invalid owned source snapshot");
     byId.set(source.id, source);
+    const sized = bySize.get(source.size);
+    if (sized) sized.push(source);
+    else bySize.set(source.size, [source]);
+    const names = bySizeAndName.get(source.size) ?? new Map();
+    const name = path.basename(source.path);
+    names.set(name, names.has(name) ? null : source);
+    bySizeAndName.set(source.size, names);
   }
+  const candidatePaths = new Set(candidate.files.map(file => file.path));
   const explicit = new Map<string, string>();
   for (const binding of input.bindings ?? []) {
     if (explicit.has(binding.candidatePath) || !byId.has(binding.sourceId) ||
-      !candidate.files.some((file) => file.path === binding.candidatePath))
+      !candidatePaths.has(binding.candidatePath))
       throw new Error("Invalid or duplicate reuse binding");
     explicit.set(binding.candidatePath, binding.sourceId);
   }
   let offset = 0;
   const files = candidate.files.map((file): ReusePlanFile => {
-    const candidates = sources.filter((source) => source.size === file.size);
-    const names = candidates.filter((source) => path.basename(source.path) === path.posix.basename(file.path));
+    const candidates = bySize.get(file.size) ?? [];
+    const named = bySizeAndName.get(file.size)?.get(path.posix.basename(file.path));
     const selected = explicit.get(file.path);
     // Ambiguous equal-size matches need an explicit domain-level binding.
     const source = selected ? byId.get(selected) : file.role === "sidecar" ? undefined :
-      names.length === 1 ? names[0] : candidates.length === 1 ? candidates[0] : undefined;
+      named ?? (candidates.length === 1 ? candidates[0] : undefined);
     const result: ReusePlanFile = {
       candidatePath: file.path, size: file.size, role: file.role ?? "content", offset,
-      source, alternatives: candidates.map((entry) => entry.id),
+      source, alternatives: candidates.slice(0, 32).map((entry) => entry.id),
       proof: source ? "likely" : "missing", verifiedBytes: 0,
     };
     offset += file.size;

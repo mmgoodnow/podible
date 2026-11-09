@@ -40,7 +40,9 @@ export const movieSettingsSchema = z
       .number()
       .int()
       .positive()
-      .default(40 * 1024 ** 3),
+      .safe()
+      .nullable()
+      .default(null),
     qualityPolicy: movieQualityPolicySchema.default(defaultMovieQualityPolicy),
   })
   .strict();

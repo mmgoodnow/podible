@@ -49,6 +49,8 @@ export type OptimisticRegistration = {
   operationId: string; planId: string; ref: TorrentRef; location: DownloadLocation; plan: ReusePlan;
   torrentId: number; status: "monitoring" | "removing" | "removed"; recordedAt: string;
 };
+export const optimisticRegistrationFits = (input: { planId: string; ref: TorrentRef; location: DownloadLocation; plan: ReusePlan }) =>
+  Buffer.byteLength(JSON.stringify(input)) <= 32 * 1024 * 1024;
 export const crossSeedStateKey = (id: string) => prefix + z.string().uuid().parse(id);
 export const crossSeedRegistrationKey = (ref: TorrentRef) => "cross-seed:registration:" + createHash("sha256").update(JSON.stringify([ref.clientId, ref.nativeId])).digest("hex");
 export const crossSeedCommandHash = (command: CrossSeedCommand) => createHash("sha256").update(JSON.stringify(crossSeedCommandSchema.parse(command))).digest("hex");
@@ -88,10 +90,10 @@ export class CrossSeedRepo {
   recordOptimistic(operationId: string, input: { planId: string; ref: TorrentRef; location: DownloadLocation; plan: ReusePlan }): void {
     z.string().uuid().parse(operationId); planIdSchema.parse(input.planId); hashSchema.parse(input.ref.nativeId);
     if (input.planId !== input.plan.id || input.plan.candidate.identity.v1 !== input.ref.nativeId ||
-      input.plan.files.length !== input.plan.candidate.files.length || input.plan.files.length > 2000 || !input.plan.files.length ||
+      input.plan.files.length !== input.plan.candidate.files.length || !input.plan.files.length ||
       input.plan.files.some((file, index) => !file.source || file.source.size !== file.size ||
         file.candidatePath !== input.plan.candidate.files[index]!.path || file.size !== input.plan.candidate.files[index]!.size) ||
-      JSON.stringify(input).length > 32 * 1024 * 1024) throw new Error("Optimistic registration needs a bounded fully mapped plan");
+      !optimisticRegistrationFits(input)) throw new Error("Optimistic registration needs a bounded fully mapped plan");
     immediateTransaction(this.db, this.beforeWrite, () => {
       const receipt = this.receipt(operationId);
       const record = this.db.query("SELECT * FROM media_torrents WHERE client_id=? AND native_id=?")
@@ -218,39 +220,69 @@ export class CrossSeedRepo {
     return `${row.newest}:${row.files}`;
   }
   files(scope: CrossSeedScope, sizes: number[]) {
+    return [...this.filePages(scope, sizes)].flat();
+  }
+  *filePages(scope: CrossSeedScope, sizes: number[]) {
     crossSeedScopeSchema.parse(scope);
-    z.array(z.number().int().nonnegative().safe()).max(2000).parse(sizes);
-    if (!sizes.length) return [];
-    if (isBookCrossSeedScope(scope)) return this.db.query(`SELECT 'book-file:' || f.id AS id,
+    const unique = [...new Set(z.array(z.number().int().nonnegative().safe()).parse(sizes))];
+    for (let start = 0; start < unique.length; start += 250) {
+      const batch = unique.slice(start, start + 250), params = batch.map(() => "?").join(",");
+      type File = { id: string; relative_path: string; size_bytes: number };
+      const book = isBookCrossSeedScope(scope);
+      const query = this.db.query<File, (number | string)[]>(book ? `SELECT 'book-file:' || f.id AS id,
       f.path AS relative_path,f.size AS size_bytes FROM asset_files f
       JOIN assets a ON a.id=f.asset_id JOIN manifestations m ON m.id=a.manifestation_id AND m.book_id=a.book_id
-      WHERE a.book_id=? AND m.kind=? AND f.size IN (${sizes.map(() => "?").join(",")})
-      ORDER BY f.id LIMIT 2001`).all(scope.targetId, scope.media, ...sizes) as { id: string; relative_path: string; size_bytes: number }[];
-    return this.db.query(`SELECT DISTINCT f.id,f.relative_path,f.size_bytes FROM managed_content_files f
+      WHERE a.book_id=? AND m.kind=? AND f.size IN (${params}) AND f.id>?
+      ORDER BY f.id LIMIT 250` : `SELECT DISTINCT f.id,f.relative_path,f.size_bytes FROM managed_content_files f
       JOIN ${scope.media}_version_files vf ON vf.file_id=f.id
       JOIN ${scope.media}_versions v ON v.id=vf.version_id
       JOIN ${scope.media}_acquisitions a ON a.id=v.acquisition_id
-      WHERE a.target_id=? AND f.size_bytes IN (${sizes.map(() => "?").join(",")})
+      WHERE a.target_id=? AND f.size_bytes IN (${params}) AND f.id>?
       AND NOT EXISTS(SELECT 1 FROM media_content_losses l WHERE l.file_id=f.id)
-      ORDER BY f.created_at,f.id LIMIT 2001`).all(scope.targetId, ...sizes) as { id: string; relative_path: string; size_bytes: number }[];
+      ORDER BY f.id LIMIT 250`);
+      let cursor: string | number = book ? 0 : "";
+      for (;;) {
+        const rows = book ? query.all(scope.targetId, scope.media, ...batch, cursor) : query.all(scope.targetId, ...batch, cursor);
+        if (!rows.length) break;
+        yield rows;
+        if (rows.length < 250) break;
+        cursor = book ? Number(rows.at(-1)!.id.slice("book-file:".length)) : rows.at(-1)!.id;
+      }
+    }
   }
   sourceDownloads(scope: CrossSeedScope): TorrentRecord[] {
+    return [...this.sourceDownloadPages(scope)].flat();
+  }
+  *sourceDownloadPages(scope: CrossSeedScope) {
     crossSeedScopeSchema.parse(scope);
-    if (isBookCrossSeedScope(scope)) return this.db.query(`SELECT DISTINCT t.* FROM media_torrents t
+    const book = isBookCrossSeedScope(scope);
+    const query = this.db.query<TorrentRecord, (number | string)[]>(book ? `SELECT DISTINCT t.* FROM media_torrents t
       JOIN book_torrent_bindings b ON b.torrent_id=t.id JOIN releases r ON r.id=b.release_id
-      WHERE b.book_id=? AND r.book_id=b.book_id AND r.media_type=? ORDER BY t.id LIMIT 129`)
-      .all(scope.targetId, scope.media) as TorrentRecord[];
-    return this.db.query(`SELECT DISTINCT t.* FROM media_torrents t
+      WHERE b.book_id=? AND r.book_id=b.book_id AND r.media_type=? AND t.id>? ORDER BY t.id LIMIT 128`
+      : `SELECT DISTINCT t.* FROM media_torrents t
       JOIN ${scope.media}_acquisition_downloads d ON d.torrent_id=t.id
       JOIN ${scope.media}_acquisitions a ON a.id=d.acquisition_id
-      WHERE a.target_id=? ORDER BY t.id LIMIT 129`).all(scope.targetId) as TorrentRecord[];
+      WHERE a.target_id=? AND t.id>? ORDER BY t.id LIMIT 128`);
+    let cursor = 0;
+    for (;;) {
+      const rows = book ? query.all(scope.targetId, scope.media, cursor) : query.all(scope.targetId, cursor);
+      if (!rows.length) return;
+      yield rows;
+      if (rows.length < 128) return;
+      cursor = rows.at(-1)!.id;
+    }
   }
-  sourceProofs(scope: CrossSeedScope, torrentId: number): { job_id: number | null; source_json: string | null }[] {
+  *sourceProofs(scope: CrossSeedScope, torrentId: number) {
     crossSeedScopeSchema.parse(scope);
-    if (isBookCrossSeedScope(scope)) return [];
-    return this.db.query(`SELECT DISTINCT a.job_id,json_extract(v.facts_json,'$.source') AS source_json
+    if (isBookCrossSeedScope(scope)) return;
+    const query = this.db.query<{ job_id: number | null; source_json: string | null }, [number, number, number]>(`SELECT DISTINCT a.job_id,json_extract(v.facts_json,'$.source') AS source_json
       FROM ${scope.media}_acquisition_downloads d JOIN ${scope.media}_acquisitions a ON a.id=d.acquisition_id
       LEFT JOIN ${scope.media}_versions v ON v.acquisition_id=a.id
-      WHERE a.target_id=? AND d.torrent_id=? LIMIT 33`).all(scope.targetId, torrentId) as { job_id: number | null; source_json: string | null }[];
+      WHERE a.target_id=? AND d.torrent_id=? ORDER BY a.job_id,source_json LIMIT 32 OFFSET ?`);
+    for (let offset = 0; ; offset += 32) {
+      let count = 0;
+      for (const row of query.iterate(scope.targetId, torrentId, offset)) { count++; yield row; }
+      if (count < 32) return;
+    }
   }
 }

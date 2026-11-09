@@ -1185,6 +1185,13 @@ export function runMigrations(db: Database): void {
     backfillStewardshipStatusIndex(db);
   });
   apply(56, () => db.exec(TRANSFER_METRICS_SCHEMA_SQL));
+  apply(57, () => {
+    for (const media of ["movies", "tv"]) {
+      const key = `$.${media}.maximumReleaseBytes`;
+      db.query("UPDATE settings SET value_json=json_set(value_json, ?, NULL) WHERE json_extract(value_json, ?)=?")
+        .run(key, key, 40 * 1024 ** 3);
+    }
+  });
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */
