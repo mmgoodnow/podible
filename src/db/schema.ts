@@ -451,6 +451,19 @@ export interface DB {
     "torrent_id": number;
   };
 
+  "tv_acquisition_pack_evidence": {
+    "torrent_id": Generated<number>;
+    "source_json": string;
+  };
+
+  "tv_acquisition_rejections": {
+    "acquisition_id": number;
+    "attempt_key": string;
+    "torrent_id": number;
+    "offer_key": string;
+    "episode_ids_json": string;
+  };
+
   "tv_acquisitions": {
     "id": Generated<number>;
     "target_id": number;

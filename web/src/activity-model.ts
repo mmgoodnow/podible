@@ -13,7 +13,8 @@ export function activityPhase(work: ActivityWork, downloads: ActivityDownload[])
   const publication = work.stage === "publishing" || work.stage === "publication-queued" || work.stage === "available";
   const labels: Record<string, string> = { searching: "Finding a release", selecting: "Choosing a release", replacing: "Trying another release",
     verifying: "Checking episodes", publishing: "Publication pending", "publication-queued": "Waiting to publish", available: "Confirming availability", retained: "Finishing up",
-    downloading: "Downloading", "pack-pending": "Waiting for pack to finish", blocked: "Waiting for a suitable release" };
+    downloading: "Downloading", "pack-pending": work.waitingPack ? "Waiting on a matching download" : "Checking existing downloads",
+    blocked: "Waiting for a suitable release" };
   const label = publication ? labels[work.stage!]! : transferring ? "Downloading" : checking ? "Checking download"
     : live.some(d => d.state === "download-queued") ? "Download queued" : work.job.recovery === "automatic-retry" ? "Retry scheduled"
     : work.stage === "downloading" ? "Waiting for download status" : labels[work.stage ?? ""] ?? (work.job.recovery === "running" ? "Working" : "Queued");

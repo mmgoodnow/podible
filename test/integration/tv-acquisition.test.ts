@@ -101,6 +101,10 @@ function fixtureServices(root: string) {
     },
     timing: { pollMs: 1, stallMs: 1500, plexAttempts: 2, plexRetryMs: 1 },
     decider: () => ({
+      matchPack: async ({ title, episodes }) => {
+        const pack = [...packs.values()].find(pack => pack.offer.title === title);
+        return episodes.filter(episode => pack?.keys.includes(episode.key)).map(episode => episode.id);
+      },
       select: async ({ episodes, offers, excludedOfferKeys = [], maximumReleaseBytes = Infinity }) => {
         selections.push({ ids: episodes.map((ep) => ep.id), keys: episodes.map((ep) => ep.key),
           absolute: episodes.map((ep) => ep.numbering.find((n) => n.scheme === "tvdb:aired")!.absolute) });
@@ -349,10 +353,12 @@ test("parallel batches wait for a shared large pack and reuse all remaining memb
   let runtime:Runtime|undefined;
   try{
     s.fixture.addPack("whole-large-season",entry.episodes.map(ep=>ep.key));
+    let hasWaited = false;
     const inspect=s.fixture.services.client.inspect;
     s.fixture.services.client.inspect=async ref=>{
       const value=await inspect(ref);
-      return s.fixture.selections.length<2 ? {...value,complete:false,state:"downloading",bytesDone:0}:value;
+      hasWaited ||= s.repo.tv.acquisitions(s.request.targetId).some(a => JSON.parse(a.decision_json ?? "{}").waitingPack?.episodeCount > 0);
+      return !hasWaited ? {...value,complete:false,state:"downloading",bytesDone:0,downloadBytesPerSecond:1}:value;
     };
     let searches=0;const search=s.fixture.services.search;
     s.fixture.services.search=async(...args)=>{searches++;return search(...args);};
@@ -363,7 +369,7 @@ test("parallel batches wait for a shared large pack and reuse all remaining memb
     expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(130);
     expect(s.fixture.stats.snatches).toBe(1);expect(searches).toBe(1);
     expect(await assertOwnedViews(s)).toHaveLength(130);
-    expect(s.repo.tv.events(s.request.targetId).some(e=>e.message.includes("owned pack to finish"))).toBe(true);
+    expect(hasWaited).toBe(true);
   }finally{await runtime?.stop();await s.close();}
 },20000);
 
@@ -391,7 +397,12 @@ test("simultaneous TV batches with stale directory intents register one canonica
       await Bun.sleep(20); // Let the sibling save its different early directory intent.
       return add(input);
     };
-    s.fixture.services.client.inspect = async () => { throw new Error("Fixture stop after registration"); };
+    const inspect = s.fixture.services.client.inspect;
+    let observations = 0;
+    s.fixture.services.client.inspect = async ref => {
+      if (++observations === 2) return inspect(ref); // The follower checks the owned pack before polling.
+      throw new Error("Fixture stop after registration");
+    };
     const queued = queueTvSeasons(s.repo, s.request.requestId);
     const results = await Promise.allSettled(queued.map(q => acquireTv(s.context, s.repo.getJob(q.acquisition.job_id!)!, s.fixture.services)));
     expect(results.every(r => r.status === "rejected" && r.reason.message === "Fixture stop after registration")).toBe(true);
@@ -406,6 +417,93 @@ test("simultaneous TV batches with stale directory intents register one canonica
     expect(plan.files).toHaveLength(2);
     for (const file of plan.files) expect((await fs.lstat(path.join(source, file.path))).isSymbolicLink()).toBe(true);
     expect(await fs.readdir(path.join(s.root, "downloads"))).toEqual([locations[0]!.relativePath]);
+  } finally { await s.close(); }
+});
+
+test.each(["unrelated", "stalled", "stops", "matching"] as const)("sibling pack wait and scoped fallback: %s", async (kind) => {
+  const entry = seasonCatalog(2);
+  entry.episodes.forEach((ep, i) => { ep.numbering[0]!.season = i + 1; });
+  const s = await setup(entry.episodes.map(ep => ep.key), entry);
+  try {
+    const [first, second] = queueTvSeasons(s.repo, s.request.requestId);
+    const siblingOffer = s.fixture.addPack("owned-sibling", [entry.episodes[kind === "unrelated" ? 0 : 1]!.key]);
+    const bytes = await s.fixture.services.fetchMetainfo(siblingOffer);
+    const location = { rootId: "tv", relativePath: "owned-sibling" };
+    const ref = await s.fixture.services.client.ensureAdded({ metainfo: bytes, location });
+    const id = s.repo.tv.bindDownload(first!.acquisition.id, ref, location, siblingOffer.key);
+    s.repo.tv.recordPackEvidence(id, { ref, location, title: siblingOffer.title, offerKey: siblingOffer.key,
+      provider: siblingOffer.provider, manifest: inspectMetainfo(bytes) });
+    const sleeps: string[] = [];
+    let pending: { title: string; episodeCount: number } | undefined;
+    const inspect = s.fixture.services.client.inspect;
+    s.fixture.services.client.inspect = async current => {
+      const seen = await inspect(current);
+      if (current.nativeId !== ref.nativeId || (kind === "matching" && sleeps.length)) return seen;
+      return { ...seen, complete: false, bytesDone: 0, state: "downloading",
+        downloadBytesPerSecond: kind === "stalled" || (kind === "stops" && sleeps.length) ? 0 : 100 };
+    };
+    const fallback = s.fixture.addPack("scoped-alternative", [entry.episodes[1]!.key]);
+    const queries: string[][] = [];
+    s.fixture.services.search = async (_entry, _query, episodes) => {
+      queries.push(episodes?.map(episode => episode.key) ?? []);
+      return { offers: episodes?.length ? [fallback] : [], warnings: [] };
+    };
+    await acquireTv({ ...s.context, execution: { key: "fixture", assertActive() {}, run: async (_name, fn) => fn(),
+      sleep: async name => {
+        sleeps.push(name);
+        pending = JSON.parse(s.repo.tv.acquisition(second!.acquisition.id)!.decision_json!).waitingPack;
+      } } }, s.repo.getJob(second!.acquisition.job_id!)!, s.fixture.services);
+    expect(queries).toEqual(kind === "matching" ? [[]] : [[], [entry.episodes[1]!.key]]);
+    expect(s.fixture.stats.snatches).toBe(kind === "matching" ? 1 : 2);
+    const waited = kind === "stops" || kind === "matching";
+    expect(sleeps.filter(name => name.includes("pack"))).toHaveLength(waited ? 1 : 0);
+    expect(pending).toEqual(waited ? { title: siblingOffer.title, episodeCount: 1 } : undefined);
+    expect(s.repo.tv.activeEpisodes(s.request.targetId).map(episode => episode.episode_id)).toEqual([s.request.episodeIds[1]!]);
+  } finally { await s.close(); }
+});
+
+test("a rejected TV torrent remains eligible for a different episode range and is not downloaded twice", async () => {
+  const entry = seasonCatalog(2);
+  entry.episodes.forEach((ep, i) => { ep.numbering[0]!.season = i + 1; });
+  const s = await setup(entry.episodes.map(ep => ep.key), entry);
+  try {
+    const offer = s.fixture.addPack("different-season", [entry.episodes[1]!.key]);
+    const decider = s.fixture.services.decider;
+    s.fixture.services.decider = current => ({ ...decider(current), select: async input => ({
+      offer: input.excludedOfferKeys?.includes(offer.key) ? null : offer,
+      reason: "Fixture simulates selecting a misleading release",
+    }) });
+    const [first, second] = queueTvSeasons(s.repo, s.request.requestId);
+    await acquireTv(s.context, s.repo.getJob(first!.acquisition.job_id!)!, s.fixture.services);
+    expect(s.repo.tv.activeEpisodes(s.request.targetId)).toEqual([]);
+    expect(s.repo.tv.episodeRejections(s.request.targetId, [s.request.episodeIds[0]!])).toEqual([{ offer_key: offer.key, native_id: offer.infoHash! }]);
+    expect(s.repo.tv.episodeRejections(s.request.targetId, [s.request.episodeIds[1]!])).toEqual([]);
+    s.reopen();
+    await acquireTv(s.context, s.repo.getJob(second!.acquisition.job_id!)!, s.fixture.services);
+    expect(s.fixture.stats.snatches).toBe(1);
+    expect(s.repo.tv.activeEpisodes(s.request.targetId).map(episode => episode.episode_id)).toEqual([s.request.episodeIds[1]!]);
+  } finally { await s.close(); }
+});
+
+test("a parked legacy run can take a scoped search without discarding its completed steps", async () => {
+  const s = await setup(["tvdb:201"]);
+  try {
+    const offer = s.fixture.addPack("previously-excluded", ["tvdb:201"]);
+    const acquisition = s.enqueue();
+    const steps: string[] = [];
+    await acquireTv({ ...s.context, execution: { key: "legacy", assertActive() {}, sleep: async () => {},
+      run: async (name, fn) => {
+        steps.push(name);
+        if (name.endsWith(":sibling-sources:0")) return { sources: [], pending: true } as Awaited<ReturnType<typeof fn>>;
+        const result = await fn();
+        if (name === "tv:target-snapshot") return { ...(result as object), scopedRecovery: undefined,
+          priorKeys: [offer.key], priorHashes: [offer.infoHash!] } as typeof result;
+        return result;
+      } } }, s.repo.getJob(acquisition.job_id!)!, s.fixture.services);
+    expect(steps).toContain("tv:attempt:0:sibling-sources:1");
+    expect(steps).toContain("tv:attempt:3:snatch");
+    expect(s.fixture.stats.snatches).toBe(1);
+    expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(1);
   } finally { await s.close(); }
 });
 

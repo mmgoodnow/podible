@@ -1192,6 +1192,20 @@ export function runMigrations(db: Database): void {
         .run(key, key, 40 * 1024 ** 3);
     }
   });
+  apply(58, () => db.exec(`
+    CREATE TABLE tv_acquisition_rejections (
+      acquisition_id INTEGER NOT NULL REFERENCES tv_acquisitions(id),
+      attempt_key TEXT NOT NULL,
+      torrent_id INTEGER NOT NULL REFERENCES media_torrents(id),
+      offer_key TEXT NOT NULL,
+      episode_ids_json TEXT NOT NULL,
+      PRIMARY KEY(acquisition_id,attempt_key)
+    );
+    CREATE TABLE tv_acquisition_pack_evidence (
+      torrent_id INTEGER PRIMARY KEY REFERENCES media_torrents(id),
+      source_json TEXT NOT NULL
+    );
+  `));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

@@ -41,6 +41,7 @@ const workSchema = z.object({
   key: z.string(), title: z.string(), media: z.enum(["book", "movie", "tv", "system"]),
   targetId: id.nullable(), href: z.string().nullable(), stage: z.string().nullable(), job: adminWebJobSchema,
   scope: z.string().nullable().optional(),
+  waitingPack: z.object({ title: z.string(), episodeCount: id }).optional(),
 });
 const incidentSchema = z.object({
   key: z.string(), title: z.string(), detail: z.string(), code: z.string(), jobId: id.nullable(), href: z.string().nullable(),
@@ -239,7 +240,8 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
         href: row.tmdb_id ? `/movies/${row.tmdb_id}` : null, stage: row.stage, suppressIncident: Boolean(suppressed),
       });
     }
-    const decisionSchema = z.object({ batchEpisodeIds: z.array(id).optional(), waitingForSources: z.boolean().optional() });
+    const decisionSchema = z.object({ batchEpisodeIds: z.array(id).optional(), waitingForSources: z.boolean().optional(),
+      waitingPack: workSchema.shape.waitingPack });
     for (const row of reads.tvAcquisitions(relevantIds)) {
       const pending = JSON.parse(row.missing_dates) as (string | null)[];
       const nothingAiredMissing = pending.every(airDate => !airDate || Date.parse(airDate) > now);
@@ -257,6 +259,8 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
         href: row.title === null ? null : row.request_user_id === actorUserId ? `/tv/requests/${row.request_id}`
           : row.available ? `/tv/library/${row.entry_id}` : null,
         stage: parsed.success && parsed.data.waitingForSources ? "pack-pending" : stage,
+        ...(parsed.success && parsed.data.waitingForSources && parsed.data.waitingPack
+          ? { waitingPack: { ...parsed.data.waitingPack, title: label(parsed.data.waitingPack.title) } } : {}),
         suppressIncident: !row.latest || !row.active_request || nothingAiredMissing || Boolean(row.evicted),
       });
     }
@@ -268,7 +272,7 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
         torrents.set(job_id, bindings);
       }
     }
-    waiting = [...repo.activityJobStatuses([...waitIds]).values()].filter(status => status === "succeeded").length;
+    waiting = [...repo.getJobStatuses([...waitIds]).values()].filter(status => status === "succeeded").length;
   } catch { warnings.push("Some movie/TV acquisition associations could not be read; those operational counts may be incomplete."); }
 
   const sources: AdminTorrentSource[] = [];

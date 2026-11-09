@@ -86,6 +86,12 @@ credential, TV indexer list, public torrent endpoint, or model selector.
   another indexer search: exact torrent/source provenance and fresh file evidence
   are required, and only still-missing requested episodes are adopted. Reuse does
   not add, resume or redownload the torrent. Fully accounted sources are skipped.
+  An unfinished sibling pack only delays a batch when its exact owned metainfo
+  indicates coverage of the whole batch and the client is making progress.
+  If it stops, a scoped search can continue without stopping the sibling torrent.
+  Rejections are recorded for the attempted episode IDs, not the whole show;
+  stalls do not permanently rule out a release. Filename coverage is advisory
+  and never bypasses file and Plex verification.
   Future requested episodes remain wanted. Routine discovery
   is event-driven via category RSS, not periodic searches per title. Feed routing
   uses the normal selector/importer and durable per-target/source receipts.

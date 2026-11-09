@@ -68,6 +68,19 @@ test("TV import validation rejects invented files, ordinal IDs, and duplicate ep
   expect(validateTvImportPlan({ files: [], reason: "No complete requested episode." }, files, [episode]).files).toEqual([]);
 });
 
+test("pack coverage only accepts requested episode IDs backed by known playable file indexes", async () => {
+  const fake = provider([
+    { files: [{ fileIndex: 1, episodeIds: [episode.id] }] },
+    { files: [{ fileIndex: 0, episodeIds: [999] }] },
+    { files: [{ fileIndex: 0, episodeIds: [episode.id] }] },
+  ]);
+  const result = await createTvDecider(defaultSettings(), fake.model).matchPack!({ entry, episodes: [episode], title: offer.title,
+    files: [{ path: "A Sequel - 01.mkv", size: 1234 }, { path: "description.nfo", size: 10 }] });
+  expect(result).toEqual([episode.id]);
+  expect(fake.calls).toHaveLength(3);
+  expect(fake.calls[0]!.tools.map(tool => tool.name)).toContain("getRequestedEpisodes");
+});
+
 test("production TV feed matcher uses the shared agent and receives no private offer URLs", async () => {
   const fake = provider([{ matches: [{ targetId: 3, releaseIndexes: [0], reason: "Explicit provider season maps to the requested sequel." }] }]);
   const matches = await createTvFeedMatcher(defaultSettings(), fake.model)({

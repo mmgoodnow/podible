@@ -235,6 +235,45 @@ export class TvRepo {
       WHERE d.acquisition_id=? ORDER BY t.id`).all(acquisitionId) as TorrentRecord[];
   }
 
+  recordPackEvidence(torrentId: number, source: unknown): void {
+    this.beforeWrite();
+    this.db.query("INSERT OR IGNORE INTO tv_acquisition_pack_evidence(torrent_id,source_json) VALUES(?,?)")
+      .run(torrentId, json(source));
+  }
+
+  hasOtherUnfinishedDownload(torrentId: number, acquisitionId: number): boolean {
+    return Boolean(this.db.query(`SELECT 1 FROM tv_acquisition_downloads d JOIN tv_acquisitions a ON a.id=d.acquisition_id
+      WHERE d.torrent_id=? AND a.id<>? AND a.finished_at IS NULL LIMIT 1`).get(torrentId, acquisitionId));
+  }
+
+  siblingPackEvidence(targetId: number, acquisitionId: number) {
+    return this.db.query<{ torrent_id: number; source_json: string; job_ids_json: string }, [number, number]>(`
+      SELECT e.torrent_id,e.source_json,json_group_array(DISTINCT a.job_id) AS job_ids_json
+      FROM tv_acquisitions a JOIN tv_acquisition_downloads d ON d.acquisition_id=a.id
+      JOIN tv_acquisition_pack_evidence e ON e.torrent_id=d.torrent_id
+      JOIN media_torrents t ON t.id=d.torrent_id AND t.ownership_tag='Podible TV'
+      WHERE a.target_id=? AND a.id<>? AND a.finished_at IS NULL AND a.job_id IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM job_commands c JOIN jobs j ON j.id=c.job_id AND j.execution_generation=c.generation
+          WHERE c.job_id=a.job_id AND c.kind='cancel')
+      GROUP BY e.torrent_id ORDER BY MAX(a.id) DESC`).all(targetId, acquisitionId);
+  }
+
+  recordEpisodeRejection(acquisitionId: number, attemptKey: string, torrentId: number, offerKey: string, episodeIds: number[]): void {
+    this.beforeWrite();
+    this.db.query(`INSERT OR IGNORE INTO tv_acquisition_rejections
+      (acquisition_id,attempt_key,torrent_id,offer_key,episode_ids_json) VALUES(?,?,?,?,?)`)
+      .run(acquisitionId, attemptKey, torrentId, offerKey, json(episodeIds));
+  }
+
+  episodeRejections(targetId: number, episodeIds: number[]) {
+    if (!episodeIds.length) return [];
+    return this.db.query<{ offer_key: string; native_id: string }, [number, string]>(`SELECT DISTINCT r.offer_key,t.native_id
+      FROM tv_acquisitions a JOIN tv_acquisition_rejections r ON r.acquisition_id=a.id
+      JOIN media_torrents t ON t.id=r.torrent_id WHERE a.target_id=?
+      AND NOT EXISTS (SELECT 1 FROM json_each(?) wanted
+        WHERE wanted.value NOT IN (SELECT value FROM json_each(r.episode_ids_json)))`).all(targetId, json(episodeIds));
+  }
+
   request(userId: number, catalog: TvCatalogEntry, policy: TvPolicy, episodeKeys: string[]): TvRequestResult {
     return this.transaction(() => {
       const entry = this.upsertEntry(catalog);

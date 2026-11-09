@@ -24,8 +24,8 @@ import { refreshTvFeedOffer } from "./feed";
 import { completeTvSource, recordedLegacyTvSource, reusableTvSources, tvSourceFiles, tvSourceSchema, type TvSource } from "./source-reuse";
 import { recoverMissingTorrentSource } from "../media/recovery-source";
 import { withTorrentRegistration } from "../media/torrent-use";
-import type { DownloadLocation, TorrentRef } from "../media/torrent-client";
-import { prepareCanonicalDownload, resolveDownloadFile, sealCanonicalDownload } from "../media/canonical-download";
+import type { DownloadLocation, TorrentRef, TorrentSnapshot } from "../media/torrent-client";
+import { prepareCanonicalDownload, readCanonicalDownload, resolveDownloadFile, sealCanonicalDownload } from "../media/canonical-download";
 
 export async function tvUpstreamStep<T>(ctx: WorkerContext, name: string, action: () => Promise<T>): Promise<T> {
   for (let attempt = 0; attempt < (ctx.execution ? Infinity : 3); attempt++) {
@@ -112,12 +112,12 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
   const emit = (key: string, stage: Parameters<typeof repo.event>[3], message: string) => {
     active(); repo.event(target.id, acquisition.id, `tv-acquisition:${acquisition.id}:${key}`, stage, message);
   };
-  const sharedSearch = async (wave: string) => {
-    const key=intake.searchGroup ? `tv-search:${intake.searchGroup}:${wave}` : null;
+  const sharedSearch = async (wave: string, scoped = false) => {
+    const key=intake.searchGroup && !scoped ? `tv-search:${intake.searchGroup}:${wave}` : null;
     const fingerprint=createHash("sha256").update(JSON.stringify([ctx.getSettings(),entry.key,entry.title])).digest("hex");
     const saved=key ? ctx.repo.getJsonState<{fingerprint:string;capturedAt:number;value:Awaited<ReturnType<TvServices["search"]>>}>(key) : null;
     if(saved?.fingerprint===fingerprint && Date.now()-saved.capturedAt>=0 && Date.now()-saved.capturedAt<30*60_000) return saved.value;
-    const value=await services.search(entry, undefined, intake.searchGroup ? undefined : episodes);
+    const value=await services.search(entry, undefined, key ? undefined : episodes);
     active();
     if(key) ctx.repo.setJsonState(key,{fingerprint,capturedAt:Date.now(),value});
     return value;
@@ -128,10 +128,11 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       .filter((episode) => (!intake.batchEpisodeIds || intake.batchEpisodeIds.includes(episode.id)) && episode.airDate && Date.parse(episode.airDate) <= Date.now())).map((episode) => episode.id);
     const reuse = await reusableTvSources(ctx.repo, target.id, acquisition.id, episodeIds);
     const retry = ctx.repo.contentLoss.retryDownloads({ namespace: "tv-target", id: String(target.id) });
-    return { episodeIds, priorKeys: repo.downloads(target.id).map((download) => download.offer_key).filter(key => !retry.some(d => d.offer_key === key)), policy: JSON.parse(target.policy_json),
-      priorHashes: repo.downloads(target.id).map((download) => download.native_id).filter(hash => !retry.some(d => d.native_id === hash)), sourceReuse: true,
+    const rejected = repo.episodeRejections(target.id, episodeIds).filter(row => !retry.some(d => d.native_id === row.native_id));
+    return { episodeIds, priorKeys: rejected.map(row => row.offer_key), policy: JSON.parse(target.policy_json),
+      priorHashes: rejected.map(row => row.native_id), sourceReuse: true, scopedRecovery: true,
       lossRecoveryHashes: retry.map(d => d.native_id),
-      reuseSources: reuse.sources, consumedSources: reuse.consumed };
+      reuseSources: reuse.sources.filter(item => !rejected.some(row => row.native_id === item.source.ref.nativeId)), consumedSources: reuse.consumed };
   });
   const episodes = snapshot.episodeIds.map((id) => repo.episode(id, entry.id)!);
   const policy = movieQualityPolicySchema.parse(snapshot.policy);
@@ -144,6 +145,56 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
   const excluded = new Set(snapshot.priorKeys);
   let capacityProblem: string | undefined;
   const excludedHashes = new Set(snapshot.priorHashes ?? []);
+  let scopedRecovery = snapshot.scopedRecovery === true;
+  const currentFailures: { key: string; hash?: string }[] = [];
+  const reject = (key: string, hash?: string) => {
+    currentFailures.push({ key, hash });
+    excluded.add(key);
+    if (hash) excludedHashes.add(hash);
+  };
+  const coverPack = async (name: string, pack: TvSource) => durableStep(ctx, name, async () => {
+    active();
+    try {
+      const match = services.decider(entry).matchPack;
+      if (!match) return [];
+      const ids = await match({ entry, episodes, title: pack.title, files: pack.manifest.files });
+      return [...new Set(ids)].filter(id => snapshot.episodeIds.includes(id));
+    } catch {
+      return [];
+    }
+  });
+  const observePack = async (pack: TvSource) => {
+    active();
+    try {
+      const seen = await services.client.inspect(pack.ref);
+      return seen.ref.clientId === pack.ref.clientId && seen.ref.nativeId === pack.ref.nativeId &&
+        seen.location.rootId === pack.location.rootId && seen.location.relativePath === pack.location.relativePath &&
+        seen.sizeBytes === pack.manifest.size && !seen.integrityError ? seen : null;
+    } catch { return null; }
+  };
+  const progressing = (seen: TorrentSnapshot | null, priorBytes?: number | null) =>
+    seen?.state === "downloading" && !seen.seedOnly && !seen.message && !seen.errorKind && seen.bytesDone !== null &&
+    ((seen.downloadBytesPerSecond ?? 0) > 0 || (priorBytes != null && seen.bytesDone > priorBytes));
+  const waitForPack = async (name: string, source: TvSource, observation: TorrentSnapshot, coverage: number[], reason: string) => {
+    let seen: TorrentSnapshot | null = observation;
+    for (let poll = 0; poll < 20_000; poll++) {
+      if (seen && completeTvSource(source, seen)) return true;
+      if (!seen || !ctx.execution) break;
+      active();
+      if (poll === 0) await durableStep(ctx, `${name}:wait-state`, () => {
+        active();
+        repo.decision(acquisition.id, { ...intake, selection: { title: source.title, reason },
+          waitingForSources: true, waitingPack: { title: source.title, episodeCount: coverage.length } });
+      });
+      await ctx.execution.sleep(`${name}:wait:${poll}`, services.timing?.pollMs ?? 5000);
+      const previousBytes: number | null = seen.bytesDone;
+      seen = await durableStep(ctx, `${name}:observe:${poll}`, async () => {
+        const observed = await observePack(source);
+        return observed && (completeTvSource(source, observed) || progressing(observed, previousBytes)) ? observed : null;
+      });
+    }
+    return false;
+  };
   if (snapshot.consumedSources) emit("sources-consumed", "retained", `Skipped ${snapshot.consumedSources} verified source(s): no unused playable members for missing requested episodes`);
   const publish = async (prefix: string, versionId: number) => {
     const facts = repo.version(versionId)?.facts as { selectedOfferKey?: string; source?: { offerKey?: string } } | undefined;
@@ -247,7 +298,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       emit(`${attempt}:searching`, "searching", `Searching releases for ${entry.title}`);
       let search = await tvUpstreamStep(ctx, `${prefix}:search`, () => attempt === 0 && intake.feedOffers?.length
         ? Promise.resolve({ offers: intake.feedOffers.map((offer) => refreshTvFeedOffer(ctx.repo, offer)), warnings: [] })
-        : sharedSearch(`${attempt}:initial`));
+        : sharedSearch(`${attempt}:initial`, attempt > 0));
       let selection;
       for (let wave = 0; ; wave++) {
         selection = await durableStep(ctx, `${prefix}:select:${wave}`, async () => {
@@ -268,37 +319,83 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
         const retryAt = Math.min(...deferred.map((provider) => Date.parse(provider.retryAt)).filter(Number.isFinite));
         if (!ctx.execution) throw new Error("Deferred TV indexers require durable execution");
         await ctx.execution.sleep(`${prefix}:indexer-wait:${wave}`, Math.max(1000, Math.min(3_600_000, retryAt - Date.now() || 60_000)));
-        search = await tvUpstreamStep(ctx, `${prefix}:search-wave:${wave}`, () => sharedSearch(`${attempt}:retry:${wave}`));
+        search = await tvUpstreamStep(ctx, `${prefix}:search-wave:${wave}`, () => sharedSearch(`${attempt}:retry:${wave}`, attempt > 0));
       }
       if (!selection.offer) {
-        let handoff=false;
-        for(let wave=0;wave<20_000;wave++) {
-          const retained=await durableStep(ctx,`${prefix}:sibling-sources:${wave}`,async()=>{
+        const followSource = (source: TvSource, skipFileIndexes: number[] = []) => {
+          triedSources.add(`${source.ref.clientId}:${source.ref.nativeId}`);
+          const next = reuseSequence++;
+          return { source, skipFileIndexes, attempt: next, prefix: `tv:reuse:${next}` };
+        };
+        // Preserve the handoff sequence for runs already checkpointed on the old loop.
+        let handoff = false;
+        for (let wave = 0; wave < 20_000; wave++) {
+          const retained = await durableStep(ctx, `${prefix}:sibling-sources:${wave}`, async () => {
             active();
-            const found=await reusableTvSources(ctx.repo,target.id,acquisition.id,snapshot.episodeIds);
-            const sources=found.sources.filter(item=>!triedSources.has(`${item.source.ref.clientId}:${item.source.ref.nativeId}`));
-            const pending=repo.acquisitions(target.id).some(other=>other.id!==acquisition.id && !other.finished_at && other.job_id!==null &&
-              ["queued","running"].includes(ctx.repo.getJob(other.job_id)?.status??"") &&
-              !(other.decision_json && JSON.parse(other.decision_json).waitingForSources===true) && repo.acquisitionDownloads(other.id).length>0);
-            const previous=repo.acquisition(acquisition.id)!.decision_json;
-            repo.decision(acquisition.id,{...(previous?JSON.parse(previous):{}),waitingForSources:sources.length===0&&pending});
-            return {sources,pending};
+            const found = await reusableTvSources(ctx.repo, target.id, acquisition.id, snapshot.episodeIds);
+            return { sources: found.sources.filter(item => !triedSources.has(`${item.source.ref.clientId}:${item.source.ref.nativeId}`)
+              && (!scopedRecovery || !excludedHashes.has(item.source.ref.nativeId))), pending: false };
           });
-          if(retained.sources.length) {
-            const follow=retained.sources.map(({source,skipFileIndexes})=>{
-              triedSources.add(`${source.ref.clientId}:${source.ref.nativeId}`);
-              const next=reuseSequence++;
-              return {source,skipFileIndexes,attempt:next,prefix:`tv:reuse:${next}`};
-            });
-            // Research was exhausted. Only inspect newly completed owned bytes, not another title search.
-            attempts.splice(position+1,attempts.length-position-1,...follow);
-            handoff=true;break;
+          if (retained.sources.length) {
+            attempts.splice(position + 1, 0, ...retained.sources.map(item => followSource(item.source, item.skipFileIndexes)));
+            handoff = true;
+            break;
           }
-          if(!retained.pending || !ctx.execution) break;
-          emit(`${attempt}:sibling-wait`,"verifying","Waiting for an owned pack to finish before checking its remaining episodes");
-          await ctx.execution.sleep(`${prefix}:sibling-wait:${wave}`,services.timing?.pollMs??5000);
+          if (!retained.pending || !ctx.execution) break;
+          await ctx.execution.sleep(`${prefix}:sibling-wait:${wave}`, services.timing?.pollMs ?? 5000);
         }
-        if(handoff) continue;
+        if (handoff) continue;
+        const pack = await durableStep(ctx, `${prefix}:pack-candidate-v2`, async () => {
+          active();
+          const candidates = repo.siblingPackEvidence(target.id, acquisition.id);
+          const statuses = ctx.repo.getJobStatuses(candidates.flatMap(row => JSON.parse(row.job_ids_json) as number[]));
+          const viable: { id: number; source: TvSource; observation: TorrentSnapshot }[] = [];
+          for (const row of candidates) {
+            if (!(JSON.parse(row.job_ids_json) as number[]).some(id => ["queued", "running"].includes(statuses.get(id) ?? ""))) continue;
+            const parsed = tvSourceSchema.safeParse(JSON.parse(row.source_json));
+            if (!parsed.success) continue;
+            const source = parsed.data;
+            if (source.ref.clientId !== services.client.id || triedSources.has(`${source.ref.clientId}:${source.ref.nativeId}`) ||
+                (scopedRecovery && excludedHashes.has(source.ref.nativeId))) continue;
+            const seen = await observePack(source);
+            if (seen && (completeTvSource(source, seen) || progressing(seen))) viable.push({ id: row.torrent_id, source, observation: seen });
+          }
+          return viable;
+        });
+        for (const { id, source, observation } of pack) {
+          const coverage = await coverPack(`${prefix}:pack-coverage:${id}`, source);
+          if (coverage.length !== episodes.length) continue;
+          if (!await waitForPack(`${prefix}:sibling-pack:${id}`, source, observation, coverage, selection.reason)) continue;
+          await durableStep(ctx, `${prefix}:pack-seal:${id}`, async () => {
+            const directory = path.join(settings.tv.managedRoot, "downloads", source.location.relativePath);
+            const reservation = await readCanonicalDownload(roots.contentRoot, directory);
+            if (reservation && !reservation.sealed)
+              await sealCanonicalDownload(roots.contentRoot, directory, services.client, source.ref, active);
+          });
+          attempts.splice(position + 1, 0, followSource(source));
+          handoff = true;
+          break;
+        }
+        await durableStep(ctx, `${prefix}:pack-wait-clear`, () => {
+          active(); repo.decision(acquisition.id, { ...intake, selection: { title: null, reason: selection.reason } });
+        });
+        if (handoff) continue;
+        // Give a parked pre-change run a fresh attempt without rewriting its cached selections.
+        if (!scopedRecovery) {
+          const rejected = await durableStep(ctx, `${prefix}:scoped-recovery-fence`, () => {
+            active(); return repo.episodeRejections(target.id, snapshot.episodeIds)
+              .filter(row => !snapshot.lossRecoveryHashes?.includes(row.native_id));
+          });
+          excluded.clear();
+          excludedHashes.clear();
+          for (const row of rejected) { excluded.add(row.offer_key); excludedHashes.add(row.native_id); }
+          for (const failure of currentFailures) { excluded.add(failure.key); if (failure.hash) excludedHashes.add(failure.hash); }
+          scopedRecovery = true;
+          attempts.splice(position + 1, attempts.length, { source: null, skipFileIndexes: [], attempt: 3, prefix: "tv:attempt:3" });
+          continue;
+        }
+        // A scoped search can find results buried under a shared show-wide lookup.
+        if (attempt === 0 && (intake.searchGroup || intake.feedOffers?.length)) continue;
         emit("blocked", "blocked", capacityProblem ?? selection.reason); repo.finishAcquisition(acquisition.id); return "done";
       }
       const offer = selection.offer;
@@ -308,10 +405,10 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       active();
       ctx.repo.transferMetrics.learnMetainfo(metainfo, offer.provider);
       if (metadata.size > (settings.tv.maximumReleaseBytes ?? Infinity)) {
-        excluded.add(offer.key); emit(`${attempt}:oversize`, "replacing", "Release exceeds the configured size limit; selecting another release"); continue;
+        reject(offer.key); emit(`${attempt}:oversize`, "replacing", "Release exceeds the configured size limit; selecting another release"); continue;
       }
       if (excludedHashes.has(metadata.infoHash)) {
-        excluded.add(offer.key); emit(`${attempt}:retained-source`, "replacing", "Previously attempted torrent identity remains excluded from new downloads"); continue;
+        reject(offer.key); emit(`${attempt}:retained-source`, "replacing", "Torrent was rejected for these episodes; trying another release"); continue;
       }
       const binding = await durableStep(ctx, `${prefix}:download-intent`, () => {
         const previous = repo.torrent(services.client.id, metadata.infoHash);
@@ -321,7 +418,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       });
       // In-flight pre-canonical jobs retain their original intent and regular-file layout.
       const intendedLocation = "location" in binding ? binding.location : binding as DownloadLocation;
-      const registered = await durableStep<TorrentRef | { ref: TorrentRef; location: DownloadLocation } | { noSpace: string }>(ctx, `${prefix}:snatch`, () =>
+      const registered = await durableStep<TorrentRef | { ref: TorrentRef; location: DownloadLocation; shared?: boolean } | { noSpace: string }>(ctx, `${prefix}:snatch`, () =>
         withTorrentRegistration(ctx.repo, { clientId: services.client.id, infoHash: metadata.infoHash }, async () => {
           active(); await assertMovieStorage(ctx.repo, roots.contentRoot);
           // A sibling may have registered this identity after our earlier intent was checkpointed.
@@ -342,19 +439,42 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
           const added = await services.client.ensureAdded({ metainfo, location });
           if (added.clientId !== services.client.id || added.nativeId.toLowerCase() !== metadata.infoHash)
             throw new Error("TV client returned another torrent identity");
-          active(); repo.bindDownload(acquisition.id, added, location, offer.key);
-          return { ref: added, location };
+          active(); repo.transaction(() => {
+            const id = repo.bindDownload(acquisition.id, added, location, offer.key);
+            const proof = tvSourceSchema.safeParse({ ref: added, location, offerKey: offer.key, title: offer.title, provider: offer.provider, manifest: metadata });
+            if (proof.success) repo.recordPackEvidence(id, proof.data);
+          });
+          return { ref: added, location, shared: Boolean(existing && repo.hasOtherUnfinishedDownload(existing.id, acquisition.id)) };
         }));
       // Completed pre-change checkpoints contain only the ref and retain their original location.
       if ("noSpace" in registered) {
         capacityProblem = registered.noSpace;
-        excluded.add(offer.key); emit(`${attempt}:disk-space`, "replacing", registered.noSpace); continue;
+        reject(offer.key); emit(`${attempt}:disk-space`, "replacing", registered.noSpace); continue;
       }
       const ref = "ref" in registered ? registered.ref : registered;
       const location = "ref" in registered ? registered.location : intendedLocation;
       const sourceRoot = path.resolve(settings.tv.managedRoot, "downloads", location.relativePath);
       if (location.rootId !== "tv" || !sourceRoot.startsWith(path.resolve(settings.tv.managedRoot, "downloads") + path.sep)) throw new Error("TV download escaped its owned root");
       const downloadId = repo.torrent(ref.clientId, ref.nativeId)!.id;
+      const shared = "ref" in registered && registered.shared;
+      if (shared && scopedRecovery) {
+        const pack = tvSourceSchema.parse({ ref, location, offerKey: offer.key, title: offer.title, provider: offer.provider, manifest: metadata });
+        const observed = await durableStep(ctx, `${prefix}:shared-observation`, () => observePack(pack));
+        let ready = observed !== null && completeTvSource(pack, observed);
+        if (!ready && observed && progressing(observed)) {
+          const coverage = await coverPack(`${prefix}:shared-coverage`, pack);
+          if (coverage.length === episodes.length)
+            ready = await waitForPack(`${prefix}:shared-pack`, pack, observed, coverage, selection.reason);
+        }
+        await durableStep(ctx, `${prefix}:shared-wait-clear`, () => {
+          active(); repo.decision(acquisition.id, { ...intake, selection: { title: offer.title, provider: offer.provider, reason: selection.reason }, attempt });
+        });
+        if (!ready) {
+          reject(offer.key, ref.nativeId);
+          emit(`${attempt}:shared-unproven`, "replacing", "An existing torrent is not progressing or its files do not match this batch; trying another release");
+          continue;
+        }
+      }
       if (snapshot.lossRecoveryHashes?.includes(metadata.infoHash))
         await recoverMissingTorrentSource({ ctx, client: services.client, ref, sourceRoot, metadata, prefix, active });
       emit(`${attempt}:downloading`, "downloading", `Downloading ${offer.title}`);
@@ -371,15 +491,16 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
           throw new Error("TV torrent observation changed identity or layout");
         ({ lastBytes, progressedAt, startedAt } = progress);
         if (downloadComplete(observation)) { complete = true; break; }
-        if (observation.state === "inactive") await durableStep(ctx, `${prefix}:resume:${poll}`, () => { active(); return services.client.resume(ref); });
+        if (observation.seedOnly) break;
+        if (!shared && observation.state === "inactive") await durableStep(ctx, `${prefix}:resume:${poll}`, () => { active(); return services.client.resume(ref); });
         const stallMs = services.timing?.stallMs ?? settings.recovery.stalledTorrentMinutes * 60_000;
         if ((stallMs > 0 && now - progressedAt >= stallMs) || now - startedAt > 86_400_000) break;
         if (ctx.execution) await ctx.execution.sleep(`${prefix}:wait:${poll}`, services.timing?.pollMs ?? 5000);
         else await Bun.sleep(services.timing?.pollMs ?? 5000);
       }
       if (!complete) {
-        await durableStep(ctx, `${prefix}:retain-stalled`, () => { active(); return services.client.quiesce(ref); });
-        excluded.add(offer.key); excludedHashes.add(ref.nativeId); emit(`${attempt}:stalled`, "replacing", "Retained a stalled TV download and searching another release"); continue;
+        if (!shared) await durableStep(ctx, `${prefix}:retain-stalled`, () => { active(); return services.client.quiesce(ref); });
+        reject(offer.key, ref.nativeId); emit(`${attempt}:stalled`, "replacing", "Retained a stalled TV download and searching another release"); continue;
       }
       await durableStep(ctx, `${prefix}:seal-download`, () => sealCanonicalDownload(roots.contentRoot, sourceRoot, services.client, ref, active));
       prepared = await tvSourceFiles(tvSourceSchema.parse({ ref, location, offerKey: offer.key, title: offer.title, provider: offer.provider, manifest: metadata }), services.client, settings.tv.managedRoot);
@@ -391,6 +512,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
     const { ref } = source;
     emit(`${attempt}:verifying`, "verifying", "Checking playable streams and exact episode coverage");
     const files: TvFileCandidate[] = [];
+    let incompleteProbe = false;
     for (const file of prepared.files) {
       if (skipFileIndexes.includes(file.index)) continue;
       const expectedFile = source.manifest.files[file.index]!;
@@ -402,6 +524,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       const probe = snapshot.sourceReuse ? await durableStep(ctx, `${prefix}:probe:${file.index}`, probeFile) : await probeFile();
       if (!snapshot.sourceReuse) await durableStep(ctx, `${prefix}:probe:${file.index}`, () => probe);
       if (probe) files.push({ index: file.index, name: expectedFile.path, sizeBytes: expectedFile.size, probe });
+      else incompleteProbe = true;
     }
     const inspectFiles = async () => {
       const result = validateTvImportPlan(await services.decider(entry).inspect({ entry, episodes, policy, offer: releaseEvidence, files }), files, episodes);
@@ -413,7 +536,13 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       const file = files.find((candidate) => candidate.index === mapping.fileIndex);
       return file && evaluateMovieQuality(policy, factsFromMovieProbe(file.probe, mapping.facts)).eligibility === "eligible";
     });
-    if (!eligible.length) { excluded.add(releaseEvidence.key); excludedHashes.add(ref.nativeId); emit(`${prefix}:invalid`, "replacing", plan.reason); continue; }
+    if (!eligible.length) {
+      active();
+      const torrent = repo.torrent(ref.clientId, ref.nativeId);
+      if (torrent && files.length && !incompleteProbe && !skipFileIndexes.length)
+        repo.recordEpisodeRejection(acquisition.id, prefix, torrent.id, releaseEvidence.key, snapshot.episodeIds);
+      reject(releaseEvidence.key, ref.nativeId); emit(`${prefix}:invalid`, "replacing", plan.reason); continue;
+    }
     await tvSourceFiles(source, services.client, settings.tv.managedRoot);
     const content: TvContentFile[] = [];
     for (const mapping of eligible) {

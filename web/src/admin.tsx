@@ -207,6 +207,7 @@ function ActivityWork({ work, downloads }: { work: Ops["activeAcquisitions"][num
   return <article className="activity-item" aria-label={work.title}>
     <div className="activity-item-heading"><h3><WorkTitle title={work.title} href={work.href} /></h3><span className="activity-badge">{phase.label}</span></div>
     {work.scope && <p>{work.scope}</p>}
+    {work.waitingPack && <p>{work.waitingPack.title} is expected to cover {work.waitingPack.episodeCount} missing {work.waitingPack.episodeCount === 1 ? "episode" : "episodes"}.</p>}
     {work.media === "book" && work.stage && <p>{work.stage}</p>}
     {measured ? <>
       {phase.transferLabel !== "Download progress" && <p>{phase.transferLabel}</p>}
