@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type CatalogMovie } from "./types";
+import { type CatalogMovie, type MoviePageExtras } from "./types";
 
 const entrySchema = z.object({
   id: z.number().int().positive(),
@@ -12,6 +12,8 @@ const entrySchema = z.object({
   imdb_id: z.string().nullable().optional(),
   runtime: z.number().nullable().optional(),
 });
+const imagePath = (value: string | null | undefined, size: "w185" | "w342") =>
+  value && /^\/[a-zA-Z0-9._-]+$/.test(value) ? `https://image.tmdb.org/t/p/${size}${value}` : null;
 function normalize(raw: z.infer<typeof entrySchema>): CatalogMovie {
   const year = Number(raw.release_date?.slice(0, 4));
   return {
@@ -21,13 +23,26 @@ function normalize(raw: z.infer<typeof entrySchema>): CatalogMovie {
     year: Number.isInteger(year) && year > 0 ? year : null,
     overview: raw.overview,
     originalLanguage: raw.original_language,
-    posterUrl:
-      raw.poster_path && /^\/[a-zA-Z0-9._-]+$/.test(raw.poster_path)
-        ? `https://image.tmdb.org/t/p/w342${raw.poster_path}`
-        : null,
+    posterUrl: imagePath(raw.poster_path, "w342"),
     imdbId: raw.imdb_id ?? null,
     runtimeMinutes: raw.runtime && raw.runtime > 0 ? raw.runtime : null,
   };
+}
+const label = z.string().trim().min(1).max(300);
+const person = z.object({ id: z.number().int().positive(), name: label });
+const actor = person.extend({ character: z.string().trim().max(300).nullish(), profile_path: z.string().nullish() });
+const relatedEntry = entrySchema.extend({ adult: z.boolean().optional() });
+const creditsSchema = z.object({ cast: z.array(z.unknown()).optional(), crew: z.array(z.unknown()).optional() });
+const relatedSchema = z.object({ results: z.array(z.unknown()) });
+const extrasWireSchema = z.object({
+  id: z.number().int().positive(),
+  runtime: z.unknown(), genres: z.unknown(), credits: z.unknown(), recommendations: z.unknown(), similar: z.unknown(),
+});
+function validRows<S extends z.ZodType>(schema: S, rows: unknown[]) {
+  return rows.flatMap(row => {
+    const parsed = schema.safeParse(row);
+    return parsed.success ? [parsed.data] : [];
+  });
 }
 export class CatalogUnavailableError extends Error {
   constructor(
@@ -40,6 +55,7 @@ export class CatalogUnavailableError extends Error {
 export interface MovieCatalog {
   search(query: string): Promise<CatalogMovie[]>;
   get(tmdbId: number): Promise<CatalogMovie>;
+  pageExtras?(tmdbId: number): Promise<MoviePageExtras>;
 }
 /** The catalog owns upstream URLs. RPC callers supply IDs, never fetch URLs. */
 export class TmdbCatalog implements MovieCatalog {
@@ -107,5 +123,33 @@ export class TmdbCatalog implements MovieCatalog {
     return normalize(
       entrySchema.parse(await this.json(`/movie/${tmdbId}?language=en-US`)),
     );
+  }
+  async pageExtras(tmdbId: number): Promise<MoviePageExtras> {
+    z.number().int().positive().parse(tmdbId);
+    const raw = extrasWireSchema.parse(await this.json(
+      `/movie/${tmdbId}?language=en-US&append_to_response=credits,recommendations,similar`,
+    ));
+    if (raw.id !== tmdbId) throw new CatalogUnavailableError("TMDB returned a different movie");
+    const credits = creditsSchema.safeParse(raw.credits).data;
+    const directors = validRows(person.extend({ job: z.literal("Director") }), credits?.crew ?? []);
+    const cast = validRows(actor, credits?.cast ?? []);
+    const seen = new Set([tmdbId]);
+    const related = [raw.recommendations, raw.similar].flatMap(section => {
+      const rows = relatedSchema.safeParse(section).data?.results ?? [];
+      return validRows(relatedEntry, rows).flatMap(entry => {
+        if (entry.adult || !entry.title.trim() || seen.has(entry.id)) return [];
+        seen.add(entry.id);
+        const { tmdbId, title, year, posterUrl } = normalize(entry);
+        return [{ tmdbId, title, year, posterUrl }];
+      });
+    }).slice(0, 12);
+    return {
+      runtimeMinutes: z.number().int().positive().safeParse(raw.runtime).data ?? null,
+      genres: [...new Set(validRows(z.object({ name: label }), Array.isArray(raw.genres) ? raw.genres : []).map(row => row.name))].slice(0, 8),
+      directors: [...new Set(directors.map(row => row.name))].slice(0, 8),
+      cast: cast.filter((row, i) => cast.findIndex(person => person.id === row.id) === i).slice(0, 12)
+        .map(({ id, name, character, profile_path }) => ({ id, name, character: character ?? "", profileUrl: imagePath(profile_path, "w185") })),
+      related,
+    };
   }
 }

@@ -4,7 +4,7 @@ import "./content-rail.css";
 
 type RailLink = { href: string; label: string };
 export function ContentRail({ title, children, more, variant, loading = false }: {
-  title: string; children: ReactNode; more?: RailLink | RailLink[]; variant?: "requests"; loading?: boolean;
+  title: string; children: ReactNode; more?: RailLink | RailLink[]; variant?: "requests" | "cast"; loading?: boolean;
 }) {
   const id = useId(), track = useRef<HTMLDivElement>(null);
   const [overflow, setOverflow] = useState(false);

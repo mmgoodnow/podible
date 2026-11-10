@@ -13,6 +13,13 @@
 .content-rail--requests .content-rail__track { box-sizing: border-box; min-height: calc(var(--rail-card-width) * 1.5 + 9.5rem); }
 .content-rail--requests .screen-card__meta { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .content-rail--requests .screen-card__detail { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.movie-extras { display: grid; gap: clamp(1.6rem, 4vw, 3rem); margin-top: clamp(2rem, 5vw, 4rem); min-width: 0; }
+.content-rail.content-rail--cast { --rail-card-width: clamp(98px, 11vw, 134px); }
+.cast-portrait__image { aspect-ratio: 1; overflow: hidden; border-radius: 12px; background: linear-gradient(145deg, var(--line), var(--paper, #f4efe5)); display: grid; place-items: center; }
+.cast-portrait__image img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center 25%; }
+.cast-portrait__image span { color: var(--muted); font-size: 1.65rem; }
+.cast-portrait h3 { margin: .65rem 0 .15rem; font-size: 1rem; line-height: 1.2; overflow-wrap: anywhere; }
+.cast-portrait p { margin: 0; color: var(--muted); font-size: .85rem; overflow-wrap: anywhere; }
 .content-rail__placeholder { aspect-ratio: 2 / 3; align-self: start; border-radius: 10px; background: var(--line); }
 .rail-book { color: inherit; text-decoration: none; display: block; }
 .rail-book__cover { aspect-ratio: 2 / 3; overflow: hidden; border-radius: 5px 10px 10px 5px; box-shadow: 0 4px 12px #17382c18; background: #e3e4d5; }

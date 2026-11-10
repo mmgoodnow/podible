@@ -97,10 +97,18 @@ export function createFixtureMovieServices(root: string) {
     catalog: {
       search: async () => [fixtureMovie],
       get: async (id) => {
+        if (id === 102) return { ...fixtureMovie, tmdbId: id, title: "A Related Film" };
         if (id !== fixtureMovie.tmdbId)
           throw new Error("Unknown fixture movie");
         return fixtureMovie;
       },
+      pageExtras: async id => ({
+        runtimeMinutes: id === fixtureMovie.tmdbId ? 97 : null,
+        genres: id === fixtureMovie.tmdbId ? ["Drama", "Mystery"] : [],
+        directors: id === fixtureMovie.tmdbId ? ["Fixture Director"] : [],
+        cast: id === fixtureMovie.tmdbId ? [{ id: 1, name: "Fixture Actor", character: "Detective", profileUrl: null }] : [],
+        related: id === fixtureMovie.tmdbId ? [{ tmdbId: 102, title: "A Related Film", year: 2024, posterUrl: null }] : [],
+      }),
     },
     search: async () => {
       stats.searches++;

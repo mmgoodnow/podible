@@ -2,7 +2,7 @@ import { z } from "zod";
 import { defineMethod, defineRouter } from "./framework";
 import { RpcError, type RpcContext } from "./shared";
 import { positiveIntSchema, emptyParamsSchema } from "./schemas";
-import { catalogMovieSchema } from "../movies/types";
+import { catalogMovieSchema, moviePageExtrasSchema } from "../movies/types";
 import { movieRequestViewSchema } from "../movies/contracts";
 import { movieCatalog, searchMovieReleases } from "../movies/runtime";
 import { movieRequestView, queueMovieAcquisition } from "../movies/service";
@@ -77,6 +77,17 @@ export const moviesRouter = defineRouter({
         .requestsForMovie(ctx.session!.user_id, input.tmdbId)
         .map((r) => movieRequestView(ctx.repo, r.id));
       return { movie, requests, availableInLibrary: ctx.repo.movies.availableByTmdb(input.tmdbId) };
+    },
+  }),
+  pageExtras: defineMethod({
+    auth: "user", readOnly: true,
+    summary: "Read optional movie credits, genres, runtime and related titles without blocking movie availability.",
+    paramsSchema: z.object({ tmdbId: positiveIntSchema }).strict(),
+    resultSchema: moviePageExtrasSchema.nullable(),
+    async handler(ctx, { tmdbId }) {
+      const settings = ctx.repo.readSettings();
+      const catalog = ctx.movieServices?.catalog ?? (settings?.movies.tmdbAccessToken.trim() ? movieCatalog(settings) : null);
+      return await catalog?.pageExtras?.(tmdbId) ?? null;
     },
   }),
   request: defineMethod({

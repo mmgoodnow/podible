@@ -4,6 +4,9 @@ import { useTRPC } from "./rpc";
 import { Link, navigate } from "./router";
 import type { MovieRequestView } from "../../src/movies/contracts";
 import { StageTracker } from "./stage-tracker";
+import { ContentRail } from "./content-rail";
+import { ScreenCard } from "./screen-card";
+import type { MoviePageExtras } from "../../src/movies/types";
 import tmdbLogo from "./assets/tmdb-logo.svg" with { type: "file" };
 
 function Failure({ message }: { message: string }) {
@@ -122,6 +125,9 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const details = useQuery(trpc.movies.get.queryOptions({ tmdbId }));
+  const extra = useQuery(trpc.movies.pageExtras.queryOptions({ tmdbId }, {
+    enabled: details.isSuccess, staleTime: 10 * 60_000, retry: false,
+  })).data;
   const request = useMutation(
     trpc.movies.request.mutationOptions({
       onSuccess: ({ request }) => {
@@ -171,11 +177,42 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
             </button>
           )}
           {request.isError && <Failure message={request.error.message} />}
+          <MovieFacts runtimeMinutes={extra?.runtimeMinutes ?? movie.runtimeMinutes ?? null}
+            genres={extra?.genres ?? []} directors={extra?.directors ?? []} />
         </div>
       </section>
       {tracked && <MovieRequestPanel key={tracked.id} initialRequest={tracked} />}
+      {extra && (extra.cast.length > 0 || extra.related.length > 0) && <div className="movie-extras">
+        {extra.cast.length > 0 && <ContentRail title="Cast" variant="cast">
+          {extra.cast.map(actor => <CastPortrait key={actor.id} actor={actor} />)}
+        </ContentRail>}
+        {extra.related.length > 0 && <ContentRail title="Related movies">
+          {extra.related.map(related => <ScreenCard key={related.tmdbId} title={related.title}
+            year={related.year} posterUrl={related.posterUrl} href={`/movies/${related.tmdbId}`} media="movie" />)}
+        </ContentRail>}
+      </div>}
     </>
   );
+}
+function MovieFacts({ runtimeMinutes, genres, directors }: Pick<MoviePageExtras, "runtimeMinutes" | "genres" | "directors">) {
+  const facts = [...(runtimeMinutes ? [`${runtimeMinutes} min`] : []), ...genres];
+  if (!facts.length && !directors.length) return null;
+  return <div className="movie-facts">
+    {facts.length > 0 && <p>{facts.join(" · ")}</p>}
+    {directors.length > 0 && <p>Directed by <strong>{directors.join(", ")}</strong></p>}
+  </div>;
+}
+
+function CastPortrait({ actor }: { actor: MoviePageExtras["cast"][number] }) {
+  const [broken, setBroken] = useState<string | null>(null);
+  const initials = actor.name.split(/\s+/u).slice(0, 2).map(word => Array.from(word)[0]).join("");
+  return <article className="cast-portrait">
+    <div className="cast-portrait__image">{actor.profileUrl && actor.profileUrl !== broken ?
+      <img src={actor.profileUrl} alt="" loading="lazy" decoding="async" width="185" height="278"
+        onError={() => setBroken(actor.profileUrl)} /> : <span aria-hidden="true">{initials}</span>}</div>
+    <h3>{actor.name}</h3>
+    {actor.character && <p>{actor.character}</p>}
+  </article>;
 }
 export function MovieRequests() {
   const trpc = useTRPC();

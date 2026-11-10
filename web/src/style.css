@@ -954,6 +954,10 @@ footer {
 .movie-hero h1 {
   margin-bottom: 1.5rem;
 }
+.movie-hero > div { min-width: 0; }
+.movie-facts { margin-top: 1.35rem; font-size: .95rem; color: var(--muted); }
+.movie-facts p { margin: .4rem 0; }
+.movie-facts strong { color: var(--ink); }
 .synopsis {
   max-width: 700px;
   line-height: 1.6;

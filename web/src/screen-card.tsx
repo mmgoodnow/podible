@@ -4,7 +4,7 @@ import { Link } from "./router";
 export type ScreenBadge = { label: string; tone: "available" | "active" | "waiting" | "paused" | "catalog" };
 export function ScreenCard({ title, year, posterUrl, href, media, badge, detail, source, progress }: {
   title: string; year?: number | null; posterUrl: string | null; href: string; media: "movie" | "tv";
-  badge: ScreenBadge; detail?: string; source?: string;
+  badge?: ScreenBadge; detail?: string; source?: string;
   progress?: { value: number; max: number; label: string };
 }) {
   const [failedPoster, setFailedPoster] = useState<string | null>(null);
@@ -23,7 +23,7 @@ export function ScreenCard({ title, year, posterUrl, href, media, badge, detail,
           <span className="screen-poster__title" aria-hidden="true">{title}</span>
           <span className="screen-poster__year" aria-hidden="true">{year ?? kind}</span>
         </div>}
-      <span className={`screen-badge screen-badge--${badge.tone}`}><span aria-hidden="true" />{badge.label}</span>
+      {badge && <span className={`screen-badge screen-badge--${badge.tone}`}><span aria-hidden="true" />{badge.label}</span>}
     </div>
     <div className="screen-card__caption">
       <h3 title={title}>{title}</h3>

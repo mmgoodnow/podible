@@ -79,6 +79,12 @@ try {
       await page.evaluate("getComputedStyle(document.querySelector('button[aria-busy=true]')).cursor") !== "default")
     throw new Error("Pending search lacks a busy label or shows a beachball cursor");
   finishSearch();
+  let releaseCredits!: () => void;
+  const creditsGate = new Promise<void>(resolve => { releaseCredits = resolve; });
+  await page.route("**/api/trpc/movies.pageExtras**", async route => {
+    await creditsGate;
+    await route.continue();
+  });
   await page
     .getByRole("heading", { name: "A Fixture Film", exact: true })
     .click();
@@ -90,6 +96,15 @@ try {
   await page
     .getByRole("heading", { name: "Watching for a release", exact: true })
     .waitFor();
+  releaseCredits();
+  await page.getByText("Directed by Fixture Director", { exact: true }).waitFor();
+  await page.getByText("97 min · Drama · Mystery", { exact: true }).waitFor();
+  const cast = page.getByRole("region", { name: "Cast", exact: true });
+  await cast.getByRole("heading", { name: "Fixture Actor" }).waitFor();
+  await cast.getByText("Detective", { exact: true }).waitFor();
+  const related = page.getByRole("region", { name: "Related movies", exact: true }).getByRole("link", { name: /A Related Film/ });
+  if (await related.getAttribute("href") !== "/movies/102") throw new Error("Related title does not link to its movie page");
+  await page.unroute("**/api/trpc/movies.pageExtras**");
   if (!/^\/movies\/\d+$/.test(new URL(page.url()).pathname)) throw new Error("Request changed the canonical movie URL");
   if (await page.getByText(/\/ Request \d+/).count()) throw new Error("Movie request headline exposes a primary request ID");
   await context.request.post(new URL("/__fixture/add-release", url).href);
@@ -124,6 +139,7 @@ try {
     .getByRole("heading", { name: "Ready to watch in Plex", exact: true })
     .waitFor();
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("region", { name: "Related movies", exact: true }).waitFor();
   if (await page.locator("header").count() !== 1)
     throw new Error("Movie page rendered duplicate app shells");
   if (await page.evaluate("document.documentElement.scrollWidth > innerWidth"))

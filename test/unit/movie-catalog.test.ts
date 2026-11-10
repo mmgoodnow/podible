@@ -1,6 +1,42 @@
 import { expect, test } from "bun:test";
 import { TmdbCatalog, CatalogUnavailableError } from "../../src/movies/catalog";
 
+test("movie page extras batch credits and related titles, cache them, and skip bad optional data", async () => {
+  const seen: URL[] = [];
+  const movie = (id: number, title: string) => ({
+    id, title, original_title: title, original_language: "en", release_date: "2025-01-01", poster_path: "/movie.jpg",
+  });
+  const catalog = new TmdbCatalog("test", async input => {
+    seen.push(new URL(input));
+    return Response.json({
+      id: 11, runtime: 110, genres: [{ name: "Drama" }, {}, { name: "Drama" }],
+      credits: {
+        crew: [{ id: 1, name: "Ada", job: "Director" }, { id: 2, name: "Bea", job: "Producer" }],
+        cast: [{ id: 3, name: "Cam", character: "The Detective", profile_path: "/portrait.jpg" },
+          { id: 3, name: "Cam", character: "Duplicate" },
+          { id: 4, name: "Dan", profile_path: "https://invalid.test/picture" }, {}],
+      },
+      recommendations: { results: [movie(11, "Self"), movie(22, "Recommended"), { ...movie(33, "Adult"), adult: true }] },
+      similar: { results: [movie(22, "Duplicate"), movie(44, "Similar")] },
+    });
+  });
+  const extras = await catalog.pageExtras(11);
+  expect(await catalog.pageExtras(11)).toEqual(extras);
+  expect(seen).toHaveLength(1);
+  expect(seen[0]?.pathname).toBe("/3/movie/11");
+  expect(seen[0]?.searchParams.get("append_to_response")).toBe("credits,recommendations,similar");
+  expect(extras).toMatchObject({
+    runtimeMinutes: 110, genres: ["Drama"], directors: ["Ada"],
+    cast: [
+      { id: 3, name: "Cam", character: "The Detective", profileUrl: "https://image.tmdb.org/t/p/w185/portrait.jpg" },
+      { id: 4, name: "Dan", character: "", profileUrl: null },
+    ],
+    related: [{ tmdbId: 22, title: "Recommended" }, { tmdbId: 44, title: "Similar" }],
+  });
+  const sparse = new TmdbCatalog("test", async () => Response.json({ id: 11, credits: { error: "not found" } }));
+  expect(await sparse.pageExtras(11)).toEqual({ runtimeMinutes: null, genres: [], directors: [], cast: [], related: [] });
+});
+
 test("TMDB search normalizes identity and caches without exposing download or credential URLs", async () => {
   const calls: string[] = [];
   const fetcher = async (input: string, init?: RequestInit) => {

@@ -274,6 +274,12 @@ export const appRouter = t.router({
       .query(({ ctx, input }) =>
         executeMethod(moviesRouter.routes.get, ctx, input),
       ),
+    pageExtras: procedure
+      .input(moviesRouter.routes.pageExtras.paramsSchema)
+      .output(moviesRouter.routes.pageExtras.resultSchema)
+      .query(({ ctx, input }) =>
+        executeMethod(moviesRouter.routes.pageExtras, ctx, input),
+      ),
     request: procedure
       .input(moviesRouter.routes.request.paramsSchema)
       .output(moviesRouter.routes.request.resultSchema)

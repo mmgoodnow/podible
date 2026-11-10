@@ -16,6 +16,17 @@ export const catalogMovieSchema = movieSchema.omit({ id: true });
 export type CatalogMovie = z.infer<typeof catalogMovieSchema>;
 export type Movie = z.infer<typeof movieSchema>;
 
+export const moviePageExtrasSchema = z.object({
+  runtimeMinutes: z.number().int().positive().nullable(),
+  genres: z.array(z.string()).max(8),
+  directors: z.array(z.string()).max(8),
+  cast: z.array(z.object({
+    id: z.number().int().positive(), name: z.string(), character: z.string(), profileUrl: z.string().nullable(),
+  })).max(12),
+  related: z.array(catalogMovieSchema.pick({ tmdbId: true, title: true, year: true, posterUrl: true })).max(12),
+});
+export type MoviePageExtras = z.infer<typeof moviePageExtrasSchema>;
+
 export const movieStages = [
   "requested",
   "searching",
