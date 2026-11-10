@@ -3,7 +3,9 @@ import { Link } from "./router";
 import "./content-rail.css";
 
 type RailLink = { href: string; label: string };
-export function ContentRail({ title, children, more }: { title: string; children: ReactNode; more?: RailLink | RailLink[] }) {
+export function ContentRail({ title, children, more, variant, loading = false }: {
+  title: string; children: ReactNode; more?: RailLink | RailLink[]; variant?: "requests"; loading?: boolean;
+}) {
   const id = useId(), track = useRef<HTMLDivElement>(null);
   const [overflow, setOverflow] = useState(false);
   useEffect(() => {
@@ -17,14 +19,14 @@ export function ContentRail({ title, children, more }: { title: string; children
     const el = track.current;
     if (el) el.scrollBy({ left: direction * Math.max(180, el.clientWidth * .8), behavior: "instant" });
   }
-  return <section className="content-rail" aria-labelledby={id}>
+  return <section className={variant ? `content-rail content-rail--${variant}` : "content-rail"} aria-labelledby={id} aria-busy={loading || undefined}>
     <div className="content-rail__heading"><h2 id={id}>{title}</h2>
       <div className="content-rail__actions">{(more ? Array.isArray(more) ? more : [more] : []).map(link => <Link key={link.href} href={link.href}>{link.label}</Link>)}
-        {overflow && <><button type="button" className="secondary" aria-label={`Scroll ${title} left`} onClick={() => scroll(-1)}><span aria-hidden="true">&#8592;</span></button>
+        {!loading && overflow && <><button type="button" className="secondary" aria-label={`Scroll ${title} left`} onClick={() => scroll(-1)}><span aria-hidden="true">&#8592;</span></button>
         <button type="button" className="secondary" aria-label={`Scroll ${title} right`} onClick={() => scroll(1)}><span aria-hidden="true">&#8594;</span></button></>}
       </div>
     </div>
-    <div className="content-rail__track" ref={track} tabIndex={0} role="group" aria-label={`${title} cards`} onKeyDown={event => {
+    <div className="content-rail__track" ref={track} tabIndex={loading ? undefined : 0} role="group" aria-label={`${title} cards`} onKeyDown={event => {
       if (event.target !== event.currentTarget) return;
       if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); scroll(event.key === "ArrowLeft" ? -1 : 1); }
       if (event.key === "Home" || event.key === "End") { event.preventDefault(); event.currentTarget.scrollLeft = event.key === "Home" ? 0 : event.currentTarget.scrollWidth; }

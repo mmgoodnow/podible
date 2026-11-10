@@ -62,6 +62,8 @@ export function UnifiedLibrary({ initialPage }: {
   const readyTv = tvItems.filter(request => request.availableEpisodes > 0 && !request.intentionallyAbsent && !publishedTvKeys.has(request.entry.key));
   const pendingTv = tvItems.filter(request => request.availableEpisodes === 0 || request.intentionallyAbsent);
   const outstandingTv = tvItems.filter(request => request.intentionallyAbsent || request.availableEpisodes < request.requestedEpisodes);
+  const hasRequests = pendingMovies.length > 0 || outstandingTv.length > 0;
+  const loadingRequests = !hasRequests && (movies.isPending || tv.isPending);
   const movieCard = (request: MovieRequest) => <ScreenCard key={`request:movie:${request.id}`} title={request.movie.title} year={request.movie.year}
     posterUrl={request.movie.posterUrl} href={`/requests/${request.id}`} media="movie" badge={movieBadge(request)} source="Your request"
     detail={movieDetail(request)}
@@ -89,6 +91,15 @@ export function UnifiedLibrary({ initialPage }: {
       </button>)}
     </div>
     {homeRails ? <div className="home-rails">
+      {(loadingRequests || hasRequests) && <ContentRail title="Your requests" variant="requests" loading={loadingRequests} more={[
+        ...(pendingMovies.length ? [{ href: "/library?media=movies", label: `Movies (${pendingMovies.length})` }] : []),
+        ...(outstandingTv.length ? [{ href: "/library?media=tv", label: `TV (${outstandingTv.length})` }] : []),
+      ]}>
+        {loadingRequests ? [0, 1, 2, 3].map(i => <div key={i} className="content-rail__placeholder" aria-hidden="true" />)
+          : <>{pendingMovies.slice(0, 10).map(movieCard)}{outstandingTv.slice(0, 10).map(tvCard)}</>}
+      </ContentRail>}
+      {movies.isError && <Failure error={movies.error} retry={() => void movies.refetch()} />}
+      {tv.isError && <Failure error={tv.error} retry={() => void tv.refetch()} />}
       {recent.isPending && <p role="status">Loading library...</p>}
       {recent.isError && <Failure error={recent.error} retry={() => void recent.refetch()} />}
       {!!recent.data?.books.length && <ContentRail title="Newly added books" more={{ href: "/library?media=books", label: "All books" }}>
@@ -120,14 +131,6 @@ export function UnifiedLibrary({ initialPage }: {
             badge={{ label: kind === "movies" ? "Movie" : "TV series", tone: "catalog" }} detail={kind === "movies" ? "View movie" : "Choose seasons"} />)}
         </ContentRail> : section?.unavailable ? <p className="muted" key={kind}>Trending {kind === "movies" ? "movies" : "TV"} unavailable right now.</p> : null;
       })}
-      {!movies.isPending && !tv.isPending && (pendingMovies.length > 0 || outstandingTv.length > 0) && <ContentRail title="Your requests" more={[
-        ...(pendingMovies.length ? [{ href: "/library?media=movies", label: `Movies (${pendingMovies.length})` }] : []),
-        ...(outstandingTv.length ? [{ href: "/library?media=tv", label: `TV (${outstandingTv.length})` }] : []),
-      ]}>
-        {pendingMovies.slice(0, 10).map(movieCard)}{outstandingTv.slice(0, 10).map(tvCard)}
-      </ContentRail>}
-      {movies.isError && <Failure error={movies.error} retry={() => void movies.refetch()} />}
-      {tv.isError && <Failure error={tv.error} retry={() => void tv.refetch()} />}
     </div> : <section aria-label="In the library">
       {booksShown && <section className="media-section library-books" aria-label="Your books">
         <h2 className="visually-hidden">Books</h2><Library initialPage={initialPage} query={q} embedded />

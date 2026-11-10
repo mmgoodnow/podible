@@ -74,7 +74,7 @@ async function checkPosterShelves(browser: Awaited<ReturnType<typeof chromium.la
   page.on("pageerror", error => errors.push(error.message));
   let releaseRequestCards = () => {};
   const requestCardsGate = new Promise<void>(resolve => { releaseRequestCards = resolve; });
-  await page.route("**/api/trpc/tv.requestCards?*", async route => {
+  await page.route(/\/api\/trpc\/(?:requests\.list|tv\.requestCards)\?/, async route => {
     await requestCardsGate;
     await route.continue();
   });
@@ -84,9 +84,13 @@ async function checkPosterShelves(browser: Awaited<ReturnType<typeof chromium.la
     await movieRail.locator(".screen-card").nth(5).waitFor();
     assert.deepEqual(await movieRail.locator("h3").allTextContents(), movieTitles, "Newly published movies must sort by publication date, not IDs");
     const before = await movieRail.boundingBox();
-    assert.equal(await page.getByRole("region", { name: "Your requests", exact: true }).count(), 0);
+    const requestRail = page.getByRole("region", { name: "Your requests", exact: true });
+    const requestPosition = await requestRail.boundingBox();
+    assert.ok(before && requestPosition && requestPosition.y < before.y, "Requests must be the first home rail");
+    assert.equal(await requestRail.getAttribute("aria-busy"), "true");
     releaseRequestCards();
     await page.getByRole("region", { name: "Your requests", exact: true }).getByRole("link", { name: /Tomorrow's Tide/ }).waitFor();
+    await requestRail.getByRole("link", { name: /The Next Chapter/ }).waitFor();
     assert.equal((await movieRail.boundingBox())?.y, before?.y, "Late request cards must not move published rails");
     await page.getByRole("region", { name: "Recently aired episodes", exact: true }).locator(".screen-card").nth(2).waitFor();
     assert.equal(await page.getByText(/Private unreleased/).count(), 0);
