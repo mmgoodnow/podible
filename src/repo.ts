@@ -264,7 +264,9 @@ function assertPositiveInt(value: number): void {
 export class BooksRepo {
   get trackerAnnounces() { return new TrackerAnnounceState(this.db, this.beforeWrite); }
   get activityReads() { return new ActivityReads(this.db); }
-  get transferMetrics() { return new TransferMetricsRepo(this.db, this.beforeWrite, id => this.getJob(id)); }
+  get transferMetrics() {
+    return new TransferMetricsRepo(this.db, this.beforeWrite, id => this.getJob(id), () => this.readSettings()?.prowlarr.url ?? null);
+  }
   get crossSeed() { return new CrossSeedRepo(this.db, this.beforeWrite); }
   get releaseHealth() { return new ReleaseHealthRepo(this.db, this.beforeWrite); }
   reuseTorrent(ref: TorrentRef) { return new TorrentRecordsRepo(this.db, this.beforeWrite).get(ref.clientId, ref.nativeId); }
@@ -810,7 +812,7 @@ export class BooksRepo {
         now,
         now
       ) as TorrentCacheRow;
-    this.transferMetrics.learnMetainfo(input.torrentBytes, input.provider ?? null, now);
+    this.transferMetrics.learnMetainfo(input.torrentBytes, input.provider ?? null, now, input.url);
     return cached;
   }
 

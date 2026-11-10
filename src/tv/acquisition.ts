@@ -420,7 +420,6 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       const encoded = await tvUpstreamStep(ctx, `${prefix}:metainfo`, async () => Buffer.from(await services.fetchMetainfo(offer)).toString("base64"));
       const metainfo = Buffer.from(encoded, "base64"), metadata = inspectMetainfo(metainfo);
       active();
-      ctx.repo.transferMetrics.learnMetainfo(metainfo, offer.provider);
       if (metadata.size > (settings.tv.maximumReleaseBytes ?? Infinity)) {
         reject(offer.key); emit(`${attempt}:oversize`, "replacing", "Release exceeds the configured size limit; selecting another release"); continue;
       }

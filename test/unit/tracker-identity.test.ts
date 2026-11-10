@@ -59,3 +59,24 @@ test("cached private metainfo assigns the source name to all announce aliases wi
     expect(JSON.stringify(repo.transferMetrics.mappings())).not.toContain("secret");
   } finally { db.close(); }
 });
+
+test("cache replay repairs a legacy conflict and distinguishes a rename from independent sources", () => {
+  const db = new Database(":memory:"); runMigrations(db); const repo = new BooksRepo(db);
+  try {
+    repo.updateSettings({ ...repo.getSettings(), prowlarr: { url: "https://indexer.example/base/", apiKey: "" } });
+    const bytes = bencode.encode({ announce: "https://a.example/SECRET", info: { private: 1 } });
+    const cache = db.query(`INSERT INTO torrent_cache (key,provider,url,torrent_bytes,created_at,updated_at) VALUES (?,?,?,?,?,?)`);
+    const old = "2026-01-01T00:00:00.000Z", recent = "2026-01-02T00:00:00.000Z";
+    cache.run("z-old", "Old name", "https://indexer.example/base/17/download?apikey=SECRET", bytes, old, old);
+    cache.run("a-new", "Current name", "https://indexer.example/base/17/download?apikey=SECRET", bytes, recent, recent);
+    db.run("INSERT INTO transfer_tracker_mappings(hostname,inferred_name,updated_at) VALUES('a.example','',?)", [old]);
+    repo.transferMetrics.learnCachedTrackers(recent);
+    expect(repo.transferMetrics.mappings()[0]?.name).toBe("Current name");
+
+    repo.transferMetrics.learnMetainfo(bytes, "Different name", recent, "https://indexer.example/base/42/download");
+    expect(repo.transferMetrics.mappings()[0]?.source).toBe("unknown");
+    repo.transferMetrics.learnMetainfo(bytes, "Current name", "2026-01-03T00:00:00.000Z", "https://indexer.example/base/42/download");
+    expect(repo.transferMetrics.mappings()[0]?.name).toBe("Current name");
+    expect(JSON.stringify(db.query("SELECT * FROM app_state WHERE key LIKE '%tracker-sources:%'").all())).not.toMatch(/SECRET|indexer\.example|download/);
+  } finally { db.close(); }
+});

@@ -25,11 +25,27 @@ export function advanceTransferCounter(previousRaw: number | null, previousTotal
   return previousTotal + (raw >= previousRaw ? raw - previousRaw : raw);
 }
 const sum = (values: (number | null)[]) => values.some(n => n === null) ? null : values.reduce<number>((a, b) => a + b!, 0);
+const trackerCacheCursor = "transfer-metrics:tracker-cache-source-cursor";
+function safeTrackerName(name: string) {
+  return name.trim() && name.length <= 100 && !/[\x00-\x1f]|:\/\//.test(name);
+}
+
+function trackerSource(provider: string, downloadUrl?: string, prowlarrUrl?: string | null) {
+  const base = prowlarrUrl ? URL.parse(prowlarrUrl) : null;
+  const download = downloadUrl ? URL.parse(downloadUrl) : null;
+  if (base && download && /^https?:$/.test(base.protocol) && base.origin === download.origin) {
+    const prefix = base.pathname.replace(/\/+$/, "") + "/";
+    const match = download.pathname.startsWith(prefix) && /^(\d+)\/download\/?$/.exec(download.pathname.slice(prefix.length));
+    if (match) return metricDigest(["prowlarr", base.origin, prefix, match[1]]);
+  }
+  return metricDigest(["provider", provider.toLowerCase()]);
+}
 
 /** Sanitized domain telemetry only; no execution state, torrent URLs or daemon credentials. */
 export class TransferMetricsRepo {
   constructor(private db: Database, private beforeWrite: () => void = () => {},
-    private jobState: (id: number) => { status: string } | null = () => null) {}
+    private jobState: (id: number) => { status: string } | null = () => null,
+    private prowlarrUrl: () => string | null = () => null) {}
   inventory(after = 0, limit = 100): MetricInventory[] {
     return this.db.query(`SELECT t.id,t.client_id,t.native_id,t.location_json,t.ownership_tag,t.root_path,t.root_token,t.offer_key,
       b.book_id,b.release_id FROM media_torrents t LEFT JOIN book_torrent_bindings b ON b.torrent_id=t.id
@@ -77,37 +93,66 @@ export class TransferMetricsRepo {
       UNION SELECT a.target_id,'tv' FROM tv_acquisition_downloads d JOIN tv_acquisitions a ON a.id=d.acquisition_id WHERE d.torrent_id=?`).all(row.id, row.id) as { target_id: number; media: "movie" | "tv" }[];
     return refs.flatMap(ref => this.contents(row, { command: { scope: { media: ref.media, targetId: ref.target_id } } } as CrossSeedReceipt));
   }
-  learnMetainfo(bytes: Uint8Array, provider: string | null, now = new Date().toISOString()) {
-    if (!provider) return;
+  learnMetainfo(bytes: Uint8Array, provider: string | null, now = new Date().toISOString(), downloadUrl?: string) {
+    this.learnTrackerEvidence(bytes, provider, now, downloadUrl, downloadUrl ? this.prowlarrUrl() : null);
+  }
+  private learnTrackerEvidence(bytes: Uint8Array, provider: string | null, now: string, downloadUrl?: string, prowlarrUrl?: string | null) {
+    if (!provider || !safeTrackerName(provider)) return;
     const { hosts, privateTorrent } = metainfoTrackerIdentity(bytes);
+    const source = trackerSource(provider.trim(), downloadUrl, prowlarrUrl);
     // Private providers can publish backup announce aliases. Public multi-tracker lists are not identity evidence.
-    for (const host of hosts) this.inferTracker(host, privateTorrent || hosts.length === 1 ? provider : null, now);
+    for (const host of hosts) this.inferTracker(host, privateTorrent || hosts.length === 1 ? provider : null, now, source);
   }
   /** Gradual local backfill; never downloads metainfo or scans the filesystem on a dashboard read. */
   learnCachedTrackers(now: string) {
-    const state = this.db.query("SELECT value_json FROM app_state WHERE key='transfer-metrics:tracker-cache-cursor'").get() as { value_json: string } | null;
-    const after = state ? JSON.parse(state.value_json) as string : "";
+    const state = this.db.query("SELECT value_json FROM app_state WHERE key=?").get(trackerCacheCursor) as { value_json: string } | null;
+    const after = state ? JSON.parse(state.value_json) as string | null : "";
+    if (after === null) return;
+    const prowlarrUrl = this.prowlarrUrl();
     const rows = this.db.query("SELECT key,provider,length(torrent_bytes) AS size FROM torrent_cache WHERE key>? ORDER BY key LIMIT 100").all(after) as { key: string; provider: string | null; size: number }[];
     let processed = 0, budget = 0, last = after;
     for (const row of rows) {
       if (processed && budget + row.size > 16 * 1024 * 1024) break;
       processed++; last = row.key;
       if (!row.provider || row.size > 8 * 1024 * 1024) continue;
-      const cached = this.db.query("SELECT torrent_bytes FROM torrent_cache WHERE key=?").get(row.key) as { torrent_bytes: Uint8Array };
-      this.learnMetainfo(cached.torrent_bytes, row.provider, now); budget += row.size;
+      const cached = this.db.query("SELECT torrent_bytes,url,updated_at FROM torrent_cache WHERE key=?").get(row.key) as
+        { torrent_bytes: Uint8Array; url: string; updated_at: string };
+      this.learnTrackerEvidence(cached.torrent_bytes, row.provider, cached.updated_at, cached.url, prowlarrUrl);
+      budget += row.size;
     }
+    const next = processed < rows.length || rows.length === 100 ? last : null;
     this.beforeWrite();
-    this.db.query(`INSERT INTO app_state(key,value_json,updated_at) VALUES('transfer-metrics:tracker-cache-cursor',?,?)
+    this.db.query(`INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?)
       ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`)
-      .run(JSON.stringify(processed < rows.length || rows.length === 100 ? last : ""), now);
+      .run(trackerCacheCursor, JSON.stringify(next), now);
   }
-  inferTracker(host: string, name: string | null, now: string) {
-    if (name !== null && (!name.trim() || name.length > 100 || /[\x00-\x1f]|:\/\//.test(name))) return;
+  inferTracker(host: string, name: string | null, now: string, source?: string) {
+    if (name !== null && !safeTrackerName(name)) return;
     this.beforeWrite();
-    this.db.query(`INSERT INTO transfer_tracker_mappings(hostname,inferred_name,updated_at) VALUES(?,?,?)
-      ON CONFLICT(hostname) DO UPDATE SET inferred_name=CASE WHEN excluded.inferred_name IS NULL THEN inferred_name
-        WHEN inferred_name=excluded.inferred_name OR inferred_name IS NULL THEN excluded.inferred_name ELSE '' END,updated_at=excluded.updated_at`)
-      .run(normalizeTrackerHost(host), name?.trim() ?? null, now);
+    host = normalizeTrackerHost(host);
+    if (name === null) {
+      this.db.run("INSERT OR IGNORE INTO transfer_tracker_mappings(hostname,inferred_name,updated_at) VALUES(?,NULL,?)", [host, now]);
+      return;
+    }
+    const label = name.trim(), id = source ?? trackerSource(label);
+    const key = `transfer-metrics:tracker-sources:${host}`;
+    this.db.transaction(() => {
+      const saved = this.db.query("SELECT value_json FROM app_state WHERE key=?").get(key) as { value_json: string } | null;
+      const evidence = saved ? JSON.parse(saved.value_json) as Record<string, { label: string; at: string }> : {};
+      const previous = evidence[id];
+      // Replaying older cache entries cannot undo a provider rename.
+      if (!previous || now > previous.at || (now === previous.at && label < previous.label)) {
+        evidence[id] = { label, at: now };
+        this.db.run(`INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?)
+          ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`, [key, JSON.stringify(evidence), now]);
+      }
+      const names = Object.values(evidence).sort((a, b) => b.at.localeCompare(a.at) || a.label.localeCompare(b.label));
+      const preferred = names[0]!.label;
+      const inferred = names.every(entry => entry.label.toLowerCase() === preferred.toLowerCase()) ? preferred : "";
+      this.db.run(`INSERT INTO transfer_tracker_mappings(hostname,inferred_name,updated_at) VALUES(?,?,?)
+        ON CONFLICT(hostname) DO UPDATE SET inferred_name=excluded.inferred_name,updated_at=excluded.updated_at
+        WHERE inferred_name IS NOT excluded.inferred_name`, [host, inferred, names[0]!.at]);
+    })();
   }
   mappings() {
     return (this.db.query("SELECT hostname,inferred_name FROM transfer_tracker_mappings ORDER BY hostname").all() as { hostname: string; inferred_name: string | null }[])

@@ -206,7 +206,6 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
     (adapters.fetchMetainfo?.(offer) ?? services?.fetchMetainfo(offer) ?? cachedMovieMetainfo(ctx.repo, offer, "reuse"))).toString("base64"));
   const bytes = Buffer.from(encoded, "base64"), metadata = inspectMetainfo(bytes);
   active();
-  ctx.repo.transferMetrics.learnMetainfo(bytes, crossSeedOffer(ctx.repo, command).provider);
   if (ctx.repo.releaseHealth.isOfferBlocked({ ...crossSeedOffer(ctx.repo, command), infoHash: metadata.infoHash }))
     return finish({ kind: "skipped", reason: "Candidate is a confirmed nuked release" });
   if (ctx.repo.crossSeed.owns(command.scope, client.id, metadata.infoHash))

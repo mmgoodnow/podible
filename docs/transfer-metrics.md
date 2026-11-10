@@ -51,10 +51,11 @@ ratio is not the tracker's credited account ratio, freeleech or bonus accounting
 
 **Tracker totals** use hostname-to-name mappings learned from the announce and
 announce-list fields of metainfo fetched from a known indexer. This runs for book,
-movie, TV and reuse acquisitions; only a single distinct announce host establishes
-an unambiguous name. Multi-host torrents do not establish tracker aliases; each
-host needs independent evidence. The collector gradually backfills the retained
-local metainfo cache without new network requests. Hosts sharing one name are grouped.
+movie, TV and reuse acquisitions. All announce hosts in private metainfo are
+aliases of its source; public multi-tracker metainfo does not establish identity.
+The collector gradually replays the retained metainfo cache without new network
+requests. A Prowlarr indexer keeps its identity when renamed, so old cache entries
+cannot undo its newer label. Hosts sharing one name are grouped.
 Mutable daemon tracker lists never establish a name. Legacy hosts without retained
 metainfo keep their hostname until a later verified source supplies the evidence.
 There is no manual naming UI or mutation API; old manual overrides are ignored.
