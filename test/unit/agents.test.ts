@@ -393,6 +393,36 @@ describe("agent decisions", () => {
     }
   });
 
+  test("book inspection failures never send credential-bearing errors to the model", async () => {
+    using db = new Database(":memory:");
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    const url = "https://indexer.invalid/download?apikey=fixture-book-secret";
+    const originalFetch = globalThis.fetch;
+    let fetches = 0;
+    globalThis.fetch = Object.assign(async () => {
+      fetches++;
+      throw new Error(`Network failure for ${url}`);
+    }, { preconnect: originalFetch.preconnect });
+    const fake = new FakeModelProvider([
+      functionCallModelResponse([{ callId: "inspect_failure", name: "inspect", arguments: '{"index":0}' }]),
+      textModelResponse(JSON.stringify({ selections: [], confidence: 0, reason: "Could not inspect candidate." })),
+    ]);
+    try {
+      const decision = await selectSearchCandidates(defaultSettings({ agents: agentSettings() }), {
+        query: "Twilight Stephenie Meyer", media: "audio", forceAgent: true,
+        book: { id: 1, title: "Twilight", author: "Stephenie Meyer" },
+        results: [{ title: "Twilight Stephenie Meyer MP3", provider: "fixture", mediaType: "audio",
+          url, guid: "fixture", infoHash: null, sizeBytes: 1000, seeders: 1, leechers: 0, raw: {} }],
+      }, { repo, modelProvider: fake });
+      expect(decision.mode).toBe("agent");
+      expect(fetches).toBe(1);
+      expect(fake.requests).toHaveLength(2);
+      expect(JSON.stringify(fake.requests[1]?.input)).toContain("Could not inspect this release's torrent file.");
+      expect(JSON.stringify(fake.requests)).not.toContain("fixture-book-secret");
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
   test("forced/configured search agents inspect all oppositely tagged candidates even when fallback selects nothing", async () => {
     for (const media of ["audio", "ebook"] as const) {
       const db = new Database(":memory:");

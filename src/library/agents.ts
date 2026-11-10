@@ -10,6 +10,7 @@ import { inferLanguageFromReleaseTitles, normalizeManifestationLanguageCode } fr
 import type { TorznabResult } from "./torznab";
 import { getOrFetchCachedTorrentBytes, inspectTorrentFiles } from "./torrent-cache";
 import { normalizeInfoHash } from "./torrent";
+import { METAINFO_INSPECTION_FAILED } from "../media/metainfo";
 import type { AppSettings, MediaType, ReleaseRow } from "../app-types";
 
 /**
@@ -618,11 +619,11 @@ function createSearchAgent(
           fileCount: files.length,
           files,
         });
-      } catch (error) {
+      } catch {
         return JSON.stringify({
           ok: false,
           index,
-          error: (error as Error).message || "inspect failed",
+          error: METAINFO_INSPECTION_FAILED,
         });
       }
     },

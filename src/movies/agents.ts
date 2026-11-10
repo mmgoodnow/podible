@@ -3,7 +3,7 @@ import type { ModelProvider } from "@openai/agents-core";
 import { z } from "zod";
 import type { AppSettings } from "../app-types";
 import { TEXT_AGENT_MODEL } from "../ai-models";
-import { inspectMetainfo } from "../media/metainfo";
+import { inspectMetainfo, METAINFO_INSPECTION_FAILED } from "../media/metainfo";
 import { createCrossSeedabilityTool, matchingIndexesSchema, matchingSelectionOffers, releaseSelectionInstructions } from "../media/release-selection";
 import { movieFactsSchema, evaluateMovieQuality } from "./quality";
 import { factsFromMovieProbe } from "./probe";
@@ -103,11 +103,12 @@ export function createMovieDecider(
           const offer = input.offers[index];
           if (!offer || ++inspections > 5)
             return { error: "Unknown index or inspection budget exhausted" };
-          const metadata = inspectMetainfo(await fetchMetainfo(offer));
-          return {
-            files: metadata.files.slice(0, 200),
-            totalSize: metadata.size,
-          };
+          try {
+            const metadata = inspectMetainfo(await fetchMetainfo(offer));
+            return { files: metadata.files.slice(0, 200), totalSize: metadata.size };
+          } catch {
+            return { error: METAINFO_INSPECTION_FAILED };
+          }
         },
       });
       const result = await run(

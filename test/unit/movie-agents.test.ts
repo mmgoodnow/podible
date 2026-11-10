@@ -88,6 +88,20 @@ function assessment(indexes: number[]) {
   return [{ type: "function_call", name: "assessCrossSeedability", callId: "coverage",
     arguments: JSON.stringify({ indexes }), status: "completed" }];
 }
+
+test("movie inspection failures never send credential-bearing errors to the model", async () => {
+  const fake = selectionProvider([[{ type: "function_call", name: "inspectRelease", callId: "inspect",
+    arguments: '{"index":0}', status: "completed" }],
+    { index: null, facts: fixtureFacts(), reason: "Could not inspect candidate." }]);
+  const decider = createMovieDecider(defaultSettings(), fake.model, async () => {
+    throw new Error("Network failure for https://tracker.invalid/fixture-movie-secret/announce");
+  });
+  const result = await decider.select({ movie: fixtureMovie, policy: defaultMovieQualityPolicy, current: null, offers: [selectionOffer] });
+  expect(result.offerKey).toBeNull();
+  expect(fake.requests).toHaveLength(2);
+  expect(JSON.stringify(fake.requests[1]?.input)).toContain("Could not inspect this release's torrent file.");
+  expect(JSON.stringify(fake.requests)).not.toContain("fixture-movie-secret");
+});
 function assessmentOutputs(request: ModelRequest) {
   if (!Array.isArray(request.input)) throw new Error("Expected agent tool history");
   return request.input.flatMap(item => item.type === "function_call_result" && item.name === "assessCrossSeedability"

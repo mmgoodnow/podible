@@ -52,6 +52,20 @@ test("TV selector researches an empty initial search without leaking server-owne
   expect(JSON.stringify(fake.calls)).toContain("anidb");
 });
 
+test("TV inspection failures never send credential-bearing errors to the model", async () => {
+  const fake = provider([[{ type: "function_call", name: "inspectRelease", callId: "inspect",
+    arguments: '{"index":0,"offset":0,"limit":5}', status: "completed" }],
+    { index: null, reason: "Could not inspect candidate." }]);
+  const decider = createTvDecider(defaultSettings(), fake.model, undefined, async () => {
+    throw new Error("Network failure for https://tracker.invalid/fixture-tv-secret/announce");
+  });
+  const result = await decider.select({ entry, episodes: [episode], policy: defaultMovieQualityPolicy, offers: [offer] });
+  expect(result.offer).toBeNull();
+  expect(fake.calls).toHaveLength(2);
+  expect(JSON.stringify(fake.calls[1]?.input)).toContain("Could not inspect this release's torrent file.");
+  expect(JSON.stringify(fake.calls)).not.toContain("fixture-tv-secret");
+});
+
 test("TV verifier uses probe policy evidence and preserves episode IDs across numbering schemes", async () => {
   const fake = provider([[{ type: "function_call", name: "assessCandidate", callId: "assess", arguments: JSON.stringify({ fileIndex: 0, facts: claims }), status: "completed" }], plan]);
   const result = await createTvDecider(defaultSettings(), fake.model).inspect({ entry, episodes: [episode], policy: defaultMovieQualityPolicy, offer, files });

@@ -3,6 +3,9 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { infoHashFromTorrentBytes } from "../library/torrent";
 
+// Model-facing tool errors must not expose exceptions from credential-bearing requests.
+export const METAINFO_INSPECTION_FAILED = "Could not inspect this release's torrent file.";
+
 const bytesSchema = z.instanceof(Uint8Array);
 const component = (raw: Uint8Array) => {
   const value = new TextDecoder("utf-8", { fatal: true }).decode(raw);

@@ -3,7 +3,7 @@ import type { AgentInputItem, ModelProvider } from "@openai/agents-core";
 import { z } from "zod";
 import type { AppSettings } from "../app-types";
 import { TEXT_AGENT_MODEL } from "../ai-models";
-import { inspectMetainfo } from "../media/metainfo";
+import { inspectMetainfo, METAINFO_INSPECTION_FAILED } from "../media/metainfo";
 import { createCrossSeedabilityTool, matchingIndexesSchema, matchingSelectionOffers, releaseSelectionInstructions } from "../media/release-selection";
 import { fetchMovieMetainfo, type MovieOffer, type MovieSearch } from "../movies/offers";
 import { movieFactsSchema, evaluateMovieQuality, type MovieQualityPolicy } from "../movies/quality";
@@ -101,7 +101,11 @@ export function createTvDecider(settings: AppSettings, modelProvider?: ModelProv
           if (!offers[index]) return { error: "Unknown release" };
           if (!manifests.has(index)) {
             if (++inspections > 8) return { error: "Metainfo request budget exhausted", maximumDistinctReleases: 8 };
-            manifests.set(index,inspectMetainfo(await fetchMetainfo(offers[index]!)));
+            try {
+              manifests.set(index, inspectMetainfo(await fetchMetainfo(offers[index]!)));
+            } catch {
+              return { error: METAINFO_INSPECTION_FAILED };
+            }
           }
           const metadata = manifests.get(index)!;
           return { ...evidencePage(metadata.files,offset,limit,file => ({ name: file.path, sizeBytes: file.size })), sizeBytes: metadata.size,
