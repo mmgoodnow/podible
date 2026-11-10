@@ -14,7 +14,7 @@ import { tvRequestProgress, tvRequestProgressSchema } from "../tv/request-progre
 const id = z.number().int().positive();
 const empty = z.object({}).strict();
 const view = z.object({
-  requestId: id, targetId: id, externalRequestId: id.nullable(),
+  requestId: id, targetId: id, entryId: id, externalRequestId: id.nullable(),
   entry: tvCatalogEntrySchema, requestedEpisodes: z.number().int().nonnegative(),
   availableEpisodes: z.number().int().nonnegative(), futureEpisodes: z.number().int().nonnegative(),
   withdrawn: z.boolean(), intentionallyAbsent: z.boolean(),
@@ -23,7 +23,7 @@ const view = z.object({
   acquisitions: z.array(z.object({ id, jobId: id.nullable(), status: z.string(), error: z.string().nullable(), reason: z.string(), decision: z.unknown() })),
   events: z.array(z.object({ stage: z.string(), message: z.string(), createdAt: z.string() })),
 });
-function requestView(ctx: RpcContext, requestId: number, userSafe = false): z.input<typeof view> {
+function requestView(ctx: RpcContext, requestId: number, userSafe = false, detail = false): z.input<typeof view> {
   const repo = ctx.repo.tv, request = repo.requestById(requestId);
   if (!request) throw new RpcError(-32602, "TV request not found");
   const target = repo.target(request.target_id)!;
@@ -32,18 +32,23 @@ function requestView(ctx: RpcContext, requestId: number, userSafe = false): z.in
   const episodes = entry.episodes.filter(episode=>requestedIds.has(episode.id));
   const active = new Set(repo.activeEpisodes(target.id).map((episode) => episode.episode_id));
   const acquisitions = repo.acquisitions(target.id).filter((acquisition) => !userSafe || acquisition.request_id === requestId);
+  const jobs = ctx.repo.getJobs(acquisitions.flatMap(a => a.job_id ? [a.job_id] : []));
+  const jobStatuses = new Map([...jobs].map(([id, job]) => [id, job.status] as const));
   const acquisitionIds = new Set(acquisitions.map((a) => a.id));
   const events = repo.events(target.id);
-  return { requestId, targetId: target.id,
+  return { requestId, targetId: target.id, entryId: entry.id,
     externalRequestId: userSafe ? null : repo.origins().find((origin) => origin.requestId === requestId)?.externalRequestId ?? null,
-    entry, progress: tvRequestProgress(ctx.repo,{episodes,available:active,events,acquisitions:acquisitions.filter(a=>a.request_id===requestId)}), requestedEpisodes: episodes.length, availableEpisodes: episodes.filter((episode) => active.has(episode.id)).length,
+    entry, progress: tvRequestProgress({ episodes, available: active, events, jobStatuses,
+      acquisitions: acquisitions.filter(a => a.request_id === requestId),
+      readTransfers: detail ? ids => repo.requestDownloadObservations(ids) : undefined }),
+    requestedEpisodes: episodes.length, availableEpisodes: episodes.filter((episode) => active.has(episode.id)).length,
     futureEpisodes: episodes.filter((episode) => !episode.airDate || Date.parse(episode.airDate) > Date.now()).length,
     withdrawn: request.withdrawn_at !== null,
     seasonNumbers: nativeTvRequestScope(request)?.seasonNumbers ?? [...new Set(episodes.flatMap((ep) => ep.numbering
       .filter((n) => n.scheme === "tvdb:aired" && n.season !== null).map((n) => n.season!)))].sort((a, b) => a - b),
     intentionallyAbsent: ctx.repo.retention.get({ namespace: "tv-target", id: String(target.id) })?.desiredPresence === "evicted",
     acquisitions: acquisitions.map((acquisition) => {
-      const job = acquisition.job_id ? ctx.repo.getJob(acquisition.job_id) : null;
+      const job = acquisition.job_id ? jobs.get(acquisition.job_id) : null;
       return { id: acquisition.id, jobId: acquisition.job_id, status: job?.status ?? "unknown", reason: acquisition.reason,
         error: job?.error ? "TV acquisition failed; inspect server diagnostics" : null,
         decision: !userSafe && acquisition.decision_json ? JSON.parse(acquisition.decision_json) as unknown : null };
@@ -83,15 +88,25 @@ export function createTvRouter(services: { catalog?: TvCatalog } = {}) {
     } }),
   details: defineMethod({ auth: "user", readOnly: true, summary: "Read a TV work and its explicitly mapped, requestable TVDB aired seasons.",
     paramsSchema: z.object({ tmdbId: id }).strict(),
-    resultSchema: z.object({ configured: z.boolean(), unavailableReason: z.string().nullable(), series: tvSeriesDetailsSchema.nullable() }),
+    resultSchema: z.object({ configured: z.boolean(), unavailableReason: z.string().nullable(), series: tvSeriesDetailsSchema.nullable(),
+      showId: id.nullable(), seasons: z.array(z.object({ number: z.number(), available: z.number(), requested: z.boolean() })) }),
     async handler(ctx, p) {
+      const showId = ctx.repo.tv.visibleShowId(p.tmdbId, ctx.session!.user_id);
       try {
         const series = await catalog(ctx).details(p.tmdbId);
-        return { configured: configured(ctx), unavailableReason: series.seasons.find((s) => !s.requestable)?.unavailableReason ??
+        const episodes = series.episodeKeysBySeason ?? new Map<number, string[]>();
+        const keys = [...episodes.values()].flat();
+        const available = ctx.repo.tv.publishedEpisodeKeys(keys), requested = ctx.repo.tv.requestedEpisodeKeys(keys);
+        const seasons = [...episodes].map(([number, keys]) => {
+          const missing = keys.filter(key => !available.has(key));
+          return { number, available: keys.length - missing.length,
+            requested: missing.length > 0 && missing.every(key => requested.has(key)) };
+        });
+        return { showId, seasons, configured: configured(ctx), unavailableReason: series.seasons.find((s) => !s.requestable)?.unavailableReason ??
           (series.seasons.length ? null : "No canonical TVDB seasons are available for this work."), series };
       } catch (error) {
         if (!(error instanceof TvCatalogError)) throw error;
-        return { configured: configured(ctx), unavailableReason: error.message, series: null };
+        return { showId, seasons: [], configured: configured(ctx), unavailableReason: error.message, series: null };
       }
     } }),
   request: defineMethod({ auth: "user", summary: "Request complete canonical TVDB seasons, including future episode intent.",
@@ -106,9 +121,28 @@ export function createTvRouter(services: { catalog?: TvCatalog } = {}) {
   myRequests: defineMethod({ auth: "user", readOnly: true, summary: "Read only the current user's TV requests and safe progress.",
     paramsSchema: empty, resultSchema: z.object({ requests: z.array(view) }),
     handler: (ctx) => ({ requests: ctx.repo.tv.requests(ctx.session!.user_id).map((request) => requestView(ctx, request.id, true)) }) }),
+  requestCards: defineMethod({ auth: "user", readOnly: true, summary: "Read compact TV cards without hydrating episodes or job histories.",
+    paramsSchema: empty, resultSchema: z.object({ requests: z.array(z.object({
+      requestId: id, entryId: id, entry: tvCatalogEntrySchema.pick({ key: true, title: true, year: true, posterUrl: true }),
+      requestedEpisodes: z.number(), availableEpisodes: z.number(), futureEpisodes: z.number(),
+      intentionallyAbsent: z.boolean(), seasonNumbers: z.array(z.number()),
+      acquisitions: z.array(z.object({ status: z.string() })),
+    })) }),
+    handler(ctx) {
+      const cards = ctx.repo.tv.requestCards(ctx.session!.user_id);
+      const jobs = ctx.repo.getJobStatuses(cards.flatMap(c => c.latestJobId === null ? [] : [c.latestJobId]));
+      return { requests: cards.map(c => ({
+        requestId: c.requestId, entryId: c.entryId,
+        entry: { key: c.key, title: c.title, year: c.year, posterUrl: c.posterUrl },
+        requestedEpisodes: c.requestedEpisodes, availableEpisodes: c.availableEpisodes, futureEpisodes: c.futureEpisodes,
+        intentionallyAbsent: Boolean(c.evicted),
+        seasonNumbers: (JSON.parse(c.seasons) as (number | null)[]).filter((n): n is number => n !== null).sort((a,b) => a-b),
+        acquisitions: c.latestJobId === null ? [] : [{ status: jobs.get(c.latestJobId) ?? "unknown" }],
+      })) };
+    } }),
   myRequest: defineMethod({ auth: "user", readOnly: true, summary: "Read one of the current user's TV requests.",
     paramsSchema: z.object({ requestId: id }).strict(), resultSchema: z.object({ request: view }),
-    handler(ctx, p) { owned(ctx, p.requestId); return { request: requestView(ctx, p.requestId, true) }; } }),
+    handler(ctx, p) { owned(ctx, p.requestId); return { request: requestView(ctx, p.requestId, true, true) }; } }),
   withdraw: defineMethod({ auth: "user", summary: "Withdraw only the current user's request, preserving media and other demand.",
     paramsSchema: z.object({ requestId: id }).strict(), resultSchema: z.object({ request: view }),
     handler(ctx, p) { owned(ctx, p.requestId); withdrawTvRequest(ctx.repo, p.requestId); return { request: requestView(ctx, p.requestId, true) }; } }),
@@ -120,7 +154,7 @@ export function createTvRouter(services: { catalog?: TvCatalog } = {}) {
       return ctx.repo.transaction(() => {
         ensurePresentIntent(ctx.repo, { namespace: "tv-target", id: String(request.target_id) }, "User explicitly resumed their TV request");
         queueTvSeasons(ctx.repo, p.requestId, "recovery");
-        return { request: requestView(ctx, p.requestId, true) };
+        return { request: requestView(ctx, p.requestId, true, true) };
       });
     } }),
   status: defineMethod({ auth: "admin", readOnly: true, summary: "Inspect independent TV acquisition and its no-backfill activation boundary.",

@@ -462,13 +462,13 @@ describe("operational facts from the execution authority", () => {
   test("TV future episodes remain informational while real TV acquisitions/downloads are visible", async () => {
     await using f = await fixture();
     const rows: ReturnType<typeof liveTorrent>[] = [];
-    let currentRequestId = 0;
+    let currentEntryId = 0;
     for (const [n, date] of [[301, "2020-01-01"], [302, "2099-01-01"]] as const) {
       const request = f.repo.tv.request(f.user.id, { key: `tvdb:${n}`, tvdbId: n, tmdbId: null, title: `Series ${n}`, aliases: [], year: 2020, anime: false,
         episodes: [{ key: `tvdb:${n}01`, title: "Episode", airDate: date, runtimeMinutes: 30,
           numbering: [{ scheme: "tvdb:aired", season: 1, episode: 1, absolute: null }] }], relations: [] }, {}, [`tvdb:${n}01`]);
       const acquisition = f.repo.tv.startAcquisition(request.targetId, "initial", () => f.job({ type: "tv_acquire" }, { status: n === 301 ? "running" : "succeeded" }).id, request.requestId).acquisition;
-      if (n === 301) currentRequestId = request.requestId;
+      if (n === 301) currentEntryId = request.entryId;
       if (n === 302) f.repo.tv.finishAcquisition(acquisition.id);
       else {
         const source = await managedSource(f, acquisition.id, "tv", "b".repeat(40), "owned");
@@ -477,7 +477,7 @@ describe("operational facts from the execution authority", () => {
     }
     const result = await liveInventory(f, rows).read();
     expect(result.summary.waiting).toBe(1);
-    expect(result.activeAcquisitions.find((item) => item.media === "tv")).toMatchObject({ title: "Series 301", href: `/tv/requests/${currentRequestId}` });
+    expect(result.activeAcquisitions.find((item) => item.media === "tv")).toMatchObject({ title: "Series 301", href: `/tv/library/${currentEntryId}` });
     expect(result.downloads.find((item) => item.media === "tv")).toMatchObject({ telemetry: "live", bytesDone: 40, problem: null });
     expect(result.incidents).toEqual([]);
   });
@@ -512,7 +512,7 @@ describe("operational facts from the execution authority", () => {
     expect(staged.activeAcquisitions.find(w => w.job.id === batches[2]!.job_id)?.stage).toBe("publication-queued");
   });
 
-  test("TV activity links use the actor's exact request, shared published work, or no inaccessible private destination", async () => {
+  test("TV activity links open the same show for owners and viewers of published episodes, never a private foreign show", async () => {
     await using f = await fixture();
     const foreign = f.repo.upsertUser({ provider: "local", providerUserId: "activity-foreign", username: "Other viewer", isAdmin: false });
     const cases: { jobId: number; href: string | null; requestId: number; entryId: number; owner: boolean; published: boolean }[] = [];
@@ -532,7 +532,7 @@ describe("operational facts from the execution authority", () => {
         f.repo.tv.clearPublication(request.targetId, version);
       }
       cases.push({ jobId: acquisition.job_id!, requestId: request.requestId, entryId: request.entryId, owner, published,
-        href: owner ? `/tv/requests/${request.requestId}` : published ? `/tv/library/${request.entryId}` : null });
+        href: owner || published ? `/tv/library/${request.entryId}` : null });
     }
     const before = f.db.query("SELECT total_changes() AS n").get();
     const result = await executeMethod(f.router.routes.ops, f.ctx, {});
@@ -540,7 +540,7 @@ describe("operational facts from the execution authority", () => {
       expect(result.activeAcquisitions.find(work => work.job.id === entry.jobId)?.href).toBe(entry.href);
       if (entry.owner) expect((await executeMethod(tvRouter.routes.myRequest, f.ctx, { requestId: entry.requestId })).request.requestId).toBe(entry.requestId);
       else await expect(executeMethod(tvRouter.routes.myRequest, f.ctx, { requestId: entry.requestId })).rejects.toMatchObject({ code: -32003 });
-      if (entry.published) expect((await executeMethod(catalogRouter.routes.tvEntry, f.ctx, { entryId: entry.entryId })).availableEpisodes).toBe(1);
+      if (entry.owner || entry.published) expect((await executeMethod(catalogRouter.routes.tvEntry, f.ctx, { entryId: entry.entryId })).availableEpisodes).toBe(entry.published ? 1 : 0);
       else await expect(executeMethod(catalogRouter.routes.tvEntry, f.ctx, { entryId: entry.entryId })).rejects.toMatchObject({ code: -32602 });
       f.setLifecycle(entry.jobId, { status: "failed", error: "TV source unavailable" });
     }

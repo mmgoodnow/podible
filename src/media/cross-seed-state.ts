@@ -183,6 +183,26 @@ export class CrossSeedRepo {
     return (this.db.query("SELECT value_json FROM app_state WHERE key>=? AND key<? ORDER BY updated_at DESC,key LIMIT ?")
       .all(prefix, prefix + "~", limit) as { value_json: string }[]).map(row => JSON.parse(row.value_json));
   }
+  showRegistrations(entryId: number) {
+    return this.db.query<{
+      title: string | null; provider: string | null; jobId: number; registered: 0 | 1; reusedBytes: number | null;
+    }, [number]>(`
+      SELECT COALESCE(json_extract(copy.value_json,'$.offer.title'),json_extract(release.payload_json,'$.title')) AS title,
+        COALESCE(json_extract(copy.value_json,'$.offer.provider'),json_extract(release.payload_json,'$.provider')) AS provider,
+        json_extract(op.value_json,'$.jobId') AS jobId,t.id IS NOT NULL AS registered,
+        json_extract(op.value_json,'$.outcome.reusedBytes') AS reusedBytes
+      FROM app_state op
+      LEFT JOIN media_torrents t ON t.id=json_extract(op.value_json,'$.outcome.torrentId')
+        AND t.ownership_tag='Podible TV'
+      LEFT JOIN release_inbox release ON release.id=json_extract(op.value_json,'$.command.releaseId')
+      LEFT JOIN app_state copy ON copy.key='cross-seed:selected-copy:' || json_extract(op.value_json,'$.command.selectionCopyId')
+      WHERE op.key>='cross-seed:operation:' AND op.key<'cross-seed:operation:~'
+        AND json_extract(op.value_json,'$.command.scope.media')='tv'
+        AND json_extract(op.value_json,'$.command.scope.targetId') IN (SELECT id FROM tv_targets WHERE entry_id=?)
+        AND (json_extract(op.value_json,'$.outcome.kind') IS NULL
+          OR (json_extract(op.value_json,'$.outcome.kind')='seeding' AND t.id IS NOT NULL))
+      ORDER BY op.updated_at DESC,op.key LIMIT 50`).all(entryId);
+  }
   owns(scope: CrossSeedScope, clientId: string, nativeId: string): boolean {
     crossSeedScopeSchema.parse(scope);
     if (isBookCrossSeedScope(scope)) return !!this.db.query(`SELECT 1 FROM media_torrents t

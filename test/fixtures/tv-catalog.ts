@@ -1,4 +1,4 @@
-import type { TvCatalog, TvSeriesDetails } from "../../src/tv/catalog";
+import type { TvCatalog, TvCatalogDetails } from "../../src/tv/catalog";
 import { canonicalTvSeasons } from "../../src/tv/catalog";
 import type { TvCatalogEntry } from "../../src/tv/types";
 
@@ -26,10 +26,12 @@ export function fixtureTvCatalog() {
   const calls = { search: 0, details: 0, resolve: 0 };
   const catalog: TvCatalog = {
     async search() { calls.search++; return [summary]; },
-    async details(tmdbId): Promise<TvSeriesDetails> {
+    async details(tmdbId): Promise<TvCatalogDetails> {
       calls.details++;
       const { seasons } = canonicalTvSeasons(entry, tmdbId);
-      return { ...summary, numberingScheme: "tvdb:aired", seasons: [...seasons].map(([seasonNumber, episodes]) => ({
+      return { ...summary, numberingScheme: "tvdb:aired",
+        episodeKeysBySeason: new Map([...seasons].map(([number, episodes]) => [number, episodes.map(ep => ep.key)])),
+        seasons: [...seasons].map(([seasonNumber, episodes]) => ({
         seasonNumber, title: `Season ${seasonNumber}`, episodeCount: episodes.length,
         airDate: null, requestable: true, unavailableReason: null,
       })) };

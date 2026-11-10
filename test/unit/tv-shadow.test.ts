@@ -159,19 +159,19 @@ describe("TV immutable audit capture", () => {
     } finally { upserts.mockRestore(); }
   });
 
-  test("entry-scoped episode numbering reloads use the existing identity index, not a catalog-wide scan per episode", async () => {
+  test("loads episode numbering once per entry with the identity index", async () => {
     const f = await setup();
     const queries = spyOn(f.db, "query");
     let lookups: string[];
     try {
       await syncTvShadow(f.ctx);
-      lookups = [...new Set(queries.mock.calls.map(([sql]) => sql).filter((sql) =>
-        sql.includes("SELECT entry_id AS entryId") && sql.includes("FROM tv_episode_numbering")))];
+      lookups = queries.mock.calls.map(([sql]) => sql).filter(sql =>
+        sql.includes("AS entryId") && sql.includes("FROM tv_episode_numbering WHERE entry_id=?"));
     } finally { queries.mockRestore(); }
-    expect(lookups!).not.toHaveLength(0);
+    expect(lookups!).toHaveLength(1);
     for (const sql of lookups!) {
       const plan = f.db.query(`EXPLAIN QUERY PLAN ${sql}`).all(...Array.from({ length: sql.match(/\?/g)?.length ?? 0 }, () => 1)) as { detail: string }[];
-      expect(plan.map((row) => row.detail).join(" ")).toMatch(/SEARCH tv_episode_numbering .*\(entry_id=\? AND episode_id=\?\)/);
+      expect(plan.map((row) => row.detail).join(" ")).toMatch(/SEARCH tv_episode_numbering .*\(entry_id=\?\)/);
       expect(plan.some((row) => /SCAN tv_episode_numbering/.test(row.detail))).toBe(false);
     }
   });

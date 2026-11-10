@@ -9,8 +9,9 @@ export function useLocation() {
     () => location.pathname + location.search,
   );
 }
-export function navigate(href: string) {
-  history.pushState(null, "", href);
+export function navigate(href: string, { replace = false } = {}) {
+  if (replace) history.replaceState(null, "", href);
+  else history.pushState(null, "", href);
   window.dispatchEvent(new PopStateEvent("popstate"));
   window.scrollTo(0, 0);
 }

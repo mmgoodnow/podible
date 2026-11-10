@@ -60,6 +60,7 @@ describe("schema migrations", () => {
     db.exec(`
       CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
       CREATE TABLE settings (id INTEGER PRIMARY KEY, value_json TEXT NOT NULL);
+      CREATE TABLE app_state (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE manifestations (id INTEGER PRIMARY KEY);
       CREATE TABLE assets (id INTEGER PRIMARY KEY);
       CREATE TABLE asset_files (id INTEGER PRIMARY KEY);

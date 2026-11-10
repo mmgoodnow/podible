@@ -41,10 +41,14 @@ try {
   page.on("request",item => { if (/(?:tvShadow|movieShadow|movieDualWrite)\.|\/tv\.(?:get|list|status)(?:$|,)/.test(new URL(item.url()).pathname)) diagnostics.push(item.url()); });
   await page.goto(new URL(`/tv/requests/${request.requestId}`,url).href);
   await page.getByRole("heading",{ name: "Fixture Sequel", exact: true }).waitFor();
-  await page.getByRole("heading",{ name: "Waiting for upcoming episodes", exact: true }).waitFor();
+  await page.getByRole("heading",{ name: "Available in Plex", exact: true }).waitFor();
+  assert.equal(new URL(page.url()).pathname,`/tv/library/${request.entryId}`);
   await page.getByRole("heading",{ name: "Season 2", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Season 2", exact: true }).click();
+  const episodes = page.getByRole("list", { name: "Season 2 episodes" });
+  await episodes.getByRole("listitem").filter({ hasText: "Fixture episode 1" }).getByText("Ready in Plex").waitFor();
+  await episodes.getByRole("listitem").filter({ hasText: "Fixture episode 2" }).getByText("Upcoming").waitFor();
   await page.getByText("1 of 2 episodes verified in Plex.",{ exact: true }).waitFor();
-  await page.getByText("1 episodes have not aired or do not yet have an air date.",{ exact: false }).waitFor();
   assert.equal(await page.getByRole("progressbar",{ name: "Available TV episodes" }).getAttribute("value"),"1");
   assert.equal(await page.getByRole("heading",{ name: "Activity", exact: true }).count(),0,"Request page displays a raw execution history");
   assert.equal(await page.getByRole("button",{ name: "Search missing episodes" }).count(),0,"Future-only intent should not invite searches");
@@ -64,12 +68,20 @@ try {
   await page.getByText("1 of 2 episodes verified in Plex.",{ exact: true }).waitFor();
   assert.equal(await page.locator("header").count(),1,"Mobile TV request rendered duplicate app shells");
   assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"),false,"Native TV request overflows mobile viewport");
-  assert.equal(await page.getByRole("button",{ name: "Withdraw my request", exact: true }).isVisible(),true);
+  assert.equal(await page.getByRole("button",{ name: "Withdraw request", exact: true }).isVisible(),true);
   await page.screenshot({ path: path.join(artifacts,"tv-request-mobile.png"), animations: "disabled" });
   console.log("Native TV browser: persisted coverage and desktop/mobile screenshots verified");
 
   await page.goto(new URL(`/tv/requests/${withGaps.requestId}`,url).href);
   await page.getByRole("heading", { name: "1 episode batch in progress" }).waitFor();
+  await page.getByRole("progressbar", { name: "Active downloads progress" }).waitFor();
+  assert.equal(await page.getByRole("progressbar", { name: "Season 1 downloads progress" }).getAttribute("value"),String(3 * 1024 ** 3));
+  assert.equal(await page.getByRole("progressbar", { name: "Season 2 downloads progress" }).count(),0);
+  await page.getByText("3 GiB of 8 GiB · 2 MiB/s", { exact: true }).first().waitFor();
+  await page.getByRole("button", { name: "Season 1", exact: true }).press("Enter");
+  await page.getByRole("list", { name: "Season 1 episodes" }).getByText("Not in Plex").waitFor();
+  assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"),false,"Expanded episode list overflows mobile viewport");
+  await page.screenshot({ path: path.join(artifacts,"tv-request-transfer-mobile.png"), fullPage: true, animations: "disabled" });
   await page.getByRole("button", { name: "Search missing episodes", exact: true }).click();
   await page.getByRole("heading", { name: "2 episode batches in progress" }).waitFor();
   assert.equal(await page.getByRole("button", { name: "Search missing episodes" }).count(), 0);
@@ -88,7 +100,8 @@ try {
   assert.equal(await adminPage.getByRole("heading",{ name: "Fixture Sequel", exact: true }).count(),0,"Admin opened another user's private request");
   const entry = (await api.catalog.available.query({ query: "Fixture Sequel" })).tv.find(entry => entry.key === request.entry.key)!;
   await adminPage.goto(new URL(`/tv/library/${entry.entryId}`,url).href);
-  await adminPage.getByText("1 episodes published in Plex.",{ exact: true }).waitFor();
+  await adminPage.getByText("1 of 2 episodes verified in Plex.",{ exact: true }).waitFor();
+  assert.equal(await adminPage.getByRole("button", { name: "Withdraw request", exact: true }).count(),0);
   let retentionAudits = 0;
   adminPage.on("request",item => { if (item.url().includes("tvRetention.audit")) retentionAudits++; });
   await adminPage.goto(new URL("/tv-retention",url).href);
@@ -104,10 +117,10 @@ try {
 
   activePage = page;
   page.once("dialog",dialog => dialog.accept());
-  await page.getByRole("button",{ name: "Withdraw my request", exact: true }).click();
-  await page.getByRole("heading",{ name: "Request withdrawn", exact: true }).waitFor();
+  await page.getByRole("button",{ name: "Withdraw request", exact: true }).click();
+  await page.getByRole("button",{ name: "Withdraw request", exact: true }).waitFor({ state: "detached" });
   await page.reload();
-  await page.getByRole("heading",{ name: "Request withdrawn", exact: true }).waitFor();
+  await page.getByRole("heading",{ name: "Available in Plex", exact: true }).waitFor();
   assert.equal((await api.tv.myRequest.query({ requestId: request.requestId })).request.withdrawn,true);
   assert.equal((await api.catalog.tvEntry.query({ entryId: entry.entryId })).availableEpisodes,1,"Withdrawal removed existing published coverage");
   console.log("Native TV browser: withdrawal persisted without deleting published episodes");

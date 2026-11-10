@@ -7,31 +7,56 @@
 .tv-request-meta { color: var(--muted); font-size: .9rem; margin: .6rem 0; }
 .tv-request-count { font-size: 1.25rem; }
 .tv-request-count strong { font-size: 2rem; }
-.tv-request-summary progress, .tv-season-card progress { width: 100%; height: 7px; accent-color: var(--ink); }
+.tv-request-summary progress, .tv-transfer progress { width: 100%; height: 7px; accent-color: var(--ink); }
 .tv-request-summary > p:not(.tv-request-count):not(.tv-request-meta) { font-size: .9rem; margin: .6rem 0; }
 .tv-request-update { border-left: 3px solid var(--ink); padding: 1.1rem 1.5rem; background: #25433208; margin: 1.5rem 0; }
 .tv-request-update h3 { margin: 0; font-size: 1.2rem; }
 .tv-request-update p { max-width: 78ch; margin: .7rem 0; }
 .tv-request-paused { border-color: var(--accent); }
 .tv-request-seasons { margin: 2rem 0; }
-.tv-request-section-heading { display: flex; gap: 1rem; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
-.tv-request-section-heading h2 { font-size: 1.5rem; margin: 0; }
-.tv-request-section-heading button { font-size: .9rem; padding: .5rem .8rem; }
-.tv-season-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: .8rem; }
-.tv-season-card { border: 1px solid var(--line); background: var(--paper); border-radius: 9px; padding: 1rem 1.2rem; }
-.tv-season-card > div { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; }
+.tv-request-seasons > h2 { font-size: 1.5rem; margin: 0 0 1rem; }
+.tv-season-list { display: grid; gap: .65rem; }
+.tv-season-card { border: 1px solid var(--line); background: var(--paper); border-radius: 9px; }
 .tv-season-card h3 { font-size: 1.1rem; margin: 0; }
-.tv-season-card p { font-size: .95rem; margin: .8rem 0 .4rem; }
+.tv-season-toggle { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto) .6rem; align-items: center; gap: .8rem;
+  width: 100%; color: var(--ink); background: transparent; border: 0; padding: .9rem 1.2rem; text-align: left; }
+.tv-season-toggle:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.tv-season-name { font-size: 1.06rem; font-weight: bold; }
+.tv-season-facts { display: flex; flex-wrap: wrap; justify-content: end; align-items: baseline; gap: .3rem .9rem; }
+.tv-season-count { font-size: .86rem; font-variant-numeric: tabular-nums; }
 .tv-season-stage { color: var(--muted); font-size: .8rem; }
-.tv-season-downloading, .tv-season-searching, .tv-season-verifying, .tv-season-publishing { border-color: var(--ink); }
+.tv-season-chevron { width: .45rem; height: .45rem; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+.tv-season-toggle[aria-expanded="true"] .tv-season-chevron { transform: rotate(225deg); }
 .tv-season-failed .tv-season-stage { color: var(--accent); }
-.tv-request-actions { border-top: 1px solid var(--line); padding-top: 1.5rem; }
+.tv-transfer { margin: .6rem 0 .15rem; font-size: .85rem; font-variant-numeric: tabular-nums; }
+.tv-transfer-caption { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .3rem 1rem; }
+.tv-transfer-caption span { color: var(--muted); }
+.tv-transfer progress { accent-color: var(--accent); }
+.tv-season-transfer { padding: 0 1.2rem .8rem; }
+.tv-episode-list { list-style: none; margin: 0; padding: 0 1.2rem; border-top: 1px solid var(--line); }
+.tv-episode-list li { display: grid; grid-template-columns: 2rem minmax(0, 1fr) 7.5rem 6rem; gap: .65rem; align-items: baseline;
+  padding: .65rem 0; font-size: .88rem; }
+.tv-episode-list li + li { border-top: 1px solid var(--line); }
+.tv-episode-number, .tv-episode-list time, .tv-episode-status { color: var(--muted); font-size: .8rem; }
+.tv-episode-number { font-variant-numeric: tabular-nums; }
+.tv-episode-title { overflow-wrap: anywhere; }
+.tv-episode-status { text-align: right; }
+.tv-episode-ready { color: var(--ink); font-weight: bold; }
+.tv-request-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .55rem 1rem;
+  border-top: 1px solid var(--line); padding: 1rem 0; }
 @media (max-width: 600px) {
   .tv-request-hero { align-items: flex-start; gap: 1rem; }
   .tv-request-poster { width: 100px; }
   .tv-request-summary h1 { font-size: 2rem; }
   .tv-request-summary h2 { font-size: 1rem; }
   .tv-request-meta { font-size: .8rem; }
-  .tv-request-section-heading { align-items: flex-start; flex-direction: column; }
   .tv-request-update { padding: 1rem; }
+  .tv-season-toggle, .tv-episode-list { padding-inline: .85rem; }
+  .tv-season-transfer { padding-inline: .85rem; }
+  .tv-episode-list li { grid-template-columns: 1.6rem minmax(0, 1fr) auto; gap: .25rem .5rem; }
+  .tv-episode-list time { grid-row: 2; grid-column: 2; }
+  .tv-episode-status { grid-row: 1; grid-column: 3; }
 }
+.tv-cross-seeds { list-style: none; padding: 0; margin: 0; }
+.tv-cross-seeds li { display: grid; gap: .3rem; border-bottom: 1px solid var(--line); padding: .85rem 0; overflow-wrap: anywhere; }
+.tv-cross-seeds li > span { color: var(--muted); font-size: .9rem; }

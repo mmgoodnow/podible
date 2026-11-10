@@ -257,8 +257,7 @@ async function operationalView(repo: BooksRepo, settings: AppSettings, includeJo
       const stage = row.stage === "publishing" && row.publishing_acquisition !== row.id ? "publication-queued" : row.stage;
       contexts.set(row.job_id, {
         key: `tv:${row.id}`, title: label(row.title ?? `TV target ${row.target_id}`), media: "tv", targetId: row.target_id,
-        href: row.title === null ? null : row.request_user_id === actorUserId ? `/tv/requests/${row.request_id}`
-          : row.available ? `/tv/library/${row.entry_id}` : null,
+        href: row.title !== null && (row.request_user_id === actorUserId || row.available) ? `/tv/library/${row.entry_id}` : null,
         stage: parsed.success && parsed.data.waitingForSources ? "pack-pending" : stage,
         ...(parsed.success && parsed.data.waitingForSources && parsed.data.waitingPack
           ? { waitingPack: { ...parsed.data.waitingPack, title: label(parsed.data.waitingPack.title) } } : {}),

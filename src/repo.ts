@@ -1645,6 +1645,11 @@ export class BooksRepo {
     assertPositiveInt(jobId);
     return this.jobRows("WHERE j.id = ?", [jobId])[0] ?? null;
   }
+  getJobs(ids: number[]): Map<number, JobRow> {
+    if (!ids.length) return new Map();
+    return new Map(this.jobRows("WHERE j.id IN (SELECT value FROM json_each(?))", [JSON.stringify(ids)])
+      .map(job => [job.id, job]));
+  }
   /** Fresh execution fence, without reading payloads, step attempts or history. */
   getJobStatus(jobId: number): JobStatus | null {
     assertPositiveInt(jobId);

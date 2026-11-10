@@ -3,12 +3,15 @@ import { Database } from "bun:sqlite";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { initTRPC } from "@trpc/server";
 import { finalizeJobJournalMigration, runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { hashSessionToken } from "../../src/auth";
 import { createPodibleFetchHandler } from "../../src/http";
 import { createTvRouter, tvRouter } from "../../src/rpc/tv-router";
+import { catalogRouter } from "../../src/rpc/catalog-router";
+import { crossSeedCommandSchema, crossSeedStateKey } from "../../src/media/cross-seed-state";
 import { executeMethod, type RpcMethodDefinition } from "../../src/rpc/framework";
 import { RpcError, type RpcContext } from "../../src/rpc/shared";
 import { TmdbTvCatalog, TvCatalogError } from "../../src/tv/catalog";
@@ -77,6 +80,95 @@ test("own-request progress groups exact season coverage, omits private evidence,
     await s.call("withdraw", { requestId: requested.requestId });
     await expect(s.call("retryMyRequest", { requestId: requested.requestId })).rejects.toThrow("withdrawn");
     expect(JSON.stringify(requested.progress)).not.toContain("decision_json");
+  } finally { await s.close(); }
+});
+
+test("request detail shows only fresh, relevant transfer totals and exact episode availability", async () => {
+  const s = await setup();
+  try {
+    const entry = s.fixture.entry(); entry.episodes.at(-1)!.airDate = "2020-01-01"; s.fixture.setEntry(entry);
+    const { request } = await s.call("request", { tmdbId: 70, seasonNumbers: [1,2] }) as any;
+    const batches = s.repo.tv.acquisitions(request.targetId);
+    expect(batches).toHaveLength(2);
+    const attach = (hash: string, observedAt: string, bytesDone: number) => {
+      const ref = { clientId: "transmission:fixture", nativeId: hash.repeat(40) };
+      const location = { rootId: "tv", relativePath: "private-slot" };
+      const id = s.repo.tv.bindDownload(batches[0]!.id, ref, location, "private-offer");
+      s.repo.tv.bindDownload(batches[1]!.id, ref, location, "private-offer");
+      s.repo.tv.observeDownload(id, { ref, location, observedAt, bytesDone, sizeBytes: 1000,
+        downloadBytesPerSecond: 50, state: "downloading", complete: false, message: "private tracker diagnostic" });
+      return id;
+    };
+    for (const b of batches) s.repo.tv.event(request.targetId, b.id, `download-${b.id}`, "downloading", "Downloading");
+    attach("a", new Date().toISOString(), 250);
+    attach("b", new Date(Date.now() - 61_000).toISOString(), 999);
+    const rejected = attach("c", new Date().toISOString(), 500);
+    for (const b of batches) s.repo.tv.recordEpisodeRejection(b.id, "old-attempt", rejected, "private-offer", []);
+    const detail = (await s.call("myRequest", { requestId: request.requestId }) as any).request;
+    const expected = { bytesDone: 250, sizeBytes: 1000, bytesPerSecond: 50 };
+    expect(detail.progress.download).toEqual(expected);
+    expect(detail.progress.seasons.map((season: any) => season.download)).toEqual([expected, expected]);
+    expect(detail.progress.seasons[0].episodes.map(({ number, status }: any) => [number, status]))
+      .toEqual([[1, "missing"], [2, "upcoming"], [3, "upcoming"]]);
+    expect(detail.availableEpisodes).toBe(0);
+    expect(JSON.stringify(detail)).not.toContain("private tracker diagnostic");
+    expect(JSON.stringify(detail)).not.toContain("private-slot");
+    expect(JSON.stringify(detail)).not.toContain("private-offer");
+    const list = await s.call("myRequests") as any;
+    expect(list.requests[0].progress).toMatchObject({ download: null, seasons: [{ episodes: [] }, { episodes: [] }] });
+  } finally { await s.close(); }
+});
+
+test("one show exposes exact Plex coverage and safe cross-seeds, not another viewer's request actions", async () => {
+  const s = await setup();
+  try {
+    const { request } = await s.call("request", { tmdbId: 70, seasonNumbers: [2] }) as any;
+    const episodes = s.repo.tv.entry(request.entryId)!.episodes;
+    const show = () => executeMethod(catalogRouter.routes.tvEntry, s.ctx("two"), { entryId: request.entryId });
+    await expect(show()).rejects.toMatchObject({ code: -32602 });
+    const details = async () => (await s.call("details", { tmdbId: 70 }, "two")) as any;
+    expect((await details()).seasons.find((season: any) => season.number === 2)).toEqual({ number: 2, available: 0, requested: true });
+    const a = s.repo.tv.startAcquisition(request.targetId, "initial",
+      () => s.repo.createJob({ type: "tv_acquire" }).id, request.requestId).acquisition;
+    const published = episodes.filter(ep => ["tvdb:7004", "tvdb:7001"].includes(ep.key));
+    const version = s.repo.tv.recordVersion(a.id, { identityVerified: true }, published.map(ep => ({
+      id: randomUUID(), relativePath: `files/${ep.id}.mkv`, sizeBytes: 5, probe: {}, episodeIds: [ep.id],
+    })));
+    s.repo.tv.stagePublication(request.targetId, version, 0);
+    s.repo.tv.promotePublication(request.targetId, version, 0);
+    s.repo.tv.clearPublication(request.targetId, version);
+    s.repo.tv.finishAcquisition(a.id);
+    expect((await details()).showId).toBe(request.entryId);
+    expect((await details()).seasons.filter((season: any) => season.number > 0)).toEqual([
+      { number: 1, available: 1, requested: false }, { number: 2, available: 1, requested: false },
+    ]);
+    const before = s.count("tv_requests");
+    await expect(s.call("request", { tmdbId: 70, seasonNumbers: [2] }, "two")).rejects.toThrow("already in Plex");
+    expect(s.count("tv_requests")).toBe(before);
+
+    const operationId = randomUUID(), selectionCopyId = randomUUID(), infoHash = "a".repeat(40);
+    const scope = { media: "tv", targetId: request.targetId } as const;
+    const command = crossSeedCommandSchema.parse({ operationId, selectionCopyId, scope });
+    const seedJob = s.repo.createJob({ type: "torrent_reuse" });
+    const ref = { clientId: "transmission:fixture", nativeId: infoHash };
+    const record = s.repo.reserveReuseTorrent(ref, { rootId: "tv", relativePath: "private-path" }, "selected-copy", scope, operationId);
+    s.repo.setJsonState(`cross-seed:selected-copy:${selectionCopyId}`, { offer: {
+      title: "Fixture S02 https://tracker.invalid/private-token", provider: "Fixture Indexer", url: "https://private.invalid/download",
+    } });
+    s.repo.setJsonState(crossSeedStateKey(operationId), { command, jobId: seedJob.id, outcome: {
+      kind: "seeding", torrentId: record.id, reusedBytes: 42, infoHash, reason: "private diagnostic",
+    } });
+    const visible = await show();
+    expect(visible.availableEpisodes).toBe(2);
+    expect(visible.requests).toEqual([]);
+    expect(visible.progress.seasons.find(season => season.seasonNumber === 1)?.episodes[0]).toMatchObject({ status: "ready" });
+    expect(visible.crossSeeds).toEqual([{ title: "Fixture S02", provider: "Fixture Indexer", status: "registered", reusedBytes: 42 }]);
+    for (const secret of [infoHash, "private-path", "private-token", "private.invalid", "private diagnostic"])
+      expect(JSON.stringify(visible)).not.toContain(secret);
+    const { request: partial } = await s.call("request", { tmdbId: 70, seasonNumbers: [1] }, "two") as any;
+    const cards = await s.call("requestCards", {}, "two") as any;
+    expect(cards.requests).toMatchObject([{ requestId: partial.requestId, entryId: request.entryId, requestedEpisodes: 3, availableEpisodes: 1 }]);
+    expect(cards.requests[0].entry).not.toHaveProperty("episodes");
   } finally { await s.close(); }
 });
 

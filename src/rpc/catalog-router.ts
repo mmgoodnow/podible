@@ -5,6 +5,8 @@ import { catalogMovieSchema } from "../movies/types";
 import { tvCatalogEntrySchema } from "../tv/types";
 import { homeRecentSchema } from "../media/home-recent";
 import { homeDiscovery, homeDiscoverySchema } from "../media/home-discovery";
+import { tvRequestProgress, tvRequestProgressSchema } from "../tv/request-progress";
+import { nativeTvRequestScope } from "../tv/service";
 const id = z.number().int().positive();
 export const catalogRouter = defineRouter({
   recent: defineMethod({ auth: "user", readOnly: true,
@@ -26,13 +28,45 @@ export const catalogRouter = defineRouter({
       return { movies: movies.slice(0, input.limit), tv: tv.slice(0, input.limit), movieTruncated: movies.length > input.limit, tvTruncated: tv.length > input.limit };
     } }),
   tvEntry: defineMethod({ auth: "user", readOnly: true,
-    summary: "Read shared published TV work metadata without exposing private acquisition/request diagnostics.",
+    summary: "Read one TV show with episode availability, acquisition progress and the viewer's request actions.",
     paramsSchema: z.object({ entryId: id }).strict(),
-    resultSchema: z.object({ entry: tvCatalogEntrySchema, availableEpisodes: z.number().int().positive() }),
+    resultSchema: z.object({ entry: tvCatalogEntrySchema, availableEpisodes: z.number().int().nonnegative(),
+      progress: tvRequestProgressSchema,
+      requests: z.array(z.object({ id, seasons: z.array(z.number()), searchable: z.boolean() })),
+      crossSeeds: z.array(z.object({ title: z.string(), provider: z.string().nullable(),
+        status: z.enum(["queued", "preparing", "registered"]), reusedBytes: z.number().nonnegative().nullable() })),
+    }),
     handler(ctx, input) {
-      const availableEpisodes = ctx.repo.tv.availableEpisodeCount(input.entryId);
-      const entry = availableEpisodes ? ctx.repo.tv.entry(input.entryId) : null;
-      if (!entry) throw new RpcError(-32602, "Published TV work not found");
-      return { entry, availableEpisodes };
+      const tv = ctx.repo.tv;
+      const available = new Set(tv.publishedEpisodeIds(input.entryId));
+      const requests = tv.showRequests(input.entryId, ctx.session!.user_id);
+      const entry = available.size || requests.length ? tv.entry(input.entryId) : null;
+      if (!entry) throw new RpcError(-32602, "TV show not found");
+      const acquisitions = tv.showAcquisitions(entry.id), events = tv.showProgressEvents(entry.id);
+      const seeds = ctx.repo.crossSeed.showRegistrations(entry.id);
+      const jobStatuses = ctx.repo.getJobStatuses([
+        ...acquisitions.flatMap(a => a.job_id === null ? [] : [a.job_id]),
+        ...seeds.flatMap(s => s.registered ? [] : [s.jobId]),
+      ]);
+      const progress = tvRequestProgress({ episodes: entry.episodes, available, events, acquisitions, jobStatuses,
+        readTransfers: ids => tv.requestDownloadObservations(ids) });
+      // Only display provider-facing labels, never raw offers, client errors, or torrent identifiers.
+      const label = (value: string | null) => value?.replace(/(?:https?:\/\/|magnet:\?)[^\s]+/gi, "").trim().slice(0, 350) || null;
+      const requested = tv.showRequestedEpisodeIds(entry.id, ctx.session!.user_id);
+      return { entry: { ...entry, episodes: [] }, availableEpisodes: available.size, progress,
+        requests: requests.filter(r => r.withdrawn_at === null).map(r => {
+          const scope = new Set(requested.get(r.id) ?? []);
+          const episodes = entry.episodes.filter(ep => scope.has(ep.id));
+          const own = tvRequestProgress({ episodes, available, events,
+            acquisitions: acquisitions.filter(a => a.request_id === r.id), jobStatuses });
+          return { id: r.id, seasons: nativeTvRequestScope(r)?.seasonNumbers ?? own.seasons.map(s => s.seasonNumber),
+            searchable: own.searchableAiredEpisodes > 0 };
+        }),
+        crossSeeds: seeds.flatMap(s => {
+          const status: "registered" | "preparing" | "queued" | null = s.registered ? "registered" : jobStatuses.get(s.jobId) === "running" ? "preparing"
+            : jobStatuses.get(s.jobId) === "queued" ? "queued" : null;
+          return status ? [{ title: label(s.title) ?? "Cross-seed release", provider: label(s.provider),
+            status, reusedBytes: s.reusedBytes }] : [];
+        }) };
     } }),
 });

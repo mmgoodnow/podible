@@ -157,17 +157,16 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
           <p className="synopsis">
             {movie.overview || "No description available."}
           </p>
-          {availableInLibrary && !existing && <p className="state ready">Available in Plex</p>}
-          {existing ? (
+          {availableInLibrary ? <p className="state ready">Available in Plex</p> : existing ? (
             <Link className="button" href={`/requests/${existing.id}`}>
-              {existing.available ? "Available in Plex" : "Track request"}
+              Track request
             </Link>
           ) : (
             <button
               disabled={request.isPending}
               onClick={() => request.mutate({ tmdbId })}
             >
-              {request.isPending ? availableInLibrary ? "Adding..." : "Requesting..." : availableInLibrary ? "Add to my library" : "Request movie"}
+              {request.isPending ? "Requesting..." : "Request movie"}
             </button>
           )}
           {request.isError && <Failure message={request.error.message} />}

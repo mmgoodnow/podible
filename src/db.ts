@@ -1206,6 +1206,16 @@ export function runMigrations(db: Database): void {
       source_json TEXT NOT NULL
     );
   `));
+  apply(59, () => db.exec(`
+    CREATE INDEX tv_active_episodes_by_episode ON tv_active_episodes(episode_id);
+    CREATE INDEX tv_request_episodes_by_episode ON tv_request_episodes(episode_id);
+    CREATE INDEX tv_entries_by_tmdb ON tv_entries(json_extract(metadata_json,'$.tmdbId'));
+    CREATE INDEX tv_acquisitions_by_request ON tv_acquisitions(request_id,id DESC);
+    CREATE INDEX cross_seed_operations_by_show ON app_state(
+      json_extract(value_json,'$.command.scope.targetId'),updated_at DESC,key
+    ) WHERE key>='cross-seed:operation:' AND key<'cross-seed:operation:~'
+      AND json_extract(value_json,'$.command.scope.media')='tv';
+  `));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

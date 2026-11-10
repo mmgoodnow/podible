@@ -133,7 +133,14 @@ if (process.env.TV_FIXTURE) {
       episodes: catalog.episodes.map((episode, index) => ({ ...episode, key: `tvdb:${2001 + index}`, airDate: "2020-01-01",
         numbering: [{ scheme: "tvdb:aired", season: index + 1, episode: 1, absolute: null, source: "fixture:aired" }] })) };
     const withGaps = repo.tv.request(owner.id, missingCatalog, settings.movies.qualityPolicy, missingCatalog.episodes.map(ep => ep.key));
-    queueTvAcquisition(repo, withGaps.requestId, "initial", [withGaps.episodeIds[0]!]);
+    const batch = queueTvAcquisition(repo, withGaps.requestId, "initial", [withGaps.episodeIds[0]!]).acquisition;
+    const ref = { clientId: "transmission:fixture", nativeId: "a".repeat(40) };
+    const location = { rootId: "tv", relativePath: "fixture-download" };
+    const torrentId = repo.tv.bindDownload(batch.id, ref, location, "fixture-transfer");
+    repo.tv.event(withGaps.targetId, batch.id, "tv-browser-downloading", "downloading", "Downloading fixture release");
+    repo.tv.observeDownload(torrentId, { ref, location, state: "downloading", complete: false,
+      bytesDone: 3 * 1024 ** 3, sizeBytes: 8 * 1024 ** 3, downloadBytesPerSecond: 2 * 1024 ** 2,
+      message: null, observedAt: new Date().toISOString() });
   }
   const acquisition = repo.tv.startAcquisition(native.targetId, "initial", (id) => repo.createJob({
     type: "tv_acquire", payload: { acquisitionId: id }, status: "succeeded", idempotencyKey: "tv-browser-seed",

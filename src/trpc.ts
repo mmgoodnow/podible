@@ -127,6 +127,7 @@ export const appRouter = t.router({
     details: procedure.input(tvRouter.routes.details.paramsSchema).output(tvRouter.routes.details.resultSchema).query(({ ctx, input }) => executeMethod(tvRouter.routes.details, ctx, input)),
     request: procedure.input(tvRouter.routes.request.paramsSchema).output(tvRouter.routes.request.resultSchema).mutation(({ ctx, input }) => executeMethod(tvRouter.routes.request, ctx, input)),
     myRequests: procedure.input(tvRouter.routes.myRequests.paramsSchema).output(tvRouter.routes.myRequests.resultSchema).query(({ ctx, input }) => executeMethod(tvRouter.routes.myRequests, ctx, input)),
+    requestCards: procedure.input(tvRouter.routes.requestCards.paramsSchema).output(tvRouter.routes.requestCards.resultSchema).query(({ ctx, input }) => executeMethod(tvRouter.routes.requestCards, ctx, input)),
     myRequest: procedure.input(tvRouter.routes.myRequest.paramsSchema).output(tvRouter.routes.myRequest.resultSchema).query(({ ctx, input }) => executeMethod(tvRouter.routes.myRequest, ctx, input)),
     withdraw: procedure.input(tvRouter.routes.withdraw.paramsSchema).output(tvRouter.routes.withdraw.resultSchema).mutation(({ ctx, input }) => executeMethod(tvRouter.routes.withdraw, ctx, input)),
     retryMyRequest: procedure.input(tvRouter.routes.retryMyRequest.paramsSchema).output(tvRouter.routes.retryMyRequest.resultSchema).mutation(({ ctx, input }) => executeMethod(tvRouter.routes.retryMyRequest, ctx, input)),

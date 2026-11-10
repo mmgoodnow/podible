@@ -19,6 +19,7 @@ export const tvSeriesDetailsSchema = tvSearchResultSchema.extend({
 });
 export type TvSearchResult = z.infer<typeof tvSearchResultSchema>;
 export type TvSeriesDetails = z.infer<typeof tvSeriesDetailsSchema>;
+export type TvCatalogDetails = TvSeriesDetails & { episodeKeysBySeason?: ReadonlyMap<number, string[]> };
 export class TvCatalogError extends Error {
   constructor(message: string, readonly kind: "configuration" | "unavailable" | "unsupported" = "unavailable") {
     super(message);
@@ -26,7 +27,7 @@ export class TvCatalogError extends Error {
 }
 export interface TvCatalog {
   search(query: string): Promise<TvSearchResult[]>;
-  details(tmdbId: number): Promise<TvSeriesDetails>;
+  details(tmdbId: number): Promise<TvCatalogDetails>;
   resolve(tmdbId: number): Promise<TvCatalogEntry>;
 }
 
@@ -252,11 +253,13 @@ export class TmdbTvCatalog implements TvCatalog {
     };
   }
   async resolve(tmdbId: number) { return (await this.mapped(await this.metadata(tmdbId))).entry; }
-  async details(tmdbId: number): Promise<TvSeriesDetails> {
+  async details(tmdbId: number): Promise<TvCatalogDetails> {
     const metadata = await this.metadata(tmdbId);
     let seasons: TvSeriesDetails["seasons"];
+    let episodeKeysBySeason: TvCatalogDetails["episodeKeysBySeason"];
     try {
       const mapped = await this.mapped(metadata);
+      episodeKeysBySeason = new Map([...mapped.seasons].map(([season, episodes]) => [season, episodes.map(ep => ep.key)]));
       seasons = [...mapped.seasons].sort(([a], [b]) => a - b).map(([seasonNumber, episodes]) => ({
         seasonNumber, title: seasonNumber === 0 ? "Specials" : `Season ${seasonNumber}`, episodeCount: episodes.length,
         airDate: episodes.map((ep) => ep.airDate).filter((date): date is string => !!date).sort()[0] ?? null,
@@ -268,7 +271,7 @@ export class TmdbTvCatalog implements TvCatalog {
       seasons = metadata.seasons.map((s) => ({ seasonNumber: s.season_number, title: s.name,
         episodeCount: s.episode_count, airDate: s.air_date ?? null, requestable: false, unavailableReason: error.message }));
     }
-    return { ...summary(metadata), numberingScheme: "tvdb:aired", seasons };
+    return { ...summary(metadata), numberingScheme: "tvdb:aired", seasons, episodeKeysBySeason };
   }
 }
 

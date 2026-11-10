@@ -148,6 +148,67 @@ export class TvRepo {
     return (this.db.query(`SELECT COUNT(DISTINCT a.episode_id) AS n FROM tv_active_episodes a
       JOIN tv_targets t ON t.id=a.target_id WHERE t.entry_id=?`).get(entryId) as { n: number }).n;
   }
+  publishedEpisodeIds(entryId: number): number[] {
+    return this.db.query<{ id: number }, [number]>(`SELECT DISTINCT a.episode_id AS id
+      FROM tv_targets t JOIN tv_active_episodes a ON a.target_id=t.id WHERE t.entry_id=?`)
+      .all(entryId).map(row => row.id);
+  }
+
+  publishedEpisodeKeys(keys: Iterable<string>): Set<string> {
+    return new Set(this.db.query<{ key: string }, [string]>(`SELECT e.episode_key AS key
+      FROM json_each(?) keys JOIN tv_episodes e ON e.episode_key=keys.value
+      WHERE EXISTS (SELECT 1 FROM tv_active_episodes a WHERE a.episode_id=e.id)`)
+      .all(JSON.stringify([...keys])).map(row => row.key));
+  }
+
+  requestedEpisodeKeys(keys: Iterable<string>): Set<string> {
+    return new Set(this.db.query<{ key: string }, [string]>(`SELECT e.episode_key AS key
+      FROM json_each(?) keys JOIN tv_episodes e ON e.episode_key=keys.value
+      WHERE EXISTS (SELECT 1 FROM tv_request_episodes m JOIN tv_requests r ON r.id=m.request_id
+        LEFT JOIN retention_resources p ON p.namespace='tv-target' AND p.resource_id=CAST(r.target_id AS TEXT)
+        WHERE m.episode_id=e.id AND r.withdrawn_at IS NULL AND p.desired_presence IS NOT 'evicted')`)
+      .all(JSON.stringify([...keys])).map(row => row.key));
+  }
+
+  showRequests(entryId: number, userId: number): TvRequest[] {
+    return this.db.query<TvRequest, [number, number]>(`SELECT r.* FROM tv_requests r
+      JOIN tv_targets t ON t.id=r.target_id WHERE t.entry_id=? AND r.user_id=?
+      ORDER BY r.id DESC`).all(entryId, userId);
+  }
+
+  showRequestedEpisodeIds(entryId: number, userId: number): Map<number, number[]> {
+    const rows = this.db.query<{ requestId: number; episodeId: number }, [number, number]>(`SELECT r.id AS requestId,
+      m.episode_id AS episodeId FROM tv_targets t JOIN tv_requests r ON r.target_id=t.id
+      JOIN tv_request_episodes m ON m.request_id=r.id WHERE t.entry_id=? AND r.user_id=? AND r.withdrawn_at IS NULL`).all(entryId, userId);
+    const result = new Map<number, number[]>();
+    for (const row of rows) {
+      const ids = result.get(row.requestId) ?? [];
+      ids.push(row.episodeId);
+      result.set(row.requestId, ids);
+    }
+    return result;
+  }
+
+  visibleShowId(tmdbId: number, userId: number): number | null {
+    const rows = this.db.query<{ id: number }, [number, number]>(`SELECT e.id FROM tv_entries e
+      WHERE json_extract(e.metadata_json,'$.tmdbId')=? AND EXISTS (
+        SELECT 1 FROM tv_targets t WHERE t.entry_id=e.id AND (
+          EXISTS (SELECT 1 FROM tv_active_episodes a WHERE a.target_id=t.id)
+          OR EXISTS (SELECT 1 FROM tv_requests r WHERE r.target_id=t.id AND r.user_id=?)))
+      LIMIT 2`).all(tmdbId, userId);
+    return rows.length === 1 ? rows[0]!.id : null;
+  }
+
+  showAcquisitions(entryId: number): TvAcquisition[] {
+    return this.db.query<TvAcquisition, [number]>(`SELECT a.* FROM tv_targets t
+      JOIN tv_acquisitions a ON a.target_id=t.id WHERE t.entry_id=? ORDER BY a.id DESC`).all(entryId);
+  }
+
+  showProgressEvents(entryId: number): TvEvent[] {
+    return this.db.query<TvEvent, [number]>(`SELECT e.id,e.acquisition_id AS acquisitionId,e.stage,
+      '' AS message,e.created_at AS createdAt FROM tv_targets t JOIN tv_events e ON e.target_id=t.id
+      WHERE t.entry_id=? ORDER BY e.id`).all(entryId);
+  }
   entries(): TvEntry[] {
     return (this.db.query("SELECT id FROM tv_entries ORDER BY id").all() as { id: number }[]).map((r) => this.entry(r.id)!);
   }
@@ -188,8 +249,29 @@ export class TvRepo {
   }
 
   episodes(entryId: number): TvEpisode[] {
-    return (this.db.query("SELECT episode_id FROM tv_entry_episodes WHERE entry_id=? ORDER BY episode_id").all(entryId) as { episode_id: number }[])
-      .map((r) => this.episode(r.episode_id, entryId)!);
+    const rows = this.db.query<{ id: number; metadata_json: string }, [number]>(`
+      SELECT e.id,e.metadata_json FROM tv_entry_episodes members JOIN tv_episodes e ON e.id=members.episode_id
+      WHERE members.entry_id=? ORDER BY e.id`).all(entryId);
+    if (!rows.length) return [];
+    const refs = new Map<number, TvExternalRef[]>();
+    for (const { episodeId, ...ref } of this.db.query<TvExternalRef & { episodeId: number }, [number]>(`
+      SELECT r.episode_id AS episodeId,r.provider,r.external_id AS id,NULLIF(r.instance,'') AS instance,r.source
+      FROM tv_entry_episodes members JOIN tv_episode_refs r ON r.episode_id=members.episode_id
+      WHERE members.entry_id=? ORDER BY r.episode_id,r.provider,r.instance,r.external_id`).all(entryId)) {
+      const group = refs.get(episodeId) ?? [];
+      group.push(ref);
+      refs.set(episodeId, group);
+    }
+    const numbering = new Map<number, TvEpisode["numbering"]>();
+    for (const { episodeId, ...number } of this.db.query<TvEpisode["numbering"][number] & { episodeId: number }, [number]>(`
+      SELECT episode_id AS episodeId,entry_id AS entryId,scheme,season,episode,absolute,source
+      FROM tv_episode_numbering WHERE entry_id=? ORDER BY episode_id,scheme`).all(entryId)) {
+      const group = numbering.get(episodeId) ?? [];
+      group.push(number);
+      numbering.set(episodeId, group);
+    }
+    return rows.map(({ id, metadata_json }) => ({ ...JSON.parse(metadata_json), id,
+      refs: refs.get(id) ?? [], numbering: numbering.get(id) ?? [] }));
   }
 
   target(id: number): TvTarget | null {
@@ -233,6 +315,17 @@ export class TvRepo {
   acquisitionDownloads(acquisitionId: number) {
     return this.db.query(`SELECT t.* FROM media_torrents t JOIN tv_acquisition_downloads d ON d.torrent_id=t.id
       WHERE d.acquisition_id=? ORDER BY t.id`).all(acquisitionId) as TorrentRecord[];
+  }
+
+  requestDownloadObservations(acquisitionIds: number[]) {
+    return this.db.query<{ acquisitionId: number; torrentId: number; observation: string }, [string]>(`
+      SELECT d.acquisition_id AS acquisitionId,t.id AS torrentId,t.observation_json AS observation
+      FROM json_each(?) ids JOIN tv_acquisition_downloads d ON d.acquisition_id=ids.value
+      JOIN media_torrents t ON t.id=d.torrent_id
+      WHERE t.ownership_tag='Podible TV' AND t.observation_json IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM tv_acquisition_rejections r
+        WHERE r.acquisition_id=d.acquisition_id AND r.torrent_id=t.id)
+    `).all(JSON.stringify(acquisitionIds));
   }
 
   recordPackEvidence(torrentId: number, source: unknown): void {
@@ -376,6 +469,30 @@ export class TvRepo {
 
   requests(userId?: number): TvRequest[] {
     return this.db.query("SELECT * FROM tv_requests WHERE (? IS NULL OR user_id=?) ORDER BY id DESC").all(userId ?? null, userId ?? null) as TvRequest[];
+  }
+
+  requestCards(userId: number) {
+    return this.db.query<{
+      entryId: number; requestId: number; key: string; title: string; year: number | null; posterUrl: string | null;
+      requestedEpisodes: number; availableEpisodes: number; futureEpisodes: number; evicted: 0 | 1; latestJobId: number | null;
+      seasons: string;
+    }, [number, number]>(`SELECT t.entry_id AS entryId,r.id AS requestId,e.catalog_key AS key,
+      json_extract(e.metadata_json,'$.title') AS title,json_extract(e.metadata_json,'$.year') AS year,
+      json_extract(e.metadata_json,'$.posterUrl') AS posterUrl,
+      COUNT(m.episode_id) AS requestedEpisodes,COUNT(a.episode_id) AS availableEpisodes,
+      SUM(CASE WHEN m.episode_id IS NOT NULL AND a.episode_id IS NULL
+        AND COALESCE(unixepoch(json_extract(ep.metadata_json,'$.airDate')) > ?,1) THEN 1 ELSE 0 END) AS futureEpisodes,
+      COALESCE(p.desired_presence='evicted',0) AS evicted,
+      (SELECT job_id FROM tv_acquisitions WHERE request_id=r.id ORDER BY id DESC LIMIT 1) AS latestJobId,
+      json_group_array(DISTINCT n.season) AS seasons
+      FROM tv_requests r JOIN tv_targets t ON t.id=r.target_id JOIN tv_entries e ON e.id=t.entry_id
+      LEFT JOIN tv_request_episodes m ON m.request_id=r.id
+      LEFT JOIN tv_episodes ep ON ep.id=m.episode_id
+      LEFT JOIN tv_active_episodes a ON a.target_id=t.id AND a.episode_id=m.episode_id
+      LEFT JOIN tv_episode_numbering n ON n.entry_id=t.entry_id AND n.episode_id=m.episode_id AND n.scheme='tvdb:aired'
+      LEFT JOIN retention_resources p ON p.namespace='tv-target' AND p.resource_id=CAST(t.id AS TEXT)
+      WHERE r.user_id=? AND r.withdrawn_at IS NULL GROUP BY r.id ORDER BY r.id DESC`)
+      .all(Math.floor(Date.now() / 1000), userId);
   }
 
   canAccessTarget(userId: number, targetId: number): boolean {

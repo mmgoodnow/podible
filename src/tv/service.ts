@@ -23,6 +23,9 @@ export async function requestTvSeasons(repo: BooksRepo, catalog: TvCatalog, user
     if (!seasons.has(season)) throw new TvCatalogError(`Season ${season} has no canonical TVDB episode metadata; refresh the catalog or select a supported season.`, "unsupported");
   return repo.transaction(() => {
     const wanted = new Set(scope.seasonNumbers.flatMap((season) => seasons.get(season)!.map((ep) => ep.key)));
+    const published = repo.tv.publishedEpisodeKeys(wanted);
+    if (scope.seasonNumbers.some(season => seasons.get(season)!.every(ep => published.has(ep.key))))
+      throw new TvCatalogError("A selected season is already in Plex. Refresh the show and select only seasons with missing episodes.", "unsupported");
     const normalized = JSON.stringify([...scope.seasonNumbers].sort((a, b) => a - b));
     for (const previous of repo.tv.requests(userId)) {
       const priorScope = nativeTvRequestScope(previous);

@@ -72,13 +72,23 @@ async function checkPosterShelves(browser: Awaited<ReturnType<typeof chromium.la
   await context.addCookies([{ name: "podible_session", value: "book-spa-reader", url: origin, httpOnly: true }]);
   const page = await context.newPage();
   page.on("pageerror", error => errors.push(error.message));
+  let releaseRequestCards = () => {};
+  const requestCardsGate = new Promise<void>(resolve => { releaseRequestCards = resolve; });
+  await page.route("**/api/trpc/tv.requestCards?*", async route => {
+    await requestCardsGate;
+    await route.continue();
+  });
   try {
     await page.goto(origin);
     const movieRail = page.getByRole("region", { name: "Newly added movies", exact: true });
     await movieRail.locator(".screen-card").nth(5).waitFor();
     assert.deepEqual(await movieRail.locator("h3").allTextContents(), movieTitles, "Newly published movies must sort by publication date, not IDs");
+    const before = await movieRail.boundingBox();
+    assert.equal(await page.getByRole("region", { name: "Your requests", exact: true }).count(), 0);
+    releaseRequestCards();
     await page.getByRole("region", { name: "Your requests", exact: true }).getByRole("link", { name: /Tomorrow's Tide/ }).waitFor();
-    await page.getByRole("region", { name: "Recently aired, in your library", exact: true }).locator(".screen-card").nth(2).waitFor();
+    assert.equal((await movieRail.boundingBox())?.y, before?.y, "Late request cards must not move published rails");
+    await page.getByRole("region", { name: "Recently aired episodes", exact: true }).locator(".screen-card").nth(2).waitFor();
     assert.equal(await page.getByText(/Private unreleased/).count(), 0);
     await page.screenshot({ path: path.join(os.tmpdir(), "podible-home-rails-desktop.png"), fullPage: true, animations: "disabled" });
     await page.setViewportSize({ width: 390, height: 844 });
@@ -116,10 +126,11 @@ async function checkPosterShelves(browser: Awaited<ReturnType<typeof chromium.la
     await page.getByRole("region", { name: "Your movies" }).getByRole("link", { name: /A Room in Winter/ }).click();
     assert.ok(page.url().endsWith("/movies/501"));
     await page.getByRole("heading", { name: "A Room in Winter", exact: true }).waitFor();
-    await page.getByRole("button", { name: "Add to my library", exact: true }).waitFor();
+    await page.getByText("Available in Plex", { exact: true }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "Add to my library", exact: true }).count(), 0);
     assert.equal(await page.getByRole("button", { name: "Follow movie", exact: true }).count(), 0);
     await page.goto(`${origin}/?media=tv`);
-    const tv = page.getByRole("region", { name: "Your TV" });
+    const tv = page.getByRole("region", { name: "TV", exact: true });
     await tv.getByText("3 available", { exact: true }).waitFor();
     assert.equal(await tv.getByText("Shared library", { exact: false }).count(), 0);
     await page.waitForFunction("['The Glasshouse tv series poster', 'North of Here tv series poster'].every(alt => [...document.querySelectorAll('.screen-poster > img')].some(img => img.alt === alt && img.complete && img.naturalWidth === 300))");
@@ -137,7 +148,7 @@ async function checkPosterShelves(browser: Awaited<ReturnType<typeof chromium.la
     await page.setViewportSize({ width: 390, height: 844 });
     for (const media of ["movies", "tv"] as const) {
       await page.goto(`${origin}/?media=${media}`);
-      const shelf = page.getByRole("region", { name: media === "movies" ? "Your movies" : "Your TV" });
+      const shelf = page.getByRole("region", { name: media === "movies" ? "Your movies" : "TV", exact: true });
       await shelf.getByText(media === "movies" ? "6 available" : "3 available", { exact: true }).waitFor();
       const cards = shelf.locator(":scope > .screen-grid > .screen-card");
       const first = await cards.nth(0).boundingBox(), second = await cards.nth(1).boundingBox();
@@ -189,7 +200,7 @@ async function checkPosterShelves(browser: Awaited<ReturnType<typeof chromium.la
     assert.deepEqual(await nav.getByRole("link").evaluateAll(links => links.map(link => link.getAttribute("href"))), ["/library", "/ops", "/settings"]);
     assert.deepEqual(external, [], "Unexpected external network request");
     assert.deepEqual(errors, []);
-  } finally { await context.close(); fixture.stop(true); await data.close(); }
+  } finally { releaseRequestCards(); await context.close(); fixture.stop(true); await data.close(); }
 }
 const server = Bun.spawn([process.execPath, "run", "test/fixtures/unified-spa-server.ts"], { stdout: "pipe", stderr: "inherit" });
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
@@ -260,18 +271,21 @@ try {
   await checkboxes.first().check();
   await page.getByRole("button", { name: "Request season", exact: true }).click();
   await page.getByRole("heading", { name: "Waiting for upcoming episodes" }).waitFor();
-  await page.getByText("0 of 2 episodes verified in Plex.", { exact: true }).waitFor();
+  await page.getByText("0 of 3 episodes verified in Plex.", { exact: true }).waitFor();
   const requestUrl = page.url();
   await page.reload();
-  await page.getByText("0 of 2 episodes verified in Plex.", { exact: true }).waitFor();
+  await page.getByText("0 of 3 episodes verified in Plex.", { exact: true }).waitFor();
   await page.getByRole("link", { name: "Back to library" }).click();
-  await page.getByRole("region", { name: "Your TV", exact: true }).getByRole("link", { name: /Piranesi Series/ }).waitFor();
+  await page.getByRole("region", { name: "TV", exact: true }).getByRole("link", { name: /Piranesi Series/ }).waitFor();
   await page.goto(origin);
   await page.getByRole("region", { name: "Your requests", exact: true }).getByRole("link", { name: /Piranesi Series/ }).waitFor();
   await page.goto(requestUrl);
   page.once("dialog", dialog => dialog.accept());
-  await page.getByRole("button", { name: "Withdraw my request" }).click();
-  await page.getByRole("heading", { name: "Request withdrawn" }).waitFor();
+  await page.getByRole("button", { name: "Withdraw request" }).click();
+  await page.getByRole("button", { name: "Withdraw request" }).waitFor({ state: "detached" });
+  await page.reload();
+  await page.getByRole("heading", { name: "Piranesi Series" }).waitFor();
+  assert.equal(page.url(), requestUrl, "Withdrawing a request must not change the show's page");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(origin);
   await page.getByRole("searchbox").waitFor();
