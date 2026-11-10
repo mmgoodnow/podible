@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { AcquisitionEvents } from "../../src/http/acquisition-events";
+import { AcquisitionEvents } from "../../src/runtime/acquisition-events";
 import { CompletionSignals } from "../../src/runtime/completion-signals";
 import { plexScanEnded } from "../../src/runtime/plex-completion";
 
@@ -32,14 +32,17 @@ test("Plex only wakes publications for scan completions, scoped where possible",
 test("browser gets an invalidation on every connection and after an update during backpressure", async () => {
   const events = new AcquisitionEvents();
   const abort = new AbortController();
-  const reader = events.response(abort.signal).body!.getReader();
+  const reader = events.changes(abort.signal);
+  expect((await reader.next()).value).toEqual({ type: "change" });
   events.notify();
-  expect(new TextDecoder().decode((await reader.read()).value)).toContain("event: change");
-  expect(new TextDecoder().decode((await reader.read()).value)).toContain("event: change");
+  events.notify();
+  expect((await reader.next()).value).toEqual({ type: "change" });
+  const idle = reader.next();
   abort.abort();
-  expect((await reader.read()).done).toBe(true);
-  const reconnect = events.response(new AbortController().signal).body!.getReader();
-  expect(new TextDecoder().decode((await reconnect.read()).value)).toContain("event: change");
+  expect((await idle).done).toBe(true);
+  const reconnect = events.changes(new AbortController().signal);
+  expect((await reconnect.next()).value).toEqual({ type: "change" });
+  const disconnected = reconnect.next();
   events.close();
-  expect((await reconnect.read()).done).toBe(true);
+  await expect(disconnected).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
 });

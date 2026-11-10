@@ -8,6 +8,7 @@ import type { HttpEnv } from "./middleware";
 export function createTrpcRoutes(repo: BooksRepo, startTime: number, dependencies: {
   movieServices?: import("../movies/operations").MovieServices;
   bookTorrentClient?: import("../media/torrent-client").TorrentClient;
+  acquisitionEvents?: import("../runtime/acquisition-events").AcquisitionEvents;
 } = {}) {
   const app = new Hono<HttpEnv>();
   app.all("*", async (c) => {
@@ -34,7 +35,8 @@ export function createTrpcRoutes(repo: BooksRepo, startTime: number, dependencie
         return { ...dependencies, repo, startTime, request, session: c.get("session") };
       },
     });
-    response.headers.set("Cache-Control", "no-store");
+    response.headers.set("Cache-Control", response.headers.get("Content-Type")?.startsWith("text/event-stream")
+      ? "no-store, no-transform" : "no-store");
     return response;
   });
   return app;

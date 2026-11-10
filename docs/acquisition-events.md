@@ -18,10 +18,10 @@ original step order until they drain.
   a final verification deadline. These bound the effect of a silently lost
   event without an interval of status requests. If a Plex scan is already
   running, there is one opportunity to request another scan after a wake.
-- Movie and TV detail pages and library cards use an authenticated SSE
-  invalidation stream. On connect or reconnect, the browser reads the current
+- Movie and TV detail pages and library cards use the authenticated tRPC
+  subscription `acquisition.changes` over SSE. On connect or reconnect, the browser reads the current
   authorized snapshot. Frames contain no titles, IDs or tracker details.
-  Keepalive comments do not trigger reads. Byte counts are snapshots, not a
+  Keepalive frames do not trigger reads. Byte counts are snapshots, not a
   per-second stream from Transmission.
 
 Release discovery via RSS catch-up, provider backoff, and the Reflow

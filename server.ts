@@ -4,7 +4,7 @@ import { createPodibleFetchHandler } from "./src/http";
 import { pingPlexOwnerToken } from "./src/plex";
 import { BooksRepo } from "./src/repo";
 import { BackgroundWorker } from "./src/runtime/background-worker";
-import { AcquisitionEvents, acquisitionEventsPath } from "./src/http/acquisition-events";
+import { AcquisitionEvents, acquisitionEventsPath } from "./src/runtime/acquisition-events";
 import { readAutobrrConfig, reconcileAutobrrWebhook, type AutobrrConfig } from "./src/media/autobrr";
 import type { HTMLBundle } from "bun";
 

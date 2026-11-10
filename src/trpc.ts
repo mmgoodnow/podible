@@ -26,7 +26,9 @@ import { torrentRetirementRouter } from "./rpc/torrent-retirement-router";
 import { transferMetricsRouter } from "./rpc/transfer-metrics-router";
 import { crossSeedRouter } from "./rpc/cross-seed-router";
 
-const t = initTRPC.context<RpcContext>().create();
+const t = initTRPC.context<RpcContext>().create({
+  sse: { ping: { enabled: true, intervalMs: 20_000 }, client: { reconnectAfterInactivityMs: 50_000 } },
+});
 const id = z.number().int().positive();
 const bookInput = z.object({ bookId: id });
 const media = z.enum(["audio", "ebook"]);
@@ -66,6 +68,13 @@ const procedure = t.procedure.use(async ({ next }) => {
 });
 
 export const appRouter = t.router({
+  acquisition: t.router({
+    changes: procedure.subscription(({ ctx, signal }) => {
+      if (!ctx.session) throw new TRPCError({ code: "UNAUTHORIZED" });
+      if (!ctx.acquisitionEvents) throw new TRPCError({ code: "SERVICE_UNAVAILABLE" });
+      return ctx.acquisitionEvents.changes(signal ?? ctx.request.signal);
+    }),
+  }),
   crossSeed: t.router({
     startBackfill: procedure.input(crossSeedRouter.routes.startBackfill.paramsSchema).output(crossSeedRouter.routes.startBackfill.resultSchema).mutation(({ ctx, input }) => executeMethod(crossSeedRouter.routes.startBackfill, ctx, input)),
     backfillLatest: procedure.input(crossSeedRouter.routes.backfillLatest.paramsSchema).output(crossSeedRouter.routes.backfillLatest.resultSchema).query(({ ctx, input }) => executeMethod(crossSeedRouter.routes.backfillLatest, ctx, input)),

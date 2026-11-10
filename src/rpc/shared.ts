@@ -41,6 +41,7 @@ export type RpcFailure = {
 export type RpcAuthLevel = "public" | "user" | "admin";
 
 export type RpcContext = {
+  acquisitionEvents?: import("../runtime/acquisition-events").AcquisitionEvents;
   bookTorrentClient?: import("../media/torrent-client").TorrentClient;
   movieServices?: import("../movies/operations").MovieServices;
   repo: BooksRepo;

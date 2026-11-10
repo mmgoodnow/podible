@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createTRPCClient, httpBatchLink, httpLink } from "@trpc/client";
+import { AcquisitionEvents, acquisitionEventsPath } from "../../src/runtime/acquisition-events";
 import { hashSessionToken } from "../../src/auth";
 import { runMigrations } from "../../src/db";
 import { createPodibleFetchHandler } from "../../src/http";
@@ -231,3 +232,31 @@ function typedContract(client: ReturnType<typeof createTRPCClient<AppRouter>>) {
     return id;
   });
 }
+test("the tRPC acquisition stream requires a session and only sends invalidations", async () => {
+  const db = new Database(":memory:");
+  const events = new AcquisitionEvents();
+  const abort = new AbortController();
+  try {
+    runMigrations(db);
+    const repo = new BooksRepo(db);
+    repo.ensureSettings();
+    const user = repo.upsertUser({ provider: "local", providerUserId: "sse-reader", username: "reader", isAdmin: false });
+    repo.createSession(user.id, hashSessionToken("sse-token"), null, "browser");
+    const handler = createPodibleFetchHandler(repo, Date.now(), null, { acquisitionEvents: events });
+    const url = "http://localhost" + acquisitionEventsPath;
+    expect(await (await handler(new Request(url))).text()).toContain('"code":"UNAUTHORIZED"');
+    const response = await handler(new Request(url, { signal: abort.signal, headers: { cookie: "podible_session=sse-token" } }));
+    expect(response.headers.get("Content-Type")).toStartWith("text/event-stream");
+    expect(response.headers.get("Cache-Control")).toBe("no-store, no-transform");
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let initial = "";
+    while (!initial.includes('data: {"type":"change"}')) {
+      const result = await reader.read();
+      if (result.done) throw new Error("Stream closed before the initial invalidation");
+      initial += decoder.decode(result.value, { stream: true });
+    }
+    abort.abort();
+    await reader.cancel();
+  } finally { abort.abort(); events.close(); db.close(); }
+});

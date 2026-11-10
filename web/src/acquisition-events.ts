@@ -1,11 +1,11 @@
 import { useEffect, useEffectEvent } from "react";
+import { rpc } from "./rpc";
 
 export function useAcquisitionEvents(enabled: boolean, onChange: () => void) {
   const invalidate = useEffectEvent(onChange);
   useEffect(() => {
     if (!enabled) return;
-    const stream = new EventSource("/api/events/acquisition");
-    stream.addEventListener("change", () => invalidate());
-    return () => stream.close();
+    const subscription = rpc.acquisition.changes.subscribe(undefined, { onData: () => invalidate() });
+    return () => subscription.unsubscribe();
   }, [enabled]);
 }

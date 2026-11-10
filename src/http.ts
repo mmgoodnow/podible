@@ -29,8 +29,7 @@ import { createActivityRoutes } from "./http/activity-routes";
 import { createMetricsRoutes } from "./http/metrics-routes";
 import { createAutobrrRoutes } from "./http/autobrr-routes";
 import { AUTOBRR_WEBHOOK_PATH, type AutobrrConfig } from "./media/autobrr";
-import { requireAuthenticatedRequest } from "./http/middleware";
-import { AcquisitionEvents, acquisitionEventsPath } from "./http/acquisition-events";
+import { AcquisitionEvents } from "./runtime/acquisition-events";
 
 export function createPodibleFetchHandler(
   repo: BooksRepo,
@@ -48,7 +47,6 @@ export function createPodibleFetchHandler(
 
   app.use("*", createRequestContextMiddleware(repo));
   const acquisitionEvents = dependencies.acquisitionEvents ?? new AcquisitionEvents();
-  app.get(acquisitionEventsPath, requireAuthenticatedRequest, c => acquisitionEvents.response(c.req.raw.signal));
 
   const spa = createSpaRoutes();
   for (const route of [
@@ -89,7 +87,7 @@ export function createPodibleFetchHandler(
   app.route("/activity", createActivityRoutes(repo));
   app.route("/admin", createAdminRoutes(repo, startTime, buildInfo));
   app.route("/rpc", createRpcRoutes(repo, startTime, dependencies));
-  app.route("/api/trpc", createTrpcRoutes(repo, startTime, dependencies));
+  app.route("/api/trpc", createTrpcRoutes(repo, startTime, { ...dependencies, acquisitionEvents }));
   app.route("/metrics", createMetricsRoutes(repo, dependencies.metricsTokenDigestPath));
   if (dependencies.autobrr)
     app.route(AUTOBRR_WEBHOOK_PATH, createAutobrrRoutes(repo, dependencies.autobrr));
