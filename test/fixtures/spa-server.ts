@@ -3,6 +3,7 @@ import { buildSessionCookie, createSessionToken, hashSessionToken } from "../../
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { createPodibleFetchHandler } from "../../src/http";
+import { AcquisitionEvents, acquisitionEventsPath } from "../../src/http/acquisition-events";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -107,6 +108,7 @@ if (process.env.SHADOW_FIXTURE) {
   const { caseId } = repo.movieShadow.capture({ observation: { key: "fixture:history:1", movie: fixtureMovie, releaseTitle: "A Fixture Film 2024", sourcePaths: [], observedAt: new Date().toISOString(), radarr: { outcome: "imported", messages: [] } }, policy: settings.movies.qualityPolicy, files: [], source: "unavailable", warnings: ["Source is missing or has moved"] });
   repo.movieShadow.finish(caseId, { decision: "unobservable", selectedFile: null, reason: "No source files remain", facts: null, quality: null, probes: [], probeErrors: [], model: "fixture", evaluatedAt: new Date().toISOString() });
 }
+let advanceTvFixture: (() => void) | undefined;
 if (process.env.TV_FIXTURE) {
   settings.movies.seerr = { ...settings.movies.seerr, url: "https://fixture-seerr.invalid", apiKey: "tv-fixture-seerr-private" };
   settings.agents.apiKey = "tv-fixture-agent-private";
@@ -140,6 +142,9 @@ if (process.env.TV_FIXTURE) {
     repo.tv.event(withGaps.targetId, batch.id, "tv-browser-downloading", "downloading", "Downloading fixture release");
     repo.tv.observeDownload(torrentId, { ref, location, state: "downloading", complete: false,
       bytesDone: 3 * 1024 ** 3, sizeBytes: 8 * 1024 ** 3, downloadBytesPerSecond: 2 * 1024 ** 2,
+      message: null, observedAt: new Date().toISOString() });
+    advanceTvFixture = () => repo.tv.observeDownload(torrentId, { ref, location, state: "downloading", complete: false,
+      bytesDone: 5 * 1024 ** 3, sizeBytes: 8 * 1024 ** 3, downloadBytesPerSecond: 2 * 1024 ** 2,
       message: null, observedAt: new Date().toISOString() });
   }
   const acquisition = repo.tv.startAcquisition(native.targetId, "initial", (id) => repo.createJob({
@@ -216,16 +221,24 @@ for (const [title, author] of [
   ["The Odyssey", "Homer"],
 ])
   repo.createBook({ title: title!, author: author! });
+const acquisitionEvents = new AcquisitionEvents();
 const handler = createPodibleFetchHandler(repo, Date.now(), null, {
   movieServices: fixture.services,
+  acquisitionEvents,
 });
 const authFixture = { mode: "success", starts: 0, callbacks: 0 };
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: Number(process.env.PORT ?? 0),
   ...(process.env.FIXTURE_TLS_KEY ? { tls: { key: Bun.file(process.env.FIXTURE_TLS_KEY), cert: Bun.file(process.env.FIXTURE_TLS_CERT!) } } : {}),
-  async fetch(request) {
+  async fetch(request, httpServer) {
     const url = new URL(request.url), pathname = url.pathname;
+    if (pathname === acquisitionEventsPath) httpServer.timeout(request, 0);
+    if (advanceTvFixture && pathname === "/__fixture/tv-transfer" && request.method === "POST") {
+      advanceTvFixture();
+      acquisitionEvents.notify();
+      return Response.json({ ok: true });
+    }
     if (process.env.AUTH_FIXTURE) {
       if (pathname === "/__fixture/auth-mode" && request.method === "POST") {
         const input = await request.json() as { mode?: string };

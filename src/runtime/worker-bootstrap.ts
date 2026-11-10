@@ -7,6 +7,7 @@ import { queueStaleMetadataHydration } from "../worker/metadata-hydration";
 import { watermarkLegacyGeneratedCovers } from "../library/cover-generation";
 import { queuePendingCurationJobs } from "../library/chapter-analysis";
 import type { BackgroundWorkerInput, BackgroundWorkerMessage } from "./background-protocol";
+import { transmissionCompletionDirectory } from "../media/managed-transmission";
 
 async function startupMaintenance(repo: BooksRepo, stopping: () => boolean) {
   const watermarks = await watermarkLegacyGeneratedCovers(repo);
@@ -38,13 +39,23 @@ export async function bootBackgroundWorker(options: {
   let loopOwnsRuntime = false;
   let maintenance: Promise<void> | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let acquisitionUpdate: ReturnType<typeof setTimeout> | undefined;
   try {
     db = openDatabase(data.databasePath);
     const repo = new BooksRepo(db);
     repo.ensureSettings();
     const context = { repo, getSettings: () => repo.getSettings(), shouldStop: () => stopping,
+      onAcquisitionChange: () => {
+        acquisitionUpdate ??= setTimeout(() => {
+          acquisitionUpdate = undefined;
+          if (!stopping) post({ type: "acquisition-change" });
+        }, 150);
+      },
       onLog: (message: string) => console.log(message), activeLocks: new Set<string>() };
-    runtime = await createJobExecutionRuntime(context, repo.executionDatabasePath(), options.execution);
+    runtime = await createJobExecutionRuntime(context, repo.executionDatabasePath(), {
+      ...(options.startupMaintenance !== false ? { torrentCompletionDirectory: transmissionCompletionDirectory() } : {}),
+      ...options.execution,
+    });
     if (stopping) return;
     post({ type: "ready", pid: process.pid, threadId,
       busyTimeoutMs: (db.query("PRAGMA busy_timeout").get() as { timeout: number }).timeout });
@@ -64,6 +75,7 @@ export async function bootBackgroundWorker(options: {
   } finally {
     stopping = true;
     clearInterval(heartbeat);
+    clearTimeout(acquisitionUpdate);
     if (runtime && !loopOwnsRuntime) await runtime.stop();
     await maintenance;
     db?.close();

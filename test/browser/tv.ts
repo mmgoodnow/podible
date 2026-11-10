@@ -36,7 +36,11 @@ try {
   const page = await context.newPage(), errors: string[] = [], networkErrors: string[] = [], diagnostics: string[] = [];
   activePage = page;
   page.on("pageerror",error => errors.push(error.message));
-  page.on("requestfailed",item => networkErrors.push(`${item.method()} ${item.url()}: ${item.failure()?.errorText}`));
+  page.on("requestfailed",item => {
+    const error = item.failure()?.errorText;
+    if (item.url().endsWith("/api/events/acquisition") && error === "net::ERR_ABORTED") return;
+    networkErrors.push(`${item.method()} ${item.url()}: ${error}`);
+  });
   page.on("response",response => { if (response.url().includes("/api/trpc/") && response.status() >= 400) networkErrors.push(`${response.status()} ${response.url()}`); });
   page.on("request",item => { if (/(?:tvShadow|movieShadow|movieDualWrite)\.|\/tv\.(?:get|list|status)(?:$|,)/.test(new URL(item.url()).pathname)) diagnostics.push(item.url()); });
   await page.goto(new URL(`/tv/requests/${request.requestId}`,url).href);
@@ -72,7 +76,9 @@ try {
   await page.screenshot({ path: path.join(artifacts,"tv-request-mobile.png"), animations: "disabled" });
   console.log("Native TV browser: persisted coverage and desktop/mobile screenshots verified");
 
+  const stream = page.waitForResponse(response => response.url().endsWith("/api/events/acquisition") && response.ok());
   await page.goto(new URL(`/tv/requests/${withGaps.requestId}`,url).href);
+  await stream;
   await page.getByRole("heading", { name: "1 episode batch in progress" }).waitFor();
   const stages = page.getByRole("list", { name: "Acquisition stages" });
   await stages.getByRole("listitem").filter({ hasText: "Download" }).getByText("1 season", { exact: true }).waitFor();
@@ -81,6 +87,8 @@ try {
   assert.equal(await page.getByRole("progressbar", { name: "Season 1 downloads progress" }).getAttribute("value"),String(3 * 1024 ** 3));
   assert.equal(await page.getByRole("progressbar", { name: "Season 2 downloads progress" }).count(),0);
   await page.getByText("3 GiB of 8 GiB · 2 MiB/s", { exact: true }).first().waitFor();
+  assert.equal((await context.request.post(new URL("/__fixture/tv-transfer", url).href)).ok(), true);
+  await page.getByText("5 GiB of 8 GiB · 2 MiB/s", { exact: true }).first().waitFor({ timeout: 1500 });
   await page.getByRole("button", { name: "Season 1", exact: true }).press("Enter");
   await page.getByRole("list", { name: "Season 1 episodes" }).getByText("Downloading", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Season 2", exact: true }).press("Enter");

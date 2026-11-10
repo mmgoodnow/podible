@@ -6,5 +6,6 @@ export type BackgroundWorkerReady = {
   busyTimeoutMs: number;
 };
 export type BackgroundWorkerMessage = BackgroundWorkerReady | { type: "stopped" } | { type: "failed" }
+  | { type: "acquisition-change" }
   | { type: "heartbeat"; stalledEffects: number; activeEffects: number; reservations: number };
 export type BackgroundWorkerCommand = { type: "stop" };

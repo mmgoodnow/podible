@@ -16,6 +16,33 @@ const identitySchema = z.object({
   username: z.string().min(1),
   password: z.string().min(32),
 });
+export const transmissionCompletionDirectory = (directory = path.join(configDir, "transmission")) =>
+  path.join(directory, "completion-events");
+
+export function notifyTransmissionRestart(directory: string) {
+  const receipt = path.join(transmissionCompletionDirectory(directory), "reset." + randomBytes(8).toString("hex"));
+  writeFileSync(receipt, "", { mode: 0o600, flag: "wx" });
+  renameSync(receipt, receipt + ".done");
+}
+
+function prepareCompletionHook(directory: string) {
+  const hook = path.resolve(directory, "torrent-done.sh");
+  const temporary = hook + ".tmp";
+  mkdirSync(transmissionCompletionDirectory(directory), { recursive: true, mode: 0o700 });
+  writeFileSync(temporary, `#!/bin/sh
+set -eu
+umask 077
+hash=$(printf '%s' "${"$"}{TR_TORRENT_HASH:-}" | tr 'A-F' 'a-f')
+case "$hash" in *[!0-9a-f]*) exit 1;; esac
+case ${"$"}{#hash} in 40|64) ;; *) exit 1;; esac
+dir=$(dirname "$0")/completion-events
+tmp=$(mktemp "$dir/$hash.XXXXXXXX")
+mv "$tmp" "$tmp.done"
+`, { mode: 0o700 });
+  chmodSync(temporary, 0o700);
+  renameSync(temporary, hook);
+  return hook;
+}
 export function readTransmissionIdentity(
   directory = path.join(configDir, "transmission"),
 ) {
@@ -76,7 +103,8 @@ export function prepareTransmission(
     "trash-original-torrent-files": false,
     umask: 0o027,
     "script-torrent-added-enabled": false,
-    "script-torrent-done-enabled": false,
+    "script-torrent-done-enabled": true,
+    "script-torrent-done-filename": prepareCompletionHook(directory),
     "script-torrent-done-seeding-enabled": false,
   };
   const temporary = path.join(directory, "settings.json.tmp");

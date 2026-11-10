@@ -12,6 +12,7 @@ export interface BackgroundWorkerOptions {
   terminateTimeoutMs?: number;
   heartbeatTimeoutMs?: number;
   onFailure?: (error: Error) => void;
+  onAcquisitionChange?: () => void;
 }
 const owners = new Map<string, BackgroundWorker>();
 
@@ -91,7 +92,10 @@ export class BackgroundWorker {
               failed("Background worker stopped responding; refusing a second engine until confirmed exit");
           }, Math.min(1000, heartbeatTimeout));
           this.watchdog.unref();
+          this.options.onAcquisitionChange?.();
           resolveReady(message);
+        } else if (message?.type === "acquisition-change" && ready && !this.plannedStop) {
+          this.options.onAcquisitionChange?.();
         } else if (message?.type === "heartbeat" && ready && !this.plannedStop) {
           if ([message.activeEffects, message.stalledEffects, message.reservations].every(value => Number.isSafeInteger(value) && value >= 0))
             this.progress = { activeEffects: message.activeEffects, stalledEffects: message.stalledEffects,

@@ -1,5 +1,6 @@
 import { useDeferredValue, useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAcquisitionEvents } from "./acquisition-events";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../src/trpc";
 import { useTRPC } from "./rpc";
@@ -18,6 +19,7 @@ export function UnifiedLibrary({ initialPage }: {
   initialPage?: inferRouterOutputs<AppRouter>["library"]["bootstrap"];
 }) {
   const trpc = useTRPC();
+  const cache = useQueryClient();
   const route = useLocation();
   const params = new URLSearchParams(route.split("?")[1]);
   const initialMedia = params.get("media") as Media;
@@ -41,9 +43,15 @@ export function UnifiedLibrary({ initialPage }: {
   const homeRails = media === "all" && !q.trim();
   const recent = useQuery(trpc.catalog.recent.queryOptions({ limit: 12 }, { enabled: homeRails, staleTime: 60_000 }));
   const discovery = useQuery(trpc.catalog.discovery.queryOptions({}, { enabled: homeRails, staleTime: 10 * 60_000, retry: false }));
-  const movies = useQuery(trpc.requests.list.queryOptions({}, { enabled: moviesShown, refetchInterval: 15_000 }));
-  const tv = useQuery(trpc.tv.requestCards.queryOptions({}, { enabled: tvShown, refetchInterval: 15_000 }));
-  const available = useQuery(trpc.catalog.available.queryOptions({ query: localQ, limit: 50 }, { enabled: !homeRails && (moviesShown || tvShown), refetchInterval: 15_000 }));
+  const movies = useQuery(trpc.requests.list.queryOptions({}, { enabled: moviesShown }));
+  const tv = useQuery(trpc.tv.requestCards.queryOptions({}, { enabled: tvShown }));
+  const available = useQuery(trpc.catalog.available.queryOptions({ query: localQ, limit: 50 }, { enabled: !homeRails && (moviesShown || tvShown) }));
+  useAcquisitionEvents(moviesShown || tvShown, () => {
+    if (moviesShown) void cache.invalidateQueries({ queryKey: trpc.requests.list.pathKey() });
+    if (tvShown) void cache.invalidateQueries({ queryKey: trpc.tv.requestCards.pathKey() });
+    if (homeRails) void cache.invalidateQueries({ queryKey: trpc.catalog.recent.pathKey() });
+    else void cache.invalidateQueries({ queryKey: trpc.catalog.available.pathKey() });
+  });
   const movieStatus = useQuery(trpc.movies.status.queryOptions({}, { enabled: moviesShown && Boolean(remoteQ) }));
   const remoteBooks = useQuery(trpc.openlibrary.search.queryOptions({ q: remoteQ, limit: 20 }, { enabled: booksShown && Boolean(remoteQ), staleTime: 10 * 60_000 }));
   const remoteMovies = useQuery(trpc.movies.search.queryOptions({ query: remoteQ }, { enabled: moviesShown && Boolean(remoteQ) && movieStatus.data?.catalogConfigured === true, staleTime: 10 * 60_000 }));

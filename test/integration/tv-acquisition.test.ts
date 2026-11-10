@@ -270,6 +270,83 @@ async function assertOwnedViews(s: Awaited<ReturnType<typeof setup>>) {
   return views;
 }
 
+for (const restart of [false, true]) {
+  test(`TV publishes on completion notifications ${restart ? "missed while stopped" : "without recurring checks"}`, async () => {
+    const s = await setup(["tvdb:201"]);
+    let runtime: Runtime | undefined;
+    try {
+      const offer = s.fixture.addPack("event-pack", ["tvdb:201"]);
+      const settings = s.repo.getSettings();
+      settings.movies.plexUrl = "http://plex.invalid";
+      settings.movies.plexToken = "fixture-token";
+      settings.tv.plexSectionId = "16";
+      s.repo.updateSettings(settings);
+      const job = s.enqueue().job_id!;
+      let downloaded = false, scanned = false, plexReady = false, checks = 0, verifications = 0;
+      const inspect = s.fixture.services.client.inspect;
+      s.fixture.services.client.inspect = async ref => {
+        checks++;
+        const snapshot = await inspect(ref);
+        return downloaded ? snapshot : { ...snapshot, state: "downloading", complete: false, bytesDone: 0 };
+      };
+      s.fixture.services.timing!.stallMs = 120_000;
+      s.fixture.services.library.scan = async () => { scanned = true; };
+      s.fixture.services.library.verify = async (_entry, files) => {
+        verifications++;
+        expect(files[0]?.episodes.map(episode => episode.key)).toEqual(["tvdb:201"]);
+        expect(files[0]?.serverPath).toStartWith(settings.tv.plexViewPath + "/");
+        return plexReady;
+      };
+      let sendPlex!: (data: string) => void;
+      const plexEventFetcher = (async (_input: unknown, init?: RequestInit) => new Response(new ReadableStream({
+        start(controller) {
+          sendPlex = data => controller.enqueue(new TextEncoder().encode(data));
+          init?.signal?.addEventListener("abort", () => controller.close(), { once: true });
+        },
+      }), { headers: { "Content-Type": "text/event-stream" } })) as typeof fetch;
+      const spool = path.join(s.root, "torrent-events");
+      const start = async () => { runtime = await createJobExecutionRuntime(s.context, path.join(s.root, "event.sqlite"),
+        { torrentCompletionDirectory: spool, plexEventFetcher }); };
+      const waiting = async () => {
+        const run = s.repo.getJobExecution(job)?.run_id;
+        return run ? (await runtime!.engine.getRunStatus(run))?.run.status === "waiting" : false;
+      };
+      const waitFor = async (condition: () => boolean | Promise<boolean>) => {
+        const deadline = Date.now() + 10_000;
+        while (!await condition()) {
+          if (Date.now() >= deadline) throw new Error(`TV event run did not reach expected state: ${JSON.stringify(s.repo.getJob(job))}`);
+          await runtime!.reconcile();
+          await Bun.sleep(10);
+        }
+      };
+      await start();
+      await waitFor(waiting);
+      expect(checks).toBe(1);
+      await Bun.sleep(80);
+      expect(checks).toBe(1);
+      if (restart) { await runtime!.stop(); runtime = undefined; }
+      downloaded = true;
+      if (restart) await start();
+      else {
+        const receipt = path.join(spool, `${offer.infoHash}.test`);
+        await fs.writeFile(receipt, "");
+        await fs.rename(receipt, receipt + ".done");
+      }
+      await waitFor(async () => scanned && await waiting());
+      expect(verifications).toBe(1);
+      expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(0);
+      if (restart) { await runtime!.stop(); runtime = undefined; }
+      plexReady = true;
+      if (restart) await start();
+      else sendPlex('data: {"ActivityNotification":{"event":"ended","Activity":{"type":"library.update.section","Context":{"librarySectionID":16}}}}\n\n');
+      await waitFor(() => s.repo.getJobStatus(job) === "succeeded");
+      expect(verifications).toBe(2);
+      expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(1);
+      await assertOwnedViews(s);
+    } finally { await runtime?.stop(); await s.close(); }
+  }, 30_000);
+}
+
 function extendRequest(s: Awaited<ReturnType<typeof setup>>, keys: string[]) {
   const request = s.repo.tv.requestById(s.request.requestId)!;
   const episodes = s.repo.tv.entry(s.request.entryId)!.episodes;

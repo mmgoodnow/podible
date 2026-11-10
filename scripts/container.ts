@@ -1,6 +1,6 @@
 import path from "node:path";
 import { configDir } from "../src/config";
-import { prepareTransmission } from "../src/media/managed-transmission";
+import { notifyTransmissionRestart, prepareTransmission } from "../src/media/managed-transmission";
 import { TransmissionRpc } from "../src/media/transmission-client";
 import { stopSupervisedChildren } from "../src/runtime/child-shutdown";
 
@@ -10,6 +10,7 @@ async function supervise(
   name: string,
   command: string[],
   beforeStart?: () => void,
+  onRestart?: (child: ReturnType<typeof Bun.spawn>) => void,
 ) {
   let failures = 0;
   while (!stopping) {
@@ -23,6 +24,7 @@ async function supervise(
         stderr: "inherit",
       });
       children.set(name, child);
+      if (failures) onRestart?.(child);
       await child.exited;
     } catch {
       console.error(`[supervisor] ${name} failed to start`);
@@ -61,6 +63,17 @@ const daemon = supervise(
   ["transmission-daemon", "--foreground", "--config-dir", directory],
   () => {
     prepareTransmission(directory);
+  },
+  child => {
+    void (async () => {
+      if (!rpc) return;
+      for (let attempt = 0; attempt < 8 && !stopping && child.exitCode === null; attempt++) {
+        try { await rpc.call("session-get"); }
+        catch { await Bun.sleep(500); continue; }
+        if (!stopping && child.exitCode === null) notifyTransmissionRestart(directory);
+        return;
+      }
+    })().catch(() => console.warn("[supervisor] Could not write torrent engine restart receipt"));
   },
 );
 const rpc = identity

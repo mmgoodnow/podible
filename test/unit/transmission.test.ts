@@ -272,6 +272,14 @@ test("private Transmission identity and resume directory survive preparation wit
     expect(settings["rpc-bind-address"]).toBe("127.0.0.1");
     expect(settings["rpc-authentication-required"]).toBe(true);
     expect(settings["watch-dir-enabled"]).toBe(false);
+    expect(settings["script-torrent-done-enabled"]).toBe(true);
+    const hash = "AB".repeat(20);
+    const hook = settings["script-torrent-done-filename"] as string;
+    expect(await Bun.spawn([hook], { env: { ...process.env, TR_TORRENT_HASH: "../invalid" } }).exited).toBe(1);
+    expect(await Bun.spawn([hook], { env: { ...process.env, TR_TORRENT_HASH: hash } }).exited).toBe(0);
+    const receipts = await fs.readdir(path.join(root, "completion-events"));
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatch(new RegExp(`^${hash.toLowerCase()}\\.[A-Za-z0-9]+\\.done$`));
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

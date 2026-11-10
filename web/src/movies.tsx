@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAcquisitionEvents } from "./acquisition-events";
 import { useTRPC } from "./rpc";
 import { Link, navigate } from "./router";
 import type { MovieRequestView } from "../../src/movies/contracts";
@@ -125,6 +126,10 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const details = useQuery(trpc.movies.get.queryOptions({ tmdbId }));
+  useAcquisitionEvents(true, () => {
+    void queryClient.invalidateQueries({ queryKey: trpc.movies.get.queryKey({ tmdbId }) });
+    void queryClient.invalidateQueries({ queryKey: trpc.requests.get.pathKey() });
+  });
   const extra = useQuery(trpc.movies.pageExtras.queryOptions({ tmdbId }, {
     enabled: details.isSuccess, staleTime: 10 * 60_000, retry: false,
   })).data;
@@ -216,14 +221,10 @@ function CastPortrait({ actor }: { actor: MoviePageExtras["cast"][number] }) {
 }
 export function MovieRequests() {
   const trpc = useTRPC();
-  const requests = useQuery({
-    ...trpc.requests.list.queryOptions({}),
-    refetchInterval: (query) =>
-      query.state.data?.requests.some(
-        (r) => ["queued", "running"].includes(r.state) || r.upgrading,
-      )
-        ? 5000
-        : false,
+  const cache = useQueryClient();
+  const requests = useQuery(trpc.requests.list.queryOptions({}));
+  useAcquisitionEvents(true, () => {
+    void cache.invalidateQueries({ queryKey: trpc.requests.list.pathKey() });
   });
   return (
     <>
@@ -449,12 +450,6 @@ function MovieRequestPanel({ initialRequest }: { initialRequest: MovieRequestVie
   const query = useQuery({
     ...trpc.requests.get.queryOptions({ requestId }),
     initialData: { request: initialRequest },
-    refetchInterval: (q) =>
-      q.state.data &&
-      (["queued", "running"].includes(q.state.data.request.state) ||
-        q.state.data.request.upgrading)
-        ? 2000
-        : false,
   });
   const refresh = () => {
     void queryClient.invalidateQueries({

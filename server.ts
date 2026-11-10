@@ -4,6 +4,7 @@ import { createPodibleFetchHandler } from "./src/http";
 import { pingPlexOwnerToken } from "./src/plex";
 import { BooksRepo } from "./src/repo";
 import { BackgroundWorker } from "./src/runtime/background-worker";
+import { AcquisitionEvents, acquisitionEventsPath } from "./src/http/acquisition-events";
 import { readAutobrrConfig, reconcileAutobrrWebhook, type AutobrrConfig } from "./src/media/autobrr";
 import type { HTMLBundle } from "bun";
 
@@ -17,7 +18,8 @@ export async function startServer(frontend?: HTMLBundle) {
   let plexPingTimer: ReturnType<typeof setInterval> | undefined;
   let autobrrTimer: ReturnType<typeof setTimeout> | undefined;
   const autobrrLifetime = new AbortController();
-  const background = new BackgroundWorker({ databasePath: booksDbPath, onFailure: error => {
+  const acquisitionEvents = new AcquisitionEvents();
+  const background = new BackgroundWorker({ databasePath: booksDbPath, onAcquisitionChange: () => acquisitionEvents.notify(), onFailure: error => {
     console.error("[background] execution worker failed", error.message);
     void shutdown(1);
   } });
@@ -27,6 +29,7 @@ export async function startServer(frontend?: HTMLBundle) {
     clearInterval(plexPingTimer);
     clearTimeout(autobrrTimer);
     autobrrLifetime.abort();
+    acquisitionEvents.close();
     const deadline = setTimeout(() => process.exit(exitCode || 1), 8_000);
     deadline.unref();
     try {
@@ -71,7 +74,7 @@ export async function startServer(frontend?: HTMLBundle) {
     } catch (error) {
       console.warn("[autobrr] " + (error as Error).message + "; RSS remains enabled");
     }
-    const fetchHandler = createPodibleFetchHandler(repo, startTime, undefined, { autobrr });
+    const fetchHandler = createPodibleFetchHandler(repo, startTime, undefined, { autobrr, acquisitionEvents });
     server = Bun.serve({
       port,
       idleTimeout: 60,
@@ -99,8 +102,11 @@ export async function startServer(frontend?: HTMLBundle) {
             development: { hmr: true, console: true },
           }
         : { development: false }),
-      fetch: request => background.state === "ready" ? fetchHandler(request)
-        : new Response("Background execution unavailable", { status: 503 }),
+      fetch: (request, httpServer) => {
+        if (stopping || background.state !== "ready") return new Response("Background execution unavailable", { status: 503 });
+        if (request.method === "GET" && new URL(request.url).pathname === acquisitionEventsPath) httpServer.timeout(request, 0);
+        return fetchHandler(request);
+      },
     });
     if (autobrr) {
       const config = autobrr;

@@ -96,6 +96,8 @@ export async function publishMovieVersion(input: {
   versionId: number;
   assertActive?: () => void;
   afterPromotion?: () => void | Promise<void>;
+  scan?: boolean;
+  pendingIsExpected?: boolean;
 }) {
   const { repo, roots, library, targetId, versionId } = input;
   const active = input.assertActive ?? (() => {});
@@ -125,11 +127,13 @@ export async function publishMovieVersion(input: {
       .map((entry) =>
         path.posix.join(roots.serverViewRoot, entry.relativePath),
       );
-    await library.scan(paths);
-    if (!(await library.verify(movie, paths)))
+    if (input.scan !== false) await library.scan(paths);
+    if (!(await library.verify(movie, paths))) {
+      if (input.pendingIsExpected) return false;
       throw new Error(
         "Plex has not verified the expected movie and content paths; previous version remains active",
       );
+    }
     active();
     repo.selectVersion(targetId, versionId, pending.expected_revision);
     await input.afterPromotion?.();
@@ -147,5 +151,6 @@ export async function publishMovieVersion(input: {
       "available",
       "Verified in Plex and ready to watch",
     );
+    return true;
   });
 }

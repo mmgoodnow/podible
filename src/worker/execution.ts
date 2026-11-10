@@ -17,6 +17,8 @@ import { JOB_TYPES } from "../job-types";
 import { periodicPrefix } from "./periodic";
 import { assertWorkflowBoundary, effectCheckpoint, executionDiagnostics, withExecutionEffects } from "../runtime/execution-effects";
 import { assertNoMutexHeld, mutexDiagnostics } from "../runtime/keyed-mutex";
+import { CompletionSignals, completionEvent, watchTorrentCompletions } from "../runtime/completion-signals";
+import { watchPlexCompletions } from "../runtime/plex-completion";
 
 export const EXECUTION_JOB_TYPES = JOB_TYPES;
 
@@ -52,6 +54,8 @@ export async function createJobExecutionRuntime(
     afterHistoryCopy?: () => Promise<void>;
     onCheckpoint?: (jobId: number, stepName: string) => Promise<void>;
     stallTimeoutMs?: number;
+    torrentCompletionDirectory?: string;
+    plexEventFetcher?: typeof fetch;
   } = {}
 ) {
   const leaseMs = options.leaseMs ?? 30_000;
@@ -153,6 +157,25 @@ export async function createJobExecutionRuntime(
     await storage.close();
     throw error;
   }
+  const signalDb = options.torrentCompletionDirectory ? new Database(databasePath) : undefined;
+  signalDb?.exec("PRAGMA busy_timeout = 2000");
+  const signalsInbox = signalDb && new CompletionSignals(signalDb, (runId, slot) => engine.sendEvent(
+    runId, slot.startsWith("podible:admission:") ? "podible-admission" : completionEvent, slot));
+  const plexSignals = signalsInbox && watchPlexCompletions(
+    (source, prefix) => signalsInbox.signal(source, prefix),
+    () => workerLog(ctx, "[execution] Plex notification stream disconnected; reconnecting"), options.plexEventFetcher);
+  const configurePlex = () => {
+    const { plexUrl, plexToken } = ctx.getSettings().movies;
+    plexSignals?.configure({ url: plexUrl, token: plexToken });
+  };
+  const wakeLanes = (keys: string[]) => {
+    if (!signalsInbox || stopping) return;
+    const deliver = (key: string, prefix = false) => {
+      void signalsInbox.signal(key, prefix).catch(() => workerLog(ctx, "[execution] Could not deliver a lane wake"));
+    };
+    if (keys.includes("*")) deliver("lane:", true);
+    else for (const key of keys) if (/^(?:tv|movie)-target:\d+$/.test(key)) deliver("lane:" + key);
+  };
   const workflows = EXECUTION_JOB_TYPES.map((type) =>
     createWorkflow(
       {
@@ -160,6 +183,7 @@ export async function createJobExecutionRuntime(
         concurrency: ["torrent_reuse_backfill", "torrent_reuse_feed", "torrent_metrics_collect", "torrent_stewardship_collect", "indexer_feed_sync", "movie_feed_match", "book_feed_match", "acquire", "movie_reconcile", "movie_shadow_sync", "movie_dual_write_sync", "tv_sync", "tv_reconcile", "tv_shadow_sync", "tv_feed_match"].includes(type)
           ? 1 : ["torrent_reuse", "import", "chapter_analysis", "movie_acquire", "movie_shadow_evaluate", "tv_acquire", "tv_shadow_evaluate"].includes(type) ? 2 : 16,
         input: z.object({ jobId: z.number().int().positive(), generation: z.number().int().nonnegative().default(0) }),
+        events: { [completionEvent]: z.string(), "podible-admission": z.string() },
         maxOperations: 200_000
       },
       async ({ input, step, runId }) => {
@@ -174,17 +198,19 @@ export async function createJobExecutionRuntime(
         const priorSteps = await storage.getStepResults(runId);
         const completedSteps = new Set(priorSteps.filter(row => row.status === "completed" && (!row.kind || row.kind === "step")).map(row => row.name));
         const priorLaneSleeps = new Map<string, Array<{ name: string; index: number }>>();
+        const priorLaneEvents = new Map<string, Array<{ name: string; index: number }>>();
         for (const row of priorSteps) {
-          const match = /^podible:lane:(.+):(0|[1-9][0-9]*)$/.exec(row.name);
+          const match = /^podible:(lane|admission):(.+):(0|[1-9][0-9]*)$/.exec(row.name);
           if (!match) continue;
-          const index = Number(match[2]);
-          if ((row.kind && row.kind !== "sleep") || !Number.isSafeInteger(index) || index >= 200_000)
-            throw new Error("Invalid retained resource admission sleep");
-          const name = match[1]!;
-          const sleeps = priorLaneSleeps.get(name) ?? [];
-          sleeps.push({ name: row.name, index }); priorLaneSleeps.set(name, sleeps);
+          const index = Number(match[3]);
+          if (!Number.isSafeInteger(index) || index >= 200_000) throw new Error("Invalid retained resource admission wait");
+          const name = match[2]!;
+          const waits = match[1] === "admission" ? priorLaneEvents : priorLaneSleeps;
+          const history = waits.get(name) ?? [];
+          history.push({ name: row.name, index }); waits.set(name, history);
         }
-        for (const sleeps of priorLaneSleeps.values()) sleeps.sort((a, b) => a.index - b.index);
+        for (const waits of [priorLaneSleeps, priorLaneEvents])
+          for (const history of waits.values()) history.sort((a, b) => a.index - b.index);
         let replayedSteps = 0;
         const prefix = periodicPrefix({ ...queuedJob, dedupe_key: ctx.repo.jobDedupeKey(queuedJob.id) });
         const newer = prefix ? ctx.repo.latestJobByDedupePrefix(queuedJob.type, prefix) : null;
@@ -218,6 +244,9 @@ export async function createJobExecutionRuntime(
           if (!status || status === "cancelled" || ctx.repo.isJobCancellationRequested(input.jobId))
             throw new RunCancelledError(runId);
         };
+        const eventMode = signalsInbox && (type === "tv_acquire" || type === "movie_acquire") &&
+          (priorSteps.some(row => row.name === "media:event-mode" || row.name.startsWith("podible:admission:")) ||
+            priorSteps.every(row => row.name === "job-input"));
         const execution: NonNullable<WorkerContext["execution"]> = {
           key: runId,
           assertActive,
@@ -234,11 +263,19 @@ export async function createJobExecutionRuntime(
             // reached. Skipping former admission sleeps can strand a later slow
             // fresh effect after its callback exits, even with no lane conflict.
             const retainedSleeps = priorLaneSleeps.get(name) ?? [];
+            const retainedEvents = priorLaneEvents.get(name) ?? [];
             for (const sleep of retainedSleeps) {
               if (++replayedSteps % 16 === 0) await yieldToIo();
               assertActive();
               await step.sleep(sleep.name, 1000);
               assertActive();
+            }
+            for (const event of retainedEvents) {
+              if (++replayedSteps % 16 === 0) await yieldToIo();
+              assertActive();
+              await step.waitForEvent(event.name, { event: "podible-admission" });
+              assertActive();
+              signalsInbox?.clear(runId, event.name);
             }
             if (completedSteps.has(name)) {
               // Cached results perform no effects and must not wait for their
@@ -255,14 +292,21 @@ export async function createJobExecutionRuntime(
             const keys = [...(current ? jobLockKeys(ctx.repo, current) : []), `execution:${token}`];
             // Wait outside the handler: a durable sleep releases Reflow's run slot.
             // Reserve synchronously before entering step.run so another callback cannot race admission.
-            for (let wait = (retainedSleeps.at(-1)?.index ?? -1) + 1; lockSetsConflict(
+            const blocked = () => lockSetsConflict(
               new Set([...activeLocks].filter(key => laneOwners.get(key)?.owner !== token)), keys
-            ) || (current !== null && jobAdmissionBlocked(ctx.repo, current)); wait++) {
+            ) || (current !== null && jobAdmissionBlocked(ctx.repo, current));
+            const targetLane = eventMode ? keys.find(key => /^(?:tv|movie)-target:\d+$/.test(key)) : undefined;
+            for (let wait = ((targetLane ? retainedEvents : retainedSleeps).at(-1)?.index ?? -1) + 1; blocked(); wait++) {
               // Cached durable sleeps only yield microtasks in Reflow. Let
               // filesystem completions and timers run during a long replay.
               if (wait > 0 && wait % 16 === 0) await yieldToIo();
               assertActive();
-              await step.sleep(`podible:lane:${name}:${wait}`, 1000);
+              if (targetLane && signalsInbox) {
+                const slot = `podible:admission:${name}:${wait}`;
+                signalsInbox.arm(runId, slot, "lane:" + targetLane);
+                await step.waitForEvent(slot, { event: "podible-admission" });
+                signalsInbox.clear(runId, slot);
+              } else await step.sleep(`podible:lane:${name}:${wait}`, 1000);
             }
             assertActive();
             let reserved = false;
@@ -291,6 +335,7 @@ export async function createJobExecutionRuntime(
                 const lane = laneOwners.get(key)!;
                 if (--lane.count === 0) { laneOwners.delete(key); activeLocks.delete(key); }
               }
+              wakeLanes(type === "tv_reconcile" ? ["*"] : keys);
             };
             try { return await step.run<unknown>(name, {
               retry: executionRetryPolicy(ctx.repo.getJob(input.jobId)?.max_attempts ?? 5, options.retryDelayMs),
@@ -312,6 +357,27 @@ export async function createJobExecutionRuntime(
             }) as T; }
             finally { release(); }
           },
+          ...(eventMode ? {
+            armCompletion: (slot: string, source: string) => {
+              assertActive();
+              signalsInbox.arm(runId, slot, source);
+              if (source.startsWith("plex:")) configurePlex();
+            },
+            clearCompletion: (slot: string) => signalsInbox.clear(runId, slot),
+            waitForCompletion: async (slot: string, timeoutMs: number) => {
+              assertWorkflowBoundary();
+              assertNoMutexHeld();
+              for (let duplicate = 0; ; duplicate++) {
+                assertActive();
+                const value = await step.waitForEvent(`${slot}:event:${duplicate}`,
+                  { event: completionEvent, timeout: timeoutMs });
+                if (value !== null && value !== slot) continue;
+                assertActive();
+                signalsInbox.clear(runId, slot);
+                return value !== null;
+              }
+            },
+          } : {}),
           sleep: (name, milliseconds) => {
             assertWorkflowBoundary();
             assertNoMutexHeld();
@@ -319,10 +385,11 @@ export async function createJobExecutionRuntime(
           }
         };
         const job = await execution.run("job-input", () => ctx.repo.getJob(input.jobId)!);
+        if (eventMode) await execution.run("media:event-mode", () => true);
         const ownedRepo = ctx.repo.forExecution(assertActive);
         const result = await (options.processJob ?? processJob)({ ...ctx, repo: ownedRepo, execution }, job);
         if (result !== "done" && result !== undefined) throw new Error(`Job ${job.id} returned an invalid result`);
-        await execution.run("operation-finish", () => execution.assertActive());
+        await execution.run("operation-finish", () => { execution.assertActive(); signalsInbox?.clear(runId); });
         return { jobId: job.id };
       }
     )
@@ -334,11 +401,17 @@ export async function createJobExecutionRuntime(
     runLeaseDurationMs: leaseMs,
     heartbeatIntervalMs: Math.max(20, Math.floor(leaseMs / 3)),
     hooks: {
+      onRunComplete: ({ workflow }) => {
+        if (["media-tv_acquire-v1", "media-movie_acquire-v1", "media-torrent_reuse-v1"].includes(workflow))
+          ctx.onAcquisitionChange?.();
+      },
       onRunFailed: async ({ runId, error }) => {
+        signalsInbox?.clear(runId);
         const run = await storage.getRun(runId);
         const input = run?.input as { jobId: number } | undefined;
         const job = input ? ctx.repo.getJob(input.jobId) : null;
         if (job) await notifyJobFailure(ctx, job, error);
+        if (job?.type === "tv_acquire" || job?.type === "movie_acquire" || job?.type === "torrent_reuse") ctx.onAcquisitionChange?.();
       },
       onStepStart: ({ runId, stepName }) => workerLog(ctx, `[execution] run=${runId} step=${stepName}`),
       onStepComplete: async ({ runId, stepName }) => {
@@ -351,6 +424,12 @@ export async function createJobExecutionRuntime(
     }
   });
   await engine.start(300);
+  await signalsInbox?.signal("lane:", true);
+  if (plexSignals) configurePlex();
+  const stopTorrentSignals = options.torrentCompletionDirectory && signalsInbox
+    ? watchTorrentCompletions(options.torrentCompletionDirectory, (source, prefix) => signalsInbox.signal(source, prefix),
+      () => workerLog(ctx, "[execution] Torrent completion inbox unavailable; reopening"))
+    : undefined;
   return {
     engine,
     diagnostics() {
@@ -435,15 +514,19 @@ export async function createJobExecutionRuntime(
         if (!runId || !(await storage.getRun(runId)))
           throw new Error(`Missing execution for command ${command.id}, job ${job.id}`);
         // Also notify the live engine so an in-process callback gets aborted.
-        if (command.kind === "cancel") await engine.cancel(runId);
+        if (command.kind === "cancel") { await engine.cancel(runId); signalsInbox?.clear(runId); }
         commands.apply(`${namespace}:command:${command.id}`, command, runId);
         ctx.repo.acknowledgeJobCommand(command.id);
       }
     },
     async stop() {
       stopping = true;
+      await plexSignals?.stop();
+      await stopTorrentSignals?.();
+      await signalsInbox?.drained();
       for (const reservation of reservations) if (!reservation.entered) reservation.release();
       await engine.stop();
+      signalDb?.close();
       commands.close();
       await storage.close();
     }

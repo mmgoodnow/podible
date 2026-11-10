@@ -73,7 +73,7 @@ export function tvViewEntries(repo: TvRepo, roots: TvRoots): LibraryViewEntry[] 
 export function reconcileTvView(repo: TvRepo, roots: TvRoots, assertActive: () => void = () => {}) {
   return serialized(roots.viewRoot, () => reconcileLibraryView({ ...roots, entries: tvViewEntries(repo, roots), assertActive }));
 }
-export async function publishTvVersion(input: { repo: TvRepo; roots: TvRoots; library: TvLibrary; targetId: number; versionId: number; assertActive?: () => void }) {
+export async function publishTvVersion(input: { repo: TvRepo; roots: TvRoots; library: TvLibrary; targetId: number; versionId: number; assertActive?: () => void; scan?: boolean; pendingIsExpected?: boolean }) {
   const { repo, roots, targetId, versionId, library } = input;
   const active = input.assertActive ?? (() => {});
   effectPhase("publication:mutex-wait");
@@ -89,9 +89,12 @@ export async function publishTvVersion(input: { repo: TvRepo; roots: TvRoots; li
       serverPath: path.posix.join(roots.serverViewRoot, file.relativePath), episodes: file.episodes,
     }));
     effectPhase("publication:scan");
-    await library.scan();
+    if (input.scan !== false) await library.scan();
     effectPhase("publication:verify");
-    if (!await library.verify(entry, files)) throw new Error("Plex has not verified the exact TV episodes and paths; existing episodes remain selected");
+    if (!await library.verify(entry, files)) {
+      if (input.pendingIsExpected) return false;
+      throw new Error("Plex has not verified the exact TV episodes and paths; existing episodes remain selected");
+    }
     effectPhase("publication:promote");
     active(); repo.promotePublication(targetId, versionId, pending.expected_revision);
     active(); repo.clearPublication(targetId, versionId);
@@ -99,5 +102,6 @@ export async function publishTvVersion(input: { repo: TvRepo; roots: TvRoots; li
     await reconcileLibraryView({ ...roots, entries: tvViewEntries(repo, roots), assertActive: active });
     repo.event(targetId, null, `tv-published:${targetId}:${versionId}`, "available", "Episode identity and file paths verified in Plex");
     effectPhase("publication:complete");
+    return true;
   });
 }

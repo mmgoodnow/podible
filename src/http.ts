@@ -29,6 +29,8 @@ import { createActivityRoutes } from "./http/activity-routes";
 import { createMetricsRoutes } from "./http/metrics-routes";
 import { createAutobrrRoutes } from "./http/autobrr-routes";
 import { AUTOBRR_WEBHOOK_PATH, type AutobrrConfig } from "./media/autobrr";
+import { requireAuthenticatedRequest } from "./http/middleware";
+import { AcquisitionEvents, acquisitionEventsPath } from "./http/acquisition-events";
 
 export function createPodibleFetchHandler(
   repo: BooksRepo,
@@ -39,11 +41,14 @@ export function createPodibleFetchHandler(
     bookTorrentClient?: import("./media/torrent-client").TorrentClient;
     metricsTokenDigestPath?: string;
     autobrr?: AutobrrConfig;
+    acquisitionEvents?: AcquisitionEvents;
   } = {},
 ): (request: Request) => Promise<Response> {
   const app = new Hono<HttpEnv>();
 
   app.use("*", createRequestContextMiddleware(repo));
+  const acquisitionEvents = dependencies.acquisitionEvents ?? new AcquisitionEvents();
+  app.get(acquisitionEventsPath, requireAuthenticatedRequest, c => acquisitionEvents.response(c.req.raw.signal));
 
   const spa = createSpaRoutes();
   for (const route of [

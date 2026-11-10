@@ -18,7 +18,8 @@ async function until(check: () => boolean | Promise<boolean>) {
   while (!await check()) { if (Date.now() > end) throw new Error("Publication admission timed out"); await Bun.sleep(10); }
 }
 
-test.each([[false, false], [true, false], [false, true]])("staged TV owner takes next admission; in-flight=%s selected=%s", async (inFlight, selected) => {
+test.each([[false, false, false], [true, false, false], [false, true, false], [true, false, true]])(
+  "staged TV owner takes next admission; in-flight=%s selected=%s event-driven=%s", async (inFlight, selected, eventDriven) => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "tv-publication-admission-")));
   const db = new Database(path.join(root, "app.sqlite")); runMigrations(db);
   const repo = new BooksRepo(db), settings = repo.ensureSettings();
@@ -36,7 +37,7 @@ test.each([[false, false], [true, false], [false, true]])("staged TV owner takes
   let release!: () => void; const hold = new Promise<void>(resolve => { release = resolve; });
   let held = false, afterRead = 0, published = false, ownerId = 0, versionId = 0;
   const runtime = await createJobExecutionRuntime({ repo, getSettings: () => repo.getSettings(), onLog() {} },
-    path.join(root, "execution.sqlite"), { processJob: async (ctx, job) => {
+    path.join(root, "execution.sqlite"), { torrentCompletionDirectory: eventDriven ? path.join(root, "events") : undefined, processJob: async (ctx, job) => {
       if (job.id === ownerId) await ctx.execution!.run("publish", () => publishTvVersion({ repo: ctx.repo.tv, roots,
         targetId: request.targetId, versionId, assertActive: () => ctx.execution!.assertActive(), library: {
           scan: async () => {}, verify: async (_entry, files) => {
@@ -75,7 +76,7 @@ test.each([[false, false], [true, false], [false, true]])("staged TV owner takes
     expect(jobAdmissionBlocked(repo, { ...repo.getJob(ownerId)!, type: "tv_reconcile" })).toBe(false);
     await runtime.reconcile();
     if (inFlight) {
-      await until(async () => (await runtime.engine.getRunStatus(repo.getJobExecution(second.job_id!)!.run_id))?.run.status === "sleeping");
+      await until(async () => (await runtime.engine.getRunStatus(repo.getJobExecution(second.job_id!)!.run_id))?.run.status === (eventDriven ? "waiting" : "sleeping"));
       expect(published).toBe(false); expect(afterRead).toBe(0);
       expect(runtime.diagnostics().effects.some(effect => effect.jobId === first.job_id && effect.stepName === "long-read")).toBe(true);
       release();

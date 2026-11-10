@@ -5,6 +5,7 @@ import { Failure } from "./books";
 import { Link, navigate } from "./router";
 import { metricBytes } from "./transfer-metrics-model";
 import { StageTracker } from "./stage-tracker";
+import { useAcquisitionEvents } from "./acquisition-events";
 import "./tv.css";
 
 function ShowRedirect({ entryId }: { entryId: number }) {
@@ -89,9 +90,10 @@ function TvSeasonPicker({ tmdbId, showId }: { tmdbId: number; showId?: number })
 export function TvLibraryDetail({ entryId }: { entryId: number }) {
   const trpc = useTRPC();
   const cache = useQueryClient();
-  const result = useQuery(trpc.catalog.tvEntry.queryOptions({ entryId }, {
-    refetchInterval: query => query.state.data?.progress.activeBatches ? 2000 : 5000,
-  }));
+  const result = useQuery(trpc.catalog.tvEntry.queryOptions({ entryId }));
+  useAcquisitionEvents(true, () => {
+    void cache.invalidateQueries({ queryKey: trpc.catalog.tvEntry.queryKey({ entryId }) });
+  });
   const [expanded, setExpanded] = useState<number[]>([]);
   const changed = () => {
     void cache.invalidateQueries({ queryKey: trpc.tv.myRequest.pathKey() });

@@ -7,6 +7,7 @@ export type WorkerContext = {
   repo: BooksRepo;
   getSettings: () => AppSettings;
   onLog?: (message: string) => void;
+  onAcquisitionChange?: () => void;
   shouldStop?: () => boolean;
   /** Override the agent model provider (e.g. a fake for tests). */
   modelProvider?: ModelProvider;
@@ -34,6 +35,9 @@ export type WorkerContext = {
     key: string;
     run<T>(name: string, handler: () => T | Promise<T>, options?: { timeoutMs?: number }): Promise<T>;
     sleep(name: string, milliseconds: number): Promise<void>;
+    armCompletion?(slot: string, source: string): void;
+    clearCompletion?(slot: string): void;
+    waitForCompletion?(slot: string, timeoutMs: number): Promise<boolean>;
     assertActive(): void;
   };
 };

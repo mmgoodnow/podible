@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { downloadCapacityProblem } from "../media/download-capacity";
 import { advanceDownloadProgress, downloadComplete } from "../media/download-lifecycle";
+import { waitForPlexPublication, waitForTorrentCompletion } from "../worker/media-completion";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { JobRow } from "../app-types";
@@ -111,6 +112,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
   };
   const emit = (key: string, stage: Parameters<typeof repo.event>[3], message: string) => {
     active(); repo.event(target.id, acquisition.id, `tv-acquisition:${acquisition.id}:${key}`, stage, message);
+    ctx.onAcquisitionChange?.();
   };
   const sharedSearch = async (wave: string, scoped = false) => {
     const key=intake.searchGroup && !scoped ? `tv-search:${intake.searchGroup}:${wave}` : null;
@@ -175,7 +177,17 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
   const progressing = (seen: TorrentSnapshot | null, priorBytes?: number | null) =>
     seen?.state === "downloading" && !seen.seedOnly && !seen.message && !seen.errorKind && seen.bytesDone !== null &&
     ((seen.downloadBytesPerSecond ?? 0) > 0 || (priorBytes != null && seen.bytesDone > priorBytes));
+  const stallDeadlineMs = services.timing?.stallMs ?? settings.recovery.stalledTorrentMinutes * 60_000;
   const waitForPack = async (name: string, source: TvSource, observation: TorrentSnapshot, coverage: number[], reason: string) => {
+    if (ctx.execution?.armCompletion && !completeTvSource(source, observation)) {
+      await durableStep(ctx, `${name}:wait-state`, () => {
+        active();
+        repo.decision(acquisition.id, { ...intake, selection: { title: source.title, reason },
+          waitingForSources: true, waitingPack: { title: source.title, episodeCount: coverage.length } });
+      });
+      return waitForTorrentCompletion(ctx, name, source.ref, stallDeadlineMs, () => observePack(source),
+        seen => completeTvSource(source, seen));
+    }
     let seen: TorrentSnapshot | null = observation;
     for (let poll = 0; poll < 20_000; poll++) {
       if (seen && completeTvSource(source, seen)) return true;
@@ -205,7 +217,14 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
     });
     const eventKey = prefix.startsWith("tv:attempt:") ? prefix.slice("tv:attempt:".length) : prefix;
     emit(`${eventKey}:publishing`, "publishing", "Publishing an isolated TV view and verifying each episode in Plex");
-    for (let scan = 0; ; scan++) {
+    if (ctx.execution?.armCompletion) {
+      await waitForPlexPublication(ctx, prefix, settings.tv.plexSectionId, async scan => {
+        if (repo.publications().some(item => item.target_id === target.id && item.version_id !== versionId)) return false;
+        active();
+        return publishTvVersion({ repo, roots, library: services.library, targetId: target.id, versionId,
+          assertActive: active, scan, pendingIsExpected: true });
+      });
+    } else for (let scan = 0; ; scan++) {
       const published = await durableStep(ctx, `${prefix}:publish:${scan}`, async () => {
         if (repo.publications().some(item => item.target_id === target.id && item.version_id !== versionId)) return false;
         try { active(); await publishTvVersion({ repo, roots, library: services.library, targetId: target.id, versionId, assertActive: active }); return true; }
@@ -230,6 +249,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
         (!intake.batchEpisodeIds || intake.batchEpisodeIds.includes(episode.id)) && episode.airDate && Date.parse(episode.airDate) <= Date.now());
       if (remaining.length) queueTvSeasons(ctx.repo, requestId, "recovery", remaining.map(ep => ep.id));
     }));
+    ctx.onAcquisitionChange?.();
     return "done" as const;
   };
   // Old running jobs have neither this flag nor new source facts: retain their exact receipt sequence.
@@ -478,7 +498,18 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
         await recoverMissingTorrentSource({ ctx, client: services.client, ref, sourceRoot, metadata, prefix, active });
       emit(`${attempt}:downloading`, "downloading", `Downloading ${offer.title}`);
       let complete = false, lastBytes = -1, progressedAt = 0, startedAt = 0;
-      for (let poll = 0; poll < 20_000; poll++) {
+      if (ctx.execution?.armCompletion) {
+        complete = await waitForTorrentCompletion(ctx, prefix, ref, stallDeadlineMs, async () => {
+          const seen = await services.client.inspect(ref);
+          active();
+          if (seen.ref.clientId !== ref.clientId || seen.ref.nativeId !== ref.nativeId ||
+              seen.location.rootId !== location.rootId || seen.location.relativePath !== location.relativePath)
+            throw new Error("TV torrent observation changed identity or layout");
+          repo.observeDownload(downloadId, seen);
+          ctx.onAcquisitionChange?.();
+          return seen;
+        }, downloadComplete, shared ? undefined : () => { active(); return services.client.resume(ref); });
+      } else for (let poll = 0; poll < 20_000; poll++) {
         active();
         const observation = await durableStep(ctx, `${prefix}:poll:${poll}`, async () => {
           const observed = await services.client.inspect(ref); active(); repo.observeDownload(downloadId, observed); return observed;

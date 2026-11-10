@@ -6,6 +6,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { z } from "zod";
 import type { JobRow } from "../app-types";
 import { durableStep, type WorkerContext } from "../worker/context";
+import { waitForPlexPublication, waitForTorrentCompletion } from "../worker/media-completion";
 import { assertMovieStorage, prepareMovieStorage } from "./storage";
 import { adoptContentFile } from "../media/content-store";
 import { inspectMetainfo } from "../media/metainfo";
@@ -135,6 +136,7 @@ export async function acquireMovie(
       stage,
       message,
     );
+    ctx.onAcquisitionChange?.();
   };
   const priorKeys = new Set(initial.priorKeys);
   const excluded = new Set<string>();
@@ -390,7 +392,20 @@ export async function acquireMovie(
     let progressedAt = 0;
     let startedAt = 0;
     let completed = false;
-    for (let poll = 0; poll < 20_000; poll++) {
+    if (ctx.execution?.armCompletion) {
+      completed = await waitForTorrentCompletion(ctx, prefix, ref,
+        services.timing?.stallMs ?? settings.recovery.stalledTorrentMinutes * 60_000,
+        async () => {
+          const observed = await services.client.inspect(ref);
+          active();
+          if (observed.ref.clientId !== ref.clientId || observed.ref.nativeId !== ref.nativeId ||
+              observed.location.rootId !== binding.location.rootId || observed.location.relativePath !== binding.location.relativePath)
+            throw new Error("Movie torrent observation changed identity or layout");
+          repo.observeDownload(downloadId, observed);
+          ctx.onAcquisitionChange?.();
+          return observed;
+        }, downloadComplete, () => { active(); return services.client.resume(ref); });
+    } else for (let poll = 0; poll < 20_000; poll++) {
       active();
       const snapshot = await durableStep(
         ctx,
@@ -567,7 +582,13 @@ export async function acquireMovie(
       "publishing",
       "Publishing to Plex; the previous version stays available until verification",
     );
-    for (let scan = 0; ; scan++) {
+    if (ctx.execution?.armCompletion) {
+      await waitForPlexPublication(ctx, prefix, settings.movies.plexSectionId, async scan => {
+        await assertMovieStorage(ctx.repo, roots.contentRoot);
+        return publishMovieVersion({ repo, roots, library: services.library, targetId: target.id, versionId,
+          assertActive: active, scan, pendingIsExpected: true });
+      });
+    } else for (let scan = 0; ; scan++) {
       const published = await durableStep(
         ctx,
         `${prefix}:publish:${scan}`,
@@ -615,6 +636,7 @@ export async function acquireMovie(
       active();
       repo.finishAcquisition(acquisition.id);
     });
+    ctx.onAcquisitionChange?.();
     return "done";
   }
   emit(
