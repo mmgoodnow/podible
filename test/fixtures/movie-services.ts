@@ -34,7 +34,7 @@ export function fixtureFacts(width = 1280): MovieFacts {
     cut: "theatrical",
     source: "web",
     width,
-    height: width === 1280 ? 720 : 1080,
+    height: width === 1280 ? 720 : width >= 3840 ? 2160 : 1080,
     videoCodec: "h264",
     dynamicRange: "sdr",
     audioLanguages: ["eng"],

@@ -163,6 +163,13 @@ try {
   await page
     .getByRole("heading", { name: "Request withdrawn", exact: true })
     .waitFor();
+  await page.getByRole("button", { name: "Request a specific version", exact: true }).click();
+  await page.getByLabel("Resolution", { exact: true }).selectOption("2160");
+  await page.getByRole("button", { name: "Request version", exact: true }).click();
+  await page.getByRole("region", { name: "4K version", exact: true }).waitFor();
+  await page.getByRole("status").getByText("4K requested. Its progress is shown above.", { exact: true }).waitFor();
+  if (await page.evaluate("document.documentElement.scrollWidth > innerWidth"))
+    throw new Error("Version request form overflows on mobile");
   await context.clearCookies();
   await page.reload();
   await page.getByRole("link", { name: "Sign in", exact: true }).waitFor();

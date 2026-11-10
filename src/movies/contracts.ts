@@ -3,6 +3,7 @@ import { movieEventSchema, movieSchema, movieStages } from "./types";
 export const movieRequestViewSchema = z.object({
   id: z.number(),
   targetId: z.number(),
+  versionLabel: z.string(),
   movie: movieSchema,
   createdAt: z.string(),
   state: z.enum(["queued", "running", "waiting-for-release", "blocked", "available", "withdrawn"]),

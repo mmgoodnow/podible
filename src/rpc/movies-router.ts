@@ -6,6 +6,7 @@ import { catalogMovieSchema, moviePageExtrasSchema } from "../movies/types";
 import { movieRequestViewSchema } from "../movies/contracts";
 import { movieCatalog, searchMovieReleases } from "../movies/runtime";
 import { movieRequestView, queueMovieAcquisition } from "../movies/service";
+import { movieVersionSpecSchema, policyForMovieVersion } from "../movies/version-target";
 
 function owned(ctx: RpcContext, requestId: number) {
   const request = ctx.repo.movies.requestById(requestId);
@@ -93,7 +94,7 @@ export const moviesRouter = defineRouter({
   request: defineMethod({
     auth: "user",
     summary: "Request a movie, sharing compatible acquisition work.",
-    paramsSchema: z.object({ tmdbId: positiveIntSchema }),
+    paramsSchema: z.object({ tmdbId: positiveIntSchema, version: movieVersionSpecSchema.optional() }).strict(),
     resultSchema: requestResult,
     async handler(ctx, input) {
       const movie = ctx.repo.movies.movieByTmdb(input.tmdbId) ?? await (
@@ -103,7 +104,8 @@ export const moviesRouter = defineRouter({
         const request = ctx.repo.movies.request(
           ctx.session!.user_id,
           movie,
-          ctx.repo.getSettings().movies.qualityPolicy,
+          input.version ? policyForMovieVersion(ctx.repo.getSettings().movies.qualityPolicy, input.version)
+            : ctx.repo.getSettings().movies.qualityPolicy,
         );
         const view = movieRequestView(ctx.repo, request.requestId);
         if (!view.available)

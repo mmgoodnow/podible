@@ -3,6 +3,7 @@ import type { MovieAcquisition } from "./repo";
 import type { MovieOffer } from "./offers";
 import { evaluateMovieQuality, movieQualityPolicySchema } from "./quality";
 import type { TorrentSnapshot } from "../media/torrent-client";
+import { movieVersionLabel } from "./version-target";
 
 export function queueMovieAcquisition(
   repo: BooksRepo,
@@ -104,6 +105,7 @@ export function movieRequestView(repo: BooksRepo, requestId: number) {
   return {
     id: request.id,
     targetId: target.id,
+    versionLabel: movieVersionLabel(movieQualityPolicySchema.parse(JSON.parse(target.policy_json))),
     movie,
     createdAt: request.created_at,
     state,

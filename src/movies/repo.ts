@@ -109,6 +109,14 @@ export class MovieRepo {
   hasTargets(): boolean {
     return Boolean(this.db.query("SELECT 1 FROM movie_targets LIMIT 1").get());
   }
+  publishedVersionsForMovie(movieId: number): { id: number; facts: MovieFacts }[] {
+    return (this.db.query(`SELECT v.id,v.facts_json FROM movie_versions v WHERE v.movie_id=?
+      AND EXISTS(SELECT 1 FROM movie_targets t WHERE t.active_version_id=v.id)
+      AND EXISTS(SELECT 1 FROM movie_version_files f WHERE f.version_id=v.id)
+      AND NOT EXISTS(SELECT 1 FROM movie_version_files f JOIN media_content_losses l ON l.file_id=f.file_id WHERE f.version_id=v.id)
+      ORDER BY v.id`).all(movieId) as { id: number; facts_json: string }[])
+      .map(row => ({ id: row.id, facts: movieFactsSchema.parse(JSON.parse(row.facts_json)) }));
+  }
   request(userId: number, movie: CatalogMovie, rawPolicy: MovieQualityPolicy) {
     const policy = movieQualityPolicySchema.parse(rawPolicy);
     const policyJson = JSON.stringify(policy);

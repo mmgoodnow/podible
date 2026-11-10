@@ -138,6 +138,63 @@ export async function acquireMovie(
     );
     ctx.onAcquisitionChange?.();
   };
+  const publish = async (versionId: number, prefix: string) => {
+    if (ctx.execution?.armCompletion) {
+      await waitForPlexPublication(ctx, prefix, settings.movies.plexSectionId, async scan => {
+        await assertMovieStorage(ctx.repo, roots.contentRoot);
+        return publishMovieVersion({ repo, roots, library: services.library, targetId: target.id, versionId,
+          assertActive: active, scan, pendingIsExpected: true });
+      });
+    } else for (let scan = 0; ; scan++) {
+      const published = await durableStep(ctx, `${prefix}:publish:${scan}`, async () => {
+        try {
+          await assertMovieStorage(ctx.repo, roots.contentRoot);
+          await publishMovieVersion({ repo, roots, library: services.library, targetId: target.id, versionId, assertActive: active });
+          return true;
+        } catch (error) {
+          active();
+          if (repo.publications().some(entry => entry.target_id === target.id && entry.version_id === versionId)) return false;
+          throw error;
+        }
+      });
+      if (published) break;
+      if (scan + 1 >= (services.timing?.plexAttempts ?? 120))
+        throw new Error("Plex did not verify the published movie; previous version retained");
+      const delay = services.timing?.plexRetryMs ?? 5000;
+      if (ctx.execution) await ctx.execution.sleep(`${prefix}:plex-wait:${scan}`, delay);
+      else await Bun.sleep(delay);
+    }
+  };
+  const reusable = await durableStep(ctx, "movie:existing-version", () => {
+    if (current || manual?.manualOffer || manual?.feedOffers) return null;
+    const candidates = repo.publishedVersionsForMovie(movie.id).map(version => ({
+      id: version.id, quality: evaluateMovieQuality(policy, version.facts),
+    })).filter(candidate => candidate.quality.eligibility === "eligible");
+    candidates.sort((a, b) => (b.quality.tier! - a.quality.tier!) ||
+      b.quality.preferenceScore - a.quality.preferenceScore || a.id - b.id);
+    return candidates[0]?.id ?? null;
+  });
+  if (reusable !== null) {
+    active();
+    const version = repo.version(reusable);
+    if (!version) throw new Error("Reusable movie version disappeared");
+    for (const file of version.files) {
+      const canonical = path.resolve(roots.contentRoot, file.relativePath);
+      if (!canonical.startsWith(`${path.resolve(roots.contentRoot)}${path.sep}`) || await fs.realpath(canonical) !== canonical)
+        throw new Error("Reusable movie content escaped its canonical root");
+      const stat = await fs.lstat(canonical);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== file.sizeBytes)
+        throw new Error("Reusable movie content no longer matches its recorded file");
+    }
+    active();
+    repo.decision(acquisition.id, { reusedVersionId: reusable,
+      importDecision: { reason: "An already published canonical version satisfies this target; no download needed" } });
+    emit("existing:publish", "publishing", "Adding the existing matching version to this target; no new download");
+    await publish(reusable, "movie:existing");
+    await durableStep(ctx, "movie:finish", () => { active(); repo.finishAcquisition(acquisition.id); });
+    ctx.onAcquisitionChange?.();
+    return "done";
+  }
   const priorKeys = new Set(initial.priorKeys);
   const excluded = new Set<string>();
   let capacityProblem: string | undefined;
@@ -581,56 +638,7 @@ export async function acquireMovie(
       "publishing",
       "Publishing to Plex; the previous version stays available until verification",
     );
-    if (ctx.execution?.armCompletion) {
-      await waitForPlexPublication(ctx, prefix, settings.movies.plexSectionId, async scan => {
-        await assertMovieStorage(ctx.repo, roots.contentRoot);
-        return publishMovieVersion({ repo, roots, library: services.library, targetId: target.id, versionId,
-          assertActive: active, scan, pendingIsExpected: true });
-      });
-    } else for (let scan = 0; ; scan++) {
-      const published = await durableStep(
-        ctx,
-        `${prefix}:publish:${scan}`,
-        async () => {
-          try {
-            await assertMovieStorage(ctx.repo, roots.contentRoot);
-            await publishMovieVersion({
-              repo,
-              roots,
-              library: services.library,
-              targetId: target.id,
-              versionId,
-              assertActive: active,
-            });
-            return true;
-          } catch (error) {
-            active();
-            if (
-              repo
-                .publications()
-                .some(
-                  (entry) =>
-                    entry.target_id === target.id &&
-                    entry.version_id === versionId,
-                )
-            )
-              return false;
-            throw error;
-          }
-        },
-      );
-      if (published) break;
-      // A busy library can take minutes to discover a new part. These are
-      // durable sleeps, not a reason to download a different release.
-      if (scan + 1 >= (services.timing?.plexAttempts ?? 120))
-        throw new Error(
-          "Plex did not verify the published movie; previous version retained",
-        );
-      const delay = services.timing?.plexRetryMs ?? 5000;
-      if (ctx.execution)
-        await ctx.execution.sleep(`${prefix}:plex-wait:${scan}`, delay);
-      else await Bun.sleep(delay);
-    }
+    await publish(versionId, prefix);
     await durableStep(ctx, "movie:finish", () => {
       active();
       repo.finishAcquisition(acquisition.id);

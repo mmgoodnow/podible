@@ -150,7 +150,8 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
   if (!details.data) return <p role="status">Loading movie...</p>;
   const { movie, requests, availableInLibrary } = details.data;
   const existing = requests.find((entry) => entry.state !== "withdrawn");
-  const tracked = existing ?? requests[0];
+  const tracked = requests.some(entry => entry.state !== "withdrawn")
+    ? requests.filter(entry => entry.state !== "withdrawn") : requests.slice(0, 1);
   return (
     <>
       <Link href="/library" className="back">
@@ -186,7 +187,11 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
             genres={extra?.genres ?? []} directors={extra?.directors ?? []} />
         </div>
       </section>
-      {tracked && <MovieRequestPanel key={tracked.id} initialRequest={tracked} />}
+      <MovieVersionRequest tmdbId={tmdbId} />
+      {tracked.map(entry => <section key={entry.id} aria-label={`${entry.versionLabel} version`}>
+        {tracked.length > 1 && <h2>{entry.versionLabel}</h2>}
+        <MovieRequestPanel initialRequest={entry} />
+      </section>)}
       {extra && (extra.cast.length > 0 || extra.related.length > 0) && <div className="movie-extras">
         {extra.cast.length > 0 && <ContentRail title="Cast" variant="cast">
           {extra.cast.map(actor => <CastPortrait key={actor.id} actor={actor} />)}
@@ -198,6 +203,43 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
       </div>}
     </>
   );
+}
+function MovieVersionRequest({ tmdbId }: { tmdbId: number }) {
+  const trpc = useTRPC(), cache = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [resolution, setResolution] = useState("");
+  const [cut, setCut] = useState("");
+  const [audioLanguage, setAudioLanguage] = useState("");
+  const [sdrOnly, setSdrOnly] = useState(false);
+  const request = useMutation(trpc.movies.request.mutationOptions({ onSuccess: async () => {
+    await cache.invalidateQueries({ queryKey: trpc.movies.get.queryKey({ tmdbId }) });
+    await cache.invalidateQueries({ queryKey: trpc.requests.list.queryKey() });
+  } }));
+  return <section className="media-section" aria-label="Specific movie version">
+    <button className="secondary" aria-expanded={open} aria-controls="movie-version-form" onClick={() => setOpen(!open)}>Request a specific version</button>
+    {open && <form id="movie-version-form" className="panel" onSubmit={event => {
+      event.preventDefault();
+      request.mutate({ tmdbId, version: { ...(resolution ? { resolution: Number(resolution) as 1080 | 2160 } : {}),
+        ...(cut.trim() ? { cut: cut.trim() } : {}), ...(audioLanguage.trim() ? { audioLanguage: audioLanguage.trim() } : {}),
+        ...(sdrOnly ? { sdrOnly: true as const } : {}) } });
+    }}>
+      <h2>Keep a separate version</h2>
+      <p>This version is acquired and upgraded independently. Other requested versions are not replaced.</p>
+      <div className="actions">
+        <label>Resolution <select aria-label="Resolution" value={resolution} onChange={event => setResolution(event.target.value)}>
+          <option value="">Library default</option><option value="1080">1080p only</option><option value="2160">4K only</option>
+        </select></label>
+        <label>Cut <input value={cut} onChange={event => setCut(event.target.value)} placeholder="Any cut" maxLength={100} /></label>
+        <label>Audio language <input value={audioLanguage} onChange={event => setAudioLanguage(event.target.value)} placeholder="Default (e.g. en or ja)" maxLength={35} /></label>
+        <label><input type="checkbox" checked={sdrOnly} onChange={event => setSdrOnly(event.target.checked)} /> SDR only</label>
+      </div>
+      <button disabled={request.isPending || !(resolution || cut.trim() || audioLanguage.trim() || sdrOnly)}>
+        {request.isPending ? "Requesting version..." : "Request version"}
+      </button>
+      {request.isError && <p role="alert">{request.error.message}</p>}
+      {request.isSuccess && <p role="status">{request.data.request.versionLabel} requested. Its progress is shown above.</p>}
+    </form>}
+  </section>;
 }
 function MovieFacts({ runtimeMinutes, genres, directors }: Pick<MoviePageExtras, "runtimeMinutes" | "genres" | "directors">) {
   const facts = [...(runtimeMinutes ? [`${runtimeMinutes} min`] : []), ...genres];
