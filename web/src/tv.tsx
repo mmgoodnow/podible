@@ -214,11 +214,20 @@ export function TvLibraryDetail({ entryId }: { entryId: number }) {
   </>;
 }
 
-function TvDownloadProgress({ download, label }: { download: { bytesDone: number; sizeBytes: number; bytesPerSecond: number | null; lastReportedAt?: string }; label: string }) {
-  const { bytesDone, sizeBytes, bytesPerSecond, lastReportedAt } = download;
+function downloadEta(seconds: number) {
+  if (seconds < 60) return "<1 min";
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60), remaining = minutes % 60;
+  return `${hours}h${remaining ? ` ${remaining}m` : ""}`;
+}
+
+function TvDownloadProgress({ download, label }: { download: { bytesDone: number; sizeBytes: number; bytesPerSecond: number | null; etaSeconds: number | null; lastReportedAt?: string }; label: string }) {
+  const { bytesDone, sizeBytes, bytesPerSecond, etaSeconds, lastReportedAt } = download;
   return <div className="tv-transfer">
     <div className="tv-transfer-caption"><strong>{label}</strong>
       <span>{metricBytes(bytesDone)} of {metricBytes(sizeBytes)}{bytesPerSecond !== null ? ` · ${metricBytes(bytesPerSecond)}/s` : ""}
+        {etaSeconds != null && <> · <span title="Estimated time left to download, before Plex verification">ETA {downloadEta(etaSeconds)}</span></>}
         {lastReportedAt && <> · Last reported <time dateTime={lastReportedAt}>{new Date(lastReportedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</time></>}
       </span>
     </div>

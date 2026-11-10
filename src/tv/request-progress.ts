@@ -7,15 +7,16 @@ import type { AdminTorrentObservation } from "../rpc/admin-torrents";
 
 const stage = z.enum(["ready", "queued", "searching", "downloading", "verifying", "publishing", "pack-pending", "waiting", "failed", "upcoming"]);
 const count = z.number().int().nonnegative().safe();
-const download = z.object({ bytesDone: count, sizeBytes: count.positive(), bytesPerSecond: count.nullable(),
+const downloadSample = z.object({ bytesDone: count, sizeBytes: count.positive(), bytesPerSecond: count.nullable(),
   lastReportedAt: z.iso.datetime().optional() });
-const observation = download.omit({ bytesPerSecond: true, lastReportedAt: true }).extend({
+const download = downloadSample.extend({ etaSeconds: count.nullable() });
+const observation = downloadSample.omit({ bytesPerSecond: true, lastReportedAt: true }).extend({
   state: z.literal("downloading"), complete: z.literal(false), seedOnly: z.boolean().optional(),
   downloadBytesPerSecond: count.nullable(), observedAt: z.string(),
 });
 const episodeProgress = z.object({ id: count, number: count, title: z.string(), airDate: z.string().nullable(),
   status: z.enum(["ready", "upcoming", "missing", "queued", "searching", "downloading", "verifying", "publishing", "pack-pending"]) });
-type Transfer = z.infer<typeof download>;
+type Transfer = z.infer<typeof downloadSample>;
 const TRANSFER_MAX_AGE_MS = 60_000;
 export const tvRequestProgressSchema = z.object({
   activeBatches: z.number().int().nonnegative(),
@@ -27,15 +28,18 @@ export const tvRequestProgressSchema = z.object({
     download: download.nullable(), episodes: z.array(episodeProgress) })),
 });
 
-function summarize(transfers: { torrentId: number; sample: Transfer }[]): Transfer | null {
+function summarize(transfers: { torrentId: number; sample: Transfer }[]): z.infer<typeof download> | null {
   const unique = [...new Map(transfers.map(t => [t.torrentId, t.sample])).values()];
   if (!unique.length) return null;
   const bytesDone = unique.reduce((sum, t) => sum + t.bytesDone, 0);
   const sizeBytes = unique.reduce((sum, t) => sum + t.sizeBytes, 0);
   const bytesPerSecond = unique.some(t => t.bytesPerSecond === null) ? null
     : unique.reduce((sum, t) => sum + t.bytesPerSecond!, 0);
+  // The last download to finish determines the ETA, not the combined speed.
+  const etaSeconds = unique.some(t => !t.bytesPerSecond) ? null
+    : unique.reduce((slowest, t) => Math.max(slowest, Math.ceil((t.sizeBytes - t.bytesDone) / t.bytesPerSecond!)), 0);
   const lastReportedAt = unique.flatMap(t => t.lastReportedAt ? [t.lastReportedAt] : []).sort()[0];
-  const parsed = download.safeParse({ bytesDone, sizeBytes, bytesPerSecond, ...(lastReportedAt ? { lastReportedAt } : {}) });
+  const parsed = download.safeParse({ bytesDone, sizeBytes, bytesPerSecond, etaSeconds, ...(lastReportedAt ? { lastReportedAt } : {}) });
   return parsed.success ? parsed.data : null;
 }
 

@@ -106,7 +106,7 @@ test("request detail distinguishes stale speed from last reported bytes and excl
     const rejected = attach("c", new Date().toISOString(), 500);
     for (const b of batches) s.repo.tv.recordEpisodeRejection(b.id, "old-attempt", rejected, "private-offer", []);
     const detail = (await s.call("myRequest", { requestId: request.requestId }) as any).request;
-    const expected = { bytesDone: 250, sizeBytes: 1000, bytesPerSecond: 50 };
+    const expected = { bytesDone: 250, sizeBytes: 1000, bytesPerSecond: 50, etaSeconds: 15 };
     expect(detail.progress.download).toEqual(expected);
     expect(detail.progress.seasons.map((season: any) => season.download)).toEqual([expected, expected]);
     expect(detail.progress.seasons[0].episodes.map(({ number, status }: any) => [number, status]))
@@ -122,14 +122,14 @@ test("request detail distinguishes stale speed from last reported bytes and excl
       .run(new Date(Date.now() - 120_000).toISOString(), b.id);
     attach("a", lastReportedAt, 300);
     const updated = (await s.call("myRequest", { requestId: request.requestId }) as any).request;
-    expect(updated.progress.download).toEqual({ bytesDone: 1299, sizeBytes: 2000, bytesPerSecond: null, lastReportedAt });
+    expect(updated.progress.download).toEqual({ bytesDone: 1299, sizeBytes: 2000, bytesPerSecond: null, etaSeconds: null, lastReportedAt });
 
     const settings = s.repo.getSettings();
     settings.tv.managedRoot = await fs.realpath(s.root);
     s.repo.updateSettings(settings);
     const downloadDir = path.join(settings.tv.managedRoot, "downloads", "private-slot");
     await fs.mkdir(downloadDir, { recursive: true });
-    let reads = 0, leftUntilDone = 600, offline = false;
+    let reads = 0, leftUntilDone = 600, secondLeft = 0, secondRate = 0, offline = false;
     const liveRouter = createCatalogRouter({ clientId, rpc: { async call(method, args) {
       reads++;
       expect(method).toBe("torrent-get");
@@ -138,15 +138,19 @@ test("request detail distinguishes stale speed from last reported bytes and excl
       return { torrents: [
         { hashString: "a".repeat(40), downloadDir, labels: ["Podible TV"], status: 4,
           leftUntilDone, sizeWhenDone: 1000, rateDownload: 80, error: 0, errorString: "" },
-        { hashString: "b".repeat(40), downloadDir, labels: ["Podible TV"], status: 6,
-          leftUntilDone: 0, sizeWhenDone: 1000, rateDownload: 0, error: 0, errorString: "" },
+        { hashString: "b".repeat(40), downloadDir, labels: ["Podible TV"], status: secondLeft ? 4 : 6,
+          leftUntilDone: secondLeft, sizeWhenDone: 1000, rateDownload: secondRate, error: 0, errorString: "" },
       ] };
     } } });
     const show = () => executeMethod(liveRouter.routes.tvEntry, s.ctx(), { entryId: request.entryId });
-    expect((await show()).progress.download).toEqual({ bytesDone: 400, sizeBytes: 1000, bytesPerSecond: 80 });
+    expect((await show()).progress.download).toEqual({ bytesDone: 400, sizeBytes: 1000, bytesPerSecond: 80, etaSeconds: 8 });
     expect(reads).toBe(1);
     leftUntilDone = 500;
     expect((await show()).progress.download?.bytesDone).toBe(500);
+    secondLeft = 100;
+    expect((await show()).progress.download?.etaSeconds).toBeNull();
+    secondRate = 2;
+    expect((await show()).progress.download?.etaSeconds).toBe(50);
     offline = true;
     expect((await show()).progress.download).toEqual(updated.progress.download);
     expect((await s.call("myRequest", { requestId: request.requestId }) as any).request.progress.download)

@@ -86,11 +86,11 @@ try {
   await page.getByRole("progressbar", { name: "Active downloads progress" }).waitFor();
   assert.equal(await page.getByRole("progressbar", { name: "Season 1 downloads progress" }).getAttribute("value"),String(3 * 1024 ** 3));
   assert.equal(await page.getByRole("progressbar", { name: "Season 2 downloads progress" }).count(),0);
-  await page.getByText("3 GiB of 8 GiB · 2 MiB/s", { exact: true }).first().waitFor();
+  await page.getByText("3 GiB of 8 GiB · 2 MiB/s · ETA 43 min", { exact: true }).first().waitFor();
   assert.equal((await context.request.post(new URL("/__fixture/tv-transfer", url).href)).ok(), true);
-  await page.getByText("5 GiB of 8 GiB · 2 MiB/s", { exact: true }).first().waitFor({ timeout: 1500 });
+  await page.getByText("5 GiB of 8 GiB · 2 MiB/s · ETA 26 min", { exact: true }).first().waitFor({ timeout: 1500 });
   assert.equal((await context.request.post(new URL("/__fixture/tv-transfer?reconnect", url).href)).ok(), true);
-  await page.getByText("6 GiB of 8 GiB · 2 MiB/s", { exact: true }).first().waitFor({ timeout: 10_000 });
+  await page.getByText("6 GiB of 8 GiB · 2 MiB/s · ETA 18 min", { exact: true }).first().waitFor({ timeout: 10_000 });
   await page.getByRole("button", { name: "Season 1", exact: true }).press("Enter");
   await page.getByRole("list", { name: "Season 1 episodes" }).getByText("Downloading", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Season 2", exact: true }).press("Enter");
