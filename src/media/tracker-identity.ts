@@ -8,10 +8,12 @@ export function normalizeTrackerHost(raw: string): string {
 }
 
 /** Only announce hostnames leave metainfo; paths, passkeys and unrelated URLs never do. */
-export function metainfoTrackerHosts(bytes: Uint8Array): string[] {
-  if (bytes.byteLength > 8 * 1024 * 1024) return [];
+export function metainfoTrackerIdentity(bytes: Uint8Array): { hosts: string[]; privateTorrent: boolean } {
+  const empty = { hosts: [], privateTorrent: false };
+  if (bytes.byteLength > 8 * 1024 * 1024) return empty;
   try {
     const raw = bencode.decode(Buffer.from(bytes)) as Record<string, unknown>;
+    const info = raw.info as { private?: unknown } | null | undefined;
     const tiers = Array.isArray(raw["announce-list"]) ? raw["announce-list"].slice(0, 100) : [];
     const values = [raw.announce, ...tiers.flatMap(tier => Array.isArray(tier) ? tier.slice(0, 100) : [])];
     const hosts = new Set<string>();
@@ -22,6 +24,10 @@ export function metainfoTrackerHosts(bytes: Uint8Array): string[] {
         if (["http:", "https:", "udp:"].includes(url.protocol)) hosts.add(normalizeTrackerHost(url.hostname));
       } catch { /* Malformed announces are not tracker identities. */ }
     }
-    return [...hosts].sort();
-  } catch { return []; }
+    return { hosts: [...hosts].sort(), privateTorrent: info?.private === 1 };
+  } catch { return empty; }
+}
+
+export function metainfoTrackerHosts(bytes: Uint8Array): string[] {
+  return metainfoTrackerIdentity(bytes).hosts;
 }

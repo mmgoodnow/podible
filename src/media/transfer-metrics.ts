@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { transferMetricsStatusSchema, transferMetricsStatusParamsSchema, type TransferMetricsStatus } from "./transfer-metrics-types";
-import { metainfoTrackerHosts, normalizeTrackerHost } from "./tracker-identity";
+import { metainfoTrackerIdentity, normalizeTrackerHost } from "./tracker-identity";
 export { normalizeTrackerHost } from "./tracker-identity";
 import type { CrossSeedReceipt } from "./cross-seed-state";
 
@@ -79,9 +79,9 @@ export class TransferMetricsRepo {
   }
   learnMetainfo(bytes: Uint8Array, provider: string | null, now = new Date().toISOString()) {
     if (!provider) return;
-    const hosts = metainfoTrackerHosts(bytes);
-    // Distribution by an indexer does not prove all announces in a multi-tracker torrent belong to it.
-    for (const host of hosts) this.inferTracker(host, hosts.length === 1 ? provider : null, now);
+    const { hosts, privateTorrent } = metainfoTrackerIdentity(bytes);
+    // Private providers can publish backup announce aliases. Public multi-tracker lists are not identity evidence.
+    for (const host of hosts) this.inferTracker(host, privateTorrent || hosts.length === 1 ? provider : null, now);
   }
   /** Gradual local backfill; never downloads metainfo or scans the filesystem on a dashboard read. */
   learnCachedTrackers(now: string) {

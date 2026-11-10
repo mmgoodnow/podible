@@ -42,3 +42,20 @@ test("multi-tracker metainfo cannot name independent announces after its supplyi
     ]);
   } finally { db.close(); }
 });
+
+test("cached private metainfo assigns the source name to all announce aliases without exposing credentials", () => {
+  const db = new Database(":memory:"); runMigrations(db); const repo = new BooksRepo(db);
+  try {
+    const bytes = bencode.encode({ announce: "https://reactor.filelist.io/private-secret/announce",
+      "announce-list": [["https://reactor.filelist.io/private-secret/announce"], ["https://reactor.thefl.org/other-secret/announce"]],
+      info: { private: 1 } });
+    repo.putTorrentCache({ key: "filelist", provider: "FileList", url: "https://indexer.example/private", torrentBytes: bytes });
+    db.query("DELETE FROM transfer_tracker_mappings").run();
+    repo.transferMetrics.learnCachedTrackers(new Date().toISOString());
+    expect(repo.transferMetrics.mappings()).toEqual([
+      { host: "reactor.filelist.io", name: "FileList", source: "inferred" },
+      { host: "reactor.thefl.org", name: "FileList", source: "inferred" },
+    ]);
+    expect(JSON.stringify(repo.transferMetrics.mappings())).not.toContain("secret");
+  } finally { db.close(); }
+});
