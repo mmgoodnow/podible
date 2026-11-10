@@ -73,6 +73,20 @@ async function stat(file: string) {
   }
 }
 
+async function preflight<T, R>(items: readonly T[], check: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = [];
+  const concurrency = 16;
+  for (let i = 0; i < items.length; i += concurrency) {
+    // Drain the batch before releasing the publication lock, even on failure.
+    const batch = await Promise.allSettled(items.slice(i, i + concurrency).map(check));
+    for (const result of batch) {
+      if (result.status === "rejected") throw result.reason;
+      results.push(result.value);
+    }
+  }
+  return results;
+}
+
 async function directory(
   root: string,
   relative = "",
@@ -193,11 +207,18 @@ export async function reconcileLibraryView(input: {
     return { source: sourceRelative, ...identity(existing) };
   };
   const files: Record<string, string> = Object.create(null);
+  const desiredPaths = new Set<string>();
   for (const entry of input.entries) {
     contained(viewRoot, entry.relativePath);
-    if (Object.hasOwn(files, entry.relativePath))
+    if (desiredPaths.has(entry.relativePath))
       throw new Error(`Duplicate view path: ${entry.relativePath}`);
-    files[entry.relativePath] = (await canonicalSource(entry.contentPath)).source;
+    desiredPaths.add(entry.relativePath);
+  }
+  for (const [relative, source] of await preflight(input.entries, async entry => {
+    input.assertActive?.();
+    return [entry.relativePath, (await canonicalSource(entry.contentPath)).source] as const;
+  })) {
+    files[relative] = source;
   }
   const adoptions: Record<string, Adoption> = Object.assign(
     Object.create(null),
@@ -245,9 +266,9 @@ export async function reconcileLibraryView(input: {
         throw new Error(`Conflicting view paths: ${key}`);
     }
   }
-  const observed = new Map<string, string | FileIdentity | null>();
   // Preflight every path before changing any link, including retired entries.
-  for (const relative of knownPaths) {
+  const observed = new Map(await preflight([...knownPaths], async relative => {
+    input.assertActive?.();
     const destination = contained(viewRoot, relative);
     const parent = path.posix.dirname(relative);
     if (parent !== ".")
@@ -278,8 +299,8 @@ export async function reconcileLibraryView(input: {
           );
       }
     }
-    observed.set(relative, target);
-  }
+    return [relative, target] as const;
+  }));
   const owned = Object.fromEntries(
     [...knownPaths].map((relative) => [
       relative,
