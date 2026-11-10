@@ -180,6 +180,7 @@ if (process.env.TV_FIXTURE) {
     unmappedEpisodeIds: [], probes: [{ index: 0, name: "tv-audit.mkv", probe }], probeErrors: [], model: "fixture", evaluatedAt: now });
 }
 const fixture = createFixtureMovieServices(root);
+let acquisitionEvents = new AcquisitionEvents();
 const runtime = process.env.TV_FIXTURE ? null : await createJobExecutionRuntime(
   {
     repo,
@@ -187,6 +188,7 @@ const runtime = process.env.TV_FIXTURE ? null : await createJobExecutionRuntime(
     movieServices: fixture.services,
     movieShadowServices: { observe: async () => [], inspect: fixture.services.decider.inspect, probe: fixture.services.probe },
     indexerFeedSources: async () => [],
+    onAcquisitionChange: () => acquisitionEvents.notify(),
     onLog() {},
   },
   path.join(root, "execution.sqlite"),
@@ -221,7 +223,6 @@ for (const [title, author] of [
   ["The Odyssey", "Homer"],
 ])
   repo.createBook({ title: title!, author: author! });
-let acquisitionEvents = new AcquisitionEvents();
 const createHandler = () => createPodibleFetchHandler(repo, Date.now(), null, {
   movieServices: fixture.services,
   acquisitionEvents,
