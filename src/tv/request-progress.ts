@@ -14,7 +14,7 @@ const observation = download.omit({ bytesPerSecond: true, lastReportedAt: true }
   downloadBytesPerSecond: count.nullable(), observedAt: z.string(),
 });
 const episodeProgress = z.object({ id: count, number: count, title: z.string(), airDate: z.string().nullable(),
-  status: z.enum(["ready", "upcoming", "missing"]) });
+  status: z.enum(["ready", "upcoming", "missing", "queued", "searching", "downloading", "verifying", "publishing", "pack-pending"]) });
 type Transfer = z.infer<typeof download>;
 const TRANSFER_MAX_AGE_MS = 60_000;
 export const tvRequestProgressSchema = z.object({
@@ -44,6 +44,7 @@ type ProgressInput = {
   episodes: TvEpisode[]; available: ReadonlySet<number>; events: TvEvent[]; acquisitions: TvAcquisition[];
   jobStatuses: ReadonlyMap<number, JobStatus>;
   readTransfers?: TvRepo["requestDownloadObservations"];
+  readPublishingEpisodes?: TvRepo["publishingEpisodeIds"];
 };
 
 function prepareWork({ episodes, available, events, acquisitions, jobStatuses }: ProgressInput) {
@@ -115,10 +116,22 @@ export function tvRequestProgress(input: ProgressInput) {
   return prepareTvRequestProgress(input).project();
 }
 
-function projectProgress({ episodes, available, events, acquisitions, readTransfers }: ProgressInput,
+function projectProgress({ episodes, available, events, acquisitions, readTransfers, readPublishingEpisodes }: ProgressInput,
   { missing, work, activeWork }: Pick<ReturnType<typeof prepareWork>, "missing" | "work" | "activeWork">,
   transfers: { torrentId: number; ids: Set<number>; sample: Transfer }[], now: number): z.infer<typeof tvRequestProgressSchema> {
   const queuedIds = new Set(activeWork.flatMap(w => [...w.ids]));
+  const activeByEpisode = new Map<number, (typeof activeWork)[number]>();
+  const publishingIds = activeWork.filter(batch => batch.stage === "publishing").map(batch => batch.id);
+  const publishing = new Map<number, number[]>();
+  if (publishingIds.length) for (const { acquisitionId, episodeId } of readPublishingEpisodes?.(publishingIds) ?? []) {
+    const ids = publishing.get(acquisitionId) ?? [];
+    ids.push(episodeId);
+    publishing.set(acquisitionId, ids);
+  }
+  for (const batch of activeWork) {
+    const scope = batch.stage === "publishing" ? publishing.get(batch.id) ?? [] : batch.unscoped ? [] : batch.ids;
+    for (const id of scope) if (!activeByEpisode.has(id)) activeByEpisode.set(id, batch);
+  }
   const searchableAiredEpisodes = activeWork.some(w => w.unscoped) ? 0 : missing.filter(ep =>
     ep.airDate && Date.parse(ep.airDate) <= now && !queuedIds.has(ep.id)).length;
   const seasons = [...new Set(episodes.flatMap(ep => ep.numbering.filter(n => n.scheme === "tvdb:aired" && n.season !== null).map(n => n.season!)))].sort((a,b) => a-b);
@@ -144,8 +157,11 @@ function projectProgress({ episodes, available, events, acquisitions, readTransf
         episodes: readTransfers ? members.flatMap(ep => {
           const number = ep.numbering.find(n => n.scheme === "tvdb:aired" && n.season === seasonNumber)?.episode;
           if (number == null) return [];
+          const batch = activeByEpisode.get(ep.id);
+          const activeStage = batch?.stage;
           return [{ id: ep.id, number, title: ep.title, airDate: ep.airDate,
-            status: available.has(ep.id) ? "ready" as const : upcoming(ep) ? "upcoming" as const : "missing" as const }];
+            status: available.has(ep.id) ? "ready" as const : upcoming(ep) ? "upcoming" as const
+              : !activeStage || activeStage === "waiting" || activeStage === "failed" ? "missing" as const : activeStage }];
         }).sort((a, b) => a.number - b.number || a.id - b.id) : [] };
     }),
   };

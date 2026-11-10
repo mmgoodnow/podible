@@ -110,7 +110,7 @@ test("request detail distinguishes stale speed from last reported bytes and excl
     expect(detail.progress.download).toEqual(expected);
     expect(detail.progress.seasons.map((season: any) => season.download)).toEqual([expected, expected]);
     expect(detail.progress.seasons[0].episodes.map(({ number, status }: any) => [number, status]))
-      .toEqual([[1, "missing"], [2, "upcoming"], [3, "upcoming"]]);
+      .toEqual([[1, "downloading"], [2, "upcoming"], [3, "upcoming"]]);
     expect(detail.availableEpisodes).toBe(0);
     expect(JSON.stringify(detail)).not.toContain("private tracker diagnostic");
     expect(JSON.stringify(detail)).not.toContain("private-slot");
@@ -151,6 +151,27 @@ test("request detail distinguishes stale speed from last reported bytes and excl
     expect((await show()).progress.download).toEqual(updated.progress.download);
     expect((await s.call("myRequest", { requestId: request.requestId }) as any).request.progress.download)
       .toEqual(updated.progress.download);
+  } finally { await s.close(); }
+});
+
+test("a publishing batch only marks the episodes actually in its version", async () => {
+  const s = await setup();
+  try {
+    const entry = s.fixture.entry();
+    entry.episodes[2]!.airDate = "2020-01-01";
+    s.fixture.setEntry(entry);
+    const { request } = await s.call("request", { tmdbId: 70, seasonNumbers: [1] }) as any;
+    const batch = s.repo.tv.acquisitions(request.targetId)[0]!;
+    const episodes = s.repo.tv.entry(request.entryId)!.episodes;
+    const first = episodes.find(ep => ep.key === "tvdb:7001")!;
+    s.repo.tv.recordVersion(batch.id, { identityVerified: true }, [{
+      id: randomUUID(), relativePath: "files/episode.mkv", sizeBytes: 5, probe: {}, episodeIds: [first.id],
+    }]);
+    s.repo.tv.event(request.targetId, batch.id, "publish-partial", "publishing", "Publishing selected file");
+    const show = await executeMethod(catalogRouter.routes.tvEntry, s.ctx(), { entryId: request.entryId });
+    expect(show.progress.seasons.find(season => season.seasonNumber === 1)?.episodes.map(ep => ep.status))
+      .toEqual(["publishing", "missing", "upcoming"]);
+    expect(show.availableEpisodes).toBe(0);
   } finally { await s.close(); }
 });
 

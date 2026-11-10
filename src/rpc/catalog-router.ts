@@ -50,7 +50,8 @@ export const createCatalogRouter = (transmission?: AdminTransmissionReader | nul
         ...seeds.flatMap(s => s.registered ? [] : [s.jobId]),
       ]);
       const prepared = prepareTvRequestProgress({ episodes: entry.episodes, available, events, acquisitions, jobStatuses,
-        readTransfers: ids => tv.requestDownloadObservations(ids) });
+        readTransfers: ids => tv.requestDownloadObservations(ids),
+        readPublishingEpisodes: ids => tv.publishingEpisodeIds(ids) });
       const settings = prepared.bindings.length ? ctx.repo.readSettings() : null;
       const sources = prepared.bindings.map(row => ({ media: "tv" as const, binding: { ...row, id: row.torrentId } }));
       const live = settings ? (await readAdminTorrents(sources, settings, Date.now(), transmission)).observations : undefined;

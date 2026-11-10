@@ -82,7 +82,9 @@ try {
   assert.equal(await page.getByRole("progressbar", { name: "Season 2 downloads progress" }).count(),0);
   await page.getByText("3 GiB of 8 GiB · 2 MiB/s", { exact: true }).first().waitFor();
   await page.getByRole("button", { name: "Season 1", exact: true }).press("Enter");
-  await page.getByRole("list", { name: "Season 1 episodes" }).getByText("Not in Plex").waitFor();
+  await page.getByRole("list", { name: "Season 1 episodes" }).getByText("Downloading", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Season 2", exact: true }).press("Enter");
+  await page.getByRole("list", { name: "Season 2 episodes" }).getByText("Not in Plex", { exact: true }).waitFor();
   assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"),false,"Expanded episode list overflows mobile viewport");
   await page.screenshot({ path: path.join(artifacts,"tv-request-transfer-mobile.png"), fullPage: true, animations: "disabled" });
   await page.getByRole("button", { name: "Search missing episodes", exact: true }).click();

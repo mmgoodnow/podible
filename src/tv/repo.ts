@@ -209,6 +209,14 @@ export class TvRepo {
       '' AS message,e.created_at AS createdAt FROM tv_targets t JOIN tv_events e ON e.target_id=t.id
       WHERE t.entry_id=? ORDER BY e.id`).all(entryId);
   }
+
+  publishingEpisodeIds(acquisitionIds: number[]) {
+    return this.db.query<{ acquisitionId: number; episodeId: number }, [string]>(`
+      SELECT v.acquisition_id AS acquisitionId, f.episode_id AS episodeId
+      FROM json_each(?) ids JOIN tv_versions v ON v.acquisition_id=ids.value
+      JOIN tv_version_file_episodes f ON f.version_id=v.id
+    `).all(JSON.stringify(acquisitionIds));
+  }
   entries(): TvEntry[] {
     return (this.db.query("SELECT id FROM tv_entries ORDER BY id").all() as { id: number }[]).map((r) => this.entry(r.id)!);
   }

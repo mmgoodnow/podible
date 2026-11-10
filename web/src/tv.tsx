@@ -117,9 +117,11 @@ export function TvLibraryDetail({ entryId }: { entryId: number }) {
   const searches = atStage("searching"), downloads = atStage("downloading", "pack-pending");
   const verifying = atStage("verifying"), publishing = atStage("publishing");
   const ready = tracked.reduce((sum, s) => sum + s.available, 0);
+  const allReady = tracked.length > 0 && tracked.every(s => s.stage === "ready");
   const waiting = atStage("waiting", "upcoming"), stopped = atStage("failed");
   const seasonCount = (n: number) => n ? `${n} season${n === 1 ? "" : "s"}` : undefined;
   const labels = { ready: "Ready in Plex", queued: "Queued", searching: "Finding a release", downloading: "Downloading", verifying: "Checking episodes", publishing: "Adding to Plex", "pack-pending": "Waiting for pack", waiting: "Episodes missing", failed: "Acquisition stopped", upcoming: "Not aired yet" };
+  const episodeLabels = { ...labels, missing: "Not in Plex", upcoming: "Upcoming", verifying: "Checking release" };
   const stamp = (value: string) => new Date(value).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   return <>
     <Link href="/library" className="back">Back to library</Link>
@@ -138,9 +140,9 @@ export function TvLibraryDetail({ entryId }: { entryId: number }) {
       <div className="progress-heading"><h2>{active
         ? `${r.progress.activeBatches} episode ${r.progress.activeBatches === 1 ? "batch" : "batches"} in progress`
         : "Request progress"}</h2></div>
-      <StageTracker reached={[true, Boolean(searches || downloads || verifying || publishing || ready),
-        Boolean(downloads || verifying || publishing || ready), Boolean(verifying || publishing || ready),
-        Boolean(publishing || ready)]}
+      <StageTracker reached={[true, Boolean(searches || downloads || verifying || publishing || allReady),
+        Boolean(downloads || verifying || publishing || allReady), Boolean(verifying || publishing || allReady),
+        Boolean(publishing || allReady)]}
         details={[seasonCount(requestedSeasons.size), seasonCount(searches), seasonCount(downloads),
           seasonCount(verifying), ready ? `${ready} ready` : publishing ? "Adding episodes" : undefined]} />
       {waiting > 0 && <p>{seasonCount(waiting)} waiting for new releases or upcoming episodes.</p>}
@@ -174,7 +176,7 @@ export function TvLibraryDetail({ entryId }: { entryId: number }) {
                   <span className="tv-episode-number">{ep.number}</span>
                   <span className="tv-episode-title">{ep.title}</span>
                   {date && <time dateTime={date}>{new Date(`${date}T00:00:00Z`).toLocaleDateString(undefined, { dateStyle: "medium", timeZone: "UTC" })}</time>}
-                  <span className={`tv-episode-status tv-episode-${ep.status}`}>{ep.status === "ready" ? "Ready in Plex" : ep.status === "upcoming" ? "Upcoming" : "Not in Plex"}</span>
+                  <span className={`tv-episode-status tv-episode-${ep.status}`}>{episodeLabels[ep.status]}</span>
                 </li>;
               })}
             </ol>}
