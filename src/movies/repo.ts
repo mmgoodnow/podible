@@ -154,6 +154,11 @@ export class MovieRepo {
       )
       .all(userId) as { id: number; targetId: number; createdAt: string }[];
   }
+  requestsForMovie(userId: number, tmdbId: number): { id: number }[] {
+    return this.db.query<{ id: number }, [number, number]>(`SELECT r.id FROM movies m
+      JOIN movie_targets t ON t.movie_id=m.id JOIN movie_requests r ON r.target_id=t.id
+      WHERE m.tmdb_id=? AND r.user_id=? ORDER BY r.id DESC`).all(tmdbId, userId);
+  }
   canAccessTarget(userId: number, targetId: number): boolean {
     return Boolean(
       this.db

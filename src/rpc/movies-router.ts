@@ -74,9 +74,8 @@ export const moviesRouter = defineRouter({
         ctx.movieServices?.catalog ?? movieCatalog(ctx.repo.getSettings())
       ).get(input.tmdbId);
       const requests = ctx.repo.movies
-        .requests(ctx.session!.user_id)
-        .map((r) => movieRequestView(ctx.repo, r.id))
-        .filter((r) => r.movie.tmdbId === input.tmdbId);
+        .requestsForMovie(ctx.session!.user_id, input.tmdbId)
+        .map((r) => movieRequestView(ctx.repo, r.id));
       return { movie, requests, availableInLibrary: ctx.repo.movies.availableByTmdb(input.tmdbId) };
     },
   }),

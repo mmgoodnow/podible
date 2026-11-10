@@ -4,6 +4,7 @@ import { useTRPC } from "./rpc";
 import { Failure } from "./books";
 import { Link, navigate } from "./router";
 import { metricBytes } from "./transfer-metrics-model";
+import { StageTracker } from "./stage-tracker";
 import "./tv.css";
 
 function ShowRedirect({ entryId }: { entryId: number }) {
@@ -28,7 +29,7 @@ export function TvDetail({ tmdbId }: { tmdbId: number }) {
   if (detail.data.showId) return <ShowRedirect entryId={detail.data.showId} />;
   const { series, unavailableReason } = detail.data;
   return <>
-    <Link href="/library?media=tv" className="back">Back to library</Link>
+    <Link href="/library" className="back">Back to library</Link>
     {!series ? <p role="alert" className="notice">{unavailableReason ?? "TV metadata is unavailable."}</p> : <>
       <section className="movie-hero">
         <div className="jacket">{series.posterUrl ? <img src={series.posterUrl} alt="" /> : <span>{series.title}</span>}</div>
@@ -88,7 +89,9 @@ function TvSeasonPicker({ tmdbId, showId }: { tmdbId: number; showId?: number })
 export function TvLibraryDetail({ entryId }: { entryId: number }) {
   const trpc = useTRPC();
   const cache = useQueryClient();
-  const result = useQuery(trpc.catalog.tvEntry.queryOptions({ entryId }, { refetchInterval: 5000 }));
+  const result = useQuery(trpc.catalog.tvEntry.queryOptions({ entryId }, {
+    refetchInterval: query => query.state.data?.progress.activeBatches ? 2000 : 5000,
+  }));
   const [expanded, setExpanded] = useState<number[]>([]);
   const changed = () => {
     void cache.invalidateQueries({ queryKey: trpc.tv.myRequest.pathKey() });
@@ -108,10 +111,18 @@ export function TvLibraryDetail({ entryId }: { entryId: number }) {
   const title = active ? "Adding episodes" : r.availableEpisodes > 0 ? "Available in Plex"
     : future === total && total > 0 ? "Waiting for upcoming episodes" : "Not in Plex yet";
   const seasons = r.progress.seasons;
+  const requestedSeasons = new Set(r.requests.flatMap(request => request.seasons));
+  const tracked = seasons.filter(s => !requestedSeasons.size || requestedSeasons.has(s.seasonNumber));
+  const atStage = (...stages: typeof seasons[number]["stage"][]) => tracked.filter(s => stages.includes(s.stage)).length;
+  const searches = atStage("searching"), downloads = atStage("downloading", "pack-pending");
+  const verifying = atStage("verifying"), publishing = atStage("publishing");
+  const ready = tracked.reduce((sum, s) => sum + s.available, 0);
+  const waiting = atStage("waiting", "upcoming"), stopped = atStage("failed");
+  const seasonCount = (n: number) => n ? `${n} season${n === 1 ? "" : "s"}` : undefined;
   const labels = { ready: "Ready in Plex", queued: "Queued", searching: "Finding a release", downloading: "Downloading", verifying: "Checking episodes", publishing: "Adding to Plex", "pack-pending": "Waiting for pack", waiting: "Episodes missing", failed: "Acquisition stopped", upcoming: "Not aired yet" };
   const stamp = (value: string) => new Date(value).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   return <>
-    <Link href="/library?media=tv" className="back">Back to library</Link>
+    <Link href="/library" className="back">Back to library</Link>
     <section className="tv-request-hero">
       {r.entry.posterUrl && <img className="tv-request-poster" src={r.entry.posterUrl} alt="" />}
       <div className="tv-request-summary">
@@ -123,8 +134,17 @@ export function TvLibraryDetail({ entryId }: { entryId: number }) {
         {r.progress.lastPublishedAt && <p className="tv-request-meta">Last added {stamp(r.progress.lastPublishedAt)}</p>}
       </div>
     </section>
-    {active && <section className="tv-request-update" aria-label="Current acquisition status">
-      <h3>{r.progress.activeBatches} episode {r.progress.activeBatches === 1 ? "batch" : "batches"} in progress</h3>
+    {(active || r.requests.length > 0) && <section className="panel progress-panel" aria-label="TV acquisition progress">
+      <div className="progress-heading"><h2>{active
+        ? `${r.progress.activeBatches} episode ${r.progress.activeBatches === 1 ? "batch" : "batches"} in progress`
+        : "Request progress"}</h2></div>
+      <StageTracker reached={[true, Boolean(searches || downloads || verifying || publishing || ready),
+        Boolean(downloads || verifying || publishing || ready), Boolean(verifying || publishing || ready),
+        Boolean(publishing || ready)]}
+        details={[seasonCount(requestedSeasons.size), seasonCount(searches), seasonCount(downloads),
+          seasonCount(verifying), ready ? `${ready} ready` : publishing ? "Adding episodes" : undefined]} />
+      {waiting > 0 && <p>{seasonCount(waiting)} waiting for new releases or upcoming episodes.</p>}
+      {stopped > 0 && <p>{seasonCount(stopped)} stopped. Check the season list below.</p>}
       {r.progress.download && <TvDownloadProgress download={r.progress.download} label="Active downloads" />}
     </section>}
     <section className="tv-request-seasons" aria-label="Season progress">
@@ -190,11 +210,13 @@ export function TvLibraryDetail({ entryId }: { entryId: number }) {
   </>;
 }
 
-function TvDownloadProgress({ download, label }: { download: { bytesDone: number; sizeBytes: number; bytesPerSecond: number | null }; label: string }) {
-  const { bytesDone, sizeBytes, bytesPerSecond } = download;
+function TvDownloadProgress({ download, label }: { download: { bytesDone: number; sizeBytes: number; bytesPerSecond: number | null; lastReportedAt?: string }; label: string }) {
+  const { bytesDone, sizeBytes, bytesPerSecond, lastReportedAt } = download;
   return <div className="tv-transfer">
     <div className="tv-transfer-caption"><strong>{label}</strong>
-      <span>{metricBytes(bytesDone)} of {metricBytes(sizeBytes)}{bytesPerSecond !== null ? ` · ${metricBytes(bytesPerSecond)}/s` : ""}</span>
+      <span>{metricBytes(bytesDone)} of {metricBytes(sizeBytes)}{bytesPerSecond !== null ? ` · ${metricBytes(bytesPerSecond)}/s` : ""}
+        {lastReportedAt && <> · Last reported <time dateTime={lastReportedAt}>{new Date(lastReportedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</time></>}
+      </span>
     </div>
     <progress aria-label={`${label} progress`} value={bytesDone} max={sizeBytes} />
   </div>;

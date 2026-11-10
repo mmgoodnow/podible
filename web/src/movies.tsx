@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTRPC } from "./rpc";
 import { Link, navigate } from "./router";
 import type { MovieRequestView } from "../../src/movies/contracts";
+import { StageTracker } from "./stage-tracker";
 import tmdbLogo from "./assets/tmdb-logo.svg" with { type: "file" };
 
 function Failure({ message }: { message: string }) {
@@ -124,10 +125,13 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
   const request = useMutation(
     trpc.movies.request.mutationOptions({
       onSuccess: ({ request }) => {
+        queryClient.setQueryData(trpc.movies.get.queryKey({ tmdbId }), current => current && ({
+          ...current, requests: [request, ...current.requests.filter(r => r.id !== request.id)],
+        }));
+        queryClient.setQueryData(trpc.requests.get.queryKey({ requestId: request.id }), { request });
         void queryClient.invalidateQueries({
           queryKey: trpc.requests.list.queryKey(),
         });
-        navigate(`/requests/${request.id}`);
       },
     }),
   );
@@ -135,15 +139,16 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
   if (!details.data) return <p role="status">Loading movie...</p>;
   const { movie, requests, availableInLibrary } = details.data;
   const existing = requests.find((entry) => entry.state !== "withdrawn");
+  const tracked = existing ?? requests[0];
   return (
     <>
-      <Link href="/library?media=movies" className="back">
+      <Link href="/library" className="back">
         Back to library
       </Link>
       <section className="movie-hero">
         <div className="jacket">
           {movie.posterUrl ? (
-            <img src={movie.posterUrl} alt="" />
+            <img src={movie.posterUrl} alt={`${movie.title} movie poster`} width={300} height={450} />
           ) : (
             <span>{movie.title}</span>
           )}
@@ -157,11 +162,7 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
           <p className="synopsis">
             {movie.overview || "No description available."}
           </p>
-          {availableInLibrary ? <p className="state ready">Available in Plex</p> : existing ? (
-            <Link className="button" href={`/requests/${existing.id}`}>
-              Track request
-            </Link>
-          ) : (
+          {availableInLibrary ? <p className="state ready">Available in Plex</p> : !existing && (
             <button
               disabled={request.isPending}
               onClick={() => request.mutate({ tmdbId })}
@@ -172,6 +173,7 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
           {request.isError && <Failure message={request.error.message} />}
         </div>
       </section>
+      {tracked && <MovieRequestPanel key={tracked.id} initialRequest={tracked} />}
     </>
   );
 }
@@ -197,7 +199,7 @@ export function MovieRequests() {
         <div className="request-list">
           {requests.data.requests.map((request) => (
             <Link
-              href={`/requests/${request.id}`}
+              href={`/movies/${request.movie.tmdbId}`}
               key={request.id}
               className="request-row"
             >
@@ -314,12 +316,12 @@ function ReleaseSearch({
     </details>
   );
 }
-const stages = [
-  { label: "Requested", values: ["requested"] },
-  { label: "Search", values: ["searching", "selecting"] },
-  { label: "Download", values: ["downloading", "replacing"] },
-  { label: "Verify", values: ["verifying"] },
-  { label: "Plex", values: ["publishing", "available"] },
+const movieStages = [
+  ["requested"],
+  ["searching", "selecting"],
+  ["downloading", "replacing"],
+  ["verifying"],
+  ["publishing", "available"],
 ];
 function Progress({ request }: { request: MovieRequestView }) {
   const download = request.download;
@@ -352,21 +354,7 @@ function Progress({ request }: { request: MovieRequestView }) {
           {request.upgrading ? "Upgrade in progress" : request.state === "waiting-for-release" ? "Watching for releases" : request.state}
         </span>
       </div>
-      <ol className="stage-tracker">
-        {stages.map((stage) => (
-          <li
-            key={stage.label}
-            className={
-              request.events.some((event) => stage.values.includes(event.stage))
-                ? "reached"
-                : ""
-            }
-          >
-            <span />
-            {stage.label}
-          </li>
-        ))}
-      </ol>
+      <StageTracker reached={movieStages.map(stages => request.events.some(event => stages.includes(event.stage)))} />
       {request.upgrading && (
         <p>
           Your current version stays available while we look for something
@@ -408,9 +396,22 @@ function Progress({ request }: { request: MovieRequestView }) {
 }
 export function MovieRequestDetail({ requestId }: { requestId: number }) {
   const trpc = useTRPC();
+  const query = useQuery(trpc.requests.get.queryOptions({ requestId }));
+  const tmdbId = query.data?.request.movie.tmdbId;
+  useEffect(() => {
+    if (tmdbId) navigate(`/movies/${tmdbId}`, { replace: true });
+  }, [tmdbId]);
+  if (query.isError) return <Failure message={query.error.message} />;
+  return <p role="status">Opening movie...</p>;
+}
+
+function MovieRequestPanel({ initialRequest }: { initialRequest: MovieRequestView }) {
+  const requestId = initialRequest.id;
+  const trpc = useTRPC();
   const queryClient = useQueryClient();
   const query = useQuery({
     ...trpc.requests.get.queryOptions({ requestId }),
+    initialData: { request: initialRequest },
     refetchInterval: (q) =>
       q.state.data &&
       (["queued", "running"].includes(q.state.data.request.state) ||
@@ -419,6 +420,9 @@ export function MovieRequestDetail({ requestId }: { requestId: number }) {
         : false,
   });
   const refresh = () => {
+    void queryClient.invalidateQueries({
+      queryKey: trpc.movies.get.queryKey({ tmdbId: initialRequest.movie.tmdbId }),
+    });
     void queryClient.invalidateQueries({
       queryKey: trpc.requests.get.queryKey({ requestId }),
     });
@@ -442,11 +446,6 @@ export function MovieRequestDetail({ requestId }: { requestId: number }) {
     ["queued", "running"].includes(request.state) || request.upgrading;
   return (
     <>
-      <Link href="/library?media=movies" className="back">
-        Back to library
-      </Link>
-      <div className="library-toolbar"><h1>{request.movie.title}</h1></div>
-      {request.movie.year && <p className="muted">{request.movie.year}</p>}
       <Progress request={request} />
       <div className="actions">
         {request.state === "blocked" && (
@@ -457,7 +456,7 @@ export function MovieRequestDetail({ requestId }: { requestId: number }) {
             Retry acquisition
           </button>
         )}
-        {request.available && (
+        {request.available && request.state !== "withdrawn" && (
           <button
             disabled={working || upgrade.isPending}
             onClick={() => upgrade.mutate({ requestId })}
@@ -474,7 +473,6 @@ export function MovieRequestDetail({ requestId }: { requestId: number }) {
             Withdraw my request
           </button>
         )}
-        <Link href={`/movies/${request.movie.tmdbId}`}>Movie details</Link>
       </div>
       {[retry.error, upgrade.error, withdraw.error]
         .filter(Boolean)

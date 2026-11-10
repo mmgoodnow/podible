@@ -29,7 +29,7 @@ async function checkPosterShelves(browser: Awaited<ReturnType<typeof chromium.la
     repo.movies.event(requested.targetId, null, key, "available", "Verified in Plex and ready to watch");
     db.query("UPDATE movie_events SET created_at=? WHERE event_key=?").run(new Date(Date.now() - index * 86_400_000).toISOString(), key);
   }
-  repo.movies.request(reader.id, { ...fixtureMovie, tmdbId: 600, title: "Tomorrow's Tide", posterUrl: `${art}6.svg` }, policy);
+  const pendingMovie = repo.movies.request(reader.id, { ...fixtureMovie, tmdbId: 600, title: "Tomorrow's Tide", posterUrl: `${art}6.svg` }, policy);
   repo.movies.request(admin.id, { ...fixtureMovie, tmdbId: 601, title: "Private unreleased movie" }, policy);
   const tvTitles = ["The Glasshouse", "North of Here", "Small Hours"];
   for (const [index, title] of tvTitles.entries()) {
@@ -107,6 +107,17 @@ async function checkPosterShelves(browser: Awaited<ReturnType<typeof chromium.la
     await page.screenshot({ path: path.join(os.tmpdir(), "podible-home-rails-mobile.png"), fullPage: true, animations: "disabled" });
     await movieRail.getByRole("link", { name: /Night Orchard/ }).click();
     await page.getByRole("heading", { name: "Night Orchard", exact: true }).waitFor();
+    await page.getByRole("link", { name: "Back to library", exact: true }).click();
+    assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/library");
+    await requestRail.getByRole("link", { name: /Tomorrow's Tide/ }).click();
+    const requestPoster = page.getByRole("img", { name: "Tomorrow's Tide movie poster", exact: true });
+    await requestPoster.evaluate(image => (image as unknown as { decode(): Promise<void> }).decode());
+    await page.getByRole("region", { name: "Request progress" }).waitFor();
+    assert.equal(new URL(page.url()).pathname, "/movies/600");
+    await page.goto(`${origin}/requests/${pendingMovie.requestId}`);
+    await page.waitForURL(`${origin}/movies/600`);
+    await page.getByRole("region", { name: "Request progress" }).waitFor();
+    assert.equal(await page.getByRole("link", { name: "Back to library" }).getAttribute("href"), "/library");
     await page.setViewportSize({ width: 1440, height: 1100 });
     await page.goto(`${origin}/?media=movies`);
     const movies = page.getByRole("region", { name: "Your movies" });
@@ -123,7 +134,7 @@ async function checkPosterShelves(browser: Awaited<ReturnType<typeof chromium.la
     await movies.getByRole("link", { name: /Tomorrow's Tide/ }).waitFor();
     assert.equal(await movies.getByRole("region", { name: "Movie requests", exact: true }).locator("summary").count(), 0, "A single waiting request must not need disclosure");
     const ownMovie = movies.getByRole("link", { name: /The Last Coast/ });
-    assert.match((await ownMovie.getAttribute("href"))!, /^\/requests\//);
+    assert.equal(await ownMovie.getAttribute("href"), "/movies/500");
     await ownMovie.click();
     await page.getByRole("heading", { name: "The Last Coast", exact: true }).waitFor();
     await page.goto(`${origin}/?media=movies`);
@@ -280,8 +291,7 @@ try {
   await page.reload();
   await page.getByText("0 of 3 episodes verified in Plex.", { exact: true }).waitFor();
   await page.getByRole("link", { name: "Back to library" }).click();
-  await page.getByRole("region", { name: "TV", exact: true }).getByRole("link", { name: /Piranesi Series/ }).waitFor();
-  await page.goto(origin);
+  assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, "/library");
   await page.getByRole("region", { name: "Your requests", exact: true }).getByRole("link", { name: /Piranesi Series/ }).waitFor();
   await page.goto(requestUrl);
   page.once("dialog", dialog => dialog.accept());

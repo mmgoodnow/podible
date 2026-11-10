@@ -65,7 +65,7 @@ export function UnifiedLibrary({ initialPage }: {
   const hasRequests = pendingMovies.length > 0 || outstandingTv.length > 0;
   const loadingRequests = !hasRequests && (movies.isPending || tv.isPending);
   const movieCard = (request: MovieRequest) => <ScreenCard key={`request:movie:${request.id}`} title={request.movie.title} year={request.movie.year}
-    posterUrl={request.movie.posterUrl} href={`/requests/${request.id}`} media="movie" badge={movieBadge(request)} source="Your request"
+    posterUrl={request.movie.posterUrl} href={`/movies/${request.movie.tmdbId}`} media="movie" badge={movieBadge(request)} source="Your request"
     detail={movieDetail(request)}
     progress={!request.available && request.state === "running" && request.stage === "downloading" && request.download?.bytesDone != null && request.download.sizeBytes != null ? {
       value: request.download.bytesDone, max: request.download.sizeBytes, label: `${request.movie.title} download progress`,

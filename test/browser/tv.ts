@@ -74,6 +74,9 @@ try {
 
   await page.goto(new URL(`/tv/requests/${withGaps.requestId}`,url).href);
   await page.getByRole("heading", { name: "1 episode batch in progress" }).waitFor();
+  const stages = page.getByRole("list", { name: "Acquisition stages" });
+  await stages.getByRole("listitem").filter({ hasText: "Download" }).getByText("1 season", { exact: true }).waitFor();
+  assert.equal(await stages.getByRole("listitem").count(), 5);
   await page.getByRole("progressbar", { name: "Active downloads progress" }).waitFor();
   assert.equal(await page.getByRole("progressbar", { name: "Season 1 downloads progress" }).getAttribute("value"),String(3 * 1024 ** 3));
   assert.equal(await page.getByRole("progressbar", { name: "Season 2 downloads progress" }).count(),0);

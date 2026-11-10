@@ -1020,6 +1020,11 @@ footer {
   padding-top: 1.5rem;
   border-top: 3px solid var(--line);
 }
+.stage-tracker small {
+  display: block;
+  font-size: .72rem;
+  padding-right: .25rem;
+}
 .stage-tracker li span {
   position: absolute;
   left: 0;
