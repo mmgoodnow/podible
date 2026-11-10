@@ -11,6 +11,7 @@ export const movieSchema = z.object({
   originalLanguage: z.string(),
   imdbId: z.string().nullable(),
   runtimeMinutes: z.number().positive().nullable().optional(),
+  releaseDate: z.iso.date().optional(),
 });
 export const catalogMovieSchema = movieSchema.omit({ id: true });
 export type CatalogMovie = z.infer<typeof catalogMovieSchema>;

@@ -124,6 +124,11 @@ export function TvLibraryDetail({ entryId }: { entryId: number }) {
   const seasonCount = (n: number) => n ? `${n} season${n === 1 ? "" : "s"}` : undefined;
   const labels = { ready: "Ready in Plex", queued: "Queued", searching: "Finding a release", downloading: "Downloading", verifying: "Checking episodes", publishing: "Adding to Plex", "pack-pending": "Waiting for pack", waiting: "Episodes missing", failed: "Acquisition stopped", upcoming: "Not aired yet" };
   const episodeLabels = { ...labels, missing: "Not in Plex", upcoming: "Upcoming", verifying: "Checking release" };
+  const episodeOutcomes = {
+    "no-match": "No suitable release selected",
+    stopped: "Last attempt stopped before this episode was added",
+    "not-published": "Last attempt did not add this episode",
+  };
   const stamp = (value: string) => new Date(value).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   return <>
     <Link href="/library" className="back">Back to library</Link>
@@ -179,6 +184,13 @@ export function TvLibraryDetail({ entryId }: { entryId: number }) {
                   <span className="tv-episode-title">{ep.title}</span>
                   {date && <time dateTime={date}>{new Date(`${date}T00:00:00Z`).toLocaleDateString(undefined, { dateStyle: "medium", timeZone: "UTC" })}</time>}
                   <span className={`tv-episode-status tv-episode-${ep.status}`}>{episodeLabels[ep.status]}</span>
+                  {(ep.lastAttempt || ep.retryRequestId) && <div className="tv-episode-actions">
+                    {ep.lastAttempt && <span>{episodeOutcomes[ep.lastAttempt.outcome]} · {stamp(ep.lastAttempt.at)}</span>}
+                    {ep.retryRequestId !== null && <button className="secondary" disabled={retry.isPending}
+                      aria-label={`Search for ${ep.title}`}
+                      onClick={() => retry.mutate({ requestId: ep.retryRequestId!, episodeId: ep.id })}>Search episode</button>}
+                    {retry.isError && retry.variables?.episodeId === ep.id && <Failure error={retry.error} />}
+                  </div>}
                 </li>;
               })}
             </ol>}

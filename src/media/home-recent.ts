@@ -10,10 +10,15 @@ export const homeRecentSchema = z.object({
   tv: z.array(card.extend({ entryId: id, year: z.number().nullable(), posterUrl: tvPosterUrlSchema })),
   episodes: z.array(z.object({ entryId: id, episodeId: id, title: z.string(), episodeTitle: z.string(),
     posterUrl: tvPosterUrlSchema, airDate: z.string(), season: z.number().nullable(), episode: z.number().nullable() })),
+  upcoming: z.array(z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("tv"), entryId: id, episodeId: id, title: z.string(), episodeTitle: z.string(),
+      posterUrl: tvPosterUrlSchema, date: z.iso.date() }),
+    z.object({ kind: z.literal("movie"), tmdbId: id, title: z.string(), posterUrl: tvPosterUrlSchema, date: z.iso.date() }),
+  ])),
 });
-export type HomeRecentInput = { limit?: number; now?: string };
+export type HomeRecentInput = { limit?: number; now?: string; userId?: number };
 
-/** Four bounded read-only projections. Publication time is never inferred from row IDs or metadata updates. */
+/** Bounded projections, plus one personalized rail. Publication time never comes from row IDs or metadata updates. */
 export function readHomeRecent(db: Database, input: HomeRecentInput = {}): z.infer<typeof homeRecentSchema> {
   const limit = z.number().int().min(1).max(20).parse(input.limit ?? 12);
   const now = z.iso.datetime().parse(input.now ?? new Date().toISOString());
@@ -53,5 +58,20 @@ export function readHomeRecent(db: Database, input: HomeRecentInput = {}): z.inf
       AND date(json_extract(ep.metadata_json,'$.airDate'),'+0 days')=json_extract(ep.metadata_json,'$.airDate')
       AND julianday(json_extract(ep.metadata_json,'$.airDate')) BETWEEN julianday(date(?,'-30 days')) AND julianday(date(?))
     ORDER BY airDate DESC,entryId,episodeId LIMIT ?`).all(now, now, limit);
-  return homeRecentSchema.parse({ books, movies, tv, episodes });
+  const upcoming = input.userId === undefined ? [] : db.query(`WITH upcoming AS (
+    SELECT DISTINCT 'tv' AS kind,e.id AS entryId,ep.id AS episodeId,NULL AS tmdbId,
+      json_extract(e.metadata_json,'$.title') AS title,json_extract(ep.metadata_json,'$.title') AS episodeTitle,
+      json_extract(e.metadata_json,'$.posterUrl') AS posterUrl,substr(json_extract(ep.metadata_json,'$.airDate'),1,10) AS date
+    FROM tv_requests r JOIN tv_targets t ON t.id=r.target_id JOIN tv_entries e ON e.id=t.entry_id
+    JOIN tv_request_episodes re ON re.request_id=r.id JOIN tv_episodes ep ON ep.id=re.episode_id
+    WHERE r.user_id=? AND r.withdrawn_at IS NULL AND NOT EXISTS (
+      SELECT 1 FROM tv_active_episodes a WHERE a.entry_id=e.id AND a.episode_id=ep.id)
+    UNION ALL
+    SELECT DISTINCT 'movie',NULL,NULL,m.tmdb_id,json_extract(m.metadata_json,'$.title'),NULL,
+      json_extract(m.metadata_json,'$.posterUrl'),json_extract(m.metadata_json,'$.releaseDate')
+    FROM movie_requests r JOIN movie_targets t ON t.id=r.target_id JOIN movies m ON m.id=t.movie_id
+    WHERE r.user_id=? AND r.withdrawn_at IS NULL AND t.active_version_id IS NULL
+  ) SELECT * FROM upcoming WHERE date(date,'+0 days')=date AND date>date(?) AND date<=date(?,'+14 days')
+    ORDER BY date,title,entryId,episodeId,tmdbId LIMIT ?`).all(input.userId, input.userId, now, now, limit);
+  return homeRecentSchema.parse({ books, movies, tv, episodes, upcoming });
 }

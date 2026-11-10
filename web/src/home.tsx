@@ -110,6 +110,16 @@ export function UnifiedLibrary({ initialPage }: {
       {tv.isError && <Failure error={tv.error} retry={() => void tv.refetch()} />}
       {recent.isPending && <p role="status">Loading library...</p>}
       {recent.isError && <Failure error={recent.error} retry={() => void recent.refetch()} />}
+      {!!recent.data?.upcoming.length && <ContentRail title="Coming up">
+        {recent.data.upcoming.map(item => {
+          const date = new Date(`${item.date}T00:00:00Z`).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+          const tv = item.kind === "tv";
+          return <ScreenCard key={tv ? `tv:${item.episodeId}` : `movie:${item.tmdbId}`} title={item.title} posterUrl={item.posterUrl}
+            href={tv ? `/tv/library/${item.entryId}` : `/movies/${item.tmdbId}`} media={tv ? "tv" : "movie"}
+            badge={{ label: tv ? "Upcoming episode" : "Upcoming movie", tone: "catalog" }}
+            source={tv ? item.episodeTitle : undefined} detail={tv ? `Airs ${date}` : `Catalog release ${date}`} />;
+        })}
+      </ContentRail>}
       {!!recent.data?.books.length && <ContentRail title="Newly added books" more={{ href: "/library?media=books", label: "All books" }}>
         {recent.data.books.map(book => <RailBook key={book.id} book={book} />)}
       </ContentRail>}

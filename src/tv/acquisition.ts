@@ -413,6 +413,8 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
         }
         // A scoped search can find results buried under a shared show-wide lookup.
         if (attempt === 0 && (intake.searchGroup || intake.feedOffers?.length)) continue;
+        repo.decision(acquisition.id, { ...intake, selection: { title: null, reason: selection.reason },
+          blockedCode: capacityProblem ? "stopped" : "no-match" });
         emit("blocked", "blocked", capacityProblem ?? selection.reason); repo.finishAcquisition(acquisition.id); return "done";
       }
       const offer = selection.offer;

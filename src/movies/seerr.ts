@@ -103,6 +103,7 @@ function movie(raw: unknown): CatalogMovie {
         : null,
     runtimeMinutes: m.runtime && m.runtime > 0 ? m.runtime : null,
     imdbId: m.imdbId ?? m.externalIds?.imdbId ?? null,
+    ...(m.releaseDate && z.iso.date().safeParse(m.releaseDate).success ? { releaseDate: m.releaseDate } : {}),
   };
 }
 

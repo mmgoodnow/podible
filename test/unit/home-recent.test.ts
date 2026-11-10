@@ -4,6 +4,8 @@ import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { readHomeRecent } from "../../src/media/home-recent";
 import { publishRailMovie, publishRailTv } from "../fixtures/home-rails-data";
+import { fixtureMovie } from "../fixtures/movie-services";
+import { fixtureTvEntry } from "../fixtures/tv-catalog";
 
 test("recent rails use real publication dates, bounded SQL and no private pending data or writes", () => {
   using db = new Database(":memory:"); runMigrations(db);
@@ -52,4 +54,23 @@ test("aired rail requires recent real dates and exact healthy selected episode c
   const afterLoss = readHomeRecent(db, { now: "2026-11-04T00:00:00Z" });
   expect(afterLoss.episodes).toEqual([]);
   expect(afterLoss.tv.map(t => t.title)).not.toContain("Recent selected episode");
+});
+
+test("upcoming rail shows only the viewer's dated, unfulfilled requests in the next two weeks", () => {
+  using db = new Database(":memory:"); runMigrations(db);
+  const repo = new BooksRepo(db); repo.ensureSettings();
+  const viewer = repo.upsertUser({ provider: "local", providerUserId: "viewer", username: "Viewer", isAdmin: false });
+  const other = repo.upsertUser({ provider: "local", providerUserId: "other", username: "Other", isAdmin: false });
+  const policy = repo.getSettings().movies.qualityPolicy;
+  const movie = { ...fixtureMovie, releaseDate: "2026-11-06" };
+  repo.movies.request(viewer.id, { ...movie, tmdbId: 101, title: "Upcoming movie" }, policy);
+  repo.movies.request(other.id, { ...movie, tmdbId: 102, title: "Private movie" }, policy);
+  repo.movies.request(viewer.id, { ...movie, tmdbId: 103, releaseDate: "2026-12-06" }, policy);
+  const entry = fixtureTvEntry();
+  entry.episodes[2]!.airDate = "2026-11-05";
+  repo.tv.requestSeasons(viewer.id, entry, policy, [1]);
+  const result = readHomeRecent(db, { userId: viewer.id, now: "2026-11-04T00:00:00Z" });
+  expect(result.upcoming.map(item => [item.kind, item.title, item.date])).toEqual([
+    ["tv", entry.title, "2026-11-05"], ["movie", "Upcoming movie", "2026-11-06"],
+  ]);
 });

@@ -147,14 +147,18 @@ export function createTvRouter(services: { catalog?: TvCatalog } = {}) {
   withdraw: defineMethod({ auth: "user", summary: "Withdraw only the current user's request, preserving media and other demand.",
     paramsSchema: z.object({ requestId: id }).strict(), resultSchema: z.object({ request: view }),
     handler(ctx, p) { owned(ctx, p.requestId); withdrawTvRequest(ctx.repo, p.requestId); return { request: requestView(ctx, p.requestId, true) }; } }),
-  retryMyRequest: defineMethod({ auth: "user", summary: "Search missing aired seasons for the current user's active request; share existing work.",
-    paramsSchema: z.object({ requestId: id }).strict(), resultSchema: z.object({ request: view }),
+  retryMyRequest: defineMethod({ auth: "user", summary: "Search missing aired episodes in the current user's active request; optionally scope to one episode.",
+    paramsSchema: z.object({ requestId: id, episodeId: id.optional() }).strict(), resultSchema: z.object({ request: view }),
     handler(ctx, p) {
       const request = owned(ctx, p.requestId);
       if (request.withdrawn_at) throw new RpcError(-32602, "This request has been withdrawn");
       return ctx.repo.transaction(() => {
+        if (p.episodeId !== undefined && !ctx.repo.tv.missingEpisodes(p.requestId).some(ep =>
+          ep.id === p.episodeId && ep.airDate && Date.parse(ep.airDate) <= Date.now())) {
+          throw new RpcError(-32602, "Only missing, aired episodes in this request can be searched");
+        }
         ensurePresentIntent(ctx.repo, { namespace: "tv-target", id: String(request.target_id) }, "User explicitly resumed their TV request");
-        queueTvSeasons(ctx.repo, p.requestId, "recovery");
+        queueTvSeasons(ctx.repo, p.requestId, "recovery", p.episodeId === undefined ? undefined : [p.episodeId]);
         return { request: requestView(ctx, p.requestId, true, true) };
       });
     } }),

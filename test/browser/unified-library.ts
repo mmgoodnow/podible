@@ -29,7 +29,8 @@ async function checkPosterShelves(browser: Awaited<ReturnType<typeof chromium.la
     repo.movies.event(requested.targetId, null, key, "available", "Verified in Plex and ready to watch");
     db.query("UPDATE movie_events SET created_at=? WHERE event_key=?").run(new Date(Date.now() - index * 86_400_000).toISOString(), key);
   }
-  const pendingMovie = repo.movies.request(reader.id, { ...fixtureMovie, tmdbId: 600, title: "Tomorrow's Tide", posterUrl: `${art}6.svg` }, policy);
+  const pendingMovie = repo.movies.request(reader.id, { ...fixtureMovie, tmdbId: 600, title: "Tomorrow's Tide", posterUrl: `${art}6.svg`,
+    releaseDate: new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10) }, policy);
   repo.movies.request(admin.id, { ...fixtureMovie, tmdbId: 601, title: "Private unreleased movie" }, policy);
   const tvTitles = ["The Glasshouse", "North of Here", "Small Hours"];
   for (const [index, title] of tvTitles.entries()) {
@@ -90,6 +91,11 @@ async function checkPosterShelves(browser: Awaited<ReturnType<typeof chromium.la
     assert.equal(await requestRail.getAttribute("aria-busy"), "true");
     releaseRequestCards();
     await page.getByRole("region", { name: "Your requests", exact: true }).getByRole("link", { name: /Tomorrow's Tide/ }).waitFor();
+    const comingUp = page.getByRole("region", { name: "Coming up", exact: true });
+    await comingUp.getByRole("link", { name: /Tomorrow's Tide/ }).waitFor();
+    assert.ok(await requestRail.evaluate((rail, next) =>
+      Boolean(rail.compareDocumentPosition(next as typeof rail) & 4),
+    await comingUp.elementHandle()));
     await requestRail.getByRole("link", { name: /The Next Chapter/ }).waitFor();
     assert.equal((await movieRail.boundingBox())?.y, before?.y, "Late request cards must not move published rails");
     await page.getByRole("region", { name: "Recently aired episodes", exact: true }).locator(".screen-card").nth(2).waitFor();

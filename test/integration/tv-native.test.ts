@@ -179,6 +179,36 @@ test("a publishing batch only marks the episodes actually in its version", async
   } finally { await s.close(); }
 });
 
+test("episode explanations use only exact batch scope and an episode retry stays within existing demand", async () => {
+  const s = await setup();
+  try {
+    const entry = s.fixture.entry();
+    entry.episodes[3]!.airDate = "2020-01-01";
+    s.fixture.setEntry(entry);
+    const { request } = await s.call("request", { tmdbId: 70, seasonNumbers: [1] }) as any;
+    const [first, future, other] = s.repo.tv.entry(request.entryId)!.episodes.filter(ep =>
+      ep.numbering.some(n => n.season === 1));
+    const batch = s.repo.tv.acquisitions(request.targetId)[0]!;
+    s.repo.tv.decision(batch.id, { batchEpisodeIds: [first!.id], blockedCode: "no-match" });
+    s.repo.tv.event(request.targetId, batch.id, "blocked-example", "blocked", "private upstream diagnostics");
+    s.repo.tv.finishAcquisition(batch.id);
+
+    const show = await executeMethod(catalogRouter.routes.tvEntry, s.ctx(), { entryId: request.entryId });
+    const episodes = show.progress.seasons.find(season => season.seasonNumber === 1)!.episodes;
+    expect(episodes[0]).toMatchObject({ id: first!.id, lastAttempt: { outcome: "no-match" }, retryRequestId: request.requestId });
+    expect(episodes[1]).toMatchObject({ id: future!.id, lastAttempt: null, retryRequestId: null });
+    expect(episodes[2]).toMatchObject({ id: other!.id, lastAttempt: null, retryRequestId: request.requestId });
+    expect(JSON.stringify(show)).not.toContain("private upstream diagnostics");
+    await expect(s.call("retryMyRequest", { requestId: request.requestId, episodeId: first!.id }, "two")).rejects.toMatchObject({ code: -32003 });
+    await expect(s.call("retryMyRequest", { requestId: request.requestId, episodeId: future!.id })).rejects.toThrow("missing, aired");
+    await s.call("retryMyRequest", { requestId: request.requestId, episodeId: first!.id });
+    await s.call("retryMyRequest", { requestId: request.requestId, episodeId: first!.id });
+    const acquisitions = s.repo.tv.acquisitions(request.targetId);
+    expect(acquisitions).toHaveLength(2);
+    expect(JSON.parse(acquisitions[0]!.decision_json!).batchEpisodeIds).toEqual([first!.id]);
+  } finally { await s.close(); }
+});
+
 test("one show exposes exact Plex coverage and safe cross-seeds, not another viewer's request actions", async () => {
   const s = await setup();
   try {

@@ -5,12 +5,13 @@ The unfiltered All view uses bounded horizontal rails. Searching replaces them w
 ## Evidence and boundaries
 
 - Your requests uses the existing authenticated own-request read models. Partly available TV requests remain visible. The rail shows up to ten movie and ten TV cards, with counted media links for the rest.
+- Coming up uses only the viewer's unfulfilled requests with known dates in the next 14 days (UTC). Movie dates are catalog release dates, not confirmed streaming or disc dates. Existing movies without a saved date remain absent until the catalog supplies one. The rail never starts a search.
 - Newly added books use the first persisted asset import timestamp, not book release dates, IDs, metadata updates or pending additions. Only books with imported assets are included.
 - Newly added movies/TV use the first persisted verified publication event and require current selected content. An upgrade does not make an old title newly added. Rows with no historical publication event are omitted rather than assigned an invented date. Known content-loss tombstones are excluded.
 - Recently aired, in your library uses real episode air dates within the preceding 30 calendar days and exact selected healthy file coverage. Future/undated episodes are omitted. This is not a recently-downloaded claim. There is no per-episode publication timestamp, so a separate recently-available episode rail is intentionally omitted.
 - Availability is the persisted publication/selection state, not a fresh disk/Plex probe. These read-only projections do not perform network, filesystem or hashing work, or initiate acquisitions.
 
-`catalog.recent({limit?:1..20})` returns `{books,movies,tv,episodes}` from four bounded SQL projections. `catalog.discovery({})` returns `{configured,movies:{items,unavailable},tv:{items,unavailable}}`. Both require authentication and return only card metadata, never ownership paths or private acquisition diagnostics.
+`catalog.recent({limit?:1..20})` returns `{books,movies,tv,episodes,upcoming}` from bounded SQL projections. `catalog.discovery({})` returns `{configured,movies:{items,unavailable},tv:{items,unavailable}}`. Both require authentication and return only card metadata, never ownership paths or private acquisition diagnostics.
 
 ## Discovery
 

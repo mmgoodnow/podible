@@ -26,6 +26,7 @@ function normalize(raw: z.infer<typeof entrySchema>): CatalogMovie {
     posterUrl: imagePath(raw.poster_path, "w342"),
     imdbId: raw.imdb_id ?? null,
     runtimeMinutes: raw.runtime && raw.runtime > 0 ? raw.runtime : null,
+    ...(raw.release_date && z.iso.date().safeParse(raw.release_date).success ? { releaseDate: raw.release_date } : {}),
   };
 }
 const label = z.string().trim().min(1).max(300);

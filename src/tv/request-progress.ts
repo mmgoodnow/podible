@@ -15,7 +15,10 @@ const observation = downloadSample.omit({ bytesPerSecond: true, lastReportedAt: 
   downloadBytesPerSecond: count.nullable(), observedAt: z.string(),
 });
 const episodeProgress = z.object({ id: count, number: count, title: z.string(), airDate: z.string().nullable(),
-  status: z.enum(["ready", "upcoming", "missing", "queued", "searching", "downloading", "verifying", "publishing", "pack-pending"]) });
+  status: z.enum(["ready", "upcoming", "missing", "queued", "searching", "downloading", "verifying", "publishing", "pack-pending"]),
+  lastAttempt: z.object({ at: z.string(), outcome: z.enum(["no-match", "stopped", "not-published"]) }).nullable(),
+  retryRequestId: count.positive().nullable(),
+});
 type Transfer = z.infer<typeof downloadSample>;
 const TRANSFER_MAX_AGE_MS = 60_000;
 export const tvRequestProgressSchema = z.object({
@@ -49,6 +52,7 @@ type ProgressInput = {
   jobStatuses: ReadonlyMap<number, JobStatus>;
   readTransfers?: TvRepo["requestDownloadObservations"];
   readPublishingEpisodes?: TvRepo["publishingEpisodeIds"];
+  requestByEpisode?: ReadonlyMap<number, number>;
 };
 
 function prepareWork({ episodes, available, events, acquisitions, jobStatuses }: ProgressInput) {
@@ -57,7 +61,8 @@ function prepareWork({ episodes, available, events, acquisitions, jobStatuses }:
   const legacyScope = tvAcquisitionBatch(missing).map(ep => ep.id);
   const work = acquisitions.map(a => {
     const status = a.job_id ? jobStatuses.get(a.job_id) : undefined;
-    const scoped = z.object({ batchEpisodeIds: z.array(z.number().int().positive()).optional(),waitingForSources:z.boolean().optional() })
+    const scoped = z.object({ batchEpisodeIds: z.array(z.number().int().positive()).optional(),waitingForSources:z.boolean().optional(),
+      blockedCode: z.enum(["no-match", "stopped"]).optional() })
       .safeParse(a.decision_json ? JSON.parse(a.decision_json) : {});
     const ids = scoped.success ? scoped.data.batchEpisodeIds ?? legacyScope : legacyScope;
     const current = !a.finished_at && (status === "queued" || status === "running");
@@ -65,6 +70,7 @@ function prepareWork({ episodes, available, events, acquisitions, jobStatuses }:
     const runningStage = scoped.success && scoped.data.waitingForSources ? "pack-pending" : last?.stage === "downloading" || last?.stage === "verifying" || last?.stage === "publishing"
       ? last.stage : last?.stage === "searching" || last?.stage === "selecting" || last?.stage === "replacing" ? "searching" : "queued";
     return { id: a.id, ids: new Set(ids), current, last, unscoped: !scoped.success || !scoped.data.batchEpisodeIds,
+      finishedAt: a.finished_at, failed: status === "failed", blockedCode: scoped.success ? scoped.data.blockedCode : undefined,
       stage: current ? runningStage : status === "failed" ? "failed" : "waiting" } as const;
   });
   const activeWork = work.filter(w => w.current);
@@ -120,10 +126,22 @@ export function tvRequestProgress(input: ProgressInput) {
   return prepareTvRequestProgress(input).project();
 }
 
-function projectProgress({ episodes, available, events, acquisitions, readTransfers, readPublishingEpisodes }: ProgressInput,
+function projectProgress({ episodes, available, events, acquisitions, readTransfers, readPublishingEpisodes, requestByEpisode }: ProgressInput,
   { missing, work, activeWork }: Pick<ReturnType<typeof prepareWork>, "missing" | "work" | "activeWork">,
   transfers: { torrentId: number; ids: Set<number>; sample: Transfer }[], now: number): z.infer<typeof tvRequestProgressSchema> {
   const queuedIds = new Set(activeWork.flatMap(w => [...w.ids]));
+  const hasUnscopedWork = activeWork.some(w => w.unscoped);
+  const attemptsByEpisode = new Map<number, NonNullable<z.infer<typeof episodeProgress>["lastAttempt"]>>();
+  if (readTransfers) for (const batch of work) {
+    if (batch.unscoped || batch.current || !batch.last || (!batch.finishedAt && !batch.failed)) continue;
+    const outcome = batch.last.stage === "blocked" ? batch.blockedCode ?? "stopped"
+      : batch.failed ? "stopped" : "not-published";
+    const at = batch.finishedAt ?? batch.last.createdAt;
+    for (const id of batch.ids) {
+      const prior = attemptsByEpisode.get(id);
+      if (!prior || at > prior.at) attemptsByEpisode.set(id, { at, outcome });
+    }
+  }
   const activeByEpisode = new Map<number, (typeof activeWork)[number]>();
   const publishingIds = activeWork.filter(batch => batch.stage === "publishing").map(batch => batch.id);
   const publishing = new Map<number, number[]>();
@@ -136,7 +154,7 @@ function projectProgress({ episodes, available, events, acquisitions, readTransf
     const scope = batch.stage === "publishing" ? publishing.get(batch.id) ?? [] : batch.unscoped ? [] : batch.ids;
     for (const id of scope) if (!activeByEpisode.has(id)) activeByEpisode.set(id, batch);
   }
-  const searchableAiredEpisodes = activeWork.some(w => w.unscoped) ? 0 : missing.filter(ep =>
+  const searchableAiredEpisodes = hasUnscopedWork ? 0 : missing.filter(ep =>
     ep.airDate && Date.parse(ep.airDate) <= now && !queuedIds.has(ep.id)).length;
   const seasons = [...new Set(episodes.flatMap(ep => ep.numbering.filter(n => n.scheme === "tvdb:aired" && n.season !== null).map(n => n.season!)))].sort((a,b) => a-b);
   return {
@@ -163,7 +181,11 @@ function projectProgress({ episodes, available, events, acquisitions, readTransf
           if (number == null) return [];
           const batch = activeByEpisode.get(ep.id);
           const activeStage = batch?.stage;
+          const canRetry = !available.has(ep.id) && ep.airDate && Date.parse(ep.airDate) <= now
+            && !hasUnscopedWork && !queuedIds.has(ep.id);
           return [{ id: ep.id, number, title: ep.title, airDate: ep.airDate,
+            lastAttempt: available.has(ep.id) || upcoming(ep) || activeStage ? null : attemptsByEpisode.get(ep.id) ?? null,
+            retryRequestId: canRetry ? requestByEpisode?.get(ep.id) ?? null : null,
             status: available.has(ep.id) ? "ready" as const : upcoming(ep) ? "upcoming" as const
               : !activeStage || activeStage === "waiting" || activeStage === "failed" ? "missing" as const : activeStage }];
         }).sort((a, b) => a.number - b.number || a.id - b.id) : [] };

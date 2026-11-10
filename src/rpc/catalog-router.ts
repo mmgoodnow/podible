@@ -14,7 +14,7 @@ export const createCatalogRouter = (transmission?: AdminTransmissionReader | nul
     summary: "Bounded shared library rails ordered by verified publication and actual episode air dates.",
     paramsSchema: z.object({ limit: z.number().int().min(1).max(20).default(12) }).strict(),
     resultSchema: homeRecentSchema,
-    handler(ctx, input) { return ctx.repo.readHomeRecent(input); } }),
+    handler(ctx, input) { return ctx.repo.readHomeRecent({ ...input, userId: ctx.session!.user_id }); } }),
   discovery: defineMethod({ auth: "user", readOnly: true,
     summary: "Server-cached public trending lists using the existing TMDB configuration, without per-card lookups.",
     paramsSchema: z.object({}).strict(), resultSchema: homeDiscoverySchema,
@@ -49,7 +49,11 @@ export const createCatalogRouter = (transmission?: AdminTransmissionReader | nul
         ...acquisitions.flatMap(a => a.job_id === null ? [] : [a.job_id]),
         ...seeds.flatMap(s => s.registered ? [] : [s.jobId]),
       ]);
+      const requested = tv.showRequestedEpisodeIds(entry.id, ctx.session!.user_id);
+      const requestByEpisode = new Map<number, number>();
+      for (const [requestId, episodes] of requested) for (const episodeId of episodes) requestByEpisode.set(episodeId, requestId);
       const prepared = prepareTvRequestProgress({ episodes: entry.episodes, available, events, acquisitions, jobStatuses,
+        requestByEpisode,
         readTransfers: ids => tv.requestDownloadObservations(ids),
         readPublishingEpisodes: ids => tv.publishingEpisodeIds(ids) });
       const settings = prepared.bindings.length ? ctx.repo.readSettings() : null;
@@ -61,7 +65,6 @@ export const createCatalogRouter = (transmission?: AdminTransmissionReader | nul
       })));
       // Only display provider-facing labels, never raw offers, client errors, or torrent identifiers.
       const label = (value: string | null) => value?.replace(/(?:https?:\/\/|magnet:\?)[^\s]+/gi, "").trim().slice(0, 350) || null;
-      const requested = tv.showRequestedEpisodeIds(entry.id, ctx.session!.user_id);
       return { entry: { ...entry, episodes: [] }, availableEpisodes: available.size, progress,
         requests: requests.filter(r => r.withdrawn_at === null).map(r => {
           const scope = new Set(requested.get(r.id) ?? []);
