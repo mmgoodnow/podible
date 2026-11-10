@@ -3,11 +3,13 @@ import type { JobStatus } from "../app-types";
 import type { TvRepo } from "./repo";
 import { tvAcquisitionBatch } from "./acquisition";
 import type { TvAcquisition, TvEpisode, TvEvent } from "./types";
+import type { AdminTorrentObservation } from "../rpc/admin-torrents";
 
 const stage = z.enum(["ready", "queued", "searching", "downloading", "verifying", "publishing", "pack-pending", "waiting", "failed", "upcoming"]);
 const count = z.number().int().nonnegative().safe();
-const download = z.object({ bytesDone: count, sizeBytes: count.positive(), bytesPerSecond: count.nullable() });
-const observation = download.omit({ bytesPerSecond: true }).extend({
+const download = z.object({ bytesDone: count, sizeBytes: count.positive(), bytesPerSecond: count.nullable(),
+  lastReportedAt: z.iso.datetime().optional() });
+const observation = download.omit({ bytesPerSecond: true, lastReportedAt: true }).extend({
   state: z.literal("downloading"), complete: z.literal(false), seedOnly: z.boolean().optional(),
   downloadBytesPerSecond: count.nullable(), observedAt: z.string(),
 });
@@ -32,18 +34,19 @@ function summarize(transfers: { torrentId: number; sample: Transfer }[]): Transf
   const sizeBytes = unique.reduce((sum, t) => sum + t.sizeBytes, 0);
   const bytesPerSecond = unique.some(t => t.bytesPerSecond === null) ? null
     : unique.reduce((sum, t) => sum + t.bytesPerSecond!, 0);
-  const parsed = download.safeParse({ bytesDone, sizeBytes, bytesPerSecond });
+  const lastReportedAt = unique.flatMap(t => t.lastReportedAt ? [t.lastReportedAt] : []).sort()[0];
+  const parsed = download.safeParse({ bytesDone, sizeBytes, bytesPerSecond, ...(lastReportedAt ? { lastReportedAt } : {}) });
   return parsed.success ? parsed.data : null;
 }
 
-/** User-facing facts from persisted work, never a live client poll or an inference that a release does not exist. */
-export function tvRequestProgress(input: {
+type LiveTransfer = Pick<AdminTorrentObservation, "state" | "active" | "seedOnly" | "bytesDone" | "sizeBytes" | "bytesPerSecond">;
+type ProgressInput = {
   episodes: TvEpisode[]; available: ReadonlySet<number>; events: TvEvent[]; acquisitions: TvAcquisition[];
   jobStatuses: ReadonlyMap<number, JobStatus>;
   readTransfers?: TvRepo["requestDownloadObservations"];
-}): z.infer<typeof tvRequestProgressSchema> {
-  const { episodes, available, events, acquisitions, jobStatuses, readTransfers } = input;
-  const now = Date.now();
+};
+
+function prepareWork({ episodes, available, events, acquisitions, jobStatuses }: ProgressInput) {
   const latestEvents = new Map(events.flatMap(e => e.acquisitionId === null ? [] : [[e.acquisitionId, e] as const]));
   const missing = episodes.filter(ep => !available.has(ep.id));
   const legacyScope = tvAcquisitionBatch(missing).map(ep => ep.id);
@@ -60,22 +63,62 @@ export function tvRequestProgress(input: {
       stage: current ? runningStage : status === "failed" ? "failed" : "waiting" } as const;
   });
   const activeWork = work.filter(w => w.current);
-  const queuedIds = new Set(activeWork.flatMap(w => [...w.ids]));
   const downloading = new Map(activeWork.filter(w => w.stage === "downloading").map(w => [w.id, w]));
-  const transfers = (downloading.size ? readTransfers?.([...downloading.keys()]) ?? [] : []).flatMap(row => {
+  return { missing, work, activeWork, downloading };
+}
+
+function currentTransferRows(downloading: ReturnType<typeof prepareWork>["downloading"], readTransfers: ProgressInput["readTransfers"], now: number) {
+  return (downloading.size ? readTransfers?.([...downloading.keys()]) ?? [] : []).flatMap(row => {
     const batch = downloading.get(row.acquisitionId);
     if (!batch?.last) return [];
     try {
       const result = observation.safeParse(JSON.parse(row.observation));
       if (!result.success) return [];
       const value = result.data, observed = Date.parse(value.observedAt), age = now - observed;
-      if (value.seedOnly || value.bytesDone >= value.sizeBytes || !(age >= 0 && age <= TRANSFER_MAX_AGE_MS)
+      if (value.seedOnly || value.bytesDone >= value.sizeBytes || !Number.isFinite(age) || age < 0
         || observed < Date.parse(batch.last.createdAt)) return [];
-      return [{ torrentId: row.torrentId, ids: batch.ids, sample: {
-        bytesDone: value.bytesDone, sizeBytes: value.sizeBytes, bytesPerSecond: value.downloadBytesPerSecond,
-      } }];
+      return [{ row, ids: batch.ids, value, observed }];
     } catch { return []; }
   });
+}
+
+/** Scope the daemon read to still-current download attempts, then project public progress once. */
+export function prepareTvRequestProgress(input: ProgressInput) {
+  const now = Date.now();
+  const { missing, work, activeWork, downloading } = prepareWork(input);
+  const rows = currentTransferRows(downloading, input.readTransfers, now);
+  return {
+    bindings: rows.map(({ row }) => row),
+    project(liveTransfers?: ReadonlyMap<number, LiveTransfer>): z.infer<typeof tvRequestProgressSchema> {
+      const transfers = rows.flatMap<{ torrentId: number; ids: Set<number>; sample: Transfer }>(({ row, ids, value, observed }) => {
+        const live = liveTransfers?.get(row.torrentId);
+        if (live) {
+          if (live.seedOnly || !["downloading", "download-queued"].includes(live.state)
+            || !live.active || live.sizeBytes <= 0 || live.bytesDone >= live.sizeBytes) return [];
+          return [{ torrentId: row.torrentId, ids, sample: {
+            bytesDone: live.bytesDone, sizeBytes: live.sizeBytes, bytesPerSecond: live.bytesPerSecond,
+          } }];
+        }
+        const stale = now - observed > TRANSFER_MAX_AGE_MS;
+        return [{ torrentId: row.torrentId, ids, sample: {
+          bytesDone: value.bytesDone, sizeBytes: value.sizeBytes,
+          bytesPerSecond: stale ? null : value.downloadBytesPerSecond,
+          ...(stale ? { lastReportedAt: new Date(observed).toISOString() } : {}),
+        } }];
+      });
+      return projectProgress(input, { missing, work, activeWork }, transfers, now);
+    },
+  };
+}
+
+export function tvRequestProgress(input: ProgressInput) {
+  return prepareTvRequestProgress(input).project();
+}
+
+function projectProgress({ episodes, available, events, acquisitions, readTransfers }: ProgressInput,
+  { missing, work, activeWork }: Pick<ReturnType<typeof prepareWork>, "missing" | "work" | "activeWork">,
+  transfers: { torrentId: number; ids: Set<number>; sample: Transfer }[], now: number): z.infer<typeof tvRequestProgressSchema> {
+  const queuedIds = new Set(activeWork.flatMap(w => [...w.ids]));
   const searchableAiredEpisodes = activeWork.some(w => w.unscoped) ? 0 : missing.filter(ep =>
     ep.airDate && Date.parse(ep.airDate) <= now && !queuedIds.has(ep.id)).length;
   const seasons = [...new Set(episodes.flatMap(ep => ep.numbering.filter(n => n.scheme === "tvdb:aired" && n.season !== null).map(n => n.season!)))].sort((a,b) => a-b);

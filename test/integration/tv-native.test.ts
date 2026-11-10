@@ -10,7 +10,7 @@ import { BooksRepo } from "../../src/repo";
 import { hashSessionToken } from "../../src/auth";
 import { createPodibleFetchHandler } from "../../src/http";
 import { createTvRouter, tvRouter } from "../../src/rpc/tv-router";
-import { catalogRouter } from "../../src/rpc/catalog-router";
+import { catalogRouter, createCatalogRouter } from "../../src/rpc/catalog-router";
 import { crossSeedCommandSchema, crossSeedStateKey } from "../../src/media/cross-seed-state";
 import { executeMethod, type RpcMethodDefinition } from "../../src/rpc/framework";
 import { RpcError, type RpcContext } from "../../src/rpc/shared";
@@ -83,15 +83,16 @@ test("own-request progress groups exact season coverage, omits private evidence,
   } finally { await s.close(); }
 });
 
-test("request detail shows only fresh, relevant transfer totals and exact episode availability", async () => {
+test("request detail distinguishes stale speed from last reported bytes and excludes earlier attempts", async () => {
   const s = await setup();
   try {
     const entry = s.fixture.entry(); entry.episodes.at(-1)!.airDate = "2020-01-01"; s.fixture.setEntry(entry);
     const { request } = await s.call("request", { tmdbId: 70, seasonNumbers: [1,2] }) as any;
     const batches = s.repo.tv.acquisitions(request.targetId);
     expect(batches).toHaveLength(2);
+    const clientId = `transmission:${randomUUID()}`;
     const attach = (hash: string, observedAt: string, bytesDone: number) => {
-      const ref = { clientId: "transmission:fixture", nativeId: hash.repeat(40) };
+      const ref = { clientId, nativeId: hash.repeat(40) };
       const location = { rootId: "tv", relativePath: "private-slot" };
       const id = s.repo.tv.bindDownload(batches[0]!.id, ref, location, "private-offer");
       s.repo.tv.bindDownload(batches[1]!.id, ref, location, "private-offer");
@@ -116,6 +117,40 @@ test("request detail shows only fresh, relevant transfer totals and exact episod
     expect(JSON.stringify(detail)).not.toContain("private-offer");
     const list = await s.call("myRequests") as any;
     expect(list.requests[0].progress).toMatchObject({ download: null, seasons: [{ episodes: [] }, { episodes: [] }] });
+    const lastReportedAt = new Date(Date.now() - 90_000).toISOString();
+    for (const b of batches) s.db.query("UPDATE tv_events SET created_at=? WHERE acquisition_id=? AND stage='downloading'")
+      .run(new Date(Date.now() - 120_000).toISOString(), b.id);
+    attach("a", lastReportedAt, 300);
+    const updated = (await s.call("myRequest", { requestId: request.requestId }) as any).request;
+    expect(updated.progress.download).toEqual({ bytesDone: 1299, sizeBytes: 2000, bytesPerSecond: null, lastReportedAt });
+
+    const settings = s.repo.getSettings();
+    settings.tv.managedRoot = await fs.realpath(s.root);
+    s.repo.updateSettings(settings);
+    const downloadDir = path.join(settings.tv.managedRoot, "downloads", "private-slot");
+    await fs.mkdir(downloadDir, { recursive: true });
+    let reads = 0, leftUntilDone = 600, offline = false;
+    const liveRouter = createCatalogRouter({ clientId, rpc: { async call(method, args) {
+      reads++;
+      expect(method).toBe("torrent-get");
+      expect(args?.ids).toEqual(["a".repeat(40), "b".repeat(40)]);
+      if (offline) throw new Error("Transmission unavailable");
+      return { torrents: [
+        { hashString: "a".repeat(40), downloadDir, labels: ["Podible TV"], status: 4,
+          leftUntilDone, sizeWhenDone: 1000, rateDownload: 80, error: 0, errorString: "" },
+        { hashString: "b".repeat(40), downloadDir, labels: ["Podible TV"], status: 6,
+          leftUntilDone: 0, sizeWhenDone: 1000, rateDownload: 0, error: 0, errorString: "" },
+      ] };
+    } } });
+    const show = () => executeMethod(liveRouter.routes.tvEntry, s.ctx(), { entryId: request.entryId });
+    expect((await show()).progress.download).toEqual({ bytesDone: 400, sizeBytes: 1000, bytesPerSecond: 80 });
+    expect(reads).toBe(1);
+    leftUntilDone = 500;
+    expect((await show()).progress.download?.bytesDone).toBe(500);
+    offline = true;
+    expect((await show()).progress.download).toEqual(updated.progress.download);
+    expect((await s.call("myRequest", { requestId: request.requestId }) as any).request.progress.download)
+      .toEqual(updated.progress.download);
   } finally { await s.close(); }
 });
 

@@ -318,8 +318,10 @@ export class TvRepo {
   }
 
   requestDownloadObservations(acquisitionIds: number[]) {
-    return this.db.query<{ acquisitionId: number; torrentId: number; observation: string }, [string]>(`
-      SELECT d.acquisition_id AS acquisitionId,t.id AS torrentId,t.observation_json AS observation
+    return this.db.query<{ acquisitionId: number; torrentId: number; observation: string;
+      client_id: string; native_id: string; location_json: string }, [string]>(`
+      SELECT d.acquisition_id AS acquisitionId,t.id AS torrentId,t.observation_json AS observation,
+        t.client_id,t.native_id,t.location_json
       FROM json_each(?) ids JOIN tv_acquisition_downloads d ON d.acquisition_id=ids.value
       JOIN media_torrents t ON t.id=d.torrent_id
       WHERE t.ownership_tag='Podible TV' AND t.observation_json IS NOT NULL

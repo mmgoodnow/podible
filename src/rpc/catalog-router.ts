@@ -5,10 +5,11 @@ import { catalogMovieSchema } from "../movies/types";
 import { tvCatalogEntrySchema } from "../tv/types";
 import { homeRecentSchema } from "../media/home-recent";
 import { homeDiscovery, homeDiscoverySchema } from "../media/home-discovery";
-import { tvRequestProgress, tvRequestProgressSchema } from "../tv/request-progress";
+import { prepareTvRequestProgress, tvRequestProgress, tvRequestProgressSchema } from "../tv/request-progress";
 import { nativeTvRequestScope } from "../tv/service";
+import { adminTorrentKey, readAdminTorrents, type AdminTransmissionReader } from "./admin-torrents";
 const id = z.number().int().positive();
-export const catalogRouter = defineRouter({
+export const createCatalogRouter = (transmission?: AdminTransmissionReader | null) => defineRouter({
   recent: defineMethod({ auth: "user", readOnly: true,
     summary: "Bounded shared library rails ordered by verified publication and actual episode air dates.",
     paramsSchema: z.object({ limit: z.number().int().min(1).max(20).default(12) }).strict(),
@@ -36,7 +37,7 @@ export const catalogRouter = defineRouter({
       crossSeeds: z.array(z.object({ title: z.string(), provider: z.string().nullable(),
         status: z.enum(["queued", "preparing", "registered"]), reusedBytes: z.number().nonnegative().nullable() })),
     }),
-    handler(ctx, input) {
+    async handler(ctx, input) {
       const tv = ctx.repo.tv;
       const available = new Set(tv.publishedEpisodeIds(input.entryId));
       const requests = tv.showRequests(input.entryId, ctx.session!.user_id);
@@ -48,8 +49,15 @@ export const catalogRouter = defineRouter({
         ...acquisitions.flatMap(a => a.job_id === null ? [] : [a.job_id]),
         ...seeds.flatMap(s => s.registered ? [] : [s.jobId]),
       ]);
-      const progress = tvRequestProgress({ episodes: entry.episodes, available, events, acquisitions, jobStatuses,
+      const prepared = prepareTvRequestProgress({ episodes: entry.episodes, available, events, acquisitions, jobStatuses,
         readTransfers: ids => tv.requestDownloadObservations(ids) });
+      const settings = prepared.bindings.length ? ctx.repo.readSettings() : null;
+      const sources = prepared.bindings.map(row => ({ media: "tv" as const, binding: { ...row, id: row.torrentId } }));
+      const live = settings ? (await readAdminTorrents(sources, settings, Date.now(), transmission)).observations : undefined;
+      const progress = prepared.project(live && new Map(sources.flatMap(source => {
+        const sample = live.get(adminTorrentKey(source));
+        return sample ? [[source.binding.id, sample] as const] : [];
+      })));
       // Only display provider-facing labels, never raw offers, client errors, or torrent identifiers.
       const label = (value: string | null) => value?.replace(/(?:https?:\/\/|magnet:\?)[^\s]+/gi, "").trim().slice(0, 350) || null;
       const requested = tv.showRequestedEpisodeIds(entry.id, ctx.session!.user_id);
@@ -70,3 +78,4 @@ export const catalogRouter = defineRouter({
         }) };
     } }),
 });
+export const catalogRouter = createCatalogRouter();
