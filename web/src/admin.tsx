@@ -11,6 +11,7 @@ import { Connections } from "./connections";
 import { RecordedDownloads, SharingHistory, SharingOverview, useSharingMetrics } from "./transfer-metrics";
 import { LibraryOverview } from "./library-inventory";
 import { CrossSeedBackfill } from "./cross-seed-backfill";
+import { LibraryMigrationPreview } from "./library-migration";
 
 type SettingsDraft = { text: string; base: string } | null;
 const draftKey = ["admin-settings-draft"] as const;
@@ -81,6 +82,7 @@ export function SettingsPage() {
   return <>
     <h1 style={{ fontSize: "2rem", margin: "0 0 0.5rem" }}>Settings</h1>
     <AdminNavigation current="settings" />
+    <LibraryMigrationPreview />
     <section className="panel" aria-label="Plex access control">
       <h2>Plex access control</h2>
       <p>Select which existing Plex server controls browser sign-ins.</p>

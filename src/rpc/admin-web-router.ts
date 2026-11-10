@@ -14,6 +14,7 @@ import { feedGapDiagnosticsSchema, readFeedGapDiagnostics } from "../media/feed-
 import { seerrInstance } from "../movies/seerr";
 import { tvSeerrMappingIssues } from "../tv/sync";
 import { describeReuseIncident } from "./activity-reuse-incident";
+import { migrationPreviewParams, migrationPreviewSchema, previewLibraryMigration } from "../media/library-migration";
 
 const empty = z.object({}).strict();
 const id = z.number().int().positive().safe();
@@ -76,6 +77,7 @@ type PublicServer = z.infer<typeof serverSchema>;
 type Work = z.infer<typeof workSchema>;
 type Context = Omit<Work, "job"> & { suppressIncident: boolean };
 export type AdminWebDependencies = {
+  migrationFetcher?: typeof fetch;
   now?: () => number;
   fetchPlexServers?: (settings: AppSettings) => Promise<PlexServerDevice[]>;
   transmission?: AdminTransmissionReader | null;
@@ -404,6 +406,12 @@ export function createAdminWebRouter(deps: AdminWebDependencies = {}) {
   const now = deps.now ?? Date.now;
   const fetchServers = deps.fetchPlexServers ?? fetchPlexServerDevices;
   return defineRouter({
+    migrationPreview: defineMethod({ auth: "admin", readOnly: true, summary: "Preview existing Radarr or Sonarr inventory without importing, acquiring or claiming files.",
+      paramsSchema: migrationPreviewParams, resultSchema: migrationPreviewSchema,
+      handler(ctx, params) {
+        const settings = settingsForRead(ctx.repo);
+        return previewLibraryMigration(settings, params, { fetcher: deps.migrationFetcher, now, label: labelSanitizer(settings) });
+      } }),
     users: defineMethod({ auth: "admin", readOnly: true, summary: "Read user account metadata, never sessions or credentials.", paramsSchema: empty, resultSchema: adminWebUsersSchema,
       handler(ctx) {
         const label = labelSanitizer(settingsForRead(ctx.repo));

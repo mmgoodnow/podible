@@ -46,6 +46,8 @@ if (process.env.ADMIN_FIXTURE) {
   settings.auth.plex = { ...settings.auth.plex, ownerToken: "admin-fixture-owner-secret", machineId: "fixture-mendel" };
   settings.agents.apiKey = "admin-fixture-agent-secret";
   settings.rtorrent.url = "http://admin-fixture.invalid/RPC2";
+  settings.movies.shadow.radarrUrl = "https://radarr-fixture.invalid/radarr";
+  settings.movies.shadow.radarrApiKey = "admin-fixture-provider-secret";
   await fs.mkdir(settings.libraryRoot);
   repo.updateSettings(settings);
   const servers = [
@@ -59,6 +61,9 @@ if (process.env.ADMIN_FIXTURE) {
   const realFetch = globalThis.fetch;
   globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
     const url = new URL(args[0] instanceof Request ? args[0].url : String(args[0]));
+    if (url.origin === "https://radarr-fixture.invalid" && url.pathname === "/radarr/api/v3/movie" && args[1]?.method === "GET")
+      return Response.json([{ id: 1, tmdbId: 11, title: "A library worth keeping", year: 2025, monitored: true, hasFile: true },
+        { id: 2, tmdbId: 0, title: "An unidentified title", monitored: true, hasFile: false }]);
     if (url.origin === "https://plex.tv" && url.pathname === "/api/resources") return new Response(`<MediaContainer>${servers.map((server) =>
       `<Device clientIdentifier="${server.machineId}" name="${server.name}" product="${server.product}" owned="${server.owned ? "1" : "0"}" provides="server" accessToken="admin-fixture-server-secret" />`).join("")}</MediaContainer>`,
       { headers: { "Content-Type": "application/xml" } });

@@ -106,9 +106,9 @@ function liveInventory(f: Fixture, rows: unknown[], clientId = privateClientId) 
 }
 
 describe("admin web authorization and metadata", () => {
-  test("only five scoped methods exist; every method rejects missing/non-admin sessions before effects", async () => {
+  test("only scoped methods exist; every method rejects missing/non-admin sessions before effects", async () => {
     await using f = await fixture();
-    expect(Object.keys(f.router.routes)).toEqual(["users", "plexServers", "selectPlexServer", "ops", "refresh"]);
+    expect(Object.keys(f.router.routes)).toEqual(["migrationPreview", "users", "plexServers", "selectPlexServer", "ops", "refresh"]);
     for (const [name, method] of Object.entries(flattenRouter(f.router))) {
       const input = name === "selectPlexServer" ? { machineId: "server-a" } : {};
       await expect(executeMethod(method, { ...f.ctx, session: null }, input)).rejects.toMatchObject({ code: -32001 });

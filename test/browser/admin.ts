@@ -36,7 +36,7 @@ try {
   };
   const anonymous = await browser.newContext({ ignoreHTTPSErrors: true }), readerContext = await browser.newContext({ ignoreHTTPSErrors: true });
   await readerContext.addCookies([{ name: "podible_session", value: "admin-reader-fixture", url, httpOnly: true }]);
-  for (const method of ["settings.get", "settings.update", "adminWeb.users", "adminWeb.ops", "adminWeb.plexServers", "adminWeb.selectPlexServer", "adminWeb.refresh", "jobs.retry", "retention.preview", "retention.evict", "transferMetrics.status", "transferMetrics.library",
+  for (const method of ["settings.get", "settings.update", "adminWeb.migrationPreview", "adminWeb.users", "adminWeb.ops", "adminWeb.plexServers", "adminWeb.selectPlexServer", "adminWeb.refresh", "jobs.retry", "retention.preview", "retention.evict", "transferMetrics.status", "transferMetrics.library",
     "crossSeed.startBackfill", "crossSeed.backfillLatest", "crossSeed.backfillStatus", "crossSeed.cancelBackfill"]) {
     assert.equal((await rpc(method, {}, anonymous.request)).error?.code, -32001);
     assert.equal((await rpc(method, {}, readerContext.request)).error?.code, -32003);
@@ -77,6 +77,11 @@ try {
   await page.goto(new URL("/settings", url).href);
   await page.getByRole("heading", { name: "Settings", exact: true }).waitFor();
   console.log("Admin browser: settings route loaded");
+  const migration = page.getByRole("region", { name: "Existing library preview" });
+  await migration.getByRole("button", { name: "Preview library", exact: true }).click();
+  await migration.getByText("A library worth keeping (2025)", { exact: true }).waitFor();
+  await migration.getByText(/1 titles need a catalog identity/).waitFor();
+  assert.equal(await migration.getByRole("button", { name: /Import|Adopt|Download/ }).count(), 0, "Preview must not expose a mutation");
   const adminNavigation = page.getByRole("navigation", { name: "Administrator pages", exact: true });
   assert.equal(await adminNavigation.getByRole("link").count(), 3);
   const editor = page.getByLabel("Settings JSON", { exact: true });

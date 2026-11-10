@@ -111,6 +111,7 @@ export const appRouter = t.router({
     recover: procedure.input(recoveryRouter.routes.recover.paramsSchema).output(recoveryRouter.routes.recover.resultSchema).mutation(({ ctx, input }) => executeMethod(recoveryRouter.routes.recover, ctx, input)),
   }),
   adminWeb: t.router({
+    migrationPreview: procedure.input(adminWebRouter.routes.migrationPreview.paramsSchema).output(adminWebRouter.routes.migrationPreview.resultSchema).query(({ ctx, input }) => executeMethod(adminWebRouter.routes.migrationPreview, ctx, input)),
     users: procedure.input(adminWebRouter.routes.users.paramsSchema).output(adminWebRouter.routes.users.resultSchema).query(({ ctx, input }) => executeMethod(adminWebRouter.routes.users, ctx, input)),
     plexServers: procedure.input(adminWebRouter.routes.plexServers.paramsSchema).output(adminWebRouter.routes.plexServers.resultSchema).query(({ ctx, input }) => executeMethod(adminWebRouter.routes.plexServers, ctx, input)),
     selectPlexServer: procedure.input(adminWebRouter.routes.selectPlexServer.paramsSchema).output(adminWebRouter.routes.selectPlexServer.resultSchema).mutation(({ ctx, input }) => executeMethod(adminWebRouter.routes.selectPlexServer, ctx, input)),
