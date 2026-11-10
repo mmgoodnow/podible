@@ -3,6 +3,7 @@ import bencode from "bencode";
 import type { BooksRepo } from "../repo";
 import { infoHashFromTorrentBytes, normalizeInfoHash } from "./torrent";
 import { recordIndexerTraffic, type TrafficPurpose } from "../media/indexer-traffic";
+import { AUTOBRR_ID_PREFIX } from "../media/autobrr";
 
 type TorrentCacheIdentity = {
   provider?: string | null;
@@ -56,6 +57,30 @@ export async function fetchTorrentBytes(url: string): Promise<Uint8Array> {
     throw new Error(`Failed to download torrent: ${response.status}`);
   }
   return new Uint8Array(await response.arrayBuffer());
+}
+
+export async function fetchAutobrrTorrentBytes(url: string, fetcher: typeof fetch = fetch): Promise<Uint8Array> {
+  // The webhook checks the initial origin; a redirect must not bypass that check.
+  const response = await fetcher(url, { redirect: "manual", signal: AbortSignal.timeout(30_000) });
+  if (!response.ok || !response.body) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error("Autobrr metainfo retrieval returned HTTP " + response.status);
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 8 * 1024 * 1024) throw new Error("Autobrr metainfo exceeds 8 MiB");
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return Buffer.concat(chunks);
 }
 
 export function inspectTorrentFiles(bytes: Uint8Array): TorrentFileEntry[] {
@@ -138,7 +163,9 @@ export async function getOrFetchCachedTorrentBytes(
     recordIndexerTraffic(repo, purpose, "metainfo_fetch");
     let bytes: Uint8Array, infoHash: string;
     try {
-      bytes = await (options.fetchBytes ?? fetchTorrentBytes)(identity.url);
+      const fetchBytes = identity.providerGuid?.startsWith(AUTOBRR_ID_PREFIX)
+        ? fetchAutobrrTorrentBytes : options.fetchBytes ?? fetchTorrentBytes;
+      bytes = await fetchBytes(identity.url);
       options.validate?.(bytes);
       infoHash = infoHashFromTorrentBytes(bytes);
     } catch (error) {

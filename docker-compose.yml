@@ -15,4 +15,8 @@ services:
       - ./data:/config
     environment:
       - PORT=80
+      - AUTOBRR_URL
+      - AUTOBRR_API_KEY
+      - AUTOBRR_PODIBLE_URL
+      - AUTOBRR_DOWNLOAD_ORIGINS
     command: ["bun", "run", "server.ts", "/books"]

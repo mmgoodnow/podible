@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { releaseIdentity, type SearchResult } from "./indexer-gateway";
+import { AUTOBRR_ID_PREFIX } from "./autobrr";
 
 export type ReleaseOffer = {
   inboxId?: number;
@@ -18,6 +19,9 @@ export function releaseOfferFromResult(result: SearchResult<string>): ReleaseOff
   return {
     key: createHash("sha256").update(JSON.stringify([releaseIdentity(result), result.infoHash, result.sizeBytes, result.title])).digest("hex"),
     title: result.title, provider: result.provider, sizeBytes: result.sizeBytes,
-    seeders: result.seeders, url: result.url, infoHash: result.infoHash, attributes: result.raw,
+    seeders: result.seeders, url: result.url, infoHash: result.infoHash,
+    attributes: result.guid?.startsWith(AUTOBRR_ID_PREFIX)
+      ? { ...result.raw, guid: result.guid }
+      : result.raw,
   };
 }

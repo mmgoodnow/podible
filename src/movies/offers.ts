@@ -2,7 +2,8 @@ import { ProwlarrDiscovery, type DiscoveredIndexer } from "../media/prowlarr";
 import { IndexerGateway, indexerGateway, type SearchOptions } from "../media/indexer-gateway";
 import { inspectMetainfo } from "../media/metainfo";
 import type { BooksRepo } from "../repo";
-import { getOrFetchCachedTorrentBytes } from "../library/torrent-cache";
+import { fetchAutobrrTorrentBytes, getOrFetchCachedTorrentBytes } from "../library/torrent-cache";
+import { AUTOBRR_ID_PREFIX } from "../media/autobrr";
 import type { TrafficPurpose } from "../media/indexer-traffic";
 import type { Movie } from "./types";
 import { releaseOfferFromResult as movieOfferFromResult, type ReleaseOffer as MovieOffer } from "../media/release-offer";
@@ -140,15 +141,20 @@ function validateMetainfo(bytes: Uint8Array, advertisedHash: string | null) {
 }
 
 export async function fetchMovieMetainfo(offer: MovieOffer): Promise<Uint8Array> {
-  const bytes = await fetchMetainfoResponse(offer.url);
+  const bytes = await (offerGuid(offer)?.startsWith(AUTOBRR_ID_PREFIX)
+    ? fetchAutobrrTorrentBytes : fetchMetainfoResponse)(offer.url);
   validateMetainfo(bytes, offer.infoHash);
   return bytes;
 }
 
-export async function cachedMovieMetainfo(repo: BooksRepo, offer: MovieOffer, purpose: TrafficPurpose): Promise<Uint8Array> {
+function offerGuid(offer: MovieOffer) {
   const guid = offer.attributes.guid;
-  const providerGuid = typeof guid === "string" ? guid : guid && typeof guid === "object" && "#text" in guid && typeof guid["#text"] === "string"
+  return typeof guid === "string" ? guid : guid && typeof guid === "object" && "#text" in guid && typeof guid["#text"] === "string"
     ? guid["#text"] : null;
+}
+
+export async function cachedMovieMetainfo(repo: BooksRepo, offer: MovieOffer, purpose: TrafficPurpose): Promise<Uint8Array> {
+  const providerGuid = offerGuid(offer);
   return (await getOrFetchCachedTorrentBytes(repo, { provider: offer.provider, providerGuid, url: offer.url, infoHash: offer.infoHash }, {
     purpose,
     fetchBytes: fetchMetainfoResponse,

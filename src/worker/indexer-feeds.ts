@@ -9,6 +9,7 @@ import {
 import type { DiscoveredIndexer } from "../media/prowlarr";
 import { IndexerError, indexerFailure, type IndexerFailure } from "../media/indexer-errors";
 import { boundedFeedBoundary, feedIdentity, feedReleaseKey } from "../media/release-inbox";
+import { enqueueReleaseMatches } from "../media/enqueue-release-matches";
 import { durableStep, type WorkerContext } from "./context";
 import type { FeedGapDiagnostics } from "../media/feed-gap";
 
@@ -192,19 +193,7 @@ export async function syncIndexerFeeds(
         active();
         const now = new Date().toISOString();
         const inserted = ctx.repo.releaseInbox.ingest(id, results, now);
-        for (let start = 0; start < inserted.length; start += PAGE_SIZE) {
-          const ids = inserted.slice(start, start + PAGE_SIZE);
-          ctx.repo.createJob({
-            type: media === "movie" ? "movie_feed_match" : media === "tv" ? "tv_feed_match" : "book_feed_match",
-            payload: { releaseIds: ids },
-            idempotencyKey: "rss-match:" + id + ":" + ids.join(","),
-            maxAttempts: 3,
-          });
-          ctx.repo.createJob({
-            type: "torrent_reuse_feed", payload: { releaseIds: ids },
-            idempotencyKey: "rss-reuse:" + id + ":" + ids.join(","), maxAttempts: 3,
-          });
-        }
+        enqueueReleaseMatches(ctx.repo, id, media, inserted);
         const boundary = boundedFeedBoundary([...results.map(feedReleaseKey), ...feed.boundaryKeys]);
         const diagnostics: FeedGapDiagnostics | null = gap ? {
           version: 1, detectedAt: now, reason: stopReason,

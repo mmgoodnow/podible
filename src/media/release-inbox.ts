@@ -9,6 +9,7 @@ import type {
 } from "./indexer-gateway";
 import type { IndexerFailure } from "./indexer-errors";
 import { feedGapDiagnosticsSchema, type FeedGapDiagnostics } from "./feed-gap";
+import { AUTOBRR_ID_PREFIX } from "./autobrr";
 
 export const inboxResultSchema = z.object({
   title: z.string().min(1),
@@ -88,6 +89,7 @@ export class ReleaseInboxRepo {
       dbSql
         .selectFrom("indexer_feeds")
         .selectAll()
+        .where("id", "not like", AUTOBRR_ID_PREFIX + "%")
         .orderBy("provider")
         .orderBy("media_type"),
     );

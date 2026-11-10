@@ -27,6 +27,8 @@ import { createTrpcRoutes } from "./http/trpc-routes";
 import { createSpaRoutes } from "./http/spa-routes";
 import { createActivityRoutes } from "./http/activity-routes";
 import { createMetricsRoutes } from "./http/metrics-routes";
+import { createAutobrrRoutes } from "./http/autobrr-routes";
+import { AUTOBRR_WEBHOOK_PATH, type AutobrrConfig } from "./media/autobrr";
 
 export function createPodibleFetchHandler(
   repo: BooksRepo,
@@ -36,6 +38,7 @@ export function createPodibleFetchHandler(
     movieServices?: import("./movies/operations").MovieServices;
     bookTorrentClient?: import("./media/torrent-client").TorrentClient;
     metricsTokenDigestPath?: string;
+    autobrr?: AutobrrConfig;
   } = {},
 ): (request: Request) => Promise<Response> {
   const app = new Hono<HttpEnv>();
@@ -83,6 +86,8 @@ export function createPodibleFetchHandler(
   app.route("/rpc", createRpcRoutes(repo, startTime, dependencies));
   app.route("/api/trpc", createTrpcRoutes(repo, startTime, dependencies));
   app.route("/metrics", createMetricsRoutes(repo, dependencies.metricsTokenDigestPath));
+  if (dependencies.autobrr)
+    app.route(AUTOBRR_WEBHOOK_PATH, createAutobrrRoutes(repo, dependencies.autobrr));
   app.route("/app", spa);
   app.route("/web-assets", spa);
   app.route("/assets", createAssetsIndexRoutes(repo));

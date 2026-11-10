@@ -4,6 +4,7 @@ import { createPodibleFetchHandler } from "./src/http";
 import { pingPlexOwnerToken } from "./src/plex";
 import { BooksRepo } from "./src/repo";
 import { BackgroundWorker } from "./src/runtime/background-worker";
+import { readAutobrrConfig, reconcileAutobrrWebhook, type AutobrrConfig } from "./src/media/autobrr";
 import type { HTMLBundle } from "bun";
 
 export async function startServer(frontend?: HTMLBundle) {
@@ -14,6 +15,8 @@ export async function startServer(frontend?: HTMLBundle) {
   let server: ReturnType<typeof Bun.serve> | undefined;
   let stopping = false;
   let plexPingTimer: ReturnType<typeof setInterval> | undefined;
+  let autobrrTimer: ReturnType<typeof setTimeout> | undefined;
+  const autobrrLifetime = new AbortController();
   const background = new BackgroundWorker({ databasePath: booksDbPath, onFailure: error => {
     console.error("[background] execution worker failed", error.message);
     void shutdown(1);
@@ -22,6 +25,8 @@ export async function startServer(frontend?: HTMLBundle) {
     if (stopping) return;
     stopping = true;
     clearInterval(plexPingTimer);
+    clearTimeout(autobrrTimer);
+    autobrrLifetime.abort();
     const deadline = setTimeout(() => process.exit(exitCode || 1), 8_000);
     deadline.unref();
     try {
@@ -60,7 +65,13 @@ export async function startServer(frontend?: HTMLBundle) {
       PLEX_PING_INTERVAL_MS,
     );
 
-    const fetchHandler = createPodibleFetchHandler(repo, startTime);
+    let autobrr: AutobrrConfig | undefined;
+    try {
+      autobrr = readAutobrrConfig(process.env) ?? undefined;
+    } catch (error) {
+      console.warn("[autobrr] " + (error as Error).message + "; RSS remains enabled");
+    }
+    const fetchHandler = createPodibleFetchHandler(repo, startTime, undefined, { autobrr });
     server = Bun.serve({
       port,
       idleTimeout: 60,
@@ -91,6 +102,30 @@ export async function startServer(frontend?: HTMLBundle) {
       fetch: request => background.state === "ready" ? fetchHandler(request)
         : new Response("Background execution unavailable", { status: 503 }),
     });
+    if (autobrr) {
+      const config = autobrr;
+      let previous: string | undefined;
+      async function register() {
+        let status: string;
+        let delay: number;
+        try {
+          await reconcileAutobrrWebhook(config, fetch, autobrrLifetime.signal);
+          status = "Release webhook registered";
+          delay = 5 * 60_000;
+        } catch (error) {
+          const detail = error instanceof Error && /^(Autobrr notification API returned HTTP \d{3}|Conflicting Podible notification in autobrr)$/.test(error.message)
+            ? error.message : "Could not reconcile the release webhook";
+          status = detail + "; retrying, RSS remains enabled";
+          delay = 60_000;
+        }
+        if (autobrrLifetime.signal.aborted) return;
+        if (status !== previous) console.log("[autobrr] " + status);
+        previous = status;
+        autobrrTimer = setTimeout(() => void register(), delay);
+        autobrrTimer.unref();
+      }
+      void register();
+    }
 
     const localBase = `http://localhost${server.port === 80 ? "" : `:${server.port}`}`;
     console.log(`Podible backend listening on ${localBase}`);
@@ -100,6 +135,8 @@ export async function startServer(frontend?: HTMLBundle) {
     return server;
   } catch (error) {
     clearInterval(plexPingTimer);
+    clearTimeout(autobrrTimer);
+    autobrrLifetime.abort();
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
     await server?.stop();

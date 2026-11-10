@@ -10,6 +10,33 @@ download URLs stay server-side.
 
 ## Intake And Recovery
 
+### Optional autobrr push intake
+
+For autobrr v1.90.0, set these variables on Podible (no filter or manually
+configured notification in autobrr is needed):
+
+| Variable | Value |
+| --- | --- |
+| `AUTOBRR_URL` | autobrr base URL, reachable from Podible; include its base path if set |
+| `AUTOBRR_API_KEY` | API key created in autobrr |
+| `AUTOBRR_PODIBLE_URL` | Podible base URL reachable from autobrr, ideally over a private network or HTTPS |
+| `AUTOBRR_DOWNLOAD_ORIGINS` | Comma-separated exact origins used for autobrr torrent downloads, e.g. `https://tracker.example` |
+
+Podible registers a global New Release notification on startup and periodically
+reconciles it. It derives a separate callback token from the API key. API key
+rotation updates the same notification. If the callback URL changes or the
+integration is removed, delete the old Podible notification in autobrr.
+
+Pushes enter the normal release inbox and matching pipeline without moving RSS
+checkpoints. Duplicate deliveries from the same autobrr indexer are deduplicated;
+RSS remains active at its normal cadence to catch missed pushes. Some providers
+use different release IDs in the two transports, so the same offer can be
+evaluated again when it arrives via RSS. Unrecognized categories, unsupported
+protocols, unlisted download origins, and metainfo redirects are left to RSS.
+Registration failures are logged and retried without blocking RSS.
+
+### RSS polling and catch-up
+
 With Prowlarr or configured Torznab sources and library targets present, the worker
 polls applicable feeds every 15 minutes. It does not periodically search each title.
 Prowlarr discovery selects enabled torrent indexers with the requested category
