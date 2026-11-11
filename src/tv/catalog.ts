@@ -296,13 +296,15 @@ export class TmdbTvCatalog implements TvCatalog {
 }
 
 const catalogs = new Map<string, TvCatalog>();
-export function configuredTvCatalog(settings: AppSettings): TvCatalog {
+export function configuredTvCatalog(settings: AppSettings, options?: { fresh: boolean }): TvCatalog {
+  const create = () => new TmdbTvCatalog(settings.movies.tmdbAccessToken, { url: settings.tv.sonarrUrl, apiKey: settings.tv.sonarrApiKey });
+  if (options?.fresh) return create();
   const key = createHash("sha256").update(JSON.stringify([
     settings.movies.tmdbAccessToken, settings.tv.sonarrUrl, settings.tv.sonarrApiKey,
   ])).digest("hex");
   let catalog = catalogs.get(key);
   if (!catalog) {
-    catalog = new TmdbTvCatalog(settings.movies.tmdbAccessToken, { url: settings.tv.sonarrUrl, apiKey: settings.tv.sonarrApiKey });
+    catalog = create();
     if (catalogs.size >= 4) catalogs.delete(catalogs.keys().next().value!);
     catalogs.set(key, catalog);
   }

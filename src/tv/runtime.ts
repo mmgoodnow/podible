@@ -10,6 +10,7 @@ import { searchTvReleases } from "./indexers";
 import { PlexTvLibrary } from "./plex";
 import type { TvLibrary } from "./publication";
 import type { TvEntry, TvEpisode } from "./types";
+import type { TvCatalog } from "./catalog";
 
 export type TvServices = {
   search(entry: TvEntry, query?: string, episodes?: TvEpisode[]): Promise<MovieSearch>;
@@ -18,6 +19,7 @@ export type TvServices = {
   library: TvLibrary;
   fetchMetainfo(offer: MovieOffer): Promise<Uint8Array>;
   probe: typeof probeMovie;
+  seasonCatalog?: Pick<TvCatalog, "resolve">;
   timing?: { pollMs?: number; stallMs?: number; plexAttempts?: number; plexRetryMs?: number };
 };
 export function configuredTvServices(settings: AppSettings, modelProvider: ModelProvider | undefined, repo: BooksRepo): TvServices {

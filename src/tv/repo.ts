@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { assertVersionContentAvailable } from "../media/content-loss";
 import { NotificationsRepo } from "../notifications/repo";
+import { TV_SEASON_PACK_PROMOTION_MAX_TARGETS, TV_SEASON_PACK_PROMOTION_PILOT } from "./season-promotion-pilot";
 import { TorrentRecordsRepo, type TorrentRecord } from "../media/torrent-records";
 import type { JobRow } from "../app-types";
 import type { DownloadLocation, TorrentRef, TorrentSnapshot } from "../media/torrent-client";
@@ -490,6 +491,37 @@ export class TvRepo {
 
   requests(userId?: number): TvRequest[] {
     return this.db.query("SELECT * FROM tv_requests WHERE (? IS NULL OR user_id=?) ORDER BY id DESC").all(userId ?? null, userId ?? null) as TvRequest[];
+  }
+
+  feedInventory(includePromotion: boolean, targetId?: number) {
+    const rows = this.db.query<TvTarget & { request_id: number; episode_id: number; opted_in: 0 | 1 },
+      [number, string] | [number, string, number]>(`
+      WITH pilot(ids) AS MATERIALIZED (
+        SELECT CASE WHEN json_valid(value_json) THEN CASE
+          WHEN json_type(value_json)='array' AND json_array_length(value_json)<=${TV_SEASON_PACK_PROMOTION_MAX_TARGETS}
+          THEN value_json ELSE '[]' END ELSE '[]' END
+        FROM app_state WHERE ? AND key=?
+      ), allowed(id) AS MATERIALIZED (
+        SELECT DISTINCT choice.value FROM pilot JOIN json_each(pilot.ids) choice
+        WHERE NOT EXISTS (SELECT 1 FROM json_each(pilot.ids) invalid
+          WHERE invalid.type<>'integer' OR invalid.value<1 OR invalid.value>${Number.MAX_SAFE_INTEGER})
+      )
+      SELECT t.id,t.entry_id,t.policy_json,t.revision,t.created_at,r.id AS request_id,m.episode_id,
+        allowed.id IS NOT NULL AS opted_in
+      FROM tv_requests r JOIN tv_request_episodes m ON m.request_id=r.id JOIN tv_targets t ON t.id=r.target_id
+      LEFT JOIN allowed ON allowed.id=t.id
+      WHERE r.withdrawn_at IS NULL ${targetId === undefined ? "" : "AND r.target_id=?"}
+      ORDER BY r.target_id,r.id,m.episode_id`).all(...(targetId === undefined ?
+        [Number(includePromotion), TV_SEASON_PACK_PROMOTION_PILOT] : [Number(includePromotion), TV_SEASON_PACK_PROMOTION_PILOT, targetId]));
+    const targets = new Map<number, { target: TvTarget; optedIn: boolean; demand: { requestId: number; episodeIds: number[] }[] }>();
+    for (const { request_id, episode_id, opted_in, ...target } of rows) {
+      let item = targets.get(target.id);
+      if (!item) targets.set(target.id, item = { target, optedIn: Boolean(opted_in), demand: [] });
+      let request = item.demand.at(-1);
+      if (!request || request.requestId !== request_id) item.demand.push(request = { requestId: request_id, episodeIds: [] });
+      request.episodeIds.push(episode_id);
+    }
+    return targets;
   }
 
   requestCards(userId: number) {

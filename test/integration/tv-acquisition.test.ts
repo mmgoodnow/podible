@@ -10,7 +10,7 @@ import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
 import { inspectMetainfo } from "../../src/media/metainfo";
 import { defaultMovieQualityPolicy } from "../../src/movies/quality";
-import { acquireTv, tvAcquisitionBatch, queueTvSeasons } from "../../src/tv/acquisition";
+import { acquireTv, tvAcquisitionBatch, queueTvAcquisition, queueTvSeasons } from "../../src/tv/acquisition";
 import { PlexTvLibrary } from "../../src/tv/plex";
 import { tvRoots, tvViewEntries, type TvPublishedFile } from "../../src/tv/publication";
 import type { TvServices } from "../../src/tv/runtime";
@@ -26,6 +26,8 @@ import { crossSeedOffer } from "../../src/media/cross-seed";
 import { readCanonicalDownload } from "../../src/media/canonical-download";
 import { prepareMovieStorage } from "../../src/movies/storage";
 import { acquisitionLatencyPrometheus } from "../../src/media/acquisition-latency";
+import { movieOfferFromResult } from "../../src/movies/offers";
+import { TV_SEASON_PACK_PROMOTION_PILOT } from "../../src/tv/season-promotion-pilot";
 
 function catalog(): TvCatalogEntry {
   return {
@@ -93,7 +95,7 @@ function fixtureServices(root: string) {
       verify: (_entry, files) => base.services.library.verify(fixtureMovie, files.map((file) => file.serverPath)) },
     fetchMetainfo: (offer) => packs.has(offer.infoHash!) ? Promise.resolve(packs.get(offer.infoHash!)!.metainfo) : base.services.fetchMetainfo(offer),
     probe: async (file) => {
-      if ([...packs.values()].some((pack) => file.includes(path.sep + pack.offer.key + path.sep))) {
+      if ([...packs.values()].some((pack) => file.includes(path.sep + inspectMetainfo(pack.metainfo).name + path.sep))) {
         base.stats.probes++;
         return { format: { duration: "1440" }, streams: [{ codec_type: "video", codec_name: "h264", width: 1280, height: 720, color_transfer: "bt709" },
           { codec_type: "audio", codec_name: "aac", tags: { language: "eng" } }] };
@@ -152,7 +154,7 @@ function fixtureServices(root: string) {
   };
 }
 
-async function setup(keys = ["tvdb:201", "tvdb:202", "tvdb:203", "tvdb:204"], input = catalog()) {
+async function setup(keys = ["tvdb:201", "tvdb:202", "tvdb:203", "tvdb:204"], input = catalog(), nativeSeason?: number) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "tv-acquire-")));
   const appPath = path.join(root, "app.sqlite");
   let db = new Database(appPath);
@@ -163,7 +165,8 @@ async function setup(keys = ["tvdb:201", "tvdb:202", "tvdb:203", "tvdb:204"], in
   settings.tv = { ...settings.tv, managedRoot: root, plexViewPath: "/data/views/plex/tv" };
   repo.updateSettings(settings);
   const user = repo.upsertUser({ provider: "local", providerUserId: "tv-acquisition", username: "viewer", isAdmin: false });
-  const request = repo.tv.request(user.id, input, defaultMovieQualityPolicy, keys);
+  const request = nativeSeason === undefined ? repo.tv.request(user.id, input, defaultMovieQualityPolicy, keys) :
+    repo.tv.requestSeasons(user.id, input, defaultMovieQualityPolicy, [nativeSeason]);
   const fixture = fixtureServices(root);
   const context: WorkerContext = { get repo() { return repo; }, getSettings: () => repo.getSettings(), onLog() {}, tvServices: fixture.services };
   const enqueue = (reason: "initial" | "recovery" = "initial") => repo.tv.startAcquisition(request.targetId, reason, (id) =>
@@ -366,6 +369,206 @@ function seasonCatalog(count: number, future = false) {
     numbering: [{ scheme: "tvdb:aired", season: 2, episode: index + 1, absolute: index + 13, source: "explicit-fixture" }] }));
   return entry;
 }
+
+for (const variant of ["default-off", "malformed-pilot", "revoked-before-snatch", "revoked-during-plex", "equivalent", "better",
+  "lower-quality", "partial", "roster-race"] as const) {
+  test(`TV feed season-pack promotion: ${variant}`, async () => {
+    const entry = { ...seasonCatalog(2), key: "tvdb:307375", tmdbId: 4294 };
+    const s = await setup(entry.episodes.map(episode => episode.key), entry, 2);
+    let runtime: Runtime | undefined;
+    let concurrent: Database | undefined;
+    try {
+      runtime = await createJobExecutionRuntime(s.context, path.join(s.root, "execution.sqlite"), { retryDelayMs: 1 });
+      for (const [i, episode] of entry.episodes.entries()) {
+        s.fixture.clearOffers();
+        s.fixture.addRelease(`selected-single-${i}`, [episode.key]);
+        const { acquisition } = queueTvAcquisition(s.repo, s.request.requestId, "initial", [s.request.episodeIds[i]!]);
+        await until(runtime, () => s.repo.getJob(acquisition.job_id!)?.status === "succeeded",
+          () => JSON.stringify(s.repo.getJob(acquisition.job_id!)), publicationWaitMs);
+      }
+      expect(s.repo.tv.missingEpisodes(s.request.requestId)).toEqual([]);
+      const ownerId = s.repo.tv.requestById(s.request.requestId)!.user_id;
+      const originalNotices = s.repo.notifications.list(ownerId).items;
+      expect(originalNotices).toHaveLength(2); // Existing Plex-verified availability notices still fire.
+      const optIn = (repo: BooksRepo, ids: unknown) => repo.setJsonState(TV_SEASON_PACK_PROMOTION_PILOT, ids);
+      expect(s.repo.getJsonState(TV_SEASON_PACK_PROMOTION_PILOT)).toBeNull();
+      if (variant === "malformed-pilot") optIn(s.repo, [s.request.targetId, "invalid"]);
+      else if (variant !== "default-off") optIn(s.repo, [s.request.targetId]);
+      const oldSelection = s.repo.tv.activeEpisodes(s.request.targetId);
+      expect(new Set(oldSelection.map(row => row.version_id)).size).toBe(2);
+      const oldRevision = s.repo.tv.target(s.request.targetId)!.revision;
+      const originals = await Promise.all((await assertOwnedViews(s)).map(async view => ({
+        ...view, bytes: await fs.readFile(view.contentPath), inode: (await fs.stat(view.contentPath)).ino,
+      })));
+      const oldRegistrations = s.repo.tv.downloads(s.request.targetId);
+      expect(oldRegistrations).toHaveLength(2);
+      const sourceAdds = s.fixture.sourceAdds;
+      s.fixture.services.search = async () => { throw new Error("Pack promotion must not run a title search"); };
+      let canonicalReads = 0;
+      s.fixture.services.seasonCatalog = { resolve: async id => {
+        expect(id).toBe(entry.tmdbId);
+        canonicalReads++;
+        return structuredClone(entry);
+      } };
+      const pack = s.fixture.addPack("promotion-candidate", entry.episodes.map(episode => episode.key));
+      const result = { mediaType: "tv" as const, provider: pack.provider, guid: "promotion-fixture",
+        title: "Anime Work Two S02 WEB", url: pack.url, infoHash: pack.infoHash, sizeBytes: pack.sizeBytes,
+        seeders: 3, leechers: null, raw: {} };
+      Object.assign(pack, movieOfferFromResult(result)); // The synthetic verifier uses the immutable inbox offer key.
+      let metainfoReads = 0;
+      const fetchMetainfo = s.fixture.services.fetchMetainfo;
+      s.fixture.services.fetchMetainfo = async offer => {
+        metainfoReads++;
+        if (variant === "revoked-before-snatch") optIn(s.repo, []);
+        return fetchMetainfo(offer);
+      };
+      const decider = s.fixture.services.decider;
+      s.fixture.services.decider = entry => {
+        const base = decider(entry);
+        return { ...base, inspect: async input => {
+          const plan = await base.inspect(input);
+          if (variant === "partial") plan.files.pop(); // Intake predicted complete; actual import does not.
+          if (variant === "lower-quality") plan.files[1]!.facts.source = "hdtv";
+          return plan;
+        } };
+      };
+      if (variant === "better") {
+        const probe = s.fixture.services.probe;
+        s.fixture.services.probe = async file => {
+          const facts = await probe(file);
+          for (const stream of facts.streams) if (stream.codec_type === "video") {
+            stream.width = 1920; stream.height = 1080;
+          }
+          return facts;
+        };
+      }
+      const stagedLinks: string[] = [];
+      let scans = 0, raced = false;
+      if (variant === "roster-race" || variant === "revoked-during-plex") concurrent = new Database(s.db.filename);
+      s.fixture.services.library = {
+        scan: async () => { scans++; },
+        verify: async (work, files) => {
+          expect(work.key).toBe(entry.key);
+          expect(files.flatMap(file => file.episodes.map(episode => episode.id)).sort()).toEqual([...s.request.episodeIds].sort());
+          expect(s.repo.tv.activeEpisodes(s.request.targetId)).toEqual(oldSelection);
+          for (const file of files) {
+            const link = path.join(s.roots.viewRoot, path.posix.relative(s.roots.serverViewRoot, file.serverPath));
+            expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
+            stagedLinks.push(link);
+          }
+          for (const old of originals)
+            expect(await fs.realpath(path.join(s.roots.viewRoot, old.relativePath))).toBe(old.contentPath);
+          if (concurrent && !raced) {
+            raced = true;
+            const writer = new BooksRepo(concurrent);
+            if (variant === "revoked-during-plex") optIn(writer, []);
+            else {
+              const expanded = { ...entry, episodes: seasonCatalog(3).episodes };
+              writer.tv.requestSeasons(ownerId, expanded, defaultMovieQualityPolicy, [2]);
+            }
+            expect(s.repo.tv.target(s.request.targetId)!.revision).toBe(oldRevision);
+          }
+          return true;
+        },
+      };
+      let matcherCalls = 0, versionReads = 0;
+      const readVersion = s.repo.tv.version.bind(s.repo.tv);
+      s.repo.tv.version = (id) => { versionReads++; return readVersion(id); };
+      s.context.tvFeedMatcher = async ({ targets, offers }) => {
+        matcherCalls++;
+        expect(versionReads).toBe(0); // RSS must not hydrate each selected version.
+        expect(targets.map(target => target.promotionSeasons)).toEqual([[2]]);
+        expect(offers.map(offer => offer.title)).toEqual([result.title]);
+        return [{ targetId: s.request.targetId, releaseIndexes: [0], reason: "Plausible whole season pack" }];
+      };
+      s.repo.releaseInbox.ensureFeed("promotion-feed", pack.provider, "tv", new Date().toISOString());
+      const releaseIds = s.repo.releaseInbox.ingest("promotion-feed", [result], new Date().toISOString());
+      const feedJob = s.repo.createJob({ type: "tv_feed_match", payload: { releaseIds } });
+      await until(runtime, () => s.repo.getJob(feedJob.id)?.status === "succeeded",
+        () => JSON.stringify(s.repo.getJob(feedJob.id)), publicationWaitMs);
+      const upgrade = s.repo.tv.acquisitions(s.request.targetId).find(item => item.reason === "upgrade");
+      if (variant === "default-off" || variant === "malformed-pilot") {
+        expect(upgrade).toBeUndefined();
+        expect([matcherCalls, versionReads, canonicalReads, metainfoReads]).toEqual([0, 0, 0, 0]);
+        expect(s.fixture.sourceAdds).toBe(sourceAdds);
+        expect(s.repo.tv.activeEpisodes(s.request.targetId)).toEqual(oldSelection);
+        return;
+      }
+      expect(matcherCalls).toBe(1);
+      if (!upgrade) throw new Error("Expected opted-in season-pack acquisition");
+      expect(JSON.parse(upgrade.decision_json!).batchEpisodeIds).toEqual(s.request.episodeIds);
+      await until(runtime, () => s.repo.getJob(upgrade.job_id!)?.status === "succeeded",
+        () => JSON.stringify(s.repo.getJob(upgrade.job_id!)), publicationWaitMs);
+      expect(metainfoReads).toBe(1);
+      expect(s.fixture.sourceAdds).toBe(sourceAdds + (variant === "revoked-before-snatch" ? 0 : 1));
+      expect(s.repo.tv.publications()).toEqual([]);
+      expect(s.repo.notifications.list(ownerId).items).toEqual(originalNotices); // No duplicate availability notices.
+      const oldRegistrationIds = new Set(oldRegistrations.map(row => row.id));
+      expect(s.repo.tv.downloads(s.request.targetId).filter(row => oldRegistrationIds.has(row.id))).toEqual(oldRegistrations);
+      for (const old of originals) {
+        expect((await fs.stat(old.contentPath)).ino).toBe(old.inode);
+        expect(await fs.readFile(old.contentPath)).toEqual(old.bytes);
+      }
+      const candidate = s.repo.tv.versionSources(s.request.targetId).find(row => row.acquisition.id === upgrade.id)?.version;
+      if (variant === "equivalent" || variant === "better") {
+        expect(candidate).toBeDefined();
+        expect(s.repo.tv.activeEpisodes(s.request.targetId)).toEqual(s.request.episodeIds.map(episode_id => ({ episode_id, version_id: candidate!.id })));
+        expect(s.repo.tv.target(s.request.targetId)!.revision).toBe(oldRevision + 1);
+        expect(stagedLinks).toHaveLength(2);
+        for (const old of originals)
+          await expect(fs.lstat(path.join(s.roots.viewRoot, old.relativePath))).rejects.toMatchObject({ code: "ENOENT" });
+        expect(await assertOwnedViews(s)).toHaveLength(2);
+        expect(canonicalReads).toBe(2);
+      } else {
+        expect(s.repo.tv.activeEpisodes(s.request.targetId)).toEqual(oldSelection);
+        expect(s.repo.tv.target(s.request.targetId)!.revision).toBe(oldRevision);
+        expect(await assertOwnedViews(s)).toEqual(originals.map(({ relativePath, contentPath }) => expect.objectContaining({ relativePath, contentPath })));
+        if (variant === "roster-race" || variant === "revoked-during-plex") {
+          expect(raced).toBe(true);
+          expect(candidate).toBeDefined();
+          expect(canonicalReads).toBe(2); // The live catalog still agrees; the transactional local fence vetoes.
+          expect(scans).toBe(2); // Stage scan, then rollback rescan.
+          expect(stagedLinks).toHaveLength(2);
+          for (const link of stagedLinks) await expect(fs.lstat(link)).rejects.toMatchObject({ code: "ENOENT" });
+          for (const file of candidate!.files) expect((await fs.stat(path.join(s.roots.contentRoot, file.relativePath))).isFile()).toBe(true);
+          expect(s.repo.tv.missingEpisodes(s.request.requestId).map(episode => episode.key))
+            .toEqual(variant === "roster-race" ? ["tvdb:203"] : []);
+        } else {
+          expect(candidate).toBeUndefined();
+          expect(stagedLinks).toEqual([]);
+        }
+      }
+    } finally { await runtime?.stop(); concurrent?.close(); await s.close(); }
+  }, 60_000);
+}
+
+test("ordinary TV acquisition resumes the pre-pilot persisted configuration digest", async () => {
+  const s = await setup(["tvdb:201"]);
+  try {
+    const settings = s.repo.getSettings();
+    const oldTv = { sonarrUrl: "", sonarrApiKey: "", managedRoot: s.root, plexSectionId: "",
+      plexViewPath: "/data/views/plex/tv", pollIntervalMinutes: 1, lookbackDays: 7, maxCasesPerSync: 5,
+      maximumReleaseBytes: null, pathMappings: [] };
+    const legacyHash = createHash("sha256").update(JSON.stringify([
+      oldTv, settings.movies.plexUrl, s.fixture.services.client.id,
+    ])).digest("hex");
+    s.repo.setJsonState(TV_SEASON_PACK_PROMOTION_PILOT, [s.request.targetId]);
+    const { acquisition } = queueTvAcquisition(s.repo, s.request.requestId, "recovery", s.request.episodeIds);
+    s.fixture.addRelease("legacy-recovery-single", ["tvdb:201"]);
+    s.context.execution = {
+      key: "legacy-tv-configuration", assertActive() {}, sleep: async () => {},
+      async run<T>(name: string, action: () => T | Promise<T>) {
+        if (name === "tv:configuration") {
+          expect(String(await action())).toBe(legacyHash);
+          return legacyHash as T;
+        }
+        return await action();
+      },
+    };
+    await acquireTv(s.context, s.repo.getJob(acquisition.job_id!)!, s.fixture.services);
+    expect(s.repo.tv.missingEpisodes(s.request.requestId)).toEqual([]);
+  } finally { await s.close(); }
+});
 
 test("explicit multi-season acquisition queues every batch once; a no-match season cannot starve later seasons", async () => {
   const entry = seasonCatalog(4);

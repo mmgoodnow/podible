@@ -74,33 +74,83 @@ export function tvViewEntries(repo: TvRepo, roots: TvRoots): LibraryViewEntry[] 
 export function reconcileTvView(repo: TvRepo, roots: TvRoots, assertActive: () => void = () => {}) {
   return serialized(roots.viewRoot, () => reconcileLibraryView({ ...roots, entries: tvViewEntries(repo, roots), assertActive }));
 }
-export async function publishTvVersion(input: { repo: TvRepo; roots: TvRoots; library: TvLibrary; targetId: number; versionId: number; assertActive?: () => void; scan?: boolean; pendingIsExpected?: boolean; onReconcile?: (ms: number) => void }) {
-  const { repo, roots, targetId, versionId, library } = input;
+export class TvPromotionRejected extends Error {}
+export type TvPublicationGuard = { expectedRevision: number; validate(): void; verifyRoster(): Promise<boolean> };
+
+export async function publishTvVersion(input: { repo: TvRepo; roots: TvRoots; library: TvLibrary; targetId: number; versionId: number; assertActive?: () => void; scan?: boolean; pendingIsExpected?: boolean; onReconcile?: (ms: number) => void; guard?: TvPublicationGuard }) {
+  const { repo, roots, targetId, versionId, library, guard } = input;
   const active = input.assertActive ?? (() => {});
   effectPhase("publication:mutex-wait");
   return serialized(roots.viewRoot, async () => {
-    effectPhase("publication:stage");
-    active(); repo.stagePublication(targetId, versionId);
-    const pending = repo.publications().find((item) => item.target_id === targetId)!;
-    effectPhase("publication:reconcile");
-    await measureView(() => reconcileLibraryView({ ...roots, entries: tvViewEntries(repo, roots), assertActive: active }), input.onReconcile);
-    active();
-    const entry = repo.entry(repo.target(targetId)!.entry_id)!;
-    const files = versionEntries(repo, roots, targetId, repo.version(versionId)!).map((file) => ({
-      serverPath: path.posix.join(roots.serverViewRoot, file.relativePath), episodes: file.episodes,
-    }));
-    effectPhase("publication:scan");
-    if (input.scan !== false) await library.scan();
-    effectPhase("publication:verify");
-    if (!await library.verify(entry, files)) {
-      if (input.pendingIsExpected) return false;
-      throw new Error("Plex has not verified the exact TV episodes and paths; existing episodes remain selected");
+    const reconcile = () => measureView(() =>
+      reconcileLibraryView({ ...roots, entries: tvViewEntries(repo, roots), assertActive: active }), input.onReconcile);
+    const pending = () => repo.publications().find(item => item.target_id === targetId);
+    const selected = () => repo.activeEpisodes(targetId).some(row => row.version_id === versionId);
+    const promote = (expectedRevision: number) => {
+      active(); repo.promotePublication(targetId, versionId, expectedRevision, { plexVerified: true });
+      active(); repo.clearPublication(targetId, versionId);
+    };
+    let fenceFailed = false;
+    const guarded = (action: () => void) => {
+      try { repo.transaction(() => { active(); action(); }); }
+      catch (error) { fenceFailed = true; throw error; }
+    };
+    let alreadyPromoted = false;
+    try {
+      effectPhase("publication:stage");
+      if (guard) guarded(() => {
+        const version = repo.version(versionId);
+        const activeRows = repo.activeEpisodes(targetId);
+        alreadyPromoted = repo.target(targetId)?.revision === guard.expectedRevision + 1 && !!version &&
+          version.episodeIds.every(id => activeRows.some(row => row.episode_id === id && row.version_id === versionId));
+        if (!alreadyPromoted) {
+          guard.validate();
+          repo.stagePublication(targetId, versionId, guard.expectedRevision);
+        }
+      });
+      else { active(); repo.stagePublication(targetId, versionId); }
+      if (!alreadyPromoted) {
+        const expectedRevision = pending()!.expected_revision;
+        effectPhase("publication:reconcile");
+        await reconcile();
+        active();
+        const entry = repo.entry(repo.target(targetId)!.entry_id)!;
+        const files = versionEntries(repo, roots, targetId, repo.version(versionId)!).map(file => ({
+          serverPath: path.posix.join(roots.serverViewRoot, file.relativePath), episodes: file.episodes,
+        }));
+        effectPhase("publication:scan");
+        if (input.scan !== false) await library.scan();
+        effectPhase("publication:verify");
+        if (!await library.verify(entry, files)) {
+          if (input.pendingIsExpected) return false;
+          throw new Error("Plex has not verified the exact TV episodes and paths; existing episodes remain selected");
+        }
+        effectPhase("publication:promote");
+        if (guard) {
+          try {
+            if (!await guard.verifyRoster()) throw new TvPromotionRejected("Authoritative TV season roster changed before promotion");
+          } catch (error) { fenceFailed = true; throw error; }
+          // Request/numbering changes need not bump the target revision. Read them under the same write lock.
+          guarded(() => {
+            guard.validate();
+            promote(guard.expectedRevision);
+          });
+        } else promote(expectedRevision);
+      }
+    } catch (error) {
+      if (guard && fenceFailed) {
+        effectPhase("publication:rollback");
+        repo.transaction(() => {
+          active();
+          if (pending()?.version_id === versionId && !selected()) repo.abortPublication(targetId, versionId);
+        });
+        await reconcile();
+        await library.scan();
+      }
+      throw error;
     }
-    effectPhase("publication:promote");
-    active(); repo.promotePublication(targetId, versionId, pending.expected_revision, { plexVerified: true });
-    active(); repo.clearPublication(targetId, versionId);
     effectPhase("publication:cleanup");
-    await measureView(() => reconcileLibraryView({ ...roots, entries: tvViewEntries(repo, roots), assertActive: active }), input.onReconcile);
+    await reconcile();
     repo.event(targetId, null, `tv-published:${targetId}:${versionId}`, "available", "Episode identity and file paths verified in Plex");
     effectPhase("publication:complete");
     return true;

@@ -7,6 +7,8 @@ import { matchTvFeed, refreshTvFeedOffer, type TvFeedContext, type TvFeedMatcher
 import { queueTvAcquisition, queueTvSeasons } from "../../src/tv/acquisition";
 import type { TvCatalogEntry } from "../../src/tv/types";
 import type { IndexerMedia, SearchResult } from "../../src/media/indexer-gateway";
+import { appSettingsSchema } from "../../src/rpc/schemas";
+import { TV_SEASON_PACK_PROMOTION_MAX_TARGETS, TV_SEASON_PACK_PROMOTION_PILOT, tvSeasonPackPromotionTargets } from "../../src/tv/season-promotion-pilot";
 
 function catalog(key = "anidb:5373", episodeBase = 100): TvCatalogEntry {
   return { key, tvdbId: 79525, tmdbId: null, title: "Independent anime work R2", aliases: ["Native release alias"],
@@ -147,6 +149,43 @@ test("published coverage, withdrawn requests, future/undated episodes never trig
   f.repo.tv.withdrawRequest(requested.requestId);
   await matchTvFeed(f.ctx, f.job(), async () => { calls++; return []; });
   expect(calls).toBe(0);
+}));
+
+test("default-off season pack hint adds no SQL round trips or catalog hydration for a ready target", () => fixture(async f => {
+  publish(f, f.requested.episodeIds);
+  const ordinary = f.job();
+  const hinted = f.job(f.ingest({ ...release("hinted"), title: "Native release alias S02 WEB" }));
+  const query = f.db.query.bind(f.db);
+  let reads = 0;
+  f.db.query = ((sql: string) => { reads++; return query(sql); }) as typeof f.db.query;
+  f.repo.tv.entry = () => { throw new Error("Default-off ready scope must not hydrate the catalog"); };
+  const matcher: TvFeedMatcher = async () => { throw new Error("Default-off ready scope must not match packs"); };
+  await matchTvFeed(f.ctx, ordinary, matcher);
+  const ordinaryReads = reads;
+  reads = 0;
+  await matchTvFeed(f.ctx, hinted, matcher);
+  expect(reads).toBe(ordinaryReads);
+  expect(reads).toBeLessThanOrEqual(4);
+}));
+
+test("operator pilot state stays private, bounded, and independent of Settings replacement", () => fixture(f => {
+  const id = f.requested.targetId;
+  const read = () => [...tvSeasonPackPromotionTargets(f.repo)];
+  expect(read()).toEqual([]);
+  for (const invalid of [[id, 0], [id, "wrong"], [id, Number.MAX_SAFE_INTEGER + 1],
+    Array.from({ length: TV_SEASON_PACK_PROMOTION_MAX_TARGETS + 1 }, () => id), { targets: [id] }]) {
+    f.repo.setJsonState(TV_SEASON_PACK_PROMOTION_PILOT, invalid);
+    expect(read()).toEqual([]);
+    expect(f.repo.tv.feedInventory(true).get(id)?.optedIn).toBe(false);
+  }
+  f.repo.setJsonState(TV_SEASON_PACK_PROMOTION_PILOT, [id]);
+  const existing = appSettingsSchema.parse(f.repo.getSettings());
+  const updated = appSettingsSchema.parse({ ...existing, feed: { ...existing.feed, title: "Edited in Settings" } });
+  f.repo.updateSettings(updated);
+  expect(f.repo.getSettings()).toEqual(updated);
+  expect(JSON.stringify(updated)).not.toContain("seasonPackPromotion");
+  expect(read()).toEqual([id]);
+  expect(f.repo.tv.feedInventory(true).get(id)?.optedIn).toBe(true);
 }));
 
 test("retention uses tv-target identity and desired eviction, including eviction after semantic routing", () => fixture(async f => {

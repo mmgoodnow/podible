@@ -35,6 +35,27 @@ registrations/objects; they do not become evidence supporting another retirement
 
 ## Selected Season Pack Evidence
 
+TV feed promotion is separate from this planner. It is **off by default**.
+For a controlled canary, operators can set the private `app_state` key
+`tv-season-pack-promotion-target-ids` to a JSON array of at most 100 positive
+safe-integer Podible TV target IDs, for example `[42]`. Missing, empty, or
+invalid state disables the pilot. This is not part of web Settings or its
+save payload, and it does not alter any existing settings fingerprints. When
+an opted-in target has no missing aired demand, the feed can submit a
+season-labelled offer for a fully aired, provider-verified season of 2 to 64
+episodes that one active request covers and that is selected across multiple
+versions. This starts a **new full-pack download**. The downloader does not
+preseed from selected episodes or reuse their bytes before snatch, and it skips
+torrents already registered by another acquisition. Removing a target from the
+list blocks new snatches and promotion; it does not cancel an already registered
+torrent. The downloader and importer must prove full torrent completion and exact
+episode coverage without regressing any selected episode under the target's quality policy (tier, then same-tier
+preferences). After Plex verification, the publisher rechecks the provider
+roster and validates the persisted scope, selection and quality inside the
+selection transaction. A veto removes staged view links; neither outcome
+deletes canonical bytes or retires registrations.
+The planner below does not infer its own retirement evidence from promotion.
+
 The TV-only override is opt-in through `seasonPacks`. Each claim joins one exact
 registration to one TV target, authoritative season ID and publication version:
 
