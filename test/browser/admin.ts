@@ -15,7 +15,7 @@ const server = Bun.spawn([process.execPath, "run", "test/fixtures/spa-server.ts"
     FIXTURE_TLS_KEY: key, FIXTURE_TLS_CERT: cert },
 });
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
-try {
+async function verify() {
   const reader = server.stdout.getReader();
   let output = "", url = "";
   const deadline = Date.now() + 15_000;
@@ -46,7 +46,7 @@ try {
   for (const pathname of ["/settings", "/users", "/ops", "/retention"]) {
     await readerPage.goto(new URL(pathname, url).href);
     await readerPage.getByRole("alert").getByText("Administrator access required.").waitFor();
-    assert.equal(await readerPage.getByLabel("Settings JSON", { exact: true }).count(), 0);
+    assert.equal(await readerPage.getByRole("navigation", { name: "Settings sections" }).count(), 0);
   }
   for (const page of ["settings", "users", "ops"]) {
     const legacy = await context.request.get(new URL(`/admin/${page}`, url).href, { maxRedirects: 0 });
@@ -77,6 +77,23 @@ try {
   await page.goto(new URL("/settings", url).href);
   await page.getByRole("heading", { name: "Settings", exact: true }).waitFor();
   console.log("Admin browser: settings route loaded");
+  const sectionNav = page.getByRole("navigation", { name: "Settings sections", exact: true });
+  const openSettings = (name: string) => sectionNav.getByRole("button", { name, exact: true }).click();
+  const title = page.getByLabel("Feed title", { exact: true });
+  const openAi = page.getByLabel("OpenAI API key", { exact: true });
+  const saveSettings = page.getByRole("button", { name: "Save settings", exact: true });
+  const reloadSettings = page.getByRole("button", { name: "Reload server settings", exact: true });
+  const discard = page.getByRole("button", { name: "Discard draft", exact: true });
+  const artifacts = path.resolve("tmp/movies-lab");
+  await mkdir(artifacts, { recursive: true });
+  await title.waitFor();
+  assert.equal(await title.inputValue(), "Fixture library");
+  assert.equal(await openAi.getAttribute("type"), "password");
+  assert.equal(await openAi.inputValue(), "", "An existing credential was put into an input");
+  assert.equal(await page.getByLabel("Settings JSON", { exact: true }).count(), 0);
+  assert.equal(await saveSettings.isDisabled(), true);
+  await page.screenshot({ path: path.join(artifacts, "admin-settings-desktop.png"), animations: "disabled" });
+  await openSettings("Storage");
   const migration = page.getByRole("region", { name: "Existing library preview" });
   await migration.getByRole("button", { name: "Preview library", exact: true }).click();
   await migration.getByText("A library worth keeping (2025)", { exact: true }).waitFor();
@@ -84,23 +101,21 @@ try {
   assert.equal(await migration.getByRole("button", { name: /Import|Adopt|Download/ }).count(), 0, "Preview must not expose a mutation");
   const adminNavigation = page.getByRole("navigation", { name: "Administrator pages", exact: true });
   assert.equal(await adminNavigation.getByRole("link").count(), 3);
-  const editor = page.getByLabel("Settings JSON", { exact: true });
-  await editor.waitFor({ timeout: 5000 }).catch(async (error) => {
-    console.error(JSON.stringify({ route: page.url(), labels: await page.locator("label").count(),
-      textareas: await page.locator("textarea").count(), alerts: await page.getByRole("alert").allTextContents(), pageErrors }));
-    throw error;
-  });
-  await page.waitForFunction('document.querySelector(\'textarea[aria-describedby="settings-json-note"]\')?.value.includes("Fixture library")');
-  const initial = JSON.parse(await editor.inputValue());
+  const initial = (await rpc("settings.get")).result;
   assert.equal(initial.auth.plex.machineId, "fixture-mendel");
-  assert.equal(await page.getByLabel("Plex access server", { exact: true }).inputValue(), "fixture-mendel");
-  const edited = { ...initial, feed: { ...initial.feed, title: "Unsaved administrator draft" } };
-  const editedText = JSON.stringify(edited, null, 2);
-  await editor.fill(editedText);
+  await openSettings("Books & feed");
+  const editedTitle = "Unsaved administrator draft";
+  await title.fill(editedTitle);
   await page.getByRole("status").getByText("Unsaved changes", { exact: true }).waitFor();
-  await page.getByRole("button", { name: "Reload server settings", exact: true }).click();
-  await page.getByRole("button", { name: "Reload server settings", exact: true }).waitFor({ state: "visible" });
-  assert.equal(await editor.inputValue(), editedText, "Refetch overwrote an unsaved settings draft");
+  const outsideSettings = { ...initial, feed: { ...initial.feed, author: "Updated elsewhere" },
+    agents: { ...initial.agents, apiKey: "rotated-fixture-secret" } };
+  assert.ok((await rpc("settings.update", { settings: outsideSettings })).result);
+  await reloadSettings.click();
+  await page.getByLabel("Feed author", { exact: true }).and(page.locator('[value="Updated elsewhere"]')).waitFor();
+  assert.equal(await title.inputValue(), editedTitle, "Refetch overwrote an unsaved settings draft");
+  assert.equal(await page.getByLabel("Feed author", { exact: true }).inputValue(), outsideSettings.feed.author);
+  assert.equal(await openAi.inputValue(), "");
+  assert.equal(settingsPosts, 0, "Opening sections and editing fields must not save");
   await adminNavigation.getByRole("link", { name: "Users", exact: true }).click();
   console.log("Admin browser: checking users and draft navigation");
   await page.getByRole("heading", { name: "Users", exact: true }).waitFor();
@@ -110,19 +125,27 @@ try {
   for (const user of users) assert.deepEqual(Object.keys(user).sort(), ["id", "provider", "username", "displayName", "isAdmin", "createdAt", "updatedAt"].sort());
   assert.ok(!(await page.locator("body").innerText()).includes("admin-fixture-owner-secret"));
   await adminNavigation.getByRole("link", { name: "Settings", exact: true }).click();
-  await editor.waitFor();
-  assert.equal(await editor.inputValue(), editedText, "SPA navigation lost the unsaved draft");
-  await page.getByLabel("Plex access server", { exact: true }).selectOption("fixture-cyprus");
+  await title.waitFor();
+  assert.equal(await title.inputValue(), editedTitle, "SPA navigation lost the unsaved draft");
+  await openSettings("Plex access");
+  const plexPicker = page.getByLabel("Plex access server", { exact: true });
+  await plexPicker.waitFor();
+  assert.equal(await plexPicker.inputValue(), "fixture-mendel");
+  await plexPicker.selectOption("fixture-cyprus");
+  assert.equal((await rpc("settings.get")).result.auth.plex.machineId, "fixture-mendel", "Picker choice was applied before confirmation");
   await page.getByRole("button", { name: "Use selected Plex server", exact: true }).click();
   console.log("Admin browser: checking fresh Plex selection");
   await page.getByText("Plex access server selected. Other unsaved settings are preserved.", { exact: true }).waitFor();
-  const rebased = JSON.parse(await editor.inputValue());
-  assert.equal(rebased.auth.plex.machineId, "fixture-cyprus");
-  assert.equal(rebased.feed.title, edited.feed.title);
-  assert.equal(rebased.agents.apiKey, initial.agents.apiKey);
   const afterSelection = (await rpc("settings.get")).result;
   assert.equal(afterSelection.auth.plex.machineId, "fixture-cyprus");
   assert.equal(afterSelection.feed.title, initial.feed.title, "Plex selection saved unrelated draft settings");
+  assert.equal(settingsPosts, 0, "Verified Plex selection must not save the settings draft");
+  await page.getByText("Advanced Plex identity settings", { exact: true }).click();
+  assert.equal(await page.getByLabel("Plex owner token", { exact: true }).inputValue(), "");
+  await openSettings("Books & feed");
+  assert.equal(await title.inputValue(), editedTitle);
+  const rotatedAgain = { ...afterSelection, agents: { ...afterSelection.agents, apiKey: "latest-fixture-secret" } };
+  assert.ok((await rpc("settings.update", { settings: rotatedAgain })).result);
   const servers = (await rpc("adminWeb.plexServers")).result;
   assert.ok(!JSON.stringify(servers).includes("admin-fixture-server-secret"));
   assert.equal((await rpc("adminWeb.selectPlexServer", { machineId: "arbitrary-unlisted-server" })).error?.code, -32602);
@@ -131,37 +154,119 @@ try {
   const saveGate = new Promise<void>((resolve) => { releaseSave = resolve; });
   await page.route("**/api/trpc/settings.update**", async (route) => { await saveGate; await route.continue(); });
   const pendingSave = page.waitForRequest((request) => request.url().includes("settings.update") && request.method() === "POST");
-  await page.getByRole("button", { name: "Save settings", exact: true }).click();
+  await saveSettings.click();
   await pendingSave;
   console.log("Admin browser: checking edits during an in-flight save");
-  const newer = { ...rebased, feed: { ...rebased.feed, title: "Newer edits while saving" } };
-  await editor.fill(JSON.stringify(newer, null, 2));
+  const newerTitle = "Newer edits while saving";
+  await title.fill(newerTitle);
   releaseSave();
   await page.getByText("Settings saved; newer edits remain unsaved.", { exact: true }).waitFor();
   await page.unroute("**/api/trpc/settings.update**");
-  assert.equal(JSON.parse(await editor.inputValue()).feed.title, newer.feed.title, "Successful save erased newer edits");
-  assert.equal((await rpc("settings.get")).result.feed.title, edited.feed.title);
-  await page.getByRole("button", { name: "Save settings", exact: true }).click();
+  assert.equal(await title.inputValue(), newerTitle, "Successful save erased newer edits");
+  assert.equal((await rpc("settings.get")).result.feed.title, editedTitle);
+  await saveSettings.click();
   await page.getByText("Settings saved.", { exact: true }).waitFor();
-  assert.equal((await rpc("settings.get")).result.auth.plex.machineId, "fixture-cyprus");
-  const saved = JSON.parse(await editor.inputValue());
-  const invalid = { ...saved, agents: { ...saved.agents, timeoutMs: "not-a-number" } };
-  const invalidText = JSON.stringify(invalid, null, 2);
-  await editor.fill(invalidText);
+  const saved = (await rpc("settings.get")).result;
+  assert.deepEqual(saved, { ...rotatedAgain, feed: { ...rotatedAgain.feed, title: newerTitle } });
+  assert.equal(saved.agents.apiKey, rotatedAgain.agents.apiKey, "An untouched credential rotation was overwritten");
+
+  const timeout = page.getByLabel("Agent timeout (ms)", { exact: true });
+  await timeout.fill("45000");
+  await page.route("**/api/trpc/settings.update**", async route => {
+    const input = JSON.parse(route.request().postData()!);
+    (input["0"] ?? input).settings.agents.timeoutMs = "force-server-rejection";
+    await route.continue({ postData: JSON.stringify(input) });
+  });
   expectedSettingsError = true;
-  await page.getByRole("button", { name: "Save settings", exact: true }).click();
+  await saveSettings.click();
   await page.getByRole("alert").filter({ hasText: "Settings were not saved" }).waitFor();
   expectedSettingsError = false;
-  assert.equal(await editor.inputValue(), invalidText, "Server validation erased the draft");
+  await page.unroute("**/api/trpc/settings.update**");
+  assert.equal(await timeout.inputValue(), "45000", "Server validation erased the draft");
   assert.equal((await rpc("settings.get")).result.agents.timeoutMs, saved.agents.timeoutMs);
-  const postsBeforeParseError = settingsPosts;
-  await editor.fill("{ broken JSON");
-  await page.getByRole("alert").filter({ hasText: "Invalid JSON" }).waitFor();
-  assert.equal(await page.getByRole("button", { name: "Save settings", exact: true }).isDisabled(), true);
-  assert.equal(settingsPosts, postsBeforeParseError, "Invalid JSON was submitted");
-  await page.getByRole("button", { name: "Discard draft", exact: true }).click();
+  const postsBeforeInvalid = settingsPosts;
+  await timeout.fill("not-a-number");
+  await page.getByRole("alert").filter({ hasText: "Check 1 invalid setting" }).waitFor();
+  assert.equal(await timeout.getAttribute("aria-invalid"), "true");
+  assert.equal(await saveSettings.isDisabled(), true);
+  assert.equal(settingsPosts, postsBeforeInvalid, "Invalid input was submitted");
+  await discard.click();
 
+  await title.fill("A conflicting draft");
+  await timeout.fill("45000");
+  const otherEdit = { ...saved, feed: { ...saved.feed, title: "A competing server edit" } };
+  assert.ok((await rpc("settings.update", { settings: otherEdit })).result);
+  await saveSettings.click();
+  await page.getByRole("alert").filter({ hasText: "Server settings changed while you were editing: Feed title" }).waitFor();
+  assert.equal(await saveSettings.isDisabled(), true);
+  assert.equal(await title.inputValue(), "A conflicting draft");
+  assert.equal(settingsPosts, postsBeforeInvalid, "Save must detect conflicts before writing");
+  await page.getByRole("button", { name: "Use server values", exact: true }).click();
+  assert.equal(await title.inputValue(), otherEdit.feed.title);
+  assert.equal(await timeout.inputValue(), "45000", "Accepting a conflicting server value discarded an unrelated draft edit");
+  assert.equal(await saveSettings.isEnabled(), true);
+  await discard.click();
+
+  await page.getByRole("button", { name: "Clear OpenAI API key", exact: true }).click();
+  await openSettings("Indexers");
+  await page.getByRole("button", { name: "Add torznab source", exact: true }).click();
+  await page.getByLabel("Source name", { exact: true }).fill("Fixture Torznab");
+  const torznabUrl = "https://torznab-fixture.invalid/api?apikey=embedded-fixture-token";
+  await page.getByLabel("Torznab URL", { exact: true }).fill(torznabUrl);
+  await page.getByLabel("Torznab API key", { exact: true }).fill("torznab-replacement-fixture");
+  await page.getByLabel("Audiobook categories", { exact: true }).fill("3030,3040");
+  await openSettings("TV");
+  await page.getByRole("button", { name: "Add path mapping", exact: true }).click();
+  assert.equal(await saveSettings.isDisabled(), true, "Incomplete path mapping should fail schema validation");
+  await page.getByLabel("Remote root", { exact: true }).fill("/remote/tv");
+  await page.getByLabel("Local root", { exact: true }).fill("/local/tv");
+  await openSettings("Movies");
+  await page.getByRole("button", { name: "Move tier 2 up", exact: true }).click();
+  await openSettings("Storage");
+  const protectedTv = page.getByLabel("Protected TV target IDs", { exact: true });
+  await protectedTv.fill("42");
+  await protectedTv.press("End");
+  await protectedTv.press("Enter");
+  await protectedTv.pressSequentially("123");
+  assert.equal(await protectedTv.inputValue(), "42\n123", "Typing a newline must not collapse the list");
+  assert.equal(settingsPosts, postsBeforeInvalid, "Structured changes must not auto-save");
+  assert.deepEqual((await rpc("settings.get")).result, otherEdit);
+  await saveSettings.click();
+  await page.getByText("Settings saved.", { exact: true }).waitFor();
+  const grouped = (await rpc("settings.get")).result;
+  const [firstTier, secondTier, ...otherTiers] = saved.movies.qualityPolicy.tiers;
+  assert.deepEqual(grouped, { ...otherEdit, agents: { ...saved.agents, apiKey: "" },
+    torznab: [{ name: "Fixture Torznab", baseUrl: torznabUrl, apiKey: "torznab-replacement-fixture", categories: { audio: "3030,3040" } }],
+    tv: { ...saved.tv, pathMappings: [{ remoteRoot: "/remote/tv", localRoot: "/local/tv" }] },
+    movies: { ...saved.movies, qualityPolicy: { ...saved.movies.qualityPolicy, tiers: [secondTier, firstTier, ...otherTiers] } },
+    retention: { ...saved.retention, protectedTvTargetIds: [42, 123] },
+  });
+  await openSettings("Indexers");
+  assert.equal(await page.getByLabel("Torznab API key", { exact: true }).inputValue(), "");
+  assert.equal(await page.getByLabel("Torznab URL", { exact: true }).inputValue(), "", "A URL with embedded credentials was exposed");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openSettings("Books & feed");
+  await title.waitFor();
+  await page.evaluate("scrollTo(0, 0)");
+  await page.screenshot({ path: path.join(artifacts, "admin-settings-mobile.png"), animations: "disabled" });
+  for (const section of ["Books & feed", "Indexers", "Downloads", "Movies", "TV", "Storage", "Notifications", "Plex access"]) {
+    await openSettings(section);
+    await page.getByRole("heading", { name: section, exact: true }).waitFor();
+    assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false, `${section} settings overflow mobile viewport`);
+  }
+  await plexPicker.waitFor();
+  assert.equal(await plexPicker.inputValue(), "fixture-cyprus");
+  await plexPicker.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(artifacts, "admin-settings-plex-mobile.png"), animations: "disabled" });
   assert.equal((await rpc("jobs.list", { type: "full_library_refresh" })).result.jobs.length, 0, "Opening pages queued a refresh");
+  if (process.env.SETTINGS_ONLY === "1") {
+    assert.deepEqual(pageErrors, [], "Settings UI page errors");
+    assert.deepEqual(networkErrors, [], "Unexpected Settings UI request/HTTP errors");
+    console.log("Settings Chrome acceptance passed at 1280x900 and 390x844.");
+    return;
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
   await adminNavigation.getByRole("link", { name: "Activity", exact: true }).click();
   console.log("Admin browser: checking operational triage");
   await page.getByRole("heading", { name: "Activity", exact: true }).waitFor();
@@ -351,8 +456,6 @@ try {
   await page.getByRole("button", { name: "Refresh library metadata", exact: true }).click();
   await page.getByRole("status").filter({ hasText: "Library refresh already queued or running" }).waitFor();
   assert.equal((await rpc("jobs.list", { type: "full_library_refresh" })).result.jobs.length, 1);
-  const artifacts = path.resolve("tmp/movies-lab");
-  await mkdir(artifacts, { recursive: true });
   await sharing.screenshot({ path: path.join(artifacts, "transfer-metrics-desktop.png"), animations: "disabled" });
   await page.screenshot({ path: path.join(artifacts, "admin-ops-desktop.png"), fullPage: true, animations: "disabled" });
   await page.setViewportSize({ width: 390, height: 844 });
@@ -360,15 +463,7 @@ try {
   await sharing.screenshot({ path: path.join(artifacts, "transfer-metrics-mobile.png"), animations: "disabled" });
   await waiting.scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(artifacts, "admin-ops-mobile.png"), animations: "disabled" });
-  await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Settings", exact: true }).click();
-  await editor.waitFor();
-  await page.waitForFunction("Boolean(document.querySelector('#admin-settings-json')?.value.trim())");
-  assert.equal(JSON.parse(await editor.inputValue()).auth.plex.machineId, "fixture-cyprus");
-  assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false, "Settings overflows mobile viewport");
-  await page.getByLabel("Plex access server", { exact: true }).scrollIntoViewIfNeeded();
-  await page.screenshot({ path: path.join(artifacts, "admin-settings-mobile.png"), animations: "disabled" });
   const cleanupBefore = (await rpc("jobs.list", { type: "retention_cleanup" })).result.jobs;
-  await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Activity", exact: true }).click();
   const movieStorage = page.getByRole("region", { name: "Storage and links" }).getByRole("article").filter({ has: page.getByRole("heading", { name: "Movies", exact: true }) });
   await movieStorage.getByText("Storage details", { exact: true }).click();
   await movieStorage.getByRole("link", { name: "Review removable titles", exact: true }).click();
@@ -385,7 +480,11 @@ try {
   await page.screenshot({ path: path.join(artifacts, "admin-retention-mobile.png"), animations: "disabled" });
   assert.deepEqual(pageErrors, [], "Admin UI page errors");
   assert.deepEqual(networkErrors, [], "Unexpected admin UI request/HTTP errors");
-  console.log("Admin Chrome acceptance passed: canonical routes/auth, removed DB/curation, safe users, preserved JSON drafts/refetch/navigation/in-flight edits, validated saves and Plex rebase, operational triage/retry/provider/storage, lazy diagnostics, bounded refresh and mobile layout.");
+  console.log("Admin Chrome acceptance passed: authorization, grouped Settings, secret preservation, draft conflicts, explicit saves and Plex selection, Activity, and mobile layout.");
+}
+
+try {
+  await verify();
 } finally {
   await browser?.close();
   server.kill("SIGTERM");
