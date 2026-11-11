@@ -4,9 +4,22 @@ import { sendPushoverNotification } from "../../src/notify";
 import { defaultSettings } from "../../src/settings";
 
 describe("pushover notifications", () => {
+  test("defaults to dry run even when an existing Pushover account is configured", async () => {
+    const settings = defaultSettings({ notifications: { pushover: { enabled: true, apiToken: "token", userKey: "user" } } });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => { throw new Error("Dry run attempted network delivery"); }) as unknown as typeof fetch;
+    try {
+      expect(await sendPushoverNotification(settings, { title: "Test", message: "No external delivery" }))
+        .toEqual({ delivered: false, reason: "dry_run" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("times out hung requests", async () => {
     const settings = defaultSettings({
       notifications: {
+        delivery: "live",
         pushover: {
           enabled: true,
           apiToken: "token",

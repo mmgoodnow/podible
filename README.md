@@ -35,9 +35,12 @@ Runtime bootstrap uses one directory:
 
 - `CONFIG_DIR` (default `${TMPDIR:-/tmp}/podible-config`) for `podible.sqlite`
 
-`libraryRoot` is stored in application settings (`settings.get` / `settings.update`).
-
-Open Library covers are stored alongside each imported book inside `libraryRoot`.
+On a new install, choose one absolute library root in **Settings > Storage**
+(`storageRoot` in the API). Podible derives the books, movies and TV directories
+below it. Mount the same directory at the same absolute path in Podible and
+Plex, and point each Plex section at its displayed symlink view, never its
+canonical `objects` directory. Existing installs keep their saved paths;
+changing the root after adding media requires a separate storage migration.
 
 ## Auth
 
@@ -150,7 +153,8 @@ Bridge constraints:
     "password": "",
     "downloadPath": ""
   },
-  "libraryRoot": "/media/library",
+  "storageRoot": "/media/podible",
+  "libraryRoot": "/media/podible/books",
   "polling": { "rtorrentMs": 5000 },
   "recovery": { "stalledTorrentMinutes": 10 },
   "feed": { "title": "Books", "author": "Unknown" },
@@ -164,12 +168,12 @@ Bridge constraints:
     }
   },
   "agents": {
-    "provider": "openai-responses",
     "apiKey": "",
-    "lowConfidenceThreshold": 0.45,
+    "editionPreference": "",
     "timeoutMs": 30000
   },
   "notifications": {
+    "delivery": "dry-run",
     "pushover": {
       "enabled": false,
       "apiToken": "",

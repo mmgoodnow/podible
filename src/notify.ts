@@ -25,6 +25,9 @@ export async function sendPushoverNotification(
   if (!canSendPushover(settings)) {
     return { delivered: false, reason: "pushover_disabled" };
   }
+  if (settings.notifications.delivery !== "live") {
+    return { delivered: false, reason: "dry_run" };
+  }
 
   const pushover = settings.notifications.pushover;
   const body = new URLSearchParams({

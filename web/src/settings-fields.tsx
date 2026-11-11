@@ -66,7 +66,7 @@ function SecretField({ field, label, help }: { field: Field<string | undefined>;
   return <Frame {...{ field, label, help }}>{props => <>
     <div className="settings-secret">
       <input {...props} type="password" autoComplete="new-password" spellCheck={false} value={active?.text ?? ""}
-        placeholder={field.value ? "Enter a replacement" : "Enter a value"}
+        placeholder={field.value ? "\u2022".repeat(8) : "Enter a value"}
         onChange={event => {
           const text = event.target.value, before = active ? active.before : field.value;
           setReplacement(text ? { before, text } : undefined);
@@ -95,16 +95,19 @@ function EndpointField({ field, label, placeholder, storedUrls }: {
     : <TextField {...{ field, label, placeholder }} />;
 }
 
-function NumberField({ field, label, help, nullable, decimal, min }: {
-  field: Field<number | null>; label: string; help?: string; nullable?: boolean; decimal?: boolean; min?: number;
+const GiB = 1024 ** 3;
+
+function NumberField({ field, label, help, nullable, scale = 1, min }: {
+  field: Field<number | null>; label: string; help?: string; nullable?: boolean; scale?: number; min?: number;
 }) {
   const [typing, setTyping] = useState<{ value: number | null; input: string }>();
   const input = field.input ?? (typing && Object.is(typing.value, field.value) ? typing.input : undefined);
-  return <Frame {...{ field, label, help }}>{props => <input {...props} type="text" inputMode={decimal ? "decimal" : "numeric"}
-    autoComplete="off" placeholder={nullable ? "Not set" : undefined} value={input ?? field.value ?? ""}
+  return <Frame {...{ field, label, help }}>{props => <input {...props} type="text" inputMode={scale === 1 ? "numeric" : "decimal"}
+    autoComplete="off" placeholder={nullable ? "Not set" : undefined} value={input ?? (field.value === null ? "" : field.value / scale)}
     onChange={event => {
-      const input = event.target.value, value = numericSetting(input, nullable);
-      const valid = value === null || ((min === undefined || value >= min) && (decimal || Number.isSafeInteger(value)));
+      const input = event.target.value, parsed = numericSetting(input, nullable);
+      const value = parsed === null ? null : scale === 1 ? parsed : Math.round(parsed * scale);
+      const valid = value === null || ((min === undefined || value >= min) && Number.isSafeInteger(value));
       const next = valid ? value : NaN;
       setTyping({ value: next, input });
       field.set(next, label, input);
@@ -202,38 +205,43 @@ function rowField<T>(form: SettingsForm, collection: string, index: number, key:
   return { path, value, persisted: settingAt(form.saved, path) as T, set, issue: form.issues.find(issue => issue.path === path)?.message };
 }
 
-function PathMappings({ form, field }: { form: SettingsForm; field: Field<{ remoteRoot: string; localRoot: string }[]> }) {
-  return <Rows field={field} label="Path mappings" singular="Path mapping" empty="No path mappings configured."
-    create={() => ({ remoteRoot: "", localRoot: "" })}>
-    {(row, change, index) => <>
-      <TextField label="Remote root" field={rowField(form, field.path, index, "remoteRoot", row.remoteRoot, remoteRoot => change({ ...row, remoteRoot }))} />
-      <TextField label="Local root" field={rowField(form, field.path, index, "localRoot", row.localRoot, localRoot => change({ ...row, localRoot }))} />
-    </>}
-  </Rows>;
-}
-
 export function BookSettings({ form }: { form: SettingsForm }) {
   const root = fields(form), feed = root.group("feed"), agents = root.group("agents");
   return <>
-    <SettingsGroup title="Book library and feed">
+    <SettingsGroup title="Reader feed">
       <Grid>
-        <TextField label="Book library root" field={root.field("libraryRoot")} help="Where Podible stores its managed ebooks and audiobooks." />
         <TextField label="Feed title" field={feed.field("title")} />
         <TextField label="Feed author" field={feed.field("author")} />
       </Grid>
     </SettingsGroup>
-    <SettingsGroup title="Edition matching" note="The optional OpenAI Responses integration helps evaluate book editions.">
+    <SettingsGroup title="Edition matching">
       <Grid>
-        <SecretField label="OpenAI API key" field={agents.field("apiKey")} />
         <TextField label="Edition preference" field={agents.field("editionPreference")} help="Guidance for choosing among book editions." />
-        <NumberField label="Low-confidence threshold" field={agents.field("lowConfidenceThreshold")} decimal help="Matches below this score can be escalated to the agent." />
-        <NumberField label="Agent timeout (ms)" field={agents.field("timeoutMs")} min={1000} help="At least 1,000 milliseconds." />
       </Grid>
     </SettingsGroup>
   </>;
 }
 
-export function IndexerSettings({ form }: { form: SettingsForm }) {
+export function AiSettings({ form }: { form: SettingsForm }) {
+  const agents = fields(form).group("agents");
+  return <SettingsGroup title="OpenAI">
+    <Grid>
+      <SecretField label="OpenAI API key" field={agents.field("apiKey")} />
+      <NumberField label="Agent timeout (ms)" field={agents.field("timeoutMs")} min={1000}
+        help="Default for agent calls. Longer-running tasks can use their own limits." />
+    </Grid>
+  </SettingsGroup>;
+}
+
+type DiscoveredIndexers = {
+  state: "not-configured" | "available" | "unavailable";
+  indexers: { id: number; name: string; search: string[]; feeds: string[]; retryAt: number | null }[];
+  duplicates: { index: number; name: string }[];
+};
+const indexerMedia: Record<string, string> = { audio: "Audiobooks", ebook: "Ebooks", movie: "Movies", tv: "TV" };
+const formatIndexerMedia = (media: string[]) => media.map(kind => indexerMedia[kind]).join(", ");
+
+export function IndexerSettings({ form, discovery, loading }: { form: SettingsForm; discovery?: DiscoveredIndexers; loading: boolean }) {
   const root = fields(form), prowlarr = root.group("prowlarr"), sources = root.field("torznab");
   const original = form.draft.torznab?.original as TorznabSource[] | undefined;
   const protectedUrls = new Set([...(original ?? []), ...form.saved.torznab].map(source => source.baseUrl).filter(hasUrlCredentials));
@@ -242,10 +250,25 @@ export function IndexerSettings({ form }: { form: SettingsForm }) {
       <Grid><EndpointField label="Prowlarr URL" field={prowlarr.field("url")} placeholder="https://prowlarr.example" />
         <SecretField label="Prowlarr API key" field={prowlarr.field("apiKey")} /></Grid>
     </SettingsGroup>
-    <SettingsGroup title="Torznab sources" note="Configure direct sources and category IDs for book searches.">
+    {form.saved.prowlarr.url && <SettingsGroup title="Discovered indexers">
+      {loading ? <p role="status">Loading indexers...</p> : discovery?.state !== "available"
+        ? <p>Prowlarr discovery is unavailable. Check the saved URL and API key.</p>
+        : discovery.indexers.length === 0 ? <p>No enabled torrent indexers were discovered.</p>
+        : <ul className="settings-indexer-list">{discovery.indexers.map(indexer => <li key={indexer.id}>
+          <strong>{indexer.name}</strong>
+          {indexer.retryAt !== null && <span> · Cooling down</span>}
+          {indexer.search.length > 0 && <small>Search: {formatIndexerMedia(indexer.search)}</small>}
+          {indexer.feeds.length > 0 && <small>Feeds: {formatIndexerMedia(indexer.feeds)}</small>}
+        </li>)}</ul>}
+    </SettingsGroup>}
+    <SettingsGroup title="Torznab sources" note={form.saved.prowlarr.url
+      ? "Prowlarr is active. Manual sources are saved but not queried."
+      : "Configure direct sources to use without Prowlarr."}>
       <Rows<TorznabSource> field={sources} label="Torznab sources" singular="Torznab source" empty="No direct Torznab sources configured."
         create={() => ({ name: "", baseUrl: "" })}>
         {(source, change, index) => <>
+          {source.baseUrl === form.saved.torznab[index]?.baseUrl && discovery?.duplicates.find(row => row.index === index) &&
+            <p className="settings-note">Already discovered through Prowlarr; not queried twice.</p>}
           <TextField label="Source name" field={rowField(form, sources.path, index, "name", source.name, name => change({ ...source, name }))} />
           <EndpointField label="Torznab URL" storedUrls={protectedUrls}
             field={rowField(form, sources.path, index, "baseUrl", source.baseUrl, baseUrl => change({ ...source, baseUrl }))} />
@@ -261,19 +284,10 @@ export function IndexerSettings({ form }: { form: SettingsForm }) {
 }
 
 export function DownloadSettings({ form }: { form: SettingsForm }) {
-  const root = fields(form), rtorrent = root.group("rtorrent");
+  const root = fields(form);
   return <>
-    <SettingsGroup title="rTorrent" note="Connection and path settings for the legacy HTTP/XML-RPC torrent client.">
+    <SettingsGroup title="Download recovery">
       <Grid>
-        <EndpointField label="rTorrent RPC URL" field={rtorrent.field("url")} placeholder="http://127.0.0.1/RPC2" />
-        <TextField label="Download path" field={rtorrent.field("downloadPath")} />
-        <TextField label="Username" field={rtorrent.field("username")} />
-        <SecretField label="rTorrent password" field={rtorrent.field("password")} />
-      </Grid>
-    </SettingsGroup>
-    <SettingsGroup title="Polling and recovery">
-      <Grid>
-        <NumberField label="Torrent poll interval (ms)" field={root.group("polling").field("rtorrentMs")} />
         <NumberField label="Stalled torrent threshold (minutes)" field={root.group("recovery").field("stalledTorrentMinutes")} min={0}
           help="Set to 0 to retry as soon as a stall is detected." />
       </Grid>
@@ -290,8 +304,6 @@ export function MovieSettings({ form }: { form: SettingsForm }) {
   return <>
     <SettingsGroup title="Movie library and Plex publishing">
       <Grid>
-        <TextField label="Movie managed root" field={movies.field("managedRoot")} />
-        <TextField label="Movie Plex view path" field={movies.field("plexViewPath")} />
         <EndpointField label="Plex URL" field={movies.field("plexUrl")} />
         <SecretField label="Plex library token" field={movies.field("plexToken")} help="Used for library operations, separate from the Plex sign-in token." />
         <TextField label="Movie Plex section ID" field={movies.field("plexSectionId")} />
@@ -308,7 +320,7 @@ export function MovieSettings({ form }: { form: SettingsForm }) {
     <SettingsGroup title="Acquisition">
       <Grid>
         <NumberField label="Download group ID" field={movies.field("downloadGroupId")} nullable help="Leave blank to use the default group." />
-        <NumberField label="Maximum movie release size (bytes)" field={movies.field("maximumReleaseBytes")} nullable help="Leave blank for no size cap." />
+        <NumberField label="Maximum movie release size (GiB)" field={movies.field("maximumReleaseBytes")} scale={GiB} min={1} nullable help="Leave blank for no size cap." />
         <SelectField label="Cross-seed preference" field={movies.field("crossSeedPreference")} options={[["off", "Off"], ["tie-break", "Prefer reuse as a tie-breaker"]]} />
         <CheckField label="Automatically upgrade movies" field={movies.field("automaticUpgrades")} />
       </Grid>
@@ -344,9 +356,6 @@ export function MovieSettings({ form }: { form: SettingsForm }) {
         <NumberField label="Maximum Radarr cases per sync" field={shadow.field("maxCasesPerSync")} />
         <CheckField label="Enable Radarr observation" field={shadow.field("enabled")} />
       </Grid>
-      <h4>Radarr path mappings</h4>
-      <p className="settings-note">Map paths reported by Radarr to paths visible to Podible.</p>
-      <PathMappings form={form} field={shadow.field("pathMappings")} />
     </SettingsGroup>
   </>;
 }
@@ -356,10 +365,8 @@ export function TvSettings({ form, openMovies }: { form: SettingsForm; openMovie
   return <>
     <SettingsGroup title="TV library and Plex publishing">
       <Grid>
-        <TextField label="TV managed root" field={tv.field("managedRoot")} />
-        <TextField label="TV Plex view path" field={tv.field("plexViewPath")} />
         <TextField label="TV Plex section ID" field={tv.field("plexSectionId")} />
-        <NumberField label="Maximum TV release size (bytes)" field={tv.field("maximumReleaseBytes")} nullable help="Leave blank for no size cap." />
+        <NumberField label="Maximum TV release size (GiB)" field={tv.field("maximumReleaseBytes")} scale={GiB} min={1} nullable help="Leave blank for no size cap." />
       </Grid>
       <p className="settings-note">TV shares the Seerr connection and release quality policy in <button type="button" className="settings-text-button" onClick={openMovies}>Movies</button>.</p>
     </SettingsGroup>
@@ -371,9 +378,6 @@ export function TvSettings({ form, openMovies }: { form: SettingsForm; openMovie
         <NumberField label="Sonarr lookback (days)" field={tv.field("lookbackDays")} />
         <NumberField label="Maximum Sonarr cases per sync" field={tv.field("maxCasesPerSync")} />
       </Grid>
-      <h4>Sonarr path mappings</h4>
-      <p className="settings-note">Map paths reported by Sonarr to paths visible to Podible.</p>
-      <PathMappings form={form} field={tv.field("pathMappings")} />
     </SettingsGroup>
   </>;
 }
@@ -400,20 +404,38 @@ export function PlexSettings({ form }: { form: SettingsForm }) {
 }
 
 export function StorageSettings({ form }: { form: SettingsForm }) {
-  const retention = fields(form).group("retention");
+  const root = fields(form), retention = root.group("retention");
   const id = (line: string) => numericSetting(line) ?? NaN;
-  return <SettingsGroup title="Retention policy" note="When free space runs low, Podible can remove eligible movie and TV library copies. Protected titles are excluded.">
+  return <>
+    <SettingsGroup title="Library location" note="Books, movies and TV use one root. Plex scans the published views, not the canonical files.">
+      <TextField label="Library root directory" field={root.field("storageRoot")} placeholder="/media/podible"
+        help="Changing the root of an existing library requires a storage migration." />
+      {!form.saved.storageRoot && <p className="settings-note">Existing locations stay in use until the library is migrated or a root is set before adding content.</p>}
+      <dl className="settings-facts">
+        <div><dt>Movies in Plex</dt><dd>{form.saved.movies.plexViewPath || "Not configured"}</dd></div>
+        <div><dt>TV in Plex</dt><dd>{form.saved.tv.plexViewPath || "Not configured"}</dd></div>
+      </dl>
+    </SettingsGroup>
+    <SettingsGroup title="Retention policy" note="When free space runs low, Podible can remove eligible movie and TV library copies. Protected titles are excluded.">
     <Grid>
-      <NumberField label="Minimum free space (bytes)" field={retention.field("minimumFreeBytes")} help="The free-space threshold for automatic cleanup. 1 GiB = 1,073,741,824 bytes." />
+      <NumberField label="Minimum free space (GiB)" field={retention.field("minimumFreeBytes")} scale={GiB} min={0} help="The free-space threshold for automatic cleanup." />
       <ListField label="Protected movie target IDs" field={retention.field("protectedMovieTargetIds")} parse={id} help="One Podible target ID per line." />
       <ListField label="Protected TV target IDs" field={retention.field("protectedTvTargetIds")} parse={id} help="One Podible target ID per line." />
     </Grid>
-  </SettingsGroup>;
+    </SettingsGroup>
+  </>;
 }
 
 export function NotificationSettings({ form }: { form: SettingsForm }) {
-  const pushover = fields(form).group("notifications").group("pushover");
-  return <SettingsGroup title="Pushover" note="Send notifications through your Pushover application.">
+  const notifications = fields(form).group("notifications"), pushover = notifications.group("pushover");
+  const delivery = notifications.field("delivery");
+  return <>
+    <SettingsGroup title="External delivery">
+      <SelectField<"dry-run" | "live"> label="Delivery mode" field={{ ...delivery, value: delivery.value ?? "dry-run", persisted: delivery.persisted ?? "dry-run" }}
+        options={[["dry-run", "Dry run"], ["live", "Live"]]} />
+      <p className="settings-note">Dry run logs skipped delivery without contacting Pushover. In-app notifications still work.</p>
+    </SettingsGroup>
+    <SettingsGroup title="Pushover" note="Send administrator alerts to Pushover.">
     <Grid>
       <CheckField label="Enable Pushover notifications" field={pushover.field("enabled")} />
     </Grid>
@@ -421,5 +443,6 @@ export function NotificationSettings({ form }: { form: SettingsForm }) {
       <SecretField label="Pushover API token" field={pushover.field("apiToken")} />
       <SecretField label="Pushover user key" field={pushover.field("userKey")} />
     </Grid>
-  </SettingsGroup>;
+    </SettingsGroup>
+  </>;
 }

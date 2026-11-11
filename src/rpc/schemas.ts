@@ -77,6 +77,7 @@ export const appSettingsSchema: z.ZodType<AppSettings> = z.object({
     downloadPath: z.string().optional(),
   }),
   libraryRoot: z.string(),
+  storageRoot: z.string().optional(),
   polling: z.object({
     rtorrentMs: z.number(),
   }),
@@ -98,13 +99,12 @@ export const appSettingsSchema: z.ZodType<AppSettings> = z.object({
     }),
   }),
   agents: z.object({
-    provider: z.literal("openai-responses"),
     apiKey: z.string(),
     editionPreference: z.string(),
-    lowConfidenceThreshold: z.number(),
     timeoutMs: z.number(),
   }),
   notifications: z.object({
+    delivery: z.enum(["dry-run", "live"]).optional(),
     pushover: z.object({
       enabled: z.boolean(),
       apiToken: z.string(),

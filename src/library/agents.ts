@@ -162,17 +162,15 @@ function configuredAgent(settings: AppSettings) {
   };
 }
 
+const LOW_CONFIDENCE_THRESHOLD = 0.45;
+
 function determineTrigger(
-  settings: AppSettings,
-  _domain: "search" | "manualImport",
   confidence: number,
   options: { forceAgent?: boolean; priorFailure?: boolean }
 ): DecisionTrigger {
   if (options.forceAgent) return "forced";
-  const lowConfidenceThreshold =
-    typeof settings.agents?.lowConfidenceThreshold === "number" ? settings.agents.lowConfidenceThreshold : 0.45;
   if (options.priorFailure) return "prior_failure";
-  if (confidence < lowConfidenceThreshold) return "low_confidence";
+  if (confidence < LOW_CONFIDENCE_THRESHOLD) return "low_confidence";
   return "none";
 }
 
@@ -656,7 +654,7 @@ export async function selectSearchCandidates(
     : [];
   const deterministic = deterministicSearchSelection(input, knownFailedReleases);
   const agentConfig = configuredAgent(settings);
-  const trigger = determineTrigger(settings, "search", deterministic.confidence, {
+  const trigger = determineTrigger(deterministic.confidence, {
     forceAgent: input.forceAgent || Boolean(agentConfig && deterministic.selections.length === 0),
     priorFailure: input.priorFailure,
   });
@@ -730,7 +728,7 @@ export async function selectManualImportPaths(
   runtime: ManualImportSelectionRuntime = {}
 ): Promise<ManualImportSelectionResult> {
   const deterministic = deterministicManualImportSelection(input);
-  const trigger = determineTrigger(settings, "manualImport", deterministic.confidence, {
+  const trigger = determineTrigger(deterministic.confidence, {
     forceAgent: input.forceAgent,
     priorFailure: input.priorFailure,
   });

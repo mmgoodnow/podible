@@ -872,6 +872,7 @@ describe("worker stalled torrent recovery", () => {
         auth: { mode: "plex" },
         torznab: [],
         notifications: {
+          delivery: "live",
           pushover: {
             enabled: true,
             apiToken: "token",

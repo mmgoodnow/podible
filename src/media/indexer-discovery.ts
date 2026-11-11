@@ -8,6 +8,49 @@ import { INDEXER_RETRY_MS, IndexerError, indexerFailure, type IndexerFailure } f
 type DiscoveryEntry = { discovery: ProwlarrDiscovery; failure?: IndexerFailure; until?: number };
 const discoveries = new Map<string, DiscoveryEntry>();
 
+function endpointIdentity(value: string): string | null {
+  try {
+    const url = new URL(value);
+    return url.origin + url.pathname.replace(/\/+$/, "").replace(/\/api$/, "");
+  } catch {
+    return null;
+  }
+}
+
+export async function indexerDiscoveryStatus(settings: AppSettings, sourcesFor = indexerSources) {
+  const mediaTypes = ["movie", "tv", "audio", "ebook"] as const;
+  const modes = ["search", "rss"] as const;
+  type Row = { id: number; name: string; search: IndexerMedia[]; feeds: IndexerMedia[]; retryAt: number | null };
+  if (!settings.prowlarr.url.trim())
+    return { state: "not-configured" as const, indexers: [], duplicates: [] };
+  try {
+    const groups = await Promise.all(modes.flatMap(mode => mediaTypes.map(async media =>
+      ({ mode, media, sources: await sourcesFor(settings, media, mode) }))));
+    const rows = new Map<string, Row>();
+    for (const { mode, media, sources } of groups) for (const source of sources) {
+      const endpoint = endpointIdentity(source.baseUrl);
+      if (!endpoint) continue;
+      let row = rows.get(endpoint);
+      if (!row) {
+        const name = source.name.replaceAll(settings.prowlarr.apiKey, "[redacted]").replace(/https?:\/\/\S+/gi, "[URL]");
+        row = { id: Number(endpoint.split("/").at(-1)), name, search: [], feeds: [], retryAt: null };
+        rows.set(endpoint, row);
+      }
+      row[mode === "search" ? "search" : "feeds"].push(media);
+      if (source.availableAfter && source.availableAfter > Date.now())
+        row.retryAt = Math.max(row.retryAt ?? 0, source.availableAfter);
+    }
+    const duplicates = settings.torznab.flatMap((source, index) => {
+      const match = rows.get(endpointIdentity(source.baseUrl) ?? "");
+      return match ? [{ index, name: match.name }] : [];
+    });
+    return { state: "available" as const, indexers: [...rows.values()].sort((a, b) => a.name.localeCompare(b.name)), duplicates };
+  } catch (error) {
+    if (isRunControlError(error)) throw error;
+    return { state: "unavailable" as const, indexers: [], duplicates: [] };
+  }
+}
+
 export async function indexerSources(settings: AppSettings, media: IndexerMedia, mode: "search" | "rss" = "search"): Promise<DiscoveredIndexer[]> {
   if (!settings.prowlarr?.url.trim()) return settings.torznab;
   try {

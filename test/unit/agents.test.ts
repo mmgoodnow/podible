@@ -173,7 +173,7 @@ describe("agent decisions", () => {
       })),
     ]);
     const settings = defaultSettings({
-      agents: agentSettings({ lowConfidenceThreshold: 0.99 }),
+      agents: agentSettings(),
     });
     const decision = await selectSearchCandidates(
       settings,
@@ -232,7 +232,7 @@ describe("agent decisions", () => {
       })),
     ]);
     const settings = defaultSettings({
-      agents: agentSettings({ lowConfidenceThreshold: 0.99, editionPreference: "prefer GraphicAudio dramatizations" }),
+      agents: agentSettings({ editionPreference: "prefer GraphicAudio dramatizations" }),
     });
     const decision = await selectSearchCandidates(
       settings,
@@ -457,9 +457,8 @@ describe("agent decisions", () => {
         })),
       ]);
       try {
-        // One media exercises explicit forcing, the other configured-agent
-        // recovery even when the normal confidence threshold disables review.
-        const settings = defaultSettings({ agents: agentSettings({ lowConfidenceThreshold: 0 }) });
+        // Exercise both explicit forcing and automatic review of discarded results.
+        const settings = defaultSettings({ agents: agentSettings() });
         const input = {
           query: "Foundation Isaac Asimov", media, results: candidates,
           rejectedGuids: ["rejected"], forceAgent: media === "audio",
@@ -563,7 +562,7 @@ describe("agent decisions", () => {
       }),
     };
     const settings = defaultSettings({
-      agents: agentSettings({ lowConfidenceThreshold: 0.99 }),
+      agents: agentSettings(),
     });
     await expect(
       selectSearchCandidates(
@@ -618,6 +617,8 @@ describe("agent decisions", () => {
       })
     );
     expect("model" in legacySettings.agents).toBe(false);
+    expect("provider" in legacySettings.agents).toBe(false);
+    expect("lowConfidenceThreshold" in legacySettings.agents).toBe(false);
 
     const decision = await selectSearchCandidates(legacySettings, {
       query: "Dune Frank Herbert",

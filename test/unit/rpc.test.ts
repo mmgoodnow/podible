@@ -1959,6 +1959,32 @@ describe("json-rpc handler", () => {
     db.close();
   });
 
+  test("derives storage paths from one root and rejects relocation of an existing library", async () => {
+    const db = new Database(":memory:");
+    try {
+      runMigrations(db);
+      const repo = new BooksRepo(db);
+      const request = new Request("http://localhost/rpc/settings/update");
+      const ctx = makeRpcContext(repo, request);
+      const update = async (storageRoot: string) =>
+        (await handleRpcMethod("settings.update", { settings: { ...repo.getSettings(), storageRoot } }, ctx)).json() as Promise<any>;
+      expect((await update("relative")).error.code).toBe(-32602);
+      expect((await update("/")).error.code).toBe(-32602);
+      expect((await update("/mnt/library/")).result.libraryRoot).toBe("/mnt/library/books");
+      const saved = repo.getSettings();
+      expect(saved.storageRoot).toBe("/mnt/library");
+      expect(saved.movies.managedRoot).toBe("/mnt/library/movies");
+      expect(saved.movies.plexViewPath).toBe("/mnt/library/movies/views/plex/movies");
+      expect(saved.tv.plexViewPath).toBe("/mnt/library/tv/views/plex/tv");
+      repo.createBook({ title: "Dune", author: "Frank Herbert" });
+      expect((await update("/mnt/other")).error.code).toBe(-32602);
+      expect((await update("")).error.code).toBe(-32602);
+      expect(repo.getSettings()).toEqual(saved);
+    } finally {
+      db.close();
+    }
+  });
+
   test("blocks write methods in read-only rpc dispatch", async () => {
     const db = new Database(":memory:");
     runMigrations(db);

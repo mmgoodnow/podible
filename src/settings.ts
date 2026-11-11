@@ -1,4 +1,5 @@
 import type { AppSettings } from "./app-types";
+import path from "node:path";
 import { defaultMovieSettings, movieSettingsSchema } from "./movies/settings";
 import { prowlarrSettingsSchema } from "./media/prowlarr";
 import { tvSettingsSchema } from "./tv/settings";
@@ -14,6 +15,7 @@ type SettingsOverrides = Partial<Omit<AppSettings, "rtorrent" | "polling" | "rec
     };
   agents?: Partial<AppSettings["agents"]>;
   notifications?: {
+    delivery?: AppSettings["notifications"]["delivery"];
     pushover?: Partial<AppSettings["notifications"]["pushover"]>;
   };
 };
@@ -54,13 +56,12 @@ export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
       },
     },
     agents: {
-      provider: "openai-responses",
       apiKey: "",
       editionPreference: "",
-      lowConfidenceThreshold: 0.45,
       timeoutMs: 30000,
     },
     notifications: {
+      delivery: "dry-run",
       pushover: {
         enabled: false,
         apiToken: "",
@@ -69,7 +70,7 @@ export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
     },
   };
 
-  return {
+  return resolveLibraryStorage({
     ...defaults,
     ...overrides,
     movies: movieSettingsSchema.parse(overrides?.movies ?? defaults.movies),
@@ -105,11 +106,25 @@ export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
       ...(overrides?.agents ?? {}),
     },
     notifications: {
+      delivery: overrides?.notifications?.delivery ?? defaults.notifications.delivery,
       pushover: {
         ...defaults.notifications.pushover,
         ...(overrides?.notifications?.pushover ?? {}),
       },
     },
+  });
+}
+
+export function resolveLibraryStorage(settings: AppSettings): AppSettings {
+  if (!settings.storageRoot) return settings;
+  const root = path.resolve(settings.storageRoot);
+  const movies = path.join(root, "movies"), tv = path.join(root, "tv");
+  return {
+    ...settings,
+    storageRoot: root,
+    libraryRoot: path.join(root, "books"),
+    movies: { ...settings.movies, managedRoot: movies, plexViewPath: path.join(movies, "views", "plex", "movies") },
+    tv: { ...settings.tv, managedRoot: tv, plexViewPath: path.join(tv, "views", "plex", "tv") },
   };
 }
 
@@ -138,7 +153,7 @@ export function parseSettings(value: string): AppSettings {
     typeof parsedRecovery.stalledTorrentMinutes === "number" && Number.isFinite(parsedRecovery.stalledTorrentMinutes)
       ? Math.max(0, Math.trunc(parsedRecovery.stalledTorrentMinutes))
       : defaults.recovery.stalledTorrentMinutes;
-  return {
+  return resolveLibraryStorage({
     ...defaults,
     ...parsed,
     movies: movieSettingsSchema.parse(parsed.movies ?? {}),
@@ -192,25 +207,21 @@ export function parseSettings(value: string): AppSettings {
       },
     },
     agents: {
-      provider: parsedAgents.provider === "openai-responses" ? parsedAgents.provider : defaults.agents.provider,
       apiKey: typeof parsedAgents.apiKey === "string" ? parsedAgents.apiKey : defaults.agents.apiKey,
       editionPreference:
         typeof parsedAgents.editionPreference === "string" ? parsedAgents.editionPreference : defaults.agents.editionPreference,
-      lowConfidenceThreshold:
-        typeof parsedAgents.lowConfidenceThreshold === "number" && Number.isFinite(parsedAgents.lowConfidenceThreshold)
-          ? parsedAgents.lowConfidenceThreshold
-          : defaults.agents.lowConfidenceThreshold,
       timeoutMs:
         typeof parsedAgents.timeoutMs === "number" && Number.isFinite(parsedAgents.timeoutMs)
           ? Math.max(1000, Math.trunc(parsedAgents.timeoutMs))
           : defaults.agents.timeoutMs,
     },
     notifications: {
+      delivery: parsedNotifications.delivery === "live" ? "live" : "dry-run",
       pushover: {
         enabled: typeof parsedPushover.enabled === "boolean" ? parsedPushover.enabled : defaults.notifications.pushover.enabled,
         apiToken: typeof parsedPushover.apiToken === "string" ? parsedPushover.apiToken : defaults.notifications.pushover.apiToken,
         userKey: typeof parsedPushover.userKey === "string" ? parsedPushover.userKey : defaults.notifications.pushover.userKey,
       },
     },
-  };
+  });
 }

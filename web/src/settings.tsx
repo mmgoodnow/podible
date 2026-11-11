@@ -4,7 +4,7 @@ import { appSettingsSchema } from "../../src/rpc/schemas";
 import { rpc, useTRPC } from "./rpc";
 import { LibraryMigrationPreview } from "./library-migration";
 import { applySettingsDraft, changeSetting, conflictingSettings, rebaseSettingsDraft, type SettingsDraft } from "./settings-draft";
-import { BookSettings, DownloadSettings, IndexerSettings, MovieSettings, NotificationSettings, PlexSettings,
+import { AiSettings, BookSettings, DownloadSettings, IndexerSettings, MovieSettings, NotificationSettings, PlexSettings,
   SettingsGroup, StorageSettings, TvSettings, type SettingsForm } from "./settings-fields";
 import "./settings.css";
 
@@ -13,18 +13,22 @@ const saveKey = ["admin-settings-save"] as const;
 const selectKey = ["admin-settings-plex-select"] as const;
 const emptyDraft: SettingsDraft = {};
 const sections = {
-  books: { title: "Books & feed", description: "Library paths, reader feed and edition matching.", roots: ["libraryRoot", "feed", "agents"] },
+  books: { title: "Books & feed", description: "Reader feed and edition matching.", roots: ["feed"] },
+  ai: { title: "AI", description: "OpenAI connection for books, movies and TV.", roots: ["agents"] },
   indexers: { title: "Indexers", description: "Manage search providers and release sources.", roots: ["prowlarr", "torznab"] },
-  downloads: { title: "Downloads", description: "Torrent connection, polling and recovery.", roots: ["rtorrent", "polling", "recovery"] },
+  downloads: { title: "Downloads", description: "Recover stalled downloads.", roots: ["recovery"] },
   movies: { title: "Movies", description: "Publishing, request integrations and release quality.", roots: ["movies"] },
-  tv: { title: "TV", description: "Series publishing, Sonarr and path mappings.", roots: ["tv"] },
+  tv: { title: "TV", description: "Series publishing and Sonarr.", roots: ["tv"] },
   plex: { title: "Plex access", description: "Choose who can sign in and configure reader app redirects.", roots: ["auth"] },
-  storage: { title: "Storage", description: "Set retention limits and preview an existing library.", roots: ["retention"] },
+  storage: { title: "Storage", description: "Library location, Plex views and retention.", roots: ["storageRoot", "retention"] },
   notifications: { title: "Notifications", description: "Configure alerts delivered through Pushover.", roots: ["notifications"] },
 } satisfies Record<string, { title: string; description: string; roots: string[] }>;
 type Section = keyof typeof sections;
 const sectionKeys = Object.keys(sections) as Section[];
-const sectionFor = (path: string) => sectionKeys.find(key => sections[key].roots.includes(path.split(".")[0]!));
+const sectionFor = (path: string): Section | undefined => {
+  if (path === "agents.editionPreference") return "books";
+  return sectionKeys.find(key => sections[key].roots.includes(path.split(".")[0]!));
+};
 
 function PlexAccess({ form, saving }: { form: SettingsForm; saving: boolean }) {
   const trpc = useTRPC(), cache = useQueryClient();
@@ -106,6 +110,10 @@ export default function Settings({ navigation }: { navigation: ReactNode }) {
   // Query observer notifications are batched; controlled inputs need the draft immediately.
   const draft = useSyncExternalStore(draftStore.subscribe, draftStore.snapshot);
   const [section, setSection] = useState<Section>("books");
+  const indexers = useQuery(trpc.settings.indexers.queryOptions({}, {
+    enabled: section === "indexers" && !!settings.data?.prowlarr.url,
+    staleTime: 60_000, retry: false,
+  }));
   const save = useMutation({
     mutationKey: saveKey,
     async mutationFn(submitted: SettingsDraft) {
@@ -123,7 +131,10 @@ export default function Settings({ navigation }: { navigation: ReactNode }) {
       await cache.cancelQueries({ queryKey: settingsKey });
       cache.setQueryData(settingsKey, result.settings);
       cache.setQueryData<SettingsDraft>(draftKey, current => rebaseSettingsDraft(result.settings, current ?? emptyDraft, submitted));
-      if (result.written) void cache.invalidateQueries({ queryKey: trpc.adminWeb.plexServers.queryKey() });
+      if (result.written) {
+        void cache.invalidateQueries({ queryKey: trpc.adminWeb.plexServers.queryKey() });
+        void cache.invalidateQueries({ queryKey: trpc.settings.indexers.queryKey() });
+      }
     },
   });
   const saved = settings.data;
@@ -195,7 +206,8 @@ export default function Settings({ navigation }: { navigation: ReactNode }) {
           {settings.error && <p className="settings-load" role="alert">{settings.error.message}{dirty ? ". Your unsaved draft has been kept." : ""}</p>}
           {form && <div className="settings-panel-body">
             {section === "books" && <BookSettings form={form} />}
-            {section === "indexers" && <IndexerSettings form={form} />}
+            {section === "ai" && <AiSettings form={form} />}
+            {section === "indexers" && <IndexerSettings form={form} discovery={indexers.data} loading={indexers.isPending} />}
             {section === "downloads" && <DownloadSettings form={form} />}
             {section === "movies" && <MovieSettings form={form} />}
             {section === "tv" && <TvSettings form={form} openMovies={() => openSection("movies")} />}

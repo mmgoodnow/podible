@@ -133,6 +133,7 @@ export const appRouter = t.router({
     refresh: procedure.input(adminWebRouter.routes.refresh.paramsSchema).output(adminWebRouter.routes.refresh.resultSchema).mutation(({ ctx, input }) => executeMethod(adminWebRouter.routes.refresh, ctx, input)),
   }),
   settings: t.router({
+    indexers: procedure.input(settingsRouter.routes.indexers.paramsSchema).output(settingsRouter.routes.indexers.resultSchema).query(({ ctx, input }) => executeMethod(settingsRouter.routes.indexers, ctx, input)),
     get: procedure.input(settingsRouter.routes.get.paramsSchema).output(settingsRouter.routes.get.resultSchema).query(({ ctx, input }) => executeMethod(settingsRouter.routes.get, ctx, input)),
     update: procedure.input(settingsRouter.routes.update.paramsSchema).output(settingsRouter.routes.update.resultSchema).mutation(({ ctx, input }) => executeMethod(settingsRouter.routes.update, ctx, input)),
   }),

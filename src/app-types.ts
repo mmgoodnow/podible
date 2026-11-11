@@ -48,6 +48,7 @@ export type AppSettings = {
     downloadPath?: string;
   };
   libraryRoot: string;
+  storageRoot?: string;
   polling: {
     rtorrentMs: number;
   };
@@ -69,13 +70,12 @@ export type AppSettings = {
     };
   };
   agents: {
-    provider: "openai-responses";
     apiKey: string;
     editionPreference: string;
-    lowConfidenceThreshold: number;
     timeoutMs: number;
   };
   notifications: {
+    delivery?: "dry-run" | "live";
     pushover: {
       enabled: boolean;
       apiToken: string;

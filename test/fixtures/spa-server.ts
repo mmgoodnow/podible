@@ -41,6 +41,7 @@ if (process.env.ADMIN_FIXTURE) {
   // Exercise a healthy-disk preview independently of the CI runner's free space.
   settings.retention.minimumFreeBytes = 0;
   settings.feed.title = "Fixture library";
+  settings.prowlarr = { url: "https://prowlarr-fixture.invalid/prowlarr", apiKey: "prowlarr-fixture-secret" };
   settings.libraryRoot = path.join(root, "books");
   settings.tv.managedRoot = path.join(root, "tv-unavailable");
   settings.auth.plex = { ...settings.auth.plex, ownerToken: "admin-fixture-owner-secret", machineId: "fixture-mendel" };
@@ -61,6 +62,15 @@ if (process.env.ADMIN_FIXTURE) {
   const realFetch = globalThis.fetch;
   globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
     const url = new URL(args[0] instanceof Request ? args[0].url : String(args[0]));
+    if (url.origin === "https://prowlarr-fixture.invalid") {
+      if (new Headers(args[1]?.headers).get("X-Api-Key") !== "prowlarr-fixture-secret")
+        return new Response(null, { status: 401 });
+      if (url.pathname === "/prowlarr/api/v1/indexer") return Response.json([{
+        id: 17, name: "Fixture Prowlarr indexer", enable: true, protocol: "torrent",
+        capabilities: { categories: [{ id: 3030 }, { id: 7020 }] },
+      }]);
+      if (url.pathname === "/prowlarr/api/v1/indexerstatus") return Response.json([]);
+    }
     if (url.origin === "https://radarr-fixture.invalid" && url.pathname === "/radarr/api/v3/movie" && args[1]?.method === "GET")
       return Response.json([{ id: 1, tmdbId: 11, title: "A library worth keeping", year: 2025, monitored: true, hasFile: true },
         { id: 2, tmdbId: 0, title: "An unidentified title", monitored: true, hasFile: false }]);

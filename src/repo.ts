@@ -558,6 +558,17 @@ export class BooksRepo {
     });
   }
 
+  hasLibraryStorageHistory(): boolean {
+    const history = this.db.query<{ present: number }, []>(`
+      SELECT EXISTS(SELECT 1 FROM books)
+          OR EXISTS(SELECT 1 FROM movie_targets)
+          OR EXISTS(SELECT 1 FROM tv_targets)
+          OR EXISTS(SELECT 1 FROM managed_content_files)
+          OR EXISTS(SELECT 1 FROM media_torrents) AS present
+    `).get();
+    return history?.present === 1;
+  }
+
   upsertUser(input: UpsertUserInput): UserRow {
     const now = nowIso();
     return this.db

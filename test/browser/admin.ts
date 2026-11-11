@@ -36,7 +36,7 @@ async function verify() {
   };
   const anonymous = await browser.newContext({ ignoreHTTPSErrors: true }), readerContext = await browser.newContext({ ignoreHTTPSErrors: true });
   await readerContext.addCookies([{ name: "podible_session", value: "admin-reader-fixture", url, httpOnly: true }]);
-  for (const method of ["settings.get", "settings.update", "adminWeb.migrationPreview", "adminWeb.users", "adminWeb.ops", "adminWeb.plexServers", "adminWeb.selectPlexServer", "adminWeb.refresh", "jobs.retry", "retention.preview", "retention.evict", "transferMetrics.status", "transferMetrics.library",
+  for (const method of ["settings.get", "settings.update", "settings.indexers", "adminWeb.migrationPreview", "adminWeb.users", "adminWeb.ops", "adminWeb.plexServers", "adminWeb.selectPlexServer", "adminWeb.refresh", "jobs.retry", "retention.preview", "retention.evict", "transferMetrics.status", "transferMetrics.library",
     "crossSeed.startBackfill", "crossSeed.backfillLatest", "crossSeed.backfillStatus", "crossSeed.cancelBackfill"]) {
     assert.equal((await rpc(method, {}, anonymous.request)).error?.code, -32001);
     assert.equal((await rpc(method, {}, readerContext.request)).error?.code, -32003);
@@ -91,7 +91,10 @@ async function verify() {
   await mkdir(artifacts, { recursive: true });
   await title.waitFor();
   assert.equal(await title.inputValue(), "Fixture library");
+  assert.equal(await openAi.count(), 0);
+  await openSettings("AI");
   assert.equal(await openAi.getAttribute("type"), "password");
+  assert.equal(await openAi.getAttribute("placeholder"), "\u2022".repeat(8));
   assert.equal(await openAi.inputValue(), "", "An existing credential was put into an input");
   assert.equal(await page.getByLabel("Settings JSON", { exact: true }).count(), 0);
   assert.equal(await saveSettings.isDisabled(), true);
@@ -117,7 +120,6 @@ async function verify() {
   await page.getByLabel("Feed author", { exact: true }).and(page.locator('[value="Updated elsewhere"]')).waitFor();
   assert.equal(await title.inputValue(), editedTitle, "Refetch overwrote an unsaved settings draft");
   assert.equal(await page.getByLabel("Feed author", { exact: true }).inputValue(), outsideSettings.feed.author);
-  assert.equal(await openAi.inputValue(), "");
   assert.equal(settingsPosts, 0, "Opening sections and editing fields must not save");
   await adminNavigation.getByRole("link", { name: "Users", exact: true }).click();
   console.log("Admin browser: checking users and draft navigation");
@@ -173,6 +175,7 @@ async function verify() {
   assert.deepEqual(saved, { ...rotatedAgain, feed: { ...rotatedAgain.feed, title: newerTitle } });
   assert.equal(saved.agents.apiKey, rotatedAgain.agents.apiKey, "An untouched credential rotation was overwritten");
 
+  await openSettings("AI");
   const timeout = page.getByLabel("Agent timeout (ms)", { exact: true });
   await timeout.fill("45000");
   await page.route("**/api/trpc/settings.update**", async route => {
@@ -195,8 +198,9 @@ async function verify() {
   assert.equal(settingsPosts, postsBeforeInvalid, "Invalid input was submitted");
   await discard.click();
 
-  await title.fill("A conflicting draft");
   await timeout.fill("45000");
+  await openSettings("Books & feed");
+  await title.fill("A conflicting draft");
   const otherEdit = { ...saved, feed: { ...saved.feed, title: "A competing server edit" } };
   assert.ok((await rpc("settings.update", { settings: otherEdit })).result);
   await saveSettings.click();
@@ -206,26 +210,27 @@ async function verify() {
   assert.equal(settingsPosts, postsBeforeInvalid, "Save must detect conflicts before writing");
   await page.getByRole("button", { name: "Use server values", exact: true }).click();
   assert.equal(await title.inputValue(), otherEdit.feed.title);
+  await openSettings("AI");
   assert.equal(await timeout.inputValue(), "45000", "Accepting a conflicting server value discarded an unrelated draft edit");
   assert.equal(await saveSettings.isEnabled(), true);
   await discard.click();
 
   await page.getByRole("button", { name: "Clear OpenAI API key", exact: true }).click();
   await openSettings("Indexers");
+  await page.getByText("Fixture Prowlarr indexer", { exact: true }).waitFor();
+  await page.getByText("Search: Audiobooks, Ebooks", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Add torznab source", exact: true }).click();
   await page.getByLabel("Source name", { exact: true }).fill("Fixture Torznab");
-  const torznabUrl = "https://torznab-fixture.invalid/api?apikey=embedded-fixture-token";
+  const torznabUrl = `${saved.prowlarr.url}/17?apikey=embedded-fixture-token`;
   await page.getByLabel("Torznab URL", { exact: true }).fill(torznabUrl);
   await page.getByLabel("Torznab API key", { exact: true }).fill("torznab-replacement-fixture");
   await page.getByLabel("Audiobook categories", { exact: true }).fill("3030,3040");
   await openSettings("TV");
-  await page.getByRole("button", { name: "Add path mapping", exact: true }).click();
-  assert.equal(await saveSettings.isDisabled(), true, "Incomplete path mapping should fail schema validation");
-  await page.getByLabel("Remote root", { exact: true }).fill("/remote/tv");
-  await page.getByLabel("Local root", { exact: true }).fill("/local/tv");
+  assert.equal(await page.getByRole("button", { name: "Add path mapping", exact: true }).count(), 0);
   await openSettings("Movies");
   await page.getByRole("button", { name: "Move tier 2 up", exact: true }).click();
   await openSettings("Storage");
+  await page.getByLabel("Minimum free space (GiB)", { exact: true }).fill("2.5");
   const protectedTv = page.getByLabel("Protected TV target IDs", { exact: true });
   await protectedTv.fill("42");
   await protectedTv.press("End");
@@ -240,11 +245,11 @@ async function verify() {
   const [firstTier, secondTier, ...otherTiers] = saved.movies.qualityPolicy.tiers;
   assert.deepEqual(grouped, { ...otherEdit, agents: { ...saved.agents, apiKey: "" },
     torznab: [{ name: "Fixture Torznab", baseUrl: torznabUrl, apiKey: "torznab-replacement-fixture", categories: { audio: "3030,3040" } }],
-    tv: { ...saved.tv, pathMappings: [{ remoteRoot: "/remote/tv", localRoot: "/local/tv" }] },
     movies: { ...saved.movies, qualityPolicy: { ...saved.movies.qualityPolicy, tiers: [secondTier, firstTier, ...otherTiers] } },
-    retention: { ...saved.retention, protectedTvTargetIds: [42, 123] },
+    retention: { ...saved.retention, minimumFreeBytes: 2.5 * 1024 ** 3, protectedTvTargetIds: [42, 123] },
   });
   await openSettings("Indexers");
+  await page.getByText("Already discovered through Prowlarr; not queried twice.", { exact: true }).waitFor();
   assert.equal(await page.getByLabel("Torznab API key", { exact: true }).inputValue(), "");
   assert.equal(await page.getByLabel("Torznab URL", { exact: true }).inputValue(), "", "A URL with embedded credentials was exposed");
 
@@ -253,7 +258,7 @@ async function verify() {
   await title.waitFor();
   await page.evaluate("scrollTo(0, 0)");
   await page.screenshot({ path: path.join(artifacts, "admin-settings-mobile.png"), animations: "disabled" });
-  for (const section of ["Books & feed", "Indexers", "Downloads", "Movies", "TV", "Storage", "Notifications", "Plex access"]) {
+  for (const section of ["Books & feed", "AI", "Indexers", "Downloads", "Movies", "TV", "Storage", "Notifications", "Plex access"]) {
     await openSettings(section);
     await page.getByRole("heading", { name: section, exact: true }).waitFor();
     assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false, `${section} settings overflow mobile viewport`);
