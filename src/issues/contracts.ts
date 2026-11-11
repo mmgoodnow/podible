@@ -22,6 +22,51 @@ export const screenIssueSchema = z.object({
 });
 export const screenIssuePageSchema = z.object({ reports: z.array(screenIssueSchema), nextBeforeId: id.nullable() });
 
+export const screenIssueEvidenceSchema = z.strictObject({
+  scope: z.enum(["movie", "tv-show", "tv-episode"]),
+  category,
+  filedFinding: finding,
+  currentFinding: finding,
+});
+export const screenIssueDecisionSchema = z.strictObject({
+  focus: z.enum(["recorded-content-loss", "publication-gap", "library-availability-unverified", "playback-unverified",
+    "tracks-unverified", "identity-unverified", "inconclusive"]),
+});
+export const screenIssueCheckForFocus = {
+  "recorded-content-loss": "preview-recovery",
+  "publication-gap": "preview-recovery",
+  "library-availability-unverified": "preview-recovery",
+  "playback-unverified": "check-plex-playback",
+  "tracks-unverified": "check-plex-tracks",
+  "identity-unverified": "verify-content-identity",
+  "inconclusive": "manual-review",
+} as const satisfies Record<z.infer<typeof screenIssueDecisionSchema>["focus"], string>;
+export const screenIssueAssessmentSchema = screenIssueDecisionSchema.extend({
+  evidence: screenIssueEvidenceSchema,
+  checkedAt: z.iso.datetime(),
+  suggestedCheck: z.enum(["preview-recovery", "check-plex-playback", "check-plex-tracks", "verify-content-identity", "manual-review"]),
+}).refine(({ evidence, focus, suggestedCheck }) => {
+  if (screenIssueCheckForFocus[focus] !== suggestedCheck) return false;
+  const published = evidence.currentFinding === "publication-recorded";
+  switch (focus) {
+    case "recorded-content-loss": return evidence.currentFinding === "content-loss-recorded";
+    case "publication-gap": return evidence.currentFinding === "no-publication-recorded";
+    case "library-availability-unverified":
+    case "playback-unverified": return published && (evidence.category === "playback" || evidence.category === "missing");
+    case "tracks-unverified": return published && evidence.category === "audio-subtitles";
+    case "identity-unverified": return published && evidence.category === "wrong-content";
+    case "inconclusive": return true;
+  }
+}, "Assessment is not supported by the evidence");
+export const screenIssueInboxPageSchema = screenIssuePageSchema.extend({
+  reports: z.array(screenIssueSchema.extend({ assessment: screenIssueAssessmentSchema.nullable() })),
+});
+export const diagnoseScreenIssueSchema = z.strictObject({ reportId: id });
+export const screenIssueDiagnosisRequestResultSchema = z.discriminatedUnion("status", [
+  z.strictObject({ status: z.literal("assessed"), assessment: screenIssueAssessmentSchema }),
+  z.strictObject({ status: z.literal("job"), jobId: id }),
+]);
+
 export type ScreenIssueTitle = z.infer<typeof screenIssueTitleSchema>;
 export type ScreenIssueSubject = z.infer<typeof subject>;
 export type ScreenIssueCategory = z.infer<typeof category>;
@@ -30,3 +75,6 @@ export type CreateScreenIssue = z.infer<typeof createScreenIssueSchema>;
 export type ScreenIssue = z.infer<typeof screenIssueSchema>;
 export type ListScreenIssues = z.infer<typeof listScreenIssuesSchema>;
 export type ScreenIssuePage = z.infer<typeof screenIssuePageSchema>;
+export type ScreenIssueEvidence = z.infer<typeof screenIssueEvidenceSchema>;
+export type ScreenIssueAssessment = z.infer<typeof screenIssueAssessmentSchema>;
+export type ScreenIssueInboxPage = z.infer<typeof screenIssueInboxPageSchema>;

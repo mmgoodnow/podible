@@ -36,7 +36,7 @@ export function ScreenIssuePanel({ title, episodeGroups = [] }: { title: ScreenI
     <div id={panelId} hidden={!open}>
       {open && <div className="panel">
         <h2>Report a problem</h2>
-        <p>Administrators can read your report. Filing it records a local check but does not check Plex playback or apply a fix.</p>
+        <p>Administrators can read your report. Filing it records a local check and queues diagnosis. It does not check Plex playback or apply a fix.</p>
         <form onSubmit={event => {
           event.preventDefault();
           if (!description.trim() || submit.isPending) return;

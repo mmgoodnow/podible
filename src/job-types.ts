@@ -4,7 +4,7 @@ export const JOB_TYPES = [
   "indexer_feed_sync", "movie_feed_match", "book_feed_match",
   "movie_acquire", "movie_reconcile", "movie_shadow_sync", "movie_shadow_evaluate", "movie_dual_write_sync",
   "acquire", "download", "import", "reconcile", "full_library_refresh",
-  "chapter_analysis", "cover_generation", "metadata_hydration",
+  "chapter_analysis", "cover_generation", "metadata_hydration", "screen_issue_diagnosis",
   "retention_cleanup", "tv_retention_cleanup", "tv_retention_pressure", "torrent_stewardship_collect",
   "torrent_reuse", "torrent_reuse_feed", "torrent_reuse_backfill", "torrent_metrics_collect",
 ] as const;

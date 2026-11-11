@@ -123,6 +123,7 @@ export const appRouter = t.router({
     create: procedure.input(issuesRouter.routes.create.paramsSchema).output(issuesRouter.routes.create.resultSchema).mutation(({ ctx, input }) => executeMethod(issuesRouter.routes.create, ctx, input)),
     listMine: procedure.input(issuesRouter.routes.listMine.paramsSchema).output(issuesRouter.routes.listMine.resultSchema).query(({ ctx, input }) => executeMethod(issuesRouter.routes.listMine, ctx, input)),
     inbox: procedure.input(issuesRouter.routes.inbox.paramsSchema).output(issuesRouter.routes.inbox.resultSchema).query(({ ctx, input }) => executeMethod(issuesRouter.routes.inbox, ctx, input)),
+    diagnose: procedure.input(issuesRouter.routes.diagnose.paramsSchema).output(issuesRouter.routes.diagnose.resultSchema).mutation(({ ctx, input }) => executeMethod(issuesRouter.routes.diagnose, ctx, input)),
   }),
   adminWeb: t.router({
     migrationPreview: procedure.input(adminWebRouter.routes.migrationPreview.paramsSchema).output(adminWebRouter.routes.migrationPreview.resultSchema).query(({ ctx, input }) => executeMethod(adminWebRouter.routes.migrationPreview, ctx, input)),

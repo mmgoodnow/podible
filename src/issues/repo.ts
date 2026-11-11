@@ -1,16 +1,23 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
+import type { JobRow } from "../app-types";
 import { immediateTransaction } from "../db-transaction";
-import type { CreateScreenIssue, ListScreenIssues, ScreenIssue, ScreenIssueFinding, ScreenIssuePage } from "./contracts";
+import { screenIssueAssessmentSchema, screenIssueEvidenceSchema, type CreateScreenIssue, type ListScreenIssues,
+  type ScreenIssue, type ScreenIssueAssessment, type ScreenIssueFinding, type ScreenIssueInboxPage, type ScreenIssuePage } from "./contracts";
 
 type SubjectRow = { id: number; title: string; visible: 0 | 1 };
 type ReportRow = {
   id: number; tmdbId: number | null; entryId: number | null; episodeId: number | null;
   title: string; episodeTitle: string | null; category: ScreenIssue["category"];
   description: string; finding: ScreenIssueFinding; createdAt: string;
+  assessmentJson?: string | null;
 };
-const reportSelect = `SELECT i.id,m.tmdb_id AS tmdbId,i.tv_entry_id AS entryId,i.tv_episode_id AS episodeId,
-  i.title,i.episode_title AS episodeTitle,i.category,i.description,i.triage_finding AS finding,i.created_at AS createdAt
-  FROM screen_issues i LEFT JOIN movies m ON m.id=i.movie_id`;
+const assessmentPrefix = "screen-issue-assessment:v1:";
+
+function readAssessment(json: string | null | undefined): ScreenIssueAssessment | null {
+  if (!json) return null;
+  try { return screenIssueAssessmentSchema.safeParse(JSON.parse(json)).data ?? null; }
+  catch { return null; }
+}
 
 function view(row: ReportRow): ScreenIssue {
   return {
@@ -24,7 +31,7 @@ function view(row: ReportRow): ScreenIssue {
 export class ScreenIssuesRepo {
   constructor(private readonly db: Database, private readonly beforeWrite: () => void) {}
 
-  create(userId: number, input: CreateScreenIssue): ScreenIssue | null {
+  create(userId: number, input: CreateScreenIssue, enqueueDiagnosis: (reportId: number) => JobRow): ScreenIssue | null {
     return immediateTransaction(this.db, this.beforeWrite, () => {
       const { subject, category, description } = input;
       const title = subject.media === "movie" ? this.movie(userId, subject.tmdbId) : this.show(userId, subject.entryId);
@@ -46,6 +53,7 @@ export class ScreenIssuesRepo {
         VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id`
       ).get(userId, subject.media === "movie" ? title.id : null, subject.media === "tv" ? title.id : null,
         episodeId, title.title, episode?.title ?? null, category, description, finding, createdAt)!;
+      enqueueDiagnosis(id);
       return { id, subject, title: title.title, episodeTitle: episode?.title ?? null, category, description,
         status: "open", createdAt, triage: { finding, checkedAt: createdAt } };
     });
@@ -58,20 +66,61 @@ export class ScreenIssuesRepo {
       filters.push(title.media === "movie" ? "i.movie_id=(SELECT id FROM movies WHERE tmdb_id=?)" : "i.tv_entry_id=?");
       bindings.push(title.media === "movie" ? title.tmdbId : title.entryId);
     }
-    return this.page(filters, bindings, beforeId, limit);
+    const { rows, nextBeforeId } = this.page(filters, bindings, beforeId, limit, false);
+    return { reports: rows.map(view), nextBeforeId };
   }
 
-  inbox({ beforeId, limit }: Omit<ListScreenIssues, "title">): ScreenIssuePage {
-    return this.page([], [], beforeId, limit);
+  inbox({ beforeId, limit }: Omit<ListScreenIssues, "title">): ScreenIssueInboxPage {
+    const { rows, nextBeforeId } = this.page([], [], beforeId, limit, true);
+    return { reports: rows.map(row => ({ ...view(row), assessment: readAssessment(row.assessmentJson) })), nextBeforeId };
   }
 
-  private page(filters: string[], bindings: SQLQueryBindings[], beforeId: number | undefined, limit: number): ScreenIssuePage {
+  private page(filters: string[], bindings: SQLQueryBindings[], beforeId: number | undefined, limit: number, inbox: boolean) {
     if (beforeId !== undefined) { filters.push("i.id<?"); bindings.push(beforeId); }
     const where = filters.length ? ` WHERE ${filters.join(" AND ")}` : "";
-    const rows = this.db.query<ReportRow, SQLQueryBindings[]>(`${reportSelect}${where} ORDER BY i.id DESC LIMIT ?`)
+    const rows = this.db.query<ReportRow, SQLQueryBindings[]>(`
+      SELECT i.id,m.tmdb_id AS tmdbId,i.tv_entry_id AS entryId,i.tv_episode_id AS episodeId,
+        i.title,i.episode_title AS episodeTitle,i.category,i.description,i.triage_finding AS finding,i.created_at AS createdAt
+        ${inbox ? ",s.value_json AS assessmentJson" : ""}
+      FROM screen_issues i LEFT JOIN movies m ON m.id=i.movie_id
+      ${inbox ? `LEFT JOIN app_state s ON s.key='${assessmentPrefix}' || i.id` : ""}
+      ${where} ORDER BY i.id DESC LIMIT ?`)
       .all(...bindings, limit + 1);
-    const reports = rows.slice(0, limit).map(view);
-    return { reports, nextBeforeId: rows.length > limit ? reports.at(-1)!.id : null };
+    return { rows: rows.slice(0, limit), nextBeforeId: rows.length > limit ? rows[limit - 1]!.id : null };
+  }
+
+  diagnosisInput(reportId: number) {
+    return this.db.transaction(() => {
+      const row = this.db.query<{
+        userId: number; movieId: number | null; entryId: number | null; episodeId: number | null;
+        category: ScreenIssue["category"]; filedFinding: ScreenIssueFinding; assessmentJson: string | null;
+      }, [string, number]>(`SELECT i.user_id AS userId,i.movie_id AS movieId,i.tv_entry_id AS entryId,
+        i.tv_episode_id AS episodeId,i.category,i.triage_finding AS filedFinding,s.value_json AS assessmentJson
+        FROM screen_issues i LEFT JOIN app_state s ON s.key=? WHERE i.id=?`).get(`${assessmentPrefix}${reportId}`, reportId);
+      if (!row) return null;
+      const saved = readAssessment(row.assessmentJson);
+      if (saved) return { saved } as const;
+      const media = row.movieId === null ? "tv" : "movie";
+      const currentFinding = this.triage(row.userId, media, (row.movieId ?? row.entryId)!, row.episodeId);
+      return { evidence: screenIssueEvidenceSchema.parse({
+        scope: media === "movie" ? "movie" : row.episodeId === null ? "tv-show" : "tv-episode",
+        category: row.category, filedFinding: row.filedFinding, currentFinding,
+      }), checkedAt: new Date().toISOString() } as const;
+    })();
+  }
+
+  saveAssessment(reportId: number, assessment: ScreenIssueAssessment): ScreenIssueAssessment | null {
+    const key = `${assessmentPrefix}${reportId}`;
+    return immediateTransaction(this.db, this.beforeWrite, () => {
+      if (!this.db.query("SELECT 1 FROM screen_issues WHERE id=?").get(reportId)) return null;
+      const saved = readAssessment(this.db.query<{ value_json: string }, [string]>(
+        "SELECT value_json FROM app_state WHERE key=?").get(key)?.value_json);
+      if (saved) return saved;
+      this.db.query(`INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?)
+        ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`)
+        .run(key, JSON.stringify(screenIssueAssessmentSchema.parse(assessment)), new Date().toISOString());
+      return assessment;
+    });
   }
 
   private movie(userId: number, tmdbId: number) {

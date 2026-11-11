@@ -181,7 +181,7 @@ export async function createJobExecutionRuntime(
     createWorkflow(
       {
         name: `media-${type}-v1` as const,
-        concurrency: ["torrent_reuse_backfill", "torrent_reuse_feed", "torrent_metrics_collect", "torrent_stewardship_collect", "indexer_feed_sync", "movie_feed_match", "book_feed_match", "acquire", "movie_reconcile", "movie_shadow_sync", "movie_dual_write_sync", "tv_sync", "tv_reconcile", "tv_shadow_sync", "tv_feed_match"].includes(type)
+        concurrency: ["screen_issue_diagnosis", "torrent_reuse_backfill", "torrent_reuse_feed", "torrent_metrics_collect", "torrent_stewardship_collect", "indexer_feed_sync", "movie_feed_match", "book_feed_match", "acquire", "movie_reconcile", "movie_shadow_sync", "movie_dual_write_sync", "tv_sync", "tv_reconcile", "tv_shadow_sync", "tv_feed_match"].includes(type)
           ? 1 : ["torrent_reuse", "import", "chapter_analysis", "movie_acquire", "movie_shadow_evaluate", "tv_acquire", "tv_shadow_evaluate"].includes(type) ? 2 : 16,
         input: z.object({ jobId: z.number().int().positive(), generation: z.number().int().nonnegative().default(0) }),
         events: { [completionEvent]: z.string(), "podible-admission": z.string() },

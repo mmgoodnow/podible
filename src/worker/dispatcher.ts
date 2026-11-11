@@ -1,5 +1,6 @@
 import { processChapterAnalysisJob } from "../library/chapter-analysis";
 import { processCoverGenerationJob } from "../library/cover-generation";
+import { processScreenIssueDiagnosisJob } from "../issues/diagnosis-job";
 import type { JobRow } from "../app-types";
 
 import { processAcquireJob } from "./acquire";
@@ -34,6 +35,7 @@ export type JobProcessResult = "done";
 
 /** Domain handlers are code, not a database execution-type enum. */
 export async function processJob(ctx: WorkerContext, job: JobRow): Promise<JobProcessResult> {
+  if (job.type === "screen_issue_diagnosis") return processScreenIssueDiagnosisJob(ctx, job);
   if (job.type === "torrent_metrics_collect") return processTransferMetrics(ctx, job);
   if (job.type === "torrent_reuse") return processCrossSeed(ctx, job);
   if (job.type === "torrent_reuse_feed") return discoverCrossSeeds(ctx, job);
