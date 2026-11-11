@@ -5,7 +5,9 @@ import { Failure } from "./books";
 import { Link, navigate } from "./router";
 import { metricBytes } from "./transfer-metrics-model";
 import { StageTracker } from "./stage-tracker";
+import { ScreenIssuePanel } from "./screen-issues";
 import { useAcquisitionEvents } from "./acquisition-events";
+import { NotifyMe } from "./notifications";
 import "./tv.css";
 
 function ShowRedirect({ entryId }: { entryId: number }) {
@@ -36,6 +38,7 @@ export function TvDetail({ tmdbId }: { tmdbId: number }) {
         <div className="jacket">{series.posterUrl ? <img src={series.posterUrl} alt="" /> : <span>{series.title}</span>}</div>
         <div><h1>{series.title}</h1><p>{series.year}</p><p className="synopsis">{series.overview}</p></div>
       </section>
+      <NotifyMe kind="tv" tmdbId={tmdbId} />
       <TvSeasonPicker tmdbId={tmdbId} />
     </>}
   </>;
@@ -111,6 +114,8 @@ export function TvLibraryDetail({ entryId }: { entryId: number }) {
   const result = useQuery(trpc.catalog.tvEntry.queryOptions({ entryId }));
   useAcquisitionEvents(true, () => {
     void cache.invalidateQueries({ queryKey: trpc.catalog.tvEntry.queryKey({ entryId }) });
+    const tmdbId = result.data?.entry.tmdbId;
+    if (tmdbId) void cache.invalidateQueries({ queryKey: trpc.notifications.watchStatus.queryKey({ kind: "tv", tmdbId }) });
   });
   const [expanded, setExpanded] = useState<number[]>([]);
   const changed = () => {
@@ -159,6 +164,7 @@ export function TvLibraryDetail({ entryId }: { entryId: number }) {
         {total > 0 && <><progress value={r.availableEpisodes} max={Math.max(total, r.availableEpisodes)} aria-label="Available TV episodes" />
           <p>{r.availableEpisodes} of {total} episodes verified in Plex.</p></>}
         {r.progress.lastPublishedAt && <p className="tv-request-meta">Last added {stamp(r.progress.lastPublishedAt)}</p>}
+        {r.entry.tmdbId && <NotifyMe kind="tv" tmdbId={r.entry.tmdbId} />}
       </div>
     </section>
     {(active || r.requests.length > 0) && <section className="panel progress-panel" aria-label="TV acquisition progress">
@@ -238,6 +244,7 @@ export function TvLibraryDetail({ entryId }: { entryId: number }) {
           seed.reusedBytes != null ? `${metricBytes(seed.reusedBytes)} reused` : null].filter(Boolean).join(" · ")}</span>
       </li>)}</ul>
     </section>}
+    {(r.availableEpisodes > 0 || r.requests.length > 0) && <ScreenIssuePanel title={{ media: "tv", entryId }} episodeGroups={seasons} />}
     {r.entry.relations.length > 0 && <section className="media-section"><h2>Related works</h2><ul>{r.entry.relations.map(work => <li key={`${work.key}:${work.relation}`}>
       {work.title} · {work.relation}
     </li>)}</ul></section>}

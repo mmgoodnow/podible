@@ -404,6 +404,20 @@ export interface DB {
     "applied_at": string;
   };
 
+  "screen_issues": {
+    "id": Generated<number>;
+    "user_id": number;
+    "movie_id": number | null;
+    "tv_entry_id": number | null;
+    "tv_episode_id": number | null;
+    "title": string;
+    "episode_title": string | null;
+    "category": string;
+    "description": string;
+    "triage_finding": string;
+    "created_at": string;
+  };
+
   "sessions": {
     "id": Generated<number>;
     "user_id": number;

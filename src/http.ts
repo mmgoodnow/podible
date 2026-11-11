@@ -59,6 +59,7 @@ export function createPodibleFetchHandler(
     "/movies",
     "/movies/:id",
     "/requests",
+    "/notifications",
     "/requests/:id",
     "/tv/:id",
     "/tv/requests/:id",

@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAcquisitionEvents } from "./acquisition-events";
+import { NotifyMe } from "./notifications";
 import { useTRPC } from "./rpc";
 import { Link, navigate } from "./router";
 import type { MovieRequestView } from "../../src/movies/contracts";
 import { StageTracker } from "./stage-tracker";
 import { ContentRail } from "./content-rail";
 import { ScreenCard } from "./screen-card";
+import { ScreenIssuePanel } from "./screen-issues";
 import type { MoviePageExtras } from "../../src/movies/types";
 import tmdbLogo from "./assets/tmdb-logo.svg" with { type: "file" };
 
@@ -128,6 +130,7 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
   const details = useQuery(trpc.movies.get.queryOptions({ tmdbId }));
   useAcquisitionEvents(true, () => {
     void queryClient.invalidateQueries({ queryKey: trpc.movies.get.queryKey({ tmdbId }) });
+    void queryClient.invalidateQueries({ queryKey: trpc.notifications.watchStatus.queryKey({ kind: "movie", tmdbId }) });
     void queryClient.invalidateQueries({ queryKey: trpc.requests.get.pathKey() });
   });
   const extra = useQuery(trpc.movies.pageExtras.queryOptions({ tmdbId }, {
@@ -183,6 +186,7 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
             </button>
           )}
           {request.isError && <Failure message={request.error.message} />}
+          <NotifyMe kind="movie" tmdbId={tmdbId} />
           <MovieFacts runtimeMinutes={extra?.runtimeMinutes ?? movie.runtimeMinutes ?? null}
             genres={extra?.genres ?? []} directors={extra?.directors ?? []} />
         </div>
@@ -192,6 +196,7 @@ export function MovieDetail({ tmdbId }: { tmdbId: number }) {
         {tracked.length > 1 && <h2>{entry.versionLabel}</h2>}
         <MovieRequestPanel initialRequest={entry} />
       </section>)}
+      {(availableInLibrary || existing) && <ScreenIssuePanel key={tmdbId} title={{ media: "movie", tmdbId }} />}
       {extra && (extra.cast.length > 0 || extra.related.length > 0) && <div className="movie-extras">
         {extra.cast.length > 0 && <ContentRail title="Cast" variant="cast">
           {extra.cast.map(actor => <CastPortrait key={actor.id} actor={actor} />)}

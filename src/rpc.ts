@@ -4,6 +4,7 @@ import { authRouter, createHelpMethod } from "./rpc/auth-router";
 import { downloadsRouter } from "./rpc/downloads-router";
 import { defineRouter, executeMethod, flattenRouter, type RpcMethodDefinition } from "./rpc/framework";
 import { importRouter } from "./rpc/import-router";
+import { issuesRouter } from "./rpc/issues-router";
 import { jobsRouter } from "./rpc/jobs-router";
 import { libraryRouter, releasesRouter } from "./rpc/library-router";
 import { openLibraryRouter } from "./rpc/openlibrary-router";
@@ -35,6 +36,7 @@ import { crossSeedRouter } from "./rpc/cross-seed-router";
 import { transferMetricsRouter } from "./rpc/transfer-metrics-router";
 import { tvRetentionRouter } from "./rpc/tv-retention-router";
 import { torrentRetirementRouter } from "./rpc/torrent-retirement-router";
+import { notificationsRouter } from "./rpc/notifications-router";
 
 function response(payload: RpcSuccess | RpcFailure): Response {
   return new Response(JSON.stringify(payload, null, 2), {
@@ -66,6 +68,7 @@ let methodsByName: Record<string, RpcMethodDefinition<any>> = {};
 const rootRouter = defineRouter({
   help: createHelpMethod(() => methodsByName),
   auth: authRouter,
+  notifications: notificationsRouter,
   system: systemRouter,
   openlibrary: openLibraryRouter,
   library: libraryRouter,
@@ -79,6 +82,7 @@ const rootRouter = defineRouter({
   agent: agentRouter,
   admin: adminRouter,
   movies: moviesRouter,
+  issues: issuesRouter,
   requests: movieRequestsRouter,
   movieShadow: movieShadowRouter,
   movieDualWrite: movieDualWriteRouter,

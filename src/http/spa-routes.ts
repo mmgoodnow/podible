@@ -35,7 +35,7 @@ export function createSpaRoutes(directory = SPA_BUILD_DIRECTORY) {
       return c.redirect("/ops", 308);
     if (
       relative.includes(".") ||
-      !/^(?:|library|add|series|author|movies(?:\/\d+)?|requests(?:\/\d+)?|tv\/(?:(?:requests|library)\/)?\d+|book\/\d+|retention|tv-retention|recovery|stewardship|settings|users|ops|login(?:\/plex\/(?:loading|result))?)\/?$/.test(
+      !/^(?:|library|add|series|author|movies(?:\/\d+)?|requests(?:\/\d+)?|notifications|tv\/(?:(?:requests|library)\/)?\d+|book\/\d+|retention|tv-retention|recovery|stewardship|settings|users|ops|login(?:\/plex\/(?:loading|result))?)\/?$/.test(
         relative,
       )
     )

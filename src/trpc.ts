@@ -8,6 +8,7 @@ import { openLibraryRouter } from "./rpc/openlibrary-router";
 import { importRouter } from "./rpc/import-router";
 import { RpcError, type RpcContext } from "./rpc/shared";
 import { moviesRouter, movieRequestsRouter } from "./rpc/movies-router";
+import { issuesRouter } from "./rpc/issues-router";
 import { movieShadowRouter } from "./rpc/movie-shadow-router";
 import { movieDualWriteRouter } from "./rpc/movie-dual-write-router";
 import { indexerFeedsRouter } from "./rpc/indexer-feeds-router";
@@ -25,6 +26,7 @@ import { tvRetentionRouter } from "./rpc/tv-retention-router";
 import { torrentRetirementRouter } from "./rpc/torrent-retirement-router";
 import { transferMetricsRouter } from "./rpc/transfer-metrics-router";
 import { crossSeedRouter } from "./rpc/cross-seed-router";
+import { notificationsRouter } from "./rpc/notifications-router";
 
 const t = initTRPC.context<RpcContext>().create({
   sse: { ping: { enabled: true, intervalMs: 20_000 }, client: { reconnectAfterInactivityMs: 50_000 } },
@@ -68,6 +70,12 @@ const procedure = t.procedure.use(async ({ next }) => {
 });
 
 export const appRouter = t.router({
+  notifications: t.router({
+    list: procedure.input(notificationsRouter.routes.list.paramsSchema).output(notificationsRouter.routes.list.resultSchema).query(({ ctx, input }) => executeMethod(notificationsRouter.routes.list, ctx, input)),
+    markRead: procedure.input(notificationsRouter.routes.markRead.paramsSchema).output(notificationsRouter.routes.markRead.resultSchema).mutation(({ ctx, input }) => executeMethod(notificationsRouter.routes.markRead, ctx, input)),
+    watchStatus: procedure.input(notificationsRouter.routes.watchStatus.paramsSchema).output(notificationsRouter.routes.watchStatus.resultSchema).query(({ ctx, input }) => executeMethod(notificationsRouter.routes.watchStatus, ctx, input)),
+    setWatch: procedure.input(notificationsRouter.routes.setWatch.paramsSchema).output(notificationsRouter.routes.setWatch.resultSchema).mutation(({ ctx, input }) => executeMethod(notificationsRouter.routes.setWatch, ctx, input)),
+  }),
   acquisition: t.router({
     changes: procedure.subscription(({ ctx, signal }) => {
       if (!ctx.session) throw new TRPCError({ code: "UNAUTHORIZED" });
@@ -109,6 +117,11 @@ export const appRouter = t.router({
     inventory: procedure.input(recoveryRouter.routes.inventory.paramsSchema).output(recoveryRouter.routes.inventory.resultSchema).query(({ ctx, input }) => executeMethod(recoveryRouter.routes.inventory, ctx, input)),
     preview: procedure.input(recoveryRouter.routes.preview.paramsSchema).output(recoveryRouter.routes.preview.resultSchema).query(({ ctx, input }) => executeMethod(recoveryRouter.routes.preview, ctx, input)),
     recover: procedure.input(recoveryRouter.routes.recover.paramsSchema).output(recoveryRouter.routes.recover.resultSchema).mutation(({ ctx, input }) => executeMethod(recoveryRouter.routes.recover, ctx, input)),
+  }),
+  issues: t.router({
+    create: procedure.input(issuesRouter.routes.create.paramsSchema).output(issuesRouter.routes.create.resultSchema).mutation(({ ctx, input }) => executeMethod(issuesRouter.routes.create, ctx, input)),
+    listMine: procedure.input(issuesRouter.routes.listMine.paramsSchema).output(issuesRouter.routes.listMine.resultSchema).query(({ ctx, input }) => executeMethod(issuesRouter.routes.listMine, ctx, input)),
+    inbox: procedure.input(issuesRouter.routes.inbox.paramsSchema).output(issuesRouter.routes.inbox.resultSchema).query(({ ctx, input }) => executeMethod(issuesRouter.routes.inbox, ctx, input)),
   }),
   adminWeb: t.router({
     migrationPreview: procedure.input(adminWebRouter.routes.migrationPreview.paramsSchema).output(adminWebRouter.routes.migrationPreview.resultSchema).query(({ ctx, input }) => executeMethod(adminWebRouter.routes.migrationPreview, ctx, input)),

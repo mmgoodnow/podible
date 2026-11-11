@@ -139,7 +139,7 @@ export async function publishMovieVersion(input: {
       );
     }
     active();
-    repo.selectVersion(targetId, versionId, pending.expected_revision);
+    repo.selectVersion(targetId, versionId, pending.expected_revision, { plexVerified: true });
     await input.afterPromotion?.();
     active();
     repo.clearPublication(targetId, versionId);

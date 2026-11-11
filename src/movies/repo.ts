@@ -25,6 +25,7 @@ import { RetentionRepo } from "../media/retention-repo";
 import { assertVersionContentAvailable } from "../media/content-loss";
 import { TorrentRecordsRepo, type TorrentRecord } from "../media/torrent-records";
 import { canReplaceConfirmedNuke } from "../media/release-health";
+import { NotificationsRepo } from "../notifications/repo";
 
 export type MovieTarget = {
   id: number;
@@ -464,6 +465,7 @@ export class MovieRepo {
     targetId: number,
     versionId: number,
     expectedRevision: number,
+    options?: { plexVerified: true },
   ): void {
     this.transaction(() => {
       assertVersionContentAvailable(this.db, "movie", versionId);
@@ -482,6 +484,8 @@ export class MovieRepo {
         .run(versionId, targetId, expectedRevision);
       if (changed.changes !== 1)
         throw new Error("Movie target changed during publication");
+      if (options?.plexVerified && target.active_version_id === null)
+        new NotificationsRepo(this.db, this.beforeWrite).moviePublished(targetId, expectedRevision + 1);
     });
   }
   finishAcquisition(id: number): void {

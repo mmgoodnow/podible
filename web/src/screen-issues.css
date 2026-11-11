@@ -1,0 +1,17 @@
+.screen-issues .panel { margin-top: .8rem; }
+.screen-issues fieldset { border: 0; display: grid; gap: .75rem; margin: 0; padding: 0; }
+.screen-issues label { display: grid; gap: .35rem; min-width: 0; }
+.screen-issues select, .screen-issues textarea {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: .4rem;
+  color: inherit;
+  max-width: 100%;
+  padding: .5rem;
+}
+.screen-issues textarea { resize: vertical; }
+.screen-issues button { justify-self: start; }
+.screen-issue-history { list-style: none; padding: 0; }
+.screen-issue-history li { border-top: 1px solid var(--line); display: grid; gap: .35rem; padding: .65rem 0; }
+.screen-issue-history p { margin: 0; }
+.screen-issue-description { overflow-wrap: anywhere; white-space: pre-wrap; }

@@ -80,7 +80,7 @@ jobs:
             suites: spa books library-performance
             packages: ffmpeg unzip wamerican
           - group: screen
-            suites: movies movie-shadow tv unified-library
+            suites: movies movie-shadow tv unified-library notifications screen-issues
             packages: ffmpeg unzip wamerican
           - group: admin
             suites: admin auth recovery stewardship

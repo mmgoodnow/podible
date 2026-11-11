@@ -18,6 +18,7 @@ import { TV_SHADOW_SCHEMA_SQL } from "./tv/shadow-repo";
 import { CONTENT_LOSS_SCHEMA_SQL } from "./media/content-loss";
 import { TV_RETENTION_SCHEMA_SQL } from "./media/tv-retention-repo";
 import { TRANSFER_METRICS_SCHEMA_SQL } from "./media/transfer-metrics-schema";
+import { SCREEN_ISSUES_SCHEMA_SQL } from "./issues/schema";
 
 const SCHEMA_MIGRATION_ID = 1;
 const GUID_MIGRATION_ID = 2;
@@ -1228,6 +1229,7 @@ export function runMigrations(db: Database): void {
       PRIMARY KEY(media,acquisition_id)
     ) WITHOUT ROWID;
   `));
+  apply(62, () => db.exec(SCREEN_ISSUES_SCHEMA_SQL));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

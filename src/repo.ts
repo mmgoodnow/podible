@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { readHomeRecent, type HomeRecentInput } from "./media/home-recent";
 import path from "node:path";
 import { MovieRepo } from "./movies/repo";
+import { ScreenIssuesRepo } from "./issues/repo";
 import { MovieShadowRepo } from "./movies/shadow-repo";
 import { MovieSeerrRepo } from "./movies/seerr-repo";
 import { ReleaseInboxRepo } from "./media/release-inbox";
@@ -25,6 +26,7 @@ import { readConsumerCount } from "./media/torrent-retirement-query";
 import type { RetirementBinding } from "./media/torrent-retirement-types";
 import { TvShadowRepo } from "./tv/shadow-repo";
 import { ActivityReads } from "./activity-reads";
+import { NotificationsRepo } from "./notifications/repo";
 
 import { nowIso, finalizeJobJournalMigration } from "./db";
 import { immediateTransaction, type SyncTransactionCallback } from "./db-transaction";
@@ -262,6 +264,7 @@ function assertPositiveInt(value: number): void {
 }
 
 export class BooksRepo {
+  get notifications() { return new NotificationsRepo(this.db, this.beforeWrite); }
   get trackerAnnounces() { return new TrackerAnnounceState(this.db, this.beforeWrite); }
   get activityReads() { return new ActivityReads(this.db); }
   get transferMetrics() {
@@ -281,6 +284,7 @@ export class BooksRepo {
     });
   }
   get movieSeerr() { return new MovieSeerrRepo(this.db, this.beforeWrite); }
+  get screenIssues() { return new ScreenIssuesRepo(this.db, this.beforeWrite); }
   get releaseInbox() { return new ReleaseInboxRepo(this.db, this.beforeWrite); }
   get bookTorrents() { return new BookTorrentsRepo(this.db, this.beforeWrite); }
   get movieShadow() {

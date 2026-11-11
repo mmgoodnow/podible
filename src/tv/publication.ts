@@ -97,7 +97,7 @@ export async function publishTvVersion(input: { repo: TvRepo; roots: TvRoots; li
       throw new Error("Plex has not verified the exact TV episodes and paths; existing episodes remain selected");
     }
     effectPhase("publication:promote");
-    active(); repo.promotePublication(targetId, versionId, pending.expected_revision);
+    active(); repo.promotePublication(targetId, versionId, pending.expected_revision, { plexVerified: true });
     active(); repo.clearPublication(targetId, versionId);
     effectPhase("publication:cleanup");
     await measureView(() => reconcileLibraryView({ ...roots, entries: tvViewEntries(repo, roots), assertActive: active }), input.onReconcile);

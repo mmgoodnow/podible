@@ -3,6 +3,7 @@ import { immediateTransaction, type SyncTransactionCallback } from "../db-transa
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { assertVersionContentAvailable } from "../media/content-loss";
+import { NotificationsRepo } from "../notifications/repo";
 import { TorrentRecordsRepo, type TorrentRecord } from "../media/torrent-records";
 import type { JobRow } from "../app-types";
 import type { DownloadLocation, TorrentRef, TorrentSnapshot } from "../media/torrent-client";
@@ -707,7 +708,7 @@ export class TvRepo {
     });
   }
 
-  promotePublication(targetId: number, versionId: number, expectedRevision: number): void {
+  promotePublication(targetId: number, versionId: number, expectedRevision: number, options?: { plexVerified: true }): void {
     this.transaction(() => {
       assertVersionContentAvailable(this.db, "tv", versionId);
       const { target, version } = this.ownedVersion(targetId, versionId);
@@ -732,6 +733,11 @@ export class TvRepo {
       for (const ep of version.episodeIds)
         this.db.query(`INSERT INTO tv_active_episodes(target_id,entry_id,episode_id,version_id) VALUES(?,?,?,?)
           ON CONFLICT(target_id,episode_id) DO UPDATE SET version_id=excluded.version_id`).run(targetId, target.entry_id, ep, versionId);
+      if (options?.plexVerified) {
+        const previouslyActive = new Set(active.map(ep => ep.episode_id));
+        new NotificationsRepo(this.db, this.beforeWrite).tvPublished(targetId, expectedRevision + 1,
+          version.episodeIds.filter(id => !previouslyActive.has(id)));
+      }
     });
   }
 
