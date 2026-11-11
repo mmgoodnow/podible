@@ -4,6 +4,7 @@ import { downloadComplete, downloadRemainingBytes, downloadPollDecision } from "
 import type { TorrentSnapshot } from "../media/torrent-client";
 import type { AppSettings, JobRow, MediaType } from "../app-types";
 import { durableStep, type WorkerContext } from "./context";
+import { recordAudioEditionPart } from "../library/audio-editions";
 
 const FAST_POLL_MS = 500;
 const EBOOK_MAX_POLL_MS = 1_000;
@@ -14,6 +15,7 @@ type DownloadJobPayload = {
   manifestationId?: number | null;
   sequenceInManifestation?: number | null;
   repairReviewJobId?: number;
+  audioEditionRequestId?: number;
   telemetry?: {
     lastBytesDone?: number | null;
     stagnantSince?: string | null;
@@ -179,6 +181,11 @@ export async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promi
         await durableStep(ctx, "download:recover", () =>
           ctx.repo.transaction(() => {
             ctx.repo.setReleaseStatus(release.id, "failed", issue.error);
+            if (payload.audioEditionRequestId !== undefined) {
+              // A generic recovery search could fetch a different performance or replace current audio.
+              ctx.repo.markJobCancelled(job.id, "Requested audiobook edition download failed");
+              return;
+            }
             const acquireJob = ctx.repo.createJob({
               type: "acquire",
               bookId: release.book_id,
@@ -232,7 +239,7 @@ export async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promi
     await durableStep(ctx, "download:handoff", () =>
       ctx.repo.transaction(() => {
         ctx.repo.setReleaseStatus(release.id, "downloaded", null);
-        ctx.repo.createJob({
+        const importJob = ctx.repo.createJob({
           type: "import",
           releaseId: release.id,
           bookId: release.book_id,
@@ -244,9 +251,13 @@ export async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promi
             preferAgentFirst: payload.preferAgentImport === true,
             manifestationId: payload.manifestationId ?? null,
             sequenceInManifestation: payload.sequenceInManifestation ?? null,
-            repairReviewJobId: payload.repairReviewJobId
+            repairReviewJobId: payload.repairReviewJobId,
+            audioEditionRequestId: payload.audioEditionRequestId,
           }
         });
+        if (payload.audioEditionRequestId !== undefined)
+          recordAudioEditionPart(ctx.repo, payload.audioEditionRequestId, payload.manifestationId ?? null,
+            payload.sequenceInManifestation ?? null, { releaseId: release.id, downloadJobId: job.id, importJobId: importJob.id });
       })
     );
     return "done";

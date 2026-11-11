@@ -16,6 +16,7 @@ import { queueSelectedCrossSeeds } from "../media/cross-seed";
 import { z } from "zod";
 import { bookManualSelectionKey, stageBookUpgrade, stageBookRepair, type BookUpgradeBaseline } from "./quality-state";
 import type { BookQualityAssessment } from "./quality";
+import { audioEditionPart, PENDING_AUDIO_EDITION_SCORE, recordAudioEditionPart, stageAudioEdition } from "./audio-editions";
 
 type SearchRequest = {
   query: string;
@@ -80,6 +81,7 @@ type SnatchRuntimeOptions = {
   automatic?: boolean;
   bookUpgrade?: { baseline: BookUpgradeBaseline; preflight: BookQualityAssessment };
   bookRepair?: { reviewJobId: number };
+  audioEditionRequestId?: number;
   onLog?: (message: string) => void;
   preferAgentImport?: boolean;
   execution?: WorkerContext["execution"];
@@ -284,7 +286,7 @@ export async function runSnatch(
     throw new Error(`Book ${request.bookId} not found`);
   }
   const retainManualChoice = () => {
-    if (!runtime.automatic) repo.setJsonState(bookManualSelectionKey(book.id, request.mediaType), {
+    if (!runtime.automatic && runtime.audioEditionRequestId === undefined) repo.setJsonState(bookManualSelectionKey(book.id, request.mediaType), {
       releaseTitle: request.title, selectedAt: new Date().toISOString(),
     });
   };
@@ -340,6 +342,18 @@ export async function runSnatch(
   const derivedHash = infoHashFromTorrentBytes(torrentBytes);
   snatchLog(`[snatch] derived_hash=${derivedHash}`);
 
+  if (runtime.audioEditionRequestId !== undefined) {
+    const { part } = audioEditionPart(repo, runtime.audioEditionRequestId, manifestationId, sequenceInManifestation);
+    if (part && repo.getRelease(part.releaseId)?.info_hash !== derivedHash)
+      throw new Error("Audiobook edition part changed torrent identity");
+  }
+
+  const checkEditionReplay = (existing: ReleaseRow) => {
+    if (runtime.audioEditionRequestId === undefined) return;
+    const { part } = audioEditionPart(repo, runtime.audioEditionRequestId, manifestationId, sequenceInManifestation);
+    if (part?.releaseId !== existing.id) throw new Error("Audiobook edition part is already linked to another acquisition");
+  };
+
   const retainedEvidence = retainBookSelectionIntent(repo, request, derivedHash, runtime.selectedCopies);
   const existingByDerived = repo.findReleaseByInfoHash(derivedHash);
   if (existingByDerived) {
@@ -350,6 +364,7 @@ export async function runSnatch(
       `[snatch] dedupe reason=derived_hash release=${existingByDerived.id} info_hash=${existingByDerived.info_hash} provider_guid=${JSON.stringify(existingByDerived.provider_guid)}`
     );
     return repo.transaction(() => {
+      checkEditionReplay(existingByDerived);
       retainManualChoice();
       for (const evidence of retainedEvidence) retainBookSelectedCopies(repo, existingByDerived, evidence);
       if (repo.listAssetsByBook(existingByDerived.book_id).some(asset => asset.source_release_id === existingByDerived.id))
@@ -376,6 +391,7 @@ export async function runSnatch(
     const existing = repo.findReleaseByInfoHash(derivedHash);
     if (existing) {
       if (existing.book_id !== request.bookId) throw new Error(`Infohash already linked to book ${existing.book_id}`);
+      checkEditionReplay(existing);
       for (const evidence of retainedEvidence) retainBookSelectedCopies(repo, existing, evidence);
       if (repo.listAssetsByBook(existing.book_id).some(asset => asset.source_release_id === existing.id))
         queueBookSelectedCopies(repo, existing);
@@ -416,9 +432,13 @@ export async function runSnatch(
         preferAgentImport: runtime.preferAgentImport === true,
         manifestationId,
         sequenceInManifestation,
-        repairReviewJobId: runtime.bookRepair?.reviewJobId
+        repairReviewJobId: runtime.bookRepair?.reviewJobId,
+        audioEditionRequestId: runtime.audioEditionRequestId,
       }
     });
+    if (runtime.audioEditionRequestId !== undefined)
+      recordAudioEditionPart(repo, runtime.audioEditionRequestId, manifestationId, sequenceInManifestation,
+        { releaseId: release.id, downloadJobId: job.id });
     snatchLog(`[snatch] created release=${release.id} download_job=${job.id} info_hash=${release.info_hash}`);
 
     return {
@@ -439,6 +459,7 @@ export async function runSnatchGroup(
     throw new Error("At least one release is required");
   }
   const needsExplicitManifestation =
+    runtime.audioEditionRequestId !== undefined ||
     runtime.bookUpgrade !== undefined ||
     runtime.bookRepair !== undefined ||
     request.forceManifestation === true ||
@@ -449,7 +470,7 @@ export async function runSnatchGroup(
   const language =
     normalizeManifestationLanguageCode(request.manifestation.language) ??
     inferLanguageFromReleaseTitles(request.parts.map((part) => part.title));
-  const createManifestation = () => {
+  const createManifestation = () => repo.transaction(() => {
     const input = {
       bookId: request.bookId,
       kind: request.mediaType === "ebook" ? ("ebook" as const) : ("audio" as const),
@@ -457,12 +478,15 @@ export async function runSnatchGroup(
       editionNote: request.manifestation.editionNote,
       selectionNote: request.manifestation.selectionNote ?? null,
       language,
-      preferredScore: runtime.bookUpgrade || runtime.bookRepair ? -1 : 0
+      preferredScore: runtime.audioEditionRequestId !== undefined ? PENDING_AUDIO_EDITION_SCORE :
+        runtime.bookUpgrade || runtime.bookRepair ? -1 : 0
     };
-    return runtime.operationKey
+    const id = runtime.operationKey
       ? repo.ensureManifestation(runtime.operationKey, input).id
       : repo.addManifestation(input).id;
-  };
+    if (runtime.audioEditionRequestId !== undefined) stageAudioEdition(repo, runtime.audioEditionRequestId, id, request.parts.length);
+    return id;
+  });
   const prefix = runtime.stepPrefix ?? "snatch";
   let manifestationId = needsExplicitManifestation
     ? runtime.execution
@@ -503,11 +527,11 @@ export async function runSnatchGroup(
       results.push(await (runtime.execution ? runtime.execution.run(`${prefix}:part:${index}`, snatch) : snatch()));
     }
   } finally {
-    if (!runtime.execution && manifestationId !== null && repo.pruneEmptyManifestationIfUnreferenced(manifestationId)) {
+    if (runtime.audioEditionRequestId === undefined && !runtime.execution && manifestationId !== null && repo.pruneEmptyManifestationIfUnreferenced(manifestationId)) {
       manifestationId = null;
     }
   }
-  if (runtime.execution && manifestationId !== null) {
+  if (runtime.audioEditionRequestId === undefined && runtime.execution && manifestationId !== null) {
     const id = manifestationId;
     manifestationId = await runtime.execution.run(`${prefix}:cleanup`, () =>
       repo.pruneEmptyManifestationIfUnreferenced(id) ? null : id

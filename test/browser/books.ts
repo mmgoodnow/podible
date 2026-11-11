@@ -485,6 +485,14 @@ try {
   );
   assert.equal(await navigation.getByRole("link", { name: "Settings", exact: true }).count(), 0);
   assert.equal(await page.getByText("Manifestation diagnostics", { exact: true }).count(), 0);
+  const editionRequests = page.locator("section").filter({ has: page.getByRole("heading", { name: "Request an audiobook edition" }) });
+  const selectedBeforeRequest = await page.getByLabel("Audio edition").inputValue();
+  const dramatizedRequest = editionRequests.getByRole("button", { name: "Request Dramatized / GraphicAudio", exact: true });
+  await dramatizedRequest.click();
+  await editionRequests.getByText("Request queued.", { exact: false }).waitFor();
+  assert.equal(await dramatizedRequest.isDisabled(), true);
+  assert.equal(await editionRequests.getByRole("button", { name: "Request Narrated audiobook" }).isEnabled(), true);
+  assert.equal(await page.getByLabel("Audio edition").inputValue(), selectedBeforeRequest);
   const forbiddenDiagnostics = await context.request.get(
     new URL(`/api/trpc/book.diagnostics?input=${encodeURIComponent(JSON.stringify({ bookId: fixture.bookId }))}`, fixture.url).href,
   );

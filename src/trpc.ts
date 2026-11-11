@@ -187,6 +187,14 @@ export const appRouter = t.router({
       .mutation(({ ctx, input }) => executeMethod(indexerFeedsRouter.routes.sync, ctx, input)),
   }),
   book: t.router({
+    audioEditionRequests: procedure
+      .input(bookWebRouter.routes.audioEditionRequests.paramsSchema)
+      .output(bookWebRouter.routes.audioEditionRequests.resultSchema)
+      .query(({ ctx, input }) => executeMethod(bookWebRouter.routes.audioEditionRequests, ctx, input)),
+    requestAudioEdition: procedure
+      .input(bookWebRouter.routes.requestAudioEdition.paramsSchema)
+      .output(bookWebRouter.routes.requestAudioEdition.resultSchema)
+      .mutation(({ ctx, input }) => executeMethod(bookWebRouter.routes.requestAudioEdition, ctx, input)),
     diagnostics: procedure
       .input(bookWebRouter.routes.diagnostics.paramsSchema)
       .output(bookWebRouter.routes.diagnostics.resultSchema)

@@ -242,6 +242,66 @@ function AudioContents({
   );
 }
 
+const requestLabels = { dramatized: "Dramatized / GraphicAudio", narrated: "Narrated audiobook" };
+const requestStatus = {
+  idle: null,
+  queued: "Request queued.",
+  searching: "Looking for this performance...",
+  importing: "Downloading or importing this edition...",
+  ready: "Ready to listen.",
+  no_match: "No confidently matching complete edition was found.",
+  failed: "This request could not finish. Try again or ask an administrator to check acquisition.",
+};
+
+function AudioEditionRequests({ bookId, refresh }: { bookId: number; refresh: () => void }) {
+  const trpc = useTRPC();
+  const cache = useQueryClient();
+  const options = trpc.book.audioEditionRequests.queryOptions({ bookId }, { refetchInterval: 5_000 });
+  const requests = useQuery(options);
+  const readyIds = requests.data?.requests.flatMap((entry) => entry.manifestationId ?? []).join(",");
+  useEffect(() => {
+    if (!readyIds) return;
+    void cache.invalidateQueries({ queryKey: trpc.library.get.queryKey({ bookId }) });
+    void cache.invalidateQueries({ queryKey: trpc.book.editions.queryKey({ bookId }) });
+  }, [readyIds, bookId, cache, trpc]);
+  const request = useMutation(trpc.book.requestAudioEdition.mutationOptions({
+    onSuccess: (result) => {
+      cache.setQueryData(options.queryKey, (previous) => previous && ({
+        ...previous, requests: previous.requests.map((entry) => entry.edition === result.edition ? result : entry),
+      }));
+      refresh();
+    },
+  }));
+  return (
+    <section className="panel">
+      <h2>Request an audiobook edition</h2>
+      <p className="muted">Find a specific performance. It won&apos;t replace the audio you already have.</p>
+      {requests.isPending && <p role="status">Checking edition requests...</p>}
+      {requests.isError && <Failure error={requests.error} retry={() => void requests.refetch()} />}
+      {requests.data && !requests.data.enabled && <p className="muted">Targeted search is not configured.</p>}
+      {requests.data?.requests.map(({ edition, status, manifestationId }) => (
+        <div key={edition}>
+          <p><strong>{requestLabels[edition]}</strong><span role="status">{requestStatus[status] && `: ${requestStatus[status]}`}</span></p>
+          {manifestationId ? (
+            <Link className="button secondary" href={`/book/${bookId}?edition=${manifestationId}`}>
+              Open {requestLabels[edition]}
+            </Link>
+          ) : requests.data.enabled && (
+            <button
+              className="secondary"
+              disabled={request.isPending || status === "queued" || status === "searching" || status === "importing"}
+              onClick={() => request.mutate({ bookId, edition })}
+            >
+              {status === "failed" || status === "no_match" ? "Retry" : "Request"} {requestLabels[edition]}
+            </button>
+          )}
+        </div>
+      ))}
+      {request.isError && <Failure error={request.error} />}
+    </section>
+  );
+}
+
 export function BookDetail({
   bookId,
   isAdmin,
@@ -579,6 +639,7 @@ export function BookDetail({
               <p role="status">Acquisition queued.</p>
             )}
           </section>
+          <AudioEditionRequests key={bookId} bookId={bookId} refresh={refresh} />
           {(audioReleaseIds.length > 0 || ebook?.releaseId) && (
             <section className="panel">
               <h2>Report a problem</h2>

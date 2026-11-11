@@ -9,6 +9,8 @@ import { isRunControlError } from "reflow-ts";
 import { selectWithIndexerRecovery } from "./indexer-search";
 import { z } from "zod";
 import type { TorznabResult } from "../library/torznab";
+import { audioEditionLabels, audioEditionSchema, markAudioEditionNoMatch, requireAudioEditionRequest, type AudioEdition } from "../library/audio-editions";
+import { normalizeInfoHash } from "../library/torrent";
 
 export type AcquirePayload = {
   bookId?: number;
@@ -27,6 +29,8 @@ export type AcquirePayload = {
   /** New RSS dispatch deliberately considers an already imported slot; old jobs retain missing-only semantics. */
   considerUpgrade?: boolean;
   repairReviewJobId?: number;
+  /** Set only by the dedicated audio edition request service. */
+  audioEdition?: AudioEdition;
 };
 
 const feedCandidateSchema = z.array(z.number().int().positive()).min(1).max(1000);
@@ -55,6 +59,13 @@ function selectionNote(media: MediaType, decision: { mode: string; trigger: stri
 export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
   const settings = ctx.getSettings();
   const payload = job.payload_json ? (JSON.parse(job.payload_json) as AcquirePayload) : {};
+  const audioEdition = payload.audioEdition === undefined ? undefined : audioEditionSchema.parse(payload.audioEdition);
+  if (audioEdition) {
+    if (!payload.bookId || job.book_id !== payload.bookId || payload.media?.length !== 1 || payload.media[0] !== "audio" ||
+        payload.feedCandidateIds !== undefined || payload.considerUpgrade || payload.repairReviewJobId !== undefined)
+      throw new Error("Invalid targeted audiobook acquisition");
+    requireAudioEditionRequest(ctx.repo, job.id, payload.bookId, audioEdition);
+  }
   if (payload.feedCandidateIds !== undefined) {
     feedCandidateSchema.parse(payload.feedCandidateIds);
     if (payload.media?.length !== 1 || !["audio", "ebook"].includes(payload.media[0]))
@@ -86,29 +97,32 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
       if (!feedEligible) return result;
       const repair = payload.repairReviewJobId === undefined ? null :
         validateBookRepair(ctx.repo, book.id, media, payload.repairReviewJobId);
-      const baseline = await durableStep(ctx, `${media}:quality-baseline`, () => repair ? null : currentBookQualityBaseline(ctx.repo, book.id, media));
+      const baseline = audioEdition ? null : await durableStep(ctx, `${media}:quality-baseline`, () => repair ? null : currentBookQualityBaseline(ctx.repo, book.id, media));
       if (!repair && baseline && !bookAutomaticUpgradeAllowed(ctx.repo, book.id, media)) return result;
 
       const query = `${book.title} ${book.author}`.trim();
-      const select = (results: TorznabResult[]) => selectSearchCandidates(
-        settings,
-        {
+      const select = (results: TorznabResult[]) => {
+        const owned = audioEdition ? ctx.repo.listReleasesByBook(book.id) : [];
+        return selectSearchCandidates(settings, {
           query,
           media,
-          results,
-          editionPreference: settings.agents.editionPreference,
+          results: audioEdition ? results.filter((candidate) => {
+            const hash = candidate.infoHash ? normalizeInfoHash(candidate.infoHash) : null;
+            return !owned.some((release) => hash ? hash === release.info_hash : candidate.url === release.url);
+          }) : results,
+          editionPreference: audioEdition ? undefined : settings.agents.editionPreference,
+          audioEdition,
           forceAgent: payload.forceAgent === true || Boolean(ctx.modelProvider) || Boolean(settings.agents.apiKey?.trim()),
           priorFailure: payload.priorFailure === true,
           rejectedUrls: Array.isArray(payload.rejectedUrls) ? payload.rejectedUrls : [],
           rejectedGuids: Array.isArray(payload.rejectedGuids) ? payload.rejectedGuids : [],
           rejectedInfoHashes: Array.isArray(payload.rejectedInfoHashes) ? payload.rejectedInfoHashes : [],
           book: { id: book.id, title: book.title, author: book.author },
-        },
-        {
+        }, {
           repo: ctx.repo,
           modelProvider: ctx.modelProvider,
-        }
-      );
+        });
+      };
       const feedSelection = payload.feedCandidateIds
         ? await durableStep(ctx, `${media}:feed-selection`, async () => {
             const candidates = currentFeedCandidates(ctx, payload.feedCandidateIds!, media);
@@ -186,6 +200,7 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
               mediaType: media,
               manifestation: {
                 ...selection.manifestation,
+                ...(audioEdition ? { label: audioEditionLabels[audioEdition], editionNote: null } : {}),
                 selectionNote: [
                   payload.feedRoutingNote?.slice(0, 4000),
                   selectionNote(media, decision),
@@ -204,13 +219,14 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
               automatic: true,
               bookUpgrade,
               bookRepair: repair ? { reviewJobId: payload.repairReviewJobId! } : undefined,
+              audioEditionRequestId: audioEdition ? job.id : undefined,
               onLog: (line) => workerLog(ctx, `[acquire] job=${job.id} book=${book.id} media=${media} ${line}`),
-              preferAgentImport: decision.mode === "agent",
+              preferAgentImport: !audioEdition && decision.mode === "agent",
               bookTorrentClient: ctx.bookTorrentClient,
               execution: ctx.execution,
-              operationKey: `acquire:${ctx.execution?.key ?? job.id}:${media}:${selectionIndex}`,
+              operationKey: `acquire:${audioEdition ? job.id : ctx.execution?.key ?? job.id}:${media}:${selectionIndex}`,
               stepPrefix: `${media}:selection:${selectionIndex}`,
-              selectedCopiesByPart: parts.map((part, index) => ({
+              selectedCopiesByPart: audioEdition ? undefined : parts.map((part, index) => ({
                 selected: part,
                 alternatives: selection.matchingCopies?.[index] ?? [],
               })),
@@ -248,6 +264,8 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
     const detail = noResultReasons.length > 0 ? noResultReasons.join(" | ") : "no candidate selected";
     throw new Error(`Auto-acquire found no usable release for book ${book.id}; ${detail}`);
   }
+  if (audioEdition && !snatchSucceeded) await durableStep(ctx, "audio:edition:no-match", () =>
+    ctx.repo.transaction(() => markAudioEditionNoMatch(ctx.repo, job.id)));
 
   return "done";
 }

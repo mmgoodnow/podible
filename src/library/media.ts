@@ -10,6 +10,7 @@ import type { StoredTranscriptUtterance } from "./chapter-analysis";
 import { wordsToTranscriptUtterances } from "./chapter-markers";
 import { readFfprobeChapters } from "../media/probe-cache";
 import { selectPreferredAudioAsset, selectPreferredAudioManifestation } from "./asset-selection";
+import { PENDING_AUDIO_EDITION_SCORE } from "./audio-editions";
 import { configDir } from "../config";
 
 import type { BooksRepo } from "../repo";
@@ -336,6 +337,7 @@ export async function buildManifestationChapters(
   manifestation: ManifestationRow,
   containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>
 ): Promise<{ version: string; chapters: ServedChapter[] } | null> {
+  if (manifestation.preferred_score === PENDING_AUDIO_EDITION_SCORE) return null;
   const timings = await buildManifestationChapterTimings(repo, manifestation, containers);
   if (!timings || timings.length === 0) return null;
   return {
@@ -603,7 +605,8 @@ export async function streamAudioManifestation(
   containers: Array<{ asset: AssetRow; files: AssetFileRow[] }>,
   coverPath?: string | null
 ): Promise<Response> {
-  if (manifestation.kind !== "audio") return new Response("Not found", { status: 404 });
+  if (manifestation.kind !== "audio" || manifestation.preferred_score === PENDING_AUDIO_EDITION_SCORE)
+    return new Response("Not found", { status: 404 });
   const audioContainers = containers;
   if (audioContainers.length === 0) return new Response("Not found", { status: 404 });
   if (audioContainers.length === 1) {

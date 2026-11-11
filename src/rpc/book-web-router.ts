@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ChapterAnalysisRow } from "../app-types";
 import { buildManifestationChapters } from "../library/media";
+import { audioEditionSchema, audioEditionStatusSchema, PENDING_AUDIO_EDITION_SCORE, queueAudioEditionRequest, readAudioEditionStatus } from "../library/audio-editions";
 import { defineMethod, defineRouter } from "./framework";
 import { positiveIntSchema } from "./schemas";
 import { RpcError } from "./shared";
@@ -74,8 +75,33 @@ function analysisSummary(analysis: ChapterAnalysisRow | null) {
   };
 }
 
-// Browser-only read models. Mutations continue to use the public domain RPCs.
 export const bookWebRouter = defineRouter({
+  audioEditionRequests: defineMethod({
+    auth: "user",
+    readOnly: true,
+    summary: "Read safe acquisition status for the supported audiobook performances.",
+    paramsSchema: bookParams.strict(),
+    resultSchema: z.object({ enabled: z.boolean(), requests: z.array(audioEditionStatusSchema) }),
+    handler(ctx, { bookId }) {
+      if (!ctx.repo.getBookRow(bookId)) throw new RpcError(-32000, "Book not found", { error: "not_found" });
+      return {
+        enabled: Boolean(ctx.repo.readSettings()?.agents.apiKey.trim()),
+        requests: audioEditionSchema.options.map((edition) => readAudioEditionStatus(ctx.repo, bookId, edition)),
+      };
+    },
+  }),
+  requestAudioEdition: defineMethod({
+    auth: "user",
+    summary: "Request a specific audiobook performance without replacing current playback.",
+    paramsSchema: bookParams.extend({ edition: audioEditionSchema }).strict(),
+    resultSchema: audioEditionStatusSchema,
+    handler(ctx, { bookId, edition }) {
+      if (!ctx.repo.getBookRow(bookId)) throw new RpcError(-32000, "Book not found", { error: "not_found" });
+      if (!ctx.repo.readSettings()?.agents.apiKey.trim())
+        throw new RpcError(-32602, "Targeted audiobook search is not configured");
+      return queueAudioEditionRequest(ctx.repo, bookId, edition);
+    },
+  }),
   diagnostics: defineMethod({
     auth: "admin",
     readOnly: true,
@@ -272,7 +298,7 @@ export const bookWebRouter = defineRouter({
       return {
         audio: ctx.repo
           .listManifestationsByBook(bookId)
-          .filter((edition) => edition.kind === "audio")
+          .filter((edition) => edition.kind === "audio" && edition.preferred_score !== PENDING_AUDIO_EDITION_SCORE)
           .map((edition) => ({
             manifestationId: edition.id,
             releaseIds: Array.from(
@@ -329,7 +355,8 @@ export const bookWebRouter = defineRouter({
       if (
         !target ||
         target.manifestation.book_id !== bookId ||
-        target.manifestation.kind !== "audio"
+        target.manifestation.kind !== "audio" ||
+        target.manifestation.preferred_score === PENDING_AUDIO_EDITION_SCORE
       ) {
         throw new RpcError(-32000, "Audio edition not found", {
           error: "not_found",

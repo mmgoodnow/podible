@@ -3,6 +3,7 @@ import { importReleaseFromPath, inspectImportPath, type ImportInspectionFile } f
 import { bookDownloadClient } from "../media/book-torrents";
 import { isRunControlError } from "reflow-ts";
 import { finalizeBookUpgrade, stageBookRepair } from "../library/quality-state";
+import { audioEditionPart, finalizeAudioEdition } from "../library/audio-editions";
 import type { JobRow } from "../app-types";
 import { durableStep, workerLog, type WorkerContext } from "./context";
 
@@ -13,6 +14,7 @@ type ImportJobPayload = {
   reason?: string;
   userReportedIssue?: boolean;
   repairReviewJobId?: number;
+  audioEditionRequestId?: number;
   rejectedSourcePaths?: string[];
   preferAgentFirst?: boolean;
   manifestationId?: number | null;
@@ -39,7 +41,7 @@ function importNote(
   return `${context}: ${mode}${trigger}${confidence}: ${detail.reason}${selectedText}`;
 }
 
-async function importJobBody(ctx: WorkerContext, job: JobRow): Promise<"done"> {
+async function importJobBody(ctx: WorkerContext, job: JobRow, payload: ImportJobPayload): Promise<"done"> {
   if (!job.release_id) {
     throw new Error("Import job missing release_id");
   }
@@ -50,7 +52,13 @@ async function importJobBody(ctx: WorkerContext, job: JobRow): Promise<"done"> {
   }
 
   const settings = ctx.getSettings();
-  const payload = job.payload_json ? (JSON.parse(job.payload_json) as ImportJobPayload) : {};
+  if (payload.audioEditionRequestId !== undefined) {
+    const { part } = audioEditionPart(ctx.repo, payload.audioEditionRequestId,
+      payload.manifestationId ?? null, payload.sequenceInManifestation ?? null);
+    if (part?.importJobId !== job.id || part.releaseId !== release.id || release.media_type !== "audio" ||
+        payload.userReportedIssue || payload.repairReviewJobId !== undefined)
+      throw new Error("Import does not belong to the requested audiobook edition");
+  }
   const client = bookDownloadClient(ctx.repo, settings, ctx.bookTorrentClient);
   const importSource = await durableStep(ctx, "import:source", async () => {
     const source =
@@ -236,6 +244,7 @@ async function importJobBody(ctx: WorkerContext, job: JobRow): Promise<"done"> {
     return "done";
   } catch (firstError) {
     if (isRunControlError(firstError)) throw firstError;
+    if (payload.audioEditionRequestId !== undefined) throw firstError;
     const deterministicMessage = (firstError as Error).message || "deterministic import failed";
     workerLog(
       ctx,
@@ -315,13 +324,19 @@ async function importJobBody(ctx: WorkerContext, job: JobRow): Promise<"done"> {
 }
 
 export async function processImportJob(ctx: WorkerContext, job: JobRow): Promise<"done"> {
-  const result = await importJobBody(ctx, job);
+  const payload = job.payload_json ? (JSON.parse(job.payload_json) as ImportJobPayload) : {};
+  const result = await importJobBody(ctx, job, payload);
   const release = job.release_id === null ? null : ctx.repo.getRelease(job.release_id);
   if (release?.status === "imported") {
     const asset = ctx.repo.findAssetByImportKey(`import:${job.id}`);
-    if (asset?.manifestation_id) await durableStep(ctx, "import:quality:review", () =>
-      finalizeBookUpgrade(ctx.repo, ctx.getSettings(), asset.manifestation_id!, ctx.modelProvider,
-        () => ctx.execution?.assertActive()));
+    if (asset?.manifestation_id) {
+      if (payload.audioEditionRequestId !== undefined) {
+        const requestId = payload.audioEditionRequestId;
+        await durableStep(ctx, "import:audio-edition:publish", () => finalizeAudioEdition(ctx.repo, requestId, asset.manifestation_id!));
+      } else await durableStep(ctx, "import:quality:review", () =>
+        finalizeBookUpgrade(ctx.repo, ctx.getSettings(), asset.manifestation_id!, ctx.modelProvider,
+          () => ctx.execution?.assertActive()));
+    }
   }
   return result;
 }

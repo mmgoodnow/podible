@@ -5,6 +5,7 @@ import { rm } from "node:fs/promises";
 import { z } from "zod";
 
 import { hasStoredManifestationTranscriptPayload, selectPreferredDownloadableEbookAsset } from "../library/chapter-analysis";
+import { PENDING_AUDIO_EDITION_SCORE } from "../library/audio-editions";
 import { selectPreferredAudioManifestation, streamExtensionForManifestation } from "../library/media";
 import { computeDownloadFraction, pseudoProgressForMediaStatus, pseudoProgressForRelease } from "../library/progress";
 import { BooksRepo } from "../repo";
@@ -246,7 +247,8 @@ export function buildLibraryPlayback(repo: BooksRepo, request: Request, bookId: 
     ? audioChoice.containers.map((asset) => ({ asset, files: repo.getAssetFiles(asset.id) }))
     : [];
   const buildAudioOption = (candidate: (typeof audioCandidates)[number]): LibraryPlaybackAudio | null => {
-    if (candidate.manifestation.kind !== "audio" || candidate.containers.length === 0) return null;
+    if (candidate.manifestation.kind !== "audio" || candidate.manifestation.preferred_score === PENDING_AUDIO_EDITION_SCORE ||
+        candidate.containers.length === 0) return null;
     const containers = candidate.containers.map((asset) => ({ asset, files: repo.getAssetFiles(asset.id) }));
     const primaryAudio = containers[0]?.asset ?? null;
     if (!primaryAudio) return null;
