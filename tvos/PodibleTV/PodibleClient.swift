@@ -36,7 +36,7 @@ struct PodibleClient {
         return results
     }
 
-    func detail(_ item: MediaTitle) async throws -> (MediaTitle, [MediaSeason]) {
+    func detail(_ item: MediaTitle) async throws -> (MediaTitle, [MediaSeason], TitleAcquisitionProgress?) {
         switch item.kind {
         case .movie:
             guard let tmdbId = item.tmdbID, tmdbId > 0 else { throw ClientError.missingIdentity }
@@ -47,7 +47,8 @@ struct PodibleClient {
             let state: RequestState = movie.availableInLibrary || active.contains(where: \.available) ? .available
                 : !active.isEmpty ? .requested
                 : capabilities.acquisitionConfigured ? .requestable : .unavailable
-            return (title(movie.movie, kind: .movie, state: state), [])
+            let progress = active.first(where: \.available) ?? active.first
+            return (title(movie.movie, kind: .movie, state: state), [], progress?.progress)
         case .show:
             return try await tvDetail(item)
         }
@@ -98,7 +99,7 @@ struct PodibleClient {
         }
     }
 
-    private func tvDetail(_ item: MediaTitle) async throws -> (MediaTitle, [MediaSeason]) {
+    private func tvDetail(_ item: MediaTitle) async throws -> (MediaTitle, [MediaSeason], TitleAcquisitionProgress?) {
         var local = try await libraryEntry(for: item)
         let tmdbId = local?.entry.tmdbId ?? item.tmdbID
         var remote: TVDetail?
@@ -142,7 +143,7 @@ struct PodibleClient {
                            synopsis: series?.overview ?? item.synopsis, kind: .show,
                            artwork: artwork(series?.posterUrl ?? local?.entry.posterUrl) ?? item.artwork,
                            backdrop: nil, accent: item.accent, playable: false, playbackURL: nil,
-                           requestState: state, tmdbID: tmdbId), seasons)
+                           requestState: state, tmdbID: tmdbId), seasons, local?.acquisitionProgress)
     }
 
     private func libraryEntry(for item: MediaTitle) async throws -> TVEntry? {
@@ -340,6 +341,22 @@ nonisolated private struct MovieRequest: Decodable, Sendable {
     let movie: CatalogTitle
     let state: String
     let available: Bool
+    let stage: String?
+    let download: TitleAcquisitionProgress.Download?
+
+    var progress: TitleAcquisitionProgress {
+        switch (state, stage) {
+        case _ where available: .init(step: .plex, status: "Ready in Plex")
+        case ("waiting-for-release", _): .init(step: .search, status: "Watching for a release")
+        case ("blocked", _): .init(step: .requested, status: "Acquisition stopped")
+        case (_, "downloading"): .init(step: .download, status: "Downloading", download: download)
+        case (_, "verifying"): .init(step: .verify, status: "Checking the download")
+        case (_, "publishing"): .init(step: .verify, status: "Adding to Plex")
+        case (_, "searching"), (_, "selecting"), (_, "replacing"):
+            .init(step: .search, status: "Finding a release")
+        default: .requested
+        }
+    }
 }
 nonisolated private struct RequestList<Entry: Decodable & Sendable>: Decodable, Sendable { let requests: [Entry] }
 nonisolated private struct Requested<Entry: Decodable>: Decodable { let request: Entry }
@@ -379,12 +396,40 @@ nonisolated private struct TVDetail: Decodable {
 nonisolated private struct TVEntry: Decodable {
     struct Metadata: Decodable { let tmdbId: Int?; let title: String; let year: Int?; let posterUrl: String? }
     struct Progress: Decodable {
-        struct Season: Decodable { let seasonNumber: Int; let available: Int; let total: Int }
+        struct Season: Decodable { let seasonNumber: Int; let available: Int; let total: Int; let stage: String }
+        let download: TitleAcquisitionProgress.Download?
         let seasons: [Season]
     }
-    struct OwnRequest: Decodable { let id: Int }
+    struct OwnRequest: Decodable { let id: Int; let seasons: [Int] }
     let entry: Metadata
     let availableEpisodes: Int
     let progress: Progress
     let requests: [OwnRequest]
+
+    var acquisitionProgress: TitleAcquisitionProgress? {
+        let numbers = Set(requests.flatMap(\.seasons))
+        let seasons = progress.seasons.filter { numbers.contains($0.seasonNumber) }
+        guard !seasons.isEmpty else { return nil }
+        let available = seasons.reduce(0) { $0 + $1.available }
+        let total = seasons.reduce(0) { $0 + $1.total }
+        let stages = Set(seasons.map(\.stage))
+        let stage = ["downloading", "verifying", "publishing", "pack-pending", "searching", "queued", "failed",
+                     "waiting", "upcoming"].first(where: stages.contains)
+        let count = "\(available) of \(total) episodes ready"
+        let status: String
+        switch stage {
+        case "downloading": status = "Downloading episodes"
+        case "verifying": status = "Checking episodes"
+        case "publishing": status = "Adding episodes to Plex"
+        case "pack-pending": status = "Waiting for a pack to finish"
+        case "searching": status = "Finding episodes"
+        case "failed": status = "Acquisition stopped for some episodes"
+        case "waiting": status = "Watching for releases"
+        case "upcoming": status = "Waiting for episodes to air"
+        default: status = "Request received"
+        }
+        if total > 0 && available == total { return .init(step: .plex, status: "Ready in Plex", episodeCount: count) }
+        let step: TitleAcquisitionProgress.Step = stage == "upcoming" ? .search : .from(stage: stage)
+        return .init(step: step, status: status, episodeCount: count, download: stage == "downloading" ? progress.download : nil)
+    }
 }

@@ -4,11 +4,12 @@ import SwiftUI
 struct TitleDetailView: View {
     let item: MediaTitle
     let seasons: [MediaSeason]
+    let progress: TitleAcquisitionProgress?
     let play: (URL) -> Void
     let request: ([Int]) async throws -> Void
 
     var body: some View {
-        Content(item: item, seasons: seasons, play: play, request: request)
+        Content(item: item, seasons: seasons, progress: progress, play: play, request: request)
             .id(item.id)
     }
 }
@@ -17,6 +18,7 @@ private extension TitleDetailView {
     struct Content: View {
         let item: MediaTitle
         let seasons: [MediaSeason]
+        let progress: TitleAcquisitionProgress?
         let play: (URL) -> Void
         let request: ([Int]) async throws -> Void
 
@@ -68,6 +70,11 @@ private extension TitleDetailView {
                                 backdrop(width: geometry.size.width, height: heroHeight)
                             }
 
+                        if let progress {
+                            TitleRequestTracker(progress: progress)
+                                .padding(.horizontal, 56)
+                        }
+
                         if !isMovie {
                             seasonSection
                                 .padding(.horizontal, 56)
@@ -105,9 +112,7 @@ private extension TitleDetailView {
                             Capsule().fill(accent).frame(width: 4)
                         }
 
-                    Text(item.title)
-                        .font(.system(size: 72, weight: .semibold, design: .serif))
-                        .accessibilityAddTraits(.isHeader)
+                    TVTitleTreatment(item: item)
                         .fixedSize(horizontal: false, vertical: true)
 
                     if !item.subtitle.isEmpty {
@@ -341,5 +346,63 @@ private extension TitleDetailView {
                 }
             }
         }
+    }
+}
+
+private struct TitleRequestTracker: View {
+    let progress: TitleAcquisitionProgress
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(progress.status)
+                    .font(.system(size: 31, weight: .semibold))
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("request.progress.status")
+                Spacer()
+                if let episodeCount = progress.episodeCount {
+                    Text(episodeCount).foregroundStyle(.secondary)
+                }
+            }
+            let steps = TitleAcquisitionProgress.Step.allCases
+            let current = steps.firstIndex(of: progress.step) ?? 0
+            HStack(spacing: 10) {
+                ForEach(steps.indices, id: \.self) { index in
+                    VStack(alignment: .leading, spacing: 9) {
+                        Capsule().fill(index <= current ? TVPalette.accent : .white.opacity(0.18))
+                            .frame(height: 5)
+                        Text(steps[index].rawValue)
+                            .font(.system(size: 21, weight: index == current ? .semibold : .regular))
+                            .foregroundStyle(index <= current ? TVPalette.paper : .secondary)
+                            .accessibilityAddTraits(index == current ? .isSelected : [])
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            if let sample = progress.download, let done = sample.bytesDone, let size = sample.sizeBytes, size > 0 {
+                ProgressView(value: Double(min(max(0, done), size)), total: Double(size))
+                    .tint(TVPalette.accent)
+                Text(transferLabel(sample, done: done, size: size))
+                    .font(.system(size: 21))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(26)
+        .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func transferLabel(_ sample: TitleAcquisitionProgress.Download, done: Int64, size: Int64) -> String {
+        let format = ByteCountFormatter()
+        format.countStyle = .binary
+        var parts = ["\(format.string(fromByteCount: done)) of \(format.string(fromByteCount: size))"]
+        if let speed = sample.bytesPerSecond, speed > 0 { parts.append("\(format.string(fromByteCount: speed))/s") }
+        if let eta = sample.etaSeconds, eta > 0 {
+            let time = DateComponentsFormatter()
+            time.unitsStyle = .abbreviated
+            time.allowedUnits = [.hour, .minute, .second]
+            time.maximumUnitCount = 2
+            if let remaining = time.string(from: Double(eta)) { parts.append("\(remaining) left") }
+        }
+        return parts.joined(separator: " · ")
     }
 }

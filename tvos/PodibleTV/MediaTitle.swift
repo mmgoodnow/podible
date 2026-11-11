@@ -40,6 +40,36 @@ struct MediaSeason: Identifiable {
     var requestable: Bool
 }
 
+struct TitleAcquisitionProgress: Sendable {
+    enum Step: String, CaseIterable, Sendable {
+        case requested = "Requested", search = "Search", download = "Download", verify = "Verify", plex = "Plex"
+
+        static func from(stage: String?) -> Self {
+            switch stage {
+            case "searching", "selecting", "waiting", "waiting-for-release", "replacing": .search
+            case "downloading", "pack-pending": .download
+            case "verifying", "publishing": .verify
+            case "ready", "available": .plex
+            default: .requested
+            }
+        }
+    }
+
+    let step: Step
+    let status: String
+    var episodeCount: String? = nil
+    var download: Download? = nil
+
+    static let requested = Self(step: .requested, status: "Request received")
+
+    nonisolated struct Download: Decodable, Sendable {
+        let bytesDone: Int64?
+        let sizeBytes: Int64?
+        let bytesPerSecond: Int64?
+        let etaSeconds: Int?
+    }
+}
+
 enum DemoCatalog {
     private static let sample = URL(string: "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8")
 

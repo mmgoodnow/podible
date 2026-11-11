@@ -9,17 +9,19 @@ final class FocusTests: XCTestCase {
         app.launch()
         let remote = XCUIRemote.shared
         let firstPoster = app.buttons["poster.marrow"]
-        let browse = app.buttons["nav.Browse"]
+        let browse = app.buttons["nav.Home"]
         let search = app.buttons["nav.Search"]
 
         XCTAssertTrue(firstPoster.waitForExistence(timeout: 8))
-        if browse.hasFocus { remote.press(.down) }
+        if browse.hasFocus { remote.press(.right) }
         assertFocused(firstPoster)
         capture("02-browse-movies")
 
-        remote.press(.up)
-        assertFocused(browse)
-        remote.press(.right)
+        remote.press(.left)
+        let sidebar = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "nav."))
+        XCTAssertTrue(sidebar.allElementsBoundByIndex.contains(where: \.hasFocus))
+        for _ in 0..<6 where !browse.hasFocus { remote.press(.up) }
+        remote.press(.down)
         assertFocused(search)
         capture("03-navigation-focus")
 
@@ -28,15 +30,14 @@ final class FocusTests: XCTestCase {
         XCTAssertTrue(query.waitForExistence(timeout: 5))
         capture("04-search")
 
-        remote.press(.down)
         assertFocused(query)
         capture("04b-search-input-focus")
-        remote.press(.up)
-        assertFocused(search)
         remote.press(.left)
+        XCTAssertTrue(sidebar.allElementsBoundByIndex.contains(where: \.hasFocus))
+        for _ in 0..<6 where !browse.hasFocus { remote.press(.up) }
         assertFocused(browse)
         remote.press(.select)
-        if browse.hasFocus { remote.press(.down) }
+        if browse.hasFocus { remote.press(.right) }
         assertFocused(firstPoster)
         remote.press(.right)
         assertFocused(app.buttons["poster.after"])
@@ -56,6 +57,7 @@ final class FocusTests: XCTestCase {
         assertFocused(app.buttons["season.request"])
         remote.press(.select)
         XCTAssertTrue(app.staticTexts["Request sent"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["request.progress.status"].label, "Request received")
         capture("08-request-sent")
         remote.press(.menu)
         let showPoster = app.buttons["poster.after"]

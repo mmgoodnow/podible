@@ -22,7 +22,7 @@ struct BrowseView: View {
     var body: some View {
         GeometryReader { geometry in
             if let spotlight {
-                let heroHeight = min(390, max(300, geometry.size.height * 0.45))
+                let heroHeight = min(455, max(300, geometry.size.height * 0.46))
                 let compactCatalog = items.count <= 8
                 let cardWidth = compactCatalog ? min(218, max(140, (geometry.size.width - 280) / 6))
                     : min(188, max(150, (geometry.size.width - 240) / 8))
@@ -56,7 +56,7 @@ struct BrowseView: View {
             Color.clear.overlay(alignment: .trailing) {
                 if let image = item.backdrop ?? item.artwork {
                     TVArtwork(url: image, alignment: item.backdrop == nil ? .center : .top)
-                        .frame(width: width * 0.63, height: height)
+                        .frame(width: width * 0.81, height: height)
                         .mask {
                             LinearGradient(stops: [
                                 .init(color: .clear, location: 0),
@@ -72,15 +72,7 @@ struct BrowseView: View {
                 }
             }
             VStack(alignment: .leading, spacing: 13) {
-                Text(item.kind.label.uppercased())
-                    .font(.system(size: 18, weight: .semibold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundStyle(TVPalette.accent)
-                Text(item.title)
-                    .font(.system(size: 66, weight: .semibold, design: .serif))
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.62)
-                    .accessibilityAddTraits(.isHeader)
+                TVTitleTreatment(item: item)
                 HStack(spacing: 16) {
                     if !item.subtitle.isEmpty { Text(item.subtitle) }
                     if item.requestState == .requested {
@@ -130,6 +122,32 @@ struct BrowseView: View {
                 .scrollIndicators(.hidden)
             }
             .focusSection()
+        }
+    }
+}
+
+struct TVTitleTreatment: View {
+    let item: MediaTitle
+
+    var body: some View {
+        if item.tmdbID == nil && item.id == "after" {
+            VStack(alignment: .leading, spacing: -7) {
+                Text("AFTER THE").font(.system(size: 31, weight: .semibold, design: .monospaced)).tracking(7)
+                Text("SIGNAL").font(.system(size: 82, weight: .heavy, design: .monospaced)).tracking(8)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(item.title)
+            .accessibilityAddTraits(.isHeader)
+        } else {
+            let demo = item.tmdbID == nil
+            Text(demo && item.id == "north" ? item.title.uppercased() : item.title)
+                .font(.system(size: 76, weight: demo && item.id == "marrow" ? .medium : .bold,
+                              design: demo && ["marrow", "orchard"].contains(item.id) ? .serif : .default))
+                .italic(demo && item.id == "tide")
+                .tracking(demo && item.id == "marrow" ? 2 : -1)
+                .lineLimit(2)
+                .minimumScaleFactor(0.62)
+                .accessibilityAddTraits(.isHeader)
         }
     }
 }

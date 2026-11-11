@@ -13,8 +13,8 @@ Use [Plex's Apple TV preview](https://www.plex.tv/blog/new-year-same-mission/) f
 [Plex Apple TV search reference](https://www.plex.tv/wp-content/uploads/2025/01/tvOS-Search-scaled.jpg)
 
 [Plex later moved navigation back to the left](https://forums.plex.tv/t/navigation-updates-coming-to-preview-users/941751/1).
-Podible keeps four flat destinations above the artwork rather than adding a sidebar for a hierarchy it doesn't have.
-From the first shelf, press Up to reach the tabs, then Left/Right and Select.
+Podible uses a left sidebar that expands when focused. Press Left from the first poster to enter the
+sidebar, Up or Down to choose a destination, and Select to open it.
 
 ## Prototype
 
@@ -30,7 +30,7 @@ xcodebuild -project tvos/PodibleTV.xcodeproj -scheme PodibleTV \
 ## Simulator focus and screenshots
 
 With an Apple TV simulator installed, substitute its ID from `xcrun simctl list devices available`.
-The UI test uses Siri Remote actions and captures Browse, tab focus, Search, and the TV season request flow.
+The UI test uses Siri Remote actions and captures Home, sidebar focus, Search, and the TV season request flow.
 
 ```sh
 xcodebuild -project tvos/PodibleTV.xcodeproj -scheme PodibleTV \

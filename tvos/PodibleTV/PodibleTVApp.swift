@@ -21,37 +21,31 @@ private struct TVRoot: View {
     @State private var playback: Playback?
     @State private var browseError: String?
     @State private var loading = true
+    @FocusState private var sidebarFocus: Section?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum Section: String, CaseIterable {
-        case browse = "Browse", search = "Search", requests = "Requests", settings = "Settings"
+        case browse = "Home", search = "Search", movies = "Movies", tv = "TV Shows"
+        case requests = "Requests", settings = "Settings"
+
+        var icon: String {
+            switch self {
+            case .browse: "house"
+            case .search: "magnifyingglass"
+            case .movies: "film"
+            case .tv: "tv"
+            case .requests: "tray"
+            case .settings: "gearshape"
+            }
+        }
     }
 
     var body: some View {
         NavigationStack(path: $path) {
-            VStack(spacing: 0) {
-                HStack(spacing: 12) {
-                    ForEach(Section.allCases, id: \.self) { section in
-                        Button(section.rawValue) { selection = section }
-                            .buttonStyle(TVNavigationButton(selected: selection == section))
-                            .focusEffectDisabled()
-                            .accessibilityIdentifier("nav.\(section.rawValue)")
-                            .accessibilityAddTraits(selection == section ? .isSelected : [])
-                    }
-                    Spacer()
-                    if connection == nil {
-                        Text("Demo")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                    Text("podible")
-                        .font(.system(size: 34, weight: .heavy, design: .serif))
-                }
-                .padding(.horizontal, 72)
-                .padding(.bottom, 12)
-                .focusSection()
+            ZStack(alignment: .leading) {
                 Group {
                     switch selection {
-                    case .browse: browse
+                    case .browse, .movies, .tv: browse.id(selection)
                     case .search: SearchScreen(catalog: catalog, connection: connection, open: open)
                     case .requests:
                         requests.task(id: connection) { await refreshRequests() }
@@ -67,7 +61,15 @@ private struct TVRoot: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .focusSection()
+                .padding(.leading, 84)
+                Color.black.opacity(sidebarFocus == nil ? 0 : 0.55)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                sidebar
             }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: sidebarFocus != nil)
             .foregroundStyle(TVPalette.paper)
             .background(TVPalette.background.ignoresSafeArea())
             .navigationDestination(for: MediaTitle.self) { item in
@@ -90,7 +92,64 @@ private struct TVRoot: View {
         .fullScreenCover(item: $playback) { playback in DemoPlayer(url: playback.url) }
     }
 
+    private var sidebar: some View {
+        let expanded = sidebarFocus != nil
+        return VStack(spacing: 10) {
+            ForEach(Section.allCases, id: \.self) { section in
+                let focused = sidebarFocus == section
+                Button { selection = section } label: {
+                    Image(systemName: section.icon)
+                        .font(.system(size: 30, weight: selection == section ? .semibold : .regular))
+                        .frame(width: 64, height: 62)
+                        .overlay(alignment: .leading) {
+                            if expanded {
+                                Text(section.rawValue)
+                                    .font(.system(size: 25, weight: focused ? .bold : .medium))
+                                    .fixedSize()
+                                    .offset(x: 74)
+                                    .accessibilityHidden(true)
+                            }
+                        }
+                        .foregroundStyle(focused ? TVPalette.background :
+                            (selection == section ? TVPalette.accent : TVPalette.paper.opacity(0.72)))
+                        .background(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(focused ? TVPalette.paper : .clear)
+                                .frame(width: expanded ? 254 : 64)
+                        }
+                }
+                .buttonStyle(TVUnstyledButton())
+                .focusEffectDisabled()
+                .focused($sidebarFocus, equals: section)
+                .accessibilityLabel(section.rawValue)
+                .accessibilityIdentifier("nav.\(section.rawValue)")
+                .accessibilityAddTraits(selection == section ? .isSelected : [])
+            }
+        }
+        .frame(width: 84)
+        .frame(maxHeight: .infinity)
+        .background(alignment: .leading) {
+            Rectangle().fill(TVPalette.background)
+                .frame(width: expanded ? 366 : 164)
+                .offset(x: -80)
+                .ignoresSafeArea(edges: .vertical)
+        }
+        .overlay(alignment: .topLeading) {
+            Text(expanded ? "podible" : "p")
+                .font(.system(size: 42, weight: .heavy, design: .serif))
+                .foregroundStyle(TVPalette.accent)
+                .fixedSize()
+                .padding(.leading, 20)
+                .padding(.top, 12)
+                .accessibilityHidden(true)
+        }
+        .focusSection()
+    }
+
     @ViewBuilder private var browse: some View {
+        let items = catalog.filter {
+            selection == .browse || $0.kind == (selection == .movies ? .movie : .show)
+        }
         if loading {
             ProgressView("Loading library")
         } else if let browseError {
@@ -99,11 +158,11 @@ private struct TVRoot: View {
                 Button("Try Again") { Task { await refresh() } }
                 Button("Connection Settings") { selection = .settings }
             }
-        } else if catalog.isEmpty {
+        } else if items.isEmpty {
             ContentUnavailableView("Nothing to browse yet", systemImage: "play.rectangle",
                                    description: Text("Try searching for a movie or show."))
         } else {
-            BrowseView(items: catalog, open: open)
+            BrowseView(items: items, open: open)
         }
     }
 
@@ -183,38 +242,10 @@ private struct TVRoot: View {
     }
 }
 
-private struct TVNavigationButton: ButtonStyle {
-    let selected: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        Label(configuration: configuration, selected: selected)
-    }
-
-    private struct Label: View {
-        @Environment(\.isFocused) private var focused
-        let configuration: ButtonStyle.Configuration
-        let selected: Bool
-
-        var body: some View {
-            configuration.label
-                .font(.system(size: 25, weight: .semibold))
-                .foregroundStyle(focused ? TVPalette.background : TVPalette.paper.opacity(selected ? 1 : 0.72))
-                .padding(.horizontal, 22)
-                .padding(.vertical, 10)
-                .background(focused ? TVPalette.accent : .clear, in: Capsule())
-                .overlay(alignment: .bottom) {
-                    if selected && !focused {
-                        Capsule().fill(TVPalette.accent).frame(width: 20, height: 2)
-                    }
-                }
-                .scaleEffect(configuration.isPressed ? 0.96 : 1)
-        }
-    }
-}
-
 private struct DetailScreen: View {
     @State private var item: MediaTitle
     @State private var seasons: [MediaSeason]
+    @State private var progress: TitleAcquisitionProgress?
     @State private var loaded: Bool
     @State private var detailError: String?
     let connection: Connection?
@@ -226,6 +257,8 @@ private struct DetailScreen: View {
         _item = State(initialValue: initial)
         _seasons = State(initialValue: connection == nil ? DemoCatalog.seasons(for: initial, requested: demoSeasons) : [])
         _loaded = State(initialValue: connection == nil)
+        _progress = State(initialValue: connection == nil && (!demoSeasons.isEmpty || initial.requestState == .requested)
+            ? .requested : nil)
         self.connection = connection
         self.play = play
         self.requested = requested
@@ -241,7 +274,7 @@ private struct DetailScreen: View {
             }
             if !loaded && detailError == nil { ProgressView("Loading title") }
             if loaded {
-                TitleDetailView(item: item, seasons: seasons, play: play, request: submit)
+                TitleDetailView(item: item, seasons: seasons, progress: progress, play: play, request: submit)
             }
         }
         .task { if !loaded { await load() } }
@@ -251,7 +284,9 @@ private struct DetailScreen: View {
         guard let connection else { return }
         detailError = nil
         do {
-            (item, seasons) = try await PodibleClient(baseURL: connection.url, token: connection.token).detail(item)
+            let details = try await PodibleClient(baseURL: connection.url, token: connection.token).detail(item)
+            guard !Task.isCancelled else { return }
+            (item, seasons, progress) = details
             loaded = true
         } catch {
             guard !Task.isCancelled else { return }
@@ -267,6 +302,7 @@ private struct DetailScreen: View {
             seasons[i] = MediaSeason(id: seasons[i].id, name: seasons[i].name, summary: "Requested", requestable: false)
         }
         if item.requestState != .available { item.requestState = .requested }
+        if progress == nil || progress?.step == .plex { progress = .requested }
         var requestItem = item
         requestItem.requestState = .requested
         requested(requestItem, numbers)
@@ -330,6 +366,7 @@ private struct SearchScreen: View {
         }
         .padding(.horizontal, 72)
         .padding(.top, 26)
+        .onAppear { queryFocused = true }
         .onDisappear { searchTask?.cancel() }
     }
 
