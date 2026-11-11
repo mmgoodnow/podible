@@ -1071,6 +1071,28 @@ test("exhausted stalled packs hand off once to smaller missing-only searches", a
   } finally { await s.close(); }
 });
 
+test("multi-episode pack fallback probes distinct episode coordinates instead of repeating a season search", async () => {
+  const input = catalog();
+  input.episodes[3]!.airDate = "2019-01-01";
+  const keys = input.episodes.map(episode => episode.key);
+  const s = await setup(keys, input);
+  try {
+    const stalled = s.fixture.addRelease("stalled-large-pack", keys, { stalled: true });
+    const probes: string[] = [];
+    s.fixture.services.search = async (_entry, _query, episodes) => {
+      if (episodes?.length === 1) probes.push(episodes[0]!.key);
+      return { warnings: [], offers: [stalled] };
+    };
+    await acquireTv(s.context, s.repo.getJob(s.enqueue().job_id!)!, s.fixture.services);
+    const children = s.repo.tv.acquisitions(s.request.targetId).filter(row => !row.finished_at);
+    expect(children).toHaveLength(2);
+    for (const child of children) await acquireTv(s.context, s.repo.getJob(child.job_id!)!, s.fixture.services);
+    expect(probes.sort()).toEqual(keys);
+    expect(s.fixture.sourceAdds).toBe(1);
+    expect(s.repo.tv.acquisitions(s.request.targetId).filter(row => !row.finished_at)).toHaveLength(0);
+  } finally { await s.close(); }
+});
+
 test("wrong Plex episode GUID blocks activation despite correct aired ordinals and retains old playable links", async () => {
   const s = await setup(["tvdb:201", "tvdb:202"]);
   try {

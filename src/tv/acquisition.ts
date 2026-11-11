@@ -121,12 +121,12 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
     active(); repo.event(target.id, acquisition.id, `tv-acquisition:${acquisition.id}:${key}`, stage, message);
     ctx.onAcquisitionChange?.();
   };
-  const sharedSearch = async (wave: string, scoped = false) => {
+  const sharedSearch = async (wave: string, scoped = false, queryEpisodes = episodes) => {
     const key=intake.searchGroup && !scoped ? `tv-search:${intake.searchGroup}:${wave}` : null;
     const fingerprint=createHash("sha256").update(JSON.stringify([ctx.getSettings(),entry.key,entry.title])).digest("hex");
     const saved=key ? ctx.repo.getJsonState<{fingerprint:string;capturedAt:number;value:Awaited<ReturnType<TvServices["search"]>>}>(key) : null;
     if(saved?.fingerprint===fingerprint && Date.now()-saved.capturedAt>=0 && Date.now()-saved.capturedAt<30*60_000) return saved.value;
-    const value=await services.search(entry, undefined, key ? undefined : episodes);
+    const value=await services.search(entry, undefined, key ? undefined : queryEpisodes);
     active();
     if(key) ctx.repo.setJsonState(key,{fingerprint,capturedAt:Date.now(),value});
     return value;
@@ -144,6 +144,11 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       reuseSources: reuse.sources.filter(item => !rejected.some(row => row.native_id === item.source.ref.nativeId)), consumedSources: reuse.consumed };
   });
   const episodes = snapshot.episodeIds.map((id) => repo.episode(id, entry.id)!);
+  // Multiple episodes from one season would still produce a season-wide ID
+  // query. Probe distinct episode coordinates, while selecting for the group.
+  const packProbes = intake.stalledPacks
+    ? [...new Set([episodes[0], episodes.at(-1), episodes[Math.floor(episodes.length / 2)]].filter(ep => ep !== undefined))]
+    : [];
   const policy = movieQualityPolicySchema.parse(snapshot.policy);
   if (!episodes.length) {
     emit("waiting", "retained", repo.missingEpisodes(requestId).length ? "Waiting for requested episodes to air and arrive in indexer feeds" : "All requested episodes are already available");
@@ -355,10 +360,13 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       repo.observeDownload(id, observation);
       releaseEvidence = { key: reusable.offerKey, title: reusable.title, provider: reusable.provider };
     } else {
+      const probe = packProbes[attempt];
+      if (packProbes.length && !probe) break;
+      const searchEpisodes = probe ? [probe] : episodes;
       emit(`${attempt}:searching`, "searching", `Searching releases for ${entry.title}`);
       let search = await tvUpstreamStep(ctx, `${prefix}:search`, () => attempt === 0 && intake.feedOffers?.length
         ? Promise.resolve({ offers: intake.feedOffers.map((offer) => refreshTvFeedOffer(ctx.repo, offer)), warnings: [] })
-        : sharedSearch(`${attempt}:initial`, attempt > 0));
+        : sharedSearch(`${attempt}:initial`, attempt > 0, searchEpisodes));
       let selection;
       for (let wave = 0; ; wave++) {
         selection = await durableStep(ctx, `${prefix}:select:${wave}`, async () => {
@@ -379,7 +387,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
         const retryAt = Math.min(...deferred.map((provider) => Date.parse(provider.retryAt)).filter(Number.isFinite));
         if (!ctx.execution) throw new Error("Deferred TV indexers require durable execution");
         await ctx.execution.sleep(`${prefix}:indexer-wait:${wave}`, Math.max(1000, Math.min(3_600_000, retryAt - Date.now() || 60_000)));
-        search = await tvUpstreamStep(ctx, `${prefix}:search-wave:${wave}`, () => sharedSearch(`${attempt}:retry:${wave}`, attempt > 0));
+        search = await tvUpstreamStep(ctx, `${prefix}:search-wave:${wave}`, () => sharedSearch(`${attempt}:retry:${wave}`, attempt > 0, searchEpisodes));
       }
       if (!selection.offer) {
         const followSource = (source: TvSource, skipFileIndexes: number[] = []) => {
@@ -457,6 +465,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
         }
         // A scoped search can find results buried under a shared show-wide lookup.
         if (attempt === 0 && (intake.searchGroup || intake.feedOffers?.length)) continue;
+        if (attempt + 1 < packProbes.length) continue;
         if (await splitStalledBatch()) return "done";
         repo.decision(acquisition.id, { ...intake, selection: { title: null, reason: selection.reason },
           blockedCode: capacityProblem ? "stopped" : "no-match" });
