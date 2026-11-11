@@ -52,6 +52,11 @@ export function queueTvAcquisition(repo: BooksRepo, requestId: number, reason: "
     type: "tv_acquire", payload: { acquisitionId }, idempotencyKey: `tv-acquire:${acquisitionId}`, maxAttempts: 5,
   }).id, requestId, batchEpisodeIds);
 }
+type StalledPack = { key: string; hash: string };
+function queueTvPackFallback(repo: BooksRepo, requestId: number, ids: number[], stalledPacks: StalledPack[]) {
+  const work = queueTvAcquisition(repo, requestId, "recovery", ids);
+  if (!work.shared) repo.tv.decision(work.acquisition.id, { batchEpisodeIds: ids, stalledPacks });
+}
 /** Explicit requests/retries fan out once. A failed season waits for RSS, not a title-search timer. */
 export function queueTvSeasons(repo: BooksRepo, requestId: number, reason: "initial" | "recovery" = "initial", episodeIds?: number[]) {
   return repo.transaction(() => {
@@ -97,7 +102,8 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
   const target = repo.target(acquisition.target_id)!;
   const entry = repo.entry(target.entry_id)!;
   const requestId = acquisition.request_id;
-  const intake = acquisition.decision_json ? JSON.parse(acquisition.decision_json) as { batchEpisodeIds?: number[]; searchGroup?: string; feedOffers?: MovieOffer[]; feedEvidence?: unknown } : {};
+  const intake = acquisition.decision_json ? JSON.parse(acquisition.decision_json) as { batchEpisodeIds?: number[]; searchGroup?: string; feedOffers?: MovieOffer[]; feedEvidence?: unknown; stalledPacks?: StalledPack[]; splitStalledPack?: boolean } : {};
+  if (acquisition.finished_at && intake.splitStalledPack) return "done";
   const settings = ctx.getSettings();
   const roots = tvRoots(settings.tv.managedRoot, settings.tv.plexViewPath);
   const configuration = () => createHash("sha256").update(JSON.stringify([
@@ -150,10 +156,37 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
   const excludedHashes = new Set(snapshot.priorHashes ?? []);
   let scopedRecovery = snapshot.scopedRecovery === true;
   const currentFailures: { key: string; hash?: string }[] = [];
+  const stalledPacks: StalledPack[] = [];
+  for (const stalled of intake.stalledPacks ?? []) {
+    excluded.add(stalled.key);
+    excludedHashes.add(stalled.hash);
+  }
   const reject = (key: string, hash?: string) => {
     currentFailures.push({ key, hash });
     excluded.add(key);
     if (hash) excludedHashes.add(hash);
+  };
+  const splitStalledBatch = async () => {
+    if (!stalledPacks.length || intake.stalledPacks || capacityProblem || episodes.length < 2) return false;
+    const handedOff = await durableStep(ctx, "tv:split-stalled-pack", () => ctx.repo.transaction(() => {
+      active();
+      const prior = repo.acquisition(acquisition.id);
+      // The app transaction may have committed before the workflow saved its step.
+      if (prior?.finished_at) return Boolean(JSON.parse(prior.decision_json ?? "{}").splitStalledPack);
+      const missing = new Set(repo.missingEpisodes(requestId).map(ep => ep.id));
+      const ids = episodes.filter(ep => missing.has(ep.id)).map(ep => ep.id);
+      if (ids.length < 2) return false;
+      const midpoint = Math.ceil(ids.length / 2);
+      repo.decision(acquisition.id, { ...intake, splitStalledPack: true });
+      repo.finishAcquisition(acquisition.id);
+      queueTvPackFallback(ctx.repo, requestId, ids.slice(0, midpoint), stalledPacks);
+      queueTvPackFallback(ctx.repo, requestId, ids.slice(midpoint), stalledPacks);
+      repo.event(target.id, acquisition.id, `tv-acquisition:${acquisition.id}:pack-fallback`, "replacing",
+        "Pack downloads stalled; searching for the remaining episodes in smaller groups");
+      return true;
+    }));
+    if (handedOff) ctx.onAcquisitionChange?.();
+    return handedOff;
   };
   const coverPack = async (name: string, pack: TvSource) => durableStep(ctx, name, async () => {
     active();
@@ -253,7 +286,11 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       active(); repo.finishAcquisition(acquisition.id);
       const remaining = repo.missingEpisodes(requestId).filter(episode =>
         (!intake.batchEpisodeIds || intake.batchEpisodeIds.includes(episode.id)) && episode.airDate && Date.parse(episode.airDate) <= Date.now());
-      if (remaining.length) queueTvSeasons(ctx.repo, requestId, "recovery", remaining.map(ep => ep.id));
+      if (remaining.length) {
+        const ids = remaining.map(ep => ep.id);
+        if (intake.stalledPacks) queueTvPackFallback(ctx.repo, requestId, ids, intake.stalledPacks);
+        else queueTvSeasons(ctx.repo, requestId, "recovery", ids);
+      }
     }));
     ctx.onAcquisitionChange?.();
     return "done" as const;
@@ -412,6 +449,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
           excluded.clear();
           excludedHashes.clear();
           for (const row of rejected) { excluded.add(row.offer_key); excludedHashes.add(row.native_id); }
+          for (const stalled of intake.stalledPacks ?? []) { excluded.add(stalled.key); excludedHashes.add(stalled.hash); }
           for (const failure of currentFailures) { excluded.add(failure.key); if (failure.hash) excludedHashes.add(failure.hash); }
           scopedRecovery = true;
           attempts.splice(position + 1, attempts.length, { source: null, skipFileIndexes: [], attempt: 3, prefix: "tv:attempt:3" });
@@ -419,6 +457,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
         }
         // A scoped search can find results buried under a shared show-wide lookup.
         if (attempt === 0 && (intake.searchGroup || intake.feedOffers?.length)) continue;
+        if (await splitStalledBatch()) return "done";
         repo.decision(acquisition.id, { ...intake, selection: { title: null, reason: selection.reason },
           blockedCode: capacityProblem ? "stopped" : "no-match" });
         emit("blocked", "blocked", capacityProblem ?? selection.reason); repo.finishAcquisition(acquisition.id); return "done";
@@ -537,6 +576,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       }
       if (!complete) {
         if (!shared) await durableStep(ctx, `${prefix}:retain-stalled`, () => { active(); return services.client.quiesce(ref); });
+        stalledPacks.push({ key: offer.key, hash: ref.nativeId });
         reject(offer.key, ref.nativeId); emit(`${attempt}:stalled`, "replacing", "Retained a stalled TV download and searching another release"); continue;
       }
       await durableStep(ctx, `${prefix}:seal-download`, () => sealCanonicalDownload(roots.contentRoot, sourceRoot, services.client, ref, active));
@@ -614,6 +654,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
     if (!snapshot.sourceReuse) { active(); if (repo.recordVersion(acquisition.id, facts, content) !== versionId) throw new Error("Legacy TV version differs from fresh verification"); }
     return publish(prefix, versionId, ref);
   }
+  if (await splitStalledBatch()) return "done";
   emit("blocked", "blocked", capacityProblem ?? "TV acquisition alternatives exhausted; current episodes and completed torrent data retained");
   repo.finishAcquisition(acquisition.id); return "done";
 }

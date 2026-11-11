@@ -1031,6 +1031,46 @@ test("invalid TV import and stalled source are retained while a different comple
   } finally { await s.close(); }
 });
 
+test("exhausted stalled packs hand off once to smaller missing-only searches", async () => {
+  const s = await setup();
+  try {
+    s.fixture.addRelease("already-ready", ["tvdb:201"]);
+    await acquireTv(s.context, s.repo.getJob(s.enqueue().job_id!)!, s.fixture.services);
+    // The successful batch may already have queued recovery for the other episodes.
+    const parent = s.repo.tv.acquisitions(s.request.targetId).find(row => !row.finished_at)!;
+    expect(parent).toBeDefined();
+    const before = s.repo.tv.activeEpisodes(s.request.targetId);
+    s.fixture.clearOffers();
+    const stalled = s.fixture.addRelease("stalled-whole-pack", ["tvdb:202", "tvdb:203"], { stalled: true });
+    const second = s.fixture.addRelease("scoped-second", ["tvdb:202"]);
+    const third = s.fixture.addRelease("scoped-third", ["tvdb:203"], { stalled: true });
+    const searches: string[][] = [];
+    const search = s.fixture.services.search;
+    s.fixture.services.search = async (entry, query, episodes) => {
+      const keys = episodes?.map(episode => episode.key) ?? [];
+      searches.push(keys);
+      const offers = (await search(entry, query, episodes)).offers;
+      return { warnings: [], offers: offers.filter(offer => offer.key === stalled.key ||
+        (keys.length === 1 && offer.key === (keys[0] === "tvdb:202" ? second.key : third.key))) };
+    };
+    const parentJob = s.repo.getJob(parent.job_id!)!;
+    await acquireTv(s.context, parentJob, s.fixture.services);
+    const children = s.repo.tv.acquisitions(s.request.targetId).filter(row => !row.finished_at);
+    expect(children).toHaveLength(2);
+    expect(children.every(row => JSON.parse(row.decision_json!).batchEpisodeIds.length === 1)).toBe(true);
+    await acquireTv(s.context, parentJob, s.fixture.services);
+    expect(s.repo.tv.acquisitions(s.request.targetId).filter(row => !row.finished_at)).toEqual(children);
+    for (const child of children) await acquireTv(s.context, s.repo.getJob(child.job_id!)!, s.fixture.services);
+    expect(searches).toContainEqual(["tvdb:202"]);
+    expect(searches).toContainEqual(["tvdb:203"]);
+    expect(s.repo.tv.acquisitions(s.request.targetId).filter(row => !row.finished_at)).toHaveLength(0);
+    expect(s.repo.tv.activeEpisodes(s.request.targetId)).toContainEqual(before[0]);
+    expect(s.repo.tv.missingEpisodes(s.request.requestId).map(episode => episode.key)).toEqual(["tvdb:203", "tvdb:204"]);
+    expect(s.fixture.stats.quiesces).toBe(2);
+    expect(s.fixture.stats.removals).toBe(0);
+  } finally { await s.close(); }
+});
+
 test("wrong Plex episode GUID blocks activation despite correct aired ordinals and retains old playable links", async () => {
   const s = await setup(["tvdb:201", "tvdb:202"]);
   try {
