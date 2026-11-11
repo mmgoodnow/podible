@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
-import { promises as fs } from "node:fs";
+import { mkdirSync, promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { createHash, randomUUID } from "node:crypto";
+import { Worker } from "node:worker_threads";
 import bencode from "bencode";
 import { initializeManagedContent } from "../../src/media/library-view";
 import { prepareCanonicalDownload, readCanonicalDownload, resolveDownloadFile, sealCanonicalDownload,
@@ -11,16 +12,18 @@ import { adoptContentFile } from "../../src/media/content-store";
 import { adoptBookContent, prepareBookStorage } from "../../src/library/book-storage";
 import { inspectImportPath } from "../../src/library/importer";
 import type { TorrentClient } from "../../src/media/torrent-client";
+import { canonicalFinalizationPrometheus } from "../../src/media/acquisition-latency";
+import { executionDiagnostics, withExecutionEffects } from "../../src/runtime/execution-effects";
 
-async function fixture(book = false) {
+async function fixture(book = false, firstChapter = "first chapter") {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "canonical-download-")));
   const contentRoot = book ? await prepareBookStorage(root) : path.join(root, "objects");
   if (!book) await initializeManagedContent(contentRoot);
   const sourceRoot = path.join(root, "downloads"); await fs.mkdir(sourceRoot);
-  const members = [{ path: "chapter01.mp3", text: "first chapter" }, { path: "chapter02.mp3", text: "second chapter" }, { path: "release.nfo", text: "sidecar" }];
+  const members = [{ path: "chapter01.mp3", text: firstChapter }, { path: "chapter02.mp3", text: "second chapter" }, { path: "release.nfo", text: "sidecar" }];
   const bytes = Buffer.concat(members.map(member => Buffer.from(member.text)));
   const metainfo = bencode.encode({ info: { name: "Book", files: members.map(member => ({ length: Buffer.byteLength(member.text), path: [member.path] })),
-    "piece length": 16384, pieces: createHash("sha1").update(bytes).digest() } });
+    "piece length": bytes.length > 16384 ? 8 * 1024 ** 2 : 16384, pieces: createHash("sha1").update(bytes).digest() } });
   const input = { contentRoot, sourceRoot, metainfo, clientId: "fixture-client", allowCreate: true };
   const plan = (await prepareCanonicalDownload(input))!;
   const ref = { clientId: input.clientId, nativeId: plan.infoHash };
@@ -29,6 +32,69 @@ async function fixture(book = false) {
     async fill() { for (const member of members) await fs.writeFile(path.join(sourceRoot, "Book", member.path), member.text); },
     close: () => fs.rm(root, { recursive: true, force: true }) };
 }
+
+const sample = (media: string, series: string, phase?: string) => {
+  const prefix = `podible_canonical_finalization_${series}{media="${media}"${phase ? `,phase="${phase}"` : ""}} `;
+  return Number(canonicalFinalizationPrometheus().split("\n").find(line => line.startsWith(prefix))?.slice(prefix.length));
+};
+
+test("a fresh multi-chunk proof reports each phase and bytes from the worker; replay does not count", async () => {
+  const bytes = "a".repeat(4 * 1024 ** 2) + "different tail";
+  const f = await fixture(false, bytes);
+  try {
+    const file = f.plan.files[0]!, view = path.join(f.sourceRoot, file.path);
+    await f.fill();
+    await sealCanonicalDownload(f.contentRoot, f.sourceRoot, f.client, f.ref);
+    const phases = ["read_wait", "sha256", "cooperative", "revalidate", "proof_persist"];
+    const counts = phases.map(phase => sample("tv", "seconds_count", phase));
+    const before = sample("tv", "bytes_total");
+    const worker = new Worker(new URL("../fixtures/canonical-finalization-worker.ts", import.meta.url), {
+      workerData: { contentRoot: f.contentRoot, sourceRoot: f.sourceRoot, view, size: file.size },
+    });
+    try {
+      type Result = NonNullable<Awaited<ReturnType<typeof finalizeCanonicalDownloadFile>>>;
+      const { first, replay } = await new Promise<{ first: Result; replay: Result }>((resolve, reject) => {
+        worker.once("message", resolve);
+        worker.once("error", reject);
+        worker.once("exit", code => reject(new Error(`Fixture worker exited before delivering a result: ${code}`)));
+      });
+      expect(first.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+      expect(replay).toEqual(first);
+      for (let i = 0; i < 100 && sample("tv", "bytes_total") === before; i++) await Bun.sleep(10);
+      expect(sample("tv", "bytes_total") - before).toBe(file.size);
+      for (const [i, phase] of phases.entries()) {
+        expect(sample("tv", "seconds_count", phase)).toBe(counts[i]! + 1);
+        expect(sample("tv", "seconds_sum", phase)).toBeGreaterThan(0);
+      }
+      expect(await finalizedCanonicalObject(f.contentRoot, path.join(f.contentRoot, file.relativePath!))).toEqual(first);
+    } finally { await worker.terminate(); }
+  } finally { await f.close(); }
+});
+
+test("a failed proof persistence does not report success or leave a temporary receipt", async () => {
+  const f = await fixture();
+  try {
+    const file = f.plan.files[0]!, view = path.join(f.sourceRoot, file.path);
+    const canonical = path.join(f.contentRoot, file.relativePath!), proof = canonical + ".podible-finalized.json";
+    await f.fill();
+    await sealCanonicalDownload(f.contentRoot, f.sourceRoot, f.client, f.ref);
+    const before = sample("other", "seconds_count", "proof_persist");
+    await expect(withExecutionEffects({
+      jobId: 1, runId: "proof-failure", stepName: "fixture", signal: new AbortController().signal,
+    }, () => finalizeCanonicalDownloadFile(f.contentRoot, f.sourceRoot, view, file.size, () => {
+      if (executionDiagnostics().some(item => item.runId === "proof-failure" && item.phases.at(-1)?.name === "canonical-revalidate"))
+        mkdirSync(proof);
+    }))).rejects.toThrow();
+    expect((await fs.lstat(proof)).isDirectory()).toBe(true);
+    expect((await fs.readdir(path.dirname(proof))).filter(name => name.endsWith(".tmp"))).toEqual([]);
+    expect(sample("other", "seconds_count", "proof_persist")).toBe(before);
+    await fs.rmdir(proof);
+    expect(await finalizedCanonicalObject(f.contentRoot, canonical)).toBeNull();
+    expect(await finalizeCanonicalDownloadFile(f.contentRoot, f.sourceRoot, view, file.size)).toEqual(
+      await finalizedCanonicalObject(f.contentRoot, canonical));
+    expect(sample("other", "seconds_count", "proof_persist")).toBe(before + 1);
+  } finally { await f.close(); }
+});
 
 test("initial torrent is a persisted view of private canonical objects; import hashes in place and sidecars stay local", async () => {
   const f = await fixture();
@@ -41,11 +107,13 @@ test("initial torrent is a persisted view of private canonical objects; import h
     await expect(finalizeCanonicalDownloadFile(f.contentRoot, f.sourceRoot, view, file.size)).rejects.toThrow("active writer");
     await f.fill(); const before = await fs.stat(canonical, { bigint: true });
     await sealCanonicalDownload(f.contentRoot, f.sourceRoot, f.client, f.ref);
+    const priorCount = sample("other", "seconds_count", "proof_persist");
     let checks = 0;
     await expect(finalizeCanonicalDownloadFile(f.contentRoot, f.sourceRoot, view, file.size, () => {
       if (++checks > 1) throw new Error("Lost ownership");
     })).rejects.toThrow("Lost ownership");
     expect(await finalizedCanonicalObject(f.contentRoot, canonical)).toBeNull();
+    expect(sample("other", "seconds_count", "proof_persist")).toBe(priorCount);
     const result = await adoptContentFile({ contentRoot: f.contentRoot, sourceRoot: f.sourceRoot, sourcePath: view, fileId: randomUUID(), expectedSize: file.size });
     expect(result.id).toBe(file.id); expect(result.relativePath).toBe(file.relativePath!);
     expect(result.sha256).toBe(createHash("sha256").update(f.members[0]!.text).digest("hex"));

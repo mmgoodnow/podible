@@ -64,7 +64,7 @@ stat(12, "Completed downloads measured", "Only counts verified publications with
 stat(18, "Typical queue to Plex", "Starts when an acquisition batch is queued, not when the title was originally requested.", "s",
   percentile(0.5, "queued_to_ready", "$__range"));
 y += 4;
-chart(0, "Where time goes", "Rolling six-hour p95 for each stage, by media type. The pre-publication stage includes finalization, probes and import decisions.", "s", [
+chart(0, "Where time goes", "Rolling six-hour histogram p95 by media type. Sparse samples and wide buckets can overstate the actual slowest run. The pre-publication stage includes finalization, probes and import decisions.", "s", [
   [percentile(0.95, "complete_to_publish", "6h", "le, media"), "{{media}} · download complete → publishing"],
   [percentile(0.95, "publish_to_ready", "6h", "le, media"), "{{media}} · publishing → verified in Plex"],
 ]);
@@ -72,6 +72,21 @@ chart(12, "File view reconciliation", "Rolling six-hour p50 and p95 per successf
   [percentile(0.5, "view_reconcile", "6h", "le, media"), "{{media}} · p50"],
   [percentile(0.95, "view_reconcile", "6h", "le, media"), "{{media}} · p95"],
 ]);
+y += 9;
+
+const finalization = (suffix: string, labels = "") =>
+  `podible_canonical_finalization_${suffix}{job="podible"${labels}}`;
+const finalizationSum = (group: string, suffix: string, labels?: string) =>
+  `sum by (${group}) (increase(${finalization(suffix, labels)}[6h]))`;
+const perPhase = (suffix: string) => finalizationSum("media, phase", `seconds_${suffix}`);
+const readHashTime = finalizationSum("media", "seconds_sum", ',phase=~"read_wait|sha256|cooperative"');
+const finalizedFiles = finalizationSum("media", "seconds_count", ',phase="proof_persist"');
+panel("timeseries", "Canonical finalization phases", "Six-hour mean per successful proof write, not per acquisition. Read wait includes filesystem and scheduling; cooperative time includes fences and loop overhead. Revalidation is the post-read identity check. Proof persistence includes file and directory sync.", "s", grid(0, 12, 9),
+  [[`${perPhase("sum")} / (${perPhase("count")} > 0)`, "{{media}} · {{phase}}"]]);
+panel("timeseries", "Finalization read + hash rate", "Bytes divided by read, SHA-256 and cooperative wall time. Aggregate effective rate per file, not device bandwidth.", "Bps", grid(12, 6, 9),
+  [[`${finalizationSum("media", "bytes_total")} / (${readHashTime} > 0)`, "{{media}}"]]);
+panel("timeseries", "Finalization samples", "Successful proof writes in the last six hours, not published titles. Reused proofs and failed attempts are excluded. 'Other' is work outside TV/movie acquisition steps.", "none", grid(18, 6, 9),
+  [[finalizedFiles, "{{media}}"]]);
 y += 9;
 
 nextPanelId = 1; // Preserve existing Grafana panel links and IDs.

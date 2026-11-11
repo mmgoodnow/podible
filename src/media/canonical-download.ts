@@ -6,7 +6,8 @@ import { inspectMetainfo } from "./metainfo";
 import { torrentFileRole } from "./content-file-role";
 import type { TorrentClient, TorrentRef } from "./torrent-client";
 import { withKeyedMutex } from "../runtime/keyed-mutex";
-import { effectCheckpoint } from "../runtime/execution-effects";
+import { effectCheckpoint, effectPhase } from "../runtime/execution-effects";
+import { recordCanonicalFinalization } from "./acquisition-latency";
 
 const relative = z.string().min(1).refine(value => !path.isAbsolute(value) &&
   !/[\\\x00-\x1f\x7f]/.test(value) && value.split("/").every(part => part && part !== "." && part !== ".."));
@@ -244,8 +245,12 @@ export async function finalizeCanonicalDownloadFile(contentRoot: string, sourceR
   if (previous) return previous;
   const handle = await fs.open(resolved.path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
-    const before = await handle.stat({ bigint: true }), hash = createHash("sha256"), buffer = Buffer.alloc(1024 * 1024);
-    let fenceAfter = performance.now() + 250;
+    const before = await handle.stat({ bigint: true }), hash = createHash("sha256");
+    // Amortize async read overhead without unbounded buffering or parallel reads.
+    const buffer = Buffer.alloc(Math.max(1, Math.min(expectedSize, 4 * 1024 ** 2)));
+    effectPhase("canonical-read-hash");
+    const readStarted = performance.now();
+    let fenceAfter = readStarted + 250, readWait = 0, sha256 = 0, bytesHashed = 0;
     for (;;) {
       effectCheckpoint();
       // This loop only reads bytes. Keep cheap cancellation per chunk and
@@ -254,16 +259,37 @@ export async function finalizeCanonicalDownloadFile(contentRoot: string, sourceR
         active();
         fenceAfter = performance.now() + 250;
       }
+      const started = performance.now();
       const { bytesRead } = await handle.read(buffer);
-      if (!bytesRead) break; hash.update(buffer.subarray(0, bytesRead));
+      const ready = performance.now();
+      readWait += ready - started;
+      if (!bytesRead) break;
+      effectCheckpoint();
+      const hashStarted = performance.now();
+      hash.update(buffer.subarray(0, bytesRead));
+      sha256 += performance.now() - hashStarted;
+      bytesHashed += bytesRead;
     }
+    const digestStarted = performance.now();
+    const digest = hash.digest("hex");
+    const readFinished = performance.now();
+    sha256 += readFinished - digestStarted;
+    effectPhase("canonical-revalidate");
+    const revalidationStarted = performance.now();
     const after = await handle.stat({ bigint: true });
-    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs)
+    if (bytesHashed !== expectedSize || before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs)
       throw new Error("Canonical download changed during finalization");
     await resolveDownloadFile(contentRoot, sourceRoot, sourcePath, expectedSize); active();
-    const result = { id: resolved.file.id, relativePath: resolved.file.relativePath!, sizeBytes: expectedSize, sha256: hash.digest("hex") };
+    const revalidate = performance.now() - revalidationStarted;
+    const result = { id: resolved.file.id, relativePath: resolved.file.relativePath!, sizeBytes: expectedSize, sha256: digest };
+    effectPhase("canonical-proof-persist");
+    const proofStarted = performance.now();
     await writeJson(proofPath(resolved.path), { ...result, sourceRoot,
       device: String(after.dev), inode: String(after.ino), mtimeNs: String(after.mtimeNs), ctimeNs: String(after.ctimeNs) });
+    recordCanonicalFinalization(bytesHashed, {
+      read_wait: readWait, sha256, cooperative: Math.max(0, readFinished - readStarted - readWait - sha256),
+      revalidate, proof_persist: performance.now() - proofStarted,
+    });
     return result;
   } finally { await handle.close(); }
 }
