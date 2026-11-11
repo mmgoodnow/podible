@@ -26,7 +26,6 @@ export async function runTvRetentionPressure(ctx: WorkerContext, _job: JobRow,
   const audits: TvRetentionAudit[] = [];
   for (const scope of page.scopes) {
     active();
-    if (settings.retention.protectedTvTargetIds.includes(scope.targetId)) continue;
     const audit = await service.audit(scope);
     active(); if (audit.eligible) audits.push(audit);
   }

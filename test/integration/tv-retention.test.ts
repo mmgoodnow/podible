@@ -120,17 +120,13 @@ test("whole-season audit uses exact global episode history and real independent 
   expect(JSON.stringify(result)).not.toContain("private-plex-token"); expect(f.rpcCalls.every((method) => method === "torrent-get")).toBe(true);
 });
 
-test("protected TV pins block explicit audit/eviction and the queued plan fence independently", async () => {
+test("a change to the retention reserve invalidates a queued TV eviction plan", async () => {
   await using f = await fixture();
-  const settings = f.repo.readSettings()!; settings.retention.protectedTvTargetIds = [f.scope.targetId]; f.repo.updateSettings(settings);
-  const audit = await f.service().audit(f.scope);
-  expect(audit.eligible).toBe(false); expect(codes(audit)).toContain("protected-resource");
-  const blocked = await f.service().evict({ ...f.scope, expectedRevision: audit.revision, operationId: randomUUID(), reason: "Pins must win" });
-  expect(blocked.status).toBe("blocked"); expect(f.repo.tv.activeEpisodes(f.scope.targetId)).toHaveLength(3);
-  settings.retention.protectedTvTargetIds = []; f.repo.updateSettings(settings);
   const queued = await f.queue();
-  settings.retention.protectedTvTargetIds = [f.scope.targetId]; f.repo.updateSettings(settings);
-  expect(() => f.repo.tvRetention.assert(queued.evictionId!)).toThrow("protected");
+  const settings = f.repo.readSettings()!;
+  settings.retention.minimumFreeBytes += 1024 ** 3;
+  f.repo.updateSettings(settings);
+  expect(() => f.repo.tvRetention.assert(queued.evictionId!)).toThrow("TV retention configuration changed");
   for (const file of f.files) expect(await fs.readFile(file.canonical)).toEqual(file.bytes);
 });
 

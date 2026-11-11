@@ -61,7 +61,6 @@ export class TvRetentionRepo {
     // The same parsed settings projection is hashed by the service; raw JSON order is not configuration identity.
     if (!settings) throw new Error("TV storage configuration missing");
     const configuration = parseSettings(settings.value_json);
-    if (configuration.retention.protectedTvTargetIds.includes(plan.scope.targetId)) throw new Error("TV target is protected by retention policy");
     if (createHash("sha256").update(JSON.stringify(configuration)).digest("hex") !== plan.settingsHash)
       throw new Error("TV retention configuration changed");
     const root = JSON.parse(settings.value_json).tv?.managedRoot;

@@ -106,8 +106,6 @@ export class TvRetentionService {
           inventory.acquisitions.length > 100 || inventory.downloads.length > 20) throw new Error("Whole-season inventory exceeds bounds");
       if (!inventory.target || !inventory.work) { block("not-found", "Owned TV target not found."); throw new Error("Unknown target"); }
       result.title = inventory.work.title; result.workKey = inventory.work.key; result.targetRevision = inventory.target.revision;
-      if (settings?.retention.protectedTvTargetIds.includes(season.targetId))
-        block("protected-resource", "This TV target is pinned by retention.protectedTvTargetIds; explicit and pressure eviction are blocked.");
       const targetKey = { namespace: "tv-target", id: String(season.targetId) };
       const targetIntent = this.repo.retention.get(targetKey), seasonIntent = this.repo.retention.get(key);
       const selectedAtAudit = this.repository()?.selected(season.targetId) ?? [];

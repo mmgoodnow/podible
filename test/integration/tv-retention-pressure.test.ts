@@ -48,17 +48,16 @@ test("healthy/unknown TV space is a read-only no-op without metadata audits or w
   } finally { audit.mockRestore(); }
 });
 
-test("TV pressure scans bounded whole targets, skips pins, ranks low plays/old watch, and rechecks space before queueing", async () => {
+test("TV pressure scans bounded whole targets, ranks low plays/old watch, and rechecks space before queueing", async () => {
   await using f = await fixture();
-  f.settings.retention.protectedTvTargetIds = [2]; f.repo.updateSettings(f.settings);
   // Evidence and destructive execution are covered by the real whole-season suite; this tests intake/ranking only.
   const audit = spyOn(TvRetentionService.prototype, "audit").mockImplementation(async scope => ({ season: scope,
-    eligible: true, revision: "a".repeat(64), watch: { episodes: [{ playCount: scope.targetId === 1 ? 5 : 1, lastViewedAt: "2020-01-01" }] },
+    eligible: true, revision: "a".repeat(64), watch: { episodes: [{ playCount: scope.targetId === 3 ? 1 : 5, lastViewedAt: "2020-01-01" }] },
   } as unknown as TvRetentionAudit));
   const evict = spyOn(TvRetentionService.prototype, "evict").mockResolvedValue({ status: "queued", evictionId: randomUUID(), jobId: 99, blockers: [] });
   try {
     await runTvRetentionPressure(f.ctx, f.job, { observeDisk: async () => f.disk(1) });
-    expect(audit.mock.calls.map(([scope]) => scope.targetId)).toEqual([1, 3]);
+    expect(audit.mock.calls.map(([scope]) => scope.targetId)).toEqual([1, 2, 3]);
     expect(evict.mock.calls[0]![0].targetId).toBe(3);
     expect(f.repo.getJsonState<number>("tv-retention-pressure-cursor")).toBe(3);
     evict.mockClear(); f.repo.setJsonState("tv-retention-pressure-cursor", 0);

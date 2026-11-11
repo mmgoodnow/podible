@@ -237,18 +237,24 @@ async function verify() {
   await page.getByLabel("Torznab URL", { exact: true }).fill(torznabUrl);
   await page.getByLabel("Torznab API key", { exact: true }).fill("torznab-replacement-fixture");
   await page.getByLabel("Audiobook categories", { exact: true }).fill("3030,3040");
-  await openSettings("TV");
+  await openSettings("Movies & TV");
   assert.equal(await page.getByRole("button", { name: "Add path mapping", exact: true }).count(), 0);
-  await openSettings("Movies");
+  assert.equal(await page.getByLabel("TV Plex section ID", { exact: true }).count(), 1);
+  assert.equal(await page.getByLabel("Seerr URL", { exact: true }).count(), 0);
+  assert.equal(await page.getByLabel("Maximum movie release size (GiB)", { exact: true }).count(), 0);
+  assert.equal(await page.getByRole("heading", { name: "Quality tiers", exact: true }).count(), 0);
+  await openSettings("Seerr");
+  await page.getByLabel("Seerr URL", { exact: true }).waitFor();
+  await openSettings("Acquisition");
+  await page.getByLabel("Maximum movie release size (GiB)", { exact: true }).waitFor();
+  await page.getByLabel("Maximum TV release size (GiB)", { exact: true }).waitFor();
+  await openSettings("Release quality");
   await page.getByRole("button", { name: "Move tier 2 up", exact: true }).click();
+  assert.equal(await sectionNav.getByRole("button", { name: "Release quality", exact: true }).getAttribute("aria-description"), "Unsaved changes");
+  assert.equal(await sectionNav.getByRole("button", { name: "Movies & TV", exact: true }).getAttribute("aria-description"), null);
   await openSettings("Storage");
   await page.getByLabel("Minimum free space (GiB)", { exact: true }).fill("2.5");
-  const protectedTv = page.getByLabel("Protected TV target IDs", { exact: true });
-  await protectedTv.fill("42");
-  await protectedTv.press("End");
-  await protectedTv.press("Enter");
-  await protectedTv.pressSequentially("123");
-  assert.equal(await protectedTv.inputValue(), "42\n123", "Typing a newline must not collapse the list");
+  assert.equal(await page.getByLabel(/Protected .* target IDs/).count(), 0);
   assert.equal(settingsPosts, postsBeforeInvalid, "Structured changes must not auto-save");
   assert.deepEqual((await rpc("settings.get")).result, otherEdit);
   await saveSettings.click();
@@ -258,7 +264,7 @@ async function verify() {
   assert.deepEqual(grouped, { ...otherEdit, agents: { ...saved.agents, apiKey: "", editionPreference },
     torznab: [{ name: "Fixture Torznab", baseUrl: torznabUrl, apiKey: "torznab-replacement-fixture", categories: { audio: "3030,3040" } }],
     movies: { ...saved.movies, qualityPolicy: { ...saved.movies.qualityPolicy, tiers: [secondTier, firstTier, ...otherTiers] } },
-    retention: { ...saved.retention, minimumFreeBytes: 2.5 * 1024 ** 3, protectedTvTargetIds: [42, 123] },
+    retention: { minimumFreeBytes: 2.5 * 1024 ** 3 },
   });
   await openSettings("Indexers");
   await page.getByText("Already managed by Prowlarr. You can remove this manual entry.", { exact: true }).waitFor();
@@ -278,7 +284,7 @@ async function verify() {
   assert.ok((await title.boundingBox())!.y >= mobileTitleHelp.y + mobileTitleHelp.height, "Mobile controls should stack below their descriptions");
   await page.evaluate("scrollTo(0, 0)");
   await page.screenshot({ path: path.join(artifacts, "admin-settings-mobile.png"), animations: "disabled" });
-  for (const section of ["Books & feed", "AI", "Indexers", "Downloads", "Movies", "TV", "Storage", "Notifications", "Plex access"]) {
+  for (const section of ["Books & feed", "AI", "Indexers", "Acquisition", "Release quality", "Seerr", "Movies & TV", "Storage", "Notifications", "Plex access"]) {
     await openSettings(section);
     await page.getByRole("heading", { name: section, exact: true }).waitFor();
     assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false, `${section} settings overflow mobile viewport`);

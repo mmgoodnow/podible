@@ -280,16 +280,15 @@ export async function runRetentionCleanup(ctx: WorkerContext, job: JobRow, adapt
   for (const eviction of existing) await executeEviction(ctx, eviction, adapters);
   for (let iteration = existing.length; iteration < RETENTION_MAX_TARGETS; iteration++) {
     ctx.execution?.assertActive();
-    const configuration = retentionConfiguration(ctx.repo);
     const cursor = ctx.repo.getJsonState<number>("retention-pressure-cursor") ?? 0;
-    const preview = await previewRetention(ctx.repo, configuration.policy, adapters, { afterTargetId: cursor });
+    const preview = await previewRetention(ctx.repo, adapters, { afterTargetId: cursor });
     if (preview.pressure !== true) return "done";
     if (preview.nextAfterTargetId !== null) ctx.repo.setJsonState("retention-pressure-cursor", preview.nextAfterTargetId);
     const candidate = preview.candidates.find((candidate) => candidate.eligible);
     if (!candidate || candidate.expectedRevision === null) return "done";
     const eviction = await durableStep(ctx, `retention:plan:${iteration}`, async () => {
       const plan = await prepareMovieEviction(ctx.repo, { targetId: candidate.targetId, expectedRevision: candidate.expectedRevision!,
-        reason: "Automatic disk pressure: oldest low-watch eligible owned movie", mode: "pressure" }, configuration.policy,
+        reason: "Automatic disk pressure: oldest low-watch eligible owned movie", mode: "pressure" },
       { ...adapters, watchHistory: adapters.watchHistory ?? freshWatch });
       ctx.execution?.assertActive();
       return ctx.repo.retention.queueEviction(plan, () => job.id);

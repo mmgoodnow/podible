@@ -4,8 +4,8 @@ import { appSettingsSchema } from "../../src/rpc/schemas";
 import { rpc, useTRPC } from "./rpc";
 import { LibraryMigrationPreview } from "./library-migration";
 import { applySettingsDraft, changeSetting, conflictingSettings, rebaseSettingsDraft, type SettingsDraft } from "./settings-draft";
-import { AiSettings, BookSettings, DownloadSettings, IndexerSettings, MovieSettings, NotificationSettings, PlexSettings,
-  SettingsGroup, StorageSettings, TvSettings, type SettingsForm } from "./settings-fields";
+import { AcquisitionSettings, AiSettings, BookSettings, IndexerSettings, NotificationSettings, PlexSettings, QualitySettings,
+  SeerrSettings, SettingsGroup, StorageSettings, VideoSettings, type SettingsForm } from "./settings-fields";
 import "./settings.css";
 
 const draftKey = ["admin-settings-draft"] as const;
@@ -16,9 +16,11 @@ const sections = {
   books: { title: "Books & feed", description: "Reader feed and edition matching.", roots: ["feed"] },
   ai: { title: "AI", description: "OpenAI connection for books, movies and TV.", roots: ["agents"] },
   indexers: { title: "Indexers", description: "Manage search providers and release sources.", roots: ["prowlarr", "torznab"] },
-  downloads: { title: "Downloads", description: "Recover stalled downloads.", roots: ["recovery"] },
-  movies: { title: "Movies", description: "Publishing, request integrations and release quality.", roots: ["movies"] },
-  tv: { title: "TV", description: "Series publishing and Sonarr.", roots: ["tv"] },
+  acquisition: { title: "Acquisition", description: "Control what gets downloaded, upgraded, and retried.", roots: ["recovery",
+    "movies.maximumReleaseBytes", "movies.crossSeedPreference", "movies.automaticUpgrades", "movies.downloadGroupId", "tv.maximumReleaseBytes"] },
+  quality: { title: "Release quality", description: "Choose which movie and TV releases are eligible and rank them for upgrades.", roots: ["movies.qualityPolicy"] },
+  seerr: { title: "Seerr", description: "Connect Seerr to sync approved movie and TV requests.", roots: ["movies.seerr"] },
+  video: { title: "Movies & TV", description: "Catalog metadata, Plex publishing, and Radarr and Sonarr comparisons.", roots: ["movies", "tv"] },
   plex: { title: "Plex access", description: "Choose who can sign in and configure reader app redirects.", roots: ["auth"] },
   storage: { title: "Storage", description: "Library location, Plex views and retention.", roots: ["storageRoot", "retention"] },
   notifications: { title: "Notifications", description: "Configure alerts delivered through Pushover.", roots: ["notifications"] },
@@ -27,7 +29,7 @@ type Section = keyof typeof sections;
 const sectionKeys = Object.keys(sections) as Section[];
 const sectionFor = (path: string): Section | undefined => {
   if (path === "agents.editionPreference") return "books";
-  return sectionKeys.find(key => sections[key].roots.includes(path.split(".")[0]!));
+  return sectionKeys.find(key => sections[key].roots.some(root => path === root || path.startsWith(root + ".")));
 };
 
 function PlexAccess({ form, saving }: { form: SettingsForm; saving: boolean }) {
@@ -204,9 +206,10 @@ export default function Settings({ navigation }: { navigation: ReactNode }) {
             {section === "books" && <BookSettings form={form} />}
             {section === "ai" && <AiSettings form={form} />}
             {section === "indexers" && <IndexerSettings form={form} discovery={indexers.data} loading={indexers.isPending} />}
-            {section === "downloads" && <DownloadSettings form={form} />}
-            {section === "movies" && <MovieSettings form={form} />}
-            {section === "tv" && <TvSettings form={form} openMovies={() => openSection("movies")} />}
+            {section === "acquisition" && <AcquisitionSettings form={form} />}
+            {section === "quality" && <QualitySettings form={form} />}
+            {section === "seerr" && <SeerrSettings form={form} />}
+            {section === "video" && <VideoSettings form={form} />}
             {section === "plex" && <PlexAccess form={form} saving={saving} />}
             {section === "storage" && <><StorageSettings form={form} /><LibraryMigrationPreview /></>}
             {section === "notifications" && <NotificationSettings form={form} />}

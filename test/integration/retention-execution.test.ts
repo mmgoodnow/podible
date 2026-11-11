@@ -110,7 +110,7 @@ async function fixture() {
 test("retention preview is dry-run and healthy pressure loops do no candidate or provider work", async () => {
   await using f = await fixture();
   const movie = await f.add(1), before = f.db.query("SELECT total_changes() AS n").get();
-  const preview = await previewRetention(f.repo, DEFAULT_RETENTION_POLICY, f.adapters);
+  const preview = await previewRetention(f.repo, f.adapters);
   expect(retentionPreviewSchema.parse(preview)).toEqual(preview);
   expect(preview.candidates[0]).toMatchObject({ eligible: true, targetId: movie.requested.targetId });
   expect(preview.candidates[0]!.reclaimableBytes).toBe((await fs.stat(movie.canonical)).blocks * 512);
@@ -132,7 +132,7 @@ test("eviction intent, selection retirement and outbox roll back together on enq
   const runtime = await createJobExecutionRuntime(f.context, path.join(f.root, "execution.sqlite"), { processJob: async () => "done" });
   await runtime.stop();
   f.db.exec("CREATE TRIGGER reject_retention_job BEFORE INSERT ON job_commands BEGIN SELECT RAISE(ABORT,'fixture outbox unavailable'); END");
-  await expect(queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Operator cleanup" }, DEFAULT_RETENTION_POLICY, f.adapters)).rejects.toThrow("outbox unavailable");
+  await expect(queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Operator cleanup" }, f.adapters)).rejects.toThrow("outbox unavailable");
   expect(f.repo.retention.get(movie.key)).toMatchObject({ desiredPresence: "present", revision: 1 });
   expect(f.repo.movies.target(movie.requested.targetId)!.active_version_id).toBe(movie.versionId);
   expect(f.db.query("SELECT COUNT(*) AS n FROM retention_evictions").get()).toEqual({ n: 0 });
@@ -157,9 +157,8 @@ test("pressure ranks inspected low-watch/old-watch targets, preserves seeds and 
   expect(f.rpcCalls.every((method) => method === "torrent-get")).toBe(true);
 });
 
-test.each(["protected", "fresh", "untracked", "unwatched", "unknown-watch", "active-playback", "unknown-playback", "unknown-allocation", "seed-unverified", "hardlink", "active-acquisition"])("%s evidence blocks both preview eligibility and operator deletion", async (kind) => {
+test.each(["fresh", "untracked", "unwatched", "unknown-watch", "active-playback", "unknown-playback", "unknown-allocation", "seed-unverified", "hardlink", "active-acquisition"])("%s evidence blocks both preview eligibility and operator deletion", async (kind) => {
   await using f = await fixture(); const movie = await f.add(1);
-  const policy = { ...DEFAULT_RETENTION_POLICY, protectedMovieTargetIds: kind === "protected" ? [movie.requested.targetId] : [] };
   const watch = f.watches.get(1)!;
   if (kind === "fresh") f.db.query("UPDATE retention_events SET created_at=? WHERE namespace='movie-target' AND resource_id=?").run(new Date().toISOString(), movie.key.id);
   if (kind === "untracked") { f.db.query("DELETE FROM retention_events WHERE resource_id=?").run(movie.key.id); f.db.query("DELETE FROM retention_resources WHERE resource_id=?").run(movie.key.id); }
@@ -171,16 +170,16 @@ test.each(["protected", "fresh", "untracked", "unwatched", "unknown-watch", "act
   if (kind === "seed-unverified") f.torrents.clear();
   if (kind === "hardlink") await fs.link(movie.canonical, path.join(f.root, "foreign-link.mkv"));
   if (kind === "active-acquisition") f.repo.movies.startAcquisition(movie.requested.targetId, "upgrade", () => f.repo.createJob({ type: "metadata_hydration" }).id);
-  const inspected = await inspectRetentionCandidate(f.repo, movie.requested.targetId, policy, f.adapters);
+  const inspected = await inspectRetentionCandidate(f.repo, movie.requested.targetId, f.adapters);
   expect(inspected.candidate.eligible).toBe(false);
-  await expect(queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Operator cleanup" }, policy, f.adapters)).rejects.toThrow("blocked");
+  await expect(queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Operator cleanup" }, f.adapters)).rejects.toThrow("blocked");
   expect((await fs.stat(movie.canonical)).size).toBe(5000);
   expect(f.repo.movies.target(movie.requested.targetId)!.active_version_id).toBe(movie.versionId);
 });
 
 test.each(["re-request", "replacement", "sharing", "playback"])("fresh %s after intent retirement fences execution without claiming missing bytes", async (kind) => {
   await using f = await fixture(); const movie = await f.add(1);
-  const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Operator cleanup" }, DEFAULT_RETENTION_POLICY, f.adapters);
+  const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Operator cleanup" }, f.adapters);
   expect(f.repo.retention.get(movie.key)).toMatchObject({ desiredPresence: "evicted", actualPresence: "unknown" });
   f.adapters.afterCheckpoint = async (name) => {
     if (name !== "view-retired") return;
@@ -203,7 +202,7 @@ test.each(["re-request", "replacement", "sharing", "playback"])("fresh %s after 
 
 test.each(["staging-created", "staging-initialized", "view-retired", "file-staged", "file-unlinked"])("real Reflow/SQLite restart recovers eviction after %s without deleting seed storage or replaying intent", async (checkpoint) => {
   await using f = await fixture(); const movie = await f.add(1, 1, 180, 2);
-  const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Crash acceptance" }, DEFAULT_RETENTION_POLICY, f.adapters);
+  const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Crash acceptance" }, f.adapters);
   f.db.query("UPDATE jobs SET max_attempts=1 WHERE id=?").run(queued.jobId);
   let once = true;
   f.adapters.afterCheckpoint = async (name) => {
@@ -248,7 +247,7 @@ test.each(["staging-created", "staging-initialized", "view-retired", "file-stage
 
 test.each(["file-staged", "file-unlinked"])("new demand at %s restores proven bytes or preserves honest missing recovery", async (checkpoint) => {
   await using f = await fixture(); const movie = await f.add(1);
-  const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Demand race" }, DEFAULT_RETENTION_POLICY, f.adapters);
+  const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Demand race" }, f.adapters);
   f.adapters.afterCheckpoint = async (name) => {
     if (name === checkpoint) f.repo.movies.request(f.user.id, movie.movie, defaultMovieQualityPolicy);
   };
@@ -267,7 +266,7 @@ test.each(["file-staged", "file-unlinked"])("new demand at %s restores proven by
 
 test.each(["before-start", "between-proofs"])("new demand %s restores selection without deleting still-canonical members", async (boundary) => {
   await using f = await fixture(); const movie = await f.add(1, 1, 180, 2);
-  const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Proof demand race" }, DEFAULT_RETENTION_POLICY, f.adapters);
+  const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Proof demand race" }, f.adapters);
   if (boundary === "before-start") f.repo.movies.request(f.user.id, movie.movie, defaultMovieQualityPolicy);
   const execution: NonNullable<WorkerContext["execution"]> = { ...f.execution, run: async <T>(name: string, action: () => T | Promise<T>) => {
     const result = await f.execution.run(name, action);
@@ -293,7 +292,7 @@ test("cleanup without durable execution cannot commit eviction intent", async ()
 
 test.each(["file-staged", "file-unlinked", "file-restored-linked", "demand-superseded"])("real Reflow restart settles newer demand after %s", async (checkpoint) => {
   await using f = await fixture(); const movie = await f.add(1);
-  const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Demand restart" }, DEFAULT_RETENTION_POLICY, f.adapters);
+  const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Demand restart" }, f.adapters);
   f.db.query("UPDATE jobs SET max_attempts=1 WHERE id=?").run(queued.jobId);
   let interrupted = false;
   f.adapters.afterCheckpoint = async (name) => {
@@ -373,7 +372,7 @@ test.each(["file-staged", "file-unlinked", "demand-superseded"])("pressure job r
 
 test.each(["bytes", "inode", "hardlink", "proof", "missing-proof", "mount", "seed"])("staged %s corruption is blocked without unlink or false completion", async (kind) => {
   await using f = await fixture(); const movie = await f.add(1);
-  const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Corruption fence" }, DEFAULT_RETENTION_POLICY, f.adapters);
+  const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Corruption fence" }, f.adapters);
   f.adapters.afterCheckpoint = async (name) => { if (name === "file-staged") throw new Error("staged fixture interrupted"); };
   await expect(runRetentionCleanup({ ...f.context, execution: f.execution }, f.repo.getJob(queued.jobId)!, f.adapters)).rejects.toThrow("staged fixture interrupted");
   const staged = path.join(f.contentRoot, ".podible-retention", `${queued.evictionId}-${movie.fileId}.mkv`);
@@ -395,7 +394,7 @@ test.each(["bytes", "inode", "hardlink", "proof", "missing-proof", "mount", "see
 test("supersession never overwrites a new canonical file or restores corrupted staging", async () => {
   for (const kind of ["canonical", "staged"]) {
     await using f = await fixture(); const movie = await f.add(1);
-    const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Restore conflict" }, DEFAULT_RETENTION_POLICY, f.adapters);
+    const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Restore conflict" }, f.adapters);
     const staged = path.join(f.contentRoot, ".podible-retention", `${queued.evictionId}-${movie.fileId}.mkv`);
     f.adapters.afterCheckpoint = async (name) => {
       if (name !== "file-staged") return;
@@ -412,7 +411,7 @@ test("supersession never overwrites a new canonical file or restores corrupted s
 
 test.each(["unmarked", "wrong-owner", "symlink"])("foreign %s staging is never adopted or removed", async (kind) => {
   await using f = await fixture(); const movie = await f.add(1);
-  const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Staging ownership" }, DEFAULT_RETENTION_POLICY, f.adapters);
+  const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Staging ownership" }, f.adapters);
   const staging = path.join(f.contentRoot, ".podible-retention");
   if (kind === "symlink") await fs.symlink(f.root, staging);
   else {
@@ -427,7 +426,7 @@ test.each(["unmarked", "wrong-owner", "symlink"])("foreign %s staging is never a
 
 test.each([1, 2])("request immediately before filesystem fence %d prevents stale destructive intent", async (boundary) => {
   await using f = await fixture(); const movie = await f.add(1);
-  const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Writer fence" }, DEFAULT_RETENTION_POLICY, f.adapters);
+  const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Writer fence" }, f.adapters);
   const original = RetentionRepo.prototype.withEvictionFence;
   let calls = 0;
   const fence = spyOn(RetentionRepo.prototype, "withEvictionFence").mockImplementation(function <T>(this: RetentionRepo, id: string, effect: () => T): T {
@@ -444,7 +443,7 @@ test.each([1, 2])("request immediately before filesystem fence %d prevents stale
 
 test("playback starting during final seed hashing is re-observed before unlink", async () => {
   await using f = await fixture(); const movie = await f.add(1);
-  const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Playback freshness" }, DEFAULT_RETENTION_POLICY, f.adapters);
+  const queued = await queueMovieEviction(f.repo, { targetId: movie.requested.targetId, expectedRevision: 1, reason: "Playback freshness" }, f.adapters);
   let staged = false;
   f.adapters.afterCheckpoint = async (name) => { if (name === "file-staged") staged = true; };
   const original = RetentionService.prototype.seedEvidence;

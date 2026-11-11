@@ -54,9 +54,7 @@ claim that the season has already been removed.
 - Fresh or unknown demand for any member/policy target protects the whole season
   for the existing 30-day grace period. Original request IDs are never deleted or
   withdrawn by retention.
-- `retention.protectedTvTargetIds` pins protect both explicit operator commands
-  and pressure-driven eviction. Audit and the atomic queue/execution plan guard
-  independently enforce the current pin list; a settings hash also fences edits.
+- A settings hash fences configuration edits between planning and removal.
 - The existing pinned content marker and canonical root must match. Missing,
   replaced, uninitialized or symlinked storage is unknown, not removable bytes.
 - Canonical UUID layout, exact file coverage, physical identity/size/timestamps,
@@ -148,8 +146,8 @@ a no-op. Under pressure it considers at most three supported single-season
 targets, performs these same whole-season audits, ranks eligible low-play/older
 last-watch candidates, and calls the same revision-fenced `service.evict` to
 queue the durable executor. The shared threshold is
-`retention.minimumFreeBytes`; `retention.protectedTvTargetIds` defaults to `[]`.
-There is no pressure bypass for pins, complete membership, watch/playback, seed
+`retention.minimumFreeBytes`.
+There is no pressure bypass for complete membership, watch/playback, seed
 proofs or whole-target scope. This does not introduce periodic title searches or
 partial-season/multi-season removal.
 

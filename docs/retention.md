@@ -12,10 +12,10 @@ is configured. It observes the movie filesystem first. Healthy or unknown space 
 no per-title Plex history lookup, provider search, seed inspection, intent change, or deletion.
 This is not a periodic release-search/upgrade loop.
 
-`AppSettings.retention` has just two settings:
+`AppSettings.retention` configures the free-space reserve:
 
 ```ts
-{ minimumFreeBytes: 20 * 1024 ** 3, protectedMovieTargetIds: [] }
+{ minimumFreeBytes: 20 * 1024 ** 3 }
 ```
 
 When available space is below the reserve, inspect at most 20 selected targets per pass by
@@ -30,7 +30,7 @@ Both automatic and explicit operator eviction require all of these conditions:
 
 - Existing tracked retention intent, a selected owned movie version, and a complete bounded
   object/reference inventory. Untracked legacy content is never silently adopted or evicted.
-- Target is not in `protectedMovieTargetIds`. The most recent explicit request, considering
+- The most recent explicit request, considering
   both movie request rows and retention request events across users, is at least 30 days old.
   A fresh request is protected even when another user had already requested the same target.
 - Known watched history with verified all-user Plex visibility, positive known retained play

@@ -5,8 +5,7 @@ import type { BooksRepo } from "../repo";
 import { createPlexWatchHistoryReader, readPlexWatchHistory } from "./plex-watch-history";
 import { RetentionService, type RetentionServiceAdapters, type RetentionResourceDetail } from "./retention-service";
 import { ext4ReclaimableAllocation, inspectRetentionFile, observeRetentionDisk } from "./retention-filesystem";
-import { DEFAULT_RETENTION_POLICY, RETENTION_REQUEST_GRACE_MS, retentionEvictionPlanSchema, retentionPolicySchema,
-  type RetentionDisk, type RetentionEvictionPlan, type RetentionPolicy } from "./retention-policy-types";
+import { RETENTION_REQUEST_GRACE_MS, retentionEvictionPlanSchema, type RetentionDisk, type RetentionEvictionPlan } from "./retention-policy-types";
 
 export type RetentionAdapters = RetentionServiceAdapters & {
   observeDisk?: typeof observeRetentionDisk;
@@ -37,13 +36,12 @@ export function retentionAdapters(adapters: RetentionAdapters): RetentionService
   return { watchHistory: readPlexWatchHistory, reclaimableAllocation: ext4ReclaimableAllocation, ...adapters };
 }
 
-export async function inspectRetentionCandidate(repo: BooksRepo, targetId: number, rawPolicy: RetentionPolicy, adapters: RetentionAdapters = {}) {
-  const policy = retentionPolicySchema.parse(rawPolicy), target = repo.movies.target(targetId);
+export async function inspectRetentionCandidate(repo: BooksRepo, targetId: number, adapters: RetentionAdapters = {}) {
+  const target = repo.movies.target(targetId);
   if (!target) throw new Error("Unknown movie target");
   const key = { namespace: "movie-target", id: String(targetId) }, intent = repo.retention.get(key);
   const blockers: string[] = [];
   if (!intent) blockers.push("untracked-resource");
-  if (policy.protectedMovieTargetIds.includes(targetId)) blockers.push("protected-resource");
   const requested = repo.retention.lastRequestAt(targetId);
   const now = adapters.now?.() ?? Date.now(), requestedAt = requested ? Date.parse(requested) : NaN;
   if (!Number.isFinite(requestedAt) || now - requestedAt < RETENTION_REQUEST_GRACE_MS) blockers.push("fresh-or-unknown-request");
@@ -65,27 +63,27 @@ export async function inspectRetentionCandidate(repo: BooksRepo, targetId: numbe
     reclaimableBytes: detail.verifiedReclaimableBytes, playCount: detail.watch.playCount, lastViewedAt: detail.watch.lastViewedAt }, detail };
 }
 
-export async function previewRetention(repo: BooksRepo, policy = retentionConfiguration(repo).policy, adapters: RetentionAdapters = {},
+export async function previewRetention(repo: BooksRepo, adapters: RetentionAdapters = {},
   input: { targetId?: number; afterTargetId?: number; limit?: number } = {}): Promise<RetentionPreview> {
   const configuration = retentionConfiguration(repo);
   const disk = await (adapters.observeDisk ?? observeRetentionDisk)(configuration.movies.managedRoot);
-  const pressure = disk.state === "known" && disk.availableBytes !== null ? disk.availableBytes < policy.minimumFreeBytes : null;
+  const pressure = disk.state === "known" && disk.availableBytes !== null ? disk.availableBytes < configuration.policy.minimumFreeBytes : null;
   if (input.targetId === undefined && pressure !== true) return { mode: "pressure-preview", disk, pressure, candidates: [], nextAfterTargetId: null };
   const limit = Math.max(1, Math.min(100, input.limit ?? 20));
   const all = repo.movies.targets().filter((target) => target.active_version_id !== null).sort((a, b) => a.id - b.id);
   const after = all.filter((target) => target.id > (input.afterTargetId ?? 0));
   const targets = input.targetId === undefined ? (after.length ? after : all).slice(0, limit) : all.filter((target) => target.id === input.targetId);
   const candidates: RetentionCandidate[] = [];
-  for (const target of targets) candidates.push((await inspectRetentionCandidate(repo, target.id, policy, adapters)).candidate);
+  for (const target of targets) candidates.push((await inspectRetentionCandidate(repo, target.id, adapters)).candidate);
   candidates.sort((a, b) => Number(b.eligible) - Number(a.eligible) || (a.playCount ?? Infinity) - (b.playCount ?? Infinity) ||
     Date.parse(a.lastViewedAt ?? "9999-01-01") - Date.parse(b.lastViewedAt ?? "9999-01-01") || a.targetId - b.targetId);
   return { mode: "pressure-preview", disk, pressure, candidates, nextAfterTargetId: targets.at(-1)?.id ?? null };
 }
 
 export async function prepareMovieEviction(repo: BooksRepo, input: { targetId: number; expectedRevision: number; reason: string; mode: "operator" | "pressure" },
-  policy: RetentionPolicy, adapters: RetentionAdapters = {}): Promise<RetentionEvictionPlan> {
+  adapters: RetentionAdapters = {}): Promise<RetentionEvictionPlan> {
   const configuration = retentionConfiguration(repo);
-  const { candidate, detail } = await inspectRetentionCandidate(repo, input.targetId, policy, adapters);
+  const { candidate, detail } = await inspectRetentionCandidate(repo, input.targetId, adapters);
   if (!candidate.eligible || !detail) throw new Error(`Movie eviction blocked: ${candidate.blockers.join(", ")}`);
   if (candidate.expectedRevision !== input.expectedRevision) throw new Error("Retention revision changed; refresh the preview");
   const root = path.join(configuration.movies.managedRoot, "objects");
@@ -111,8 +109,8 @@ export async function prepareMovieEviction(repo: BooksRepo, input: { targetId: n
 }
 
 export async function queueMovieEviction(repo: BooksRepo, input: { targetId: number; expectedRevision: number; reason: string },
-  policy = retentionConfiguration(repo).policy, adapters: RetentionAdapters = {}) {
-  const plan = await prepareMovieEviction(repo, { ...input, mode: "operator" }, policy, { ...adapters, watchHistory: adapters.watchHistory ?? freshWatch });
+  adapters: RetentionAdapters = {}) {
+  const plan = await prepareMovieEviction(repo, { ...input, mode: "operator" }, { ...adapters, watchHistory: adapters.watchHistory ?? freshWatch });
   const eviction = repo.retention.queueEviction(plan, (evictionId) => repo.createJob({
     type: "retention_cleanup", payload: { evictionId }, idempotencyKey: `retention-eviction:${evictionId}`, maxAttempts: 5,
   }).id);

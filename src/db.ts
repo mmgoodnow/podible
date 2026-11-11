@@ -1230,6 +1230,10 @@ export function runMigrations(db: Database): void {
     ) WITHOUT ROWID;
   `));
   apply(62, () => db.exec(SCREEN_ISSUES_SCHEMA_SQL));
+  apply(63, () => db.exec(`UPDATE settings SET value_json = json_remove(value_json,
+    '$.retention.protectedMovieTargetIds', '$.retention.protectedTvTargetIds')
+    WHERE json_type(value_json, '$.retention.protectedMovieTargetIds') IS NOT NULL
+       OR json_type(value_json, '$.retention.protectedTvTargetIds') IS NOT NULL`));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

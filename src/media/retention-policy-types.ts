@@ -4,8 +4,6 @@ const count = z.number().int().nonnegative().safe();
 const id = z.number().int().positive().safe();
 export const retentionPolicySchema = z.object({
   minimumFreeBytes: count.default(20 * 1024 ** 3),
-  protectedMovieTargetIds: z.array(id).max(1000).default([]),
-  protectedTvTargetIds: z.array(id).max(1000).default([]),
 }).strict();
 export type RetentionPolicy = z.infer<typeof retentionPolicySchema>;
 export const DEFAULT_RETENTION_POLICY = retentionPolicySchema.parse({});

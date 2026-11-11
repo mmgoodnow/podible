@@ -36,13 +36,13 @@ export function createRetentionRouter(adapters: RetentionAdapters = {}) {
       auth: "admin", readOnly: true,
       summary: "Observe disk pressure and preview eligible owned movie evictions without changing intent or files.",
       paramsSchema: retentionPreviewParamsSchema, resultSchema: retentionPreviewSchema,
-      handler: (ctx, params) => previewRetention(ctx.repo, undefined, adapters, params),
+      handler: (ctx, params) => previewRetention(ctx.repo, adapters, params),
     }),
     evict: defineMethod({
       auth: "admin",
       summary: "Revalidate a movie eviction and atomically record its intent and durable cleanup job; retain seed data.",
       paramsSchema: retentionEvictParamsSchema, resultSchema: retentionEvictResultSchema,
-      handler: (ctx, params) => queueMovieEviction(ctx.repo, params, undefined, adapters),
+      handler: (ctx, params) => queueMovieEviction(ctx.repo, params, adapters),
     }),
   });
 }

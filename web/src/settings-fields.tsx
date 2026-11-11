@@ -135,26 +135,16 @@ function SelectField<T extends string | number>({ field, label, help, options }:
   </select>}</Frame>;
 }
 
-function ListField({ field, label, help, parse }: {
-  field: Field<string[]>; label: string; help: string; parse?: undefined;
-} | {
-  field: Field<number[]>; label: string; help: string; parse: (line: string) => number;
-}) {
-  const [typing, setTyping] = useState<{ value: (string | number)[]; input: string }>();
+function ListField({ field, label, help }: { field: Field<string[]>; label: string; help: string }) {
+  const [typing, setTyping] = useState<{ value: string[]; input: string }>();
   const input = field.input ?? (typing && typing.value.length === field.value.length &&
     field.value.every((value, index) => Object.is(value, typing.value[index])) ? typing.input : undefined);
   return <Frame {...{ field, label, help }}>{props => <textarea {...props} rows={3} spellCheck={false} autoComplete="off"
     value={input ?? field.value.join("\n")}
     onChange={event => {
       const input = event.target.value, lines = input.split("\n").map(line => line.trim()).filter(Boolean);
-      if (parse) {
-        const value = lines.map(parse);
-        setTyping({ value, input });
-        field.set(value, label, input);
-      } else {
-        setTyping({ value: lines, input });
-        field.set(lines, label, input);
-      }
+      setTyping({ value: lines, input });
+      field.set(lines, label, input);
     }} />}</Frame>;
 }
 
@@ -294,9 +284,25 @@ export function IndexerSettings({ form, discovery, loading }: { form: SettingsFo
   </>;
 }
 
-export function DownloadSettings({ form }: { form: SettingsForm }) {
-  const root = fields(form);
+export function AcquisitionSettings({ form }: { form: SettingsForm }) {
+  const root = fields(form), movies = root.group("movies"), tv = root.group("tv");
   return <>
+    <SettingsGroup title="Release selection">
+      <Grid>
+        <NumberField label="Maximum movie release size (GiB)" field={movies.field("maximumReleaseBytes")} scale={GiB} min={1} nullable
+          help="Skip movie releases larger than this. Leave blank for no cap." />
+        <NumberField label="Maximum TV release size (GiB)" field={tv.field("maximumReleaseBytes")} scale={GiB} min={1} nullable
+          help="Skip TV releases larger than this, including packs. Leave blank for no cap." />
+        <SelectField label="Movie cross-seed preference" field={movies.field("crossSeedPreference")} options={[["off", "Off"], ["tie-break", "Prefer reuse as a tie-breaker"]]}
+          help="Use cross-seed potential to break ties between otherwise comparable movie releases." />
+        <CheckField label="Automatically upgrade movies" field={movies.field("automaticUpgrades")}
+          help="Let better releases replace existing movie copies when they meet your quality rules." />
+      </Grid>
+    </SettingsGroup>
+    <SettingsGroup title="Download files">
+      <NumberField label="Movie download group ID" field={movies.field("downloadGroupId")} nullable
+        help="Filesystem group for new movie download folders. Leave blank to keep the default." />
+    </SettingsGroup>
     <SettingsGroup title="Download recovery">
       <Grid>
         <NumberField label="Stalled torrent threshold (minutes)" field={root.group("recovery").field("stalledTorrentMinutes")} min={0}
@@ -309,37 +315,21 @@ export function DownloadSettings({ form }: { form: SettingsForm }) {
 const tierSources = [["web", "WEB"], ["bluray", "Blu-ray"], ["hdtv", "HDTV"], ["dvd", "DVD"], ["cam", "CAM"]] as const;
 const tierResolutions = [[480, "480p"], [720, "720p"], [1080, "1080p"], [2160, "2160p"]] as const;
 
-export function MovieSettings({ form }: { form: SettingsForm }) {
-  const movies = fields(form).group("movies"), seerr = movies.group("seerr"), shadow = movies.group("shadow");
-  const quality = movies.group("qualityPolicy"), tiers = quality.field("tiers");
+export function SeerrSettings({ form }: { form: SettingsForm }) {
+  const seerr = fields(form).group("movies").group("seerr");
+  return <SettingsGroup title="Connection">
+    <Grid>
+      <EndpointField label="Seerr URL" field={seerr.field("url")} help="Address Podible uses to read requests from Seerr." />
+      <SecretField label="Seerr API key" field={seerr.field("apiKey")} help="Authorizes reading requests and metadata from Seerr." />
+      <NumberField label="Seerr movie sync interval (minutes)" field={seerr.field("pollIntervalMinutes")} help="How often Podible checks Seerr for new movie requests." />
+    </Grid>
+  </SettingsGroup>;
+}
+
+export function QualitySettings({ form }: { form: SettingsForm }) {
+  const quality = fields(form).group("movies").group("qualityPolicy"), tiers = quality.field("tiers");
   return <>
-    <SettingsGroup title="Movie library and Plex publishing">
-      <Grid>
-        <EndpointField label="Plex URL" field={movies.field("plexUrl")} help="Server address used to scan and verify movies and TV in Plex." />
-        <SecretField label="Plex library token" field={movies.field("plexToken")} help="Authorizes library operations, not Plex sign-in." />
-        <TextField label="Movie Plex section ID" field={movies.field("plexSectionId")} help="Numeric ID of the Plex library where movies are published." />
-        <SecretField label="TMDB access token" field={movies.field("tmdbAccessToken")} help="Authorizes movie and TV catalog lookups." />
-      </Grid>
-    </SettingsGroup>
-    <SettingsGroup title="Seerr" note="The same Seerr connection supplies movie and TV requests.">
-      <Grid>
-        <EndpointField label="Seerr URL" field={seerr.field("url")} help="Address Podible uses to read requests from Seerr." />
-        <SecretField label="Seerr API key" field={seerr.field("apiKey")} help="Authorizes reading requests and metadata from Seerr." />
-        <NumberField label="Seerr poll interval (minutes)" field={seerr.field("pollIntervalMinutes")} help="How often Podible checks Seerr for movie requests." />
-      </Grid>
-    </SettingsGroup>
-    <SettingsGroup title="Acquisition">
-      <Grid>
-        <NumberField label="Download group ID" field={movies.field("downloadGroupId")} nullable help="Filesystem group for new movie download folders. Leave blank to keep the default." />
-        <NumberField label="Maximum movie release size (GiB)" field={movies.field("maximumReleaseBytes")} scale={GiB} min={1} nullable
-          help="Skip movie releases larger than this. Leave blank for no cap." />
-        <SelectField label="Cross-seed preference" field={movies.field("crossSeedPreference")} options={[["off", "Off"], ["tie-break", "Prefer reuse as a tie-breaker"]]}
-          help="Use cross-seed potential to break ties between otherwise comparable releases." />
-        <CheckField label="Automatically upgrade movies" field={movies.field("automaticUpgrades")}
-          help="Let better releases replace existing copies when they meet your quality rules." />
-      </Grid>
-    </SettingsGroup>
-    <SettingsGroup title="Release quality" note="Set which releases are eligible and how Podible ranks upgrades. TV also uses this policy.">
+    <SettingsGroup title="Video preferences">
       <Grid>
         <TextField label="Required cut" field={quality.field("cut")} nullable help="Require a cut such as theatrical. Leave blank to allow any cut." />
         <NumberField label="Minimum preference gain" field={quality.field("minimumPreferenceGain")} help="Minimum score improvement for a same-tier upgrade." />
@@ -349,8 +339,8 @@ export function MovieSettings({ form }: { form: SettingsForm }) {
         <CheckField label="Allow HDR" field={quality.field("allowHdr")} help="Include high dynamic range releases when choosing a copy." />
         <CheckField label="Prefer proper and repack releases" field={quality.field("preferProper")} help="Favor corrected releases over otherwise comparable copies." />
       </Grid>
-      <h4>Quality tiers</h4>
-      <p className="settings-note">List allowed source and resolution pairs from lowest to highest quality.</p>
+    </SettingsGroup>
+    <SettingsGroup title="Quality tiers" note="List allowed source and resolution pairs from lowest to highest quality.">
       <Rows field={tiers} label="Quality tiers" singular="Tier" empty="At least one quality tier is required." ordered
         create={() => ({ source: "web", resolution: 1080 })}>
         {(tier, change, index) => <>
@@ -361,6 +351,23 @@ export function MovieSettings({ form }: { form: SettingsForm }) {
         </>}
       </Rows>
     </SettingsGroup>
+  </>;
+}
+
+export function VideoSettings({ form }: { form: SettingsForm }) {
+  const root = fields(form), movies = root.group("movies"), tv = root.group("tv"), shadow = movies.group("shadow");
+  return <>
+    <SettingsGroup title="Plex publishing">
+      <Grid>
+        <EndpointField label="Plex URL" field={movies.field("plexUrl")} help="Server address used to scan and verify movies and TV in Plex." />
+        <SecretField label="Plex library token" field={movies.field("plexToken")} help="Authorizes library operations, not Plex sign-in." />
+        <TextField label="Movie Plex section ID" field={movies.field("plexSectionId")} help="Numeric ID of the Plex library where movies are published." />
+        <TextField label="TV Plex section ID" field={tv.field("plexSectionId")} help="Numeric ID of the Plex library where TV is published." />
+      </Grid>
+    </SettingsGroup>
+    <SettingsGroup title="Movie and TV metadata">
+      <SecretField label="TMDB access token" field={movies.field("tmdbAccessToken")} help="Authorizes movie and TV catalog lookups." />
+    </SettingsGroup>
     <SettingsGroup title="Radarr observation" note="Read Radarr history for comparison and existing-library previews.">
       <Grid>
         <EndpointField label="Radarr URL" field={shadow.field("radarrUrl")} help="Address of the Radarr instance to observe." />
@@ -370,20 +377,6 @@ export function MovieSettings({ form }: { form: SettingsForm }) {
         <NumberField label="Maximum Radarr cases per sync" field={shadow.field("maxCasesPerSync")} help="Maximum new comparison cases to queue per check." />
         <CheckField label="Enable Radarr observation" field={shadow.field("enabled")} help="Compare Radarr imports without changing anything in Radarr." />
       </Grid>
-    </SettingsGroup>
-  </>;
-}
-
-export function TvSettings({ form, openMovies }: { form: SettingsForm; openMovies(): void }) {
-  const tv = fields(form).group("tv");
-  return <>
-    <SettingsGroup title="TV library and Plex publishing">
-      <Grid>
-        <TextField label="TV Plex section ID" field={tv.field("plexSectionId")} help="Numeric ID of the Plex library where TV is published." />
-        <NumberField label="Maximum TV release size (GiB)" field={tv.field("maximumReleaseBytes")} scale={GiB} min={1} nullable
-          help="Skip TV releases larger than this, including packs. Leave blank for no cap." />
-      </Grid>
-      <p className="settings-note">TV shares the Seerr connection and release quality policy in <button type="button" className="settings-text-button" onClick={openMovies}>Movies</button>.</p>
     </SettingsGroup>
     <SettingsGroup title="Sonarr">
       <Grid>
@@ -420,23 +413,18 @@ export function PlexSettings({ form }: { form: SettingsForm }) {
 
 export function StorageSettings({ form }: { form: SettingsForm }) {
   const root = fields(form), retention = root.group("retention");
-  const id = (line: string) => numericSetting(line) ?? NaN;
   return <>
     <SettingsGroup title="Library location" note="Books, movies and TV use one root. Plex scans the published views, not the canonical files.">
       <TextField label="Library root directory" field={root.field("storageRoot")} placeholder="/media/podible"
         help="Parent directory for managed media. Moving an existing library requires a migration." />
-      {!form.saved.storageRoot && <p className="settings-note">Existing locations stay in use until the library is migrated or a root is set before adding content.</p>}
+      {!form.saved.storageRoot && <p className="settings-note">This library still uses separate storage locations. Existing files and Plex views stay where they are until migrated.</p>}
       <dl className="settings-facts">
         <div><dt>Movies in Plex</dt><dd>{form.saved.movies.plexViewPath || "Not configured"}</dd></div>
         <div><dt>TV in Plex</dt><dd>{form.saved.tv.plexViewPath || "Not configured"}</dd></div>
       </dl>
     </SettingsGroup>
-    <SettingsGroup title="Retention policy" note="When free space runs low, Podible can remove eligible movie and TV library copies. Protected titles are excluded.">
-    <Grid>
+    <SettingsGroup title="Retention policy" note="When free space runs low, Podible can remove eligible movie and TV library copies.">
       <NumberField label="Minimum free space (GiB)" field={retention.field("minimumFreeBytes")} scale={GiB} min={0} help="The free-space threshold for automatic cleanup." />
-      <ListField label="Protected movie target IDs" field={retention.field("protectedMovieTargetIds")} parse={id} help="Movies to keep during cleanup. Enter one Podible target ID per line." />
-      <ListField label="Protected TV target IDs" field={retention.field("protectedTvTargetIds")} parse={id} help="TV to keep during cleanup. Enter one Podible target ID per line." />
-    </Grid>
     </SettingsGroup>
   </>;
 }
