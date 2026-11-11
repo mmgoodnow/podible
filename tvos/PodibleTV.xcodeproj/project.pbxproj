@@ -1,0 +1,108 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 77;
+	objects = {
+		920000000000000000000001 = {
+			isa = PBXProject;
+			buildConfigurationList = 920000000000000000000009;
+			developmentRegion = en;
+			knownRegions = (en, Base);
+			mainGroup = 920000000000000000000002;
+			productRefGroup = 920000000000000000000004;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (920000000000000000000006);
+		};
+		920000000000000000000002 = {
+			isa = PBXGroup;
+			children = (920000000000000000000003, 920000000000000000000004);
+			sourceTree = "<group>";
+		};
+		920000000000000000000003 = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = PodibleTV;
+			sourceTree = "<group>";
+		};
+		920000000000000000000004 = {
+			isa = PBXGroup;
+			children = (920000000000000000000005);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		920000000000000000000005 = {
+			isa = PBXFileReference;
+			explicitFileType = wrapper.application;
+			path = PodibleTV.app;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		920000000000000000000006 = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 92000000000000000000000A;
+			buildPhases = (920000000000000000000007, 920000000000000000000008);
+			buildRules = ();
+			dependencies = ();
+			fileSystemSynchronizedGroups = (920000000000000000000003);
+			name = PodibleTV;
+			productName = PodibleTV;
+			productReference = 920000000000000000000005;
+			productType = "com.apple.product-type.application";
+		};
+		920000000000000000000007 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		920000000000000000000008 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		920000000000000000000009 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (92000000000000000000000B, 92000000000000000000000C);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		92000000000000000000000A = {
+			isa = XCConfigurationList;
+			buildConfigurations = (92000000000000000000000D, 92000000000000000000000E);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		92000000000000000000000B = {
+			isa = XCBuildConfiguration;
+			buildSettings = {SDKROOT = appletvos; TVOS_DEPLOYMENT_TARGET = 17.0; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; };
+			name = Debug;
+		};
+		92000000000000000000000C = {
+			isa = XCBuildConfiguration;
+			buildSettings = {SDKROOT = appletvos; TVOS_DEPLOYMENT_TARGET = 17.0; SWIFT_COMPILATION_MODE = wholemodule; };
+			name = Release;
+		};
+		92000000000000000000000D = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Podible;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.podible.tv;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "appletvos appletvsimulator";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 3;
+			};
+			name = Debug;
+		};
+		92000000000000000000000E = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Podible;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.podible.tv;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "appletvos appletvsimulator";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 3;
+			};
+			name = Release;
+		};
+	};
+	rootObject = 920000000000000000000001;
+}
