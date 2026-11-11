@@ -215,11 +215,16 @@ export function BookSettings({ form }: { form: SettingsForm }) {
       </Grid>
     </SettingsGroup>
     <SettingsGroup title="Edition matching">
-      <Grid>
-        <TextField label="Edition preference" field={agents.field("editionPreference")} help="Guidance for choosing among book editions." />
-      </Grid>
+      <EditionPreference field={agents.field("editionPreference")} />
     </SettingsGroup>
   </>;
+}
+
+function EditionPreference({ field }: { field: Field<string> }) {
+  const label = "Edition preference";
+  return <Frame field={field} label={label} help="Guidance for choosing among book editions.">
+    {props => <textarea {...props} rows={4} value={field.value} onChange={event => field.set(event.target.value, label)} />}
+  </Frame>;
 }
 
 export function AiSettings({ form }: { form: SettingsForm }) {
@@ -239,7 +244,7 @@ type DiscoveredIndexers = {
   duplicates: { index: number; name: string }[];
 };
 const indexerMedia: Record<string, string> = { audio: "Audiobooks", ebook: "Ebooks", movie: "Movies", tv: "TV" };
-const formatIndexerMedia = (media: string[]) => media.map(kind => indexerMedia[kind]).join(", ");
+const formatIndexerMedia = (media: string[]) => media.map(kind => indexerMedia[kind]).join(", ") || "None";
 
 export function IndexerSettings({ form, discovery, loading }: { form: SettingsForm; discovery?: DiscoveredIndexers; loading: boolean }) {
   const root = fields(form), prowlarr = root.group("prowlarr"), sources = root.field("torznab");
@@ -254,12 +259,14 @@ export function IndexerSettings({ form, discovery, loading }: { form: SettingsFo
       {loading ? <p role="status">Loading indexers...</p> : discovery?.state !== "available"
         ? <p>Prowlarr discovery is unavailable. Check the saved URL and API key.</p>
         : discovery.indexers.length === 0 ? <p>No enabled torrent indexers were discovered.</p>
-        : <ul className="settings-indexer-list">{discovery.indexers.map(indexer => <li key={indexer.id}>
-          <strong>{indexer.name}</strong>
-          {indexer.retryAt !== null && <span> · Cooling down</span>}
-          {indexer.search.length > 0 && <small>Search: {formatIndexerMedia(indexer.search)}</small>}
-          {indexer.feeds.length > 0 && <small>Feeds: {formatIndexerMedia(indexer.feeds)}</small>}
-        </li>)}</ul>}
+        : <table className="settings-indexer-table" aria-label="Discovered indexers">
+          <thead><tr><th scope="col">Indexer</th><th scope="col">Search</th><th scope="col">Feeds</th></tr></thead>
+          <tbody>{discovery.indexers.map(indexer => <tr key={indexer.id}>
+            <th scope="row">{indexer.name}{indexer.retryAt !== null && <small className="settings-indexer-cooldown">Cooling down</small>}</th>
+            <td>{formatIndexerMedia(indexer.search)}</td>
+            <td>{formatIndexerMedia(indexer.feeds)}</td>
+          </tr>)}</tbody>
+        </table>}
     </SettingsGroup>}
     <SettingsGroup title="Torznab sources" note={form.saved.prowlarr.url
       ? "Prowlarr is active. Manual sources are saved but not queried."
@@ -268,7 +275,7 @@ export function IndexerSettings({ form, discovery, loading }: { form: SettingsFo
         create={() => ({ name: "", baseUrl: "" })}>
         {(source, change, index) => <>
           {source.baseUrl === form.saved.torznab[index]?.baseUrl && discovery?.duplicates.find(row => row.index === index) &&
-            <p className="settings-note">Already discovered through Prowlarr; not queried twice.</p>}
+            <p className="settings-note settings-duplicate-source">Already managed by Prowlarr. You can remove this manual entry.</p>}
           <TextField label="Source name" field={rowField(form, sources.path, index, "name", source.name, name => change({ ...source, name }))} />
           <EndpointField label="Torznab URL" storedUrls={protectedUrls}
             field={rowField(form, sources.path, index, "baseUrl", source.baseUrl, baseUrl => change({ ...source, baseUrl }))} />

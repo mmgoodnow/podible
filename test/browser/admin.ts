@@ -216,9 +216,15 @@ async function verify() {
   await discard.click();
 
   await page.getByRole("button", { name: "Clear OpenAI API key", exact: true }).click();
+  await openSettings("Books & feed");
+  const editionPreference = "Prefer full-cast audio.\nKeep unabridged narration when available.";
+  await page.locator("textarea").and(page.getByLabel("Edition preference", { exact: true })).fill(editionPreference);
   await openSettings("Indexers");
-  await page.getByText("Fixture Prowlarr indexer", { exact: true }).waitFor();
-  await page.getByText("Search: Audiobooks, Ebooks", { exact: true }).waitFor();
+  const indexerTable = page.getByRole("table", { name: "Discovered indexers" });
+  const discoveredRow = indexerTable.getByRole("row").filter({ has: page.getByRole("rowheader", { name: "Fixture Prowlarr indexer", exact: true }) });
+  await discoveredRow.waitFor();
+  assert.deepEqual(await indexerTable.getByRole("columnheader").allTextContents(), ["Indexer", "Search", "Feeds"]);
+  assert.deepEqual(await discoveredRow.getByRole("cell").allTextContents(), ["Audiobooks, Ebooks", "Audiobooks, Ebooks"]);
   await page.getByRole("button", { name: "Add torznab source", exact: true }).click();
   await page.getByLabel("Source name", { exact: true }).fill("Fixture Torznab");
   const torznabUrl = `${saved.prowlarr.url}/17?apikey=embedded-fixture-token`;
@@ -243,19 +249,25 @@ async function verify() {
   await page.getByText("Settings saved.", { exact: true }).waitFor();
   const grouped = (await rpc("settings.get")).result;
   const [firstTier, secondTier, ...otherTiers] = saved.movies.qualityPolicy.tiers;
-  assert.deepEqual(grouped, { ...otherEdit, agents: { ...saved.agents, apiKey: "" },
+  assert.deepEqual(grouped, { ...otherEdit, agents: { ...saved.agents, apiKey: "", editionPreference },
     torznab: [{ name: "Fixture Torznab", baseUrl: torznabUrl, apiKey: "torznab-replacement-fixture", categories: { audio: "3030,3040" } }],
     movies: { ...saved.movies, qualityPolicy: { ...saved.movies.qualityPolicy, tiers: [secondTier, firstTier, ...otherTiers] } },
     retention: { ...saved.retention, minimumFreeBytes: 2.5 * 1024 ** 3, protectedTvTargetIds: [42, 123] },
   });
   await openSettings("Indexers");
-  await page.getByText("Already discovered through Prowlarr; not queried twice.", { exact: true }).waitFor();
+  await page.getByText("Already managed by Prowlarr. You can remove this manual entry.", { exact: true }).waitFor();
   assert.equal(await page.getByLabel("Torznab API key", { exact: true }).inputValue(), "");
   assert.equal(await page.getByLabel("Torznab URL", { exact: true }).inputValue(), "", "A URL with embedded credentials was exposed");
+  await page.getByRole("button", { name: "Remove torznab source 1", exact: true }).click();
+  await saveSettings.click();
+  await page.getByText("Settings saved.", { exact: true }).waitFor();
+  assert.deepEqual((await rpc("settings.get")).result, { ...grouped, torznab: [] });
+  await discoveredRow.waitFor();
 
   await page.setViewportSize({ width: 390, height: 844 });
   await openSettings("Books & feed");
   await title.waitFor();
+  assert.equal(await page.getByLabel("Edition preference", { exact: true }).inputValue(), editionPreference);
   await page.evaluate("scrollTo(0, 0)");
   await page.screenshot({ path: path.join(artifacts, "admin-settings-mobile.png"), animations: "disabled" });
   for (const section of ["Books & feed", "AI", "Indexers", "Downloads", "Movies", "TV", "Storage", "Notifications", "Plex access"]) {

@@ -148,9 +148,24 @@
 .settings-page .settings-field .settings-field-error, .settings-page .settings-field-error, .settings-page [role="alert"] { color: var(--settings-warn); }
 .settings-page .settings-secret { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.45rem; }
 .settings-page .settings-secret button { padding-inline: 0.6rem; }
-.settings-page .settings-indexer-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.75rem; }
-.settings-page .settings-indexer-list li { padding-block: 0.6rem; border-bottom: 1px solid var(--settings-rule); }
-.settings-page .settings-indexer-list small { display: block; color: var(--settings-secondary); }
+.settings-page .settings-indexer-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 0.92rem; }
+.settings-page .settings-indexer-table :is(th, td) {
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--settings-rule);
+  text-align: left;
+  vertical-align: baseline;
+  overflow-wrap: anywhere;
+}
+.settings-page .settings-indexer-table thead { background: var(--settings-tint); }
+.settings-page .settings-indexer-table thead th:first-child { width: 38%; }
+.settings-page .settings-indexer-table td { color: var(--settings-secondary); }
+.settings-page .settings-indexer-cooldown {
+  display: inline-block;
+  margin-inline-start: 0.45em;
+  color: var(--settings-warn);
+  font-weight: normal;
+}
+.settings-page .settings-duplicate-source { grid-column: 1 / -1; margin: 0; }
 .settings-page .settings-facts dd { overflow-wrap: anywhere; }
 .settings-page .settings-checks { display: grid; gap: 0.5rem; }
 .settings-page .settings-check {
