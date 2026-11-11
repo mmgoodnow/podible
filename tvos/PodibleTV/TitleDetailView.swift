@@ -30,6 +30,7 @@ private extension TitleDetailView {
         @State private var requestError: String?
         @FocusState private var focusedOption: MediaRequestOption.ID?
 
+        @Environment(\.trailerConnection) private var trailerConnection
         private let base = Color(red: 0.045, green: 0.055, blue: 0.07)
 
         private var isMovie: Bool { item.kind == .movie }
@@ -148,6 +149,12 @@ private extension TitleDetailView {
                             status("Requested", icon: "checkmark.circle")
                         } else if playbackURL == nil && item.requestState == .available {
                             status("In Library", icon: "checkmark.circle")
+                        }
+
+                        if let trailerConnection, let tmdbID = item.tmdbID, tmdbID > 0 {
+                            TrailerButton(connection: trailerConnection, kind: item.kind, tmdbID: tmdbID,
+                                          preferFocus: playbackURL == nil && !canRequestMovie && !seasons.contains(where: \.requestable))
+                            .id(tmdbID)
                         }
                     }
                     .focusSection()

@@ -1,6 +1,6 @@
 # Podible for Apple TV
 
-Browse what's already available and request what's missing without leaving the TV. Podible owns discovery and requests; Plex remains the playback and watch-history authority.
+Browse what's already available and request what's missing without leaving the TV. Podible owns discovery and requests; Plex remains the feature and episode playback and watch-history authority.
 
 ## Design references
 
@@ -20,7 +20,8 @@ sidebar, Up or Down to choose a destination, and Select to open it.
 
 - Browse movie and TV shelves, search, open title details, request a movie or specific seasons, and revisit your requests.
 - Demo mode needs no server; its requests are temporary and its player uses an Apple sample stream.
-- Settings can connect to an HTTPS Podible origin with an existing user bearer token stored in the device Keychain. This uses existing JSON-RPC methods, not admin endpoints. It does not stream from Plex or treat catalog availability as playback authorization.
+- Settings can connect to an HTTPS Podible origin with an existing user bearer token stored in the device Keychain. Catalog and request features use existing JSON-RPC methods, not admin endpoints.
+- Connected titles can play explicitly shared [local Plex trailers](TRAILERS.md). Catalog availability is not playback authorization.
 
 ```sh
 xcodebuild -project tvos/PodibleTV.xcodeproj -scheme PodibleTV \

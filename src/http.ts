@@ -28,6 +28,7 @@ import { createSpaRoutes } from "./http/spa-routes";
 import { createActivityRoutes } from "./http/activity-routes";
 import { createMetricsRoutes } from "./http/metrics-routes";
 import { createAutobrrRoutes } from "./http/autobrr-routes";
+import { createTrailerRoutes } from "./http/trailer-routes";
 import { AUTOBRR_WEBHOOK_PATH, type AutobrrConfig } from "./media/autobrr";
 import { AcquisitionEvents } from "./runtime/acquisition-events";
 
@@ -89,6 +90,7 @@ export function createPodibleFetchHandler(
   app.route("/admin", createAdminRoutes(repo, startTime, buildInfo));
   app.route("/rpc", createRpcRoutes(repo, startTime, dependencies));
   app.route("/api/trpc", createTrpcRoutes(repo, startTime, { ...dependencies, acquisitionEvents }));
+  app.route("/api/trailers", createTrailerRoutes(repo));
   app.route("/metrics", createMetricsRoutes(repo, dependencies.metricsTokenDigestPath));
   if (dependencies.autobrr)
     app.route(AUTOBRR_WEBHOOK_PATH, createAutobrrRoutes(repo, dependencies.autobrr));

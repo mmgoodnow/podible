@@ -9,7 +9,7 @@ struct PodibleTVApp: App {
 }
 
 private struct TVRoot: View {
-    @State private var connection = ProcessInfo.processInfo.arguments.contains("--demo") ? nil : Connection.load()
+    @State private var connection = Connection.loadForTV()
     @State private var catalog: [MediaTitle] = []
     @State private var serverRequests: [MediaTitle] = []
     @State private var requestsError: String?
@@ -279,6 +279,7 @@ private struct DetailScreen: View {
                 TitleDetailView(item: item, seasons: seasons, progress: progress, play: play, request: submit)
             }
         }
+        .environment(\.trailerConnection, connection)
         .task(id: ObservationID(connection: connection, retry: observationRetry, background: scenePhase == .background)) {
             guard scenePhase != .background, let connection else { return }
             do {
