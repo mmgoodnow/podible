@@ -9,7 +9,7 @@ struct PodibleTVApp: App {
 }
 
 private struct TVRoot: View {
-    @State private var connection = Connection.load()
+    @State private var connection = ProcessInfo.processInfo.arguments.contains("--demo") ? nil : Connection.load()
     @State private var catalog: [MediaTitle] = []
     @State private var serverRequests: [MediaTitle] = []
     @State private var requestsError: String?
@@ -28,21 +28,27 @@ private struct TVRoot: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            VStack(spacing: 12) {
-                HStack(spacing: 30) {
-                    Text("podible").font(.system(size: 40, weight: .heavy, design: .serif))
-                    if connection == nil {
-                        Text("Demo").font(.caption2).foregroundStyle(.secondary)
-                    }
-                    Spacer()
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
                     ForEach(Section.allCases, id: \.self) { section in
                         Button(section.rawValue) { selection = section }
                             .buttonStyle(TVNavigationButton(selected: selection == section))
+                            .focusEffectDisabled()
+                            .accessibilityIdentifier("nav.\(section.rawValue)")
                             .accessibilityAddTraits(selection == section ? .isSelected : [])
                     }
+                    Spacer()
+                    if connection == nil {
+                        Text("Demo")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("podible")
+                        .font(.system(size: 34, weight: .heavy, design: .serif))
                 }
-                .padding(.horizontal, 70)
-                .padding(.vertical, 12)
+                .padding(.horizontal, 72)
+                .padding(.bottom, 12)
+                .focusSection()
                 Group {
                     switch selection {
                     case .browse: browse
@@ -62,7 +68,8 @@ private struct TVRoot: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .background(Color(red: 0.024, green: 0.063, blue: 0.067).ignoresSafeArea())
+            .foregroundStyle(TVPalette.paper)
+            .background(TVPalette.background.ignoresSafeArea())
             .navigationDestination(for: MediaTitle.self) { item in
                 DetailScreen(initial: item, connection: connection, demoSeasons: demoSeasons[item.id] ?? [],
                              play: { playback = Playback(url: $0) },
@@ -191,11 +198,15 @@ private struct TVNavigationButton: ButtonStyle {
         var body: some View {
             configuration.label
                 .font(.system(size: 25, weight: .semibold))
-                .foregroundStyle(focused ? Color.black : Color.white.opacity(selected ? 1 : 0.7))
-                .padding(.horizontal, 23)
-                .padding(.vertical, 12)
-                .background(focused ? Color(red: 0.96, green: 0.85, blue: 0.62) :
-                    selected ? Color.white.opacity(0.12) : .clear, in: Capsule())
+                .foregroundStyle(focused ? TVPalette.background : TVPalette.paper.opacity(selected ? 1 : 0.72))
+                .padding(.horizontal, 22)
+                .padding(.vertical, 10)
+                .background(focused ? TVPalette.accent : .clear, in: Capsule())
+                .overlay(alignment: .bottom) {
+                    if selected && !focused {
+                        Capsule().fill(TVPalette.accent).frame(width: 20, height: 2)
+                    }
+                }
                 .scaleEffect(configuration.isPressed ? 0.96 : 1)
         }
     }
@@ -269,35 +280,56 @@ private struct SearchScreen: View {
     @State private var query = ""
     @State private var results: [MediaTitle] = []
     @State private var status: String?
+    @State private var submittedQuery: String?
     @State private var searchTask: Task<Void, Never>?
+    @FocusState private var focusedPoster: String?
+    @FocusState private var queryFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            HStack(spacing: 24) {
-                TextField("Movie or TV show", text: $query).onSubmit(search)
-                Button("Search", systemImage: "magnifyingglass", action: search)
-                    .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-            if let status { Text(status).foregroundStyle(.secondary) }
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(results) { item in
-                        Button { open(item) } label: {
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text(item.title)
-                                    Text(item.subtitle).font(.caption2).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Text(item.requestState.label).font(.caption)
-                            }
-                            .padding(.vertical, 8)
-                        }
-                    }
+        VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Search movies and TV")
+                    .font(.system(size: 46, weight: .semibold, design: .serif))
+                    .accessibilityAddTraits(.isHeader)
+                HStack(spacing: 24) {
+                    TextField("Title", text: $query, prompt: Text("Enter a title")
+                        .foregroundStyle(queryFocused ? TVPalette.background.opacity(0.72) : TVPalette.paper.opacity(0.62)))
+                        .foregroundStyle(queryFocused ? TVPalette.background : TVPalette.paper)
+                        .focused($queryFocused)
+                        .frame(width: 410)
+                        .onSubmit(search)
+                        .accessibilityIdentifier("search.query")
+                    Button("Search", systemImage: "magnifyingglass", action: search)
+                        .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
+            .focusSection()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let status { Text(status).foregroundStyle(.secondary) }
+                    let titles = submittedQuery == nil ? Array(catalog.prefix(8)) : results
+                    if !titles.isEmpty {
+                        Text(submittedQuery == nil ? "Browse Titles" : "Results")
+                            .font(.system(size: 30, weight: .semibold))
+                            .accessibilityAddTraits(.isHeader)
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 180, maximum: 200), spacing: 24)],
+                                  alignment: .leading, spacing: 25) {
+                            ForEach(titles) { item in
+                                TVPosterButton(item: item, width: 176, focused: focusedPoster == item.id) { open(item) }
+                                    .focused($focusedPoster, equals: item.id)
+                            }
+                        }
+                        .padding(.horizontal, 5)
+                    }
+                }
+                .padding(.vertical, 12)
+            }
+            .scrollIndicators(.hidden)
+            .focusSection()
         }
-        .padding(70)
+        .padding(.horizontal, 72)
+        .padding(.top, 26)
         .onDisappear { searchTask?.cancel() }
     }
 
@@ -306,6 +338,8 @@ private struct SearchScreen: View {
         guard !term.isEmpty else { return }
         searchTask?.cancel()
         searchTask = Task { @MainActor in
+            submittedQuery = term
+            results = []
             status = "Searching..."
             do {
                 let found: [MediaTitle]

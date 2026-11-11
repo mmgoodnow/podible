@@ -13,11 +13,11 @@
 			productRefGroup = 920000000000000000000004;
 			projectDirPath = "";
 			projectRoot = "";
-			targets = (920000000000000000000006);
+			targets = (920000000000000000000006, 920000000000000000000010);
 		};
 		920000000000000000000002 = {
 			isa = PBXGroup;
-			children = (920000000000000000000003, 920000000000000000000004);
+			children = (920000000000000000000003, 920000000000000000000013, 920000000000000000000004);
 			sourceTree = "<group>";
 		};
 		920000000000000000000003 = {
@@ -27,7 +27,7 @@
 		};
 		920000000000000000000004 = {
 			isa = PBXGroup;
-			children = (920000000000000000000005);
+			children = (920000000000000000000005, 920000000000000000000011);
 			name = Products;
 			sourceTree = "<group>";
 		};
@@ -103,6 +103,54 @@
 			};
 			name = Release;
 		};
+		920000000000000000000010 = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 920000000000000000000012;
+			buildPhases = (920000000000000000000014);
+			buildRules = ();
+			dependencies = (920000000000000000000017);
+			fileSystemSynchronizedGroups = (920000000000000000000013);
+			name = PodibleTVUITests;
+			productName = PodibleTVUITests;
+			productReference = 920000000000000000000011;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		920000000000000000000011 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = PodibleTVUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		920000000000000000000012 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (920000000000000000000015, 920000000000000000000016);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		920000000000000000000013 = {isa = PBXFileSystemSynchronizedRootGroup; path = PodibleTVUITests; sourceTree = "<group>"; };
+		920000000000000000000014 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		920000000000000000000015 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.podible.tv.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "appletvsimulator";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 3;
+				TEST_TARGET_NAME = PodibleTV;
+			};
+			name = Debug;
+		};
+		920000000000000000000016 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.podible.tv.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "appletvsimulator";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 3;
+				TEST_TARGET_NAME = PodibleTV;
+			};
+			name = Release;
+		};
+		920000000000000000000017 = {isa = PBXTargetDependency; target = 920000000000000000000006; };
 	};
 	rootObject = 920000000000000000000001;
 }

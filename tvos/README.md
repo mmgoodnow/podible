@@ -12,6 +12,10 @@ Use [Plex's Apple TV preview](https://www.plex.tv/blog/new-year-same-mission/) f
 
 [Plex Apple TV search reference](https://www.plex.tv/wp-content/uploads/2025/01/tvOS-Search-scaled.jpg)
 
+[Plex later moved navigation back to the left](https://forums.plex.tv/t/navigation-updates-coming-to-preview-users/941751/1).
+Podible keeps four flat destinations above the artwork rather than adding a sidebar for a hierarchy it doesn't have.
+From the first shelf, press Up to reach the tabs, then Left/Right and Select.
+
 ## Prototype
 
 - Browse movie and TV shelves, search, open title details, request a movie or specific seasons, and revisit your requests.
@@ -22,6 +26,23 @@ Use [Plex's Apple TV preview](https://www.plex.tv/blog/new-year-same-mission/) f
 xcodebuild -project tvos/PodibleTV.xcodeproj -scheme PodibleTV \
   -destination 'generic/platform=tvOS Simulator' CODE_SIGNING_ALLOWED=NO build
 ```
+
+## Simulator focus and screenshots
+
+With an Apple TV simulator installed, substitute its ID from `xcrun simctl list devices available`.
+The UI test uses Siri Remote actions and captures Browse, tab focus, Search, and the TV season request flow.
+
+```sh
+xcodebuild -project tvos/PodibleTV.xcodeproj -scheme PodibleTV \
+  -destination 'platform=tvOS Simulator,id=SIMULATOR_ID' \
+  -parallel-testing-enabled NO -resultBundlePath /tmp/podible-tv-focus.xcresult \
+  CODE_SIGNING_ALLOWED=NO test
+xcrun xcresulttool export attachments --path /tmp/podible-tv-focus.xcresult \
+  --output-path /tmp/podible-tv-screens --filter '*.png'
+```
+
+Demo artwork is bundled in `PodibleTV/DemoArtwork`. It was generated for the fictional demo titles,
+using a grid of six cinematic poster illustrations and a widescreen lighthouse backdrop.
 
 ## Next milestones
 

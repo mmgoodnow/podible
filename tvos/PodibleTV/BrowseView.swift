@@ -1,358 +1,221 @@
 import SwiftUI
+import UIKit
+
+enum TVPalette {
+    static let background = Color(red: 0.043, green: 0.051, blue: 0.067)
+    static let paper = Color(red: 0.97, green: 0.95, blue: 0.9)
+    static let accent = Color(red: 0.97, green: 0.76, blue: 0.43)
+}
 
 struct BrowseView: View {
     let items: [MediaTitle]
     let open: (MediaTitle) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @FocusState private var focus: FocusTarget?
-
-    private enum Rail: String, CaseIterable {
-        case movies = "Movies"
-        case shows = "TV Shows"
-
-        func contains(_ item: MediaTitle) -> Bool {
-            switch (self, item.kind) {
-            case (.movies, .movie), (.shows, .show): true
-            default: false
-            }
-        }
-    }
-
-    private enum FocusTarget: Hashable {
-        case featured
-        case card(String)
-    }
-
-    private var featured: MediaTitle? {
-        items.first { $0.backdrop != nil && $0.playable }
-            ?? items.first { $0.backdrop != nil }
-            ?? items.first { $0.playable }
-            ?? items.first
-    }
+    @FocusState private var focusedID: String?
+    @State private var previewID: String?
 
     private var spotlight: MediaTitle? {
-        if case let .card(id) = focus, let item = items.first(where: { $0.id == id }) {
-            return item
-        }
-        return featured
+        items.first(where: { $0.id == previewID }) ?? items.first(where: { $0.kind == .movie }) ?? items.first
     }
 
     var body: some View {
         GeometryReader { geometry in
-            if let spotlight, let featured {
-                let inset: CGFloat = 70
-                let cardWidth = min(320, max(220, geometry.size.width * 0.175))
-                let heroHeight = min(540, max(390, geometry.size.height * 0.57))
-
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 24) {
-                        hero(spotlight, featured: featured, height: heroHeight, inset: inset)
-                            .focusSection()
-
-                        ForEach(Rail.allCases, id: \.self) { rail in
-                            let titles = items.filter(rail.contains)
-                            if !titles.isEmpty {
-                                shelf(rail, titles: titles, cardWidth: cardWidth, inset: inset)
-                                    .focusSection()
+            if let spotlight {
+                let heroHeight = min(390, max(300, geometry.size.height * 0.45))
+                let compactCatalog = items.count <= 8
+                let cardWidth = compactCatalog ? min(218, max(140, (geometry.size.width - 280) / 6))
+                    : min(188, max(150, (geometry.size.width - 240) / 8))
+                VStack(alignment: .leading, spacing: 0) {
+                    hero(spotlight, width: geometry.size.width, height: heroHeight)
+                    ScrollView(.vertical) {
+                        VStack(alignment: .leading, spacing: 18) {
+                            if compactCatalog {
+                                shelf("Movies & TV", titles: items, cardWidth: cardWidth)
+                            } else {
+                                shelf("Movies", titles: items.filter { $0.kind == .movie }, cardWidth: cardWidth)
+                                shelf("TV Shows", titles: items.filter { $0.kind == .show }, cardWidth: cardWidth)
                             }
                         }
+                        .padding(.top, 4)
+                        .padding(.bottom, 48)
                     }
-                    .padding(.bottom, 44)
+                    .scrollIndicators(.hidden)
+                    .accessibilityIdentifier("browse.shelves")
                 }
-                .defaultFocus($focus, .featured)
-            } else {
-                VStack(spacing: 20) {
-                    Image(systemName: "rectangle.stack")
-                        .font(.system(size: 56, weight: .light))
-                        .foregroundStyle(Palette.gold)
-                        .accessibilityHidden(true)
-                    Text("No titles yet")
-                        .font(.system(size: 42, weight: .semibold, design: .serif))
+                .defaultFocus($focusedID, spotlight.id)
+                .onChange(of: focusedID) { _, id in
+                    if let id { previewID = id }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        }
-        .foregroundStyle(Palette.cream)
-        .background {
-            LinearGradient(colors: [Palette.teal, Palette.midnight], startPoint: .topLeading, endPoint: .bottomTrailing)
-                .ignoresSafeArea()
         }
     }
 
-    private func hero(_ item: MediaTitle, featured: MediaTitle, height: CGFloat, inset: CGFloat) -> some View {
-        ZStack(alignment: .bottomLeading) {
-            ZStack {
-                heroBackdrop(item)
-                    .id(item.id)
-                    .transition(.opacity)
-            }
-            .accessibilityHidden(true)
-            .allowsHitTesting(false)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: item.id)
-
-            VStack(alignment: .leading, spacing: 20) {
-                HStack(spacing: 12) {
-                    Capsule().fill(Palette.gold).frame(width: 30, height: 3)
+    private func hero(_ item: MediaTitle, width: CGFloat, height: CGFloat) -> some View {
+        ZStack(alignment: .leading) {
+            Color.clear.overlay(alignment: .trailing) {
+                if let image = item.backdrop ?? item.artwork {
+                    TVArtwork(url: image, alignment: item.backdrop == nil ? .center : .top)
+                        .frame(width: width * 0.63, height: height)
+                        .mask {
+                            LinearGradient(stops: [
+                                .init(color: .clear, location: 0),
+                                .init(color: .black.opacity(0.35), location: 0.27),
+                                .init(color: .black, location: 0.65)
+                            ], startPoint: .leading, endPoint: .trailing)
+                        }
+                        .overlay(alignment: .bottom) {
+                            LinearGradient(colors: [.clear, TVPalette.background], startPoint: .top, endPoint: .bottom)
+                                .frame(height: height * 0.48)
+                        }
                         .accessibilityHidden(true)
-                    Text(item.id == featured.id ? "Featured" : kindLabel(item))
-                        .font(.system(size: 20, weight: .semibold, design: .monospaced))
-                        .tracking(4)
-                        .textCase(.uppercase)
                 }
-                .foregroundStyle(Palette.gold)
-
+            }
+            VStack(alignment: .leading, spacing: 13) {
+                Text(item.kind.label.uppercased())
+                    .font(.system(size: 18, weight: .semibold, design: .monospaced))
+                    .tracking(3)
+                    .foregroundStyle(TVPalette.accent)
                 Text(item.title)
-                    .font(.system(size: 76, weight: .semibold, design: .serif))
+                    .font(.system(size: 66, weight: .semibold, design: .serif))
                     .lineLimit(2)
                     .minimumScaleFactor(0.62)
                     .accessibilityAddTraits(.isHeader)
-
-                if !item.subtitle.isEmpty {
-                    Text(item.subtitle)
-                        .font(.system(size: 26, weight: .medium))
-                        .lineLimit(1)
-                        .foregroundStyle(Palette.cream.opacity(0.83))
+                HStack(spacing: 16) {
+                    if !item.subtitle.isEmpty { Text(item.subtitle) }
+                    if item.requestState == .requested {
+                        Label("Requested", systemImage: "clock")
+                    } else if item.requestState == .available {
+                        Label("In Library", systemImage: "checkmark.circle")
+                    }
                 }
-
+                .font(.system(size: 23, weight: .medium))
+                .foregroundStyle(TVPalette.paper.opacity(0.82))
+                .lineLimit(1)
                 if !item.synopsis.isEmpty {
                     Text(item.synopsis)
                         .font(.system(size: 25))
+                        .foregroundStyle(TVPalette.paper.opacity(0.84))
                         .lineLimit(2)
-                        .foregroundStyle(Palette.cream.opacity(0.76))
                 }
+            }
+            .frame(maxWidth: min(810, width * 0.5), alignment: .leading)
+            .padding(.leading, 72)
+        }
+        .id(item.id)
+        .transition(.opacity)
+        .frame(width: width, height: height)
+        .clipped()
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: item.id)
+    }
 
-                // The hero button keeps one focus identity as rail previews change.
-                Button { open(item) } label: {
-                    Label("View Details", systemImage: "arrow.right")
-                        .font(.system(size: 23, weight: .semibold))
-                        .foregroundStyle(focus == .featured ? Palette.midnight : Palette.cream)
-                        .padding(.horizontal, 26)
-                        .padding(.vertical, 14)
-                        .background(focus == .featured ? Palette.gold : Palette.teal, in: Capsule())
-                        .overlay {
-                            Capsule().strokeBorder(Palette.gold.opacity(focus == .featured ? 1 : 0.46))
+    @ViewBuilder
+    private func shelf(_ title: String, titles: [MediaTitle], cardWidth: CGFloat) -> some View {
+        if !titles.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 30, weight: .semibold))
+                    .accessibilityAddTraits(.isHeader)
+                    .padding(.leading, 72)
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: 27) {
+                        ForEach(titles) { item in
+                            TVPosterButton(item: item, width: cardWidth, focused: focusedID == item.id) { open(item) }
+                                .focused($focusedID, equals: item.id)
                         }
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .focused($focus, equals: .featured)
-                .accessibilityLabel("View details for \(item.title)")
-                .accessibilityValue(statusLabel(item))
-            }
-            .frame(maxWidth: 670, alignment: .leading)
-            .padding(.horizontal, inset)
-            .padding(.bottom, 22)
-        }
-        .frame(height: height)
-        .frame(maxWidth: .infinity)
-    }
-
-    private func heroBackdrop(_ item: MediaTitle) -> some View {
-        GeometryReader { geometry in
-            let width = geometry.size.width
-            let height = geometry.size.height
-
-            ZStack(alignment: .trailing) {
-                RadialGradient(
-                    colors: [accentColor(item).opacity(0.45), Palette.midnight.opacity(0)],
-                    center: UnitPoint(x: 0.8, y: 0.3), startRadius: 20, endRadius: width * 0.52
-                )
-
-                let hasBackdrop = item.backdrop != nil
-                Artwork(backdrop: item.backdrop, poster: item.artwork, placeholder: .clear)
-                    .frame(width: width * (hasBackdrop ? 0.79 : 0.48), height: height)
-                    .mask {
-                        LinearGradient(
-                            stops: [.init(color: .clear, location: 0),
-                                    .init(color: .black.opacity(0.62), location: 0.35),
-                                    .init(color: .black, location: 0.70)],
-                            startPoint: .leading, endPoint: .trailing
-                        )
                     }
-
-                LinearGradient(
-                    stops: [.init(color: Palette.midnight.opacity(0.22), location: 0),
-                            .init(color: .clear, location: 0.25),
-                            .init(color: Palette.midnight.opacity(0.58), location: 0.79),
-                            .init(color: Palette.midnight, location: 1)],
-                    startPoint: .top, endPoint: .bottom
-                )
-                LinearGradient(
-                    stops: [.init(color: Palette.midnight.opacity(0.6), location: 0),
-                            .init(color: .clear, location: 0.60)],
-                    startPoint: .leading, endPoint: .trailing
-                )
-            }
-        }
-    }
-
-    private func shelf(_ rail: Rail, titles: [MediaTitle], cardWidth: CGFloat, inset: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(rail.rawValue)
-                .font(.system(size: 32, weight: .semibold))
-                .accessibilityAddTraits(.isHeader)
-                .padding(.horizontal, inset)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 30) {
-                    ForEach(titles) { item in
-                        card(item, width: cardWidth)
-                    }
+                    .padding(.horizontal, 72)
+                    .padding(.vertical, 14)
                 }
-                .padding(.horizontal, inset)
-                .padding(.top, 18)
-                .padding(.bottom, 16)
+                .scrollIndicators(.hidden)
             }
+            .focusSection()
         }
     }
+}
 
-    private func card(_ item: MediaTitle, width: CGFloat) -> some View {
-        let target = FocusTarget.card(item.id)
-        let isFocused = focus == target
-        let shape = RoundedRectangle(cornerRadius: 15)
+struct TVPosterButton: View {
+    let item: MediaTitle
+    let width: CGFloat
+    let focused: Bool
+    let open: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-        return Button { open(item) } label: {
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 11)
+        Button(action: open) {
             VStack(alignment: .leading, spacing: 10) {
-                ZStack(alignment: .topTrailing) {
-                    Artwork(
-                        backdrop: item.backdrop,
-                        poster: item.artwork,
-                        placeholder: accentColor(item).opacity(0.35),
-                        symbol: item.kind == .movie ? "film" : "tv"
-                    )
-
-                    if !item.playable, let symbol = statusSymbol(item) {
-                        Image(systemName: symbol)
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(Palette.gold)
-                            .frame(width: 38, height: 38)
-                            .background(Palette.midnight.opacity(0.92), in: Circle())
-                            .padding(10)
+                TVArtwork(url: item.artwork, title: item.title)
+                    .frame(width: width, height: width * 1.5)
+                    .clipShape(shape)
+                    .overlay {
+                        shape.strokeBorder(focused ? TVPalette.accent : .white.opacity(0.14),
+                                           lineWidth: focused ? 3 : 1)
                     }
-                }
-                .frame(width: width, height: width * 9 / 16)
-                .clipShape(shape)
-                .overlay {
-                    shape.strokeBorder(isFocused ? Palette.gold : .white.opacity(0.12), lineWidth: isFocused ? 4 : 1)
-                }
-                .shadow(color: isFocused ? Palette.gold.opacity(0.35) : .clear, radius: 13)
-                .scaleEffect(isFocused && !reduceMotion ? 1.065 : 1)
-                .accessibilityHidden(true)
-
+                    .accessibilityHidden(true)
                 Text(item.title)
-                    .font(.system(size: 23, weight: isFocused ? .semibold : .medium))
-                    .foregroundStyle(isFocused ? Palette.cream : Palette.cream.opacity(0.74))
+                    .font(.system(size: 21, weight: focused ? .semibold : .medium))
                     .lineLimit(1)
+                    .foregroundStyle(TVPalette.paper.opacity(focused ? 1 : 0.74))
             }
             .frame(width: width, alignment: .leading)
-            .contentShape(Rectangle())
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isFocused)
+            .scaleEffect(focused && !reduceMotion ? 1.045 : 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: focused)
         }
-        .buttonStyle(.plain)
-        .focused($focus, equals: target)
+        .buttonStyle(TVUnstyledButton())
+        .focusEffectDisabled()
         .accessibilityLabel(item.title)
-        .accessibilityValue(statusLabel(item))
-        .zIndex(isFocused ? 1 : 0)
+        .accessibilityValue(item.requestState.label)
+        .accessibilityIdentifier("poster.\(item.id)")
     }
+}
 
-    private func kindLabel(_ item: MediaTitle) -> String {
-        item.kind == .movie ? "Movie" : "TV Show"
+struct TVUnstyledButton: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.8 : 1)
     }
+}
 
-    private func statusLabel(_ item: MediaTitle) -> String {
-        if item.playable { return "Ready to watch" }
-        if item.requestState == .available { return "In library" }
-        if item.requestState == .requestable { return "Can be requested" }
-        if item.requestState == .requested { return "Requested" }
-        return "Unavailable"
-    }
+struct TVArtwork: View {
+    let url: URL?
+    var title: String? = nil
+    var alignment: Alignment = .center
 
-    private func statusSymbol(_ item: MediaTitle) -> String? {
-        if item.requestState == .requestable { return "plus" }
-        if item.requestState == .requested { return "clock" }
-        return nil
-    }
-
-    private func accentColor(_ item: MediaTitle) -> Color {
-        let hex = item.accent.trimmingCharacters(in: .whitespacesAndNewlines)
-        let digits = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
-        guard digits.count == 6, let rgb = UInt32(digits, radix: 16) else { return Palette.teal }
-        return Palette.color(rgb)
-    }
-
-    private enum Palette {
-        static let midnight = color(0x061416)
-        static let teal = color(0x103437)
-        static let gold = color(0xF3C576)
-        static let cream = color(0xFFF4DF)
-
-        static func color(_ rgb: UInt32) -> Color {
-            Color(red: Double((rgb >> 16) & 255) / 255,
-                  green: Double((rgb >> 8) & 255) / 255,
-                  blue: Double(rgb & 255) / 255)
-        }
-    }
-
-    private struct Artwork: View {
-        let backdrop: URL?
-        let poster: URL?
-        let placeholder: Color
-        var symbol: String? = nil
-
-        var body: some View {
-            GeometryReader { geometry in
-                artwork(size: geometry.size)
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                    .clipped()
-            }
-        }
-
-        @ViewBuilder
-        private func artwork(size: CGSize) -> some View {
-            if let backdrop, backdrop != poster {
-                AsyncImage(url: backdrop) { phase in
-                    switch phase {
-                    case .success(let image): fitted(image, size: size)
-                    case .failure: posterImage(size: size)
-                    default: fallback
+    var body: some View {
+        GeometryReader { geometry in
+            Group {
+                if let url, url.isFileURL, let image = UIImage(contentsOfFile: url.path) {
+                    Image(uiImage: image).resizable().scaledToFill()
+                } else if let url {
+                    AsyncImage(url: url) { phase in
+                        if let image = phase.image {
+                            image.resizable().scaledToFill()
+                        } else {
+                            fallback
+                        }
                     }
-                }
-            } else {
-                posterImage(size: size)
-            }
-        }
-
-        @ViewBuilder
-        private func posterImage(size: CGSize) -> some View {
-            if let poster {
-                AsyncImage(url: poster) { phase in
-                    if let image = phase.image {
-                        fitted(image, size: size)
-                    } else {
-                        fallback
-                    }
-                }
-            } else {
-                fallback
-            }
-        }
-
-        private func fitted(_ image: Image, size: CGSize) -> some View {
-            image.resizable().scaledToFill().frame(width: size.width, height: size.height)
-        }
-
-        private var fallback: some View {
-            ZStack {
-                if let symbol {
-                    LinearGradient(colors: [placeholder, Palette.teal], startPoint: .topTrailing, endPoint: .bottomLeading)
-                    Image(systemName: symbol)
-                        .font(.system(size: 42, weight: .light))
-                        .foregroundStyle(Palette.cream.opacity(0.45))
                 } else {
-                    placeholder
+                    fallback
                 }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: alignment)
+            .clipped()
+        }
+    }
+
+    @ViewBuilder private var fallback: some View {
+        if let title {
+            LinearGradient(colors: [.white.opacity(0.12), TVPalette.background],
+                           startPoint: .topTrailing, endPoint: .bottomLeading)
+                .overlay(alignment: .bottomLeading) {
+                    Text(title)
+                        .font(.system(size: 25, weight: .semibold, design: .serif))
+                        .lineLimit(3)
+                        .padding(16)
+                }
+        } else {
+            Color.clear
         }
     }
 }

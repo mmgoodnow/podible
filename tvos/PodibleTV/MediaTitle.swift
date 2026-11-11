@@ -63,8 +63,16 @@ enum DemoCatalog {
 
     private static func title(_ id: String, _ name: String, _ metadata: String, _ synopsis: String,
                               _ kind: MediaKind, _ accent: String, _ state: RequestState) -> MediaTitle {
-        MediaTitle(id: id, title: name, subtitle: metadata, synopsis: synopsis, kind: kind,
-                   artwork: nil, backdrop: nil, accent: accent, playable: state == .available,
-                   playbackURL: state == .available ? sample : nil, requestState: state, tmdbID: nil)
+        let index = ["marrow", "after", "isle", "orchard", "north", "tide"].firstIndex(of: id)
+        return MediaTitle(id: id, title: name, subtitle: metadata, synopsis: synopsis, kind: kind,
+                          artwork: index.flatMap { image(named: "demo-\($0)") },
+                          backdrop: id == "marrow" ? image(named: "marrow-hero") : nil,
+                          accent: accent, playable: state == .available,
+                          playbackURL: state == .available ? sample : nil, requestState: state, tmdbID: nil)
+    }
+
+    private static func image(named name: String) -> URL? {
+        Bundle.main.url(forResource: name, withExtension: "jpg", subdirectory: "DemoArtwork")
+            ?? Bundle.main.url(forResource: name, withExtension: "jpg")
     }
 }
