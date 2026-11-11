@@ -16,7 +16,8 @@ outside this completion batch.
 - [x] Verify approved season membership expands to 13 / 25 / 10 episodes.
 - [x] Complete Breaking Bad season publication from its existing pack, with exact Plex IDs/paths for all 13 episodes and no new search/download.
 - [x] Complete Berserk download, import and exact Plex verification: all 25 approved episodes, canonical sizes/symlinks and exact section 16 identities/paths independently verified November 4 at 10:39 UTC on running e581960.
-- [ ] Observe the actively airing Khom Khlang request through its next release.
+- [x] Independently verify the Khom Khlang finale after airing: all ten episodes are present at their exact Plex identities and paths.
+- [ ] Capture a fresh live TV download-to-Plex timing trace on the instrumented build, including automatic UI update.
 
 ## Performance
 
@@ -76,8 +77,8 @@ the selected version. See [the comparison](movie-rss-canary.md).
 - [x] Compare all 17 successful transcript rows/fingerprints across rollout and confirm filesystem-identity preservation of canonical movie/seed files around the preview; see the dated production evidence in retention.md.
 
 The `monitor-tv-and-rss-canaries` heartbeat was removed at the user's request.
-There is no active Codex monitor. Khom Khlang E10 remains dependent on a real
-upstream release; the application's normal RSS intake remains responsible.
+There is no active Codex monitor. Khom Khlang S01E10 is now verified in Plex.
+The show also provides a production season-pack candidate; see [TV](tv.md).
 
 ## Follow-Through Implementation
 

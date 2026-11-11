@@ -241,6 +241,14 @@ not published. Future-release arrival, semantic routing, acquisition, and exact
 Plex publication remain an end-to-end observation after airing, not a completed
 canary or a reason to start periodic per-title searches.
 
+**November 11 follow-up:** All ten episodes of Khom Khlang season 1 were
+independently verified in Plex section 16, with matching canonical files and
+symlink targets. The ten selected episodes came from individual releases. The
+observed 1080p and 2160p WEB packs were rejected for cross-seed reuse: neither
+met the reuse ratio or additional-download budget. A reuse rejection is not a
+quality-upgrade decision. The pack did not replace the selected episodes and
+none of the single-episode registrations had reached 30 actual seed days.
+
 The initial rollout exposed an ordering failure: both normal CD runs
 [`41784606406`](https://github.com/mmgoodnow/podible/actions/runs/41784606406)
 (`41a88af`) and
