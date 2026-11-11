@@ -1,4 +1,5 @@
 import path from "node:path";
+import { measureView } from "../media/acquisition-latency";
 import type { MovieRepo } from "./repo";
 import type { Movie } from "./types";
 import { withKeyedMutex } from "../runtime/keyed-mutex";
@@ -99,6 +100,7 @@ export async function publishMovieVersion(input: {
   afterPromotion?: () => void | Promise<void>;
   scan?: boolean;
   pendingIsExpected?: boolean;
+  onReconcile?: (ms: number) => void;
 }) {
   const { repo, roots, library, targetId, versionId } = input;
   const active = input.assertActive ?? (() => {});
@@ -108,12 +110,12 @@ export async function publishMovieVersion(input: {
     const pending = repo
       .publications()
       .find((entry) => entry.target_id === targetId)!;
-    await reconcileLibraryView({
+    await measureView(() => reconcileLibraryView({
       ...roots,
       entries: movieViewEntries(repo, roots),
       assertActive: active,
       onLinkApplied: active,
-    });
+    }), input.onReconcile);
     active();
     const target = repo.target(targetId)!;
     const movie = repo.movie(target.movie_id)!;
@@ -141,12 +143,12 @@ export async function publishMovieVersion(input: {
     await input.afterPromotion?.();
     active();
     repo.clearPublication(targetId, versionId);
-    await reconcileLibraryView({
+    await measureView(() => reconcileLibraryView({
       ...roots,
       entries: movieViewEntries(repo, roots),
       assertActive: active,
       onLinkApplied: active,
-    });
+    }), input.onReconcile);
     repo.event(
       targetId,
       null,

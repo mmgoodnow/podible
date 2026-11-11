@@ -190,17 +190,10 @@ export const bookWebRouter = defineRouter({
     handler(ctx, { bookId }) {
       if (!ctx.repo.getBookRow(bookId))
         throw new RpcError(-32000, "Book not found", { error: "not_found" });
-      const jobs = (["acquire", "download", "import"] as const)
-        .flatMap((type) => ctx.repo.listJobsByType(type))
-        .filter((job) => job.book_id === bookId)
-        .sort((a, b) => b.id - a.id);
+      const { jobs, activeAcquisition } = ctx.repo.readBookActivity(bookId);
       return {
-        activeAcquisition: jobs.some(
-          (job) =>
-            job.type === "acquire" &&
-            (job.status === "queued" || job.status === "running"),
-        ),
-        jobs: jobs.slice(0, 12).map((job) => {
+        activeAcquisition,
+        jobs: jobs.map((job) => {
           const unavailable =
             /429|rate.?limit|too many requests|temporarily unavailable/i.test(
               job.error ?? "",

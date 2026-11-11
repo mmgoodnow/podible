@@ -243,7 +243,7 @@ try {
       getSettings: () => settings,
       bookTorrentClient: bookClient,
     },
-    bookRepo.getJob(snatch.jobId)!,
+    bookRepo.getJob(snatch.jobId!)!,
   );
   const importJob = bookRepo.listJobsByType("import")[0]!;
   await processImportJob(

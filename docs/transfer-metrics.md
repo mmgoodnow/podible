@@ -137,6 +137,13 @@ transfer snapshot without rescanning torrent records. Library counts describe
 published records, not a new verification of files or physical disk use. Some
 categories overlap, so don't sum them. Suggested PromQL:
 
+The Time to Plex panels use a durable histogram of successful movie and TV
+publications. Download completion is Transmission's recorded completion time,
+not the worker's next observation. A torrent that finished before the batch was
+queued does not contribute to download latency. Reconciliation measures the
+filesystem projection pass separately from Plex indexing. An empty percentile
+means no qualifying samples, not instant completion.
+
 | Panel | PromQL | Unit |
 | --- | --- | --- |
 | Logical seed size | `podible_seed_bytes` | bytes |

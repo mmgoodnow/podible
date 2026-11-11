@@ -88,6 +88,7 @@ const torrentSchema = z.object({
   totalSize: z.number().nonnegative().optional(),
   haveValid: z.number().nonnegative().optional(),
   haveUnchecked: z.number().nonnegative().optional(),
+  doneDate: z.number().int().optional(),
 });
 const SEED_ONLY_LABEL = "Podible Seed Only";
 export class TransmissionAdapter implements TorrentClient {
@@ -161,7 +162,7 @@ export class TransmissionAdapter implements TorrentClient {
         "error",
         "errorString",
         "files",
-        "fileStats", "totalSize", "haveValid", "haveUnchecked",
+        "fileStats", "totalSize", "haveValid", "haveUnchecked", "doneDate",
       ],
     });
     const torrents = z.array(torrentSchema).parse(result.torrents);
@@ -264,6 +265,8 @@ export class TransmissionAdapter implements TorrentClient {
         : errorKind === "storage" ? "Torrent engine reported a local storage error"
         : errorKind === "unknown" ? "Torrent engine reported an unknown error" : null,
       observedAt: new Date().toISOString(),
+      ...(row.doneDate && row.doneDate > 0 && row.doneDate <= Date.now() / 1000
+        ? { completedAt: new Date(row.doneDate * 1000).toISOString() } : {}),
     };
   }
   async files(ref: TorrentRef) {

@@ -1216,6 +1216,18 @@ export function runMigrations(db: Database): void {
     ) WHERE key>='cross-seed:operation:' AND key<'cross-seed:operation:~'
       AND json_extract(value_json,'$.command.scope.media')='tv';
   `));
+  apply(60, () => db.exec(`
+    CREATE INDEX jobs_book_activity ON jobs(book_id,id DESC) WHERE type IN ('acquire','download','import');
+    CREATE INDEX jobs_book_acquire ON jobs(book_id) WHERE type='acquire';
+    CREATE INDEX jobs_release_download ON jobs(release_id,id DESC) WHERE type='download';
+  `));
+  apply(61, () => db.exec(`
+    CREATE TABLE acquisition_latency_receipts (
+      media TEXT NOT NULL CHECK(media IN ('movie','tv')),
+      acquisition_id INTEGER NOT NULL,
+      PRIMARY KEY(media,acquisition_id)
+    ) WITHOUT ROWID;
+  `));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

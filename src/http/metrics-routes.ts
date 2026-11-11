@@ -6,6 +6,7 @@ import { configDir } from "../config";
 import type { BooksRepo } from "../repo";
 import { transferMetricsPrometheus } from "../media/transfer-metrics-prometheus";
 import { indexerTrafficPrometheus } from "../media/indexer-traffic";
+import { acquisitionLatencyPrometheus } from "../media/acquisition-latency";
 import { getCurrentSession, type HttpEnv } from "./middleware";
 
 async function matchesScrapeToken(authorization: string | undefined, digestPath: string): Promise<boolean> {
@@ -25,7 +26,8 @@ export function createMetricsRoutes(repo: BooksRepo, digestPath = join(configDir
       if (session) return c.text("Forbidden", 403);
       return c.text("Unauthorized", 401, { "WWW-Authenticate": 'Bearer realm="podible"' });
     }
-    return c.text(transferMetricsPrometheus(repo.transferMetrics.scrapeSnapshot(), repo.transferMetrics.publishedCounts()) + indexerTrafficPrometheus(repo), 200, {
+    return c.text(transferMetricsPrometheus(repo.transferMetrics.scrapeSnapshot(), repo.transferMetrics.publishedCounts()) +
+      indexerTrafficPrometheus(repo) + acquisitionLatencyPrometheus(repo), 200, {
       "Content-Type": "text/plain; version=0.0.4; charset=utf-8", "Cache-Control": "no-store",
     });
   });

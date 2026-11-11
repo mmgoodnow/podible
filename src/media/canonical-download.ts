@@ -6,6 +6,7 @@ import { inspectMetainfo } from "./metainfo";
 import { torrentFileRole } from "./content-file-role";
 import type { TorrentClient, TorrentRef } from "./torrent-client";
 import { withKeyedMutex } from "../runtime/keyed-mutex";
+import { effectCheckpoint } from "../runtime/execution-effects";
 
 const relative = z.string().min(1).refine(value => !path.isAbsolute(value) &&
   !/[\\\x00-\x1f\x7f]/.test(value) && value.split("/").every(part => part && part !== "." && part !== ".."));
@@ -239,12 +240,21 @@ export async function finalizeCanonicalDownloadFile(contentRoot: string, sourceR
   if (!resolved.file) return null;
   if (!resolved.plan?.sealed) throw new Error("Canonical download still has an active writer");
   const previous = await finalizedCanonicalObject(contentRoot, resolved.path);
+  active();
   if (previous) return previous;
   const handle = await fs.open(resolved.path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const before = await handle.stat({ bigint: true }), hash = createHash("sha256"), buffer = Buffer.alloc(1024 * 1024);
+    let fenceAfter = performance.now() + 250;
     for (;;) {
-      active(); const { bytesRead } = await handle.read(buffer);
+      effectCheckpoint();
+      // This loop only reads bytes. Keep cheap cancellation per chunk and
+      // recheck durable ownership periodically and before writing the proof.
+      if (performance.now() >= fenceAfter) {
+        active();
+        fenceAfter = performance.now() + 250;
+      }
+      const { bytesRead } = await handle.read(buffer);
       if (!bytesRead) break; hash.update(buffer.subarray(0, bytesRead));
     }
     const after = await handle.stat({ bigint: true });

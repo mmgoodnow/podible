@@ -1,4 +1,5 @@
 import path from "node:path";
+import { measureView } from "../media/acquisition-latency";
 import { withKeyedMutex } from "../runtime/keyed-mutex";
 import { effectPhase } from "../runtime/execution-effects";
 import { reconcileLibraryView, type LibraryViewEntry } from "../media/library-view";
@@ -73,7 +74,7 @@ export function tvViewEntries(repo: TvRepo, roots: TvRoots): LibraryViewEntry[] 
 export function reconcileTvView(repo: TvRepo, roots: TvRoots, assertActive: () => void = () => {}) {
   return serialized(roots.viewRoot, () => reconcileLibraryView({ ...roots, entries: tvViewEntries(repo, roots), assertActive }));
 }
-export async function publishTvVersion(input: { repo: TvRepo; roots: TvRoots; library: TvLibrary; targetId: number; versionId: number; assertActive?: () => void; scan?: boolean; pendingIsExpected?: boolean }) {
+export async function publishTvVersion(input: { repo: TvRepo; roots: TvRoots; library: TvLibrary; targetId: number; versionId: number; assertActive?: () => void; scan?: boolean; pendingIsExpected?: boolean; onReconcile?: (ms: number) => void }) {
   const { repo, roots, targetId, versionId, library } = input;
   const active = input.assertActive ?? (() => {});
   effectPhase("publication:mutex-wait");
@@ -82,7 +83,7 @@ export async function publishTvVersion(input: { repo: TvRepo; roots: TvRoots; li
     active(); repo.stagePublication(targetId, versionId);
     const pending = repo.publications().find((item) => item.target_id === targetId)!;
     effectPhase("publication:reconcile");
-    await reconcileLibraryView({ ...roots, entries: tvViewEntries(repo, roots), assertActive: active });
+    await measureView(() => reconcileLibraryView({ ...roots, entries: tvViewEntries(repo, roots), assertActive: active }), input.onReconcile);
     active();
     const entry = repo.entry(repo.target(targetId)!.entry_id)!;
     const files = versionEntries(repo, roots, targetId, repo.version(versionId)!).map((file) => ({
@@ -99,7 +100,7 @@ export async function publishTvVersion(input: { repo: TvRepo; roots: TvRoots; li
     active(); repo.promotePublication(targetId, versionId, pending.expected_revision);
     active(); repo.clearPublication(targetId, versionId);
     effectPhase("publication:cleanup");
-    await reconcileLibraryView({ ...roots, entries: tvViewEntries(repo, roots), assertActive: active });
+    await measureView(() => reconcileLibraryView({ ...roots, entries: tvViewEntries(repo, roots), assertActive: active }), input.onReconcile);
     repo.event(targetId, null, `tv-published:${targetId}:${versionId}`, "available", "Episode identity and file paths verified in Plex");
     effectPhase("publication:complete");
     return true;

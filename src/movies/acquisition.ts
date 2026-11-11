@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { JobRow } from "../app-types";
 import { durableStep, type WorkerContext } from "../worker/context";
 import { waitForPlexPublication, waitForTorrentCompletion } from "../worker/media-completion";
+import { recordPublicationLatency, recordViewLatency, savedCompletionTime } from "../media/acquisition-latency";
 import { assertMovieStorage, prepareMovieStorage } from "./storage";
 import { adoptContentFile } from "../media/content-store";
 import { inspectMetainfo } from "../media/metainfo";
@@ -138,18 +139,19 @@ export async function acquireMovie(
     );
     ctx.onAcquisitionChange?.();
   };
-  const publish = async (versionId: number, prefix: string) => {
+  const publish = async (versionId: number, prefix: string, eventKey: string, completeAt?: string | null) => {
+    const onReconcile = (ms: number) => recordViewLatency(ctx.repo, "movie", ms);
     if (ctx.execution?.armCompletion) {
       await waitForPlexPublication(ctx, prefix, settings.movies.plexSectionId, async scan => {
         await assertMovieStorage(ctx.repo, roots.contentRoot);
         return publishMovieVersion({ repo, roots, library: services.library, targetId: target.id, versionId,
-          assertActive: active, scan, pendingIsExpected: true });
+          assertActive: active, scan, pendingIsExpected: true, onReconcile });
       });
     } else for (let scan = 0; ; scan++) {
       const published = await durableStep(ctx, `${prefix}:publish:${scan}`, async () => {
         try {
           await assertMovieStorage(ctx.repo, roots.contentRoot);
-          await publishMovieVersion({ repo, roots, library: services.library, targetId: target.id, versionId, assertActive: active });
+          await publishMovieVersion({ repo, roots, library: services.library, targetId: target.id, versionId, assertActive: active, onReconcile });
           return true;
         } catch (error) {
           active();
@@ -164,6 +166,9 @@ export async function acquireMovie(
       if (ctx.execution) await ctx.execution.sleep(`${prefix}:plex-wait:${scan}`, delay);
       else await Bun.sleep(delay);
     }
+    recordPublicationLatency(ctx.repo, { media: "movie", acquisitionId: acquisition.id, queuedAt: acquisition.created_at,
+      completeAt, publishingEvent: `acquisition:${acquisition.id}:${eventKey}`,
+      publicationEvent: `published:${target.id}:${versionId}` });
   };
   const reusable = await durableStep(ctx, "movie:existing-version", () => {
     if (current || manual?.manualOffer || manual?.feedOffers) return null;
@@ -190,7 +195,7 @@ export async function acquireMovie(
     repo.decision(acquisition.id, { reusedVersionId: reusable,
       importDecision: { reason: "An already published canonical version satisfies this target; no download needed" } });
     emit("existing:publish", "publishing", "Adding the existing matching version to this target; no new download");
-    await publish(reusable, "movie:existing");
+    await publish(reusable, "movie:existing", "existing:publish");
     await durableStep(ctx, "movie:finish", () => { active(); repo.finishAcquisition(acquisition.id); });
     ctx.onAcquisitionChange?.();
     return "done";
@@ -638,7 +643,7 @@ export async function acquireMovie(
       "publishing",
       "Publishing to Plex; the previous version stays available until verification",
     );
-    await publish(versionId, prefix);
+    await publish(versionId, prefix, `${attempt}:publish`, savedCompletionTime(repo.torrent(ref.clientId, ref.nativeId)?.observation_json));
     await durableStep(ctx, "movie:finish", () => {
       active();
       repo.finishAcquisition(acquisition.id);

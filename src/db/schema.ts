@@ -9,6 +9,11 @@
 import type { Generated } from "kysely";
 
 export interface DB {
+  "acquisition_latency_receipts": {
+    "media": string;
+    "acquisition_id": number;
+  };
+
   "app_login_attempts": {
     "id": string | null;
     "redirect_uri": string;

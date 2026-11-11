@@ -25,6 +25,7 @@ import { randomUUID } from "node:crypto";
 import { crossSeedOffer } from "../../src/media/cross-seed";
 import { readCanonicalDownload } from "../../src/media/canonical-download";
 import { prepareMovieStorage } from "../../src/movies/storage";
+import { acquisitionLatencyPrometheus } from "../../src/media/acquisition-latency";
 
 function catalog(): TvCatalogEntry {
   return {
@@ -282,12 +283,13 @@ for (const restart of [false, true]) {
       settings.tv.plexSectionId = "16";
       s.repo.updateSettings(settings);
       const job = s.enqueue().job_id!;
-      let downloaded = false, scanned = false, plexReady = false, checks = 0, verifications = 0;
+      let completedAt: string | undefined;
+      let scanned = false, plexReady = false, checks = 0, verifications = 0;
       const inspect = s.fixture.services.client.inspect;
       s.fixture.services.client.inspect = async ref => {
         checks++;
         const snapshot = await inspect(ref);
-        return downloaded ? snapshot : { ...snapshot, state: "downloading", complete: false, bytesDone: 0 };
+        return completedAt ? { ...snapshot, completedAt } : { ...snapshot, state: "downloading", complete: false, bytesDone: 0 };
       };
       s.fixture.services.timing!.stallMs = 120_000;
       s.fixture.services.library.scan = async () => { scanned = true; };
@@ -325,7 +327,7 @@ for (const restart of [false, true]) {
       await Bun.sleep(80);
       expect(checks).toBe(1);
       if (restart) { await runtime!.stop(); runtime = undefined; }
-      downloaded = true;
+      completedAt = new Date().toISOString();
       if (restart) await start();
       else {
         const receipt = path.join(spool, `${offer.infoHash}.test`);
@@ -342,6 +344,9 @@ for (const restart of [false, true]) {
       await waitFor(() => s.repo.getJobStatus(job) === "succeeded");
       expect(verifications).toBe(2);
       expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(1);
+      expect(acquisitionLatencyPrometheus(s.repo)).toContain(
+        'podible_acquisition_latency_seconds_count{media="tv",phase="complete_to_ready"} 1\n',
+      );
       await assertOwnedViews(s);
     } finally { await runtime?.stop(); await s.close(); }
   }, 30_000);

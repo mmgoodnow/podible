@@ -384,7 +384,7 @@ export const libraryRouter = defineRouter({
       results: z.array(
         z.object({
           release: releaseRowSchema,
-          jobId: positiveIntSchema,
+          jobId: positiveIntSchema.nullable(),
           idempotent: z.boolean(),
         })
       ),

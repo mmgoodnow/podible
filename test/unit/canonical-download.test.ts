@@ -41,6 +41,11 @@ test("initial torrent is a persisted view of private canonical objects; import h
     await expect(finalizeCanonicalDownloadFile(f.contentRoot, f.sourceRoot, view, file.size)).rejects.toThrow("active writer");
     await f.fill(); const before = await fs.stat(canonical, { bigint: true });
     await sealCanonicalDownload(f.contentRoot, f.sourceRoot, f.client, f.ref);
+    let checks = 0;
+    await expect(finalizeCanonicalDownloadFile(f.contentRoot, f.sourceRoot, view, file.size, () => {
+      if (++checks > 1) throw new Error("Lost ownership");
+    })).rejects.toThrow("Lost ownership");
+    expect(await finalizedCanonicalObject(f.contentRoot, canonical)).toBeNull();
     const result = await adoptContentFile({ contentRoot: f.contentRoot, sourceRoot: f.sourceRoot, sourcePath: view, fileId: randomUUID(), expectedSize: file.size });
     expect(result.id).toBe(file.id); expect(result.relativePath).toBe(file.relativePath!);
     expect(result.sha256).toBe(createHash("sha256").update(f.members[0]!.text).digest("hex"));

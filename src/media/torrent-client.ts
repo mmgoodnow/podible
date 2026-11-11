@@ -16,6 +16,7 @@ export type TorrentSnapshot = {
   errorKind?: "tracker" | "storage" | "unknown" | null;
   integrityError?: "piece-mismatch" | null;
   observedAt: string;
+  completedAt?: string;
   seedOnly?: boolean;
 };
 

@@ -64,7 +64,7 @@ export const snatchRouter = defineRouter({
     }),
     resultSchema: z.object({
       release: releaseRowSchema,
-      jobId: positiveIntSchema,
+      jobId: positiveIntSchema.nullable(),
       idempotent: z.boolean(),
     }),
     async handler(ctx, params) {
@@ -100,7 +100,7 @@ export const snatchRouter = defineRouter({
       results: z.array(
         z.object({
           release: releaseRowSchema,
-          jobId: positiveIntSchema,
+          jobId: positiveIntSchema.nullable(),
           idempotent: z.boolean(),
         })
       ),

@@ -427,7 +427,7 @@ try {
     .getByRole("button", { name: "Remove from library", exact: true })
     .click();
   await page
-    .getByRole("button", { name: "Permanently remove book", exact: true })
+    .getByRole("button", { name: "Remove book", exact: true })
     .click();
   await page.waitForURL(/\/library$/);
   await page.goto(new URL(`/book/${fixture.bookId}`, fixture.url).href);

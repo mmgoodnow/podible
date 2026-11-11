@@ -57,7 +57,7 @@ export type SnatchGroupRequest = {
   }>;
 };
 
-export type SnatchResult = { release: ReleaseRow; jobId: number; idempotent: boolean };
+export type SnatchResult = { release: ReleaseRow; jobId: number | null; idempotent: boolean };
 
 export type SnatchGroupResult = {
   manifestationId: number | null;
@@ -169,11 +169,11 @@ function resolveInfoHash(explicitHash?: string | null): string | null {
 
 function idempotentResult(repo: BooksRepo, existing: ReleaseRow): SnatchResult {
   const existingJob = repo
-    .listJobsByType("download")
-    .find((job) => job.release_id === existing.id && (job.status === "queued" || job.status === "running"));
+    .listReleaseDownloadJobs(existing.id)
+    .find((job) => job.status === "queued" || job.status === "running");
   return {
     release: existing,
-    jobId: existingJob?.id ?? -1,
+    jobId: existingJob?.id ?? null,
     idempotent: true
   };
 }

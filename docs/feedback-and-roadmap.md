@@ -205,6 +205,17 @@ CoW variants are acceptable for seed coverage, and seniority breaks equivalent
 library-version ties. Plex still receives one explicitly selected canonical
 version. See [content reuse plan](content-reuse-plan.md).
 
+For an exact, Plex-verified season pack, prefer retiring superseded episode
+torrent registrations after their actual seed minimum, even if shared bytes
+make them free on disk. Preserve registrations with unique required episode
+coverage. Keep any object the pack, Plex, or another retained registration
+still references. Verify retirement separately from reclaiming bytes.
+
+Keep Radarr/Sonarr migration at preview while finishing this work. Native
+movie/TV issue reports should attach to the affected title or episodes and show
+what Podible found or fixed. Prefer built-in reporting and bounded remediation
+over a Seerr integration.
+
 ## Historical One-Offs And Unverified Old Incidents
 
 | Item | Disposition |
@@ -236,6 +247,7 @@ version. See [content reuse plan](content-reuse-plan.md).
 
 - [Latest UI follow-through and production evidence](ui-follow-through.md)
 - [Completion checklist and remaining canaries](completion-checklist.md)
+- [Time to Plex and Attack on Titan baseline](time-to-plex.md)
 - [UI interaction principles](ui-interaction-model.md), [home rails](home-rails.md),
   [unified Library](unified-library.md), [book SPA](book-spa.md)
 - [RSS contracts and failure/gap semantics](indexer-feeds.md),

@@ -519,6 +519,17 @@ export class BooksRepo {
     }
   }
 
+  claimAcquisitionLatency(media: "movie" | "tv", acquisitionId: number): boolean {
+    return this.db.query("INSERT OR IGNORE INTO acquisition_latency_receipts VALUES (?,?)").run(media, acquisitionId).changes === 1;
+  }
+
+  readAcquisitionEventTime(media: "movie" | "tv", key: string, stage: "available" | "publishing"): string | null {
+    const table = media === "movie" ? "movie_events" : "tv_events";
+    return this.db.query<{ created_at: string }, [string, string]>(
+      `SELECT created_at FROM ${table} WHERE event_key=? AND stage=?`,
+    ).get(key, stage)?.created_at ?? null;
+  }
+
   setJsonState(key: string, value: unknown): void {
     this.db
       .query(
@@ -1669,6 +1680,14 @@ export class BooksRepo {
   }
   listJobsByType(type: JobType): JobRow[] {
     return this.jobRows("WHERE j.type = ? ORDER BY j.id DESC", [type]);
+  }
+  readBookActivity(bookId: number): { jobs: JobRow[]; activeAcquisition: boolean } {
+    const jobs = this.jobRows("WHERE j.book_id=? AND j.type IN ('acquire','download','import') ORDER BY j.id DESC LIMIT 12", [bookId]);
+    const ids = this.db.query<{ id: number }, [number]>("SELECT id FROM jobs WHERE book_id=? AND type='acquire'").all(bookId).map(row => row.id);
+    return { jobs, activeAcquisition: [...this.getJobStatuses(ids).values()].some(status => status === "queued" || status === "running") };
+  }
+  listReleaseDownloadJobs(releaseId: number): JobRow[] {
+    return this.jobRows("WHERE j.release_id=? AND j.type='download' ORDER BY j.id DESC", [releaseId]);
   }
   latestJobByType(type: JobType): JobRow | null {
     return this.jobRows("WHERE j.type = ? ORDER BY j.id DESC LIMIT 1", [type])[0] ?? null;

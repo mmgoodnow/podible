@@ -4,6 +4,7 @@ if (!uid || !/^[\w-]+$/.test(uid)) throw new Error("Supply a Prometheus datasour
 const datasource = { type: "prometheus", uid };
 const panels: object[] = [];
 let y = 0;
+let nextPanelId = 1000;
 const grid = (x: number, w: number, h: number) => ({ x, y, w, h });
 const series = (metric: string) => `podible_${metric}{job="podible"}`;
 const delta = (metric: string) => `increase(${series(metric)}[$__range])`;
@@ -13,7 +14,7 @@ function panel(type: "stat" | "timeseries" | "table", title: string, description
   position: ReturnType<typeof grid>, queries: Query[], decimals?: number, statusLabels?: readonly [string, string]) {
   const instant = type !== "timeseries";
   panels.push({
-    id: panels.length + 1, type, title, description, gridPos: position, datasource,
+    id: nextPanelId++, type, title, description, gridPos: position, datasource,
     targets: queries.map(([expr, legendFormat], i) => ({
       datasource, refId: String.fromCharCode(65 + i), expr, legendFormat, instant, range: !instant,
       ...(type === "table" ? { format: "table" } : {}),
@@ -35,11 +36,11 @@ function panel(type: "stat" | "timeseries" | "table", title: string, description
   });
 }
 function row(title: string) {
-  panels.push({ id: panels.length + 1, type: "row", title, gridPos: grid(0, 24, 1), collapsed: false, panels: [] });
+  panels.push({ id: nextPanelId++, type: "row", title, gridPos: grid(0, 24, 1), collapsed: false, panels: [] });
   y++;
 }
 function note(text: string) {
-  panels.push({ id: panels.length + 1, type: "text", transparent: true, gridPos: grid(0, 24, 3), options: { mode: "markdown", content: text } });
+  panels.push({ id: nextPanelId++, type: "text", transparent: true, gridPos: grid(0, 24, 3), options: { mode: "markdown", content: text } });
   y += 3;
 }
 const stat = (x: number, title: string, description: string, unit: string, expr: string, decimals?: number) =>
@@ -50,6 +51,30 @@ const chart = (x: number, title: string, description: string, unit: string, quer
   panel("timeseries", title, description, unit, grid(x, 12, 9), queries);
 const items = (kind: string) => `podible_published_library_items{job="podible",kind="${kind}"}`;
 
+row("Time to Plex");
+const latency = (suffix: string, phase: string) =>
+  `podible_acquisition_latency_seconds_${suffix}{job="podible",phase="${phase}"}`;
+const percentile = (p: number, phase: string, range: string, group = "le") =>
+  `histogram_quantile(${p}, sum by (${group}) (increase(${latency("bucket", phase)}[${range}])))`;
+const latencyCount = (phase: string) => `sum(increase(${latency("count", phase)}[$__range]))`;
+const successOnly = "Successfully verified publications in the selected range. Incomplete work is not counted.";
+stat(0, "Typical time after download", successOnly, "s", percentile(0.5, "complete_to_ready", "$__range"));
+stat(6, "Slow end after download (p95)", successOnly, "s", percentile(0.95, "complete_to_ready", "$__range"));
+stat(12, "Completed downloads measured", "Only counts verified publications with a client-reported completion timestamp.", "none", latencyCount("complete_to_ready"), 0);
+stat(18, "Typical queue to Plex", "Starts when an acquisition batch is queued, not when the title was originally requested.", "s",
+  percentile(0.5, "queued_to_ready", "$__range"));
+y += 4;
+chart(0, "Where time goes", "Rolling six-hour p95 for each stage, by media type. The pre-publication stage includes finalization, probes and import decisions.", "s", [
+  [percentile(0.95, "complete_to_publish", "6h", "le, media"), "{{media}} · download complete → publishing"],
+  [percentile(0.95, "publish_to_ready", "6h", "le, media"), "{{media}} · publishing → verified in Plex"],
+]);
+chart(12, "File view reconciliation", "Rolling six-hour p50 and p95 per successful reconciliation pass, including view projection but not waiting for Plex.", "s", [
+  [percentile(0.5, "view_reconcile", "6h", "le, media"), "{{media}} · p50"],
+  [percentile(0.95, "view_reconcile", "6h", "le, media"), "{{media}} · p95"],
+]);
+y += 9;
+
+nextPanelId = 1; // Preserve existing Grafana panel links and IDs.
 row("Library");
 const inventory = "Published in Podible's records. Not a live filesystem verification.";
 stat(0, "Movies", inventory, "none", items("movies"));
@@ -114,7 +139,7 @@ y += 4;
 note("History starts with the first successful Prometheus scrape. Missing series are not zero. Publication counts reflect Podible records; they do not prove files still exist. Tracker traffic does not represent account credit.");
 
 console.log(JSON.stringify({
-  uid: "podible-operations", title: "Podible", tags: ["media", "podible"], schemaVersion: 41, version: 1,
+  uid: "podible-operations", title: "Podible", tags: ["media", "podible"], schemaVersion: 41, version: 2,
   description: "Library delivery, seeding coverage, reuse and network activity.",
   editable: false, time: { from: "now-24h", to: "now" }, refresh: "1m", panels,
   links: [{ type: "link", title: "Podible Activity", url: "https://podible.cyplex.dev/ops", targetBlank: true }],

@@ -172,10 +172,25 @@ test("typed book RPC creates ordered manual editions through the private client 
       expect(data.repo.bookTorrents.get(entry.release.info_hash)).toMatchObject({
         book_id: data.book.id, release_id: entry.release.id, client_id: bookTorrentClient.id,
       });
-      expect(JSON.parse(data.repo.getJob(entry.jobId)!.payload_json!)).toMatchObject({
+      expect(entry.jobId).not.toBeNull();
+      expect(JSON.parse(data.repo.getJob(entry.jobId!)!.payload_json!)).toMatchObject({
         manifestationId: result.manifestationId, sequenceInManifestation: index,
       });
     }
+    expect(bookTorrentClient.adds).toHaveLength(2);
+    const first = result.results[0]!;
+    data.repo.attachJobExecution(first.jobId!, "finished-download");
+    data.repo.bindJobJournalReader({
+      read: (ids) => new Map(ids.map((id) => [id, {
+        status: "succeeded" as const, error: null, attempt_count: 1,
+        next_run_at: null, updated_at: new Date().toISOString(),
+      }])),
+    });
+    const duplicate = await client.library.createManifestationFromSearch({
+      bookId: data.book.id, mediaType: "audio", searchId: search.searchId, indexes: [indexes[0]!],
+      manifestation: { label: null, editionNote: null },
+    });
+    expect(duplicate.results[0]).toMatchObject({ jobId: null, idempotent: true, release: { id: first.release.id } });
     expect(bookTorrentClient.adds).toHaveLength(2);
     expect(torznab.searches).toHaveLength(1);
   } finally {
@@ -408,6 +423,11 @@ test("a sleeping acquisition exposes its next attempt instead of looking stuck o
     expect(activity.jobs[0]?.message).toContain(
       "No need to start another acquisition",
     );
+    for (let i = 0; i < 13; i++) data.repo.createJob({ type: "import", bookId: data.book.id });
+    const busyActivity = await client.book.activity({ bookId: data.book.id });
+    expect(busyActivity.jobs).toHaveLength(12);
+    expect(busyActivity.jobs.some((entry) => entry.state === "scheduled")).toBe(false);
+    expect(busyActivity.activeAcquisition).toBe(true);
   } finally {
     await data.close();
   }
