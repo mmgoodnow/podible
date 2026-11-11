@@ -54,3 +54,10 @@ export const recoveryResultSchema = z.object({
 }).strict();
 export type RecoveryResult = z.infer<typeof recoveryResultSchema>;
 export const recoveryRecoverSchema = z.object({ operationId: z.string().uuid(), results: z.array(recoveryResultSchema).max(RECOVERY_BATCH_LIMIT) }).strict();
+export const recoveryOperationParamsSchema = z.object({ operationId: z.string().uuid().optional() }).strict();
+export const recoveryOperationSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("not-found"), operationId: z.string().uuid().nullable() }).strict(),
+  z.object({ status: z.literal("legacy"), operationId: z.string().uuid() }).strict(),
+  z.object({ status: z.literal("recorded"), command: recoveryRecoverParamsSchema,
+    receipts: z.array(recoveryResultSchema).max(RECOVERY_BATCH_LIMIT) }).strict(),
+]);

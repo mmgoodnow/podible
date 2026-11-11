@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { runMigrations } from "../../src/db";
 import { RecoveryService } from "../../src/media/recovery";
+import { recoveryDigest } from "../../src/media/recovery-filesystem";
 import { RECOVERY_OPERATION_LIMIT, recoveryPreviewSchema, type RecoveryKey } from "../../src/media/recovery-types";
 import { BooksRepo } from "../../src/repo";
 import { prepareMovieStorage } from "../../src/movies/storage";
@@ -18,6 +19,8 @@ import { TvRepo } from "../../src/tv/repo";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
 import { recoveryRouter } from "../../src/rpc/recovery-router";
 import { executeMethod } from "../../src/rpc/framework";
+import { handleRpcMethod } from "../../src/rpc";
+import { appRouter } from "../../src/trpc";
 import type { RpcContext } from "../../src/rpc/shared";
 
 const movie = { tmdbId: 7, title: "Owned movie", originalTitle: "Owned movie", year: 2024, overview: "Fixture",
@@ -213,6 +216,67 @@ test("supported unselected movie/TV recovery atomically queues existing acquisit
   expect(codes(f.service.recover(conflict).results[0]!)).toContain("operation-conflict");
 });
 
+test("a mixed confirmed-loss batch can be read back and resumed after a partial commit and reconnect", async () => {
+  await using f = await fixture();
+  const lostMovie = await f.addVersion("movies"), lostTv = await f.addVersion("tv");
+  await f.modern();
+  await fs.unlink(lostMovie.canonical); await fs.unlink(lostTv.canonical);
+  const { resources } = f.service.preview({ targets: f.keys });
+  expect(resources.map(({ canonical, action }) => [canonical.state, action]))
+    .toEqual([["missing", "queue-acquisition"], ["missing", "queue-acquisition"]]);
+  const command = { operationId: randomUUID(), targets: resources.map(({ key, revision }) =>
+    ({ key, expectedRevision: revision, action: "queue-acquisition" as const })) };
+  f.db.exec(`CREATE TRIGGER fail_second_recovery BEFORE INSERT ON job_commands
+    WHEN EXISTS (SELECT 1 FROM jobs WHERE id=NEW.job_id AND type='tv_reconcile')
+    BEGIN SELECT RAISE(ABORT,'second target outbox failure'); END`);
+  expect(() => f.service.recover(command)).toThrow("second target outbox failure");
+  expect(f.db.query("SELECT file_id FROM media_content_losses").all()).toEqual([{ file_id: lostMovie.file.id }]);
+  expect(f.repo.listJobCommands()).toHaveLength(2);
+  expect(f.repo.tv.activeEpisodes(f.requestedTv.targetId)).toHaveLength(2);
+  f.db.exec("DROP TRIGGER fail_second_recovery");
+
+  using reopened = new Database(path.join(f.root, "app.sqlite"));
+  const repo = new BooksRepo(reopened), service = new RecoveryService(repo);
+  const readInventory = repo.readRecoveryInventory.bind(repo);
+  const read = spyOn(repo, "readRecoveryInventory").mockImplementation(input => {
+    if (input.namespace === "movie-target") throw new Error("a committed target must not be inspected again");
+    return readInventory(input);
+  });
+  try {
+    const before = reopened.query("SELECT total_changes() AS n").get();
+    const recorded = service.operation({});
+    expect(recorded).toMatchObject({ status: "recorded", command, receipts: [{ key: f.keys[0], status: "queued" }] });
+    if (recorded.status !== "recorded") throw new Error("Expected the stored command");
+    expect(service.operation({ operationId: recorded.command.operationId })).toEqual(recorded);
+    expect(read).not.toHaveBeenCalled();
+    expect(reopened.query("SELECT total_changes() AS n").get()).toEqual(before);
+
+    const resumed = service.recover(recorded.command);
+    expect(resumed.results.map(result => result.status)).toEqual(["queued", "queued"]);
+    expect(resumed.results[0]).toEqual(recorded.receipts[0]);
+    expect(repo.listJobCommands()).toHaveLength(4);
+    expect(reopened.query("SELECT file_id FROM media_content_losses ORDER BY namespace").all())
+      .toEqual([{ file_id: lostMovie.file.id }, { file_id: lostTv.file.id }]);
+    expect(service.operation({})).toEqual({ status: "recorded", command, receipts: resumed.results });
+    expect(service.recover(recorded.command)).toEqual(resumed);
+    expect(repo.listJobCommands()).toHaveLength(4);
+  } finally { read.mockRestore(); }
+});
+
+test("legacy digest-only bindings are hydrated only by the original exact command", async () => {
+  await using f = await fixture();
+  expect(f.service.operation({})).toEqual({ status: "not-found", operationId: null });
+  const command = f.command(f.keys[0]!, "queue-acquisition"), key = `recovery-operation:${command.operationId}`;
+  const result = f.service.recover(command);
+  f.repo.setJsonState(key, { descriptor: recoveryDigest(command.targets) });
+  expect(f.service.operation({})).toEqual({ status: "legacy", operationId: command.operationId });
+  const wrong = { ...command, targets: [{ ...command.targets[0]!, expectedRevision: "f".repeat(64) }] };
+  expect(codes(f.service.recover(wrong).results[0]!)).toContain("operation-conflict");
+  expect(f.service.operation({})).toEqual({ status: "legacy", operationId: command.operationId });
+  expect(f.service.recover(command)).toEqual(result);
+  expect(f.service.operation({})).toEqual({ status: "recorded", command, receipts: result.results });
+});
+
 test("outbox failure rolls back acquisition, job, and success receipt; exact operation retry remains usable", async () => {
   await using f = await fixture();
   await f.modern();
@@ -255,6 +319,10 @@ test("a missing file restored before command is not invalidated or reacquired", 
   const command = f.command(key, "queue-acquisition");
   await fs.writeFile(version.canonical, bytes);
   expect(codes(f.service.recover(command).results[0]!)).toContain("stale-revision");
+  const recorded = f.service.operation({ operationId: command.operationId });
+  expect(recorded).toEqual({ status: "recorded", command, receipts: [] });
+  if (recorded.status !== "recorded") throw new Error("Expected the stored command");
+  expect(codes(f.service.recover(recorded.command).results[0]!)).toContain("stale-revision");
   expect(f.repo.movies.target(f.requestedMovie.targetId)!.active_version_id).toBe(version.versionId);
   expect(f.db.query("SELECT * FROM media_content_losses").all()).toEqual([]);
 });
@@ -439,12 +507,20 @@ test("standalone router is admin-only, bounded, strict, and preview stays read-o
     await expect(executeMethod<any, any>(method, ctx, {})).rejects.toMatchObject({ code: -32001 });
   ctx.session = { is_admin: 0, user_id: f.user.id } as RpcContext["session"];
   await expect(executeMethod(recoveryRouter.routes.preview, ctx, { targets: f.keys })).rejects.toMatchObject({ code: -32003 });
+  await expect(appRouter.createCaller(ctx).recovery.operation({})).rejects.toMatchObject({ code: "FORBIDDEN" });
   ctx.session = { is_admin: 1, user_id: f.user.id } as RpcContext["session"];
   expect(recoveryRouter.routes.inventory.readOnly).toBe(true); expect(recoveryRouter.routes.preview.readOnly).toBe(true);
   expect(recoveryRouter.routes.recover.readOnly).toBe(false);
+  expect(recoveryRouter.routes.operation.readOnly).toBe(true);
+  for (const input of [{ operationId: "bad" }, { force: true }])
+    await expect(executeMethod(recoveryRouter.routes.operation, ctx, input)).rejects.toMatchObject({ code: -32602 });
   for (const params of [{ namespace: "movie-target", limit: 21 }, { namespace: "movie-request" }, { namespace: "tv-target", path: "/tmp" }])
     await expect(executeMethod(recoveryRouter.routes.inventory, ctx, params)).rejects.toMatchObject({ code: -32602 });
   const before = f.db.query("SELECT total_changes() AS n").get();
   expect((await executeMethod(recoveryRouter.routes.preview, ctx, { targets: f.keys })).resources).toHaveLength(2);
+  const operationId = randomUUID(), empty = { status: "not-found", operationId } as const;
+  expect(await appRouter.createCaller(ctx).recovery.operation({ operationId })).toEqual(empty);
+  expect(await (await handleRpcMethod("recovery.operation", { operationId }, ctx, { readOnly: true })).json())
+    .toMatchObject({ result: empty });
   expect(f.db.query("SELECT total_changes() AS n").get()).toEqual(before);
 });

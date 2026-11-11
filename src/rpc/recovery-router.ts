@@ -1,7 +1,7 @@
 import { RecoveryService } from "../media/recovery";
 import {
   recoveryInventoryParamsSchema, recoveryInventorySchema, recoveryPreviewParamsSchema, recoveryPreviewSchema,
-  recoveryRecoverParamsSchema, recoveryRecoverSchema,
+  recoveryOperationParamsSchema, recoveryOperationSchema, recoveryRecoverParamsSchema, recoveryRecoverSchema,
 } from "../media/recovery-types";
 import { defineMethod, defineRouter } from "./framework";
 
@@ -18,6 +18,12 @@ export const recoveryRouter = defineRouter({
     summary: "Preview at most 20 namespaced recovery targets; missing mounts block recovery.",
     paramsSchema: recoveryPreviewParamsSchema, resultSchema: recoveryPreviewSchema,
     handler: (ctx, params) => new RecoveryService(ctx.repo).preview(params),
+  }),
+  operation: defineMethod({
+    auth: "admin", readOnly: true,
+    summary: "Read the exact submitted recovery batch and committed receipts by ID, or the latest submitted batch.",
+    paramsSchema: recoveryOperationParamsSchema, resultSchema: recoveryOperationSchema,
+    handler: (ctx, params) => new RecoveryService(ctx.repo).operation(params),
   }),
   recover: defineMethod({
     auth: "admin",

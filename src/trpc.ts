@@ -116,6 +116,7 @@ export const appRouter = t.router({
   recovery: t.router({
     inventory: procedure.input(recoveryRouter.routes.inventory.paramsSchema).output(recoveryRouter.routes.inventory.resultSchema).query(({ ctx, input }) => executeMethod(recoveryRouter.routes.inventory, ctx, input)),
     preview: procedure.input(recoveryRouter.routes.preview.paramsSchema).output(recoveryRouter.routes.preview.resultSchema).query(({ ctx, input }) => executeMethod(recoveryRouter.routes.preview, ctx, input)),
+    operation: procedure.input(recoveryRouter.routes.operation.paramsSchema).output(recoveryRouter.routes.operation.resultSchema).query(({ ctx, input }) => executeMethod(recoveryRouter.routes.operation, ctx, input)),
     recover: procedure.input(recoveryRouter.routes.recover.paramsSchema).output(recoveryRouter.routes.recover.resultSchema).mutation(({ ctx, input }) => executeMethod(recoveryRouter.routes.recover, ctx, input)),
   }),
   issues: t.router({

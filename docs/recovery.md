@@ -40,7 +40,7 @@ const result = service.recover({
 ```
 
 All service calls are synchronous. The router exposes `inventory`, `preview`,
-and `recover`, all administrator-only. The first two are marked read-only.
+`operation`, and `recover`, all administrator-only. Only `recover` is a mutation.
 All request objects are strict. IDs are canonical positive safe-integer strings;
 duplicate keys and batches over 20 are rejected. `movie-target:1` and
 `tv-target:1` are unrelated resources. Request references use `movie-request`
@@ -149,8 +149,9 @@ filesystem effects. Each target has its own transaction, not one library-wide
 writer transaction. Filesystem fsync latency still depends on storage; the local
 focused test enforces a 250 ms writer ceiling, not a production latency guarantee.
 
-An operation UUID is durably bound to its exact ordered batch, expected revisions,
-and actions. Reusing it with different input is `operation-conflict`. Successful
+An operation UUID and its exact ordered batch, expected revisions, and actions
+are saved before any target is applied. Reusing it with different input is
+`operation-conflict`. Successful
 per-target results are stored in `app_state` in the action's transaction; reopen
 and lost-response replay return those receipts without repeating effects.
 Blocked results are not cached as success. Storage errors remain errors; an
@@ -160,6 +161,18 @@ Filesystem effects cannot be rolled back with SQLite: if a crash/error occurs
 after additive links but before receipt commit, fresh preview may be required.
 No success is fabricated, no bytes are removed, and a fresh command can converge
 the additive view state.
+
+After a disconnect, call `recovery.operation({ operationId })` to recover the
+submitted command and its committed receipts. Omit `operationId` to read the
+latest submitted batch, not necessarily your own or the latest completed batch.
+Verify the returned target list before explicitly passing the returned `command`
+unchanged to `recovery.recover`. Already committed targets replay their receipts
+without reinspection; all remaining targets still go through the current fences.
+A missing receipt means no result was committed, not that the target was never
+attempted. If evidence changed, preview again and submit a new UUID for the
+remaining work. Preexisting digest-only records return `legacy`: their command
+cannot be reconstructed, but resubmitting the original exact command fills it
+in without rerunning committed targets. An unknown UUID returns `not-found`.
 
 Receipt storage has a hard limit of 256 operation bindings, each with at most 20
 results. When full, new UUIDs return `operation-budget`; existing operations stay
@@ -173,8 +186,9 @@ bun test test/unit/recovery.test.ts test/integration/recovery.test.ts
 bun run typecheck
 ```
 
-Tests use real SQLite and temporary owned files/markers/views, including reopened
-receipts, modern transactional outbox rollback/retry, movie/TV ID collisions,
+Tests use real SQLite and temporary owned files/markers/views, including a mixed
+confirmed-loss batch resumed after a partial outbox failure and DB reconnect,
+reopened receipts, modern transactional outbox rollback/retry, movie/TV ID collisions,
 intentional eviction, withdrawal, missing/replaced mounts, actual canonical loss,
 foreign/symlinked paths, surviving-content reuse, strict admin APIs, large
 unrelated episode inventory, query/writer budgets, and exclusion of another WAL

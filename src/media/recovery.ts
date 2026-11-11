@@ -11,11 +11,12 @@ import {
   type RecoveryMount, type RecoveryView,
 } from "./recovery-filesystem";
 import {
-  RECOVERY_FILE_LIMIT, RECOVERY_OPERATION_LIMIT, recoveryInventoryParamsSchema, recoveryPreviewParamsSchema,
+  RECOVERY_FILE_LIMIT, RECOVERY_OPERATION_LIMIT, recoveryInventoryParamsSchema, recoveryOperationParamsSchema,
+  recoveryOperationSchema, recoveryPreviewParamsSchema,
   recoveryRecoverParamsSchema, recoveryResultSchema,
   type RecoveryKey, type RecoveryResource, type RecoveryResult,
 } from "./recovery-types";
-import type { z } from "zod";
+import { z } from "zod";
 
 type File = { id: string; relativePath: string; sizeBytes: number };
 type Snapshot = {
@@ -24,6 +25,11 @@ type Snapshot = {
 };
 const keyString = (key: RecoveryKey) => `${key.namespace}:${key.id}`;
 const reason = (code: string, message: string) => ({ code, message });
+const bindingKey = (operationId: string) => `recovery-operation:${operationId}`;
+const operationIndexKey = "recovery-operation-index";
+const bindingSchema = z.object({ descriptor: z.string().regex(/^[a-f0-9]{64}$/),
+  targets: recoveryRecoverParamsSchema.shape.targets.optional() }).strict();
+const operationIndexSchema = z.array(recoveryRecoverParamsSchema.shape.operationId).max(RECOVERY_OPERATION_LIMIT);
 
 /** Use the domain's actual declarative renderer, scoped to exactly one target. */
 function scoped<T extends object>(repo: T, overrides: Partial<T>): T {
@@ -49,22 +55,63 @@ export class RecoveryService {
     return { resources: params.targets.map((key) => this.inspect(key).resource) };
   }
 
+  /** Read back the submitted command, not a new preview or an authorization to skip its fences. */
+  operation(input: z.input<typeof recoveryOperationParamsSchema>): z.output<typeof recoveryOperationSchema> {
+    const { operationId: requested } = recoveryOperationParamsSchema.parse(input);
+    const operationId = requested ?? this.operationIndex().at(-1) ?? null;
+    const binding = operationId === null ? null : this.readBinding(bindingKey(operationId));
+    if (operationId === null || !binding) return { status: "not-found", operationId };
+    if (!binding.targets) return { status: "legacy", operationId };
+    const command = { operationId, targets: binding.targets };
+    const receipts = command.targets.flatMap(target => this.readReceipt(bindingKey(operationId), target) ?? []);
+    return { status: "recorded", command, receipts };
+  }
+
+  private operationIndex() {
+    return operationIndexSchema.parse(this.repo.getJsonState(operationIndexKey) ?? []);
+  }
+
+  private readBinding(key: string) {
+    const raw = this.repo.getJsonState(key);
+    if (raw === null) return null;
+    const binding = bindingSchema.parse(raw);
+    if (binding.targets && recoveryDigest(binding.targets) !== binding.descriptor)
+      throw new Error("Recovery command does not match its stored binding");
+    return binding;
+  }
+
+  private readReceipt(operationKey: string, target: z.output<typeof recoveryRecoverParamsSchema>["targets"][number]) {
+    const raw = this.repo.getJsonState(`${operationKey}:${keyString(target.key)}`);
+    if (raw === null) return null;
+    const receipt = recoveryResultSchema.parse(raw);
+    if (receipt.status === "blocked" || keyString(receipt.key) !== keyString(target.key) || receipt.revision !== target.expectedRevision)
+      throw new Error("Recovery receipt does not match its stored command");
+    return receipt;
+  }
+
   recover(input: z.input<typeof recoveryRecoverParamsSchema>) {
     const params = recoveryRecoverParamsSchema.parse(input);
-    const operationKey = `recovery-operation:${params.operationId}`;
-    const descriptor = recoveryDigest(params.targets);
+    const operationKey = bindingKey(params.operationId);
+    const binding = { descriptor: recoveryDigest(params.targets), targets: params.targets };
     const accepted = this.repo.transaction(() => {
-      const prior = this.repo.getJsonState<{ descriptor: string }>(operationKey);
-      if (prior) return prior.descriptor === descriptor;
-      const index = this.repo.getJsonState<string[]>("recovery-operation-index") ?? [];
-      if (!Array.isArray(index) || index.some((id) => typeof id !== "string")) throw new Error("Invalid recovery receipt inventory");
+      const prior = this.readBinding(operationKey);
+      if (prior) {
+        if (prior.descriptor !== binding.descriptor) return false;
+        if (!prior.targets) this.repo.setJsonState(operationKey, binding);
+        return true;
+      }
+      const index = this.operationIndex();
       if (index.length >= RECOVERY_OPERATION_LIMIT) return "limit" as const;
-      this.repo.setJsonState("recovery-operation-index", [...index, params.operationId]);
-      this.repo.setJsonState(operationKey, { descriptor });
+      this.repo.setJsonState(operationIndexKey, [...index, params.operationId]);
+      this.repo.setJsonState(operationKey, binding);
       return true;
     });
     const results = params.targets.map((command): RecoveryResult => {
       const receiptKey = `${operationKey}:${keyString(command.key)}`;
+      if (accepted === true) {
+        const saved = this.readReceipt(operationKey, command);
+        if (saved) return saved;
+      }
       const current = this.inspect(command.key);
       const blocked = (code: string, message: string): RecoveryResult => ({
         key: command.key, status: "blocked", revision: current.resource.revision, jobIds: [], reasons: [reason(code, message)],
@@ -73,8 +120,8 @@ export class RecoveryService {
         ? blocked("operation-budget", "Durable recovery operation budget is full. Existing operations remain retryable; receipts are never silently forgotten.")
         : blocked("operation-conflict", "Operation ID is already bound to a different exact batch. Preview and use a new ID.");
       return this.repo.transaction(() => {
-        const saved = this.repo.getJsonState<RecoveryResult>(receiptKey);
-        if (saved) return recoveryResultSchema.parse(saved);
+        const saved = this.readReceipt(operationKey, command);
+        if (saved) return saved;
         const fresh = current;
         if (fresh.resource.revision !== command.expectedRevision)
           return { ...blocked("stale-revision", "Recovery evidence or intent changed. Preview again; no action was taken."),
@@ -89,7 +136,7 @@ export class RecoveryService {
           return blocked("action-mismatch", "Command does not match the current preview action; no fallback/download was attempted.");
         // Take the application writer before filesystem effects (also in WAL mode).
         // A deferred read transaction alone would allow a concurrent intent commit.
-        this.repo.setJsonState(operationKey, { descriptor });
+        this.repo.setJsonState(operationKey, binding);
         // Full inventory/rendering is outside the writer. This fence is target-scoped,
         // <=20 exact canonical/view paths, and does not hash media or call the network.
         if (this.quickFence(fresh) !== fresh.fence)
