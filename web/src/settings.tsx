@@ -64,21 +64,24 @@ function PlexAccess({ form, saving }: { form: SettingsForm; saving: boolean }) {
         </dl>
         {plex.data.error && <p role="alert">{plex.data.error}</p>}
         {plex.data.source === "stale-cache" && <p className="settings-note">Showing the last known server list. Podible verifies the server again before applying a selection.</p>}
-        <div className="settings-plex-picker">
-          <div className="settings-field">
+        <div className="settings-field">
+          <div className="settings-field-copy">
             <label htmlFor="admin-plex-server">Plex access server</label>
-            <select id="admin-plex-server" value={candidate} disabled={selecting || saving || !plex.data.servers.length}
+            <small id="admin-plex-server-help">Choose which server's shared users can sign in.</small>
+          </div>
+          <div className="settings-field-control settings-plex-picker">
+            <select id="admin-plex-server" aria-describedby="admin-plex-server-help" value={candidate} disabled={selecting || saving || !plex.data.servers.length}
               onChange={event => { setPendingMachine(event.target.value); select.reset(); }}>
               {!listed && <option value={candidate}>{candidate || "Select a server"}</option>}
               {plex.data.servers.map(server => <option key={server.machineId} value={server.machineId}>
                 {server.name}{server.owned ? " (owned)" : server.sourceTitle ? ` (shared by ${server.sourceTitle})` : " (shared)"}
               </option>)}
             </select>
+            <button type="button" disabled={!listed || candidate === selected || manualDraft || selecting || saving}
+              onClick={() => {
+                if (!cache.isMutating({ mutationKey: selectKey }) && !cache.isMutating({ mutationKey: saveKey })) select.mutate({ machineId: candidate });
+              }}>{selecting ? "Selecting..." : "Use selected Plex server"}</button>
           </div>
-          <button type="button" disabled={!listed || candidate === selected || manualDraft || selecting || saving}
-            onClick={() => {
-              if (!cache.isMutating({ mutationKey: selectKey }) && !cache.isMutating({ mutationKey: saveKey })) select.mutate({ machineId: candidate });
-            }}>{selecting ? "Selecting..." : "Use selected Plex server"}</button>
         </div>
         {!plex.data.servers.length && <p className="settings-note">No accessible servers reported. The existing selection is preserved.</p>}
         {manualDraft && <p className="settings-note">Save or discard the manual machine ID edit before using the verified picker.</p>}
@@ -175,21 +178,15 @@ export default function Settings({ navigation }: { navigation: ReactNode }) {
 
   return <div className="settings-page">
     <div className="settings-intro">
-      <div>
-        <p className="eyebrow">LIBRARY ADMINISTRATION</p>
-        <h1>Settings</h1>
-        <p>Manage how Podible connects, finds releases and publishes your library.</p>
-      </div>
+      <h1>Settings</h1>
       {navigation}
     </div>
     <div className="settings-layout">
       <nav className="settings-index" aria-label="Settings sections">
-        <p className="settings-kicker" aria-hidden="true">Configuration</p>
-        {sectionKeys.map((key, index) => {
+        {sectionKeys.map(key => {
           const edited = Object.keys(draft).some(path => sectionFor(path) === key);
           return <button key={key} type="button" aria-current={section === key ? "true" : undefined} aria-controls="settings-panel"
             aria-description={edited ? "Unsaved changes" : undefined} onClick={() => openSection(key)}>
-            <span className="settings-index-number" aria-hidden="true">0{index + 1}</span>
             <span>{sections[key].title}</span>
             {edited && <span className="settings-index-dot" aria-hidden="true" />}
           </button>;
@@ -198,7 +195,6 @@ export default function Settings({ navigation }: { navigation: ReactNode }) {
       <div className="settings-main">
         <section className="settings-panel" id="settings-panel" aria-labelledby="settings-section-title">
           <div className="settings-panel-heading">
-            <p className="settings-kicker">Section {sectionKeys.indexOf(section) + 1} of {sectionKeys.length}</p>
             <h2 id="settings-section-title">{sections[section].title}</h2>
             <p>{sections[section].description}</p>
           </div>

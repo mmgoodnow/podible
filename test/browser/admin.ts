@@ -91,6 +91,13 @@ async function verify() {
   await mkdir(artifacts, { recursive: true });
   await title.waitFor();
   assert.equal(await title.inputValue(), "Fixture library");
+  const titleHelp = page.getByText("Name shown for your library in feed readers.", { exact: true });
+  assert.equal(await title.getAttribute("aria-describedby"), await titleHelp.getAttribute("id"));
+  assert.ok((await title.boundingBox())!.x > (await titleHelp.boundingBox())!.x, "Desktop controls should sit beside their descriptions");
+  for (const selector of ["body", ".settings-intro", ".settings-panel-heading"]) {
+    assert.equal(await page.locator(selector).evaluate(element => element.ownerDocument.defaultView!.getComputedStyle(element).backgroundImage), "none");
+  }
+  await page.screenshot({ path: path.join(artifacts, "admin-settings-desktop.png"), animations: "disabled" });
   assert.equal(await openAi.count(), 0);
   await openSettings("AI");
   assert.equal(await openAi.getAttribute("type"), "password");
@@ -98,7 +105,6 @@ async function verify() {
   assert.equal(await openAi.inputValue(), "", "An existing credential was put into an input");
   assert.equal(await page.getByLabel("Settings JSON", { exact: true }).count(), 0);
   assert.equal(await saveSettings.isDisabled(), true);
-  await page.screenshot({ path: path.join(artifacts, "admin-settings-desktop.png"), animations: "disabled" });
   await openSettings("Storage");
   const migration = page.getByRole("region", { name: "Existing library preview" });
   await migration.getByRole("button", { name: "Preview library", exact: true }).click();
@@ -268,12 +274,19 @@ async function verify() {
   await openSettings("Books & feed");
   await title.waitFor();
   assert.equal(await page.getByLabel("Edition preference", { exact: true }).inputValue(), editionPreference);
+  const mobileTitleHelp = (await titleHelp.boundingBox())!;
+  assert.ok((await title.boundingBox())!.y >= mobileTitleHelp.y + mobileTitleHelp.height, "Mobile controls should stack below their descriptions");
   await page.evaluate("scrollTo(0, 0)");
   await page.screenshot({ path: path.join(artifacts, "admin-settings-mobile.png"), animations: "disabled" });
   for (const section of ["Books & feed", "AI", "Indexers", "Downloads", "Movies", "TV", "Storage", "Notifications", "Plex access"]) {
     await openSettings(section);
     await page.getByRole("heading", { name: section, exact: true }).waitFor();
     assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false, `${section} settings overflow mobile viewport`);
+    assert.deepEqual(await page.locator(".settings-field :is(input, textarea, select)").evaluateAll(controls =>
+      controls.filter(control => {
+        const id = control.getAttribute("aria-describedby")?.split(" ")[0];
+        return !id || !control.ownerDocument.getElementById(id)?.textContent?.trim();
+      }).map(control => control.id)), [], `${section} settings must describe each control`);
   }
   await plexPicker.waitFor();
   assert.equal(await plexPicker.inputValue(), "fixture-cyprus");

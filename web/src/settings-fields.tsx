@@ -39,28 +39,32 @@ function fieldId(field: Pick<Field<unknown>, "path">) {
   return `settings-${field.path.replaceAll(".", "-")}`;
 }
 
-function Frame({ field, label, help, children }: {
-  field: Pick<Field<unknown>, "path" | "issue">; label: string; help?: string;
+function Frame({ field, label, help, kind, children }: {
+  field: Pick<Field<unknown>, "path" | "issue">; label: string; help: string; kind?: "check";
   children(props: { id: string; "aria-describedby"?: string; "aria-invalid"?: true }): ReactNode;
 }) {
   const id = fieldId(field);
-  return <div className="settings-field">
-    <label htmlFor={id}>{label}</label>
-    {children({ id, "aria-describedby": [help && `${id}-help`, field.issue && `${id}-error`].filter(Boolean).join(" ") || undefined,
-      "aria-invalid": field.issue ? true : undefined })}
-    {help && <small id={`${id}-help`}>{help}</small>}
-    {field.issue && <small id={`${id}-error`} className="settings-field-error">{field.issue}</small>}
+  return <div className="settings-field" data-kind={kind}>
+    <div className="settings-field-copy">
+      <label htmlFor={id}>{label}</label>
+      <small id={`${id}-help`}>{help}</small>
+    </div>
+    <div className="settings-field-control">
+      {children({ id, "aria-describedby": field.issue ? `${id}-help ${id}-error` : `${id}-help`,
+        "aria-invalid": field.issue ? true : undefined })}
+      {field.issue && <small id={`${id}-error`} className="settings-field-error">{field.issue}</small>}
+    </div>
   </div>;
 }
 
 export function TextField({ field, label, help, placeholder, nullable }: {
-  field: Field<string | null | undefined>; label: string; help?: string; placeholder?: string; nullable?: boolean;
+  field: Field<string | null | undefined>; label: string; help: string; placeholder?: string; nullable?: boolean;
 }) {
   return <Frame {...{ field, label, help }}>{props => <input {...props} type="text" spellCheck={false} autoComplete="off"
     placeholder={placeholder} value={field.value ?? ""} onChange={event => field.set(event.target.value || (nullable ? null : ""), label)} />}</Frame>;
 }
 
-function SecretField({ field, label, help }: { field: Field<string | undefined>; label: string; help?: string }) {
+function SecretField({ field, label, help }: { field: Field<string | undefined>; label: string; help: string }) {
   const [replacement, setReplacement] = useState<{ before: string | undefined; text: string }>();
   const active = replacement && replacement.text === field.value && field.value !== field.persisted ? replacement : undefined;
   return <Frame {...{ field, label, help }}>{props => <>
@@ -87,18 +91,18 @@ function hasUrlCredentials(value: string) {
   } catch { return false; }
 }
 
-function EndpointField({ field, label, placeholder, storedUrls }: {
-  field: Field<string>; label: string; placeholder?: string; storedUrls?: ReadonlySet<string>;
+function EndpointField({ field, label, help, placeholder, storedUrls }: {
+  field: Field<string>; label: string; help: string; placeholder?: string; storedUrls?: ReadonlySet<string>;
 }) {
   return (hasUrlCredentials(field.persisted) || storedUrls?.has(field.value))
-    ? <SecretField field={field} label={label} help="The saved URL contains credentials and is hidden." />
-    : <TextField {...{ field, label, placeholder }} />;
+    ? <SecretField field={field} label={label} help={`${help} The saved URL is masked because it contains credentials.`} />
+    : <TextField {...{ field, label, help, placeholder }} />;
 }
 
 const GiB = 1024 ** 3;
 
 function NumberField({ field, label, help, nullable, scale = 1, min }: {
-  field: Field<number | null>; label: string; help?: string; nullable?: boolean; scale?: number; min?: number;
+  field: Field<number | null>; label: string; help: string; nullable?: boolean; scale?: number; min?: number;
 }) {
   const [typing, setTyping] = useState<{ value: number | null; input: string }>();
   const input = field.input ?? (typing && Object.is(typing.value, field.value) ? typing.input : undefined);
@@ -114,19 +118,15 @@ function NumberField({ field, label, help, nullable, scale = 1, min }: {
     }} />}</Frame>;
 }
 
-function CheckField({ field, label, help }: { field: Field<boolean>; label: string; help?: string }) {
-  const id = fieldId(field);
-  return <label className="settings-check">
-    <input type="checkbox" checked={field.value} aria-describedby={help ? `${id}-help` : undefined}
-      onChange={event => field.set(event.target.checked, label)} />
-    <span>{label}{help && <small id={`${id}-help`}>{help}</small>}</span>
-  </label>;
+function CheckField({ field, label, help }: { field: Field<boolean>; label: string; help: string }) {
+  return <Frame {...{ field, label, help }} kind="check">{props => <input {...props} type="checkbox" checked={field.value}
+    onChange={event => field.set(event.target.checked, label)} />}</Frame>;
 }
 
-function SelectField<T extends string | number>({ field, label, options }: {
-  field: Field<T>; label: string; options: readonly (readonly [T, string])[];
+function SelectField<T extends string | number>({ field, label, help, options }: {
+  field: Field<T>; label: string; help: string; options: readonly (readonly [T, string])[];
 }) {
-  return <Frame {...{ field, label }}>{props => <select {...props} value={field.value}
+  return <Frame {...{ field, label, help }}>{props => <select {...props} value={field.value}
     onChange={event => {
       const option = options.find(([value]) => String(value) === event.target.value);
       if (option) field.set(option[0], label);
@@ -136,9 +136,9 @@ function SelectField<T extends string | number>({ field, label, options }: {
 }
 
 function ListField({ field, label, help, parse }: {
-  field: Field<string[]>; label: string; help?: string; parse?: undefined;
+  field: Field<string[]>; label: string; help: string; parse?: undefined;
 } | {
-  field: Field<number[]>; label: string; help?: string; parse: (line: string) => number;
+  field: Field<number[]>; label: string; help: string; parse: (line: string) => number;
 }) {
   const [typing, setTyping] = useState<{ value: (string | number)[]; input: string }>();
   const input = field.input ?? (typing && typing.value.length === field.value.length &&
@@ -210,8 +210,8 @@ export function BookSettings({ form }: { form: SettingsForm }) {
   return <>
     <SettingsGroup title="Reader feed">
       <Grid>
-        <TextField label="Feed title" field={feed.field("title")} />
-        <TextField label="Feed author" field={feed.field("author")} />
+        <TextField label="Feed title" field={feed.field("title")} help="Name shown for your library in feed readers." />
+        <TextField label="Feed author" field={feed.field("author")} help="Author or publisher credited on the feed." />
       </Grid>
     </SettingsGroup>
     <SettingsGroup title="Edition matching">
@@ -222,7 +222,7 @@ export function BookSettings({ form }: { form: SettingsForm }) {
 
 function EditionPreference({ field }: { field: Field<string> }) {
   const label = "Edition preference";
-  return <Frame field={field} label={label} help="Guidance for choosing among book editions.">
+  return <Frame field={field} label={label} help="Tell Podible which editions you prefer, such as full-cast audio or EPUB.">
     {props => <textarea {...props} rows={4} value={field.value} onChange={event => field.set(event.target.value, label)} />}
   </Frame>;
 }
@@ -231,7 +231,7 @@ export function AiSettings({ form }: { form: SettingsForm }) {
   const agents = fields(form).group("agents");
   return <SettingsGroup title="OpenAI">
     <Grid>
-      <SecretField label="OpenAI API key" field={agents.field("apiKey")} />
+      <SecretField label="OpenAI API key" field={agents.field("apiKey")} help="Authorizes OpenAI calls for release selection and other AI tasks." />
       <NumberField label="Agent timeout (ms)" field={agents.field("timeoutMs")} min={1000}
         help="Default for agent calls. Longer-running tasks can use their own limits." />
     </Grid>
@@ -251,9 +251,10 @@ export function IndexerSettings({ form, discovery, loading }: { form: SettingsFo
   const original = form.draft.torznab?.original as TorznabSource[] | undefined;
   const protectedUrls = new Set([...(original ?? []), ...form.saved.torznab].map(source => source.baseUrl).filter(hasUrlCredentials));
   return <>
-    <SettingsGroup title="Prowlarr" note="Connect the indexer manager used for media searches and feeds.">
-      <Grid><EndpointField label="Prowlarr URL" field={prowlarr.field("url")} placeholder="https://prowlarr.example" />
-        <SecretField label="Prowlarr API key" field={prowlarr.field("apiKey")} /></Grid>
+    <SettingsGroup title="Prowlarr">
+      <Grid><EndpointField label="Prowlarr URL" field={prowlarr.field("url")} placeholder="https://prowlarr.example"
+        help="Address Podible uses to discover and query your indexers. Include any URL base." />
+        <SecretField label="Prowlarr API key" field={prowlarr.field("apiKey")} help="Authorizes discovery, searches, and feed requests." /></Grid>
     </SettingsGroup>
     {form.saved.prowlarr.url && <SettingsGroup title="Discovered indexers">
       {loading ? <p role="status">Loading indexers...</p> : discovery?.state !== "available"
@@ -276,10 +277,13 @@ export function IndexerSettings({ form, discovery, loading }: { form: SettingsFo
         {(source, change, index) => <>
           {source.baseUrl === form.saved.torznab[index]?.baseUrl && discovery?.duplicates.find(row => row.index === index) &&
             <p className="settings-note settings-duplicate-source">Already managed by Prowlarr. You can remove this manual entry.</p>}
-          <TextField label="Source name" field={rowField(form, sources.path, index, "name", source.name, name => change({ ...source, name }))} />
+          <TextField label="Source name" help="Name shown for this indexer in Podible."
+            field={rowField(form, sources.path, index, "name", source.name, name => change({ ...source, name }))} />
           <EndpointField label="Torznab URL" storedUrls={protectedUrls}
+            help="Torznab endpoint supplied by the indexer."
             field={rowField(form, sources.path, index, "baseUrl", source.baseUrl, baseUrl => change({ ...source, baseUrl }))} />
-          <SecretField label="Torznab API key" field={rowField(form, sources.path, index, "apiKey", source.apiKey, apiKey => change({ ...source, apiKey }))} />
+          <SecretField label="Torznab API key" help="Key for this endpoint, if the indexer requires one."
+            field={rowField(form, sources.path, index, "apiKey", source.apiKey, apiKey => change({ ...source, apiKey }))} />
           <TextField label="Audiobook categories" field={rowField(form, sources.path, index, "categories.audio", source.categories?.audio,
             audio => change({ ...source, categories: { ...source.categories, audio } }))} help="Category IDs, separated by commas." />
           <TextField label="Ebook categories" field={rowField(form, sources.path, index, "categories.ebook", source.categories?.ebook,
@@ -296,7 +300,7 @@ export function DownloadSettings({ form }: { form: SettingsForm }) {
     <SettingsGroup title="Download recovery">
       <Grid>
         <NumberField label="Stalled torrent threshold (minutes)" field={root.group("recovery").field("stalledTorrentMinutes")} min={0}
-          help="Set to 0 to retry as soon as a stall is detected." />
+          help="How long a download can stall before recovery. Set to 0 to recover as soon as a stall is detected." />
       </Grid>
     </SettingsGroup>
   </>;
@@ -311,57 +315,60 @@ export function MovieSettings({ form }: { form: SettingsForm }) {
   return <>
     <SettingsGroup title="Movie library and Plex publishing">
       <Grid>
-        <EndpointField label="Plex URL" field={movies.field("plexUrl")} />
-        <SecretField label="Plex library token" field={movies.field("plexToken")} help="Used for library operations, separate from the Plex sign-in token." />
-        <TextField label="Movie Plex section ID" field={movies.field("plexSectionId")} />
-        <SecretField label="TMDB access token" field={movies.field("tmdbAccessToken")} />
+        <EndpointField label="Plex URL" field={movies.field("plexUrl")} help="Server address used to scan and verify movies and TV in Plex." />
+        <SecretField label="Plex library token" field={movies.field("plexToken")} help="Authorizes library operations, not Plex sign-in." />
+        <TextField label="Movie Plex section ID" field={movies.field("plexSectionId")} help="Numeric ID of the Plex library where movies are published." />
+        <SecretField label="TMDB access token" field={movies.field("tmdbAccessToken")} help="Authorizes movie and TV catalog lookups." />
       </Grid>
     </SettingsGroup>
     <SettingsGroup title="Seerr" note="The same Seerr connection supplies movie and TV requests.">
       <Grid>
-        <EndpointField label="Seerr URL" field={seerr.field("url")} />
-        <SecretField label="Seerr API key" field={seerr.field("apiKey")} />
-        <NumberField label="Seerr poll interval (minutes)" field={seerr.field("pollIntervalMinutes")} />
+        <EndpointField label="Seerr URL" field={seerr.field("url")} help="Address Podible uses to read requests from Seerr." />
+        <SecretField label="Seerr API key" field={seerr.field("apiKey")} help="Authorizes reading requests and metadata from Seerr." />
+        <NumberField label="Seerr poll interval (minutes)" field={seerr.field("pollIntervalMinutes")} help="How often Podible checks Seerr for movie requests." />
       </Grid>
     </SettingsGroup>
     <SettingsGroup title="Acquisition">
       <Grid>
-        <NumberField label="Download group ID" field={movies.field("downloadGroupId")} nullable help="Leave blank to use the default group." />
-        <NumberField label="Maximum movie release size (GiB)" field={movies.field("maximumReleaseBytes")} scale={GiB} min={1} nullable help="Leave blank for no size cap." />
-        <SelectField label="Cross-seed preference" field={movies.field("crossSeedPreference")} options={[["off", "Off"], ["tie-break", "Prefer reuse as a tie-breaker"]]} />
-        <CheckField label="Automatically upgrade movies" field={movies.field("automaticUpgrades")} />
+        <NumberField label="Download group ID" field={movies.field("downloadGroupId")} nullable help="Filesystem group for new movie download folders. Leave blank to keep the default." />
+        <NumberField label="Maximum movie release size (GiB)" field={movies.field("maximumReleaseBytes")} scale={GiB} min={1} nullable
+          help="Skip movie releases larger than this. Leave blank for no cap." />
+        <SelectField label="Cross-seed preference" field={movies.field("crossSeedPreference")} options={[["off", "Off"], ["tie-break", "Prefer reuse as a tie-breaker"]]}
+          help="Use cross-seed potential to break ties between otherwise comparable releases." />
+        <CheckField label="Automatically upgrade movies" field={movies.field("automaticUpgrades")}
+          help="Let better releases replace existing copies when they meet your quality rules." />
       </Grid>
     </SettingsGroup>
     <SettingsGroup title="Release quality" note="Set which releases are eligible and how Podible ranks upgrades. TV also uses this policy.">
       <Grid>
-        <TextField label="Required cut" field={quality.field("cut")} nullable help="Leave blank to allow any cut." />
+        <TextField label="Required cut" field={quality.field("cut")} nullable help="Require a cut such as theatrical. Leave blank to allow any cut." />
         <NumberField label="Minimum preference gain" field={quality.field("minimumPreferenceGain")} help="Minimum score improvement for a same-tier upgrade." />
-        <ListField label="Audio languages" field={quality.field("audioLanguages")} help="One language code per line, such as en. Leave blank to allow any language." />
-        <ListField label="Allowed codecs" field={quality.field("allowedCodecs")} help="One codec per line, such as h264, hevc or av1." />
-        <ListField label="Preferred codecs" field={quality.field("preferredCodecs")} help="One codec per line, most preferred first." />
-        <div className="settings-checks">
-          <CheckField label="Allow HDR" field={quality.field("allowHdr")} />
-          <CheckField label="Prefer proper and repack releases" field={quality.field("preferProper")} />
-        </div>
+        <ListField label="Audio languages" field={quality.field("audioLanguages")} help="Allowed audio languages, one code per line (such as en). Leave blank to allow any." />
+        <ListField label="Allowed codecs" field={quality.field("allowedCodecs")} help="Eligible video codecs, one per line (such as h264, hevc, or av1)." />
+        <ListField label="Preferred codecs" field={quality.field("preferredCodecs")} help="Rank eligible codecs, one per line, most preferred first." />
+        <CheckField label="Allow HDR" field={quality.field("allowHdr")} help="Include high dynamic range releases when choosing a copy." />
+        <CheckField label="Prefer proper and repack releases" field={quality.field("preferProper")} help="Favor corrected releases over otherwise comparable copies." />
       </Grid>
       <h4>Quality tiers</h4>
       <p className="settings-note">List allowed source and resolution pairs from lowest to highest quality.</p>
       <Rows field={tiers} label="Quality tiers" singular="Tier" empty="At least one quality tier is required." ordered
         create={() => ({ source: "web", resolution: 1080 })}>
         {(tier, change, index) => <>
-          <SelectField label="Source" field={rowField(form, tiers.path, index, "source", tier.source, source => change({ ...tier, source }))} options={tierSources} />
-          <SelectField label="Resolution" field={rowField(form, tiers.path, index, "resolution", tier.resolution, resolution => change({ ...tier, resolution }))} options={tierResolutions} />
+          <SelectField label="Source" help="Release type for this tier."
+            field={rowField(form, tiers.path, index, "source", tier.source, source => change({ ...tier, source }))} options={tierSources} />
+          <SelectField label="Resolution" help="Video resolution for this tier."
+            field={rowField(form, tiers.path, index, "resolution", tier.resolution, resolution => change({ ...tier, resolution }))} options={tierResolutions} />
         </>}
       </Rows>
     </SettingsGroup>
     <SettingsGroup title="Radarr observation" note="Read Radarr history for comparison and existing-library previews.">
       <Grid>
-        <EndpointField label="Radarr URL" field={shadow.field("radarrUrl")} />
-        <SecretField label="Radarr API key" field={shadow.field("radarrApiKey")} />
-        <NumberField label="Radarr poll interval (minutes)" field={shadow.field("pollIntervalMinutes")} />
-        <NumberField label="Radarr lookback (days)" field={shadow.field("lookbackDays")} />
-        <NumberField label="Maximum Radarr cases per sync" field={shadow.field("maxCasesPerSync")} />
-        <CheckField label="Enable Radarr observation" field={shadow.field("enabled")} />
+        <EndpointField label="Radarr URL" field={shadow.field("radarrUrl")} help="Address of the Radarr instance to observe." />
+        <SecretField label="Radarr API key" field={shadow.field("radarrApiKey")} help="Authorizes reading Radarr imports and library records." />
+        <NumberField label="Radarr poll interval (minutes)" field={shadow.field("pollIntervalMinutes")} help="How often Podible checks Radarr import history." />
+        <NumberField label="Radarr lookback (days)" field={shadow.field("lookbackDays")} help="How far back each check reads import history." />
+        <NumberField label="Maximum Radarr cases per sync" field={shadow.field("maxCasesPerSync")} help="Maximum new comparison cases to queue per check." />
+        <CheckField label="Enable Radarr observation" field={shadow.field("enabled")} help="Compare Radarr imports without changing anything in Radarr." />
       </Grid>
     </SettingsGroup>
   </>;
@@ -372,18 +379,19 @@ export function TvSettings({ form, openMovies }: { form: SettingsForm; openMovie
   return <>
     <SettingsGroup title="TV library and Plex publishing">
       <Grid>
-        <TextField label="TV Plex section ID" field={tv.field("plexSectionId")} />
-        <NumberField label="Maximum TV release size (GiB)" field={tv.field("maximumReleaseBytes")} scale={GiB} min={1} nullable help="Leave blank for no size cap." />
+        <TextField label="TV Plex section ID" field={tv.field("plexSectionId")} help="Numeric ID of the Plex library where TV is published." />
+        <NumberField label="Maximum TV release size (GiB)" field={tv.field("maximumReleaseBytes")} scale={GiB} min={1} nullable
+          help="Skip TV releases larger than this, including packs. Leave blank for no cap." />
       </Grid>
       <p className="settings-note">TV shares the Seerr connection and release quality policy in <button type="button" className="settings-text-button" onClick={openMovies}>Movies</button>.</p>
     </SettingsGroup>
     <SettingsGroup title="Sonarr">
       <Grid>
-        <EndpointField label="Sonarr URL" field={tv.field("sonarrUrl")} />
-        <SecretField label="Sonarr API key" field={tv.field("sonarrApiKey")} />
-        <NumberField label="Sonarr poll interval (minutes)" field={tv.field("pollIntervalMinutes")} />
-        <NumberField label="Sonarr lookback (days)" field={tv.field("lookbackDays")} />
-        <NumberField label="Maximum Sonarr cases per sync" field={tv.field("maxCasesPerSync")} />
+        <EndpointField label="Sonarr URL" field={tv.field("sonarrUrl")} help="Address used to read series, episodes, and import history." />
+        <SecretField label="Sonarr API key" field={tv.field("sonarrApiKey")} help="Authorizes reading data from Sonarr." />
+        <NumberField label="Sonarr poll interval (minutes)" field={tv.field("pollIntervalMinutes")} help="How often Podible checks TV requests and Sonarr imports." />
+        <NumberField label="Sonarr lookback (days)" field={tv.field("lookbackDays")} help="How far back each check reads import history." />
+        <NumberField label="Maximum Sonarr cases per sync" field={tv.field("maxCasesPerSync")} help="Maximum new comparison cases to queue per check." />
       </Grid>
     </SettingsGroup>
   </>;
@@ -394,17 +402,17 @@ export function PlexSettings({ form }: { form: SettingsForm }) {
   return <>
     <SettingsGroup title="Sign-in and app redirects">
       <Grid>
-        <TextField label="Plex product name" field={plex.field("productName")} />
-        <ListField label="Allowed app redirect URIs" field={auth.field("appRedirectURIs")} help="One exact URI per line." />
+        <TextField label="Plex product name" field={plex.field("productName")} help="App name shown during Plex sign-in." />
+        <ListField label="Allowed app redirect URIs" field={auth.field("appRedirectURIs")} help="Where Plex sign-in can return users to an app. Enter one exact URI per line." />
       </Grid>
     </SettingsGroup>
     <details className="settings-advanced">
       <summary>Advanced Plex identity settings</summary>
       <p className="settings-note">Changing this identity can affect sign-in. Prefer the verified server picker above.</p>
       <Grid>
-        <SecretField label="Plex owner token" field={plex.field("ownerToken")} />
-        <TextField label="Plex owner client identifier" field={plex.field("ownerClientIdentifier")} />
-        <TextField label="Plex access server machine ID" field={plex.field("machineId")} />
+        <SecretField label="Plex owner token" field={plex.field("ownerToken")} help="Lets Podible look up servers and shared access for the owner account." />
+        <TextField label="Plex owner client identifier" field={plex.field("ownerClientIdentifier")} help="Client ID sent to Plex with the owner token." />
+        <TextField label="Plex access server machine ID" field={plex.field("machineId")} help="Identifier of the server whose shared users can sign in." />
       </Grid>
     </details>
   </>;
@@ -416,7 +424,7 @@ export function StorageSettings({ form }: { form: SettingsForm }) {
   return <>
     <SettingsGroup title="Library location" note="Books, movies and TV use one root. Plex scans the published views, not the canonical files.">
       <TextField label="Library root directory" field={root.field("storageRoot")} placeholder="/media/podible"
-        help="Changing the root of an existing library requires a storage migration." />
+        help="Parent directory for managed media. Moving an existing library requires a migration." />
       {!form.saved.storageRoot && <p className="settings-note">Existing locations stay in use until the library is migrated or a root is set before adding content.</p>}
       <dl className="settings-facts">
         <div><dt>Movies in Plex</dt><dd>{form.saved.movies.plexViewPath || "Not configured"}</dd></div>
@@ -426,8 +434,8 @@ export function StorageSettings({ form }: { form: SettingsForm }) {
     <SettingsGroup title="Retention policy" note="When free space runs low, Podible can remove eligible movie and TV library copies. Protected titles are excluded.">
     <Grid>
       <NumberField label="Minimum free space (GiB)" field={retention.field("minimumFreeBytes")} scale={GiB} min={0} help="The free-space threshold for automatic cleanup." />
-      <ListField label="Protected movie target IDs" field={retention.field("protectedMovieTargetIds")} parse={id} help="One Podible target ID per line." />
-      <ListField label="Protected TV target IDs" field={retention.field("protectedTvTargetIds")} parse={id} help="One Podible target ID per line." />
+      <ListField label="Protected movie target IDs" field={retention.field("protectedMovieTargetIds")} parse={id} help="Movies to keep during cleanup. Enter one Podible target ID per line." />
+      <ListField label="Protected TV target IDs" field={retention.field("protectedTvTargetIds")} parse={id} help="TV to keep during cleanup. Enter one Podible target ID per line." />
     </Grid>
     </SettingsGroup>
   </>;
@@ -439,16 +447,14 @@ export function NotificationSettings({ form }: { form: SettingsForm }) {
   return <>
     <SettingsGroup title="External delivery">
       <SelectField<"dry-run" | "live"> label="Delivery mode" field={{ ...delivery, value: delivery.value ?? "dry-run", persisted: delivery.persisted ?? "dry-run" }}
+        help="Dry run logs alerts without sending them. In-app notifications still work."
         options={[["dry-run", "Dry run"], ["live", "Live"]]} />
-      <p className="settings-note">Dry run logs skipped delivery without contacting Pushover. In-app notifications still work.</p>
     </SettingsGroup>
     <SettingsGroup title="Pushover" note="Send administrator alerts to Pushover.">
     <Grid>
-      <CheckField label="Enable Pushover notifications" field={pushover.field("enabled")} />
-    </Grid>
-    <Grid>
-      <SecretField label="Pushover API token" field={pushover.field("apiToken")} />
-      <SecretField label="Pushover user key" field={pushover.field("userKey")} />
+      <CheckField label="Enable Pushover notifications" field={pushover.field("enabled")} help="Send administrator alerts when delivery mode is Live." />
+      <SecretField label="Pushover API token" field={pushover.field("apiToken")} help="Application token that authorizes sending alerts." />
+      <SecretField label="Pushover user key" field={pushover.field("userKey")} help="Account key that determines who receives the alerts." />
     </Grid>
     </SettingsGroup>
   </>;
