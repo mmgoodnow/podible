@@ -15,8 +15,9 @@ import { crossSeedCommandSchema, crossSeedStateKey } from "../../src/media/cross
 import { executeMethod, type RpcMethodDefinition } from "../../src/rpc/framework";
 import { RpcError, type RpcContext } from "../../src/rpc/shared";
 import { TmdbTvCatalog, TvCatalogError } from "../../src/tv/catalog";
-import { nativeTvRequestScope, refreshNativeTvRequests, requestTvSeasons } from "../../src/tv/service";
+import { nativeTvRequestScope, refreshNativeTvRequests, requestTvSelection } from "../../src/tv/service";
 import { syncTvRequests, type TvSyncServices } from "../../src/tv/sync";
+import type { TvCatalogEntry } from "../../src/tv/types";
 import type { WorkerContext } from "../../src/worker/context";
 import { runWorker } from "../../src/worker";
 import { fixtureTvCatalog } from "../fixtures/tv-catalog";
@@ -60,8 +61,8 @@ test("USER TV catalog/request methods authenticate before provider access and le
     }
     expect(await s.call("search", { query: "work" })).toMatchObject({ configured: true, unavailableReason: null, results: [{ tmdbId: 70 }] });
     expect(await s.call("details", { tmdbId: 70 })).toMatchObject({ series: { numberingScheme: "tvdb:aired", seasons: [
-      { seasonNumber: 0, requestable: true }, { seasonNumber: 1, requestable: true }, { seasonNumber: 2, requestable: true },
-    ] } });
+      { seasonNumber: 0, requestable: false }, { seasonNumber: 1, requestable: true }, { seasonNumber: 2, requestable: true },
+    ] }, specials: [{ episodeKey: "tvdb:7000", episodeNumber: 1, title: "Special", available: false, requested: false }] });
   } finally { await s.close(); }
 });
 
@@ -262,10 +263,10 @@ test("one show exposes exact Plex coverage and safe cross-seeds, not another vie
   } finally { await s.close(); }
 });
 
-test("strict SEASON selection has no episode-level surface and unsupported mappings roll back all intent", async () => {
+test("regular episodes require season selection and unsupported mappings roll back all intent", async () => {
   const s = await setup();
   try {
-    for (const input of [{ tmdbId: 70, seasonNumbers: [] }, { tmdbId: 70, seasonNumbers: [1, 1] },
+    for (const input of [{ tmdbId: 70, seasonNumbers: [] }, { tmdbId: 70, seasonNumbers: [1, 1] }, { tmdbId: 70, seasonNumbers: [0] },
       { tmdbId: 70, seasonNumbers: [-1] }, { tmdbId: 70, seasonNumbers: [1.5] }, { tmdbId: 70, seasonNumbers: ["1"] },
       { tmdbId: 70, seasonNumbers: [1], episodeIds: [7001] }, { tmdbId: 70, seasonNumbers: [1], episodeKeys: ["tvdb:7001"] },
       { tmdbId: 70, seasonNumbers: [1], episodeLimit: 1 }, { tmdbId: 70, seasonNumbers: [1], url: "https://wrong.invalid" }])
@@ -305,12 +306,90 @@ test("native requests select all known season episodes including future/undated,
     expect(other.request.requestId).not.toBe(request.requestId);
     expect(other.request.targetId).toBe(request.targetId); expect(other.request.requestedEpisodes).toBe(1);
     expect(other.request.acquisitions).toEqual([]); expect(s.outbox()).toHaveLength(1);
-    const ordered = await s.call("request", { tmdbId: 70, seasonNumbers: [2, 0] }) as any;
-    const reordered = await s.call("request", { tmdbId: 70, seasonNumbers: [0, 2] }) as any;
+    const ordered = await s.call("request", { tmdbId: 70, seasonNumbers: [2, 1] }) as any;
+    const reordered = await s.call("request", { tmdbId: 70, seasonNumbers: [1, 2] }) as any;
     expect(ordered.request.requestId).toBe(reordered.request.requestId);
-    expect(ordered.request.seasonNumbers).toEqual([0, 2]);
-    expect(s.repo.tv.requestedEpisodes(ordered.request.requestId).map((ep) => ep.key)).toEqual(["tvdb:7000", "tvdb:7004"]);
+    expect(ordered.request.seasonNumbers).toEqual([1, 2]);
+    expect(s.repo.tv.requestedEpisodes(ordered.request.requestId).map((ep) => ep.key)).toEqual(["tvdb:7001", "tvdb:7002", "tvdb:7003", "tvdb:7004"]);
     expect(s.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  } finally { await s.close(); }
+});
+
+function addSpecial(entry: TvCatalogEntry, id: number, number: number, airDate = "2020-01-01") {
+  entry.episodes.push({ ...structuredClone(entry.episodes[0]!), key: `tvdb:${id}`, title: `Special ${number}`, airDate,
+    refs: [{ provider: "tvdb", id: String(id), source: "verified-catalog" }],
+    numbering: [{ scheme: "tvdb:aired", season: 0, episode: number, absolute: null, source: "verified-catalog" }] });
+}
+
+test("special selection verifies provider identity and queues only selected aired specials with regular season intent", async () => {
+  const s = await setup();
+  try {
+    const entry = s.fixture.entry();
+    addSpecial(entry, 7010, 2); addSpecial(entry, 7011, 3, "2099-01-01"); addSpecial(entry, 7012, 4);
+    entry.episodes.at(-1)!.refs = [];
+    s.fixture.setEntry(entry);
+    const details = async () => (await s.call("details", { tmdbId: 70 }, "two") as any).specials;
+    expect((await details()).map((special: any) => special.episodeKey)).toEqual(["tvdb:7000", "tvdb:7010", "tvdb:7011"]);
+    for (const specialEpisodeKeys of [["tvdb:7001"], ["tvdb:7012"], ["tvdb:99999"], ["s00e01"],
+      ["tvdb:9007199254740992"], ["tvdb:7000", "tvdb:7000"]])
+      await expect(s.call("request", { tmdbId: 70, seasonNumbers: [1], specialEpisodeKeys })).rejects.toMatchObject({ code: -32602 });
+    expect(s.count("tv_requests")).toBe(0); expect(s.outbox()).toEqual([]);
+    const selection = { tmdbId: 70, seasonNumbers: [2], specialEpisodeKeys: ["tvdb:7000", "tvdb:7011"] };
+    const [first, second] = await Promise.all([s.call("request", selection),
+      s.call("request", { ...selection, specialEpisodeKeys: [...selection.specialEpisodeKeys].reverse() })]) as any[];
+    const request = first.request;
+    expect(second.request.requestId).toBe(request.requestId);
+    expect(request).toMatchObject({ seasonNumbers: [0, 2], specialEpisodeKeys: selection.specialEpisodeKeys, requestedEpisodes: 3, futureEpisodes: 2 });
+    const members = s.repo.tv.requestedEpisodes(request.requestId);
+    expect(members.map(ep => ep.key)).toEqual(["tvdb:7000", "tvdb:7004", "tvdb:7011"]);
+    const batches = s.repo.tv.acquisitions(request.targetId);
+    expect(batches.map(batch => JSON.parse(batch.decision_json!).batchEpisodeIds)).toEqual([[members[0]!.id]]);
+    expect(await details()).toMatchObject([{ requested: true }, { requested: false }, { requested: true }]);
+    for (const user of ["one", "two"]) {
+      await expect(s.call("request", { tmdbId: 70, specialEpisodeKeys: ["tvdb:7010", "tvdb:7000"] }, user)).rejects.toThrow("already requested");
+    }
+    expect(s.count("tv_requests")).toBe(1); expect(s.outbox()).toHaveLength(1);
+    const version = s.repo.tv.recordVersion(batches[0]!.id, { identityVerified: true }, [{
+      id: randomUUID(), relativePath: "files/special.mkv", sizeBytes: 5, probe: {}, episodeIds: [members[0]!.id],
+    }]);
+    s.repo.tv.stagePublication(request.targetId, version, 0);
+    s.repo.tv.promotePublication(request.targetId, version, 0);
+    expect((await details())[0]).toMatchObject({ available: true });
+    await expect(s.call("request", { tmdbId: 70, specialEpisodeKeys: ["tvdb:7000"] }, "two")).rejects.toThrow("already in Plex");
+    const single = await s.call("request", { tmdbId: 70, specialEpisodeKeys: ["tvdb:7010"] }, "two") as any;
+    expect(single.request).toMatchObject({ seasonNumbers: [0], requestedEpisodes: 1, specialEpisodeKeys: ["tvdb:7010"] });
+    const local = await executeMethod(catalogRouter.routes.tvEntry, s.ctx("two"), { entryId: request.entryId });
+    expect(local.requests).toMatchObject([{ id: single.request.requestId, seasons: [0] }]);
+  } finally { await s.close(); }
+});
+
+test("refresh follows a selected special by stable key without adding new specials or replacing a lost identity", async () => {
+  const s = await setup();
+  try {
+    const { request } = await s.call("request", { tmdbId: 70, specialEpisodeKeys: ["tvdb:7000"] }) as any;
+    const before = s.repo.tv.requestedEpisodeIds(request.requestId);
+    const entry = s.fixture.entry();
+    entry.episodes[0]!.numbering[0]!.episode = 7;
+    addSpecial(entry, 7010, 1); s.fixture.setEntry(entry);
+    expect(nativeTvRequestScope(s.repo.tv.requestById(request.requestId)!)).toEqual({ tmdbId: 70, seasonNumbers: [], specialEpisodeKeys: ["tvdb:7000"] });
+    expect(await refreshNativeTvRequests(s.repo, s.fixture.catalog)).toEqual({ refreshed: 1, errors: [] });
+    expect(s.repo.tv.requestedEpisodeIds(request.requestId)).toEqual(before);
+    expect(s.repo.tv.requestedEpisodes(request.requestId)[0]!.numbering[0]!.episode).toBe(7);
+    entry.episodes.shift(); s.fixture.setEntry(entry);
+    expect((await refreshNativeTvRequests(s.repo, s.fixture.catalog)).errors[0]?.message).toContain("not a verified TVDB special");
+    expect(s.repo.tv.requestedEpisodeIds(request.requestId)).toEqual(before);
+    expect(s.outbox()).toHaveLength(1);
+  } finally { await s.close(); }
+});
+
+test("legacy season-zero requests remain readable and cover their existing special episodes", async () => {
+  const s = await setup();
+  try {
+    const legacy = s.repo.tv.requestSeasons(s.ctx().session!.user_id, s.fixture.entry(), s.repo.getSettings().movies.qualityPolicy, [0]);
+    expect(await s.call("myRequest", { requestId: legacy.requestId })).toMatchObject({ request: { seasonNumbers: [0], specialEpisodeKeys: [] } });
+    await expect(s.call("request", { tmdbId: 70, specialEpisodeKeys: ["tvdb:7000"] }, "two")).rejects.toThrow("already requested");
+    await s.call("withdraw", { requestId: legacy.requestId });
+    expect(await s.call("request", { tmdbId: 70, specialEpisodeKeys: ["tvdb:7000"] }, "two")).toMatchObject({ request: { requestedEpisodes: 1 } });
   } finally { await s.close(); }
 });
 
@@ -333,7 +412,7 @@ test("own request RPC hides other users' scope and diagnostics; withdrawal prese
   const s = await setup();
   try {
     const first = (await s.call("request", { tmdbId: 70, seasonNumbers: [1] }) as any).request;
-    const second = (await s.call("request", { tmdbId: 70, seasonNumbers: [0] }, "two") as any).request;
+    const second = (await s.call("request", { tmdbId: 70, specialEpisodeKeys: ["tvdb:7000"] }, "two") as any).request;
     expect(first.targetId).toBe(second.targetId);
     const acquisition = s.repo.tv.acquisitions(first.targetId).find((a) => a.request_id === first.requestId)!;
     s.repo.tv.decision(acquisition.id, { url: "https://private.invalid/?token=secret", otherRequest: second.requestId });
@@ -431,6 +510,8 @@ test("typed tRPC convention consumes exactly the same USER schemas/handlers and 
     expect(requested.request.entry.key).toBe("anilist:800");
     expect((await client.tv.myRequest({ requestId: requested.request.requestId })).request.seasonNumbers).toEqual([2]);
     expect((await client.tv.details({ tmdbId: 70 })).series!.seasons).toHaveLength(3);
+    const special = await client.tv.request({ tmdbId: 70, specialEpisodeKeys: ["tvdb:7000"] });
+    expect(special.request.specialEpisodeKeys).toEqual(["tvdb:7000"]);
     await expect(router.createCaller(s.ctx("two")).tv.myRequest({ requestId: requested.request.requestId })).rejects.toThrow("TV request not found");
     await expect(router.createCaller(s.ctx("invalid")).tv.request({ tmdbId: 70, seasonNumbers: [1] })).rejects.toThrow("Unauthorized");
     expect(s.repo.tv.origins()).toEqual([]);
@@ -462,7 +543,7 @@ test("native season scope is complete beyond fifty episodes and catalog reads oc
       numbering: [{ scheme: "tvdb:aired", season: 1, episode: index + 1, absolute: null, source: "verified-catalog" }],
     }));
     s.fixture.setEntry(entry);
-    const result = await requestTvSeasons(s.repo, { ...s.fixture.catalog, async resolve(tmdbId) {
+    const result = await requestTvSelection(s.repo, { ...s.fixture.catalog, async resolve(tmdbId) {
       expect(s.db.inTransaction).toBe(false); return s.fixture.catalog.resolve(tmdbId);
     } }, s.ctx().session!.user_id, { tmdbId: 70, seasonNumbers: [1] });
     expect(s.repo.tv.requestedEpisodes(result.requestId)).toHaveLength(64);

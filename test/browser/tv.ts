@@ -139,6 +139,34 @@ try {
   assert.equal((await api.tv.myRequest.query({ requestId: request.requestId })).request.withdrawn,true);
   assert.equal((await api.catalog.tvEntry.query({ entryId: entry.entryId })).availableEpisodes,1,"Withdrawal removed existing published coverage");
   console.log("Native TV browser: withdrawal persisted without deleting published episodes");
+
+  const specialsPage = await context.newPage();
+  activePage = specialsPage;
+  specialsPage.on("pageerror", error => errors.push(error.message));
+  await specialsPage.route(/\/api\/trpc\/tv\.details\?/, route => route.fulfill({ json: [{ result: { data: {
+    configured: true, unavailableReason: null, showId: null, seasons: [],
+    series: { title: "Specials fixture", year: 2020, overview: "", posterUrl: null, seasons: [] },
+    specials: [
+      { episodeKey: "tvdb:7111", episodeNumber: 1, title: "Behind the scenes", available: false, requested: false },
+      { episodeKey: "tvdb:7112", episodeNumber: 2, title: "Outtakes", available: false, requested: false },
+      { episodeKey: "tvdb:7113", episodeNumber: 3, title: "Recap", available: true, requested: false },
+      { episodeKey: "tvdb:7114", episodeNumber: 4, title: "Interview", available: false, requested: true },
+    ],
+  } } }] }));
+  await specialsPage.route(/\/api\/trpc\/tv\.request\?/, route => route.fulfill({ json: [{ result: { data: { request: { entryId: request.entryId } } } }] }));
+  await specialsPage.goto(new URL("/tv/711", url).href);
+  await specialsPage.getByRole("checkbox", { name: /Behind the scenes/ }).check();
+  assert.equal(await specialsPage.getByRole("checkbox", { name: /Outtakes/ }).isChecked(), false);
+  assert.equal(await specialsPage.getByRole("checkbox", { name: /Recap.*Ready in Plex/ }).isDisabled(), true);
+  assert.equal(await specialsPage.getByRole("checkbox", { name: /Interview.*Already requested/ }).isDisabled(), true);
+  const selection = specialsPage.waitForRequest(item => new URL(item.url()).pathname === "/api/trpc/tv.request");
+  await specialsPage.getByRole("button", { name: "Request selected", exact: true }).click();
+  assert.deepEqual((await selection).postDataJSON(), { 0: { tmdbId: 711, seasonNumbers: [], specialEpisodeKeys: ["tvdb:7111"] } });
+  await specialsPage.waitForURL(`**/tv/library/${request.entryId}`);
+  await specialsPage.close();
+  activePage = page;
+  console.log("Native TV browser: the picker sends only the selected special and disables covered specials");
+
   await context.clearCookies();
   await page.reload();
   await page.getByRole("link",{ name: "Sign in", exact: true }).waitFor();

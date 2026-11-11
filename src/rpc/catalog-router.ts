@@ -6,7 +6,7 @@ import { tvCatalogEntrySchema } from "../tv/types";
 import { homeRecentSchema } from "../media/home-recent";
 import { homeDiscovery, homeDiscoverySchema } from "../media/home-discovery";
 import { prepareTvRequestProgress, tvRequestProgress, tvRequestProgressSchema } from "../tv/request-progress";
-import { nativeTvRequestScope } from "../tv/service";
+import { nativeTvRequestScope, nativeTvRequestSeasonNumbers } from "../tv/service";
 import { adminTorrentKey, readAdminTorrents, type AdminTransmissionReader } from "./admin-torrents";
 const id = z.number().int().positive();
 export const createCatalogRouter = (transmission?: AdminTransmissionReader | null) => defineRouter({
@@ -71,7 +71,7 @@ export const createCatalogRouter = (transmission?: AdminTransmissionReader | nul
           const episodes = entry.episodes.filter(ep => scope.has(ep.id));
           const own = tvRequestProgress({ episodes, available, events,
             acquisitions: acquisitions.filter(a => a.request_id === r.id), jobStatuses });
-          return { id: r.id, seasons: nativeTvRequestScope(r)?.seasonNumbers ?? own.seasons.map(s => s.seasonNumber),
+          return { id: r.id, seasons: nativeTvRequestSeasonNumbers(nativeTvRequestScope(r)) ?? own.seasons.map(s => s.seasonNumber),
             searchable: own.searchableAiredEpisodes > 0 };
         }),
         crossSeeds: seeds.flatMap(s => {

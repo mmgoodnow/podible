@@ -46,8 +46,10 @@ function TvSeasonPicker({ tmdbId, showId }: { tmdbId: number; showId?: number })
   const cache = useQueryClient();
   const result = useQuery(trpc.tv.details.queryOptions({ tmdbId }, { staleTime: 30_000 }));
   const [selected, setSelected] = useState<number[]>([]);
+  const [selectedSpecials, setSelectedSpecials] = useState<string[]>([]);
   const request = useMutation(trpc.tv.request.mutationOptions({ onSuccess: ({ request }) => {
     setSelected([]);
+    setSelectedSpecials([]);
     void cache.invalidateQueries({ queryKey: trpc.tv.myRequests.pathKey() });
     void cache.invalidateQueries({ queryKey: trpc.tv.requestCards.pathKey() });
     void cache.invalidateQueries({ queryKey: trpc.tv.details.pathKey() });
@@ -58,7 +60,7 @@ function TvSeasonPicker({ tmdbId, showId }: { tmdbId: number; showId?: number })
   if (!series) return null;
   if (showId && result.data?.showId !== showId) return null;
   const states = new Map((result.data?.seasons ?? []).map(s => [s.number, s]));
-  const options = series.seasons.map(s => {
+  const options = series.seasons.filter(s => s.seasonNumber > 0).map(s => {
     const state = states.get(s.seasonNumber);
     return { ...s, ready: state?.available === s.episodeCount && s.episodeCount > 0,
       requested: state?.requested ?? false, available: state?.available ?? 0 };
@@ -66,10 +68,15 @@ function TvSeasonPicker({ tmdbId, showId }: { tmdbId: number; showId?: number })
   const selectable = options.filter(s => s.requestable && !s.ready && !s.requested);
   const selection = selected.filter(n => selectable.some(s => s.seasonNumber === n));
   const visible = showId ? selectable : options;
-  if (!visible.length) return null;
+  const specials = result.data?.specials ?? [];
+  const selectableSpecials = specials.filter(s => !s.available && !s.requested);
+  const specialSelection = selectedSpecials.filter(key => selectableSpecials.some(s => s.episodeKey === key));
+  const canSelect = selectable.length > 0 || selectableSpecials.length > 0;
+  const specialUnavailable = series.seasons.find(s => s.seasonNumber === 0)?.unavailableReason;
+  if (!visible.length && !specials.length && !specialUnavailable) return null;
   return <section className="media-section">
-    <h2>{showId ? "Request more episodes" : "Choose seasons"}</h2>
-    <fieldset className="season-options" disabled={request.isPending}>
+    <h2>{showId ? "Request more episodes" : specials.length ? "Choose seasons or specials" : "Choose seasons"}</h2>
+    {visible.length > 0 && <fieldset className="season-options" disabled={request.isPending}>
       <legend>Seasons</legend>
       {visible.map(s => <label key={s.seasonNumber}>
         <input type="checkbox" checked={selection.includes(s.seasonNumber)} disabled={!s.requestable || s.ready || s.requested}
@@ -78,10 +85,21 @@ function TvSeasonPicker({ tmdbId, showId }: { tmdbId: number; showId?: number })
           : s.available ? `${s.episodeCount - s.available} missing` : `${s.episodeCount} ${s.episodeCount === 1 ? "episode" : "episodes"}`}
           {!s.requestable && <small>{s.unavailableReason ?? "Season information is unavailable."}</small>}</span>
       </label>)}
-    </fieldset>
-    {selectable.length > 0 && <button disabled={!selection.length || request.isPending}
-      onClick={() => request.mutate({ tmdbId, seasonNumbers: selection })}>
-      {request.isPending ? "Requesting..." : `Request ${selection.length === 1 ? "season" : "seasons"}`}
+    </fieldset>}
+    {specials.length > 0 && <fieldset className="season-options" disabled={request.isPending}>
+      <legend>Specials</legend>
+      {specials.map(s => <label key={s.episodeKey}>
+        <input type="checkbox" checked={specialSelection.includes(s.episodeKey)} disabled={s.available || s.requested}
+          onChange={e => setSelectedSpecials(previous => e.target.checked
+            ? [...previous, s.episodeKey] : previous.filter(key => key !== s.episodeKey))} />
+        <span><strong>Special {s.episodeNumber}{s.title ? `: ${s.title}` : ""}</strong>
+          {s.available ? " · Ready in Plex" : s.requested ? " · Already requested" : null}</span>
+      </label>)}
+    </fieldset>}
+    {specialUnavailable && <p>{specialUnavailable}</p>}
+    {canSelect && <button disabled={(!selection.length && !specialSelection.length) || request.isPending}
+      onClick={() => request.mutate({ tmdbId, seasonNumbers: selection, specialEpisodeKeys: specialSelection })}>
+      {request.isPending ? "Requesting..." : specialSelection.length ? "Request selected" : `Request ${selection.length === 1 ? "season" : "seasons"}`}
     </button>}
     {request.isError && <Failure error={request.error} />}
   </section>;

@@ -1,5 +1,5 @@
 import type { TvCatalog, TvCatalogDetails } from "../../src/tv/catalog";
-import { canonicalTvSeasons } from "../../src/tv/catalog";
+import { canonicalTvSeasons, verifiedTvSpecials } from "../../src/tv/catalog";
 import type { TvCatalogEntry } from "../../src/tv/types";
 
 export function fixtureTvEntry(): TvCatalogEntry {
@@ -8,6 +8,8 @@ export function fixtureTvEntry(): TvCatalogEntry {
     anime: false, source: "verified-catalog", refs: [], relations: [],
     episodes: [
       { key: "tvdb:7000", title: "Special", airDate: "2020-01-01", runtimeMinutes: 24,
+        identity: { stability: "provider", source: "verified-catalog" },
+        refs: [{ provider: "tvdb", id: "7000", source: "verified-catalog" }],
         numbering: [{ scheme: "tvdb:aired", season: 0, episode: 1, absolute: null, source: "verified-catalog" }] },
       { key: "tvdb:7001", title: "First", airDate: "2020-01-01", runtimeMinutes: 24,
         numbering: [{ scheme: "tvdb:aired", season: 1, episode: 1, absolute: null, source: "verified-catalog" }] },
@@ -30,10 +32,11 @@ export function fixtureTvCatalog() {
       calls.details++;
       const { seasons } = canonicalTvSeasons(entry, tmdbId);
       return { ...summary, numberingScheme: "tvdb:aired",
+        specials: verifiedTvSpecials(seasons),
         episodeKeysBySeason: new Map([...seasons].map(([number, episodes]) => [number, episodes.map(ep => ep.key)])),
         seasons: [...seasons].map(([seasonNumber, episodes]) => ({
-        seasonNumber, title: `Season ${seasonNumber}`, episodeCount: episodes.length,
-        airDate: null, requestable: true, unavailableReason: null,
+        seasonNumber, title: seasonNumber === 0 ? "Specials" : `Season ${seasonNumber}`, episodeCount: episodes.length,
+        airDate: null, requestable: seasonNumber > 0, unavailableReason: null,
       })) };
     },
     async resolve() { calls.resolve++; return structuredClone(entry); },

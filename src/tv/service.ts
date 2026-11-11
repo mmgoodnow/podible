@@ -2,44 +2,76 @@ import { z } from "zod";
 import type { BooksRepo } from "../repo";
 import { ensurePresentIntent } from "../media/retention-service";
 import { queueTvSeasons } from "./acquisition";
-import { canonicalTvSeasons, configuredTvCatalog, TvCatalogError, type TvCatalog } from "./catalog";
+import { canonicalTvSeasons, configuredTvCatalog, tvSpecialEpisodeKeySchema, verifiedTvSpecials, TvCatalogError, type TvCatalog } from "./catalog";
+import { nativeTvRequestKey } from "./repo";
 import type { TvRequest } from "./types";
 
-export const tvSeasonSelectionSchema = z.array(z.number().int().nonnegative().safe()).min(1).max(500)
-  .refine((seasons) => new Set(seasons).size === seasons.length, "Duplicate season selection");
-const scopeSchema = z.object({ tmdbId: z.number().int().positive().safe(), seasonNumbers: tvSeasonSelectionSchema });
-export function nativeTvRequestScope(request: TvRequest) {
-  const match = /^native-seasons:([1-9]\d*):(\[[\d,]+\])$/.exec(request.request_key);
+const unique = <T>(values: T[]) => new Set(values).size === values.length;
+const tmdbIdSchema = z.number().int().positive().safe();
+const seasonNumber = z.number().int().nonnegative().safe();
+const legacyScopeSchema = z.object({ tmdbId: tmdbIdSchema,
+  seasonNumbers: z.array(seasonNumber).min(1).max(500).refine(unique) });
+export const tvRequestSelectionSchema = z.object({
+  tmdbId: tmdbIdSchema,
+  seasonNumbers: z.array(seasonNumber.positive()).max(500).refine(unique, "Duplicate season selection").optional(),
+  specialEpisodeKeys: z.array(tvSpecialEpisodeKeySchema).max(500).refine(unique, "Duplicate special selection").optional(),
+}).strict().refine(scope => !!(scope.seasonNumbers?.length || scope.specialEpisodeKeys?.length), "Select at least one season or special");
+type NativeTvScope = { tmdbId: number; seasonNumbers: number[]; specialEpisodeKeys?: string[] };
+export function nativeTvRequestScope(request: TvRequest): NativeTvScope | null {
+  const match = /^native-seasons:([1-9]\d*):(\[[\d,]*\])(?::(\[.*\]))?$/.exec(request.request_key);
   if (!match) return null;
-  return scopeSchema.parse({ tmdbId: Number(match[1]), seasonNumbers: JSON.parse(match[2]!) });
+  const tmdbId = Number(match[1]), seasonNumbers = JSON.parse(match[2]!);
+  if (!match[3]) return legacyScopeSchema.parse({ tmdbId, seasonNumbers });
+  const scope = tvRequestSelectionSchema.parse({ tmdbId, seasonNumbers, specialEpisodeKeys: JSON.parse(match[3]) });
+  return { ...scope, seasonNumbers: scope.seasonNumbers! };
 }
+export function nativeTvRequestSeasonNumbers(scope: NativeTvScope | null): number[] | undefined {
+  return scope?.specialEpisodeKeys?.length ? [0, ...scope.seasonNumbers] : scope?.seasonNumbers;
+}
+
 const aired = (episode: { airDate: string | null }) => !!episode.airDate && Date.parse(episode.airDate) <= Date.now();
 
-export async function requestTvSeasons(repo: BooksRepo, catalog: TvCatalog, userId: number,
-  input: { tmdbId: number; seasonNumbers: number[] }) {
-  const scope = scopeSchema.parse(input);
-  const { entry, seasons } = canonicalTvSeasons(await catalog.resolve(scope.tmdbId), scope.tmdbId);
+function selectedEpisodeKeys(scope: NativeTvScope, seasons: ReturnType<typeof canonicalTvSeasons>["seasons"]) {
   for (const season of scope.seasonNumbers)
     if (!seasons.has(season)) throw new TvCatalogError(`Season ${season} has no canonical TVDB episode metadata; refresh the catalog or select a supported season.`, "unsupported");
+  const specialKeys = scope.specialEpisodeKeys ?? [];
+  if (specialKeys.length) {
+    const verified = new Set(verifiedTvSpecials(seasons).map(special => special.episodeKey));
+    if (specialKeys.some(key => !verified.has(key)))
+      throw new TvCatalogError("A selected episode is not a verified TVDB special for this show. Refresh the catalog and select again.", "unsupported");
+  }
+  return new Set([...specialKeys, ...scope.seasonNumbers.flatMap(season => seasons.get(season)!.map(ep => ep.key))]);
+}
+
+export async function requestTvSelection(repo: BooksRepo, catalog: TvCatalog, userId: number,
+  input: z.input<typeof tvRequestSelectionSchema>) {
+  const selection = tvRequestSelectionSchema.parse(input);
+  const scope = { ...selection, seasonNumbers: selection.seasonNumbers ?? [], specialEpisodeKeys: selection.specialEpisodeKeys ?? [] };
+  const { entry, seasons } = canonicalTvSeasons(await catalog.resolve(scope.tmdbId), scope.tmdbId);
+  const wanted = selectedEpisodeKeys(scope, seasons);
   return repo.transaction(() => {
-    const wanted = new Set(scope.seasonNumbers.flatMap((season) => seasons.get(season)!.map((ep) => ep.key)));
     const published = repo.tv.publishedEpisodeKeys(wanted);
     if (scope.seasonNumbers.some(season => seasons.get(season)!.every(ep => published.has(ep.key))))
       throw new TvCatalogError("A selected season is already in Plex. Refresh the show and select only seasons with missing episodes.", "unsupported");
-    const normalized = JSON.stringify([...scope.seasonNumbers].sort((a, b) => a - b));
-    for (const previous of repo.tv.requests(userId)) {
-      const priorScope = nativeTvRequestScope(previous);
-      if (!priorScope || priorScope.tmdbId !== scope.tmdbId || JSON.stringify(priorScope.seasonNumbers) !== normalized) continue;
+    if (scope.specialEpisodeKeys.some(key => published.has(key)))
+      throw new TvCatalogError("A selected special is already in Plex. Refresh the show and select only missing specials.", "unsupported");
+    const requestKey = nativeTvRequestKey(scope.tmdbId, scope.seasonNumbers, scope.specialEpisodeKeys);
+    const previousRequests = repo.tv.requests(userId).filter(request => request.request_key === requestKey);
+    for (const previous of previousRequests) {
       const target = repo.tv.target(previous.target_id)!;
       const priorEntry = repo.tv.entry(target.entry_id)!;
       if (priorEntry.key !== entry.key || priorEntry.tvdbId !== entry.tvdbId ||
           repo.tv.requestedEpisodes(previous.id).some((ep) => !wanted.has(ep.key)))
-        throw new TvCatalogError("Canonical mapping changed for this season request; correct the mapping before re-requesting. Existing identities were retained.", "unsupported");
+        throw new TvCatalogError("Canonical mapping changed for this TV request; correct the mapping before re-requesting. Existing identities were retained.", "unsupported");
     }
-    const request = repo.tv.requestSeasons(userId, entry, repo.getSettings().movies.qualityPolicy, scope.seasonNumbers);
+    const prior = scope.specialEpisodeKeys.length ? previousRequests.find(request => !request.withdrawn_at) ?? previousRequests[0] : undefined;
+    if (scope.specialEpisodeKeys.length && repo.tv.requestedEpisodeKeys(scope.specialEpisodeKeys, prior?.id).size)
+      throw new TvCatalogError("A selected special is already requested. Refresh the show and select only unrequested specials.", "unsupported");
+    const policy = prior ? JSON.parse(repo.tv.target(prior.target_id)!.policy_json) : repo.getSettings().movies.qualityPolicy;
+    const request = repo.tv.requestNativeSelection(userId, entry, policy, scope.seasonNumbers, scope.specialEpisodeKeys, [...wanted]);
     const key = { namespace: "tv-target", id: String(request.targetId) };
     if (repo.retention.get(key)?.desiredPresence !== "present")
-      ensurePresentIntent(repo, key, "User explicitly requested TV seasons");
+      ensurePresentIntent(repo, key, "User explicitly requested TV episodes");
     if (repo.tv.missingEpisodes(request.requestId).some(aired)) queueTvSeasons(repo, request.requestId);
     return request;
   });
@@ -66,9 +98,7 @@ export async function refreshNativeTvRequests(repo: BooksRepo, catalog: TvCatalo
       if (!pending) { pending = catalog.resolve(scope.tmdbId); resolved.set(scope.tmdbId, pending); }
       const { entry, seasons } = canonicalTvSeasons(await pending, scope.tmdbId);
       options.assertActive?.();
-      if (scope.seasonNumbers.some((season) => !seasons.has(season)))
-        throw new TvCatalogError("Previously requested season no longer has canonical episode metadata; retaining existing scope.", "unsupported");
-      const selected = new Set(scope.seasonNumbers.flatMap((season) => seasons.get(season)!.map((ep) => ep.key)));
+      const selected = selectedEpisodeKeys(scope, seasons);
       repo.transaction(() => {
         options.assertActive?.();
         const current = repo.tv.requestById(request.id);
@@ -79,7 +109,8 @@ export async function refreshNativeTvRequests(repo: BooksRepo, catalog: TvCatalo
             repo.tv.requestedEpisodes(request.id).some((ep) => !selected.has(ep.key)))
           throw new TvCatalogError("Canonical work or episode membership changed; retaining existing request identities.", "unsupported");
         // The existing request/policy identity must survive administrator policy changes.
-        repo.tv.requestSeasons(current.user_id, entry, JSON.parse(target.policy_json), scope.seasonNumbers);
+        repo.tv.requestNativeSelection(current.user_id, entry, JSON.parse(target.policy_json), scope.seasonNumbers,
+          scope.specialEpisodeKeys ?? [], [...selected]);
         refreshed++;
       });
     } catch (error) {
@@ -107,6 +138,6 @@ export function withdrawTvRequest(repo: BooksRepo, requestId: number) {
     }
     const key = { namespace: "tv-target", id: String(request.target_id) };
     const retention = repo.retention.get(key);
-    if (retention) repo.retention.withdraw(key, { expectedRevision: retention.revision, reason: "User withdrew a TV season request; other demand and media are unchanged" });
+    if (retention) repo.retention.withdraw(key, { expectedRevision: retention.revision, reason: "User withdrew a TV request; other demand and media are unchanged" });
   });
 }

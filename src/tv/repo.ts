@@ -27,6 +27,11 @@ function json(value: unknown): string {
 function ids(values: number[]): number[] {
   return [...new Set(z.array(z.number().int().positive()).parse(values))].sort((a, b) => a - b);
 }
+export function nativeTvRequestKey(tmdbId: number, seasonNumbers: number[], specialEpisodeKeys: string[] = []): string {
+  const seasons = json([...seasonNumbers].sort((a, b) => a - b));
+  // Keep the native-seasons prefix used to schedule metadata refresh for native requests.
+  return `native-seasons:${tmdbId}:${seasons}${specialEpisodeKeys.length ? `:${json([...specialEpisodeKeys].sort())}` : ""}`;
+}
 function keyRef(key: string, source: string): TvExternalRef | null {
   if (key.startsWith("ephemeral:")) return null;
   const split = key.indexOf(":");
@@ -161,13 +166,13 @@ export class TvRepo {
       .all(JSON.stringify([...keys])).map(row => row.key));
   }
 
-  requestedEpisodeKeys(keys: Iterable<string>): Set<string> {
-    return new Set(this.db.query<{ key: string }, [string]>(`SELECT e.episode_key AS key
+  requestedEpisodeKeys(keys: Iterable<string>, excludingRequestId?: number): Set<string> {
+    return new Set(this.db.query<{ key: string }, [string, number | null]>(`SELECT e.episode_key AS key
       FROM json_each(?) keys JOIN tv_episodes e ON e.episode_key=keys.value
       WHERE EXISTS (SELECT 1 FROM tv_request_episodes m JOIN tv_requests r ON r.id=m.request_id
         LEFT JOIN retention_resources p ON p.namespace='tv-target' AND p.resource_id=CAST(r.target_id AS TEXT)
-        WHERE m.episode_id=e.id AND r.withdrawn_at IS NULL AND p.desired_presence IS NOT 'evicted')`)
-      .all(JSON.stringify([...keys])).map(row => row.key));
+        WHERE m.episode_id=e.id AND r.id IS NOT ? AND r.withdrawn_at IS NULL AND p.desired_presence IS NOT 'evicted')`)
+      .all(JSON.stringify([...keys]), excludingRequestId ?? null).map(row => row.key));
   }
 
   showRequests(entryId: number, userId: number): TvRequest[] {
@@ -387,15 +392,20 @@ export class TvRepo {
   /** Keep season intent in the durable request key, independently of known episode membership. */
   requestSeasons(userId: number, catalog: TvCatalogEntry, policy: TvPolicy, seasonNumbers: number[]): TvRequestResult {
     const seasons = [...new Set(z.array(z.number().int().nonnegative().safe()).min(1).max(500).parse(seasonNumbers))].sort((a, b) => a - b);
-    const tmdbId = z.number().int().positive().safe().parse(catalog.tmdbId);
     const selected = catalog.episodes.filter((episode) => episode.numbering.some((n) =>
       n.scheme === "tvdb:aired" && n.season !== null && seasons.includes(n.season)));
     if (seasons.some((season) => !selected.some((ep) => ep.numbering.some((n) => n.scheme === "tvdb:aired" && n.season === season))))
       throw new Error("Selected TV season has no canonical episodes");
+    return this.requestNativeSelection(userId, catalog, policy, seasons, [], selected.map(ep => ep.key));
+  }
+
+  requestNativeSelection(userId: number, catalog: TvCatalogEntry, policy: TvPolicy,
+    seasonNumbers: number[], specialEpisodeKeys: string[], episodeKeys: string[]): TvRequestResult {
+    const tmdbId = z.number().int().positive().safe().parse(catalog.tmdbId);
     return this.transaction(() => {
       const entry = this.upsertEntry(catalog);
-      return this.requestEpisodes(userId, entry.id, policy, this.resolveKeys(entry, selected.map((ep) => ep.key)),
-        undefined, `native-seasons:${tmdbId}:${json(seasons)}`);
+      return this.requestEpisodes(userId, entry.id, policy, this.resolveKeys(entry, episodeKeys),
+        undefined, nativeTvRequestKey(tmdbId, seasonNumbers, specialEpisodeKeys));
     });
   }
 

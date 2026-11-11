@@ -17,9 +17,16 @@ export const tvSeasonSchema = z.object({
 export const tvSeriesDetailsSchema = tvSearchResultSchema.extend({
   numberingScheme: z.literal("tvdb:aired"), seasons: z.array(tvSeasonSchema),
 });
+export const tvSpecialEpisodeKeySchema = z.string().regex(/^tvdb:[1-9]\d{0,15}$/)
+  .refine(key => Number.isSafeInteger(Number(key.slice(5))));
+export const tvSpecialSchema = z.object({
+  episodeKey: tvSpecialEpisodeKeySchema, episodeNumber: id, title: z.string(), airDate: z.string().nullable(),
+});
 export type TvSearchResult = z.infer<typeof tvSearchResultSchema>;
 export type TvSeriesDetails = z.infer<typeof tvSeriesDetailsSchema>;
-export type TvCatalogDetails = TvSeriesDetails & { episodeKeysBySeason?: ReadonlyMap<number, string[]> };
+export type TvCatalogDetails = TvSeriesDetails & {
+  episodeKeysBySeason?: ReadonlyMap<number, string[]>; specials?: z.infer<typeof tvSpecialSchema>[];
+};
 export class TvCatalogError extends Error {
   constructor(message: string, readonly kind: "configuration" | "unavailable" | "unsupported" = "unavailable") {
     super(message);
@@ -58,6 +65,16 @@ export function canonicalTvSeasons(input: TvCatalogEntry, tmdbId: number) {
     members.push(episode); seasons.set(number.season, members);
   }
   return { entry, seasons };
+}
+
+/** Only expose season-zero keys explicitly attested by the canonical provider. */
+export function verifiedTvSpecials(seasons: ReturnType<typeof canonicalTvSeasons>["seasons"]) {
+  return (seasons.get(0) ?? []).flatMap((episode) => {
+    if (!tvSpecialEpisodeKeySchema.safeParse(episode.key).success || episode.identity?.stability !== "provider" ||
+        !episode.refs.some(ref => ref.provider === "tvdb" && !ref.instance && ref.id === episode.key.slice(5))) return [];
+    const episodeNumber = episode.numbering.find(n => n.scheme === "tvdb:aired")!.episode!;
+    return [{ episodeKey: episode.key, episodeNumber, title: episode.title, airDate: episode.airDate }];
+  }).sort((a, b) => a.episodeNumber - b.episodeNumber);
 }
 
 const tmdbSeries = z.object({
@@ -257,13 +274,16 @@ export class TmdbTvCatalog implements TvCatalog {
     const metadata = await this.metadata(tmdbId);
     let seasons: TvSeriesDetails["seasons"];
     let episodeKeysBySeason: TvCatalogDetails["episodeKeysBySeason"];
+    let specials: NonNullable<TvCatalogDetails["specials"]> = [];
     try {
       const mapped = await this.mapped(metadata);
       episodeKeysBySeason = new Map([...mapped.seasons].map(([season, episodes]) => [season, episodes.map(ep => ep.key)]));
+      specials = verifiedTvSpecials(mapped.seasons);
       seasons = [...mapped.seasons].sort(([a], [b]) => a - b).map(([seasonNumber, episodes]) => ({
         seasonNumber, title: seasonNumber === 0 ? "Specials" : `Season ${seasonNumber}`, episodeCount: episodes.length,
         airDate: episodes.map((ep) => ep.airDate).filter((date): date is string => !!date).sort()[0] ?? null,
-        requestable: true, unavailableReason: null,
+        requestable: seasonNumber > 0, unavailableReason: seasonNumber === 0 && !specials.length
+          ? "Verified individual specials are unavailable." : null,
       }));
     } catch (error) {
       if (!(error instanceof TvCatalogError)) throw error;
@@ -271,7 +291,7 @@ export class TmdbTvCatalog implements TvCatalog {
       seasons = metadata.seasons.map((s) => ({ seasonNumber: s.season_number, title: s.name,
         episodeCount: s.episode_count, airDate: s.air_date ?? null, requestable: false, unavailableReason: error.message }));
     }
-    return { ...summary(metadata), numberingScheme: "tvdb:aired", seasons, episodeKeysBySeason };
+    return { ...summary(metadata), numberingScheme: "tvdb:aired", seasons, episodeKeysBySeason, specials };
   }
 }
 

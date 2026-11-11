@@ -133,6 +133,21 @@ test("SkyHook artwork is retained only from explicit public provider images when
   expect(f.calls).toHaveLength(2);
 });
 
+test("special discovery uses only canonical TVDB episode IDs, not TMDB counts or ordinals", async () => {
+  const f = fixture({ tmdb: { ...details, seasons: [{ season_number: 0, name: "TMDB Specials", episode_count: 20 }] },
+    skyhook: { ...skyhookShow, episodes: [...skyhookShow.episodes,
+      { tvdbShowId: 700, tvdbId: 7021, seasonNumber: 0, episodeNumber: 8, title: "Second" },
+      { tvdbShowId: 700, tvdbId: 7034, seasonNumber: 0, episodeNumber: 3, title: "First", airDate: "2020-01-01" },
+    ] } });
+  const catalog = new TmdbTvCatalog("token", { url: "", apiKey: "" }, { fetcher: f.fetcher });
+  const detail = await catalog.details(70);
+  expect(detail.seasons).toMatchObject([{ seasonNumber: 0, episodeCount: 2, requestable: false }, { seasonNumber: 2, requestable: true }]);
+  expect(detail.specials).toEqual([
+    { episodeKey: "tvdb:7034", episodeNumber: 3, title: "First", airDate: "2020-01-01" },
+    { episodeKey: "tvdb:7021", episodeNumber: 8, title: "Second", airDate: null },
+  ]);
+});
+
 test("provider timeouts bound both response headers and streaming bodies, and concurrency is capped", async () => {
   for (const fetcher of [
     async () => new Promise<Response>(() => {}),
