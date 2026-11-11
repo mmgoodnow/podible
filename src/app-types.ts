@@ -76,8 +76,14 @@ export type AppSettings = {
   };
   notifications: {
     delivery?: "dry-run" | "live";
+    email: {
+      apiKey: string;
+      from: string;
+      recipients: string;
+    };
     pushover: {
       enabled: boolean;
+      lifecycleEnabled: boolean;
       apiToken: string;
       userKey: string;
     };

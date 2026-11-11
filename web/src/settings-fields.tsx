@@ -431,16 +431,28 @@ export function StorageSettings({ form }: { form: SettingsForm }) {
 
 export function NotificationSettings({ form }: { form: SettingsForm }) {
   const notifications = fields(form).group("notifications"), pushover = notifications.group("pushover");
-  const delivery = notifications.field("delivery");
+  const email = notifications.group("email");
+  const delivery = notifications.field("delivery"), recipients = email.field("recipients");
   return <>
     <SettingsGroup title="External delivery">
       <SelectField<"dry-run" | "live"> label="Delivery mode" field={{ ...delivery, value: delivery.value ?? "dry-run", persisted: delivery.persisted ?? "dry-run" }}
-        help="Dry run logs alerts without sending them. In-app notifications still work."
+        help="Dry run sends nothing. Events recorded in dry run are not sent later. In-app notifications still work."
         options={[["dry-run", "Dry run"], ["live", "Live"]]} />
     </SettingsGroup>
-    <SettingsGroup title="Pushover" note="Send administrator alerts to Pushover.">
+    <SettingsGroup title="User email" note="Send existing movie and TV availability notices to the mapped recipients through Resend.">
+    <Grid>
+      <SecretField label="Resend API key" field={email.field("apiKey")} help="Use a sending key for your verified domain." />
+      <TextField label="Sender address" field={email.field("from")} help="An email address on the verified sending domain." />
+      <Frame field={recipients} label="Recipient addresses" help="Enter one Podible user ID = email address per line. Unlisted users only get in-app notices.">
+        {props => <textarea {...props} rows={4} spellCheck={false} value={recipients.value}
+          onChange={event => recipients.set(event.target.value, "Recipient addresses")} />}
+      </Frame>
+    </Grid>
+    </SettingsGroup>
+    <SettingsGroup title="Pushover" note="Send owner alerts to the configured Pushover account.">
     <Grid>
       <CheckField label="Enable Pushover notifications" field={pushover.field("enabled")} help="Send administrator alerts when delivery mode is Live." />
+      <CheckField label="Movie and TV availability" field={pushover.field("lifecycleEnabled")} help="Also notify the owner after Plex verifies newly available movies or episodes." />
       <SecretField label="Pushover API token" field={pushover.field("apiToken")} help="Application token that authorizes sending alerts." />
       <SecretField label="Pushover user key" field={pushover.field("userKey")} help="Account key that determines who receives the alerts." />
     </Grid>

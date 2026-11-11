@@ -7,6 +7,7 @@ import { STEWARDSHIP_INTERVAL_MS } from "./media/torrent-stewardship-types";
 import { hasTorrentStewardshipBindings } from "./media/torrent-stewardship";
 import { TRANSFER_METRICS_INTERVAL_MS } from "./media/transfer-metrics-types";
 import { queuePeriodicJob } from "./worker/periodic";
+import { startNotificationDelivery } from "./notifications/delivery";
 
 export { pollMsForMedia, selectDownloadPollMs } from "./worker/downloads";
 
@@ -25,6 +26,7 @@ export async function runWorker(
       options.databasePath ?? ctx.repo.executionDatabasePath(),
       options,
     ));
+  const stopNotifications = startNotificationDelivery(ctx.repo.notifications.delivery, message => workerLog(ctx, message));
   try {
     const schedule = (input: Parameters<typeof ctx.repo.createJob>[0]) => queuePeriodicJob(ctx.repo, input);
     const boot = randomUUID();
@@ -139,6 +141,6 @@ export async function runWorker(
       await Bun.sleep(100);
     }
   } finally {
-    await runtime.stop();
+    await Promise.all([runtime.stop(), stopNotifications()]);
   }
 }

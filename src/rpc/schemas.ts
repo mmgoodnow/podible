@@ -6,6 +6,7 @@ import { tvSettingsSchema } from "../tv/settings";
 import { retentionPolicySchema } from "../media/retention-policy-types";
 import { JOB_TYPES } from "../job-types";
 import { prowlarrSettingsSchema } from "../media/prowlarr";
+import { emailSettingsSchema } from "../notifications/settings";
 
 const emptyToUndefined = (value: unknown) => {
   if (value === undefined || value === null || value === "") return undefined;
@@ -51,7 +52,7 @@ export const mediaSelectionSchema = z
 
 export const jobTypeSchema = z.enum(JOB_TYPES);
 
-export const appSettingsSchema: z.ZodType<AppSettings> = z.object({
+export const appSettingsSchema = z.object({
   prowlarr: prowlarrSettingsSchema.prefault({}),
   movies: movieSettingsSchema.default(defaultMovieSettings()),
   tv: tvSettingsSchema.prefault({}),
@@ -105,13 +106,15 @@ export const appSettingsSchema: z.ZodType<AppSettings> = z.object({
   }),
   notifications: z.object({
     delivery: z.enum(["dry-run", "live"]).optional(),
+    email: emailSettingsSchema,
     pushover: z.object({
       enabled: z.boolean(),
+      lifecycleEnabled: z.boolean(),
       apiToken: z.string(),
       userKey: z.string(),
     }),
   }),
-});
+}) satisfies z.ZodType<AppSettings>;
 
 export const stringRecordSchema = z.record(z.string(), z.string());
 export const countMapSchema = z.record(z.string(), z.number().int().nonnegative());

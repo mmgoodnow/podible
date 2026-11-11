@@ -29,7 +29,9 @@ describe("books repo", () => {
       auth: { ...initial.auth, mode: "plex" as const },
       recovery: { stalledTorrentMinutes: 15 },
       notifications: {
+        ...initial.notifications,
         pushover: {
+          ...initial.notifications.pushover,
           enabled: true,
           apiToken: "token",
           userKey: "user"

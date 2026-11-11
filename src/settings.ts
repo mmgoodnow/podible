@@ -4,6 +4,7 @@ import { defaultMovieSettings, movieSettingsSchema } from "./movies/settings";
 import { prowlarrSettingsSchema } from "./media/prowlarr";
 import { tvSettingsSchema } from "./tv/settings";
 import { retentionPolicySchema } from "./media/retention-policy-types";
+import { parseNotificationSettings } from "./notifications/settings";
 
 type SettingsOverrides = Partial<Omit<AppSettings, "rtorrent" | "polling" | "recovery" | "feed" | "auth" | "agents" | "notifications">> & {
   rtorrent?: Partial<AppSettings["rtorrent"]>;
@@ -16,6 +17,7 @@ type SettingsOverrides = Partial<Omit<AppSettings, "rtorrent" | "polling" | "rec
   agents?: Partial<AppSettings["agents"]>;
   notifications?: {
     delivery?: AppSettings["notifications"]["delivery"];
+    email?: Partial<AppSettings["notifications"]["email"]>;
     pushover?: Partial<AppSettings["notifications"]["pushover"]>;
   };
 };
@@ -60,14 +62,7 @@ export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
       editionPreference: "",
       timeoutMs: 30000,
     },
-    notifications: {
-      delivery: "dry-run",
-      pushover: {
-        enabled: false,
-        apiToken: "",
-        userKey: "",
-      },
-    },
+    notifications: parseNotificationSettings(undefined),
   };
 
   return resolveLibraryStorage({
@@ -107,6 +102,7 @@ export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
     },
     notifications: {
       delivery: overrides?.notifications?.delivery ?? defaults.notifications.delivery,
+      email: { ...defaults.notifications.email, ...overrides?.notifications?.email },
       pushover: {
         ...defaults.notifications.pushover,
         ...(overrides?.notifications?.pushover ?? {}),
@@ -141,14 +137,6 @@ export function parseSettings(value: string): AppSettings {
   const parsedAgents = (parsed.agents && typeof parsed.agents === "object" ? parsed.agents : {}) as Partial<AppSettings["agents"]>;
   const parsedRecovery =
     parsed.recovery && typeof parsed.recovery === "object" ? (parsed.recovery as Partial<AppSettings["recovery"]>) : {};
-  const parsedNotifications =
-    parsed.notifications && typeof parsed.notifications === "object"
-      ? (parsed.notifications as Partial<AppSettings["notifications"]>)
-      : {};
-  const parsedPushover =
-    parsedNotifications.pushover && typeof parsedNotifications.pushover === "object"
-      ? (parsedNotifications.pushover as Partial<AppSettings["notifications"]["pushover"]>)
-      : {};
   const stalledTorrentMinutes =
     typeof parsedRecovery.stalledTorrentMinutes === "number" && Number.isFinite(parsedRecovery.stalledTorrentMinutes)
       ? Math.max(0, Math.trunc(parsedRecovery.stalledTorrentMinutes))
@@ -215,13 +203,6 @@ export function parseSettings(value: string): AppSettings {
           ? Math.max(1000, Math.trunc(parsedAgents.timeoutMs))
           : defaults.agents.timeoutMs,
     },
-    notifications: {
-      delivery: parsedNotifications.delivery === "live" ? "live" : "dry-run",
-      pushover: {
-        enabled: typeof parsedPushover.enabled === "boolean" ? parsedPushover.enabled : defaults.notifications.pushover.enabled,
-        apiToken: typeof parsedPushover.apiToken === "string" ? parsedPushover.apiToken : defaults.notifications.pushover.apiToken,
-        userKey: typeof parsedPushover.userKey === "string" ? parsedPushover.userKey : defaults.notifications.pushover.userKey,
-      },
-    },
+    notifications: parseNotificationSettings(parsed.notifications),
   });
 }

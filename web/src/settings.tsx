@@ -23,7 +23,7 @@ const sections = {
   video: { title: "Movies & TV", description: "Catalog metadata, Plex publishing, and Radarr and Sonarr comparisons.", roots: ["movies", "tv"] },
   plex: { title: "Plex access", description: "Choose who can sign in and configure reader app redirects.", roots: ["auth"] },
   storage: { title: "Storage", description: "Library location, Plex views and retention.", roots: ["storageRoot", "retention"] },
-  notifications: { title: "Notifications", description: "Configure alerts delivered through Pushover.", roots: ["notifications"] },
+  notifications: { title: "Notifications", description: "Configure movie and TV email and owner Pushover alerts.", roots: ["notifications"] },
 } satisfies Record<string, { title: string; description: string; roots: string[] }>;
 type Section = keyof typeof sections;
 const sectionKeys = Object.keys(sections) as Section[];

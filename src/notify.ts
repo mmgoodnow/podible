@@ -4,6 +4,7 @@ type NotificationRequest = {
   title: string;
   message: string;
 };
+export type NotificationFetch = (url: string, init: RequestInit) => Promise<Response>;
 
 const PUSHOVER_TIMEOUT_MS = 3_000;
 
@@ -29,7 +30,18 @@ export async function sendPushoverNotification(
     return { delivered: false, reason: "dry_run" };
   }
 
-  const pushover = settings.notifications.pushover;
+  const response = await postPushoverMessage(settings.notifications.pushover, request);
+  if (!response.ok) {
+    throw new Error(`Pushover returned ${response.status}`);
+  }
+  return { delivered: true };
+}
+
+export async function postPushoverMessage(
+  pushover: AppSettings["notifications"]["pushover"],
+  request: NotificationRequest,
+  fetcher: NotificationFetch = fetch,
+): Promise<Response> {
   const body = new URLSearchParams({
     token: pushover.apiToken.trim(),
     user: pushover.userKey.trim(),
@@ -39,10 +51,10 @@ export async function sendPushoverNotification(
 
   const signal = AbortSignal.timeout(PUSHOVER_TIMEOUT_MS);
 
-  let response: Response;
   try {
-    response = await fetch("https://api.pushover.net/1/messages.json", {
+    return await fetcher("https://api.pushover.net/1/messages.json", {
       method: "POST",
+      redirect: "error",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
       },
@@ -55,10 +67,4 @@ export async function sendPushoverNotification(
     }
     throw error;
   }
-
-  if (!response.ok) {
-    throw new Error(`Pushover returned ${response.status}`);
-  }
-
-  return { delivered: true };
 }

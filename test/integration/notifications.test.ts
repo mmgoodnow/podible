@@ -11,6 +11,9 @@ import { initializeManagedContent } from "../../src/media/library-view";
 import { publishMovieVersion } from "../../src/movies/publication";
 import { defaultMovieQualityPolicy as policy } from "../../src/movies/quality";
 import { BooksRepo } from "../../src/repo";
+import { deliverNextNotification } from "../../src/notifications/delivery";
+import type { NotificationFetch } from "../../src/notify";
+import { defaultSettings } from "../../src/settings";
 import { PlexTvLibrary } from "../../src/tv/plex";
 import { publishTvVersion, tvRoots, tvViewEntries } from "../../src/tv/publication";
 import { requestTvSelection } from "../../src/tv/service";
@@ -38,6 +41,62 @@ async function fixture() {
 
 const movie = { tmdbId: 406, title: "Private Movie", originalTitle: "Private Movie", year: 2024, overview: "", originalLanguage: "en", imdbId: null, posterUrl: null };
 const verified = { scan: async () => {}, verify: async () => true };
+const addressFor = (user: { id: number }) => `user-${user.id}@example.test`;
+
+function configureDelivery(repo: BooksRepo, users: { id: number }[]) {
+  repo.updateSettings(defaultSettings({ notifications: {
+    delivery: "live",
+    email: { apiKey: "fake", from: "podible@example.test", recipients: users.map(user => `${user.id}=${addressFor(user)}`).join("\n") },
+    pushover: { enabled: true, lifecycleEnabled: true, apiToken: "fake", userKey: "owner-key" },
+  } }));
+}
+
+function pendingDeliveries(db: Database) {
+  return db.query("SELECT key FROM app_state WHERE key GLOB 'notifications:delivery:v1:pending:*'").all();
+}
+
+async function drainDeliveries(repo: BooksRepo, count: number) {
+  const emails: { to: string[]; subject: string; text: string }[] = [], pushes: URLSearchParams[] = [];
+  const fetcher: NotificationFetch = async (url, request) => {
+    if (url === "https://api.resend.com/emails") {
+      emails.push(JSON.parse(String(request?.body)));
+      return Response.json({ id: `fake-${emails.length}` });
+    }
+    expect(url).toBe("https://api.pushover.net/1/messages.json");
+    pushes.push(new URLSearchParams(String(request?.body)));
+    return Response.json({ status: 1 });
+  };
+  for (let i = 0; i < count; i++) expect(await deliverNextNotification(repo.notifications.delivery, { fetcher })).toEqual({ state: "accepted" });
+  expect(await deliverNextNotification(repo.notifications.delivery, { fetcher })).toBeNull();
+  return { emails, pushes };
+}
+
+test("notification destinations are admin-only and survive a legacy settings update", async () => {
+  const f = await fixture();
+  try {
+    const admin = f.user("admin", true), user = f.user("user");
+    configureDelivery(f.repo, [user]);
+    for (const account of [admin, user]) f.repo.createSession(account.id, hashSessionToken(`notify-${account.username}`), null, "browser");
+    const handler = createPodibleFetchHandler(f.repo, Date.now(), null);
+    const rpc = async (method: string, params: object, username: string) => {
+      const response = await handler(new Request("http://localhost/rpc", { method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: `podible_session=notify-${username}` },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) }));
+      return await response.json() as { result?: ReturnType<typeof defaultSettings>; error?: { code: number } };
+    };
+    expect((await rpc("settings.get", {}, "user")).result).toBeUndefined();
+    const { result: saved } = await rpc("settings.get", {}, "admin");
+    if (!saved) throw new Error("admin settings unavailable");
+    expect(saved.notifications.email.recipients).toBe(`${user.id}=${addressFor(user)}`);
+    const legacy = { ...saved, notifications: { pushover: { enabled: true, apiToken: "fake", userKey: "owner-key" } } };
+    const { result: updated } = await rpc("settings.update", { settings: legacy }, "admin");
+    expect(updated?.notifications).toEqual(saved.notifications);
+    const invalid = { ...saved, notifications: { ...saved.notifications,
+      email: { ...saved.notifications.email, recipients: "1=a@example.test\n1=b@example.test" } } };
+    expect((await rpc("settings.update", { settings: invalid }, "admin")).error?.code).toBe(-32602);
+    expect(f.repo.getSettings().notifications).toEqual(saved.notifications);
+  } finally { await f.close(); }
+});
 
 test("movie publication atomically delivers once, including a watch, without exposing other users' inboxes", async () => {
   const f = await fixture();
@@ -45,6 +104,7 @@ test("movie publication atomically delivers once, including a watch, without exp
   try {
     const owner = f.user("owner"), watcher = f.user("watcher"), stranger = f.user("stranger", true);
     const withdrawn = f.user("withdrawn"), imported = f.user("imported");
+    configureDelivery(repo, [owner, watcher, stranger, withdrawn, imported]);
     for (const user of [owner, watcher, stranger]) repo.createSession(user.id, hashSessionToken(`notify-${user.username}`), null, "browser");
     const handler = createPodibleFetchHandler(repo, Date.now(), null);
     const rpc = async (method: string, params: object, username?: string) => {
@@ -75,12 +135,16 @@ test("movie publication atomically delivers once, including a watch, without exp
     expect(await publishMovieVersion({ ...input, pendingIsExpected: true, library: { ...verified, verify: async () => false } })).toBe(false);
     expect(repo.notifications.list(owner.id).items).toEqual([]);
     expect(repo.notifications.list(watcher.id).items).toEqual([]);
-    db.exec(`CREATE TRIGGER fail_inbox_write BEFORE INSERT ON app_state
-      WHEN NEW.key GLOB 'notifications:inbox:*' BEGIN SELECT RAISE(ABORT, 'inbox write failed'); END`);
-    await expect(publishMovieVersion(input)).rejects.toThrow("inbox write failed");
+    expect(pendingDeliveries(db)).toEqual([]);
+    db.exec(`CREATE TRIGGER fail_delivery_write BEFORE INSERT ON app_state
+      WHEN NEW.key GLOB 'notifications:delivery:v1:pending:*' BEGIN SELECT RAISE(ABORT, 'outbox write failed'); END`);
+    await expect(publishMovieVersion(input)).rejects.toThrow("outbox write failed");
     expect(repo.movies.target(request.targetId)?.active_version_id).toBeNull();
     expect(repo.notifications.watchStatus(watcher.id, title)).toBe("watching");
-    db.exec("DROP TRIGGER fail_inbox_write");
+    expect(repo.notifications.list(owner.id).items).toEqual([]);
+    expect(repo.notifications.list(watcher.id).items).toEqual([]);
+    expect(pendingDeliveries(db)).toEqual([]);
+    db.exec("DROP TRIGGER fail_delivery_write");
     await expect(publishMovieVersion({ ...input, afterPromotion: () => { throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
 
     const ownerNotice = repo.notifications.list(owner.id).items[0]!;
@@ -101,7 +165,15 @@ test("movie publication atomically delivers once, including a watch, without exp
         { ...ownerNotice, readAt: expect.any(String) },
       ]);
       expect(new BooksRepo(reopened).notifications.list(watcher.id).items).toEqual([watcherNotice]);
+      const { emails, pushes } = await drainDeliveries(new BooksRepo(reopened), 3);
+      expect(emails.map(email => email.to[0]).sort()).toEqual([addressFor(owner), addressFor(watcher)].sort());
+      for (const email of emails) expect(email.subject).toContain(movie.title);
+      expect(pushes).toHaveLength(1);
+      expect(pushes[0]?.get("user")).toBe("owner-key");
+      expect(pushes[0]?.get("message")).toBe(movie.title);
     } finally { reopened.close(); }
+    await publishMovieVersion(input);
+    expect(pendingDeliveries(db)).toEqual([]);
 
     // An explicit new watch after losing availability is not a replay of the first delivery.
     db.query("UPDATE movie_targets SET active_version_id=NULL,revision=revision+1 WHERE id=?").run(request.targetId);
@@ -216,6 +288,7 @@ test("a TV publication batches notice and watch statements across recipients and
     const { repo } = f;
     const owner = f.user("owner"), otherOwner = f.user("other-owner"), later = f.user("later-owner");
     const watchers = [f.user("watcher-a"), f.user("watcher-b")];
+    configureDelivery(repo, [owner, otherOwner, later, ...watchers]);
     const [special, regular, future] = show.episodes.map(ep => ep.key) as [string, string, string];
     const request = repo.tv.requestNativeSelection(owner.id, show, policy, [1], [special], [special, regular]);
     repo.tv.requestNativeSelection(otherOwner.id, show, policy, [1], [], [regular]);
@@ -232,7 +305,7 @@ test("a TV publication batches notice and watch statements across recipients and
     try {
       await publishTvVersion({ repo: repo.tv, roots: tvRoots(f.root, "/plex/tv"), targetId: request.targetId, versionId, library: verified });
       const writes = query.mock.calls.map(([sql]) => sql).filter(sql => /^(INSERT INTO|UPDATE|DELETE FROM) app_state\b/.test(sql));
-      expect(writes.map(sql => sql.split(" app_state")[0])).toEqual(["INSERT INTO", "DELETE FROM", "UPDATE"]);
+      expect(writes.map(sql => sql.split(" app_state")[0])).toEqual(["INSERT INTO", "INSERT INTO", "INSERT INTO", "DELETE FROM", "UPDATE"]);
     } finally { query.mockRestore(); }
 
     const notices = repo.notifications.list(owner.id).items;
@@ -249,7 +322,14 @@ test("a TV publication batches notice and watch statements across recipients and
 
     expect(repo.notifications.markRead(owner.id, notices[0]!.id)).toBe(true);
     const read = repo.notifications.list(owner.id).items;
+    const { emails, pushes } = await drainDeliveries(repo, 8);
+    const specialEmails = emails.filter(email => email.text.includes("S00E01"));
+    const regularEmails = emails.filter(email => email.text.includes("S01E01"));
+    expect(specialEmails.flatMap(email => email.to).sort()).toEqual([owner, ...watchers].map(addressFor).sort());
+    expect(regularEmails.flatMap(email => email.to).sort()).toEqual([owner, otherOwner, ...watchers].map(addressFor).sort());
+    expect(pushes.map(push => push.get("message"))).toEqual([`${show.title}: S00E01: Episode 0, S01E01: Episode 1`]);
     repo.transaction(() => repo.notifications.tvPublished(request.targetId, revision, request.episodeIds));
     expect(repo.notifications.list(owner.id).items).toEqual(read);
+    expect(pendingDeliveries(f.db)).toEqual([]);
   } finally { await f.close(); }
 });
