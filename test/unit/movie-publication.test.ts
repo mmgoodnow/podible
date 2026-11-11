@@ -159,6 +159,15 @@ test("movie upgrade keeps the old playable view until verified and recovers a cr
         "utf8",
       ),
     ).toBe("movie 2");
+    const remainingPath = path.join(roots.viewRoot, movieViewEntries(repo.movies, roots)[0]!.relativePath);
+    db.query("UPDATE movie_targets SET active_version_id=NULL WHERE id=?").run(requested.targetId);
+    let checks = 0;
+    await expect(reconcileMovieView(repo.movies, roots, () => {
+      if (++checks > 1) throw new Error("cancelled cleanup");
+    })).rejects.toThrow("cancelled cleanup");
+    expect(await readFile(remainingPath, "utf8")).toBe("movie 2");
+    await reconcileMovieView(repo.movies, roots);
+    await expect(readlink(remainingPath)).rejects.toThrow();
   } finally {
     db.close();
     await rm(root, { recursive: true, force: true });

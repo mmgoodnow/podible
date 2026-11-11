@@ -82,6 +82,7 @@ export async function reconcileMovieView(
     return reconcileLibraryView({
       ...roots,
       entries: movieViewEntries(repo, roots),
+      assertActive,
       onLinkApplied: assertActive,
     });
   });
@@ -110,6 +111,7 @@ export async function publishMovieVersion(input: {
     await reconcileLibraryView({
       ...roots,
       entries: movieViewEntries(repo, roots),
+      assertActive: active,
       onLinkApplied: active,
     });
     active();
@@ -142,6 +144,7 @@ export async function publishMovieVersion(input: {
     await reconcileLibraryView({
       ...roots,
       entries: movieViewEntries(repo, roots),
+      assertActive: active,
       onLinkApplied: active,
     });
     repo.event(

@@ -31,7 +31,7 @@ import {
   releaseRowSchema,
   torznabResultSchema,
 } from "./schemas";
-import { enrichLibraryBookPlayback, enrichLibraryBookProgress, removeFileIfPresent, RpcError, type RpcContext } from "./shared";
+import { enrichLibraryBookPlayback, enrichLibraryBookProgress, RpcError, type RpcContext } from "./shared";
 import type { BookRow } from "../app-types";
 
 const RELEASE_SEARCH_TTL_MS = 30 * 60 * 1000;
@@ -676,7 +676,7 @@ export const libraryRouter = defineRouter({
 
   delete: defineMethod({
     auth: "user",
-    summary: "Delete a book, cascading DB rows and imported files/covers.",
+    summary: "Remove a book and queue view reconciliation without reclaiming its files.",
     paramsSchema: emptyParamsSchema.extend({
       bookId: positiveIntSchema,
     }),
@@ -688,38 +688,20 @@ export const libraryRouter = defineRouter({
       deletedTranscriptPaths: z.array(z.string()),
       deletedCoverPath: z.string().nullable(),
     }),
-    async handler(ctx, params) {
-      const book = ctx.repo.getBookRow(params.bookId);
-      if (!book) {
-        throw new RpcError(-32000, "Book not found", { error: "not_found", bookId: params.bookId });
-      }
-
-      const artifacts = ctx.repo.getBookDeleteArtifacts(params.bookId);
-      const deleted = ctx.repo.deleteBook(params.bookId);
-      if (!deleted) {
-        throw new RpcError(-32000, "Book not found", { error: "not_found", bookId: params.bookId });
-      }
-      const deletedAssetPaths: string[] = [];
-      for (const filePath of artifacts.assetPaths) {
-        if (await removeFileIfPresent(filePath)) {
-          deletedAssetPaths.push(filePath);
+    handler(ctx, params) {
+      ctx.repo.transaction(() => {
+        if (!ctx.repo.deleteBook(params.bookId)) {
+          throw new RpcError(-32000, "Book not found", { error: "not_found", bookId: params.bookId });
         }
-      }
-      const deletedTranscriptPaths: string[] = [];
-      for (const filePath of artifacts.transcriptPaths) {
-        if (await removeFileIfPresent(filePath)) {
-          deletedTranscriptPaths.push(filePath);
-        }
-      }
-      const deletedCoverPath = artifacts.coverPath ? ((await removeFileIfPresent(artifacts.coverPath)) ? artifacts.coverPath : null) : null;
-
+        ctx.repo.createJob({ type: "reconcile", payload: { bookViewOnly: true } });
+      });
       return {
         deletedBookId: params.bookId,
-        deletedAssetFileCount: deletedAssetPaths.length,
-        deletedAssetPaths,
-        deletedTranscriptFileCount: deletedTranscriptPaths.length,
-        deletedTranscriptPaths,
-        deletedCoverPath,
+        deletedAssetFileCount: 0,
+        deletedAssetPaths: [],
+        deletedTranscriptFileCount: 0,
+        deletedTranscriptPaths: [],
+        deletedCoverPath: null,
       };
     },
   }),

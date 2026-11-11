@@ -672,8 +672,8 @@ export function BookDetail({
           <details className="panel">
             <summary>Manage this book</summary>
             <p>
-              Removing a book also removes imported files, artwork, and
-              transcripts. This cannot be undone.
+              This removes the book from the library. Downloaded files are
+              kept so existing torrents can continue seeding.
             </p>
             {confirmDelete ? (
               <div className="actions">
@@ -681,7 +681,7 @@ export function BookDetail({
                   disabled={remove.isPending}
                   onClick={() => remove.mutate({ bookId })}
                 >
-                  Permanently remove book
+                  Remove book
                 </button>
                 <button
                   className="secondary"

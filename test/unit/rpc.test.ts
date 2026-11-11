@@ -1524,7 +1524,7 @@ describe("json-rpc handler", () => {
     }
   });
 
-  test("library.delete allows non-admin users and cascades DB rows and asset+cover files", async () => {
+  test("library.delete removes library records and durably queues view cleanup without unlinking stored files", async () => {
     const db = new Database(":memory:");
     runMigrations(db);
     const repo = new BooksRepo(db);
@@ -1577,13 +1577,14 @@ describe("json-rpc handler", () => {
       "user"
     );
     expect(result.result.deletedBookId).toBe(book.id);
-    expect(result.result.deletedAssetFileCount).toBe(1);
+    expect(result.result.deletedAssetFileCount).toBe(0);
     expect(repo.getBook(book.id)).toBeNull();
     expect(repo.listReleasesByBook(book.id)).toEqual([]);
     expect(repo.listAssetsByBook(book.id)).toEqual([]);
 
-    expect(await Bun.file(assetPath).exists()).toBe(false);
-    expect(await Bun.file(coverPath).exists()).toBe(false);
+    expect(JSON.parse(repo.latestJobByType("reconcile")!.payload_json!)).toEqual({ bookViewOnly: true });
+    expect(await Bun.file(assetPath).text()).toBe("test-audio");
+    expect(await Bun.file(coverPath).exists()).toBe(true);
 
     db.close();
   });
