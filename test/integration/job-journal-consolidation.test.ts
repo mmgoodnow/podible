@@ -6,6 +6,7 @@ import path from "node:path";
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
+import { agentUsagePrometheus, recordAgentUsage } from "../../src/agent-usage";
 
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "podible-job-journal-"));
@@ -110,6 +111,31 @@ test("lifecycle reads come from the journal without running a status pump", asyn
     expect(f.repo.forExecution(() => {}).getJob(job.id)?.status).toBe("succeeded");
   } finally {
     release();
+    await runtime.stop();
+    f.db.close();
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("agent usage inside durable worker steps is visible from another database handle", async () => {
+  const f = await fixture();
+  const runtime = await createJobExecutionRuntime(f.ctx, f.journal, {
+    processJob: async (ctx) => {
+      await ctx.execution!.run("model", () => {
+        recordAgentUsage("book-selection", "responses", "gpt-6-luna", 123, { input: 1000 });
+        return true;
+      });
+      return "done";
+    },
+  });
+  try {
+    const job = f.repo.createJob({ type: "acquire" });
+    await runtime.reconcile();
+    await until(() => f.repo.getJob(job.id)?.status === "succeeded");
+    using reader = new Database(path.join(f.root, "books.sqlite"), { readonly: true });
+    expect(agentUsagePrometheus(new BooksRepo(reader))).toContain(
+      'podible_agent_model_calls_total{workflow="book-selection",api="responses",model="gpt-6-luna"} 1\n');
+  } finally {
     await runtime.stop();
     f.db.close();
     await rm(f.root, { recursive: true, force: true });

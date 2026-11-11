@@ -1,13 +1,14 @@
 import { Agent, OpenAIProvider, Runner } from "@openai/agents";
 import type { ModelProvider } from "@openai/agents-core";
 import { TEXT_AGENT_MODEL } from "../ai-models";
+import { meterAgentProvider } from "../agent-usage";
 import type { AppSettings } from "../app-types";
 import { bookQualityAssessmentSchema, type BookQualityEvidence } from "./quality";
 
 export async function assessBookUpgrade(settings: AppSettings, evidence: BookQualityEvidence, modelProvider?: ModelProvider) {
   if (!modelProvider && !settings.agents.apiKey.trim()) return null;
   const provider = modelProvider ? null : new OpenAIProvider({ apiKey: settings.agents.apiKey, useResponses: true });
-  const runner = new Runner({ modelProvider: modelProvider ?? provider!, tracingDisabled: true, traceIncludeSensitiveData: false });
+  const runner = new Runner({ modelProvider: modelProvider ?? meterAgentProvider(provider!, "book-upgrade"), tracingDisabled: true, traceIncludeSensitiveData: false });
   try {
     const agent = new Agent({
       name: "BookUpgradeReviewer", model: TEXT_AGENT_MODEL, outputType: bookQualityAssessmentSchema,

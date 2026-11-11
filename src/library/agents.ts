@@ -3,6 +3,7 @@ import type { ModelProvider } from "@openai/agents-core";
 import { z } from "zod";
 
 import { TEXT_AGENT_MODEL } from "../ai-models";
+import { meterAgentProvider } from "../agent-usage";
 import type { ImportInspectionFile } from "./importer";
 import type { BooksRepo } from "../repo";
 import { rankSearchResults } from "./service";
@@ -175,7 +176,7 @@ function determineTrigger(
   return "none";
 }
 
-function makeRunner(apiKey: string, overrideProvider?: ModelProvider): { provider: OpenAIProvider | null; runner: Runner } {
+function makeRunner(apiKey: string, workflow: "book-selection" | "book-import", overrideProvider?: ModelProvider): { provider: OpenAIProvider | null; runner: Runner } {
   if (overrideProvider) {
     const runner = new Runner({
       modelProvider: overrideProvider,
@@ -186,7 +187,7 @@ function makeRunner(apiKey: string, overrideProvider?: ModelProvider): { provide
   }
   const provider = new OpenAIProvider({ apiKey, useResponses: true });
   const runner = new Runner({
-    modelProvider: provider,
+    modelProvider: meterAgentProvider(provider, workflow),
     tracingDisabled: true,
     traceIncludeSensitiveData: false,
   });
@@ -682,7 +683,7 @@ export async function selectSearchCandidates(
   try {
     const userPrompt = buildSearchAgentPrompt(trigger, input, ranked);
     const agent = createSearchAgent(agentConfig, ranked, runtime.repo);
-    const { provider, runner } = makeRunner(agentConfig.apiKey, runtime.modelProvider);
+    const { provider, runner } = makeRunner(agentConfig.apiKey, "book-selection", runtime.modelProvider);
     const output = await runAgentWithTimeout(provider, agentConfig.timeoutMs, async (signal) => {
       const result = await runner.run(agent, userPrompt, {
         maxTurns: 6,
@@ -745,7 +746,7 @@ export async function selectManualImportPaths(
   try {
     const userPrompt = buildManualImportAgentPrompt(trigger, input);
     const agent = createManualImportAgent(agentConfig);
-    const { provider, runner } = makeRunner(agentConfig.apiKey, runtime.modelProvider);
+    const { provider, runner } = makeRunner(agentConfig.apiKey, "book-import", runtime.modelProvider);
     const output = await runAgentWithTimeout(provider, agentConfig.timeoutMs, async (signal) => {
       const result = await runner.run(agent, userPrompt, {
         maxTurns: 2,

@@ -3,6 +3,7 @@ import type { ModelProvider } from "@openai/agents-core";
 import { z } from "zod";
 import type { AppSettings } from "../app-types";
 import { TEXT_AGENT_MODEL } from "../ai-models";
+import { meterAgentProvider } from "../agent-usage";
 import { inspectMetainfo, METAINFO_INSPECTION_FAILED } from "../media/metainfo";
 import { createCrossSeedabilityTool, matchingIndexesSchema, matchingSelectionOffers, releaseSelectionInstructions } from "../media/release-selection";
 import { movieFactsSchema, evaluateMovieQuality } from "./quality";
@@ -61,7 +62,7 @@ function movieAgentRunner(
           useResponses: true,
         });
     const runner = new Runner({
-      modelProvider: modelProvider ?? provider!,
+      modelProvider: modelProvider ?? meterAgentProvider(provider!, "movie"),
       tracingDisabled: true,
       traceIncludeSensitiveData: false,
     });

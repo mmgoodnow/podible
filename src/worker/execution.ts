@@ -19,6 +19,7 @@ import { assertWorkflowBoundary, effectCheckpoint, executionDiagnostics, withExe
 import { assertNoMutexHeld, mutexDiagnostics } from "../runtime/keyed-mutex";
 import { CompletionSignals, completionEvent, watchTorrentCompletions } from "../runtime/completion-signals";
 import { watchPlexCompletions } from "../runtime/plex-completion";
+import { withAgentUsageAccounting } from "../agent-usage";
 
 export const EXECUTION_JOB_TYPES = JOB_TYPES;
 
@@ -387,7 +388,9 @@ export async function createJobExecutionRuntime(
         const job = await execution.run("job-input", () => ctx.repo.getJob(input.jobId)!);
         if (eventMode) await execution.run("media:event-mode", () => true);
         const ownedRepo = ctx.repo.forExecution(assertActive);
-        const result = await (options.processJob ?? processJob)({ ...ctx, repo: ownedRepo, execution }, job);
+        // Paid calls are accounted for even if the job loses its lease before returning.
+        const result = await withAgentUsageAccounting(ctx.repo, () =>
+          (options.processJob ?? processJob)({ ...ctx, repo: ownedRepo, execution }, job));
         if (result !== "done" && result !== undefined) throw new Error(`Job ${job.id} returned an invalid result`);
         await execution.run("operation-finish", () => { execution.assertActive(); signalsInbox?.clear(runId); });
         return { jobId: job.id };

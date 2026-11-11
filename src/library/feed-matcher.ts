@@ -3,6 +3,7 @@ import type { ModelProvider } from "@openai/agents-core";
 import { z } from "zod";
 import type { AppSettings, MediaType } from "../app-types";
 import { TEXT_AGENT_MODEL } from "../ai-models";
+import { meterAgentProvider } from "../agent-usage";
 import type { TorznabResult } from "./torznab";
 
 export type BookFeedTarget = {
@@ -99,7 +100,7 @@ export function createBookFeedMatcher(
           useResponses: true,
         });
     const runner = new Runner({
-      modelProvider: modelProvider ?? provider!,
+      modelProvider: modelProvider ?? meterAgentProvider(provider!, "book-feed"),
       tracingDisabled: true,
       traceIncludeSensitiveData: false,
     });

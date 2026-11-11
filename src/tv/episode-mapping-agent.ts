@@ -3,6 +3,7 @@ import type { ModelProvider } from "@openai/agents-core";
 import { z } from "zod";
 import type { AppSettings } from "../app-types";
 import { TEXT_AGENT_MODEL } from "../ai-models";
+import { meterAgentProvider } from "../agent-usage";
 import { evidencePage } from "./agent-evidence";
 import { EpisodeMappingError, episodeMappingDecisionSchema, episodeTitle, validateEpisodeMappingDecisions,
   type EpisodeMappingDecision, type EpisodeMappingResearch } from "./episode-crosswalk";
@@ -56,7 +57,7 @@ Call submitEpisodeMappings with every source ID exactly once and an evidence-bas
         toolUseBehavior: async () => accepted === null ? { isFinalOutput: false as const, isInterrupted: undefined }
           : { isFinalOutput: true as const, isInterrupted: undefined, finalOutput: JSON.stringify(accepted) },
       });
-      const runner = new Runner({ modelProvider: modelProvider ?? provider!, tracingDisabled: true, traceIncludeSensitiveData: false });
+      const runner = new Runner({ modelProvider: modelProvider ?? meterAgentProvider(provider!, "tv-episode-mapping"), tracingDisabled: true, traceIncludeSensitiveData: false });
       await runner.run(agent, JSON.stringify({ work: { key: entry.key, title: entry.title, tmdbId: entry.tmdbId, tvdbId: entry.tvdbId },
         requestedCount: sources.length, canonicalCandidateCount: candidates.length }),
       { maxTurns: 64, signal: AbortSignal.timeout(Math.max(120_000, settings.agents.timeoutMs)), toolExecution: { maxFunctionToolConcurrency: 1 } });

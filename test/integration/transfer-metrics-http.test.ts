@@ -30,6 +30,7 @@ test("metrics use admin authentication, expose no tracker editor, and reads have
     expect(scrape.headers.get("content-type")).toContain("text/plain");
     const text = await scrape.text(); expect(text).toContain("podible_transfer_metrics_fresh 0\n");
     expect(text).toContain("# TYPE podible_canonical_finalization_seconds histogram\n");
+    expect(text).toContain("# TYPE podible_agent_estimated_cost_usd_total counter\n");
     expect(text).toMatch(/^podible_canonical_finalization_seconds_count\{media="tv",phase="proof_persist"\} \d+$/m);
     expect(text).not.toMatch(/^podible_seed_bytes /m);
     for (const [token, code] of [[undefined, -32001], ["metrics-reader-token", -32003]] as const) {

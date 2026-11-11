@@ -153,9 +153,26 @@ stat(18, "Reuse attempts pending", "Attempts without a recorded outcome.", "none
 y += 4;
 note("History starts with the first successful Prometheus scrape. Missing series are not zero. Publication counts reflect Podible records; they do not prove files still exist. Tracker traffic does not represent account credit.");
 
+row("AI usage and cost");
+const agentMetric = (metric: string) => series(`agent_${metric}`);
+const agentChange = (metric: string, range = "$__range") => `increase(${agentMetric(metric)}[${range}])`;
+const agentTotal = (metric: string) => `sum(${agentChange(metric)})`;
+stat(0, "Estimated agent spend", "Observed text model calls in the selected range, priced at standard global rates. Not the OpenAI invoice; audio, covers, missing usage and unpriced calls are excluded.", "currencyUSD", agentTotal("estimated_cost_usd_total"), 4);
+stat(6, "Model calls", "Observed SDK model calls in the selected range, including individual turns of an agent.", "none", agentTotal("model_calls_total"), 0);
+stat(12, "Average model call time", "Per-call wall time, including model transport but excluding indexer and tool work between calls.", "s",
+  `${agentTotal("model_call_seconds_total")} / (${agentTotal("model_calls_total")} > 0)`);
+stat(18, "Calls without a cost estimate", "Missing token usage (including model errors) or unknown rates. These calls are not evidence of zero cost.", "none",
+  `${agentTotal("usage_missing_total")} + ${agentTotal("usage_unpriced_total")}`, 0);
+y += 4;
+chart(0, "Agent spend by workflow", "Trailing-hour estimated cost by workflow and API.", "currencyUSD",
+  [[`sum by (workflow, api) (${agentChange("estimated_cost_usd_total", "1h")}) > 0`, "{{workflow}} · {{api}}"]]);
+chart(12, "Model calls by workflow", "Trailing-hour model calls. Compare Responses and Decisions here when both paths emit usage.", "none",
+  [[`sum by (workflow, api) (${agentChange("model_calls_total", "1h")}) > 0`, "{{workflow}} · {{api}}"]]);
+y += 9;
+
 console.log(JSON.stringify({
-  uid: "podible-operations", title: "Podible", tags: ["media", "podible"], schemaVersion: 41, version: 2,
-  description: "Library delivery, seeding coverage, reuse and network activity.",
+  uid: "podible-operations", title: "Podible", tags: ["media", "podible"], schemaVersion: 41, version: 3,
+  description: "Library delivery, seeding coverage, reuse, network activity and agent costs.",
   editable: false, time: { from: "now-24h", to: "now" }, refresh: "1m", panels,
   links: [{ type: "link", title: "Podible Activity", url: "https://podible.cyplex.dev/ops", targetBlank: true }],
 }, null, 2));

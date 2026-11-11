@@ -11,6 +11,7 @@ function ensureTracingInitialized(apiKey: string): void {
 import { z } from "zod";
 
 import { TEXT_AGENT_MODEL } from "../ai-models";
+import { meterAgentProvider } from "../agent-usage";
 import type { EpubChapterEntry } from "./chapter-analysis";
 import { chapterArtifactStep } from "./chapter-execution";
 import {
@@ -906,7 +907,7 @@ export async function judgeChapterBoundary(
   const provider = new OpenAIProvider({ apiKey, useResponses: true });
   try {
     const runner = new Runner({
-      modelProvider: provider,
+      modelProvider: meterAgentProvider(provider, "chapter-judge"),
       tracingDisabled: true,
       traceIncludeSensitiveData: false,
     });
@@ -2292,7 +2293,7 @@ export async function runNodeParallelAgenticChapterCurationDetailed(ctx: Chapter
   const provider = new OpenAIProvider({ apiKey, useResponses: true });
   try {
     const runner = new Runner({
-      modelProvider: provider,
+      modelProvider: meterAgentProvider(provider, "chapter-curation"),
       tracingDisabled: true,
       traceIncludeSensitiveData: false,
     });

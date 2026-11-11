@@ -144,6 +144,15 @@ queued does not contribute to download latency. Reconciliation measures the
 filesystem projection pass separately from Plex indexing. An empty percentile
 means no qualifying samples, not instant completion.
 
+The **AI usage and cost** row reports text agent model calls made by the job
+worker, their wall time, and estimated USD spend from reported token counts.
+Each turn of a tool-using agent counts separately. Rates assume standard global
+OpenAI pricing, including cache discounts and the long-context premium; this
+is not an invoice. Calls without usage or a supported price are counted
+separately. Image generation, transcription, and work before instrumentation
+are not included. Metrics persist across worker restarts and contain only
+bounded workflow, API, and model labels, not prompts or titles.
+
 | Panel | PromQL | Unit |
 | --- | --- | --- |
 | Logical seed size | `podible_seed_bytes` | bytes |

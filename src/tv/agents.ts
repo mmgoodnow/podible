@@ -3,6 +3,7 @@ import type { AgentInputItem, ModelProvider } from "@openai/agents-core";
 import { z } from "zod";
 import type { AppSettings } from "../app-types";
 import { TEXT_AGENT_MODEL } from "../ai-models";
+import { meterAgentProvider } from "../agent-usage";
 import { inspectMetainfo, METAINFO_INSPECTION_FAILED } from "../media/metainfo";
 import { createCrossSeedabilityTool, matchingIndexesSchema, matchingSelectionOffers, releaseSelectionInstructions } from "../media/release-selection";
 import { fetchMovieMetainfo, type MovieOffer, type MovieSearch } from "../movies/offers";
@@ -64,7 +65,7 @@ export function createTvDecider(settings: AppSettings, modelProvider?: ModelProv
     if (!modelProvider && !settings.agents.apiKey.trim()) throw new Error("Configure the existing agent API key for TV review");
     const provider = modelProvider ? null : new OpenAIProvider({ apiKey: settings.agents.apiKey, useResponses: true });
     try {
-      const runner = new Runner({ modelProvider: modelProvider ?? provider!, tracingDisabled: true, traceIncludeSensitiveData: false });
+      const runner = new Runner({ modelProvider: modelProvider ?? meterAgentProvider(provider!, "tv"), tracingDisabled: true, traceIncludeSensitiveData: false });
       const agent = new Agent({ name, model: TEXT_AGENT_MODEL, instructions: instructions + "\n" + extra, outputType, tools });
       const signal = AbortSignal.timeout(Math.max(120_000, settings.agents.timeoutMs));
       let history: string | AgentInputItem[] = JSON.stringify(input);

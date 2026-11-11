@@ -3,6 +3,7 @@ import type { ModelProvider } from "@openai/agents-core";
 import { z } from "zod";
 import type { AppSettings } from "../app-types";
 import { TEXT_AGENT_MODEL } from "../ai-models";
+import { meterAgentProvider } from "../agent-usage";
 import type { TvFeedMatcher } from "./feed";
 
 const output = z.object({ matches: z.array(z.object({
@@ -22,7 +23,7 @@ This is broad candidate routing, not final release selection or proof of quality
 Works and their relationships are independent of provider seasons. This applies to live-action and animation alike. A separately numbered sequel can map to a provider season or absolute numbering. Use the explicit sourced numbering, references, titles and aliases; do not invent mapping evidence.
 ${mode === "reuse" ? "Route releases for the same retained work, including completed episodes and season packs. Episode arrays are omitted intentionally: this is work-level byte-reuse discovery, not an episode request. A separate manifest/file verifier must prove reuse before starting a torrent." : "Only the supplied episodes are wanted. For a target with promotionSeasons, the episodes are already available: route only plausible whole packs for one of those TVDB aired seasons, not singles or multi-season releases."} Do not route an unrelated work just because it shares a provider aggregate or franchise. Return matches:[] if none are plausible.
 Explain the matching evidence briefly. Do not ask for human approval, search upstream, or invent releases.` });
-      const runner = new Runner({ modelProvider: modelProvider ?? provider!, tracingDisabled: true, traceIncludeSensitiveData: false });
+      const runner = new Runner({ modelProvider: modelProvider ?? meterAgentProvider(provider!, "tv-feed"), tracingDisabled: true, traceIncludeSensitiveData: false });
       const result = await runner.run(agent, JSON.stringify({
         targets: targets.map(({ targetId, entry, episodes, promotionSeasons }) => ({ targetId,
           entry: { key: entry.key, title: entry.title, aliases: entry.aliases, refs: entry.refs, relations: entry.relations },
