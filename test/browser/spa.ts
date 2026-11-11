@@ -42,8 +42,9 @@ try {
   await page
     .getByRole("heading", { name: "The Odyssey", exact: true })
     .waitFor();
-  assert.deepEqual(await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link").allTextContents(),
-    ["Library"], "A reader should only see the Library destination");
+  const mainLinks = page.getByRole("navigation", { name: "Main navigation" }).getByRole("link");
+  assert.deepEqual(await mainLinks.evaluateAll(items => items.map(link => [link.textContent, link.getAttribute("href")])),
+    [["Library", "/library"], ["Notifications", "/notifications"]], "A reader must not see administrator destinations");
   await page.goto(new URL("/movie-dual-write", url).href);
   assert.equal(new URL(page.url()).pathname, "/ops");
   await page.getByRole("alert").getByText("Administrator access required.").waitFor();
@@ -80,6 +81,8 @@ try {
   await context.clearCookies();
   await page.reload();
   await page.getByRole("link", { name: "Sign in", exact: true }).waitFor();
+  assert.deepEqual(await mainLinks.evaluateAll(items => items.map(link => [link.textContent, link.getAttribute("href")])),
+    [["Library", "/library"]], "Signed-out navigation must not expose account destinations");
   if (errors.length) throw new Error(errors.join("\n"));
   console.log(
     "SPA browser acceptance passed: typed API, live filtering, mobile layout, deep link, missing resources and expired session.",
