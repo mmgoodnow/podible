@@ -33,8 +33,30 @@ struct MediaTitle: Identifiable, Hashable {
     let tmdbID: Int?
 }
 
-struct MediaSeason: Identifiable {
-    let id: Int
+struct MediaRequestOption: Identifiable {
+    enum ID: Hashable {
+        case season(Int)
+        case special(String)
+
+        var seasonNumber: Int? {
+            if case let .season(number) = self { return number }
+            return nil
+        }
+
+        var specialKey: String? {
+            if case let .special(key) = self { return key }
+            return nil
+        }
+
+        var accessibilityIdentifier: String {
+            switch self {
+            case .season(let number): "season.\(number)"
+            case .special(let key): "special.\(key)"
+            }
+        }
+    }
+
+    let id: ID
     let name: String
     let summary: String
     var requestable: Bool
@@ -82,12 +104,18 @@ enum DemoCatalog {
         title("tide", "Tide Lines", "2025 / 1 season / Documentary", "A season on the water with the people restoring the North Atlantic kelp forests.", .show, "#465C8E", .requested),
     ]
 
-    static func seasons(for item: MediaTitle, requested: Set<Int>) -> [MediaSeason] {
+    static func requestOptions(for item: MediaTitle, requested: Set<MediaRequestOption.ID>) -> [MediaRequestOption] {
         guard item.kind == .show else { return [] }
         let count = item.id == "tide" ? 1 : item.id == "north" ? 3 : 2
-        return (1...count).map { season in
-            let pending = requested.contains(season) || item.id == "tide"
-            return MediaSeason(id: season, name: "Season \(season)", summary: pending ? "Requested" : "8 episodes", requestable: !pending)
+        let seasons = (1...count).map { season in
+            let pending = requested.contains(.season(season)) || item.id == "tide"
+            return MediaRequestOption(id: .season(season), name: "Season \(season)", summary: pending ? "Requested" : "8 episodes", requestable: !pending)
+        }
+        guard item.id == "north" else { return seasons }
+        return seasons + ["Behind the Scenes", "The First Crossing"].enumerated().map { index, name in
+            let id = MediaRequestOption.ID.special("tvdb:\(8001 + index)")
+            let pending = requested.contains(id)
+            return MediaRequestOption(id: id, name: "Special \(index + 1): \(name)", summary: pending ? "Requested" : "", requestable: !pending)
         }
     }
 

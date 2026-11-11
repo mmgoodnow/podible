@@ -67,6 +67,42 @@ final class FocusTests: XCTestCase {
     }
 
     @MainActor
+    func testRequestOnlyOneSpecial() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo"]
+        app.launch()
+        let remote = XCUIRemote.shared
+        let firstPoster = app.buttons["poster.marrow"]
+        XCTAssertTrue(firstPoster.waitForExistence(timeout: 8))
+        if app.buttons["nav.Home"].hasFocus { remote.press(.right) }
+        assertFocused(firstPoster)
+        for _ in 0..<4 { remote.press(.right) }
+        assertFocused(app.buttons["poster.north"])
+        remote.press(.select)
+
+        let firstSeason = app.buttons["season.1"]
+        XCTAssertTrue(firstSeason.waitForExistence(timeout: 5))
+        assertFocused(firstSeason)
+        for _ in 0..<3 { remote.press(.down) }
+        let special = app.buttons["special.tvdb:8001"]
+        let other = app.buttons["special.tvdb:8002"]
+        assertFocused(special)
+        remote.press(.select)
+        XCTAssertEqual(special.value as? String, "Selected")
+        XCTAssertEqual(other.value as? String, "Not selected")
+        remote.press(.down)
+        assertFocused(other)
+        remote.press(.down)
+        assertFocused(app.buttons["season.request"])
+        remote.press(.select)
+        XCTAssertTrue(app.staticTexts["Request sent"].waitForExistence(timeout: 5))
+        XCTAssertFalse(special.exists)
+        XCTAssertEqual(other.value as? String, "Not selected")
+        XCTAssertEqual(firstSeason.value as? String, "Not selected")
+    }
+
+    @MainActor
     private func assertFocused(_ element: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
         let focused = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hasFocus == YES"), object: element)
         XCTAssertEqual(XCTWaiter.wait(for: [focused], timeout: 4), .completed, file: file, line: line)

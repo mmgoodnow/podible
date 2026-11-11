@@ -3,10 +3,10 @@ import SwiftUI
 
 struct TitleDetailView: View {
     let item: MediaTitle
-    let seasons: [MediaSeason]
+    let seasons: [MediaRequestOption]
     let progress: TitleAcquisitionProgress?
     let play: (URL) -> Void
-    let request: ([Int]) async throws -> Void
+    let request: (Set<MediaRequestOption.ID>) async throws -> Void
 
     var body: some View {
         Content(item: item, seasons: seasons, progress: progress, play: play, request: request)
@@ -17,18 +17,18 @@ struct TitleDetailView: View {
 private extension TitleDetailView {
     struct Content: View {
         let item: MediaTitle
-        let seasons: [MediaSeason]
+        let seasons: [MediaRequestOption]
         let progress: TitleAcquisitionProgress?
         let play: (URL) -> Void
-        let request: ([Int]) async throws -> Void
+        let request: (Set<MediaRequestOption.ID>) async throws -> Void
 
-        @State private var selection: Set<Int> = []
-        @State private var submittedSeasons: Set<Int> = []
+        @State private var selection: Set<MediaRequestOption.ID> = []
+        @State private var submittedOptions: Set<MediaRequestOption.ID> = []
         @State private var submittedMovie = false
         @State private var confirmingMovie = false
         @State private var submitting = false
         @State private var requestError: String?
-        @FocusState private var focusedSeason: Int?
+        @FocusState private var focusedOption: MediaRequestOption.ID?
 
         private let base = Color(red: 0.045, green: 0.055, blue: 0.07)
 
@@ -38,11 +38,11 @@ private extension TitleDetailView {
             isMovie && item.requestState == .requestable && !submittedMovie
         }
 
-        private var eligibleSeasons: Set<Int> {
-            Set(seasons.filter(\.requestable).map(\.id)).subtracting(submittedSeasons)
+        private var eligibleOptions: Set<MediaRequestOption.ID> {
+            Set(seasons.filter(\.requestable).map(\.id)).subtracting(submittedOptions)
         }
 
-        private var selectedSeasons: Set<Int> { selection.intersection(eligibleSeasons) }
+        private var selectedOptions: Set<MediaRequestOption.ID> { selection.intersection(eligibleOptions) }
 
         private var accent: Color {
             let raw = item.accent.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -87,7 +87,7 @@ private extension TitleDetailView {
             .background(base.ignoresSafeArea())
             .foregroundStyle(.white)
             .environment(\.colorScheme, .dark)
-            .onChange(of: eligibleSeasons) { _, eligible in
+            .onChange(of: eligibleOptions) { _, eligible in
                 selection.formIntersection(eligible)
             }
             .alert("Request Movie?", isPresented: $confirmingMovie) {
@@ -205,10 +205,13 @@ private extension TitleDetailView {
         }
 
         private var seasonSection: some View {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Seasons")
-                    .font(.system(size: 44, weight: .bold))
-                    .accessibilityAddTraits(.isHeader)
+            let firstSpecial = seasons.first { $0.id.specialKey != nil }?.id
+            return VStack(alignment: .leading, spacing: 20) {
+                if seasons.isEmpty || seasons.contains(where: { $0.id.seasonNumber != nil }) {
+                    Text("Seasons")
+                        .font(.system(size: 44, weight: .bold))
+                        .accessibilityAddTraits(.isHeader)
+                }
 
                 if seasons.isEmpty {
                     Text("No season information available.")
@@ -216,30 +219,35 @@ private extension TitleDetailView {
                 }
 
                 ForEach(seasons) { season in
-                    if eligibleSeasons.contains(season.id) {
-                        let checked = selectedSeasons.contains(season.id)
+                    if season.id == firstSpecial {
+                        Text("Specials")
+                            .font(.system(size: 44, weight: .bold))
+                            .accessibilityAddTraits(.isHeader)
+                    }
+                    if eligibleOptions.contains(season.id) {
+                        let checked = selectedOptions.contains(season.id)
                         Button {
-                            toggleSeason(season.id)
+                            toggleOption(season.id)
                         } label: {
                             seasonLabel(season, icon: checked ? "checkmark.square.fill" : "square")
                                 .padding(.horizontal, 24)
                                 .padding(.vertical, 16)
-                                .background(.white.opacity(focusedSeason == season.id ? 0.12 : 0.06),
+                                .background(.white.opacity(focusedOption == season.id ? 0.12 : 0.06),
                                             in: .rect(cornerRadius: 16))
                                 .overlay {
                                     RoundedRectangle(cornerRadius: 16)
-                                        .strokeBorder(focusedSeason == season.id ? TVPalette.accent : .clear,
+                                        .strokeBorder(focusedOption == season.id ? TVPalette.accent : .clear,
                                                       lineWidth: 3)
                                 }
                         }
                         .buttonStyle(TVUnstyledButton())
                         .focusEffectDisabled()
-                        .focused($focusedSeason, equals: season.id)
+                        .focused($focusedOption, equals: season.id)
                         .disabled(submitting)
-                        .accessibilityIdentifier("season.\(season.id)")
+                        .accessibilityIdentifier(season.id.accessibilityIdentifier)
                         .accessibilityValue(checked ? "Selected" : "Not selected")
                     } else {
-                        let sent = submittedSeasons.contains(season.id)
+                        let sent = submittedOptions.contains(season.id)
                         seasonLabel(season, icon: sent ? "checkmark.circle" : "minus.circle")
                             .padding(.horizontal, 24)
                             .padding(.vertical, 16)
@@ -249,16 +257,18 @@ private extension TitleDetailView {
                     }
                 }
 
-                if !eligibleSeasons.isEmpty {
+                if !eligibleOptions.isEmpty {
                     HStack(spacing: 20) {
-                        Button { submit(selectedSeasons.sorted()) } label: {
-                            Label("Request Selected Seasons", systemImage: "plus")
+                        Button { submit(selectedOptions) } label: {
+                            Label(firstSpecial == nil ? "Request Selected Seasons" : "Request Selected", systemImage: "plus")
                         }
                         .buttonStyle(.bordered)
-                        .disabled(submitting || selectedSeasons.isEmpty)
+                        .disabled(submitting || selectedOptions.isEmpty)
                         .accessibilityIdentifier("season.request")
 
-                        Text(selectedSeasons.isEmpty ? "Select seasons to request." : "\(selectedSeasons.count) selected")
+                        Text(selectedOptions.isEmpty
+                             ? (firstSpecial == nil ? "Select seasons to request." : "Select seasons or specials to request.")
+                             : "\(selectedOptions.count) selected")
                             .foregroundStyle(.white.opacity(0.75))
                     }
                 }
@@ -268,7 +278,7 @@ private extension TitleDetailView {
             .focusSection()
         }
 
-        private func seasonLabel(_ season: MediaSeason, icon: String) -> some View {
+        private func seasonLabel(_ season: MediaRequestOption, icon: String) -> some View {
             HStack(spacing: 18) {
                 Image(systemName: icon)
                     .font(.system(size: 29))
@@ -283,9 +293,9 @@ private extension TitleDetailView {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                if submittedSeasons.contains(season.id) {
+                if submittedOptions.contains(season.id) && season.summary != "Requested" {
                     Text("Requested")
-                } else if !season.requestable {
+                } else if !season.requestable && season.summary.isEmpty {
                     Text("Not requestable")
                 }
             }
@@ -301,7 +311,7 @@ private extension TitleDetailView {
                 .font(.system(size: 24))
             } else if let requestError {
                 status("Request failed: \(requestError)", icon: "exclamationmark.circle")
-            } else if submittedMovie || !submittedSeasons.isEmpty {
+            } else if submittedMovie || !submittedOptions.isEmpty {
                 status("Request sent", icon: "checkmark.circle.fill")
             }
         }
@@ -312,21 +322,21 @@ private extension TitleDetailView {
                 .foregroundStyle(Color.white.opacity(0.85))
         }
 
-        private func toggleSeason(_ id: Int) {
-            guard !submitting, eligibleSeasons.contains(id) else { return }
+        private func toggleOption(_ id: MediaRequestOption.ID) {
+            guard !submitting, eligibleOptions.contains(id) else { return }
             requestError = nil
             if !selection.insert(id).inserted {
                 selection.remove(id)
             }
         }
 
-        private func submit(_ ids: [Int]) {
+        private func submit(_ ids: Set<MediaRequestOption.ID>) {
             guard !submitting else { return }
             let movie = isMovie
             if movie {
                 guard canRequestMovie else { return }
             } else {
-                guard !ids.isEmpty, Set(ids).isSubset(of: eligibleSeasons) else { return }
+                guard !ids.isEmpty, ids.isSubset(of: eligibleOptions) else { return }
             }
 
             submitting = true
@@ -338,7 +348,7 @@ private extension TitleDetailView {
                     if movie {
                         submittedMovie = true
                     } else {
-                        submittedSeasons.formUnion(ids)
+                        submittedOptions.formUnion(ids)
                         selection.subtract(ids)
                     }
                 } catch {

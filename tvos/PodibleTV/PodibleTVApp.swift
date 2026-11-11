@@ -15,7 +15,7 @@ private struct TVRoot: View {
     @State private var requestsError: String?
     @State private var loadingRequests = true
     @State private var sent: [MediaTitle] = []
-    @State private var demoSeasons: [String: Set<Int>] = [:]
+    @State private var demoSelections: [String: Set<MediaRequestOption.ID>] = [:]
     @State private var selection: Section = .browse
     @State private var path: [MediaTitle] = []
     @State private var playback: Playback?
@@ -73,9 +73,9 @@ private struct TVRoot: View {
             .foregroundStyle(TVPalette.paper)
             .background(TVPalette.background.ignoresSafeArea())
             .navigationDestination(for: MediaTitle.self) { item in
-                DetailScreen(initial: item, connection: connection, demoSeasons: demoSeasons[item.id] ?? [],
+                DetailScreen(initial: item, connection: connection, demoSelection: demoSelections[item.id] ?? [],
                              play: { playback = Playback(url: $0) },
-                             requested: { requested, seasons in
+                             requested: { requested, selection in
                                  if let index = catalog.firstIndex(where: { $0.id == requested.id }),
                                     catalog[index].requestState != .available {
                                      catalog[index] = requested
@@ -83,7 +83,7 @@ private struct TVRoot: View {
                                  if connection == nil {
                                      sent.removeAll { $0.id == requested.id }
                                      sent.append(requested)
-                                     demoSeasons[item.id, default: []].formUnion(seasons)
+                                     demoSelections[item.id, default: []].formUnion(selection)
                                  }
                              })
             }
@@ -205,7 +205,7 @@ private struct TVRoot: View {
     @MainActor private func refresh() async {
         guard let connection else {
             catalog = DemoCatalog.items
-            demoSeasons = [:]
+            demoSelections = [:]
             browseError = nil
             loading = false
             return
@@ -243,21 +243,23 @@ private struct TVRoot: View {
 }
 
 private struct DetailScreen: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var observationRetry = 0
     @State private var item: MediaTitle
-    @State private var seasons: [MediaSeason]
+    @State private var seasons: [MediaRequestOption]
     @State private var progress: TitleAcquisitionProgress?
     @State private var loaded: Bool
     @State private var detailError: String?
     let connection: Connection?
     let play: (URL) -> Void
-    let requested: (MediaTitle, [Int]) -> Void
+    let requested: (MediaTitle, Set<MediaRequestOption.ID>) -> Void
 
-    init(initial: MediaTitle, connection: Connection?, demoSeasons: Set<Int>,
-         play: @escaping (URL) -> Void, requested: @escaping (MediaTitle, [Int]) -> Void) {
+    init(initial: MediaTitle, connection: Connection?, demoSelection: Set<MediaRequestOption.ID>,
+         play: @escaping (URL) -> Void, requested: @escaping (MediaTitle, Set<MediaRequestOption.ID>) -> Void) {
         _item = State(initialValue: initial)
-        _seasons = State(initialValue: connection == nil ? DemoCatalog.seasons(for: initial, requested: demoSeasons) : [])
+        _seasons = State(initialValue: connection == nil ? DemoCatalog.requestOptions(for: initial, requested: demoSelection) : [])
         _loaded = State(initialValue: connection == nil)
-        _progress = State(initialValue: connection == nil && (!demoSeasons.isEmpty || initial.requestState == .requested)
+        _progress = State(initialValue: connection == nil && (!demoSelection.isEmpty || initial.requestState == .requested)
             ? .requested : nil)
         self.connection = connection
         self.play = play
@@ -269,7 +271,7 @@ private struct DetailScreen: View {
             if let detailError {
                 HStack {
                     Text(detailError)
-                    Button("Try Again") { Task { await load() } }
+                    Button("Try Again") { observationRetry += 1 }
                 }.padding(.top, 20)
             }
             if !loaded && detailError == nil { ProgressView("Loading title") }
@@ -277,10 +279,26 @@ private struct DetailScreen: View {
                 TitleDetailView(item: item, seasons: seasons, progress: progress, play: play, request: submit)
             }
         }
-        .task { if !loaded { await load() } }
+        .task(id: ObservationID(connection: connection, retry: observationRetry, background: scenePhase == .background)) {
+            guard scenePhase != .background, let connection else { return }
+            do {
+                if !loaded || detailError != nil { try await load() }
+                let client = PodibleClient(baseURL: connection.url, token: connection.token)
+                try await AcquisitionChanges(client: client).observe { try await load() }
+            } catch {
+                guard !Task.isCancelled else { return }
+                detailError = error.localizedDescription
+            }
+        }
     }
 
-    @MainActor private func load() async {
+    private struct ObservationID: Equatable {
+        let connection: Connection?
+        let retry: Int
+        let background: Bool
+    }
+
+    @MainActor private func load() async throws {
         guard let connection else { return }
         detailError = nil
         do {
@@ -288,24 +306,26 @@ private struct DetailScreen: View {
             guard !Task.isCancelled else { return }
             (item, seasons, progress) = details
             loaded = true
+        } catch ClientError.unauthorized {
+            throw ClientError.unauthorized
         } catch {
             guard !Task.isCancelled else { return }
             detailError = error.localizedDescription
         }
     }
 
-    @MainActor private func submit(_ numbers: [Int]) async throws {
+    @MainActor private func submit(_ selection: Set<MediaRequestOption.ID>) async throws {
         if let connection {
-            try await PodibleClient(baseURL: connection.url, token: connection.token).request(item, seasons: numbers)
+            try await PodibleClient(baseURL: connection.url, token: connection.token).request(item, selection: selection)
         }
-        for i in seasons.indices where numbers.contains(seasons[i].id) {
-            seasons[i] = MediaSeason(id: seasons[i].id, name: seasons[i].name, summary: "Requested", requestable: false)
+        for i in seasons.indices where selection.contains(seasons[i].id) && seasons[i].requestable {
+            seasons[i] = MediaRequestOption(id: seasons[i].id, name: seasons[i].name, summary: "Requested", requestable: false)
         }
         if item.requestState != .available { item.requestState = .requested }
-        if progress == nil || progress?.step == .plex { progress = .requested }
+        if progress == nil || (connection == nil && progress?.step == .plex) { progress = .requested }
         var requestItem = item
         requestItem.requestState = .requested
-        requested(requestItem, numbers)
+        requested(requestItem, selection)
     }
 }
 

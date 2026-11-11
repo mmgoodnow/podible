@@ -36,7 +36,7 @@ struct PodibleClient {
         return results
     }
 
-    func detail(_ item: MediaTitle) async throws -> (MediaTitle, [MediaSeason], TitleAcquisitionProgress?) {
+    func detail(_ item: MediaTitle) async throws -> (MediaTitle, [MediaRequestOption], TitleAcquisitionProgress?) {
         switch item.kind {
         case .movie:
             guard let tmdbId = item.tmdbID, tmdbId > 0 else { throw ClientError.missingIdentity }
@@ -54,15 +54,17 @@ struct PodibleClient {
         }
     }
 
-    func request(_ item: MediaTitle, seasons: [Int]) async throws {
+    func request(_ item: MediaTitle, selection: Set<MediaRequestOption.ID>) async throws {
         switch item.kind {
         case .movie:
             guard let tmdbId = item.tmdbID, tmdbId > 0 else { throw ClientError.missingIdentity }
             let _: Requested<MovieRequest> = try await call("movies.request", MovieID(tmdbId: tmdbId))
         case .show:
-            guard (1...500).contains(seasons.count), Set(seasons).count == seasons.count,
-                  seasons.allSatisfy({ (0...9_007_199_254_740_991).contains($0) }) else {
-                throw ClientError.invalidSeasons
+            let seasons = selection.compactMap(\.seasonNumber).sorted()
+            let specials = selection.compactMap(\.specialKey).sorted()
+            guard !selection.isEmpty, seasons.count <= 500, specials.count <= 500,
+                  seasons.allSatisfy({ (1...9_007_199_254_740_991).contains($0) }) else {
+                throw ClientError.invalidSelection
             }
             let tmdbId: Int?
             if let knownID = item.tmdbID {
@@ -72,7 +74,8 @@ struct PodibleClient {
             }
             guard let tmdbId, tmdbId > 0 else { throw ClientError.missingIdentity }
             let _: Requested<TVRequestReceipt> = try await call(
-                "tv.request", SeasonRequest(tmdbId: tmdbId, seasonNumbers: seasons.sorted())
+                "tv.request", TVRequestSelection(tmdbId: tmdbId, seasonNumbers: seasons.isEmpty ? nil : seasons,
+                                                 specialEpisodeKeys: specials.isEmpty ? nil : specials)
             )
         }
     }
@@ -99,7 +102,7 @@ struct PodibleClient {
         }
     }
 
-    private func tvDetail(_ item: MediaTitle) async throws -> (MediaTitle, [MediaSeason], TitleAcquisitionProgress?) {
+    private func tvDetail(_ item: MediaTitle) async throws -> (MediaTitle, [MediaRequestOption], TitleAcquisitionProgress?) {
         var local = try await libraryEntry(for: item)
         let tmdbId = local?.entry.tmdbId ?? item.tmdbID
         var remote: TVDetail?
@@ -115,26 +118,33 @@ struct PodibleClient {
         }
 
         let coverage = remote?.seasons ?? []
-        let seasons = remote?.series?.seasons.map { season in
+        let specials = remote?.specials ?? []
+        let seasons = remote?.series?.seasons.filter { $0.seasonNumber != 0 || specials.isEmpty }.map { season in
             let current = coverage.first { $0.number == season.seasonNumber }
             let ready = season.episodeCount > 0 && current?.available == season.episodeCount
             let requested = current?.requested == true
-            let canRequest = season.requestable && season.episodeCount > 0 && !ready && !requested
+            let canRequest = season.seasonNumber > 0 && season.requestable && season.episodeCount > 0 && !ready && !requested
             let summary: String
             if ready { summary = "Ready in Plex" }
             else if requested { summary = "Already requested" }
             else if !season.requestable { summary = season.unavailableReason ?? "Season unavailable" }
             else { summary = "\(current?.available ?? 0) of \(season.episodeCount) episodes ready" }
-            return MediaSeason(id: season.seasonNumber, name: season.title, summary: summary, requestable: canRequest)
+            return MediaRequestOption(id: .season(season.seasonNumber), name: season.title, summary: summary, requestable: canRequest)
         } ?? local?.progress.seasons.map { season in
-            MediaSeason(id: season.seasonNumber, name: season.seasonNumber == 0 ? "Specials" : "Season \(season.seasonNumber)",
+            MediaRequestOption(id: .season(season.seasonNumber), name: season.seasonNumber == 0 ? "Specials" : "Season \(season.seasonNumber)",
                         summary: "\(season.available) of \(season.total) episodes ready", requestable: false)
         } ?? []
+        let options = seasons + specials.map { special in
+            let name = "Special \(special.episodeNumber)" + (special.title.isEmpty ? "" : ": \(special.title)")
+            let summary = special.available ? "Ready in Plex" : special.requested ? "Already requested" : special.airDate ?? ""
+            return MediaRequestOption(id: .special(special.episodeKey), name: name, summary: summary,
+                                      requestable: !special.available && !special.requested)
+        }
 
         let state: RequestState
         if (local?.availableEpisodes ?? 0) > 0 || coverage.contains(where: { $0.available > 0 }) { state = .available }
-        else if seasons.contains(where: \.requestable) { state = .requestable }
-        else if local?.requests.isEmpty == false || coverage.contains(where: \.requested) { state = .requested }
+        else if options.contains(where: \.requestable) { state = .requestable }
+        else if local?.requests.isEmpty == false || coverage.contains(where: \.requested) || specials.contains(where: \.requested) { state = .requested }
         else { state = .unavailable }
 
         let series = remote?.series
@@ -143,7 +153,7 @@ struct PodibleClient {
                            synopsis: series?.overview ?? item.synopsis, kind: .show,
                            artwork: artwork(series?.posterUrl ?? local?.entry.posterUrl) ?? item.artwork,
                            backdrop: nil, accent: item.accent, playable: false, playbackURL: nil,
-                           requestState: state, tmdbID: tmdbId), seasons, local?.acquisitionProgress)
+                           requestState: state, tmdbID: tmdbId), options, local?.acquisitionProgress)
     }
 
     private func libraryEntry(for item: MediaTitle) async throws -> TVEntry? {
@@ -193,21 +203,9 @@ struct PodibleClient {
     }
 
     private func call<Params: Encodable, Value: Decodable>(_ method: String, _ params: Params) async throws -> Value {
-        guard var endpoint = URLComponents(url: baseURL, resolvingAgainstBaseURL: true),
-              let scheme = endpoint.scheme?.lowercased(), let host = endpoint.host?.lowercased(), !host.isEmpty,
-              endpoint.user == nil, endpoint.password == nil, endpoint.query == nil, endpoint.fragment == nil,
-              scheme == "https" || (scheme == "http" && ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host)) else {
-            throw ClientError.invalidBaseURL
-        }
-        endpoint.path = "/rpc"
-        guard let url = endpoint.url else { throw ClientError.invalidBaseURL }
-        guard !token.isEmpty, token.utf8.allSatisfy({ (33...126).contains($0) }) else {
-            throw ClientError.unauthorized
-        }
         let id = UUID().uuidString
-        var request = URLRequest(url: url)
+        var request = try authenticatedRequest(path: "/rpc")
         request.httpMethod = "POST"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.httpBody = try JSONEncoder().encode(RPCRequest(id: id, method: method, params: params))
@@ -229,14 +227,33 @@ struct PodibleClient {
         }
     }
 
-    private static let session: URLSession = {
+    func authenticatedRequest(path: String) throws -> URLRequest {
+        guard var endpoint = URLComponents(url: baseURL, resolvingAgainstBaseURL: true),
+              let scheme = endpoint.scheme?.lowercased(), let host = endpoint.host?.lowercased(), !host.isEmpty,
+              endpoint.user == nil, endpoint.password == nil, endpoint.query == nil, endpoint.fragment == nil,
+              scheme == "https" || (scheme == "http" && ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host)) else {
+            throw ClientError.invalidBaseURL
+        }
+        endpoint.path = path
+        guard let url = endpoint.url else { throw ClientError.invalidBaseURL }
+        guard !token.isEmpty, token.utf8.allSatisfy({ (33...126).contains($0) }) else {
+            throw ClientError.unauthorized
+        }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        return request
+    }
+
+    private static let session = makeSession(timeout: 30)
+
+    static func makeSession(timeout: TimeInterval) -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpShouldSetCookies = false
         configuration.httpCookieStorage = nil
         configuration.urlCache = nil
-        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForRequest = timeout
         return URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
-    }()
+    }
 }
 
 private final class NoRedirects: NSObject, URLSessionTaskDelegate {
@@ -246,8 +263,8 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     }
 }
 
-nonisolated private enum ClientError: LocalizedError {
-    case invalidBaseURL, unauthorized, invalidQuery, missingIdentity, invalidSeasons, catalogUnavailable
+nonisolated enum ClientError: LocalizedError {
+    case invalidBaseURL, unauthorized, invalidQuery, missingIdentity, invalidSelection, catalogUnavailable
     case invalidResponse, http(Int), rpc(Int)
 
     var errorDescription: String? {
@@ -256,7 +273,7 @@ nonisolated private enum ClientError: LocalizedError {
         case .unauthorized: return "Sign in to Podible again."
         case .invalidQuery: return "Enter a search of at most 200 characters."
         case .missingIdentity: return "This title has no requestable catalog identity."
-        case .invalidSeasons: return "Select between 1 and 500 distinct seasons."
+        case .invalidSelection: return "Select at least one season or special, up to 500 of each."
         case .catalogUnavailable: return "Part of the catalog is unavailable. Try again later."
         case .invalidResponse: return "Podible returned an unexpected response."
         case .http(let code): return "Podible returned HTTP \(code)."
@@ -287,7 +304,11 @@ nonisolated private struct SearchQuery: Encodable { let query: String }
 nonisolated private struct LibraryQuery: Encodable { let query: String; let limit = 50 }
 nonisolated private struct MovieID: Encodable { let tmdbId: Int }
 nonisolated private struct EntryID: Encodable { let entryId: Int }
-nonisolated private struct SeasonRequest: Encodable { let tmdbId: Int; let seasonNumbers: [Int] }
+nonisolated private struct TVRequestSelection: Encodable {
+    let tmdbId: Int
+    let seasonNumbers: [Int]?
+    let specialEpisodeKeys: [String]?
+}
 
 nonisolated private struct CatalogTitle: Decodable, Sendable {
     let tmdbId: Int
@@ -389,9 +410,18 @@ nonisolated private struct TVDetail: Decodable {
         let seasons: [Season]
     }
     struct Coverage: Decodable { let number: Int; let available: Int; let requested: Bool }
+    struct Special: Decodable {
+        let episodeKey: String
+        let episodeNumber: Int
+        let title: String
+        let airDate: String?
+        let available: Bool
+        let requested: Bool
+    }
     let showId: Int?
     let series: Series?
     let seasons: [Coverage]
+    let specials: [Special]?
 }
 nonisolated private struct TVEntry: Decodable {
     struct Metadata: Decodable { let tmdbId: Int?; let title: String; let year: Int?; let posterUrl: String? }
