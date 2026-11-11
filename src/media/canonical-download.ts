@@ -8,6 +8,8 @@ import type { TorrentClient, TorrentRef } from "./torrent-client";
 import { withKeyedMutex } from "../runtime/keyed-mutex";
 import { effectCheckpoint, effectPhase } from "../runtime/execution-effects";
 import { recordCanonicalFinalization } from "./acquisition-latency";
+import { prefillReuseFile } from "./reuse-layout";
+import type { ReuseSourceFile } from "./reuse-plan";
 
 const relative = z.string().min(1).refine(value => !path.isAbsolute(value) &&
   !/[\\\x00-\x1f\x7f]/.test(value) && value.split("/").every(part => part && part !== "." && part !== ".."));
@@ -84,6 +86,7 @@ export async function readCanonicalDownload(contentRoot: string, sourceRoot: str
 type PrepareInput = {
   contentRoot: string; sourceRoot: string; clientId: string; metainfo: Uint8Array;
   allowCreate: boolean; assertActive?: () => void;
+  prefill?: ReadonlyMap<string, ReuseSourceFile>;
 };
 async function serialized<T>(key: string, action: () => Promise<T>): Promise<T> {
   return withKeyedMutex({ kind: "storage", key: `canonical:${key}` }, action);
@@ -132,10 +135,17 @@ async function prepare(input: PrepareInput): Promise<CanonicalDownload | null> {
     const canonical = path.join(contentRoot, file.relativePath);
     let existing = await stat(canonical);
     if (!existing && !plan.ready) {
-      // Plex may run under a different UID; publication must remain readable.
-      const handle = await fs.open(canonical, "wx", 0o644);
-      try { await handle.chmod(0o644); await handle.sync(); } finally { await handle.close(); }
-      await sync(path.dirname(canonical)); existing = await stat(canonical);
+      const prefill = input.prefill?.get(file.path);
+      if (prefill) {
+        if (prefill.size !== file.size) throw new Error("Prefill does not match the canonical reservation size");
+        await prefillReuseFile(prefill, canonical, active);
+      } else {
+        // Plex may run under a different UID; publication must remain readable.
+        const handle = await fs.open(canonical, "wx", 0o644);
+        try { await handle.chmod(0o644); await handle.sync(); } finally { await handle.close(); }
+        await sync(path.dirname(canonical));
+      }
+      existing = await stat(canonical);
     }
     if (!existing?.isFile() || existing.isSymbolicLink() || existing.nlink !== 1n || existing.size > BigInt(file.size) ||
       (plan.sealed && existing.size !== BigInt(file.size)) ||

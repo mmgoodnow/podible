@@ -15,7 +15,7 @@ import { PlexTvLibrary } from "../../src/tv/plex";
 import { tvRoots, tvViewEntries, type TvPublishedFile } from "../../src/tv/publication";
 import type { TvServices } from "../../src/tv/runtime";
 import type { TvCatalogEntry } from "../../src/tv/types";
-import type { DownloadLocation, TorrentRef, TorrentSnapshot } from "../../src/media/torrent-client";
+import { TorrentNotFoundError, type DownloadLocation, type TorrentRef, type TorrentSnapshot } from "../../src/media/torrent-client";
 import { tvSourceSchema } from "../../src/tv/source-reuse";
 import type { WorkerContext } from "../../src/worker/context";
 import { createJobExecutionRuntime } from "../../src/worker/execution";
@@ -43,6 +43,36 @@ function catalog(): TvCatalogEntry {
   };
 }
 
+const fixturePieceBytes = 16 * 1024;
+type PackReuseSnapshot = TorrentSnapshot & { verifiedBytes: number; uncheckedBytes: number };
+type PackReuseFixture = {
+  checked: boolean;
+  checkPhase: "pending" | "observed" | null;
+  uncheckedAfterCheck: number;
+  running: boolean;
+  removed: boolean;
+  verifiedPieces: Set<number>;
+  staged: { path: string; canonical: string; dev: number; ino: number }[];
+  rechecks: PackReuseSnapshot[];
+  resumes: PackReuseSnapshot[];
+  writes: { index: number; offset: number; bytes: number }[];
+};
+
+function packPieces(files: readonly Buffer[]) {
+  const pieces: { index: number; offset: number; bytes: Buffer }[][] = [];
+  let total = 0;
+  for (const [index, file] of files.entries()) {
+    for (let offset = 0; offset < file.length;) {
+      const pieceIndex = Math.floor(total / fixturePieceBytes);
+      const length = Math.min(file.length - offset, fixturePieceBytes - total % fixturePieceBytes);
+      (pieces[pieceIndex] ??= []).push({ index, offset, bytes: file.subarray(offset, offset + length) });
+      offset += length;
+      total += length;
+    }
+  }
+  return pieces;
+}
+
 function fixtureServices(root: string) {
   const base = createFixtureMovieServices(root);
   const coverage = new Map<string, string[]>();
@@ -51,7 +81,25 @@ function fixtureServices(root: string) {
   const inspections: { key: string; ids: number[] }[] = [];
   const completed = new Map<string, TorrentSnapshot>();
   const inspectedHashes: string[] = [];
-  const packs = new Map<string, { offer: ReturnType<typeof base.addOffer>; metainfo: Uint8Array; bytes: Buffer[]; keys: string[]; location?: DownloadLocation }>();
+  const packs = new Map<string, { offer: ReturnType<typeof base.addOffer>; metainfo: Uint8Array; bytes: Buffer[];
+    keys: string[]; location?: DownloadLocation; reuse?: PackReuseFixture }>();
+  const packFiles = (pack: { metainfo: Uint8Array; location: DownloadLocation }) => inspectMetainfo(pack.metainfo).files.map((file, index) => ({ index,
+    path: path.join(root, "downloads", pack.location.relativePath, file.path) }));
+  const reuseObservation = async (ref: TorrentRef, pack: { metainfo: Uint8Array; bytes: Buffer[];
+    location: DownloadLocation; reuse: PackReuseFixture }): Promise<PackReuseSnapshot> => {
+    const { reuse } = pack;
+    const sizeBytes = inspectMetainfo(pack.metainfo).size;
+    const verifiedBytes = packPieces(pack.bytes).reduce((sum, piece, i) => sum + (reuse.verifiedPieces.has(i)
+      ? piece.reduce((bytes, part) => bytes + part.bytes.length, 0) : 0), 0);
+    const uncheckedBytes = reuse.checked ? reuse.uncheckedAfterCheck : (await Promise.all(packFiles(pack).map(async file =>
+      (await fs.stat(file.path)).size))).reduce((sum, size) => sum + size, 0);
+    const complete = reuse.checked && !reuse.checkPhase && uncheckedBytes === 0 && verifiedBytes === sizeBytes;
+    const state = reuse.checkPhase ? "checking" : reuse.running ? complete ? "seeding" : "downloading" : "inactive";
+    return { ref, location: pack.location, state,
+      complete, verifiedBytes, uncheckedBytes, bytesDone: verifiedBytes + uncheckedBytes, sizeBytes,
+      downloadedEver: reuse.writes.reduce((total, write) => total + write.bytes, 0),
+      downloadBytesPerSecond: 0, message: null, observedAt: new Date().toISOString() };
+  };
   let packOffers: ReturnType<typeof base.addOffer>[] = [];
   let resumes = 0;
   let sourceAdds = 0;
@@ -64,6 +112,10 @@ function fixtureServices(root: string) {
       if (pack) {
         if (!pack.location) {
           base.stats.snatches++; pack.location = input.location;
+          if (pack.reuse) {
+            expect(input.seedOnly).not.toBe(true);
+            return { clientId: base.services.client.id, nativeId: metadata.infoHash };
+          }
           for (const [i, file] of metadata.files.entries()) {
             const destination = path.join(root, "downloads", input.location.relativePath, file.path);
             await fs.mkdir(path.dirname(destination), { recursive: true });
@@ -77,6 +129,14 @@ function fixtureServices(root: string) {
       inspectedHashes.push(ref.nativeId);
       const pack = packs.get(ref.nativeId);
       if (pack?.location) {
+        if (pack.reuse?.removed) throw new TorrentNotFoundError();
+        if (pack.reuse) {
+          const { reuse } = pack;
+          if (reuse.checkPhase === "observed") reuse.checkPhase = null;
+          const observation = await reuseObservation(ref, { ...pack, location: pack.location, reuse });
+          if (reuse.checkPhase === "pending") reuse.checkPhase = "observed";
+          return observation;
+        }
         const size = inspectMetainfo(pack.metainfo).size;
         return { ref, location: pack.location, state: "seeding", complete: true, bytesDone: size, sizeBytes: size,
           downloadBytesPerSecond: 0, message: null, observedAt: new Date().toISOString() };
@@ -88,9 +148,73 @@ function fixtureServices(root: string) {
       return observation;
     }, files: async (ref) => {
       const pack = packs.get(ref.nativeId);
-      return pack?.location ? inspectMetainfo(pack.metainfo).files.map((file, index) => ({ index,
-        path: path.join(root, "downloads", pack.location!.relativePath, file.path) })) : base.services.client.files(ref);
-    }, resume: async (ref) => { resumes++; return base.services.client.resume(ref); } },
+      return pack?.location ? packFiles({ ...pack, location: pack.location }) : base.services.client.files(ref);
+    }, recheck: async (ref) => {
+      const pack = packs.get(ref.nativeId);
+      if (!pack?.location || !pack.reuse) return base.services.client.recheck(ref);
+      const { reuse } = pack;
+      expect(reuse.running).toBe(false);
+      reuse.staged = await Promise.all(packFiles({ ...pack, location: pack.location }).map(async file => {
+        expect((await fs.lstat(file.path)).isSymbolicLink()).toBe(true);
+        const canonical = await fs.realpath(file.path), stat = await fs.lstat(canonical);
+        expect(canonical.startsWith(path.join(root, "objects", "files") + path.sep)).toBe(true);
+        expect(stat.isFile()).toBe(true);
+        expect(stat.nlink).toBe(1);
+        return { ...file, canonical, dev: stat.dev, ino: stat.ino };
+      }));
+      const staged = await Promise.all(reuse.staged.map(file => fs.readFile(file.canonical)));
+      reuse.verifiedPieces.clear();
+      const pieces = packPieces(pack.bytes);
+      const decoded = bencode.decode(Buffer.from(pack.metainfo)) as { info: { pieces: Uint8Array } };
+      const hashes = Buffer.from(decoded.info.pieces);
+      for (const [index, piece] of pieces.entries()) {
+        const actual = piece.map(part => staged[part.index]!.subarray(part.offset, part.offset + part.bytes.length));
+        if (actual.every((bytes, i) => bytes.length === piece[i]!.bytes.length) &&
+            createHash("sha1").update(Buffer.concat(actual)).digest().equals(hashes.subarray(index * 20, (index + 1) * 20)))
+          reuse.verifiedPieces.add(index);
+      }
+      reuse.checked = true;
+      reuse.rechecks.push(await reuseObservation(ref, { ...pack, location: pack.location, reuse }));
+      reuse.checkPhase = "pending";
+    }, resume: async (ref) => {
+      resumes++;
+      const pack = packs.get(ref.nativeId);
+      if (!pack?.location || !pack.reuse) return base.services.client.resume(ref);
+      const { reuse } = pack;
+      reuse.resumes.push(await reuseObservation(ref, { ...pack, location: pack.location, reuse }));
+      reuse.checkPhase = null;
+      reuse.uncheckedAfterCheck = 0;
+      reuse.running = true;
+      const files = packFiles({ ...pack, location: pack.location });
+      for (const [index, piece] of packPieces(pack.bytes).entries()) {
+        if (reuse.verifiedPieces.has(index)) continue;
+        for (const part of piece) {
+          const file = await fs.open(files[part.index]!.path, "r+");
+          try {
+            const { bytesWritten } = await file.write(part.bytes, 0, part.bytes.length, part.offset);
+            expect(bytesWritten).toBe(part.bytes.length);
+          } finally { await file.close(); }
+          reuse.writes.push({ index: part.index, offset: part.offset, bytes: part.bytes.length });
+        }
+        reuse.verifiedPieces.add(index);
+      }
+      reuse.checked = true;
+    }, quiesce: async (ref) => {
+      const reuse = packs.get(ref.nativeId)?.reuse;
+      if (!reuse) return base.services.client.quiesce(ref);
+      reuse.running = false;
+    }, removeRecord: async (ref) => {
+      const reuse = packs.get(ref.nativeId)?.reuse;
+      if (!reuse) return base.services.client.removeRecord(ref);
+      reuse.running = false;
+      reuse.removed = true;
+    }, sealDownload: async (ref) => {
+      const pack = packs.get(ref.nativeId);
+      if (!pack?.location || !pack.reuse) throw new Error("Unexpected fixture download seal");
+      const observation = await reuseObservation(ref, { ...pack, location: pack.location, reuse: pack.reuse });
+      expect(observation.complete).toBe(true);
+      pack.reuse.running = false;
+    } },
     library: { scan: () => base.services.library.scan(),
       verify: (_entry, files) => base.services.library.verify(fixtureMovie, files.map((file) => file.serverPath)) },
     fetchMetainfo: (offer) => packs.has(offer.infoHash!) ? Promise.resolve(packs.get(offer.infoHash!)!.metainfo) : base.services.fetchMetainfo(offer),
@@ -133,9 +257,10 @@ function fixtureServices(root: string) {
   return {
     ...base, services, selections, inspections, inspectedHashes, packs, get sourceAdds() { return sourceAdds; }, get resumes() { return resumes; },
     clearOffers: () => { base.clearOffers(); packOffers = []; },
-    addPack: (key: string, episodeKeys: string[]) => {
-      const bytes = episodeKeys.map((episode) => Buffer.from(`synthetic whole episode ${episode}`));
-      const combined = Buffer.concat(bytes), pieceLength = 16384;
+    addPack: (key: string, episodeKeys: string[], options?: { bytes: Buffer[]; reuse?: boolean }) => {
+      const bytes = options?.bytes ?? episodeKeys.map((episode) => Buffer.from(`synthetic whole episode ${episode}`));
+      expect(bytes).toHaveLength(episodeKeys.length);
+      const combined = Buffer.concat(bytes), pieceLength = fixturePieceBytes;
       const pieces = Buffer.concat(Array.from({ length: Math.ceil(combined.length / pieceLength) }, (_, index) =>
         createHash("sha1").update(combined.subarray(index * pieceLength, (index + 1) * pieceLength)).digest()));
       const metainfo = new Uint8Array(bencode.encode({ announce: "https://tracker.invalid/private-passkey",
@@ -143,7 +268,9 @@ function fixtureServices(root: string) {
       const hash = inspectMetainfo(metainfo).infoHash;
       const offer = { key, title: `Fixture season ${key}`, provider: "Fixture", sizeBytes: combined.length, seeders: 1,
         url: `https://fixture.invalid/${key}`, infoHash: hash, attributes: {} };
-      packs.set(hash, { offer, metainfo, bytes, keys: episodeKeys }); packOffers.push(offer); coverage.set(key, episodeKeys);
+      const reuse: PackReuseFixture | undefined = options?.reuse ? { checked: false, checkPhase: null, uncheckedAfterCheck: 0, running: false, removed: false,
+        verifiedPieces: new Set(), staged: [], rechecks: [], resumes: [], writes: [] } : undefined;
+      packs.set(hash, { offer, metainfo, bytes, keys: episodeKeys, reuse }); packOffers.push(offer); coverage.set(key, episodeKeys);
       return offer;
     },
     addRelease: (key: string, episodeKeys: string[], options: { stalled?: boolean; invalid?: boolean } = {}) => {
@@ -371,17 +498,19 @@ function seasonCatalog(count: number, future = false) {
 }
 
 for (const variant of ["default-off", "malformed-pilot", "revoked-before-snatch", "revoked-during-plex", "equivalent", "better",
-  "lower-quality", "partial", "roster-race"] as const) {
+  "lower-quality", "partial-coverage", "partial-reuse", "lost-resume-ack", "previously-downloaded", "unmatched-layout", "unmatched-content", "below-half-reuse", "unchecked-content", "roster-race"] as const) {
   test(`TV feed season-pack promotion: ${variant}`, async () => {
     const entry = { ...seasonCatalog(2), key: "tvdb:307375", tmdbId: 4294 };
     const s = await setup(entry.episodes.map(episode => episode.key), entry, 2);
     let runtime: Runtime | undefined;
     let concurrent: Database | undefined;
     try {
+      // Distinct sizes allow the reuse planner to match opaque canonical filenames; file 1 ends on a piece boundary.
+      const singleBytes = [Buffer.alloc(2 * fixturePieceBytes, 0x31), Buffer.alloc(fixturePieceBytes, 0x32)];
       runtime = await createJobExecutionRuntime(s.context, path.join(s.root, "execution.sqlite"), { retryDelayMs: 1 });
       for (const [i, episode] of entry.episodes.entries()) {
         s.fixture.clearOffers();
-        s.fixture.addRelease(`selected-single-${i}`, [episode.key]);
+        s.fixture.addPack(`selected-single-${i}`, [episode.key], { bytes: [singleBytes[i]!] });
         const { acquisition } = queueTvAcquisition(s.repo, s.request.requestId, "initial", [s.request.episodeIds[i]!]);
         await until(runtime, () => s.repo.getJob(acquisition.job_id!)?.status === "succeeded",
           () => JSON.stringify(s.repo.getJob(acquisition.job_id!)), publicationWaitMs);
@@ -397,9 +526,11 @@ for (const variant of ["default-off", "malformed-pilot", "revoked-before-snatch"
       const oldSelection = s.repo.tv.activeEpisodes(s.request.targetId);
       expect(new Set(oldSelection.map(row => row.version_id)).size).toBe(2);
       const oldRevision = s.repo.tv.target(s.request.targetId)!.revision;
-      const originals = await Promise.all((await assertOwnedViews(s)).map(async view => ({
-        ...view, bytes: await fs.readFile(view.contentPath), inode: (await fs.stat(view.contentPath)).ino,
-      })));
+      const originals = await Promise.all((await assertOwnedViews(s)).map(async view => {
+        const { dev, ino } = await fs.stat(view.contentPath);
+        return { ...view, bytes: await fs.readFile(view.contentPath), dev, ino };
+      }));
+      expect(originals.map(file => file.bytes)).toEqual(singleBytes);
       const oldRegistrations = s.repo.tv.downloads(s.request.targetId);
       expect(oldRegistrations).toHaveLength(2);
       const sourceAdds = s.fixture.sourceAdds;
@@ -410,11 +541,39 @@ for (const variant of ["default-off", "malformed-pilot", "revoked-before-snatch"
         canonicalReads++;
         return structuredClone(entry);
       } };
-      const pack = s.fixture.addPack("promotion-candidate", entry.episodes.map(episode => episode.key));
+      const candidateBytes = [...singleBytes];
+      if (variant === "better" || variant === "unmatched-content" || variant === "unchecked-content")
+        candidateBytes[1] = Buffer.alloc(fixturePieceBytes, 0x42);
+      if (variant === "unmatched-content" || variant === "below-half-reuse") candidateBytes[0] = Buffer.alloc(2 * fixturePieceBytes, 0x41);
+      if (variant === "partial-reuse" || variant === "lost-resume-ack") candidateBytes[1] = Buffer.alloc(3 * fixturePieceBytes / 2, 0x43);
+      if (variant === "unmatched-layout") {
+        candidateBytes[0] = Buffer.alloc(3 * fixturePieceBytes / 2, 0x41);
+        candidateBytes[1] = Buffer.alloc(5 * fixturePieceBytes / 4, 0x42);
+      }
+      const pack = s.fixture.addPack("promotion-candidate", entry.episodes.map(episode => episode.key), { bytes: candidateBytes, reuse: true });
+      const pilot = s.fixture.packs.get(pack.infoHash!)!.reuse!;
+      if (variant === "unchecked-content") pilot.uncheckedAfterCheck = fixturePieceBytes;
+      s.fixture.services.client.capabilities.canonicalDownloads = true;
+      s.fixture.services.client.capabilities.recheck = true;
+      if (variant === "lost-resume-ack") {
+        const resume = s.fixture.services.client.resume;
+        s.fixture.services.client.resume = async ref => {
+          await resume(ref);
+          throw new Error("Transmission started the pack but the acknowledgement was lost");
+        };
+      }
       const result = { mediaType: "tv" as const, provider: pack.provider, guid: "promotion-fixture",
         title: "Anime Work Two S02 WEB", url: pack.url, infoHash: pack.infoHash, sizeBytes: pack.sizeBytes,
         seeders: 3, leechers: null, raw: {} };
       Object.assign(pack, movieOfferFromResult(result)); // The synthetic verifier uses the immutable inbox offer key.
+      if (variant === "previously-downloaded") {
+        const inspect = s.fixture.services.client.inspect;
+        s.fixture.services.client.inspect = async ref => {
+          const seen = await inspect(ref);
+          return ref.nativeId === pack.infoHash ? { ...seen, complete: true, bytesDone: seen.sizeBytes,
+            verifiedBytes: seen.sizeBytes!, uncheckedBytes: 0, downloadedEver: seen.sizeBytes! } : seen;
+        };
+      }
       let metainfoReads = 0;
       const fetchMetainfo = s.fixture.services.fetchMetainfo;
       s.fixture.services.fetchMetainfo = async offer => {
@@ -427,7 +586,7 @@ for (const variant of ["default-off", "malformed-pilot", "revoked-before-snatch"
         const base = decider(entry);
         return { ...base, inspect: async input => {
           const plan = await base.inspect(input);
-          if (variant === "partial") plan.files.pop(); // Intake predicted complete; actual import does not.
+          if (variant === "partial-coverage") plan.files.pop(); // Intake predicted complete; actual import does not.
           if (variant === "lower-quality") plan.files[1]!.facts.source = "hdtv";
           return plan;
         } };
@@ -436,7 +595,7 @@ for (const variant of ["default-off", "malformed-pilot", "revoked-before-snatch"
         const probe = s.fixture.services.probe;
         s.fixture.services.probe = async file => {
           const facts = await probe(file);
-          for (const stream of facts.streams) if (stream.codec_type === "video") {
+          for (const stream of facts.streams) if (stream.codec_type === "video" && path.basename(file) === "episode-2.mkv") {
             stream.width = 1920; stream.height = 1080;
           }
           return facts;
@@ -491,6 +650,7 @@ for (const variant of ["default-off", "malformed-pilot", "revoked-before-snatch"
         expect(upgrade).toBeUndefined();
         expect([matcherCalls, versionReads, canonicalReads, metainfoReads]).toEqual([0, 0, 0, 0]);
         expect(s.fixture.sourceAdds).toBe(sourceAdds);
+        expect([pilot.rechecks.length, pilot.resumes.length, pilot.writes.length]).toEqual([0, 0, 0]);
         expect(s.repo.tv.activeEpisodes(s.request.targetId)).toEqual(oldSelection);
         return;
       }
@@ -500,24 +660,50 @@ for (const variant of ["default-off", "malformed-pilot", "revoked-before-snatch"
       await until(runtime, () => s.repo.getJob(upgrade.job_id!)?.status === "succeeded",
         () => JSON.stringify(s.repo.getJob(upgrade.job_id!)), publicationWaitMs);
       expect(metainfoReads).toBe(1);
-      expect(s.fixture.sourceAdds).toBe(sourceAdds + (variant === "revoked-before-snatch" ? 0 : 1));
+      const noRegistration = variant === "revoked-before-snatch" || variant === "unmatched-layout";
+      expect(s.fixture.sourceAdds).toBe(sourceAdds + (noRegistration ? 0 : 1));
+      if (noRegistration || variant === "previously-downloaded") {
+        expect([pilot.rechecks.length, pilot.resumes.length, pilot.writes.length]).toEqual([0, 0, 0]);
+      } else {
+        const total = candidateBytes.reduce((sum, file) => sum + file.length, 0);
+        const partial = variant === "partial-reuse" || variant === "lost-resume-ack" || variant === "better";
+        const uncheckedBytes = variant === "unchecked-content" ? fixturePieceBytes : 0;
+        const rejected = variant === "unmatched-content" || variant === "below-half-reuse" || variant === "unchecked-content";
+        const verifiedBytes = variant === "unmatched-content" ? 0 : variant === "below-half-reuse" ? singleBytes[1]!.length :
+          partial || uncheckedBytes ? singleBytes[0]!.length : total;
+        expect(pilot.rechecks).toEqual([expect.objectContaining({ state: "inactive", sizeBytes: total, verifiedBytes, uncheckedBytes })]);
+        expect(pilot.staged).toHaveLength(2);
+        for (const staged of pilot.staged)
+          expect(originals.some(old => old.dev === staged.dev && old.ino === staged.ino)).toBe(false);
+        if (rejected) expect(pilot.resumes).toEqual([]);
+        if (partial) expect(pilot.resumes).toHaveLength(1);
+        for (const resume of pilot.resumes) {
+          expect(resume).toMatchObject({ state: "inactive", verifiedBytes, uncheckedBytes: 0 });
+          expect(resume.verifiedBytes * 2).toBeGreaterThanOrEqual(total);
+        }
+        expect(pilot.writes.reduce((sum, write) => sum + write.bytes, 0)).toBe(partial ? candidateBytes[1]!.length : 0);
+        if (partial) expect(pilot.writes.every(write => write.index === 1)).toBe(true);
+      }
       expect(s.repo.tv.publications()).toEqual([]);
       expect(s.repo.notifications.list(ownerId).items).toEqual(originalNotices); // No duplicate availability notices.
       const oldRegistrationIds = new Set(oldRegistrations.map(row => row.id));
       expect(s.repo.tv.downloads(s.request.targetId).filter(row => oldRegistrationIds.has(row.id))).toEqual(oldRegistrations);
       for (const old of originals) {
-        expect((await fs.stat(old.contentPath)).ino).toBe(old.inode);
+        expect((await fs.stat(old.contentPath)).ino).toBe(old.ino);
         expect(await fs.readFile(old.contentPath)).toEqual(old.bytes);
       }
       const candidate = s.repo.tv.versionSources(s.request.targetId).find(row => row.acquisition.id === upgrade.id)?.version;
-      if (variant === "equivalent" || variant === "better") {
+      if (variant === "equivalent" || variant === "better" || variant === "partial-reuse" || variant === "lost-resume-ack") {
         expect(candidate).toBeDefined();
         expect(s.repo.tv.activeEpisodes(s.request.targetId)).toEqual(s.request.episodeIds.map(episode_id => ({ episode_id, version_id: candidate!.id })));
         expect(s.repo.tv.target(s.request.targetId)!.revision).toBe(oldRevision + 1);
         expect(stagedLinks).toHaveLength(2);
         for (const old of originals)
           await expect(fs.lstat(path.join(s.roots.viewRoot, old.relativePath))).rejects.toMatchObject({ code: "ENOENT" });
-        expect(await assertOwnedViews(s)).toHaveLength(2);
+        const selected = await assertOwnedViews(s);
+        expect(selected).toHaveLength(2);
+        expect(await Promise.all(selected.map(file => fs.readFile(file.contentPath)))).toEqual(candidateBytes);
+        expect(pilot.removed).toBe(false);
         expect(canonicalReads).toBe(2);
       } else {
         expect(s.repo.tv.activeEpisodes(s.request.targetId)).toEqual(oldSelection);

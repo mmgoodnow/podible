@@ -146,6 +146,32 @@ async function assertSource(source: ReuseSourceFile, hash = true) {
   if (reuseDigest(current) !== reuseDigest(source)) throw new Error("Owned reuse source identity or digest changed");
 }
 
+/** Prepopulate a private writable reservation; never give a downloader a shared inode. */
+export async function prefillReuseFile(source: ReuseSourceFile, destination: string, active: () => void) {
+  await assertSource(source, false);
+  const temporary = `${destination}.${randomUUID()}.prefill`;
+  try {
+    try { await fs.copyFile(source.path, temporary, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE_FORCE); }
+    catch (error) {
+      if (!isCloneUnsupported(error)) throw error;
+      await fs.copyFile(source.path, temporary, constants.COPYFILE_EXCL);
+    }
+    await assertSource(source, false);
+    const handle = await fs.open(temporary, READ);
+    try {
+      const copy = statIdentity(await handle.stat({ bigint: true }));
+      if (copy.size !== source.size || (copy.device === source.identity.device && copy.inode === source.identity.inode))
+        throw new Error("Reuse prefill is not a complete private file");
+      await handle.chmod(0o644);
+      await handle.sync();
+    } finally { await handle.close(); }
+    if (await maybeStat(destination)) throw new Error("Prefill destination already exists");
+    active();
+    await fs.rename(temporary, destination);
+    await syncDirectory(path.dirname(destination));
+  } finally { await fs.unlink(temporary).catch(error => { if (error.code !== "ENOENT") throw error; }); }
+}
+
 async function sourceStat(filePath: string) {
   const handle = await fs.open(filePath, READ);
   try {

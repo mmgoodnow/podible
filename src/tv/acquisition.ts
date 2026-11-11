@@ -30,6 +30,7 @@ import type { DownloadLocation, TorrentRef, TorrentSnapshot } from "../media/tor
 import { prepareCanonicalDownload, readCanonicalDownload, resolveDownloadFile, sealCanonicalDownload } from "../media/canonical-download";
 import { configuredTvCatalog, TvCatalogError } from "./catalog";
 import { tvSeasonPackPromotionTargets } from "./season-promotion-pilot";
+import { hasVerifiedLocalSeasonPackPrefill, hasVerifiedSeasonPackReuse, planSeasonPackPrefill } from "./season-pack-reuse";
 import { eligibleTvSeasonPlan, eligibleTvSeasonVersion, matchesTvSeasonRoster, playableTvMember,
   readTvSeasonPromotion, readTvSeasonSelection, tvSeasonPackHint, tvSeasonPromotionSchema, type TvSeasonSelection } from "./season-promotion";
 
@@ -611,13 +612,27 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
           await fs.mkdir(sourceRoot, { recursive: true });
           if (await fs.realpath(sourceRoot) !== sourceRoot) throw new Error("TV download layout traverses a symlink");
           const canonical = !existing && "canonicalDownload" in binding && binding.canonicalDownload;
+          const assertPrefillActive = () => {
+            active();
+            if (!promotionAllowed()) throw new TvPromotionRejected("TV season promotion was disabled during pack preparation");
+          };
+          let prefill: Awaited<ReturnType<typeof planSeasonPackPrefill>> | undefined;
+          if (promotion) {
+            const current = promotionSelection();
+            if (!current || !canonical || !services.client.capabilities.pausedAdd || !services.client.capabilities.recheck)
+              return { promotionSkipped: true };
+            prefill = await planSeasonPackPrefill({ repo: ctx.repo, contentRoot: roots.contentRoot,
+              selection: current, metadata, active: assertPrefillActive });
+            if (!prefill.length) return { promotionSkipped: true };
+          }
           if (!existing) {
             const noSpace = await downloadCapacityProblem({ contentRoot: roots.contentRoot, sourceRoot, canonical, files: metadata.files });
             if (noSpace) return { noSpace };
           }
           await prepareCanonicalDownload({ contentRoot: roots.contentRoot, sourceRoot, clientId: services.client.id, metainfo,
-            allowCreate: canonical, assertActive: active });
-          if (promotion && !promotionAllowed()) return { promotionSkipped: true };
+            allowCreate: canonical, assertActive: promotion ? assertPrefillActive : active,
+            ...(prefill ? { prefill: new Map(prefill) } : {}) });
+          if (promotion && !promotionScope()) return { promotionSkipped: true };
           const added = await services.client.ensureAdded({
             metainfo: ctx.repo.trackerAnnounces.currentMetainfo(offer.provider, metainfo), location,
           });
@@ -631,7 +646,11 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
           return { ref: added, location, shared: Boolean(existing && repo.hasOtherUnfinishedDownload(existing.id, acquisition.id)) };
         }));
       // Completed pre-change checkpoints contain only the ref and retain their original location.
-      if ("promotionSkipped" in registered) { reject(offer.key, metadata.infoHash); continue; }
+      if ("promotionSkipped" in registered) {
+        reject(offer.key, metadata.infoHash);
+        emit(`${prefix}:prefill-unavailable`, "retained", "Could not safely prefill this season pack; existing episodes retained");
+        continue;
+      }
       if ("noSpace" in registered) {
         capacityProblem = registered.noSpace;
         reject(offer.key); emit(`${attempt}:disk-space`, "replacing", registered.noSpace); continue;
@@ -641,6 +660,58 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       const sourceRoot = path.resolve(settings.tv.managedRoot, "downloads", location.relativePath);
       if (location.rootId !== "tv" || !sourceRoot.startsWith(path.resolve(settings.tv.managedRoot, "downloads") + path.sep)) throw new Error("TV download escaped its owned root");
       const downloadId = repo.torrent(ref.clientId, ref.nativeId)!.id;
+      const observeDownload = async () => {
+        const seen = await services.client.inspect(ref);
+        active();
+        if (seen.ref.clientId !== ref.clientId || seen.ref.nativeId !== ref.nativeId ||
+            seen.location.rootId !== location.rootId || seen.location.relativePath !== location.relativePath)
+          throw new Error("TV torrent observation changed identity or layout");
+        return seen;
+      };
+      let verified = 0;
+      const resume = async () => {
+        active();
+        if (promotion) {
+          const seen = await observeDownload();
+          if (!verified || !hasVerifiedSeasonPackReuse(seen, metadata.size) || !promotionScope())
+            throw new TvPromotionRejected("TV season pack can no longer resume safely with local reuse");
+          // The daemon can accept the start before Reflow persists its acknowledgement.
+          if (seen.state === "downloading" || seen.state === "seeding" || seen.complete) return;
+        }
+        return services.client.resume(ref);
+      };
+      if (promotion) {
+        const canonical = await readCanonicalDownload(roots.contentRoot, sourceRoot);
+        if (!canonical?.ready || canonical.clientId !== ref.clientId || canonical.infoHash !== metadata.infoHash || !promotionScope())
+          return stopPromotion("TV season pack is no longer in scope or lacks a private download layout; existing episodes retained");
+        const initial = await durableStep(ctx, `${prefix}:prefill-initial`, observeDownload);
+        if (initial.state === "inactive" && initial.downloadedEver === 0 && !hasVerifiedLocalSeasonPackPrefill(initial, metadata.size)) {
+          await durableStep(ctx, `${prefix}:prefill-verify`, async () => {
+            if (promotionScope()) await services.client.recheck(ref);
+          });
+        }
+        // The daemon reports verification separately from download completion. Wait only while it is checking.
+        const interval = services.timing?.pollMs ?? 5000;
+        for (let check = 0; check <= 360; check++) {
+          if (!promotionAllowed()) break;
+          const seen = await durableStep(ctx, `${prefix}:prefill-result:${check}`, observeDownload);
+          if (seen.state !== "checking") {
+            if (hasVerifiedLocalSeasonPackPrefill(seen, metadata.size))
+              verified = seen.verifiedBytes!;
+            break;
+          }
+          if (check === 360) break;
+          if (ctx.execution) await ctx.execution.sleep(`${prefix}:prefill-wait:${check}`, interval);
+          else await Bun.sleep(interval);
+        }
+        if (!promotionScope()) return stopPromotion("TV season pack is no longer in scope; existing episodes retained");
+        if (!verified) {
+          reject(offer.key, ref.nativeId);
+          emit(`${prefix}:prefill-rejected`, "retained", "Transmission could not verify at least half of this season pack locally; download not started");
+          continue;
+        }
+        emit(`${prefix}:prefill-verified`, "downloading", `Verified ${verified} of ${metadata.size} bytes locally before downloading missing pieces`);
+      }
       const shared = "ref" in registered && registered.shared;
       if (shared && scopedRecovery) {
         const pack = tvSourceSchema.parse({ ref, location, offerKey: offer.key, title: offer.title, provider: offer.provider, manifest: metadata });
@@ -666,15 +737,11 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       let complete = false, lastBytes = -1, progressedAt = 0, startedAt = 0;
       if (ctx.execution?.armCompletion) {
         complete = await waitForTorrentCompletion(ctx, prefix, ref, stallDeadlineMs, async () => {
-          const seen = await services.client.inspect(ref);
-          active();
-          if (seen.ref.clientId !== ref.clientId || seen.ref.nativeId !== ref.nativeId ||
-              seen.location.rootId !== location.rootId || seen.location.relativePath !== location.relativePath)
-            throw new Error("TV torrent observation changed identity or layout");
+          const seen = await observeDownload();
           repo.observeDownload(downloadId, seen);
           ctx.onAcquisitionChange?.();
           return seen;
-        }, downloadComplete, shared ? undefined : () => { active(); return services.client.resume(ref); });
+        }, downloadComplete, shared ? undefined : resume);
       } else for (let poll = 0; poll < 20_000; poll++) {
         active();
         const observation = await durableStep(ctx, `${prefix}:poll:${poll}`, async () => {
@@ -688,7 +755,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
         ({ lastBytes, progressedAt, startedAt } = progress);
         if (downloadComplete(observation)) { complete = true; break; }
         if (observation.seedOnly) break;
-        if (!shared && observation.state === "inactive") await durableStep(ctx, `${prefix}:resume:${poll}`, () => { active(); return services.client.resume(ref); });
+        if (!shared && observation.state === "inactive") await durableStep(ctx, `${prefix}:resume:${poll}`, resume);
         const stallMs = services.timing?.stallMs ?? settings.recovery.stalledTorrentMinutes * 60_000;
         if ((stallMs > 0 && now - progressedAt >= stallMs) || now - startedAt > 86_400_000) break;
         if (ctx.execution) await ctx.execution.sleep(`${prefix}:wait:${poll}`, services.timing?.pollMs ?? 5000);

@@ -9,6 +9,9 @@ export type TorrentSnapshot = {
   state: "downloading" | "seeding" | "checking" | "inactive";
   complete: boolean;
   bytesDone: number | null;
+  verifiedBytes?: number;
+  uncheckedBytes?: number;
+  downloadedEver?: number;
   sizeBytes: number | null;
   downloadBytesPerSecond: number | null;
   message: string | null;

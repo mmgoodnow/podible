@@ -44,9 +44,11 @@ save payload, and it does not alter any existing settings fingerprints. When
 an opted-in target has no missing aired demand, the feed can submit a
 season-labelled offer for a fully aired, provider-verified season of 2 to 64
 episodes that one active request covers and that is selected across multiple
-versions. This starts a **new full-pack download**. The downloader does not
-preseed from selected episodes or reuse their bytes before snatch, and it skips
-torrents already registered by another acquisition. Removing a target from the
+versions. The downloader prefills a private writable layout from eligible
+selected episode files and adds the torrent paused. It starts downloading only
+if Transmission verifies at least half the pack's bytes locally; otherwise the
+selected episodes remain in place. It skips torrents already registered by
+another acquisition. Removing a target from the
 list blocks new snatches and promotion; it does not cancel an already registered
 torrent. The downloader and importer must prove full torrent completion and exact
 episode coverage without regressing any selected episode under the target's quality policy (tier, then same-tier

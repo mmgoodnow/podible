@@ -98,6 +98,11 @@ credential, TV indexer list, public torrent endpoint, or model selector.
   New RSS acquisitions reserve only their assigned single-season episode batch
   (at most 64 episodes). A manual search can queue other missing episodes
   without duplicating the RSS batch. Existing unscoped jobs finish unchanged.
+- The opt-in season-pack promotion pilot prefills matching selected episode files
+  into private writable reservations. These use a copy-on-write clone when available
+  or a local copy when not. Transmission must verify at least half the pack while
+  paused; only missing pieces can then download. If reuse cannot be proven, the
+  pilot does not start a full download or change the existing Plex selection.
 - Reflow owns execution/retries/checkpoints. Application transactions retain
   request scope, source evidence and outbox intent. A retry rechecks failed Plex
   observations without repeating successful source adds or canonical adoption.

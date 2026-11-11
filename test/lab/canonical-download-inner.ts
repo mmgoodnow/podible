@@ -9,6 +9,8 @@ import { prepareTransmission, managedTransmission } from "../../src/media/manage
 import { initializeManagedContent } from "../../src/media/library-view";
 import { prepareCanonicalDownload, readCanonicalDownload, sealCanonicalDownload, finalizeCanonicalDownloadFile, type CanonicalDownload } from "../../src/media/canonical-download";
 import { readSeedOnlyIntent, seedOnlyIntentDirectory } from "../../src/media/seed-only-state";
+import { captureReuseFile, captureReuseRoot } from "../../src/media/reuse-layout";
+import { hasVerifiedLocalSeasonPackPrefill } from "../../src/tv/season-pack-reuse";
 
 assert.equal(process.platform, "linux", "Run in the disposable Linux Transmission lab image");
 const binary = process.env.TRANSMISSION_BINARY ?? "transmission-daemon";
@@ -35,7 +37,8 @@ let gate = false, requests = 0, servedBytes = 0;
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
   const pathname = decodeURIComponent(new URL(request.url).pathname);
   if (pathname === "/announce") return new Response(bencode.encode({ interval: 5, peers: Buffer.alloc(0), complete: 0, incomplete: 1 }));
-  const file = files.find(file => `/seed/${file.name}` === pathname) ?? (pathname === `/seed/${singleFile.name}` ? singleFile : undefined);
+  const fixturePath = pathname.replace(/^\/seed\/Season\//, "/seed/Pack/");
+  const file = files.find(file => `/seed/${file.name}` === fixturePath) ?? (pathname === `/seed/${singleFile.name}` ? singleFile : undefined);
   if (!file) return new Response(null, { status: 404 });
   requests++;
   const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.get("range") ?? "");
@@ -252,12 +255,47 @@ try {
   await assertSingle();
   assert.deepEqual(await finalizeCanonicalDownloadFile(canonicalRoot, singleRoot, singleView, singleFile.bytes.length), singleFinalized);
   await assertCanonicalLinks(); await assertNoPayloadCopies();
+
+  const seasonRoot = path.join(root, "downloads", "season"); await fs.mkdir(seasonRoot);
+  const reusable = files[2]!, missing = files[0]!, seasonPayload = Buffer.concat([reusable.bytes, missing.bytes]);
+  const seasonPieces: Buffer[] = [];
+  for (let start = 0; start < seasonPayload.length; start += pieceLength)
+    seasonPieces.push(createHash("sha1").update(seasonPayload.subarray(start, start + pieceLength)).digest());
+  const seasonInfo = { name: "Season", "piece length": pieceLength, pieces: Buffer.concat(seasonPieces),
+    files: [reusable, missing].map(file => ({ length: file.bytes.length, path: file.name.split("/").slice(1) })) };
+  const seasonMeta = bencode.encode({ announce: endpoint + "/announce", "url-list": [endpoint + "/seed/"], info: seasonInfo });
+  const source = await captureReuseFile({ root: await captureReuseRoot({ rootPath: canonicalRoot, markerName: ".podible-content.json" }),
+    sourceId: reusable.name, sourcePath: originals.get(reusable.name)!.path });
+  const seasonPath = reusable.name.replace(/^Pack\//, "Season/");
+  const seasonPlan = await prepareCanonicalDownload({ contentRoot: canonicalRoot, sourceRoot: seasonRoot, clientId: client.id,
+    metainfo: seasonMeta, allowCreate: true, prefill: new Map([[seasonPath, source]]) });
+  assert.ok(seasonPlan?.ready);
+  assert.notEqual(String((await fs.stat(path.join(seasonRoot, seasonPath), { bigint: true })).ino), source.identity.inode);
+  const seasonRef = await client.ensureAdded({ metainfo: seasonMeta, location: { rootId: "movies", relativePath: "season" } });
+  if ((await client.inspect(seasonRef)).state === "inactive") await client.recheck(seasonRef);
+  const checking = await client.inspect(seasonRef);
+  assert.ok(checking.state === "checking" || hasVerifiedLocalSeasonPackPrefill(checking, seasonPayload.length));
+  await until(async () => {
+    const seen = await client.inspect(seasonRef);
+    return hasVerifiedLocalSeasonPackPrefill(seen, seasonPayload.length);
+  }, "paused season pack reuse verification");
+  const prefilled = await snapshot(seasonRef.nativeId);
+  assert.equal(prefilled.downloadedEver, 0, "No network transfer is permitted during preflight");
+  assert.equal(prefilled.haveValid, Math.floor(reusable.bytes.length / pieceLength) * pieceLength);
+  await client.resume(seasonRef);
+  await until(async () => (await client.inspect(seasonRef)).complete, "download only missing season pieces");
+  const seasonComplete = await snapshot(seasonRef.nativeId);
+  assert.equal(seasonComplete.downloadedEver, seasonPayload.length - prefilled.haveValid);
+  await sealCanonicalDownload(canonicalRoot, seasonRoot, client, seasonRef);
+  assert.equal(sha256(await fs.readFile(source.path)), sha256(reusable.bytes));
+  await assertCanonicalLinks();
   await stop();
   console.log(JSON.stringify({ result: "passed", version: "4.1.4", initiallyVerifiedCanonicalBytes: 0, totalBytes: payload.length,
     boundaryOffsets: boundaries, crossFilePieces: boundaries.length, flushedVerifiedBytes, restartHaveValid: restarted.haveValid,
     finalHaveValid: complete.haveValid, downloadedEver: complete.downloadedEver, requests, servedBytes,
     canonicalInodesPreserved: true, symlinkInodesPreserved: true, noPartialOrDuplicatePayloads: true,
     applicationManifestReplay: true, startupGuardPreservedSealedState: true, finalized,
+    seasonPack: { bytes: seasonPayload.length, verifiedBeforeStart: prefilled.haveValid, downloadedEver: seasonComplete.downloadedEver },
     singleFile: { name: singleFile.name, bytes: singleFile.bytes.length, initiallyEmpty: true,
       canonicalInodePreserved: true, symlinkInodePreserved: true, sealedRestart: true,
       noPartialOrDuplicatePayloads: true, sha256: singleFinalized!.sha256 },

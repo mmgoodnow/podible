@@ -88,6 +88,7 @@ const torrentSchema = z.object({
   totalSize: z.number().nonnegative().optional(),
   haveValid: z.number().nonnegative().optional(),
   haveUnchecked: z.number().nonnegative().optional(),
+  downloadedEver: z.number().int().nonnegative().optional(),
   doneDate: z.number().int().optional(),
 });
 const SEED_ONLY_LABEL = "Podible Seed Only";
@@ -162,7 +163,7 @@ export class TransmissionAdapter implements TorrentClient {
         "error",
         "errorString",
         "files",
-        "fileStats", "totalSize", "haveValid", "haveUnchecked", "doneDate",
+        "fileStats", "totalSize", "haveValid", "haveUnchecked", "downloadedEver", "doneDate",
       ],
     });
     const torrents = z.array(torrentSchema).parse(result.torrents);
@@ -255,6 +256,8 @@ export class TransmissionAdapter implements TorrentClient {
             : "downloading",
       complete: physicalBytesKnown ? row.haveValid === row.totalSize && row.haveUnchecked === 0 : !seedOnly && row.leftUntilDone === 0,
       bytesDone: seedOnly && !physicalBytesKnown ? 0 : row.haveValid !== undefined ? row.haveValid + (row.haveUnchecked ?? 0) : row.sizeWhenDone - row.leftUntilDone,
+      ...(physicalBytesKnown ? { verifiedBytes: row.haveValid, uncheckedBytes: row.haveUnchecked } : {}),
+      ...(row.downloadedEver === undefined ? {} : { downloadedEver: row.downloadedEver }),
       sizeBytes: row.totalSize ?? row.sizeWhenDone,
       ...(seedOnly ? { seedOnly: this.isSeedOnly(row) } : {}),
       downloadBytesPerSecond: row.rateDownload,
