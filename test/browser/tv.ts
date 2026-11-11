@@ -167,14 +167,23 @@ try {
   activePage = page;
   console.log("Native TV browser: the picker sends only the selected special and disables covered specials");
 
-  await context.clearCookies();
+  // An authenticated response can renew a cookie after clearCookies(). Revoke the
+  // fixture session out of band so a stale cookie cannot authenticate the reload.
+  const revoked = await fetch(new URL("/rpc", url), {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: "podible_session=tv-reader-fixture" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "auth.logout", params: {} }),
+  });
+  assert.equal(revoked.status, 200);
+  assert.deepEqual((await revoked.json() as { result?: unknown }).result, { ok: true });
+  assert.ok((await context.cookies()).some(cookie => cookie.name === "podible_session"));
   await page.reload();
   await page.getByRole("link",{ name: "Sign in", exact: true }).waitFor();
-  // The expired-session request is expected; earlier authenticated views must stay error-free.
+  // Requests with the revoked session are expected; earlier authenticated views must stay error-free.
   assert.deepEqual(networkErrors.filter(error => !error.startsWith("401 ")),[],"Native TV browser request errors");
   assert.deepEqual(diagnostics,[],"Native TV screens fetched admin diagnostics");
   assert.deepEqual(errors,[],"Native TV browser runtime errors");
-  console.log("Native TV browser acceptance passed: owned request deep link/reload, actual coverage versus audit, future season intent, private/admin separation, published library route, withdrawal persistence/no media deletion, expired session and desktop/mobile screenshots.");
+  console.log("Native TV browser acceptance passed: owned request deep link/reload, actual coverage versus audit, future season intent, private/admin separation, published library route, withdrawal persistence/no media deletion, revoked session and desktop/mobile screenshots.");
 } catch (error) {
   if (activePage && !activePage.isClosed()) {
     console.error(await activePage.locator("body").innerText());
