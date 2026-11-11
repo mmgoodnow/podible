@@ -24,6 +24,24 @@ Transmission file-list call per adopted episode and replace the per-MiB
 full state check during read-only hashing with cooperative cancellation
 and periodic ownership checks. Publication still revalidates source files.
 
+## November 11 follow-up
+
+Read-only verification on Cyprus, running `a6f7843`, found all 89 requested
+episodes at their exact identities and paths in Plex section 16. The canonical
+files and library symlinks also matched. TVDB numbers the two Final Chapters
+as S04E29 and S04E30, not as Season 0 entries. A manual resume was needed after
+the stalled batch: 75 episodes landed before it, 12 after it, and the automatic
+continuation added the final two.
+
+| Acquisition | Download complete to publishing | Canonical adoption/finalization | Publishing to Plex verified |
+| --- | ---: | ---: | ---: |
+| 160 | 14m 28s | 13m 38s (44.3 GB) | 91s |
+| 161 | 3m 07s | 2m 37s (7.8 GB) | 24s |
+
+These runs narrow the largest delay to adoption/finalization, not the Plex
+scan. They predate the detailed finalization timers and larger read buffer in
+`8e67afc`; they do not demonstrate the effect of that change on Cyprus.
+
 A successful older publication is not a live-path timing canary for the
 new build. Verify a fresh download completion, durable worker wakeup,
 exact Plex path and identity, browser subscription update, and fresh Grafana
