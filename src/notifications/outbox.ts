@@ -12,7 +12,7 @@ const lifetimeMs = 12 * 60 * 60_000;
 const maxDeliveryAttempts = 6;
 type Settings = AppSettings["notifications"];
 type Message = { title: string; message: string };
-type EmailNotice = { id: string; userId: number; title: string; episode: string | null };
+export type EmailNotice = { id: string; userId: number; title: string; episode: string | null };
 type PendingDelivery = {
   message: Message;
   binding: string;
@@ -59,7 +59,7 @@ export class NotificationOutbox {
     return !!this.db.query("SELECT 1 FROM users WHERE id=?").get(id);
   }
 
-  /** Called inside promotion, alongside inbox inserts and watch consumption. Never performs I/O. */
+  /** Called inside promotion, alongside watch consumption. Never performs I/O. */
   enqueue(identity: string, ownerMessage: Message, notices: EmailNotice[], now: string) {
     const eventId = hash(identity), eventKey = prefix + "event:" + eventId;
     const settings = this.settings();
@@ -77,7 +77,7 @@ export class NotificationOutbox {
       const title = clean(notice.title), episode = notice.episode && clean(notice.episode);
       jobs.push({ id: hash(["email", notice.id]), job: {
         ...initial, channel: "email", userId: notice.userId, binding: target.binding,
-        message: { title: `Available in Plex: ${title}`, message: `${episode ? `${title} - ${episode}` : title} is now available in Plex.\n\nOpen Podible to view your notification.` },
+        message: { title: `Available in Plex: ${title}`, message: `${episode ? `${title} - ${episode}` : title} is now available in Plex.` },
       } });
     }
     const owner = pushoverTarget(settings);

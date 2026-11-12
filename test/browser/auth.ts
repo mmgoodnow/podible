@@ -132,7 +132,7 @@ try {
   await page.getByRole("heading", { name: "Library", exact: true }).waitFor();
   const mainLinks = page.getByRole("navigation", { name: "Main navigation" }).getByRole("link");
   assert.deepEqual(await mainLinks.evaluateAll(items => items.map(link => [link.textContent, link.getAttribute("href")])),
-    [["Library", "/library"], ["Notifications", "/notifications"]], "A reader must not see administrator destinations");
+    [["Library", "/library"]], "A reader must not see administrator destinations");
   // This fixture has pending books, not imported assets for the publication-only All rails.
   await page.getByRole("group", { name: "Media type" }).getByRole("button", { name: "Books", exact: true }).click();
   const bookLink = page.getByRole("region", { name: "Your books", exact: true }).getByRole("link", { name: /Piranesi Susanna Clarke/ });

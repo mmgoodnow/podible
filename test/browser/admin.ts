@@ -48,7 +48,7 @@ async function verify() {
     await readerPage.getByRole("alert").getByText("Administrator access required.").waitFor();
     const links = readerPage.getByRole("navigation", { name: "Main navigation" }).getByRole("link");
     assert.deepEqual(await links.evaluateAll(items => items.map(link => [link.textContent, link.getAttribute("href")])),
-      [["Library", "/library"], ["Notifications", "/notifications"]], "A reader must not see administrator destinations");
+      [["Library", "/library"]], "A reader must not see administrator destinations");
     assert.equal(await readerPage.getByRole("navigation", { name: "Settings sections" }).count(), 0);
   }
   for (const page of ["settings", "users", "ops"]) {
@@ -391,7 +391,7 @@ async function verify() {
   assert.ok((await scrape.text()).includes("podible_seeding_torrents 2"));
   const mainLinks = page.getByRole("navigation", { name: "Main navigation" }).getByRole("link");
   assert.deepEqual(await mainLinks.evaluateAll(items => items.map(link => [link.textContent, link.getAttribute("href")])),
-    [["Library", "/library"], ["Notifications", "/notifications"], ["Activity", "/ops"], ["Settings", "/settings"]]);
+    [["Library", "/library"], ["Activity", "/ops"], ["Settings", "/settings"]]);
   const active = page.getByRole("region", { name: "Active work", exact: true });
   const waiting = page.getByRole("region", { name: "Waiting work", exact: true });
   const attention = page.getByRole("region", { name: "Needs attention", exact: true });

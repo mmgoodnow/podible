@@ -44,7 +44,7 @@ try {
     .waitFor();
   const mainLinks = page.getByRole("navigation", { name: "Main navigation" }).getByRole("link");
   assert.deepEqual(await mainLinks.evaluateAll(items => items.map(link => [link.textContent, link.getAttribute("href")])),
-    [["Library", "/library"], ["Notifications", "/notifications"]], "A reader must not see administrator destinations");
+    [["Library", "/library"]], "A reader must not see administrator destinations");
   await page.goto(new URL("/movie-dual-write", url).href);
   assert.equal(new URL(page.url()).pathname, "/ops");
   await page.getByRole("alert").getByText("Administrator access required.").waitFor();

@@ -425,7 +425,7 @@ export function NotificationSettings({ form }: { form: SettingsForm }) {
   return <>
     <SettingsGroup title="External delivery">
       <SelectField<"dry-run" | "live"> label="Delivery mode" field={{ ...delivery, value: delivery.value ?? "dry-run", persisted: delivery.persisted ?? "dry-run" }}
-        help="Dry run sends nothing. Events recorded in dry run are not sent later. In-app notifications still work."
+        help="Dry run sends nothing. Events recorded in dry run are not sent later."
         options={[["dry-run", "Dry run"], ["live", "Live"]]} />
     </SettingsGroup>
     <SettingsGroup title="User email (SMTP)" note="Send movie and TV availability notices through your mail server.">
@@ -437,7 +437,7 @@ export function NotificationSettings({ form }: { form: SettingsForm }) {
       <TextField label="SMTP username" field={email.field("username")} help="Leave blank only if your server accepts mail without sign-in." />
       <SecretField label="SMTP password" field={email.field("password")} help="Password for the SMTP account, if required." />
       <TextField label="Sender address" field={email.field("from")} help="An email address your mail server allows you to send from." />
-      <Frame field={recipients} label="Recipient addresses" help="Enter one Podible user ID = email address per line. Unlisted users only get in-app notices.">
+      <Frame field={recipients} label="Recipient addresses" help="Enter one Podible user ID = email address per line. Only listed users receive email.">
         {props => <textarea {...props} rows={4} spellCheck={false} value={recipients.value}
           onChange={event => recipients.set(event.target.value, "Recipient addresses")} />}
       </Frame>

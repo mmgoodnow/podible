@@ -71,8 +71,6 @@ const procedure = t.procedure.use(async ({ next }) => {
 
 export const appRouter = t.router({
   notifications: t.router({
-    list: procedure.input(notificationsRouter.routes.list.paramsSchema).output(notificationsRouter.routes.list.resultSchema).query(({ ctx, input }) => executeMethod(notificationsRouter.routes.list, ctx, input)),
-    markRead: procedure.input(notificationsRouter.routes.markRead.paramsSchema).output(notificationsRouter.routes.markRead.resultSchema).mutation(({ ctx, input }) => executeMethod(notificationsRouter.routes.markRead, ctx, input)),
     watchStatus: procedure.input(notificationsRouter.routes.watchStatus.paramsSchema).output(notificationsRouter.routes.watchStatus.resultSchema).query(({ ctx, input }) => executeMethod(notificationsRouter.routes.watchStatus, ctx, input)),
     setWatch: procedure.input(notificationsRouter.routes.setWatch.paramsSchema).output(notificationsRouter.routes.setWatch.resultSchema).mutation(({ ctx, input }) => executeMethod(notificationsRouter.routes.setWatch, ctx, input)),
   }),

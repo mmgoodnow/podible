@@ -1259,6 +1259,16 @@ export function runMigrations(db: Database): void {
       access_token TEXT NOT NULL
     );
   `));
+  apply(66, () => {
+    db.exec("DELETE FROM app_state WHERE key >= 'notifications:inbox:v1:' AND key < 'notifications:inbox:v1:~'");
+    db.query(`UPDATE app_state
+      SET value_json = json_set(value_json, '$.message.message',
+        substr(json_extract(value_json, '$.message.message'), 1, length(json_extract(value_json, '$.message.message')) - length($footer)))
+      WHERE key >= 'notifications:delivery:v1:pending:' AND key < 'notifications:delivery:v1:pending:~'
+        AND json_extract(value_json, '$.channel') = 'email'
+        AND substr(json_extract(value_json, '$.message.message'), -length($footer)) = $footer
+    `).run({ $footer: "\n\nOpen Podible to view your notification." });
+  });
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

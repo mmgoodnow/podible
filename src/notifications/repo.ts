@@ -1,26 +1,20 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { immediateTransaction } from "../db-transaction";
-import { NotificationOutbox } from "./outbox";
+import { NotificationOutbox, type EmailNotice } from "./outbox";
 
 export type WatchTitle = { kind: "movie" | "tv"; tmdbId: number };
 type Watch = { userId: number; tv?: { entryId: number; episodeIds: number[] } };
 export type WatchStatus = "unavailable" | "eligible" | "watching";
-type NoticeContent = { title: string; episode: string | null; href: string };
-type Notice = NoticeContent & { id: string; createdAt: string; readAt: string | null };
-type NoticeRow = { key: string; notice: Notice; userId: number };
 type WatchUpdate = { key: string; watch: Watch };
 type StateRow = { key: string; value_json: string; updated_at: string };
-const inboxPrefix = (userId: number) => `notifications:inbox:v1:${userId}:`;
 const watchPrefix = ({ kind, tmdbId }: WatchTitle) => `notifications:watch:v1:${kind}:${tmdbId}:`;
-const pageSize = 40;
 
-function prepareNotice(userId: number, identity: string, content: NoticeContent, createdAt: string): NoticeRow {
+function prepareNotice(userId: number, identity: string, content: Pick<EmailNotice, "title" | "episode">): EmailNotice {
   const id = createHash("sha256").update(`${userId}:${identity}`).digest("hex");
-  return { key: inboxPrefix(userId) + id, notice: { id, ...content, createdAt, readAt: null }, userId };
+  return { id, userId, ...content };
 }
 
-/** Use separate, namespaced state rows so neither history nor a watch list needs a schema migration. */
 export class NotificationsRepo {
   constructor(private db: Database, private beforeWrite: () => void) {}
 
@@ -31,23 +25,6 @@ export class NotificationsRepo {
   }
 
   private remove(key: string) { this.db.query("DELETE FROM app_state WHERE key=?").run(key); }
-
-  list(userId: number, before?: string): { items: Notice[]; next: string | null } {
-    const prefix = inboxPrefix(userId), cursor = before ? this.row(prefix + before) : null;
-    if (before && !cursor) return { items: [], next: null };
-    const rows = this.db.query<StateRow, [string, string, string | null, string | null, string | null, number]>(`
-      SELECT key,value_json,updated_at FROM app_state WHERE key>=? AND key<?
-        AND (? IS NULL OR (updated_at,key)<(?,?)) ORDER BY updated_at DESC,key DESC LIMIT ?
-    `).all(prefix, prefix + "~", cursor?.key ?? null, cursor?.updated_at ?? null, cursor?.key ?? null, pageSize + 1);
-    const items = rows.slice(0, pageSize).map(row => JSON.parse(row.value_json) as Notice);
-    return { items, next: rows.length > pageSize ? items.at(-1)!.id : null };
-  }
-
-  markRead(userId: number, id: string): boolean {
-    return immediateTransaction(this.db, this.beforeWrite, () => this.db.query(`UPDATE app_state
-      SET value_json=json_set(value_json,'$.readAt',coalesce(json_extract(value_json,'$.readAt'),?)) WHERE key=?
-    `).run(new Date().toISOString(), inboxPrefix(userId) + id).changes === 1);
-  }
 
   watchStatus(userId: number, title: WatchTitle): WatchStatus {
     if (this.row(watchPrefix(title) + userId)) return "watching";
@@ -101,13 +78,6 @@ export class NotificationsRepo {
       .map(row => ({ key: row.key, watch: JSON.parse(row.value_json) as Watch }));
   }
 
-  private insertNotices(rows: NoticeRow[], now: string) {
-    if (!rows.length) return;
-    this.db.query(`INSERT INTO app_state(key,value_json,updated_at)
-      SELECT json_extract(value,'$.key'),json_extract(value,'$.notice'),? FROM json_each(?) WHERE true
-      ON CONFLICT(key) DO NOTHING`).run(now, JSON.stringify(rows));
-  }
-
   private consumeWatches(remove: string[], updates: WatchUpdate[], now: string) {
     if (remove.length) this.db.query("DELETE FROM app_state WHERE key IN (SELECT value FROM json_each(?))")
       .run(JSON.stringify(remove));
@@ -125,12 +95,10 @@ export class NotificationsRepo {
     const watches = this.watches({ kind: "movie", tmdbId: movie.tmdbId });
     const users = new Set([...owners.map(o => o.userId), ...watches.map(w => w.watch.userId)]);
     const now = new Date().toISOString();
-    const content = { title: movie.title, episode: null, href: `/movies/${movie.tmdbId}` };
+    const content = { title: movie.title, episode: null };
     const identity = `movie:${targetId}:${revision}`;
-    const notices = [...users].map(userId => prepareNotice(userId, identity, content, now));
-    this.insertNotices(notices, now);
-    this.delivery.enqueue(identity, { title: "Movie available in Plex", message: movie.title },
-      notices.map(({ userId, notice }) => ({ userId, ...notice })), now);
+    const notices = [...users].map(userId => prepareNotice(userId, identity, content));
+    this.delivery.enqueue(identity, { title: "Movie available in Plex", message: movie.title }, notices, now);
     this.consumeWatches(watches.map(w => w.key), [], now);
   }
 
@@ -153,16 +121,16 @@ export class NotificationsRepo {
     const byId = new Map(episodes.map(ep => {
       const code = `S${String(ep.season).padStart(2, "0")}E${String(ep.number).padStart(2, "0")}`;
       return [ep.id, {
-        title: entry.title, episode: ep.title ? `${code}: ${ep.title}` : code, href: `/tv/library/${entry.id}`,
+        title: entry.title, episode: ep.title ? `${code}: ${ep.title}` : code,
       }] as const;
     }));
     const now = new Date().toISOString();
-    const notices = new Map<string, NoticeRow>();
+    const notices = new Map<string, EmailNotice>();
     const queue = (userId: number, episodeId: number) => {
       const content = byId.get(episodeId);
       if (!content) return false;
       const recipient = `${userId}:${episodeId}`;
-      if (!notices.has(recipient)) notices.set(recipient, prepareNotice(userId, `tv:${targetId}:${revision}:${episodeId}`, content, now));
+      if (!notices.has(recipient)) notices.set(recipient, prepareNotice(userId, `tv:${targetId}:${revision}:${episodeId}`, content));
       return true;
     };
     const remove: string[] = [], updates: WatchUpdate[] = [];
@@ -173,15 +141,13 @@ export class NotificationsRepo {
       if (!remaining.length) remove.push(key);
       else if (remaining.length < watch.tv.episodeIds.length) updates.push({ key, watch: { ...watch, tv: { entryId: entry.id, episodeIds: remaining } } });
     }
-    const rows = [...notices.values()];
-    this.insertNotices(rows, now);
     if (byId.size) {
       const episodes = [...byId.values()].map(ep => ep.episode).sort();
       const listed = episodes.slice(0, 5).join(", ");
       const more = episodes.length > 5 ? ` (+${episodes.length - 5} more)` : "";
       this.delivery.enqueue(`tv:${targetId}:${revision}`, {
         title: "TV available in Plex", message: `${entry.title}: ${listed}${more}`,
-      }, rows.map(({ userId, notice }) => ({ userId, ...notice })), now);
+      }, [...notices.values()], now);
     }
     this.consumeWatches(remove, updates, now);
   }

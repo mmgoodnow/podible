@@ -517,8 +517,9 @@ for (const variant of ["default-off", "malformed-pilot", "revoked-before-snatch"
       }
       expect(s.repo.tv.missingEpisodes(s.request.requestId)).toEqual([]);
       const ownerId = s.repo.tv.requestById(s.request.requestId)!.user_id;
-      const originalNotices = s.repo.notifications.list(ownerId).items;
-      expect(originalNotices).toHaveLength(2); // Existing Plex-verified availability notices still fire.
+      const notificationEvents = () => s.db.query("SELECT key FROM app_state WHERE key GLOB 'notifications:delivery:v1:event:*' ORDER BY key").all();
+      const originalNotices = notificationEvents();
+      expect(originalNotices).toHaveLength(2); // Initial Plex availability records an event for each publication.
       const optIn = (repo: BooksRepo, ids: unknown) => repo.setJsonState(TV_SEASON_PACK_PROMOTION_PILOT, ids);
       expect(s.repo.getJsonState(TV_SEASON_PACK_PROMOTION_PILOT)).toBeNull();
       if (variant === "malformed-pilot") optIn(s.repo, [s.request.targetId, "invalid"]);
@@ -685,7 +686,7 @@ for (const variant of ["default-off", "malformed-pilot", "revoked-before-snatch"
         if (partial) expect(pilot.writes.every(write => write.index === 1)).toBe(true);
       }
       expect(s.repo.tv.publications()).toEqual([]);
-      expect(s.repo.notifications.list(ownerId).items).toEqual(originalNotices); // No duplicate availability notices.
+      expect(notificationEvents()).toEqual(originalNotices); // An upgrade does not announce existing availability again.
       const oldRegistrationIds = new Set(oldRegistrations.map(row => row.id));
       expect(s.repo.tv.downloads(s.request.targetId).filter(row => oldRegistrationIds.has(row.id))).toEqual(oldRegistrations);
       for (const old of originals) {

@@ -218,7 +218,7 @@ async function checkPosterShelves(browser: Awaited<ReturnType<typeof chromium.la
     await page.getByRole("button", { name: "Sign out" }).waitFor();
     const nav = page.getByRole("navigation", { name: "Main navigation" });
     assert.deepEqual(await nav.getByRole("link").evaluateAll(links => links.map(link => [link.textContent, link.getAttribute("href")])),
-      [["Library", "/library"], ["Notifications", "/notifications"], ["Activity", "/ops"], ["Settings", "/settings"]]);
+      [["Library", "/library"], ["Activity", "/ops"], ["Settings", "/settings"]]);
     assert.deepEqual(external, [], "Unexpected external network request");
     assert.deepEqual(errors, []);
   } finally { releaseRequestCards(); await context.close(); fixture.stop(true); await data.close(); }

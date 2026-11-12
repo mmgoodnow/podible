@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { expect, spyOn, test } from "bun:test";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -98,7 +98,7 @@ test("notification destinations are admin-only and survive a legacy settings upd
   } finally { await f.close(); }
 });
 
-test("movie publication atomically delivers once, including a watch, without exposing other users' inboxes", async () => {
+test("movie publication atomically queues email and Pushover once, including a watch, without an inbox", async () => {
   const f = await fixture();
   const { db, repo } = f;
   try {
@@ -115,7 +115,9 @@ test("movie publication atomically delivers once, including a watch, without exp
       return await response.json() as { result?: unknown; error?: { code: number } };
     };
     const title = { kind: "movie", tmdbId: movie.tmdbId } as const;
-    expect((await rpc("list", {})).error?.code).toBe(-32001);
+    expect((await rpc("watchStatus", title)).error?.code).toBe(-32001);
+    expect((await rpc("list", {}, "owner")).error?.code).toBe(-32601);
+    expect((await rpc("markRead", { id: "a".repeat(64) }, "owner")).error?.code).toBe(-32601);
     expect((await rpc("setWatch", { ...title, enabled: true }, "watcher")).result).toEqual({ status: "unavailable" });
     const request = repo.movies.request(owner.id, movie, policy);
     const dropped = repo.movies.request(withdrawn.id, movie, policy);
@@ -133,41 +135,28 @@ test("movie publication atomically delivers once, including a watch, without exp
       width: 1920, height: 1080, videoCodec: "h264", dynamicRange: "sdr", audioLanguages: ["en"], proper: false }, [await f.file()]);
     const input = { repo: repo.movies, roots: f.roots, library: verified, targetId: request.targetId, versionId };
     expect(await publishMovieVersion({ ...input, pendingIsExpected: true, library: { ...verified, verify: async () => false } })).toBe(false);
-    expect(repo.notifications.list(owner.id).items).toEqual([]);
-    expect(repo.notifications.list(watcher.id).items).toEqual([]);
     expect(pendingDeliveries(db)).toEqual([]);
     db.exec(`CREATE TRIGGER fail_delivery_write BEFORE INSERT ON app_state
       WHEN NEW.key GLOB 'notifications:delivery:v1:pending:*' BEGIN SELECT RAISE(ABORT, 'outbox write failed'); END`);
     await expect(publishMovieVersion(input)).rejects.toThrow("outbox write failed");
     expect(repo.movies.target(request.targetId)?.active_version_id).toBeNull();
     expect(repo.notifications.watchStatus(watcher.id, title)).toBe("watching");
-    expect(repo.notifications.list(owner.id).items).toEqual([]);
-    expect(repo.notifications.list(watcher.id).items).toEqual([]);
     expect(pendingDeliveries(db)).toEqual([]);
     db.exec("DROP TRIGGER fail_delivery_write");
     await expect(publishMovieVersion({ ...input, afterPromotion: () => { throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
 
-    const ownerNotice = repo.notifications.list(owner.id).items[0]!;
-    const watcherNotice = repo.notifications.list(watcher.id).items[0]!;
-    expect(ownerNotice).toMatchObject({ title: movie.title, href: `/movies/${movie.tmdbId}`, readAt: null });
-    expect(watcherNotice.id).not.toBe(ownerNotice.id);
     expect(repo.notifications.watchStatus(watcher.id, title)).toBe("unavailable");
-    expect(repo.notifications.list(withdrawn.id).items).toEqual([]);
-    expect(repo.notifications.list(imported.id).items).toEqual([]);
-    expect((await rpc("list", { before: ownerNotice.id }, "stranger")).result).toEqual({ items: [], next: null });
-    expect((await rpc("markRead", { id: ownerNotice.id }, "stranger")).result).toEqual({ ok: false });
-    expect((await rpc("markRead", { id: ownerNotice.id }, "owner")).result).toEqual({ ok: true });
+    expect(db.query("SELECT key FROM app_state WHERE key GLOB 'notifications:inbox:*'").all()).toEqual([]);
 
     await publishMovieVersion(input);
     const reopened = new Database(f.database);
     try {
-      expect(new BooksRepo(reopened).notifications.list(owner.id).items).toEqual([
-        { ...ownerNotice, readAt: expect.any(String) },
-      ]);
-      expect(new BooksRepo(reopened).notifications.list(watcher.id).items).toEqual([watcherNotice]);
       const { emails, pushes } = await drainDeliveries(new BooksRepo(reopened), 3);
       expect(emails.map(email => email.to[0]).sort()).toEqual([addressFor(owner), addressFor(watcher)].sort());
-      for (const email of emails) expect(email.subject).toContain(movie.title);
+      for (const email of emails) {
+        expect(email.subject).toContain(movie.title);
+        expect(email.text).toBe(`${movie.title} is now available in Plex.`);
+      }
       expect(pushes).toHaveLength(1);
       expect(pushes[0]?.get("user")).toBe("owner-key");
       expect(pushes[0]?.get("message")).toBe(movie.title);
@@ -179,9 +168,8 @@ test("movie publication atomically delivers once, including a watch, without exp
     db.query("UPDATE movie_targets SET active_version_id=NULL,revision=revision+1 WHERE id=?").run(request.targetId);
     expect(repo.notifications.setWatch(watcher.id, title, true)).toBe("watching");
     await publishMovieVersion(input);
-    const history = repo.notifications.list(watcher.id).items;
-    expect(history).toHaveLength(2);
-    expect(new Set(history.map(item => item.id)).size).toBe(2);
+    const { emails } = await drainDeliveries(repo, 3);
+    expect(emails.map(email => email.to[0]).sort()).toEqual([addressFor(owner), addressFor(watcher)].sort());
   } finally { await f.close(); }
 });
 
@@ -196,6 +184,7 @@ test("an individual native special notifies only its owner after exact Plex veri
   try {
     const { repo } = f;
     const owner = f.user("special-owner"), other = f.user("different-special-owner"), admin = f.user("unrelated-admin", true);
+    configureDelivery(repo, [owner, other, admin]);
     const fixture = fixtureTvCatalog(), entry = fixture.entry();
     const first = entry.episodes[0]!;
     entry.episodes.push({ ...first, key: "tvdb:7010", title: "Another Special",
@@ -224,18 +213,16 @@ test("an individual native special notifies only its owner after exact Plex veri
     const publish = () => publishTvVersion({ repo: repo.tv, roots, targetId: one.targetId, versionId, library, scan: false, pendingIsExpected: true });
 
     expect(await publish()).toBe(false); // Right aired coordinate and path, wrong episode GUID.
-    expect(repo.notifications.list(owner.id).items).toEqual([]);
+    expect(pendingDeliveries(f.db)).toEqual([]);
     plexEpisode = "7000";
     wrongPath = true;
     expect(await publish()).toBe(false);
-    expect(repo.notifications.list(owner.id).items).toEqual([]);
+    expect(pendingDeliveries(f.db)).toEqual([]);
     wrongPath = false;
     expect(await publish()).toBe(true);
-    expect(repo.notifications.list(owner.id).items).toEqual([expect.objectContaining({
-      title: entry.title, episode: "S00E01: Special", href: `/tv/library/${one.entryId}`, readAt: null,
-    })]);
-    expect(repo.notifications.list(other.id).items).toEqual([]);
-    expect(repo.notifications.list(admin.id).items).toEqual([]);
+    const { emails } = await drainDeliveries(repo, 2);
+    expect(emails).toEqual([{ to: [addressFor(owner)], subject: `Available in Plex: ${entry.title}`,
+      text: `${entry.title} - S00E01: Special is now available in Plex.` }]);
   } finally { await f.close(); }
 });
 
@@ -245,6 +232,7 @@ test("TV notices match exact episode membership, keep remaining watches, and nev
     const { repo } = f;
     const specialOwner = f.user("special"), regularOwner = f.user("regular"), laterOwner = f.user("later");
     const watcher = f.user("watcher"), cancelled = f.user("cancelled");
+    configureDelivery(repo, [specialOwner, regularOwner, laterOwner, watcher, cancelled]);
     const [special, regular, later] = show.episodes.map(ep => ep.key) as [string, string, string];
     const one = repo.tv.requestNativeSelection(specialOwner.id, show, policy, [], [special], [special]);
     const two = repo.tv.requestNativeSelection(regularOwner.id, show, policy, [1], [], [regular]);
@@ -265,19 +253,21 @@ test("TV notices match exact episode membership, keep remaining watches, and nev
       return { repo: repo.tv, roots, targetId: request.targetId, versionId, library: verified };
     };
     await publishTvVersion(await prepare(three));
-    expect(repo.notifications.list(laterOwner.id).items[0]?.episode).toBe("S02E01: Episode 2");
-    expect(repo.notifications.list(watcher.id).items).toEqual([]);
+    const laterDelivery = await drainDeliveries(repo, 2);
+    expect(laterDelivery.emails.map(email => email.to[0])).toEqual([addressFor(laterOwner)]);
+    expect(laterDelivery.emails[0]?.text).toContain("S02E01: Episode 2");
     const specialVersion = await prepare(one);
     expect(await publishTvVersion({ ...specialVersion, pendingIsExpected: true, library: { ...verified, verify: async () => false } })).toBe(false);
-    expect(repo.notifications.list(specialOwner.id).items).toEqual([]);
+    expect(pendingDeliveries(f.db)).toEqual([]);
     await publishTvVersion(specialVersion);
-    expect(repo.notifications.list(specialOwner.id).items[0]?.episode).toBe("S00E01: Episode 0");
-    expect(repo.notifications.list(regularOwner.id).items).toEqual([]);
+    const specialDelivery = await drainDeliveries(repo, 3);
+    expect(specialDelivery.emails.map(email => email.to[0]).sort()).toEqual([specialOwner, watcher].map(addressFor).sort());
+    expect(specialDelivery.emails.every(email => email.text.includes("S00E01: Episode 0"))).toBe(true);
     expect(repo.notifications.watchStatus(watcher.id, title)).toBe("watching");
     await publishTvVersion(await prepare(two));
-    expect(repo.notifications.list(regularOwner.id).items[0]?.episode).toBe("S01E01: Episode 1");
-    expect(repo.notifications.list(watcher.id).items.map(n => n.episode).sort()).toEqual(["S00E01: Episode 0", "S01E01: Episode 1"]);
-    expect(repo.notifications.list(cancelled.id).items).toEqual([]);
+    const regularDelivery = await drainDeliveries(repo, 3);
+    expect(regularDelivery.emails.map(email => email.to[0]).sort()).toEqual([regularOwner, watcher].map(addressFor).sort());
+    expect(regularDelivery.emails.every(email => email.text.includes("S01E01: Episode 1"))).toBe(true);
     expect(repo.notifications.watchStatus(watcher.id, title)).toBe("unavailable");
   } finally { await f.close(); }
 });
@@ -305,23 +295,15 @@ test("a TV publication batches notice and watch statements across recipients and
     try {
       await publishTvVersion({ repo: repo.tv, roots: tvRoots(f.root, "/plex/tv"), targetId: request.targetId, versionId, library: verified });
       const writes = query.mock.calls.map(([sql]) => sql).filter(sql => /^(INSERT INTO|UPDATE|DELETE FROM) app_state\b/.test(sql));
-      expect(writes.map(sql => sql.split(" app_state")[0])).toEqual(["INSERT INTO", "INSERT INTO", "INSERT INTO", "DELETE FROM", "UPDATE"]);
+      expect(writes.map(sql => sql.split(" app_state")[0])).toEqual(["INSERT INTO", "INSERT INTO", "DELETE FROM", "UPDATE"]);
     } finally { query.mockRestore(); }
 
-    const notices = repo.notifications.list(owner.id).items;
     const revision = repo.tv.target(request.targetId)!.revision;
-    expect(notices.map(n => n.id).sort()).toEqual(request.episodeIds.map(id =>
-      createHash("sha256").update(`${owner.id}:tv:${request.targetId}:${revision}:${id}`).digest("hex")).sort());
     expect(repo.notifications.watchStatus(owner.id, title)).toBe("eligible");
-    expect(repo.notifications.list(otherOwner.id).items.map(n => n.episode)).toEqual(["S01E01: Episode 1"]);
-    expect(repo.notifications.list(later.id).items).toEqual([]);
     for (const watcher of watchers) {
-      expect(repo.notifications.list(watcher.id).items.map(n => n.episode).sort()).toEqual(["S00E01: Episode 0", "S01E01: Episode 1"]);
       expect(repo.notifications.watchStatus(watcher.id, title)).toBe("watching");
     }
 
-    expect(repo.notifications.markRead(owner.id, notices[0]!.id)).toBe(true);
-    const read = repo.notifications.list(owner.id).items;
     const { emails, pushes } = await drainDeliveries(repo, 8);
     const specialEmails = emails.filter(email => email.text.includes("S00E01"));
     const regularEmails = emails.filter(email => email.text.includes("S01E01"));
@@ -329,7 +311,29 @@ test("a TV publication batches notice and watch statements across recipients and
     expect(regularEmails.flatMap(email => email.to).sort()).toEqual([owner, otherOwner, ...watchers].map(addressFor).sort());
     expect(pushes.map(push => push.get("message"))).toEqual([`${show.title}: S00E01: Episode 0, S01E01: Episode 1`]);
     repo.transaction(() => repo.notifications.tvPublished(request.targetId, revision, request.episodeIds));
-    expect(repo.notifications.list(owner.id).items).toEqual(read);
     expect(pendingDeliveries(f.db)).toEqual([]);
+  } finally { await f.close(); }
+});
+
+test("migration drops only inbox history and removes the inbox footer from queued mail", async () => {
+  const f = await fixture();
+  try {
+    const { repo, db } = f;
+    const pending = "notifications:delivery:v1:pending:email";
+    const watch = "notifications:watch:v1:movie:406:1";
+    const done = "notifications:delivery:v1:done:email";
+    const inbox = "notifications:inbox:v1:1:retired";
+    const message = { title: "Available in Plex", message: "Ready in Plex." };
+    const delivery = { channel: "email", attempts: 1, message, binding: "unchanged" };
+    repo.setJsonState(pending, { ...delivery, message: { ...message, message: message.message + "\n\nOpen Podible to view your notification." } });
+    repo.setJsonState(watch, { userId: 1 });
+    repo.setJsonState(done, { state: "accepted" });
+    repo.setJsonState(inbox, { readAt: "old" });
+    db.query("DELETE FROM schema_migrations WHERE id=66").run();
+    runMigrations(db);
+    expect(repo.getJsonState(inbox)).toBeNull();
+    expect(repo.getJsonState<{ userId: number }>(watch)).toEqual({ userId: 1 });
+    expect(repo.getJsonState<{ state: string }>(done)).toEqual({ state: "accepted" });
+    expect(repo.getJsonState<typeof delivery>(pending)).toEqual(delivery);
   } finally { await f.close(); }
 });

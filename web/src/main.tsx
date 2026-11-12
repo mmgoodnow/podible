@@ -12,7 +12,6 @@ import { Link, useLocation } from "./router";
 import { RetentionAudit } from "./retention";
 import { SettingsPage, UsersPage, OpsPage } from "./admin";
 import { LoginScreen } from "./auth";
-import { NotificationsInbox } from "./notifications";
 import { Catalog, BookCollection } from "./books";
 import { BookDetail } from "./book-detail";
 import { UnifiedLibrary } from "./home";
@@ -77,7 +76,6 @@ function App() {
           >
             Library
           </Link>
-          {session.data && <Link href="/notifications" aria-current={route === "/notifications" ? "page" : undefined}>Notifications</Link>}
           {session.data?.user.isAdmin && <Link href="/ops" aria-current={route === "/ops" ? "page" : undefined}>Activity</Link>}
           {session.data?.user.isAdmin && <Link href="/settings" aria-current={route === "/settings" ? "page" : undefined}>Settings</Link>}
         </nav>
@@ -85,7 +83,7 @@ function App() {
       </header>
       <main
         className={
-          (["/", "/library", "/add", "/retention", "/tv-retention", "/recovery", "/stewardship", "/settings", "/users", "/ops", "/notifications"].includes(route) || route.startsWith("/requests"))
+          (["/", "/library", "/add", "/retention", "/tv-retention", "/recovery", "/stewardship", "/settings", "/users", "/ops"].includes(route) || route.startsWith("/requests"))
             ? "compact-main"
             : undefined
         }
@@ -175,8 +173,6 @@ function ActorLibrary({ isAdmin, initialLibrary }: {
             key={route}
             requestId={Number(route.split("/").at(-1))}
           />
-        ) : route === "/notifications" ? (
-          <NotificationsInbox />
         ) : route === "/requests" ? (
           <MovieRequests />
         ) : /^\/book\/\d+$/.test(route) ? (
