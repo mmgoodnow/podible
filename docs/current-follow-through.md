@@ -7,7 +7,8 @@
 - [x] Group Plex sign-in and publishing, Seerr, TMDB, Radarr and Sonarr under Integrations. Move the read-only library preview out of Storage.
 - [x] Combine Prowlarr and manual Torznab sources for search and feeds. Deduplicate endpoint aliases and keep discovery status separate.
 - [ ] Let direct sources keep working during discovery outages without treating the unavailable Prowlarr sources as searched or caught up.
-- [ ] Replace the Resend-specific notification transport with SMTP. Match Seerr's connection and TLS settings without displaying its credentials; preserve email for users, Pushover for the owner, and dry-run delivery in production.
+- [x] Replace the Resend-specific notification transport with SMTP, preserving user email, owner Pushover and dry run. Require TLS and do not resend ambiguous deliveries.
+- [ ] Configure Podible with the same authenticated port 587 relay as Seerr after normal CD. Verify TLS/authentication without sending mail and confirm dry run stays enabled.
 - [ ] Keep cross-seed coverage as a tie-breaker, not a quality or viability override. Remove its settings toggle once that behavior is enforced.
 - [ ] Prefer proper/repack releases by default without a toggle. A correction label must not waive eligibility or regress quality.
 - [ ] Add freeform video selection guidance to Decisions and its agent fallback. Keep ordered quality tiers and hard playback constraints enforceable. Replace soft scoring controls only after testing stable upgrade decisions.
@@ -16,9 +17,9 @@
 
 - [ ] Expand Decisions with escalation to book, movie and TV selection and import. Use bounded evidence, never pass credentials, and measure fallback rate, latency and cost.
 - [ ] Make the ten-minute stall threshold internal. Check connectivity before recovery; preserve current transfers through outages and keep the only viable download eligible for import. Shorten the threshold only after those safeguards are proven.
-- [ ] Finish the Khom Khlang season-pack pilot on real production inbox offers. Match job 63190 dispatched upgrade job 63191; Transmission verified 2,362,864,234 of 3,927,339,626 bytes locally before downloading missing pieces. Verify exact Plex identities and paths if the pack is promoted.
+- [x] Finish the Khom Khlang season-pack pilot on real production inbox offers. Match job 63190 dispatched upgrade job 63191. See the live verification and timing in [TV](tv.md).
 - [ ] Implement automatic retirement of provably superseded episode torrent registrations once the pack is verified and seed obligations are met. Keep any referenced payload bytes.
-- [ ] Capture a fresh production download-complete-to-Plex trace, verify the open UI updates on its own, and compare each step in Grafana.
+- [ ] Verify the open UI updates on its own during a production publication, and verify the timing is visible in Grafana. The Khom Khlang canary has a fresh backend timing trace.
 
 ## Apple TV
 

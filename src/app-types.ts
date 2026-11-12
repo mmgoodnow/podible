@@ -77,7 +77,11 @@ export type AppSettings = {
   notifications: {
     delivery?: "dry-run" | "live";
     email: {
-      apiKey: string;
+      host: string;
+      port: number;
+      security: "starttls" | "tls";
+      username: string;
+      password: string;
       from: string;
       recipients: string;
     };

@@ -254,6 +254,20 @@ met the reuse ratio or additional-download budget. A reuse rejection is not a
 quality-upgrade decision. The pack did not replace the selected episodes and
 none of the single-episode registrations had reached 30 actual seed days.
 
+**November 11 pack canary (Pacific time):** On running build `edf235f`, the
+normal worker replayed the two saved inbox offers (match job 63190) for the
+opted-in target. Upgrade job 63191 promoted the 1080p pack to version 137.
+Transmission verified 2,362,864,234 of 3,927,339,626 bytes locally (60.2%) and
+downloaded 1,564,475,392 bytes. A separate read-only check confirmed all ten
+canonical files and symlinks and all ten exact TVDB episode IDs and paths in
+Plex section 16. The publication produced one provable superseded-registration
+nomination; no registrations or payloads were removed.
+
+Transmission completed at 01:44:35 UTC on November 12. Publishing began
+61.9 seconds later and Plex verification took another 42.6 seconds, for
+104.5 seconds from completion to ready. This verifies the backend timing,
+not whether an already-open browser updated on its own.
+
 The initial rollout exposed an ordering failure: both normal CD runs
 [`41784606406`](https://github.com/mmgoodnow/podible/actions/runs/41784606406)
 (`41a88af`) and

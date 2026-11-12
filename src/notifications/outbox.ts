@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { AppSettings } from "../app-types";
 import { immediateTransaction } from "../db-transaction";
 import { parseNotificationSettings, recipientAddresses } from "./settings";
@@ -8,7 +8,7 @@ const prefix = "notifications:delivery:v1:";
 const pending = prefix + "pending:";
 const done = prefix + "done:";
 const leaseMs = 30_000;
-const lifetimeMs = 12 * 60 * 60_000; // Stay well inside Resend's 24-hour key retention.
+const lifetimeMs = 12 * 60 * 60_000;
 const maxDeliveryAttempts = 6;
 type Settings = AppSettings["notifications"];
 type Message = { title: string; message: string };
@@ -20,7 +20,7 @@ type PendingDelivery = {
   expiresAt: number;
   inFlight: boolean;
   possiblyAccepted: boolean;
-} & ({ channel: "email"; userId: number; idempotencyKey: string } | { channel: "pushover" });
+} & ({ channel: "email"; userId: number } | { channel: "pushover" });
 type Row = { key: string; value_json: string; updated_at: string };
 export type DeliveryClaim = { id: string; delivery: PendingDelivery };
 type TerminalOutcome = {
@@ -34,8 +34,11 @@ const iso = (time: number) => new Date(time).toISOString();
 const clean = (value: string) => value.replace(/\s+/g, " ").trim();
 
 export function emailTarget(settings: Settings, to: string | undefined) {
-  const from = settings.email.from.trim(), apiKey = settings.email.apiKey.trim();
-  return to && from && apiKey ? { from, to, apiKey, binding: hash([from, to, apiKey]) } : null;
+  const { host, port, security, username, password } = settings.email;
+  const from = settings.email.from.trim();
+  if (!to || !from || !host || Boolean(username) !== Boolean(password)) return null;
+  return { from, to, host, port, security, username, password,
+    binding: hash(["smtp", from, to, host, port, security, username, password]) };
 }
 
 export function pushoverTarget(settings: Settings) {
@@ -73,7 +76,7 @@ export class NotificationOutbox {
       if (!target) continue;
       const title = clean(notice.title), episode = notice.episode && clean(notice.episode);
       jobs.push({ id: hash(["email", notice.id]), job: {
-        ...initial, channel: "email", userId: notice.userId, binding: target.binding, idempotencyKey: `podible/${randomUUID()}`,
+        ...initial, channel: "email", userId: notice.userId, binding: target.binding,
         message: { title: `Available in Plex: ${title}`, message: `${episode ? `${title} - ${episode}` : title} is now available in Plex.\n\nOpen Podible to view your notification.` },
       } });
     }
@@ -95,12 +98,12 @@ export class NotificationOutbox {
       const row = next();
       if (!row) return null;
       const id = row.key.slice(pending.length), delivery = JSON.parse(row.value_json) as PendingDelivery;
-      if ((delivery.channel === "pushover" && delivery.inFlight) || delivery.attempts >= maxDeliveryAttempts || now >= delivery.expiresAt) {
+      // Neither transport can guarantee deduplication if the worker stopped mid-send.
+      if (delivery.inFlight || delivery.attempts >= maxDeliveryAttempts || now >= delivery.expiresAt) {
         this.finish(id, delivery, { state: delivery.inFlight || delivery.possiblyAccepted ? "unknown" : "failed", reason: "retry_window_closed" }, now);
         return null;
       }
       delivery.attempts++;
-      delivery.possiblyAccepted ||= delivery.inFlight;
       delivery.inFlight = true;
       this.db.query("UPDATE app_state SET value_json=?,updated_at=? WHERE key=?")
         .run(JSON.stringify(delivery), iso(now + leaseMs), row.key);
@@ -113,7 +116,7 @@ export class NotificationOutbox {
       const row = this.db.query<{ value_json: string }, [string]>("SELECT value_json FROM app_state WHERE key=?").get(pending + id);
       const current = row && JSON.parse(row.value_json) as PendingDelivery;
       if (!current || !current.inFlight || current.attempts !== delivery.attempts) return null;
-      const possiblyAccepted = current.possiblyAccepted || (outcome.state === "retry" && outcome.reason !== "http_429");
+      const possiblyAccepted = current.possiblyAccepted;
       if (outcome.state === "retry" && delivery.attempts < maxDeliveryAttempts && outcome.at < delivery.expiresAt) {
         this.db.query("UPDATE app_state SET value_json=?,updated_at=? WHERE key=?")
           .run(JSON.stringify({ ...current, inFlight: false, possiblyAccepted }), iso(outcome.at), pending + id);

@@ -437,10 +437,15 @@ export function NotificationSettings({ form }: { form: SettingsForm }) {
         help="Dry run sends nothing. Events recorded in dry run are not sent later. In-app notifications still work."
         options={[["dry-run", "Dry run"], ["live", "Live"]]} />
     </SettingsGroup>
-    <SettingsGroup title="User email" note="Send existing movie and TV availability notices to the mapped recipients through Resend.">
+    <SettingsGroup title="User email (SMTP)" note="Send movie and TV availability notices through your mail server.">
     <Grid>
-      <SecretField label="Resend API key" field={email.field("apiKey")} help="Use a sending key for your verified domain." />
-      <TextField label="Sender address" field={email.field("from")} help="An email address on the verified sending domain." />
+      <TextField label="SMTP host" field={email.field("host")} help="Hostname or IP address of the outgoing mail server." />
+      <NumberField label="SMTP port" field={email.field("port")} min={1} help="Usually 587 for STARTTLS or 465 for implicit TLS." />
+      <SelectField label="SMTP encryption" field={email.field("security")} options={[["starttls", "STARTTLS"], ["tls", "Implicit TLS"]]}
+        help="Choose the encryption mode your mail server expects. Podible requires an encrypted connection." />
+      <TextField label="SMTP username" field={email.field("username")} help="Leave blank only if your server accepts mail without sign-in." />
+      <SecretField label="SMTP password" field={email.field("password")} help="Password for the SMTP account, if required." />
+      <TextField label="Sender address" field={email.field("from")} help="An email address your mail server allows you to send from." />
       <Frame field={recipients} label="Recipient addresses" help="Enter one Podible user ID = email address per line. Unlisted users only get in-app notices.">
         {props => <textarea {...props} rows={4} spellCheck={false} value={recipients.value}
           onChange={event => recipients.set(event.target.value, "Recipient addresses")} />}

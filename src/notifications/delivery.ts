@@ -1,6 +1,7 @@
 import { postPushoverMessage, type NotificationFetch } from "../notify";
 import { emailTarget, pushoverTarget, type DeliveryClaim, type DeliveryOutcome, type NotificationOutbox } from "./outbox";
 import { recipientAddresses } from "./settings";
+import { sendSmtp, type SendSmtp } from "./smtp";
 
 const backoffMs = [30_000, 120_000, 600_000, 1_800_000, 7_200_000];
 
@@ -12,7 +13,7 @@ function retry(claim: DeliveryClaim, now: number, reason: string, response?: Res
   return { state: "retry", reason, at: Math.max(now + (backoffMs[claim.delivery.attempts - 1] ?? backoffMs.at(-1)!), retryAt || 0, reset || 0) };
 }
 
-async function deliver(outbox: NotificationOutbox, claim: DeliveryClaim, fetcher: NotificationFetch, now: () => number): Promise<DeliveryOutcome> {
+async function deliver(outbox: NotificationOutbox, claim: DeliveryClaim, fetcher: NotificationFetch, smtp: SendSmtp, now: () => number): Promise<DeliveryOutcome> {
   const settings = outbox.settings(), { delivery } = claim;
   if (settings.delivery !== "live") return { state: "skipped", reason: "dry_run" };
 
@@ -37,35 +38,29 @@ async function deliver(outbox: NotificationOutbox, claim: DeliveryClaim, fetcher
   if (!target || target.binding !== delivery.binding || !outbox.hasUser(delivery.userId))
     return { state: "skipped", reason: "destination_changed" };
   try {
-    const response = await fetcher("https://api.resend.com/emails", {
-      method: "POST",
-      redirect: "error",
-      headers: { Authorization: `Bearer ${target.apiKey}`, "Content-Type": "application/json", "Idempotency-Key": delivery.idempotencyKey },
-      body: JSON.stringify({ from: target.from, to: [target.to], subject: delivery.message.title, text: delivery.message.message }),
-      signal: AbortSignal.timeout(3_000),
-    });
-    if (response.ok) {
-      const payload = await response.json() as { id?: unknown } | null;
-      return typeof payload?.id === "string" && payload.id ? { state: "accepted" } : retry(claim, now(), "invalid_response");
+    const accepted = await smtp(target, { id: claim.id, subject: delivery.message.title, text: delivery.message.message });
+    if (accepted) return { state: "accepted" };
+  } catch (error) {
+    const failure = error as { responseCode?: number; command?: string; code?: string } | null;
+    const code = failure?.responseCode;
+    // Retry only definite pre-delivery failures or explicit SMTP rejection, never a lost DATA acknowledgement.
+    if (failure?.code === "EDNS" || failure?.command === "CONN" && code === undefined)
+      return retry(claim, now(), "smtp_connection");
+    if (typeof code === "number" && Number.isInteger(code) &&
+        /^(?:CONN|EHLO|HELO|STARTTLS|AUTH\b.*|MAIL FROM|RCPT TO|DATA)$/.test(failure?.command ?? "")) {
+      if (code >= 400 && code < 500) return retry(claim, now(), `smtp_${code}`);
+      if (code >= 500 && code < 600) return { state: "failed", reason: `smtp_${code}` };
     }
-    if (response.status === 409) {
-      const payload = await response.json().catch(() => null) as { name?: string } | null;
-      if (payload?.name === "concurrent_idempotent_requests") return retry(claim, now(), "concurrent_request", response);
-    }
-    if (response.status === 408 || response.status === 429 || response.status >= 500)
-      return retry(claim, now(), `http_${response.status}`, response);
-    return { state: "failed", reason: `http_${response.status}` };
-  } catch {
-    return retry(claim, now(), "unconfirmed_email");
   }
+  return { state: "unknown", reason: "unconfirmed_email" };
 }
 
-export async function deliverNextNotification(outbox: NotificationOutbox, { fetcher = fetch, now = Date.now }: {
-  fetcher?: NotificationFetch; now?: () => number;
+export async function deliverNextNotification(outbox: NotificationOutbox, { fetcher = fetch, smtp = sendSmtp, now = Date.now }: {
+  fetcher?: NotificationFetch; smtp?: SendSmtp; now?: () => number;
 } = {}) {
   const claim = outbox.claim(now());
   if (!claim) return null;
-  const outcome = await deliver(outbox, claim, fetcher, now);
+  const outcome = await deliver(outbox, claim, fetcher, smtp, now);
   return outbox.settle(claim, outcome, now());
 }
 

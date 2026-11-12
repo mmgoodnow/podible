@@ -16,9 +16,13 @@ export function recipientAddresses(value: string): Map<number, string> | null {
 }
 
 export const emailSettingsSchema = z.object({
-  apiKey: z.string(),
-  from: z.string().refine(value => !value.trim() || address.safeParse(value.trim()).success, "Enter a sender email address."),
-  recipients: z.string().refine(value => recipientAddresses(value) !== null, "Use one unique Podible user ID = email address per line."),
+  host: z.string().trim().max(253).regex(/^[\w.:-]*$/, "Enter a hostname or IP address, not a URL.").default(""),
+  port: z.number().int().min(1).max(65535).default(587),
+  security: z.enum(["starttls", "tls"]).default("starttls"),
+  username: z.string().default(""),
+  password: z.string().default(""),
+  from: z.string().refine(value => !value.trim() || address.safeParse(value.trim()).success, "Enter a sender email address.").default(""),
+  recipients: z.string().refine(value => recipientAddresses(value) !== null, "Use one unique Podible user ID = email address per line.").default(""),
 });
 
 export function parseNotificationSettings(value: unknown): AppSettings["notifications"] {
@@ -26,7 +30,7 @@ export function parseNotificationSettings(value: unknown): AppSettings["notifica
   const email = emailSettingsSchema.safeParse(input.email);
   return {
     delivery: input.delivery === "live" ? "live" : "dry-run",
-    email: email.success ? email.data : { apiKey: "", from: "", recipients: "" },
+    email: email.success ? email.data : emailSettingsSchema.parse({}),
     pushover: {
       enabled: input.pushover?.enabled === true,
       lifecycleEnabled: input.pushover?.lifecycleEnabled === true,

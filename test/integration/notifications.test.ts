@@ -46,7 +46,7 @@ const addressFor = (user: { id: number }) => `user-${user.id}@example.test`;
 function configureDelivery(repo: BooksRepo, users: { id: number }[]) {
   repo.updateSettings(defaultSettings({ notifications: {
     delivery: "live",
-    email: { apiKey: "fake", from: "podible@example.test", recipients: users.map(user => `${user.id}=${addressFor(user)}`).join("\n") },
+    email: { host: "smtp.example.test", from: "podible@example.test", recipients: users.map(user => `${user.id}=${addressFor(user)}`).join("\n") },
     pushover: { enabled: true, lifecycleEnabled: true, apiToken: "fake", userKey: "owner-key" },
   } }));
 }
@@ -58,16 +58,16 @@ function pendingDeliveries(db: Database) {
 async function drainDeliveries(repo: BooksRepo, count: number) {
   const emails: { to: string[]; subject: string; text: string }[] = [], pushes: URLSearchParams[] = [];
   const fetcher: NotificationFetch = async (url, request) => {
-    if (url === "https://api.resend.com/emails") {
-      emails.push(JSON.parse(String(request?.body)));
-      return Response.json({ id: `fake-${emails.length}` });
-    }
     expect(url).toBe("https://api.pushover.net/1/messages.json");
     pushes.push(new URLSearchParams(String(request?.body)));
     return Response.json({ status: 1 });
   };
-  for (let i = 0; i < count; i++) expect(await deliverNextNotification(repo.notifications.delivery, { fetcher })).toEqual({ state: "accepted" });
-  expect(await deliverNextNotification(repo.notifications.delivery, { fetcher })).toBeNull();
+  const tick = () => deliverNextNotification(repo.notifications.delivery, { fetcher, async smtp(target, message) {
+    emails.push({ to: [target.to], subject: message.subject, text: message.text });
+    return true;
+  } });
+  for (let i = 0; i < count; i++) expect(await tick()).toEqual({ state: "accepted" });
+  expect(await tick()).toBeNull();
   return { emails, pushes };
 }
 
