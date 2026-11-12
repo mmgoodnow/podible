@@ -153,6 +153,12 @@ separately. Image generation, transcription, and work before instrumentation
 are not included. Metrics persist across worker restarts and contain only
 bounded workflow, API, and model labels, not prompts or titles.
 
+The book Decisions fast path considers only a fresh, complete initial indexer
+search for a first ebook acquisition with one exact title/author and EPUB/PDF
+offer. This is title evidence, not file verification. All non-selections return
+to the existing Responses selector. Decisions usage feeds the same local
+rate-card estimate (`api="decisions"`), not provider billing.
+
 | Panel | PromQL | Unit |
 | --- | --- | --- |
 | Logical seed size | `podible_seed_bytes` | bytes |

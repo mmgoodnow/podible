@@ -16,7 +16,7 @@ type SearchCheckpoint = TorznabResult[] | {
 export async function selectWithIndexerRecovery<T extends { selections: unknown[] }>(
   ctx: WorkerContext,
   request: { query: string; media: MediaType; jobId: number; bookId: number },
-  select: (results: TorznabResult[], stepName: string) => Promise<T>,
+  select: (results: TorznabResult[], stepName: string, completeFreshBatch: boolean) => Promise<T>,
 ): Promise<T> {
   for (let phase = 0; ; phase++) {
     const suffix = phase === 0 ? "" : `:retry:${phase}`;
@@ -34,7 +34,7 @@ export async function selectWithIndexerRecovery<T extends { selections: unknown[
     workerLog(ctx, `[acquire] job=${request.jobId} book=${request.bookId} media=${request.media} query=${JSON.stringify(request.query)} results=${results.length}`);
     // An empty incomplete batch is not a terminal "no results" decision (or a paid agent call).
     const decision = results.length || !failures.length
-      ? await select(results, `${request.media}:selection${suffix}`)
+      ? await select(results, `${request.media}:selection${suffix}`, searched && phase === 0 && failures.length === 0)
       : null;
     if (decision?.selections.length || !failures.length) return decision!;
     const retryAt = failures.flatMap((failure) => failure.retryAt === null ? [] : [failure.retryAt]);

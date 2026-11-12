@@ -3,7 +3,7 @@ import type { ModelProvider } from "@openai/agents-core";
 import { z } from "zod";
 
 import { TEXT_AGENT_MODEL } from "../ai-models";
-import { meterAgentProvider } from "../agent-usage";
+import { meterAgentProvider, recordAgentUsage } from "../agent-usage";
 import type { ImportInspectionFile } from "./importer";
 import type { BooksRepo } from "../repo";
 import { rankSearchResults } from "./service";
@@ -14,13 +14,14 @@ import { normalizeInfoHash } from "./torrent";
 import { METAINFO_INSPECTION_FAILED } from "../media/metainfo";
 import type { AppSettings, MediaType, ReleaseRow } from "../app-types";
 import type { AudioEdition } from "./audio-editions";
+import { BOOK_DECISIONS_MODEL, decideBookRelease, type BookDecisionOptions } from "./decisions";
 
 /**
  * Optional agent decision layer.
  *
  * Deterministic ranking/selection stays the default path. Responses API is
- * consulted only when configured and triggered (forced, prior failure, or low
- * confidence). Agent invocation failures surface as errors to the caller.
+ * consulted only when configured and triggered. The fresh-acquisition pilot can
+ * try Decisions before Responses. Responses failures still surface to callers.
  */
 type DecisionMode = "deterministic" | "agent";
 type DecisionTrigger = "none" | "forced" | "prior_failure" | "low_confidence";
@@ -104,6 +105,10 @@ type SearchSelectionRuntime = {
   repo?: BooksRepo;
   /** Override the model provider (e.g. a fake for tests). */
   modelProvider?: ModelProvider;
+  /** Preserve the worker's agent-first policy independently of an operator override. */
+  preferSearchAgent?: boolean;
+  /** Opt in only for a complete, ordinary first-acquisition search. */
+  freshAcquisitionDecisions?: Pick<BookDecisionOptions, "fetch" | "minConfidence" | "minMargin">;
 };
 
 type ManualImportAgentOutput = {
@@ -264,6 +269,15 @@ function searchSelectionFromIndex(result: TorznabResult): SearchSelection {
     manifestation: { label: null, editionNote: null, language: inferLanguageFromReleaseTitles([result.title]) },
     parts: [result],
   };
+}
+
+function isPlainEbookOffer(result: TorznabResult, book: NonNullable<SearchSelectionInput["book"]>): boolean {
+  if (result.mediaType !== "ebook" || !book.title.trim() || !book.author.trim() || !agreesWithAdvertisedPartOrder([result])) return false;
+  // Require positive identity and format evidence, with no extra release qualifiers.
+  const normalize = (text: string) => text.normalize("NFC").toLowerCase().replace(/[ ._()[\]-]+/g, " ").trim();
+  const title = normalize(result.title);
+  const identity = [`${book.title} ${book.author}`, `${book.title} by ${book.author}`, `${book.author} ${book.title}`];
+  return identity.some(name => ["epub", "pdf"].some(format => title === normalize(`${name} ${format}`)));
 }
 
 function agreesWithAdvertisedPartOrder(parts: TorznabResult[]): boolean {
@@ -667,19 +681,29 @@ export async function selectSearchCandidates(
   input: SearchSelectionInput,
   runtime: SearchSelectionRuntime = {}
 ): Promise<SearchSelectionResult> {
-  const knownFailedReleases = runtime.repo && input.book
-    ? runtime.repo.listReleasesByBook(input.book.id).filter((release) => release.status === "failed" && release.media_type === input.media)
+  const mediaReleases = runtime.repo && input.book
+    ? runtime.repo.listReleasesByBook(input.book.id).filter(release => release.media_type === input.media)
     : [];
+  const knownFailedReleases = mediaReleases.filter(release => release.status === "failed");
   const noEditionMatch: SearchSelectionResult = {
     selections: [], confidence: 0, mode: "agent", trigger: "forced", reason: "No verified performance match", error: null,
   };
   const deterministic = input.audioEdition ? noEditionMatch : deterministicSearchSelection(input, knownFailedReleases);
   const agentConfig = configuredAgent(settings);
+  const forceAgent = input.forceAgent || runtime.preferSearchAgent;
   const trigger = determineTrigger(deterministic.confidence, {
-    forceAgent: Boolean(input.audioEdition) || input.forceAgent || Boolean(agentConfig && deterministic.selections.length === 0),
+    forceAgent: Boolean(input.audioEdition) || forceAgent || Boolean(agentConfig && deterministic.selections.length === 0),
     priorFailure: input.priorFailure,
   });
-  if (trigger === "none") {
+  const pilot = agentConfig && runtime.freshAcquisitionDecisions;
+  const [candidate] = input.results;
+  // Use the original offer count: filtering must not hide another edition, part, or copy.
+  const fastPath = pilot && candidate && input.media === "ebook" && input.book && runtime.repo && !input.audioEdition &&
+    !input.forceAgent && !input.priorFailure && !input.rejectedUrls?.length && !input.rejectedGuids?.length && !input.rejectedInfoHashes?.length &&
+    !mediaReleases.length && input.results.length === 1 && deterministic.selections[0]?.parts[0] === candidate &&
+    isPlainEbookOffer(candidate, input.book) && !runtime.repo.listManifestationsByBook(input.book.id).some(row => row.kind === input.media)
+    ? { candidate, book: input.book, pilot } : null;
+  if (trigger === "none" && !fastPath) {
     return deterministic;
   }
 
@@ -700,8 +724,24 @@ export async function selectSearchCandidates(
   ranked.splice(12);
   if (ranked.length === 0) return deterministic;
   if (!agentConfig) {
-    if (!input.forceAgent && deterministic.selections.length === 0) return deterministic;
+    if (!forceAgent && deterministic.selections.length === 0) return deterministic;
     throw new Error("OpenAI agent not configured");
+  }
+
+  if (fastPath) {
+    const { candidate, book, pilot } = fastPath;
+    const started = performance.now();
+    const decision = await decideBookRelease({
+      target: { title: book.title, author: book.author, media: "ebook" },
+      candidates: [{ title: candidate.title }],
+    }, { ...pilot, apiKey: agentConfig.apiKey, timeoutMs: Math.min(1000, agentConfig.timeoutMs) });
+    if (decision.kind !== "error" || (decision.reason !== "invalid_input" && decision.reason !== "invalid_configuration")) {
+      recordAgentUsage("book-selection", "decisions", BOOK_DECISIONS_MODEL, performance.now() - started, decision.usage);
+    }
+    if (decision.kind === "selected" && decision.candidateIndex === 0) {
+      return { selections: [searchSelectionFromIndex(candidate)], confidence: decision.confidence,
+        mode: "agent", trigger, reason: "Decisions matched the only eligible ebook offer", error: null };
+    }
   }
 
   try {

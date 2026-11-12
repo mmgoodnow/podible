@@ -101,8 +101,10 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
       if (!repair && baseline && !bookAutomaticUpgradeAllowed(ctx.repo, book.id, media)) return result;
 
       const query = `${book.title} ${book.author}`.trim();
-      const select = (results: TorznabResult[]) => {
+      const select = (results: TorznabResult[], completeFreshBatch = false) => {
         const owned = audioEdition ? ctx.repo.listReleasesByBook(book.id) : [];
+        const tryDecisions = completeFreshBatch && media === "ebook" && !audioEdition && !repair && !baseline &&
+          !payload.feedCandidateIds && !payload.considerUpgrade && !payload.forceAgent && !payload.priorFailure && !ctx.modelProvider;
         return selectSearchCandidates(settings, {
           query,
           media,
@@ -110,9 +112,9 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
             const hash = candidate.infoHash ? normalizeInfoHash(candidate.infoHash) : null;
             return !owned.some((release) => hash ? hash === release.info_hash : candidate.url === release.url);
           }) : results,
-          editionPreference: audioEdition ? undefined : settings.agents.editionPreference,
+          editionPreference: media === "audio" && !audioEdition ? settings.agents.editionPreference : undefined,
           audioEdition,
-          forceAgent: payload.forceAgent === true || Boolean(ctx.modelProvider) || Boolean(settings.agents.apiKey?.trim()),
+          forceAgent: payload.forceAgent === true,
           priorFailure: payload.priorFailure === true,
           rejectedUrls: Array.isArray(payload.rejectedUrls) ? payload.rejectedUrls : [],
           rejectedGuids: Array.isArray(payload.rejectedGuids) ? payload.rejectedGuids : [],
@@ -121,6 +123,8 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
         }, {
           repo: ctx.repo,
           modelProvider: ctx.modelProvider,
+          preferSearchAgent: Boolean(ctx.modelProvider || settings.agents.apiKey?.trim()),
+          freshAcquisitionDecisions: tryDecisions ? { fetch, minConfidence: 0.95, minMargin: 0.5 } : undefined,
         });
       };
       const feedSelection = payload.feedCandidateIds
@@ -137,7 +141,7 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
         : null;
       const decision = feedSelection?.decision ?? await selectWithIndexerRecovery(
         ctx, { query, media, jobId: job.id, bookId: book.id },
-        (results, stepName) => durableStep(ctx, stepName, () => select(results)),
+        (results, stepName, completeFreshBatch) => durableStep(ctx, stepName, () => select(results, completeFreshBatch)),
       );
       if (decision.error) {
         workerLog(
