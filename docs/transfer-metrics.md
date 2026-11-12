@@ -161,11 +161,17 @@ These are estimates, not OpenAI billing records. Responses and Decisions report
 usage rather than a per-request dollar charge. The [organization Costs API](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/costs)
 reports billed aggregates, not Podible's per-workflow attribution.
 
-The book Decisions fast path considers only a fresh, complete initial indexer
-search for a first ebook acquisition with one exact title/author and EPUB/PDF
-offer. This is title evidence, not file verification. All non-selections return
-to the existing Responses selector. Decisions usage feeds the same local
-rate-card estimate (`api="decisions"`), not provider billing.
+Book, movie, and TV selection and import can use Decisions first when local
+evidence independently supports a bounded choice. Book selection requires one
+exactly matching offer. Movie and single-episode TV selection can consider up to
+12 screened offers when there is one policy winner. Imports require one
+corroborated file. Ties, complex releases, and unsuccessful Decisions attempts
+use the existing tool-using agents. The fast path does not replace file, quality,
+or publication checks. Decisions usage feeds the same local rate-card estimate
+(`api="decisions"`), not provider billing. Use
+`podible_agent_acquisition_decisions_total` by `question` and `outcome` to track
+accepted and escalated Decisions attempts. This counter does not count jobs
+that went straight to Responses, so it is not a share of all acquisition work.
 
 | Panel | PromQL | Unit |
 | --- | --- | --- |

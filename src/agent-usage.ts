@@ -4,6 +4,11 @@ import { TEXT_AGENT_MODEL } from "./ai-models";
 import type { BooksRepo } from "./repo";
 
 const key = "agent-usage:v1";
+const decisionsKey = "acquisition-decisions:v1";
+const decisionQuestions = ["book_release", "book_import", "movie_release", "movie_import", "tv_release", "tv_import"] as const;
+type DecisionQuestion = typeof decisionQuestions[number];
+type DecisionOutcome = "accepted" | "escalated";
+type DecisionTotals = Partial<Record<DecisionQuestion, Partial<Record<DecisionOutcome, number>>>>;
 const scope = new AsyncLocalStorage<BooksRepo>();
 const workflows = ["book-selection", "book-import", "book-feed", "book-upgrade", "chapter-curation", "chapter-judge",
   "movie", "tv", "tv-feed", "tv-episode-mapping", "indexer-query", "transcription"] as const;
@@ -19,6 +24,19 @@ const empty = (): Totals => ({ calls: 0, missing: 0, unpriced: 0, input: 0, outp
 
 export function withAgentUsageAccounting<T>(repo: BooksRepo, work: () => T): T {
   return scope.run(repo, work);
+}
+
+export function recordAcquisitionDecision(question: DecisionQuestion, outcome: DecisionOutcome): void {
+  const repo = scope.getStore();
+  if (!repo) return;
+  try {
+    repo.transaction(() => {
+      const totals = repo.getJsonState<DecisionTotals>(decisionsKey) ?? {};
+      const row = totals[question] ??= {};
+      row[outcome] = count(row[outcome]) + 1;
+      repo.setJsonState(decisionsKey, totals);
+    });
+  } catch { /* A metric must not change acquisition behavior. */ }
 }
 
 /** Standard global text rates; this is an estimate, not a billing API. */
@@ -138,6 +156,10 @@ export function agentUsagePrometheus(repo: BooksRepo): string {
     ["estimated_cost_usd_total", "usd", "Estimated standard model usage cost, not provider billing."],
     ["model_call_seconds_total", "seconds", "Total model call wall time, excluding agent tools between calls."],
   ];
+  const decisions = repo.getJsonState<DecisionTotals>(decisionsKey) ?? {};
+  const decisionMetric = "podible_agent_acquisition_decisions_total";
+  const outcomeSamples = decisionQuestions.flatMap(question => (["accepted", "escalated"] as const).map(outcome =>
+    `${decisionMetric}{question="${question}",outcome="${outcome}"} ${count(decisions[question]?.[outcome])}\n`));
   return metrics.map(([suffix, field, help]) => {
     const name = `podible_agent_${suffix}`;
     const samples = rows.flatMap(({ total, labels }) => {
@@ -145,5 +167,5 @@ export function agentUsagePrometheus(repo: BooksRepo): string {
       return value !== undefined && Number.isFinite(value) && value >= 0 ? [`${name}{${labels}} ${value}\n`] : [];
     });
     return `# HELP ${name} ${help}\n# TYPE ${name} counter\n${samples.join("")}`;
-  }).join("");
+  }).join("") + `# HELP ${decisionMetric} Screened acquisition Decisions outcomes; escalated means tool-agent fallback.\n# TYPE ${decisionMetric} counter\n${outcomeSamples.join("")}`;
 }

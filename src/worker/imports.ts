@@ -61,8 +61,9 @@ async function importJobBody(ctx: WorkerContext, job: JobRow, payload: ImportJob
   }
   const client = bookDownloadClient(ctx.repo, settings, ctx.bookTorrentClient);
   const importSource = await durableStep(ctx, "import:source", async () => {
+    const managed = ctx.repo.bookTorrents.get(release.info_hash);
     const source =
-      !ctx.repo.bookTorrents.get(release.info_hash) &&
+      !managed &&
       (payload.basePath || (Array.isArray(payload.selectedPaths) && payload.selectedPaths.length > 0))
         ? {
             basePath: payload.basePath ?? null,
@@ -70,7 +71,8 @@ async function importJobBody(ctx: WorkerContext, job: JobRow, payload: ImportJob
           }
         : await client.getImportSource(release.info_hash);
     if (!source.basePath) throw new Error("Import source is not ready");
-    return source;
+    return { ...source, freshDecisionReview: Boolean(managed && payload.preferAgentFirst && !payload.userReportedIssue &&
+      payload.audioEditionRequestId === undefined && payload.repairReviewJobId === undefined && !ctx.modelProvider && settings.agents.apiKey.trim()) };
   });
   const basePath = importSource.basePath;
   if (!basePath) {
@@ -182,24 +184,21 @@ async function importJobBody(ctx: WorkerContext, job: JobRow, payload: ImportJob
   }
 
   if (payload.preferAgentFirst === true) {
-    let agentFirstError: string | null = null;
+    // Old source receipts have no flag; never add a new gate to an in-flight legacy import.
+    const requireReviewedSelection = importSource.freshDecisionReview === true;
     try {
       const files = await durableStep(ctx, "import:agent-first:inspect", () => inspectImportPath(basePath, settings.libraryRoot));
       const book = ctx.repo.getBookRow(release.book_id);
-      const decision = await durableStep(ctx, "import:agent-first:select", () =>
-        selectManualImportPaths(
-          settings,
-          {
-            mediaType: release.media_type,
-            files,
-            forceAgent: true,
-            priorFailure: false,
-            book: book ? { id: book.id, title: book.title, author: book.author } : null
-          },
-          { modelProvider: ctx.modelProvider }
-        )
-      );
+      const ownedPaths = new Set(importSource.selectedPaths);
+      const input = { mediaType: release.media_type, files: requireReviewedSelection ? files.filter(file => ownedPaths.has(file.sourcePath)) : files,
+        releaseTitle: release.title, forceAgent: true, priorFailure: false,
+        book: book ? { id: book.id, title: book.title, author: book.author } : null };
+      const decision = await durableStep(ctx, "import:agent-first:select", () => selectManualImportPaths(settings, input, {
+        modelProvider: ctx.modelProvider, freshImportDecisions: requireReviewedSelection && !ctx.modelProvider ? fetch : undefined,
+      }));
       if (decision.selectedPaths.length > 0) {
+        if (requireReviewedSelection && decision.selectedPaths.some(file => !ownedPaths.has(file)))
+          throw new Error("Book import review selected a file outside the owned torrent");
         await durableStep(ctx, "import:agent-first:publish", () =>
           importReleaseFromPath(ctx.repo, release, basePath, settings.libraryRoot, {
             selectedPaths: decision.selectedPaths,
@@ -220,9 +219,10 @@ async function importJobBody(ctx: WorkerContext, job: JobRow, payload: ImportJob
         ctx,
         `[import] job=${job.id} release=${release.id} agent_first=no_selection mode=${decision.mode} reason=${JSON.stringify(decision.reason)}`
       );
+      if (requireReviewedSelection) throw new Error("Book import review did not confirm a safe file; deterministic publish was not attempted");
     } catch (error) {
-      if (isRunControlError(error)) throw error;
-      agentFirstError = (error as Error).message || "agent-first import failed";
+      if (isRunControlError(error) || requireReviewedSelection) throw error;
+      const agentFirstError = (error as Error).message || "agent-first import failed";
       workerLog(
         ctx,
         `[import] job=${job.id} release=${release.id} agent_first_error=${JSON.stringify(agentFirstError)}`

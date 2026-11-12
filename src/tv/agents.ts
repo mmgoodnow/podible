@@ -11,6 +11,8 @@ import { movieFactsSchema, evaluateMovieQuality, type MovieQualityPolicy } from 
 import { factsFromMovieProbe, type MovieProbe } from "../movies/probe";
 import type { TvEntry, TvEpisode } from "./types";
 import { evidencePage, tvEpisodeEvidence, tvFileEvidence, tvProbeEvidence, tvWorkEvidence } from "./agent-evidence";
+import { modelEvidenceText, tryAcquisitionDecision, type DecisionsTransport } from "../library/decisions";
+import { screenedVideoFile, screenedVideoOffers, tvDecisionIdentity, videoPolicyEvidence } from "../media/video-decisions";
 
 const claimsSchema = movieFactsSchema.pick({ identityVerified: true, cut: true, source: true, proper: true });
 export const tvImportPlanSchema = z.object({
@@ -22,8 +24,8 @@ export type TvFileCandidate = { index: number; name: string; sizeBytes: number; 
 export type TvImportPlan = z.infer<typeof tvImportPlanSchema>;
 export interface TvDecider {
   select(input: { entry: TvEntry; episodes: TvEpisode[]; policy: MovieQualityPolicy; offers: MovieOffer[];
-    excludedOfferKeys?: string[]; maximumReleaseBytes?: number }): Promise<{ offer: MovieOffer | null; reason: string; matchingOffers?: MovieOffer[]; deferred?: MovieSearch["deferred"] }>;
-  inspect(input: { entry: TvEntry; episodes: TvEpisode[]; policy: MovieQualityPolicy; offer: Pick<MovieOffer, "key" | "title" | "provider">; files: TvFileCandidate[] }): Promise<TvImportPlan>;
+    excludedOfferKeys?: string[]; maximumReleaseBytes?: number; allowDecisions?: boolean }): Promise<{ offer: MovieOffer | null; reason: string; matchingOffers?: MovieOffer[]; deferred?: MovieSearch["deferred"] }>;
+  inspect(input: { entry: TvEntry; episodes: TvEpisode[]; policy: MovieQualityPolicy; offer: Pick<MovieOffer, "key" | "title" | "provider">; files: TvFileCandidate[]; allowDecisions?: boolean }): Promise<TvImportPlan>;
   matchPack?(input: { entry: TvEntry; episodes: TvEpisode[]; title: string; files: { path: string; size: number }[] }): Promise<number[]>;
 }
 const instructions = `You acquire and independently verify TV episodes, including anime, for a private library.
@@ -58,7 +60,7 @@ export function validateTvImportPlan(raw: unknown, files: TvFileCandidate[], epi
 }
 
 export function createTvDecider(settings: AppSettings, modelProvider?: ModelProvider, search?: (query: string) => Promise<MovieSearch>,
-  fetchMetainfo = fetchMovieMetainfo): TvDecider {
+  fetchMetainfo = fetchMovieMetainfo, decisionsFetch: DecisionsTransport | undefined = modelProvider ? undefined : fetch): TvDecider {
   async function run<T extends z.ZodObject>(name: string, outputType: T, extra: string, input: unknown,
     tools: ConstructorParameters<typeof Agent>[0]["tools"] = [],
     validate?: (output: z.output<T>) => string | null): Promise<z.output<T>> {
@@ -84,11 +86,20 @@ export function createTvDecider(settings: AppSettings, modelProvider?: ModelProv
   return {
     async select(input) {
       const excluded = new Set(input.excludedOfferKeys ?? []);
+      const identity = decisionsFetch && input.allowDecisions !== false && !excluded.size ? tvDecisionIdentity(input.entry, input.episodes) : null;
+      const screened = identity && screenedVideoOffers(identity, input.offers, input.policy, input.maximumReleaseBytes);
+      if (identity && screened) {
+        const decision = await tryAcquisitionDecision(settings, "tv_release", {
+          target: { title: input.entry.title, year: identity.year, episode: identity.marker, media: "tv" }, candidates: screened.candidates,
+        }, decisionsFetch, { preferredIndex: screened.preferredIndex });
+        if (decision?.kind === "selected") return { offer: screened.offer, matchingOffers: [],
+          reason: "Decisions confirmed the policy-preferred screened TV release; file and episode verification is still required" };
+      }
       const allowed = (offer: MovieOffer) => !excluded.has(offer.key) &&
         (offer.sizeBytes === null || offer.sizeBytes <= (input.maximumReleaseBytes ?? Infinity));
       const offers = [...input.offers];
       const deferred: NonNullable<MovieSearch["deferred"]> = [];
-      const present = (offer: MovieOffer) => ({ index: offers.indexOf(offer), title: offer.title, provider: offer.provider, sizeBytes: offer.sizeBytes, seeders: offer.seeders,
+      const present = (offer: MovieOffer) => ({ index: offers.indexOf(offer), title: modelEvidenceText(offer.title, 320), provider: modelEvidenceText(offer.provider, 80), sizeBytes: offer.sizeBytes, seeders: offer.seeders,
         blockers: [...(excluded.has(offer.key) ? ["previously-attempted"] : []), ...(offer.sizeBytes !== null && offer.sizeBytes > (input.maximumReleaseBytes ?? Infinity) ? ["release-size-limit"] : [])] });
       const listing = (offset: number, limit: number, query: string | null = null) => evidencePage(offers.filter(offer =>
         !query || query.toLowerCase().split(/\s+/).every(word => offer.title.toLowerCase().includes(word))),offset,limit,present);
@@ -109,18 +120,18 @@ export function createTvDecider(settings: AppSettings, modelProvider?: ModelProv
             }
           }
           const metadata = manifests.get(index)!;
-          return { ...evidencePage(metadata.files,offset,limit,file => ({ name: file.path, sizeBytes: file.size })), sizeBytes: metadata.size,
+          return { ...evidencePage(metadata.files,offset,limit,file => ({ name: modelEvidenceText(file.path, 240), sizeBytes: file.size })), sizeBytes: metadata.size,
             blockers: metadata.size > (input.maximumReleaseBytes ?? Infinity) ? ["release-size-limit"] : [] };
         } });
       const research = tool({ name: "searchReleases", errorFunction: null, description: "Search a better title/alias or provider numbering when initial results are empty or ambiguous. URLs remain server-side.",
         parameters: z.object({ query: z.string().trim().min(1).max(250) }), async execute({ query }) {
-          if (!search || ++searches > 3) return { error: "Additional search is unavailable or its budget is exhausted" };
+          if (!search || ++searches > 3 || modelEvidenceText(query) !== query) return { error: "Additional search is unavailable or its query is outside the evidence budget" };
           const found = await search(query);
           deferred.push(...found.deferred ?? []);
           const firstNewIndex=offers.length;
           for (const offer of found.offers) if (!offers.some((known) => known.key === offer.key)) offers.push(offer);
           return { candidates: listing(firstNewIndex,20), firstNewIndex, addedCount:offers.length-firstNewIndex,
-            knownCandidates: offers.length, warnings: found.warnings, deferred: found.deferred ?? [] };
+            knownCandidates: offers.length, warningCount: found.warnings.length, deferredCount: found.deferred?.length ?? 0 };
         } });
       const result = await run("TvReleaseSelector", z.object({ index: z.number().int().nonnegative().nullable(), matchingIndexes: matchingIndexesSchema, reason: z.string().min(1).max(2000) }),
         `Choose one release containing some or all requested episodes, or index:null. Season packs and multi-episode files are allowed; extra pack contents will not be published unless requested.
@@ -131,7 +142,7 @@ Prefer a viable complete release within policy. Weigh download size against cove
 ${releaseSelectionInstructions}
 For this task, matchingIndexes should include only eligible copies; omit ones marked previously-attempted or release-size-limit. Optional copies never justify choosing a blocked primary.`,
         { entry: tvWorkEvidence(input.entry), episodeCount: input.episodes.length, episodes: input.episodes.slice(0,4).map(tvEpisodeEvidence),
-          policy: { ...input.policy, preferProper: true }, limits: { maximumReleaseBytes: input.maximumReleaseBytes ?? null, distinctMetainfoRequests: 8, additionalSearches: 3 },
+          policy: videoPolicyEvidence(input.policy), limits: { maximumReleaseBytes: input.maximumReleaseBytes ?? null, distinctMetainfoRequests: 8, additionalSearches: 3 },
           candidates: listing(0,10) },
         [list, episodeTool(input.episodes), inspect, research, createCrossSeedabilityTool(() => offers, 30)],
         output => output.index !== null && (!offers[output.index] || !allowed(offers[output.index]!))
@@ -145,7 +156,7 @@ For this task, matchingIndexes should include only eligible copies; omit ones ma
     },
     async matchPack({ entry, episodes, title, files }) {
       const playable = files.flatMap((file, index) => file.size > 0 && /\.(mkv|mp4|m4v|avi|mov|ts)$/i.test(file.path)
-        ? [{ index, name: file.path, sizeBytes: file.size }] : []);
+        ? [{ index, name: modelEvidenceText(file.path, 240), sizeBytes: file.size }] : []);
       if (!playable.length || !episodes.length) return [];
       const wanted = new Set(episodes.map(episode => episode.id));
       const indexes = new Set(playable.map(file => file.index));
@@ -155,7 +166,7 @@ For this task, matchingIndexes should include only eligible copies; omit ones ma
       const list = (offset: number, limit: number) => evidencePage(playable, offset, limit, file => file);
       const result = await run("TvPackCoverage", mappings,
         "Check whether an already registered torrent is worth waiting for. Map only requested episode IDs whose exact identity is supported by the playable metainfo filenames and catalog numbering or titles. A pack title, assigned season, file count, or a plausible range alone is not proof. Use both tools to resolve numbering, and omit ambiguous matches. This predicts coverage only; import will still verify actual files and streams.",
-        { entry: tvWorkEvidence(entry), title, episodeCount: episodes.length, files: list(0, 12) },
+        { entry: tvWorkEvidence(entry), title: modelEvidenceText(title), episodeCount: episodes.length, files: list(0, 12) },
         [episodeTool(episodes), tool({ name: "listPackFiles", description: "Page through playable files in the exact owned torrent metainfo.", parameters: z.object(pageParams),
           execute: async ({ offset, limit }) => list(offset, limit) })],
         output => {
@@ -167,6 +178,18 @@ For this task, matchingIndexes should include only eligible copies; omit ones ma
       return result.files.flatMap(file => file.episodeIds);
     },
     async inspect(input) {
+      const identity = decisionsFetch && input.allowDecisions !== false ? tvDecisionIdentity(input.entry, input.episodes) : null;
+      const episode = input.episodes[0];
+      const screened = identity && screenedVideoFile(identity, input.offer.title, input.files, input.policy, episode?.runtimeMinutes);
+      if (identity && episode && screened) {
+        const decision = await tryAcquisitionDecision(settings, "tv_import", {
+          target: { title: input.entry.title, year: identity.year, episode: identity.marker, media: "tv" }, candidates: [{ title: screened.title }],
+        }, decisionsFetch);
+        if (decision?.kind === "selected") {
+          const reason = "Decisions confirmed the independently screened single-episode file";
+          return validateTvImportPlan({ files: [{ fileIndex: screened.file.index, episodeIds: [episode.id], facts: screened.claims, reason }], reason }, input.files, input.episodes);
+        }
+      }
       const fileList = tool({ name: "listFiles", description: "Page through downloaded playable filenames and sizes. These are actual probed files, not release-title guesses.",
         parameters: z.object(pageParams), execute: async ({ offset, limit }) => evidencePage(input.files,offset,limit,tvFileEvidence) });
       const probe = tool({ name: "getFileProbe", description: "Read actual duration, video/audio/subtitle stream facts for a file. Stream lists are paginated; arbitrary container tags are not model evidence.",
@@ -198,8 +221,8 @@ For this task, matchingIndexes should include only eligible copies; omit ones ma
 Do not assign season-pack names wholesale: identify each file's actual episodes. Consult provider aired/absolute and anime-local numbering, aliases, episode titles and runtimes. Ignore samples, extras, opening clips and unrequested episodes.
 If a combined file also contains an unrequested episode, reject the file rather than mislabeling it as only its requested subset.
 The initial input is only an overview. Page through listFiles and getRequestedEpisodes as needed. Use getFileProbes/getFileProbe for duration, languages and subtitle/video streams; assessCandidates/assessCandidate check selected files against policy. Prefer the bulk tools for packs so one-file-per-turn research does not exhaust your budget. Actual stream facts override release claims. Return files:[] if nothing can be established. Do not map a truncated episode or an unsupported collection of partial files as a complete episode.`,
-        { entry: tvWorkEvidence(input.entry), episodeCount: input.episodes.length, episodes: input.episodes.slice(0,4).map(tvEpisodeEvidence), policy: { ...input.policy, preferProper: true },
-          release: { title: input.offer.title, provider: input.offer.provider }, files: evidencePage(input.files,0,10,tvFileEvidence) },
+        { entry: tvWorkEvidence(input.entry), episodeCount: input.episodes.length, episodes: input.episodes.slice(0,4).map(tvEpisodeEvidence), policy: videoPolicyEvidence(input.policy),
+          release: { title: modelEvidenceText(input.offer.title) }, files: evidencePage(input.files,0,10,tvFileEvidence) },
         [fileList, probe, probes, episodeTool(input.episodes), assess, assessments]);
       return validateTvImportPlan(plan, input.files, input.episodes);
     },

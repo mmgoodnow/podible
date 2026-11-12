@@ -151,11 +151,16 @@ test("aborts on timeout even when the injected transport never settles", async (
 });
 
 test("the timeout also covers reading a successful response body", async () => {
-  const response = new Response();
-  const read = spyOn(response, "json").mockImplementation(() => new Promise(() => {}));
+  let cancelled = false;
+  const response = new Response(new ReadableStream({ cancel() { cancelled = true; } }));
   expect(await decideBookRelease(evidence, { ...options, timeoutMs: 10, fetch: async () => response }))
     .toEqual({ kind: "error", reason: "timeout" });
-  expect(read).toHaveBeenCalledTimes(1);
+  expect(cancelled).toBe(true);
+});
+
+test("bounds even successful Decisions response bodies", async () => {
+  expect(await decideBookRelease(evidence, mock({ ...wire(), extra: "x".repeat(33 * 1024) })))
+    .toEqual({ kind: "error", reason: "invalid_response" });
 });
 
 const offer: TorznabResult = {

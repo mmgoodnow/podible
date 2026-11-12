@@ -3,7 +3,7 @@ import type { ModelProvider } from "@openai/agents-core";
 import { z } from "zod";
 
 import { TEXT_AGENT_MODEL } from "../ai-models";
-import { meterAgentProvider, recordAgentUsage } from "../agent-usage";
+import { meterAgentProvider } from "../agent-usage";
 import type { ImportInspectionFile } from "./importer";
 import type { BooksRepo } from "../repo";
 import { rankSearchResults } from "./service";
@@ -14,14 +14,14 @@ import { normalizeInfoHash } from "./torrent";
 import { METAINFO_INSPECTION_FAILED } from "../media/metainfo";
 import type { AppSettings, MediaType, ReleaseRow } from "../app-types";
 import type { AudioEdition } from "./audio-editions";
-import { BOOK_DECISIONS_MODEL, decideBookRelease, type BookDecisionOptions } from "./decisions";
+import { modelEvidencePage, modelEvidenceText, tryAcquisitionDecision, type BookDecisionOptions, type DecisionsTransport } from "./decisions";
 
 /**
  * Optional agent decision layer.
  *
  * Deterministic ranking/selection stays the default path. Responses API is
- * consulted only when configured and triggered. The fresh-acquisition pilot can
- * try Decisions before Responses. Responses failures still surface to callers.
+ * consulted only when configured and triggered. Screened acquisitions can try
+ * Decisions before Responses. Responses failures still surface to callers.
  */
 type DecisionMode = "deterministic" | "agent";
 type DecisionTrigger = "none" | "forced" | "prior_failure" | "low_confidence";
@@ -75,6 +75,7 @@ type SearchSelectionInput = {
 type ManualImportSelectionInput = {
   mediaType: MediaType;
   files: ImportInspectionFile[];
+  releaseTitle?: string;
   rejectedSourcePaths?: string[];
   forceAgent?: boolean;
   priorFailure?: boolean;
@@ -147,12 +148,12 @@ function humanSize(value: number | null | undefined): string | null {
 }
 
 function mdInline(value: unknown): string {
-  const text = String(value ?? "");
+  const text = modelEvidenceText(String(value ?? ""));
   return text.replace(/`/g, "\\`");
 }
 
 function mdTableCell(value: unknown): string {
-  const text = String(value ?? "");
+  const text = modelEvidenceText(String(value ?? ""));
   return text.replace(/\|/g, "\\|").replace(/\n/g, " ");
 }
 
@@ -271,13 +272,11 @@ function searchSelectionFromIndex(result: TorznabResult): SearchSelection {
   };
 }
 
-function isPlainEbookOffer(result: TorznabResult, book: NonNullable<SearchSelectionInput["book"]>): boolean {
-  if (result.mediaType !== "ebook" || !book.title.trim() || !book.author.trim() || !agreesWithAdvertisedPartOrder([result])) return false;
-  // Require positive identity and format evidence, with no extra release qualifiers.
+function plainBookName(title: string, book: NonNullable<SearchSelectionInput["book"]>, formats: string[]): boolean {
+  if (!book.title.trim() || !book.author.trim() || modelEvidenceText(title) !== title) return false;
   const normalize = (text: string) => text.normalize("NFC").toLowerCase().replace(/[ ._()[\]-]+/g, " ").trim();
-  const title = normalize(result.title);
   const identity = [`${book.title} ${book.author}`, `${book.title} by ${book.author}`, `${book.author} ${book.title}`];
-  return identity.some(name => ["epub", "pdf"].some(format => title === normalize(`${name} ${format}`)));
+  return identity.some(name => formats.some(format => normalize(title) === normalize(`${name} ${format}`)));
 }
 
 function agreesWithAdvertisedPartOrder(parts: TorznabResult[]): boolean {
@@ -523,11 +522,13 @@ function buildSearchAgentPrompt(trigger: DecisionTrigger, input: SearchSelection
   return lines.join("\n");
 }
 
-function buildManualImportAgentPrompt(trigger: DecisionTrigger, input: ManualImportSelectionInput): string {
+function bookFileEvidence(input: ManualImportSelectionInput) {
+  return input.files.flatMap((file, index) => (input.mediaType === "audio" ? file.supportedAudio : file.supportedEbook)
+    ? [{ index, path: modelEvidenceText(file.relativePath, 240), size: humanSize(file.size) ?? file.size }] : []);
+}
+
+function buildManualImportAgentPrompt(trigger: DecisionTrigger, input: ManualImportSelectionInput, files: ReturnType<typeof bookFileEvidence>): string {
   const lines: string[] = [];
-  const importableFiles = input.files
-    .map((file, index) => ({ file, index }))
-    .filter(({ file }) => (input.mediaType === "audio" ? file.supportedAudio : file.supportedEbook));
   lines.push("# Task");
   lines.push("Pick the exact subset of files to import for one book.");
   lines.push("");
@@ -543,27 +544,19 @@ function buildManualImportAgentPrompt(trigger: DecisionTrigger, input: ManualImp
   }
   const rejected = Array.isArray(input.rejectedSourcePaths) ? input.rejectedSourcePaths.filter(Boolean) : [];
   if (rejected.length > 0) {
-    lines.push("- Previously imported source paths from the rejected import:");
-    lines.push("  - These paths are not individually banned.");
+    const rejectedSet = new Set(rejected);
+    const indexes = files.filter(file => rejectedSet.has(input.files[file.index]!.sourcePath)).map(file => file.index);
+    lines.push(`- Previously rejected import set (file indexes): ${JSON.stringify(indexes.slice(0, 100))}. These files are not individually banned.`);
     lines.push("  - Do not return the exact same full set again.");
     lines.push("  - A strict subset is allowed and may be the correct answer when the prior import included extra books/files.");
-    for (const p of rejected) {
-      lines.push(`  - \`${mdInline(p)}\``);
-    }
   }
-  if (importableFiles.length !== input.files.length) {
-    lines.push(`- Only importable ${input.mediaType} files are listed below (${importableFiles.length} of ${input.files.length} total files).`);
-  }
+  lines.push(`- ${files.length} compatible files. Use listImportFiles to page beyond the first 12 or inspect alternatives.`);
   lines.push("");
   lines.push("# Importable Files (JSON Array)");
   lines.push("```json");
   lines.push(
     JSON.stringify(
-      importableFiles.map(({ file, index }) => ({
-        index,
-        path: file.relativePath,
-        size: humanSize(file.size) ?? file.size,
-      })),
+      files.slice(0, 12),
       null,
       2
     )
@@ -611,15 +604,19 @@ function createSearchAgent(
   repo: BooksRepo | undefined,
   audioEdition?: AudioEdition,
 ): Agent {
+  let inspections = 0;
+  const manifests = new Map<number, { files: ReturnType<typeof inspectTorrentFiles>; cacheHit: boolean }>();
   const inspectTool = tool({
     name: "inspect",
     description:
       "Download and inspect the .torrent file for a candidate by index. Returns the torrent file list so you can confirm whether it contains the target book.",
     parameters: z.object({
       index: z.number().int().min(0),
+      offset: z.number().int().nonnegative().default(0),
+      limit: z.number().int().min(1).max(24).default(20),
     }),
     strict: true,
-    execute: async ({ index }) => {
+    execute: async ({ index, offset, limit }) => {
       if (!Number.isInteger(index) || index < 0 || index >= ranked.length) {
         return JSON.stringify({ ok: false, error: `Invalid index ${index}` });
       }
@@ -631,22 +628,25 @@ function createSearchAgent(
         return JSON.stringify({ ok: false, error: "Torrent inspection not available (no repo)" });
       }
       try {
-        const { bytes, cacheHit } = await getOrFetchCachedTorrentBytes(repo, {
-          provider: candidate.provider,
-          providerGuid: candidate.guid ?? null,
-          url: candidate.url,
-          infoHash: candidate.infoHash ?? null,
-        }, { purpose: "inspection" });
-        const files = inspectTorrentFiles(bytes).map((file) => ({
-          path: file.path,
+        if (!manifests.has(index)) {
+          if (++inspections > 5) return JSON.stringify({ ok: false, error: "Torrent inspection budget exhausted" });
+          const { bytes, cacheHit } = await getOrFetchCachedTorrentBytes(repo, {
+            provider: candidate.provider, providerGuid: candidate.guid ?? null, url: candidate.url, infoHash: candidate.infoHash ?? null,
+          }, { purpose: "inspection" });
+          manifests.set(index, { files: inspectTorrentFiles(bytes), cacheHit });
+        }
+        const manifest = manifests.get(index)!;
+        const page = modelEvidencePage(manifest.files, offset, limit, file => ({
+          path: modelEvidenceText(file.path, 240),
           size: humanSize(file.size) ?? file.size,
         }));
         return JSON.stringify({
           ok: true,
           index,
-          cacheHit,
-          fileCount: files.length,
-          files,
+          cacheHit: manifest.cacheHit,
+          fileCount: page.total,
+          nextOffset: page.nextOffset,
+          files: page.items,
         });
       } catch {
         return JSON.stringify({
@@ -668,11 +668,14 @@ function createSearchAgent(
   });
 }
 
-function createManualImportAgent(agentConfig: { model: string }): Agent {
+function createManualImportAgent(agentConfig: { model: string }, files: ReturnType<typeof bookFileEvidence>): Agent {
   return new Agent({
     name: "ManualImportSelector",
     model: agentConfig.model,
     instructions: manualImportAgentSystemInstructions,
+    tools: [tool({ name: "listImportFiles", description: "Page through supported files using server-assigned indexes; no filesystem access.",
+      parameters: z.object({ offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(24).default(12) }),
+      execute: async ({ offset, limit }) => modelEvidencePage(files, offset, limit, file => file) })],
   });
 }
 
@@ -698,10 +701,13 @@ export async function selectSearchCandidates(
   const pilot = agentConfig && runtime.freshAcquisitionDecisions;
   const [candidate] = input.results;
   // Use the original offer count: filtering must not hide another edition, part, or copy.
-  const fastPath = pilot && candidate && input.media === "ebook" && input.book && runtime.repo && !input.audioEdition &&
+  const fastPath = pilot && candidate && input.book && runtime.repo && !input.audioEdition &&
     !input.forceAgent && !input.priorFailure && !input.rejectedUrls?.length && !input.rejectedGuids?.length && !input.rejectedInfoHashes?.length &&
     !mediaReleases.length && input.results.length === 1 && deterministic.selections[0]?.parts[0] === candidate &&
-    isPlainEbookOffer(candidate, input.book) && !runtime.repo.listManifestationsByBook(input.book.id).some(row => row.kind === input.media)
+    candidate.mediaType === input.media && agreesWithAdvertisedPartOrder([candidate]) &&
+    (input.media !== "audio" || !input.editionPreference?.trim()) &&
+    plainBookName(candidate.title, input.book, input.media === "ebook" ? ["epub", "pdf"] : ["audiobook m4b"]) &&
+    !runtime.repo.listManifestationsByBook(input.book.id).some(row => row.kind === input.media)
     ? { candidate, book: input.book, pilot } : null;
   if (trigger === "none" && !fastPath) {
     return deterministic;
@@ -730,17 +736,13 @@ export async function selectSearchCandidates(
 
   if (fastPath) {
     const { candidate, book, pilot } = fastPath;
-    const started = performance.now();
-    const decision = await decideBookRelease({
-      target: { title: book.title, author: book.author, media: "ebook" },
+    const decision = await tryAcquisitionDecision(settings, "book_release", {
+      target: { title: book.title, author: book.author, media: input.media },
       candidates: [{ title: candidate.title }],
-    }, { ...pilot, apiKey: agentConfig.apiKey, timeoutMs: Math.min(1000, agentConfig.timeoutMs) });
-    if (decision.kind !== "error" || (decision.reason !== "invalid_input" && decision.reason !== "invalid_configuration")) {
-      recordAgentUsage("book-selection", "decisions", BOOK_DECISIONS_MODEL, performance.now() - started, decision.usage);
-    }
-    if (decision.kind === "selected" && decision.candidateIndex === 0) {
+    }, pilot.fetch, { minConfidence: pilot.minConfidence, minMargin: pilot.minMargin });
+    if (decision?.kind === "selected" && decision.candidateIndex === 0) {
       return { selections: [searchSelectionFromIndex(candidate)], confidence: decision.confidence,
-        mode: "agent", trigger, reason: "Decisions matched the only eligible ebook offer", error: null };
+        mode: "agent", trigger, reason: `Decisions matched the only eligible ${input.media} offer`, error: null };
     }
   }
 
@@ -789,7 +791,17 @@ export async function selectSearchCandidates(
 type ManualImportSelectionRuntime = {
   /** Override the model provider (e.g. a fake for tests). */
   modelProvider?: ModelProvider;
+  freshImportDecisions?: DecisionsTransport;
 };
+
+function screenedBookImport(input: ManualImportSelectionInput): ImportInspectionFile | null {
+  const supported = input.files.filter(file => input.mediaType === "audio" ? file.supportedAudio : file.supportedEbook);
+  const [file] = supported;
+  if (!input.book || input.priorFailure || input.rejectedSourcePaths?.length || supported.length !== 1 || !file || file.size <= 0) return null;
+  if (!(input.mediaType === "ebook" ? [".epub", ".pdf"] : [".m4b"]).includes(file.ext)) return null;
+  if (input.releaseTitle && !plainBookName(input.releaseTitle, input.book, input.mediaType === "ebook" ? ["epub", "pdf"] : ["audiobook m4b"])) return null;
+  return plainBookName(file.relativePath, input.book, [file.ext.slice(1)]) ? file : null;
+}
 
 export async function selectManualImportPaths(
   settings: AppSettings,
@@ -797,11 +809,12 @@ export async function selectManualImportPaths(
   runtime: ManualImportSelectionRuntime = {}
 ): Promise<ManualImportSelectionResult> {
   const deterministic = deterministicManualImportSelection(input);
+  const screened = runtime.freshImportDecisions && screenedBookImport(input);
   const trigger = determineTrigger(deterministic.confidence, {
-    forceAgent: input.forceAgent,
+    forceAgent: input.forceAgent || Boolean(runtime.freshImportDecisions),
     priorFailure: input.priorFailure,
   });
-  if (trigger === "none" || input.files.length === 0 || !hasImportableFilesForMedia(input)) {
+  if ((!screened && trigger === "none") || input.files.length === 0 || !hasImportableFilesForMedia(input)) {
     return deterministic;
   }
 
@@ -810,13 +823,25 @@ export async function selectManualImportPaths(
     throw new Error("OpenAI agent not configured");
   }
 
+  if (screened && input.book) {
+    const decision = await tryAcquisitionDecision(settings, "book_import", {
+      target: { title: input.book.title, author: input.book.author, media: input.mediaType },
+      candidates: [{ title: screened.relativePath }],
+    }, runtime.freshImportDecisions);
+    if (decision?.kind === "selected" && decision.candidateIndex === 0) return {
+      selectedPaths: [screened.sourcePath], confidence: decision.confidence, mode: "agent", trigger,
+      reason: "Decisions confirmed the only screened book file", error: null,
+    };
+  }
+
   try {
-    const userPrompt = buildManualImportAgentPrompt(trigger, input);
-    const agent = createManualImportAgent(agentConfig);
+    const files = bookFileEvidence(input);
+    const userPrompt = buildManualImportAgentPrompt(trigger, input, files);
+    const agent = createManualImportAgent(agentConfig, files);
     const { provider, runner } = makeRunner(agentConfig.apiKey, "book-import", runtime.modelProvider);
     const output = await runAgentWithTimeout(provider, agentConfig.timeoutMs, async (signal) => {
       const result = await runner.run(agent, userPrompt, {
-        maxTurns: 2,
+        maxTurns: 6,
         signal,
         toolExecution: { maxFunctionToolConcurrency: 1 },
       });

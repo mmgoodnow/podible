@@ -24,6 +24,7 @@ export interface MovieDecider {
     policy: MovieQualityPolicy;
     offers: MovieOffer[];
     current: MovieFacts | null;
+    allowDecisions?: boolean;
   }): Promise<MovieSelection>;
   inspect(input: {
     movie: Movie;
@@ -31,6 +32,7 @@ export interface MovieDecider {
     offer: MovieOffer;
     files: MovieFileCandidate[];
     selection: MovieSelection;
+    allowDecisions?: boolean;
   }): Promise<{
     fileIndex: number | null;
     facts: Pick<MovieFacts, "identityVerified" | "source" | "cut" | "proper">;

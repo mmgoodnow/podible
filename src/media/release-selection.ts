@@ -1,6 +1,7 @@
 import { tool } from "@openai/agents";
 import { z } from "zod";
 import type { MovieOffer } from "../movies/offers";
+import { modelEvidenceText } from "../library/decisions";
 
 const indexesSchema = z.array(z.number().int().nonnegative().safe()).max(2000);
 export const matchingIndexesSchema = indexesSchema.default([]);
@@ -74,7 +75,7 @@ export function assessReleaseCrossSeedability(offers: readonly MovieOffer[], ind
   return {
     distinctTrackerCount: new Set(providers).size,
     unknownProviderCount: group.length - providers.length,
-    offers: group.map(({ index, offer }) => ({ index, provider: offer.provider, sizeBytes: offer.sizeBytes,
+    offers: group.map(({ index, offer }) => ({ index, provider: modelEvidenceText(offer.provider, 80), sizeBytes: offer.sizeBytes,
       downloadVolumeFactor: releaseDownloadVolumeFactor(offer) })),
     sizeEvidence: { knownCount: sizes.length, distinctCount: new Set(sizes).size, unknownCount: group.length - sizes.length },
     hashEvidence: { knownCount: hashes.length, distinctCount: new Set(hashes).size,

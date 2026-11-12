@@ -103,7 +103,7 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
       const query = `${book.title} ${book.author}`.trim();
       const select = (results: TorznabResult[], completeFreshBatch = false) => {
         const owned = audioEdition ? ctx.repo.listReleasesByBook(book.id) : [];
-        const tryDecisions = completeFreshBatch && media === "ebook" && !audioEdition && !repair && !baseline &&
+        const tryDecisions = completeFreshBatch && !audioEdition && !repair && !baseline &&
           !payload.feedCandidateIds && !payload.considerUpgrade && !payload.forceAgent && !payload.priorFailure && !ctx.modelProvider;
         return selectSearchCandidates(settings, {
           query,

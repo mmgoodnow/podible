@@ -15,7 +15,7 @@
 
 ## Acquisition And Production Proof
 
-- [ ] Expand Decisions with escalation to book, movie and TV selection and import. Use bounded evidence, never pass credentials, and measure fallback rate, latency and cost.
+- [x] Try Decisions on independently screened book, movie and TV selection and import. Ambiguous or unsuccessful choices use the existing tool-using agents. Track accepted and escalated attempts, latency, and estimated cost. Production acceptance rate and cost savings still need observation.
 - [x] Make the ten-minute stall threshold internal for books, movies and TV.
 - [ ] Check connectivity before recovery; preserve current transfers through outages and keep the only viable download eligible for import. Shorten the threshold only after those safeguards are proven.
 - [x] Finish the Khom Khlang season-pack pilot on real production inbox offers. Match job 63190 dispatched upgrade job 63191. See the live verification and timing in [TV](tv.md).

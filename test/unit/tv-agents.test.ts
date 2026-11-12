@@ -219,9 +219,8 @@ test("selector retrieves late candidates and episode evidence in pages and cache
     files:Array.from({length:10},(_,i)=>({length:1,path:[`episode-${i+1}.mkv`]})),"piece length":16384,
     pieces:createHash("sha1").update(bytes).digest()}});
   let requests=0;
-  const server=Bun.serve({port:0,hostname:"127.0.0.1",fetch:()=>{ requests++; return new Response(metainfo); }});
   const candidates=Array.from({length:50},(_,i)=>({...offer,key:`candidate-${i}`,title:`Candidate ${i}`,
-    sizeBytes:i===1?5000:1234,url:`http://127.0.0.1:${server.port}/private?secret=hidden`}));
+    sizeBytes:i===1?5000:1234,url:"https://fixture.invalid/private?secret=hidden"}));
   const episodes=Array.from({length:64},(_,i)=>({...episode,id:100+i,title:`Requested episode ${i}`}));
   const call=(name:string,args:unknown)=>[{type:"function_call",name,callId:name+JSON.stringify(args),arguments:JSON.stringify(args),status:"completed"}];
   const fake=provider([
@@ -231,23 +230,23 @@ test("selector retrieves late candidates and episode evidence in pages and cache
     call("inspectRelease",{index:15,offset:5,limit:5}),
     {index:15,reason:"Late candidate's actual file list matches requested identities."},
   ]);
-  try {
-    const result=await createTvDecider(defaultSettings(),fake.model).select({entry:{...entry,episodes},episodes,policy:defaultMovieQualityPolicy,
-      offers:candidates,maximumReleaseBytes:2000,excludedOfferKeys:[candidates[2]!.key]});
-    expect(result.offer?.key).toBe("candidate-15"); expect(requests).toBe(1);
-    const initial=JSON.stringify(fake.calls[0]!.input);
-    expect(initial).not.toContain('"title":"Candidate 15"');
-    expect(initial).not.toContain("Requested episode 63");
-    expect(initial).toContain("release-size-limit"); expect(initial).toContain("previously-attempted");
-    expect(initial.length).toBeLessThan(10_000);
-    expect(JSON.stringify(fake.calls[1]!.input)).toContain("Candidate 15");
-    expect(JSON.stringify(fake.calls[2]!.input)).toContain("Requested episode 13");
-    expect(JSON.stringify(fake.calls[3]!.input)).toContain("episode-5.mkv");
-    expect(JSON.stringify(fake.calls[3]!.input)).not.toContain("episode-6.mkv");
-    expect(JSON.stringify(fake.calls[4]!.input)).toContain("episode-10.mkv");
-    expect(JSON.stringify(fake.calls)).not.toContain("hidden");
-    expect(JSON.stringify(fake.calls)).not.toContain("private-passkey");
-  } finally { await server.stop(true); }
+  const result=await createTvDecider(defaultSettings(),fake.model,undefined,async (selected) => {
+    expect(selected).toBe(candidates[15]); requests++; return metainfo;
+  }).select({entry:{...entry,episodes},episodes,policy:defaultMovieQualityPolicy,
+    offers:candidates,maximumReleaseBytes:2000,excludedOfferKeys:[candidates[2]!.key]});
+  expect(result.offer?.key).toBe("candidate-15"); expect(requests).toBe(1);
+  const initial=JSON.stringify(fake.calls[0]!.input);
+  expect(initial).not.toContain('"title":"Candidate 15"');
+  expect(initial).not.toContain("Requested episode 63");
+  expect(initial).toContain("release-size-limit"); expect(initial).toContain("previously-attempted");
+  expect(initial.length).toBeLessThan(10_000);
+  expect(JSON.stringify(fake.calls[1]!.input)).toContain("Candidate 15");
+  expect(JSON.stringify(fake.calls[2]!.input)).toContain("Requested episode 13");
+  expect(JSON.stringify(fake.calls[3]!.input)).toContain("episode-5.mkv");
+  expect(JSON.stringify(fake.calls[3]!.input)).not.toContain("episode-6.mkv");
+  expect(JSON.stringify(fake.calls[4]!.input)).toContain("episode-10.mkv");
+  expect(JSON.stringify(fake.calls)).not.toContain("hidden");
+  expect(JSON.stringify(fake.calls)).not.toContain("private-passkey");
 });
 
 test("import verifier retrieves file/probe evidence without receiving a whole manifest or arbitrary probe tags upfront",async()=>{

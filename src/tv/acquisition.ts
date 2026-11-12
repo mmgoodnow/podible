@@ -460,7 +460,8 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
             ? { offer: search.offers.find(offer => !excluded.has(offer.key) && (offer.sizeBytes ?? 0) <= (settings.tv.maximumReleaseBytes ?? Infinity)) ?? null,
               reason: "Checking season pack from the release inbox" }
             : await services.decider(entry).select({ entry, episodes, policy, excludedOfferKeys: [...excluded],
-              maximumReleaseBytes: settings.tv.maximumReleaseBytes ?? undefined, offers: search.offers });
+              maximumReleaseBytes: settings.tv.maximumReleaseBytes ?? undefined, offers: search.offers,
+              allowDecisions: attempt === 0 && wave === 0 && !intake.feedOffers?.length && !search.deferred?.length && !search.warnings.length });
           if (result.offer && excluded.has(result.offer.key)) throw new Error("TV selector repeated a retained failed release");
           if (result.offer && !promotion) {
             active();
@@ -790,7 +791,9 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       else incompleteProbe = true;
     }
     const inspectFiles = async () => {
-      const result = validateTvImportPlan(await services.decider(entry).inspect({ entry, episodes, policy, offer: releaseEvidence, files }), files, episodes);
+      const result = validateTvImportPlan(await services.decider(entry).inspect({ entry, episodes, policy, offer: releaseEvidence, files,
+        allowDecisions: snapshot.sourceReuse && !promotion && !reusable && attempt === 0 && !incompleteProbe &&
+          source.manifest.files.filter(file => playableTvMember(file.path)).length === 1 }), files, episodes);
       active(); repo.decision(acquisition.id, { ...intake, releaseTitle: releaseEvidence.title, provider: releaseEvidence.provider, plan: result, attempt }); return result;
     };
     const plan = snapshot.sourceReuse ? await durableStep(ctx, `${prefix}:inspect`, inspectFiles) : await inspectFiles();

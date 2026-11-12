@@ -12,6 +12,14 @@ import { fetchMovieMetainfo } from "./offers";
 import type { MovieDecider } from "./operations";
 import type { Movie } from "./types";
 import type { MovieOffer } from "./offers";
+import { modelEvidencePage, modelEvidenceText, tryAcquisitionDecision, type DecisionsTransport } from "../library/decisions";
+import { movieDecisionIdentity, screenedVideoFile, screenedVideoOffers, videoFactsEvidence, videoPolicyEvidence, videoProbeEvidence } from "../media/video-decisions";
+
+const page = { offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(30).default(20) };
+const movieEvidence = (movie: Movie) => ({ title: modelEvidenceText(movie.title), originalTitle: modelEvidenceText(movie.originalTitle),
+  year: movie.year, runtimeMinutes: movie.runtimeMinutes });
+const fileEvidence = ({ index, name, sizeBytes }: { index: number; name: string; sizeBytes: number }) =>
+  ({ index, name: modelEvidenceText(name, 240), sizeBytes });
 
 const selectionSchema = z.object({
   index: z.number().int().nonnegative().nullable(),
@@ -90,23 +98,40 @@ export function createMovieDecider(
   settings: AppSettings,
   modelProvider?: ModelProvider,
   fetchMetainfo = fetchMovieMetainfo,
+  decisionsFetch: DecisionsTransport | undefined = modelProvider ? undefined : fetch,
 ): MovieDecider {
   const run = movieAgentRunner(settings, modelProvider);
   return {
     async select(input) {
+      const identity = decisionsFetch && input.allowDecisions !== false && !input.current ? movieDecisionIdentity(input.movie) : null;
+      const screened = identity && screenedVideoOffers(identity, input.offers, input.policy);
+      if (screened) {
+        const decision = await tryAcquisitionDecision(settings, "movie_release", {
+          target: { title: input.movie.title, year: input.movie.year!, media: "movie" }, candidates: screened.candidates,
+        }, decisionsFetch, { preferredIndex: screened.preferredIndex });
+        if (decision?.kind === "selected") return { offerKey: screened.offer.key, facts: screened.facts, matchingOffers: [],
+          reason: "Decisions confirmed the policy-preferred screened movie release; download still requires file and probe verification" };
+      }
+      const releases = input.offers.map((offer, index) => ({ index, title: modelEvidenceText(offer.title, 320),
+        provider: modelEvidenceText(offer.provider, 80), sizeBytes: offer.sizeBytes, seeders: offer.seeders }));
       let inspections = 0;
+      const manifests = new Map<number, ReturnType<typeof inspectMetainfo>>();
       const inspect = tool({
         name: "inspectRelease",
         description:
           "Read validated torrent file names/sizes to clarify the release's actual contents; no download is started.",
-        parameters: z.object({ index: z.number().int().nonnegative() }),
-        async execute({ index }) {
+        parameters: z.object({ index: z.number().int().nonnegative(), ...page }),
+        async execute({ index, offset, limit }) {
           const offer = input.offers[index];
-          if (!offer || ++inspections > 5)
+          if (!offer)
             return { error: "Unknown index or inspection budget exhausted" };
           try {
-            const metadata = inspectMetainfo(await fetchMetainfo(offer));
-            return { files: metadata.files.slice(0, 200), totalSize: metadata.size };
+            if (!manifests.has(index)) {
+              if (++inspections > 5) return { error: "Unknown index or inspection budget exhausted" };
+              manifests.set(index, inspectMetainfo(await fetchMetainfo(offer)));
+            }
+            const metadata = manifests.get(index)!;
+            return { ...modelEvidencePage(metadata.files, offset, limit, file => ({ path: modelEvidenceText(file.path, 240), size: file.size })), totalSize: metadata.size };
           } catch {
             return { error: METAINFO_INSPECTION_FAILED };
           }
@@ -115,24 +140,20 @@ export function createMovieDecider(
       const result = await run(
         selectionSchema,
         "MovieReleaseSelector",
-        `Choose one eligible release or index:null. All candidates, including untagged titles, are provided.
+        `Choose one eligible release or index:null. Page through listReleases for candidates beyond the initial view, including untagged titles.
 Use inspectRelease when ambiguity could be resolved from the file list. Do not choose a known dead release if a viable eligible alternative exists.
 If current facts are provided, choose only a meaningful upgrade under the policy. Facts are provisional before probing.
 Weigh download size against quality and availability; a large release is not automatically ineligible.
 ${releaseSelectionInstructions}`,
         {
-          movie: input.movie,
-          policy: { ...input.policy, preferProper: true },
-          current: input.current,
-          offers: input.offers.map((offer, index) => ({
-            index,
-            title: offer.title,
-            provider: offer.provider,
-            sizeBytes: offer.sizeBytes,
-            seeders: offer.seeders,
-          })),
+          movie: movieEvidence(input.movie),
+          policy: videoPolicyEvidence(input.policy),
+          current: input.current && videoFactsEvidence(input.current),
+          offers: modelEvidencePage(releases, 0, 20, offer => offer),
         },
-        [inspect, createCrossSeedabilityTool(() => input.offers)],
+        [tool({ name: "listReleases", description: "Page through known releases using stable indexes.", parameters: z.object(page),
+          execute: async ({ offset, limit }) => modelEvidencePage(releases, offset, limit, offer => offer) }),
+          inspect, createCrossSeedabilityTool(() => input.offers, 30)],
       );
       if (result.index !== null && !input.offers[result.index])
         throw new Error("Movie agent selected an unknown release index");
@@ -145,6 +166,15 @@ ${releaseSelectionInstructions}`,
       };
     },
     async inspect(input) {
+      const identity = decisionsFetch && input.allowDecisions !== false ? movieDecisionIdentity(input.movie) : null;
+      const screened = identity && screenedVideoFile(identity, input.offer.title, input.files, input.policy, input.movie.runtimeMinutes);
+      if (screened) {
+        const decision = await tryAcquisitionDecision(settings, "movie_import", {
+          target: { title: input.movie.title, year: input.movie.year!, media: "movie" }, candidates: [{ title: screened.title }],
+        }, decisionsFetch);
+        if (decision?.kind === "selected") return { fileIndex: screened.file.index, facts: screened.claims,
+          reason: "Decisions confirmed the independently screened feature file" };
+      }
       const assess = tool({
         name: "assessCandidate",
         description:
@@ -182,13 +212,18 @@ Resolve ambiguity from available evidence and the policy tool; never ask for hum
 Reject truncated or unrelated contents. For multipart-only contents requiring unsupported concatenation, choose null and explain rather than publishing a partial movie.
 Identity must be supported by the release and file evidence. Do not claim certainty from probe codec/resolution alone.`,
         {
-          movie: input.movie,
-          policy: { ...input.policy, preferProper: true },
-          release: { title: input.offer.title, provider: input.offer.provider },
-          selection: input.selection,
-          files: input.files,
+          movie: movieEvidence(input.movie),
+          policy: videoPolicyEvidence(input.policy),
+          release: { title: modelEvidenceText(input.offer.title) },
+          files: modelEvidencePage(input.files, 0, 10, file => ({ ...fileEvidence(file), probe: videoProbeEvidence(file, 0, 4) })),
         },
-        [assess],
+        [assess, tool({ name: "listFiles", description: "Page through downloaded playable file names and sizes.", parameters: z.object(page),
+          execute: async ({ offset, limit }) => modelEvidencePage(input.files, offset, limit, fileEvidence) }),
+        tool({ name: "getFileProbe", description: "Read bounded probe evidence for a known file index.",
+          parameters: z.object({ fileIndex: z.number().int().nonnegative(), ...page }), async execute({ fileIndex, offset, limit }) {
+            const file = input.files.find(file => file.index === fileIndex);
+            return file ? videoProbeEvidence(file, offset, limit) : { error: "Unknown file index" };
+          } })],
       );
       if (
         result.fileIndex !== null &&

@@ -276,6 +276,8 @@ export async function acquireMovie(
               ),
               // Equal quality may repair a trusted nuke; local gates still prohibit downgrades.
               current: repairVersion === null ? current : null,
+              allowDecisions: attempt === 0 && wave === 0 && repairVersion === null && !useFeed && !manual?.manualOffer &&
+                candidates.length === search.offers.length && !search.deferred?.length && !search.warnings.length,
             });
             if (
               manual?.manualOffer &&
@@ -558,6 +560,8 @@ export async function acquireMovie(
         offer,
         files,
         selection,
+        allowDecisions: attempt === 0 && !current && !manual?.manualOffer && !replacingNukedCurrent() &&
+          metadata.files.filter(file => /\.(mkv|mp4|m4v|avi|mov|ts)$/i.test(file.path)).length === 1,
       });
       active();
       repo.decision(acquisition.id, {
