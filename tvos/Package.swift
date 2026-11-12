@@ -6,8 +6,8 @@ let package = Package(
     platforms: [.macOS(.v14)],
     targets: [
         .target(name: "PodibleTVTransport", path: "PodibleTV",
-                exclude: ["BrowseView.swift", "Connection.swift", "DemoArtwork", "PodibleTVApp.swift", "TitleDetailView.swift", "TrailerPlayback.swift"],
-                sources: ["AcquisitionChanges.swift", "MediaTitle.swift", "PodibleClient.swift"]),
+                exclude: ["BrowseView.swift", "Connection.swift", "DemoArtwork", "PairingQRCode.swift", "PodibleTVApp.swift", "TitleDetailView.swift", "TrailerPlayback.swift"],
+                sources: ["AcquisitionChanges.swift", "MediaTitle.swift", "PodibleClient.swift", "RPCWire.swift"]),
         .testTarget(name: "PodibleTVTransportTests", dependencies: ["PodibleTVTransport"], path: "TransportTests"),
     ]
 )

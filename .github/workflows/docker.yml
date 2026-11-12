@@ -55,6 +55,7 @@ jobs:
           key: ${{ runner.os }}-bun-${{ env.BUN_VERSION }}-${{ hashFiles('bun.lock') }}
       - run: bun install --frozen-lockfile
       - run: bun run check:db-types
+      - run: bun run check:tvos-wire
       - run: bun run typecheck
       - run: bun run build
       - run: bun run validate:runtime-scripts

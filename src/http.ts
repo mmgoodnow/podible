@@ -29,6 +29,7 @@ import { createActivityRoutes } from "./http/activity-routes";
 import { createMetricsRoutes } from "./http/metrics-routes";
 import { createAutobrrRoutes } from "./http/autobrr-routes";
 import { createTrailerRoutes } from "./http/trailer-routes";
+import { createDeviceLoginRoutes } from "./http/device-login";
 import { AUTOBRR_WEBHOOK_PATH, type AutobrrConfig } from "./media/autobrr";
 import { AcquisitionEvents } from "./runtime/acquisition-events";
 
@@ -86,6 +87,7 @@ export function createPodibleFetchHandler(
   app.route("/login", createLoginRoutes(repo));
   app.route("/logout", createLogoutRoutes(repo));
   app.route("/auth/app", createAppAuthRoutes(repo));
+  app.route("/auth/device", createDeviceLoginRoutes(repo));
   app.route("/activity", createActivityRoutes(repo));
   app.route("/admin", createAdminRoutes(repo, startTime, buildInfo));
   app.route("/rpc", createRpcRoutes(repo, startTime, dependencies));

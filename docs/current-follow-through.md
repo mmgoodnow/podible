@@ -26,7 +26,7 @@
 ## Apple TV
 
 - [ ] Generate Swift wire types from the shared JSON-RPC schemas at build time and check contract drift. Reuse the transport Kindling already calls.
-- [ ] Add QR sign-in via the self-hosted Podible origin and existing account authorization. Use a short-lived pairing grant and a separate revocable TV session.
+- [x] Implement QR sign-in via the self-hosted Podible origin and existing account authorization. Use a short-lived pairing grant and a separate revocable TV session. Server integration tests and tvOS simulator suite passed; live phone-to-device sign-in still needs verification.
 - [ ] Add movie and episode playback against the viewer's Plex access, exact server/title identities, and verified progress reporting. Test in the simulator and on device.
 - [ ] Expand trailer discovery beyond approved local Plex clips using playable, authorized sources.
 

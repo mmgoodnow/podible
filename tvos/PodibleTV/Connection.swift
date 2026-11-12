@@ -4,18 +4,25 @@ import Security
 struct Connection: Equatable {
     let url: URL
     let token: String
+    let paired: Bool
 
-    init(server: String, token: String) throws {
+    static func serverURL(_ server: String) throws -> URL {
         guard let parts = URLComponents(string: server.trimmingCharacters(in: .whitespacesAndNewlines)),
               parts.scheme?.lowercased() == "https", parts.host != nil,
               parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil,
               parts.path.isEmpty || parts.path == "/", let url = parts.url
         else { throw ConnectionError.invalidServer }
+        return url
+    }
+
+    init(server: String, token: String, paired: Bool = false) throws {
+        let url = try Self.serverURL(server)
         let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty, !token.unicodeScalars.contains(where: CharacterSet.whitespacesAndNewlines.contains)
         else { throw ConnectionError.invalidToken }
         self.url = url
         self.token = token
+        self.paired = paired
     }
 
     private static let key: [String: String] = [
@@ -31,12 +38,12 @@ struct Connection: Equatable {
         var result: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
               let data = result as? Data, let values = try? JSONDecoder().decode([String].self, from: data),
-              values.count == 2 else { return nil }
-        return try? Self(server: values[0], token: values[1])
+              (2...3).contains(values.count) else { return nil }
+        return try? Self(server: values[0], token: values[1], paired: values.last == "paired" && values.count == 3)
     }
 
     func save() throws {
-        let data = try JSONEncoder().encode([url.absoluteString, token])
+        let data = try JSONEncoder().encode([url.absoluteString, token, paired ? "paired" : "manual"])
         let values = [kSecValueData as String: data]
         var status = SecItemUpdate(Self.key as CFDictionary, values as CFDictionary)
         if status == errSecItemNotFound {

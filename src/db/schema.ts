@@ -108,6 +108,15 @@ export interface DB {
     "updated_at": string;
   };
 
+  "device_login_grants": {
+    "id": string;
+    "verifier_hash": string;
+    "confirmation_code": string;
+    "expires_at": string;
+    "attempts": Generated<number>;
+    "user_id": number | null;
+  };
+
   "indexer_feeds": {
     "id": string;
     "provider": string;

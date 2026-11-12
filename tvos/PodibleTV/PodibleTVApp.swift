@@ -422,48 +422,98 @@ private struct ConnectionScreen: View {
     let connection: Connection?
     let changed: (Connection?) -> Void
     @State private var server = ""
-    @State private var token = ""
     @State private var status: String?
-    @State private var connecting = false
+    @State private var pairingBase: URL?
+    @State private var pairing: DeviceLoginGrant?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             Text("Connect to Podible").font(.title2.bold())
-            Text("Use a Podible HTTPS address and session token. Plex playback isn't connected in this build.")
-                .font(.caption).foregroundStyle(.secondary)
-            TextField("https://podible.example", text: $server)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            SecureField("Session token", text: $token)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            if let status { Text(status).font(.caption) }
-            HStack(spacing: 24) {
-                Button(connecting ? "Connecting..." : "Connect") { Task { await connect() } }
-                    .disabled(connecting || server.isEmpty || token.isEmpty)
-                if connection != nil {
-                    Button("Disconnect") {
-                        do { try Connection.remove(); changed(nil) }
-                        catch { status = error.localizedDescription }
+            if let connection {
+                Text("Signed in to \(connection.url.host ?? "Podible")")
+                Button("Disconnect") { Task { await disconnect(connection) } }
+            } else if let pairingBase {
+                if let pairing, let url = URL(string: pairing.authorizePath, relativeTo: pairingBase)?.absoluteURL {
+                    HStack(alignment: .center, spacing: 48) {
+                        PairingQRCode(url: url)
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("Scan with your phone").font(.headline)
+                            Text("Sign in to Podible and enter this code.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Text(pairing.code).font(.system(size: 56, weight: .semibold, design: .monospaced))
+                                .accessibilityIdentifier("device-sign-in.code")
+                        }
                     }
+                } else {
+                    ProgressView("Starting sign-in…")
                 }
+                Button("Cancel") { self.pairingBase = nil; pairing = nil }
+            } else {
+                Text("Enter your server address, then sign in on your phone.")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("https://podible.example", text: $server)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button("Sign in with phone") {
+                    status = nil
+                    do { pairingBase = try Connection.serverURL(server) }
+                    catch { status = error.localizedDescription }
+                }
+                .disabled(server.isEmpty)
             }
+            if let status { Text(status).font(.caption) }
         }
-        .frame(maxWidth: 950, alignment: .leading)
+        .frame(maxWidth: 1140, alignment: .leading)
         .padding(70)
         .onAppear { server = connection?.url.absoluteString ?? "" }
+        .task(id: pairingBase) { if let pairingBase { await connect(pairingBase) } }
     }
 
-    @MainActor private func connect() async {
-        connecting = true
-        status = nil
-        defer { connecting = false }
+    @MainActor private func connect(_ base: URL) async {
+        let client = PodibleClient(baseURL: base, token: "")
         do {
-            let value = try Connection(server: server, token: token)
-            _ = try await PodibleClient(baseURL: value.url, token: value.token).browse()
-            try value.save()
-            token = ""
-            changed(value)
+            let grant = try await client.beginPairing()
+            try Task.checkCancellation()
+            pairing = grant
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: .seconds(grant.expiresInSeconds))
+            while clock.now < deadline {
+                try await Task.sleep(for: .seconds(3))
+                let result: DeviceLoginExchange
+                do { result = try await client.exchangePairing(grant) }
+                catch is URLError { continue }
+                try Task.checkCancellation()
+                switch result.status {
+                case .pending: continue
+                case .unavailable: break
+                case .approved:
+                    guard let token = result.accessToken else { throw ClientError.invalidResponse }
+                    let value = try Connection(server: base.absoluteString, token: token, paired: true)
+                    try value.save()
+                    pairing = nil
+                    pairingBase = nil
+                    changed(value)
+                    return
+                }
+                break
+            }
+            status = "This sign-in expired. Start a new one."
+        } catch {
+            guard !Task.isCancelled else { return }
+            status = error.localizedDescription
+        }
+        pairing = nil
+        pairingBase = nil
+    }
+
+    @MainActor private func disconnect(_ connection: Connection) async {
+        do {
+            if connection.paired {
+                do { try await PodibleClient(baseURL: connection.url, token: connection.token).signOut() }
+                catch ClientError.unauthorized { /* Session already expired or revoked. */ }
+            }
+            try Connection.remove()
+            changed(nil)
         } catch { status = error.localizedDescription }
     }
 }

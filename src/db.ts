@@ -1234,6 +1234,17 @@ export function runMigrations(db: Database): void {
     '$.retention.protectedMovieTargetIds', '$.retention.protectedTvTargetIds')
     WHERE json_type(value_json, '$.retention.protectedMovieTargetIds') IS NOT NULL
        OR json_type(value_json, '$.retention.protectedTvTargetIds') IS NOT NULL`));
+  apply(64, () => db.exec(`
+    CREATE TABLE device_login_grants (
+      id TEXT PRIMARY KEY,
+      verifier_hash TEXT NOT NULL,
+      confirmation_code TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE
+    ) WITHOUT ROWID;
+    CREATE INDEX device_login_grants_expiry ON device_login_grants(expires_at);
+  `));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

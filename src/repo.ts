@@ -611,6 +611,45 @@ export class BooksRepo {
     return this.db.query("SELECT * FROM users ORDER BY username COLLATE NOCASE ASC, id ASC").all() as UserRow[];
   }
 
+  createDeviceLoginGrant(id: string, verifierHash: string, code: string, expiresAt: string): boolean {
+    return this.transaction(() => {
+      this.db.query("DELETE FROM device_login_grants WHERE expires_at<=?").run(nowIso());
+      return this.db.query(`INSERT INTO device_login_grants(id,verifier_hash,confirmation_code,expires_at)
+        SELECT ?,?,?,? WHERE (SELECT count(*) FROM device_login_grants)<256`).run(id, verifierHash, code, expiresAt).changes === 1;
+    });
+  }
+
+  deviceLoginNeedsApproval(id: string): boolean {
+    return Boolean(this.db.query(`SELECT 1 FROM device_login_grants
+      WHERE id=? AND expires_at>? AND user_id IS NULL AND attempts<5`).get(id, nowIso()));
+  }
+
+  approveDeviceLogin(id: string, code: string, userId: number): boolean {
+    return this.transaction(() => {
+      const row = this.db.query<{ user_id: number | null }, [string, number, string, string]>(
+        `UPDATE device_login_grants SET attempts=attempts+1,
+          user_id=CASE WHEN confirmation_code=? THEN ? ELSE NULL END
+          WHERE id=? AND expires_at>? AND user_id IS NULL AND attempts<5 RETURNING user_id`);
+      return row.get(code, userId, id, nowIso())?.user_id === userId;
+    });
+  }
+
+  exchangeDeviceLogin(id: string, verifierHash: string, tokenHash: string): "pending" | "unavailable" | "approved" {
+    const lookup = () => this.db.query<{ user_id: number | null }, [string, string, string]>(
+      `SELECT user_id FROM device_login_grants
+       WHERE id=? AND verifier_hash=? AND expires_at>? AND (attempts<5 OR user_id IS NOT NULL)`).get(id, verifierHash, nowIso());
+    const row = lookup();
+    if (!row) return "unavailable";
+    if (row.user_id === null) return "pending";
+    return this.transaction(() => {
+      const confirmed = lookup();
+      if (confirmed?.user_id == null) return "unavailable";
+      this.createSession(confirmed.user_id, tokenHash, null, "app");
+      this.db.query("DELETE FROM device_login_grants WHERE id=?").run(id);
+      return "approved";
+    });
+  }
+
   createSession(
     userId: number,
     tokenHash: string,

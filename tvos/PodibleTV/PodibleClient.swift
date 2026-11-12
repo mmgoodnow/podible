@@ -91,6 +91,24 @@ struct PodibleClient {
         })
     }
 
+    func beginPairing() async throws -> DeviceLoginGrant {
+        let grant: DeviceLoginGrant = try await call("auth.beginDeviceLogin", Empty(), requiresSession: false)
+        guard grant.id.range(of: "^[A-Za-z0-9_-]{32}$", options: .regularExpression) != nil,
+              grant.authorizePath == "/auth/device?id=\(grant.id)",
+              grant.code.range(of: "^[0-9]{6}$", options: .regularExpression) != nil,
+              (1...300).contains(grant.expiresInSeconds) else { throw ClientError.invalidResponse }
+        return grant
+    }
+
+    func exchangePairing(_ grant: DeviceLoginGrant) async throws -> DeviceLoginExchange {
+        try await call("auth.exchangeDeviceLogin", PairingExchangeInput(id: grant.id, verifier: grant.verifier),
+                       requiresSession: false)
+    }
+
+    func signOut() async throws {
+        let _: LogoutReceipt = try await call("auth.logout", Empty())
+    }
+
     private func searchMovies(_ query: String) async throws -> (results: [CatalogTitle], canRequest: Bool, failed: Bool) {
         let status: MovieStatus = try await call("movies.status", Empty())
         guard status.catalogConfigured else { return ([], false, false) }
@@ -202,9 +220,9 @@ struct PodibleClient {
         return url
     }
 
-    private func call<Params: Encodable, Value: Decodable>(_ method: String, _ params: Params) async throws -> Value {
+    private func call<Params: Encodable, Value: Decodable>(_ method: String, _ params: Params, requiresSession: Bool = true) async throws -> Value {
         let id = UUID().uuidString
-        var request = try authenticatedRequest(path: "/rpc")
+        var request = try makeRequest(path: "/rpc", requiresSession: requiresSession)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -228,6 +246,10 @@ struct PodibleClient {
     }
 
     func authenticatedRequest(path: String) throws -> URLRequest {
+        try makeRequest(path: path, requiresSession: true)
+    }
+
+    private func makeRequest(path: String, requiresSession: Bool) throws -> URLRequest {
         guard var endpoint = URLComponents(url: baseURL, resolvingAgainstBaseURL: true),
               let scheme = endpoint.scheme?.lowercased(), let host = endpoint.host?.lowercased(), !host.isEmpty,
               endpoint.user == nil, endpoint.password == nil, endpoint.query == nil, endpoint.fragment == nil,
@@ -236,10 +258,11 @@ struct PodibleClient {
         }
         endpoint.path = path
         guard let url = endpoint.url else { throw ClientError.invalidBaseURL }
+        var request = URLRequest(url: url)
+        guard requiresSession else { return request }
         guard !token.isEmpty, token.utf8.allSatisfy({ (33...126).contains($0) }) else {
             throw ClientError.unauthorized
         }
-        var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         return request
     }

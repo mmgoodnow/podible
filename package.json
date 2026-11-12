@@ -21,6 +21,8 @@
     "test": "bun test",
     "generate:db-types": "bun run scripts/generate-db-types.ts",
     "check:db-types": "bun run scripts/generate-db-types.ts --check",
+    "generate:tvos-wire": "bun run scripts/generate-tvos-wire.ts",
+    "check:tvos-wire": "bun run scripts/generate-tvos-wire.ts --check",
     "typecheck": "bun check && bun check -p web"
   },
   "dependencies": {
