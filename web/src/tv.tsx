@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "../../src/trpc";
 import { useTRPC } from "./rpc";
 import { Failure } from "./books";
 import { Link, navigate } from "./router";
@@ -136,6 +138,7 @@ export function TvLibraryDetail({ entryId }: { entryId: number }) {
   const title = active ? "Adding episodes" : r.availableEpisodes > 0 ? "Available in Plex"
     : future === total && total > 0 ? "Waiting for upcoming episodes" : "Not in Plex yet";
   const seasons = r.progress.seasons;
+  const seeds = groupCrossSeeds(seasons, r.crossSeeds);
   const requestedSeasons = new Set(r.requests.flatMap(request => request.seasons));
   const tracked = seasons.filter(s => !requestedSeasons.size || requestedSeasons.has(s.seasonNumber));
   const atStage = (...stages: typeof seasons[number]["stage"][]) => tracked.filter(s => stages.includes(s.stage)).length;
@@ -186,6 +189,7 @@ export function TvLibraryDetail({ entryId }: { entryId: number }) {
         const name = s.seasonNumber === 0 ? "Specials" : `Season ${s.seasonNumber}`;
         const open = expanded.includes(s.seasonNumber);
         const panelId = `tv-show-${entryId}-season-${s.seasonNumber}`;
+        const packSeeds = seeds.seasons.get(s.seasonNumber) ?? [];
         return <article className={`tv-season-card tv-season-${s.stage}`} key={s.seasonNumber}>
           <h3><button className="tv-season-toggle" aria-label={name} aria-describedby={`${panelId}-summary`} aria-expanded={open} aria-controls={panelId}
             onClick={() => setExpanded(current => current.includes(s.seasonNumber) ? current.filter(n => n !== s.seasonNumber) : [...current, s.seasonNumber])}>
@@ -193,6 +197,7 @@ export function TvLibraryDetail({ entryId }: { entryId: number }) {
             <span className="tv-season-facts" id={`${panelId}-summary`}>
               <span className="tv-season-count"><strong>{s.available}</strong> / {s.total} ready{s.future > 0 ? ` · ${s.future} upcoming` : ""}</span>
               <span className="tv-season-stage">{labels[s.stage]}</span>
+              {packSeeds.length > 0 && <CrossSeedBadge count={packSeeds.length} />}
             </span>
             <span className="tv-season-chevron" aria-hidden="true" />
           </button></h3>
@@ -200,12 +205,19 @@ export function TvLibraryDetail({ entryId }: { entryId: number }) {
             <TvDownloadProgress download={s.download} label={`${name} downloads`} />
           </div>}
           <div id={panelId} hidden={!open}>
-            {open && <ol className="tv-episode-list" aria-label={`${name} episodes`}>
+            {open && <><ol className="tv-episode-list" aria-label={`${name} episodes`}>
               {s.episodes.map(ep => {
                 const date = ep.airDate?.slice(0, 10);
+                const episodeSeeds = seeds.episodes.get(ep.id) ?? [];
                 return <li key={ep.id}>
                   <span className="tv-episode-number">{ep.number}</span>
-                  <span className="tv-episode-title">{ep.title}</span>
+                  <div className="tv-episode-info">
+                    <span className="tv-episode-title">{ep.title}</span>
+                    {episodeSeeds.length > 0 && <details className="tv-episode-seeds">
+                      <summary><CrossSeedBadge count={episodeSeeds.length} /></summary>
+                      <CrossSeedList seeds={episodeSeeds} />
+                    </details>}
+                  </div>
                   {date && <time dateTime={date}>{new Date(`${date}T00:00:00Z`).toLocaleDateString(undefined, { dateStyle: "medium", timeZone: "UTC" })}</time>}
                   <span className={`tv-episode-status tv-episode-${ep.status}`}>{episodeLabels[ep.status]}</span>
                   {(ep.lastAttempt || ep.retryRequestId) && <div className="tv-episode-actions">
@@ -217,10 +229,18 @@ export function TvLibraryDetail({ entryId }: { entryId: number }) {
                   </div>}
                 </li>;
               })}
-            </ol>}
+            </ol>
+            {packSeeds.length > 0 && <details className="tv-season-seeds">
+              <summary>Season cross-seeds</summary>
+              <CrossSeedList seeds={packSeeds} />
+            </details>}</>}
           </div>
         </article>;
       })}</div> : <p>No episode information available.</p>}
+      {seeds.other.length > 0 && <details className="tv-other-seeds">
+        <summary>Other cross-seeds ({seeds.other.length})</summary>
+        <CrossSeedList seeds={seeds.other} />
+      </details>}
     </section>
     {r.entry.tmdbId && <TvSeasonPicker tmdbId={r.entry.tmdbId} showId={entryId} />}
     {r.requests.length > 0 && <section className="media-section" aria-label="Manage requests"><h2>Manage requests</h2>
@@ -236,19 +256,52 @@ export function TvLibraryDetail({ entryId }: { entryId: number }) {
       {retry.isError && <Failure error={retry.error} />}
       {withdraw.isError && <Failure error={withdraw.error} />}
     </section>}
-    {r.crossSeeds.length > 0 && <section className="media-section" aria-label="Cross-seeding">
-      <h2>Cross-seeding</h2>
-      <ul className="tv-cross-seeds">{r.crossSeeds.map((seed, i) => <li key={i}>
-        <strong>{seed.title}</strong>
-        <span>{[seed.provider, seed.status === "registered" ? "Registered to seed" : seed.status === "preparing" ? "Preparing" : "Queued",
-          seed.reusedBytes != null ? `${metricBytes(seed.reusedBytes)} reused` : null].filter(Boolean).join(" · ")}</span>
-      </li>)}</ul>
-    </section>}
     {(r.availableEpisodes > 0 || r.requests.length > 0) && <ScreenIssuePanel title={{ media: "tv", entryId }} episodeGroups={seasons} />}
     {r.entry.relations.length > 0 && <section className="media-section"><h2>Related works</h2><ul>{r.entry.relations.map(work => <li key={`${work.key}:${work.relation}`}>
       {work.title} · {work.relation}
     </li>)}</ul></section>}
   </>;
+}
+
+type TvEntry = inferRouterOutputs<AppRouter>["catalog"]["tvEntry"];
+type CrossSeed = TvEntry["crossSeeds"][number];
+
+function groupCrossSeeds(seasons: TvEntry["progress"]["seasons"], seeds: CrossSeed[]) {
+  const seasonByEpisode = new Map(seasons.flatMap(season => season.episodes.map(ep => [ep.id, season] as const)));
+  const bySeason = new Map<number, CrossSeed[]>(), byEpisode = new Map<number, CrossSeed[]>();
+  const other: CrossSeed[] = [];
+  for (const seed of seeds) {
+    const coverage = new Map<number, number[]>();
+    if (seed.status === "registered") for (const id of seed.episodeIds) {
+      const season = seasonByEpisode.get(id);
+      if (season) append(coverage, season.seasonNumber, id);
+    }
+    if (!coverage.size) other.push(seed);
+    for (const [season, ids] of coverage) {
+      const total = seasonByEpisode.get(ids[0]!)!.total;
+      if (total > 1 && ids.length === total) append(bySeason, season, seed);
+      else for (const id of ids) append(byEpisode, id, seed);
+    }
+  }
+  return { seasons: bySeason, episodes: byEpisode, other };
+}
+
+function append<T>(map: Map<number, T[]>, id: number, value: T) {
+  const values = map.get(id);
+  if (values) values.push(value);
+  else map.set(id, [value]);
+}
+
+function CrossSeedBadge({ count }: { count: number }) {
+  return <span className="tv-cross-seed-badge">{count} cross-seed{count === 1 ? "" : "s"}</span>;
+}
+
+function CrossSeedList({ seeds }: { seeds: CrossSeed[] }) {
+  return <ul className="tv-cross-seeds">{seeds.map((seed, i) => <li key={i}>
+    <strong>{seed.title}</strong>
+    <span>{[seed.provider, seed.status === "registered" ? "Registered to seed" : seed.status === "preparing" ? "Preparing" : "Queued",
+      seed.reusedBytes != null ? `${metricBytes(seed.reusedBytes)} reused` : null].filter(Boolean).join(" · ")}</span>
+  </li>)}</ul>;
 }
 
 function downloadEta(seconds: number) {

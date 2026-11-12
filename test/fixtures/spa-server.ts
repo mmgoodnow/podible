@@ -22,6 +22,7 @@ import { createHash } from "node:crypto";
 import { safeReturnPath } from "../../src/redirects";
 import { seedTransferMetricsFixture } from "./transfer-metrics";
 import { seedActivityHistory } from "./ops-scale";
+import { seedTvCrossSeed } from "./tv-cross-seed";
 
 const root = await fs.realpath(
   await fs.mkdtemp(path.join(os.tmpdir(), "movie-spa-")),
@@ -178,6 +179,7 @@ if (process.env.TV_FIXTURE) {
   repo.tv.promotePublication(native.targetId, version, 0);
   repo.tv.clearPublication(native.targetId, version);
   repo.tv.finishAcquisition(acquisition.id);
+  seedTvCrossSeed(repo, native.targetId, "Fixture Sequel 01 WEB", ["tv-browser-content"]);
   repo.tv.decision(acquisition.id, { plan: { files: [{ name: "native-selected-file.mkv", episodeIds: [native.episodeIds[0]!] }] }, reason: "Fixture first episode available; future intent retained" });
   repo.tv.event(native.targetId, acquisition.id, "tv-browser-event", "retained", "One native episode available; future episode intent retained");
   await fs.writeFile(path.join(root, "tv-audit.mkv"), "synthetic TV audit evidence");

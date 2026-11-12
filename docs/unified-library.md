@@ -12,8 +12,13 @@ the first book page without a separate authentication waterfall. Filtering and
 pagination retain their own query keys. Shared published movie/TV search uses
 bounded local SQL reads through user `catalog.available({ query?, limit? })`.
 Other users' pending/withdrawn requests, decision traces, download paths and
-credentials are not included. `catalog.tvEntry({ entryId })` exposes only an
-already-published work's metadata and available episode count.
+credentials are not included. `catalog.tvEntry({ entryId })` exposes show
+metadata, episode progress, and cross-seed coverage for a published show or a
+show the viewer requested. Coverage comes from reuse plans matched to exact
+episode file mappings. Full-season cross-seeds appear on the season; partial
+coverage appears on the matched episodes. The counts are registrations, not
+live upload activity. For older registrations without a reuse plan, stewardship
+recovers exact mappings from owned torrent layouts without reading media bytes.
 
 Remote queries are debounced 350 ms and cached per authenticated actor. Each
 provider has independent loading, failure and retry state. Remote search calls

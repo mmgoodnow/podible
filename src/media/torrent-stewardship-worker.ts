@@ -4,7 +4,7 @@ import type { JobRow } from "../app-types";
 import { durableStep, workerLog, type WorkerContext } from "../worker/context";
 import { boundedStewardshipFetch, TorrentStewardship, type StewardshipAdapters } from "./torrent-stewardship";
 import { processTorrentRetirements } from "./torrent-retirement-worker";
-import { processOptimisticCrossSeeds, type CrossSeedMonitorAdapters } from "./cross-seed-monitor";
+import { processOptimisticCrossSeeds, reconcileTvCrossSeedCoverage, type CrossSeedMonitorAdapters } from "./cross-seed-monitor";
 import { readTransmissionIdentity } from "./managed-transmission";
 import { TransmissionRpc } from "./transmission-client";
 import { trackerRotationRoots } from "./tracker-rotation";
@@ -49,5 +49,6 @@ export async function processStewardshipCollection(ctx: WorkerContext, job: JobR
     workerLog(ctx, `[stewardship] ${result.unavailableReason} Observation will retry on the next scheduled collection.`);
   await processTorrentRetirements(ctx, job, { source: result.source, offset: result.offset }, adapters.retirement ?? {});
   await processOptimisticCrossSeeds(ctx, adapters.optimistic);
+  await reconcileTvCrossSeedCoverage(ctx);
   return "done";
 }

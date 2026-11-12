@@ -52,6 +52,11 @@ try {
   const episodes = page.getByRole("list", { name: "Season 2 episodes" });
   await episodes.getByRole("listitem").filter({ hasText: "Fixture episode 1" }).getByText("Ready in Plex").waitFor();
   await episodes.getByRole("listitem").filter({ hasText: "Fixture episode 2" }).getByText("Upcoming").waitFor();
+  const seededEpisode = episodes.locator(":scope > li").filter({ hasText: "Fixture episode 1" });
+  await seededEpisode.getByText("1 cross-seed", { exact: true }).click();
+  await seededEpisode.getByText("Fixture Indexer · Registered to seed · 42 B reused", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Season 2", exact: true }).getByText("1 cross-seed").count(), 0);
+  assert.equal(await page.getByRole("heading", { name: "Cross-seeding", exact: true }).count(), 0);
   await page.getByText("1 of 2 episodes verified in Plex.",{ exact: true }).waitFor();
   assert.equal(await page.getByRole("progressbar",{ name: "Available TV episodes" }).getAttribute("value"),"1");
   assert.equal(await page.getByRole("heading",{ name: "Activity", exact: true }).count(),0,"Request page displays a raw execution history");

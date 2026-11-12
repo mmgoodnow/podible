@@ -6,10 +6,11 @@ import { managedBookTransmission, managedTransmission, managedTvTransmission } f
 import { TorrentNotFoundError, type TorrentClient } from "./torrent-client";
 import { isBookCrossSeedScope, type CrossSeedScope, type OptimisticRegistration } from "./cross-seed-state";
 import { captureReuseFile, captureReuseRoot, publishedReuseLayoutCapabilities } from "./reuse-layout";
-import { reuseDigest } from "./reuse-plan";
+import { assertReusePath, reuseDigest } from "./reuse-plan";
 import { withTorrentRegistration } from "./torrent-use";
 
 const cursorKey = "cross-seed:optimistic-monitor-cursor";
+const coverageCursorKey = "cross-seed:tv-layout-coverage-cursor";
 export type CrossSeedMonitorAdapters = { client?: (scope: CrossSeedScope) => TorrentClient | Promise<TorrentClient> };
 
 const layoutReceiptSchema = z.object({
@@ -35,6 +36,59 @@ async function readLayoutReceipt(generation: string) {
       throw new Error("Layout receipt changed");
     return layoutReceiptSchema.parse(JSON.parse(bytes.toString("utf8")));
   } finally { await handle.close(); }
+}
+
+/** Recover old layout coverage using metadata and symlinks, never media reads. */
+export async function readTvCrossSeedLayoutCoverage(managedRoot: string, clientId: string,
+  locationJson: string, active: () => void): Promise<string[]> {
+  const location = z.object({ rootId: z.literal("tv"), relativePath: z.string() }).parse(JSON.parse(locationJson));
+  const planId = /^reuse\/\.podible-reuse-([a-f0-9]{64})-[a-f0-9-]{36}\/data$/.exec(location.relativePath)?.[1];
+  if (!planId) throw new Error("Not a registered reuse generation");
+  const downloads = path.join(path.resolve(managedRoot), "downloads"), objects = path.join(path.resolve(managedRoot), "objects");
+  const root = await captureReuseRoot({ rootPath: path.join(downloads, "reuse"), markerName: ".podible-reuse-root.json", ownerId: clientId });
+  const data = path.join(downloads, location.relativePath), generation = path.dirname(data);
+  if (await fs.realpath(data) !== data) throw new Error("Reuse generation traverses a symlink");
+  const stat = await fs.lstat(generation, { bigint: true }), receipt = await readLayoutReceipt(generation);
+  if (!stat.isDirectory() || receipt.planId !== planId ||
+    receipt.generation.device !== String(stat.dev) || receipt.generation.inode !== String(stat.ino) ||
+    receipt.definitionDigest !== reuseDigest({ id: planId, root, capabilities: receipt.capabilities }))
+    throw new Error("Reuse generation ownership changed");
+  const paths = new Set<string>();
+  for (const file of receipt.files) {
+    active();
+    if (file.kind !== "symlink") continue;
+    assertReusePath(file.path);
+    const leaf = path.join(data, file.path), parent = path.dirname(leaf);
+    try {
+      if (await fs.realpath(parent) !== parent) continue;
+      const target = path.resolve(parent, await fs.readlink(leaf));
+      if (!target.startsWith(objects + path.sep) || await fs.realpath(target) !== target || !(await fs.lstat(target)).isFile()) continue;
+      paths.add(path.relative(objects, target));
+    } catch (error) {
+      if (!["ENOENT", "EINVAL", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+    }
+  }
+  return [...paths].sort();
+}
+
+export async function reconcileTvCrossSeedCoverage(ctx: WorkerContext) {
+  const active = () => ctx.execution!.assertActive();
+  const cursor = ctx.repo.getJsonState<string>(coverageCursorKey) ?? "";
+  const limit = 10, candidates = ctx.repo.crossSeed.tvLayoutCoverageCandidates(cursor, limit);
+  for (const candidate of candidates) {
+    active();
+    if (ctx.repo.crossSeed.registrationOwner({ clientId: candidate.clientId, nativeId: candidate.nativeId }) !== candidate.operationId) continue;
+    const root = ctx.getSettings().tv.managedRoot;
+    try {
+      const paths = await readTvCrossSeedLayoutCoverage(root, candidate.clientId, candidate.locationJson, active);
+      active();
+      if (ctx.getSettings().tv.managedRoot === root) ctx.repo.crossSeed.recordTvLayoutCoverage(candidate, paths);
+    } catch {
+      active(); // Missing or invalid layouts are not evidence.
+    }
+  }
+  const next = candidates.length === limit ? candidates.at(-1)!.operationId : "";
+  if (next !== cursor) { active(); ctx.repo.setJsonState(coverageCursorKey, next); }
 }
 
 /** Opens only ownership metadata and stats. Never hashes or reads media payloads. */

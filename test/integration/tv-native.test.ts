@@ -11,7 +11,6 @@ import { hashSessionToken } from "../../src/auth";
 import { createPodibleFetchHandler } from "../../src/http";
 import { createTvRouter, tvRouter } from "../../src/rpc/tv-router";
 import { catalogRouter, createCatalogRouter } from "../../src/rpc/catalog-router";
-import { crossSeedCommandSchema, crossSeedStateKey } from "../../src/media/cross-seed-state";
 import { executeMethod, type RpcMethodDefinition } from "../../src/rpc/framework";
 import { RpcError, type RpcContext } from "../../src/rpc/shared";
 import { TmdbTvCatalog, TvCatalogError } from "../../src/tv/catalog";
@@ -21,6 +20,10 @@ import type { TvCatalogEntry } from "../../src/tv/types";
 import type { WorkerContext } from "../../src/worker/context";
 import { runWorker } from "../../src/worker";
 import { fixtureTvCatalog } from "../fixtures/tv-catalog";
+import { seedTvCrossSeed } from "../fixtures/tv-cross-seed";
+import { readTvCrossSeedLayoutCoverage } from "../../src/media/cross-seed-monitor";
+import { captureReuseRoot, prepareReuseLayoutRoot } from "../../src/media/reuse-layout";
+import { reuseDigest } from "../../src/media/reuse-plan";
 
 async function setup() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "native-tv-"));
@@ -222,9 +225,10 @@ test("one show exposes exact Plex coverage and safe cross-seeds, not another vie
     const a = s.repo.tv.startAcquisition(request.targetId, "initial",
       () => s.repo.createJob({ type: "tv_acquire" }).id, request.requestId).acquisition;
     const published = episodes.filter(ep => ["tvdb:7004", "tvdb:7001"].includes(ep.key));
-    const version = s.repo.tv.recordVersion(a.id, { identityVerified: true }, published.map(ep => ({
-      id: randomUUID(), relativePath: `files/${ep.id}.mkv`, sizeBytes: 5, probe: {}, episodeIds: [ep.id],
-    })));
+    const files = published.map(ep => ({
+      id: randomUUID(), relativePath: `files/${ep.id}.mkv`, sizeBytes: 10, probe: {}, episodeIds: [ep.id],
+    }));
+    const version = s.repo.tv.recordVersion(a.id, { identityVerified: true }, files);
     s.repo.tv.stagePublication(request.targetId, version, 0);
     s.repo.tv.promotePublication(request.targetId, version, 0);
     s.repo.tv.clearPublication(request.targetId, version);
@@ -237,24 +241,48 @@ test("one show exposes exact Plex coverage and safe cross-seeds, not another vie
     await expect(s.call("request", { tmdbId: 70, seasonNumbers: [2] }, "two")).rejects.toThrow("already in Plex");
     expect(s.count("tv_requests")).toBe(before);
 
-    const operationId = randomUUID(), selectionCopyId = randomUUID(), infoHash = "a".repeat(40);
-    const scope = { media: "tv", targetId: request.targetId } as const;
-    const command = crossSeedCommandSchema.parse({ operationId, selectionCopyId, scope });
-    const seedJob = s.repo.createJob({ type: "torrent_reuse" });
-    const ref = { clientId: "transmission:fixture", nativeId: infoHash };
-    const record = s.repo.reserveReuseTorrent(ref, { rootId: "tv", relativePath: "private-path" }, "selected-copy", scope, operationId);
-    s.repo.setJsonState(`cross-seed:selected-copy:${selectionCopyId}`, { offer: {
-      title: "Fixture S02 https://tracker.invalid/private-token", provider: "Fixture Indexer", url: "https://private.invalid/download",
-    } });
-    s.repo.setJsonState(crossSeedStateKey(operationId), { command, jobId: seedJob.id, outcome: {
-      kind: "seeding", torrentId: record.id, reusedBytes: 42, infoHash, reason: "private diagnostic",
-    } });
+    const { infoHash } = seedTvCrossSeed(s.repo, request.targetId, "Fixture S02", files.map(f => f.id));
+    const managed = await fs.realpath(s.root);
+    const planId = "a".repeat(64), generation = `reuse/.podible-reuse-${planId}-${randomUUID()}`;
+    const downloads = path.join(managed, "downloads");
+    const reuseRoot = path.join(downloads, "reuse"), clientId = "transmission:fixture";
+    await fs.mkdir(downloads);
+    await prepareReuseLayoutRoot({ rootPath: reuseRoot, ownerId: clientId });
+    const root = await captureReuseRoot({ rootPath: reuseRoot, markerName: ".podible-reuse-root.json", ownerId: clientId });
+    const data = path.join(downloads, generation, "data");
+    await fs.mkdir(data, { recursive: true });
+    const canonical = path.join(managed, "objects", files[1]!.relativePath);
+    await fs.mkdir(path.dirname(canonical), { recursive: true });
+    await fs.writeFile(canonical, "video bytes");
+    await fs.symlink(canonical, path.join(data, "episode.mkv"));
+    await fs.symlink(managed, path.join(data, "not-content.mkv"));
+    const capabilities = { cow: "unavailable", symlinkMode: "verified-read-only" };
+    const stat = await fs.lstat(path.dirname(data), { bigint: true });
+    await fs.writeFile(path.join(path.dirname(data), ".podible-reuse-layout.json"), JSON.stringify({
+      version: 1, planId, definitionDigest: reuseDigest({ id: planId, root, capabilities }), capabilities,
+      generation: { device: String(stat.dev), inode: String(stat.ino) },
+      files: ["episode.mkv", "not-content.mkv"].map(path => ({ path, kind: "symlink" })),
+    }));
+    seedTvCrossSeed(s.repo, request.targetId, "Legacy Fixture S02", [], generation + "/data");
+    const removed = seedTvCrossSeed(s.repo, request.targetId, "Removed Fixture S02", [files[0]!.id]);
+    s.db.query("DELETE FROM media_torrents WHERE id=?").run(removed.torrentId);
+    expect((await show()).crossSeeds.find(seed => seed.title === "Legacy Fixture S02")?.episodeIds).toEqual([]);
+    const [candidate, ...rest] = s.repo.crossSeed.tvLayoutCoverageCandidates("", 10);
+    expect(rest).toEqual([]);
+    const paths = await readTvCrossSeedLayoutCoverage(managed, clientId, candidate!.locationJson, () => {});
+    expect(paths).toEqual([files[1]!.relativePath]);
+    await expect(readTvCrossSeedLayoutCoverage(managed, "foreign-client", candidate!.locationJson, () => {})).rejects.toThrow("ownership");
+    s.repo.crossSeed.recordTvLayoutCoverage(candidate!, paths);
+    expect(s.repo.crossSeed.tvLayoutCoverageCandidates("", 10)).toEqual([]);
     const visible = await show();
     expect(visible.availableEpisodes).toBe(2);
     expect(visible.requests).toEqual([]);
     expect(visible.progress.seasons.find(season => season.seasonNumber === 1)?.episodes[0]).toMatchObject({ status: "ready" });
-    expect(visible.crossSeeds).toEqual([{ title: "Fixture S02", provider: "Fixture Indexer", status: "registered", reusedBytes: 42 }]);
-    for (const secret of [infoHash, "private-path", "private-token", "private.invalid", "private diagnostic"])
+    expect(visible.crossSeeds.sort((a, b) => a.title.localeCompare(b.title))).toEqual([
+      { title: "Fixture S02", provider: "Fixture Indexer", status: "registered", reusedBytes: 42, episodeIds: published.map(ep => ep.id) },
+      { title: "Legacy Fixture S02", provider: "Fixture Indexer", status: "registered", reusedBytes: 42, episodeIds: [published[1]!.id] },
+    ]);
+    for (const secret of [infoHash, "private-path", "private-token", "private.invalid", "private diagnostic", ...files.map(f => f.id)])
       expect(JSON.stringify(visible)).not.toContain(secret);
     const { request: partial } = await s.call("request", { tmdbId: 70, seasonNumbers: [1] }, "two") as any;
     const cards = await s.call("requestCards", {}, "two") as any;

@@ -44,6 +44,7 @@ export type CrossSeedOutcome = {
 export type CrossSeedReceipt = { command: CrossSeedCommand; commandHash: string; jobId: number; createdAt: string; outcome?: CrossSeedOutcome };
 const prefix = "cross-seed:operation:";
 const optimisticPrefix = "cross-seed:optimistic:";
+const layoutCoveragePrefix = "cross-seed:layout-coverage:";
 const hashSchema = z.string().regex(/^[a-f0-9]{40}$/), planIdSchema = z.string().regex(/^[a-f0-9]{64}$/);
 export type OptimisticRegistration = {
   operationId: string; planId: string; ref: TorrentRef; location: DownloadLocation; plan: ReusePlan;
@@ -54,6 +55,8 @@ export const optimisticRegistrationFits = (input: { planId: string; ref: Torrent
 export const crossSeedStateKey = (id: string) => prefix + z.string().uuid().parse(id);
 export const crossSeedRegistrationKey = (ref: TorrentRef) => "cross-seed:registration:" + createHash("sha256").update(JSON.stringify([ref.clientId, ref.nativeId])).digest("hex");
 export const crossSeedCommandHash = (command: CrossSeedCommand) => createHash("sha256").update(JSON.stringify(crossSeedCommandSchema.parse(command))).digest("hex");
+
+export type TvLayoutCoverageCandidate = { operationId: string; torrentId: number; clientId: string; nativeId: string; locationJson: string };
 
 /** Domain intent/results only. Attempts, sleeps and leases remain in Reflow. */
 export class CrossSeedRepo {
@@ -183,25 +186,87 @@ export class CrossSeedRepo {
     return (this.db.query("SELECT value_json FROM app_state WHERE key>=? AND key<? ORDER BY updated_at DESC,key LIMIT ?")
       .all(prefix, prefix + "~", limit) as { value_json: string }[]).map(row => JSON.parse(row.value_json));
   }
+  tvLayoutCoverageCandidates(after: string, limit: number) {
+    return this.db.query<TvLayoutCoverageCandidate, [string, number]>(`
+      SELECT json_extract(op.value_json,'$.command.operationId') AS operationId,t.id AS torrentId,
+        t.client_id AS clientId,t.native_id AS nativeId,t.location_json AS locationJson
+      FROM app_state op
+      JOIN media_torrents t ON t.id=json_extract(op.value_json,'$.outcome.torrentId') AND t.ownership_tag='Podible TV'
+      LEFT JOIN app_state p ON p.key='cross-seed:optimistic:' || json_extract(op.value_json,'$.command.operationId')
+      LEFT JOIN app_state c ON c.key='cross-seed:layout-coverage:' || json_extract(op.value_json,'$.command.operationId')
+        AND json_extract(c.value_json,'$.torrentId')=t.id AND json_extract(c.value_json,'$.locationJson')=t.location_json
+      WHERE op.key>? AND op.key<'cross-seed:operation:~'
+        AND json_extract(op.value_json,'$.command.scope.media')='tv'
+        AND json_extract(op.value_json,'$.outcome.kind')='seeding' AND p.key IS NULL AND c.key IS NULL
+      ORDER BY op.key LIMIT ?`).all(prefix + after, limit);
+  }
+  recordTvLayoutCoverage(candidate: TvLayoutCoverageCandidate, relativePaths: string[]) {
+    const { operationId, torrentId, clientId, nativeId, locationJson } = candidate;
+    immediateTransaction(this.db, this.beforeWrite, () => {
+      const receipt = this.receipt(operationId);
+      const record = this.db.query("SELECT * FROM media_torrents WHERE id=?").get(torrentId) as TorrentRecord | null;
+      if (receipt?.command.scope.media !== "tv" || receipt.outcome?.kind !== "seeding" ||
+        receipt.outcome.torrentId !== torrentId || record?.ownership_tag !== "Podible TV" ||
+        record.client_id !== clientId || record.native_id !== nativeId || record.location_json !== locationJson ||
+        this.registrationOwner({ clientId, nativeId }) !== operationId) return;
+      this.save(layoutCoveragePrefix + operationId, { torrentId, locationJson, relativePaths });
+    });
+  }
   showRegistrations(entryId: number) {
-    return this.db.query<{
-      title: string | null; provider: string | null; jobId: number; registered: 0 | 1; reusedBytes: number | null;
-    }, [number]>(`
+    const rows = this.db.query<{
+      title: string | null; provider: string | null; jobId: number; registered: 0 | 1;
+      reusedBytes: number | null; episodeIds: string | null;
+    }, { $entryId: number }>(`
+      WITH operations AS MATERIALIZED (
+        SELECT op.*,t.id AS torrent_id,t.location_json,
+          row_number() OVER (PARTITION BY t.id IS NOT NULL ORDER BY op.updated_at DESC,op.key) AS position
+        FROM app_state op
+        LEFT JOIN media_torrents t ON t.id=json_extract(op.value_json,'$.outcome.torrentId')
+          AND t.ownership_tag='Podible TV'
+        WHERE op.key>='cross-seed:operation:' AND op.key<'cross-seed:operation:~'
+          AND json_extract(op.value_json,'$.command.scope.media')='tv'
+          AND json_extract(op.value_json,'$.command.scope.targetId') IN (SELECT id FROM tv_targets WHERE entry_id=$entryId)
+          AND (json_extract(op.value_json,'$.outcome.kind') IS NULL
+            OR (json_extract(op.value_json,'$.outcome.kind')='seeding' AND t.id IS NOT NULL))
+      ), show_files AS MATERIALIZED (
+        SELECT DISTINCT m.file_id,m.episode_id,f.relative_path
+        FROM tv_targets target
+        JOIN tv_acquisitions a ON a.target_id=target.id
+        JOIN tv_versions v ON v.acquisition_id=a.id
+        JOIN tv_version_file_episodes m ON m.version_id=v.id
+        JOIN managed_content_files f ON f.id=m.file_id
+        WHERE target.entry_id=$entryId
+      ), members AS (
+        SELECT op.key,m.episode_id
+        FROM operations op
+        JOIN app_state plan ON plan.key='cross-seed:optimistic:' || json_extract(op.value_json,'$.command.operationId')
+          AND json_extract(plan.value_json,'$.torrentId')=op.torrent_id
+          AND json_extract(plan.value_json,'$.status')='monitoring'
+        CROSS JOIN json_each(plan.value_json,'$.plan.files') file
+        CROSS JOIN show_files m ON m.file_id=json_extract(file.value,'$.source.id')
+        WHERE op.torrent_id IS NOT NULL AND json_extract(file.value,'$.role')='content'
+        UNION ALL
+        SELECT op.key,m.episode_id
+        FROM operations op
+        JOIN app_state c ON c.key='cross-seed:layout-coverage:' || json_extract(op.value_json,'$.command.operationId')
+          AND json_extract(c.value_json,'$.torrentId')=op.torrent_id
+          AND json_extract(c.value_json,'$.locationJson')=op.location_json
+        CROSS JOIN json_each(c.value_json,'$.relativePaths') member
+        CROSS JOIN show_files m ON m.relative_path=member.value
+      ), coverage AS (
+        SELECT key,json_group_array(DISTINCT episode_id ORDER BY episode_id) AS episode_ids FROM members GROUP BY key
+      )
       SELECT COALESCE(json_extract(copy.value_json,'$.offer.title'),json_extract(release.payload_json,'$.title')) AS title,
         COALESCE(json_extract(copy.value_json,'$.offer.provider'),json_extract(release.payload_json,'$.provider')) AS provider,
-        json_extract(op.value_json,'$.jobId') AS jobId,t.id IS NOT NULL AS registered,
-        json_extract(op.value_json,'$.outcome.reusedBytes') AS reusedBytes
-      FROM app_state op
-      LEFT JOIN media_torrents t ON t.id=json_extract(op.value_json,'$.outcome.torrentId')
-        AND t.ownership_tag='Podible TV'
+        json_extract(op.value_json,'$.jobId') AS jobId,op.torrent_id IS NOT NULL AS registered,
+        json_extract(op.value_json,'$.outcome.reusedBytes') AS reusedBytes,coverage.episode_ids AS episodeIds
+      FROM operations op
+      LEFT JOIN coverage ON coverage.key=op.key
       LEFT JOIN release_inbox release ON release.id=json_extract(op.value_json,'$.command.releaseId')
       LEFT JOIN app_state copy ON copy.key='cross-seed:selected-copy:' || json_extract(op.value_json,'$.command.selectionCopyId')
-      WHERE op.key>='cross-seed:operation:' AND op.key<'cross-seed:operation:~'
-        AND json_extract(op.value_json,'$.command.scope.media')='tv'
-        AND json_extract(op.value_json,'$.command.scope.targetId') IN (SELECT id FROM tv_targets WHERE entry_id=?)
-        AND (json_extract(op.value_json,'$.outcome.kind') IS NULL
-          OR (json_extract(op.value_json,'$.outcome.kind')='seeding' AND t.id IS NOT NULL))
-      ORDER BY op.updated_at DESC,op.key LIMIT 50`).all(entryId);
+      WHERE op.torrent_id IS NOT NULL OR op.position <= 50
+      ORDER BY op.updated_at DESC,op.key`).all({ $entryId: entryId });
+    return rows.map(row => ({ ...row, episodeIds: row.episodeIds ? JSON.parse(row.episodeIds) as number[] : [] }));
   }
   owns(scope: CrossSeedScope, clientId: string, nativeId: string): boolean {
     crossSeedScopeSchema.parse(scope);

@@ -35,7 +35,8 @@ export const createCatalogRouter = (transmission?: AdminTransmissionReader | nul
       progress: tvRequestProgressSchema,
       requests: z.array(z.object({ id, seasons: z.array(z.number()), searchable: z.boolean() })),
       crossSeeds: z.array(z.object({ title: z.string(), provider: z.string().nullable(),
-        status: z.enum(["queued", "preparing", "registered"]), reusedBytes: z.number().nonnegative().nullable() })),
+        status: z.enum(["queued", "preparing", "registered"]), reusedBytes: z.number().nonnegative().nullable(),
+        episodeIds: z.array(id) })),
     }),
     async handler(ctx, input) {
       const tv = ctx.repo.tv;
@@ -78,7 +79,7 @@ export const createCatalogRouter = (transmission?: AdminTransmissionReader | nul
           const status: "registered" | "preparing" | "queued" | null = s.registered ? "registered" : jobStatuses.get(s.jobId) === "running" ? "preparing"
             : jobStatuses.get(s.jobId) === "queued" ? "queued" : null;
           return status ? [{ title: label(s.title) ?? "Cross-seed release", provider: label(s.provider),
-            status, reusedBytes: s.reusedBytes }] : [];
+            status, reusedBytes: s.reusedBytes, episodeIds: s.episodeIds }] : [];
         }) };
     } }),
 });
