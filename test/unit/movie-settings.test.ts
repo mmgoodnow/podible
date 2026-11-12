@@ -2,10 +2,21 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
-import { defaultSettings } from "../../src/settings";
+import { defaultSettings, parseSettings } from "../../src/settings";
 import { movieSettingsSchema } from "../../src/movies/settings";
 import { reconcileMovies } from "../../src/movies/maintenance";
 import { defaultMovieQualityPolicy } from "../../src/movies/quality";
+
+test("stored movie settings drop retired controls without resetting the quality policy", () => {
+  const settings = defaultSettings();
+  const qualityPolicy = { ...settings.movies.qualityPolicy, minimumPreferenceGain: 30 };
+  const movies = { ...settings.movies, qualityPolicy, automaticUpgrades: false, downloadGroupId: 1000 };
+  const parsed = parseSettings(JSON.stringify({ ...settings, movies }));
+  expect(parsed.movies).not.toHaveProperty("automaticUpgrades");
+  expect(parsed.movies).not.toHaveProperty("downloadGroupId");
+  expect(parsed.movies.qualityPolicy).toEqual(qualityPolicy);
+  expect(() => parseSettings(JSON.stringify({ ...settings, movies: { ...movies, typo: true } }))).toThrow();
+});
 
 test("shared movie/TV selection preference defaults and roundtrips without changing quality identity", () => {
   expect(movieSettingsSchema.parse({}).crossSeedPreference).toBe("tie-break");

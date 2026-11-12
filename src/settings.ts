@@ -141,10 +141,13 @@ export function parseSettings(value: string): AppSettings {
     typeof parsedRecovery.stalledTorrentMinutes === "number" && Number.isFinite(parsedRecovery.stalledTorrentMinutes)
       ? Math.max(0, Math.trunc(parsedRecovery.stalledTorrentMinutes))
       : defaults.recovery.stalledTorrentMinutes;
+  const movies = parsed.movies && typeof parsed.movies === "object" && !Array.isArray(parsed.movies)
+    ? Object.fromEntries(Object.entries(parsed.movies).filter(([key]) => key !== "downloadGroupId" && key !== "automaticUpgrades"))
+    : parsed.movies;
   return resolveLibraryStorage({
     ...defaults,
     ...parsed,
-    movies: movieSettingsSchema.parse(parsed.movies ?? {}),
+    movies: movieSettingsSchema.parse(movies ?? {}),
     tv: tvSettingsSchema.parse(parsed.tv ?? {}),
     retention: retentionPolicySchema.parse(parsed.retention ?? {}),
     prowlarr: prowlarrSettingsSchema.parse(parsed.prowlarr ?? {}),

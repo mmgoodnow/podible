@@ -4,8 +4,8 @@ import { appSettingsSchema } from "../../src/rpc/schemas";
 import { rpc, useTRPC } from "./rpc";
 import { LibraryMigrationPreview } from "./library-migration";
 import { applySettingsDraft, changeSetting, conflictingSettings, rebaseSettingsDraft, type SettingsDraft } from "./settings-draft";
-import { AcquisitionSettings, AiSettings, BookSettings, IndexerSettings, NotificationSettings, PlexSettings, QualitySettings,
-  SeerrSettings, SettingsGroup, StorageSettings, VideoSettings, type SettingsForm } from "./settings-fields";
+import { AcquisitionSettings, AiSettings, BookSettings, IndexerSettings, NotificationSettings, PlexSettings, PlexPublishingSettings,
+  QualitySettings, SeerrSettings, SettingsGroup, StorageSettings, VideoIntegrations, type SettingsForm } from "./settings-fields";
 import "./settings.css";
 
 const draftKey = ["admin-settings-draft"] as const;
@@ -17,11 +17,9 @@ const sections = {
   ai: { title: "AI", description: "OpenAI connection for books, movies and TV.", roots: ["agents"] },
   indexers: { title: "Indexers", description: "Manage search providers and release sources.", roots: ["prowlarr", "torznab"] },
   acquisition: { title: "Acquisition", description: "Control what gets downloaded, upgraded, and retried.", roots: ["recovery",
-    "movies.maximumReleaseBytes", "movies.crossSeedPreference", "movies.automaticUpgrades", "movies.downloadGroupId", "tv.maximumReleaseBytes"] },
+    "movies.maximumReleaseBytes", "movies.crossSeedPreference", "tv.maximumReleaseBytes"] },
   quality: { title: "Release quality", description: "Choose which movie and TV releases are eligible and rank them for upgrades.", roots: ["movies.qualityPolicy"] },
-  seerr: { title: "Seerr", description: "Connect Seerr to sync approved movie and TV requests.", roots: ["movies.seerr"] },
-  video: { title: "Movies & TV", description: "Catalog metadata, Plex publishing, and Radarr and Sonarr comparisons.", roots: ["movies", "tv"] },
-  plex: { title: "Plex access", description: "Choose who can sign in and configure reader app redirects.", roots: ["auth"] },
+  integrations: { title: "Integrations", description: "Connect Plex, Seerr, TMDB, Radarr and Sonarr.", roots: ["auth", "movies", "tv"] },
   storage: { title: "Storage", description: "Library location, Plex views and retention.", roots: ["storageRoot", "retention"] },
   notifications: { title: "Notifications", description: "Configure movie and TV email and owner Pushover alerts.", roots: ["notifications"] },
 } satisfies Record<string, { title: string; description: string; roots: string[] }>;
@@ -208,10 +206,14 @@ export default function Settings({ navigation }: { navigation: ReactNode }) {
             {section === "indexers" && <IndexerSettings form={form} discovery={indexers.data} loading={indexers.isPending} />}
             {section === "acquisition" && <AcquisitionSettings form={form} />}
             {section === "quality" && <QualitySettings form={form} />}
-            {section === "seerr" && <SeerrSettings form={form} />}
-            {section === "video" && <VideoSettings form={form} />}
-            {section === "plex" && <PlexAccess form={form} saving={saving} />}
-            {section === "storage" && <><StorageSettings form={form} /><LibraryMigrationPreview /></>}
+            {section === "integrations" && <>
+              <PlexAccess form={form} saving={saving} />
+              <PlexPublishingSettings form={form} />
+              <SeerrSettings form={form} />
+              <VideoIntegrations form={form} />
+              <LibraryMigrationPreview />
+            </>}
+            {section === "storage" && <StorageSettings form={form} />}
             {section === "notifications" && <NotificationSettings form={form} />}
           </div>}
         </section>

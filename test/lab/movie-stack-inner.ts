@@ -178,9 +178,7 @@ const settings = repo.ensureSettings();
 settings.movies = {
   ...settings.movies,
   managedRoot: root,
-  downloadGroupId: 1000,
   plexViewPath: viewRoot,
-  automaticUpgrades: true,
 };
 settings.rtorrent = { transport: "http-xmlrpc", url: "http://rtorrent:8000" };
 settings.torznab = [

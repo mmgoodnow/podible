@@ -202,12 +202,10 @@ read these settings through the movie API. Source: `src/rpc/settings-router.ts`.
 interface MovieSettings {
   tmdbAccessToken: string;
   managedRoot: string;
-  downloadGroupId: number | null;
   plexUrl: string;
   plexToken: string;
   plexSectionId: string;
   plexViewPath: string;
-  automaticUpgrades: boolean;
   maximumReleaseBytes: number;
   qualityPolicy: MovieQualityPolicy;
 }

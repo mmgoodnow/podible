@@ -83,7 +83,6 @@ async function setup() {
   Object.assign(settings.movies, {
     managedRoot: root,
     plexViewPath: "/fixture/movies",
-    automaticUpgrades: true,
   });
   settings.prowlarr = {
     url: "https://feed.invalid",
@@ -1195,52 +1194,6 @@ test("a busy acquisition durably waits, then consumes its retained RSS candidate
     expect(s.searches()).toBe(0);
   } finally {
     release();
-    await s.close();
-  }
-}, 15_000);
-
-test("automatic upgrades disabled still allows feed recovery for missing movies, not existing versions", async () => {
-  const s = await setup();
-  try {
-    const available = s.request();
-    const original = s.fixture.addOffer("auto-off-original", 1280);
-    const initial = queueMovieAcquisition(
-      s.repo,
-      available.targetId,
-      "initial",
-      undefined,
-      [original],
-    ).acquisition;
-    await s.start();
-    await s.done(initial.job_id!);
-    const oldId = s.repo.movies.target(available.targetId)!.active_version_id;
-    const settings = s.repo.getSettings();
-    settings.movies.automaticUpgrades = false;
-    s.repo.updateSettings(settings);
-    const missing = s.request(102);
-    const offeredTargets: number[] = [];
-    s.context.movieFeedMatcher = async ({ targets }) => {
-      offeredTargets.push(...targets.map((target) => target.targetId));
-      return targets.map((target) => ({
-        targetId: target.targetId,
-        releaseIndexes: [0],
-        reason: "Missing movie recovery",
-      }));
-    };
-    s.setRows([fromOffer(s.fixture.addOffer("recovery", 1920))]);
-    await s.sync();
-    expect(offeredTargets.sort()).toEqual([available.targetId, missing.targetId].sort());
-    expect(s.repo.movies.acquisitions(available.targetId)).toHaveLength(1);
-    expect(s.repo.movies.target(available.targetId)!.active_version_id).toBe(
-      oldId,
-    );
-    expect(s.repo.movies.acquisitions(missing.targetId)[0]!.reason).toBe(
-      "recovery",
-    );
-    expect(movieRequestView(s.repo, missing.requestId).available).toBe(true);
-    expect(s.fixture.stats.snatches).toBe(2);
-    expect(s.searches()).toBe(0);
-  } finally {
     await s.close();
   }
 }, 15_000);

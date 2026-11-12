@@ -29,12 +29,10 @@ export const movieSettingsSchema = z
     seerr: seerrSettingsSchema.prefault({}),
     tmdbAccessToken: z.string().default(""),
     managedRoot: z.string().default(""),
-    downloadGroupId: z.number().int().nonnegative().nullable().default(null),
     plexUrl: z.string().default(""),
     plexToken: z.string().default(""),
     plexSectionId: z.string().default(""),
     plexViewPath: z.string().default(""),
-    automaticUpgrades: z.boolean().default(true),
     crossSeedPreference: z.enum(["off", "tie-break"]).default("tie-break"),
     maximumReleaseBytes: z
       .number()

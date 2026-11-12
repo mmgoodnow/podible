@@ -78,8 +78,6 @@ was added. Configure:
   Missing configuration is reported explicitly.
 - `movies.managedRoot`: an app-owned absolute directory visible at the same path
   inside the app container. Contains `downloads`, `objects`, `views/plex/movies`.
-- `movies.downloadGroupId`: optional shared group for client-writable download
-  directories; defaults to null. The app needs permission to assign that group.
 - `movies.plexUrl`, `movies.plexToken`, `movies.plexSectionId`.
 - `movies.plexViewPath`: the Plex-visible path for `views/plex/movies`. Plex must
   also mount the canonical content with the same relative relationship, since
@@ -89,7 +87,7 @@ was added. Configure:
   is absent. Agents reuse `agents.apiKey`. New book and movie downloads use
   the private Docker-managed Transmission engine. Existing book releases retain
   their `rtorrent` connection; see [book download ownership](book-downloads.md).
-- `movies.qualityPolicy`, `automaticUpgrades` (RSS-driven),
+- `movies.qualityPolicy` controls eligibility and RSS-driven upgrades,
   and optional `maximumReleaseBytes` (default `null`). Before a new download, Podible
   checks the target volume's available space against verified metainfo, with
   headroom. This is a live check, not a reservation against concurrent writers.

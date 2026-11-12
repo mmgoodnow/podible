@@ -107,6 +107,8 @@ async function verify() {
   assert.equal(await saveSettings.isDisabled(), true);
   await openSettings("Storage");
   const migration = page.getByRole("region", { name: "Existing library preview" });
+  assert.equal(await migration.count(), 0);
+  await openSettings("Integrations");
   await migration.getByRole("button", { name: "Preview library", exact: true }).click();
   await migration.getByText("A library worth keeping (2025)", { exact: true }).waitFor();
   await migration.getByText(/1 titles need a catalog identity/).waitFor();
@@ -138,7 +140,7 @@ async function verify() {
   await adminNavigation.getByRole("link", { name: "Settings", exact: true }).click();
   await title.waitFor();
   assert.equal(await title.inputValue(), editedTitle, "SPA navigation lost the unsaved draft");
-  await openSettings("Plex access");
+  await openSettings("Integrations");
   const plexPicker = page.getByLabel("Plex access server", { exact: true });
   await plexPicker.waitFor();
   assert.equal(await plexPicker.inputValue(), "fixture-mendel");
@@ -237,21 +239,21 @@ async function verify() {
   await page.getByLabel("Torznab URL", { exact: true }).fill(torznabUrl);
   await page.getByLabel("Torznab API key", { exact: true }).fill("torznab-replacement-fixture");
   await page.getByLabel("Audiobook categories", { exact: true }).fill("3030,3040");
-  await openSettings("Movies & TV");
+  await openSettings("Integrations");
   assert.equal(await page.getByRole("button", { name: "Add path mapping", exact: true }).count(), 0);
   assert.equal(await page.getByLabel("TV Plex section ID", { exact: true }).count(), 1);
-  assert.equal(await page.getByLabel("Seerr URL", { exact: true }).count(), 0);
+  assert.equal(await page.getByLabel("Seerr URL", { exact: true }).count(), 1);
   assert.equal(await page.getByLabel("Maximum movie release size (GiB)", { exact: true }).count(), 0);
   assert.equal(await page.getByRole("heading", { name: "Quality tiers", exact: true }).count(), 0);
-  await openSettings("Seerr");
-  await page.getByLabel("Seerr URL", { exact: true }).waitFor();
   await openSettings("Acquisition");
+  assert.equal(await page.getByLabel("Movie download group ID", { exact: true }).count(), 0);
+  assert.equal(await page.getByLabel("Automatically upgrade movies", { exact: true }).count(), 0);
   await page.getByLabel("Maximum movie release size (GiB)", { exact: true }).waitFor();
   await page.getByLabel("Maximum TV release size (GiB)", { exact: true }).waitFor();
   await openSettings("Release quality");
   await page.getByRole("button", { name: "Move tier 2 up", exact: true }).click();
   assert.equal(await sectionNav.getByRole("button", { name: "Release quality", exact: true }).getAttribute("aria-description"), "Unsaved changes");
-  assert.equal(await sectionNav.getByRole("button", { name: "Movies & TV", exact: true }).getAttribute("aria-description"), null);
+  assert.equal(await sectionNav.getByRole("button", { name: "Integrations", exact: true }).getAttribute("aria-description"), null);
   await openSettings("Storage");
   await page.getByLabel("Minimum free space (GiB)", { exact: true }).fill("2.5");
   assert.equal(await page.getByLabel(/Protected .* target IDs/).count(), 0);
@@ -284,7 +286,7 @@ async function verify() {
   assert.ok((await title.boundingBox())!.y >= mobileTitleHelp.y + mobileTitleHelp.height, "Mobile controls should stack below their descriptions");
   await page.evaluate("scrollTo(0, 0)");
   await page.screenshot({ path: path.join(artifacts, "admin-settings-mobile.png"), animations: "disabled" });
-  for (const section of ["Books & feed", "AI", "Indexers", "Acquisition", "Release quality", "Seerr", "Movies & TV", "Storage", "Notifications", "Plex access"]) {
+  for (const section of ["Books & feed", "AI", "Indexers", "Acquisition", "Release quality", "Integrations", "Storage", "Notifications"]) {
     await openSettings(section);
     await page.getByRole("heading", { name: section, exact: true }).waitFor();
     assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false, `${section} settings overflow mobile viewport`);
@@ -294,6 +296,7 @@ async function verify() {
         return !id || !control.ownerDocument.getElementById(id)?.textContent?.trim();
       }).map(control => control.id)), [], `${section} settings must describe each control`);
   }
+  await openSettings("Integrations");
   await plexPicker.waitFor();
   assert.equal(await plexPicker.inputValue(), "fixture-cyprus");
   await plexPicker.scrollIntoViewIfNeeded();

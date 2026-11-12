@@ -295,13 +295,7 @@ export function AcquisitionSettings({ form }: { form: SettingsForm }) {
           help="Skip TV releases larger than this, including packs. Leave blank for no cap." />
         <SelectField label="Movie cross-seed preference" field={movies.field("crossSeedPreference")} options={[["off", "Off"], ["tie-break", "Prefer reuse as a tie-breaker"]]}
           help="Use cross-seed potential to break ties between otherwise comparable movie releases." />
-        <CheckField label="Automatically upgrade movies" field={movies.field("automaticUpgrades")}
-          help="Let better releases replace existing movie copies when they meet your quality rules." />
       </Grid>
-    </SettingsGroup>
-    <SettingsGroup title="Download files">
-      <NumberField label="Movie download group ID" field={movies.field("downloadGroupId")} nullable
-        help="Filesystem group for new movie download folders. Leave blank to keep the default." />
     </SettingsGroup>
     <SettingsGroup title="Download recovery">
       <Grid>
@@ -354,17 +348,21 @@ export function QualitySettings({ form }: { form: SettingsForm }) {
   </>;
 }
 
-export function VideoSettings({ form }: { form: SettingsForm }) {
-  const root = fields(form), movies = root.group("movies"), tv = root.group("tv"), shadow = movies.group("shadow");
-  return <>
-    <SettingsGroup title="Plex publishing">
+export function PlexPublishingSettings({ form }: { form: SettingsForm }) {
+  const root = fields(form), movies = root.group("movies"), tv = root.group("tv");
+  return <SettingsGroup title="Plex publishing" note="Choose where Podible adds movies and TV. This connection does not control who can sign in.">
       <Grid>
         <EndpointField label="Plex URL" field={movies.field("plexUrl")} help="Server address used to scan and verify movies and TV in Plex." />
         <SecretField label="Plex library token" field={movies.field("plexToken")} help="Authorizes library operations, not Plex sign-in." />
         <TextField label="Movie Plex section ID" field={movies.field("plexSectionId")} help="Numeric ID of the Plex library where movies are published." />
         <TextField label="TV Plex section ID" field={tv.field("plexSectionId")} help="Numeric ID of the Plex library where TV is published." />
       </Grid>
-    </SettingsGroup>
+    </SettingsGroup>;
+}
+
+export function VideoIntegrations({ form }: { form: SettingsForm }) {
+  const root = fields(form), movies = root.group("movies"), tv = root.group("tv"), shadow = movies.group("shadow");
+  return <>
     <SettingsGroup title="Movie and TV metadata">
       <SecretField label="TMDB access token" field={movies.field("tmdbAccessToken")} help="Authorizes movie and TV catalog lookups." />
     </SettingsGroup>

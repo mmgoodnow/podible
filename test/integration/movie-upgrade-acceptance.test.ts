@@ -44,7 +44,6 @@ async function setup() {
   Object.assign(settings.movies, {
     managedRoot: root,
     plexViewPath: upgradeServerViewRoot,
-    automaticUpgrades: false,
   });
   repo.updateSettings(settings);
   for (const token of ["owner", "stranger"]) {

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { runMigrations } from "../../src/db";
+import type { JobRow } from "../../src/app-types";
 import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
 import { acquireMovie } from "../../src/movies/acquisition";
@@ -22,7 +23,7 @@ async function setup(policy: MovieQualityPolicy = defaultMovieQualityPolicy) {
   runMigrations(db);
   const repo = new BooksRepo(db);
   const settings = defaultSettings();
-  Object.assign(settings.movies, { managedRoot: root, plexViewPath: "/data/views/plex/movies", automaticUpgrades: false });
+  Object.assign(settings.movies, { managedRoot: root, plexViewPath: "/data/views/plex/movies" });
   repo.updateSettings(settings);
   const admin = repo.upsertUser({ provider: "local", providerUserId: "admin", username: "admin", isAdmin: true });
   const user = repo.upsertUser({ provider: "local", providerUserId: "reader", username: "reader", isAdmin: false });
@@ -77,16 +78,17 @@ function ingestRepairOffer(s: Awaited<ReturnType<typeof setup>>, offer: MovieOff
   }], now)[0];
 }
 
-async function routeRepairOffer(s: Awaited<ReturnType<typeof setup>>, releaseId: number, seen: number[][]) {
-  const job = s.repo.createJob({ type: "movie_feed_match", payload: { releaseIds: [releaseId] } });
+async function routeRepairOffer(s: Awaited<ReturnType<typeof setup>>, releaseId: number, seen: number[][], matchTargetId?: number, replay?: JobRow) {
+  const job = replay ?? s.repo.createJob({ type: "movie_feed_match", payload: { releaseIds: [releaseId] } });
   await matchMovieFeed({ ...s.context, movieFeedMatcher: async ({ targets }) => {
     seen.push(targets.map((target) => target.targetId));
-    return targets.map((target) => ({ targetId: target.targetId, releaseIndexes: [0], reason: "Fixture identity routing" }));
+    return targets.filter(target => matchTargetId === undefined || target.targetId === matchTargetId)
+      .map((target) => ({ targetId: target.targetId, releaseIndexes: [0], reason: "Fixture identity routing" }));
   } }, job);
   return job;
 }
 
-test("RSS repairs an unresolved nuke after an empty search with upgrades off, without touching healthy movies", async () => {
+test("RSS repairs an unresolved nuke after an empty search without touching unrelated movies", async () => {
   const s = await setup();
   try {
     const old = await s.initial();
@@ -103,8 +105,8 @@ test("RSS repairs an unresolved nuke after an empty search with upgrades off, wi
     const replacement = s.fixture.addOffer("late-rss-repair", 1920);
     const releaseId = ingestRepairOffer(s, replacement);
     const seen: number[][] = [];
-    await routeRepairOffer(s, releaseId, seen);
-    expect(seen).toEqual([[s.request.targetId]]);
+    const matchJob = await routeRepairOffer(s, releaseId, seen, s.request.targetId);
+    expect(seen[0]).toContain(unrelated.request.targetId);
     const recovery = s.repo.movies.acquisitions(s.request.targetId)[0];
     expect(recovery.reason).toBe("recovery");
     expect(recovery.id).not.toBe(report.replacements[0].acquisitionId);
@@ -126,7 +128,7 @@ test("RSS repairs an unresolved nuke after an empty search with upgrades off, wi
     expect(await fs.readFile(old.file, "utf8")).toContain("original");
     expect(await fs.readFile(unrelated.file, "utf8")).toContain("unrelated-healthy");
     const count = s.repo.movies.acquisitions(s.request.targetId).length;
-    await routeRepairOffer(s, releaseId, seen);
+    await routeRepairOffer(s, releaseId, seen, s.request.targetId, matchJob);
     expect(s.repo.movies.acquisitions(s.request.targetId)).toHaveLength(count);
     expect(s.fixture.stats.removals).toBe(0);
   } finally { await s.close(); }
@@ -137,9 +139,6 @@ test("nuke repair invalidates only the affected target's prior RSS quality consi
   try {
     const old = await s.initial();
     const unrelated = await publishUnrelated(s);
-    const settings = s.repo.getSettings();
-    settings.movies.automaticUpgrades = true;
-    s.repo.updateSettings(settings);
     s.fixture.clearOffers();
     const replacement = s.fixture.addOffer("previously-equal-rss", 1920);
     const releaseId = ingestRepairOffer(s, replacement);

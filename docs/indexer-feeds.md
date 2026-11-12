@@ -109,9 +109,9 @@ Matched candidates run through normal semantic selection, metainfo validation,
 download, probing, quality policy, and Plex verification. Ordinary RSS evaluation
 does not launch per-title searches. An actual stalled or invalid download can
 trigger bounded replacement searches after its feed candidates are exhausted.
-Equal/worse releases keep the current movie without searching, and
-`movies.automaticUpgrades=false` excludes already-available targets. Missing
-targets remain eligible. Busy targets wait durably rather than lose candidates.
+Equal/worse releases keep the current movie without searching; eligible
+improvements follow the target's quality policy. Busy targets wait durably
+rather than lose candidates.
 Receipts are scoped to release, target, policy and version revision, with a causal
 matching-job receipt to prevent replay from dispatching again after promotion.
 Queuing the acquisition and its receipts is atomic. Selection/import explanations remain on

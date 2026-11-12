@@ -38,10 +38,7 @@ export async function matchMovieFeed(
       .filter(
         (target) =>
           ctx.repo.movies.activeRequestCount(target.id) > 0 &&
-          ctx.repo.retention.get({ namespace: "movie-target", id: String(target.id) })?.desiredPresence !== "evicted" &&
-          (!target.active_version_id ||
-            ctx.getSettings().movies.automaticUpgrades ||
-            ctx.repo.releaseHealth.currentMovieNuke(target.id)),
+          ctx.repo.retention.get({ namespace: "movie-target", id: String(target.id) })?.desiredPresence !== "evicted",
       )
       .map((target) => ({
         targetId: target.id,
@@ -84,9 +81,7 @@ export async function matchMovieFeed(
       if (
         !target ||
         !ctx.repo.movies.activeRequestCount(targetId) ||
-        ctx.repo.retention.get({ namespace: "movie-target", id: String(targetId) })?.desiredPresence === "evicted" ||
-        (target.active_version_id &&
-          !ctx.getSettings().movies.automaticUpgrades && !nuke)
+        ctx.repo.retention.get({ namespace: "movie-target", id: String(targetId) })?.desiredPresence === "evicted"
       )
         continue;
       const unfinished = ctx.repo.movies
@@ -130,8 +125,7 @@ export async function matchMovieFeed(
           const current = ctx.repo.movies.target(targetId);
           const currentNuke = ctx.repo.releaseHealth.currentMovieNuke(targetId);
           if (ctx.repo.retention.get({ namespace: "movie-target", id: String(targetId) })?.desiredPresence === "evicted") return;
-          if (!ctx.repo.movies.activeRequestCount(targetId) ||
-            (current?.active_version_id && !ctx.getSettings().movies.automaticUpgrades && !currentNuke)) return;
+          if (!ctx.repo.movies.activeRequestCount(targetId)) return;
           if (
             !current ||
             revision(current.policy_json, current.revision, currentNuke?.evidence.source.id) !== targetRevision

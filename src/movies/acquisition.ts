@@ -418,10 +418,6 @@ export async function acquireMovie(
       await fs.mkdir(sourceRoot, { recursive: true });
       if ((await fs.realpath(sourceRoot)) !== sourceRoot)
         throw new Error("Download layout traverses a symlink");
-      if (settings.movies.downloadGroupId !== null) {
-        await fs.chown(sourceRoot, -1, settings.movies.downloadGroupId);
-        await fs.chmod(sourceRoot, 0o2770);
-      }
       return withTorrentUse(ctx.repo, { clientId: services.client.id, infoHash: metadata.infoHash }, async () => {
         if (!repo.torrent(services.client.id, metadata.infoHash)) {
           const noSpace = await downloadCapacityProblem({ contentRoot: roots.contentRoot, sourceRoot,
