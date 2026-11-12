@@ -2,6 +2,7 @@ import { z } from "zod";
 import { authRouter } from "../src/rpc/auth-router";
 import { catalogRouter } from "../src/rpc/catalog-router";
 import { movieRequestsRouter, moviesRouter } from "../src/rpc/movies-router";
+import { playbackRouter } from "../src/rpc/playback-router";
 import { tvRouter } from "../src/rpc/tv-router";
 
 type Shape = {
@@ -9,6 +10,7 @@ type Shape = {
   properties?: Record<string, Shape>;
   required?: string[];
   enum?: string[];
+  const?: unknown;
   anyOf?: Shape[];
   items?: Shape;
 };
@@ -36,9 +38,10 @@ function objectDeclaration(name: string, root: Shape, select: Fields | undefined
     const fieldName = swiftIdentifier(key[0]!.toUpperCase() + key.slice(1)) + "Value";
     const projection = select?.[key];
     const fieldType = (node: Shape | undefined): string => {
-      if (node?.enum && typedEnums) {
+      const choices = node?.enum ?? (typeof node?.const === "string" ? [node.const] : undefined);
+      if (choices && typedEnums) {
         const enumName = swiftIdentifier(key[0]!.toUpperCase() + key.slice(1));
-        nested.push(`${indent}    enum ${enumName}: String, Codable, Sendable { case ${node.enum.map(swiftIdentifier).join(", ")} }`);
+        nested.push(`${indent}    enum ${enumName}: String, Codable, Sendable { case ${choices.map(swiftIdentifier).join(", ")} }`);
         return enumName;
       }
       switch (node?.type) {
@@ -60,6 +63,7 @@ function objectDeclaration(name: string, root: Shape, select: Fields | undefined
 
 const { beginDeviceLogin, exchangeDeviceLogin, logout } = authRouter.routes;
 const catalog = catalogRouter.routes, movies = moviesRouter.routes, tv = tvRouter.routes, requests = movieRequestsRouter.routes;
+const playback = playbackRouter.routes;
 const catalogTitle = { tmdbId: true, title: true, year: true, overview: true, posterUrl: true } satisfies Fields;
 const tvCard = { key: true, title: true, year: true, posterUrl: true } satisfies Fields;
 const transfer = { bytesDone: true, sizeBytes: true, bytesPerSecond: true } satisfies Fields;
@@ -95,6 +99,13 @@ const body = [
   declaration("TVEntry", catalog.tvEntry.resultSchema, { entry: { tmdbId: true, title: true, year: true, posterUrl: true },
     availableEpisodes: true, progress: { download: { ...transfer, etaSeconds: true }, seasons: { seasonNumber: true, available: true, total: true, stage: true } },
     requests: { id: true, seasons: true } }),
+  declaration("ViewerShowSource", playback.showEpisodes.paramsSchema, undefined, true),
+  declaration("ViewerShowEpisodes", playback.showEpisodes.resultSchema),
+  declaration("ViewerMovieTarget", playback.prepare.paramsSchema.options[0], undefined, true),
+  declaration("ViewerEpisodeTarget", playback.prepare.paramsSchema.options[1], undefined, true),
+  declaration("ViewerPlaybackGrant", playback.prepare.resultSchema),
+  declaration("ViewerPlaybackClose", playback.close.paramsSchema, undefined, true),
+  declaration("ViewerPlaybackCloseReceipt", playback.close.resultSchema),
 ].join("\n\n") + "\n";
 const destination = new URL("../tvos/PodibleTV/RPCWire.swift", import.meta.url);
 if (process.argv.includes("--check")) {

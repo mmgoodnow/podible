@@ -201,11 +201,12 @@ export async function fetchPlexUser(
   return coercePlexUser(await response.json());
 }
 
-export async function fetchPlexServerDevices(settings: AppSettings, plexToken = settings.auth.plex.ownerToken): Promise<PlexServerDevice[]> {
+export async function fetchPlexServerDevices(settings: AppSettings, plexToken = settings.auth.plex.ownerToken, signal?: AbortSignal): Promise<PlexServerDevice[]> {
   if (!plexToken) {
     return [];
   }
   const response = await fetch("https://plex.tv/api/resources?includeHttps=1", {
+    signal,
     headers: plexHeaders(settings.auth.plex.productName, settingsClientIdentifier(settings), {
       "X-Plex-Token": plexToken,
     }),

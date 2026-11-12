@@ -3,6 +3,7 @@ import {
   checkPlexUserAccess,
   exchangePlexPinForToken,
   fetchPlexUser,
+  fetchPlexServerDevices,
 } from "../plex";
 
 import { BooksRepo } from "../repo";
@@ -190,8 +191,23 @@ async function resolvePlexLoginStatus(
       isAdmin: existingPlexUser ? existingPlexUser.is_admin === 1 : !hasPlexAdminUser,
     });
     const sessionToken = createSessionToken();
-    repo.createSession(user.id, hashSessionToken(sessionToken));
+    const session = repo.createSession(user.id, hashSessionToken(sessionToken));
     repo.deletePlexLoginAttempt(pinId);
+    const deviceGrant = /^\/auth\/device\?id=([A-Za-z0-9_-]{32})$/.exec(redirectTo ?? "")?.[1];
+    const machineId = settings.auth.plex.machineId;
+    if (deviceGrant && machineId && repo.deviceLoginNeedsApproval(deviceGrant)) {
+      try {
+        const servers = (await fetchPlexServerDevices(settings, plexToken, AbortSignal.timeout(8000)))
+          .filter(server => server.machineId === machineId && server.accessToken);
+        const accessToken = servers.length === 1 ? servers[0]?.accessToken : null;
+        if (accessToken && /^[\x21-\x7e]{1,1024}$/.test(accessToken)) {
+          repo.stageDeviceLoginPlexAccess(deviceGrant, session.id, machineId, accessToken);
+        }
+      } catch {
+        // Pairing can still grant Podible catalog access without Plex playback.
+        console.warn("[plex] Viewer playback access unavailable for device pairing");
+      }
+    }
     return {
       kind: "success",
       settings,

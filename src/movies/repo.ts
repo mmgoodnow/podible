@@ -102,7 +102,9 @@ export class MovieRepo {
       .query("SELECT * FROM movie_targets WHERE id=?")
       .get(id) as MovieTarget | null;
   }
-  targets(): MovieTarget[] {
+  targets(movieId?: number): MovieTarget[] {
+    if (movieId !== undefined)
+      return this.db.query("SELECT * FROM movie_targets WHERE movie_id=? ORDER BY id").all(movieId) as MovieTarget[];
     return this.db
       .query("SELECT * FROM movie_targets ORDER BY id")
       .all() as MovieTarget[];

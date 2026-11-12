@@ -1245,6 +1245,20 @@ export function runMigrations(db: Database): void {
     ) WITHOUT ROWID;
     CREATE INDEX device_login_grants_expiry ON device_login_grants(expires_at);
   `));
+  apply(65, () => db.exec(`
+    CREATE TABLE device_login_plex_access (
+      grant_id TEXT PRIMARY KEY REFERENCES device_login_grants(id) ON DELETE CASCADE,
+      browser_session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      machine_id TEXT NOT NULL,
+      access_token TEXT NOT NULL
+    ) WITHOUT ROWID;
+    CREATE INDEX device_login_plex_browser_session ON device_login_plex_access(browser_session_id);
+    CREATE TABLE session_plex_access (
+      session_id INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+      machine_id TEXT NOT NULL,
+      access_token TEXT NOT NULL
+    );
+  `));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

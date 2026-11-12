@@ -296,7 +296,9 @@ export class TvRepo {
     return this.db.query("SELECT * FROM tv_targets WHERE id=?").get(id) as TvTarget | null;
   }
 
-  targets(): TvTarget[] {
+  targets(entryId?: number): TvTarget[] {
+    if (entryId !== undefined)
+      return this.db.query("SELECT * FROM tv_targets WHERE entry_id=? ORDER BY id").all(entryId) as TvTarget[];
     return this.db.query("SELECT * FROM tv_targets ORDER BY id").all() as TvTarget[];
   }
 

@@ -33,13 +33,16 @@ export function createDeviceLoginRoutes(repo: BooksRepo) {
     const session = getCurrentSession(c);
     const path = `/auth/device?id=${id.data}`;
     if (session?.kind !== "browser") return c.redirect(`/login?${new URLSearchParams({ redirectTo: path })}`, 303);
+    const linked = repo.deviceLoginHasPlexAccess(id.data, session.id);
     return c.html(page("Connect Apple TV", html`
       <p>You are signed in as <strong>${session.display_name || session.username}</strong>. Enter the code shown on your TV. Do not enter a code sent to you by someone else.</p>
       <form method="post" action="${path}">
         <label for="code">TV code</label>
         <input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required>
         <button type="submit">Approve sign-in</button>
-      </form>`));
+      </form>
+      ${linked ? html`<p>This TV will use your Plex access for playback.</p>` : html`
+        <p><a style="color:#b7e8cc" href="${`/login?${new URLSearchParams({ redirectTo: path })}`}">Sign in with Plex to enable playback</a>, or approve now to browse and request.</p>`}`));
   });
   app.post("/", bodyLimit({ maxSize: 256 }), async (c) => {
     const session = getCurrentSession(c);
@@ -53,7 +56,7 @@ export function createDeviceLoginRoutes(repo: BooksRepo) {
     const form = await c.req.parseBody();
     if (!id.success || typeof form.code !== "string" || !/^\d{6}$/.test(form.code))
       return c.text("Invalid code", 400);
-    if (!repo.approveDeviceLogin(id.data, form.code, session.user_id))
+    if (!repo.approveDeviceLogin(id.data, form.code, session.user_id, session.id))
       return c.html(page("Could not approve sign-in", html`<p>The code is incorrect or expired. Return to the previous page to try again, or start a new sign-in on the TV.</p>`), 400);
     return c.html(page("Apple TV connected", html`<p>Return to the TV. You can close this page.</p>`));
   });

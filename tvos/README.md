@@ -1,6 +1,6 @@
 # Podible for Apple TV
 
-Browse what's already available and request what's missing without leaving the TV. Podible owns discovery and requests; Plex remains the feature and episode playback and watch-history authority.
+Browse what's already available, request what's missing, and play supported movies and episodes without leaving the TV. Plex controls access to playback.
 
 ## Design references
 
@@ -21,6 +21,7 @@ sidebar, Up or Down to choose a destination, and Select to open it.
 - Browse movie and TV shelves, search, open title details, request a movie or specific seasons, and revisit your requests.
 - Demo mode needs no server; its requests are temporary and its player uses an Apple sample stream.
 - Settings pairs with an HTTPS Podible origin. Scan the QR code, sign in on your phone, and confirm the code shown on the TV. The TV stores its own revocable session in the device Keychain. Pairing, catalog and request features use the existing JSON-RPC transport.
+- To enable feature playback, sign in with Plex on the phone during pairing. If the phone is already signed into Podible, choose **Sign in with Plex to enable playback** before approving the code. Playback uses the viewer's access to the selected Plex server and requires a verified publication. Direct play currently supports a single H.264/HEVC and AAC MP4; use Plex for other formats and combined episode files.
 - Connected titles can play explicitly shared [local Plex trailers](TRAILERS.md). Catalog availability is not playback authorization.
 
 ```sh
@@ -28,7 +29,7 @@ xcodebuild -project tvos/PodibleTV.xcodeproj -scheme PodibleTV \
   -destination 'generic/platform=tvOS Simulator' CODE_SIGNING_ALLOWED=NO build
 ```
 
-Run `bun run generate:tvos-wire` after changing the pairing, catalog, or request RPC schemas. CI runs
+Run `bun run generate:tvos-wire` after changing the pairing, catalog, request, or playback RPC schemas. CI runs
 `bun run check:tvos-wire` to catch stale Swift types.
 
 ## Simulator focus and screenshots
@@ -51,5 +52,5 @@ using a grid of six cinematic poster illustrations and a widescreen lighthouse b
 ## Next milestones
 
 1. Verify phone pairing, movie requests and season requests with a non-admin account on a real server.
-2. Link the viewer's Plex account, explicitly select the Plex server, and resolve titles to exact server-scoped movie and episode identities. Verify AVKit direct play and Plex progress reporting before adding a tested transcode fallback.
-3. Add season and episode playback, continue watching, and live request status. Keep transfer progress, Plex publication, and Plex-verified readiness distinct. Test remote focus restoration, sign-in, and playback on physical Apple TV before distribution.
+2. Verify phone sign-in and AVKit direct play on physical Apple TV, then support Plex transcode fallback for MKV and unsupported codecs.
+3. Report playback progress back to Plex and use it for Continue Watching. Keep transfer progress, Plex publication, and Plex-verified readiness distinct.

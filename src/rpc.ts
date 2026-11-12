@@ -31,6 +31,7 @@ import { tvRouter } from "./rpc/tv-router";
 import { adminWebRouter } from "./rpc/admin-web-router";
 import { recoveryRouter } from "./rpc/recovery-router";
 import { catalogRouter } from "./rpc/catalog-router";
+import { playbackRouter } from "./rpc/playback-router";
 import { stewardshipRouter } from "./rpc/stewardship-router";
 import { crossSeedRouter } from "./rpc/cross-seed-router";
 import { transferMetricsRouter } from "./rpc/transfer-metrics-router";
@@ -96,6 +97,7 @@ const rootRouter = defineRouter({
   tvRetention: tvRetentionRouter,
   torrentRetirement: torrentRetirementRouter,
   catalog: catalogRouter,
+  playback: playbackRouter,
   tv: tvRouter,
   adminWeb: adminWebRouter,
 });

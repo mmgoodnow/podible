@@ -117,6 +117,13 @@ export interface DB {
     "user_id": number | null;
   };
 
+  "device_login_plex_access": {
+    "grant_id": string;
+    "browser_session_id": number;
+    "machine_id": string;
+    "access_token": string;
+  };
+
   "indexer_feeds": {
     "id": string;
     "provider": string;
@@ -425,6 +432,12 @@ export interface DB {
     "description": string;
     "triage_finding": string;
     "created_at": string;
+  };
+
+  "session_plex_access": {
+    "session_id": Generated<number>;
+    "machine_id": string;
+    "access_token": string;
   };
 
   "sessions": {

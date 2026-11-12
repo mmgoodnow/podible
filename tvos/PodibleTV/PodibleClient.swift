@@ -224,7 +224,7 @@ struct PodibleClient {
         return url
     }
 
-    private func call<Params: Encodable, Value: Decodable>(_ method: String, _ params: Params, requiresSession: Bool = true) async throws -> Value {
+    func call<Params: Encodable, Value: Decodable>(_ method: String, _ params: Params, requiresSession: Bool = true) async throws -> Value {
         let id = UUID().uuidString
         var request = try makeRequest(path: "/rpc", requiresSession: requiresSession)
         request.httpMethod = "POST"

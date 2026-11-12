@@ -25,9 +25,10 @@
 
 ## Apple TV
 
-- [ ] Generate Swift wire types from the shared JSON-RPC schemas at build time and check contract drift. Reuse the transport Kindling already calls.
+- [x] Generate the Swift pairing, catalog and request wire types from the shared JSON-RPC schemas. CI checks contract drift; tvOS uses the same transport as Kindling.
 - [x] Implement QR sign-in via the self-hosted Podible origin and existing account authorization. Use a short-lived pairing grant and a separate revocable TV session. Server integration tests and tvOS simulator suite passed; live phone-to-device sign-in still needs verification.
-- [ ] Add movie and episode playback against the viewer's Plex access, exact server/title identities, and verified progress reporting. Test in the simulator and on device.
+- [x] Add viewer-authorized movie and episode direct play for compatible MP4 files. Exact Plex identity, publication path and active file size are required. The stream is scoped to the paired session.
+- [ ] Verify feature playback on Lovelace against production, handle MKV and incompatible codecs, and report watch progress to Plex.
 - [ ] Expand trailer discovery beyond approved local Plex clips using playable, authorized sources.
 
 ## Production Evidence

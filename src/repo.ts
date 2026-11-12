@@ -624,13 +624,32 @@ export class BooksRepo {
       WHERE id=? AND expires_at>? AND user_id IS NULL AND attempts<5`).get(id, nowIso()));
   }
 
-  approveDeviceLogin(id: string, code: string, userId: number): boolean {
+  deviceLoginHasPlexAccess(grantId: string, browserSessionId: number): boolean {
+    return Boolean(this.db.query(`SELECT 1 FROM device_login_plex_access
+      WHERE grant_id=? AND browser_session_id=?`).get(grantId, browserSessionId));
+  }
+
+  stageDeviceLoginPlexAccess(grantId: string, browserSessionId: number, machineId: string, token: string): void {
+    this.db.query(`INSERT INTO device_login_plex_access(grant_id,browser_session_id,machine_id,access_token)
+      SELECT id,?,?,? FROM device_login_grants WHERE id=? AND expires_at>? AND user_id IS NULL AND attempts<5
+      ON CONFLICT(grant_id) DO UPDATE SET browser_session_id=excluded.browser_session_id,
+        machine_id=excluded.machine_id,access_token=excluded.access_token`).run(browserSessionId, machineId, token, grantId, nowIso());
+  }
+
+  getViewerPlexTokenForSession(sessionId: number, machineId: string): string | null {
+    return this.db.query<{ access_token: string }, [number, string]>(`SELECT access_token FROM session_plex_access
+      WHERE session_id=? AND machine_id=?`).get(sessionId, machineId)?.access_token ?? null;
+  }
+
+  approveDeviceLogin(id: string, code: string, userId: number, browserSessionId: number): boolean {
     return this.transaction(() => {
       const row = this.db.query<{ user_id: number | null }, [string, number, string, string]>(
         `UPDATE device_login_grants SET attempts=attempts+1,
           user_id=CASE WHEN confirmation_code=? THEN ? ELSE NULL END
           WHERE id=? AND expires_at>? AND user_id IS NULL AND attempts<5 RETURNING user_id`);
-      return row.get(code, userId, id, nowIso())?.user_id === userId;
+      const approved = row.get(code, userId, id, nowIso())?.user_id === userId;
+      if (approved) this.db.query("DELETE FROM device_login_plex_access WHERE grant_id=? AND browser_session_id<>?").run(id, browserSessionId);
+      return approved;
     });
   }
 
@@ -644,7 +663,10 @@ export class BooksRepo {
     return this.transaction(() => {
       const confirmed = lookup();
       if (confirmed?.user_id == null) return "unavailable";
-      this.createSession(confirmed.user_id, tokenHash, null, "app");
+      const session = this.createSession(confirmed.user_id, tokenHash, null, "app");
+      this.db.query(`INSERT INTO session_plex_access(session_id,machine_id,access_token)
+        SELECT ?,p.machine_id,p.access_token FROM device_login_plex_access p
+        JOIN sessions s ON s.id=p.browser_session_id WHERE p.grant_id=? AND s.user_id=?`).run(session.id, id, confirmed.user_id);
       this.db.query("DELETE FROM device_login_grants WHERE id=?").run(id);
       return "approved";
     });

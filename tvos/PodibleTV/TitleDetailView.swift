@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import SwiftUI
 
@@ -28,13 +29,46 @@ private extension TitleDetailView {
         @State private var confirmingMovie = false
         @State private var submitting = false
         @State private var requestError: String?
+        @State private var preparingPlayback: ViewerPlaybackTarget?
+        @State private var presentedPlayback: PlaybackPresentation?
+        @State private var lastPlaybackTarget: ViewerPlaybackTarget?
+        @State private var playbackError: String?
+        @State private var viewerEpisodes: ViewerShowEpisodes?
+        @State private var episodeError: String?
+        @State private var episodeRetry = 0
         @FocusState private var focusedOption: MediaRequestOption.ID?
+        @FocusState private var focusedPlayback: ViewerPlaybackTarget?
 
         @Environment(\.trailerConnection) private var trailerConnection
         private let base = Color(red: 0.045, green: 0.055, blue: 0.07)
 
         private var isMovie: Bool { item.kind == .movie }
         private var playbackURL: URL? { item.playable ? item.playbackURL : nil }
+        private var moviePlayback: ViewerPlaybackTarget? {
+            guard isMovie, item.requestState == .available, trailerConnection != nil,
+                  let id = item.tmdbID, id > 0 else { return nil }
+            return .movie(id)
+        }
+
+        private struct EpisodeLookup: Equatable {
+            let connection: Connection
+            let source: ViewerShowSource
+            let coverage: [String]
+            let retry: Int
+        }
+
+        private var episodeLookup: EpisodeLookup? {
+            guard !isMovie, item.requestState == .available, let connection = trailerConnection,
+                  let source = ViewerShowSource(item) else { return nil }
+            return EpisodeLookup(connection: connection, source: source, coverage: seasons.map(\.summary), retry: episodeRetry)
+        }
+
+        private struct PlaybackPresentation: Identifiable {
+            let grant: ViewerPlaybackGrant
+            let asset: AVURLAsset
+            let client: PodibleClient
+            var id: String { grant.id }
+        }
         private var canRequestMovie: Bool {
             isMovie && item.requestState == .requestable && !submittedMovie
         }
@@ -77,6 +111,9 @@ private extension TitleDetailView {
                         }
 
                         if !isMovie {
+                            if episodeLookup != nil {
+                                episodeSection.padding(.horizontal, 56)
+                            }
                             seasonSection
                                 .padding(.horizontal, 56)
                         }
@@ -96,6 +133,14 @@ private extension TitleDetailView {
                 Button("Request") { submit([]) }
             } message: {
                 Text("Send a request for \(item.title)?")
+            }
+            .task(id: episodeLookup) { await loadViewerEpisodes() }
+            .task(id: preparingPlayback) { await prepareViewerPlayback() }
+            .fullScreenCover(item: $presentedPlayback, onDismiss: { focusedPlayback = lastPlaybackTarget }) { playback in
+                ViewerPlayback(asset: playback.asset)
+                    .onDisappear {
+                        Task { await playback.client.closeViewerPlayback(playback.id) }
+                    }
             }
         }
 
@@ -137,6 +182,10 @@ private extension TitleDetailView {
                             .buttonStyle(.borderedProminent)
                         }
 
+                        if let moviePlayback {
+                            viewerPlayButton(moviePlayback, title: "Play", accessibilityID: "playback.movie")
+                        }
+
                         if canRequestMovie {
                             Button { confirmingMovie = true } label: {
                                 Label("Request Movie", systemImage: "plus")
@@ -147,19 +196,21 @@ private extension TitleDetailView {
 
                         if submittedMovie || item.requestState == .requested {
                             status("Requested", icon: "checkmark.circle")
-                        } else if playbackURL == nil && item.requestState == .available {
+                        } else if playbackURL == nil && moviePlayback == nil && item.requestState == .available {
                             status("In Library", icon: "checkmark.circle")
                         }
 
                         if let trailerConnection, let tmdbID = item.tmdbID, tmdbID > 0 {
                             TrailerButton(connection: trailerConnection, kind: item.kind, tmdbID: tmdbID,
-                                          preferFocus: playbackURL == nil && !canRequestMovie && !seasons.contains(where: \.requestable))
+                                          preferFocus: playbackURL == nil && moviePlayback == nil && episodeLookup == nil &&
+                                            !canRequestMovie && !seasons.contains(where: \.requestable))
                             .id(tmdbID)
                         }
                     }
                     .focusSection()
 
                     if isMovie {
+                        playbackFeedback
                         requestFeedback
                     }
                 }
@@ -169,6 +220,94 @@ private extension TitleDetailView {
             .padding(.top, 60)
             .padding(.bottom, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
+        private var episodeSection: some View {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                Text("Episodes")
+                    .font(.system(size: 44, weight: .bold))
+                    .accessibilityAddTraits(.isHeader)
+                if let episodes = viewerEpisodes {
+                    if episodes.episodes.isEmpty {
+                        Text("No published episodes with an exact Plex match are available to this viewer.")
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(episodes.episodes) { episode in
+                        if episode.playable {
+                            viewerPlayButton(.episode(entryId: episodes.entryId, episodeId: episode.id),
+                                             title: episode.label, accessibilityID: "playback.episode.\(episode.id)")
+                        } else {
+                            Text("\(episode.label) (open in Plex)").foregroundStyle(.secondary)
+                        }
+                    }
+                } else if let episodeError {
+                    Text(episodeError)
+                    Button("Reload Episodes") { episodeRetry += 1 }.buttonStyle(.bordered)
+                } else {
+                    ProgressView("Checking Plex episodes")
+                }
+                playbackFeedback
+            }
+            .focusSection()
+        }
+
+        private func viewerPlayButton(_ target: ViewerPlaybackTarget, title: String, accessibilityID: String) -> some View {
+            Button {
+                playbackError = nil
+                preparingPlayback = target
+            } label: {
+                Label(preparingPlayback == target ? "Preparing playback..." : title, systemImage: "play.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .focused($focusedPlayback, equals: target)
+            .disabled(preparingPlayback != nil)
+            .accessibilityIdentifier(accessibilityID)
+        }
+
+        @ViewBuilder private var playbackFeedback: some View {
+            if let playbackError {
+                status(playbackError, icon: "exclamationmark.circle")
+            }
+        }
+
+        private func loadViewerEpisodes() async {
+            episodeError = nil
+            viewerEpisodes = nil
+            guard let lookup = episodeLookup else { return }
+            let client = PodibleClient(baseURL: lookup.connection.url, token: lookup.connection.token)
+            do {
+                let episodes = try await client.viewerEpisodes(lookup.source)
+                guard !Task.isCancelled, episodeLookup == lookup else { return }
+                viewerEpisodes = episodes
+            } catch {
+                guard !Task.isCancelled, episodeLookup == lookup else { return }
+                episodeError = viewerPlaybackMessage(error)
+            }
+        }
+
+        private func prepareViewerPlayback() async {
+            guard let target = preparingPlayback, let connection = trailerConnection else { return }
+            defer { if !Task.isCancelled { preparingPlayback = nil } }
+            let client = PodibleClient(baseURL: connection.url, token: connection.token)
+            do {
+                let grant = try await client.prepareViewerPlayback(target)
+                guard !Task.isCancelled, trailerConnection == connection else {
+                    Task { await client.closeViewerPlayback(grant.id) }
+                    return
+                }
+                do {
+                    let asset = try grant.asset(for: connection)
+                    lastPlaybackTarget = target
+                    presentedPlayback = PlaybackPresentation(grant: grant, asset: asset, client: client)
+                } catch {
+                    Task { await client.closeViewerPlayback(grant.id) }
+                    throw error
+                }
+            } catch {
+                guard !Task.isCancelled, trailerConnection == connection else { return }
+                focusedPlayback = target
+                playbackError = viewerPlaybackMessage(error)
+            }
         }
 
         private func backdrop(width: CGFloat, height: CGFloat) -> some View {

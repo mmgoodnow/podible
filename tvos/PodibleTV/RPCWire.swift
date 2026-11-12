@@ -269,3 +269,49 @@ nonisolated struct TVEntry: Codable, Sendable {
     let progress: ProgressValue
     let requests: [RequestsValue]
 }
+
+nonisolated struct ViewerShowSource: Codable, Sendable {
+    enum Source: String, Codable, Sendable { case entry, tmdb }
+    let source: Source
+    let id: Int
+}
+
+nonisolated struct ViewerShowEpisodes: Codable, Sendable {
+    struct EpisodesValue: Codable, Sendable {
+        let id: Int
+        let title: String
+        let season: Int?
+        let episode: Int?
+        let playable: Bool
+    }
+    let entryId: Int
+    let episodes: [EpisodesValue]
+}
+
+nonisolated struct ViewerMovieTarget: Codable, Sendable {
+    enum Kind: String, Codable, Sendable { case movie }
+    let kind: Kind
+    let tmdbId: Int
+}
+
+nonisolated struct ViewerEpisodeTarget: Codable, Sendable {
+    enum Kind: String, Codable, Sendable { case episode }
+    let kind: Kind
+    let entryId: Int
+    let episodeId: Int
+}
+
+nonisolated struct ViewerPlaybackGrant: Codable, Sendable {
+    let id: String
+    let path: String
+    let credential: String
+    let expiresInSeconds: Int
+}
+
+nonisolated struct ViewerPlaybackClose: Codable, Sendable {
+    let id: String
+}
+
+nonisolated struct ViewerPlaybackCloseReceipt: Codable, Sendable {
+    let ok: Bool
+}
