@@ -269,7 +269,7 @@ async function verify() {
     retention: { minimumFreeBytes: 2.5 * 1024 ** 3 },
   });
   await openSettings("Indexers");
-  await page.getByText("Already managed by Prowlarr. You can remove this manual entry.", { exact: true }).waitFor();
+  await page.getByText("Matches a discovered Prowlarr indexer. Discovery takes precedence where both apply.", { exact: true }).waitFor();
   assert.equal(await page.getByLabel("Torznab API key", { exact: true }).inputValue(), "");
   assert.equal(await page.getByLabel("Torznab URL", { exact: true }).inputValue(), "", "A URL with embedded credentials was exposed");
   await page.getByRole("button", { name: "Remove torznab source 1", exact: true }).click();

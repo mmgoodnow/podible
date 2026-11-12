@@ -5,7 +5,8 @@
 - [x] Remove the movie download group setting and its filesystem override.
 - [x] Remove the automatic movie upgrades switch. Keep RSS-driven upgrades gated by the requested quality policy and verified publication.
 - [x] Group Plex sign-in and publishing, Seerr, TMDB, Radarr and Sonarr under Integrations. Move the read-only library preview out of Storage.
-- [ ] Combine Prowlarr and manual Torznab sources for search and feeds. Deduplicate endpoint aliases, keep discovery status separate, and do not let one integration outage stop the other.
+- [x] Combine Prowlarr and manual Torznab sources for search and feeds. Deduplicate endpoint aliases and keep discovery status separate.
+- [ ] Let direct sources keep working during discovery outages without treating the unavailable Prowlarr sources as searched or caught up.
 - [ ] Replace the Resend-specific notification transport with SMTP. Match Seerr's connection and TLS settings without displaying its credentials; preserve email for users, Pushover for the owner, and dry-run delivery in production.
 - [ ] Keep cross-seed coverage as a tie-breaker, not a quality or viability override. Remove its settings toggle once that behavior is enforced.
 - [ ] Prefer proper/repack releases by default without a toggle. A correction label must not waive eligibility or regress quality.
@@ -15,7 +16,7 @@
 
 - [ ] Expand Decisions with escalation to book, movie and TV selection and import. Use bounded evidence, never pass credentials, and measure fallback rate, latency and cost.
 - [ ] Make the ten-minute stall threshold internal. Check connectivity before recovery; preserve current transfers through outages and keep the only viable download eligible for import. Shorten the threshold only after those safeguards are proven.
-- [ ] Run the Khom Khlang season-pack pilot on real production inbox offers. Record reuse, download and import outcomes; verify exact Plex identities and paths if the pack is promoted.
+- [ ] Finish the Khom Khlang season-pack pilot on real production inbox offers. Match job 63190 dispatched upgrade job 63191; Transmission verified 2,362,864,234 of 3,927,339,626 bytes locally before downloading missing pieces. Verify exact Plex identities and paths if the pack is promoted.
 - [ ] Implement automatic retirement of provably superseded episode torrent registrations once the pack is verified and seed obligations are met. Keep any referenced payload bytes.
 - [ ] Capture a fresh production download-complete-to-Plex trace, verify the open UI updates on its own, and compare each step in Grafana.
 

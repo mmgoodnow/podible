@@ -46,11 +46,9 @@ export function movieIndexers(settings: AppSettings) {
   if (indexers?.key !== key)
     indexers = {
       key,
-      value: settings.prowlarr.url
-        ? new DiscoveredMovieIndexers({
-            sources: (kind, mode) => indexerSources(settings, kind, mode),
-          })
-        : new MovieIndexers(settings.torznab),
+      value: new DiscoveredMovieIndexers({
+        sources: (kind, mode) => indexerSources(settings, kind, mode),
+      }),
     };
   return indexers!.value;
 }

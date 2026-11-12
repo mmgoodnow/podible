@@ -17,7 +17,7 @@ function endpointIdentity(value: string): string | null {
   }
 }
 
-export async function indexerDiscoveryStatus(settings: AppSettings, sourcesFor = indexerSources) {
+export async function indexerDiscoveryStatus(settings: AppSettings, sourcesFor = prowlarrSources) {
   const mediaTypes = ["movie", "tv", "audio", "ebook"] as const;
   const modes = ["search", "rss"] as const;
   type Row = { id: number; name: string; search: IndexerMedia[]; feeds: IndexerMedia[]; retryAt: number | null };
@@ -51,8 +51,21 @@ export async function indexerDiscoveryStatus(settings: AppSettings, sourcesFor =
   }
 }
 
-export async function indexerSources(settings: AppSettings, media: IndexerMedia, mode: "search" | "rss" = "search"): Promise<DiscoveredIndexer[]> {
-  if (!settings.prowlarr?.url.trim()) return settings.torznab;
+export async function indexerSources(settings: AppSettings, media: IndexerMedia, mode: "search" | "rss" = "search",
+  discover = prowlarrSources): Promise<DiscoveredIndexer[]> {
+  const discovered = settings.prowlarr?.url.trim() ? await discover(settings, media, mode) : [];
+  const seen = new Set<string>();
+  return [...discovered, ...settings.torznab].filter(source => {
+    const endpoint = endpointIdentity(source.baseUrl);
+    // Keep malformed entries for the gateway to report as configuration errors.
+    if (endpoint === null) return true;
+    if (seen.has(endpoint)) return false;
+    seen.add(endpoint);
+    return true;
+  });
+}
+
+async function prowlarrSources(settings: AppSettings, media: IndexerMedia, mode: "search" | "rss"): Promise<DiscoveredIndexer[]> {
   try {
     const url = new URL(settings.prowlarr.url);
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash || !settings.prowlarr.apiKey.trim()) throw new Error();

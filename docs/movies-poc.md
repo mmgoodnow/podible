@@ -83,8 +83,8 @@ was added. Configure:
   also mount the canonical content with the same relative relationship, since
   presentation links are relative. Mount the whole managed tree, not just views.
 - Top-level `prowlarr.url` and `prowlarr.apiKey` discover categorized indexers
-  dynamically. Legacy `torznab` sources remain the fallback when that connection
-  is absent. Agents reuse `agents.apiKey`. New book and movie downloads use
+  dynamically. Direct `torznab` sources supplement discovery; the discovered
+  configuration wins for matching endpoints. Agents reuse `agents.apiKey`. New book and movie downloads use
   the private Docker-managed Transmission engine. Existing book releases retain
   their `rtorrent` connection; see [book download ownership](book-downloads.md).
 - `movies.qualityPolicy` controls eligibility and RSS-driven upgrades,

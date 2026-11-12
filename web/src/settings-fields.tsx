@@ -260,13 +260,13 @@ export function IndexerSettings({ form, discovery, loading }: { form: SettingsFo
         </table>}
     </SettingsGroup>}
     <SettingsGroup title="Torznab sources" note={form.saved.prowlarr.url
-      ? "Prowlarr is active. Manual sources are saved but not queried."
-      : "Configure direct sources to use without Prowlarr."}>
+      ? "Direct sources are used alongside Prowlarr. Podible queries a matching endpoint only once."
+      : "Configure direct sources or connect Prowlarr above."}>
       <Rows<TorznabSource> field={sources} label="Torznab sources" singular="Torznab source" empty="No direct Torznab sources configured."
         create={() => ({ name: "", baseUrl: "" })}>
         {(source, change, index) => <>
           {source.baseUrl === form.saved.torznab[index]?.baseUrl && discovery?.duplicates.find(row => row.index === index) &&
-            <p className="settings-note settings-duplicate-source">Already managed by Prowlarr. You can remove this manual entry.</p>}
+            <p className="settings-note settings-duplicate-source">Matches a discovered Prowlarr indexer. Discovery takes precedence where both apply.</p>}
           <TextField label="Source name" help="Name shown for this indexer in Podible."
             field={rowField(form, sources.path, index, "name", source.name, name => change({ ...source, name }))} />
           <EndpointField label="Torznab URL" storedUrls={protectedUrls}
