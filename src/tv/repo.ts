@@ -6,6 +6,8 @@ import { assertVersionContentAvailable } from "../media/content-loss";
 import { NotificationsRepo } from "../notifications/repo";
 import { TV_SEASON_PACK_PROMOTION_MAX_TARGETS, TV_SEASON_PACK_PROMOTION_PILOT } from "./season-promotion-pilot";
 import { TorrentRecordsRepo, type TorrentRecord } from "../media/torrent-records";
+import { tvSeasonPromotionSchema } from "./season-promotion";
+import { readTvNominationJson, tvPackRetirementNominationKey, tvPackRetirementNominationSchema, tvPackRetirementSource } from "./pack-retirement-nominations";
 import type { JobRow } from "../app-types";
 import type { DownloadLocation, TorrentRef, TorrentSnapshot } from "../media/torrent-client";
 import {
@@ -29,6 +31,7 @@ function json(value: unknown): string {
 function ids(values: number[]): number[] {
   return [...new Set(z.array(z.number().int().positive()).parse(values))].sort((a, b) => a - b);
 }
+type TvPublicationFile = Pick<TvContentFile, "id" | "sizeBytes" | "episodeIds">;
 export function nativeTvRequestKey(tmdbId: number, seasonNumbers: number[], specialEpisodeKeys: string[] = []): string {
   const seasons = json([...seasonNumbers].sort((a, b) => a - b));
   // Keep the native-seasons prefix used to schedule metadata refresh for native requests.
@@ -740,7 +743,86 @@ export class TvRepo {
     });
   }
 
-  promotePublication(targetId: number, versionId: number, expectedRevision: number, options?: { plexVerified: true }): void {
+  packRetirementNomination(targetId: number, packVersionId: number) {
+    const row = this.db.query<{ value_json: string }, [string]>("SELECT value_json FROM app_state WHERE key=?")
+      .get(tvPackRetirementNominationKey(targetId, packVersionId));
+    const parsed = tvPackRetirementNominationSchema.safeParse(readTvNominationJson(row?.value_json ?? null));
+    return parsed.success && parsed.data.targetId === targetId && parsed.data.pack.versionId === packVersionId ? parsed.data : null;
+  }
+
+  private publicationFiles(versionIds: number[]) {
+    const rows = this.db.query<{ version_id: number; id: string; size_bytes: number; episode_id: number | null }, [string]>(`
+      SELECT vf.version_id,f.id,f.size_bytes,e.episode_id FROM tv_version_files vf JOIN managed_content_files f ON f.id=vf.file_id
+      LEFT JOIN tv_version_file_episodes e ON e.version_id=vf.version_id AND e.file_id=vf.file_id
+      WHERE vf.version_id IN (SELECT value FROM json_each(?)) ORDER BY vf.version_id,vf.sequence,e.episode_id
+    `).all(json(versionIds));
+    const versions = new Map<number, TvPublicationFile[]>();
+    for (const row of rows) {
+      let files = versions.get(row.version_id);
+      if (!files) versions.set(row.version_id, files = []);
+      let file = files.at(-1);
+      if (file?.id !== row.id) files.push(file = { id: row.id, sizeBytes: row.size_bytes, episodeIds: [] });
+      if (row.episode_id !== null) file.episodeIds.push(row.episode_id);
+    }
+    return versions;
+  }
+
+  private recordPackRetirementNomination(targetId: number, version: TvVersion, expectedRevision: number,
+    previous: TvActiveEpisode[], previousFiles: ReadonlyMap<number, TvPublicationFile[]>) {
+    const acquisition = this.acquisition(version.acquisitionId);
+    if (acquisition?.reason !== "upgrade" || acquisition.request_id === null) return;
+    const decision = z.object({ seasonPromotion: tvSeasonPromotionSchema }).safeParse(readTvNominationJson(acquisition.decision_json));
+    if (!decision.success) return;
+    const { season, revision, fingerprint, episodeIds } = decision.data.seasonPromotion;
+    if (revision !== expectedRevision || json(ids(episodeIds)) !== json(version.episodeIds) || episodeIds.length !== version.episodeIds.length) return;
+    const roster = this.db.query<{ episode_id: number }, [number, number]>(`SELECT episode_id FROM tv_episode_numbering
+      WHERE entry_id=? AND season=? AND scheme='tvdb:aired' ORDER BY episode_id LIMIT 65`).all(version.entryId, season);
+    if (json(roster.map(row => row.episode_id)) !== json(version.episodeIds)) return;
+    const wanted = new Set(episodeIds);
+    const replaced = previous.filter(row => wanted.has(row.episode_id));
+    if (replaced.length !== wanted.size || new Set(replaced.map(row => row.version_id)).size < 2) return;
+    const singles = replaced.filter(row => {
+      const files = previousFiles.get(row.version_id);
+      return files?.length === 1 && files[0]!.episodeIds.length === 1 && files[0]!.episodeIds[0] === row.episode_id;
+    });
+    if (!singles.length) return;
+    // Read exact source bindings for the bounded season cohort, not all snatches for each acquisition.
+    const bindings = this.db.query<TorrentRecord & { version_id: number; acquisition_id: number; facts_json: string }, [string]>(`
+      SELECT t.*,v.id AS version_id,v.acquisition_id,v.facts_json FROM tv_versions v
+      JOIN tv_acquisition_downloads d ON d.acquisition_id=v.acquisition_id
+      JOIN media_torrents t ON t.id=d.torrent_id
+        AND t.client_id=CASE WHEN json_valid(v.facts_json) THEN json_extract(v.facts_json,'$.source.ref.clientId') END
+        AND t.native_id=CASE WHEN json_valid(v.facts_json) THEN json_extract(v.facts_json,'$.source.ref.nativeId') END
+      WHERE v.id IN (SELECT value FROM json_each(?))
+    `).all(json([version.id, ...singles.map(row => row.version_id)]));
+    const byVersion = new Map(bindings.map(binding => [binding.version_id, binding]));
+    const packBinding = byVersion.get(version.id);
+    const pack = packBinding && tvPackRetirementSource(version, packBinding);
+    if (!pack) return;
+
+    const candidates = singles.flatMap(row => {
+      const binding = byVersion.get(row.version_id);
+      if (!binding) return [];
+      const proof = tvPackRetirementSource({ id: row.version_id, acquisitionId: binding.acquisition_id,
+        facts: readTvNominationJson(binding.facts_json), files: previousFiles.get(row.version_id)! }, binding);
+      return proof && proof.clientId === pack.clientId && proof.torrentId !== pack.torrentId ? [proof] : [];
+    });
+    const counts = new Map<number, number>();
+    for (const candidate of candidates) counts.set(candidate.torrentId, (counts.get(candidate.torrentId) ?? 0) + 1);
+    const superseded = candidates.filter(candidate => counts.get(candidate.torrentId) === 1);
+    if (!superseded.length) return;
+
+    const receipt = tvPackRetirementNominationSchema.safeParse({
+      targetId, requestId: acquisition.request_id, publishedRevision: expectedRevision + 1, season,
+      promotionFingerprint: fingerprint, episodeIds: version.episodeIds,
+      pack, superseded,
+    });
+    if (!receipt.success) return;
+    this.db.query("INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO NOTHING")
+      .run(tvPackRetirementNominationKey(targetId, version.id), json(receipt.data), new Date().toISOString());
+  }
+
+  promotePublication(targetId: number, versionId: number, expectedRevision: number, options?: { plexVerified: true; verifiedSeasonPack?: true }): void {
     this.transaction(() => {
       assertVersionContentAvailable(this.db, "tv", versionId);
       const { target, version } = this.ownedVersion(targetId, versionId);
@@ -751,9 +833,9 @@ export class TvRepo {
       if (target.revision === expectedRevision + 1 && version.episodeIds.every((id) => active.some((a) => a.episode_id === id && a.version_id === versionId))) return;
       const next = new Map(active.map((ep) => [ep.episode_id, ep.version_id]));
       for (const ep of version.episodeIds) next.set(ep, versionId);
-      for (const oldId of new Set(active.map((ep) => ep.version_id))) {
-        if (oldId === versionId) continue;
-        for (const file of this.version(oldId)!.files) {
+      const previousFiles = this.publicationFiles([...new Set(active.map(ep => ep.version_id))].filter(id => id !== versionId));
+      for (const [oldId, files] of previousFiles) {
+        for (const file of files) {
           const remaining = file.episodeIds.filter((ep) => next.get(ep) === oldId);
           // A playable multi-episode file cannot truthfully represent only a subset.
           if (remaining.length > 0 && remaining.length !== file.episodeIds.length)
@@ -769,6 +851,7 @@ export class TvRepo {
         const previouslyActive = new Set(active.map(ep => ep.episode_id));
         new NotificationsRepo(this.db, this.beforeWrite).tvPublished(targetId, expectedRevision + 1,
           version.episodeIds.filter(id => !previouslyActive.has(id)));
+        if (options.verifiedSeasonPack) this.recordPackRetirementNomination(targetId, version, expectedRevision, active, previousFiles);
       }
     });
   }

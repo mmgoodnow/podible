@@ -86,8 +86,8 @@ export async function publishTvVersion(input: { repo: TvRepo; roots: TvRoots; li
       reconcileLibraryView({ ...roots, entries: tvViewEntries(repo, roots), assertActive: active }), input.onReconcile);
     const pending = () => repo.publications().find(item => item.target_id === targetId);
     const selected = () => repo.activeEpisodes(targetId).some(row => row.version_id === versionId);
-    const promote = (expectedRevision: number) => {
-      active(); repo.promotePublication(targetId, versionId, expectedRevision, { plexVerified: true });
+    const promote = (expectedRevision: number, verifiedSeasonPack?: true) => {
+      active(); repo.promotePublication(targetId, versionId, expectedRevision, { plexVerified: true, verifiedSeasonPack });
       active(); repo.clearPublication(targetId, versionId);
     };
     let fenceFailed = false;
@@ -133,7 +133,7 @@ export async function publishTvVersion(input: { repo: TvRepo; roots: TvRoots; li
           // Request/numbering changes need not bump the target revision. Read them under the same write lock.
           guarded(() => {
             guard.validate();
-            promote(guard.expectedRevision);
+            promote(guard.expectedRevision, true);
           });
         } else promote(expectedRevision);
       }
