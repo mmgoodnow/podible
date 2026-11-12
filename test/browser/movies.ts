@@ -1,4 +1,5 @@
 import { chromium } from "playwright";
+import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 const server = Bun.spawn(
@@ -170,7 +171,14 @@ try {
   await page.getByRole("status").getByText("4K requested. Its progress is shown above.", { exact: true }).waitFor();
   if (await page.evaluate("document.documentElement.scrollWidth > innerWidth"))
     throw new Error("Version request form overflows on mobile");
-  await context.clearCookies();
+  // An in-flight authenticated response can restore a cleared rolling cookie.
+  const revoked = await fetch(new URL("/rpc", url), {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: "podible_session=spa-browser-fixture" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "auth.logout", params: {} }),
+  });
+  assert.equal(revoked.status, 200);
+  assert.deepEqual((await revoked.json() as { result?: unknown }).result, { ok: true });
   await page.reload();
   await page.getByRole("link", { name: "Sign in", exact: true }).waitFor();
   if (errors.length) throw new Error(errors.join("\n"));
