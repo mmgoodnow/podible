@@ -22,3 +22,250 @@ nonisolated struct PairingExchangeInput: Codable, Sendable {
 nonisolated struct LogoutReceipt: Codable, Sendable {
     let ok: Bool
 }
+
+nonisolated struct LibraryQuery: Codable, Sendable {
+    let query: String?
+    let limit: Int?
+}
+
+nonisolated struct SearchQuery: Codable, Sendable {
+    let query: String
+}
+
+nonisolated struct MovieID: Codable, Sendable {
+    let tmdbId: Int
+}
+
+nonisolated struct EntryID: Codable, Sendable {
+    let entryId: Int
+}
+
+nonisolated struct TVRequestSelection: Codable, Sendable {
+    let tmdbId: Int
+    let seasonNumbers: [Int]?
+    let specialEpisodeKeys: [String]?
+}
+
+nonisolated struct Library: Codable, Sendable {
+    struct MoviesValue: Codable, Sendable {
+        let tmdbId: Int
+        let title: String
+        let year: Int?
+        let overview: String
+        let posterUrl: String?
+    }
+    struct TvValue: Codable, Sendable {
+        let entryId: Int
+        let key: String
+        let title: String
+        let year: Double?
+        let posterUrl: String?
+    }
+    let movies: [MoviesValue]
+    let tv: [TvValue]
+}
+
+nonisolated struct Discovery: Codable, Sendable {
+    struct MoviesValue: Codable, Sendable {
+        struct ItemsValue: Codable, Sendable {
+            let tmdbId: Int
+            let title: String
+            let year: Double?
+            let posterUrl: String?
+        }
+        let items: [ItemsValue]
+    }
+    struct TvValue: Codable, Sendable {
+        struct ItemsValue: Codable, Sendable {
+            let tmdbId: Int
+            let title: String
+            let year: Double?
+            let posterUrl: String?
+        }
+        let items: [ItemsValue]
+    }
+    let movies: MoviesValue
+    let tv: TvValue
+}
+
+nonisolated struct MovieStatus: Codable, Sendable {
+    let catalogConfigured: Bool
+    let acquisitionConfigured: Bool
+}
+
+nonisolated struct MovieSearch: Codable, Sendable {
+    struct ResultsValue: Codable, Sendable {
+        let tmdbId: Int
+        let title: String
+        let year: Int?
+        let overview: String
+        let posterUrl: String?
+    }
+    let results: [ResultsValue]
+}
+
+nonisolated struct MovieDetail: Codable, Sendable {
+    struct MovieValue: Codable, Sendable {
+        let tmdbId: Int
+        let title: String
+        let year: Int?
+        let overview: String
+        let posterUrl: String?
+    }
+    struct RequestsValue: Codable, Sendable {
+        struct MovieValue: Codable, Sendable {
+            let tmdbId: Int
+            let title: String
+            let year: Int?
+            let overview: String
+            let posterUrl: String?
+        }
+        struct DownloadValue: Codable, Sendable {
+            let bytesDone: Double?
+            let sizeBytes: Double?
+            let bytesPerSecond: Double?
+        }
+        let movie: MovieValue
+        let state: String
+        let available: Bool
+        let stage: String?
+        let download: DownloadValue?
+    }
+    let movie: MovieValue
+    let requests: [RequestsValue]
+    let availableInLibrary: Bool
+}
+
+nonisolated struct MovieRequests: Codable, Sendable {
+    struct RequestsValue: Codable, Sendable {
+        struct MovieValue: Codable, Sendable {
+            let tmdbId: Int
+            let title: String
+            let year: Int?
+            let overview: String
+            let posterUrl: String?
+        }
+        struct DownloadValue: Codable, Sendable {
+            let bytesDone: Double?
+            let sizeBytes: Double?
+            let bytesPerSecond: Double?
+        }
+        let movie: MovieValue
+        let state: String
+        let available: Bool
+        let stage: String?
+        let download: DownloadValue?
+    }
+    let requests: [RequestsValue]
+}
+
+nonisolated struct MovieRequestReceipt: Codable, Sendable {
+    struct RequestValue: Codable, Sendable {
+        let id: Double
+    }
+    let request: RequestValue
+}
+
+nonisolated struct TVRequestReceipt: Codable, Sendable {
+    struct RequestValue: Codable, Sendable {
+        let requestId: Int
+    }
+    let request: RequestValue
+}
+
+nonisolated struct TVRequests: Codable, Sendable {
+    struct RequestsValue: Codable, Sendable {
+        struct EntryValue: Codable, Sendable {
+            let key: String
+            let title: String
+            let year: Int?
+            let posterUrl: String?
+        }
+        let entryId: Int
+        let entry: EntryValue
+        let requestedEpisodes: Double
+        let availableEpisodes: Double
+        let intentionallyAbsent: Bool
+    }
+    let requests: [RequestsValue]
+}
+
+nonisolated struct TVSearch: Codable, Sendable {
+    struct ResultsValue: Codable, Sendable {
+        let tmdbId: Int
+        let title: String
+        let year: Int?
+        let overview: String
+        let posterUrl: String?
+    }
+    let configured: Bool
+    let unavailableReason: String?
+    let results: [ResultsValue]
+}
+
+nonisolated struct TVDetail: Codable, Sendable {
+    struct SeriesValue: Codable, Sendable {
+        struct SeasonsValue: Codable, Sendable {
+            let seasonNumber: Int
+            let title: String
+            let episodeCount: Int
+            let requestable: Bool
+            let unavailableReason: String?
+        }
+        let title: String
+        let year: Int?
+        let overview: String
+        let posterUrl: String?
+        let seasons: [SeasonsValue]
+    }
+    struct SeasonsValue: Codable, Sendable {
+        let number: Double
+        let available: Double
+        let requested: Bool
+    }
+    struct SpecialsValue: Codable, Sendable {
+        let episodeKey: String
+        let episodeNumber: Int
+        let title: String
+        let airDate: String?
+        let available: Bool
+        let requested: Bool
+    }
+    let showId: Int?
+    let series: SeriesValue?
+    let seasons: [SeasonsValue]
+    let specials: [SpecialsValue]
+}
+
+nonisolated struct TVEntry: Codable, Sendable {
+    struct EntryValue: Codable, Sendable {
+        let tmdbId: Int?
+        let title: String
+        let year: Int?
+        let posterUrl: String?
+    }
+    struct ProgressValue: Codable, Sendable {
+        struct DownloadValue: Codable, Sendable {
+            let bytesDone: Int
+            let sizeBytes: Int
+            let bytesPerSecond: Int?
+            let etaSeconds: Int?
+        }
+        struct SeasonsValue: Codable, Sendable {
+            let seasonNumber: Int
+            let available: Int
+            let total: Int
+            let stage: String
+        }
+        let download: DownloadValue?
+        let seasons: [SeasonsValue]
+    }
+    struct RequestsValue: Codable, Sendable {
+        let id: Int
+        let seasons: [Double]
+    }
+    let entry: EntryValue
+    let availableEpisodes: Int
+    let progress: ProgressValue
+    let requests: [RequestsValue]
+}

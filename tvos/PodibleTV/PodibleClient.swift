@@ -10,12 +10,12 @@ struct PodibleClient {
     }
 
     func browse() async throws -> [MediaTitle] {
-        async let library: Library = call("catalog.available", LibraryQuery(query: ""))
+        async let library: Library = call("catalog.available", LibraryQuery(query: nil, limit: nil))
         async let discovery: Discovery = call("catalog.discovery", Empty())
         let (published, trending) = try await (library, discovery)
         return unique(libraryTitles(published)
-            + trending.movies.items.map { title($0, kind: .movie, state: .requestable) }
-            + trending.tv.items.map { title($0, kind: .show, state: .requestable) })
+            + trending.movies.items.map { title($0.tmdbId, $0.title, $0.year.flatMap(Int.init(exactly:)), nil, $0.posterUrl, kind: .movie, state: .requestable) }
+            + trending.tv.items.map { title($0.tmdbId, $0.title, $0.year.flatMap(Int.init(exactly:)), nil, $0.posterUrl, kind: .show, state: .requestable) })
     }
 
     func search(_ query: String) async throws -> [MediaTitle] {
@@ -23,13 +23,13 @@ struct PodibleClient {
         guard !query.isEmpty else { return [] }
         guard query.utf16.count <= 200 else { throw ClientError.invalidQuery }
 
-        async let library: Library = call("catalog.available", LibraryQuery(query: query))
+        async let library: Library = call("catalog.available", LibraryQuery(query: query, limit: nil))
         async let movies = searchMovies(query)
         async let tv: TVSearch = call("tv.search", SearchQuery(query: query))
         let (published, films, shows) = try await (library, movies, tv)
         let results = unique(libraryTitles(published)
-            + films.results.map { title($0, kind: .movie, state: films.canRequest ? .requestable : .unavailable) }
-            + shows.results.map { title($0, kind: .show, state: .requestable) })
+            + films.results.map { title($0.tmdbId, $0.title, $0.year, $0.overview, $0.posterUrl, kind: .movie, state: films.canRequest ? .requestable : .unavailable) }
+            + shows.results.map { title($0.tmdbId, $0.title, $0.year, $0.overview, $0.posterUrl, kind: .show, state: .requestable) })
         if results.isEmpty && (films.failed || (shows.configured && shows.unavailableReason != nil)) {
             throw ClientError.catalogUnavailable
         }
@@ -48,7 +48,8 @@ struct PodibleClient {
                 : !active.isEmpty ? .requested
                 : capabilities.acquisitionConfigured ? .requestable : .unavailable
             let progress = active.first(where: \.available) ?? active.first
-            return (title(movie.movie, kind: .movie, state: state), [], progress?.progress)
+            let info = movie.movie
+            return (title(info.tmdbId, info.title, info.year, info.overview, info.posterUrl, kind: .movie, state: state), [], progress?.progress)
         case .show:
             return try await tvDetail(item)
         }
@@ -58,7 +59,7 @@ struct PodibleClient {
         switch item.kind {
         case .movie:
             guard let tmdbId = item.tmdbID, tmdbId > 0 else { throw ClientError.missingIdentity }
-            let _: Requested<MovieRequest> = try await call("movies.request", MovieID(tmdbId: tmdbId))
+            let _: MovieRequestReceipt = try await call("movies.request", MovieID(tmdbId: tmdbId))
         case .show:
             let seasons = selection.compactMap(\.seasonNumber).sorted()
             let specials = selection.compactMap(\.specialKey).sorted()
@@ -73,7 +74,7 @@ struct PodibleClient {
                 tmdbId = try await libraryEntry(for: item)?.entry.tmdbId
             }
             guard let tmdbId, tmdbId > 0 else { throw ClientError.missingIdentity }
-            let _: Requested<TVRequestReceipt> = try await call(
+            let _: TVRequestReceipt = try await call(
                 "tv.request", TVRequestSelection(tmdbId: tmdbId, seasonNumbers: seasons.isEmpty ? nil : seasons,
                                                  specialEpisodeKeys: specials.isEmpty ? nil : specials)
             )
@@ -81,13 +82,15 @@ struct PodibleClient {
     }
 
     func requests() async throws -> [MediaTitle] {
-        async let movies: RequestList<MovieRequest> = call("requests.list", Empty())
-        async let tv: RequestList<TVRequestCard> = call("tv.requestCards", Empty())
+        async let movies: MovieRequests = call("requests.list", Empty())
+        async let tv: TVRequests = call("tv.requestCards", Empty())
         let (films, shows) = try await (movies, tv)
         return unique(films.requests.filter { $0.state != "withdrawn" && !$0.available }.map {
-            title($0.movie, kind: .movie, state: .requested)
+            let item = $0.movie
+            return title(item.tmdbId, item.title, item.year, item.overview, item.posterUrl, kind: .movie, state: .requested)
         } + shows.requests.filter { $0.intentionallyAbsent || $0.availableEpisodes < $0.requestedEpisodes }.map {
-            libraryTitle($0.entry, entryID: $0.entryId, state: $0.intentionallyAbsent ? .unavailable : .requested)
+            libraryTitle($0.entry.key, $0.entry.title, $0.entry.year, $0.entry.posterUrl, entryID: $0.entryId,
+                         state: $0.intentionallyAbsent ? .unavailable : .requested)
         })
     }
 
@@ -109,7 +112,7 @@ struct PodibleClient {
         let _: LogoutReceipt = try await call("auth.logout", Empty())
     }
 
-    private func searchMovies(_ query: String) async throws -> (results: [CatalogTitle], canRequest: Bool, failed: Bool) {
+    private func searchMovies(_ query: String) async throws -> (results: [MovieSearch.ResultsValue], canRequest: Bool, failed: Bool) {
         let status: MovieStatus = try await call("movies.status", Empty())
         guard status.catalogConfigured else { return ([], false, false) }
         do {
@@ -138,15 +141,16 @@ struct PodibleClient {
         let coverage = remote?.seasons ?? []
         let specials = remote?.specials ?? []
         let seasons = remote?.series?.seasons.filter { $0.seasonNumber != 0 || specials.isEmpty }.map { season in
-            let current = coverage.first { $0.number == season.seasonNumber }
-            let ready = season.episodeCount > 0 && current?.available == season.episodeCount
+            let current = coverage.first { $0.number == Double(season.seasonNumber) }
+            let available = current.flatMap { Int(exactly: $0.available) } ?? 0
+            let ready = season.episodeCount > 0 && available == season.episodeCount
             let requested = current?.requested == true
             let canRequest = season.seasonNumber > 0 && season.requestable && season.episodeCount > 0 && !ready && !requested
             let summary: String
             if ready { summary = "Ready in Plex" }
             else if requested { summary = "Already requested" }
             else if !season.requestable { summary = season.unavailableReason ?? "Season unavailable" }
-            else { summary = "\(current?.available ?? 0) of \(season.episodeCount) episodes ready" }
+            else { summary = "\(available) of \(season.episodeCount) episodes ready" }
             return MediaRequestOption(id: .season(season.seasonNumber), name: season.title, summary: summary, requestable: canRequest)
         } ?? local?.progress.seasons.map { season in
             MediaRequestOption(id: .season(season.seasonNumber), name: season.seasonNumber == 0 ? "Specials" : "Season \(season.seasonNumber)",
@@ -186,22 +190,22 @@ struct PodibleClient {
     }
 
     private func libraryTitles(_ library: Library) -> [MediaTitle] {
-        library.movies.map { title($0, kind: .movie, state: .available) }
-            + library.tv.map { libraryTitle($0.card, entryID: $0.entryId, state: .available) }
+        library.movies.map { title($0.tmdbId, $0.title, $0.year, $0.overview, $0.posterUrl, kind: .movie, state: .available) }
+            + library.tv.map { libraryTitle($0.key, $0.title, $0.year.flatMap(Int.init(exactly:)), $0.posterUrl, entryID: $0.entryId, state: .available) }
     }
 
-    private func title(_ item: CatalogTitle, kind: MediaKind, state: RequestState) -> MediaTitle {
+    private func title(_ tmdbId: Int, _ title: String, _ year: Int?, _ overview: String?, _ poster: String?, kind: MediaKind, state: RequestState) -> MediaTitle {
         let movie = kind == .movie
-        return MediaTitle(id: "\(movie ? "movie" : "show"):tmdb:\(item.tmdbId)", title: item.title,
-                          subtitle: item.year.map(String.init) ?? "", synopsis: item.overview ?? "", kind: kind,
-                          artwork: artwork(item.posterUrl), backdrop: nil, accent: movie ? "#D69A5B" : "#65B4AC",
-                          playable: false, playbackURL: nil, requestState: state, tmdbID: item.tmdbId)
+        return MediaTitle(id: "\(movie ? "movie" : "show"):tmdb:\(tmdbId)", title: title,
+                          subtitle: year.map(String.init) ?? "", synopsis: overview ?? "", kind: kind,
+                          artwork: artwork(poster), backdrop: nil, accent: movie ? "#D69A5B" : "#65B4AC",
+                          playable: false, playbackURL: nil, requestState: state, tmdbID: tmdbId)
     }
 
-    private func libraryTitle(_ item: TVCard, entryID: Int, state: RequestState) -> MediaTitle {
-        MediaTitle(id: "show:entry:\(entryID)", title: item.title, subtitle: item.year.map(String.init) ?? "",
-                   synopsis: "", kind: .show, artwork: artwork(item.posterUrl), backdrop: nil, accent: "#65B4AC",
-                   playable: false, playbackURL: nil, requestState: state, tmdbID: item.tmdbId)
+    private func libraryTitle(_ key: String, _ title: String, _ year: Int?, _ poster: String?, entryID: Int, state: RequestState) -> MediaTitle {
+        MediaTitle(id: "show:entry:\(entryID)", title: title, subtitle: year.map(String.init) ?? "",
+                   synopsis: "", kind: .show, artwork: artwork(poster), backdrop: nil, accent: "#65B4AC",
+                   playable: false, playbackURL: nil, requestState: state, tmdbID: key.hasPrefix("tmdb:") ? Int(key.dropFirst(5)) : nil)
     }
 
     private func unique(_ items: [MediaTitle]) -> [MediaTitle] {
@@ -323,144 +327,27 @@ nonisolated private struct RPCResponse<Value: Decodable>: Decodable {
 }
 
 nonisolated private struct Empty: Encodable {}
-nonisolated private struct SearchQuery: Encodable { let query: String }
-nonisolated private struct LibraryQuery: Encodable { let query: String; let limit = 50 }
-nonisolated private struct MovieID: Encodable { let tmdbId: Int }
-nonisolated private struct EntryID: Encodable { let entryId: Int }
-nonisolated private struct TVRequestSelection: Encodable {
-    let tmdbId: Int
-    let seasonNumbers: [Int]?
-    let specialEpisodeKeys: [String]?
-}
-
-nonisolated private struct CatalogTitle: Decodable, Sendable {
-    let tmdbId: Int
-    let title: String
-    let year: Int?
-    let overview: String?
-    let posterUrl: String?
-}
-
-nonisolated private struct TVCard: Decodable, Sendable {
-    let key: String
-    let title: String
-    let year: Int?
-    let posterUrl: String?
-    let entryId: Int?
-
-    var tmdbId: Int? { key.hasPrefix("tmdb:") ? Int(key.dropFirst(5)) : nil }
-}
-
-nonisolated private struct Library: Decodable, Sendable {
-    struct Show: Decodable, Sendable {
-        let entryId: Int
-        let card: TVCard
-
-        init(from decoder: any Decoder) throws {
-            card = try TVCard(from: decoder)
-            guard let id = card.entryId else {
-                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Missing TV entry ID"))
-            }
-            entryId = id
-        }
-    }
-    let movies: [CatalogTitle]
-    let tv: [Show]
-}
-
-nonisolated private struct Discovery: Decodable, Sendable {
-    struct Section: Decodable, Sendable { let items: [CatalogTitle] }
-    let movies: Section
-    let tv: Section
-}
-
-nonisolated private struct MovieStatus: Decodable, Sendable { let catalogConfigured: Bool; let acquisitionConfigured: Bool }
-nonisolated private struct MovieSearch: Decodable, Sendable { let results: [CatalogTitle] }
-nonisolated private struct MovieDetail: Decodable, Sendable {
-    let movie: CatalogTitle
-    let requests: [MovieRequest]
-    let availableInLibrary: Bool
-}
-nonisolated private struct MovieRequest: Decodable, Sendable {
-    let movie: CatalogTitle
-    let state: String
-    let available: Bool
-    let stage: String?
-    let download: TitleAcquisitionProgress.Download?
-
+private extension MovieDetail.RequestsValue {
     var progress: TitleAcquisitionProgress {
         switch (state, stage) {
         case _ where available: .init(step: .plex, status: "Ready in Plex")
         case ("waiting-for-release", _): .init(step: .search, status: "Watching for a release")
         case ("blocked", _): .init(step: .requested, status: "Acquisition stopped")
-        case (_, "downloading"): .init(step: .download, status: "Downloading", download: download)
+        case (_, "downloading"): .init(step: .download, status: "Downloading", download: download.map {
+            .init(bytesDone: $0.bytesDone.flatMap(Int64.init(exactly:)), sizeBytes: $0.sizeBytes.flatMap(Int64.init(exactly:)),
+                  bytesPerSecond: $0.bytesPerSecond.flatMap(Int64.init(exactly:)), etaSeconds: nil)
+        })
         case (_, "verifying"): .init(step: .verify, status: "Checking the download")
         case (_, "publishing"): .init(step: .verify, status: "Adding to Plex")
-        case (_, "searching"), (_, "selecting"), (_, "replacing"):
-            .init(step: .search, status: "Finding a release")
+        case (_, "searching"), (_, "selecting"), (_, "replacing"): .init(step: .search, status: "Finding a release")
         default: .requested
         }
     }
 }
-nonisolated private struct RequestList<Entry: Decodable & Sendable>: Decodable, Sendable { let requests: [Entry] }
-nonisolated private struct Requested<Entry: Decodable>: Decodable { let request: Entry }
-nonisolated private struct TVRequestReceipt: Decodable { let requestId: Int }
-nonisolated private struct TVRequestCard: Decodable, Sendable {
-    let entryId: Int
-    let entry: TVCard
-    let requestedEpisodes: Int
-    let availableEpisodes: Int
-    let intentionallyAbsent: Bool
-}
-nonisolated private struct TVSearch: Decodable, Sendable {
-    let configured: Bool
-    let unavailableReason: String?
-    let results: [CatalogTitle]
-}
-nonisolated private struct TVDetail: Decodable {
-    struct Series: Decodable {
-        struct Season: Decodable {
-            let seasonNumber: Int
-            let title: String
-            let episodeCount: Int
-            let requestable: Bool
-            let unavailableReason: String?
-        }
-        let title: String
-        let year: Int?
-        let overview: String
-        let posterUrl: String?
-        let seasons: [Season]
-    }
-    struct Coverage: Decodable { let number: Int; let available: Int; let requested: Bool }
-    struct Special: Decodable {
-        let episodeKey: String
-        let episodeNumber: Int
-        let title: String
-        let airDate: String?
-        let available: Bool
-        let requested: Bool
-    }
-    let showId: Int?
-    let series: Series?
-    let seasons: [Coverage]
-    let specials: [Special]?
-}
-nonisolated private struct TVEntry: Decodable {
-    struct Metadata: Decodable { let tmdbId: Int?; let title: String; let year: Int?; let posterUrl: String? }
-    struct Progress: Decodable {
-        struct Season: Decodable { let seasonNumber: Int; let available: Int; let total: Int; let stage: String }
-        let download: TitleAcquisitionProgress.Download?
-        let seasons: [Season]
-    }
-    struct OwnRequest: Decodable { let id: Int; let seasons: [Int] }
-    let entry: Metadata
-    let availableEpisodes: Int
-    let progress: Progress
-    let requests: [OwnRequest]
 
+private extension TVEntry {
     var acquisitionProgress: TitleAcquisitionProgress? {
-        let numbers = Set(requests.flatMap(\.seasons))
+        let numbers = Set(requests.flatMap(\.seasons).compactMap(Int.init(exactly:)))
         let seasons = progress.seasons.filter { numbers.contains($0.seasonNumber) }
         guard !seasons.isEmpty else { return nil }
         let available = seasons.reduce(0) { $0 + $1.available }
@@ -483,6 +370,9 @@ nonisolated private struct TVEntry: Decodable {
         }
         if total > 0 && available == total { return .init(step: .plex, status: "Ready in Plex", episodeCount: count) }
         let step: TitleAcquisitionProgress.Step = stage == "upcoming" ? .search : .from(stage: stage)
-        return .init(step: step, status: status, episodeCount: count, download: stage == "downloading" ? progress.download : nil)
+        return .init(step: step, status: status, episodeCount: count, download: stage == "downloading" ? progress.download.map {
+            .init(bytesDone: Int64($0.bytesDone), sizeBytes: Int64($0.sizeBytes),
+                  bytesPerSecond: $0.bytesPerSecond.map(Int64.init), etaSeconds: $0.etaSeconds)
+        } : nil)
     }
 }

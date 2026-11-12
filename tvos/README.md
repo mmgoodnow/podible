@@ -28,7 +28,7 @@ xcodebuild -project tvos/PodibleTV.xcodeproj -scheme PodibleTV \
   -destination 'generic/platform=tvOS Simulator' CODE_SIGNING_ALLOWED=NO build
 ```
 
-Run `bun run generate:tvos-wire` after changing the pairing RPC schemas. CI runs
+Run `bun run generate:tvos-wire` after changing the pairing, catalog, or request RPC schemas. CI runs
 `bun run check:tvos-wire` to catch stale Swift types.
 
 ## Simulator focus and screenshots
