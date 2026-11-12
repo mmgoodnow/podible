@@ -40,6 +40,7 @@ export const movieQualityPolicySchema = z
     preferredCodecs: z.array(z.string().trim().min(1)).default([]),
     allowHdr: z.boolean(),
     minimumPreferenceGain: z.number().int().positive(),
+    // Preserve serialized policy identity for existing movie and TV targets.
     preferProper: z.boolean().default(true),
   })
   .strict();
@@ -153,7 +154,7 @@ export function evaluateMovieQuality(
     },
     {
       rule: "proper/repack",
-      contribution: policy.preferProper && facts.proper === true ? 10 : 0,
+      contribution: facts.proper === true ? 10 : 0,
     },
   ];
   return {

@@ -19,10 +19,8 @@ preferred. Within that group, known lower download-volume factors/freeleech can
 break a source tie. This is not a quality improvement and cannot replace an
 equivalent existing playback version.
 
-`movies.crossSeedPreference` is `"tie-break"` by default or `"off"` to disable
-this ranking for both movie and TV selectors. It is a selection setting, not part
-of quality-policy/target identity. No particular group (including NTb) gets a bonus.
-The selector still records known matching copies when ranking is off.
+This tie-break is built into the movie and TV selectors. It is not part of
+quality-policy/target identity. No particular group (including NTb) gets a bonus.
 
 The chosen source and other matching offers are captured server-side before the
 download starts. After canonical import, **before waiting for Plex verification**,

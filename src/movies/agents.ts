@@ -122,8 +122,7 @@ Weigh download size against quality and availability; a large release is not aut
 ${releaseSelectionInstructions}`,
         {
           movie: input.movie,
-          policy: input.policy,
-          selectionPreference: settings.movies.crossSeedPreference ?? "tie-break",
+          policy: { ...input.policy, preferProper: true },
           current: input.current,
           offers: input.offers.map((offer, index) => ({
             index,
@@ -133,7 +132,7 @@ ${releaseSelectionInstructions}`,
             seeders: offer.seeders,
           })),
         },
-        [inspect, createCrossSeedabilityTool(() => input.offers, settings.movies.crossSeedPreference ?? "tie-break")],
+        [inspect, createCrossSeedabilityTool(() => input.offers)],
       );
       if (result.index !== null && !input.offers[result.index])
         throw new Error("Movie agent selected an unknown release index");
@@ -184,7 +183,7 @@ Reject truncated or unrelated contents. For multipart-only contents requiring un
 Identity must be supported by the release and file evidence. Do not claim certainty from probe codec/resolution alone.`,
         {
           movie: input.movie,
-          policy: input.policy,
+          policy: { ...input.policy, preferProper: true },
           release: { title: input.offer.title, provider: input.offer.provider },
           selection: input.selection,
           files: input.files,

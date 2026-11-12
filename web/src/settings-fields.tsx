@@ -293,8 +293,6 @@ export function AcquisitionSettings({ form }: { form: SettingsForm }) {
           help="Skip movie releases larger than this. Leave blank for no cap." />
         <NumberField label="Maximum TV release size (GiB)" field={tv.field("maximumReleaseBytes")} scale={GiB} min={1} nullable
           help="Skip TV releases larger than this, including packs. Leave blank for no cap." />
-        <SelectField label="Movie cross-seed preference" field={movies.field("crossSeedPreference")} options={[["off", "Off"], ["tie-break", "Prefer reuse as a tie-breaker"]]}
-          help="Use cross-seed potential to break ties between otherwise comparable movie releases." />
       </Grid>
     </SettingsGroup>
     <SettingsGroup title="Download recovery">
@@ -331,7 +329,6 @@ export function QualitySettings({ form }: { form: SettingsForm }) {
         <ListField label="Allowed codecs" field={quality.field("allowedCodecs")} help="Eligible video codecs, one per line (such as h264, hevc, or av1)." />
         <ListField label="Preferred codecs" field={quality.field("preferredCodecs")} help="Rank eligible codecs, one per line, most preferred first." />
         <CheckField label="Allow HDR" field={quality.field("allowHdr")} help="Include high dynamic range releases when choosing a copy." />
-        <CheckField label="Prefer proper and repack releases" field={quality.field("preferProper")} help="Favor corrected releases over otherwise comparable copies." />
       </Grid>
     </SettingsGroup>
     <SettingsGroup title="Quality tiers" note="List allowed source and resolution pairs from lowest to highest quality.">

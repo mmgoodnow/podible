@@ -1,7 +1,6 @@
 import { tool } from "@openai/agents";
 import { z } from "zod";
 import type { MovieOffer } from "../movies/offers";
-import type { MovieSettings } from "../movies/settings";
 
 const indexesSchema = z.array(z.number().int().nonnegative().safe()).max(2000);
 export const matchingIndexesSchema = indexesSchema.default([]);
@@ -9,8 +8,8 @@ export const matchingIndexesSchema = indexesSchema.default([]);
 export const releaseSelectionInstructions = `Group likely matching copies semantically: the same work, encode, cut, release group, language tracks and (for TV) episode coverage. Similar titles, sizes or hashes alone do not establish a group; do not merge different encodes, editions, remakes, seasons or partial/complete packs.
 Call assessCrossSeedability with all known indexes in each likely group (including the candidate to download) before using tracker coverage to choose. It counts distinct normalized tracker names, not results. Sizes and hashes are diagnostics, not proof that files can be reused; private torrents may have different hashes for the same media.
 Tracker listings sharing an infoHash are not proof of additional torrent registrations or new seeding coverage; runtime may skip an already-owned identity. Do not promise coverage from the estimate.
-When selectionPreference is "tie-break", prefer greater estimated tracker coverage only among viable choices with equal quality and requested coverage. Hard constraints, quality tiers/preferences, identity and episode coverage always win. Within the chosen semantic group, prefer a lower known downloadVolumeFactor (0 means freeleech) when source viability is otherwise equal. Unknown factors are unknown, not freeleech. Never pick a dead source merely for freeleech.
-When selectionPreference is "off", do not rank by tracker coverage or download volume factors, but still record any matching group you identify.
+Prefer greater estimated tracker coverage only among viable choices with equal quality and requested coverage. Hard constraints, quality tiers/preferences, identity and episode coverage always win. Within the chosen semantic group, prefer a lower known downloadVolumeFactor (0 means freeleech) when source viability is otherwise equal. Unknown factors are unknown, not freeleech. Never pick a dead source merely for freeleech.
+Prefer proper/repack releases over otherwise comparable releases, but never override eligibility or a better quality tier for a correction label.
 Return matchingIndexes for ALL other known copies in the chosen semantic group, including genuinely distinct copies on the same tracker. Do not return merely similar or unrelated results. Return [] if no group is known or index:null. Do not perform extra searches solely to increase tracker counts. Estimates are not verified cross-seeds and must not justify an equal-quality upgrade.`;
 
 function knownIndexes(offers: readonly MovieOffer[], indexes: readonly number[]) {
@@ -67,14 +66,12 @@ export function releaseDownloadVolumeFactor(offer: MovieOffer): number | null {
   return factors.length && factors.every(factor => factor === factors[0]) ? factors[0]! : null;
 }
 
-export function assessReleaseCrossSeedability(offers: readonly MovieOffer[], indexes: readonly number[],
-  preference: MovieSettings["crossSeedPreference"]) {
+export function assessReleaseCrossSeedability(offers: readonly MovieOffer[], indexes: readonly number[]) {
   const group = knownIndexes(offers, indexes).map(index => ({ index, offer: offers[index]! }));
   const providers = group.map(({ offer }) => normalizedProviderName(offer.provider)).filter(Boolean);
   const sizes = group.flatMap(({ offer }) => Number.isSafeInteger(offer.sizeBytes) && offer.sizeBytes! >= 0 ? [offer.sizeBytes!] : []);
   const hashes = group.flatMap(({ offer }) => offer.infoHash && /^[a-f0-9]{40}$|^[a-f0-9]{64}$/i.test(offer.infoHash) ? [offer.infoHash.toLowerCase()] : []);
   return {
-    preference,
     distinctTrackerCount: new Set(providers).size,
     unknownProviderCount: group.length - providers.length,
     offers: group.map(({ index, offer }) => ({ index, provider: offer.provider, sizeBytes: offer.sizeBytes,
@@ -86,14 +83,13 @@ export function assessReleaseCrossSeedability(offers: readonly MovieOffer[], ind
   };
 }
 
-export function createCrossSeedabilityTool(offers: () => readonly MovieOffer[],
-  preference: MovieSettings["crossSeedPreference"], maximumIndexes = 2000) {
+export function createCrossSeedabilityTool(offers: () => readonly MovieOffer[], maximumIndexes = 2000) {
   return tool({
     name: "assessCrossSeedability",
     description: "Assess a proposed semantic same-release group using distinct tracker names and safe size/hash/download-volume diagnostics. No network requests or downloads.",
     parameters: z.object({ indexes: indexesSchema.min(1).max(maximumIndexes) }),
     async execute({ indexes }) {
-      try { return assessReleaseCrossSeedability(offers(), indexes, preference); }
+      try { return assessReleaseCrossSeedability(offers(), indexes); }
       catch { return { error: "Supply unique known release indexes for one semantic group." }; }
     },
   });

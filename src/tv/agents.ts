@@ -131,9 +131,9 @@ Prefer a viable complete release within policy. Weigh download size against cove
 ${releaseSelectionInstructions}
 For this task, matchingIndexes should include only eligible copies; omit ones marked previously-attempted or release-size-limit. Optional copies never justify choosing a blocked primary.`,
         { entry: tvWorkEvidence(input.entry), episodeCount: input.episodes.length, episodes: input.episodes.slice(0,4).map(tvEpisodeEvidence),
-          policy: input.policy, limits: { maximumReleaseBytes: input.maximumReleaseBytes ?? null, distinctMetainfoRequests: 8, additionalSearches: 3 },
-          selectionPreference: settings.movies.crossSeedPreference ?? "tie-break", candidates: listing(0,10) },
-        [list, episodeTool(input.episodes), inspect, research, createCrossSeedabilityTool(() => offers, settings.movies.crossSeedPreference ?? "tie-break",30)],
+          policy: { ...input.policy, preferProper: true }, limits: { maximumReleaseBytes: input.maximumReleaseBytes ?? null, distinctMetainfoRequests: 8, additionalSearches: 3 },
+          candidates: listing(0,10) },
+        [list, episodeTool(input.episodes), inspect, research, createCrossSeedabilityTool(() => offers, 30)],
         output => output.index !== null && (!offers[output.index] || !allowed(offers[output.index]!))
           ? `TV selector returned an unknown or policy-blocked release at index ${output.index}` : null);
       // An optional registration must not poison a valid primary acquisition or bypass its policy.
@@ -198,7 +198,7 @@ For this task, matchingIndexes should include only eligible copies; omit ones ma
 Do not assign season-pack names wholesale: identify each file's actual episodes. Consult provider aired/absolute and anime-local numbering, aliases, episode titles and runtimes. Ignore samples, extras, opening clips and unrequested episodes.
 If a combined file also contains an unrequested episode, reject the file rather than mislabeling it as only its requested subset.
 The initial input is only an overview. Page through listFiles and getRequestedEpisodes as needed. Use getFileProbes/getFileProbe for duration, languages and subtitle/video streams; assessCandidates/assessCandidate check selected files against policy. Prefer the bulk tools for packs so one-file-per-turn research does not exhaust your budget. Actual stream facts override release claims. Return files:[] if nothing can be established. Do not map a truncated episode or an unsupported collection of partial files as a complete episode.`,
-        { entry: tvWorkEvidence(input.entry), episodeCount: input.episodes.length, episodes: input.episodes.slice(0,4).map(tvEpisodeEvidence), policy: input.policy,
+        { entry: tvWorkEvidence(input.entry), episodeCount: input.episodes.length, episodes: input.episodes.slice(0,4).map(tvEpisodeEvidence), policy: { ...input.policy, preferProper: true },
           release: { title: input.offer.title, provider: input.offer.provider }, files: evidencePage(input.files,0,10,tvFileEvidence) },
         [fileList, probe, probes, episodeTool(input.episodes), assess, assessments]);
       return validateTvImportPlan(plan, input.files, input.episodes);

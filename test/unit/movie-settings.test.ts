@@ -10,32 +10,13 @@ import { defaultMovieQualityPolicy } from "../../src/movies/quality";
 test("stored movie settings drop retired controls without resetting the quality policy", () => {
   const settings = defaultSettings();
   const qualityPolicy = { ...settings.movies.qualityPolicy, minimumPreferenceGain: 30 };
-  const movies = { ...settings.movies, qualityPolicy, automaticUpgrades: false, downloadGroupId: 1000 };
+  const movies = { ...settings.movies, qualityPolicy, automaticUpgrades: false, downloadGroupId: 1000, crossSeedPreference: "off" };
   const parsed = parseSettings(JSON.stringify({ ...settings, movies }));
   expect(parsed.movies).not.toHaveProperty("automaticUpgrades");
   expect(parsed.movies).not.toHaveProperty("downloadGroupId");
+  expect(parsed.movies).not.toHaveProperty("crossSeedPreference");
   expect(parsed.movies.qualityPolicy).toEqual(qualityPolicy);
   expect(() => parseSettings(JSON.stringify({ ...settings, movies: { ...movies, typo: true } }))).toThrow();
-});
-
-test("shared movie/TV selection preference defaults and roundtrips without changing quality identity", () => {
-  expect(movieSettingsSchema.parse({}).crossSeedPreference).toBe("tie-break");
-  expect(() => movieSettingsSchema.parse({ crossSeedPreference: "weighted" })).toThrow();
-  const db = new Database(":memory:");
-  runMigrations(db);
-  try {
-    const repo = new BooksRepo(db);
-    const settings = repo.ensureSettings();
-    const qualityIdentity = JSON.stringify(settings.movies.qualityPolicy);
-    expect(settings.movies.qualityPolicy).not.toHaveProperty("crossSeedPreference");
-    for (const preference of ["off", "tie-break"] as const) {
-      settings.movies.crossSeedPreference = preference;
-      repo.updateSettings(settings);
-      const saved = repo.getSettings();
-      expect(saved.movies.crossSeedPreference).toBe(preference);
-      expect(JSON.stringify(saved.movies.qualityPolicy)).toBe(qualityIdentity);
-    }
-  } finally { db.close(); }
 });
 
 test("movies have no feature flag; migration removes old flags without changing other settings", () => {

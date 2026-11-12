@@ -166,21 +166,6 @@ test("TV expanded research candidates participate in the shared evidence tool an
   expect(JSON.stringify(fake.calls[0]!.systemInstructions)).toContain("episode coverage always win");
 });
 
-test("TV off records eligible semantic copies independently of source preference", async () => {
-  const other = { ...offer, key: "other", provider: "Other" };
-  const fake = provider([
-    [{ type: "function_call", name: "assessCrossSeedability", callId: "coverage", arguments: '{"indexes":[0,1]}', status: "completed" }],
-    { index: 0, matchingIndexes: [1], reason: "Keep source selection independent of tracker counts." },
-  ]);
-  const settings = defaultSettings();
-  settings.movies.crossSeedPreference = "off";
-  const selected = await createTvDecider(settings, fake.model).select({ entry, episodes: [episode],
-    policy: defaultMovieQualityPolicy, offers: [offer, other] });
-  expect(selected.offer).toBe(offer);
-  expect(selected.matchingOffers).toEqual([other]);
-  expect(JSON.stringify(fake.calls[1]?.input)).toContain("off");
-});
-
 test("ineligible optional copies cannot poison a valid TV primary selection", async () => {
   const copies = [{ ...offer, key: "excluded" }, { ...offer, key: "oversized", sizeBytes: 5000 },
     { ...offer, key: "eligible", provider: "Other" }];

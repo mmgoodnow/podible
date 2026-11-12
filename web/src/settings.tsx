@@ -17,7 +17,7 @@ const sections = {
   ai: { title: "AI", description: "OpenAI connection for books, movies and TV.", roots: ["agents"] },
   indexers: { title: "Indexers", description: "Manage search providers and release sources.", roots: ["prowlarr", "torznab"] },
   acquisition: { title: "Acquisition", description: "Control what gets downloaded, upgraded, and retried.", roots: ["recovery",
-    "movies.maximumReleaseBytes", "movies.crossSeedPreference", "tv.maximumReleaseBytes"] },
+    "movies.maximumReleaseBytes", "tv.maximumReleaseBytes"] },
   quality: { title: "Release quality", description: "Choose which movie and TV releases are eligible and rank them for upgrades.", roots: ["movies.qualityPolicy"] },
   integrations: { title: "Integrations", description: "Connect Plex, Seerr, TMDB, Radarr and Sonarr.", roots: ["auth", "movies", "tv"] },
   storage: { title: "Storage", description: "Library location, Plex views and retention.", roots: ["storageRoot", "retention"] },

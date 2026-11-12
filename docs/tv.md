@@ -265,8 +265,10 @@ nomination; no registrations or payloads were removed.
 
 Transmission completed at 01:44:35 UTC on November 12. Publishing began
 61.9 seconds later and Plex verification took another 42.6 seconds, for
-104.5 seconds from completion to ready. This verifies the backend timing,
-not whether an already-open browser updated on its own.
+104.5 seconds from completion to ready. Production Prometheus sums advanced
+by 61.863, 42.638 and 104.501 seconds respectively at 01:46:30 UTC, independently
+confirming the samples feeding Grafana. This does not verify whether an
+already-open browser updated on its own.
 
 The initial rollout exposed an ordering failure: both normal CD runs
 [`41784606406`](https://github.com/mmgoodnow/podible/actions/runs/41784606406)

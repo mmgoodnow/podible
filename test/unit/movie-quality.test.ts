@@ -105,3 +105,8 @@ test("preference scores cannot beat a tier, ties do not churn, and policy change
     }).upgrade,
   ).toBe(true);
 });
+test("older policies cannot turn off preference for an otherwise eligible proper", () => {
+  const legacyPolicy = { ...policy, preferProper: false };
+  expect(assessMovieUpgrade(legacyPolicy, facts, { ...facts, proper: true }).upgrade).toBe(true);
+  expect(assessMovieUpgrade(legacyPolicy, facts, { ...facts, proper: true, cut: "director" }).upgrade).toBe(false);
+});

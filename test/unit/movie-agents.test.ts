@@ -122,7 +122,7 @@ test("movie selector executes distinct-tracker evidence tool and retains all sem
   expect(result.matchingOffers).toEqual([offers[0]!, offers[1]!]);
   expect(result.matchingOffers?.[0]).toBe(offers[0]!);
   expect(fake.requests).toHaveLength(2);
-  expect(assessmentOutputs(fake.requests[1]!)[0]).toMatchObject({ preference: "tie-break", distinctTrackerCount: 2,
+  expect(assessmentOutputs(fake.requests[1]!)[0]).toMatchObject({ distinctTrackerCount: 2,
     sizeEvidence: { distinctCount: 1 }, hashEvidence: { distinctCount: 3 } });
   expect(assessmentOutputs(fake.requests[1]!)[0].offers[2].downloadVolumeFactor).toBe(0);
   expect(JSON.stringify(fake.requests)).not.toContain("hidden");
@@ -131,22 +131,6 @@ test("movie selector executes distinct-tracker evidence tool and retains all sem
   expect(instructions).toContain("semantically");
   expect(instructions).toContain("Do not perform extra searches solely");
   expect(instructions).toContain("not proof of additional torrent registrations or new seeding coverage");
-  if (!Array.isArray(fake.requests[0]!.input)) throw new Error("Expected SDK input");
-  const message = fake.requests[0]!.input.find(item => item.type === "message" && item.role === "user");
-  expect(JSON.stringify(message)).toContain("selectionPreference");
-});
-
-test("off still exposes evidence and records matches without changing the agent's source selection", async () => {
-  const offers = [selectionOffer, { ...selectionOffer, key: "free", provider: "B", attributes: { attr: { name: "freeleech", value: true } } }];
-  const fake = selectionProvider([assessment([0, 1]), { index: 0, matchingIndexes: [1], facts: fixtureFacts(), reason: "Source chosen without coverage ranking." }]);
-  const settings = defaultSettings();
-  settings.movies.crossSeedPreference = "off";
-  const result = await createMovieDecider(settings, fake.model).select({ movie: fixtureMovie,
-    policy: defaultMovieQualityPolicy, current: null, offers });
-  expect(result.offerKey).toBe(offers[0]!.key);
-  expect(result.matchingOffers).toEqual([offers[1]!]);
-  expect(assessmentOutputs(fake.requests[1]!)[0]).toMatchObject({ preference: "off", distinctTrackerCount: 2 });
-  expect(JSON.stringify(fake.requests[0]!.systemInstructions)).toContain('do not rank by tracker coverage or download volume factors');
 });
 
 test("bad grouping tool indexes return feedback, while invalid final alternatives are rejected", async () => {

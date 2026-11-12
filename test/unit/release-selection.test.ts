@@ -9,20 +9,20 @@ test("cross-seed estimates count normalized tracker names, not duplicate search 
   const offers = [offer, { ...offer, key: "other-upload", provider: "TRACKER\u00a0A", infoHash: "b".repeat(40) },
     { ...offer, key: "third", provider: "Tracker B", infoHash: "c".repeat(40), sizeBytes: 1001 },
     { ...offer, key: "unknown", provider: "  ", infoHash: null, sizeBytes: null }];
-  const evidence = assessReleaseCrossSeedability(offers, [0, 1, 2, 3], "tie-break");
+  const evidence = assessReleaseCrossSeedability(offers, [0, 1, 2, 3]);
   expect(evidence).toMatchObject({ distinctTrackerCount: 2, unknownProviderCount: 1,
     sizeEvidence: { knownCount: 3, distinctCount: 2, unknownCount: 1 },
     hashEvidence: { knownCount: 3, distinctCount: 3, unknownCount: 1 } });
   expect(evidence.diagnostic).toContain("not verified byte reuse");
   expect(JSON.stringify(evidence)).not.toContain("hidden");
-  expect(assessReleaseCrossSeedability(offers, [0, 1], "off")).toMatchObject({ preference: "off", distinctTrackerCount: 1 });
+  expect(assessReleaseCrossSeedability(offers, [0, 1]).distinctTrackerCount).toBe(1);
 });
 
 test("same-sized unrelated titles and identical hashes are diagnostics, never automatic semantic grouping", () => {
   const offers = [offer, { ...offer, key: "unrelated", title: "A different film", provider: "B" }];
-  expect(assessReleaseCrossSeedability(offers, [0, 1], "tie-break")).toMatchObject({
+  expect(assessReleaseCrossSeedability(offers, [0, 1])).toMatchObject({
     distinctTrackerCount: 2, sizeEvidence: { distinctCount: 1 }, hashEvidence: { distinctCount: 1, duplicateIdentityCount: 1 } });
-  expect(assessReleaseCrossSeedability(offers, [0, 1], "tie-break").diagnostic).toContain("Runtime may skip an already-owned infoHash");
+  expect(assessReleaseCrossSeedability(offers, [0, 1]).diagnostic).toContain("Runtime may skip an already-owned infoHash");
   expect(matchingSelectionOffers(offers, 0, [])).toEqual([]);
 });
 
@@ -37,8 +37,8 @@ test("matching alternatives preserve distinct same-tracker offers and resolve on
   expect(() => matchingSelectionOffers(offers, 99, [])).toThrow("unknown");
   expect(() => matchingSelectionOffers(offers, null, [1])).toThrow("require a selected");
   expect(matchingSelectionOffers(offers, null, [])).toEqual([]);
-  expect(() => assessReleaseCrossSeedability(offers, [0, 0], "off")).toThrow("unique");
-  expect(() => assessReleaseCrossSeedability(offers, [4], "tie-break")).toThrow("unknown");
+  expect(() => assessReleaseCrossSeedability(offers, [0, 0])).toThrow("unique");
+  expect(() => assessReleaseCrossSeedability(offers, [4])).toThrow("unknown");
 });
 
 test("download-volume evidence accepts only whitelisted scalar Torznab attributes", () => {
@@ -59,7 +59,7 @@ test("download-volume evidence accepts only whitelisted scalar Torznab attribute
   }
   const evidence = assessReleaseCrossSeedability([{ ...offer, attributes: {
     attr: [{ name: "downloadfactor", value: 0 }, { name: "private", value: "hidden" }], description: "hidden",
-  } }], [0], "tie-break");
+  } }], [0]);
   expect(evidence.offers[0]?.downloadVolumeFactor).toBe(0);
   expect(JSON.stringify(evidence)).not.toContain("hidden");
 });
