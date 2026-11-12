@@ -36,27 +36,37 @@ const partSchema = z.object({
   Part: z.tuple([rawPart.extend({ container: z.literal("mp4").optional() })]),
 });
 type PlexRow = z.output<typeof row>;
-export type PlayablePart = { key: string; size: number; path: string };
+export type PlayablePart = { key: string; size: number; path: string; ratingKey: string; mediaIndex: number; partIndex: number;
+  mode: "direct" | "hls" };
+
+export const plexHlsRoot = "/video/:/transcode/universal";
+export const plexHlsPlaylistType = "application/vnd.apple.mpegurl";
+export const plexHlsSegment = /^\d{1,9}\.ts$/;
+const sessionIdPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const hlsProfile = "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mpegts&videoCodec=h264&audioCodec=aac&replace=true)";
+export type PlexHlsScope = { id: string; clientId: string };
 
 const mediaParts = z.object({ Part: z.array(rawPart) });
 export function hasPublishedPart(item: PlexRow, files: PublicationFiles) {
   return item.Media.some((media) => mediaParts.safeParse(media).data?.Part.some((part) => files.get(part.file) === part.size));
 }
 
-export function directPart(items: PlexRow[], files: PublicationFiles): PlayablePart | null {
-  const parts = new Map<string, PlayablePart>();
-  for (const media of items.flatMap((item) => item.Media)) {
-    const parsed = partSchema.safeParse(media);
+export function playablePart(items: PlexRow[], files: PublicationFiles): PlayablePart | null {
+  const parts: PlayablePart[] = [];
+  for (const item of items) for (const [mediaIndex, media] of item.Media.entries()) {
+    const parsed = mediaParts.safeParse(media);
     if (!parsed.success) continue;
-    const part = parsed.data.Part[0];
-    if (files.get(part.file) === part.size && new RegExp(`^/library/parts/${part.id}/[0-9]+/[a-z0-9_.-]+\\.mp4$`, "i").test(part.key)) {
-      const prior = parts.get(part.key);
-      if (prior && (prior.path !== part.file || prior.size !== part.size)) return null;
-      parts.set(part.key, { key: part.key, size: part.size, path: part.file });
+    const supportsDirect = partSchema.safeParse(media).success;
+    for (const [partIndex, part] of parsed.data.Part.entries()) {
+      if (files.get(part.file) !== part.size ||
+          !new RegExp(`^/library/parts/${part.id}/[0-9]+/[a-z0-9_.-]+\\.(mp4|mkv|m4v|avi|mov|ts)$`, "i").test(part.key)) continue;
+      parts.push({ key: part.key, size: part.size, path: part.file, ratingKey: item.ratingKey, mediaIndex, partIndex,
+        mode: supportsDirect && /\.mp4$/i.test(part.key) ? "direct" : "hls" });
     }
   }
-  // Do not silently pick a cut, edition or quality when Plex returns several compatible versions.
-  return parts.size === 1 ? parts.values().next().value! : null;
+  const direct = parts.filter(({ mode }) => mode === "direct");
+  // Preserve direct play, but never ask Plex to break a tie or substitute a different edition.
+  return direct.length === 1 ? direct[0]! : parts.length === 1 ? parts[0]! : null;
 }
 
 export function matchesPlexIdentity(item: PlexRow, expected: Record<string, string>): boolean {
@@ -164,7 +174,7 @@ export class PlexPlayback {
       if (hasPublishedPart(movie, files)) managed.push(movie);
     }
     if (!managed.length) throw new PlaybackError(404);
-    return directPart(managed, files);
+    return playablePart(managed, files);
   }
 
   async episodeRows(expected: Record<string, string>) {
@@ -177,13 +187,55 @@ export class PlexPlayback {
     return episodes;
   }
 
-  async file(part: PlayablePart, range: string | null) {
+  async confirmEpisodePart(part: PlayablePart, parent: string, identity: Record<string, string>, files: PublicationFiles) {
+    const rows = await this.rows(`/library/metadata/${part.ratingKey}`, "episode");
+    const item = rows[0];
+    if (rows.length !== 1 || !item || item.ratingKey !== part.ratingKey || item.grandparentRatingKey !== parent ||
+        !matchesPlexIdentity(item, identity)) throw new PlaybackError(404);
+    const confirmed = playablePart(rows, files);
+    if (!confirmed || confirmed.key !== part.key || confirmed.path !== part.path || confirmed.size !== part.size) throw new PlaybackError(404);
+    return confirmed;
+  }
+
+  private hlsHeaders(scope: PlexHlsScope) {
+    if (!sessionIdPattern.test(scope.id)) throw new PlaybackError(502);
+    return { "X-Plex-Client-Identifier": scope.clientId, "X-Plex-Session-Identifier": scope.id };
+  }
+
+  startHls(part: PlayablePart, scope: PlexHlsScope) {
+    if (!plexId.safeParse(part.ratingKey).success || !Number.isSafeInteger(part.mediaIndex) || part.mediaIndex < 0 ||
+        !Number.isSafeInteger(part.partIndex) || part.partIndex < 0) throw new PlaybackError(502);
+    const query = new URLSearchParams({ path: `/library/metadata/${part.ratingKey}`, mediaIndex: String(part.mediaIndex),
+      partIndex: String(part.partIndex), protocol: "hls", directPlay: "0", directStream: "1", directStreamAudio: "1",
+      transcodeSessionId: scope.id, session: scope.id, secondsPerSegment: "4", maxVideoBitrate: "12000", autoAdjustQuality: "0" });
+    return this.mediaRequest(`${plexHlsRoot}/start.m3u8?${query}`, {
+      ...this.hlsHeaders(scope), Accept: plexHlsPlaylistType, "X-Plex-Client-Profile-Name": "Generic", "X-Plex-Client-Profile-Extra": hlsProfile,
+    });
+  }
+
+  hlsResource(scope: PlexHlsScope, name: string) {
+    if (name !== "index.m3u8" && !plexHlsSegment.test(name)) throw new PlaybackError(404);
+    return this.mediaRequest(`${plexHlsRoot}/session/${scope.id}/base/${name}`, this.hlsHeaders(scope), this.signal, 15_000);
+  }
+
+  async stopHls(scope: PlexHlsScope) {
+    const query = new URLSearchParams({ session: scope.id, transcodeSessionId: scope.id });
+    const signal = AbortSignal.timeout(2_000);
+    const response = await this.mediaRequest(`${plexHlsRoot}/stop?${query}`, this.hlsHeaders(scope), signal);
+    await response.body?.cancel();
+  }
+
+  file(part: PlayablePart, range: string | null) {
+    return this.mediaRequest(part.key, range ? { Range: range } : {});
+  }
+
+  private async mediaRequest(path: string, headers: Record<string, string>, parentSignal = this.signal, timeoutMs = 8_000) {
     const signal = new AbortController();
-    const timeout = setTimeout(() => signal.abort(), 8_000);
+    const timeout = setTimeout(() => signal.abort(), timeoutMs);
     try {
-      return await this.fetcher(new URL(part.key, this.config.origin), {
-        headers: { "X-Plex-Token": this.token, "Accept-Encoding": "identity", ...(range ? { Range: range } : {}) },
-        redirect: "error", signal: AbortSignal.any([this.signal, signal.signal]),
+      return await this.fetcher(new URL(path, this.config.origin), {
+        headers: { "X-Plex-Token": this.token, "Accept-Encoding": "identity", ...headers },
+        redirect: "error", signal: AbortSignal.any([parentSignal, signal.signal]),
       });
     } finally { clearTimeout(timeout); }
   }

@@ -39,8 +39,10 @@ extension ViewerShowEpisodes.EpisodesValue: Identifiable {
 
 extension ViewerPlaybackGrant: Identifiable {
     func asset(for connection: Connection) throws -> AVURLAsset {
+        let hlsDirectory = "/api/playback/hls/\(id)/"
+        let isHLS = path == "\(hlsDirectory)master.m3u8"
         guard UUID(uuidString: id)?.uuidString.lowercased() == id,
-              path == "/api/playback/file/\(id).mp4",
+              isHLS || path == "/api/playback/file/\(id).mp4",
               credential.utf8.count == 43,
               credential.utf8.allSatisfy({ (65...90).contains($0) || (97...122).contains($0) ||
                   (48...57).contains($0) || $0 == 45 || $0 == 95 }),
@@ -50,12 +52,12 @@ extension ViewerPlaybackGrant: Identifiable {
               origin.query == nil, origin.fragment == nil else { throw ClientError.invalidResponse }
         origin.path = path
         guard let url = origin.url, let cookie = HTTPCookie(properties: [
-            .originURL: url, .path: path, .name: "podible_playback", .value: credential, .secure: "TRUE",
+            .originURL: url, .path: isHLS ? hlsDirectory : path, .name: "podible_playback", .value: credential, .secure: "TRUE",
             .expires: Date().addingTimeInterval(Double(expiresInSeconds)),
         ]) else { throw ClientError.invalidResponse }
         return AVURLAsset(url: url, options: [
             AVURLAssetHTTPCookiesKey: [cookie],
-            AVURLAssetReferenceRestrictionsKey: AVAssetReferenceRestrictions.forbidAll.rawValue,
+            AVURLAssetReferenceRestrictionsKey: (isHLS ? AVAssetReferenceRestrictions.forbidRemoteReferenceToLocal : .forbidAll).rawValue,
         ])
     }
 }
@@ -79,7 +81,7 @@ func viewerPlaybackMessage(_ error: Error) -> String {
     case .unauthorized: "Sign in again on this Apple TV."
     case .rpc(-32003): "This Apple TV session does not have Plex playback access. Pair again by signing in to Plex on your phone, or check your library share."
     case .rpc(-32044): "No exact Plex match is available for playback."
-    case .rpc(-32015): "This edition does not support direct play here. Open it in Plex to play it."
+    case .rpc(-32015): "This edition does not have a supported playback stream here. Open it in Plex to play it."
     case .rpc(-32029): "Too many playback sessions. Close another player and try again."
     default: "Podible could not prepare Plex playback. Try again later."
     }

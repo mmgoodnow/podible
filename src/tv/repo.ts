@@ -164,6 +164,30 @@ export class TvRepo {
       .all(entryId).map(row => row.id);
   }
 
+  playbackFiles(entryId: number, episodeId?: number) {
+    return this.db.query<{
+      episodeId: number; targetId: number; versionId: number; relativePath: string; sizeBytes: number;
+      title: string; year: number | null; tvdbId: number; season: number; episode: number;
+    }, number[]>(`
+      SELECT a.episode_id AS episodeId, a.target_id AS targetId, a.version_id AS versionId,
+        f.relative_path AS relativePath, f.size_bytes AS sizeBytes,
+        json_extract(e.metadata_json, '$.title') AS title, json_extract(e.metadata_json, '$.year') AS year,
+        json_extract(e.metadata_json, '$.tvdbId') AS tvdbId, n.season, n.episode
+      FROM tv_targets t
+      JOIN tv_entries e ON e.id=t.entry_id
+      JOIN tv_active_episodes a ON a.target_id=t.id AND a.entry_id=t.entry_id
+      JOIN tv_episode_numbering n ON n.entry_id=a.entry_id AND n.episode_id=a.episode_id AND n.scheme='tvdb:aired'
+      JOIN tv_version_file_episodes m ON m.version_id=a.version_id AND m.episode_id=a.episode_id
+      JOIN managed_content_files f ON f.id=m.file_id
+      WHERE t.entry_id=? ${episodeId === undefined ? "" : "AND a.episode_id=?"}
+        AND n.season IS NOT NULL AND n.episode IS NOT NULL AND json_extract(e.metadata_json, '$.tvdbId') > 0
+        AND NOT EXISTS (SELECT 1 FROM tv_version_file_episodes other WHERE other.version_id=m.version_id
+          AND ((other.file_id=m.file_id AND other.episode_id<>m.episode_id)
+            OR (other.episode_id=m.episode_id AND other.file_id<>m.file_id)))
+        AND NOT EXISTS (SELECT 1 FROM media_content_losses l WHERE l.file_id=m.file_id)
+      ORDER BY a.target_id, a.episode_id`).all(...(episodeId === undefined ? [entryId] : [entryId, episodeId]));
+  }
+
   publishedEpisodeKeys(keys: Iterable<string>): Set<string> {
     return new Set(this.db.query<{ key: string }, [string]>(`SELECT e.episode_key AS key
       FROM json_each(?) keys JOIN tv_episodes e ON e.episode_key=keys.value

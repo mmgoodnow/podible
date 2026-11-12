@@ -12,7 +12,7 @@ async function safe<T>(fn: () => T | Promise<T>): Promise<T> {
       case 401: throw new RpcError(-32001, "Sign in on this Apple TV again.");
       case 403: throw new RpcError(-32003, "This Apple TV session does not have Plex playback access.");
       case 404: throw new RpcError(-32044, "No exact Plex match is available for playback.");
-      case 415: throw new RpcError(-32015, "This edition does not have a supported direct-play file.");
+      case 415: throw new RpcError(-32015, "This edition does not have a supported playback stream.");
       case 429: throw new RpcError(-32029, "Too many playback sessions. Close a player and try again.");
       default: throw new RpcError(-32050, "Plex playback is unavailable.");
     }
@@ -29,7 +29,7 @@ export const playbackRouter = defineRouter({
     handler: (ctx, input) => safe(() => playbackService(ctx.repo).showEpisodes(ctx.request, input)),
   }),
   prepare: defineMethod({
-    auth: "user", summary: "Create a session-bound direct-play grant for one movie or episode.",
+    auth: "user", summary: "Create a session-bound playback grant for one movie or episode.",
     paramsSchema: playbackTargetSchema,
     resultSchema: z.object({ id: playbackIdSchema, path: z.string(), credential: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
       expiresInSeconds: z.number().int().positive() }),

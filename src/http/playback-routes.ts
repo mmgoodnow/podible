@@ -17,5 +17,12 @@ export function createPlaybackRoutes(repo: BooksRepo) {
     for (const [name, value] of Object.entries(headers)) response.headers.set(name, value);
     return response;
   });
+  app.get("/hls/:id/:name", async (c) => {
+    const id = playbackIdSchema.safeParse(c.req.param("id"));
+    if (!id.success || new URL(c.req.url).search) return c.body(null, 404, headers);
+    const response = await playbackService(repo).stream(c.req.raw, id.data, getCookie(c, playbackCookie), c.req.param("name"));
+    for (const [name, value] of Object.entries(headers)) response.headers.set(name, value);
+    return response;
+  });
   return app;
 }

@@ -30,26 +30,32 @@ export function tvdbAiredNumber(episode: TvEpisode) {
 function versionEntries(repo: TvRepo, roots: TvRoots, targetId: number, version: TvVersion): Array<LibraryViewEntry & { episodes: TvEpisode[] }> {
   const target = repo.target(targetId)!;
   const entry = repo.entry(target.entry_id)!;
-  if (!entry.tvdbId) throw new Error("Plex TV publication needs an explicit TVDB series identity");
-  const title = safe(entry.title);
-  const folder = `${title}${entry.year ? ` (${entry.year})` : ""} {tvdb-${entry.tvdbId}}`;
   return version.files.map((file) => {
     const episodes = file.episodeIds.map((id) => repo.episode(id, entry.id)!);
     if (episodes.some((episode) => !episode)) throw new Error("TV file references an unknown episode");
     const coordinates = episodes.map(tvdbAiredNumber).sort((a, b) => a.season - b.season || a.episode - b.episode);
-    const first = coordinates[0]!;
-    if (coordinates.some((coordinate, index) => coordinate.season !== first.season || coordinate.episode !== first.episode + index))
-      throw new Error("A multi-episode Plex file requires contiguous provider episodes in one season");
-    const code = `S${String(first.season).padStart(2, "0")}E${String(first.episode).padStart(2, "0")}` +
-      (coordinates.length > 1 ? `-E${String(coordinates.at(-1)!.episode).padStart(2, "0")}` : "");
-    const extension = path.extname(file.relativePath).toLowerCase();
-    if (![".mkv", ".mp4", ".m4v", ".avi", ".mov", ".ts"].includes(extension)) throw new Error("Unsupported TV container");
-    const contentPath = path.resolve(roots.contentRoot, file.relativePath);
-    if (!contentPath.startsWith(path.resolve(roots.contentRoot) + path.sep)) throw new Error("TV file escaped its canonical root");
-    return { relativePath: `${folder}/Season ${String(first.season).padStart(2, "0")}/${title} - ${code} - t${targetId}v${version.id}${extension}`,
-      contentPath, episodes };
+    return { ...renderTvFileEntry(entry, roots, targetId, version.id, file.relativePath, coordinates), episodes };
   });
 }
+
+export function renderTvFileEntry(entry: Pick<TvEntry, "title" | "year" | "tvdbId">, roots: TvRoots, targetId: number,
+  versionId: number, filePath: string, coordinates: ReturnType<typeof tvdbAiredNumber>[]): LibraryViewEntry {
+  if (!entry.tvdbId) throw new Error("Plex TV publication needs an explicit TVDB series identity");
+  const title = safe(entry.title);
+  const folder = `${title}${entry.year ? ` (${entry.year})` : ""} {tvdb-${entry.tvdbId}}`;
+  const first = coordinates[0]!;
+  if (coordinates.some((coordinate, index) => coordinate.season !== first.season || coordinate.episode !== first.episode + index))
+    throw new Error("A multi-episode Plex file requires contiguous provider episodes in one season");
+  const code = `S${String(first.season).padStart(2, "0")}E${String(first.episode).padStart(2, "0")}` +
+    (coordinates.length > 1 ? `-E${String(coordinates.at(-1)!.episode).padStart(2, "0")}` : "");
+  const extension = path.extname(filePath).toLowerCase();
+  if (![".mkv", ".mp4", ".m4v", ".avi", ".mov", ".ts"].includes(extension)) throw new Error("Unsupported TV container");
+  const contentPath = path.resolve(roots.contentRoot, filePath);
+  if (!contentPath.startsWith(path.resolve(roots.contentRoot) + path.sep)) throw new Error("TV file escaped its canonical root");
+  return { relativePath: `${folder}/Season ${String(first.season).padStart(2, "0")}/${title} - ${code} - t${targetId}v${versionId}${extension}`,
+    contentPath };
+}
+
 /** The provider's Plex projection is replaceable; it never establishes episode identity. */
 export function tvViewEntries(repo: TvRepo, roots: TvRoots): LibraryViewEntry[] {
   const selected = new Map<string, { targetId: number; versionId: number }>();

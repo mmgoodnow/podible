@@ -2,7 +2,8 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { z } from "zod";
 import type { AppSettings, SessionWithUserRow } from "../app-types";
 import { resolveBearerSessionFromRequest } from "../auth";
-import { directPart, episodeIdentity, hasPublishedPart, matchesPlexIdentity, PlaybackError, playbackConfig, PlexPlayback, type PlayablePart } from "./plex-playback";
+import { episodeIdentity, hasPublishedPart, matchesPlexIdentity, playablePart, PlaybackError, playbackConfig, PlexPlayback, type PlayablePart, type PlexHlsScope } from "./plex-playback";
+import { hlsPlaylist, hlsSegment, prepareHls, type PlaybackHls } from "./plex-hls";
 import { episodePlaybackFiles, moviePlaybackFiles } from "./playback-publication";
 import type { BooksRepo } from "../repo";
 
@@ -31,10 +32,13 @@ type Grant = {
   config: ReturnType<typeof playbackConfig>;
   target: Target;
   part: PlayablePart;
+  hls: PlaybackHls | null;
+  hlsIdleUntil: number;
 };
 const hash = (value: string) => createHash("sha256").update(value).digest();
 export const playbackCookie = "podible_playback";
 const ttlSeconds = 6 * 60 * 60;
+const hlsIdleMs = 5 * 60_000;
 
 function liveAppSession(session: SessionWithUserRow | null, now: number): session is SessionWithUserRow {
   return session?.kind === "app" && (session.expires_at === null || Date.parse(session.expires_at) > now);
@@ -70,6 +74,7 @@ async function checkPartResponse(response: Response, part: PlayablePart, range: 
 
 export function createPlaybackService(repo: PlaybackRepo, dependencies: PlaybackDependencies) {
   const grants = new Map<string, Grant>();
+  const preparingHls = new Set<number>();
   const now = dependencies.now ?? Date.now;
   const fetcher = dependencies.fetcher ?? fetch;
 
@@ -114,21 +119,21 @@ export function createPlaybackService(repo: PlaybackRepo, dependencies: Playback
       const match = matches[0];
       if (!match || matches.length !== 1) return [];
       return [{ id: episode.id, title: (episode.title || "Episode").slice(0, 300), season: match.parentIndex ?? null,
-        episode: match.index ?? null, playable: directPart(matches, files) !== null }];
+        episode: match.index ?? null, playable: playablePart(matches, files) !== null }];
     }).sort((a, b) => (a.season ?? 0) - (b.season ?? 0) || (a.episode ?? 0) - (b.episode ?? 0) || a.id - b.id);
     return { entryId, episodes };
   }
 
   function partStillPublished(settings: AppSettings, target: Target, part: PlayablePart) {
     if (target.kind === "episode")
-      return episodePlaybackFiles(repo, settings, target.entryId).get(target.episodeId)?.get(part.path) === part.size;
+      return episodePlaybackFiles(repo, settings, target.entryId, target.episodeId).get(target.episodeId)?.get(part.path) === part.size;
     const movie = repo.movies.movieByTmdb(target.tmdbId);
     return movie !== null && moviePlaybackFiles(repo, settings, movie).get(part.path) === part.size;
   }
 
   async function prepare(request: Request, target: Target) {
     const session = authenticate(request);
-    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(20_000)]);
+    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(25_000)]);
     const { plex, settings, config, tokenHash } = await source(session, target.kind, signal);
     let part: PlayablePart | null;
     if (target.kind === "movie") {
@@ -143,59 +148,127 @@ export function createPlaybackService(repo: PlaybackRepo, dependencies: Playback
       const episode = published.has(target.episodeId) ? entry.episodes.find((episode) => episode.id === target.episodeId) : null;
       const identity = episode && episodeIdentity(episode);
       if (!identity || !Object.keys(identity).length) throw new PlaybackError(404);
-      const files = episodePlaybackFiles(repo, settings, entry.id).get(target.episodeId);
+      const files = episodePlaybackFiles(repo, settings, entry.id, episode.id).get(target.episodeId);
       if (!files?.size) throw new PlaybackError(415);
       await plex.verifyServer();
       const matches = (await plex.episodeRows(expected)).filter((row) => matchesPlexIdentity(row, identity) && hasPublishedPart(row, files));
       if (matches.length !== 1) throw new PlaybackError(404);
-      part = directPart(matches, files);
+      part = playablePart(matches, files);
+      if (part?.mode === "hls") {
+        const parent = matches[0]?.grandparentRatingKey;
+        if (!parent) throw new PlaybackError(404);
+        part = await plex.confirmEpisodePart(part, parent, identity, files);
+      }
     }
     if (!part) throw new PlaybackError(415);
-    const probe = { start: 0, end: 7 };
-    const probeBody = await checkPartResponse(await plex.file(part, rangeHeader(probe)), part, probe);
-    const bytes = await readProbe(probeBody);
-    if (bytes.length !== 8 || bytes.subarray(4).toString("ascii") !== "ftyp") throw new PlaybackError(415);
-    // Recheck revocation after asynchronous lookup and upstream authorization.
-    if (authenticate(request).id !== session.id) throw new PlaybackError(401);
-    if (!partStillPublished(settings, target, part)) throw new PlaybackError(404);
-    for (const [id, grant] of grants) if (grant.expiresAt <= now()) grants.delete(id);
-    if (grants.size >= 512 || [...grants.values()].filter((grant) => grant.sessionId === session.id).length >= 8)
-      throw new PlaybackError(429);
     const id = randomUUID();
-    const credential = randomBytes(32).toString("base64url");
-    grants.set(id, { verifier: hash(credential), expiresAt: now() + ttlSeconds * 1000, sessionId: session.id,
-      userId: session.user_id, sessionHash: session.token_hash, tokenHash, config, target, part });
-    return { id, path: `/api/playback/file/${id}.mp4`, credential, expiresInSeconds: ttlSeconds };
+    const base = `/api/playback/hls/${id}`;
+    let hls: PlaybackHls | null = null;
+    let scope: PlexHlsScope | null = null;
+    checkQuota(session.id);
+    try {
+      if (part.mode === "hls") {
+        const active = [...grants.values()].filter((grant) => grant.hls !== null);
+        if (preparingHls.has(session.id) || active.some((grant) => grant.sessionId === session.id) ||
+            preparingHls.size + active.length >= 8) throw new PlaybackError(429);
+        // Bind the upstream session to a different ID from the client-visible grant.
+        scope = { id: randomUUID(), clientId: `podible-tv-${hash(session.token_hash).toString("hex").slice(0, 32)}` };
+        preparingHls.add(session.id);
+        hls = await prepareHls(plex, part, scope, base);
+      } else {
+        const probe = { start: 0, end: 7 };
+        const probeBody = await checkPartResponse(await plex.file(part, rangeHeader(probe)), part, probe);
+        const bytes = await readProbe(probeBody);
+        if (bytes.length !== 8 || bytes.subarray(4).toString("ascii") !== "ftyp") throw new PlaybackError(415);
+      }
+      // Recheck revocation and publication after asynchronous lookup and upstream authorization.
+      if (authenticate(request).id !== session.id) throw new PlaybackError(401);
+      if (!partStillPublished(settings, target, part)) throw new PlaybackError(404);
+      checkQuota(session.id);
+      const credential = randomBytes(32).toString("base64url");
+      grants.set(id, { verifier: hash(credential), expiresAt: now() + ttlSeconds * 1000, sessionId: session.id,
+        userId: session.user_id, sessionHash: session.token_hash, tokenHash, config, target, part, hls, hlsIdleUntil: now() + hlsIdleMs });
+      return { id, path: hls ? `${base}/master.m3u8` : `/api/playback/file/${id}.mp4`, credential, expiresInSeconds: ttlSeconds };
+    } catch (error) {
+      if (scope) await plex.stopHls(scope).catch(() => {});
+      throw error;
+    } finally {
+      if (scope) preparingHls.delete(session.id);
+    }
   }
 
-  function close(request: Request, id: string) {
+  function grantUnexpired(grant: Grant) {
+    const time = now();
+    return grant.expiresAt > time && (!grant.hls || grant.hlsIdleUntil > time);
+  }
+
+  function checkQuota(sessionId: number) {
+    for (const [id, grant] of grants) if (!grantUnexpired(grant) ||
+        (grant.hls && !liveAppSession(repo.getSessionByTokenHash(grant.sessionHash), now()))) grants.delete(id);
+    if (grants.size >= 512 || [...grants.values()].filter((grant) => grant.sessionId === sessionId).length >= 8)
+      throw new PlaybackError(429);
+  }
+
+  function sameSource(grant: Grant, config: Grant["config"], tokenHash: string) {
+    return grant.tokenHash === tokenHash && config.origin === grant.config.origin && config.machineId === grant.config.machineId &&
+      config.section === grant.config.section;
+  }
+
+  async function close(request: Request, id: string) {
     const session = authenticate(request);
-    if (grants.get(id)?.sessionId === session.id) grants.delete(id);
+    const grant = grants.get(id);
+    if (grant?.sessionId === session.id) {
+      grants.delete(id);
+      if (grant.hls) {
+        try {
+          const { plex, config, tokenHash } = await source(session, grant.target.kind, AbortSignal.timeout(2_000));
+          if (sameSource(grant, config, tokenHash)) {
+            await plex.verifyServer();
+            await plex.stopHls(grant.hls.scope);
+          }
+        } catch { /* A local grant closes even if Plex cannot stop its session. */ }
+      }
+    }
     return { ok: true as const };
   }
 
-  async function stream(request: Request, id: string, credential: string | undefined) {
+  async function stream(request: Request, id: string, credential: string | undefined, hlsName?: string) {
     const grant = grants.get(id);
-    if (!grant || grant.expiresAt <= now() || !credential || !/^[A-Za-z0-9_-]{43}$/.test(credential) ||
+    if (!grant || !grantUnexpired(grant) || !credential || !/^[A-Za-z0-9_-]{43}$/.test(credential) ||
         !timingSafeEqual(grant.verifier, hash(credential))) throw new PlaybackError(401);
     const session = repo.getSessionByTokenHash(grant.sessionHash);
     if (!liveAppSession(session, now()) || session.id !== grant.sessionId || session.user_id !== grant.userId) throw new PlaybackError(401);
-    const { target, part } = grant;
-    if (target.kind === "movie" ? !repo.movies.availableByTmdb(target.tmdbId) :
-        !repo.tv.publishedEpisodeIds(target.entryId).includes(target.episodeId)) throw new PlaybackError(404);
-    const range = parseRange(request.headers.get("range"), part.size);
+    const { target, part, hls } = grant;
+    if (hlsName !== undefined ? !hls || (hlsName !== "master.m3u8" && hlsName !== "media.m3u8" && !hls.segments.has(hlsName)) : hls !== null)
+      throw new PlaybackError(404);
+    const range = hls ? null : parseRange(request.headers.get("range"), part.size);
     if (range === false) return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${part.size}` } });
     const { plex, settings, config, tokenHash } = await source(session, target.kind, request.signal);
-    if (grant.tokenHash !== tokenHash || config.origin !== grant.config.origin || config.machineId !== grant.config.machineId ||
-        config.section !== grant.config.section) throw new PlaybackError(403);
+    if (!sameSource(grant, config, tokenHash)) throw new PlaybackError(403);
     if (!partStillPublished(settings, target, part)) throw new PlaybackError(404);
     await plex.verifyServer();
     const head = request.method === "HEAD";
+    const stillAuthorized = () => grants.get(id) === grant && grantUnexpired(grant) && liveAppSession(repo.getSessionByTokenHash(grant.sessionHash), now());
+    if (!stillAuthorized()) throw new PlaybackError(401);
+    if (hls && hlsName) {
+      if (hlsName === "master.m3u8" || hlsName === "media.m3u8") {
+        return hlsPlaylist(hlsName === "master.m3u8" ? hls.master : hls.media, head);
+      }
+      const response = await hlsSegment(await plex.hlsResource(hls.scope, hlsName), head);
+      if (!stillAuthorized()) { await response.body?.cancel(); throw new PlaybackError(401); }
+      if (!partStillPublished(settings, target, part)) { await response.body?.cancel(); throw new PlaybackError(404); }
+      if (!head) grant.hlsIdleUntil = grant.expiresAt;
+      return response;
+    }
     const upstreamRange = head ? { start: 0, end: 7 } : range;
     const body = await checkPartResponse(await plex.file(part, rangeHeader(upstreamRange)), part, upstreamRange);
-    if (grants.get(id) !== grant || !liveAppSession(repo.getSessionByTokenHash(grant.sessionHash), now())) {
+    if (!stillAuthorized()) {
       await body.cancel();
       throw new PlaybackError(401);
+    }
+    if (!partStillPublished(settings, target, part)) {
+      await body.cancel();
+      throw new PlaybackError(404);
     }
     if (head) await body.cancel();
     const headers = new Headers({ "Accept-Ranges": "bytes", "Content-Type": "video/mp4",

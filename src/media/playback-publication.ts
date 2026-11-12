@@ -4,10 +4,10 @@ import { movieRoots } from "../movies/acquisition";
 import { movieViewEntries } from "../movies/publication";
 import type { Movie } from "../movies/types";
 import type { BooksRepo } from "../repo";
-import { tvRoots, tvViewEntries } from "../tv/publication";
+import { renderTvFileEntry, tvRoots } from "../tv/publication";
 
 export type PublicationFiles = ReadonlyMap<string, number>;
-type Repo = Pick<BooksRepo, "movies" | "tv" | "contentLoss">;
+type Repo = Pick<BooksRepo, "movies" | "tv">;
 
 function scoped<T extends object>(repo: T, overrides: Partial<T>): T {
   return new Proxy(repo, { get(target, property) {
@@ -33,36 +33,14 @@ export function moviePlaybackFiles(repo: Repo, settings: AppSettings, movie: Mov
   return files;
 }
 
-export function episodePlaybackFiles(repo: Repo, settings: AppSettings, entryId: number): Map<number, PublicationFiles> {
+export function episodePlaybackFiles(repo: Repo, settings: AppSettings, entryId: number, onlyEpisodeId?: number): Map<number, PublicationFiles> {
   const roots = tvRoots(settings.tv.managedRoot, settings.tv.plexViewPath);
   const files = new Map<number, Map<string, number>>();
-  for (const target of repo.tv.targets(entryId)) {
-    const active = repo.tv.activeEpisodes(target.id);
-    if (!active.length) continue;
-    const lost = new Set(repo.contentLoss.fileIds({ namespace: "tv-target", id: String(target.id) }));
-    // Scope the actual renderer to active versions only; never use staged paths as evidence.
-    const rendered = tvViewEntries(scoped(repo.tv, { targets: () => [target], publications: () => [], activeEpisodes: () => active }), roots);
-    const byContent = new Map<string, string[]>();
-    for (const entry of rendered) {
-      const paths = byContent.get(entry.contentPath) ?? [];
-      paths.push(path.posix.join(roots.serverViewRoot, entry.relativePath));
-      byContent.set(entry.contentPath, paths);
-    }
-    const versions = new Map<number, ReturnType<BooksRepo["tv"]["version"]>>();
-    for (const { episode_id, version_id } of active) {
-      if (!versions.has(version_id)) versions.set(version_id, repo.tv.version(version_id));
-      const version = versions.get(version_id);
-      if (!version || version.entryId !== entryId || version.targetId !== target.id) continue;
-      const matching = version.files.filter((file) => file.episodeIds.includes(episode_id));
-      const file = matching[0];
-      // Combined episodes have no verified per-episode byte/time boundaries.
-      if (!file || matching.length !== 1 || file.episodeIds.length !== 1 || lost.has(file.id)) continue;
-      const paths = byContent.get(path.resolve(roots.contentRoot, file.relativePath));
-      if (paths?.length !== 1) continue;
-      const byPath = files.get(episode_id) ?? new Map<string, number>();
-      byPath.set(paths[0]!, file.sizeBytes);
-      files.set(episode_id, byPath);
-    }
+  for (const row of repo.tv.playbackFiles(entryId, onlyEpisodeId)) {
+    const view = renderTvFileEntry(row, roots, row.targetId, row.versionId, row.relativePath, [row]);
+    const byPath = files.get(row.episodeId) ?? new Map<string, number>();
+    byPath.set(path.posix.join(roots.serverViewRoot, view.relativePath), row.sizeBytes);
+    files.set(row.episodeId, byPath);
   }
   return files;
 }
