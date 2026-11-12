@@ -8,7 +8,7 @@
 - [x] Combine Prowlarr and manual Torznab sources for search and feeds. Deduplicate endpoint aliases and keep discovery status separate.
 - [ ] Let direct sources keep working during discovery outages without treating the unavailable Prowlarr sources as searched or caught up.
 - [x] Replace the Resend-specific notification transport with SMTP, preserving user email, owner Pushover and dry run. Require TLS and do not resend ambiguous deliveries.
-- [ ] Configure Podible with the same authenticated port 587 relay as Seerr after normal CD. Verify TLS/authentication without sending mail and confirm dry run stays enabled.
+- [x] Configure Podible with the same authenticated port 587 relay as Seerr after normal CD. On Cyprus build `127d567`, STARTTLS and authentication passed without sending mail. Readback confirmed dry-run mode; recipient mapping and Pushover were not changed.
 - [x] Keep cross-seed coverage as a tie-breaker, not a quality or viability override. Remove its settings toggle.
 - [x] Prefer proper/repack releases without a toggle. A correction label does not waive eligibility or regress quality. Retain the old serialized policy field solely to avoid splitting existing targets.
 - [ ] Add freeform video selection guidance to Decisions and its agent fallback. Keep ordered quality tiers and hard playback constraints enforceable. Replace soft scoring controls only after testing stable upgrade decisions.
@@ -29,3 +29,9 @@
 - [ ] Add QR sign-in via the self-hosted Podible origin and existing account authorization. Use a short-lived pairing grant and a separate revocable TV session.
 - [ ] Add movie and episode playback against the viewer's Plex access, exact server/title identities, and verified progress reporting. Test in the simulator and on device.
 - [ ] Expand trailer discovery beyond approved local Plex clips using playable, authorized sources.
+
+## Production Evidence
+
+- Normal CD deployed `127d567` to Cyprus. Deployed settings parsing confirmed the download group, automatic movie upgrade, cross-seed preference and stall threshold controls were removed, and the shared threshold was 10 minutes.
+- Deployed discovery returned 11 configured Prowlarr indexers. An in-memory direct endpoint and an alias of a real discovered endpoint verified union and deduplication without changing settings or contacting trackers. There were no live manual sources configured.
+- Khom Khlang download-complete to Plex verification took 104.501 seconds. The Reflow trace attributes 22.664 seconds to import-agent inspection and 21.792 seconds to adopting the ten canonical files; publishing and Plex verification took 42.638 seconds. This is one sample, not a latency SLO or a live browser test.
