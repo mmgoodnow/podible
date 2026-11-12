@@ -144,14 +144,22 @@ queued does not contribute to download latency. Reconciliation measures the
 filesystem projection pass separately from Plex indexing. An empty percentile
 means no qualifying samples, not instant completion.
 
-The **AI usage and cost** row reports text agent model calls made by the job
-worker, their wall time, and estimated USD spend from reported token counts.
-Each turn of a tool-using agent counts separately. Rates assume standard global
-OpenAI pricing, including cache discounts and the long-context premium; this
-is not an invoice. Calls without usage or a supported price are counted
-separately. Image generation, transcription, and work before instrumentation
-are not included. Metrics persist across worker restarts and contain only
-bounded workflow, API, and model labels, not prompts or titles.
+The **AI usage and cost** row reports text agent and transcription calls made by
+the job worker. Chapter analysis sums the curator and judge; transcription is
+shown separately. Each turn of a tool-using agent counts separately. Text
+estimates use reported tokens and standard global rates, including cache
+discounts and the long-context premium. Transcription uses the duration reported
+by Whisper at [$0.006 per audio minute](https://developers.openai.com/api/docs/models/whisper-1).
+This is the uploaded, sped-up audio, including overlap, not the book runtime.
+Cache hits make no call. Failed calls and missing usage are not assumed to be
+free; internal SDK retries are not visible as separate calls. Image generation
+and work before instrumentation are not included. Metrics persist across worker
+restarts and contain only bounded workflow, API, and model labels, not prompts
+or titles.
+
+These are estimates, not OpenAI billing records. Responses and Decisions report
+usage rather than a per-request dollar charge. The [organization Costs API](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/costs)
+reports billed aggregates, not Podible's per-workflow attribution.
 
 The book Decisions fast path considers only a fresh, complete initial indexer
 search for a first ebook acquisition with one exact title/author and EPUB/PDF

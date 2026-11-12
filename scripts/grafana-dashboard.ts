@@ -154,25 +154,33 @@ y += 4;
 note("History starts with the first successful Prometheus scrape. Missing series are not zero. Publication counts reflect Podible records; they do not prove files still exist. Tracker traffic does not represent account credit.");
 
 row("AI usage and cost");
-const agentMetric = (metric: string) => series(`agent_${metric}`);
-const agentChange = (metric: string, range = "$__range") => `increase(${agentMetric(metric)}[${range}])`;
-const agentTotal = (metric: string) => `sum(${agentChange(metric)})`;
-stat(0, "Estimated agent spend", "Observed text model calls in the selected range, priced at standard global rates. Not the OpenAI invoice; audio, covers, missing usage and unpriced calls are excluded.", "currencyUSD", agentTotal("estimated_cost_usd_total"), 4);
-stat(6, "Model calls", "Observed SDK model calls in the selected range, including individual turns of an agent.", "none", agentTotal("model_calls_total"), 0);
+const agentChange = (metric: string, range = "$__range", workflow?: string) =>
+  `increase(podible_agent_${metric}{job="podible"${workflow ? `,workflow=~"${workflow}"` : ""}}[${range}])`;
+const agentTotal = (metric: string, workflow?: string) => `sum(${agentChange(metric, "$__range", workflow)})`;
+stat(0, "Estimated AI spend", "Measured text usage and transcription duration priced at standard rates. Not billed dollars; covers, missing usage and unpriced calls are excluded.", "currencyUSD", agentTotal("estimated_cost_usd_total"), 4);
+stat(6, "Model calls", "Observed SDK calls in the selected range, including individual agent turns and transcription calls.", "none", agentTotal("model_calls_total"), 0);
 stat(12, "Average model call time", "Per-call wall time, including model transport but excluding indexer and tool work between calls.", "s",
   `${agentTotal("model_call_seconds_total")} / (${agentTotal("model_calls_total")} > 0)`);
-stat(18, "Calls without a cost estimate", "Missing token usage (including model errors) or unknown rates. These calls are not evidence of zero cost.", "none",
+stat(18, "Calls without a cost estimate", "Missing token counts or audio duration (including model errors), or unknown rates. These calls are not evidence of zero cost.", "none",
   `${agentTotal("usage_missing_total")} + ${agentTotal("usage_unpriced_total")}`, 0);
 y += 4;
-chart(0, "Agent spend by workflow", "Trailing-hour estimated cost by workflow and API.", "currencyUSD",
+chart(0, "AI spend by workflow", "Trailing-hour estimated cost by workflow and API.", "currencyUSD",
   [[`sum by (workflow, api) (${agentChange("estimated_cost_usd_total", "1h")}) > 0`, "{{workflow}} · {{api}}"]]);
-chart(12, "Model calls by workflow", "Trailing-hour model calls. Compare Responses and Decisions here when both paths emit usage.", "none",
+chart(12, "Model calls by workflow", "Trailing-hour calls by workflow and API.", "none",
   [[`sum by (workflow, api) (${agentChange("model_calls_total", "1h")}) > 0`, "{{workflow}} · {{api}}"]]);
 y += 9;
+stat(0, "Chapter analysis spend", "Estimated cost of the chapter curator and its judges. Excludes transcription.", "currencyUSD",
+  agentTotal("estimated_cost_usd_total", "chapter-curation|chapter-judge"), 4);
+stat(6, "Transcription spend", "Estimated from the duration Whisper reports for each processed clip. Cached transcripts do not generate calls.", "currencyUSD",
+  agentTotal("estimated_cost_usd_total", "transcription"), 4);
+stat(12, "Audio processed by Whisper", "The actual uploaded duration after speed-up, including chunk overlap, not audiobook playback time.", "dtdurations",
+  agentTotal("transcribed_audio_seconds_total", "transcription"));
+stat(18, "Transcription calls", "Observed Whisper SDK calls, including errors. Internal SDK retry attempts are not counted separately.", "none",
+  agentTotal("model_calls_total", "transcription"), 0);
 
 console.log(JSON.stringify({
-  uid: "podible-operations", title: "Podible", tags: ["media", "podible"], schemaVersion: 41, version: 3,
-  description: "Library delivery, seeding coverage, reuse, network activity and agent costs.",
+  uid: "podible-operations", title: "Podible", tags: ["media", "podible"], schemaVersion: 41, version: 4,
+  description: "Library delivery, seeding coverage, reuse, network activity and AI costs.",
   editable: false, time: { from: "now-24h", to: "now" }, refresh: "1m", panels,
   links: [{ type: "link", title: "Podible Activity", url: "https://podible.cyplex.dev/ops", targetBlank: true }],
 }, null, 2));

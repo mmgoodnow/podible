@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { Usage, type ModelRequest, type ModelResponse } from "@openai/agents-core";
-import { agentUsagePrometheus, estimateAgentUsageUsd, meterAgentProvider, recordAgentUsage, withAgentUsageAccounting } from "../../src/agent-usage";
+import { agentUsagePrometheus, estimateAgentUsageUsd, meterAgentProvider, meterWhisperTranscription, recordAgentUsage, withAgentUsageAccounting } from "../../src/agent-usage";
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 
@@ -13,6 +13,30 @@ test("prices Responses and Decisions separately without double-counting cached t
   expect(estimateAgentUsageUsd("gpt-6-luna", "responses", long)).toBeCloseTo(0.0615, 8);
   expect(estimateAgentUsageUsd("gpt-6-luna", "responses", usage, "priority")).toBeNull();
   expect(estimateAgentUsageUsd("unknown", "responses", usage)).toBeNull();
+});
+
+test("prices Whisper by reported processed audio duration and tracks unknown costs separately", async () => {
+  using db = new Database(":memory:"); runMigrations(db);
+  const repo = new BooksRepo(db);
+  const label = '{workflow="transcription",api="audio-transcriptions",model="whisper-1"}';
+  expect(agentUsagePrometheus(repo)).toContain(`podible_agent_transcribed_audio_seconds_total${label} 0\n`);
+  await withAgentUsageAccounting(repo, async () => {
+    const result = { duration: 90.5, text: "SECRET_TRANSCRIPT" };
+    expect(await meterWhisperTranscription(async () => result)).toBe(result);
+    await meterWhisperTranscription(async () => ({ duration: 29.5 }));
+    await meterWhisperTranscription(async () => ({ duration: NaN }));
+    await expect(meterWhisperTranscription(async () => { throw new Error("SECRET_ERROR"); })).rejects.toThrow("SECRET_ERROR");
+    recordAgentUsage("chapter-curation", "responses", "gpt-6-luna", 200, { input: 100 });
+    recordAgentUsage("chapter-judge", "responses", "gpt-6-luna", 200, { input: 100 });
+  });
+  const metrics = agentUsagePrometheus(new BooksRepo(db));
+  expect(metrics).toContain(`podible_agent_model_calls_total${label} 4\n`);
+  expect(metrics).toContain(`podible_agent_usage_missing_total${label} 2\n`);
+  expect(metrics).toContain(`podible_agent_transcribed_audio_seconds_total${label} 120\n`);
+  expect(metrics).toContain(`podible_agent_estimated_cost_usd_total${label} 0.012\n`);
+  expect(metrics).toContain('podible_agent_model_calls_total{workflow="chapter-curation",api="responses",model="gpt-6-luna"} 1\n');
+  expect(metrics).toContain('podible_agent_model_calls_total{workflow="chapter-judge",api="responses",model="gpt-6-luna"} 1\n');
+  expect(metrics).not.toContain("SECRET");
 });
 
 test("persists each observed model turn, keeps failures separate, and exports no response data", async () => {

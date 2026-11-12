@@ -11,6 +11,7 @@ import type { TranscriptionVerbose } from "openai/resources/audio/transcriptions
 
 import { promises as fsPromises } from "node:fs";
 
+import { meterWhisperTranscription, WHISPER_TRANSCRIPTION_MODEL } from "../agent-usage";
 import { configDir, ensureConfigDirSync } from "../config";
 import type { AppSettings, AssetFileRow, AssetRow, BookRow, JobRow, ManifestationRow } from "../app-types";
 import { readFfprobeChapters } from "../media/probe-cache";
@@ -26,7 +27,7 @@ import type { ChapterCurationTiming } from "./chapter-curation";
 const CHAPTER_ANALYSIS_SOURCE = "whisper_transcript";
 const CHAPTER_ANALYSIS_ALGORITHM_VERSION = "2026-04-22-atempo-2x-v1";
 const CHAPTERS_API_VERSION = "1.5.0";
-const TIMESTAMP_TRANSCRIPTION_MODEL = "whisper-1";
+const TIMESTAMP_TRANSCRIPTION_MODEL = WHISPER_TRANSCRIPTION_MODEL;
 // We pre-process audio with ffmpeg `atempo` before sending to Whisper so OpenAI
 // charges us for half the duration (they bill by minutes of input audio).
 // Whisper tolerates this well — voice is still intelligible at 2x, and the
@@ -947,7 +948,7 @@ export async function transcribeChunk(
   const requestTimeoutMs = Math.max(TRANSCRIPTION_TIMEOUT_MS, Math.trunc(settings.agents.timeoutMs || 30_000));
   const client = new OpenAI({ apiKey, timeout: requestTimeoutMs });
   const transcriptionLanguage = transcriptionLanguageForBook(book, manifestation);
-  const response = (await client.audio.transcriptions.create(
+  const response = await meterWhisperTranscription(() => client.audio.transcriptions.create(
     {
       file: createReadStream(clipPath),
       model: TIMESTAMP_TRANSCRIPTION_MODEL,
@@ -957,7 +958,7 @@ export async function transcribeChunk(
       prompt,
     },
     { timeout: requestTimeoutMs }
-  )) as TranscriptionVerbose;
+  ));
   return parseWhisperResponse(response, TRANSCRIPTION_SPEED_MULTIPLIER);
 }
 
