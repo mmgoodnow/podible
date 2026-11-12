@@ -1,5 +1,7 @@
 import type { TorrentSnapshot } from "./torrent-client";
 
+export const DOWNLOAD_STALL_MS = 10 * 60_000;
+
 export function downloadComplete(snapshot: TorrentSnapshot): boolean {
   return snapshot.complete && snapshot.state !== "checking";
 }

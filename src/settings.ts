@@ -6,10 +6,9 @@ import { tvSettingsSchema } from "./tv/settings";
 import { retentionPolicySchema } from "./media/retention-policy-types";
 import { parseNotificationSettings } from "./notifications/settings";
 
-type SettingsOverrides = Partial<Omit<AppSettings, "rtorrent" | "polling" | "recovery" | "feed" | "auth" | "agents" | "notifications">> & {
+type SettingsOverrides = Partial<Omit<AppSettings, "rtorrent" | "polling" | "feed" | "auth" | "agents" | "notifications">> & {
   rtorrent?: Partial<AppSettings["rtorrent"]>;
   polling?: Partial<AppSettings["polling"]>;
-  recovery?: Partial<AppSettings["recovery"]>;
   feed?: Partial<AppSettings["feed"]>;
     auth?: Partial<Omit<AppSettings["auth"], "plex">> & {
       plex?: Partial<AppSettings["auth"]["plex"]>;
@@ -39,9 +38,6 @@ export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
     libraryRoot: "/media/library",
     polling: {
       rtorrentMs: 5000,
-    },
-    recovery: {
-      stalledTorrentMinutes: 10,
     },
     feed: {
       title: "Kindling",
@@ -79,10 +75,6 @@ export function defaultSettings(overrides?: SettingsOverrides): AppSettings {
     polling: {
       ...defaults.polling,
       rtorrentMs: overrides?.polling?.rtorrentMs ?? defaults.polling.rtorrentMs,
-    },
-    recovery: {
-      ...defaults.recovery,
-      ...(overrides?.recovery ?? {}),
     },
     feed: {
       ...defaults.feed,
@@ -125,22 +117,17 @@ export function resolveLibraryStorage(settings: AppSettings): AppSettings {
 }
 
 export function parseSettings(value: string): AppSettings {
-  const parsed = JSON.parse(value) as Partial<AppSettings>;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  const stored = JSON.parse(value) as Partial<AppSettings> & { recovery?: unknown };
+  if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
     throw new Error("Invalid settings payload");
   }
+  const { recovery: _retiredRecovery, ...parsed } = stored;
 
   const defaults = defaultSettings();
   const parsedAuth = (parsed.auth && typeof parsed.auth === "object" ? parsed.auth : {}) as Partial<AppSettings["auth"]>;
   const parsedAuthPlex =
     parsedAuth.plex && typeof parsedAuth.plex === "object" ? (parsedAuth.plex as Partial<AppSettings["auth"]["plex"]>) : {};
   const parsedAgents = (parsed.agents && typeof parsed.agents === "object" ? parsed.agents : {}) as Partial<AppSettings["agents"]>;
-  const parsedRecovery =
-    parsed.recovery && typeof parsed.recovery === "object" ? (parsed.recovery as Partial<AppSettings["recovery"]>) : {};
-  const stalledTorrentMinutes =
-    typeof parsedRecovery.stalledTorrentMinutes === "number" && Number.isFinite(parsedRecovery.stalledTorrentMinutes)
-      ? Math.max(0, Math.trunc(parsedRecovery.stalledTorrentMinutes))
-      : defaults.recovery.stalledTorrentMinutes;
   const movies = parsed.movies && typeof parsed.movies === "object" && !Array.isArray(parsed.movies)
     ? Object.fromEntries(Object.entries(parsed.movies).filter(([key]) =>
         key !== "downloadGroupId" && key !== "automaticUpgrades" && key !== "crossSeedPreference"))
@@ -166,9 +153,6 @@ export function parseSettings(value: string): AppSettings {
     polling: {
       ...defaults.polling,
       ...(parsed.polling && typeof parsed.polling === "object" ? parsed.polling : {}),
-    },
-    recovery: {
-      stalledTorrentMinutes,
     },
     feed: {
       ...defaults.feed,

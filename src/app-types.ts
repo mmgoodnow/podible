@@ -52,9 +52,6 @@ export type AppSettings = {
   polling: {
     rtorrentMs: number;
   };
-  recovery: {
-    stalledTorrentMinutes: number;
-  };
   feed: {
     title: string;
     author: string;

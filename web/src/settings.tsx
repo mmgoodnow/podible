@@ -16,7 +16,7 @@ const sections = {
   books: { title: "Books & feed", description: "Reader feed and edition matching.", roots: ["feed"] },
   ai: { title: "AI", description: "OpenAI connection for books, movies and TV.", roots: ["agents"] },
   indexers: { title: "Indexers", description: "Manage search providers and release sources.", roots: ["prowlarr", "torznab"] },
-  acquisition: { title: "Acquisition", description: "Control what gets downloaded, upgraded, and retried.", roots: ["recovery",
+  acquisition: { title: "Acquisition", description: "Set size limits for movie and TV downloads.", roots: [
     "movies.maximumReleaseBytes", "tv.maximumReleaseBytes"] },
   quality: { title: "Release quality", description: "Choose which movie and TV releases are eligible and rank them for upgrades.", roots: ["movies.qualityPolicy"] },
   integrations: { title: "Integrations", description: "Connect Plex, Seerr, TMDB, Radarr and Sonarr.", roots: ["auth", "movies", "tv"] },

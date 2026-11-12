@@ -82,9 +82,6 @@ export const appSettingsSchema = z.object({
   polling: z.object({
     rtorrentMs: z.number(),
   }),
-  recovery: z.object({
-    stalledTorrentMinutes: z.number(),
-  }),
   feed: z.object({
     title: z.string(),
     author: z.string(),

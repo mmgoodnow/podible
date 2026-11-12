@@ -295,12 +295,6 @@ export function AcquisitionSettings({ form }: { form: SettingsForm }) {
           help="Skip TV releases larger than this, including packs. Leave blank for no cap." />
       </Grid>
     </SettingsGroup>
-    <SettingsGroup title="Download recovery">
-      <Grid>
-        <NumberField label="Stalled torrent threshold (minutes)" field={root.group("recovery").field("stalledTorrentMinutes")} min={0}
-          help="How long a download can stall before recovery. Set to 0 to recover as soon as a stall is detected." />
-      </Grid>
-    </SettingsGroup>
   </>;
 }
 

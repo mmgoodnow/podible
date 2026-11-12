@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { downloadCapacityProblem } from "../media/download-capacity";
-import { advanceDownloadProgress, downloadComplete } from "../media/download-lifecycle";
+import { advanceDownloadProgress, downloadComplete, DOWNLOAD_STALL_MS } from "../media/download-lifecycle";
 import { waitForPlexPublication, waitForTorrentCompletion } from "../worker/media-completion";
 import { recordPublicationLatency, recordViewLatency, savedCompletionTime } from "../media/acquisition-latency";
 import { promises as fs } from "node:fs";
@@ -261,7 +261,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
   const progressing = (seen: TorrentSnapshot | null, priorBytes?: number | null) =>
     seen?.state === "downloading" && !seen.seedOnly && !seen.message && !seen.errorKind && seen.bytesDone !== null &&
     ((seen.downloadBytesPerSecond ?? 0) > 0 || (priorBytes != null && seen.bytesDone > priorBytes));
-  const stallDeadlineMs = services.timing?.stallMs ?? settings.recovery.stalledTorrentMinutes * 60_000;
+  const stallDeadlineMs = services.timing?.stallMs ?? DOWNLOAD_STALL_MS;
   const waitForPack = async (name: string, source: TvSource, observation: TorrentSnapshot, coverage: number[], reason: string) => {
     if (ctx.execution?.armCompletion && !completeTvSource(source, observation)) {
       await durableStep(ctx, `${name}:wait-state`, () => {
@@ -756,8 +756,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
         if (downloadComplete(observation)) { complete = true; break; }
         if (observation.seedOnly) break;
         if (!shared && observation.state === "inactive") await durableStep(ctx, `${prefix}:resume:${poll}`, resume);
-        const stallMs = services.timing?.stallMs ?? settings.recovery.stalledTorrentMinutes * 60_000;
-        if ((stallMs > 0 && now - progressedAt >= stallMs) || now - startedAt > 86_400_000) break;
+        if ((stallDeadlineMs > 0 && now - progressedAt >= stallDeadlineMs) || now - startedAt > 86_400_000) break;
         if (ctx.execution) await ctx.execution.sleep(`${prefix}:wait:${poll}`, services.timing?.pollMs ?? 5000);
         else await Bun.sleep(services.timing?.pollMs ?? 5000);
       }

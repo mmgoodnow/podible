@@ -1,6 +1,6 @@
 import path from "node:path";
 import { downloadCapacityProblem } from "../media/download-capacity";
-import { advanceDownloadProgress, downloadComplete } from "../media/download-lifecycle";
+import { advanceDownloadProgress, downloadComplete, DOWNLOAD_STALL_MS } from "../media/download-lifecycle";
 import { promises as fs } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import { z } from "zod";
@@ -451,7 +451,7 @@ export async function acquireMovie(
     let completed = false;
     if (ctx.execution?.armCompletion) {
       completed = await waitForTorrentCompletion(ctx, prefix, ref,
-        services.timing?.stallMs ?? settings.recovery.stalledTorrentMinutes * 60_000,
+        services.timing?.stallMs ?? DOWNLOAD_STALL_MS,
         async () => {
           const observed = await services.client.inspect(ref);
           active();
@@ -486,9 +486,7 @@ export async function acquireMovie(
           active();
           return services.client.resume(ref);
         });
-      const stallMs =
-        services.timing?.stallMs ??
-        settings.recovery.stalledTorrentMinutes * 60_000;
+      const stallMs = services.timing?.stallMs ?? DOWNLOAD_STALL_MS;
       if (
         (stallMs > 0 && observedAt - progressedAt >= stallMs) ||
         observedAt - startedAt > 24 * 60 * 60_000

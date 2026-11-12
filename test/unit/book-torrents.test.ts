@@ -551,11 +551,11 @@ test("stalled private downloads queue recovery without stopping or deleting the 
   const f = await fixture();
   try {
     const { release, record } = await f.attach();
-    f.settings.recovery.stalledTorrentMinutes = 0;
     const job = f.repo.createJob({
       type: "download",
       releaseId: release.id,
       bookId: f.book.id,
+      payload: { telemetry: { stagnantSince: new Date(Date.now() - 11 * 60_000).toISOString() } },
     });
     await processDownloadJob(
       {

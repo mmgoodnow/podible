@@ -20,7 +20,7 @@ describe("books repo", () => {
     const initial = repo.ensureSettings();
     expect(initial.auth.mode).toBe("plex");
     expect(initial.auth.appRedirectURIs).toEqual([]);
-    expect(initial.recovery.stalledTorrentMinutes).toBe(10);
+    expect(initial).not.toHaveProperty("recovery");
     expect(initial.notifications.pushover.enabled).toBe(false);
 
     const next = {
@@ -41,13 +41,12 @@ describe("books repo", () => {
     const saved = repo.updateSettings(next);
     expect(saved.libraryRoot).toBe("/tmp/library");
     expect(saved.auth.mode).toBe("plex");
-    expect(saved.recovery.stalledTorrentMinutes).toBe(15);
     expect(saved.notifications.pushover.enabled).toBe(true);
 
     const fetched = repo.getSettings();
     expect(fetched.libraryRoot).toBe("/tmp/library");
     expect(fetched.auth.mode).toBe("plex");
-    expect(fetched.recovery.stalledTorrentMinutes).toBe(15);
+    expect(fetched).not.toHaveProperty("recovery");
     expect(fetched.notifications.pushover.userKey).toBe("user");
 
     db.close();

@@ -1,8 +1,8 @@
 import { nowIso } from "../db";
 import { bookDownloadClient, legacyBookSnapshot } from "../media/book-torrents";
-import { downloadComplete, downloadRemainingBytes, downloadPollDecision } from "../media/download-lifecycle";
+import { downloadComplete, downloadRemainingBytes, downloadPollDecision, DOWNLOAD_STALL_MS } from "../media/download-lifecycle";
 import type { TorrentSnapshot } from "../media/torrent-client";
-import type { AppSettings, JobRow, MediaType } from "../app-types";
+import type { JobRow, MediaType } from "../app-types";
 import { durableStep, type WorkerContext } from "./context";
 import { recordAudioEditionPart } from "../library/audio-editions";
 
@@ -68,7 +68,6 @@ function describeDownloadIssue(prefix: string, state: TorrentSnapshot, detail?: 
 function analyzeDownloadIssue(
   state: TorrentSnapshot,
   payload: DownloadJobPayload,
-  settings: AppSettings
 ): DownloadIssueDecision {
   const nextPayload: DownloadJobPayload = { ...payload };
   const leftBytes = derivedLeftBytes(state);
@@ -109,17 +108,8 @@ function analyzeDownloadIssue(
     };
   }
 
-  const stallMs = Math.max(0, settings.recovery.stalledTorrentMinutes) * 60_000;
-  if (stallMs === 0) {
-    return {
-      action: "recover",
-      nextPayload,
-      error: describeDownloadIssue("Torrent stalled with no progress; queuing forced reacquire", state)
-    };
-  }
-
   const stagnantForMs = Date.now() - Date.parse(stagnantSince);
-  if (Number.isFinite(stagnantForMs) && stagnantForMs >= stallMs) {
+  if (Number.isFinite(stagnantForMs) && stagnantForMs >= DOWNLOAD_STALL_MS) {
     return {
       action: "recover",
       nextPayload,
@@ -165,7 +155,7 @@ export async function processDownloadJob(ctx: WorkerContext, job: JobRow): Promi
       ctx.execution?.assertActive();
       const state = await client.inspect(release.info_hash);
       ctx.execution?.assertActive();
-      const issue = analyzeDownloadIssue(state, payload, settings);
+      const issue = analyzeDownloadIssue(state, payload);
       const decision = selectDownloadPollDecision(
         state,
         pollMsForMedia(release.media_type, settings.polling.rtorrentMs || 5000)
