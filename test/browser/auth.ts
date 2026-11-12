@@ -143,6 +143,21 @@ try {
   assert.equal((await rpcMe(success)).result?.user.username, "reader");
   const cookie = (await success.cookies()).find(item => item.name === "podible_session");
   assert.ok(cookie?.value); assert.equal(cookie?.httpOnly, true); assert.equal(cookie?.sameSite, "Lax");
+
+  const beginPairing = await success.request.post(link("/rpc"), {
+    data: { jsonrpc: "2.0", id: 1, method: "auth.beginDeviceLogin", params: {} },
+  });
+  const { result: grant } = await beginPairing.json();
+  const approvalUrl = link(grant.authorizePath);
+  await page.goto(approvalUrl);
+  await page.getByLabel("TV code").fill(grant.code);
+  const approvalResponse = page.waitForResponse(response => response.url() === approvalUrl && response.request().method() === "POST");
+  await page.getByRole("button", { name: "Approve sign-in", exact: true }).click();
+  const approval = await approvalResponse;
+  assert.equal((await approval.request().allHeaders()).origin, new URL(origin).origin, "The native pairing form must send the real origin");
+  assert.equal(approval.status(), 200);
+  await page.getByRole("heading", { name: "Apple TV connected" }).waitFor();
+  await page.goto(link("/library"));
   const signOutResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/logout" && response.request().method() === "POST");
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   assert.equal((await signOutResponse).status(), 303);

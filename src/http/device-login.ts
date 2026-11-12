@@ -34,6 +34,8 @@ export function createDeviceLoginRoutes(repo: BooksRepo) {
     const path = `/auth/device?id=${id.data}`;
     if (session?.kind !== "browser") return c.redirect(`/login?${new URLSearchParams({ redirectTo: path })}`, 303);
     const linked = repo.deviceLoginHasPlexAccess(id.data, session.id);
+    // no-referrer makes browsers serialize Origin as null for a native form POST.
+    c.header("Referrer-Policy", "same-origin");
     return c.html(page("Connect Apple TV", html`
       <p>You are signed in as <strong>${session.display_name || session.username}</strong>. Enter the code shown on your TV. Do not enter a code sent to you by someone else.</p>
       <form method="post" action="${path}">

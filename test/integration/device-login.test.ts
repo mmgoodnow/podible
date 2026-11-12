@@ -46,11 +46,16 @@ test("Apple TV can exchange one phone approval for a separate revocable session"
   expect(markup).toContain("Approve sign-in");
   expect(markup).not.toContain("viewer-test-token");
   expect((await rpc("auth.exchangeDeviceLogin", params)).result.status).toBe("pending");
-  const approve = (code: string, requestOrigin = origin) => handle(new Request(link, {
-    method: "POST", headers: { cookie, origin: requestOrigin, "content-type": "application/x-www-form-urlencoded" },
+  const approve = (code: string, headers: Record<string, string> = { origin }) => handle(new Request(link, {
+    method: "POST", headers: { cookie, "content-type": "application/x-www-form-urlencoded", ...headers },
     body: new URLSearchParams({ code }),
   }));
-  expect((await approve(grant.code, "https://other.example")).status).toBe(403);
+  const rejectedOrigins: Record<string, string>[] = [
+    { origin: "https://other.example" }, { origin: "null" }, {}, { origin, "sec-fetch-site": "cross-site" },
+  ];
+  for (const headers of rejectedOrigins) {
+    expect((await approve(grant.code, headers)).status).toBe(403);
+  }
   expect((await approve(grant.code === "000000" ? "111111" : "000000")).status).toBe(400);
   expect((await approve(grant.code)).status).toBe(200);
   expect((await rpc("auth.exchangeDeviceLogin", { ...params, verifier: createSessionToken() })).result.status).toBe("unavailable");
