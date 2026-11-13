@@ -43,6 +43,7 @@ export type RpcAuthLevel = "public" | "user" | "admin";
 
 export type RpcContext = {
   acquisitionEvents?: import("../runtime/acquisition-events").AcquisitionEvents;
+  acquisitionTransmission?: import("./admin-torrents").AdminTransmissionReader;
   bookTorrentClient?: import("../media/torrent-client").TorrentClient;
   movieServices?: import("../movies/operations").MovieServices;
   repo: BooksRepo;

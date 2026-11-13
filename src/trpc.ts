@@ -27,6 +27,8 @@ import { torrentRetirementRouter } from "./rpc/torrent-retirement-router";
 import { transferMetricsRouter } from "./rpc/transfer-metrics-router";
 import { crossSeedRouter } from "./rpc/cross-seed-router";
 import { notificationsRouter } from "./rpc/notifications-router";
+import { canWatchTransfer, transferSamples } from "./runtime/acquisition-transfer";
+import { transferScope } from "./runtime/acquisition-transfer-contracts";
 
 const t = initTRPC.context<RpcContext>().create({
   sse: { ping: { enabled: true, intervalMs: 20_000 }, client: { reconnectAfterInactivityMs: 50_000 } },
@@ -79,6 +81,14 @@ export const appRouter = t.router({
       if (!ctx.session) throw new TRPCError({ code: "UNAUTHORIZED" });
       if (!ctx.acquisitionEvents) throw new TRPCError({ code: "SERVICE_UNAVAILABLE" });
       return ctx.acquisitionEvents.changes(signal ?? ctx.request.signal);
+    }),
+    transfer: procedure.input(transferScope).subscription(({ ctx, input, signal }) => {
+      const session = ctx.session;
+      if (!session) throw new TRPCError({ code: "UNAUTHORIZED" });
+      const authorized = () => Boolean(ctx.repo.getSessionByTokenHash(session.token_hash)) &&
+        canWatchTransfer(ctx.repo, session.user_id, input);
+      if (!authorized()) throw new TRPCError({ code: "FORBIDDEN" });
+      return transferSamples(ctx.repo, input, authorized, signal ?? ctx.request.signal, ctx.acquisitionTransmission);
     }),
   }),
   crossSeed: t.router({

@@ -237,6 +237,11 @@ export class TvRepo {
     return this.db.query<TvAcquisition, [number]>(`SELECT a.* FROM tv_targets t
       JOIN tv_acquisitions a ON a.target_id=t.id WHERE t.entry_id=? ORDER BY a.id DESC`).all(entryId);
   }
+  showDownloadingAcquisitions(entryId: number) {
+    return this.db.query<{ id: number; job_id: number }, [number]>(`SELECT a.id,a.job_id FROM tv_targets t
+      JOIN tv_acquisitions a ON a.target_id=t.id WHERE t.entry_id=? AND a.finished_at IS NULL AND a.job_id IS NOT NULL
+      AND (SELECT stage FROM tv_events e WHERE e.target_id=t.id AND e.acquisition_id=a.id ORDER BY e.id DESC LIMIT 1)='downloading'`).all(entryId);
+  }
 
   showProgressEvents(entryId: number): TvEvent[] {
     return this.db.query<TvEvent, [number]>(`SELECT e.id,e.acquisition_id AS acquisitionId,e.stage,
@@ -362,13 +367,17 @@ export class TvRepo {
   }
 
   requestDownloadObservations(acquisitionIds: number[]) {
-    return this.db.query<{ acquisitionId: number; torrentId: number; observation: string;
+    return this.downloadBindings(acquisitionIds).filter((row): row is typeof row & { observation: string } => row.observation !== null);
+  }
+
+  downloadBindings(acquisitionIds: number[]) {
+    return this.db.query<{ acquisitionId: number; torrentId: number; observation: string | null;
       client_id: string; native_id: string; location_json: string }, [string]>(`
       SELECT d.acquisition_id AS acquisitionId,t.id AS torrentId,t.observation_json AS observation,
         t.client_id,t.native_id,t.location_json
       FROM json_each(?) ids JOIN tv_acquisition_downloads d ON d.acquisition_id=ids.value
       JOIN media_torrents t ON t.id=d.torrent_id
-      WHERE t.ownership_tag='Podible TV' AND t.observation_json IS NOT NULL
+      WHERE t.ownership_tag='Podible TV'
       AND NOT EXISTS (SELECT 1 FROM tv_acquisition_rejections r
         WHERE r.acquisition_id=d.acquisition_id AND r.torrent_id=t.id)
     `).all(JSON.stringify(acquisitionIds));

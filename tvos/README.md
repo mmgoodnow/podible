@@ -20,8 +20,8 @@ sidebar, Up or Down to choose a destination, and Select to open it.
 
 - Browse movie and TV shelves, search, open title details, request a movie or specific seasons, and revisit your requests.
 - Demo mode needs no server; its requests are temporary and its player uses an Apple sample stream.
-- Settings pairs with an HTTPS Podible origin. Scan the QR code, sign in on your phone, and confirm the code shown on the TV. The TV stores its own revocable session in the device Keychain. Pairing, catalog and request features use the existing JSON-RPC transport.
-- To enable feature playback, sign in with Plex on the phone during pairing. If the phone is already signed into Podible, choose **Sign in with Plex to enable playback** before approving the code. Playback uses the viewer's access to the selected Plex server and requires a verified publication.
+- Settings pairs with an HTTPS Podible origin. Scan the QR code and approve on your phone. Sign in with Plex first if prompted. The TV remembers the server address separately from its revocable Keychain session.
+- Playback uses the viewer's access to the selected Plex server and requires a verified publication. If a Plex server is selected, QR pairing requires that server's viewer access before approval.
 - Compatible H.264/HEVC and AAC MP4 files direct play. Other single-file editions can use Plex's HLS fallback when the server can supply a supported H.264/AAC stream. Combined episode files are not supported. Playback control uses JSON-RPC; AVKit fetches the video through short-lived, session-bound Podible URLs.
 - Connected titles can play explicitly shared [local Plex trailers](TRAILERS.md). Catalog availability is not playback authorization.
 

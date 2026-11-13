@@ -1029,7 +1029,7 @@ footer {
   font-size: .72rem;
   padding-right: .25rem;
 }
-.stage-tracker li span {
+.stage-tracker .stage-marker {
   position: absolute;
   left: 0;
   top: -7px;
@@ -1042,9 +1042,26 @@ footer {
   border-color: var(--ink);
   color: var(--ink);
 }
-.stage-tracker .reached span {
+.stage-tracker .reached .stage-marker {
   background: var(--ink);
 }
+.stage-tracker li:has(.stage-download-meter) { border-color: transparent; }
+.stage-download-meter {
+  position: absolute;
+  inset: -3px 0 auto;
+  height: 3px;
+  background: var(--line);
+}
+.stage-download-meter span {
+  display: block;
+  height: 100%;
+  width: var(--transfer-start);
+  background: var(--accent);
+  animation: stage-transfer var(--transfer-interval) linear forwards;
+}
+.stage-tracker .stage-download-stats { display: inline; color: var(--muted); overflow-wrap: anywhere; }
+@keyframes stage-transfer { to { width: var(--transfer-end); } }
+@media (prefers-reduced-motion: reduce) { .stage-download-meter span { animation: none; } }
 .actions {
   display: flex;
   align-items: center;

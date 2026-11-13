@@ -9,6 +9,7 @@ export function createTrpcRoutes(repo: BooksRepo, startTime: number, dependencie
   movieServices?: import("../movies/operations").MovieServices;
   bookTorrentClient?: import("../media/torrent-client").TorrentClient;
   acquisitionEvents?: import("../runtime/acquisition-events").AcquisitionEvents;
+  acquisitionTransmission?: import("../rpc/admin-torrents").AdminTransmissionReader;
 } = {}) {
   const app = new Hono<HttpEnv>();
   app.all("*", async (c) => {

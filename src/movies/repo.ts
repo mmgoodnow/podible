@@ -276,13 +276,14 @@ export class MovieRepo {
         .get(id) as { n: number }
     ).n;
   }
-  downloads(targetId: number) {
+  downloads(targetId: number, acquisitionId?: number) {
     return this.db
       .query(
         `SELECT t.* FROM media_torrents t JOIN movie_acquisition_downloads d ON d.torrent_id=t.id
-      JOIN movie_acquisitions a ON a.id=d.acquisition_id WHERE a.target_id=? ORDER BY a.id DESC,t.id DESC`,
+      JOIN movie_acquisitions a ON a.id=d.acquisition_id WHERE a.target_id=?
+      ${acquisitionId === undefined ? "" : "AND a.id=?"} ORDER BY a.id DESC,t.id DESC`,
       )
-      .all(targetId) as TorrentRecord[];
+      .all(...(acquisitionId === undefined ? [targetId] : [targetId, acquisitionId])) as TorrentRecord[];
   }
   torrent(clientId: string, nativeId: string) {
     return new TorrentRecordsRepo(this.db, this.beforeWrite).get(clientId, nativeId);
@@ -309,6 +310,16 @@ export class MovieRepo {
         "SELECT * FROM movie_acquisitions WHERE target_id=? ORDER BY id DESC",
       )
       .all(targetId) as MovieAcquisition[];
+  }
+  latestAcquisition(targetId: number): MovieAcquisition | null {
+    return this.db.query<MovieAcquisition, [number]>(
+      "SELECT * FROM movie_acquisitions WHERE target_id=? ORDER BY id DESC LIMIT 1",
+    ).get(targetId);
+  }
+  latestTransferStage(targetId: number, acquisitionId: number): MovieStage | undefined {
+    return this.db.query<{ stage: MovieStage }, [number, number]>(
+      "SELECT stage FROM movie_events WHERE target_id=? AND acquisition_id=? ORDER BY id DESC LIMIT 1",
+    ).get(targetId, acquisitionId)?.stage;
   }
   startAcquisition(
     targetId: number,

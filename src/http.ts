@@ -44,6 +44,7 @@ export function createPodibleFetchHandler(
     metricsTokenDigestPath?: string;
     autobrr?: AutobrrConfig;
     acquisitionEvents?: AcquisitionEvents;
+    acquisitionTransmission?: import("./rpc/admin-torrents").AdminTransmissionReader;
   } = {},
 ): (request: Request) => Promise<Response> {
   const app = new Hono<HttpEnv>();

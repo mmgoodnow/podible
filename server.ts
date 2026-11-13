@@ -4,7 +4,7 @@ import { createPodibleFetchHandler } from "./src/http";
 import { pingPlexOwnerToken } from "./src/plex";
 import { BooksRepo } from "./src/repo";
 import { BackgroundWorker } from "./src/runtime/background-worker";
-import { AcquisitionEvents, acquisitionEventsPath } from "./src/runtime/acquisition-events";
+import { AcquisitionEvents, acquisitionEventsPath, acquisitionTransferPath } from "./src/runtime/acquisition-events";
 import { readAutobrrConfig, reconcileAutobrrWebhook, type AutobrrConfig } from "./src/media/autobrr";
 import type { HTMLBundle } from "bun";
 
@@ -104,7 +104,7 @@ export async function startServer(frontend?: HTMLBundle) {
         : { development: false }),
       fetch: (request, httpServer) => {
         if (stopping || background.state !== "ready") return new Response("Background execution unavailable", { status: 503 });
-        if (request.method === "GET" && new URL(request.url).pathname === acquisitionEventsPath) httpServer.timeout(request, 0);
+        if (request.method === "GET" && [acquisitionEventsPath, acquisitionTransferPath].includes(new URL(request.url).pathname)) httpServer.timeout(request, 0);
         return fetchHandler(request);
       },
     });

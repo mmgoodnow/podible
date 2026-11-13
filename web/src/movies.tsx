@@ -242,7 +242,6 @@ function MovieVersionRequest({ tmdbId }: { tmdbId: number }) {
         {request.isPending ? "Requesting version..." : "Request version"}
       </button>
       {request.isError && <p role="alert">{request.error.message}</p>}
-      {request.isSuccess && <p role="status">{request.data.request.versionLabel} requested. Its progress is shown above.</p>}
     </form>}
   </section>;
 }
@@ -409,16 +408,6 @@ const movieStages = [
   ["publishing", "available"],
 ];
 function Progress({ request }: { request: MovieRequestView }) {
-  const download = request.download;
-  const percent =
-    download?.bytesDone !== null &&
-    download?.bytesDone !== undefined &&
-    download.sizeBytes
-      ? Math.min(
-          100,
-          Math.max(0, (100 * download.bytesDone) / download.sizeBytes),
-        )
-      : null;
   return (
     <section className="panel progress-panel" aria-label="Request progress">
       <div className="progress-heading">
@@ -439,7 +428,8 @@ function Progress({ request }: { request: MovieRequestView }) {
           {request.upgrading ? "Upgrade in progress" : request.state === "waiting-for-release" ? "Watching for releases" : request.state}
         </span>
       </div>
-      <StageTracker reached={movieStages.map(stages => request.events.some(event => stages.includes(event.stage)))} />
+      <StageTracker reached={movieStages.map(stages => request.events.some(event => stages.includes(event.stage)))}
+        transfer={request.stage === "downloading" ? { media: "movie", id: request.id } : undefined} />
       {request.upgrading && (
         <p>
           Your current version stays available while we look for something
@@ -460,21 +450,6 @@ function Progress({ request }: { request: MovieRequestView }) {
             request.events.at(-1)?.message ??
             "Your request is queued."}
         </p>
-      )}
-      {request.stage === "downloading" && download && (
-        <div>
-          <progress
-            max={100}
-            value={percent ?? undefined}
-            aria-label="Download progress"
-          />
-          <p className="muted">
-            {percent === null
-              ? "Progress unavailable"
-              : `${percent.toFixed(0)}%`}{" "}
-            / {bytes(download.sizeBytes)} / {bytes(download.bytesPerSecond)}/s
-          </p>
-        </div>
       )}
     </section>
   );

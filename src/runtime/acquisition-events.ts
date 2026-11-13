@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 
 export const acquisitionEventsPath = "/api/trpc/acquisition.changes";
+export const acquisitionTransferPath = "/api/trpc/acquisition.transfer";
 
 /** Coalesce invalidations; a fresh snapshot on connect covers missed changes. */
 export class AcquisitionEvents {

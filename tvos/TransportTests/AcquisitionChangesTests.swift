@@ -5,6 +5,34 @@ import Testing
 
 @Suite(.timeLimit(.minutes(1)))
 struct AcquisitionChangesTests {
+    @Test(arguments: ["movie", "tv"])
+    func transferUsesScopedInputAndDeliversZeroProgressAndClear(media: String) async throws {
+        let fixture = Fixture()
+        let (samples, received) = AsyncStream<Int?>.makeStream()
+        let scope = TransferScope(media: try #require(TransferScope.Media(rawValue: media)), id: 123)
+        let observation = Task {
+            try await fixture.subscriber.observeTransfer(scope) { received.yield($0?.bytesDone) }
+        }
+        defer { observation.cancel() }
+        var requests = fixture.requests.makeAsyncIterator(), updates = samples.makeAsyncIterator()
+        let stream = try #require(await requests.next()).protocolInstance
+        let url = try #require(stream.request.url)
+        #expect(url.path == "/api/trpc/acquisition.transfer")
+        let input = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first?.value)
+        let sent = try JSONDecoder().decode(TransferScope.self, from: Data(input.utf8))
+        #expect(sent.media == scope.media && sent.id == 123)
+        #expect(stream.request.value(forHTTPHeaderField: "Authorization") == "Bearer test-token")
+        stream.respond()
+        stream.send("event: connected\ndata: {}\n\ndata: {\"sample\":{\"bytesDone\":0,\"sizeBytes\":100,\"bytesPerSecond\":0,\"etaSeconds\":null}}\n\n")
+        #expect(await updates.next() == .some(0))
+        stream.send("data: {\"sample\":{\"bytesDone\":62,\"sizeBytes\":100,\"bytesPerSecond\":2,\"etaSeconds\":19}}\n\n")
+        #expect(await updates.next() == .some(62))
+        stream.send("data: {\"sample\":null}\n\n")
+        #expect(await updates.next() == .some(nil))
+        observation.cancel()
+        _ = await observation.result
+    }
+
     @Test(arguments: [false, true])
     func initialLiveAndReconnectChangesRefresh(serializedError: Bool) async throws {
         let fixture = Fixture()

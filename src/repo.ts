@@ -611,22 +611,34 @@ export class BooksRepo {
     return this.db.query("SELECT * FROM users ORDER BY username COLLATE NOCASE ASC, id ASC").all() as UserRow[];
   }
 
-  createDeviceLoginGrant(id: string, verifierHash: string, code: string, expiresAt: string): boolean {
+  createDeviceLoginGrant(id: string, verifierHash: string, code: string, expiresAt: string, approvalHash: string | null = null): boolean {
     return this.transaction(() => {
       this.db.query("DELETE FROM device_login_grants WHERE expires_at<=?").run(nowIso());
-      return this.db.query(`INSERT INTO device_login_grants(id,verifier_hash,confirmation_code,expires_at)
-        SELECT ?,?,?,? WHERE (SELECT count(*) FROM device_login_grants)<256`).run(id, verifierHash, code, expiresAt).changes === 1;
+      return this.db.query(`INSERT INTO device_login_grants(id,verifier_hash,confirmation_code,expires_at,approval_hash)
+        SELECT ?,?,?,?,? WHERE (SELECT count(*) FROM device_login_grants)<256`)
+        .run(id, verifierHash, code, expiresAt, approvalHash).changes === 1;
     });
   }
 
   deviceLoginNeedsApproval(id: string): boolean {
-    return Boolean(this.db.query(`SELECT 1 FROM device_login_grants
-      WHERE id=? AND expires_at>? AND user_id IS NULL AND attempts<5`).get(id, nowIso()));
+    return this.getPendingDeviceLogin(id) !== null;
   }
 
-  deviceLoginHasPlexAccess(grantId: string, browserSessionId: number): boolean {
+  getPendingDeviceLogin(id: string): { qrOnly: boolean } | null {
+    const row = this.db.query<{ qr_only: number }, [string, string]>(`SELECT approval_hash IS NOT NULL AS qr_only FROM device_login_grants
+      WHERE id=? AND expires_at>? AND user_id IS NULL AND attempts<5`).get(id, nowIso());
+    return row && { qrOnly: Boolean(row.qr_only) };
+  }
+
+  deviceLoginAcceptsQr(id: string, approvalHash: string): boolean {
+    return Boolean(this.db.query(`SELECT 1 FROM device_login_grants
+      WHERE id=? AND approval_hash=? AND expires_at>? AND user_id IS NULL`).get(id, approvalHash, nowIso()));
+  }
+
+  deviceLoginHasPlexAccess(grantId: string, browserSessionId: number, machineId?: string): boolean {
     return Boolean(this.db.query(`SELECT 1 FROM device_login_plex_access
-      WHERE grant_id=? AND browser_session_id=?`).get(grantId, browserSessionId));
+      WHERE grant_id=? AND browser_session_id=? AND (? IS NULL OR machine_id=?)`)
+      .get(grantId, browserSessionId, machineId ?? null, machineId ?? null));
   }
 
   stageDeviceLoginPlexAccess(grantId: string, browserSessionId: number, machineId: string, token: string): void {
@@ -646,8 +658,20 @@ export class BooksRepo {
       const row = this.db.query<{ user_id: number | null }, [string, number, string, string]>(
         `UPDATE device_login_grants SET attempts=attempts+1,
           user_id=CASE WHEN confirmation_code=? THEN ? ELSE NULL END
-          WHERE id=? AND expires_at>? AND user_id IS NULL AND attempts<5 RETURNING user_id`);
+          WHERE id=? AND expires_at>? AND user_id IS NULL AND attempts<5 AND approval_hash IS NULL RETURNING user_id`);
       const approved = row.get(code, userId, id, nowIso())?.user_id === userId;
+      if (approved) this.db.query("DELETE FROM device_login_plex_access WHERE grant_id=? AND browser_session_id<>?").run(id, browserSessionId);
+      return approved;
+    });
+  }
+
+  approveDeviceLoginQr(id: string, approvalHash: string, userId: number, browserSessionId: number, machineId: string | null): boolean {
+    return this.transaction(() => {
+      const approved = this.db.query(`UPDATE device_login_grants SET user_id=?
+        WHERE id=? AND approval_hash=? AND expires_at>? AND user_id IS NULL
+          AND (? IS NULL OR EXISTS(SELECT 1 FROM device_login_plex_access
+            WHERE grant_id=? AND browser_session_id=? AND machine_id=?))`)
+        .run(userId, id, approvalHash, nowIso(), machineId, id, browserSessionId, machineId).changes === 1;
       if (approved) this.db.query("DELETE FROM device_login_plex_access WHERE grant_id=? AND browser_session_id<>?").run(id, browserSessionId);
       return approved;
     });

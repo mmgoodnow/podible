@@ -2,6 +2,22 @@ import XCTest
 
 final class FocusTests: XCTestCase {
     @MainActor
+    func testMovieDetailHero() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo"]
+        app.launch()
+        let remote = XCUIRemote.shared
+        let poster = app.buttons["poster.marrow"]
+        XCTAssertTrue(poster.waitForExistence(timeout: 8))
+        if app.buttons["nav.Home"].hasFocus { remote.press(.right) }
+        assertFocused(poster)
+        remote.press(.select)
+        XCTAssertTrue(app.buttons["Play Sample"].waitForExistence(timeout: 5))
+        capture("10-movie-detail-hero")
+    }
+
+    @MainActor
     func testBrowseToSearchAndBack() {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -26,14 +42,14 @@ final class FocusTests: XCTestCase {
         capture("03-navigation-focus")
 
         remote.press(.select)
-        let query = app.textFields["search.query"]
+        let query = app.searchFields["Search movies and TV"]
         XCTAssertTrue(query.waitForExistence(timeout: 5))
         capture("04-search")
-
-        assertFocused(query)
-        capture("04b-search-input-focus")
-        remote.press(.left)
-        XCTAssertTrue(sidebar.allElementsBoundByIndex.contains(where: \.hasFocus))
+        XCTAssertTrue(app.staticTexts["Browse Titles"].exists)
+        XCTAssertTrue(app.keyboards.firstMatch.exists && app.keys["a"].exists, "Search opens with the inline keyboard")
+        for _ in 0..<12 where !sidebar.allElementsBoundByIndex.contains(where: \.hasFocus) { remote.press(.left) }
+        if !sidebar.allElementsBoundByIndex.contains(where: \.hasFocus) { remote.press(.menu) }
+        XCTAssertTrue(sidebar.allElementsBoundByIndex.contains(where: \.hasFocus), app.debugDescription)
         for _ in 0..<6 where !browse.hasFocus { remote.press(.up) }
         assertFocused(browse)
         remote.press(.select)

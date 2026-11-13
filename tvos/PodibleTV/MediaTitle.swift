@@ -80,16 +80,10 @@ struct TitleAcquisitionProgress: Sendable {
     let step: Step
     let status: String
     var episodeCount: String? = nil
-    var download: Download? = nil
+    var transferScope: TransferScope? = nil
 
     static let requested = Self(step: .requested, status: "Request received")
 
-    nonisolated struct Download: Decodable, Sendable {
-        let bytesDone: Int64?
-        let sizeBytes: Int64?
-        let bytesPerSecond: Int64?
-        let etaSeconds: Int?
-    }
 }
 
 enum DemoCatalog {

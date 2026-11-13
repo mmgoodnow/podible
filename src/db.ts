@@ -1269,6 +1269,7 @@ export function runMigrations(db: Database): void {
         AND substr(json_extract(value_json, '$.message.message'), -length($footer)) = $footer
     `).run({ $footer: "\n\nOpen Podible to view your notification." });
   });
+  apply(67, () => db.exec("ALTER TABLE device_login_grants ADD COLUMN approval_hash TEXT"));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

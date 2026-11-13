@@ -38,7 +38,7 @@ try {
   page.on("pageerror",error => errors.push(error.message));
   page.on("requestfailed",item => {
     const error = item.failure()?.errorText;
-    if (new URL(item.url()).pathname === "/api/trpc/acquisition.changes" && error === "net::ERR_ABORTED") return;
+    if (["/api/trpc/acquisition.changes", "/api/trpc/acquisition.transfer"].includes(new URL(item.url()).pathname) && error === "net::ERR_ABORTED") return;
     networkErrors.push(`${item.method()} ${item.url()}: ${error}`);
   });
   page.on("response",response => { if (response.url().includes("/api/trpc/") && response.status() >= 400) networkErrors.push(`${response.status()} ${response.url()}`); });
@@ -82,20 +82,26 @@ try {
   console.log("Native TV browser: persisted coverage and desktop/mobile screenshots verified");
 
   const stream = page.waitForResponse(response => new URL(response.url()).pathname === "/api/trpc/acquisition.changes" && response.ok());
+  const transfers = page.waitForResponse(response => new URL(response.url()).pathname === "/api/trpc/acquisition.transfer" && response.ok());
   await page.goto(new URL(`/tv/requests/${withGaps.requestId}`,url).href);
-  await stream;
+  await Promise.all([stream, transfers]);
   await page.getByRole("heading", { name: "1 episode batch in progress" }).waitFor();
   const stages = page.getByRole("list", { name: "Acquisition stages" });
   await stages.getByRole("listitem").filter({ hasText: "Download" }).getByText("1 season", { exact: true }).waitFor();
   assert.equal(await stages.getByRole("listitem").count(), 5);
-  await page.getByRole("progressbar", { name: "Active downloads progress" }).waitFor();
-  assert.equal(await page.getByRole("progressbar", { name: "Season 1 downloads progress" }).getAttribute("value"),String(3 * 1024 ** 3));
+  const meter = stages.getByRole("progressbar", { name: "Download progress", exact: true });
+  await meter.waitFor();
+  assert.equal(await meter.getAttribute("aria-valuenow"), "0");
+  await stages.getByText("(0% · 8 GiB)", { exact: true }).waitFor();
   assert.equal(await page.getByRole("progressbar", { name: "Season 2 downloads progress" }).count(),0);
-  await page.getByText("3 GiB of 8 GiB · 2 MiB/s · ETA 43 min", { exact: true }).first().waitFor();
+  let detailReads = 0;
+  page.on("request", req => { if (new URL(req.url()).pathname.includes("catalog.tvEntry")) detailReads++; });
   assert.equal((await context.request.post(new URL("/__fixture/tv-transfer", url).href)).ok(), true);
-  await page.getByText("5 GiB of 8 GiB · 2 MiB/s · ETA 26 min", { exact: true }).first().waitFor({ timeout: 1500 });
+  await stages.getByText("(62% · 8 GiB · 2 MiB/s · ETA 26 min)", { exact: true }).waitFor({ timeout: 8000 });
+  assert.equal(await meter.getAttribute("aria-valuenow"), "62");
+  assert.equal(detailReads, 0, "Live transfer updates must not refetch the title snapshot");
   assert.equal((await context.request.post(new URL("/__fixture/tv-transfer?reconnect", url).href)).ok(), true);
-  await page.getByText("6 GiB of 8 GiB · 2 MiB/s · ETA 18 min", { exact: true }).first().waitFor({ timeout: 10_000 });
+  await stages.getByText("(75% · 8 GiB · 2 MiB/s · ETA 18 min)", { exact: true }).waitFor({ timeout: 10_000 });
   await page.getByRole("button", { name: "Season 1", exact: true }).press("Enter");
   await page.getByRole("list", { name: "Season 1 episodes" }).getByText("Downloading", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Season 2", exact: true }).press("Enter");

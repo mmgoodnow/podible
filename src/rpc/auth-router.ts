@@ -55,32 +55,35 @@ export function createHelpMethod(
 }
 
 export const deviceLoginIdSchema = z.string().regex(/^[A-Za-z0-9_-]{32}$/);
+export const deviceLoginSecretSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 
 export const authRouter = defineRouter({
   beginDeviceLogin: defineMethod({
     auth: "public",
     summary: "Start Apple TV pairing without issuing a session.",
-    paramsSchema: emptyParamsSchema,
+    paramsSchema: emptyParamsSchema.extend({ qrOnly: z.boolean().optional() }),
     resultSchema: z.object({
-      id: deviceLoginIdSchema, verifier: z.string(), code: z.string(),
+      id: deviceLoginIdSchema, verifier: deviceLoginSecretSchema, code: z.string().optional(),
       authorizePath: z.string(), expiresInSeconds: z.number().int(),
     }),
-    async handler(ctx) {
+    async handler(ctx, params) {
       if (ctx.request.headers.get("sec-fetch-site") === "cross-site")
         throw new RpcError(-32003, "Cross-origin device login rejected");
       const id = randomBytes(24).toString("base64url");
       const verifier = createSessionToken();
-      const code = String(randomInt(1_000_000)).padStart(6, "0");
+      const approval = params.qrOnly ? createSessionToken() : undefined;
+      const code = approval ? undefined : String(randomInt(1_000_000)).padStart(6, "0");
       const expiresInSeconds = 300;
-      if (!ctx.repo.createDeviceLoginGrant(id, hashSessionToken(verifier), code, new Date(Date.now() + expiresInSeconds * 1000).toISOString()))
+      if (!ctx.repo.createDeviceLoginGrant(id, hashSessionToken(verifier), code ?? "",
+        new Date(Date.now() + expiresInSeconds * 1000).toISOString(), approval ? hashSessionToken(approval) : null))
         throw new RpcError(-32000, "Too many pending sign-ins. Try again in a few minutes.");
-      return { id, verifier, code, authorizePath: `/auth/device?id=${id}`, expiresInSeconds };
+      return { id, verifier, code, authorizePath: `/auth/device?id=${id}${approval ? `&approval=${approval}` : ""}`, expiresInSeconds };
     },
   }),
   exchangeDeviceLogin: defineMethod({
     auth: "public",
     summary: "Exchange an approved Apple TV pairing grant once.",
-    paramsSchema: z.strictObject({ id: deviceLoginIdSchema, verifier: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }),
+    paramsSchema: z.strictObject({ id: deviceLoginIdSchema, verifier: deviceLoginSecretSchema }),
     resultSchema: z.object({ status: z.enum(["pending", "unavailable", "approved"]), accessToken: z.string().nullable() }),
     async handler(ctx, params) {
       const token = createSessionToken();

@@ -6,6 +6,16 @@ struct Connection: Equatable {
     let token: String
     let paired: Bool
 
+    private static let serverPreference = "podible.serverAddress"
+
+    static var rememberedServer: String {
+        UserDefaults.standard.string(forKey: serverPreference) ?? ""
+    }
+
+    static func rememberServer(_ url: URL) {
+        UserDefaults.standard.set(url.absoluteString, forKey: serverPreference)
+    }
+
     static func serverURL(_ server: String) throws -> URL {
         guard let parts = URLComponents(string: server.trimmingCharacters(in: .whitespacesAndNewlines)),
               parts.scheme?.lowercased() == "https", parts.host != nil,

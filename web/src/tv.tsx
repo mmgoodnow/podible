@@ -177,11 +177,11 @@ export function TvLibraryDetail({ entryId }: { entryId: number }) {
       <StageTracker reached={[true, Boolean(searches || downloads || verifying || publishing || allReady),
         Boolean(downloads || verifying || publishing || allReady), Boolean(verifying || publishing || allReady),
         Boolean(publishing || allReady)]}
+        transfer={atStage("downloading") > 0 ? { media: "tv", id: entryId } : undefined}
         details={[seasonCount(requestedSeasons.size), seasonCount(searches), seasonCount(downloads),
           seasonCount(verifying), ready ? `${ready} ready` : publishing ? "Adding episodes" : undefined]} />
       {waiting > 0 && <p>{seasonCount(waiting)} waiting for new releases or upcoming episodes.</p>}
       {stopped > 0 && <p>{seasonCount(stopped)} stopped. Check the season list below.</p>}
-      {r.progress.download && <TvDownloadProgress download={r.progress.download} label="Active downloads" />}
     </section>}
     <section className="tv-request-seasons" aria-label="Season progress">
       <h2>Episodes by season</h2>

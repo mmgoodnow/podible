@@ -168,7 +168,8 @@ try {
   await page.getByLabel("Resolution", { exact: true }).selectOption("2160");
   await page.getByRole("button", { name: "Request version", exact: true }).click();
   await page.getByRole("region", { name: "4K version", exact: true }).waitFor();
-  await page.getByRole("status").getByText("4K requested. Its progress is shown above.", { exact: true }).waitFor();
+  await page.getByRole("region", { name: "4K version", exact: true }).getByRole("list", { name: "Acquisition stages" }).waitFor();
+  assert.equal(await page.getByText("4K requested. Its progress is shown above.", { exact: true }).count(), 0);
   if (await page.evaluate("document.documentElement.scrollWidth > innerWidth"))
     throw new Error("Version request form overflows on mobile");
   // An in-flight authenticated response can restore a cleared rolling cookie.

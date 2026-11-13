@@ -47,7 +47,7 @@ struct PodibleClient {
             let state: RequestState = movie.availableInLibrary || active.contains(where: \.available) ? .available
                 : !active.isEmpty ? .requested
                 : capabilities.acquisitionConfigured ? .requestable : .unavailable
-            let progress = active.first(where: \.available) ?? active.first
+            let progress = active.first { $0.stage == "downloading" } ?? active.first(where: \.available) ?? active.first
             let info = movie.movie
             return (title(info.tmdbId, info.title, info.year, info.overview, info.posterUrl, kind: .movie, state: state), [], progress?.progress)
         case .show:
@@ -95,10 +95,11 @@ struct PodibleClient {
     }
 
     func beginPairing() async throws -> DeviceLoginGrant {
-        let grant: DeviceLoginGrant = try await call("auth.beginDeviceLogin", Empty(), requiresSession: false)
+        let grant: DeviceLoginGrant = try await call("auth.beginDeviceLogin", DeviceLoginInput(qrOnly: true), requiresSession: false)
         guard grant.id.range(of: "^[A-Za-z0-9_-]{32}$", options: .regularExpression) != nil,
-              grant.authorizePath == "/auth/device?id=\(grant.id)",
-              grant.code.range(of: "^[0-9]{6}$", options: .regularExpression) != nil,
+              grant.verifier.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil,
+              grant.authorizePath.range(of: #"^/auth/device\?id=\#(grant.id)&approval=[A-Za-z0-9_-]{43}$"#,
+                                        options: .regularExpression) != nil,
               (1...300).contains(grant.expiresInSeconds) else { throw ClientError.invalidResponse }
         return grant
     }
@@ -124,6 +125,7 @@ struct PodibleClient {
     }
 
     private func tvDetail(_ item: MediaTitle) async throws -> (MediaTitle, [MediaRequestOption], TitleAcquisitionProgress?) {
+        var localID = entryID(for: item)
         var local = try await libraryEntry(for: item)
         let tmdbId = local?.entry.tmdbId ?? item.tmdbID
         var remote: TVDetail?
@@ -135,6 +137,7 @@ struct PodibleClient {
             }
             if local == nil, let showId = response.showId {
                 local = try await call("catalog.tvEntry", EntryID(entryId: showId))
+                localID = showId
             }
         }
 
@@ -175,7 +178,7 @@ struct PodibleClient {
                            synopsis: series?.overview ?? item.synopsis, kind: .show,
                            artwork: artwork(series?.posterUrl ?? local?.entry.posterUrl) ?? item.artwork,
                            backdrop: nil, accent: item.accent, playable: false, playbackURL: nil,
-                           requestState: state, tmdbID: tmdbId), options, local?.acquisitionProgress)
+                           requestState: state, tmdbID: tmdbId), options, local?.acquisitionProgress(entryID: localID))
     }
 
     private func libraryEntry(for item: MediaTitle) async throws -> TVEntry? {
@@ -249,11 +252,11 @@ struct PodibleClient {
         }
     }
 
-    func authenticatedRequest(path: String) throws -> URLRequest {
-        try makeRequest(path: path, requiresSession: true)
+    func authenticatedRequest(path: String, query: [URLQueryItem] = []) throws -> URLRequest {
+        try makeRequest(path: path, requiresSession: true, query: query)
     }
 
-    private func makeRequest(path: String, requiresSession: Bool) throws -> URLRequest {
+    private func makeRequest(path: String, requiresSession: Bool, query: [URLQueryItem] = []) throws -> URLRequest {
         guard var endpoint = URLComponents(url: baseURL, resolvingAgainstBaseURL: true),
               let scheme = endpoint.scheme?.lowercased(), let host = endpoint.host?.lowercased(), !host.isEmpty,
               endpoint.user == nil, endpoint.password == nil, endpoint.query == nil, endpoint.fragment == nil,
@@ -261,6 +264,7 @@ struct PodibleClient {
             throw ClientError.invalidBaseURL
         }
         endpoint.path = path
+        if !query.isEmpty { endpoint.queryItems = query }
         guard let url = endpoint.url else { throw ClientError.invalidBaseURL }
         var request = URLRequest(url: url)
         guard requiresSession else { return request }
@@ -330,13 +334,10 @@ nonisolated private struct Empty: Encodable {}
 private extension MovieDetail.RequestsValue {
     var progress: TitleAcquisitionProgress {
         switch (state, stage) {
+        case (_, "downloading"): .init(step: .download, status: "Downloading", transferScope: Int(exactly: id).map { .init(media: .movie, id: $0) })
         case _ where available: .init(step: .plex, status: "Ready in Plex")
         case ("waiting-for-release", _): .init(step: .search, status: "Watching for a release")
         case ("blocked", _): .init(step: .requested, status: "Acquisition stopped")
-        case (_, "downloading"): .init(step: .download, status: "Downloading", download: download.map {
-            .init(bytesDone: $0.bytesDone.flatMap(Int64.init(exactly:)), sizeBytes: $0.sizeBytes.flatMap(Int64.init(exactly:)),
-                  bytesPerSecond: $0.bytesPerSecond.flatMap(Int64.init(exactly:)), etaSeconds: nil)
-        })
         case (_, "verifying"): .init(step: .verify, status: "Checking the download")
         case (_, "publishing"): .init(step: .verify, status: "Adding to Plex")
         case (_, "searching"), (_, "selecting"), (_, "replacing"): .init(step: .search, status: "Finding a release")
@@ -346,7 +347,7 @@ private extension MovieDetail.RequestsValue {
 }
 
 private extension TVEntry {
-    var acquisitionProgress: TitleAcquisitionProgress? {
+    func acquisitionProgress(entryID: Int?) -> TitleAcquisitionProgress? {
         let numbers = Set(requests.flatMap(\.seasons).compactMap(Int.init(exactly:)))
         let seasons = progress.seasons.filter { numbers.contains($0.seasonNumber) }
         guard !seasons.isEmpty else { return nil }
@@ -370,9 +371,7 @@ private extension TVEntry {
         }
         if total > 0 && available == total { return .init(step: .plex, status: "Ready in Plex", episodeCount: count) }
         let step: TitleAcquisitionProgress.Step = stage == "upcoming" ? .search : .from(stage: stage)
-        return .init(step: step, status: status, episodeCount: count, download: stage == "downloading" ? progress.download.map {
-            .init(bytesDone: Int64($0.bytesDone), sizeBytes: Int64($0.sizeBytes),
-                  bytesPerSecond: $0.bytesPerSecond.map(Int64.init), etaSeconds: $0.etaSeconds)
-        } : nil)
+        return .init(step: step, status: status, episodeCount: count, transferScope: stage == "downloading"
+            ? entryID.map { .init(media: .tv, id: $0) } : nil)
     }
 }

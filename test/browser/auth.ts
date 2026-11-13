@@ -145,12 +145,13 @@ try {
   assert.ok(cookie?.value); assert.equal(cookie?.httpOnly, true); assert.equal(cookie?.sameSite, "Lax");
 
   const beginPairing = await success.request.post(link("/rpc"), {
-    data: { jsonrpc: "2.0", id: 1, method: "auth.beginDeviceLogin", params: {} },
+    data: { jsonrpc: "2.0", id: 1, method: "auth.beginDeviceLogin", params: { qrOnly: true } },
   });
   const { result: grant } = await beginPairing.json();
-  const approvalUrl = link(grant.authorizePath);
-  await page.goto(approvalUrl);
-  await page.getByLabel("TV code").fill(grant.code);
+  const approvalUrl = link(`/auth/device?id=${grant.id}`);
+  await page.goto(link(grant.authorizePath));
+  assert.equal(page.url(), approvalUrl);
+  assert.equal(await page.getByRole("textbox").count(), 0, "QR pairing must not ask for a code");
   const approvalResponse = page.waitForResponse(response => response.url() === approvalUrl && response.request().method() === "POST");
   await page.getByRole("button", { name: "Approve sign-in", exact: true }).click();
   const approval = await approvalResponse;

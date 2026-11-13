@@ -100,26 +100,31 @@ private extension TitleDetailView {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 42) {
                         hero
+                            .padding(.horizontal, max(geometry.safeAreaInsets.leading, geometry.safeAreaInsets.trailing))
+                            .padding(.top, geometry.safeAreaInsets.top)
                             .frame(minHeight: heroHeight, alignment: .bottomLeading)
                             .background(alignment: .top) {
-                                backdrop(width: geometry.size.width, height: heroHeight)
+                                GeometryReader { artwork in
+                                    backdrop(width: artwork.size.width, height: artwork.size.height)
+                                }
                             }
 
                         if let progress {
                             TitleRequestTracker(progress: progress)
-                                .padding(.horizontal, 56)
+                                .padding(.horizontal, 56 + max(geometry.safeAreaInsets.leading, geometry.safeAreaInsets.trailing))
                         }
 
                         if !isMovie {
                             if episodeLookup != nil {
-                                episodeSection.padding(.horizontal, 56)
+                                episodeSection.padding(.horizontal, 56 + max(geometry.safeAreaInsets.leading, geometry.safeAreaInsets.trailing))
                             }
                             seasonSection
-                                .padding(.horizontal, 56)
+                                .padding(.horizontal, 56 + max(geometry.safeAreaInsets.leading, geometry.safeAreaInsets.trailing))
                         }
                     }
                     .padding(.bottom, 48)
                 }
+                .ignoresSafeArea(edges: [.top, .horizontal])
                 .scrollIndicators(.hidden)
             }
             .background(base.ignoresSafeArea())
@@ -194,7 +199,7 @@ private extension TitleDetailView {
                             .disabled(submitting)
                         }
 
-                        if submittedMovie || item.requestState == .requested {
+                        if !isMovie && progress == nil && item.requestState == .requested {
                             status("Requested", icon: "checkmark.circle")
                         } else if playbackURL == nil && moviePlayback == nil && item.requestState == .available {
                             status("In Library", icon: "checkmark.circle")
@@ -317,9 +322,10 @@ private extension TitleDetailView {
                     colors: [accent.opacity(0.45), base],
                     center: .topTrailing, startRadius: 20, endRadius: width * 0.7
                 )
-                if let url = item.backdrop {
-                    TVArtwork(url: url, alignment: .top)
+                if let url = item.backdrop ?? item.artwork {
+                    TVArtwork(url: url, alignment: item.backdrop == nil ? .center : .top)
                         .frame(width: width, height: height)
+                        .opacity(item.backdrop == nil ? 0.62 : 1)
                 }
                 LinearGradient(
                     colors: [base.opacity(0.96), base.opacity(0.69), base.opacity(0.12)],
@@ -335,7 +341,6 @@ private extension TitleDetailView {
                 )
             }
             .frame(width: width, height: height)
-            .ignoresSafeArea(edges: [.top, .horizontal])
             .accessibilityHidden(true)
         }
 
@@ -457,7 +462,7 @@ private extension TitleDetailView {
                 .font(.system(size: 24))
             } else if let requestError {
                 status("Request failed: \(requestError)", icon: "exclamationmark.circle")
-            } else if submittedMovie || !submittedOptions.isEmpty {
+            } else if !isMovie && !submittedOptions.isEmpty {
                 status("Request sent", icon: "checkmark.circle.fill")
             }
         }
@@ -507,6 +512,26 @@ private extension TitleDetailView {
 
 private struct TitleRequestTracker: View {
     let progress: TitleAcquisitionProgress
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.trailerConnection) private var connection
+    @State private var live: LiveSample?
+
+    private struct StreamID: Equatable {
+        let connection: Connection
+        let media: TransferScope.Media
+        let id: Int
+    }
+
+    private struct LiveSample {
+        let stream: StreamID
+        let sample: TransferEvent.SampleValue
+        let received: ContinuousClock.Instant
+    }
+
+    private var streamID: StreamID? {
+        guard scenePhase == .active, let connection, let scope = progress.transferScope else { return nil }
+        return .init(connection: connection, media: scope.media, id: scope.id)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -525,39 +550,84 @@ private struct TitleRequestTracker: View {
             HStack(spacing: 10) {
                 ForEach(steps.indices, id: \.self) { index in
                     VStack(alignment: .leading, spacing: 9) {
-                        Capsule().fill(index <= current ? TVPalette.accent : .white.opacity(0.18))
-                            .frame(height: 5)
-                        Text(steps[index].rawValue)
-                            .font(.system(size: 21, weight: index == current ? .semibold : .regular))
-                            .foregroundStyle(index <= current ? TVPalette.paper : .secondary)
-                            .accessibilityAddTraits(index == current ? .isSelected : [])
+                        if steps[index] == .download, let live, live.stream == streamID {
+                            TransferSegment(sample: live.sample, received: live.received)
+                        } else {
+                            Capsule().fill(index <= current ? TVPalette.accent : .white.opacity(0.18))
+                                .frame(height: 5)
+                            Text(steps[index].rawValue)
+                                .font(.system(size: 21, weight: index == current ? .semibold : .regular))
+                                .foregroundStyle(index <= current ? TVPalette.paper : .secondary)
+                                .accessibilityAddTraits(index == current ? .isSelected : [])
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            if let sample = progress.download, let done = sample.bytesDone, let size = sample.sizeBytes, size > 0 {
-                ProgressView(value: Double(min(max(0, done), size)), total: Double(size))
-                    .tint(TVPalette.accent)
-                Text(transferLabel(sample, done: done, size: size))
-                    .font(.system(size: 21))
-                    .foregroundStyle(.secondary)
-            }
         }
         .padding(26)
         .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 16))
+        .task(id: streamID) {
+            live = nil
+            guard let id = streamID else { return }
+            let client = PodibleClient(baseURL: id.connection.url, token: id.connection.token)
+            do {
+                try await AcquisitionChanges(client: client).observeTransfer(.init(media: id.media, id: id.id)) { sample in
+                    guard !Task.isCancelled, streamID == id else { return }
+                    live = sample.map { .init(stream: id, sample: $0, received: .now) }
+                }
+            } catch {
+                if !Task.isCancelled, streamID == id { live = nil }
+            }
+        }
+    }
+}
+
+private struct TransferSegment: View {
+    let sample: TransferEvent.SampleValue
+    let received: ContinuousClock.Instant
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var projecting = false
+
+    private var fraction: Double { min(0.999, Double(sample.bytesDone) / Double(sample.sizeBytes)) }
+    private var projected: Double { min(0.999, (Double(sample.bytesDone) + acquisitionTransferIntervalSeconds * Double(sample.bytesPerSecond)) / Double(sample.sizeBytes)) }
+
+    var body: some View {
+        Capsule().fill(.white.opacity(0.18))
+            .overlay(alignment: .leading) {
+                GeometryReader { geometry in
+                    Capsule().fill(TVPalette.accent)
+                        .frame(width: geometry.size.width * (projecting ? projected : fraction))
+                }
+            }
+            .frame(height: 5)
+            .accessibilityHidden(true)
+            .id(received)
+            .task(id: received) {
+                projecting = false
+                guard !reduceMotion, sample.bytesPerSecond > 0 else { return }
+                try? await Task.sleep(for: .milliseconds(25))
+                guard !Task.isCancelled else { return }
+                withAnimation(.linear(duration: acquisitionTransferIntervalSeconds - 0.025)) { projecting = true }
+            }
+        Text("Download (\(transferLabel))")
+            .font(.system(size: 21, weight: .semibold))
+            .foregroundStyle(TVPalette.paper)
+            .accessibilityAddTraits(.isSelected)
+            .accessibilityIdentifier("request.progress.download")
     }
 
-    private func transferLabel(_ sample: TitleAcquisitionProgress.Download, done: Int64, size: Int64) -> String {
+    private var transferLabel: String {
         let format = ByteCountFormatter()
         format.countStyle = .binary
-        var parts = ["\(format.string(fromByteCount: done)) of \(format.string(fromByteCount: size))"]
-        if let speed = sample.bytesPerSecond, speed > 0 { parts.append("\(format.string(fromByteCount: speed))/s") }
+        var parts = ["\(Int(fraction * 100))%", format.string(fromByteCount: Int64(sample.sizeBytes))]
+        if sample.bytesPerSecond > 0 { parts.append("\(format.string(fromByteCount: Int64(sample.bytesPerSecond)))/s") }
         if let eta = sample.etaSeconds, eta > 0 {
             let time = DateComponentsFormatter()
             time.unitsStyle = .abbreviated
             time.allowedUnits = [.hour, .minute, .second]
             time.maximumUnitCount = 2
-            if let remaining = time.string(from: Double(eta)) { parts.append("\(remaining) left") }
+            if let remaining = time.string(from: Double(eta)) { parts.append("ETA \(remaining)") }
         }
         return parts.joined(separator: " · ")
     }

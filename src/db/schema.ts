@@ -115,6 +115,7 @@ export interface DB {
     "expires_at": string;
     "attempts": Generated<number>;
     "user_id": number | null;
+    "approval_hash": string | null;
   };
 
   "device_login_plex_access": {

@@ -17,6 +17,7 @@ private struct TVRoot: View {
     @State private var sent: [MediaTitle] = []
     @State private var demoSelections: [String: Set<MediaRequestOption.ID>] = [:]
     @State private var selection: Section = .browse
+    @State private var searchQuery = ""
     @State private var path: [MediaTitle] = []
     @State private var playback: Playback?
     @State private var browseError: String?
@@ -46,7 +47,7 @@ private struct TVRoot: View {
                 Group {
                     switch selection {
                     case .browse, .movies, .tv: browse.id(selection)
-                    case .search: SearchScreen(catalog: catalog, connection: connection, open: open)
+                    case .search: SearchScreen(catalog: catalog, connection: connection, open: open, query: $searchQuery)
                     case .requests:
                         requests.task(id: connection) { await refreshRequests() }
                     case .settings:
@@ -334,40 +335,20 @@ private struct SearchScreen: View {
     let catalog: [MediaTitle]
     let connection: Connection?
     let open: (MediaTitle) -> Void
-    @State private var query = ""
+    @Binding var query: String
     @State private var results: [MediaTitle] = []
     @State private var status: String?
-    @State private var submittedQuery: String?
-    @State private var searchTask: Task<Void, Never>?
     @FocusState private var focusedPoster: String?
-    @FocusState private var queryFocused: Bool
+
+    private var term: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("Search movies and TV")
-                    .font(.system(size: 46, weight: .semibold, design: .serif))
-                    .accessibilityAddTraits(.isHeader)
-                HStack(spacing: 24) {
-                    TextField("Title", text: $query, prompt: Text("Enter a title")
-                        .foregroundStyle(queryFocused ? TVPalette.background.opacity(0.72) : TVPalette.paper.opacity(0.62)))
-                        .foregroundStyle(queryFocused ? TVPalette.background : TVPalette.paper)
-                        .focused($queryFocused)
-                        .frame(width: 410)
-                        .onSubmit(search)
-                        .accessibilityIdentifier("search.query")
-                    Button("Search", systemImage: "magnifyingglass", action: search)
-                        .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-            .focusSection()
-
-            ScrollView {
+        ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if let status { Text(status).foregroundStyle(.secondary) }
-                    let titles = submittedQuery == nil ? Array(catalog.prefix(8)) : results
+                    let titles = term.isEmpty ? Array(catalog.prefix(8)) : results
                     if !titles.isEmpty {
-                        Text(submittedQuery == nil ? "Browse Titles" : "Results")
+                        Text(term.isEmpty ? "Browse Titles" : "Results")
                             .font(.system(size: 30, weight: .semibold))
                             .accessibilityAddTraits(.isHeader)
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 180, maximum: 200), spacing: 24)],
@@ -381,39 +362,33 @@ private struct SearchScreen: View {
                     }
                 }
                 .padding(.vertical, 12)
-            }
-            .scrollIndicators(.hidden)
-            .focusSection()
         }
+        .scrollIndicators(.hidden)
+        .focusSection()
         .padding(.horizontal, 72)
         .padding(.top, 26)
-        .onAppear { queryFocused = true }
-        .onDisappear { searchTask?.cancel() }
+        .searchable(text: $query, prompt: "Search movies and TV")
+        .task(id: term) { await search(term) }
     }
 
-    private func search() {
-        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !term.isEmpty else { return }
-        searchTask?.cancel()
-        searchTask = Task { @MainActor in
-            submittedQuery = term
-            results = []
-            status = "Searching..."
-            do {
-                let found: [MediaTitle]
-                if let connection {
-                    found = try await PodibleClient(baseURL: connection.url, token: connection.token).search(term)
-                } else {
-                    found = catalog.filter { $0.title.localizedCaseInsensitiveContains(term) }
-                }
-                guard !Task.isCancelled else { return }
-                results = found
-                status = found.isEmpty ? "No matches for this search." : nil
-            } catch {
-                guard !Task.isCancelled else { return }
-                results = []
-                status = error.localizedDescription
+    @MainActor private func search(_ term: String) async {
+        status = nil
+        guard !term.isEmpty else { results = []; return }
+        do {
+            let found: [MediaTitle]
+            if let connection {
+                try await Task.sleep(for: .milliseconds(350))
+                status = "Searching..."
+                found = try await PodibleClient(baseURL: connection.url, token: connection.token).search(term)
+            } else {
+                found = catalog.filter { $0.title.localizedCaseInsensitiveContains(term) }
             }
+            try Task.checkCancellation()
+            results = found
+            status = found.isEmpty ? "No matches for this search." : nil
+        } catch {
+            guard !Task.isCancelled else { return }
+            status = error.localizedDescription
         }
     }
 }
@@ -421,7 +396,7 @@ private struct SearchScreen: View {
 private struct ConnectionScreen: View {
     let connection: Connection?
     let changed: (Connection?) -> Void
-    @State private var server = ""
+    @State private var server = Connection.rememberedServer
     @State private var status: String?
     @State private var pairingBase: URL?
     @State private var pairing: DeviceLoginGrant?
@@ -438,10 +413,8 @@ private struct ConnectionScreen: View {
                         PairingQRCode(url: url)
                         VStack(alignment: .leading, spacing: 14) {
                             Text("Scan with your phone").font(.headline)
-                            Text("Sign in to Podible and enter this code.")
+                            Text("Approve the sign-in on your phone.")
                                 .font(.caption).foregroundStyle(.secondary)
-                            Text(pairing.code).font(.system(size: 56, weight: .semibold, design: .monospaced))
-                                .accessibilityIdentifier("device-sign-in.code")
                         }
                     }
                 } else {
@@ -454,18 +427,22 @@ private struct ConnectionScreen: View {
                 TextField("https://podible.example", text: $server)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                    .accessibilityIdentifier("device-sign-in.server")
                 Button("Sign in with phone") {
                     status = nil
-                    do { pairingBase = try Connection.serverURL(server) }
+                    do {
+                        let base = try Connection.serverURL(server)
+                        Connection.rememberServer(base)
+                        pairingBase = base
+                    }
                     catch { status = error.localizedDescription }
                 }
-                .disabled(server.isEmpty)
             }
             if let status { Text(status).font(.caption) }
         }
         .frame(maxWidth: 1140, alignment: .leading)
         .padding(70)
-        .onAppear { server = connection?.url.absoluteString ?? "" }
         .task(id: pairingBase) { if let pairingBase { await connect(pairingBase) } }
     }
 
@@ -512,6 +489,7 @@ private struct ConnectionScreen: View {
                 do { try await PodibleClient(baseURL: connection.url, token: connection.token).signOut() }
                 catch ClientError.unauthorized { /* Session already expired or revoked. */ }
             }
+            Connection.rememberServer(connection.url)
             try Connection.remove()
             changed(nil)
         } catch { status = error.localizedDescription }

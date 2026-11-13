@@ -27,7 +27,7 @@ struct BrowseView: View {
                 let cardWidth = compactCatalog ? min(218, max(140, (geometry.size.width - 280) / 6))
                     : min(188, max(150, (geometry.size.width - 240) / 8))
                 VStack(alignment: .leading, spacing: 0) {
-                    hero(spotlight, width: geometry.size.width, height: heroHeight)
+                    hero(spotlight, width: geometry.size.width, height: heroHeight, insets: geometry.safeAreaInsets)
                     ScrollView(.vertical) {
                         VStack(alignment: .leading, spacing: 18) {
                             if compactCatalog {
@@ -51,12 +51,12 @@ struct BrowseView: View {
         }
     }
 
-    private func hero(_ item: MediaTitle, width: CGFloat, height: CGFloat) -> some View {
+    private func hero(_ item: MediaTitle, width: CGFloat, height: CGFloat, insets: EdgeInsets) -> some View {
         ZStack(alignment: .leading) {
-            Color.clear.overlay(alignment: .trailing) {
+            Color.clear.overlay(alignment: .topTrailing) {
                 if let image = item.backdrop ?? item.artwork {
                     TVArtwork(url: image, alignment: item.backdrop == nil ? .center : .top)
-                        .frame(width: width * 0.81, height: height)
+                        .frame(width: width * 0.81 + insets.trailing, height: height + insets.top)
                         .mask {
                             LinearGradient(stops: [
                                 .init(color: .clear, location: 0),
@@ -68,6 +68,7 @@ struct BrowseView: View {
                             LinearGradient(colors: [.clear, TVPalette.background], startPoint: .top, endPoint: .bottom)
                                 .frame(height: height * 0.48)
                         }
+                        .offset(x: insets.trailing, y: -insets.top)
                         .accessibilityHidden(true)
                 }
             }
@@ -97,7 +98,6 @@ struct BrowseView: View {
         .id(item.id)
         .transition(.opacity)
         .frame(width: width, height: height)
-        .clipped()
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: item.id)
     }
 

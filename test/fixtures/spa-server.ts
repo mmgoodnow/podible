@@ -3,7 +3,8 @@ import { buildSessionCookie, createSessionToken, hashSessionToken } from "../../
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { createPodibleFetchHandler } from "../../src/http";
-import { AcquisitionEvents, acquisitionEventsPath } from "../../src/runtime/acquisition-events";
+import { AcquisitionEvents, acquisitionEventsPath, acquisitionTransferPath } from "../../src/runtime/acquisition-events";
+import type { AdminTransmissionReader } from "../../src/rpc/admin-torrents";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -125,6 +126,7 @@ if (process.env.SHADOW_FIXTURE) {
   repo.movieShadow.finish(caseId, { decision: "unobservable", selectedFile: null, reason: "No source files remain", facts: null, quality: null, probes: [], probeErrors: [], model: "fixture", evaluatedAt: new Date().toISOString() });
 }
 let advanceTvFixture: ((gib: number) => void) | undefined;
+let acquisitionTransmission: AdminTransmissionReader | undefined;
 if (process.env.TV_FIXTURE) {
   settings.movies.seerr = { ...settings.movies.seerr, url: "https://fixture-seerr.invalid", apiKey: "tv-fixture-seerr-private" };
   settings.agents.apiKey = "tv-fixture-agent-private";
@@ -152,16 +154,23 @@ if (process.env.TV_FIXTURE) {
         numbering: [{ scheme: "tvdb:aired", season: index + 1, episode: 1, absolute: null, source: "fixture:aired" }] })) };
     const withGaps = repo.tv.request(owner.id, missingCatalog, settings.movies.qualityPolicy, missingCatalog.episodes.map(ep => ep.key));
     const batch = queueTvAcquisition(repo, withGaps.requestId, "initial", [withGaps.episodeIds[0]!]).acquisition;
-    const ref = { clientId: "transmission:fixture", nativeId: "a".repeat(40) };
+    const ref = { clientId: "transmission:11111111-1111-4111-8111-111111111111", nativeId: "a".repeat(40) };
     const location = { rootId: "tv", relativePath: "fixture-download" };
+    const directory = path.join(settings.tv.managedRoot, "downloads", location.relativePath);
+    await fs.mkdir(directory, { recursive: true });
     const torrentId = repo.tv.bindDownload(batch.id, ref, location, "fixture-transfer");
     repo.tv.event(withGaps.targetId, batch.id, "tv-browser-downloading", "downloading", "Downloading fixture release");
+    let downloadedGiB = 0;
+    acquisitionTransmission = { clientId: ref.clientId, rpc: { async call(method, args) {
+      if (method !== "torrent-get" || !Array.isArray(args?.ids) || !args.ids.includes(ref.nativeId)) return { torrents: [] };
+      return { torrents: [{ hashString: ref.nativeId, downloadDir: directory, labels: ["Podible TV"], status: 4,
+        leftUntilDone: (8 - downloadedGiB) * 1024 ** 3, sizeWhenDone: 8 * 1024 ** 3,
+        rateDownload: downloadedGiB ? 2 * 1024 ** 2 : 0, error: 0, errorString: "" }] };
+    } } };
     repo.tv.observeDownload(torrentId, { ref, location, state: "downloading", complete: false,
-      bytesDone: 3 * 1024 ** 3, sizeBytes: 8 * 1024 ** 3, downloadBytesPerSecond: 2 * 1024 ** 2,
+      bytesDone: 0, sizeBytes: 8 * 1024 ** 3, downloadBytesPerSecond: 0,
       message: null, observedAt: new Date().toISOString() });
-    advanceTvFixture = gib => repo.tv.observeDownload(torrentId, { ref, location, state: "downloading", complete: false,
-      bytesDone: gib * 1024 ** 3, sizeBytes: 8 * 1024 ** 3, downloadBytesPerSecond: 2 * 1024 ** 2,
-      message: null, observedAt: new Date().toISOString() });
+    advanceTvFixture = gib => { downloadedGiB = gib; };
   }
   const acquisition = repo.tv.startAcquisition(native.targetId, "initial", (id) => repo.createJob({
     type: "tv_acquire", payload: { acquisitionId: id }, status: "succeeded", idempotencyKey: "tv-browser-seed",
@@ -243,6 +252,7 @@ for (const [title, author] of [
 const createHandler = () => createPodibleFetchHandler(repo, Date.now(), null, {
   movieServices: fixture.services,
   acquisitionEvents,
+  acquisitionTransmission,
 });
 let handler = createHandler();
 const authFixture = { mode: "success", starts: 0, callbacks: 0 };
@@ -252,7 +262,7 @@ const server = Bun.serve({
   ...(process.env.FIXTURE_TLS_KEY ? { tls: { key: Bun.file(process.env.FIXTURE_TLS_KEY), cert: Bun.file(process.env.FIXTURE_TLS_CERT!) } } : {}),
   async fetch(request, httpServer) {
     const url = new URL(request.url), pathname = url.pathname;
-    if (pathname === acquisitionEventsPath) httpServer.timeout(request, 0);
+    if (pathname === acquisitionEventsPath || pathname === acquisitionTransferPath) httpServer.timeout(request, 0);
     if (advanceTvFixture && pathname === "/__fixture/tv-transfer" && request.method === "POST") {
       if (url.searchParams.has("reconnect")) {
         acquisitionEvents.close();
@@ -261,7 +271,6 @@ const server = Bun.serve({
         handler = createHandler();
       } else {
         advanceTvFixture(5);
-        acquisitionEvents.notify();
       }
       return Response.json({ ok: true });
     }

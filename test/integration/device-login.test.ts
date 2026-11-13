@@ -31,6 +31,7 @@ test("Apple TV can exchange one phone approval for a separate revocable session"
   expect(grant.authorizePath).toBe(`/auth/device?id=${grant.id}`);
   expect(grant.authorizePath).not.toContain(grant.verifier);
   expect(grant.code).toMatch(/^\d{6}$/);
+  const code = grant.code!;
   expect(grant.authorizePath).not.toContain("code=");
   const machine = "a".repeat(40);
   repo.stageDeviceLoginPlexAccess(grant.id, browser.id, machine, "viewer-test-token");
@@ -54,10 +55,10 @@ test("Apple TV can exchange one phone approval for a separate revocable session"
     { origin: "https://other.example" }, { origin: "null" }, {}, { origin, "sec-fetch-site": "cross-site" },
   ];
   for (const headers of rejectedOrigins) {
-    expect((await approve(grant.code, headers)).status).toBe(403);
+    expect((await approve(code, headers)).status).toBe(403);
   }
-  expect((await approve(grant.code === "000000" ? "111111" : "000000")).status).toBe(400);
-  expect((await approve(grant.code)).status).toBe(200);
+  expect((await approve(code === "000000" ? "111111" : "000000")).status).toBe(400);
+  expect((await approve(code)).status).toBe(200);
   expect((await rpc("auth.exchangeDeviceLogin", { ...params, verifier: createSessionToken() })).result.status).toBe("unavailable");
   const exchanges = await Promise.all(Array.from({ length: 2 }, () => rpc("auth.exchangeDeviceLogin", params)));
   expect(exchanges.map(response => response.result.status).sort()).toEqual(["approved", "unavailable"]);
@@ -106,7 +107,7 @@ test("pairing cannot inherit Plex access staged by another browser session", () 
   expect(repo.getViewerPlexTokenForSession(session.id, "machine")).toBeNull();
 });
 
-test("Plex phone sign-in stages only the viewer credential for the configured server", async () => {
+test("QR-only pairing requires a scan and the approving viewer's Plex access", async () => {
   using db = new Database(":memory:");
   runMigrations(db);
   const repo = new BooksRepo(db);
@@ -115,8 +116,6 @@ test("Plex phone sign-in stages only the viewer credential for the configured se
     ...settings.auth.plex, machineId: "family-server", ownerToken: "owner-fixture-token",
   } } });
   repo.upsertUser({ provider: "plex", providerUserId: "owner", username: "owner", isAdmin: true });
-  const grant = "d".repeat(32);
-  repo.createDeviceLoginGrant(grant, "verifier", "123456", new Date(Date.now() + 60_000).toISOString());
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const url = new URL(String(input));
@@ -134,17 +133,45 @@ test("Plex phone sign-in stages only the viewer credential for the configured se
   try {
     const origin = "https://podible.example";
     const handler = createPodibleFetchHandler(repo, Date.now());
-    const redirect = encodeURIComponent(`/auth/device?id=${grant}`);
+    const begin = await handler(new Request(`${origin}/rpc`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "auth.beginDeviceLogin", params: { qrOnly: true } }),
+    }));
+    const { result: grant } = await begin.json() as { result: z.output<typeof authRouter.routes.beginDeviceLogin.resultSchema> };
+    expect(grant.code).toBeUndefined();
+    expect(grant.authorizePath).not.toContain(grant.verifier);
+    const path = `/auth/device?id=${grant.id}`;
+    expect((await handler(new Request(origin + path))).status).toBe(404);
+    const scan = await handler(new Request(origin + grant.authorizePath));
+    expect(scan.status).toBe(303);
+    expect(scan.headers.get("location")).toBe(path);
+    const qrCookieHeader = scan.headers.get("set-cookie")!;
+    expect(qrCookieHeader).toContain("HttpOnly");
+    expect(qrCookieHeader).toContain("Secure");
+    const qrCookie = qrCookieHeader.split(";")[0]!;
+    const login = await handler(new Request(origin + path, { headers: { cookie: qrCookie } }));
+    expect(new URL(login.headers.get("location")!, origin).searchParams.get("redirectTo")).toBe(path);
+    const approve = (cookie: string, from = origin) => handler(new Request(origin + path, {
+      method: "POST", headers: { cookie, origin: from, "content-type": "application/x-www-form-urlencoded" },
+    }));
+    const viewer = repo.upsertUser({ provider: "plex", providerUserId: "viewer", username: "viewer" });
+    const unlinkedToken = createSessionToken();
+    repo.createSession(viewer.id, hashSessionToken(unlinkedToken));
+    const unlinkedCookie = `podible_session=${unlinkedToken}; ${qrCookie}`;
+    const unlinkedPage = await handler(new Request(origin + path, { headers: { cookie: unlinkedCookie } }));
+    expect(await unlinkedPage.text()).not.toContain("Approve sign-in");
+    expect((await approve(unlinkedCookie)).status).toBe(403);
+    const redirect = encodeURIComponent(path);
     expect((await handler(new Request(`${origin}/login/plex/start?redirectTo=${redirect}`, { method: "POST" }))).status).toBe(200);
     const complete = await handler(new Request(`${origin}/login/plex/complete?pinId=123&redirectTo=${redirect}`));
     const cookie = complete.headers.get("set-cookie")?.split(";")[0];
     expect(cookie).toStartWith("podible_session=");
-    const result = await handler(new Request(`${origin}/auth/device?id=${grant}`, {
-      method: "POST", headers: { cookie: cookie!, origin, "content-type": "application/x-www-form-urlencoded" },
-      body: "code=123456",
-    }));
+    expect((await approve(cookie!)).status).toBe(404);
+    expect((await approve(`${cookie}; ${qrCookie}`, "https://other.example")).status).toBe(403);
+    const result = await approve(`${cookie}; ${qrCookie}`);
     expect(result.status).toBe(200);
-    expect(repo.exchangeDeviceLogin(grant, "verifier", "tv")).toBe("approved");
+    expect(repo.exchangeDeviceLogin(grant.id, hashSessionToken(grant.verifier), "tv")).toBe("approved");
+    expect((await approve(`${cookie}; ${qrCookie}`)).status).toBe(404);
     const tv = repo.getSessionByTokenHash("tv")!;
     expect(tv.is_admin).toBe(0);
     expect(repo.getViewerPlexTokenForSession(tv.id, "family-server")).toBe("shared-fixture-token");
