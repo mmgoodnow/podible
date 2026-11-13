@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { backdropUrlSchema } from "../media/tmdb-artwork";
 
 /** Only public provider artwork, never credentialed/local Sonarr media-cover URLs. */
 export function tvPosterUrl(value: unknown): string | null {
@@ -82,6 +83,7 @@ export const tvCatalogEntrySchema = z.object({
   aliases: z.array(z.string()),
   year: z.number().int().nullable(),
   posterUrl: tvPosterUrlSchema,
+  backdropUrl: backdropUrlSchema,
   // Provider enrichment hint only. Work hierarchy/relations/numbering are generic, not gated by animation.
   anime: z.boolean(),
   episodes: z.array(tvCatalogEpisodeSchema),

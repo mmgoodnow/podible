@@ -28,8 +28,8 @@ test("typed HTTP catalog rails share publications, not private requests, and rej
     expect(JSON.stringify(result)).not.toMatch(/Private pending|libraryRoot|acquisition|requestId|apiKey|token|relativePath/);
     expect(db.query("SELECT total_changes() AS n").get()).toEqual(before);
     await expect(client.catalog.recent.query({ limit: 21 })).rejects.toThrow();
-    for (const procedure of ["catalog.recent", "catalog.discovery"]) {
-      const response = await handle(new Request(`http://localhost/api/trpc/${procedure}?input=%7B%7D`));
+    for (const [procedure, input] of [["catalog.recent", {}], ["catalog.discovery", {}], ["catalog.backdrop", { kind: "tv", tmdbId: 901 }]] as const) {
+      const response = await handle(new Request(`http://localhost/api/trpc/${procedure}?input=${encodeURIComponent(JSON.stringify(input))}`));
       expect(response.status).toBe(401);
       expect(response.headers.get("cache-control")).toBe("no-store");
     }
@@ -56,5 +56,31 @@ test("typed discovery reuses configured credentials and sanitizes a partial remo
     expect(JSON.stringify(result)).not.toMatch(/super-secret|credential|upstream|home-integration-secret/);
     expect(await client.catalog.discovery.query({})).toEqual(result);
     expect(calls.sort()).toEqual(["/3/trending/movie/week", "/3/trending/tv/week"]);
+  } finally { upstream.mockRestore(); await data.close(); }
+});
+
+test("native backdrop RPC resolves an older title without changing the library or hydrating episodes", async () => {
+  const data = await createBookSpaData();
+  const calls: string[] = [];
+  const upstream = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+    const url = new URL(String(input));
+    calls.push(url.pathname);
+    expect(url.origin).toBe("https://api.themoviedb.org");
+    return Response.json({ id: 777, name: "Legacy series", original_name: "Legacy series",
+      backdrop_path: "/wide.jpg", external_ids: { tvdb_id: 777 }, seasons: [] });
+  }, { preconnect: fetch.preconnect }));
+  try {
+    const settings = data.repo.getSettings();
+    settings.movies.tmdbAccessToken = "backdrop-fixture";
+    data.repo.updateSettings(settings);
+    const handle = createPodibleFetchHandler(data.repo, Date.now());
+    const before = data.db.query("SELECT total_changes() AS n").get();
+    const response = await handle(new Request("http://localhost/rpc", { method: "POST",
+      headers: { cookie: "podible_session=book-spa-reader", "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "catalog.backdrop", params: { kind: "tv", tmdbId: 777 } }),
+    }));
+    expect(await response.json()).toMatchObject({ result: { backdropUrl: "https://image.tmdb.org/t/p/w1280/wide.jpg" } });
+    expect(calls).toEqual(["/3/tv/777"]);
+    expect(data.db.query("SELECT total_changes() AS n").get()).toEqual(before);
   } finally { upstream.mockRestore(); await data.close(); }
 });

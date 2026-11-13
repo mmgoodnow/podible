@@ -322,11 +322,8 @@ private extension TitleDetailView {
                     colors: [accent.opacity(0.45), base],
                     center: .topTrailing, startRadius: 20, endRadius: width * 0.7
                 )
-                if let url = item.backdrop ?? item.artwork {
-                    TVArtwork(url: url, alignment: item.backdrop == nil ? .center : .top)
-                        .frame(width: width, height: height)
-                        .opacity(item.backdrop == nil ? 0.62 : 1)
-                }
+                TVBackdrop(item: item, connection: trailerConnection)
+                    .frame(width: width, height: height)
                 LinearGradient(
                     colors: [base.opacity(0.96), base.opacity(0.69), base.opacity(0.12)],
                     startPoint: .leading, endPoint: .trailing

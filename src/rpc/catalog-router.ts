@@ -5,6 +5,9 @@ import { catalogMovieSchema } from "../movies/types";
 import { tvCatalogEntrySchema } from "../tv/types";
 import { homeRecentSchema } from "../media/home-recent";
 import { homeDiscovery, homeDiscoverySchema } from "../media/home-discovery";
+import { backdropUrlSchema } from "../media/tmdb-artwork";
+import { movieCatalog } from "../movies/runtime";
+import { configuredTvCatalog } from "../tv/catalog";
 import { prepareTvRequestProgress, tvRequestProgress, tvRequestProgressSchema } from "../tv/request-progress";
 import { nativeTvRequestScope, nativeTvRequestSeasonNumbers } from "../tv/service";
 import { adminTorrentKey, readAdminTorrents, type AdminTransmissionReader } from "./admin-torrents";
@@ -19,10 +22,30 @@ export const createCatalogRouter = (transmission?: AdminTransmissionReader | nul
     summary: "Server-cached public trending lists using the existing TMDB configuration, without per-card lookups.",
     paramsSchema: z.object({}).strict(), resultSchema: homeDiscoverySchema,
     handler(ctx) { return homeDiscovery.get(ctx.repo.readSettings()?.movies.tmdbAccessToken); } }),
+  backdrop: defineMethod({ auth: "user", readOnly: true,
+    summary: "Read landscape artwork for the focused title without enriching the whole library.",
+    paramsSchema: z.object({ kind: z.enum(["movie", "tv"]), tmdbId: id.safe() }).strict(),
+    resultSchema: z.object({ backdropUrl: backdropUrlSchema }),
+    async handler(ctx, { kind, tmdbId }) {
+      const settings = ctx.repo.getSettings();
+      if (kind === "movie") {
+        const saved = ctx.repo.movies.movieByTmdb(tmdbId)?.backdropUrl;
+        if (saved) return { backdropUrl: saved };
+        if (!ctx.movieServices && !settings.movies.tmdbAccessToken && !(settings.movies.seerr.url && settings.movies.seerr.apiKey))
+          return { backdropUrl: null };
+        const catalog = ctx.movieServices?.catalog ?? movieCatalog(settings);
+        const movie = await catalog.get(tmdbId);
+        return { backdropUrl: movie.tmdbId === tmdbId ? movie.backdropUrl ?? null : null };
+      }
+      if (!settings.movies.tmdbAccessToken) return { backdropUrl: null };
+      return { backdropUrl: await configuredTvCatalog(settings).backdrop?.(tmdbId) ?? null };
+    } }),
   available: defineMethod({ auth: "user", readOnly: true,
     summary: "Search already-published shared movies/TV without waiting on remote catalogs or exposing anyone's requests.",
     paramsSchema: z.object({ query: z.string().trim().max(200).default(""), limit: z.number().int().min(1).max(100).default(50) }).strict(),
-    resultSchema: z.object({ movies: z.array(catalogMovieSchema), tv: z.array(z.object({ entryId: id, key: z.string(), title: z.string(), year: z.number().nullable(), posterUrl: tvCatalogEntrySchema.shape.posterUrl, availableEpisodes: z.number().int().nonnegative() })), movieTruncated: z.boolean(), tvTruncated: z.boolean() }),
+    resultSchema: z.object({ movies: z.array(catalogMovieSchema), tv: z.array(tvCatalogEntrySchema.pick({ key: true, title: true,
+      year: true, tmdbId: true, posterUrl: true, backdropUrl: true }).extend({ entryId: id, availableEpisodes: z.number().int().nonnegative() })),
+      movieTruncated: z.boolean(), tvTruncated: z.boolean() }),
     handler(ctx, input) {
       const movies = ctx.repo.movies.availableCatalog(input.query, input.limit + 1);
       const tv = ctx.repo.tv.availableCatalog(input.query, input.limit + 1);

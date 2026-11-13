@@ -53,6 +53,7 @@ test("TMDB search normalizes identity and caches without exposing download or cr
           original_language: "fr",
           release_date: "2020-01-01",
           poster_path: "/safe.jpg",
+          backdrop_path: "/wide.jpg",
         },
       ],
     });
@@ -66,6 +67,7 @@ test("TMDB search normalizes identity and caches without exposing download or cr
   expect(results[0]?.posterUrl).toBe(
     "https://image.tmdb.org/t/p/w342/safe.jpg",
   );
+  expect(results[0]?.backdropUrl).toBe("https://image.tmdb.org/t/p/w1280/wide.jpg");
   expect(JSON.stringify(results)).not.toContain("fixture-secret");
 });
 test("TMDB accepts a legacy API key in the existing credential setting", async () => {

@@ -29,7 +29,9 @@ test("shared local catalog is user-safe, published-only, bounded and independent
   addMovie(12, "Private Pending Movie", false);
   addMovie(13, "Shared Second Movie", true);
   const posterUrl = "https://artworks.thetvdb.com/banners/posters/700.jpg";
-  const tv = repo.tv.requestSeasons(owner.id, { ...fixtureTvEntry(), posterUrl }, settings.movies.qualityPolicy, [1]);
+  const backdropUrl = "https://image.tmdb.org/t/p/w1280/wide.jpg";
+  const tv = repo.tv.requestSeasons(owner.id, { ...fixtureTvEntry(), posterUrl, backdropUrl }, settings.movies.qualityPolicy, [1]);
+  repo.tv.upsertEntry({ ...fixtureTvEntry(), posterUrl });
   const acquisition = repo.tv.startAcquisition(tv.targetId, "initial", () => repo.createJob({ type: "metadata_hydration", status: "succeeded" }).id, tv.requestId).acquisition;
   const fileId = randomUUID();
   const version = repo.tv.recordVersion(acquisition.id, { identityVerified: true }, [{ id: fileId, relativePath: `files/${fileId.slice(0, 2)}/${fileId}.mkv`, sizeBytes: 10, probe: {}, episodeIds: [tv.episodeIds[0]!] }]);
@@ -50,7 +52,8 @@ test("shared local catalog is user-safe, published-only, bounded and independent
     expect(limited.movies).toHaveLength(1); expect(limited.movieTruncated).toBe(true);
     const all = (await rpc("catalog.available")).result;
     expect(all.movies.map((m: any) => m.title).sort()).toEqual(["Shared Movie", "Shared Second Movie"]);
-    expect(all.tv).toHaveLength(1); expect(all.tv[0]).toMatchObject({ title: "A Work", availableEpisodes: 1, posterUrl });
+    expect(all.tv).toHaveLength(1);
+    expect(all.tv[0]).toMatchObject({ title: "A Work", availableEpisodes: 1, posterUrl, backdropUrl, tmdbId: 70 });
     expect((await rpc("catalog.available", { query: "Another Title" })).result.tv).toHaveLength(1);
     expect(JSON.stringify(all)).not.toContain("Private");
     expect(JSON.stringify(all)).not.toContain("requestId");

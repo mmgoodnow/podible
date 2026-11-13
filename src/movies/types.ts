@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { backdropUrlSchema } from "../media/tmdb-artwork";
 
 export const movieSchema = z.object({
   id: z.number().int().positive(),
@@ -8,6 +9,7 @@ export const movieSchema = z.object({
   year: z.number().int().nullable(),
   overview: z.string(),
   posterUrl: z.string().nullable(),
+  backdropUrl: backdropUrlSchema,
   originalLanguage: z.string(),
   imdbId: z.string().nullable(),
   runtimeMinutes: z.number().positive().nullable().optional(),

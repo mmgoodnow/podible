@@ -118,6 +118,7 @@ export const appRouter = t.router({
   catalog: t.router({
     recent: procedure.input(catalogRouter.routes.recent.paramsSchema).output(catalogRouter.routes.recent.resultSchema).query(({ ctx, input }) => executeMethod(catalogRouter.routes.recent, ctx, input)),
     discovery: procedure.input(catalogRouter.routes.discovery.paramsSchema).output(catalogRouter.routes.discovery.resultSchema).query(({ ctx, input }) => executeMethod(catalogRouter.routes.discovery, ctx, input)),
+    backdrop: procedure.input(catalogRouter.routes.backdrop.paramsSchema).output(catalogRouter.routes.backdrop.resultSchema).query(({ ctx, input }) => executeMethod(catalogRouter.routes.backdrop, ctx, input)),
     available: procedure.input(catalogRouter.routes.available.paramsSchema).output(catalogRouter.routes.available.resultSchema).query(({ ctx, input }) => executeMethod(catalogRouter.routes.available, ctx, input)),
     tvEntry: procedure.input(catalogRouter.routes.tvEntry.paramsSchema).output(catalogRouter.routes.tvEntry.resultSchema).query(({ ctx, input }) => executeMethod(catalogRouter.routes.tvEntry, ctx, input)),
   }),

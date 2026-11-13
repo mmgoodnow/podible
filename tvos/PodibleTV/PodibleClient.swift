@@ -14,8 +14,8 @@ struct PodibleClient {
         async let discovery: Discovery = call("catalog.discovery", Empty())
         let (published, trending) = try await (library, discovery)
         return unique(libraryTitles(published)
-            + trending.movies.items.map { title($0.tmdbId, $0.title, $0.year.flatMap(Int.init(exactly:)), nil, $0.posterUrl, kind: .movie, state: .requestable) }
-            + trending.tv.items.map { title($0.tmdbId, $0.title, $0.year.flatMap(Int.init(exactly:)), nil, $0.posterUrl, kind: .show, state: .requestable) })
+            + trending.movies.items.map { title($0.tmdbId, $0.title, $0.year.flatMap(Int.init(exactly:)), nil, $0.posterUrl, backdropURL: artwork($0.backdropUrl), kind: .movie, state: .requestable) }
+            + trending.tv.items.map { title($0.tmdbId, $0.title, $0.year.flatMap(Int.init(exactly:)), nil, $0.posterUrl, backdropURL: artwork($0.backdropUrl), kind: .show, state: .requestable) })
     }
 
     func search(_ query: String) async throws -> [MediaTitle] {
@@ -28,8 +28,8 @@ struct PodibleClient {
         async let tv: TVSearch = call("tv.search", SearchQuery(query: query))
         let (published, films, shows) = try await (library, movies, tv)
         let results = unique(libraryTitles(published)
-            + films.results.map { title($0.tmdbId, $0.title, $0.year, $0.overview, $0.posterUrl, kind: .movie, state: films.canRequest ? .requestable : .unavailable) }
-            + shows.results.map { title($0.tmdbId, $0.title, $0.year, $0.overview, $0.posterUrl, kind: .show, state: .requestable) })
+            + films.results.map { title($0.tmdbId, $0.title, $0.year, $0.overview, $0.posterUrl, backdropURL: artwork($0.backdropUrl), kind: .movie, state: films.canRequest ? .requestable : .unavailable) }
+            + shows.results.map { title($0.tmdbId, $0.title, $0.year, $0.overview, $0.posterUrl, backdropURL: artwork($0.backdropUrl), kind: .show, state: .requestable) })
         if results.isEmpty && (films.failed || (shows.configured && shows.unavailableReason != nil)) {
             throw ClientError.catalogUnavailable
         }
@@ -49,7 +49,8 @@ struct PodibleClient {
                 : capabilities.acquisitionConfigured ? .requestable : .unavailable
             let progress = active.first { $0.stage == "downloading" } ?? active.first(where: \.available) ?? active.first
             let info = movie.movie
-            return (title(info.tmdbId, info.title, info.year, info.overview, info.posterUrl, kind: .movie, state: state), [], progress?.progress)
+            return (title(info.tmdbId, info.title, info.year, info.overview, info.posterUrl,
+                          backdropURL: artwork(info.backdropUrl) ?? item.backdrop, kind: .movie, state: state), [], progress?.progress)
         case .show:
             return try await tvDetail(item)
         }
@@ -87,11 +88,19 @@ struct PodibleClient {
         let (films, shows) = try await (movies, tv)
         return unique(films.requests.filter { $0.state != "withdrawn" && !$0.available }.map {
             let item = $0.movie
-            return title(item.tmdbId, item.title, item.year, item.overview, item.posterUrl, kind: .movie, state: .requested)
+            return title(item.tmdbId, item.title, item.year, item.overview, item.posterUrl,
+                         backdropURL: artwork(item.backdropUrl), kind: .movie, state: .requested)
         } + shows.requests.filter { $0.intentionallyAbsent || $0.availableEpisodes < $0.requestedEpisodes }.map {
             libraryTitle($0.entry.key, $0.entry.title, $0.entry.year, $0.entry.posterUrl, entryID: $0.entryId,
                          state: $0.intentionallyAbsent ? .unavailable : .requested)
         })
+    }
+
+    func backdrop(kind: MediaKind, tmdbID: Int) async throws -> URL? {
+        let result: BackdropResult = try await call("catalog.backdrop", BackdropQuery(
+            kind: kind == .movie ? .movie : .tv, tmdbId: tmdbID
+        ))
+        return artwork(result.backdropUrl)
     }
 
     func beginPairing() async throws -> DeviceLoginGrant {
@@ -177,7 +186,8 @@ struct PodibleClient {
                            subtitle: (series?.year ?? local?.entry.year).map(String.init) ?? item.subtitle,
                            synopsis: series?.overview ?? item.synopsis, kind: .show,
                            artwork: artwork(series?.posterUrl ?? local?.entry.posterUrl) ?? item.artwork,
-                           backdrop: nil, accent: item.accent, playable: false, playbackURL: nil,
+                           backdrop: artwork(series?.backdropUrl) ?? artwork(local?.entry.backdropUrl) ?? item.backdrop,
+                           accent: item.accent, playable: false, playbackURL: nil,
                            requestState: state, tmdbID: tmdbId), options, local?.acquisitionProgress(entryID: localID))
     }
 
@@ -193,22 +203,26 @@ struct PodibleClient {
     }
 
     private func libraryTitles(_ library: Library) -> [MediaTitle] {
-        library.movies.map { title($0.tmdbId, $0.title, $0.year, $0.overview, $0.posterUrl, kind: .movie, state: .available) }
-            + library.tv.map { libraryTitle($0.key, $0.title, $0.year.flatMap(Int.init(exactly:)), $0.posterUrl, entryID: $0.entryId, state: .available) }
+        library.movies.map { title($0.tmdbId, $0.title, $0.year, $0.overview, $0.posterUrl, backdropURL: artwork($0.backdropUrl), kind: .movie, state: .available) }
+            + library.tv.map { libraryTitle($0.key, $0.title, $0.year.flatMap(Int.init(exactly:)), $0.posterUrl,
+                                           entryID: $0.entryId, tmdbID: $0.tmdbId, backdropURL: artwork($0.backdropUrl), state: .available) }
     }
 
-    private func title(_ tmdbId: Int, _ title: String, _ year: Int?, _ overview: String?, _ poster: String?, kind: MediaKind, state: RequestState) -> MediaTitle {
+    private func title(_ tmdbId: Int, _ title: String, _ year: Int?, _ overview: String?, _ poster: String?, backdropURL: URL?,
+                       kind: MediaKind, state: RequestState) -> MediaTitle {
         let movie = kind == .movie
         return MediaTitle(id: "\(movie ? "movie" : "show"):tmdb:\(tmdbId)", title: title,
                           subtitle: year.map(String.init) ?? "", synopsis: overview ?? "", kind: kind,
-                          artwork: artwork(poster), backdrop: nil, accent: movie ? "#D69A5B" : "#65B4AC",
+                          artwork: artwork(poster), backdrop: backdropURL, accent: movie ? "#D69A5B" : "#65B4AC",
                           playable: false, playbackURL: nil, requestState: state, tmdbID: tmdbId)
     }
 
-    private func libraryTitle(_ key: String, _ title: String, _ year: Int?, _ poster: String?, entryID: Int, state: RequestState) -> MediaTitle {
+    private func libraryTitle(_ key: String, _ title: String, _ year: Int?, _ poster: String?, entryID: Int, tmdbID: Int? = nil,
+                              backdropURL: URL? = nil, state: RequestState) -> MediaTitle {
         MediaTitle(id: "show:entry:\(entryID)", title: title, subtitle: year.map(String.init) ?? "",
-                   synopsis: "", kind: .show, artwork: artwork(poster), backdrop: nil, accent: "#65B4AC",
-                   playable: false, playbackURL: nil, requestState: state, tmdbID: key.hasPrefix("tmdb:") ? Int(key.dropFirst(5)) : nil)
+                   synopsis: "", kind: .show, artwork: artwork(poster), backdrop: backdropURL, accent: "#65B4AC",
+                   playable: false, playbackURL: nil, requestState: state,
+                   tmdbID: tmdbID ?? (key.hasPrefix("tmdb:") ? Int(key.dropFirst(5)) : nil))
     }
 
     private func unique(_ items: [MediaTitle]) -> [MediaTitle] {

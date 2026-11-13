@@ -179,7 +179,7 @@ private struct TVRoot: View {
             ContentUnavailableView("Nothing to browse yet", systemImage: "play.rectangle",
                                    description: Text("Try searching for a movie or show."))
         } else {
-            BrowseView(items: items, focusRequest: pageFocusRequest, open: open)
+            BrowseView(items: items, focusRequest: pageFocusRequest, connection: connection, open: open)
         }
     }
 

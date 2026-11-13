@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { tmdbImageUrl } from "../media/tmdb-artwork";
 import { createHash } from "node:crypto";
 import type { MovieCatalog } from "./catalog";
 import type { CatalogMovie } from "./types";
@@ -81,6 +82,7 @@ const movieWireSchema = z.object({
   originalLanguage: z.string().nullable().optional(),
   overview: z.string().nullable().optional(),
   posterPath: z.string().nullable().optional(),
+  backdropPath: z.string().nullable().optional().catch(null),
   runtime: z.number().nullable().optional(),
   imdbId: z.string().nullable().optional(),
   externalIds: z
@@ -97,10 +99,8 @@ function movie(raw: unknown): CatalogMovie {
     year: Number.isInteger(year) && year > 0 ? year : null,
     originalLanguage: m.originalLanguage ?? "und",
     overview: m.overview ?? "",
-    posterUrl:
-      m.posterPath && /^\/[\w.-]+$/.test(m.posterPath)
-        ? `https://image.tmdb.org/t/p/w342${m.posterPath}`
-        : null,
+    posterUrl: tmdbImageUrl(m.posterPath, "w342"),
+    backdropUrl: tmdbImageUrl(m.backdropPath, "w1280"),
     runtimeMinutes: m.runtime && m.runtime > 0 ? m.runtime : null,
     imdbId: m.imdbId ?? m.externalIds?.imdbId ?? null,
     ...(m.releaseDate && z.iso.date().safeParse(m.releaseDate).success ? { releaseDate: m.releaseDate } : {}),

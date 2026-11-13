@@ -10,6 +10,7 @@ enum TVPalette {
 struct BrowseView: View {
     let items: [MediaTitle]
     let focusRequest: Int
+    let connection: Connection?
     let open: (MediaTitle) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -65,23 +66,21 @@ struct BrowseView: View {
     private func hero(_ item: MediaTitle, width: CGFloat, height: CGFloat, insets: EdgeInsets) -> some View {
         ZStack(alignment: .leading) {
             Color.clear.overlay(alignment: .topTrailing) {
-                if let image = item.backdrop ?? item.artwork {
-                    TVArtwork(url: image, alignment: item.backdrop == nil ? .center : .top)
-                        .frame(width: width * 0.81 + insets.trailing, height: height + insets.top)
-                        .mask {
-                            LinearGradient(stops: [
-                                .init(color: .clear, location: 0),
-                                .init(color: .black.opacity(0.35), location: 0.27),
-                                .init(color: .black, location: 0.65)
-                            ], startPoint: .leading, endPoint: .trailing)
-                        }
-                        .overlay(alignment: .bottom) {
-                            LinearGradient(colors: [.clear, TVPalette.background], startPoint: .top, endPoint: .bottom)
-                                .frame(height: height * 0.48)
-                        }
-                        .offset(x: insets.trailing, y: -insets.top)
-                        .accessibilityHidden(true)
-                }
+                TVBackdrop(item: item, connection: connection, debounce: .milliseconds(180))
+                    .frame(width: width * 0.81 + insets.trailing, height: height + insets.top)
+                    .mask {
+                        LinearGradient(stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .black.opacity(0.35), location: 0.27),
+                            .init(color: .black, location: 0.65)
+                        ], startPoint: .leading, endPoint: .trailing)
+                    }
+                    .overlay(alignment: .bottom) {
+                        LinearGradient(colors: [.clear, TVPalette.background], startPoint: .top, endPoint: .bottom)
+                            .frame(height: height * 0.48)
+                    }
+                    .offset(x: insets.trailing, y: -insets.top)
+                    .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 13) {
                 TVTitleTreatment(item: item)
@@ -210,10 +209,52 @@ struct TVUnstyledButton: ButtonStyle {
     }
 }
 
+struct TVBackdrop: View {
+    let item: MediaTitle
+    let connection: Connection?
+    var debounce: Duration = .zero
+
+    @State private var resolved: Resolved?
+
+    private struct Lookup: Equatable {
+        let kind: MediaKind
+        let tmdbID: Int
+        let connection: Connection
+    }
+
+    private struct Resolved {
+        let lookup: Lookup
+        let url: URL?
+    }
+
+    private var lookup: Lookup? {
+        guard item.backdrop == nil, let tmdbID = item.tmdbID, let connection else { return nil }
+        return Lookup(kind: item.kind, tmdbID: tmdbID, connection: connection)
+    }
+
+    var body: some View {
+        let lookup = lookup
+        TVArtwork(url: item.backdrop ?? (resolved?.lookup == lookup ? resolved?.url : nil), ambientPoster: item.artwork)
+            .task(id: lookup) {
+                guard let lookup, resolved?.lookup != lookup else { return }
+                do {
+                    try await Task.sleep(for: debounce)
+                    let client = PodibleClient(baseURL: lookup.connection.url, token: lookup.connection.token)
+                    let url = try await client.backdrop(kind: lookup.kind, tmdbID: lookup.tmdbID)
+                    try Task.checkCancellation()
+                    resolved = Resolved(lookup: lookup, url: url)
+                } catch {
+                    // Optional artwork must not block browsing or playback.
+                }
+            }
+    }
+}
+
 struct TVArtwork: View {
     let url: URL?
     var title: String? = nil
     var alignment: Alignment = .center
+    var ambientPoster: URL? = nil
 
     var body: some View {
         GeometryReader { geometry in
@@ -225,11 +266,11 @@ struct TVArtwork: View {
                         if let image = phase.image {
                             image.resizable().scaledToFill()
                         } else {
-                            fallback
+                            fallback(in: geometry.size)
                         }
                     }
                 } else {
-                    fallback
+                    fallback(in: geometry.size)
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: alignment)
@@ -237,8 +278,14 @@ struct TVArtwork: View {
         }
     }
 
-    @ViewBuilder private var fallback: some View {
-        if let title {
+    @ViewBuilder private func fallback(in size: CGSize) -> some View {
+        if let ambientPoster {
+            AmbientPoster(url: ambientPoster)
+                .frame(width: size.width, height: size.height)
+                .scaleEffect(1.18)
+                .blur(radius: 64)
+                .opacity(0.43)
+        } else if let title {
             LinearGradient(colors: [.white.opacity(0.12), TVPalette.background],
                            startPoint: .topTrailing, endPoint: .bottomLeading)
                 .overlay(alignment: .bottomLeading) {
@@ -249,6 +296,24 @@ struct TVArtwork: View {
                 }
         } else {
             Color.clear
+        }
+    }
+}
+
+private struct AmbientPoster: View {
+    let url: URL
+
+    var body: some View {
+        if url.isFileURL, let image = UIImage(contentsOfFile: url.path) {
+            Image(uiImage: image).resizable().scaledToFill()
+        } else {
+            AsyncImage(url: url) { phase in
+                if let image = phase.image {
+                    image.resizable().scaledToFill()
+                } else {
+                    Color.clear
+                }
+            }
         }
     }
 }

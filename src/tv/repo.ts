@@ -3,6 +3,7 @@ import { immediateTransaction, type SyncTransactionCallback } from "../db-transa
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { assertVersionContentAvailable } from "../media/content-loss";
+import { backdropUrlSchema } from "../media/tmdb-artwork";
 import { NotificationsRepo } from "../notifications/repo";
 import { TV_SEASON_PACK_PROMOTION_MAX_TARGETS, TV_SEASON_PACK_PROMOTION_PILOT } from "./season-promotion-pilot";
 import { TorrentRecordsRepo, type TorrentRecord } from "../media/torrent-records";
@@ -75,7 +76,12 @@ export class TvRepo {
       const now = new Date().toISOString();
       const { episodes, relations, refs, ...metadata } = catalog;
       const previous = this.db.query("SELECT metadata_json FROM tv_entries WHERE catalog_key=?").get(catalog.key) as { metadata_json: string } | null;
-      metadata.posterUrl ??= previous ? tvPosterUrlSchema.parse(JSON.parse(previous.metadata_json).posterUrl) : null;
+      if (previous) {
+        const artwork = JSON.parse(previous.metadata_json);
+        metadata.posterUrl ??= tvPosterUrlSchema.parse(artwork.posterUrl);
+        if (metadata.tmdbId === artwork.tmdbId)
+          metadata.backdropUrl ??= backdropUrlSchema.parse(artwork.backdropUrl);
+      }
       const row = this.db.query(`INSERT INTO tv_entries(catalog_key,metadata_json,updated_at) VALUES(?,?,?)
         ON CONFLICT(catalog_key) DO UPDATE SET metadata_json=excluded.metadata_json,updated_at=excluded.updated_at RETURNING id`)
         .get(catalog.key, json(metadata), now) as { id: number };
@@ -131,7 +137,8 @@ export class TvRepo {
     if (!row) return null;
     const metadata = JSON.parse(row.metadata_json);
     return {
-      ...metadata, posterUrl: tvPosterUrlSchema.parse(metadata.posterUrl), id, refs: this.refs("entry", id), episodes: this.episodes(id),
+      ...metadata, posterUrl: tvPosterUrlSchema.parse(metadata.posterUrl), backdropUrl: backdropUrlSchema.parse(metadata.backdropUrl),
+      id, refs: this.refs("entry", id), episodes: this.episodes(id),
       relations: this.db.query(`SELECT related_key AS key,title,relation,source FROM tv_entry_relations
         WHERE entry_id=? ORDER BY related_key,relation,source`).all(id),
     } as TvEntry;
@@ -149,9 +156,8 @@ export class TvRepo {
         OR EXISTS(SELECT 1 FROM json_each(e.metadata_json,'$.aliases') alias WHERE instr(lower(alias.value),lower(?)) > 0)
       GROUP BY e.id ORDER BY e.id DESC LIMIT ?`).all(query, query, limit) as { id: number; catalog_key: string; metadata_json: string; availableEpisodes: number }[])
       .map(row => {
-        const metadata = tvCatalogEntrySchema.pick({ title: true, year: true, posterUrl: true }).parse(JSON.parse(row.metadata_json));
-        return { entryId: row.id, key: row.catalog_key, title: metadata.title,
-          year: metadata.year, posterUrl: metadata.posterUrl, availableEpisodes: row.availableEpisodes };
+        const metadata = tvCatalogEntrySchema.pick({ title: true, year: true, tmdbId: true, posterUrl: true, backdropUrl: true }).parse(JSON.parse(row.metadata_json));
+        return { ...metadata, entryId: row.id, key: row.catalog_key, availableEpisodes: row.availableEpisodes };
       });
   }
   availableEpisodeCount(entryId: number): number {

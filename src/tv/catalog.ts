@@ -4,11 +4,12 @@ import type { AppSettings } from "../app-types";
 import { SonarrCatalog, type SonarrSeriesRef } from "./sonarr";
 import { tvCatalogEntrySchema, tvPosterFromImages, type TvCatalogEntry } from "./types";
 import type { TvFetcher } from "./upstream";
+import { backdropUrlSchema, tmdbImageUrl } from "../media/tmdb-artwork";
 
 const id = z.number().int().positive().safe();
 export const tvSearchResultSchema = z.object({
   tmdbId: id, title: z.string(), originalTitle: z.string(), year: z.number().int().nullable(),
-  overview: z.string(), posterUrl: z.string().nullable(),
+  overview: z.string(), posterUrl: z.string().nullable(), backdropUrl: backdropUrlSchema,
 });
 export const tvSeasonSchema = z.object({
   seasonNumber: z.number().int().nonnegative(), title: z.string(), episodeCount: z.number().int().nonnegative(),
@@ -36,6 +37,7 @@ export interface TvCatalog {
   search(query: string): Promise<TvSearchResult[]>;
   details(tmdbId: number): Promise<TvCatalogDetails>;
   resolve(tmdbId: number): Promise<TvCatalogEntry>;
+  backdrop?(tmdbId: number): Promise<string | null>;
 }
 
 /** Identity is provider-sourced; ordinal equality is never an identity bridge. */
@@ -80,6 +82,7 @@ export function verifiedTvSpecials(seasons: ReturnType<typeof canonicalTvSeasons
 const tmdbSeries = z.object({
   id, name: z.string().min(1), original_name: z.string(), first_air_date: z.string().optional(),
   overview: z.string().default(""), poster_path: z.string().nullable().optional(),
+  backdrop_path: z.string().nullable().optional().catch(null),
 });
 const tmdbDetails = tmdbSeries.extend({
   external_ids: z.object({ tvdb_id: z.number().int().nonnegative().nullable().optional() }),
@@ -103,8 +106,7 @@ function summary(raw: z.infer<typeof tmdbSeries>): TvSearchResult {
   const year = Number(raw.first_air_date?.slice(0, 4));
   return { tmdbId: raw.id, title: raw.name, originalTitle: raw.original_name,
     year: Number.isInteger(year) && year > 0 ? year : null, overview: raw.overview,
-    posterUrl: raw.poster_path && /^\/[a-zA-Z0-9._-]+$/.test(raw.poster_path)
-      ? `https://image.tmdb.org/t/p/w342${raw.poster_path}` : null };
+    posterUrl: tmdbImageUrl(raw.poster_path, "w342"), backdropUrl: tmdbImageUrl(raw.backdrop_path, "w1280") };
 }
 
 function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -234,7 +236,8 @@ export class TmdbTvCatalog implements TvCatalog {
     raw ??= await this.skyhook(metadata);
     if (raw.tvdbId !== metadata.external_ids.tvdb_id)
       throw new TvCatalogError("TMDB and canonical catalog disagree on TVDB work identity; correct the mapping before requesting.", "unsupported");
-    return canonicalTvSeasons({ ...raw, posterUrl: summary(metadata).posterUrl ?? raw.posterUrl ?? null }, metadata.id);
+    const { posterUrl, backdropUrl } = summary(metadata);
+    return canonicalTvSeasons({ ...raw, posterUrl: posterUrl ?? raw.posterUrl, backdropUrl: backdropUrl ?? raw.backdropUrl }, metadata.id);
   }
   private async skyhook(metadata: z.infer<typeof tmdbDetails>): Promise<TvCatalogEntry> {
     const tvdbId = metadata.external_ids.tvdb_id!;
@@ -270,6 +273,7 @@ export class TmdbTvCatalog implements TvCatalog {
     };
   }
   async resolve(tmdbId: number) { return (await this.mapped(await this.metadata(tmdbId))).entry; }
+  async backdrop(tmdbId: number) { return summary(await this.metadata(tmdbId)).backdropUrl ?? null; }
   async details(tmdbId: number): Promise<TvCatalogDetails> {
     const metadata = await this.metadata(tmdbId);
     let seasons: TvSeriesDetails["seasons"];

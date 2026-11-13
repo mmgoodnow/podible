@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { type CatalogMovie, type MoviePageExtras } from "./types";
+import { tmdbImageUrl as imagePath } from "../media/tmdb-artwork";
 
 const entrySchema = z.object({
   id: z.number().int().positive(),
@@ -8,12 +9,11 @@ const entrySchema = z.object({
   release_date: z.string().optional(),
   overview: z.string().default(""),
   poster_path: z.string().nullable().optional(),
+  backdrop_path: z.string().nullable().optional().catch(null),
   original_language: z.string(),
   imdb_id: z.string().nullable().optional(),
   runtime: z.number().nullable().optional(),
 });
-const imagePath = (value: string | null | undefined, size: "w185" | "w342") =>
-  value && /^\/[a-zA-Z0-9._-]+$/.test(value) ? `https://image.tmdb.org/t/p/${size}${value}` : null;
 function normalize(raw: z.infer<typeof entrySchema>): CatalogMovie {
   const year = Number(raw.release_date?.slice(0, 4));
   return {
@@ -24,6 +24,7 @@ function normalize(raw: z.infer<typeof entrySchema>): CatalogMovie {
     overview: raw.overview,
     originalLanguage: raw.original_language,
     posterUrl: imagePath(raw.poster_path, "w342"),
+    backdropUrl: imagePath(raw.backdrop_path, "w1280"),
     imdbId: raw.imdb_id ?? null,
     runtimeMinutes: raw.runtime && raw.runtime > 0 ? raw.runtime : null,
     ...(raw.release_date && z.iso.date().safeParse(raw.release_date).success ? { releaseDate: raw.release_date } : {}),
@@ -121,9 +122,9 @@ export class TmdbCatalog implements MovieCatalog {
   }
   async get(tmdbId: number): Promise<CatalogMovie> {
     z.number().int().positive().parse(tmdbId);
-    return normalize(
-      entrySchema.parse(await this.json(`/movie/${tmdbId}?language=en-US`)),
-    );
+    const movie = entrySchema.parse(await this.json(`/movie/${tmdbId}?language=en-US`));
+    if (movie.id !== tmdbId) throw new CatalogUnavailableError("TMDB returned a different movie");
+    return normalize(movie);
   }
   async pageExtras(tmdbId: number): Promise<MoviePageExtras> {
     z.number().int().positive().parse(tmdbId);

@@ -75,12 +75,15 @@ nonisolated struct Library: Codable, Sendable {
         let year: Int?
         let overview: String
         let posterUrl: String?
+        let backdropUrl: String?
     }
     struct TvValue: Codable, Sendable {
         let entryId: Int
+        let tmdbId: Int?
+        let backdropUrl: String?
         let key: String
         let title: String
-        let year: Double?
+        let year: Int?
         let posterUrl: String?
     }
     let movies: [MoviesValue]
@@ -94,6 +97,7 @@ nonisolated struct Discovery: Codable, Sendable {
             let title: String
             let year: Double?
             let posterUrl: String?
+            let backdropUrl: String?
         }
         let items: [ItemsValue]
     }
@@ -103,11 +107,22 @@ nonisolated struct Discovery: Codable, Sendable {
             let title: String
             let year: Double?
             let posterUrl: String?
+            let backdropUrl: String?
         }
         let items: [ItemsValue]
     }
     let movies: MoviesValue
     let tv: TvValue
+}
+
+nonisolated struct BackdropQuery: Codable, Sendable {
+    enum Kind: String, Codable, Sendable { case movie, tv }
+    let kind: Kind
+    let tmdbId: Int
+}
+
+nonisolated struct BackdropResult: Codable, Sendable {
+    let backdropUrl: String?
 }
 
 nonisolated struct MovieStatus: Codable, Sendable {
@@ -122,6 +137,7 @@ nonisolated struct MovieSearch: Codable, Sendable {
         let year: Int?
         let overview: String
         let posterUrl: String?
+        let backdropUrl: String?
     }
     let results: [ResultsValue]
 }
@@ -133,6 +149,7 @@ nonisolated struct MovieDetail: Codable, Sendable {
         let year: Int?
         let overview: String
         let posterUrl: String?
+        let backdropUrl: String?
     }
     struct RequestsValue: Codable, Sendable {
         struct MovieValue: Codable, Sendable {
@@ -141,6 +158,7 @@ nonisolated struct MovieDetail: Codable, Sendable {
             let year: Int?
             let overview: String
             let posterUrl: String?
+            let backdropUrl: String?
         }
         struct DownloadValue: Codable, Sendable {
             let bytesDone: Double?
@@ -167,6 +185,7 @@ nonisolated struct MovieRequests: Codable, Sendable {
             let year: Int?
             let overview: String
             let posterUrl: String?
+            let backdropUrl: String?
         }
         struct DownloadValue: Codable, Sendable {
             let bytesDone: Double?
@@ -221,6 +240,7 @@ nonisolated struct TVSearch: Codable, Sendable {
         let year: Int?
         let overview: String
         let posterUrl: String?
+        let backdropUrl: String?
     }
     let configured: Bool
     let unavailableReason: String?
@@ -240,6 +260,7 @@ nonisolated struct TVDetail: Codable, Sendable {
         let year: Int?
         let overview: String
         let posterUrl: String?
+        let backdropUrl: String?
         let seasons: [SeasonsValue]
     }
     struct SeasonsValue: Codable, Sendable {
@@ -267,6 +288,7 @@ nonisolated struct TVEntry: Codable, Sendable {
         let title: String
         let year: Int?
         let posterUrl: String?
+        let backdropUrl: String?
     }
     struct ProgressValue: Codable, Sendable {
         struct DownloadValue: Codable, Sendable {

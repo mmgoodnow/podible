@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { backdropUrlSchema, tmdbImageUrl } from "./tmdb-artwork";
 
-const item = z.object({ tmdbId: z.number().int().positive(), title: z.string(), year: z.number().nullable(), posterUrl: z.string().nullable() });
+const item = z.object({ tmdbId: z.number().int().positive(), title: z.string(), year: z.number().nullable(),
+  posterUrl: z.string().nullable(), backdropUrl: backdropUrlSchema });
 const section = z.object({ items: z.array(item), unavailable: z.boolean() });
 export const homeDiscoverySchema = z.object({ configured: z.boolean(), movies: section, tv: section });
 type Section = z.infer<typeof section>;
 const upstream = z.object({ results: z.array(z.object({ id: z.number().int().positive(), adult: z.boolean().optional(),
   title: z.string().optional(), name: z.string().optional(), release_date: z.string().optional(), first_air_date: z.string().optional(),
-  poster_path: z.string().nullable().optional() })).max(100) });
+  poster_path: z.string().nullable().optional(), backdrop_path: z.string().nullable().optional().catch(null) })).max(100) });
 
 /** Fixed public lists only. No per-title enrichment, user-specific cache entries or raw upstream errors. */
 export class HomeDiscovery {
@@ -65,7 +67,7 @@ export class HomeDiscovery {
           const date = kind === "movie" ? row.release_date : row.first_air_date;
           return { tmdbId: row.id, title: (kind === "movie" ? row.title! : row.name!).trim(),
             year: date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? Number(date.slice(0, 4)) : null,
-            posterUrl: row.poster_path && /^\/[a-zA-Z0-9._-]+$/.test(row.poster_path) ? `https://image.tmdb.org/t/p/w342${row.poster_path}` : null };
+            posterUrl: tmdbImageUrl(row.poster_path, "w342"), backdropUrl: tmdbImageUrl(row.backdrop_path, "w1280") };
         }) };
     } catch { return { items: [], unavailable: true }; }
   }

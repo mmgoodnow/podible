@@ -12,15 +12,18 @@ test("discovery coalesces whole lists, bounds cards, filters adult entries and n
     calls++; urls.push(url.pathname); authorizations.push(new Headers(init?.headers).get("authorization"));
     await Bun.sleep(2);
     return Response.json({ results: Array.from({ length: 30 }, (_, i) => ({ id: i + 1, title: `Movie ${i}`, name: `TV ${i}`,
-      release_date: "2026-01-01", first_air_date: "2025-01-01", adult: i === 0, poster_path: i === 1 ? "https://secret.invalid/poster" : `/poster${i}.jpg` })) });
+      release_date: "2026-01-01", first_air_date: "2025-01-01", adult: i === 0,
+      poster_path: i === 1 ? "https://secret.invalid/poster" : `/poster${i}.jpg`,
+      backdrop_path: i === 1 ? "//secret.invalid/wide" : `/wide${i}.jpg` })) });
   }), () => now);
   const [first, other] = await Promise.all([cache.get("private-token"), cache.get("private-token")]);
   expect(calls).toBe(2); expect(first).toEqual(other);
   expect(urls.sort()).toEqual(["/3/trending/movie/week", "/3/trending/tv/week"]);
   expect(authorizations).toEqual(["Bearer private-token", "Bearer private-token"]);
   expect(first.movies.items).toHaveLength(20);
-  expect(first.movies.items[0]).toMatchObject({ tmdbId: 2, posterUrl: null, year: 2026 });
-  expect(first.tv.items[1]!.posterUrl).toBe("https://image.tmdb.org/t/p/w342/poster2.jpg");
+  expect(first.movies.items[0]).toMatchObject({ tmdbId: 2, posterUrl: null, backdropUrl: null, year: 2026 });
+  expect(first.tv.items[1]).toMatchObject({ posterUrl: "https://image.tmdb.org/t/p/w342/poster2.jpg",
+    backdropUrl: "https://image.tmdb.org/t/p/w1280/wide2.jpg" });
   expect(JSON.stringify(first)).not.toContain("private-token");
   await cache.get("private-token"); expect(calls).toBe(2);
   now += 600_001; await cache.get("private-token"); expect(calls).toBe(4);

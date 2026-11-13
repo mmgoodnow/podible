@@ -5,7 +5,7 @@ import type { TvFetcher } from "../../src/tv/upstream";
 import { fixtureTvEntry } from "../fixtures/tv-catalog";
 
 const summary = { id: 70, name: "A Work", original_name: "A Work", first_air_date: "2020-01-01", overview: "A story", poster_path: "/poster.jpg" };
-const details = { ...summary, external_ids: { tvdb_id: 700 }, seasons: [{ season_number: 9, name: "TMDB grouping", episode_count: 5 }] };
+const details = { ...summary, backdrop_path: "/wide.jpg", external_ids: { tvdb_id: 700 }, seasons: [{ season_number: 9, name: "TMDB grouping", episode_count: 5 }] };
 const sonarr = { url: "https://sonarr.invalid/base", apiKey: "sonarr-private" };
 const skyhookShow = { tvdbId: 700, tmdbId: 70, title: "A Work", runtime: 24, episodes: [
   { tvdbShowId: 700, tvdbId: 7001, seasonNumber: 2, episodeNumber: 1, title: "First", airDate: "2020-01-01" },
@@ -37,12 +37,16 @@ test("TV discovery uses the shared token, bounded GET transport, cache/coalescin
   expect(results[0]).toEqual(results[1]); expect(f.calls).toHaveLength(1);
   expect(f.calls[0]!.url.searchParams.get("query")).toBe("a & b");
   expect(results[0]![0]!.posterUrl).toBe("https://image.tmdb.org/t/p/w342/poster.jpg");
+  expect(await catalog.backdrop(70)).toBe("https://image.tmdb.org/t/p/w1280/wide.jpg");
+  expect(f.calls).toHaveLength(2); // Artwork doesn't need an episode catalog lookup.
   const detail = await catalog.details(70);
+  expect(detail.backdropUrl).toBe("https://image.tmdb.org/t/p/w1280/wide.jpg");
   expect(detail.seasons.map((s) => s.seasonNumber)).toEqual([2]); // Never infer TMDB season 9 -> TVDB season 9.
   expect(detail.seasons[0]!.requestable).toBe(true);
   const mapped = await catalog.resolve(70);
   expect(mapped.key).toBe("tvdb:700"); expect(mapped.episodes[0]!.key).toBe("tvdb:7001");
   expect(mapped.posterUrl).toBe("https://image.tmdb.org/t/p/w342/poster.jpg");
+  expect(mapped.backdropUrl).toBe(detail.backdropUrl);
   expect(f.calls).toHaveLength(4);
   for (const call of f.calls) {
     const headers = new Headers(call.init?.headers);
