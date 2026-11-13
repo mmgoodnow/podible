@@ -8,6 +8,10 @@ struct PodibleTVApp: App {
     }
 }
 
+private enum PageFocus: Hashable {
+    case settings, request(String), requestSearch, requestRetry
+}
+
 private struct TVRoot: View {
     @State private var connection = Connection.loadForTV()
     @State private var catalog: [MediaTitle] = []
@@ -17,13 +21,14 @@ private struct TVRoot: View {
     @State private var sent: [MediaTitle] = []
     @State private var demoSelections: [String: Set<MediaRequestOption.ID>] = [:]
     @State private var selection: Section = .browse
-    @State private var browseFocusRequest = 0
+    @State private var pageFocusRequest = 0
     @State private var searchQuery = ""
     @State private var path: [MediaTitle] = []
     @State private var playback: Playback?
     @State private var browseError: String?
     @State private var loading = true
     @FocusState private var sidebarFocus: Section?
+    @FocusState private var pageFocus: PageFocus?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum Section: String, CaseIterable {
@@ -54,13 +59,13 @@ private struct TVRoot: View {
                     case .requests:
                         requests.task(id: connection) { await refreshRequests() }
                     case .settings:
-                        ConnectionScreen(connection: connection) {
+                        ConnectionScreen(connection: connection, primaryFocus: $pageFocus) {
                             connection = $0
                             catalog = []
                             serverRequests = []
                             loading = true
                             sent = []
-                            selection = .browse
+                            enter($0 == nil ? .settings : .browse)
                         }
                     }
                 }
@@ -72,6 +77,17 @@ private struct TVRoot: View {
                     .accessibilityHidden(true)
             }
             .overlay(alignment: .leading) { sidebar }
+            .task(id: pageFocusRequest) {
+                guard pageFocusRequest > 0 else { return }
+                // Let the newly selected screen register its focus targets.
+                try? await Task.sleep(for: .milliseconds(50))
+                guard !Task.isCancelled else { return }
+                switch selection {
+                case .settings: pageFocus = .settings
+                case .requests: pageFocus = firstRequestFocus
+                default: break
+                }
+            }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: sidebarFocus != nil)
             .foregroundStyle(TVPalette.paper)
             .background(TVPalette.background.ignoresSafeArea())
@@ -95,15 +111,17 @@ private struct TVRoot: View {
         .fullScreenCover(item: $playback) { playback in DemoPlayer(url: playback.url) }
     }
 
+    private func enter(_ section: Section) {
+        selection = section
+        pageFocusRequest += 1
+    }
+
     private var sidebar: some View {
         let expanded = sidebarFocus != nil
         return VStack(alignment: .leading, spacing: 7) {
             ForEach(Section.allCases, id: \.self) { section in
                 let focused = sidebarFocus == section
-                Button {
-                    selection = section
-                    if [.browse, .movies, .tv].contains(section) { browseFocusRequest += 1 }
-                } label: {
+                Button { enter(section) } label: {
                     Image(systemName: section.icon)
                         .font(.system(size: 27, weight: selection == section ? .semibold : .regular))
                         .frame(width: 58, height: 55)
@@ -155,34 +173,44 @@ private struct TVRoot: View {
             VStack(spacing: 22) {
                 Text(browseError)
                 Button("Try Again") { Task { await refresh() } }
-                Button("Connection Settings") { selection = .settings }
+                Button("Connection Settings") { enter(.settings) }
             }
         } else if items.isEmpty {
             ContentUnavailableView("Nothing to browse yet", systemImage: "play.rectangle",
                                    description: Text("Try searching for a movie or show."))
         } else {
-            BrowseView(items: items, focusRequest: browseFocusRequest, open: open)
+            BrowseView(items: items, focusRequest: pageFocusRequest, open: open)
         }
     }
 
     private func open(_ item: MediaTitle) { path.append(item) }
 
+    private var requestEntries: [MediaTitle] { connection == nil ? sent : serverRequests }
+
+    private var firstRequestFocus: PageFocus {
+        if connection != nil, requestsError != nil { return .requestRetry }
+        return requestEntries.first.map { .request($0.id) } ?? .requestSearch
+    }
+
     @ViewBuilder private var requests: some View {
-        if connection != nil && loadingRequests && serverRequests.isEmpty {
-            ProgressView("Loading requests")
-        } else if connection != nil, let requestsError {
+        if connection != nil, let requestsError {
             VStack(spacing: 22) {
                 Text(requestsError)
                 Button("Try Again") { Task { await refreshRequests() } }
+                    .focused($pageFocus, equals: .requestRetry)
+            }
+        } else if requestEntries.isEmpty {
+            VStack(spacing: 22) {
+                if connection != nil && loadingRequests {
+                    ProgressView("Loading requests")
+                } else {
+                    Text("No requests to show").font(.title2)
+                }
+                Button("Search for a title") { enter(.search) }
+                    .focused($pageFocus, equals: .requestSearch)
             }
         } else {
-            let entries = connection == nil ? sent : serverRequests
-            if entries.isEmpty {
-                ContentUnavailableView("No requests to show", systemImage: "tray",
-                                       description: Text("Find a movie or a TV season in Search."))
-            } else {
-                titleList(entries)
-            }
+            titleList(requestEntries)
         }
     }
 
@@ -190,14 +218,17 @@ private struct TVRoot: View {
         guard let connection else { return }
         loadingRequests = true
         requestsError = nil
+        let restoreContentFocus = pageFocus == .requestRetry
         defer { if self.connection == connection { loadingRequests = false } }
         do {
             let result = try await PodibleClient(baseURL: connection.url, token: connection.token).requests()
             guard !Task.isCancelled, self.connection == connection else { return }
             serverRequests = result
+            if sidebarFocus == nil, restoreContentFocus || pageFocus == .requestSearch { pageFocus = firstRequestFocus }
         } catch {
             guard !Task.isCancelled, self.connection == connection else { return }
             requestsError = error.localizedDescription
+            if sidebarFocus == nil, restoreContentFocus || pageFocus == .requestSearch { pageFocus = firstRequestFocus }
         }
     }
 
@@ -235,6 +266,8 @@ private struct TVRoot: View {
                         }
                         .padding(.vertical, 10)
                     }
+                    .focused($pageFocus, equals: .request(item.id))
+                    .accessibilityIdentifier("requests.title.\(item.id)")
                 }
             }.padding(.horizontal, 70)
         }
@@ -393,6 +426,7 @@ private struct SearchScreen: View {
 
 private struct ConnectionScreen: View {
     let connection: Connection?
+    let primaryFocus: FocusState<PageFocus?>.Binding
     let changed: (Connection?) -> Void
     @State private var server = Connection.rememberedServer
     @State private var status: String?
@@ -405,6 +439,7 @@ private struct ConnectionScreen: View {
             if let connection {
                 Text("Signed in to \(connection.url.host ?? "Podible")")
                 Button("Disconnect") { Task { await disconnect(connection) } }
+                    .focused(primaryFocus, equals: .settings)
             } else if let pairingBase {
                 if let pairing, let url = URL(string: pairing.authorizePath, relativeTo: pairingBase)?.absoluteURL {
                     HStack(alignment: .center, spacing: 48) {
@@ -419,6 +454,7 @@ private struct ConnectionScreen: View {
                     ProgressView("Starting sign-in…")
                 }
                 Button("Cancel") { self.pairingBase = nil; pairing = nil }
+                    .focused(primaryFocus, equals: .settings)
             } else {
                 Text("Enter your server address, then sign in on your phone.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -427,6 +463,7 @@ private struct ConnectionScreen: View {
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
                     .accessibilityIdentifier("device-sign-in.server")
+                    .focused(primaryFocus, equals: .settings)
                 Button("Sign in with phone") {
                     status = nil
                     do {

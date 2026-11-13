@@ -122,6 +122,60 @@ final class FocusTests: XCTestCase {
         XCTAssertTrue(showPoster.waitForExistence(timeout: 5))
         assertFocused(showPoster)
         capture("09-back-to-shelf")
+
+        for _ in 0..<3 where !sidebar.allElementsBoundByIndex.contains(where: \.hasFocus) { remote.press(.left) }
+        for _ in 0..<6 where !browse.hasFocus { remote.press(.up) }
+        assertFocused(browse)
+        let requests = app.buttons["nav.Requests"]
+        for _ in 0..<6 where !requests.hasFocus { remote.press(.down) }
+        assertFocused(requests)
+        remote.press(.select)
+        assertFocused(app.buttons["requests.title.after"])
+    }
+
+    @MainActor
+    func testSidebarEntersSettingsAndEmptyRequests() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo"]
+        app.launch()
+        let remote = XCUIRemote.shared
+        let firstPoster = app.buttons["poster.marrow"]
+        let sidebar = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "nav."))
+        XCTAssertTrue(firstPoster.waitForExistence(timeout: 8))
+        if firstPoster.hasFocus { remote.press(.left) }
+        XCTAssertTrue(sidebar.allElementsBoundByIndex.contains(where: \.hasFocus))
+
+        let home = app.buttons["nav.Home"]
+        for _ in 0..<6 where !home.hasFocus { remote.press(.up) }
+        assertFocused(home)
+        let requests = app.buttons["nav.Requests"]
+        for _ in 0..<6 where !requests.hasFocus { remote.press(.down) }
+        assertFocused(requests)
+        remote.press(.select)
+        assertFocused(app.buttons["Search for a title"])
+        remote.press(.left)
+        XCTAssertTrue(sidebar.allElementsBoundByIndex.contains(where: \.hasFocus))
+        remote.press(.right)
+        assertFocused(app.buttons["Search for a title"])
+        remote.press(.left)
+        XCTAssertTrue(sidebar.allElementsBoundByIndex.contains(where: \.hasFocus))
+
+        let settings = app.buttons["nav.Settings"]
+        for _ in 0..<6 where !settings.hasFocus { remote.press(.down) }
+        assertFocused(settings)
+        remote.press(.select)
+        let server = app.textFields["device-sign-in.server"]
+        assertFocused(server)
+        remote.press(.left)
+        XCTAssertTrue(sidebar.allElementsBoundByIndex.contains(where: \.hasFocus))
+        remote.press(.right)
+        XCTAssertTrue(server.hasFocus || app.buttons["Sign in with phone"].hasFocus, app.debugDescription)
+        if !server.hasFocus { remote.press(.up) }
+        assertFocused(server)
+        remote.press(.down)
+        assertFocused(app.buttons["Sign in with phone"])
+        capture("13-settings-content-focus")
     }
 
     @MainActor
@@ -163,7 +217,8 @@ final class FocusTests: XCTestCase {
     @MainActor
     private func assertFocused(_ element: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
         let focused = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hasFocus == YES"), object: element)
-        XCTAssertEqual(XCTWaiter.wait(for: [focused], timeout: 4), .completed, file: file, line: line)
+        XCTAssertEqual(XCTWaiter.wait(for: [focused], timeout: 4), .completed,
+                       "Expected focus on \(element)", file: file, line: line)
     }
 
     @MainActor
