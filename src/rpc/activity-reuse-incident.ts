@@ -31,14 +31,16 @@ export function describeReuseIncident(repo: BooksRepo, settings: AppSettings, jo
       work = book?.title;
       if (book) href = `/book/${scope.targetId}`;
     }
+    const title = work ? `${label(work)}: cross-seeding` : "Cross-seeding";
+    let failure: ReturnType<BooksRepo["activityReuseFailure"]> = null;
+    try { failure = repo.activityReuseFailure(job.id); } catch { /* Missing evidence cannot establish the failing step. */ }
+    if (!failure) return { title, href, detail: null };
+    if (failure.stage === "inventory") return { title, href, code: "reuse-local-files",
+      detail: "Podible could not finish checking local files for reuse. This only affects seeding on an additional tracker, not the original download. Retry to check the files again. If it fails again, check the library storage." };
+
     const offer = crossSeedOffer(repo, command);
     const clean = label(offer.provider).trim();
     const provider = /^[\p{L}\p{N}][\p{L}\p{N} _().&+'!-]{0,119}$/u.test(clean) ? clean : null;
-    const title = work ? `${label(work)}: cross-seeding` : "Cross-seeding";
-    let failure: ReturnType<BooksRepo["activityReuseMetainfoFailure"]> = null;
-    try { failure = repo.activityReuseMetainfoFailure(job.id); } catch { /* Missing evidence cannot establish the failing step. */ }
-    if (!failure) return { title, href, detail: null };
-
     let viaProwlarr = false;
     try { viaProwlarr = new URL(offer.url).origin === new URL(settings.prowlarr.url).origin; } catch { /* No known proxy. */ }
     const status = failure.httpStatus;

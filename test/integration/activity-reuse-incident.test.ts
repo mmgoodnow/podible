@@ -70,6 +70,15 @@ test("Activity identifies a reuse metainfo failure without exposing or guessing 
     const unrelated = await read();
     expect(unrelated.title).toBe("Sense8: cross-seeding");
     expect(unrelated.detail).not.toMatch(/PrivateHD|HTTP 429/);
+
+    const inventoryStep = `reuse:inventory:torrent:${"a".repeat(64)}`;
+    journal.query("UPDATE workflow_steps SET name=? WHERE id=?").run(inventoryStep, stepId);
+    journal.query("UPDATE workflow_runs SET error=? WHERE id=?")
+      .run(JSON.stringify({ stepName: inventoryStep, message: raw }), runId);
+    const inventory = await read();
+    expect(inventory).toMatchObject({ title: "Sense8: cross-seeding", code: "reuse-local-files", recovery: "manual-retry" });
+    expect(inventory.detail).toContain("Retry to check the files again");
+    expect(JSON.stringify(inventory)).not.toMatch(/PrivateHD|HTTP 429|error-secret|private\.invalid/);
   } finally {
     await storage.close();
     db.close();

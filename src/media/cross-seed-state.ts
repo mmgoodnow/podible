@@ -359,10 +359,12 @@ export class CrossSeedRepo {
   }
   *sourceProofs(scope: CrossSeedScope, torrentId: number) {
     crossSeedScopeSchema.parse(scope);
-    if (isBookCrossSeedScope(scope)) return;
-    const query = this.db.query<{ job_id: number | null; source_json: string | null }, [number, number, number]>(`SELECT DISTINCT a.job_id,json_extract(v.facts_json,'$.source') AS source_json
-      FROM ${scope.media}_acquisition_downloads d JOIN ${scope.media}_acquisitions a ON a.id=d.acquisition_id
-      LEFT JOIN ${scope.media}_versions v ON v.acquisition_id=a.id
+    // Only TV records pre-publication file evidence. Movie facts use "source" for WEB/Blu-ray/etc.
+    if (scope.media !== "tv") return;
+    const query = this.db.query<{ job_id: number | null; source_json: string | null }, [number, number, number]>(`SELECT DISTINCT a.job_id,
+      CASE WHEN json_type(v.facts_json,'$.source')='object' THEN json_extract(v.facts_json,'$.source') END AS source_json
+      FROM tv_acquisition_downloads d JOIN tv_acquisitions a ON a.id=d.acquisition_id
+      LEFT JOIN tv_versions v ON v.acquisition_id=a.id
       WHERE a.target_id=? AND d.torrent_id=? ORDER BY a.job_id,source_json LIMIT 32 OFFSET ?`);
     for (let offset = 0; ; offset += 32) {
       let count = 0;

@@ -445,9 +445,9 @@ export class BooksRepo {
     }
     return jobs;
   }
-  activityReuseMetainfoFailure(jobId: number): { httpStatus: number | null } | null {
+  activityReuseFailure(jobId: number) {
     const link = this.getJobExecution(jobId);
-    return link ? this.journalState.reader?.activityReuseMetainfoFailure?.(link.run_id) ?? null : null;
+    return link ? this.journalState.reader?.activityReuseFailure?.(link.run_id) ?? null : null;
   }
   getJobStatuses(ids: number[]): Map<number, JobStatus> {
     if (!ids.length) return new Map();

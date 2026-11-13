@@ -16,6 +16,7 @@ import { completedCanonicalReuseSources } from "../../src/media/reuse-source-inv
 import { captureReuseRoot, verifyContentReuse } from "../../src/media/reuse-layout";
 import type { TorrentClient } from "../../src/media/torrent-client";
 import type { TvCatalogEntry } from "../../src/tv/types";
+import { fixtureFacts, fixtureMovie } from "../fixtures/movie-services";
 
 async function fixture(options: { sealed?: boolean; published?: boolean; journal?: boolean; oldTorrents?: number; oldProofs?: number } = {}) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "reuse-source-inventory-")));
@@ -101,6 +102,38 @@ test("completed pre-publication pack can be found past 128 registrations and 32 
     expect(f.repo.crossSeed.files(f.scope, [4, 5, 6])).toHaveLength(0);
     expect([...f.repo.crossSeed.sourceDownloadPages(f.scope)].map(page => page.length)).toEqual([128, 1]);
     expect(await f.inventory()).toHaveLength(3);
+  } finally { await f.close(); }
+});
+
+test("published movie WEB quality is not parsed as a torrent file proof", async () => {
+  const f = await fixture();
+  try {
+    const settings = f.repo.getSettings();
+    const user = f.repo.upsertUser({ provider: "local", providerUserId: "movie-inventory", username: "movie", isAdmin: true });
+    const { targetId } = f.repo.movies.request(user.id, fixtureMovie, settings.movies.qualityPolicy);
+    const scope = { media: "movie" as const, targetId };
+    const acquisition = f.repo.movies.startAcquisition(targetId, "initial", () => f.repo.createJob({ type: "movie_acquire" }).id).acquisition;
+    const sourceRoot = path.join(f.downloadRoot, "movie");
+    await fs.mkdir(sourceRoot);
+    const metainfo = bencode.decode(f.metainfo) as { info: { name: string } };
+    metainfo.info.name = "Movie";
+    const plan = (await prepareCanonicalDownload({ contentRoot: f.contentRoot, sourceRoot,
+      clientId: f.source.ref.clientId, metainfo: bencode.encode(metainfo), allowCreate: true }))!;
+    for (const [i, file] of plan.files.entries()) await fs.writeFile(path.join(sourceRoot, file.path), ["AAAA", "BBBBB", "CCCCCC"][i]!);
+    const ref = { clientId: plan.clientId, nativeId: plan.infoHash };
+    const location = { rootId: "movies", relativePath: "movie" };
+    const torrentId = f.repo.movies.bindDownload(acquisition.id, ref, location, "movie-offer");
+    f.repo.movies.observeDownload(torrentId, { ref, location, complete: true, state: "seeding",
+      bytesDone: 15, sizeBytes: 15, message: null, downloadBytesPerSecond: 0, observedAt: new Date().toISOString() });
+    await sealCanonicalDownload(f.contentRoot, sourceRoot, { id: ref.clientId, sealDownload: async () => {} } as unknown as TorrentClient, ref);
+    const first = plan.files[0]!;
+    const finalized = (await finalizeCanonicalDownloadFile(f.contentRoot, sourceRoot, path.join(sourceRoot, first.path), first.size))!;
+    f.repo.movies.recordVersion(acquisition.id, { ...fixtureFacts(), source: "web" }, [{ ...finalized, probe: {} }]);
+
+    const sources = await completedCanonicalReuseSources({ repo: f.repo, scope,
+      root: await captureReuseRoot({ rootPath: f.contentRoot, markerName: ".podible-content.json" }),
+      downloadRoot: f.downloadRoot, sizes: plan.files.map(file => file.size) });
+    expect(sources.map(file => file.size)).toEqual([first.size]); // No evidence for the other members.
   } finally { await f.close(); }
 });
 

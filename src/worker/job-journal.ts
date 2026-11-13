@@ -7,6 +7,7 @@ import { activityJobIds } from "../activity-reads";
 
 export type JobLifecycle = Pick<JobRow, "status" | "error" | "attempt_count" | "next_run_at" | "updated_at">;
 export type JobWait = { reason: "provider-search"; media: "audio" | "ebook" };
+export type ReuseFailure = { stage: "metainfo"; httpStatus: number | null } | { stage: "inventory" };
 export type JobJournalReader = {
   read(runIds: string[]): Map<string, JobLifecycle>;
   readStatus?(runId: string): JobStatus | null;
@@ -14,7 +15,7 @@ export type JobJournalReader = {
   assertLinks?(domainFilename: string): void;
   waits?(runIds: string[]): Map<string, JobWait[]>;
   activityJobIds?(domainFilename: string): number[];
-  activityReuseMetainfoFailure?(runId: string): { httpStatus: number | null } | null;
+  activityReuseFailure?(runId: string): ReuseFailure | null;
 };
 export type JobCommand = {
   id: number;
@@ -59,20 +60,22 @@ export function jobJournalReader(filename: string): JobJournalReader {
         return [row.id, statusMap[row.status]!];
       }));
     },
-    activityReuseMetainfoFailure(runId) {
+    activityReuseFailure(runId) {
       using db = new Database(filename, { readonly: true });
       // Use only the step that actually stopped this run, not an older attempt.
-      const step = db.query<{ output: string | null; error: string | null }, [string]>(`SELECT s.output, s.error
-        FROM workflow_runs r JOIN workflow_steps s ON s.run_id=r.id AND s.name='reuse:metainfo'
-        WHERE r.id=? AND r.status='failed' AND json_extract(r.error,'$.stepName')=s.name AND s.status='failed'
+      const step = db.query<{ name: string; output: string | null; error: string | null }, [string]>(`SELECT s.name, s.output, s.error
+        FROM workflow_runs r JOIN workflow_steps s ON s.run_id=r.id AND s.name=json_extract(r.error,'$.stepName')
+        WHERE r.id=? AND r.status='failed' AND s.status='failed'
       `).get(runId);
       if (!step) return null;
+      if (/^reuse:inventory:(?:torrent|files):[a-f0-9]{64}$/.test(step.name)) return { stage: "inventory" };
+      if (step.name !== "reuse:metainfo") return null;
       const output: { code?: unknown } | null = JSON.parse(step.output ?? "null");
       const code = typeof output?.code === "string" ? /^podible:metainfo-http:([1-5][0-9]{2})$/.exec(output.code) : null;
-      if (code) return { httpStatus: Number(code[1]) };
+      if (code) return { stage: "metainfo", httpStatus: Number(code[1]) };
       // Older builds did not save a code. Recognize only the exact app-owned
       // message at this known step, never a substring of an upstream error.
-      return { httpStatus: output?.code === null && step.error === "Metainfo retrieval returned HTTP 429" ? 429 : null };
+      return { stage: "metainfo", httpStatus: output?.code === null && step.error === "Metainfo retrieval returned HTTP 429" ? 429 : null };
     },
     readStatus(runId) {
       const db = new Database(filename, { readonly: true });
