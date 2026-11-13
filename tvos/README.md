@@ -13,8 +13,8 @@ Use [Plex's Apple TV preview](https://www.plex.tv/blog/new-year-same-mission/) f
 [Plex Apple TV search reference](https://www.plex.tv/wp-content/uploads/2025/01/tvOS-Search-scaled.jpg)
 
 [Plex later moved navigation back to the left](https://forums.plex.tv/t/navigation-updates-coming-to-preview-users/941751/1).
-Podible uses a left sidebar that expands when focused. Press Left from the first poster to enter the
-sidebar, Up or Down to choose a destination, and Select to open it.
+Podible uses a floating left navigation pill that expands when focused. Press Left from the first poster to enter it,
+Up or Down to choose a destination, and Select to open it. Home uses larger portrait rails under the full-bleed hero.
 
 ## Prototype
 
@@ -36,7 +36,8 @@ Run `bun run generate:tvos-wire` after changing the pairing, catalog, request, o
 ## Simulator focus and screenshots
 
 With an Apple TV simulator installed, substitute its ID from `xcrun simctl list devices available`.
-The UI test uses Siri Remote actions and captures Home, sidebar focus, Search, and the TV season request flow.
+The UI tests use Siri Remote actions and capture Home, expanded navigation, inline Search, detail heroes and the TV season request flow.
+The `--demo --demo-rails` fixture adds enough titles to exercise multiple populated Home rails.
 
 ```sh
 xcodebuild -project tvos/PodibleTV.xcodeproj -scheme PodibleTV \

@@ -98,6 +98,17 @@ enum DemoCatalog {
         title("tide", "Tide Lines", "2025 / 1 season / Documentary", "A season on the water with the people restoring the North Atlantic kelp forests.", .show, "#465C8E", .requested),
     ]
 
+    static let expandedItems: [MediaTitle] = items + [
+        ("The Quiet Atlas", MediaKind.movie, 1), ("Winter Current", .movie, 4), ("Harbor Light", .movie, 5),
+        ("Far from the Shore", .movie, 2), ("The Long Crossing", .movie, 0), ("June in the Hills", .movie, 3),
+        ("The Northern Route", .show, 4), ("Low Water", .show, 0), ("The Orchard Files", .show, 3),
+        ("Coastal Roads", .show, 2), ("Night Radio", .show, 1), ("Below the Surface", .show, 5),
+    ].enumerated().map { index, item in
+        MediaTitle(id: "rail-fixture-\(index)", title: item.0, subtitle: "Demo library", synopsis: "", kind: item.1,
+                   artwork: image(named: "demo-\(item.2)"), backdrop: nil, accent: items[item.2].accent,
+                   playable: false, playbackURL: nil, requestState: .requestable, tmdbID: nil)
+    }
+
     static func requestOptions(for item: MediaTitle, requested: Set<MediaRequestOption.ID>) -> [MediaRequestOption] {
         guard item.kind == .show else { return [] }
         let count = item.id == "tide" ? 1 : item.id == "north" ? 3 : 2

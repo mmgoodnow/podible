@@ -17,6 +17,7 @@ private struct TVRoot: View {
     @State private var sent: [MediaTitle] = []
     @State private var demoSelections: [String: Set<MediaRequestOption.ID>] = [:]
     @State private var selection: Section = .browse
+    @State private var browseFocusRequest = 0
     @State private var searchQuery = ""
     @State private var path: [MediaTitle] = []
     @State private var playback: Playback?
@@ -47,7 +48,9 @@ private struct TVRoot: View {
                 Group {
                     switch selection {
                     case .browse, .movies, .tv: browse.id(selection)
-                    case .search: SearchScreen(catalog: catalog, connection: connection, open: open, query: $searchQuery)
+                    case .search:
+                        SearchScreen(catalog: catalog, connection: connection, open: open, query: $searchQuery)
+                            .padding(.leading, 84)
                     case .requests:
                         requests.task(id: connection) { await refreshRequests() }
                     case .settings:
@@ -63,13 +66,12 @@ private struct TVRoot: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .focusSection()
-                .padding(.leading, 84)
-                Color.black.opacity(sidebarFocus == nil ? 0 : 0.55)
+                Color.black.opacity(sidebarFocus == nil ? 0 : 0.38)
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
-                sidebar
             }
+            .overlay(alignment: .leading) { sidebar }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: sidebarFocus != nil)
             .foregroundStyle(TVPalette.paper)
             .background(TVPalette.background.ignoresSafeArea())
@@ -95,20 +97,22 @@ private struct TVRoot: View {
 
     private var sidebar: some View {
         let expanded = sidebarFocus != nil
-        return VStack(spacing: 10) {
+        return VStack(alignment: .leading, spacing: 7) {
             ForEach(Section.allCases, id: \.self) { section in
                 let focused = sidebarFocus == section
-                Button { selection = section } label: {
+                Button {
+                    selection = section
+                    if [.browse, .movies, .tv].contains(section) { browseFocusRequest += 1 }
+                } label: {
                     Image(systemName: section.icon)
-                        .font(.system(size: 30, weight: selection == section ? .semibold : .regular))
-                        .frame(width: 64, height: 62)
+                        .font(.system(size: 27, weight: selection == section ? .semibold : .regular))
+                        .frame(width: 58, height: 55)
                         .overlay(alignment: .leading) {
                             if expanded {
                                 Text(section.rawValue)
                                     .font(.system(size: 25, weight: focused ? .bold : .medium))
-                                    .fixedSize()
-                                    .offset(x: 74)
-                                    .accessibilityHidden(true)
+                                    .fixedSize().offset(x: 66)
+                                    .accessibilityHidden(true).allowsHitTesting(false)
                             }
                         }
                         .foregroundStyle(focused ? TVPalette.background :
@@ -116,7 +120,7 @@ private struct TVRoot: View {
                         .background(alignment: .leading) {
                             RoundedRectangle(cornerRadius: 12)
                                 .fill(focused ? TVPalette.paper : .clear)
-                                .frame(width: expanded ? 254 : 64)
+                                .frame(width: expanded ? 224 : 58)
                         }
                 }
                 .buttonStyle(TVUnstyledButton())
@@ -127,23 +131,17 @@ private struct TVRoot: View {
                 .accessibilityAddTraits(selection == section ? .isSelected : [])
             }
         }
-        .frame(width: 84)
-        .frame(maxHeight: .infinity)
+        .padding(9)
         .background(alignment: .leading) {
-            Rectangle().fill(TVPalette.background)
-                .frame(width: expanded ? 366 : 164)
-                .offset(x: -80)
-                .ignoresSafeArea(edges: .vertical)
+            let shape = RoundedRectangle(cornerRadius: expanded ? 24 : 37)
+            shape.fill(TVPalette.background.opacity(expanded ? 0.85 : 0.55))
+                .background(.ultraThinMaterial, in: shape)
+                .overlay { shape.strokeBorder(.white.opacity(0.17)) }
+                .frame(width: expanded ? 242 : 76)
+                .shadow(color: .black.opacity(0.36), radius: 18, x: 4, y: 8)
+                .allowsHitTesting(false)
         }
-        .overlay(alignment: .topLeading) {
-            Text(expanded ? "podible" : "p")
-                .font(.system(size: 42, weight: .heavy, design: .serif))
-                .foregroundStyle(TVPalette.accent)
-                .fixedSize()
-                .padding(.leading, 20)
-                .padding(.top, 12)
-                .accessibilityHidden(true)
-        }
+        .padding(.leading, -39)
         .focusSection()
     }
 
@@ -163,7 +161,7 @@ private struct TVRoot: View {
             ContentUnavailableView("Nothing to browse yet", systemImage: "play.rectangle",
                                    description: Text("Try searching for a movie or show."))
         } else {
-            BrowseView(items: items, open: open)
+            BrowseView(items: items, focusRequest: browseFocusRequest, open: open)
         }
     }
 
@@ -205,7 +203,7 @@ private struct TVRoot: View {
 
     @MainActor private func refresh() async {
         guard let connection else {
-            catalog = DemoCatalog.items
+            catalog = ProcessInfo.processInfo.arguments.contains("--demo-rails") ? DemoCatalog.expandedItems : DemoCatalog.items
             demoSelections = [:]
             browseError = nil
             loading = false

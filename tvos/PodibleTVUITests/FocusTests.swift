@@ -2,6 +2,49 @@ import XCTest
 
 final class FocusTests: XCTestCase {
     @MainActor
+    func testExpandedBrowseRailsAndFloatingNavigation() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo", "--demo-rails"]
+        app.launch()
+        let remote = XCUIRemote.shared
+        let first = app.buttons["poster.marrow"]
+        let home = app.buttons["nav.Home"]
+        let search = app.buttons["nav.Search"]
+        XCTAssertTrue(first.waitForExistence(timeout: 8))
+        if home.hasFocus { remote.press(.right) }
+        assertFocused(first)
+        let seventh = app.buttons["poster.rail-fixture-3"]
+        XCTAssertTrue(seventh.exists, "The first rail shows a partial seventh card")
+        capture("11-home-large-rails")
+        let second = app.buttons["poster.isle"], third = app.buttons["poster.orchard"]
+        let pitch = third.frame.minX - second.frame.minX
+        let visibleCards = 1 + (app.frame.maxX - second.frame.minX) / pitch
+        XCTAssertTrue((6.4...6.8).contains(visibleCards), "Expected about 6½ cards, got \(visibleCards)")
+        XCTAssertTrue(app.staticTexts["TV Shows"].firstMatch.exists)
+        XCTAssertGreaterThan(first.frame.minX, home.frame.maxX + 20)
+
+        for _ in 0..<6 { remote.press(.right) }
+        assertFocused(seventh)
+        XCTAssertGreaterThan(seventh.frame.minX, home.frame.maxX + 15)
+        XCTAssertLessThanOrEqual(seventh.frame.maxX, app.frame.maxX)
+        for _ in 0..<6 { remote.press(.left) }
+        assertFocused(first)
+        XCTAssertGreaterThan(first.frame.minX, home.frame.maxX + 15)
+        remote.press(.left)
+        let sidebar = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "nav."))
+        XCTAssertTrue(sidebar.allElementsBoundByIndex.contains(where: \.hasFocus))
+        for _ in 0..<6 where !home.hasFocus { remote.press(.up) }
+        assertFocused(home)
+        capture("12-home-floating-navigation")
+        remote.press(.down)
+        assertFocused(search)
+        remote.press(.select)
+        XCTAssertTrue(app.searchFields["Search movies and TV"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+    }
+
+    @MainActor
     func testMovieDetailHero() {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -53,7 +96,6 @@ final class FocusTests: XCTestCase {
         for _ in 0..<6 where !browse.hasFocus { remote.press(.up) }
         assertFocused(browse)
         remote.press(.select)
-        if browse.hasFocus { remote.press(.right) }
         assertFocused(firstPoster)
         remote.press(.right)
         assertFocused(app.buttons["poster.after"])

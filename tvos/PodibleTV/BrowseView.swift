@@ -9,11 +9,14 @@ enum TVPalette {
 
 struct BrowseView: View {
     let items: [MediaTitle]
+    let focusRequest: Int
     let open: (MediaTitle) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focusedID: String?
     @State private var previewID: String?
+    private let railInset: CGFloat = 76
+    private let posterSpacing: CGFloat = 23
 
     private var spotlight: MediaTitle? {
         items.first(where: { $0.id == previewID }) ?? items.first(where: { $0.kind == .movie }) ?? items.first
@@ -22,14 +25,14 @@ struct BrowseView: View {
     var body: some View {
         GeometryReader { geometry in
             if let spotlight {
-                let heroHeight = min(455, max(300, geometry.size.height * 0.46))
+                let heroHeight = min(455, max(320, geometry.size.height * 0.46))
                 let compactCatalog = items.count <= 8
-                let cardWidth = compactCatalog ? min(218, max(140, (geometry.size.width - 280) / 6))
-                    : min(188, max(150, (geometry.size.width - 240) / 8))
+                let railWidth = geometry.size.width - railInset + geometry.safeAreaInsets.trailing
+                let cardWidth = max(140, (railWidth + posterSpacing) / 6.6 - posterSpacing)
                 VStack(alignment: .leading, spacing: 0) {
                     hero(spotlight, width: geometry.size.width, height: heroHeight, insets: geometry.safeAreaInsets)
                     ScrollView(.vertical) {
-                        VStack(alignment: .leading, spacing: 18) {
+                        VStack(alignment: .leading, spacing: 13) {
                             if compactCatalog {
                                 shelf("Movies & TV", titles: items, cardWidth: cardWidth)
                             } else {
@@ -41,9 +44,17 @@ struct BrowseView: View {
                         .padding(.bottom, 48)
                     }
                     .scrollIndicators(.hidden)
+                    .ignoresSafeArea(edges: .bottom)
                     .accessibilityIdentifier("browse.shelves")
                 }
                 .defaultFocus($focusedID, spotlight.id)
+                .task(id: focusRequest) {
+                    guard focusRequest > 0 else { return }
+                    // Let a newly selected rail register its focus targets before moving out of the overlay.
+                    try? await Task.sleep(for: .milliseconds(50))
+                    guard !Task.isCancelled else { return }
+                    focusedID = items.first(where: { $0.kind == .movie })?.id ?? items.first?.id
+                }
                 .onChange(of: focusedID) { _, id in
                     if let id { previewID = id }
                 }
@@ -76,7 +87,7 @@ struct BrowseView: View {
                 TVTitleTreatment(item: item)
                 HStack(spacing: 16) {
                     if !item.subtitle.isEmpty { Text(item.subtitle) }
-                    if item.requestState == .requested {
+                    if item.kind == .show && item.requestState == .requested {
                         Label("Requested", systemImage: "clock")
                     } else if item.requestState == .available {
                         Label("In Library", systemImage: "checkmark.circle")
@@ -93,7 +104,7 @@ struct BrowseView: View {
                 }
             }
             .frame(maxWidth: min(810, width * 0.5), alignment: .leading)
-            .padding(.leading, 72)
+            .padding(.leading, railInset)
         }
         .id(item.id)
         .transition(.opacity)
@@ -108,18 +119,22 @@ struct BrowseView: View {
                 Text(title)
                     .font(.system(size: 30, weight: .semibold))
                     .accessibilityAddTraits(.isHeader)
-                    .padding(.leading, 72)
+                    .padding(.leading, railInset)
                 ScrollView(.horizontal) {
-                    LazyHStack(alignment: .top, spacing: 27) {
+                    LazyHStack(alignment: .top, spacing: posterSpacing) {
                         ForEach(titles) { item in
                             TVPosterButton(item: item, width: cardWidth, focused: focusedID == item.id) { open(item) }
                                 .focused($focusedID, equals: item.id)
                         }
                     }
-                    .padding(.horizontal, 72)
-                    .padding(.vertical, 14)
+                    .padding(.trailing, 42)
+                    .padding(.vertical, 9)
                 }
                 .scrollIndicators(.hidden)
+                // Keep the focus viewport clear of the pill, but let unfocused artwork scroll behind it.
+                .scrollClipDisabled()
+                .padding(.leading, railInset)
+                .ignoresSafeArea(edges: .trailing)
             }
             .focusSection()
         }
