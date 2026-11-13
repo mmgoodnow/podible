@@ -78,13 +78,13 @@ const finalization = (suffix: string, labels = "") =>
   `podible_canonical_finalization_${suffix}{job="podible"${labels}}`;
 const finalizationSum = (group: string, suffix: string, labels?: string) =>
   `sum by (${group}) (increase(${finalization(suffix, labels)}[6h]))`;
-const perPhase = (suffix: string) => finalizationSum("media, phase", `seconds_${suffix}`);
-const readHashTime = finalizationSum("media", "seconds_sum", ',phase=~"read_wait|sha256|cooperative"');
+const perPhase = (suffix: string, labels: string) => finalizationSum("media, phase", `seconds_${suffix}`, labels);
 const finalizedFiles = finalizationSum("media", "seconds_count", ',phase="proof_persist"');
-panel("timeseries", "Canonical finalization phases", "Six-hour mean per successful proof write, not per acquisition. Read wait includes filesystem and scheduling; cooperative time includes fences and loop overhead. Revalidation is the post-read identity check. Proof persistence includes file and directory sync.", "s", grid(0, 12, 9),
-  [[`${perPhase("sum")} / (${perPhase("count")} > 0)`, "{{media}} · {{phase}}"]]);
-panel("timeseries", "Finalization read + hash rate", "Bytes divided by read, SHA-256 and cooperative wall time. Aggregate effective rate per file, not device bandwidth.", "Bps", grid(12, 6, 9),
-  [[`${finalizationSum("media", "bytes_total")} / (${readHashTime} > 0)`, "{{media}}"]]);
+const finalizationLabels = ',phase=~"revalidate|proof_persist"';
+panel("timeseries", "Canonical finalization phases", "Six-hour mean per successful file receipt. Revalidation checks local file identity; persistence includes file and directory sync. No payload reread is needed.", "s", grid(0, 12, 9),
+  [[`${perPhase("sum", finalizationLabels)} / (${perPhase("count", finalizationLabels)} > 0)`, "{{media}} · {{phase}}"]]);
+panel("timeseries", "Finalized media size", "Payload bytes represented by new finalization receipts over six hours, not disk I/O.", "bytes", grid(12, 6, 9),
+  [[finalizationSum("media", "bytes_total"), "{{media}}"]]);
 panel("timeseries", "Finalization samples", "Successful proof writes in the last six hours, not published titles. Reused proofs and failed attempts are excluded. 'Other' is work outside TV/movie acquisition steps.", "none", grid(18, 6, 9),
   [[finalizedFiles, "{{media}}"]]);
 y += 9;

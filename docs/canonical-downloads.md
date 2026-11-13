@@ -29,8 +29,8 @@ metainfo -> persisted reservation -> canonical regular objects
    per-hash seed-only intent. Mark all files unwanted, verify the flags, then
    resume seeding. The supervisor's existing pre-spawn guard also restores these
    flags and ownership after restart. Only then mark the reservation sealed.
-5. Probe and identify the media normally. Finalization hashes the canonical file
-   in place and records its fingerprint/digest; it creates no payload copy.
+5. Probe and identify the media normally. Finalization records the sealed
+   file's device, inode, size and timestamps without rereading the payload.
    Movie/TV versions and book assets reference that exact object. Exact Plex
    identity/path verification remains required for movie/TV activation.
 
@@ -48,7 +48,7 @@ required by this change.
   manifest's exact canonical inode. Directory aliases, arbitrary symlinks,
   replaced objects and changed mount identities fail closed.
 - Finalization requires a sealed reservation. Fingerprint changes invalidate a
-  saved digest. Application seed-only protection is not an OS write sandbox.
+  saved receipt. Application seed-only protection is not an OS write sandbox.
 - A missing ready object is not silently recreated or made writable on replay.
   Recovery must not redownload into surviving published/shared objects. Legacy
   independent seed-store recovery remains supported by its original path.

@@ -193,7 +193,8 @@ try {
     if (!file.canonical) assert.equal((await fs.lstat(target)).isFile(), true, "Sidecar must remain a tracker-specific regular file");
     const object = await finalizeCanonicalDownloadFile(canonicalRoot, downloads, target, file.bytes.length);
     if (file.canonical) {
-      assert.equal(object?.sha256, sha256(file.bytes));
+      assert.equal(object?.sizeBytes, file.bytes.length);
+      assert.equal(Object.hasOwn(object!, "sha256"), false);
       assert.deepEqual(await finalizeCanonicalDownloadFile(canonicalRoot, downloads, target, file.bytes.length), object);
       finalized.push(object);
     } else assert.equal(object, null);
@@ -211,7 +212,7 @@ try {
   assert.equal((await snapshot()).downloadedEver, complete.downloadedEver, "Sealed restart downloaded replacement bytes");
   await assertCanonicalLinks(); await assertNoPayloadCopies();
   for (const file of files.filter(item => item.canonical))
-    assert.equal((await finalizeCanonicalDownloadFile(canonicalRoot, downloads, path.join(downloads, file.name), file.bytes.length))?.sha256, sha256(file.bytes));
+    assert.equal((await finalizeCanonicalDownloadFile(canonicalRoot, downloads, path.join(downloads, file.name), file.bytes.length))?.sizeBytes, file.bytes.length);
 
   // Single-file metainfo has no top-level directory: exercise that distinct client path too.
   const singleRoot = path.join(root, "downloads", "single"); await fs.mkdir(singleRoot);
@@ -235,7 +236,7 @@ try {
   await until(async () => (await client.inspect(singleRef)).complete, "single-file initial audiobook download");
   await sealCanonicalDownload(canonicalRoot, singleRoot, client, singleRef);
   const singleFinalized = await finalizeCanonicalDownloadFile(canonicalRoot, singleRoot, singleView, singleFile.bytes.length);
-  assert.equal(singleFinalized?.sha256, sha256(singleFile.bytes));
+  assert.equal(singleFinalized?.sizeBytes, singleFile.bytes.length);
   assert.equal(sha256(await fs.readFile(singleCanonical)), sha256(singleFile.bytes));
   const assertSingle = async () => {
     const canonical = await fs.stat(singleCanonical), link = await fs.lstat(singleView);
@@ -298,7 +299,7 @@ try {
     seasonPack: { bytes: seasonPayload.length, verifiedBeforeStart: prefilled.haveValid, downloadedEver: seasonComplete.downloadedEver },
     singleFile: { name: singleFile.name, bytes: singleFile.bytes.length, initiallyEmpty: true,
       canonicalInodePreserved: true, symlinkInodePreserved: true, sealedRestart: true,
-      noPartialOrDuplicatePayloads: true, sha256: singleFinalized!.sha256 },
+      noPartialOrDuplicatePayloads: true, sha256: sha256(singleFile.bytes) },
     canonicalSha256: files.filter(file => file.canonical).map(file => ({ name: file.name, sha256: sha256(file.bytes) })),
     note: "Actual application helper, managed adapter, finalization and startup guard against Transmission 4.1.4." }, null, 2));
 } catch (error) {

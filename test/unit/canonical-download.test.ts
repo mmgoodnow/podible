@@ -38,14 +38,14 @@ const sample = (media: string, series: string, phase?: string) => {
   return Number(canonicalFinalizationPrometheus().split("\n").find(line => line.startsWith(prefix))?.slice(prefix.length));
 };
 
-test("a fresh multi-chunk proof reports each phase and bytes from the worker; replay does not count", async () => {
+test("metadata-only finalization reports receipt timings from the worker; replay does not count", async () => {
   const bytes = "a".repeat(4 * 1024 ** 2) + "different tail";
   const f = await fixture(false, bytes);
   try {
     const file = f.plan.files[0]!, view = path.join(f.sourceRoot, file.path);
     await f.fill();
     await sealCanonicalDownload(f.contentRoot, f.sourceRoot, f.client, f.ref);
-    const phases = ["read_wait", "sha256", "cooperative", "revalidate", "proof_persist"];
+    const phases = ["revalidate", "proof_persist"];
     const counts = phases.map(phase => sample("tv", "seconds_count", phase));
     const before = sample("tv", "bytes_total");
     const worker = new Worker(new URL("../fixtures/canonical-finalization-worker.ts", import.meta.url), {
@@ -58,10 +58,11 @@ test("a fresh multi-chunk proof reports each phase and bytes from the worker; re
         worker.once("error", reject);
         worker.once("exit", code => reject(new Error(`Fixture worker exited before delivering a result: ${code}`)));
       });
-      expect(first.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+      expect(first).toEqual({ id: file.id, relativePath: file.relativePath!, sizeBytes: file.size });
       expect(replay).toEqual(first);
       for (let i = 0; i < 100 && sample("tv", "bytes_total") === before; i++) await Bun.sleep(10);
       expect(sample("tv", "bytes_total") - before).toBe(file.size);
+      expect(canonicalFinalizationPrometheus()).not.toContain('phase="sha256"');
       for (const [i, phase] of phases.entries()) {
         expect(sample("tv", "seconds_count", phase)).toBe(counts[i]! + 1);
         expect(sample("tv", "seconds_sum", phase)).toBeGreaterThan(0);
@@ -96,7 +97,7 @@ test("a failed proof persistence does not report success or leave a temporary re
   } finally { await f.close(); }
 });
 
-test("initial torrent is a persisted view of private canonical objects; import hashes in place and sidecars stay local", async () => {
+test("initial torrent is a persisted view of private canonical objects; finalization uses only metadata and sidecars stay local", async () => {
   const f = await fixture();
   try {
     expect(f.plan.ready).toBe(true); expect(f.plan.sealed).toBe(false);
@@ -116,7 +117,7 @@ test("initial torrent is a persisted view of private canonical objects; import h
     expect(sample("other", "seconds_count", "proof_persist")).toBe(priorCount);
     const result = await adoptContentFile({ contentRoot: f.contentRoot, sourceRoot: f.sourceRoot, sourcePath: view, fileId: randomUUID(), expectedSize: file.size });
     expect(result.id).toBe(file.id); expect(result.relativePath).toBe(file.relativePath!);
-    expect(result.sha256).toBe(createHash("sha256").update(f.members[0]!.text).digest("hex"));
+    expect(result).not.toHaveProperty("sha256");
     expect((await fs.stat(canonical, { bigint: true })).ino).toBe(before.ino);
     expect(await finalizedCanonicalObject(f.contentRoot, canonical)).toEqual(result);
     expect(await adoptContentFile({ contentRoot: f.contentRoot, sourceRoot: f.sourceRoot, sourcePath: view, fileId: randomUUID(), expectedSize: file.size })).toEqual(result);
@@ -128,6 +129,26 @@ test("initial torrent is a persisted view of private canonical objects; import h
     expect(await fs.readFile(canonical, "utf8")).toBe(f.members[0]!.text);
     expect(await prepareCanonicalDownload(f.input)).toMatchObject({ sealed: true });
     expect(await fs.readlink(view)).toBe(canonical);
+  } finally { await f.close(); }
+});
+
+test("old receipts remain reusable, but a same-size edit invalidates the recorded identity", async () => {
+  const f = await fixture();
+  try {
+    const file = f.plan.files[0]!, view = path.join(f.sourceRoot, file.path);
+    const canonical = path.join(f.contentRoot, file.relativePath!), proof = canonical + ".podible-finalized.json";
+    await f.fill();
+    await sealCanonicalDownload(f.contentRoot, f.sourceRoot, f.client, f.ref);
+    const fresh = (await finalizeCanonicalDownloadFile(f.contentRoot, f.sourceRoot, view, file.size))!;
+    const sha256 = createHash("sha256").update(f.members[0]!.text).digest("hex");
+    const legacy = { ...JSON.parse(await fs.readFile(proof, "utf8")), sha256 };
+    await fs.writeFile(proof, JSON.stringify(legacy));
+    expect(await finalizedCanonicalObject(f.contentRoot, canonical)).toEqual({ ...fresh, sha256 });
+
+    await fs.chmod(canonical, 0o600);
+    await fs.writeFile(canonical, Buffer.alloc(file.size));
+    expect((await fs.stat(canonical)).size).toBe(file.size);
+    await expect(finalizedCanonicalObject(f.contentRoot, canonical)).rejects.toThrow("Finalized canonical object changed");
   } finally { await f.close(); }
 });
 

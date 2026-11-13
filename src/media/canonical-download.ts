@@ -226,9 +226,10 @@ async function seal(contentRoot: string, sourceRoot: string, client: TorrentClie
 }
 
 const finalizedSchema = z.object({ sourceRoot: z.string(), relativePath: relative, id: z.string().uuid(), sizeBytes: count,
-  sha256: z.string().regex(/^[a-f0-9]{64}$/), device: z.string(), inode: z.string(), mtimeNs: z.string(), ctimeNs: z.string() });
+  sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(), device: z.string(), inode: z.string(), mtimeNs: z.string(), ctimeNs: z.string() });
+type FinalizedObject = Pick<z.infer<typeof finalizedSchema>, "id" | "relativePath" | "sizeBytes" | "sha256">;
 const proofPath = (canonical: string) => canonical + ".podible-finalized.json";
-export async function finalizedCanonicalObject(contentRoot: string, canonical: string) {
+export async function finalizedCanonicalObject(contentRoot: string, canonical: string): Promise<FinalizedObject | null> {
   if (!canonical.startsWith(contentRoot + "/files/") || !await stat(proofPath(canonical))) return null;
   await directory(contentRoot, path.relative(contentRoot, path.dirname(canonical)));
   const proof = finalizedSchema.parse(await readJson(proofPath(canonical)));
@@ -240,11 +241,11 @@ export async function finalizedCanonicalObject(contentRoot: string, canonical: s
   if (!current.isFile() || current.isSymbolicLink() || String(current.dev) !== proof.device || String(current.ino) !== proof.inode ||
     String(current.mtimeNs) !== proof.mtimeNs || String(current.ctimeNs) !== proof.ctimeNs || current.size !== BigInt(proof.sizeBytes))
     throw new Error("Finalized canonical object changed");
-  return { id: proof.id, relativePath: proof.relativePath, sizeBytes: proof.sizeBytes, sha256: proof.sha256 };
+  return { id: proof.id, relativePath: proof.relativePath, sizeBytes: proof.sizeBytes, ...(proof.sha256 && { sha256: proof.sha256 }) };
 }
 
-/** Hash/finalize in place. This does not allocate another payload file. */
-export async function finalizeCanonicalDownloadFile(contentRoot: string, sourceRoot: string, sourcePath: string, expectedSize: number, active: () => void = () => {}) {
+/** Seal attests to the client's piece checks; finalization records the local file identity. */
+export async function finalizeCanonicalDownloadFile(contentRoot: string, sourceRoot: string, sourcePath: string, expectedSize: number, active: () => void = () => {}): Promise<FinalizedObject | null> {
   const plan = await readCanonicalDownload(contentRoot, sourceRoot);
   if (plan && !plan.sealed) throw new Error("Canonical download still has an active writer");
   const resolved = await resolveDownloadFile(contentRoot, sourceRoot, sourcePath, expectedSize);
@@ -253,53 +254,21 @@ export async function finalizeCanonicalDownloadFile(contentRoot: string, sourceR
   const previous = await finalizedCanonicalObject(contentRoot, resolved.path);
   active();
   if (previous) return previous;
-  const handle = await fs.open(resolved.path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    const before = await handle.stat({ bigint: true }), hash = createHash("sha256");
-    // Amortize async read overhead without unbounded buffering or parallel reads.
-    const buffer = Buffer.alloc(Math.max(1, Math.min(expectedSize, 4 * 1024 ** 2)));
-    effectPhase("canonical-read-hash");
-    const readStarted = performance.now();
-    let fenceAfter = readStarted + 250, readWait = 0, sha256 = 0, bytesHashed = 0;
-    for (;;) {
-      effectCheckpoint();
-      // This loop only reads bytes. Keep cheap cancellation per chunk and
-      // recheck durable ownership periodically and before writing the proof.
-      if (performance.now() >= fenceAfter) {
-        active();
-        fenceAfter = performance.now() + 250;
-      }
-      const started = performance.now();
-      const { bytesRead } = await handle.read(buffer);
-      const ready = performance.now();
-      readWait += ready - started;
-      if (!bytesRead) break;
-      effectCheckpoint();
-      const hashStarted = performance.now();
-      hash.update(buffer.subarray(0, bytesRead));
-      sha256 += performance.now() - hashStarted;
-      bytesHashed += bytesRead;
-    }
-    const digestStarted = performance.now();
-    const digest = hash.digest("hex");
-    const readFinished = performance.now();
-    sha256 += readFinished - digestStarted;
-    effectPhase("canonical-revalidate");
-    const revalidationStarted = performance.now();
-    const after = await handle.stat({ bigint: true });
-    if (bytesHashed !== expectedSize || before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs)
-      throw new Error("Canonical download changed during finalization");
-    await resolveDownloadFile(contentRoot, sourceRoot, sourcePath, expectedSize); active();
-    const revalidate = performance.now() - revalidationStarted;
-    const result = { id: resolved.file.id, relativePath: resolved.file.relativePath!, sizeBytes: expectedSize, sha256: digest };
-    effectPhase("canonical-proof-persist");
-    const proofStarted = performance.now();
-    await writeJson(proofPath(resolved.path), { ...result, sourceRoot,
-      device: String(after.dev), inode: String(after.ino), mtimeNs: String(after.mtimeNs), ctimeNs: String(after.ctimeNs) });
-    recordCanonicalFinalization(bytesHashed, {
-      read_wait: readWait, sha256, cooperative: Math.max(0, readFinished - readStarted - readWait - sha256),
-      revalidate, proof_persist: performance.now() - proofStarted,
-    });
-    return result;
-  } finally { await handle.close(); }
+  effectPhase("canonical-revalidate");
+  const revalidationStarted = performance.now();
+  const fresh = await resolveDownloadFile(contentRoot, sourceRoot, sourcePath, expectedSize);
+  const before = resolved.stat, after = fresh.stat;
+  if (!fresh.plan?.sealed || fresh.path !== resolved.path || fresh.file?.id !== resolved.file.id ||
+    before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs)
+    throw new Error("Canonical download changed during finalization");
+  effectCheckpoint();
+  active();
+  const revalidate = performance.now() - revalidationStarted;
+  const result = { id: resolved.file.id, relativePath: resolved.file.relativePath!, sizeBytes: expectedSize };
+  effectPhase("canonical-proof-persist");
+  const proofStarted = performance.now();
+  await writeJson(proofPath(resolved.path), { ...result, sourceRoot,
+    device: String(after.dev), inode: String(after.ino), mtimeNs: String(after.mtimeNs), ctimeNs: String(after.ctimeNs) });
+  recordCanonicalFinalization(expectedSize, { revalidate, proof_persist: performance.now() - proofStarted });
+  return result;
 }

@@ -14,7 +14,7 @@ const buckets = [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 120
 const metric = "podible_acquisition_latency_seconds";
 const finalizationMedia = ["tv", "movie", "other"] as const;
 type FinalizationMedia = typeof finalizationMedia[number];
-const finalizationPhases = ["read_wait", "sha256", "cooperative", "revalidate", "proof_persist"] as const;
+const finalizationPhases = ["revalidate", "proof_persist"] as const;
 type FinalizationTimes = Record<typeof finalizationPhases[number], number>;
 type FinalizationSample = { media: FinalizationMedia; bytes: number; times: FinalizationTimes };
 const finalizationBuckets = [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 90, 120, 180, 300, 600];
@@ -141,7 +141,7 @@ export function canonicalFinalizationPrometheus() {
   const lines = [
     `# HELP ${finalizationMetric} Per-file canonical finalization phase duration for successful durable proof writes.`,
     `# TYPE ${finalizationMetric} histogram`,
-    `# HELP ${finalizationBytes} Bytes hashed for successful durable canonical finalization proof writes.`,
+    `# HELP ${finalizationBytes} Payload bytes represented by successful durable canonical finalization proof writes.`,
     `# TYPE ${finalizationBytes} counter`,
   ];
   for (const media of finalizationMedia) {

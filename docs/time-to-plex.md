@@ -42,6 +42,11 @@ These runs narrow the largest delay to adoption/finalization, not the Plex
 scan. They predate the detailed finalization timers and larger read buffer in
 `8e67afc`; they do not demonstrate the effect of that change on Cyprus.
 
+Canonical torrent imports no longer reread payloads to compute SHA-256.
+Transmission must report all bytes valid and none unchecked before sealing.
+Podible then records the sealed file's identity, size and timestamps without
+opening the payload. Independent-copy checks before deletion are separate.
+
 A successful older publication is not a live-path timing canary for the
 new build. Verify a fresh download completion, durable worker wakeup,
 exact Plex path and identity, browser subscription update, and fresh Grafana
