@@ -32,6 +32,7 @@ struct BrowseView: View {
                 let cardWidth = max(140, (railWidth + posterSpacing) / 6.6 - posterSpacing)
                 VStack(alignment: .leading, spacing: 0) {
                     hero(spotlight, width: geometry.size.width, height: heroHeight, insets: geometry.safeAreaInsets)
+                        .padding(.leading, -railInset)
                     ScrollView(.vertical) {
                         VStack(alignment: .leading, spacing: 13) {
                             if compactCatalog {
@@ -41,13 +42,19 @@ struct BrowseView: View {
                                 shelf("TV Shows", titles: items.filter { $0.kind == .show }, cardWidth: cardWidth)
                             }
                         }
+                        .padding(.leading, railInset)
                         .padding(.top, 4)
                         .padding(.bottom, 48)
                     }
                     .scrollIndicators(.hidden)
                     .ignoresSafeArea(edges: .bottom)
+                    // Leave room for the focused poster to grow to the left of the rail.
+                    .padding(.leading, -railInset)
                     .accessibilityIdentifier("browse.shelves")
                 }
+                // Span the hero and shelves so every sidebar row has a focus region to its right.
+                .focusSection()
+                .padding(.leading, railInset)
                 .defaultFocus($focusedID, spotlight.id)
                 .task(id: focusRequest) {
                     guard focusRequest > 0 else { return }
@@ -118,7 +125,6 @@ struct BrowseView: View {
                 Text(title)
                     .font(.system(size: 30, weight: .semibold))
                     .accessibilityAddTraits(.isHeader)
-                    .padding(.leading, railInset)
                 ScrollView(.horizontal) {
                     LazyHStack(alignment: .top, spacing: posterSpacing) {
                         ForEach(titles) { item in
@@ -132,7 +138,6 @@ struct BrowseView: View {
                 .scrollIndicators(.hidden)
                 // Keep the focus viewport clear of the pill, but let unfocused artwork scroll behind it.
                 .scrollClipDisabled()
-                .padding(.leading, railInset)
                 .ignoresSafeArea(edges: .trailing)
             }
             .focusSection()

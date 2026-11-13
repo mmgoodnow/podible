@@ -27,8 +27,11 @@ Up or Down to choose a destination, and Select to open it. Home uses larger port
 
 ```sh
 xcodebuild -project tvos/PodibleTV.xcodeproj -scheme PodibleTV \
-  -destination 'generic/platform=tvOS Simulator' CODE_SIGNING_ALLOWED=NO build
+  -destination 'generic/platform=tvOS Simulator' build
 ```
+
+Leave Xcode's default signing enabled when testing real pairing in the simulator.
+The unsigned UI test build does not have the app identifier entitlement required to save a session in Keychain.
 
 Run `bun run generate:tvos-wire` after changing the pairing, catalog, request, or playback RPC schemas. CI runs
 `bun run check:tvos-wire` to catch stale Swift types.

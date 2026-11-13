@@ -2,6 +2,31 @@ import XCTest
 
 final class FocusTests: XCTestCase {
     @MainActor
+    func testRightFromEverySidebarRowReturnsToHomePosters() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo", "--demo-rails"]
+        app.launch()
+
+        let remote = XCUIRemote.shared
+        let home = app.buttons["nav.Home"]
+        let firstPoster = app.buttons["poster.marrow"]
+        assertFocused(firstPoster)
+
+        for (index, title) in ["Home", "Search", "Movies", "TV Shows", "Requests", "Settings"].enumerated() {
+            remote.press(.left)
+            for _ in 0..<5 where !home.hasFocus { remote.press(.up) }
+            assertFocused(home)
+            for _ in 0..<index { remote.press(.down) }
+            assertFocused(app.buttons["nav.\(title)"])
+
+            remote.press(.right)
+            assertFocused(firstPoster)
+            XCTAssertTrue(home.isSelected)
+        }
+    }
+
+    @MainActor
     func testExpandedBrowseRailsAndFloatingNavigation() {
         continueAfterFailure = false
         let app = XCUIApplication()
