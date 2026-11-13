@@ -50,6 +50,7 @@ globalThis.fetch = Object.assign(
               title: "Piranesi",
               author_name: ["Susanna Clarke"],
               first_publish_year: 2020,
+              cover_i: 100,
               series_key: ["OL100L"],
               series_name: ["The House"],
               series_position: ["1"],
@@ -59,6 +60,7 @@ globalThis.fetch = Object.assign(
               title: "Jonathan Strange & Mr Norrell",
               author_name: ["Susanna Clarke"],
               first_publish_year: 2004,
+              cover_i: 101,
             },
           ],
         });

@@ -9,6 +9,7 @@ import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../src/trpc";
 import { useTRPC } from "./rpc";
 import { Link, navigate, useLocation } from "./router";
+import "./book-catalog.css";
 
 export type Book = inferRouterOutputs<AppRouter>["library"]["get"]["book"];
 export function bytes(value: number) {
@@ -144,6 +145,7 @@ export function Library({ initialPage, query, embedded = false }: {
 export function AddCandidate({ candidate, compact = false }: { candidate: Candidate; compact?: boolean }) {
   const trpc = useTRPC();
   const cache = useQueryClient();
+  const [failedCover, setFailedCover] = useState<number>();
   const add = useMutation(
     trpc.library.create.mutationOptions({
       onSuccess: (result) => {
@@ -155,7 +157,15 @@ export function AddCandidate({ candidate, compact = false }: { candidate: Candid
   return (
     <article className={`catalog-result${compact ? " compact" : ""}`}>
       <div className="catalog-spine" aria-hidden="true">
-        {candidate.title.slice(0, 1)}
+        {candidate.coverId && candidate.coverId !== failedCover ? (
+          <img
+            src={`https://covers.openlibrary.org/b/id/${candidate.coverId}-M.jpg?default=false`}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            onError={() => setFailedCover(candidate.coverId)}
+          />
+        ) : candidate.title.slice(0, 1)}
       </div>
       <div>
         <span className="eyebrow">

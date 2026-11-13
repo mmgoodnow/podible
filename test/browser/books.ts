@@ -78,10 +78,12 @@ try {
       badResponses.push(`${response.status()} ${response.url()}`);
   });
   await page.route("https://covers.openlibrary.org/**", (route) =>
-    route.fulfill({
-      contentType: "image/svg+xml",
-      body: '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="300"><rect width="200" height="300" fill="#294333"/><text x="30" y="150" fill="#f4f1e9" font-family="Georgia" font-size="28">Piranesi</text></svg>',
-    }),
+    new URL(route.request().url()).pathname === "/b/id/101-M.jpg"
+      ? route.fulfill({ status: 404 })
+      : route.fulfill({
+          contentType: "image/svg+xml",
+          body: '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="300"><rect width="200" height="300" fill="#294333"/><text x="30" y="150" fill="#f4f1e9" font-family="Georgia" font-size="28">Piranesi</text></svg>',
+        }),
   );
 
   await page.goto(new URL("/library?media=books", fixture.url).href);
@@ -384,6 +386,9 @@ try {
       exact: true,
     })
     .waitFor();
+  await page.waitForFunction("document.querySelector('.catalog-spine img[src$=\"/100-M.jpg?default=false\"]')?.naturalWidth === 200");
+  const brokenCover = page.locator(".catalog-result").filter({ hasText: "Jonathan Strange & Mr Norrell" }).locator(".catalog-spine");
+  await brokenCover.getByText("J", { exact: true }).waitFor();
   await page.screenshot({
     path: path.join(artifacts, "catalog-desktop.png"),
     fullPage: true,
