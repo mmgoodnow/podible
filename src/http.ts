@@ -78,6 +78,7 @@ export function createPodibleFetchHandler(
     "/settings",
     "/users",
     "/ops",
+    "/ops/releases",
     "/login",
     "/login/plex/loading",
     "/login/plex/result",

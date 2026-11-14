@@ -105,6 +105,13 @@ if (process.env.ADMIN_FIXTURE) {
     retryAt: Date.now() + 180_000, message: "HTTP 429 cooldown; provider retry data recorded" }, new Date().toISOString());
   repo.releaseInbox.ensureFeed("admin-fixture-tv", "Fixture provider", "tv", new Date().toISOString());
   repo.releaseInbox.succeed("admin-fixture-tv", "fixture-head", null, new Date().toISOString());
+  const fixtureReleases = Array.from({ length: 50 }, (_, i) => ({
+    title: `Fixture movie release ${i + 1}`, provider: "Fixture provider", url: "https://provider.invalid/?token=release-feed-private-secret",
+    guid: `movie-${i + 1}`, mediaType: "movie" as const, infoHash: null, seeders: 1, leechers: 0, sizeBytes: null, raw: {},
+  }));
+  const [inboxTv] = repo.releaseInbox.ingest("admin-fixture-tv", [{ ...fixtureReleases[0]!, title: "Fixture TV release", guid: "tv-release", mediaType: "tv" }], new Date().toISOString());
+  repo.releaseInbox.consider(inboxTv!, "tv", 1, "fixture", failed.id, "Test consideration");
+  repo.releaseInbox.ingest("admin-fixture-feed", fixtureReleases, new Date().toISOString());
   repo.releaseInbox.ensureFeed("admin-fixture-gap", "History provider", "movie", new Date().toISOString());
   repo.releaseInbox.succeed("admin-fixture-gap", "fixture-head", "Earlier history could not be verified", new Date().toISOString());
   seedTransferMetricsFixture(repo, activeBook.id);

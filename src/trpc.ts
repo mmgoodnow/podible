@@ -187,6 +187,10 @@ export const appRouter = t.router({
     retry: procedure.input(tvShadowRouter.routes.retry.paramsSchema).output(tvShadowRouter.routes.retry.resultSchema).mutation(({ ctx, input }) => executeMethod(tvShadowRouter.routes.retry, ctx, input)),
   }),
   indexerFeeds: t.router({
+    releases: procedure
+      .input(indexerFeedsRouter.routes.releases.paramsSchema)
+      .output(indexerFeedsRouter.routes.releases.resultSchema)
+      .query(({ ctx, input }) => executeMethod(indexerFeedsRouter.routes.releases, ctx, input)),
     status: procedure
       .input(indexerFeedsRouter.routes.status.paramsSchema)
       .output(indexerFeedsRouter.routes.status.resultSchema)

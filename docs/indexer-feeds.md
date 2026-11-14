@@ -71,6 +71,14 @@ expanded gap details. Current poll errors, cooldowns, unknown observations, and
 retry times remain visible. Inspect `indexerFeeds.status` when investigating feed
 history; hiding a non-actionable warning never clears its persisted evidence.
 
+Activity > Release feed shows the retained inbox, newest receipt first. The
+media filter describes the feed that produced each row. Recorded target counts
+show acquisition considerations, not downloads or successful imports. An empty
+count is not a rejection and does not rule out cross-seed activity. This view
+does not include unsupported categories or the full tracker firehose. It
+exposes only bounded display text and never returns the stored payload or
+fetch URL.
+
 A failed page does not advance the head or commit a partial batch. Other
 providers continue. Provider retry times survive restart. Inserting new inbox
 entries, advancing the feed checkpoint, and creating matching jobs/outbox commands

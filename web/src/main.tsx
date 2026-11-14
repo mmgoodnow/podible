@@ -11,6 +11,7 @@ import { rpc, TRPCProvider, useTRPC } from "./rpc";
 import { Link, useLocation } from "./router";
 import { RetentionAudit } from "./retention";
 import { SettingsPage, UsersPage, OpsPage } from "./admin";
+import { ReleaseFeedPage } from "./release-feed";
 import { LoginScreen } from "./auth";
 import { Catalog, BookCollection } from "./books";
 import { BookDetail } from "./book-detail";
@@ -76,14 +77,14 @@ function App() {
           >
             Library
           </Link>
-          {session.data?.user.isAdmin && <Link href="/ops" aria-current={route === "/ops" ? "page" : undefined}>Activity</Link>}
+          {session.data?.user.isAdmin && <Link href="/ops" aria-current={route === "/ops" ? "page" : route.startsWith("/ops/") ? "location" : undefined}>Activity</Link>}
           {session.data?.user.isAdmin && <Link href="/settings" aria-current={route === "/settings" ? "page" : undefined}>Settings</Link>}
         </nav>
         {session.data && <form method="post" action="/logout"><button type="submit">Sign out</button></form>}
       </header>
       <main
         className={
-          (["/", "/library", "/add", "/retention", "/tv-retention", "/recovery", "/stewardship", "/settings", "/users", "/ops"].includes(route) || route.startsWith("/requests"))
+          (["/", "/library", "/add", "/retention", "/tv-retention", "/recovery", "/stewardship", "/settings", "/users", "/ops", "/ops/releases"].includes(route) || route.startsWith("/requests"))
             ? "compact-main"
             : undefined
         }
@@ -144,11 +145,13 @@ function ActorLibrary({ isAdmin, initialLibrary }: {
   return (
     <QueryClientProvider client={actorClient}>
       <TRPCProvider trpcClient={rpc} queryClient={actorClient}>
-        {isAdmin && ["/retention", "/tv-retention", "/recovery", "/stewardship"].includes(route) &&
+        {isAdmin && ["/retention", "/tv-retention", "/recovery", "/stewardship", "/ops/releases"].includes(route) &&
           <Link className="back" href="/ops">Back to activity</Link>}
         {["/settings", "/users", "/ops"].includes(route) ? (
           isAdmin ? (route === "/settings" ? <SettingsPage /> : route === "/users" ? <UsersPage /> : <OpsPage />)
             : <p role="alert">Administrator access required.</p>
+        ) : route === "/ops/releases" ? (
+          isAdmin ? <ReleaseFeedPage /> : <p role="alert">Administrator access required.</p>
         ) : route === "/stewardship" ? (
           isAdmin ? <><StewardshipPage api={stewardshipApi} /><TorrentRetirementStatus /></> : <p role="alert">Administrator access required.</p>
         ) : route === "/recovery" ? (

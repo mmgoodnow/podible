@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Database } from "bun:sqlite";
+import { sql } from "kysely";
 import { z } from "zod";
 import { dbSql, typedAll, typedGet, typedRun } from "../db/typed";
 import type {
@@ -10,6 +11,20 @@ import type {
 import type { IndexerFailure } from "./indexer-errors";
 import { feedGapDiagnosticsSchema, type FeedGapDiagnostics } from "./feed-gap";
 import { AUTOBRR_ID_PREFIX } from "./autobrr";
+
+export const releaseFeedMedia = ["movie", "tv", "audio", "ebook"] as const;
+const acquisitionKinds = new Map<string, IndexerMedia>([
+  ["movie", "movie"], ["tv", "tv"], ["book:audio", "audio"], ["book:ebook", "ebook"],
+]);
+
+function releaseDisplayText(text: string, maxLength: number) {
+  return text
+    .replace(/\b(?:[a-z][a-z0-9+.-]*:\/\/|magnet:\?|www\.)[^\s<>]+/gi, "[redacted]")
+    .replace(/\b(?:urn:)?btih:[a-z0-9]+|\b(?:[a-f0-9]{40}|[a-f0-9]{64})\b/gi, "[redacted]")
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
 
 export const inboxResultSchema = z.object({
   title: z.string().min(1),
@@ -142,6 +157,67 @@ export class ReleaseInboxRepo {
   /** Explicit backfills pin an inbox high-water mark without moving RSS boundaries. */
   retainedHighWater(): number {
     return (this.db.query("SELECT COALESCE(MAX(id),0) AS id FROM release_inbox").get() as { id: number }).id;
+  }
+  releaseFeedPage({ media, cursor, limit }: { media?: IndexerMedia; cursor?: number; limit: number }) {
+    const pageSize = limit + 1;
+    const beforeCursor = cursor === undefined ? sql`` : sql`AND release_inbox.id < ${cursor}`;
+    // For sparse media, seek each matching feed's (feed_id, id) index rather than walking unrelated releases.
+    const page = (media
+      ? sql<{ id: number }>`(
+          SELECT candidate.value AS id
+          FROM indexer_feeds AS feed
+          CROSS JOIN json_each((SELECT json_group_array(id) FROM (
+            SELECT id FROM release_inbox WHERE feed_id = feed.id ${beforeCursor}
+            ORDER BY id DESC LIMIT ${pageSize}
+          ))) AS candidate
+          WHERE feed.media_type = ${media}
+          ORDER BY id DESC LIMIT ${pageSize}
+        )`
+      : sql<{ id: number }>`(
+          SELECT release_inbox.id FROM release_inbox CROSS JOIN indexer_feeds
+          WHERE indexer_feeds.id = release_inbox.feed_id
+            AND indexer_feeds.media_type IN (${sql.join(releaseFeedMedia)}) ${beforeCursor}
+          ORDER BY release_inbox.id DESC LIMIT ${pageSize}
+        )`).as("page");
+    const rows = typedAll(this.db, dbSql.selectFrom(page)
+      .innerJoin("release_inbox", "release_inbox.id", "page.id")
+      .innerJoin("indexer_feeds", "indexer_feeds.id", "release_inbox.feed_id")
+      .select([
+        "page.id", "indexer_feeds.media_type as media",
+        "release_inbox.first_seen_at as receivedAt",
+        sql<string>`json_extract(release_inbox.payload_json, '$.title')`.as("title"),
+        sql<string>`json_extract(release_inbox.payload_json, '$.provider')`.as("provider"),
+      ])
+      .$narrowType<{ media: IndexerMedia }>()
+      .orderBy("page.id", "desc"));
+    const pageRows = rows.slice(0, limit);
+    if (!pageRows.length) return { items: [], nextCursor: null };
+
+    const routesByRelease = new Map<number, { targetKind: IndexerMedia; targetCount: number }[]>();
+    const routes = typedAll(this.db, dbSql.selectFrom("release_considerations")
+      .select(["release_id", "target_kind"])
+      .select(eb => eb.fn.count<number>("target_id").distinct().as("targetCount"))
+      .where("release_id", "in", pageRows.map(row => row.id))
+      .where("target_kind", "in", [...acquisitionKinds.keys()])
+      .groupBy(["release_id", "target_kind"])
+      .orderBy("release_id").orderBy("target_kind"));
+    for (const route of routes) {
+      const targetKind = acquisitionKinds.get(route.target_kind)!;
+      const list = routesByRelease.get(route.release_id) ?? [];
+      list.push({ targetKind, targetCount: route.targetCount });
+      routesByRelease.set(route.release_id, list);
+    }
+    return {
+      items: pageRows.map(row => ({
+        id: row.id,
+        title: releaseDisplayText(row.title, 512),
+        provider: releaseDisplayText(row.provider, 120),
+        media: row.media,
+        receivedAt: row.receivedAt,
+        acquisitionRoutes: routesByRelease.get(row.id) ?? [],
+      })),
+      nextCursor: rows.length > limit ? pageRows.at(-1)!.id : null,
+    };
   }
   retainedPage(media: IndexerMedia, afterId: number, throughId: number, limit = 100) {
     z.enum(["audio", "ebook", "movie", "tv"]).parse(media);

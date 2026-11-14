@@ -43,7 +43,7 @@ async function verify() {
   }
   assert.equal((await readerContext.request.get(new URL("/api/trpc/adminWeb.users?input=%7B%7D", url).href)).status(), 403);
   const readerPage = await readerContext.newPage();
-  for (const pathname of ["/settings", "/users", "/ops", "/retention"]) {
+  for (const pathname of ["/settings", "/users", "/ops", "/ops/releases", "/retention"]) {
     await readerPage.goto(new URL(pathname, url).href);
     await readerPage.getByRole("alert").getByText("Administrator access required.").waitFor();
     const links = readerPage.getByRole("navigation", { name: "Main navigation" }).getByRole("link");
@@ -508,6 +508,10 @@ async function verify() {
   await waiting.scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(artifacts, "admin-ops-mobile.png"), animations: "disabled" });
   const cleanupBefore = (await rpc("jobs.list", { type: "retention_cleanup" })).result.jobs;
+  const settingsForStorage = (await rpc("settings.get")).result;
+  assert.ok((await rpc("settings.update", { settings: {
+    ...settingsForStorage, retention: { ...settingsForStorage.retention, minimumFreeBytes: 0 },
+  } })).result, "Storage acceptance must not depend on the host's available disk space");
   const movieStorage = page.getByRole("region", { name: "Storage and links" }).getByRole("article").filter({ has: page.getByRole("heading", { name: "Movies", exact: true }) });
   await movieStorage.getByText("Storage details", { exact: true }).click();
   await movieStorage.getByRole("link", { name: "Review removable titles", exact: true }).click();
@@ -522,6 +526,20 @@ async function verify() {
   assert.deepEqual((await rpc("jobs.list", { type: "retention_cleanup" })).result.jobs, cleanupBefore, "Preview queued a destructive job");
   assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false, "Retention overflows mobile viewport");
   await page.screenshot({ path: path.join(artifacts, "admin-retention-mobile.png"), animations: "disabled" });
+  await page.getByRole("link", { name: "Back to activity" }).click();
+  await page.getByRole("link", { name: "Release feed", exact: true }).click();
+  await page.getByRole("heading", { name: "Release feed", exact: true }).waitFor();
+  const releases = page.getByRole("list", { name: "Incoming releases" });
+  await releases.getByText("Fixture movie release 50", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Older releases", exact: true }).click();
+  await releases.getByText("Fixture TV release", { exact: true }).waitFor();
+  await releases.getByText("TV · 1 target", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Newer releases", exact: true }).click();
+  await releases.getByText("Fixture movie release 50", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "TV", exact: true }).click();
+  await releases.getByText("Fixture TV release", { exact: true }).waitFor();
+  assert.equal(await releases.getByRole("listitem").count(), 1);
+  assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false, "Release feed overflows mobile viewport");
   assert.deepEqual(pageErrors, [], "Admin UI page errors");
   assert.deepEqual(networkErrors, [], "Unexpected admin UI request/HTTP errors");
   console.log("Admin Chrome acceptance passed: authorization, grouped Settings, secret preservation, draft conflicts, explicit saves and Plex selection, Activity, and mobile layout.");

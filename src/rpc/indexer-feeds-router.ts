@@ -5,8 +5,39 @@ import { emptyParamsSchema } from "./schemas";
 import { RpcError } from "./shared";
 import { INDEXER_FEED_INTERVAL_MS } from "../worker/indexer-feeds";
 import { feedGapDiagnosticsSchema, readFeedGapDiagnostics } from "../media/feed-gap";
+import { releaseFeedMedia } from "../media/release-inbox";
+
+const media = z.enum(releaseFeedMedia);
+const positiveInteger = z.number().int().positive();
 
 export const indexerFeedsRouter = defineRouter({
+  releases: defineMethod({
+    auth: "admin",
+    readOnly: true,
+    summary: "List retained releases and their recorded acquisition routing.",
+    paramsSchema: z.object({
+      media: media.optional(),
+      cursor: positiveInteger.optional(),
+      limit: positiveInteger.max(100).default(50),
+    }).strict(),
+    resultSchema: z.object({
+      items: z.array(z.object({
+        id: positiveInteger,
+        title: z.string(),
+        provider: z.string(),
+        media,
+        receivedAt: z.string(),
+        acquisitionRoutes: z.array(z.object({
+          targetKind: media,
+          targetCount: positiveInteger,
+        })),
+      })),
+      nextCursor: positiveInteger.nullable(),
+    }),
+    handler(ctx, input) {
+      return ctx.repo.releaseInbox.releaseFeedPage(input);
+    },
+  }),
   status: defineMethod({
     auth: "admin",
     readOnly: true,

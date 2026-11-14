@@ -172,7 +172,9 @@ export function OpsPage() {
     </section>
     <SharingHistory metrics={sharing} />
     <section className="activity-section activity-system" id="activity-system" aria-label="System">
-      <div className="transfer-heading"><h2>System</h2><Link href="/stewardship">Review torrent problems</Link></div>
+      <div className="transfer-heading"><h2>System</h2><div className="activity-heading-meta">
+        <Link href="/ops/releases">Release feed</Link><Link href="/stewardship">Review torrent problems</Link>
+      </div></div>
       {ops.data && <>
       <section className="activity-section" id="activity-storage" aria-label="Storage and links">
         <h3>Storage</h3>
