@@ -10,7 +10,7 @@ import { fetchMovieMetainfo, type MovieOffer, type MovieSearch } from "../movies
 import { movieFactsSchema, evaluateMovieQuality, type MovieQualityPolicy } from "../movies/quality";
 import { factsFromMovieProbe, type MovieProbe } from "../movies/probe";
 import type { TvEntry, TvEpisode } from "./types";
-import { evidencePage, tvEpisodeEvidence, tvFileEvidence, tvProbeEvidence, tvWorkEvidence } from "./agent-evidence";
+import { evidencePage, inlineTvImportEvidence, tvEpisodeEvidence, tvFileEvidence, tvProbeEvidence, tvWorkEvidence } from "./agent-evidence";
 import { modelEvidenceText, tryAcquisitionDecision, type DecisionsTransport } from "../library/decisions";
 import { screenedVideoFile, screenedVideoOffers, tvDecisionIdentity, videoPolicyEvidence } from "../media/video-decisions";
 
@@ -216,13 +216,17 @@ For this task, matchingIndexes should include only eligible copies; omit ones ma
           const file=input.files.find(file=>file.index===fileIndex);
           return {fileIndex,assessment:file?evaluateMovieQuality(input.policy,factsFromMovieProbe(file.probe,facts)):{error:"Unknown file"}};
         }) });
+      const inline = inlineTvImportEvidence(input.files, input.episodes);
       const plan = await run("TvEpisodeImportVerifier", tvImportPlanSchema,
         `Map only requested episode IDs to complete playable files. Each episode may be assigned once. A file can contain several whole episodes; assign all of their IDs together. Partial packs may map only the episodes genuinely present.
 Do not assign season-pack names wholesale: identify each file's actual episodes. Consult provider aired/absolute and anime-local numbering, aliases, episode titles and runtimes. Ignore samples, extras, opening clips and unrequested episodes.
 If a combined file also contains an unrequested episode, reject the file rather than mislabeling it as only its requested subset.
-The initial input is only an overview. Page through listFiles and getRequestedEpisodes as needed. Use getFileProbes/getFileProbe for duration, languages and subtitle/video streams; assessCandidates/assessCandidate check selected files against policy. Prefer the bulk tools for packs so one-file-per-turn research does not exhaust your budget. Actual stream facts override release claims. Return files:[] if nothing can be established. Do not map a truncated episode or an unsupported collection of partial files as a complete episode.`,
-        { entry: tvWorkEvidence(input.entry), episodeCount: input.episodes.length, episodes: input.episodes.slice(0,4).map(tvEpisodeEvidence), policy: videoPolicyEvidence(input.policy),
-          release: { title: modelEvidenceText(input.offer.title) }, files: evidencePage(input.files,0,10,tvFileEvidence) },
+When inlineEvidence is provided, it contains every requested episode and probed candidate. Use its duration and stream facts directly; do not re-request evidence already present. If a file has nextOffset, request more streams only when needed to establish the policy or identity. Use the tools when evidence is missing, paginated, or ambiguous, and prefer the bulk tools for packs.
+Page through listFiles/getRequestedEpisodes when the initial input is an overview. getFileProbes/getFileProbe return actual streams, and assessCandidates/assessCandidate check quality claims against policy. Actual stream facts override release claims. Return files:[] if nothing can be established. Do not map a truncated episode or an unsupported collection of partial files as a complete episode.`,
+        { entry: tvWorkEvidence(input.entry), episodeCount: input.episodes.length, policy: videoPolicyEvidence(input.policy),
+          release: { title: modelEvidenceText(input.offer.title) }, ...(inline ? { inlineEvidence: inline } : {
+            episodes: input.episodes.slice(0,4).map(tvEpisodeEvidence), files: evidencePage(input.files,0,10,tvFileEvidence),
+          }) },
         [fileList, probe, probes, episodeTool(input.episodes), assess, assessments]);
       return validateTvImportPlan(plan, input.files, input.episodes);
     },

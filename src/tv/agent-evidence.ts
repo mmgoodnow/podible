@@ -24,6 +24,13 @@ export function tvFileEvidence(file: TvFileCandidate) {
 export function tvProbeEvidence(file: TvFileCandidate, offset = 0, limit = 12) {
   return { ...tvFileEvidence(file), ...videoProbeEvidence(file, offset, limit) };
 }
+
+export function inlineTvImportEvidence(files: TvFileCandidate[], episodes: TvEpisode[]) {
+  if (files.length > 16 || episodes.length > 16) return;
+  const evidence = { files: files.map(file => tvProbeEvidence(file)), episodes: episodes.map(tvEpisodeEvidence) };
+  if (Buffer.byteLength(JSON.stringify(evidence)) <= 16_000) return evidence;
+}
+
 export function evidencePage<T>(values: T[], offset: number, limit: number, present: (value: T) => unknown) {
   return modelEvidencePage(values, offset, limit, present);
 }

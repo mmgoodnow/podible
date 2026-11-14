@@ -74,6 +74,27 @@ test("TV verifier uses probe policy evidence and preserves episode IDs across nu
   expect(JSON.stringify(fake.calls)).not.toContain("hidden");
 });
 
+test("a small TV pack has all requested episodes and sanitized stream evidence in the first model call", async () => {
+  const episodes = Array.from({ length: 12 }, (_, i) => ({ ...episode, id: 200 + i, title: `Requested member ${i + 1}` }));
+  const candidates = episodes.map((_, i) => ({ ...files[0]!, index: i, name: `Downloaded member ${i + 1}.mkv`,
+    probe: { ...files[0]!.probe, format: { duration: "1440", secret: "private-probe-tag" } },
+  }));
+  const expected = { ...plan, files: episodes.map(({ id }, i) => ({ ...plan.files[0]!, fileIndex: i, episodeIds: [id] })) };
+  const fake = provider([expected]);
+  expect(await createTvDecider(defaultSettings(), fake.model).inspect({ entry, episodes, policy: defaultMovieQualityPolicy,
+    offer, files: candidates })).toEqual(expected);
+  expect(fake.calls).toHaveLength(1);
+  const first = JSON.stringify(fake.calls[0]!.input);
+  expect(first).toContain("inlineEvidence");
+  expect(first).toContain("Requested member 12");
+  expect(first).toContain("Downloaded member 12.mkv");
+  expect(first).toContain("1440");
+  expect(first).toContain("jpn");
+  expect(first).not.toContain("private-probe-tag");
+  expect(first).not.toContain("passkey");
+  expect(fake.calls[0]!.tools.map(tool => tool.name)).toContain("getFileProbes");
+});
+
 test("TV import validation rejects invented files, ordinal IDs, and duplicate episode assignments", () => {
   expect(validateTvImportPlan(plan, files, [episode])).toEqual(plan);
   expect(() => validateTvImportPlan({ ...plan, files: [{ ...plan.files[0], fileIndex: 1 }] }, files, [episode])).toThrow("unknown");

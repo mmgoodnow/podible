@@ -58,6 +58,11 @@ spent waiting for the Plex event. The rest was inside Podible's publication
 attempts (view reconciliation, lock acquisition, scan requests and exact
 catalog checks). These runs precede the scoped reconciliation change.
 
+Small TV import batches now inline up to 16 episodes and 16 probed files under
+a 16 KB evidence limit, so the verifier can use runtimes and streams without
+another model round trip. Larger or ambiguous batches keep the same tools.
+Episode assignment, probe-derived quality and exact Plex checks are unchanged.
+
 ## Attack on Titan baseline
 
 Read-only verification on Cyprus, 2026-11-10, running
