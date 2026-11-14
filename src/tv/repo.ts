@@ -750,6 +750,44 @@ export class TvRepo {
     return this.db.query("SELECT * FROM tv_publications ORDER BY target_id").all() as TvPublication[];
   }
 
+  publicationViewRows(targetId?: number, includeStaged = true) {
+    type Row = {
+      targetId: number; versionId: number; fileId: string; relativePath: string;
+      title: string; year: number | null; tvdbId: number | null;
+      staged: 0 | 1; selected: 0 | 1; season: number | null; episode: number | null;
+    };
+    // Find candidate files first, then read every episode in each file. Filtering
+    // episode rows instead would hide partially selected multi-episode files.
+    return this.db.query<Row, [number | null, number]>(`
+      WITH wanted_files AS (
+        SELECT a.target_id,m.version_id,m.file_id
+        FROM tv_active_episodes a
+        JOIN tv_version_file_episodes m ON m.version_id=a.version_id AND m.episode_id=a.episode_id
+        WHERE (?1 IS NULL OR a.target_id=?1)
+        UNION
+        SELECT p.target_id,vf.version_id,vf.file_id
+        FROM tv_publications p JOIN tv_version_files vf ON vf.version_id=p.version_id
+        WHERE ?2=1 AND (?1 IS NULL OR p.target_id=?1)
+      )
+      SELECT w.target_id AS targetId,w.version_id AS versionId,w.file_id AS fileId,
+        f.relative_path AS relativePath,
+        json_extract(e.metadata_json,'$.title') AS title,
+        json_extract(e.metadata_json,'$.year') AS year,
+        json_extract(e.metadata_json,'$.tvdbId') AS tvdbId,
+        (p.version_id IS NOT NULL) AS staged,
+        (a.version_id IS NOT NULL) AS selected,n.season,n.episode
+      FROM wanted_files w
+      JOIN tv_version_files vf ON vf.version_id=w.version_id AND vf.file_id=w.file_id
+      JOIN tv_entries e ON e.id=vf.entry_id
+      JOIN managed_content_files f ON f.id=w.file_id
+      LEFT JOIN tv_publications p ON ?2=1 AND p.target_id=w.target_id AND p.version_id=w.version_id
+      LEFT JOIN tv_version_file_episodes m ON m.version_id=w.version_id AND m.file_id=w.file_id
+      LEFT JOIN tv_active_episodes a ON a.target_id=w.target_id AND a.version_id=w.version_id AND a.episode_id=m.episode_id
+      LEFT JOIN tv_episode_numbering n ON n.entry_id=vf.entry_id AND n.episode_id=m.episode_id AND n.scheme='tvdb:aired'
+      ORDER BY w.target_id,w.version_id,vf.sequence,m.episode_id
+    `).all(targetId ?? null, includeStaged ? 1 : 0);
+  }
+
   publicationAcquisitionId(targetId: number): number | null {
     const row = this.db.query(`SELECT v.acquisition_id FROM tv_publications p
       JOIN tv_versions v ON v.id=p.version_id WHERE p.target_id=?`).get(targetId) as { acquisition_id: number } | null;

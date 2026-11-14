@@ -110,11 +110,8 @@ export async function runTvRetentionCleanup(ctx: WorkerContext, job: JobRow, ada
   const restoreViews = () => {
     const target = ctx.repo.tv.target(plan.scope.targetId);
     if (!target || !superseded()) return;
-    const scoped = new Proxy(ctx.repo.tv, { get(repo, property) {
-      if (property === "targets") return () => [target]; if (property === "publications") return () => [];
-      const value = Reflect.get(repo, property); return typeof value === "function" ? value.bind(repo) : value;
-    } });
-    const settings = ctx.repo.readSettings()!, entries = tvViewEntries(scoped, tvRoots(root, settings.tv.plexViewPath));
+    const settings = ctx.repo.readSettings()!, entries = tvViewEntries(ctx.repo.tv, tvRoots(root, settings.tv.plexViewPath),
+      { targetId: target.id, includeStaged: false });
     const mount = observeRecoveryMount(ctx.repo, root, "tv"), view = observeRecoveryView(mount, entries);
     if (entries.length && ["present", "missing"].includes(view.state)) repairRecoveryView(mount, entries, view);
   };

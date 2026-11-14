@@ -260,12 +260,8 @@ export class TvRetentionService {
       this.repo.retention.get(audit.key), observeRecoveryMount(this.repo, settings.tv.managedRoot, "tv").evidence]) === frozen.baseline;
     if (!unchanged() || target.revision !== frozen.targetRevision || intent.revision !== frozen.intentRevision || hash(settings) !== frozen.settingsHash || hash(mount.evidence) !== frozen.mountHash)
       return stale();
-    const rendered = tvViewEntries(new Proxy(this.repo.tv, { get(targetRepo, property) {
-      if (property === "targets") return () => [target];
-      if (property === "publications") return () => [];
-      const value = Reflect.get(targetRepo, property);
-      return typeof value === "function" ? value.bind(targetRepo) : value;
-    } }), tvRoots(settings.tv.managedRoot, settings.tv.plexViewPath));
+    const rendered = tvViewEntries(this.repo.tv, tvRoots(settings.tv.managedRoot, settings.tv.plexViewPath),
+      { targetId: target.id, includeStaged: false });
     const view = observeRecoveryView(mount, rendered);
     if (!["present", "missing"].includes(view.state) || rendered.length > 20) throw new Error("TV view ownership is unverified");
     const files = [];

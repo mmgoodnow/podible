@@ -58,6 +58,31 @@ async function setup() {
 
 const verifiedLibrary = { scan: async () => {}, verify: async () => true };
 
+test("TV view enumeration uses one query and keeps staged files separate from recovery scope", async () => {
+  const s = await setup();
+  try {
+    const [one, two, three] = s.request.episodeIds;
+    const old = await s.makeVersion([[one!, two!]]);
+    await publishTvVersion({ repo: s.repo.tv, roots: s.roots, targetId: s.request.targetId, versionId: old, library: verifiedLibrary });
+    const pending = await s.makeVersion([[three!]]);
+    s.repo.tv.stagePublication(s.request.targetId, pending);
+    const original = s.db.query.bind(s.db);
+    let queries = 0;
+    s.db.query = ((...args: Parameters<Database["query"]>) => { queries++; return original(...args); }) as Database["query"];
+    expect(tvViewEntries(s.repo.tv, s.roots).map(entry => entry.relativePath)).toEqual([
+      `Anime Sequel (2019) {tvdb-307375}/Season 02/Anime Sequel - S02E01-E02 - t${s.request.targetId}v${old}.mkv`,
+      `Anime Sequel (2019) {tvdb-307375}/Season 02/Anime Sequel - S02E03 - t${s.request.targetId}v${pending}.mkv`,
+    ]);
+    expect(queries).toBe(1);
+    expect(tvViewEntries(s.repo.tv, s.roots, { targetId: s.request.targetId, includeStaged: false })).toHaveLength(1);
+    expect(tvViewEntries(s.repo.tv, s.roots, { targetId: s.request.targetId + 1, includeStaged: true })).toEqual([]);
+
+    // Fail closed if an inconsistent selection ever leaves half of a combined file active.
+    s.db.query("DELETE FROM tv_active_episodes WHERE target_id=? AND episode_id=?").run(s.request.targetId, two!);
+    expect(() => tvViewEntries(s.repo.tv, s.roots)).toThrow("Cannot partially replace a combined episode file");
+  } finally { await s.close(); }
+});
+
 test("publication diagnostics distinguish a real Plex verification wait from view reconciliation", async () => {
   const s = await setup();
   let release!: () => void, entered!: () => void;

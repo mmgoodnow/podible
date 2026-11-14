@@ -27,11 +27,10 @@ export function tvdbAiredNumber(episode: TvEpisode) {
   if (!number || number.season === null || number.episode === null) throw new Error("A verified TVDB aired mapping is required for this Plex view");
   return { season: number.season, episode: number.episode };
 }
-function versionEntries(repo: TvRepo, roots: TvRoots, targetId: number, version: TvVersion): Array<LibraryViewEntry & { episodes: TvEpisode[] }> {
-  const target = repo.target(targetId)!;
-  const entry = repo.entry(target.entry_id)!;
+function versionEntries(entry: TvEntry, roots: TvRoots, targetId: number, version: TvVersion): Array<LibraryViewEntry & { episodes: TvEpisode[] }> {
+  const byId = new Map(entry.episodes.map(episode => [episode.id, episode]));
   return version.files.map((file) => {
-    const episodes = file.episodeIds.map((id) => repo.episode(id, entry.id)!);
+    const episodes = file.episodeIds.map((id) => byId.get(id)!);
     if (episodes.some((episode) => !episode)) throw new Error("TV file references an unknown episode");
     const coordinates = episodes.map(tvdbAiredNumber).sort((a, b) => a.season - b.season || a.episode - b.episode);
     return { ...renderTvFileEntry(entry, roots, targetId, version.id, file.relativePath, coordinates), episodes };
@@ -57,25 +56,24 @@ export function renderTvFileEntry(entry: Pick<TvEntry, "title" | "year" | "tvdbI
 }
 
 /** The provider's Plex projection is replaceable; it never establishes episode identity. */
-export function tvViewEntries(repo: TvRepo, roots: TvRoots): LibraryViewEntry[] {
-  const selected = new Map<string, { targetId: number; versionId: number }>();
-  const pending = repo.publications();
-  for (const target of repo.targets()) {
-    const active = repo.activeEpisodes(target.id);
-    const staged = pending.find((item) => item.target_id === target.id);
-    for (const row of active) selected.set(`${target.id}:${row.version_id}`, { targetId: target.id, versionId: row.version_id });
-    if (staged) selected.set(`${target.id}:${staged.version_id}`, { targetId: target.id, versionId: staged.version_id });
+export function tvViewEntries(repo: TvRepo, roots: TvRoots, scope?: { targetId: number; includeStaged: boolean }): LibraryViewEntry[] {
+  const rows = repo.publicationViewRows(scope?.targetId, scope?.includeStaged);
+  const entries: LibraryViewEntry[] = [];
+  for (let i = 0; i < rows.length;) {
+    const first = rows[i]!;
+    const coordinates: Array<{ season: number; episode: number }> = [];
+    do {
+      const row = rows[i++]!;
+      if (!row.staged && !row.selected)
+        throw new Error("Cannot partially replace a combined episode file");
+      if (row.season === null || row.episode === null)
+        throw new Error("A verified TVDB aired mapping is required for this Plex view");
+      coordinates.push({ season: row.season, episode: row.episode });
+    } while (rows[i]?.versionId === first.versionId && rows[i]?.fileId === first.fileId);
+    coordinates.sort((a, b) => a.season - b.season || a.episode - b.episode);
+    entries.push(renderTvFileEntry(first, roots, first.targetId, first.versionId, first.relativePath, coordinates));
   }
-  return [...selected.values()].flatMap(({ targetId, versionId }) => {
-    const staged = pending.find((item) => item.target_id === targetId);
-    if (staged?.version_id === versionId) return versionEntries(repo, roots, targetId, repo.version(versionId)!);
-    const active = new Set(repo.activeEpisodes(targetId).filter((item) => item.version_id === versionId).map((item) => item.episode_id));
-    const version = repo.version(versionId)!;
-    const files = version.files.filter((file) => file.episodeIds.some((id) => active.has(id)));
-    if (files.some((file) => file.episodeIds.some((id) => !active.has(id))))
-      throw new Error("Cannot partially replace a combined episode file");
-    return versionEntries(repo, roots, targetId, { ...version, files });
-  });
+  return entries;
 }
 export function reconcileTvView(repo: TvRepo, roots: TvRoots, assertActive: () => void = () => {}) {
   return serialized(roots.viewRoot, () => reconcileLibraryView({ ...roots, entries: tvViewEntries(repo, roots), assertActive }));
@@ -123,7 +121,7 @@ export async function publishTvVersion(input: { repo: TvRepo; roots: TvRoots; li
         await reconcile();
         active();
         const entry = repo.entry(repo.target(targetId)!.entry_id)!;
-        const files = versionEntries(repo, roots, targetId, repo.version(versionId)!).map(file => ({
+        const files = versionEntries(entry, roots, targetId, repo.version(versionId)!).map(file => ({
           serverPath: path.posix.join(roots.serverViewRoot, file.relativePath), episodes: file.episodes,
         }));
         effectPhase("publication:scan");

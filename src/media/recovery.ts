@@ -261,8 +261,7 @@ export class RecoveryService {
         selected = active.length > 0;
         if (active.some((episode) => !ownedVersions.some((version) => version.id === episode.version_id)))
           throw new Error("Selected TV version is not owned by this target");
-        entries = tvViewEntries(scoped(this.repo.tv, { targets: () => [selectedTarget], publications: () => [], entry: () => entry }),
-          tvRoots(mount.root, settings?.tv.plexViewPath ?? ""));
+        entries = tvViewEntries(this.repo.tv, tvRoots(mount.root, settings?.tv.plexViewPath ?? ""), { targetId: id, includeStaged: false });
         requestScope = activeRequests.map((request) => ({ requestId: request.id,
           episodes: this.repo.tv.requestedEpisodes(Number(request.id)), missing: this.repo.tv.missingEpisodes(Number(request.id)),
         }));

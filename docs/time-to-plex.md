@@ -20,6 +20,14 @@ The scan request measures Plex's acknowledgement, not its asynchronous indexing.
 Podible does not wait for intro detection or thumbnail generation; readiness
 requires the exact catalog identity and file paths.
 
+## TV View Enumeration
+
+A read-only Cyprus measurement on November 14 projected 1,543 TV files with
+9,052 SQL calls in 0.92-1.25 seconds per pass. The bulk projection took 16-17 ms
+and matched the full set of view paths and backing paths in the same SQLite
+snapshot. These are database/render timings, not filesystem reconciliation or
+download-to-Plex timings.
+
 ## Attack on Titan baseline
 
 Read-only verification on Cyprus, 2026-11-10, running
