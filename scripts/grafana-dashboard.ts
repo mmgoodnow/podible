@@ -10,13 +10,20 @@ const series = (metric: string) => `podible_${metric}{job="podible"}`;
 const delta = (metric: string) => `increase(${series(metric)}[$__range])`;
 const rolling = (metric: string) => `increase(${series(metric)}[1h])`;
 type Query = [expression: string, legend?: string];
+type TimeSeriesStyle = {
+  interval?: string;
+  graphStyle?: "bars" | "points";
+  stacking?: boolean;
+  colors?: readonly string[];
+};
 function panel(type: "stat" | "timeseries" | "table", title: string, description: string, unit: string,
-  position: ReturnType<typeof grid>, queries: Query[], decimals?: number, statusLabels?: readonly [string, string]) {
+  position: ReturnType<typeof grid>, queries: Query[], decimals?: number, statusLabels?: readonly [string, string], style?: TimeSeriesStyle) {
   const instant = type !== "timeseries";
   panels.push({
     id: nextPanelId++, type, title, description, gridPos: position, datasource,
     targets: queries.map(([expr, legendFormat], i) => ({
       datasource, refId: String.fromCharCode(65 + i), expr, legendFormat, instant, range: !instant,
+      ...(style?.interval ? { interval: style.interval } : {}),
       ...(type === "table" ? { format: "table" } : {}),
     })),
     fieldConfig: { defaults: {
@@ -26,12 +33,22 @@ function panel(type: "stat" | "timeseries" | "table", title: string, description
         0: { text: statusLabels[0], color: "red", index: 0 },
         1: { text: statusLabels[1], color: "green", index: 1 },
       } }] } : {}),
-      ...(type === "timeseries" ? { min: 0, custom: { lineWidth: 2, fillOpacity: 8, spanNulls: false } } : {}),
-    }, overrides: [] },
+      ...(type === "timeseries" ? { min: 0, custom: {
+        lineWidth: style?.graphStyle === "bars" ? 0 : 2,
+        fillOpacity: style?.graphStyle === "bars" ? 85 : style?.graphStyle === "points" ? 0 : 8,
+        spanNulls: false,
+        ...(style?.graphStyle ? { drawStyle: style.graphStyle, showPoints: style.graphStyle === "points" ? "always" : "never", pointSize: 7 } : {}),
+        ...(style?.graphStyle === "bars" ? { barAlignment: -1, barWidthFactor: 0.85 } : {}),
+        ...(style?.stacking ? { stacking: { mode: "normal", group: "A" } } : {}),
+      } } : {}),
+    }, overrides: (style?.colors ?? []).map((fixedColor, index) => ({
+      matcher: { id: "byFrameRefID", options: String.fromCharCode(65 + index) },
+      properties: [{ id: "color", value: { mode: "fixed", fixedColor } }],
+    })) },
     options: type === "stat" ? { colorMode: statusLabels ? "value" : "none", graphMode: "none", justifyMode: "auto", textMode: "value",
       reduceOptions: { calcs: ["lastNotNull"], fields: "", values: false } } : type === "timeseries" ? {
-      legend: { showLegend: true, placement: "bottom", displayMode: "table", calcs: ["lastNotNull"] },
-      tooltip: { mode: "multi", sort: "desc" },
+      legend: { showLegend: true, placement: "bottom", displayMode: style ? "list" : "table", calcs: style ? [] : ["lastNotNull"] },
+      tooltip: { mode: "multi", sort: style ? "none" : "desc", hideZeros: Boolean(style) },
     } : { showHeader: true },
   });
 }
@@ -47,15 +64,17 @@ const stat = (x: number, title: string, description: string, unit: string, expr:
   panel("stat", title, description, unit, grid(x, 6, 4), [[expr]], decimals);
 const status = (x: number, title: string, description: string, expr: string, labels: readonly [string, string]) =>
   panel("stat", title, description, "none", grid(x, 6, 4), [[expr]], 0, labels);
-const chart = (x: number, title: string, description: string, unit: string, queries: Query[]) =>
-  panel("timeseries", title, description, unit, grid(x, 12, 9), queries);
+const chart = (x: number, title: string, description: string, unit: string, queries: Query[], style?: TimeSeriesStyle) =>
+  panel("timeseries", title, description, unit, grid(x, 12, 9), queries, undefined, undefined, style);
 const items = (kind: string) => `podible_published_library_items{job="podible",kind="${kind}"}`;
 
 row("Time to Plex");
-const latency = (suffix: string, phase: string) =>
-  `podible_acquisition_latency_seconds_${suffix}{job="podible",phase="${phase}"}`;
-const percentile = (p: number, phase: string, range: string, group = "le") =>
-  `histogram_quantile(${p}, sum by (${group}) (increase(${latency("bucket", phase)}[${range}])))`;
+const latency = (suffix: string, phase: string, media?: string) =>
+  `podible_acquisition_latency_seconds_${suffix}{job="podible",phase="${phase}"${media ? `,media="${media}"` : ""}}`;
+const latencyIncrease = (suffix: string, phase: string, range: string, media?: string) =>
+  `sum(increase(${latency(suffix, phase, media)}[${range}]))`;
+const percentile = (p: number, phase: string, range: string, media?: string) =>
+  `histogram_quantile(${p}, sum by (le) (increase(${latency("bucket", phase, media)}[${range}])))`;
 const latencyCount = (phase: string) => `sum(increase(${latency("count", phase)}[$__range]))`;
 const successOnly = "Successfully verified publications in the selected range. Incomplete work is not counted.";
 stat(0, "Typical time after download", successOnly, "s", percentile(0.5, "complete_to_ready", "$__range"));
@@ -64,29 +83,28 @@ stat(12, "Completed downloads measured", "Only counts verified publications with
 stat(18, "Typical queue to Plex", "Starts when an acquisition batch is queued, not when the title was originally requested.", "s",
   percentile(0.5, "queued_to_ready", "$__range"));
 y += 4;
-chart(0, "Where time goes", "Rolling six-hour histogram p95 by media type. Sparse samples and wide buckets can overstate the actual slowest run. The pre-publication stage includes finalization, probes and import decisions.", "s", [
-  [percentile(0.95, "complete_to_publish", "6h", "le, media"), "{{media}} · download complete → publishing"],
-  [percentile(0.95, "publish_to_ready", "6h", "le, media"), "{{media}} · publishing → verified in Plex"],
-]);
-chart(12, "File view reconciliation", "Rolling six-hour p50 and p95 per successful reconciliation pass, including view projection but not waiting for Plex.", "s", [
-  [percentile(0.5, "view_reconcile", "6h", "le, media"), "{{media}} · p50"],
-  [percentile(0.95, "view_reconcile", "6h", "le, media"), "{{media}} · p95"],
-]);
+const latencyWindow = "$__interval";
+const binned: TimeSeriesStyle = { interval: "3h", graphStyle: "bars" };
+function phaseChart(x: number, title: string, media: "movie" | "tv") {
+  const before = latencyIncrease("sum", "complete_to_publish", latencyWindow, media);
+  const total = latencyIncrease("sum", "complete_to_ready", latencyWindow, media);
+  const count = latencyIncrease("count", "complete_to_ready", latencyWindow, media);
+  chart(x, title, "Average time per completed download in each time bucket. Both phases use the same Plex-verified downloads. Empty buckets had no qualifying downloads or no telemetry.", "s", [
+    [`${before} / (${count} > 0)`, "Prepare files"],
+    [`clamp_min(${total} - ${before}, 0) / (${count} > 0)`, "Publish and verify in Plex"],
+  ], { ...binned, stacking: true, colors: ["blue", "orange"] });
+}
+phaseChart(0, "Movies: download to Plex", "movie");
+phaseChart(12, "TV: download to Plex", "tv");
 y += 9;
-
-const finalization = (suffix: string, labels = "") =>
-  `podible_canonical_finalization_${suffix}{job="podible"${labels}}`;
-const finalizationSum = (group: string, suffix: string, labels?: string) =>
-  `sum by (${group}) (increase(${finalization(suffix, labels)}[6h]))`;
-const perPhase = (suffix: string, labels: string) => finalizationSum("media, phase", `seconds_${suffix}`, labels);
-const finalizedFiles = finalizationSum("media", "seconds_count", ',phase="proof_persist"');
-const finalizationLabels = ',phase=~"revalidate|proof_persist"';
-panel("timeseries", "Canonical finalization phases", "Six-hour mean per successful file receipt. Revalidation checks local file identity; persistence includes file and directory sync. No payload reread is needed.", "s", grid(0, 12, 9),
-  [[`${perPhase("sum", finalizationLabels)} / (${perPhase("count", finalizationLabels)} > 0)`, "{{media}} · {{phase}}"]]);
-panel("timeseries", "Finalized media size", "Payload bytes represented by new finalization receipts over six hours, not disk I/O.", "bytes", grid(12, 6, 9),
-  [[finalizationSum("media", "bytes_total"), "{{media}}"]]);
-panel("timeseries", "Finalization samples", "Successful proof writes in the last six hours, not published titles. Reused proofs and failed attempts are excluded. 'Other' is work outside TV/movie acquisition steps.", "none", grid(18, 6, 9),
-  [[finalizedFiles, "{{media}}"]]);
+chart(0, "Downloads measured", "Plex-verified downloads behind the timing bars. Zero means no new observations; a gap means the metric was unavailable.", "none", [
+  [`round(${latencyIncrease("count", "complete_to_ready", latencyWindow, "movie")})`, "Movies"],
+  [`round(${latencyIncrease("count", "complete_to_ready", latencyWindow, "tv")})`, "TV batches"],
+], { ...binned, stacking: true, colors: ["purple", "green"] });
+chart(12, "Library link updates (p95)", "Time to update filesystem links, not time waiting for Plex. Each dot summarizes a bucket with observations; a missing dot is not zero latency.", "s", [
+  [percentile(0.95, "view_reconcile", latencyWindow, "movie"), "Movies"],
+  [percentile(0.95, "view_reconcile", latencyWindow, "tv"), "TV"],
+], { ...binned, graphStyle: "points", colors: ["purple", "green"] });
 y += 9;
 
 nextPanelId = 1; // Preserve existing Grafana panel links and IDs.
@@ -164,10 +182,12 @@ stat(12, "Average model call time", "Per-call wall time, including model transpo
 stat(18, "Calls without a cost estimate", "Missing token counts or audio duration (including model errors), or unknown rates. These calls are not evidence of zero cost.", "none",
   `${agentTotal("usage_missing_total")} + ${agentTotal("usage_unpriced_total")}`, 0);
 y += 4;
-chart(0, "AI spend by workflow", "Trailing-hour estimated cost by workflow and API.", "currencyUSD",
-  [[`sum by (workflow, api) (${agentChange("estimated_cost_usd_total", "1h")}) > 0`, "{{workflow}} · {{api}}"]]);
-chart(12, "Model calls by workflow", "Trailing-hour calls by workflow and API.", "none",
-  [[`sum by (workflow, api) (${agentChange("model_calls_total", "1h")}) > 0`, "{{workflow}} · {{api}}"]]);
+chart(0, "AI spend by workflow", "Estimated cost by workflow and API in each time bucket.", "currencyUSD",
+  [[`sum by (workflow, api) (${agentChange("estimated_cost_usd_total", latencyWindow)})`, "{{workflow}} · {{api}}"]],
+  { ...binned, stacking: true });
+chart(12, "Model calls by workflow", "Calls by workflow and API in each time bucket.", "none",
+  [[`round(sum by (workflow, api) (${agentChange("model_calls_total", latencyWindow)}))`, "{{workflow}} · {{api}}"]],
+  { ...binned, stacking: true });
 y += 9;
 stat(0, "Chapter analysis spend", "Estimated cost of the chapter curator and its judges. Excludes transcription.", "currencyUSD",
   agentTotal("estimated_cost_usd_total", "chapter-curation|chapter-judge"), 4);
@@ -179,7 +199,7 @@ stat(18, "Transcription calls", "Observed Whisper SDK calls, including errors. I
   agentTotal("model_calls_total", "transcription"), 0);
 
 console.log(JSON.stringify({
-  uid: "podible-operations", title: "Podible", tags: ["media", "podible"], schemaVersion: 41, version: 4,
+  uid: "podible-operations", title: "Podible", tags: ["media", "podible"], schemaVersion: 41, version: 5,
   description: "Library delivery, seeding coverage, reuse, network activity and AI costs.",
   editable: false, time: { from: "now-24h", to: "now" }, refresh: "1m", panels,
   links: [{ type: "link", title: "Podible Activity", url: "https://podible.cyplex.dev/ops", targetBlank: true }],

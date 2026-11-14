@@ -6,6 +6,12 @@ verification, Transmission completion to publication, publication to verified
 availability, and individual filesystem reconciliation passes. The percentiles
 are for successful observations, so read them alongside sample counts and the
 Activity page's unfinished requests. No historical timings are fabricated.
+The movie and TV stacks use the same completed-download cohort for both phases:
+preparation is completion to publishing, and Plex time is the remainder of
+completion to verified availability. Blank buckets have no qualifying samples
+or no metrics. The adjacent count panel distinguishes idle buckets (zero
+observations) from unavailable metrics. Filesystem link latency is shown as
+separate p95 points, not added to the stacks.
 
 ## Attack on Titan baseline
 

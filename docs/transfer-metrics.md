@@ -142,7 +142,9 @@ publications. Download completion is Transmission's recorded completion time,
 not the worker's next observation. A torrent that finished before the batch was
 queued does not contribute to download latency. Reconciliation measures the
 filesystem projection pass separately from Plex indexing. An empty percentile
-means no qualifying samples, not instant completion.
+means no qualifying samples, not instant completion. File handoff and proof
+write timings remain available in Prometheus for deeper debugging, rather than
+occupying the dashboard. Podible does not hash completed torrent payloads again.
 
 The **AI usage and cost** row reports text agent and transcription calls made by
 the job worker. Chapter analysis sums the curator and judge; transcription is
