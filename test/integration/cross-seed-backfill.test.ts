@@ -85,6 +85,7 @@ test("backfill snapshots all formats, separates same-title TV identities, and ex
     expect(status).toMatchObject({ status: "completed", total: 5, scanned: 5, queued: 5, errors: 0 });
     expect(requests.filter(request => request === "tv:Same Series S01E01")).toHaveLength(2);
     expect(f.repo.listJobsByType("torrent_reuse")).toHaveLength(5);
+    expect(f.repo.crossSeed.receipts().map(r => r.origin)).toEqual(Array(5).fill("backfill-search"));
     expect(new Set(f.repo.crossSeed.receipts().filter(r => r.command.scope.media === "tv").map(r => r.command.scope.targetId))).toEqual(new Set([first, second]));
     expect(JSON.stringify(status)).not.toContain("private-secret"); expect(JSON.stringify(status)).not.toContain("fixture.invalid");
   } finally { await f.close(); }
@@ -115,6 +116,7 @@ test("explicit backfill reconsiders terminal attempts but skips pending and curr
     await f.run(requestId, { sources: async () => [source], gateway: gateway(async () => ({ results: [], failures: [] })) });
     expect(crossSeedBackfillStatus(f.repo, { requestId })).toMatchObject({ total: 4, queued: 2, skipped: 2 });
     expect(f.repo.listJobsByType("torrent_reuse")).toHaveLength(6);
+    expect(f.repo.crossSeed.receipts().filter(r => r.origin === "backfill-history")).toHaveLength(2);
   } finally { await f.close(); }
 });
 

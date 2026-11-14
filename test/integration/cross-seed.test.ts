@@ -180,6 +180,7 @@ test("selection-discovered copies use the same verified executor without an RSS 
     expect(group.copies).toHaveLength(1);
     expect(rememberSelectedCopies(f.repo, f.command.scope, 1, selected, []).copies).toEqual(group.copies);
     const [receipt] = queueSelectedCrossSeeds(f.repo, f.command.scope, 1, selected.key);
+    expect(receipt?.origin).toBe("acquisition-search");
     expect(queueSelectedCrossSeeds(f.repo, f.command.scope, 1, selected.key)[0]?.jobId).toBe(receipt!.jobId);
     expect(f.repo.crossSeed.receipts()).toHaveLength(1);
     f.command = receipt!.command;

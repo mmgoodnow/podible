@@ -10,8 +10,10 @@ import type { CrossSeedScope } from "./cross-seed-state";
 import { createBookFeedMatcher } from "../library/feed-matcher";
 import type { TorznabResult } from "../library/torznab";
 import type { MediaType } from "../app-types";
+import { AUTOBRR_ID_PREFIX } from "./autobrr";
 
 const payload = z.object({ releaseIds: z.array(z.number().int().positive()).min(1).max(100) }).strict();
+const feedOrigin = (feedId: string) => feedId.startsWith(AUTOBRR_ID_PREFIX) ? "autobrr" as const : "rss" as const;
 const operationId = (value: string) => {
   const hash = createHash("sha256").update(value).digest("hex");
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
@@ -25,7 +27,7 @@ export async function discoverCrossSeeds(ctx: WorkerContext, job: JobRow): Promi
   const media = entries[0]!.result.mediaType;
   if (media === "audio" || media === "ebook") {
     if (entries.some(entry => entry.result.mediaType !== media)) throw new Error("Mixed reuse feed media");
-    return discoverBookCrossSeeds(ctx, entries as { id: number; result: TorznabResult }[], media);
+    return discoverBookCrossSeeds(ctx, entries as { id: number; feed_id: string; result: TorznabResult }[], media);
   }
   if ((media !== "movie" && media !== "tv") || entries.some(entry => entry.result.mediaType !== media)) throw new Error("Unsupported reuse feed media");
   const eligible = (scope: CrossSeedScope) => ctx.repo.crossSeed.hasFiles(scope) &&
@@ -60,7 +62,7 @@ export async function discoverCrossSeeds(ctx: WorkerContext, job: JobRow): Promi
           ctx.execution?.assertActive();
           if (!eligible(scope)) return;
           queueCrossSeed(ctx.repo, { operationId: operationId(`${media}:${scope.targetId}:${entries[index]!.id}:v1`),
-            scope, releaseId: entries[index]!.id });
+            scope, releaseId: entries[index]!.id }, feedOrigin(entries[index]!.feed_id));
         });
       }
     }
@@ -69,7 +71,7 @@ export async function discoverCrossSeeds(ctx: WorkerContext, job: JobRow): Promi
 }
 
 /** Already-imported books still consume new releases, independently of missing-format acquisition. */
-async function discoverBookCrossSeeds(ctx: WorkerContext, entries: { id: number; result: TorznabResult }[], media: MediaType): Promise<"done"> {
+async function discoverBookCrossSeeds(ctx: WorkerContext, entries: { id: number; feed_id: string; result: TorznabResult }[], media: MediaType): Promise<"done"> {
   const eligible = (bookId: number) => Boolean(ctx.repo.getBook(bookId)) &&
     ctx.repo.crossSeed.hasFiles({ media, targetId: bookId });
   const targets = await durableStep(ctx, "reuse-feed:scopes", () => ctx.repo.listAllBooks()
@@ -88,7 +90,7 @@ async function discoverBookCrossSeeds(ctx: WorkerContext, entries: { id: number;
           ctx.execution?.assertActive();
           if (!eligible(match.bookId)) return;
           queueCrossSeed(ctx.repo, { operationId: operationId(`${media}:${match.bookId}:${entries[index]!.id}:v1`),
-            scope: { media, targetId: match.bookId }, releaseId: entries[index]!.id });
+            scope: { media, targetId: match.bookId }, releaseId: entries[index]!.id }, feedOrigin(entries[index]!.feed_id));
         });
       }
     }

@@ -173,7 +173,8 @@ async function matchingIndexes(ctx: WorkerContext, target: Target, results: Sear
   return [...new Set(indexes)];
 }
 
-async function route(ctx: WorkerContext, id: string, target: Target, entries: { id: number; result: SearchResult<IndexerMedia> }[], step: string) {
+async function route(ctx: WorkerContext, id: string, target: Target, entries: { id: number; result: SearchResult<IndexerMedia> }[],
+  step: string, origin: "backfill-history" | "backfill-search") {
   const indexes = await durableStep(ctx, step + ":match", () => eligible(ctx.repo, target.scope) ? matchingIndexes(ctx, target, entries.map(entry => entry.result)) : []);
   return durableStep(ctx, step + ":queue", () => ctx.repo.transaction(() => {
     ctx.execution!.assertActive();
@@ -189,7 +190,7 @@ async function route(ctx: WorkerContext, id: string, target: Target, entries: { 
         ["queued", "running"].includes(ctx.repo.getJobStatus(attempt.jobId) ?? ""))) { skipped++; continue; }
       const operationId = selectedCopyId(`backfill:${id}:${target.scope.media}:${target.scope.targetId}:${releaseId}:${ctx.repo.crossSeed.contentRevision(target.scope)}`);
       if (ctx.repo.crossSeed.receipt(operationId)) { skipped++; continue; }
-      queueCrossSeed(ctx.repo, { operationId, scope: target.scope, releaseId: entries[index]!.id }); queued++;
+      queueCrossSeed(ctx.repo, { operationId, scope: target.scope, releaseId: entries[index]!.id }, origin); queued++;
     }
     const result = { queued, skipped }; ctx.repo.setJsonState(receiptKey, result); return result;
   }));
@@ -231,7 +232,7 @@ export async function processCrossSeedBackfill(ctx: WorkerContext, job: JobRow, 
           const entries = ctx.repo.releaseInbox.retainedPage(target.scope.media, afterId, inventory.throughId, 25);
           if (!entries.length) break;
           afterId = entries[entries.length - 1]!.id;
-          const result = await route(ctx, id, target, entries, `backfill:retained:${index}:${afterId}`);
+          const result = await route(ctx, id, target, entries, `backfill:retained:${index}:${afterId}`, "backfill-history");
           queued += result.queued; skipped += result.skipped;
         }
         await durableStep(ctx, `backfill:target:${index}:retained-complete`, () => {
@@ -314,7 +315,7 @@ export async function processCrossSeedBackfill(ctx: WorkerContext, job: JobRow, 
         });
         let queued = 0, skipped = 0;
         for (let offset = 0; offset < attempt.entries.length; offset += 25) {
-          const result = await route(ctx, id, target, attempt.entries.slice(offset, offset + 25), step + ":batch:" + offset);
+          const result = await route(ctx, id, target, attempt.entries.slice(offset, offset + 25), step + ":batch:" + offset, "backfill-search");
           queued += result.queued; skipped += result.skipped;
         }
         await durableStep(ctx, step + ":record", () => {

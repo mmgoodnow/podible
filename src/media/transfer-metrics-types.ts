@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { crossSeedOriginSchema } from "./cross-seed-state";
 
 const count = z.number().int().nonnegative().safe();
 const value = count.nullable();
@@ -20,7 +21,8 @@ export const transferMetricsStatusSchema = z.object({
       uploadBytesPerSecond: value.default(null), downloadBytesPerSecond: value.default(null) })) })),
   reuse: z.object({ attempts: count, successful: count, pending: count, skipped: count, failed: count,
     stalled: count, cancelled: count, unsupported: count, matchRate: z.number().nullable(),
-    verifiedReusedBytes: count, sidecarDownloadBytes: value, contentRepairBytes: value, tvMultiFileReusedBytes: count }),
+    verifiedReusedBytes: count, sidecarDownloadBytes: value, contentRepairBytes: value, tvMultiFileReusedBytes: count,
+    byOrigin: z.array(z.object({ origin: crossSeedOriginSchema.or(z.literal("unknown")), attempts: count, seeding: count })).optional() }),
   downloads: z.array(z.object({ id: count, title: z.string(), state: z.string(), bytesDone: value, sizeBytes: value,
     downloadBytesPerSecond: value, href: z.string().nullable() })),
   mappings: z.array(z.object({ host: z.string(), name: z.string(), source: z.enum(["inferred", "unknown"]) })),

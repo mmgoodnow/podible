@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { defineMethod, defineRouter } from "./framework";
-import { crossSeedCommandSchema } from "../media/cross-seed-state";
+import { crossSeedCommandSchema, crossSeedOriginSchema } from "../media/cross-seed-state";
 import { confirmedReleaseNukeSchema, reportConfirmedReleaseNuke } from "../media/release-health";
 import { crossSeedPlan, queueCrossSeed, crossSeedOffer } from "../media/cross-seed";
 import { cachedMovieMetainfo } from "../movies/offers";
@@ -12,7 +12,8 @@ const outcome = z.object({ kind: z.enum(["seeding", "skipped", "unsupported", "s
   torrentId: z.number().optional(), infoHash: z.string().optional(), reusedBytes: z.number().optional(), downloadedBytes: z.number().optional(), totalBytes: z.number().optional(),
   accountingVersion: z.literal(1).optional(), sidecarDownloadBytes: z.number().nonnegative().optional(),
   contentRepairBytes: z.number().nonnegative().optional(), contentFileCount: z.number().int().nonnegative().optional() });
-const receipt = z.object({ command: crossSeedCommandSchema, commandHash: z.string(), jobId: z.number(), createdAt: z.string(), outcome: outcome.optional() });
+const receipt = z.object({ command: crossSeedCommandSchema, commandHash: z.string(), jobId: z.number(), createdAt: z.string(),
+  origin: crossSeedOriginSchema.optional(), outcome: outcome.optional() });
 
 export const crossSeedRouter = defineRouter({
   startBackfill: defineMethod({ auth: "admin", summary: "Explicitly snapshot and search the retained library for cross-seed candidates.",
@@ -45,7 +46,7 @@ export const crossSeedRouter = defineRouter({
   }),
   create: defineMethod({ auth: "admin", summary: "Queue an optimistic seed-only reuse attempt without bulk hashing or changing Plex selection.",
     paramsSchema: crossSeedCommandSchema, resultSchema: receipt,
-    handler: (ctx, command) => queueCrossSeed(ctx.repo, command) }),
+    handler: (ctx, command) => queueCrossSeed(ctx.repo, command, "manual") }),
   status: defineMethod({ auth: "admin", readOnly: true, summary: "Read bounded reuse intents and outcomes; never polls or controls the daemon.",
     paramsSchema: z.object({ operationId: z.string().uuid().optional(), limit: z.number().int().min(1).max(100).default(25) }).strict(),
     resultSchema: z.object({ operations: z.array(receipt) }),

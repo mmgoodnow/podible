@@ -7,6 +7,7 @@ import { syncIndexerFeeds } from "../../src/worker/indexer-feeds";
 import { IndexerGateway } from "../../src/media/indexer-gateway";
 import type { MediaType } from "../../src/app-types";
 import type { WorkerContext } from "../../src/worker/context";
+import { AUTOBRR_ID_PREFIX } from "../../src/media/autobrr";
 
 function fixture() {
   const db = new Database(":memory:"); runMigrations(db);
@@ -19,8 +20,8 @@ function fixture() {
       files: [{ path: `/fixture/${media}`, size: 8, start: 0, end: 8, durationMs: 1000 }] });
   }
   const ctx: WorkerContext = { repo, getSettings: () => repo.getSettings() };
-  const ingest = (media: MediaType) => {
-    const feed = repo.releaseInbox.ensureFeed(`book-reuse-${media}`, "Synthetic indexer", media, new Date().toISOString());
+  const ingest = (media: MediaType, prefix = "") => {
+    const feed = repo.releaseInbox.ensureFeed(`${prefix}book-reuse-${media}`, "Synthetic indexer", media, new Date().toISOString());
     return repo.releaseInbox.ingest(feed.id, [{ title: book.title, provider: "Synthetic indexer", mediaType: media,
       guid: media, url: `https://fixture.invalid/${media}`, infoHash: null, sizeBytes: 8, seeders: 1, leechers: 0, raw: {} }], new Date().toISOString());
   };
@@ -57,12 +58,13 @@ test("book reuse routes audio and ebook independently for already-imported books
       return { bookId: target.bookId, media: target.media, releaseIndexes: [0], reason: "Same book identity" };
     });
     for (const media of ["audio", "ebook"] as const) {
-      const job = f.repo.createJob({ type: "torrent_reuse_feed", payload: { releaseIds: f.ingest(media) } });
+      const job = f.repo.createJob({ type: "torrent_reuse_feed", payload: { releaseIds: f.ingest(media, media === "audio" ? AUTOBRR_ID_PREFIX : "") } });
       await discoverCrossSeeds(f.ctx, job); await discoverCrossSeeds(f.ctx, job);
     }
     expect(new Set(scopes)).toEqual(new Set(["audio", "ebook"]));
     expect(f.repo.listJobsByType("torrent_reuse")).toHaveLength(2);
-    expect(f.repo.crossSeed.receipts().map(receipt => receipt.command.scope.media).sort()).toEqual(["audio", "ebook"]);
+    expect(f.repo.crossSeed.receipts().map(receipt => [receipt.command.scope.media, receipt.origin]).sort())
+      .toEqual([["audio", "autobrr"], ["ebook", "rss"]]);
     expect(f.repo.listJobsByType("acquire")).toHaveLength(0);
     expect(f.repo.listManifestationsByBook(f.book.id)).toHaveLength(2);
   } finally { f.db.close(); }

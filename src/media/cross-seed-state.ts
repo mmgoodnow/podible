@@ -41,7 +41,15 @@ export type CrossSeedOutcome = {
   contentFileCount?: number;
   planId?: string; verification?: "assumed" | "verified";
 };
-export type CrossSeedReceipt = { command: CrossSeedCommand; commandHash: string; jobId: number; createdAt: string; outcome?: CrossSeedOutcome };
+export const crossSeedOrigins = ["acquisition-search", "rss", "autobrr", "backfill-history", "backfill-search", "manual"] as const;
+export const crossSeedOriginSchema = z.enum(crossSeedOrigins);
+export type CrossSeedOrigin = z.infer<typeof crossSeedOriginSchema>;
+export type CrossSeedReceipt = { command: CrossSeedCommand; commandHash: string; jobId: number; createdAt: string;
+  origin?: CrossSeedOrigin; outcome?: CrossSeedOutcome };
+export function crossSeedOrigin(receipt: CrossSeedReceipt): CrossSeedOrigin | "unknown" {
+  const origin = crossSeedOriginSchema.safeParse(receipt.origin);
+  return origin.success ? origin.data : receipt.command.selectionCopyId ? "acquisition-search" : "unknown";
+}
 const prefix = "cross-seed:operation:";
 const optimisticPrefix = "cross-seed:optimistic:";
 const layoutCoveragePrefix = "cross-seed:layout-coverage:";

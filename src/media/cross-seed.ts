@@ -18,7 +18,7 @@ import { assertMovieStorage } from "../movies/storage";
 import { TorrentNotFoundError, type TorrentClient } from "./torrent-client";
 import { withTorrentRegistration } from "./torrent-use";
 import { crossSeedCommandSchema, crossSeedCommandHash, crossSeedStateKey, isBookCrossSeedScope, optimisticRegistrationFits,
-  type CrossSeedCommand, type CrossSeedReceipt, type CrossSeedScope, type CrossSeedOutcome } from "./cross-seed-state";
+  type CrossSeedCommand, type CrossSeedReceipt, type CrossSeedScope, type CrossSeedOutcome, type CrossSeedOrigin } from "./cross-seed-state";
 import { planContentReuse, reuseDigest, type ReuseCandidateManifest, type ReusePlan, type ReuseSourceFile } from "./reuse-plan";
 import { captureReuseFile, captureReuseRoot, materializeReuseLayout, prepareReuseLayoutRoot, publishedReuseLayoutCapabilities } from "./reuse-layout";
 import { selectedCopies, selectedCopyOffer, selectedCopyId } from "./selected-copies";
@@ -65,7 +65,7 @@ export function crossSeedOffer(repo: BooksRepo, command: Pick<CrossSeedCommand, 
   return releaseOfferFromResult(entry.result);
 }
 
-export function queueCrossSeed(repo: BooksRepo, raw: z.input<typeof crossSeedCommandSchema>) {
+export function queueCrossSeed(repo: BooksRepo, raw: z.input<typeof crossSeedCommandSchema>, origin?: CrossSeedOrigin) {
   const command = crossSeedCommandSchema.parse(raw), commandHash = crossSeedCommandHash(command);
   return repo.transaction(() => {
     const previous = repo.crossSeed.receipt(command.operationId);
@@ -82,7 +82,8 @@ export function queueCrossSeed(repo: BooksRepo, raw: z.input<typeof crossSeedCom
     assertCrossSeedDemand(repo, command.scope); crossSeedOffer(repo, command);
     const job = repo.createJob({ type: "torrent_reuse", payload: { operationId: command.operationId },
       idempotencyKey: `torrent-reuse:${command.operationId}`, maxAttempts: 3 });
-    const receipt: CrossSeedReceipt = { command, commandHash, jobId: job.id, createdAt: new Date().toISOString() };
+    const receipt: CrossSeedReceipt = { command, commandHash, jobId: job.id, createdAt: new Date().toISOString(),
+      origin: origin ?? (command.selectionCopyId ? "acquisition-search" : "manual") };
     repo.setJsonState(crossSeedStateKey(command.operationId), receipt);
     return receipt;
   });

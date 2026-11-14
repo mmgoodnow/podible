@@ -6,7 +6,8 @@ import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
 import { TransferMetricsRepo } from "../../src/media/transfer-metrics";
 import type { TransferMetricsStatus } from "../../src/media/transfer-metrics-types";
-import { crossSeedCommandSchema, crossSeedStateKey, type CrossSeedOutcome } from "../../src/media/cross-seed-state";
+import { crossSeedCommandSchema, crossSeedStateKey, type CrossSeedOrigin, type CrossSeedOutcome } from "../../src/media/cross-seed-state";
+import { transferMetricsPrometheus } from "../../src/media/transfer-metrics-prometheus";
 import { CrossSeedMetrics } from "../../web/src/transfer-metrics";
 
 function fixture() {
@@ -14,16 +15,29 @@ function fixture() {
   const repo = new BooksRepo(db), jobs = new Map<number, { status: string }>();
   const metrics = new TransferMetricsRepo(db, () => {}, id => jobs.get(id) ?? null);
   let nextJob = 1;
-  const add = (status: string | null, outcome?: CrossSeedOutcome["kind"], bytes = 0, verification?: CrossSeedOutcome["verification"]) => {
+  const add = (status: string | null, outcome?: CrossSeedOutcome["kind"], bytes = 0, verification?: CrossSeedOutcome["verification"], origin?: CrossSeedOrigin) => {
     const operationId = randomUUID(), jobId = nextJob++;
     if (status) jobs.set(jobId, { status });
     const command = crossSeedCommandSchema.parse({ operationId, scope: { media: "tv", targetId: 1 }, releaseId: 1 });
-    repo.setJsonState(crossSeedStateKey(operationId), { command, jobId, commandHash: "fixture", createdAt: new Date().toISOString(),
+    repo.setJsonState(crossSeedStateKey(operationId), { command, jobId, origin, commandHash: "fixture", createdAt: new Date().toISOString(),
       ...(outcome ? { outcome: { kind: outcome, at: new Date().toISOString(), reason: "Fixture", reusedBytes: bytes, verification } } : {}) });
     return jobId;
   };
   return { db, metrics, add, jobs };
 }
+
+test("cross-seed metrics separate proven origin from unattributed historical receipts", () => {
+  const f = fixture();
+  try {
+    f.add("succeeded", "seeding", 20, "assumed", "rss");
+    f.add("succeeded", "skipped", 0, undefined, "rss");
+    f.add("succeeded", "seeding");
+    const metrics = transferMetricsPrometheus(f.metrics.status());
+    expect(metrics).toContain('podible_reuse_attempts_by_origin{origin="rss"} 2\n');
+    expect(metrics).toContain('podible_reuse_seeding_by_origin{origin="rss"} 1\n');
+    expect(metrics).toContain('podible_reuse_seeding_by_origin{origin="unknown"} 1\n');
+  } finally { f.db.close(); }
+});
 
 test("28 skipped candidates and five pending operations are not reported as 33 failures", () => {
   const f = fixture();

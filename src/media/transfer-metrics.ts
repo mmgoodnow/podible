@@ -4,7 +4,7 @@ import { z } from "zod";
 import { transferMetricsStatusSchema, transferMetricsStatusParamsSchema, type TransferMetricsStatus } from "./transfer-metrics-types";
 import { metainfoTrackerIdentity, normalizeTrackerHost } from "./tracker-identity";
 export { normalizeTrackerHost } from "./tracker-identity";
-import type { CrossSeedReceipt } from "./cross-seed-state";
+import { crossSeedOrigin, crossSeedOrigins, type CrossSeedReceipt } from "./cross-seed-state";
 
 export type MetricContent = { media: "audio" | "ebook" | "movie" | "tv"; targetId: number; title: string; href: string };
 export type MetricRecord = {
@@ -240,7 +240,11 @@ export class TransferMetricsRepo {
     const units = new Set(fresh.flatMap(row => row.contents.map(content => `${content.media}:${content.targetId}`)));
     const receipts = this.receipts();
     const outcomeCounts = { seeding: 0, pending: 0, skipped: 0, failed: 0, stalled: 0, cancelled: 0, unsupported: 0 };
+    const byOrigin = new Map([...crossSeedOrigins, "unknown" as const].map(origin => [origin, { origin, attempts: 0, seeding: 0 }]));
     for (const receipt of receipts) {
+      const origin = byOrigin.get(crossSeedOrigin(receipt))!;
+      origin.attempts++;
+      if (receipt.outcome?.kind === "seeding") origin.seeding++;
       // Durable validated outcomes take precedence over a later execution-state change.
       if (receipt.outcome) outcomeCounts[receipt.outcome.kind === "incompatible" ? "failed" : receipt.outcome.kind]++;
       else {
@@ -272,7 +276,7 @@ export class TransferMetricsRepo {
       reuse: { attempts: receipts.length, successful: successes.length, pending: outcomeCounts.pending,
         skipped: outcomeCounts.skipped, failed: outcomeCounts.failed, stalled: outcomeCounts.stalled,
         cancelled: outcomeCounts.cancelled, unsupported: outcomeCounts.unsupported,
-        matchRate: terminalCount ? successes.length / terminalCount : null,
+        matchRate: terminalCount ? successes.length / terminalCount : null, byOrigin: [...byOrigin.values()],
         verifiedReusedBytes: successes.filter(row => row.outcome?.verification !== "assumed")
           .reduce((n, row) => n + (row.outcome?.reusedBytes ?? 0), 0),
         sidecarDownloadBytes: accounted.length === successes.length ? accounted.reduce((n, row) => n + (row.outcome?.sidecarDownloadBytes ?? 0), 0) : null,

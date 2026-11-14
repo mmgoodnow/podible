@@ -35,6 +35,9 @@ export function transferMetricsPrometheus(status: TransferMetricsStatus | null, 
   metric("reuse_attempts_total", "Persisted reuse attempts including pending and unsupported cases.", "counter", one(status.reuse.attempts));
   metric("reuse_completed_total", "Reuse attempts that independently verified complete and started seeding.", "counter", one(status.reuse.successful));
   metric("reuse_pending", "Reuse attempts that have not reached a recorded outcome.", "gauge", one(status.reuse.pending));
+  for (const field of ["attempts", "seeding"] as const)
+    metric(`reuse_${field}_by_origin`, "Current count of saved cross-seed receipts by discovery origin, not live torrent state.", "gauge",
+      (status.reuse.byOrigin ?? []).map(row => ({ value: row[field], labels: { origin: row.origin } })));
   metric("reuse_tv_multifile_reused_bytes_total", "Reusable payload recorded in completed multi-file TV matches, including assumed matches.", "counter", one(status.reuse.tvMultiFileReusedBytes));
   metric("reuse_verified_bytes_total", "Verified payload reused by completed registrations; not physical bytes saved.", "counter", one(status.reuse.verifiedReusedBytes));
   metric("reuse_sidecar_payload_bytes_total", "Missing sidecar payload required by completed reuse; excludes protocol/retry overhead.", "counter", one(status.reuse.sidecarDownloadBytes));
