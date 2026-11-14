@@ -1,5 +1,5 @@
 import path from "node:path";
-import { measureView } from "../media/acquisition-latency";
+import { measurePublicationPhase, measureView, recordPublicationPhase } from "../media/acquisition-latency";
 import type { MovieRepo } from "./repo";
 import type { Movie } from "./types";
 import { withKeyedMutex } from "../runtime/keyed-mutex";
@@ -104,7 +104,9 @@ export async function publishMovieVersion(input: {
 }) {
   const { repo, roots, library, targetId, versionId } = input;
   const active = input.assertActive ?? (() => {});
+  const queued = performance.now();
   return serialized(path.resolve(roots.viewRoot), async () => {
+    recordPublicationPhase("movie", "lock_wait", performance.now() - queued);
     active();
     repo.stagePublication(targetId, versionId);
     const pending = repo
@@ -131,8 +133,8 @@ export async function publishMovieVersion(input: {
       .map((entry) =>
         path.posix.join(roots.serverViewRoot, entry.relativePath),
       );
-    if (input.scan !== false) await library.scan(paths);
-    if (!(await library.verify(movie, paths))) {
+    if (input.scan !== false) await measurePublicationPhase("movie", "scan_request", () => library.scan(paths));
+    if (!(await measurePublicationPhase("movie", "verify_catalog", () => library.verify(movie, paths)))) {
       if (input.pendingIsExpected) return false;
       throw new Error(
         "Plex has not verified the expected movie and content paths; previous version remains active",

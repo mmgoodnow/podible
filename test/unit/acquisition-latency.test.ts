@@ -2,7 +2,19 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
-import { acquisitionLatencyPrometheus, recordPublicationLatency, recordViewLatency, savedCompletionTime } from "../../src/media/acquisition-latency";
+import { acquisitionLatencyPrometheus, measurePublicationPhase, publicationPhasePrometheus,
+  recordPublicationLatency, recordPublicationPhase, recordViewLatency, savedCompletionTime } from "../../src/media/acquisition-latency";
+
+test("publication diagnostics time failed calls without swallowing the error", async () => {
+  const count = (labels: string) => Number(publicationPhasePrometheus()
+    .match(new RegExp(`podible_plex_publication_phase_seconds_count\\{${labels}\\} (\\d+)`))?.[1]);
+  const scan = 'media="movie",phase="scan_request"';
+  const before = count(scan);
+  const failure = new Error("Plex unavailable");
+  await expect(measurePublicationPhase("movie", "scan_request", async () => { throw failure; })).rejects.toBe(failure);
+  recordPublicationPhase("movie", "scan_request", Number.NaN);
+  expect(count(scan)).toBe(before + 1);
+});
 
 test("publication latency is persisted once and reused torrents do not count as new downloads", () => {
   using db = new Database(":memory:");

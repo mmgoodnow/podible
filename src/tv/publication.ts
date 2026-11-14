@@ -1,5 +1,5 @@
 import path from "node:path";
-import { measureView } from "../media/acquisition-latency";
+import { measurePublicationPhase, measureView, recordPublicationPhase } from "../media/acquisition-latency";
 import { withKeyedMutex } from "../runtime/keyed-mutex";
 import { effectPhase } from "../runtime/execution-effects";
 import { reconcileLibraryView, type LibraryViewEntry } from "../media/library-view";
@@ -87,7 +87,9 @@ export async function publishTvVersion(input: { repo: TvRepo; roots: TvRoots; li
   const { repo, roots, targetId, versionId, library, guard } = input;
   const active = input.assertActive ?? (() => {});
   effectPhase("publication:mutex-wait");
+  const queued = performance.now();
   return serialized(roots.viewRoot, async () => {
+    recordPublicationPhase("tv", "lock_wait", performance.now() - queued);
     const reconcile = () => measureView(() =>
       reconcileLibraryView({ ...roots, entries: tvViewEntries(repo, roots), assertActive: active }), input.onReconcile);
     const pending = () => repo.publications().find(item => item.target_id === targetId);
@@ -125,16 +127,17 @@ export async function publishTvVersion(input: { repo: TvRepo; roots: TvRoots; li
           serverPath: path.posix.join(roots.serverViewRoot, file.relativePath), episodes: file.episodes,
         }));
         effectPhase("publication:scan");
-        if (input.scan !== false) await library.scan();
+        if (input.scan !== false) await measurePublicationPhase("tv", "scan_request", () => library.scan());
         effectPhase("publication:verify");
-        if (!await library.verify(entry, files)) {
+        if (!await measurePublicationPhase("tv", "verify_catalog", () => library.verify(entry, files))) {
           if (input.pendingIsExpected) return false;
           throw new Error("Plex has not verified the exact TV episodes and paths; existing episodes remain selected");
         }
         effectPhase("publication:promote");
         if (guard) {
           try {
-            if (!await guard.verifyRoster()) throw new TvPromotionRejected("Authoritative TV season roster changed before promotion");
+            if (!await measurePublicationPhase("tv", "verify_roster", () => guard.verifyRoster()))
+              throw new TvPromotionRejected("Authoritative TV season roster changed before promotion");
           } catch (error) { fenceFailed = true; throw error; }
           // Request/numbering changes need not bump the target revision. Read them under the same write lock.
           guarded(() => {

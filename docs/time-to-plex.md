@@ -13,6 +13,13 @@ or no metrics. The adjacent count panel distinguishes idle buckets (zero
 observations) from unavailable metrics. Filesystem link latency is shown as
 separate p95 points, not added to the stacks.
 
+For diagnosis, `podible_plex_publication_phase_seconds` breaks out each
+attempt's lock wait, scan request, catalog verification and TV upgrade roster
+check. These process-local histograms count unsuccessful operations too.
+The scan request measures Plex's acknowledgement, not its asynchronous indexing.
+Podible does not wait for intro detection or thumbnail generation; readiness
+requires the exact catalog identity and file paths.
+
 ## Attack on Titan baseline
 
 Read-only verification on Cyprus, 2026-11-10, running

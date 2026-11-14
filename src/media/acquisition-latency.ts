@@ -20,6 +20,11 @@ type FinalizationSample = { media: FinalizationMedia; bytes: number; times: Fina
 const finalizationBuckets = [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 90, 120, 180, 300, 600];
 const finalizationMetric = "podible_canonical_finalization_seconds";
 const finalizationBytes = "podible_canonical_finalization_bytes_total";
+const publicationPhases = ["lock_wait", "scan_request", "verify_catalog", "verify_roster"] as const;
+type PublicationPhase = typeof publicationPhases[number];
+type PublicationTiming = { media: Media; phase: PublicationPhase; ms: number };
+const publicationMetric = "podible_plex_publication_phase_seconds";
+const publicationTimings = new Map<string, Histogram>();
 
 function histogram(bounds: number[]): Histogram {
   return { buckets: bounds.map(() => 0), count: 0, sum: 0 };
@@ -59,6 +64,49 @@ export function recordCanonicalFinalization(bytes: number, times: FinalizationTi
     try { finalizationChannel.postMessage(sample); }
     catch { /* Telemetry must not fail adoption after the durable write. */ }
   }
+}
+
+function collectPublicationTiming(sample: PublicationTiming) {
+  if (!sample || !mediaTypes.includes(sample.media) || !publicationPhases.includes(sample.phase) ||
+      !Number.isFinite(sample.ms) || sample.ms < 0) return;
+  const key = `${sample.media}:${sample.phase}`;
+  let timing = publicationTimings.get(key);
+  if (!timing) publicationTimings.set(key, timing = histogram(finalizationBuckets));
+  observeHistogram(timing, finalizationBuckets, sample.ms / 1000);
+}
+
+const publicationChannel = new BroadcastChannel("podible:plex-publication-timing:v1");
+publicationChannel.unref();
+if (isMainThread) publicationChannel.onmessage = event => collectPublicationTiming(event.data);
+
+export function recordPublicationPhase(media: Media, phase: PublicationPhase, ms: number) {
+  const sample: PublicationTiming = { media, phase, ms };
+  if (isMainThread) collectPublicationTiming(sample);
+  else {
+    try { publicationChannel.postMessage(sample); }
+    catch { /* Metrics must not affect publication. */ }
+  }
+}
+
+export async function measurePublicationPhase<T>(media: Media, phase: PublicationPhase, action: () => Promise<T>) {
+  const started = performance.now();
+  try { return await action(); }
+  finally { recordPublicationPhase(media, phase, performance.now() - started); }
+}
+
+export function publicationPhasePrometheus() {
+  const lines = [`# HELP ${publicationMetric} Wall time of individual publication operations including unsuccessful attempts.`,
+    `# TYPE ${publicationMetric} histogram`];
+  for (const media of mediaTypes) for (const phase of publicationPhases) {
+    const sample = publicationTimings.get(`${media}:${phase}`) ?? histogram(finalizationBuckets);
+    const labels = `media="${media}",phase="${phase}"`;
+    for (const [i, bound] of finalizationBuckets.entries()) {
+      lines.push(`${publicationMetric}_bucket{${labels},le="${bound}"} ${sample.buckets[i]}`);
+    }
+    lines.push(`${publicationMetric}_bucket{${labels},le="+Inf"} ${sample.count}`,
+      `${publicationMetric}_sum{${labels}} ${sample.sum}`, `${publicationMetric}_count{${labels}} ${sample.count}`);
+  }
+  return lines.join("\n") + "\n";
 }
 
 export function savedCompletionTime(observation: string | null | undefined): string | null {
