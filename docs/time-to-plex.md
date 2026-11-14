@@ -20,6 +20,13 @@ The scan request measures Plex's acknowledgement, not its asynchronous indexing.
 Podible does not wait for intro detection or thumbnail generation; readiness
 requires the exact catalog identity and file paths.
 
+For recorded end-to-end runs, use
+`bun run scripts/report-plex-latency.ts --db /path/to/podible.sqlite --limit 10`.
+The report reads a single SQLite snapshot and compares each trace to the
+20-second movie and 30-second TV targets. It reconstructs timings from saved
+torrent observations and publication receipts. It omits reuse, missing
+completion evidence, and ambiguous events, and does not recheck Plex live.
+
 ## TV View Enumeration
 
 A read-only Cyprus measurement on November 14 projected 1,543 TV files with
