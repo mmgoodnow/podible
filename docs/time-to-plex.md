@@ -66,6 +66,9 @@ Small TV import batches now inline up to 16 episodes and 16 probed files under
 a 16 KB evidence limit, so the verifier can use runtimes and streams without
 another model round trip. Larger or ambiguous batches keep the same tools.
 Episode assignment, probe-derived quality and exact Plex checks are unchanged.
+TV stream probes run in groups of up to four read-only operations. Per-file
+checkpoint names and output order are unchanged, so retry can reuse probes
+from a completed batch. Legacy jobs still re-probe serially.
 
 ## Attack on Titan baseline
 

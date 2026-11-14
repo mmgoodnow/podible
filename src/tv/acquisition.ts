@@ -777,18 +777,27 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
     emit(`${attempt}:verifying`, "verifying", "Checking playable streams and exact episode coverage");
     const files: TvFileCandidate[] = [];
     let incompleteProbe = false;
-    for (const file of prepared.files) {
-      if (skipFileIndexes.includes(file.index)) continue;
-      const expectedFile = source.manifest.files[file.index]!;
-      if (![".mkv", ".mp4", ".m4v", ".avi", ".mov", ".ts"].includes(path.extname(file.path).toLowerCase())) continue;
+    const candidates = prepared.files.filter(file => !skipFileIndexes.includes(file.index) && playableTvMember(path.extname(file.path)));
+    async function probeCandidate(file: typeof candidates[number]) {
+      active();
       const probeFile = async () => {
         try { return await services.probe(file.path); } catch { return null; }
       };
       // Legacy receipts have no captured file identities. Preserve their names, not their authority over current bytes.
       const probe = snapshot.sourceReuse ? await durableStep(ctx, `${prefix}:probe:${file.index}`, probeFile) : await probeFile();
       if (!snapshot.sourceReuse) await durableStep(ctx, `${prefix}:probe:${file.index}`, () => probe);
-      if (probe) files.push({ index: file.index, name: expectedFile.path, sizeBytes: expectedFile.size, probe });
-      else incompleteProbe = true;
+      const expectedFile = source.manifest.files[file.index]!;
+      return probe ? { index: file.index, name: expectedFile.path, sizeBytes: expectedFile.size, probe } : null;
+    }
+    const probeConcurrency = snapshot.sourceReuse ? 4 : 1;
+    for (let i = 0; i < candidates.length; i += probeConcurrency) {
+      // Finish all siblings before returning a failure and releasing the run's lanes.
+      const batch = await Promise.allSettled(candidates.slice(i, i + probeConcurrency).map(probeCandidate));
+      for (const result of batch) {
+        if (result.status === "rejected") throw result.reason;
+        if (result.value) files.push(result.value);
+        else incompleteProbe = true;
+      }
     }
     const inspectFiles = async () => {
       const result = validateTvImportPlan(await services.decider(entry).inspect({ entry, episodes, policy, offer: releaseEvidence, files,

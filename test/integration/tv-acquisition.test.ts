@@ -497,6 +497,52 @@ function seasonCatalog(count: number, future = false) {
   return entry;
 }
 
+test("TV pack probes run in bounded parallel batches and are not repeated on durable import retry", async () => {
+  const entry = { ...seasonCatalog(6), key: "tvdb:307375", tmdbId: 4294 };
+  const keys = entry.episodes.map(episode => episode.key);
+  const s = await setup(keys, entry, 2);
+  let runtime: Runtime | undefined;
+  try {
+    s.fixture.addPack("probe-pack", keys);
+    const inspectProbe = s.fixture.services.probe;
+    const probes: string[] = [];
+    let inFlight = 0, maximum = 0, interruptImport = true;
+    s.fixture.services.probe = async file => {
+      probes.push(path.basename(file));
+      maximum = Math.max(maximum, ++inFlight);
+      try { await Bun.sleep(40); return await inspectProbe(file); }
+      finally { inFlight--; }
+    };
+    const decider = s.fixture.services.decider;
+    s.fixture.services.decider = work => {
+      const original = decider(work);
+      return { ...original, async inspect(input) {
+        expect(input.files.map(file => file.index)).toEqual([0, 1, 2, 3, 4, 5]);
+        if (interruptImport) throw new Error("fixture import interrupted after probing");
+        return original.inspect(input);
+      } };
+    };
+    const jobId = s.enqueue().job_id!;
+    const executionPath = path.join(s.root, "execution.sqlite");
+    runtime = await createJobExecutionRuntime(s.context, executionPath, { retryDelayMs: 1 });
+    await until(runtime, () => s.repo.getJobStatus(jobId) === "failed", () => JSON.stringify(s.repo.getJob(jobId)));
+    expect(s.repo.getJob(jobId)?.error).toContain("fixture import interrupted");
+    expect(maximum).toBe(4);
+    expect(new Set(probes).size).toBe(6);
+    expect(inFlight).toBe(0);
+    await runtime.stop();
+    runtime = undefined;
+    s.reopen();
+    interruptImport = false;
+    s.repo.retryJob(jobId);
+    runtime = await createJobExecutionRuntime(s.context, executionPath, { retryDelayMs: 1 });
+    await until(runtime, () => s.repo.getJobStatus(jobId) === "succeeded", () => JSON.stringify(s.repo.getJob(jobId)));
+    expect(probes).toHaveLength(6);
+    expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(6);
+    await assertOwnedViews(s);
+  } finally { await runtime?.stop(); await s.close(); }
+}, 15_000);
+
 for (const variant of ["default-off", "malformed-pilot", "revoked-before-snatch", "revoked-during-plex", "equivalent", "better",
   "lower-quality", "partial-coverage", "partial-reuse", "lost-resume-ack", "previously-downloaded", "unmatched-layout", "unmatched-content", "below-half-reuse", "unchecked-content", "roster-race"] as const) {
   test(`TV feed season-pack promotion: ${variant}`, async () => {
