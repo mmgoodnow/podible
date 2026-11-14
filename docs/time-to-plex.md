@@ -53,6 +53,16 @@ Maintenance and interrupted journals still force a full audit. On the same
 1,543-file lab, adding, rechecking, or removing one episode took 7-9 ms
 versus 43-46 ms for a full audit.
 
+## Large TV Series Verification
+
+On November 14 a GET-only comparison against Cyprus Plex verified the same
+eight stored episode IDs and file paths in a 1,242-episode catalog. The
+deployed whole-show verifier made seven requests and took 2.05-2.09 seconds.
+The season-first verifier made three requests and took 97-109 ms. This measures
+already-indexed catalog verification, not time spent waiting for an index update.
+The season lookup is bounded and falls back to the full listing if it cannot
+prove an exact match, including when Plex uses a different season order.
+
 ## November 14 Workflow Breakdown
 
 Read-only Reflow timings for TV acquisitions 164, 166, 168 and 169 showed

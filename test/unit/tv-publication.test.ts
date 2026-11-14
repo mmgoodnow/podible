@@ -138,6 +138,53 @@ test("Plex TV requires exact episode GUID plus path, not matching anime/absolute
   } finally { await s.close(); }
 });
 
+test("Plex TV narrows large shows by season but falls back when it cannot prove an exact match", async () => {
+  const s = await setup();
+  try {
+    const entry = s.repo.tv.entry(s.request.entryId)!;
+    const episode = entry.episodes[0]!;
+    entry.episodes = Array.from({ length: 201 }, (_, index) => ({ ...episode, key: `episode-${index}` }));
+    const serverPath = "/data/views/plex/tv/Anime/Season 02/Anime - S02E01.mkv";
+    const leaf = (id: string, file: string, season: number) => ({
+      ratingKey: id, parentIndex: season, index: 1,
+      Guid: [{ id: `tvdb://${id}` }], Media: [{ Part: [{ file }] }],
+    });
+    const list = (Metadata: unknown[]) => Response.json({ MediaContainer: { Metadata } });
+    let seasonResult = () => list([leaf("201", serverPath, 2)]);
+    let wholeShowResult = () => list([leaf("201", serverPath, 7)]);
+    const routes: string[] = [];
+    const plex = new PlexTvLibrary({ url: "http://plex.invalid", token: "fixture-only", sectionId: "3" }, (async (input) => {
+      const route = new URL(String(input)).pathname;
+      routes.push(route);
+      switch (route) {
+        case "/library/sections/3/all": return list([{ ratingKey: "show", Guid: [{ id: "tvdb://307375" }] }]);
+        case "/library/metadata/show/children": return list([{ ratingKey: "season", index: 2 }]);
+        case "/library/metadata/season/children": return seasonResult();
+        case "/library/metadata/show/allLeaves": return wholeShowResult();
+        default: throw new Error(`Unexpected Plex GET ${route}`);
+      }
+    }) as typeof fetch);
+    const files: TvPublishedFile[] = [{ serverPath, episodes: [episode] }];
+    expect(await plex.verify(entry, files)).toBe(true);
+    expect(routes.splice(0)).toEqual([
+      "/library/sections/3/all", "/library/metadata/show/children", "/library/metadata/season/children",
+    ]);
+
+    seasonResult = () => list([leaf("999", serverPath, 2), leaf("201", `${serverPath}.wrong`, 2)]);
+    expect(await plex.verify(entry, files)).toBe(true);
+    expect(routes.splice(0).at(-1)).toBe("/library/metadata/show/allLeaves");
+
+    wholeShowResult = () => list([leaf("999", serverPath, 2)]);
+    expect(await plex.verify(entry, files)).toBe(false);
+    expect(routes.splice(0).at(-1)).toBe("/library/metadata/show/allLeaves");
+
+    seasonResult = () => new Response(null, { status: 404 });
+    wholeShowResult = () => list([leaf("201", serverPath, 7)]);
+    expect(await plex.verify(entry, files)).toBe(true);
+    expect(routes.at(-1)).toBe("/library/metadata/show/allLeaves");
+  } finally { await s.close(); }
+});
+
 test("publication replay after promotion keeps owned bytes and finishes exactly one available event", async () => {
   const s = await setup();
   try {
