@@ -89,10 +89,10 @@ function offer(title = "An ambiguous edition"): MovieOffer {
 }
 
 function oversizedBatch() {
-  // Escaping expands each NUL to six bytes; counts/character lengths alone are insufficient.
-  const padding = "\0".repeat(1000);
+  // Multibyte text makes character counts insufficient.
+  const padding = "\u{20bb7}".repeat(1000);
   return {
-    targets: Array.from({ length: 6 }, (_, index) => ({
+    targets: Array.from({ length: 24 }, (_, index) => ({
       targetId: 100 + index,
       movie: {
         ...fixtureMovie,
@@ -113,6 +113,19 @@ function oversizedBatch() {
     })),
   };
 }
+
+test("Decisions routes movie feed releases without needing exact release title syntax", async () => {
+  const settings = defaultSettings();
+  settings.agents.apiKey = "fixture-key";
+  const never: ModelProvider = { getModel() { throw new Error("Unexpected Responses fallback"); } };
+  const matcher = createMovieFeedMatcher(settings, never, async (_url, init) => {
+    expect(String(init.body)).toContain("DD+");
+    expect(String(init.body)).not.toContain("secret-key");
+    return Response.json({ model: TEXT_AGENT_MODEL, answers: [{ name: "release_0", type: "choice", choice: "t0", confidence: 0.99 }] });
+  });
+  expect(await matcher({ targets: [{ targetId: 7, movie: fixtureMovie }], offers: [offer("Movie 2026 1080p WEB-DL DD+ GROUP")] }))
+    .toMatchObject([{ targetId: 7, releaseIndexes: [0] }]);
+});
 
 test("RSS agent broadly routes known identities without exposing download URLs or arbitrary provider text", async () => {
   const requests: ModelRequest[] = [];
@@ -192,7 +205,7 @@ test("RSS agent broadly routes known identities without exposing download URLs o
 });
 
 test("RSS matcher bounds oversized Unicode titles, provider/catalog strings and identity attributes without dropping candidates", async () => {
-  const text = '\u{20bb7}"\n'.repeat(400_000);
+  const text = '\u{20bb7}" '.repeat(400_000);
   const candidate = {
     ...offer(text),
     provider: text,

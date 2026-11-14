@@ -5,7 +5,7 @@ import type { BooksRepo } from "./repo";
 
 const key = "agent-usage:v1";
 const decisionsKey = "acquisition-decisions:v1";
-const decisionQuestions = ["book_release", "book_import", "movie_release", "movie_import", "tv_release", "tv_import"] as const;
+const decisionQuestions = ["book_release", "book_import", "book_feed", "movie_release", "movie_import", "movie_feed", "tv_release", "tv_import", "tv_feed"] as const;
 type DecisionQuestion = typeof decisionQuestions[number];
 type DecisionOutcome = "accepted" | "escalated";
 type DecisionTotals = Partial<Record<DecisionQuestion, Partial<Record<DecisionOutcome, number>>>>;
@@ -128,12 +128,14 @@ export function meterAgentProvider(provider: ModelProvider, workflow: Workflow):
 
 export function agentUsagePrometheus(repo: BooksRepo): string {
   const state = repo.getJsonState<State>(key) ?? {};
-  // Give Prometheus a zero baseline before the first paid call. Don't announce unused APIs.
+  // Give Prometheus a zero baseline for each wired API before the first paid call.
   for (const workflow of workflows) {
     if (workflow === "transcription") continue;
     state[`${workflow}:responses:${TEXT_AGENT_MODEL}`] ??= empty();
     state[`${workflow}:responses:unknown`] ??= empty();
   }
+  for (const workflow of ["book-selection", "book-import", "book-feed", "movie", "tv", "tv-feed"] as const)
+    state[`${workflow}:decisions:${TEXT_AGENT_MODEL}`] ??= empty();
   const transcription = state[`transcription:audio-transcriptions:${WHISPER_TRANSCRIPTION_MODEL}`] ??= empty();
   transcription.audioSeconds ??= 0;
   const rows = Object.entries(state).flatMap(([id, total]) => {

@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { AppSettings, MediaType } from "../app-types";
 import { TEXT_AGENT_MODEL } from "../ai-models";
 import { meterAgentProvider } from "../agent-usage";
+import { modelEvidenceText, routeFeedWithDecisions, type DecisionsTransport } from "./decisions";
 import type { TorznabResult } from "./torznab";
 
 export type BookFeedTarget = {
@@ -50,6 +51,7 @@ const identityAttributes = new Set([
 export function createBookFeedMatcher(
   settings: AppSettings,
   modelProvider?: ModelProvider,
+  decisionsFetch: DecisionsTransport | undefined = modelProvider ? undefined : fetch,
 ): BookFeedMatcher {
   return async ({ targets, releases }) => {
     if (!targets.length || !releases.length) return [];
@@ -60,17 +62,17 @@ export function createBookFeedMatcher(
     const projectedTargets = targets.map((target) => ({
       target,
       fields: {
-        title: target.title.slice(0, 512),
-        author: target.author.slice(0, 512),
-        language: target.language?.slice(0, 80) ?? null,
+        title: modelEvidenceText(target.title),
+        author: modelEvidenceText(target.author),
+        language: target.language ? modelEvidenceText(target.language, 80) : null,
         media: target.media,
       },
     }));
     const projectedReleases = releases.map((release, originalIndex) => ({
       originalIndex,
       fields: {
-        title: release.title.slice(0, 512),
-        provider: release.provider.slice(0, 120),
+        title: modelEvidenceText(release.title),
+        provider: modelEvidenceText(release.provider, 120),
         media: release.mediaType,
         attributes: (Array.isArray(release.raw.attr)
           ? release.raw.attr
@@ -89,7 +91,7 @@ export function createBookFeedMatcher(
           .slice(0, 12)
           .map((attr) => ({
             name: String(attr.name).slice(0, 80),
-            value: String(attr.value).slice(0, 120),
+            value: modelEvidenceText(String(attr.value), 120),
           })),
       },
     }));
@@ -187,6 +189,28 @@ Omit clearly unrelated releases. Explain the identity evidence concisely, withou
       }
     }
     try {
+      if (decisionsFetch && settings.agents.apiKey.trim()) {
+        const routed: BookFeedMatch[] = [];
+        for (const media of ["audio", "ebook"] as const) {
+          const offers = projectedReleases.filter(release => release.fields.media === media);
+          if (!offers.length) continue;
+          const result = await routeFeedWithDecisions({
+            settings, transport: decisionsFetch, question: "book_feed", offers,
+            targets: projectedTargets.filter(row => row.target.media === media),
+            instructions: "Match title and author; keep plausible abbreviations, translations, and parts. Don't filter by edition or infer a language restriction.",
+            targetEvidence: target => target.fields, offerEvidence: offer => offer.fields,
+            match: ({ target }, releaseIndexes): BookFeedMatch =>
+              ({ bookId: target.bookId, media, releaseIndexes, reason: "Decisions identified a plausible book match." }),
+            fallback: async (targetBatch, releaseBatch) => {
+              matches.clear();
+              await batch(targetBatch, releaseBatch.map((release, originalIndex) => ({ ...release, originalIndex })));
+              return [...matches.values()];
+            },
+          });
+          routed.push(...result.map(match => ({ ...match, releaseIndexes: match.releaseIndexes.map(i => offers[i]!.originalIndex) })));
+        }
+        return routed;
+      }
       await batch(projectedTargets, projectedReleases);
       return [...matches.values()];
     } finally {

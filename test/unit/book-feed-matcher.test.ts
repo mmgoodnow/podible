@@ -154,7 +154,7 @@ test("book RSS agent rejects invented indices, wrong media and empty evidence", 
 });
 
 test("book RSS batching bounds UTF-8 JSON bytes and remaps every target-release pair without loss", async () => {
-  const padding = "\0".repeat(1000);
+  const padding = '"'.repeat(1000);
   const targets = Array.from({ length: 7 }, (_, i) => ({
     ...target(100 + i),
     title: `book-${i} ${padding}`,
@@ -186,6 +186,21 @@ test("book RSS batching bounds UTF-8 JSON bytes and remaps every target-release 
     expect([...match.releaseIndexes].sort((a, b) => a - b)).toEqual(
       releases.map((_, i) => i),
     );
+});
+
+test("Decisions book routing keeps media separate and maps to original release indexes", async () => {
+  const settings = defaultSettings();
+  settings.agents.apiKey = "fixture-key";
+  const never: ModelProvider = { getModel() { throw new Error("Unexpected Responses fallback"); } };
+  const matcher = createBookFeedMatcher(settings, never, async (_url, init) => {
+    const data = JSON.parse(String(init.body)).input[0].content[0].data;
+    expect(data.targets).toHaveLength(1);
+    expect(data.offers[0].media).toBe(data.targets[0].media);
+    expect(String(init.body)).not.toContain("private-key");
+    return Response.json({ model: TEXT_AGENT_MODEL, answers: [{ name: "release_0", type: "choice", choice: "t0", confidence: 0.99 }] });
+  });
+  const matches = await matcher({ targets: [target(1), target(2, "ebook")], releases: [release("Foundation", "ebook"), release("Foundation")] });
+  expect(matches.map(({ bookId, releaseIndexes }) => [bookId, releaseIndexes])).toEqual([[1, [1]], [2, [0]]]);
 });
 
 test("empty book RSS batches do not invoke the model", async () => {

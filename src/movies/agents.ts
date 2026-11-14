@@ -12,7 +12,7 @@ import { fetchMovieMetainfo } from "./offers";
 import type { MovieDecider } from "./operations";
 import type { Movie } from "./types";
 import type { MovieOffer } from "./offers";
-import { modelEvidencePage, modelEvidenceText, tryAcquisitionDecision, type DecisionsTransport } from "../library/decisions";
+import { modelEvidencePage, modelEvidenceText, routeFeedWithDecisions, tryAcquisitionDecision, type DecisionsTransport } from "../library/decisions";
 import { movieDecisionIdentity, screenedVideoFile, screenedVideoOffers, videoFactsEvidence, videoPolicyEvidence, videoProbeEvidence } from "../media/video-decisions";
 
 const page = { offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(30).default(20) };
@@ -246,15 +246,16 @@ const MAX_FEED_INPUT_BYTES = 32 * 1024;
 export function createMovieFeedMatcher(
   settings: AppSettings,
   modelProvider?: ModelProvider,
+  decisionsFetch: DecisionsTransport | undefined = modelProvider ? undefined : fetch,
 ): MovieFeedMatcher {
   const run = movieAgentRunner(settings, modelProvider);
-  return async ({ targets, offers }) => {
+  const fallback: MovieFeedMatcher = async ({ targets, offers }) => {
     if (!targets.length || !offers.length) return [];
     const projectedTargets = targets.map(({ targetId, movie }) => ({
       targetId,
       fields: {
-        title: movie.title.slice(0, 512),
-        originalTitle: movie.originalTitle.slice(0, 512),
+        title: modelEvidenceText(movie.title),
+        originalTitle: modelEvidenceText(movie.originalTitle),
         year: movie.year,
         tmdbId: movie.tmdbId,
         imdbId: movie.imdbId?.slice(0, 80) ?? null,
@@ -263,8 +264,8 @@ export function createMovieFeedMatcher(
     const projectedOffers = offers.map((offer, originalIndex) => ({
       originalIndex,
       fields: {
-        title: offer.title.slice(0, 512),
-        provider: offer.provider.slice(0, 120),
+        title: modelEvidenceText(offer.title),
+        provider: modelEvidenceText(offer.provider, 120),
         attributes: (Array.isArray(offer.attributes.attr)
           ? offer.attributes.attr
           : offer.attributes.attr
@@ -282,7 +283,7 @@ export function createMovieFeedMatcher(
           .slice(0, 20)
           .map((attr) => ({
             name: String(attr.name).slice(0, 80),
-            value: String(attr.value).slice(0, 120),
+            value: modelEvidenceText(String(attr.value), 120),
           })),
       },
     }));
@@ -356,7 +357,21 @@ export function createMovieFeedMatcher(
         });
       }
     }
+    if (decisionsFetch && settings.agents.apiKey.trim()) {
+      return routeFeedWithDecisions({
+        settings, transport: decisionsFetch, question: "movie_feed", targets: projectedTargets, offers: projectedOffers,
+        instructions: "Match the film's identity, not its cut, language or quality. Use title, original title, year and provider IDs to distinguish remakes and sequels.",
+        targetEvidence: target => target.fields, offerEvidence: offer => offer.fields,
+        match: ({ targetId }, releaseIndexes) => ({ targetId, releaseIndexes, reason: "Decisions identified a plausible film match." }),
+        fallback: async (targetBatch, offerBatch) => {
+          matches.clear();
+          await matchBatch(targetBatch, offerBatch.map((offer, originalIndex) => ({ ...offer, originalIndex })));
+          return [...matches.values()];
+        },
+      });
+    }
     await matchBatch(projectedTargets, projectedOffers);
     return [...matches.values()];
   };
+  return fallback;
 }

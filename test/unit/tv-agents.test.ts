@@ -107,6 +107,46 @@ test("production TV feed matcher uses the shared agent and receives no private o
   expect(JSON.stringify(fake.calls)).toContain("live-action");
 });
 
+test("TV feed uses Decisions first and sends only unresolved offers to Responses", async () => {
+  const fake = provider([{ matches: [{ targetId: 3, releaseIndexes: [0], reason: "Plausible alternate numbering." }] }]);
+  const settings = defaultSettings();
+  settings.agents.apiKey = "fixture-key";
+  const matcher = createTvFeedMatcher(settings, fake.model, "acquire", async (_url, init) => {
+    const body = JSON.parse(String(init.body));
+    expect(body.questions.map((q: { name: string }) => q.name)).toEqual(["release_0", "release_1", "release_2"]);
+    expect(JSON.stringify(body)).toContain("An Aggregate Series");
+    expect(JSON.stringify(body)).not.toContain("fixture-secret");
+    return Response.json({ model: TEXT_AGENT_MODEL, answers: [
+      { type: "choice", name: "release_2", choice: "review", confidence: 1 },
+      { type: "choice", name: "release_0", choice: "t0", confidence: 0.98 },
+      { type: "choice", name: "release_1", choice: "no_match", confidence: 0.99 },
+    ] });
+  });
+  const candidate = { title: offer.title, provider: offer.provider, sizeBytes: offer.sizeBytes, seeders: offer.seeders, attributes: [] };
+  const matches = await matcher({ targets: [{ targetId: 3, entry, episodes: [episode] }], offers: [
+    { ...candidate, title: "An Aggregate Series 02x01 1080p WEB-DL DD+ H.264-GROUP https://fixture.invalid/fixture-secret" },
+    { ...candidate, title: "Unrelated programme" },
+    { ...candidate, title: "Ambiguous release" },
+  ] });
+  expect(matches.map(({ releaseIndexes }) => releaseIndexes)).toEqual([[0], [2]]);
+  expect(fake.calls).toHaveLength(1);
+  expect(JSON.stringify(fake.calls)).toContain("Ambiguous release");
+  expect(JSON.stringify(fake.calls)).not.toContain("Unrelated programme");
+  expect(JSON.stringify(fake.calls)).not.toContain("fixture-secret");
+});
+
+test("a failed Decisions request is not treated as an empty TV feed", async () => {
+  const fake = provider([{ matches: [{ targetId: 3, releaseIndexes: [0], reason: "Alternate numbering." }] }]);
+  const settings = defaultSettings();
+  settings.agents.apiKey = "fixture-key";
+  const matcher = createTvFeedMatcher(settings, fake.model, "reuse", async () => new Response(null, { status: 503 }));
+  const matches = await matcher({ targets: [{ targetId: 3, entry, episodes: [episode] }], offers: [
+    { title: offer.title, provider: offer.provider, sizeBytes: offer.sizeBytes, seeders: offer.seeders, attributes: [] },
+  ] });
+  expect(matches[0]?.releaseIndexes).toEqual([0]);
+  expect(fake.calls).toHaveLength(1);
+});
+
 test("TV selector research cannot reintroduce excluded or oversized releases", async () => {
   const fake = provider([[{ type: "function_call", name: "searchReleases", callId: "search", arguments: '{"query":"A Sequel"}', status: "completed" }],
     { index: null, reason: "Only excluded or oversized sources remain." }]);
