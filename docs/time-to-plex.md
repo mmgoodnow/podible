@@ -26,6 +26,10 @@ The report reads a single SQLite snapshot and compares each trace to the
 20-second movie and 30-second TV targets. It reconstructs timings from saved
 torrent observations and publication receipts. It omits reuse, missing
 completion evidence, and ambiguous events, and does not recheck Plex live.
+Pass `--execution-db /path/to/execution.sqlite` to include a timeline from
+the matching Reflow run. Segment endpoints are milliseconds since in-client
+download completion, bounded by exact Plex readiness. Unknown steps and raw
+step names are omitted; gaps may include work not tracked in a durable step.
 
 ## TV View Enumeration
 

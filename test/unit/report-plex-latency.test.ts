@@ -7,21 +7,24 @@ import path from "node:path";
 test("the read-only Plex timing report requires a completed download and its exact publication", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "plex-latency-report-"));
   const filename = path.join(dir, "podible.sqlite");
+  const execution = path.join(dir, "execution.sqlite");
   const stamp = (seconds: number) => new Date(Date.UTC(2026, 0, 1) + seconds * 1000).toISOString();
   try {
     {
       using db = new Database(filename);
       db.exec(`CREATE TABLE acquisition_latency_receipts(media, acquisition_id);
         CREATE TABLE media_torrents(id, client_id, native_id, observation_json);
+        CREATE TABLE job_executions(job_id, run_id);
         CREATE TABLE app_state(key, value_json);`);
+      db.run("INSERT INTO job_executions VALUES (2, 'tv-run')");
       for (const media of ["movie", "tv"]) db.exec(`
-        CREATE TABLE ${media}_acquisitions(id, target_id, reason, created_at);
+        CREATE TABLE ${media}_acquisitions(id, target_id, job_id, reason, created_at);
         CREATE TABLE ${media}_versions(id, acquisition_id, facts_json);
         CREATE TABLE ${media}_events(id, target_id, acquisition_id, event_key, stage, created_at);
         CREATE TABLE ${media}_acquisition_downloads(acquisition_id, torrent_id);`);
       const fixture = (media: "movie" | "tv", id: number, completion: number, publication: number, receipt = true) => {
         const base = id * 10;
-        db.run(`INSERT INTO ${media}_acquisitions VALUES (?,1,'initial',?)`, [id, stamp(2)]);
+        db.run(`INSERT INTO ${media}_acquisitions VALUES (?,1,?,'initial',?)`, [id, media === "tv" ? id : null, stamp(2)]);
         db.run("INSERT INTO media_torrents VALUES (?,'client',?,?)",
           [id, String(id), JSON.stringify({ complete: true, completedAt: stamp(completion) })]);
         db.run(`INSERT INTO ${media}_versions VALUES (?,?,?)`, [id, id, JSON.stringify({
@@ -42,14 +45,36 @@ test("the read-only Plex timing report requires a completed download and its exa
       fixture("movie", 4, 4, 20); // Publishing attempt is ambiguous.
       fixture("tv", 5, 4, 21, false); // No recorded acquisition sample.
     }
+    {
+      using db = new Database(execution);
+      db.exec("CREATE TABLE workflow_steps(run_id, name, kind, status, started_at, updated_at, created_at)");
+      for (const [step, kind, start, end] of [
+        ["completion:0:inspect", "step", 3, 5],
+        ["inspect", "step", 5, 8],
+        ["plex-publication:0", "step", 8, 14],
+        ["plex-publication:0:event:0", "wait", 14, 24],
+        ["plex-publication:1", "step", 24, 35],
+        ["sensitive-step-name", "step", 34, 36],
+      ] as const) {
+        db.run("INSERT INTO workflow_steps VALUES ('tv-run',?,?,'completed',?,?,?)",
+          ["tv:attempt:0:" + step, kind, Date.parse(stamp(start)), Date.parse(stamp(end)), Date.parse(stamp(start))]);
+      }
+    }
     const result = Bun.spawnSync([process.execPath, "run", path.resolve(import.meta.dir, "../../scripts/report-plex-latency.ts"),
-      "--db", filename, "--since", stamp(18), "--limit", "1"]);
+      "--db", filename, "--execution-db", execution, "--since", stamp(18), "--limit", "1"]);
     expect(result.stderr.toString()).toBe("");
     expect(result.exitCode).toBe(0);
     const { report } = JSON.parse(result.stdout.toString());
     expect(report).toMatchObject([
       { media: "movie", candidatesExamined: 3, samples: [{ acquisitionId: 1, preparationMs: 4000, publicationMs: 10000, totalMs: 14000, underTarget: true }] },
-      { media: "tv", candidatesExamined: 1, samples: [{ acquisitionId: 2, preparationMs: 4000, publicationMs: 26000, totalMs: 30000, underTarget: false }] },
+      { media: "tv", candidatesExamined: 1, samples: [{ acquisitionId: 2, preparationMs: 4000, publicationMs: 26000, totalMs: 30000,
+        underTarget: false, timeline: { truncated: false, segments: [
+          { phase: "read_torrent_completion", fromMs: 0, toMs: 1000 },
+          { phase: "review_import", fromMs: 1000, toMs: 4000 },
+          { phase: "publication_attempt", fromMs: 4000, toMs: 10000 },
+          { phase: "wait_for_plex_event", fromMs: 10000, toMs: 20000 },
+          { phase: "publication_attempt", fromMs: 20000, toMs: 30000 },
+        ] } }] },
     ]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
