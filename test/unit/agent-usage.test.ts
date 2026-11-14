@@ -4,6 +4,31 @@ import { Usage, type ModelRequest, type ModelResponse } from "@openai/agents-cor
 import { agentUsagePrometheus, estimateAgentUsageUsd, meterAgentProvider, meterWhisperTranscription, recordAgentUsage, withAgentUsageAccounting } from "../../src/agent-usage";
 import { runMigrations } from "../../src/db";
 import { BooksRepo } from "../../src/repo";
+import { decideFeedRoutes } from "../../src/library/decisions";
+import { defaultSettings } from "../../src/settings";
+
+test("records feed escalation causes rather than just the fallback count", async () => {
+  using db = new Database(":memory:"); runMigrations(db);
+  const repo = new BooksRepo(db);
+  const settings = defaultSettings({ agents: { apiKey: "fixture" } });
+  const answer = (i: number, choice: string, confidence: number) => ({ name: `release_${i}`, type: "choice", choice, confidence });
+  const targets = [{ title: "Fixture show" }], offers = Array.from({ length: 8 }, (_, i) => ({ title: `candidate ${i}` }));
+  await withAgentUsageAccounting(repo, async () => {
+    const route = (transport: Parameters<typeof decideFeedRoutes>[1]) =>
+      decideFeedRoutes(settings, transport, { targets, offers }, "tv_feed", "Identify matching shows.");
+    expect(await route(async () => Response.json({ model: "gpt-6-luna", answers: [
+      answer(0, "t0", 0.9), answer(1, "no_match", 0.98), answer(2, "no_match", 0.9), answer(3, "review", 1),
+      { name: "release_4", type: "refusal" }, answer(5, "t4", 0.99), answer(6, "t0", 0.8),
+    ] }))).toEqual([0, "no_match", null, null, null, null, null, null]);
+    expect(await route(async () => new Response(null, { status: 429 }))).toEqual(offers.map(() => null));
+    expect(await route(async () => Response.json({ answers: [] }))).toEqual(offers.map(() => null));
+  });
+  const metrics = agentUsagePrometheus(repo);
+  for (const [reason, count] of Object.entries({ match: 1, no_match: 1, low_match_confidence: 1, low_no_match_confidence: 1,
+    review: 1, refusal: 1, invalid_answer: 2, http: 8, invalid_response: 8 }))
+    expect(metrics).toContain(`podible_agent_feed_decisions_total{question="tv_feed",reason="${reason}"} ${count}\n`);
+  expect(metrics).toContain('podible_agent_acquisition_decisions_total{question="tv_feed",outcome="escalated"} 22\n');
+});
 
 test("prices Responses and Decisions separately without double-counting cached tokens", () => {
   const usage = { input: 100_000, cached: 20_000, cacheWrite: 10_000, output: 2_000 };

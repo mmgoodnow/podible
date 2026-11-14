@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { AppSettings } from "../app-types";
-import { recordAcquisitionDecision, recordAgentUsage } from "../agent-usage";
+import { recordAcquisitionDecision, recordAgentUsage, recordFeedDecisions, type FeedDecisionReason } from "../agent-usage";
 
 export const BOOK_DECISIONS_MODEL = "gpt-6-luna";
 const endpoint = "https://api.openai.com/v1/decisions";
@@ -220,12 +220,16 @@ const batchEnvelope = responseSchema.omit({ answers: true }).extend({
   answers: z.array(z.object({ name: z.string() }).passthrough()).max(100),
 });
 const routingAnswer = z.object({ type: z.literal("choice"), name: z.string(), choice: z.string(), confidence: probability });
+const routingRefusal = z.object({ type: z.literal("refusal") });
 const feedWorkflows = { book_feed: "book-feed", movie_feed: "movie", tv_feed: "tv-feed" } as const;
 export async function decideFeedRoutes(
   settings: AppSettings, transport: DecisionsTransport, evidence: { targets: readonly unknown[]; offers: readonly unknown[] },
   question: keyof typeof feedWorkflows, instructions: string,
 ): Promise<(number | "no_match" | null)[]> {
-  const unknown = () => evidence.offers.map(() => null);
+  const unknown = (reason: FeedDecisionReason) => {
+    recordFeedDecisions(question, evidence.offers.map(() => reason));
+    return evidence.offers.map(() => null);
+  };
   if (!evidence.offers.length) return [];
   const choices = [...evidence.targets.map((_, index) => ({ value: `t${index}` })),
     { value: "no_match", description: "Clearly no plausible matching target." },
@@ -236,7 +240,7 @@ export async function decideFeedRoutes(
     questions: evidence.offers.map((_, index) => ({ type: "choice", name: `release_${index}`,
       instructions: `Classify offer r${index}. ${instructions}`, choices })),
   });
-  if (Buffer.byteLength(body) > 160_000) return unknown();
+  if (Buffer.byteLength(body) > 160_000) return unknown("input_budget");
   const started = performance.now();
   const result = await requestDecisions(body, { apiKey: settings.agents.apiKey, fetch: transport,
     timeoutMs: Math.min(12_000, settings.agents.timeoutMs) }, 256 * 1024);
@@ -246,20 +250,27 @@ export async function decideFeedRoutes(
     input: tokens.data.input_tokens, output: tokens.data.output_tokens,
     cached: tokens.data.input_tokens_details.cached_tokens, cacheWrite: tokens.data.input_tokens_details.cache_write_tokens,
   } : undefined);
+  if (!result.ok) {
+    const { reason } = result.error;
+    return unknown(reason === "invalid_input" ? "invalid_configuration" : reason);
+  }
+  if (!parsed?.success) return unknown("invalid_response");
   const byName = new Map<string, unknown>();
-  for (const answer of parsed?.data?.answers ?? []) byName.set(answer.name, byName.has(answer.name) ? null : answer);
-  return evidence.offers.map((_, index) => {
-    const answer = routingAnswer.safeParse(byName.get(`release_${index}`));
-    let route: number | "no_match" | null = null;
-    if (answer.success) {
-      const { choice, confidence } = answer.data;
-      const targetIndex = choices.findIndex(({ value }) => value === choice);
-      if (choice === "no_match" && confidence >= 0.95) route = "no_match";
-      if (targetIndex >= 0 && targetIndex < evidence.targets.length && confidence >= 0.85) route = targetIndex;
-    }
-    recordAcquisitionDecision(question, route === null ? "escalated" : "accepted");
-    return route;
+  for (const answer of parsed.data.answers) byName.set(answer.name, byName.has(answer.name) ? null : answer);
+  const outcomes = evidence.offers.map((_, index): { reason: FeedDecisionReason; route: number | "no_match" | null } => {
+    const raw = byName.get(`release_${index}`);
+    if (routingRefusal.safeParse(raw).success) return { reason: "refusal", route: null };
+    const answer = routingAnswer.safeParse(raw);
+    if (!answer.success) return { reason: "invalid_answer", route: null };
+    const { choice, confidence } = answer.data;
+    if (choice === "review") return { reason: "review", route: null };
+    if (choice === "no_match") return confidence >= 0.95 ? { reason: "no_match", route: "no_match" } : { reason: "low_no_match_confidence", route: null };
+    const targetIndex = choices.findIndex(({ value }) => value === choice);
+    if (targetIndex < 0 || targetIndex >= evidence.targets.length) return { reason: "invalid_answer", route: null };
+    return confidence >= 0.85 ? { reason: "match", route: targetIndex } : { reason: "low_match_confidence", route: null };
   });
+  recordFeedDecisions(question, outcomes.map(({ reason }) => reason));
+  return outcomes.map(({ route }) => route);
 }
 
 /** Keep original indexes across the small Decisions cohorts and over the Responses fallback. */

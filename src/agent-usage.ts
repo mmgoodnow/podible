@@ -8,7 +8,11 @@ const decisionsKey = "acquisition-decisions:v1";
 const decisionQuestions = ["book_release", "book_import", "book_feed", "movie_release", "movie_import", "movie_feed", "tv_release", "tv_import", "tv_feed"] as const;
 type DecisionQuestion = typeof decisionQuestions[number];
 type DecisionOutcome = "accepted" | "escalated";
-type DecisionTotals = Partial<Record<DecisionQuestion, Partial<Record<DecisionOutcome, number>>>>;
+const feedDecisionReasons = ["match", "no_match", "low_match_confidence", "low_no_match_confidence", "review", "refusal", "invalid_answer",
+  "invalid_response", "timeout", "transport", "http", "invalid_configuration", "input_budget"] as const;
+export type FeedDecisionReason = typeof feedDecisionReasons[number];
+const feedQuestions = ["book_feed", "movie_feed", "tv_feed"] as const;
+type DecisionTotals = Partial<Record<DecisionQuestion, Partial<Record<DecisionOutcome | FeedDecisionReason, number>>>>;
 const scope = new AsyncLocalStorage<BooksRepo>();
 const workflows = ["book-selection", "book-import", "book-feed", "book-upgrade", "chapter-curation", "chapter-judge",
   "movie", "tv", "tv-feed", "tv-episode-mapping", "indexer-query", "transcription"] as const;
@@ -27,13 +31,29 @@ export function withAgentUsageAccounting<T>(repo: BooksRepo, work: () => T): T {
 }
 
 export function recordAcquisitionDecision(question: DecisionQuestion, outcome: DecisionOutcome): void {
+  recordDecisionCounts(question, { [outcome]: 1 });
+}
+
+export function recordFeedDecisions(question: typeof feedQuestions[number], reasons: readonly FeedDecisionReason[]): void {
+  const counts: Partial<Record<DecisionOutcome | FeedDecisionReason, number>> = {};
+  for (const reason of reasons) {
+    counts[reason] = (counts[reason] ?? 0) + 1;
+    const outcome = reason === "match" || reason === "no_match" ? "accepted" : "escalated";
+    counts[outcome] = (counts[outcome] ?? 0) + 1;
+  }
+  recordDecisionCounts(question, counts);
+}
+
+function recordDecisionCounts(question: DecisionQuestion, counts: Partial<Record<DecisionOutcome | FeedDecisionReason, number>>): void {
   const repo = scope.getStore();
   if (!repo) return;
   try {
     repo.transaction(() => {
       const totals = repo.getJsonState<DecisionTotals>(decisionsKey) ?? {};
       const row = totals[question] ??= {};
-      row[outcome] = count(row[outcome]) + 1;
+      for (const event of [...feedDecisionReasons, "accepted", "escalated"] as const) {
+        if (counts[event]) row[event] = count(row[event]) + counts[event];
+      }
       repo.setJsonState(decisionsKey, totals);
     });
   } catch { /* A metric must not change acquisition behavior. */ }
@@ -162,6 +182,9 @@ export function agentUsagePrometheus(repo: BooksRepo): string {
   const decisionMetric = "podible_agent_acquisition_decisions_total";
   const outcomeSamples = decisionQuestions.flatMap(question => (["accepted", "escalated"] as const).map(outcome =>
     `${decisionMetric}{question="${question}",outcome="${outcome}"} ${count(decisions[question]?.[outcome])}\n`));
+  const feedMetric = "podible_agent_feed_decisions_total";
+  const feedSamples = feedQuestions.flatMap(question => feedDecisionReasons.map(reason =>
+    `${feedMetric}{question="${question}",reason="${reason}"} ${count(decisions[question]?.[reason])}\n`));
   return metrics.map(([suffix, field, help]) => {
     const name = `podible_agent_${suffix}`;
     const samples = rows.flatMap(({ total, labels }) => {
@@ -169,5 +192,6 @@ export function agentUsagePrometheus(repo: BooksRepo): string {
       return value !== undefined && Number.isFinite(value) && value >= 0 ? [`${name}{${labels}} ${value}\n`] : [];
     });
     return `# HELP ${name} ${help}\n# TYPE ${name} counter\n${samples.join("")}`;
-  }).join("") + `# HELP ${decisionMetric} Screened acquisition Decisions outcomes; escalated means tool-agent fallback.\n# TYPE ${decisionMetric} counter\n${outcomeSamples.join("")}`;
+  }).join("") + `# HELP ${decisionMetric} Screened acquisition Decisions outcomes; escalated means tool-agent fallback.\n# TYPE ${decisionMetric} counter\n${outcomeSamples.join("")}` +
+    `# HELP ${feedMetric} Release routing results and reasons for Responses fallback.\n# TYPE ${feedMetric} counter\n${feedSamples.join("")}`;
 }
