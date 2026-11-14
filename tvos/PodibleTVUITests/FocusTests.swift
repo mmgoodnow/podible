@@ -204,6 +204,64 @@ final class FocusTests: XCTestCase {
     }
 
     @MainActor
+    func testPhoneSignInKeepsFocusInSettings() {
+        continueAfterFailure = false
+        let socketFD = socket(AF_INET, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(socketFD, 0)
+        var listenerOpen = true
+        defer { if listenerOpen { close(socketFD) } }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = in_addr_t(INADDR_LOOPBACK).bigEndian
+        var addressLength = socklen_t(MemoryLayout<sockaddr_in>.size)
+        withUnsafeMutablePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                XCTAssertEqual(bind(socketFD, $0, addressLength), 0)
+                // Leave connections queued so the HTTPS handshake waits until the listener closes.
+                XCTAssertEqual(listen(socketFD, 4), 0)
+                XCTAssertEqual(getsockname(socketFD, $0, &addressLength), 0)
+            }
+        }
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo", "-podible.serverAddress", "https://127.0.0.1:\(UInt16(bigEndian: address.sin_port))"]
+        app.launch()
+        let remote = XCUIRemote.shared
+        let poster = app.buttons["poster.marrow"]
+        assertFocused(poster)
+        remote.press(.left)
+        let settings = app.buttons["nav.Settings"]
+        for _ in 0..<6 where !settings.hasFocus { remote.press(.down) }
+        assertFocused(settings)
+        remote.press(.select)
+        assertFocused(app.textFields["device-sign-in.server"])
+        remote.press(.down)
+        let signIn = app.buttons["Sign in with phone"]
+        let cancel = app.buttons["Cancel"]
+        assertFocused(signIn)
+
+        remote.press(.select)
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        assertFocused(cancel)
+        remote.press(.left)
+        for _ in 0..<6 where !settings.hasFocus { remote.press(.down) }
+        assertFocused(settings)
+        remote.press(.select)
+        assertFocused(cancel)
+        remote.press(.select)
+        assertFocused(signIn)
+        XCTAssertFalse(cancel.exists)
+
+        remote.press(.select)
+        assertFocused(cancel)
+        close(socketFD)
+        listenerOpen = false
+        assertFocused(signIn)
+        XCTAssertFalse(cancel.exists)
+    }
+
+    @MainActor
     func testRequestOnlyOneSpecial() {
         continueAfterFailure = false
         let app = XCUIApplication()

@@ -9,7 +9,7 @@ struct PodibleTVApp: App {
 }
 
 private enum PageFocus: Hashable {
-    case settings, request(String), requestSearch, requestRetry
+    case settings, settingsSignIn, request(String), requestSearch, requestRetry
 }
 
 private struct TVRoot: View {
@@ -440,45 +440,52 @@ private struct ConnectionScreen: View {
                 Text("Signed in to \(connection.url.host ?? "Podible")")
                 Button("Disconnect") { Task { await disconnect(connection) } }
                     .focused(primaryFocus, equals: .settings)
-            } else if let pairingBase {
-                if let pairing, let url = URL(string: pairing.authorizePath, relativeTo: pairingBase)?.absoluteURL {
-                    HStack(alignment: .center, spacing: 48) {
-                        PairingQRCode(url: url)
-                        VStack(alignment: .leading, spacing: 14) {
-                            Text("Scan with your phone").font(.headline)
-                            Text("Approve the sign-in on your phone.")
-                                .font(.caption).foregroundStyle(.secondary)
+            } else {
+                if let pairingBase {
+                    if let pairing, let url = URL(string: pairing.authorizePath, relativeTo: pairingBase)?.absoluteURL {
+                        HStack(alignment: .center, spacing: 48) {
+                            PairingQRCode(url: url)
+                            VStack(alignment: .leading, spacing: 14) {
+                                Text("Scan with your phone").font(.headline)
+                                Text("Approve the sign-in on your phone.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                         }
+                    } else {
+                        ProgressView("Starting sign-in…")
                     }
                 } else {
-                    ProgressView("Starting sign-in…")
+                    Text("Enter your server address, then sign in on your phone.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    TextField("https://podible.example", text: $server)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                        .accessibilityIdentifier("device-sign-in.server")
+                        .focused(primaryFocus, equals: .settings)
                 }
-                Button("Cancel") { self.pairingBase = nil; pairing = nil }
-                    .focused(primaryFocus, equals: .settings)
-            } else {
-                Text("Enter your server address, then sign in on your phone.")
-                    .font(.caption).foregroundStyle(.secondary)
-                TextField("https://podible.example", text: $server)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                    .accessibilityIdentifier("device-sign-in.server")
-                    .focused(primaryFocus, equals: .settings)
-                Button("Sign in with phone") {
-                    status = nil
-                    do {
-                        let base = try Connection.serverURL(server)
-                        Connection.rememberServer(base)
-                        pairingBase = base
-                    }
-                    catch { status = error.localizedDescription }
+                // Preserve the focused button as pairing starts or returns to the form.
+                Button(pairingBase == nil ? "Sign in with phone" : "Cancel") {
+                    if pairingBase == nil { startPairing() } else { stopPairing() }
                 }
+                .focused(primaryFocus, equals: pairingBase == nil ? .settingsSignIn : .settings)
             }
             if let status { Text(status).font(.caption) }
         }
         .frame(maxWidth: 1140, alignment: .leading)
         .padding(70)
         .task(id: pairingBase) { if let pairingBase { await connect(pairingBase) } }
+    }
+
+    private func startPairing() {
+        status = nil
+        do {
+            let base = try Connection.serverURL(server)
+            Connection.rememberServer(base)
+            pairingBase = base
+        } catch {
+            status = error.localizedDescription
+        }
     }
 
     @MainActor private func connect(_ base: URL) async {
@@ -514,6 +521,10 @@ private struct ConnectionScreen: View {
             guard !Task.isCancelled else { return }
             status = error.localizedDescription
         }
+        stopPairing()
+    }
+
+    private func stopPairing() {
         pairing = nil
         pairingBase = nil
     }
