@@ -28,6 +28,14 @@ and matched the full set of view paths and backing paths in the same SQLite
 snapshot. These are database/render timings, not filesystem reconciliation or
 download-to-Plex timings.
 
+## View Reconciliation
+
+Run `bun run test/lab/view-reconcile-benchmark.ts 1543` to measure adding,
+checking, and removing links from a synthetic view. On the same local
+filesystem, a pass fell from 225-241 ms to 41-50 ms by amortizing read-only
+checks and skipping journal writes when the view already matches. File changes
+still recheck ownership, paths, and publication state immediately before writing.
+
 ## Attack on Titan baseline
 
 Read-only verification on Cyprus, 2026-11-10, running

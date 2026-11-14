@@ -106,6 +106,28 @@ test("view reconciliation resumes publication after a crash between link creatio
     expect((await ctx.reconcile("renamed.mkv")).removed).toBe(1);
   }));
 
+test("an unchanged view is verified without replacing its manifest or skipping interrupted work", () =>
+  fixture(async ctx => {
+    const relative = "Series/Season 01/episode.mkv";
+    const manifest = path.join(ctx.viewRoot, ".podible-view.json");
+    const pending = path.join(ctx.viewRoot, ".podible-view-pending.json");
+    await ctx.reconcile(relative);
+    const marker = await fs.stat(manifest, { bigint: true });
+    const input = { ...ctx, entries: [{ relativePath: relative, contentPath: ctx.file }] };
+    expect(await reconcileLibraryView(input)).toEqual({ linked: 0, removed: 0, unchanged: 1 });
+    expect((await fs.stat(manifest, { bigint: true })).ino).toBe(marker.ino);
+
+    await fs.copyFile(manifest, pending);
+    expect(await reconcileLibraryView(input)).toEqual({ linked: 0, removed: 0, unchanged: 1 });
+    expect(await fs.stat(pending).catch(() => null)).toBeNull();
+
+    await fs.unlink(path.join(ctx.viewRoot, relative));
+    expect((await reconcileLibraryView(input)).linked).toBe(1);
+    await fs.unlink(path.join(ctx.viewRoot, relative));
+    await Bun.write(path.join(ctx.viewRoot, relative), "foreign file");
+    await expect(reconcileLibraryView(input)).rejects.toThrow("regular file");
+  }));
+
 test("repeated interrupted layout changes retain ownership of every unfinished link", () =>
   fixture(async (ctx) => {
     for (const relativePath of ["first.mkv", "second.mkv"]) {

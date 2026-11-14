@@ -73,10 +73,11 @@ async function stat(file: string) {
   }
 }
 
-async function preflight<T, R>(items: readonly T[], check: (item: T) => Promise<R>): Promise<R[]> {
+async function preflight<T, R>(items: readonly T[], check: (item: T) => Promise<R>, assertActive?: () => void): Promise<R[]> {
   const results: R[] = [];
   const concurrency = 16;
   for (let i = 0; i < items.length; i += concurrency) {
+    assertActive?.();
     // Drain the batch before releasing the publication lock, even on failure.
     const batch = await Promise.allSettled(items.slice(i, i + concurrency).map(check));
     for (const result of batch) {
@@ -185,8 +186,9 @@ export async function reconcileLibraryView(input: {
   if ((await fs.realpath(contentRoot)) !== contentRoot)
     throw new Error("Content root traverses a symlink");
   await directory(viewRoot, "", input.assertActive);
+  const previousRaw = await readJson(path.join(viewRoot, manifestName));
   const previous = manifestSchema.parse(
-    (await readJson(path.join(viewRoot, manifestName))) ?? {
+    previousRaw ?? {
       contentId: content.id,
       files: {},
     },
@@ -215,9 +217,8 @@ export async function reconcileLibraryView(input: {
     desiredPaths.add(entry.relativePath);
   }
   for (const [relative, source] of await preflight(input.entries, async entry => {
-    input.assertActive?.();
     return [entry.relativePath, (await canonicalSource(entry.contentPath)).source] as const;
-  })) {
+  }, input.assertActive)) {
     files[relative] = source;
   }
   const adoptions: Record<string, Adoption> = Object.assign(
@@ -267,12 +268,22 @@ export async function reconcileLibraryView(input: {
     }
   }
   // Preflight every path before changing any link, including retired entries.
+  const parents = new Map<string, Promise<void>>();
+  const checkParent = (parent: string): Promise<void> => {
+    if (parent === ".") return Promise.resolve();
+    let check = parents.get(parent);
+    if (!check) {
+      check = checkParent(path.posix.dirname(parent)).then(async () => {
+        const existing = await stat(contained(viewRoot, parent));
+        if (existing && !existing.isDirectory()) throw new Error(`Not a real directory: ${parent}`);
+      });
+      parents.set(parent, check);
+    }
+    return check;
+  };
   const observed = new Map(await preflight([...knownPaths], async relative => {
-    input.assertActive?.();
     const destination = contained(viewRoot, relative);
-    const parent = path.posix.dirname(relative);
-    if (parent !== ".")
-      await directory(viewRoot, parent, input.assertActive, false);
+    await checkParent(path.posix.dirname(relative));
     const existing = await stat(destination);
     let target: string | FileIdentity | null = null;
     if (existing) {
@@ -300,7 +311,18 @@ export async function reconcileLibraryView(input: {
       }
     }
     return [relative, target] as const;
-  }));
+  }, input.assertActive));
+  // Skip journal writes only after a fresh disk check, never with an outstanding
+  // recovery journal or an adoption. Mutating paths revalidate without the cache.
+  if (previousRaw && !pending && !requestedAdoptions.size && knownPaths.size === Object.keys(files).length &&
+      [...knownPaths].every(relative => {
+        const source = files[relative];
+        return source !== undefined && previous.files[relative]?.length === 1 && previous.files[relative]?.[0] === source &&
+          observed.get(relative) === contained(contentRoot, source);
+      })) {
+    input.assertActive?.();
+    return { linked: 0, removed: 0, unchanged: knownPaths.size };
+  }
   const owned = Object.fromEntries(
     [...knownPaths].map((relative) => [
       relative,
@@ -350,7 +372,6 @@ export async function reconcileLibraryView(input: {
   let linked = 0;
   let removed = 0;
   for (const [relative, sourceRelative] of Object.entries(files)) {
-    input.assertActive?.();
     const destination = contained(viewRoot, relative);
     const target = contained(contentRoot, sourceRelative);
     if (observed.get(relative) === target) continue;
@@ -372,7 +393,6 @@ export async function reconcileLibraryView(input: {
     await input.onLinkApplied?.(relative);
   }
   for (const relative of knownPaths) {
-    input.assertActive?.();
     if (files[relative] !== undefined || observed.get(relative) === null)
       continue;
     await assertUnchanged(relative);
