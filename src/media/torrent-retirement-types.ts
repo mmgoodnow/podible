@@ -17,6 +17,10 @@ export const retirementEvidenceSchema = z.object({
   allTrackersExplicitlyUnregistered: z.boolean(), samples: z.array(retirementSampleSchema).max(3),
 });
 export type RetirementEvidence = z.infer<typeof retirementEvidenceSchema>;
+export const packRetirementLocatorSchema = z.strictObject({
+  targetId: z.number().int().positive().safe(), packVersionId: z.number().int().positive().safe(),
+});
+export type PackRetirementLocator = z.infer<typeof packRetirementLocatorSchema>;
 export const retirementIntentSchema = z.object({
   operationId: z.string().uuid(), source: z.enum(["books", "screen"]),
   bindingKey: digest, bindingDigest: digest, clientId: z.string(), infoHash: z.string().regex(/^[a-f0-9]{40}$/),
@@ -26,6 +30,8 @@ export const retirementIntentSchema = z.object({
   proofDigest: digest, consumerRevision: z.string(), configurationDigest: digest,
   fenceId: z.string().uuid(), fenceGeneration: count, reason: z.string(),
   jobId: z.number().int().positive().safe(), executionKey: z.string().min(1),
+  packNomination: packRetirementLocatorSchema.optional(),
+  packProof: z.strictObject({ anchorDigest: digest, seedSeconds: count }).optional(),
 });
 export type RetirementIntent = z.infer<typeof retirementIntentSchema>;
 export const retirementIntentViewSchema = retirementIntentSchema.pick({
@@ -47,6 +53,7 @@ export type RetirementIntentView = z.infer<typeof retirementIntentViewSchema>;
 export type RetirementBinding = {
   key: string; media: "books" | "movies" | "tv"; label: string; hash: string;
   clientId: string; directory: string; root: string; rootToken: string | null; bindingDigest: string;
+  packHistory?: { candidateVersionId: number; packVersionId: number };
 };
 export type RetirementConsumerSnapshot = {
   completeInventory: boolean; domainBindings: number; activeConsumers: number; activeAcquisitions: number; activePublications: number;

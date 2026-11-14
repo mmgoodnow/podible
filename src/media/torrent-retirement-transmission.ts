@@ -11,6 +11,8 @@ const rowSchema = z.object({
   status: z.number().int().min(0).max(6), leftUntilDone: count, secondsSeeding: count,
   totalSize: z.number().int().positive().safe(), sizeWhenDone: count, haveValid: count, haveUnchecked: count,
   error: z.number().int().min(0).max(3), trackerStats: z.unknown(),
+  files: z.array(z.object({ name: z.string().min(1), length: count, bytesCompleted: count })).min(1).max(256).optional(),
+  fileStats: z.array(z.object({ wanted: z.boolean() })).min(1).max(256).optional(),
 });
 export type RetirementDaemonSnapshot = {
   clientId: string; identityDigest: string; sessionDigest: string;
@@ -18,9 +20,10 @@ export type RetirementDaemonSnapshot = {
 };
 export interface RetirementDaemon {
   readonly clientId: string;
-  read(binding: RetirementBinding): Promise<RetirementDaemonSnapshot>;
+  read(binding: RetirementBinding, includeFiles?: boolean): Promise<RetirementDaemonSnapshot>;
   /** Single, conditional, record-only command. No automatic session renegotiation/retry. */
-  removeRecord(binding: RetirementBinding, expected: RetirementDaemonSnapshot, assertActive: () => void): Promise<void>;
+  removeRecord(binding: RetirementBinding, expected: RetirementDaemonSnapshot, assertActive: () => void,
+    validatePackCandidate?: (snapshot: RetirementDaemonSnapshot) => void | Promise<void>): Promise<void>;
 }
 export function validateDaemonBinding(binding: RetirementBinding, snapshot: RetirementDaemonSnapshot) {
   const row = snapshot.record;
@@ -29,11 +32,15 @@ export function validateDaemonBinding(binding: RetirementBinding, snapshot: Reti
     throw new Error("Private daemon record no longer matches the exact binding");
   return row;
 }
-export function eligibleDaemonRecord(binding: RetirementBinding, snapshot: RetirementDaemonSnapshot, now: number) {
+export function completeDaemonRecord(binding: RetirementBinding, snapshot: RetirementDaemonSnapshot) {
   const row = validateDaemonBinding(binding, snapshot);
   if (![0, 5, 6].includes(row.status) || row.leftUntilDone !== 0 || row.sizeWhenDone !== row.totalSize ||
       row.haveValid !== row.totalSize || row.haveUnchecked !== 0 || row.error === 3 || !count.safeParse(row.secondsSeeding).success)
     throw new Error("Daemon record is not fully complete with a known actual seed counter");
+  return row;
+}
+export function eligibleDaemonRecord(binding: RetirementBinding, snapshot: RetirementDaemonSnapshot, now: number) {
+  const row = completeDaemonRecord(binding, snapshot);
   const trackers = allTrackerRetirementEvidence(row.trackerStats, now);
   if (!trackers) throw new Error("Not every current tracker explicitly reports unregistration");
   return { row, trackers };
@@ -56,12 +63,12 @@ export function privateRetirementDaemon(options: {
     const value = await rpc.call("session-get", { fields: ["session-id"] });
     return z.string().min(16).max(256).parse(value["session-id"]);
   }
-  async function read(binding: RetirementBinding): Promise<RetirementDaemonSnapshot> {
+  async function read(binding: RetirementBinding, includeFiles = false): Promise<RetirementDaemonSnapshot> {
     if (binding.clientId !== clientId) throw new Error("Foreign private daemon binding");
     const before = await session();
     const data = await rpc.call("torrent-get", { ids: [binding.hash], fields: [
       "id", "hashString", "downloadDir", "labels", "status", "leftUntilDone", "secondsSeeding", "totalSize",
-      "sizeWhenDone", "haveValid", "haveUnchecked", "error", "trackerStats",
+      "sizeWhenDone", "haveValid", "haveUnchecked", "error", "trackerStats", ...(includeFiles ? ["files", "fileStats"] : []),
     ] });
     const rows = z.array(rowSchema).max(1).parse(data.torrents);
     const after = await session(); currentIdentity();
@@ -72,17 +79,21 @@ export function privateRetirementDaemon(options: {
   }
   return {
     clientId, read,
-    async removeRecord(binding, expected, active) {
+    async removeRecord(binding, expected, active, validatePackCandidate) {
       active(); currentIdentity();
-      const fresh = await read(binding);
-      const current = eligibleDaemonRecord(binding, fresh, (options.now ?? Date.now)());
-      const original = eligibleDaemonRecord(binding, expected, (options.now ?? Date.now)());
-      const row = current.row;
+      const fresh = await read(binding, !!validatePackCandidate);
+      const row = completeDaemonRecord(binding, fresh), originalRow = completeDaemonRecord(binding, expected);
       if (fresh.identityDigest !== expected.identityDigest || fresh.sessionDigest !== expected.sessionDigest ||
-          row.id !== original.row.id || row.secondsSeeding < original.row.secondsSeeding ||
-          current.trackers.trackerSetDigest !== original.trackers.trackerSetDigest ||
-          current.trackers.trackers.some((tracker, index) => tracker.announcedAt < original.trackers.trackers[index]!.announcedAt))
+          row.id !== originalRow.id || row.secondsSeeding < originalRow.secondsSeeding)
         throw new Error("Private daemon evidence changed before record-only removal");
+      if (validatePackCandidate) await validatePackCandidate(fresh);
+      else {
+        const now = (options.now ?? Date.now)();
+        const current = eligibleDaemonRecord(binding, fresh, now).trackers, original = eligibleDaemonRecord(binding, expected, now).trackers;
+        if (current.trackerSetDigest !== original.trackerSetDigest ||
+            current.trackers.some((tracker, index) => tracker.announcedAt < original.trackers[index]!.announcedAt))
+          throw new Error("Private daemon tracker evidence changed before record-only removal");
+      }
       const token = await session();
       if (retirementDigest(token) !== expected.sessionDigest) throw new Error("Private daemon session changed before record-only removal");
       active(); currentIdentity();

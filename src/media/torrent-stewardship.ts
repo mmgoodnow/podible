@@ -204,6 +204,13 @@ function saved(repo: BooksRepo, target: Binding) {
   return result.success && result.data.latest.bindingDigest === target.bindingDigest ? result.data : null;
 }
 
+export function observedSeedFloor(repo: BooksRepo, binding: Binding): number {
+  const history = saved(repo, binding);
+  if (!history) return 0;
+  return Math.max(0, ...[history.latest, ...history.history].filter(row => row.bindingDigest === binding.bindingDigest &&
+    row.ownership === "verified-private-binding").map(row => row.actualSeedSeconds ?? 0));
+}
+
 /** Scheduling hint only; collection still verifies private-client ownership. Tombstones retain seed obligations. */
 export function hasTorrentStewardshipBindings(repo: BooksRepo): boolean {
   return repo.readStewardshipInventory({ source: "all", offset: 0, limit: 1 }).total > 0;

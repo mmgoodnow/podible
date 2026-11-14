@@ -47,6 +47,10 @@ export function assertTorrentBindingWritable(repo: AdmissionRepo, ref: TorrentRe
   if (current.claim || current.retired || (token !== undefined && !current.users.some((user) => user.token === token)))
     throw new Error("Torrent binding is fenced against retirement or has no valid producer admission");
 }
+export function idleTorrentUseRevision(repo: AdmissionRepo, ref: TorrentRecordRef): number | null {
+  const current = state(repo, ref);
+  return current.claim || current.retired || current.users.length ? null : current.useRevision;
+}
 /** Raw synchronous guard for repositories that only hold Bun:sqlite. No adapter, transaction or network is created. */
 export function assertTorrentDatabaseWritable(db: Database, ref: TorrentRecordRef): void {
   refSchema.parse(ref);
@@ -82,13 +86,15 @@ function domainBindings(repo: BooksRepo, binding: RetirementBinding) {
 export function createOrphanRetirementFence(repo: BooksRepo, options: {
   globalMaintenanceHeld: () => boolean;
   readIdentityDigest?: () => string;
+  retainedTvHistory?: (binding: RetirementBinding) => { digest: string; history: NonNullable<RetirementBinding["packHistory"]> };
 }): TorrentRetirementFence {
   const refFor = (binding: RetirementBinding) => ({ clientId: binding.clientId, infoHash: binding.hash });
   const inspect = (binding: RetirementBinding): RetirementConsumerSnapshot => {
     const ref = refFor(binding), current = state(repo, ref), settings = repo.readSettings();
     const raw = binding.media === "books" ? repo.bookTorrents.get(binding.hash) : repo.movies.torrent(binding.clientId, binding.hash);
     const actual = raw ? stewardshipBinding(repo, binding.media === "books" ? "books" : "screen", { ...raw }, binding.clientId) : null;
-    const domains = domainBindings(repo, binding);
+    const retainedHistory = options.retainedTvHistory?.(binding);
+    const domains = domainBindings(repo, retainedHistory ? { ...binding, packHistory: retainedHistory.history } : binding);
     let complete = domains.complete, activeAcquisitions = 0;
     for (const id of domains.jobIds) {
       try {
@@ -100,10 +106,12 @@ export function createOrphanRetirementFence(repo: BooksRepo, options: {
     let identityDigest: string | null = null;
     try { identityDigest = options.readIdentityDigest?.() ?? retirementDigest(readTransmissionIdentity()); } catch { /* Unknown identity never authorizes a claim. */ }
     const configurationDigest = retirementDigest([settings?.libraryRoot, settings?.movies.managedRoot, settings?.tv.managedRoot, identityDigest]);
-    return { completeInventory: !!identityDigest && !!actual && complete,
-      domainBindings: domains.count, activeConsumers: current.users.length, activeAcquisitions, activePublications: domains.activePublications,
+    // Only a separately proven TV acquisition link and version provenance can be discounted.
+    const exactHistory = retainedHistory !== undefined && binding.media === "tv" && domains.count === 2;
+    return { completeInventory: !!identityDigest && !!actual && complete && (retainedHistory === undefined || exactHistory),
+      domainBindings: exactHistory ? 0 : domains.count, activeConsumers: current.users.length, activeAcquisitions, activePublications: domains.activePublications,
       bindingDigest: actual?.bindingDigest ?? "", configurationDigest,
-      revision: retirementDigest([actual?.bindingDigest, domains, activeAcquisitions, current.useRevision, configurationDigest]) };
+      revision: retirementDigest([actual?.bindingDigest, domains, activeAcquisitions, current.useRevision, configurationDigest, ...(retainedHistory ? [retainedHistory.digest] : [])]) };
   };
   return {
     inspect,

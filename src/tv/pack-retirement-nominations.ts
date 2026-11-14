@@ -39,8 +39,10 @@ export const tvPackRetirementNominationSchema = z.strictObject({
     });
 });
 
+export type TvPackRetirementNomination = z.infer<typeof tvPackRetirementNominationSchema>;
+export const tvPackRetirementNominationPrefix = "tv-pack-retirement:nomination:v1:";
 export const tvPackRetirementNominationKey = (targetId: number, packVersionId: number) =>
-  `tv-pack-retirement:nomination:v1:${targetId}:${packVersionId}`;
+  `${tvPackRetirementNominationPrefix}${targetId}:${packVersionId}`;
 
 export function readTvNominationJson(value: string | null): unknown {
   try { return value === null ? null : JSON.parse(value); }

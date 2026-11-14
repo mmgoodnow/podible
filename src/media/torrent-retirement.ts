@@ -2,13 +2,14 @@ import { z } from "zod";
 import type { BooksRepo } from "../repo";
 import type { JobRow } from "../app-types";
 import type { WorkerContext } from "../worker/context";
-import { stewardshipBinding, stewardshipStatusPage, stewardshipPageTitles, stewardshipConnection, verifyStewardshipDirectory } from "./torrent-stewardship";
+import { observedSeedFloor, stewardshipBinding, stewardshipStatusPage, stewardshipPageTitles, stewardshipConnection, verifyStewardshipDirectory } from "./torrent-stewardship";
 import { qualifiedRetirementEvidence, readRetirementEvidence, retirementDigest } from "./torrent-retirement-evidence";
 import { eligibleDaemonRecord, privateRetirementDaemon, type RetirementDaemon, type RetirementDaemonSnapshot } from "./torrent-retirement-transmission";
 import { createOrphanRetirementFence } from "./torrent-retirement-admission";
+import { inspectTvPackRetirement, verifyPackAnchor, verifyPackCandidate, verifyTvPackRetirement, type PackRetirementLibrary } from "../tv/pack-retirement";
 import {
-  retirementIntentSchema, retirementIntentViewSchema, retirementPreviewParamsSchema, retirementPreviewSchema,
-  type RetirementBinding, type RetirementConsumerSnapshot, type RetirementIntent, type TorrentRetirementFence,
+  packRetirementLocatorSchema, retirementIntentSchema, retirementIntentViewSchema, retirementPreviewParamsSchema, retirementPreviewSchema,
+  type PackRetirementLocator, type RetirementBinding, type RetirementConsumerSnapshot, type RetirementIntent, type TorrentRetirementFence,
 } from "./torrent-retirement-types";
 
 const prefix = "torrent-retirement:intent:v1:";
@@ -16,10 +17,11 @@ const activeKey = (key: string) => "torrent-retirement:binding:v1:" + key;
 const pendingKey = "torrent-retirement:pending:v1";
 export type TorrentRetirementAdapters = { fence?: TorrentRetirementFence; daemon?: RetirementDaemon | null;
   now?: () => number; readIdentityDigest?: () => string;
+  packLibrary?: PackRetirementLibrary;
   afterCheckpoint?: (stage: "intent-committed" | "dispatch-committed" | "remove-returned") => Promise<void> };
 export type RetirementLocator = { source: "books" | "screen"; clientId: string; infoHash: string };
 const locatorSchema = z.object({ source: z.enum(["books", "screen"]), clientId: z.string().regex(/^transmission:[a-f0-9-]{36}$/),
-  infoHash: z.string().regex(/^[a-f0-9]{40}$/), operationId: z.string().uuid() }).strict();
+  infoHash: z.string().regex(/^[a-f0-9]{40}$/), operationId: z.string().uuid(), packNomination: packRetirementLocatorSchema.optional() }).strict();
 const consumerSchema = z.object({ completeInventory: z.boolean(), domainBindings: z.number().int().nonnegative(),
   activeConsumers: z.number().int().nonnegative(), activeAcquisitions: z.number().int().nonnegative(), activePublications: z.number().int().nonnegative(),
   bindingDigest: z.string(), configurationDigest: z.string().regex(/^[a-f0-9]{64}$/), revision: z.string().min(1) });
@@ -84,19 +86,26 @@ export class TorrentRetirement {
       }) });
   }
   /** The concrete default may remove only under owned durable execution and the participating global writer fence. */
-  async execute(ctx: WorkerContext, job: JobRow, raw: RetirementLocator & { operationId: string }) {
+  async execute(ctx: WorkerContext, job: JobRow, raw: RetirementLocator & { operationId: string; packNomination?: PackRetirementLocator }) {
     const input = locatorSchema.parse(raw);
     if (!ctx.execution || ctx.repo !== this.repo || !ctx.activeLocks?.has("*")) throw new Error("Record retirement requires owned durable execution in the global maintenance lane");
     const active = () => ctx.execution!.assertActive(); active();
     let intent = this.intent(input.operationId);
-    if (intent && (intent.clientId !== input.clientId || intent.infoHash !== input.infoHash || intent.source !== input.source))
+    const packNomination = input.packNomination;
+    if (intent && (intent.clientId !== input.clientId || intent.infoHash !== input.infoHash || intent.source !== input.source ||
+      retirementDigest(intent.packNomination ?? null) !== retirementDigest(packNomination ?? null)))
       throw new Error("Retirement operation belongs to another binding");
     if (intent && ["retired", "aborted"].includes(intent.phase)) return { status: intent.phase, intent: view(intent), blockers: [] };
-    const fence = this.adapters.fence ?? createOrphanRetirementFence(this.repo, { globalMaintenanceHeld: () => ctx.activeLocks?.has("*") === true,
-      readIdentityDigest: this.adapters.readIdentityDigest });
+    if (packNomination && (input.source !== "screen" || (intent && !intent.packProof))) throw new Error("Invalid pack retirement intent");
+    const concreteFence = createOrphanRetirementFence(this.repo, { globalMaintenanceHeld: () => ctx.activeLocks?.has("*") === true,
+      readIdentityDigest: this.adapters.readIdentityDigest,
+      ...(packNomination && { retainedTvHistory: (binding: RetirementBinding) => inspectTvPackRetirement(this.repo, packNomination, binding) }) });
+    const fence = packNomination ? concreteFence : this.adapters.fence ?? concreteFence;
     const binding = findBinding(this.repo, input);
     if (!binding || (intent && (intent.bindingKey !== binding.key || intent.bindingDigest !== binding.bindingDigest)))
       return { status: "blocked", intent: intent ? view(intent) : null, blockers: ["binding-or-configuration-changed"] };
+    if (!intent && packNomination && this.repo.getJsonState(activeKey(binding.key)))
+      return { status: "blocked", intent: null, blockers: ["existing-retirement-intent"] };
     let daemon: RetirementDaemon;
     if (this.adapters.daemon === null) return { status: "blocked", intent: intent ? view(intent) : null, blockers: ["private-daemon-unavailable"] };
     try { daemon = this.adapters.daemon ?? privateRetirementDaemon(); }
@@ -112,15 +121,16 @@ export class TorrentRetirement {
       if (retirementDigest(consumer.revision) !== value.consumerRevision || consumer.configurationDigest !== value.configurationDigest) throw new Error("Retirement consumer/configuration revision changed");
       fence.assert(binding, value.operationId, { id: value.fenceId, generation: value.fenceGeneration }, consumer);
     };
-    const transition = (value: RetirementIntent, phase: RetirementIntent["phase"], reason: string) => this.repo.transaction(() => {
-      assertIntent(value);
+    const transition = (value: RetirementIntent, phase: RetirementIntent["phase"], reason: string, reconciliationOnly = false) => this.repo.transaction(() => {
+      if (reconciliationOnly) active(); else assertIntent(value);
       const stored = this.intent(value.operationId);
-      if (!stored || stored.phase !== value.phase) throw new Error("Retirement phase changed");
+      if (!stored || retirementDigest(stored) !== retirementDigest(value) || this.repo.getJsonState(activeKey(binding.key)) !== value.operationId)
+        throw new Error("Retirement intent changed");
       const next = retirementIntentSchema.parse({ ...stored, phase, updatedAt: new Date(now()).toISOString(), reason });
       this.repo.setJsonState(prefix + next.operationId, next); return next;
     });
     const finish = (value: RetirementIntent, phase: "retired" | "aborted", reason: string) => this.repo.transaction(() => {
-      const next = transition(value, phase, reason);
+      const next = transition(value, phase, reason, !!packNomination);
       fence.finish(binding, next.operationId, { id: next.fenceId, generation: next.fenceGeneration }, phase === "retired" ? "retired" : "aborted-before-dispatch");
       if (phase === "aborted") this.repo.setJsonState(activeKey(binding.key), null);
       this.repo.setJsonState(pendingKey, this.pending().map((value) => value.operationId));
@@ -130,12 +140,20 @@ export class TorrentRetirement {
       intent = finish(intent, "aborted", "Origin execution cancelled before any remove dispatch.");
       return { status: "aborted", intent: view(intent), blockers: [] };
     }
-    active(); await verifyStewardshipDirectory(this.repo, binding); active();
-    const snapshot = await daemon.read(binding); active();
+    // A pack intent can reconcile absence without trusting stale pack eligibility or the old daemon session.
+    // A present record after a session change is never a replay target.
+    active();
+    if (!packNomination) { await verifyStewardshipDirectory(this.repo, binding); active(); }
+    const snapshot = await daemon.read(binding, !!packNomination); active();
     if (intent) {
-      assertIntent(intent);
+      if (packNomination && !snapshot.record && intent.phase !== "planned" &&
+          snapshot.clientId === intent.clientId && snapshot.identityDigest === intent.daemonIdentityDigest) {
+        intent = finish(intent, "retired", "Exact displaced record is absent after record-only dispatch; files and bindings were retained.");
+        return { status: "retired", intent: view(intent), blockers: [] };
+      }
+      if (!packNomination) assertIntent(intent);
       if (intent.phase === "planned" && intent.clientId === snapshot.clientId && intent.daemonIdentityDigest === snapshot.identityDigest &&
-          intent.daemonSessionDigest !== snapshot.sessionDigest) {
+          (intent.daemonSessionDigest !== snapshot.sessionDigest || (!!packNomination && snapshot.record?.id !== intent.daemonRecordId))) {
         intent = finish(intent, "aborted", "Private daemon session changed before any remove dispatch; original record and files were not changed.");
         return { status: "aborted", intent: view(intent), blockers: [] };
       }
@@ -147,14 +165,41 @@ export class TorrentRetirement {
       if (originCancelled(intent)) return { status: "pending", intent: view(intent), blockers: ["cancelled-dispatch-reconciliation-only"] };
     }
     const evidence = readRetirementEvidence(this.repo, binding.key);
-    if (!qualifiedRetirementEvidence(evidence, binding.bindingDigest, now()))
-      return { status: "blocked", intent: intent ? view(intent) : null, blockers: ["all-tracker-evidence-not-qualified"] };
-    const proof = eligibleDaemonRecord(binding, snapshot, now());
-    if (proof.trackers.trackerSetDigest !== evidence!.trackerSetDigest || proof.row.secondsSeeding < evidence!.actualSeedSeconds! ||
-        proof.trackers.trackers.some((tracker, index) => tracker.announcedAt < evidence!.samples.at(-1)!.trackers[index]!.announcedAt))
-      return { status: "blocked", intent: intent ? view(intent) : null, blockers: ["current-daemon-evidence-changed"] };
+    let row, packProof: RetirementIntent["packProof"], consumer: RetirementConsumerSnapshot;
+    const packCheck = packNomination && (() => inspectTvPackRetirement(this.repo, packNomination, binding));
+    const seedFloor = packCheck ? Math.max(intent?.packProof?.seedSeconds ?? 0, observedSeedFloor(this.repo, binding),
+      evidence?.bindingDigest === binding.bindingDigest ? evidence.actualSeedSeconds ?? 0 : 0) : 0;
+    if (packCheck) {
+      try {
+        // Check cheap use/seed gates before contacting Plex or inspecting files.
+        consumer = inspectConsumers();
+        if (intent) assertIntent(intent);
+        const pack = packCheck();
+        row = verifyPackCandidate(pack, snapshot, seedFloor);
+        const anchorDigest = await verifyTvPackRetirement(this.repo, pack, snapshot, daemon, active, this.adapters.packLibrary);
+        if ((!intent && retirementDigest(inspectConsumers()) !== retirementDigest(consumer)) ||
+            (intent?.packProof && intent.packProof.anchorDigest !== anchorDigest)) throw new Error("Pack proof changed");
+        packProof = { anchorDigest, seedSeconds: row.secondsSeeding };
+        if (intent) assertIntent(intent);
+      } catch {
+        active();
+        if (intent?.phase === "planned") {
+          intent = finish(intent, "aborted", "Pack proof no longer qualifies before dispatch; no remove was sent.");
+          return { status: "aborted", intent: view(intent), blockers: [] };
+        }
+        return { status: "blocked", intent: intent ? view(intent) : null, blockers: ["current-pack-proof-unavailable"] };
+      }
+    } else {
+      if (!qualifiedRetirementEvidence(evidence, binding.bindingDigest, now()))
+        return { status: "blocked", intent: intent ? view(intent) : null, blockers: ["all-tracker-evidence-not-qualified"] };
+      const proof = eligibleDaemonRecord(binding, snapshot, now());
+      if (proof.trackers.trackerSetDigest !== evidence!.trackerSetDigest || proof.row.secondsSeeding < evidence!.actualSeedSeconds! ||
+          proof.trackers.trackers.some((tracker, index) => tracker.announcedAt < evidence!.samples.at(-1)!.trackers[index]!.announcedAt))
+        return { status: "blocked", intent: intent ? view(intent) : null, blockers: ["current-daemon-evidence-changed"] };
+      row = proof.row;
+      consumer = inspectConsumers();
+    }
     if (!intent) {
-      const consumer = inspectConsumers();
       intent = this.repo.transaction(() => {
         active(); const current = findBinding(this.repo, input);
         if (!current || current.bindingDigest !== binding.bindingDigest || this.repo.getJsonState(activeKey(binding.key)))
@@ -166,32 +211,68 @@ export class TorrentRetirement {
         const claim = fence.claim(binding, input.operationId, fresh);
         const value = retirementIntentSchema.parse({ ...input, bindingKey: binding.key, bindingDigest: binding.bindingDigest,
           phase: "planned", createdAt: new Date(now()).toISOString(), updatedAt: new Date(now()).toISOString(),
-          daemonSessionDigest: snapshot.sessionDigest, daemonIdentityDigest: snapshot.identityDigest, daemonRecordId: proof.row.id,
-          proofDigest: retirementDigest([evidence, snapshot, fresh]), consumerRevision: retirementDigest(fresh.revision), configurationDigest: fresh.configurationDigest,
+          daemonSessionDigest: snapshot.sessionDigest, daemonIdentityDigest: snapshot.identityDigest, daemonRecordId: row.id,
+          proofDigest: retirementDigest([evidence, snapshot, fresh, packProof]), consumerRevision: retirementDigest(fresh.revision), configurationDigest: fresh.configurationDigest,
           fenceId: claim.id, fenceGeneration: claim.generation, jobId: job.id, executionKey: ctx.execution!.key,
-          reason: "Durable orphan-only record retirement intent; files must not be deleted." });
+          ...(packProof && { packProof }),
+          reason: packProof ? "Exact single episode displaced by a verified selected season pack; files must not be deleted."
+            : "Durable orphan-only record retirement intent; files must not be deleted." });
         this.repo.setJsonState(prefix + value.operationId, value); this.repo.setJsonState(activeKey(binding.key), value.operationId);
         this.repo.setJsonState(pendingKey, [...pending.map((item) => item.operationId), value.operationId]);
         return value;
       });
       await this.adapters.afterCheckpoint?.("intent-committed");
     }
-    assertIntent(intent);
+    const firstDispatch = intent.phase === "planned";
+    if (firstDispatch && packCheck) {
+      try { assertIntent(intent); }
+      catch {
+        active();
+        intent = finish(intent, "aborted", "Pack proof changed before dispatch; no remove was sent.");
+        return { status: "aborted", intent: view(intent), blockers: [] };
+      }
+    } else assertIntent(intent);
     intent = transition(intent, "dispatching", "Record-only remove may be in flight; writer fence must remain closed until absence is confirmed.");
     await this.adapters.afterCheckpoint?.("dispatch-committed");
-    assertIntent(intent);
-    try { await daemon.removeRecord(binding, snapshot, () => assertIntent(intent!)); }
+    if (packCheck) {
+      try {
+        assertIntent(intent);
+        const anchor = await verifyTvPackRetirement(this.repo, packCheck(), snapshot, daemon, active, this.adapters.packLibrary);
+        if (anchor !== intent.packProof!.anchorDigest || originCancelled(intent)) throw new Error("Pack dispatch proof changed");
+        assertIntent(intent);
+      } catch {
+        active();
+        if (firstDispatch) {
+          intent = finish(intent, "aborted", "Pack verification was lost before any remove was sent.");
+          return { status: "aborted", intent: view(intent), blockers: [] };
+        }
+        return { status: "pending", intent: view(intent), blockers: ["current-pack-proof-unavailable"] };
+      }
+    } else assertIntent(intent);
+    try { await daemon.removeRecord(binding, snapshot, () => {
+      assertIntent(intent!);
+      if (packCheck && originCancelled(intent!)) throw new Error("Pack dispatch origin cancelled");
+    }, packCheck ? async fresh => {
+      const pack = packCheck();
+      verifyPackCandidate(pack, fresh, Math.max(seedFloor, row.secondsSeeding));
+      if (await verifyPackAnchor(pack, fresh, daemon, active) !== intent!.packProof!.anchorDigest)
+        throw new Error("Pack daemon record changed immediately before dispatch");
+    } : undefined); }
     catch {
-      active(); intent = transition(intent, "uncertain", "Remove acknowledgement unavailable; retain the durable fence and reconcile the exact record before replay.");
+      active(); intent = transition(intent, "uncertain", "Remove acknowledgement unavailable; retain the durable fence and reconcile the exact record before replay.", !!packCheck);
       return { status: "pending", intent: view(intent), blockers: [] };
     }
     await this.adapters.afterCheckpoint?.("remove-returned"); active();
-    const after = await daemon.read(binding); active(); assertSameDaemon(intent, after);
+    const after = await daemon.read(binding); active();
+    if (!packCheck || after.record || after.clientId !== intent.clientId || after.identityDigest !== intent.daemonIdentityDigest)
+      assertSameDaemon(intent, after);
     if (after.record) {
       intent = transition(intent, "uncertain", "Record remains present after remove acknowledgement; reconcile before retrying.");
       return { status: "pending", intent: view(intent), blockers: [] };
     }
-    intent = finish(intent, "retired", "Exact record absence confirmed; files, original bindings and observation history were retained.");
+    intent = finish(intent, "retired", packCheck
+      ? "Exact superseded single-episode record is absent; files, original bindings and observation history were retained."
+      : "Exact record absence confirmed; files, original bindings and observation history were retained.");
     return { status: "retired", intent: view(intent), blockers: [] };
   }
 }

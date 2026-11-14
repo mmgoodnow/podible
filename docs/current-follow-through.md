@@ -19,7 +19,8 @@
 - [x] Make the ten-minute stall threshold internal for books, movies and TV.
 - [ ] Check connectivity before recovery; preserve current transfers through outages and keep the only viable download eligible for import. Shorten the threshold only after those safeguards are proven.
 - [x] Finish the Khom Khlang season-pack pilot on real production inbox offers. Match job 63190 dispatched upgrade job 63191. See the live verification and timing in [TV](tv.md).
-- [ ] Implement automatic retirement of provably superseded episode torrent registrations once the pack is verified and seed obligations are met. Keep any referenced payload bytes.
+- [x] Implement automatic, record-only retirement of provably superseded single-episode torrents after 30 actual seed days and fresh exact Plex verification. No payload bytes are deleted.
+- [ ] Observe an eligible retirement in production. Khom Khlang's superseded episode must finish its seed minimum first.
 - [x] Verify production Prometheus receives the acquisition timing samples used by Grafana. The Khom Khlang phase deltas matched the backend trace.
 - [ ] Verify the open UI updates on its own during a production publication.
 

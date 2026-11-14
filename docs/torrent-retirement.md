@@ -1,7 +1,8 @@
-# Automatic Orphan Torrent Record Retirement
+# Automatic Torrent Record Retirement
 
 The continuous stewardship worker can retire a repeatedly unregistered **orphan
-record** from Podible's private Transmission daemon. It never deletes seed files,
+record** or a superseded single-episode TV record from Podible's private
+Transmission daemon. It never deletes seed files,
 canonical content, bindings, releases, history, or other clients' records. There
 is no cross-seed action and no direct HTTP removal mutation.
 
@@ -51,7 +52,7 @@ absence. Participating async producers
 are counted from durable use tokens. The global lane excludes worker acquisition,
 publication, import and maintenance callbacks throughout execution.
 
-## Evidence
+## Orphan Evidence
 
 Retirement requires all of the following, freshly rechecked before dispatch:
 
@@ -83,6 +84,28 @@ collector's observations. Only opaque digests and typed timing/count facts are
 stored; no tracker URL, passkey, raw tracker response, daemon password, session
 token, metainfo, or seed filesystem path is exposed by the retirement API.
 
+## Superseded TV Episodes
+
+The same worker reads existing `tv-pack-retirement:nomination:v1:` publication
+receipts directly. No migration, backfill, or separate job is needed. A durable
+key/member cursor visits one nominated single per maintenance slot, independently
+of the collector's books or screen page. A receipt is historical provenance,
+not permission to remove. Each single must have at least 30 days of actual
+Transmission `secondsSeeding`, with no regression from known evidence. Tracker
+warnings and unregistration never waive this minimum.
+
+The worker proves that the pack is still selected for the entire exact season
+roster, with no pending publication, and that Plex currently reports every
+matching episode at its exact selected path. It checks both owned registrations
+against the receipt, every current daemon member against the saved manifest,
+verified bytes against the entire torrent, and the sealed layout, file identities,
+finalized canonical objects and selected view links on disk. Podible's seed-only
+protection leaves all files unwanted; that flag alone is not completion evidence.
+Missing, changed or legacy layouts without canonical proof fail closed. Only
+the displaced acquisition link and version provenance may remain: active use,
+another consumer or a conflicting layout blocks dispatch. The check never scans
+Plex or modifies files, selections, or bindings.
+
 ## Transactions And Replay
 
 `app_state` holds per-client/hash admission state: `useRevision`, admitted users,
@@ -111,6 +134,12 @@ HTTP 409 is **not** automatically renegotiated/retried for removal. Read-only
 handshakes may renegotiate. This uses the official
 [Transmission RPC session and removal contract](https://github.com/transmission/transmission/blob/4.0.6/docs/rpc-spec.md).
 
+For packs, confirmation of exact hash absence on the same private identity can
+settle a dispatched intent after a daemon restart, without issuing another
+remove or rechecking the old pack. A present record on a new session is never
+replayed, even if its numeric ID matches. Up to two unresolved pack claims share
+the existing total budget of five.
+
 Confirmed retirement preserves a permanent per-hash tombstone: existing missing
 record detection cannot silently admit/re-add the retired hash. This slice does
 not implement tombstone clearing or broad retirement of linked media. Intent,
@@ -125,6 +154,8 @@ configuration, all-tracker evidence qualification, eligibility and blockers.
 The RPC factory explicitly installs this fence without requiring a held worker
 lock; preview neither claims admission nor contacts or mutates the daemon.
 Get returns only the sanitized intent phase, timestamps and record-only outcome.
+Read-only preview still describes orphan qualification; live pack qualification
+is maintenance-only. Pack intents use the same existing pending/completed status.
 The automatic worker examines the collected batch, reconciles at most five
 outstanding intents, and starts at most two new retirements per batch.
 

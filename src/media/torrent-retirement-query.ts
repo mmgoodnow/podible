@@ -29,9 +29,32 @@ export function readConsumerCount(db: Database, binding: RetirementBinding): Tor
       jobIds = ids(`SELECT id AS job_id FROM jobs WHERE book_id=? OR release_id IN
         (SELECT id FROM releases WHERE info_hash=?) ORDER BY id LIMIT 101`, Number(row.book_id), binding.hash);
     } else {
-      const row = get("SELECT id FROM media_torrents WHERE client_id=? AND native_id=?", binding.clientId, binding.hash);
+      const row = get("SELECT id, location_json FROM media_torrents WHERE client_id=? AND native_id=?", binding.clientId, binding.hash);
       if (!row) return { complete: false, count, jobIds, activePublications };
       const id = Number(row.id);
+      if (binding.packHistory) {
+        const { candidateVersionId, packVersionId } = binding.packHistory;
+        const relative = JSON.parse(String(row.location_json)).relativePath;
+        const conflict = get(`SELECT 1 FROM book_torrent_bindings WHERE torrent_id=?
+          UNION ALL SELECT 1 FROM releases WHERE info_hash=?
+          UNION ALL SELECT 1 FROM tv_active_episodes a JOIN tv_version_file_episodes f
+            ON f.version_id=a.version_id AND f.episode_id=a.episode_id WHERE f.file_id IN
+              (SELECT file_id FROM tv_version_files WHERE version_id=?)
+          UNION ALL SELECT 1 FROM tv_publications p JOIN tv_version_files f ON f.version_id=p.version_id WHERE f.file_id IN
+              (SELECT file_id FROM tv_version_files WHERE version_id=?)
+          UNION ALL SELECT 1 FROM movie_version_files f WHERE f.file_id IN
+              (SELECT file_id FROM tv_version_files WHERE version_id=?)
+          UNION ALL SELECT 1 FROM media_content_losses WHERE file_id IN
+              (SELECT file_id FROM tv_version_files WHERE version_id IN (?,?))
+          UNION ALL SELECT 1 FROM media_torrents t JOIN media_torrents owned ON owned.id=?
+            WHERE t.id<>owned.id AND CASE WHEN json_valid(t.location_json) THEN
+              json_extract(t.location_json,'$.rootId') IN ('tv','movies') AND (
+                json_extract(t.location_json,'$.relativePath')=? OR
+                instr(json_extract(t.location_json,'$.relativePath'), ? || '/')=1 OR
+                instr(?,json_extract(t.location_json,'$.relativePath') || '/')=1) END
+          LIMIT 1`, id, binding.hash, candidateVersionId, candidateVersionId, candidateVersionId, candidateVersionId, packVersionId, id, relative, relative, relative);
+        if (conflict) return { complete: false, count, jobIds, activePublications };
+      }
       for (const media of ["movie", "tv"] as const) {
         count += number(`SELECT COUNT(*) AS n FROM ${media}_acquisition_downloads WHERE torrent_id=?`, id);
         activePublications += number(`SELECT COUNT(*) AS n FROM ${media}_publications p WHERE EXISTS (
