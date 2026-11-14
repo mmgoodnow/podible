@@ -128,6 +128,34 @@ test("an unchanged view is verified without replacing its manifest or skipping i
     await expect(reconcileLibraryView(input)).rejects.toThrow("regular file");
   }));
 
+test("publication checks changed links and its own unchanged links; recovery still checks the entire view", () =>
+  fixture(async ctx => {
+    const retained = { relativePath: "Other/old.mkv", contentPath: ctx.file };
+    const episode = { relativePath: "Target/new.mkv", contentPath: ctx.file };
+    const entries = [retained, episode];
+    const scoped = { ...ctx, entries, recheckUnchangedPaths: new Set([episode.relativePath]) };
+    const oldLink = path.join(ctx.viewRoot, retained.relativePath);
+    const newLink = path.join(ctx.viewRoot, episode.relativePath);
+    await reconcileLibraryView({ ...ctx, entries: [retained] });
+
+    await fs.unlink(oldLink);
+    await Bun.write(oldLink, "foreign");
+    expect(await reconcileLibraryView(scoped)).toEqual({ linked: 1, removed: 0, unchanged: 1 });
+    expect(await Bun.file(oldLink).text()).toBe("foreign");
+    await fs.unlink(newLink);
+    expect((await reconcileLibraryView(scoped)).linked).toBe(1);
+    await expect(reconcileLibraryView({ ...scoped, entries: [episode] })).rejects.toThrow("regular file");
+    await expect(reconcileLibraryView({ ...ctx, entries })).rejects.toThrow("regular file");
+
+    await fs.unlink(oldLink);
+    await fs.unlink(newLink);
+    await expect(reconcileLibraryView({ ...scoped, onLinkApplied: () => { throw new Error("crash"); } })).rejects.toThrow("crash");
+    await Bun.write(oldLink, "foreign");
+    await expect(reconcileLibraryView(scoped)).rejects.toThrow("regular file");
+    await fs.unlink(oldLink);
+    expect(await reconcileLibraryView(scoped)).toEqual({ linked: 1, removed: 0, unchanged: 1 });
+  }));
+
 test("repeated interrupted layout changes retain ownership of every unfinished link", () =>
   fixture(async (ctx) => {
     for (const relativePath of ["first.mkv", "second.mkv"]) {

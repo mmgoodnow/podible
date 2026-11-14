@@ -33,11 +33,14 @@ try {
   const input = { contentRoot, viewRoot, assertActive };
   // Do not include library construction in the timed publication.
   await reconcileLibraryView({ ...input, entries: entries.slice(0, -1) });
-  for (const [phase, planned] of [["add", entries], ["unchanged", entries], ["remove", entries.slice(0, -1)]] as const) {
-    checks = 0;
-    const start = performance.now();
-    const result = await reconcileLibraryView({ ...input, entries: planned });
-    console.log(JSON.stringify({ phase, files: planned.length, ms: Math.round(performance.now() - start), checks, ...result }));
+  for (const scope of ["full", "publication"] as const) {
+    const recheckUnchangedPaths = scope === "publication" ? new Set([entries.at(-1)!.relativePath]) : undefined;
+    for (const [phase, planned] of [["add", entries], ["unchanged", entries], ["remove", entries.slice(0, -1)]] as const) {
+      checks = 0;
+      const start = performance.now();
+      const result = await reconcileLibraryView({ ...input, entries: planned, recheckUnchangedPaths });
+      console.log(JSON.stringify({ scope, phase, files: planned.length, ms: Math.round(performance.now() - start), checks, ...result }));
+    }
   }
 } finally {
   await fs.rm(root, { recursive: true, force: true });

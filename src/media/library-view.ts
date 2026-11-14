@@ -164,6 +164,9 @@ export async function reconcileLibraryView(input: {
   contentRoot: string;
   viewRoot: string;
   entries: LibraryViewEntry[];
+  /** On a publication, recheck these unchanged links and all manifest changes.
+   * Initial reconciliation, journal recovery and legacy adoption still audit everything. */
+  recheckUnchangedPaths?: ReadonlySet<string>;
   /** Exact legacy hardlinks whose canonical content and DB cutover the caller verified. */
   adoptRegularFiles?: LibraryViewEntry[];
   assertActive?: () => void;
@@ -210,13 +213,23 @@ export async function reconcileLibraryView(input: {
   };
   const files: Record<string, string> = Object.create(null);
   const desiredPaths = new Set<string>();
+  const unchangedOutsidePublication = new Set<string>();
+  const recheck = !pending && !input.adoptRegularFiles?.length ? input.recheckUnchangedPaths : undefined;
+  const checkEntries: LibraryViewEntry[] = [];
   for (const entry of input.entries) {
     contained(viewRoot, entry.relativePath);
     if (desiredPaths.has(entry.relativePath))
       throw new Error(`Duplicate view path: ${entry.relativePath}`);
     desiredPaths.add(entry.relativePath);
+    const recorded = previous.files[entry.relativePath];
+    if (recheck && !recheck.has(entry.relativePath) && recorded?.length === 1 &&
+        recorded[0] === path.relative(contentRoot, path.resolve(entry.contentPath))) {
+      contained(contentRoot, recorded[0]);
+      files[entry.relativePath] = recorded[0];
+      unchangedOutsidePublication.add(entry.relativePath);
+    } else checkEntries.push(entry);
   }
-  for (const [relative, source] of await preflight(input.entries, async entry => {
+  for (const [relative, source] of await preflight(checkEntries, async entry => {
     return [entry.relativePath, (await canonicalSource(entry.contentPath)).source] as const;
   }, input.assertActive)) {
     files[relative] = source;
@@ -267,7 +280,7 @@ export async function reconcileLibraryView(input: {
         throw new Error(`Conflicting view paths: ${key}`);
     }
   }
-  // Preflight every path before changing any link, including retired entries.
+  // Preflight changed and scoped paths, including every retired entry.
   const parents = new Map<string, Promise<void>>();
   const checkParent = (parent: string): Promise<void> => {
     if (parent === ".") return Promise.resolve();
@@ -281,7 +294,7 @@ export async function reconcileLibraryView(input: {
     }
     return check;
   };
-  const observed = new Map(await preflight([...knownPaths], async relative => {
+  const observed = new Map(await preflight([...knownPaths].filter(relative => !unchangedOutsidePublication.has(relative)), async relative => {
     const destination = contained(viewRoot, relative);
     await checkParent(path.posix.dirname(relative));
     const existing = await stat(destination);
@@ -312,13 +325,13 @@ export async function reconcileLibraryView(input: {
     }
     return [relative, target] as const;
   }, input.assertActive));
-  // Skip journal writes only after a fresh disk check, never with an outstanding
-  // recovery journal or an adoption. Mutating paths revalidate without the cache.
+  // Skip journal writes only after all required disk checks, never with an
+  // outstanding journal or an adoption. Mutations revalidate without the cache.
   if (previousRaw && !pending && !requestedAdoptions.size && knownPaths.size === Object.keys(files).length &&
       [...knownPaths].every(relative => {
         const source = files[relative];
         return source !== undefined && previous.files[relative]?.length === 1 && previous.files[relative]?.[0] === source &&
-          observed.get(relative) === contained(contentRoot, source);
+          (unchangedOutsidePublication.has(relative) || observed.get(relative) === contained(contentRoot, source));
       })) {
     input.assertActive?.();
     return { linked: 0, removed: 0, unchanged: knownPaths.size };
@@ -372,6 +385,7 @@ export async function reconcileLibraryView(input: {
   let linked = 0;
   let removed = 0;
   for (const [relative, sourceRelative] of Object.entries(files)) {
+    if (unchangedOutsidePublication.has(relative)) continue;
     const destination = contained(viewRoot, relative);
     const target = contained(contentRoot, sourceRelative);
     if (observed.get(relative) === target) continue;

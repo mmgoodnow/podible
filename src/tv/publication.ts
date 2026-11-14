@@ -88,8 +88,13 @@ export async function publishTvVersion(input: { repo: TvRepo; roots: TvRoots; li
   const queued = performance.now();
   return serialized(roots.viewRoot, async () => {
     recordPublicationPhase("tv", "lock_wait", performance.now() - queued);
+    let recheckUnchangedPaths: ReadonlySet<string> | undefined;
     const reconcile = () => measureView(() =>
-      reconcileLibraryView({ ...roots, entries: tvViewEntries(repo, roots), assertActive: active }), input.onReconcile);
+      reconcileLibraryView({ ...roots, entries: tvViewEntries(repo, roots), assertActive: active, recheckUnchangedPaths }), input.onReconcile);
+    const readVersionPaths = () => {
+      const entry = repo.entry(repo.target(targetId)!.entry_id)!;
+      return { entry, files: versionEntries(entry, roots, targetId, repo.version(versionId)!) };
+    };
     const pending = () => repo.publications().find(item => item.target_id === targetId);
     const selected = () => repo.activeEpisodes(targetId).some(row => row.version_id === versionId);
     const promote = (expectedRevision: number, verifiedSeasonPack?: true) => {
@@ -115,13 +120,14 @@ export async function publishTvVersion(input: { repo: TvRepo; roots: TvRoots; li
         }
       });
       else { active(); repo.stagePublication(targetId, versionId); }
+      recheckUnchangedPaths = new Set(readVersionPaths().files.map(file => file.relativePath));
       if (!alreadyPromoted) {
         const expectedRevision = pending()!.expected_revision;
         effectPhase("publication:reconcile");
         await reconcile();
         active();
-        const entry = repo.entry(repo.target(targetId)!.entry_id)!;
-        const files = versionEntries(entry, roots, targetId, repo.version(versionId)!).map(file => ({
+        const { entry, files: versionPaths } = readVersionPaths();
+        const files = versionPaths.map(file => ({
           serverPath: path.posix.join(roots.serverViewRoot, file.relativePath), episodes: file.episodes,
         }));
         effectPhase("publication:scan");
@@ -146,6 +152,7 @@ export async function publishTvVersion(input: { repo: TvRepo; roots: TvRoots; li
       }
     } catch (error) {
       if (guard && fenceFailed) {
+        recheckUnchangedPaths = undefined;
         effectPhase("publication:rollback");
         repo.transaction(() => {
           active();

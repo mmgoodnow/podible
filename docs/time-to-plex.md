@@ -43,6 +43,21 @@ filesystem, a pass fell from 225-241 ms to 41-50 ms by amortizing read-only
 checks and skipping journal writes when the view already matches. File changes
 still recheck ownership, paths, and publication state immediately before writing.
 
+The TV hot path audits the new version's links plus all manifest changes.
+Unrelated links that already match the committed projection remain untouched.
+Maintenance and interrupted journals still force a full audit. On the same
+1,543-file lab, adding, rechecking, or removing one episode took 7-9 ms
+versus 43-46 ms for a full audit.
+
+## November 14 Workflow Breakdown
+
+Read-only Reflow timings for TV acquisitions 164, 166, 168 and 169 showed
+19-24 seconds in the import verifier, 1-7 seconds probing streams, and
+18-62 seconds publishing. Only 0-5 seconds of that publication time was
+spent waiting for the Plex event. The rest was inside Podible's publication
+attempts (view reconciliation, lock acquisition, scan requests and exact
+catalog checks). These runs precede the scoped reconciliation change.
+
 ## Attack on Titan baseline
 
 Read-only verification on Cyprus, 2026-11-10, running
