@@ -203,25 +203,40 @@ async function resolveMember(contentRoot: string, sourceRoot: string, plan: Cano
 export function sealCanonicalDownload(contentRoot: string, sourceRoot: string, client: TorrentClient, ref: TorrentRef, active: () => void = () => {}) {
   return serialized(sourceRoot, () => seal(contentRoot, sourceRoot, client, ref, active));
 }
+async function checkSealMembers(files: CanonicalDownload["files"], check: (file: CanonicalDownload["files"][number]) => Promise<unknown>) {
+  const concurrency = 8;
+  for (let offset = 0; offset < files.length; offset += concurrency) {
+    // Drain every check before releasing the seal's storage lock on failure.
+    const checked = await Promise.allSettled(files.slice(offset, offset + concurrency).map(check));
+    const failure = checked.find(result => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
+  }
+}
 async function seal(contentRoot: string, sourceRoot: string, client: TorrentClient, ref: TorrentRef, active: () => void) {
+  effectPhase("canonical-seal:read-reservation");
   const plan = await readCanonicalDownload(contentRoot, sourceRoot);
   if (!plan) return;
   if (plan.clientId !== ref.clientId || plan.infoHash !== ref.nativeId || client.id !== ref.clientId || !client.sealDownload)
     throw new Error("Cannot surrender canonical download writer authority");
   const resolve = resolveDownloadMembers(contentRoot, sourceRoot, plan);
-  for (const file of plan.files) {
+  effectPhase("canonical-seal:preflight");
+  await checkSealMembers(plan.files, async (file) => {
     active();
     if (file.relativePath) await resolve(path.join(sourceRoot, file.path));
     else {
       const existing = await stat(path.join(sourceRoot, file.path));
       if (existing && (!existing.isFile() || existing.isSymbolicLink())) throw new Error("Invalid torrent-specific sidecar");
     }
-  }
+  });
+  effectPhase("canonical-seal:daemon");
   active(); await client.sealDownload(ref); active();
   // stop flushes the daemon's verified-but-buffered pieces into the reserved objects.
-  for (const file of plan.files) { active(); await resolve(path.join(sourceRoot, file.path), file.size); }
+  effectPhase("canonical-seal:verify");
+  await checkSealMembers(plan.files, async (file) => { active(); await resolve(path.join(sourceRoot, file.path), file.size); });
+  effectPhase("canonical-seal:persist");
   if (JSON.stringify(await readCanonicalDownload(contentRoot, sourceRoot)) !== JSON.stringify(plan))
     throw new Error("Canonical download reservation changed during sealing");
+  active();
   plan.sealed = true; await writeJson(manifestPath(contentRoot, sourceRoot), plan);
 }
 

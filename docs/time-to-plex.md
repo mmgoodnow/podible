@@ -80,6 +80,19 @@ TV stream probes run in groups of up to four read-only operations. Per-file
 checkpoint names and output order are unchanged, so retry can reuse probes
 from a completed batch. Legacy jobs still re-probe serially.
 
+Canonical sealing now reports separate live execution phases for reading the
+reservation, checking paths before the Transmission transition, waiting for
+the daemon to surrender write access, checking flushed file sizes and
+persisting the seal. Filesystem checks run in groups of at most eight, with no
+daemon transition or seal write until the preceding checks pass. On the Mac,
+six synthetic 160-member runs with a no-op daemon went from 43-51 ms to
+13-17 ms. This is not evidence of faster Transmission quiescence or flushing.
+The isolated canonical download/restart lab (`test/lab/canonical-download-inner.ts`)
+reports `sealTimings` for synthetic single-file, multi-file and prefilled
+season-pack transfers. On Cyprus with Transmission 4.1.4, the daemon transition
+took 1.18-1.55 s while each filesystem phase took at most 1 ms in those small
+fixtures. The lab does not establish the cause of the slower production seals.
+
 ## Attack on Titan baseline
 
 Read-only verification on Cyprus, 2026-11-10, running

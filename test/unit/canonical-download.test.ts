@@ -132,6 +132,41 @@ test("initial torrent is a persisted view of private canonical objects; finaliza
   } finally { await f.close(); }
 });
 
+test("seal rejects an invalid member before contacting the daemon and rechecks flushed bytes before persisting", async () => {
+  const f = await fixture();
+  try {
+    let daemonCalls = 0;
+    const sidecar = path.join(f.sourceRoot, "Book", "release.nfo");
+    const client = { ...f.client, sealDownload: async () => {
+      daemonCalls++;
+      expect(executionDiagnostics().find(item => item.runId === "seal-fixture")?.phases.at(-1)?.name).toBe("canonical-seal:daemon");
+      if (daemonCalls === 1) await fs.writeFile(sidecar, "truncated");
+    } };
+    const seal = () => withExecutionEffects({
+      jobId: 1, runId: "seal-fixture", stepName: "tv:seal-download", signal: new AbortController().signal,
+    }, async () => {
+      await sealCanonicalDownload(f.contentRoot, f.sourceRoot, client, f.ref);
+      expect(executionDiagnostics().find(item => item.runId === "seal-fixture")?.phases.map(phase => phase.name)).toEqual([
+        "canonical-seal:read-reservation", "canonical-seal:preflight", "canonical-seal:daemon", "canonical-seal:verify", "canonical-seal:persist",
+      ]);
+    });
+    await f.fill();
+    await fs.unlink(sidecar);
+    await fs.symlink(f.contentRoot, sidecar);
+    await expect(seal()).rejects.toThrow("Invalid torrent-specific sidecar");
+    expect(daemonCalls).toBe(0);
+    await fs.unlink(sidecar);
+    await f.fill();
+    await expect(seal()).rejects.toThrow("escaped its declared canonical regular object");
+    expect(daemonCalls).toBe(1);
+    expect((await readCanonicalDownload(f.contentRoot, f.sourceRoot))?.sealed).toBe(false);
+    await f.fill();
+    await seal();
+    expect(daemonCalls).toBe(2);
+    expect((await readCanonicalDownload(f.contentRoot, f.sourceRoot))?.sealed).toBe(true);
+  } finally { await f.close(); }
+});
+
 test("old receipts remain reusable, but a same-size edit invalidates the recorded identity", async () => {
   const f = await fixture();
   try {

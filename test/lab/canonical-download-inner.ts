@@ -11,6 +11,7 @@ import { prepareCanonicalDownload, readCanonicalDownload, sealCanonicalDownload,
 import { readSeedOnlyIntent, seedOnlyIntentDirectory } from "../../src/media/seed-only-state";
 import { captureReuseFile, captureReuseRoot } from "../../src/media/reuse-layout";
 import { hasVerifiedLocalSeasonPackPrefill } from "../../src/tv/season-pack-reuse";
+import { executionDiagnostics, withExecutionEffects } from "../../src/runtime/execution-effects";
 
 assert.equal(process.platform, "linux", "Run in the disposable Linux Transmission lab image");
 const binary = process.env.TRANSMISSION_BINARY ?? "transmission-daemon";
@@ -66,6 +67,18 @@ const info = { name: "Pack", "piece length": pieceLength, pieces: Buffer.concat(
 const metainfo = bencode.encode({ announce: endpoint + "/announce", "url-list": [endpoint + "/seed/"], info });
 const hash = createHash("sha1").update(bencode.encode(info)).digest("hex");
 let rpc: TransmissionRpc, client: ReturnType<typeof managedTransmission>;
+const sealTimings: Record<string, { totalMs: number; phasesMs: Record<string, number> }> = {};
+async function measureSeal(name: string, sourceRoot: string, ref: Parameters<typeof sealCanonicalDownload>[3]) {
+  await withExecutionEffects({ jobId: 1, runId: name, stepName: "lab:seal", signal: new AbortController().signal }, async () => {
+    const started = performance.now();
+    await sealCanonicalDownload(canonicalRoot, sourceRoot, client, ref);
+    const finished = Date.now();
+    const phases = executionDiagnostics().find(item => item.runId === name)!.phases;
+    sealTimings[name] = { totalMs: Math.round(performance.now() - started), phasesMs: Object.fromEntries(
+      phases.map(phase => [phase.name, (phase.finishedAt ?? finished) - phase.startedAt]),
+    ) };
+  });
+}
 let daemon: ReturnType<typeof Bun.spawn> | undefined;
 const daemonLog = path.join(root, "daemon.log");
 async function until(check: () => Promise<boolean>, description: string, seconds = 60) {
@@ -179,7 +192,7 @@ try {
   await until(async () => { const s = await snapshot(); return s.haveValid === payload.length && s.haveUnchecked === 0 && s.status === 6; }, "complete initial download after restart", 90);
   const complete = await snapshot();
   await assertCanonicalLinks(); await assertNoPayloadCopies();
-  await sealCanonicalDownload(canonicalRoot, downloads, client, ref);
+  await measureSeal("multiFile", downloads, ref);
   assert.equal((await readCanonicalDownload(canonicalRoot, downloads))?.sealed, true);
   const sealed = await snapshot();
   assert.equal(sealed.fileStats.every(file => !file.wanted), true);
@@ -234,7 +247,7 @@ try {
   assert.equal(singleRef.nativeId, singlePlan.infoHash); assert.equal((await snapshot(singleRef.nativeId)).haveValid, 0);
   await client.resume(singleRef);
   await until(async () => (await client.inspect(singleRef)).complete, "single-file initial audiobook download");
-  await sealCanonicalDownload(canonicalRoot, singleRoot, client, singleRef);
+  await measureSeal("singleFile", singleRoot, singleRef);
   const singleFinalized = await finalizeCanonicalDownloadFile(canonicalRoot, singleRoot, singleView, singleFile.bytes.length);
   assert.equal(singleFinalized?.sizeBytes, singleFile.bytes.length);
   assert.equal(sha256(await fs.readFile(singleCanonical)), sha256(singleFile.bytes));
@@ -287,7 +300,7 @@ try {
   await until(async () => (await client.inspect(seasonRef)).complete, "download only missing season pieces");
   const seasonComplete = await snapshot(seasonRef.nativeId);
   assert.equal(seasonComplete.downloadedEver, seasonPayload.length - prefilled.haveValid);
-  await sealCanonicalDownload(canonicalRoot, seasonRoot, client, seasonRef);
+  await measureSeal("seasonPack", seasonRoot, seasonRef);
   assert.equal(sha256(await fs.readFile(source.path)), sha256(reusable.bytes));
   await assertCanonicalLinks();
   await stop();
@@ -295,7 +308,7 @@ try {
     boundaryOffsets: boundaries, crossFilePieces: boundaries.length, flushedVerifiedBytes, restartHaveValid: restarted.haveValid,
     finalHaveValid: complete.haveValid, downloadedEver: complete.downloadedEver, requests, servedBytes,
     canonicalInodesPreserved: true, symlinkInodesPreserved: true, noPartialOrDuplicatePayloads: true,
-    applicationManifestReplay: true, startupGuardPreservedSealedState: true, finalized,
+    applicationManifestReplay: true, startupGuardPreservedSealedState: true, finalized, sealTimings,
     seasonPack: { bytes: seasonPayload.length, verifiedBeforeStart: prefilled.haveValid, downloadedEver: seasonComplete.downloadedEver },
     singleFile: { name: singleFile.name, bytes: singleFile.bytes.length, initiallyEmpty: true,
       canonicalInodePreserved: true, symlinkInodePreserved: true, sealedRestart: true,
