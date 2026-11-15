@@ -3,6 +3,7 @@ import { measurePublicationPhase, measureView, recordPublicationPhase } from "..
 import type { MovieRepo } from "./repo";
 import type { Movie } from "./types";
 import { withKeyedMutex } from "../runtime/keyed-mutex";
+import { effectPhase } from "../runtime/execution-effects";
 import {
   reconcileLibraryView,
   type LibraryViewEntry,
@@ -104,14 +105,17 @@ export async function publishMovieVersion(input: {
 }) {
   const { repo, roots, library, targetId, versionId } = input;
   const active = input.assertActive ?? (() => {});
+  effectPhase("publication:mutex-wait");
   const queued = performance.now();
   return serialized(path.resolve(roots.viewRoot), async () => {
     recordPublicationPhase("movie", "lock_wait", performance.now() - queued);
+    effectPhase("publication:stage");
     active();
     repo.stagePublication(targetId, versionId);
     const pending = repo
       .publications()
       .find((entry) => entry.target_id === targetId)!;
+    effectPhase("publication:reconcile");
     await measureView(() => reconcileLibraryView({
       ...roots,
       entries: movieViewEntries(repo, roots),
@@ -133,18 +137,22 @@ export async function publishMovieVersion(input: {
       .map((entry) =>
         path.posix.join(roots.serverViewRoot, entry.relativePath),
       );
+    effectPhase("publication:scan");
     if (input.scan !== false) await measurePublicationPhase("movie", "scan_request", () => library.scan(paths));
+    effectPhase("publication:verify");
     if (!(await measurePublicationPhase("movie", "verify_catalog", () => library.verify(movie, paths)))) {
       if (input.pendingIsExpected) return false;
       throw new Error(
         "Plex has not verified the expected movie and content paths; previous version remains active",
       );
     }
+    effectPhase("publication:promote");
     active();
     repo.selectVersion(targetId, versionId, pending.expected_revision, { plexVerified: true });
     await input.afterPromotion?.();
     active();
     repo.clearPublication(targetId, versionId);
+    effectPhase("publication:cleanup");
     await measureView(() => reconcileLibraryView({
       ...roots,
       entries: movieViewEntries(repo, roots),

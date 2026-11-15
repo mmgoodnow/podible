@@ -477,6 +477,17 @@ for (const restart of [false, true]) {
       expect(acquisitionLatencyPrometheus(s.repo)).toContain(
         'podible_acquisition_latency_seconds_count{media="tv",phase="complete_to_ready"} 1\n',
       );
+      using checkpoints = new Database(path.join(s.root, "event.sqlite"), { readonly: true });
+      const publication = checkpoints.query<{ output: string }, [string]>(`SELECT output FROM workflow_steps
+        WHERE run_id=? AND status='completed' AND kind='step' AND (name LIKE '%:plex-publication:0' OR name LIKE '%:plex-publication:1')
+        ORDER BY name`).all(s.repo.getJobExecution(job)!.run_id).map(({ output }) => JSON.parse(output));
+      expect(publication.map(result => result.published)).toEqual([false, true]);
+      expect(publication[0].phases.map((phase: { name: string }) => phase.name)).toContain("publication:scan");
+      expect(publication[1].phases.map((phase: { name: string }) => phase.name)).toContain("publication:verify");
+      for (const result of publication) for (const phase of result.phases) {
+        expect(phase.startedAt).toBeGreaterThanOrEqual(Date.parse(completedAt));
+        expect(phase.finishedAt).toBeGreaterThanOrEqual(phase.startedAt);
+      }
       await assertOwnedViews(s);
     } finally { await runtime?.stop(); await s.close(); }
   }, 30_000);

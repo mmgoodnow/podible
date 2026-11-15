@@ -47,17 +47,23 @@ test("the read-only Plex timing report requires a completed download and its exa
     }
     {
       using db = new Database(execution);
-      db.exec("CREATE TABLE workflow_steps(run_id, name, kind, status, started_at, updated_at, created_at)");
+      db.exec("CREATE TABLE workflow_steps(run_id, name, kind, status, started_at, updated_at, created_at, output)");
+      const phase = (name: string, from: number, to: number) => ({ name, startedAt: Date.parse(stamp(from)), finishedAt: Date.parse(stamp(to)) });
       for (const [step, kind, start, end] of [
         ["completion:0:inspect", "step", 3, 5],
+        ["seal-download", "step", 4, 5],
         ["inspect", "step", 5, 8],
         ["plex-publication:0", "step", 8, 14],
         ["plex-publication:0:event:0", "wait", 14, 24],
         ["plex-publication:1", "step", 24, 35],
         ["sensitive-step-name", "step", 34, 36],
       ] as const) {
-        db.run("INSERT INTO workflow_steps VALUES ('tv-run',?,?,'completed',?,?,?)",
-          ["tv:attempt:0:" + step, kind, Date.parse(stamp(start)), Date.parse(stamp(end)), Date.parse(stamp(start))]);
+        const output = step === "plex-publication:1" ? JSON.stringify({ phases: [
+          phase("publication:scan", 23, 25), phase("publication:verify", 25, 35),
+          phase("sensitive-phase-name", 25, 29), phase("publication:promote", 29, 28),
+        ] }) : step === "seal-download" ? JSON.stringify({ phases: [phase("canonical-seal:daemon", 4, 5)] }) : null;
+        db.run("INSERT INTO workflow_steps VALUES ('tv-run',?,?,'completed',?,?,?,?)",
+          ["tv:attempt:0:" + step, kind, Date.parse(stamp(start)), Date.parse(stamp(end)), Date.parse(stamp(start)), output]);
       }
     }
     const result = Bun.spawnSync([process.execPath, "run", path.resolve(import.meta.dir, "../../scripts/report-plex-latency.ts"),
@@ -70,12 +76,21 @@ test("the read-only Plex timing report requires a completed download and its exa
       { media: "tv", candidatesExamined: 1, samples: [{ acquisitionId: 2, preparationMs: 4000, publicationMs: 26000, totalMs: 30000,
         underTarget: false, timeline: { truncated: false, segments: [
           { phase: "read_torrent_completion", fromMs: 0, toMs: 1000 },
+          { phase: "seal_files", fromMs: 0, toMs: 1000, subphases: [
+            { phase: "canonical-seal:daemon", fromMs: 0, toMs: 1000 },
+          ] },
           { phase: "review_import", fromMs: 1000, toMs: 4000 },
           { phase: "publication_attempt", fromMs: 4000, toMs: 10000 },
           { phase: "wait_for_plex_event", fromMs: 10000, toMs: 20000 },
-          { phase: "publication_attempt", fromMs: 20000, toMs: 30000 },
+          { phase: "publication_attempt", fromMs: 20000, toMs: 30000, subphases: [
+            { phase: "publication:scan", fromMs: 20000, toMs: 21000 },
+            { phase: "publication:verify", fromMs: 21000, toMs: 30000 },
+          ] },
         ] } }] },
     ]);
+    expect(report[1].samples[0].timeline.segments[3].subphases).toBeUndefined();
+    expect(result.stdout.toString()).not.toContain("sensitive-");
+    expect(report[1].samples[0].timeline.segments.at(-1).subphases).toHaveLength(2);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

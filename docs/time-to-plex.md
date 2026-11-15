@@ -30,6 +30,12 @@ Pass `--execution-db /path/to/execution.sqlite` to include a timeline from
 the matching Reflow run. Segment endpoints are milliseconds since in-client
 download completion, bounded by exact Plex readiness. Unknown steps and raw
 step names are omitted; gaps may include work not tracked in a durable step.
+New seal and publication checkpoints include nested `subphases` so you can
+separate Transmission quiescence, lock wait, link changes, and Plex requests
+within a single run. Do not add these intervals to the parent durations. They
+are saved with completed step results, including attempts that didn't find
+the item in Plex yet. Older checkpoints and interrupted attempts have no
+sub-phase receipt. Recording them adds no separate database write.
 
 ## TV View Enumeration
 

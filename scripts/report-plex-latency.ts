@@ -21,14 +21,36 @@ if (values["execution-db"]) {
 }
 db.exec("PRAGMA query_only=ON; PRAGMA busy_timeout=2000");
 
+const receiptPhases = {
+  seal_files: new Set(["canonical-seal:read-reservation", "canonical-seal:preflight", "canonical-seal:daemon",
+    "canonical-seal:verify", "canonical-seal:persist"]),
+  publication_attempt: new Set(["publication:arm", "publication:mutex-wait", "publication:stage", "publication:reconcile",
+    "publication:scan", "publication:verify", "publication:promote", "publication:rollback", "publication:cleanup", "publication:complete"]),
+};
+
+function readPhaseReceipt(output: string | null, phase: keyof typeof receiptPhases, complete: number, fromMs: number, toMs: number) {
+  if (!output) return [];
+  let receipt: { phases?: unknown } | null;
+  try { receipt = JSON.parse(output); } catch { return []; }
+  if (!Array.isArray(receipt?.phases)) return [];
+  return receipt.phases.slice(0, 12).flatMap(item => {
+    if (!item || typeof item.name !== "string" || !receiptPhases[phase].has(item.name) ||
+      !Number.isSafeInteger(item.startedAt) || !Number.isSafeInteger(item.finishedAt)) return [];
+    const start = Math.max(fromMs, item.startedAt - complete), end = Math.min(toMs, item.finishedAt - complete);
+    return end > start ? [{ phase: item.name as string, fromMs: start, toMs: end }] : [];
+  });
+}
+
 function readTimeline(job: number, complete: number, ready: number) {
-  const steps = db.query<{ name: string; kind: string; start: number; end: number }, [number, number, number]>(`
-    SELECT s.name,s.kind,s.started_at AS start,s.updated_at AS end
+  const steps = db.query<{ name: string; kind: string; start: number; end: number; output: string | null }, [number, number, number]>(`
+    SELECT s.name,s.kind,s.started_at AS start,s.updated_at AS end,
+      CASE WHEN s.kind='step' AND (s.name LIKE '%:seal-download' OR s.name GLOB '*:plex-publication:[0-9]*')
+        AND length(s.output)<=8192 THEN s.output END AS output
     FROM job_executions j JOIN execution.workflow_steps s ON s.run_id=j.run_id
     WHERE j.job_id=? AND s.status='completed' AND s.updated_at>=? AND s.started_at<=?
     ORDER BY s.started_at,s.created_at LIMIT 401
   `).all(job, complete, ready);
-  const segments = steps.slice(0, 400).flatMap(({ name, kind, start, end }) => {
+  const segments = steps.slice(0, 400).flatMap(({ name, kind, start, end, output }) => {
     const phase = /:plex-publication:\d+$/.test(name) ? "publication_attempt"
       : /:plex-publication:\d+:event:\d+$/.test(name) && kind === "wait" ? "wait_for_plex_event"
       : /:completion:\d+:inspect$/.test(name) ? "read_torrent_completion"
@@ -41,7 +63,10 @@ function readTimeline(job: number, complete: number, ready: number) {
       : null;
     const fromMs = Math.max(complete, start) - complete;
     const toMs = Math.min(ready, end) - complete;
-    return phase && toMs >= fromMs ? [{ phase, fromMs, toMs }] : [];
+    if (!phase || toMs < fromMs) return [];
+    const subphases = phase === "seal_files" || phase === "publication_attempt"
+      ? readPhaseReceipt(output, phase, complete, fromMs, toMs) : [];
+    return [{ phase, fromMs, toMs, ...(subphases.length ? { subphases } : {}) }];
   });
   return { segments, truncated: steps.length > 400 };
 }

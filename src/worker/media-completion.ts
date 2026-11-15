@@ -1,5 +1,6 @@
 import type { TorrentRef, TorrentSnapshot } from "../media/torrent-client";
 import { durableStep, type WorkerContext } from "./context";
+import { effectPhase, effectPhaseReceipt } from "../runtime/execution-effects";
 
 export async function waitForTorrentCompletion(ctx: WorkerContext, name: string, ref: TorrentRef,
   stallMs: number, observe: () => Promise<TorrentSnapshot | null>, isComplete: (seen: TorrentSnapshot) => boolean,
@@ -46,9 +47,10 @@ export async function waitForPlexPublication(ctx: WorkerContext, prefix: string,
   for (let wake = 0; ; wake++) {
     const slot = `${prefix}:plex-publication:${wake}`;
     const result = await durableStep(ctx, slot, async () => {
+      effectPhase("publication:arm");
       execution.armCompletion!(slot, "plex:" + section);
       const published = await publish(!timedOut && wake <= 1);
-      return { published, remaining: Math.max(0, deadline - Date.now()) };
+      return { published, remaining: Math.max(0, deadline - Date.now()), phases: effectPhaseReceipt() };
     });
     if (result.published) { execution.clearCompletion!(slot); return; }
     if (timedOut || !result.remaining)

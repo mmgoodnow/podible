@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 
 type Effects = {
   jobId: number; runId: string; stepName: string; signal: AbortSignal;
-  progress(): void; phase(name: string): void; sequence: number;
+  progress(): void; phase(name: string): void; phases(): Phase[]; sequence: number;
 };
 type Phase = { name: string; startedAt: number; finishedAt?: number };
 const scope = new AsyncLocalStorage<Effects>();
@@ -31,6 +31,14 @@ export function effectPhase(name: string) {
   effects?.phase(name);
 }
 
+/** Capture the current effect's code-defined intervals before its durable result is saved. */
+export function effectPhaseReceipt() {
+  const finishedAt = Date.now();
+  return scope.getStore()?.phases().map(phase => ({
+    name: phase.name, startedAt: phase.startedAt, finishedAt: phase.finishedAt ?? finishedAt,
+  })) ?? [];
+}
+
 /** Stable within a step replay, independent for siblings within the step. */
 export function effectOperationId(namespace: string): string | undefined {
   const effects = scope.getStore();
@@ -46,6 +54,7 @@ export async function withExecutionEffects<T>(input: {
   const controller = new AbortController();
   const effects: Effects = { ...input, sequence: 0,
     signal: AbortSignal.any([input.signal, controller.signal]), progress: () => { record.progressAt = Date.now(); },
+    phases: () => record.phases,
     phase: name => {
       const now = Date.now(), previous = record.phases.at(-1);
       if (previous) previous.finishedAt = now;

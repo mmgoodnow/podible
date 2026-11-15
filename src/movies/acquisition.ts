@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { JobRow } from "../app-types";
 import { durableStep, type WorkerContext } from "../worker/context";
 import { waitForPlexPublication, waitForTorrentCompletion } from "../worker/media-completion";
+import { effectPhaseReceipt } from "../runtime/execution-effects";
 import { recordPublicationLatency, recordViewLatency, savedCompletionTime } from "../media/acquisition-latency";
 import { assertMovieStorage, prepareMovieStorage } from "./storage";
 import { adoptContentFile } from "../media/content-store";
@@ -514,7 +515,10 @@ export async function acquireMovie(
       );
       continue;
     }
-    await durableStep(ctx, `${prefix}:seal-download`, () => sealCanonicalDownload(roots.contentRoot, sourceRoot, services.client, ref, active));
+    await durableStep(ctx, `${prefix}:seal-download`, async () => {
+      await sealCanonicalDownload(roots.contentRoot, sourceRoot, services.client, ref, active);
+      return { phases: effectPhaseReceipt() };
+    });
     emit(
       `${attempt}:verify`,
       "verifying",

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { downloadCapacityProblem } from "../media/download-capacity";
 import { advanceDownloadProgress, downloadComplete, DOWNLOAD_STALL_MS } from "../media/download-lifecycle";
 import { waitForPlexPublication, waitForTorrentCompletion } from "../worker/media-completion";
+import { effectPhaseReceipt } from "../runtime/execution-effects";
 import { recordPublicationLatency, recordViewLatency, savedCompletionTime } from "../media/acquisition-latency";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -766,7 +767,10 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
         stalledPacks.push({ key: offer.key, hash: ref.nativeId });
         reject(offer.key, ref.nativeId); emit(`${attempt}:stalled`, "replacing", "Retained a stalled TV download and searching another release"); continue;
       }
-      await durableStep(ctx, `${prefix}:seal-download`, () => sealCanonicalDownload(roots.contentRoot, sourceRoot, services.client, ref, active));
+      await durableStep(ctx, `${prefix}:seal-download`, async () => {
+        await sealCanonicalDownload(roots.contentRoot, sourceRoot, services.client, ref, active);
+        return { phases: effectPhaseReceipt() };
+      });
       prepared = await tvSourceFiles(tvSourceSchema.parse({ ref, location, offerKey: offer.key, title: offer.title, provider: offer.provider, manifest: metadata }), services.client, settings.tv.managedRoot);
     }
     const source = snapshot.sourceReuse
