@@ -536,13 +536,28 @@ async function verify() {
   await releaseFeed.click();
   await page.getByRole("heading", { name: "Release feed", exact: true }).waitFor();
   const timeline = page.getByRole("list", { name: "Incoming releases" });
-  await timeline.getByText("2nd cross-seed", { exact: true }).waitFor();
-  await timeline.getByText("Initial download", { exact: true }).waitFor();
+  await timeline.getByRole("button", { name: "2nd cross-seed", exact: true }).waitFor();
+  await timeline.getByRole("button", { name: "First download", exact: true }).waitFor();
   assert.match(await timeline.getByRole("link", { name: "Picked Fixture Book" }).first().getAttribute("href") ?? "", /^\/book\/\d+$/);
+  const upgradeRow = timeline.getByRole("listitem").filter({ has: page.getByText("Pending cross-seed release", { exact: true }) });
+  const badge = upgradeRow.getByRole("button", { name: "Possible upgrade", exact: true });
+  assert.equal(await upgradeRow.getByRole("button", { name: "Reuse skipped", exact: true }).count(), 1);
+  assert.equal(await upgradeRow.getByRole("link", { name: "Picked Fixture Book", exact: true }).count(), 1);
+  const explanation = upgradeRow.getByText("Podible considered this release to get a better copy, but it has not been chosen.", { exact: true });
+  assert.equal(await explanation.isVisible(), false);
+  await badge.click();
+  await explanation.waitFor();
+  await badge.press("Escape");
+  assert.equal(await explanation.isVisible(), false);
+  await upgradeRow.getByText("Pending cross-seed release", { exact: true }).hover();
+  await badge.hover();
+  await explanation.waitFor();
+  await upgradeRow.getByText("Pending cross-seed release", { exact: true }).hover();
+  assert.equal(await explanation.isVisible(), false);
   const headings = await timeline.locator(":scope > li").evaluateAll(rows => rows.map(row =>
     row.querySelector(":scope > .release-feed-title > strong, :scope > details > summary")?.firstChild?.textContent?.trim()));
   assert.deepEqual(headings, ["Ignored audiobook release", "Picked audiobook release", "Pending cross-seed release",
-    "Second cross-seed release", "2 releases with no recorded pick", "First cross-seed release", "43 releases with no recorded pick"]);
+    "Second cross-seed release", "2 other releases", "First cross-seed release", "43 other releases"]);
   assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false, "Picked releases overflow mobile viewport");
   await page.screenshot({ path: path.join(artifacts, "admin-release-feed-mobile.png"), animations: "disabled" });
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -563,7 +578,7 @@ async function verify() {
   await page.getByRole("checkbox", { name: "Picked only" }).uncheck();
   await page.getByRole("button", { name: "Older releases", exact: true }).click();
   await timeline.getByText("Fixture TV release", { exact: true }).waitFor();
-  await timeline.getByText("Candidate", { exact: true }).waitFor();
+  await timeline.getByRole("button", { name: "Download option", exact: true }).waitFor();
   await page.getByRole("button", { name: "Newer releases", exact: true }).click();
   await timeline.getByText("Picked audiobook release", { exact: true }).waitFor();
   await page.getByRole("button", { name: "TV", exact: true }).click();

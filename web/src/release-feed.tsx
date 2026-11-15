@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "./router";
 import { useTRPC } from "./rpc";
@@ -10,10 +10,65 @@ const date = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric"
 const number = new Intl.NumberFormat();
 const ordinalRule = new Intl.PluralRules("en", { type: "ordinal" });
 const ordinal = (n: number) => `${n}${({ one: "st", two: "nd", few: "rd", other: "th" } as const)[ordinalRule.select(n) as "one" | "two" | "few" | "other"]}`;
-const purposeLabels = { initial: "Initial download", upgrade: "Upgrade", recovery: "Recovery", "cross-seed": "Cross-seed" } as const;
+const downloadLabels = {
+  initial: { candidate: "Download option", picked: "First download", purpose: "get a first copy" },
+  upgrade: { candidate: "Possible upgrade", picked: "Upgrade chosen", purpose: "get a better copy" },
+  recovery: { candidate: "Possible replacement", picked: "Replacement chosen", purpose: "fill a gap in your library" },
+} as const;
 
 function picked(action: { status: string }) {
   return action.status === "picked" || action.status === "cross-seeded";
+}
+
+function describeAction(action: {
+  status: string; purpose: keyof typeof downloadLabels | "cross-seed"; seedOrdinal: { min: number; max: number } | null;
+}) {
+  if (action.purpose !== "cross-seed") {
+    const { candidate, picked: chosen, purpose } = downloadLabels[action.purpose];
+    return picked(action)
+      ? { label: chosen, hint: `Podible chose this release to ${purpose}. It may not be ready yet.` }
+      : { label: candidate, hint: `Podible considered this release to ${purpose}, but it has not been chosen.` };
+  }
+  if (action.status === "not-seeded")
+    return { label: "Reuse skipped", hint: "Podible considered reusing files you already have, but this release didn't count as a successful cross-seed." };
+  if (action.status !== "cross-seeded")
+    return { label: "Possible reuse", hint: "Podible considered sharing this release using files you already have. It hasn't recorded a successful cross-seed." };
+  const rank = action.seedOrdinal;
+  return {
+    label: rank === null ? "Cross-seeded" : rank.min === rank.max ? `${ordinal(rank.min)} cross-seed` : `${ordinal(rank.min)} to ${ordinal(rank.max)} cross-seed`,
+    hint: "Podible shared this release using files already on disk (cross-seeding)." + (rank === null ? ""
+      : rank.min === rank.max ? " The number counts how many times these files have been used to share a release."
+        : " The range shows that some files have been used to share more releases than others."),
+  };
+}
+
+function StatusBadge({ label, hint, emphasized }: { label: string; hint: string; emphasized: boolean }) {
+  const id = useId();
+  const [expanded, setExpanded] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const visible = expanded || hovered;
+  const dismiss = () => { setExpanded(false); setHovered(false); };
+  return <span onPointerEnter={event => { if (event.pointerType === "mouse") setHovered(true); }}
+    onPointerLeave={() => setHovered(false)}>
+    <button type="button" className={emphasized ? "release-feed-match is-picked" : "release-feed-match"}
+      aria-expanded={visible} aria-controls={id} aria-describedby={id}
+      onClick={event => { event.currentTarget.focus({ preventScroll: true }); setExpanded(!expanded); setHovered(false); }}
+      onBlur={dismiss} onKeyDown={event => { if (event.key === "Escape") dismiss(); }}>
+      {label}
+    </button>
+    <span id={id} className="release-feed-hint" hidden={!visible}>{hint}</span>
+  </span>;
+}
+
+function actionsByTitle<T extends { href: string | null; targetKind: Media; targetId: number }>(actions: T[]) {
+  const groups = new Map<string, T[]>();
+  for (const action of actions) {
+    const key = action.href ?? `${action.targetKind}:${action.targetId}`;
+    const group = groups.get(key);
+    if (group) group.push(action);
+    else groups.set(key, [action]);
+  }
+  return groups;
 }
 
 function noPickRecorded(release: { actions: { status: string }[] }) {
@@ -43,18 +98,12 @@ export function ReleaseFeedPage() {
   const row = (release: Release) => <li className="release-feed-row" key={release.id}>
       <div className="release-feed-title"><strong>{release.title || "Untitled release"}</strong><small>{release.provider || "Unknown indexer"} · {mediaLabels[release.media]}</small></div>
       <time dateTime={release.receivedAt}>{date.format(new Date(release.receivedAt))}</time>
-      {release.actions.length === 0 ? <small className="release-feed-route">No pick recorded</small> : <div className="release-feed-route">
-        {release.actions.map((action, i) => {
-          const rank = action.seedOrdinal;
-          const status = action.status === "candidate" ? "Candidate" : action.status === "picked" ? "Picked"
-            : action.status === "not-seeded" ? "Not seeded"
-              : rank === null ? "Cross-seeded" : rank.min === rank.max
-                ? `${ordinal(rank.min)} cross-seed` : `${ordinal(rank.min)} to ${ordinal(rank.max)} cross-seed across files`;
-          return <div className="release-feed-action" key={i}>
-            <span className={picked(action) ? "release-feed-match is-picked" : "release-feed-match"}>{status}</span>
-            {action.status !== "cross-seeded" && <span>{purposeLabels[action.purpose]}</span>}
-            {action.href ? <Link href={action.href}>{action.title || "Open title"}</Link>
-              : <span>{action.title || "Title unavailable"}</span>}
+      {release.actions.length > 0 && <div className="release-feed-route">
+        {[...actionsByTitle(release.actions)].map(([key, actions]) => {
+          const { href, title } = actions[0]!;
+          return <div className="release-feed-action" key={key}>
+            {actions.map((action, i) => <StatusBadge key={i} {...describeAction(action)} emphasized={picked(action)} />)}
+            {href ? <Link href={href}>{title || "Open title"}</Link> : <span>{title || "Title unavailable"}</span>}
           </div>;
         })}
       </div>}
@@ -83,7 +132,7 @@ export function ReleaseFeedPage() {
             return <li className="release-feed-group" key={`skips:${latest.id}`}>
               <details>
                 <summary>
-                  {`${number.format(run.length)} releases with no recorded pick`}
+                  {`${number.format(run.length)} other releases`}
                   <span>{date.formatRange(Math.min(...times), Math.max(...times))}</span>
                 </summary>
                 <ul className="release-feed-list" aria-label="Releases with no recorded pick">{run.map(row)}</ul>
