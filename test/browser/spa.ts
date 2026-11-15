@@ -42,6 +42,14 @@ try {
   await page
     .getByRole("heading", { name: "The Odyssey", exact: true })
     .waitFor();
+  const icon = page.locator('link[rel="icon"]');
+  const iconPath = await icon.getAttribute("href");
+  assert.match(iconPath ?? "", /^\/web-assets\/favicon-[\w-]+\.svg$/);
+  assert.equal(await icon.getAttribute("type"), "image/svg+xml");
+  const iconResponse = await context.request.get(new URL(iconPath!, url).href);
+  assert.equal(iconResponse.status(), 200);
+  assert.match(iconResponse.headers()["content-type"] ?? "", /^image\/svg\+xml\b/);
+  assert.match(iconResponse.headers()["cache-control"] ?? "", /immutable/);
   const mainLinks = page.getByRole("navigation", { name: "Main navigation" }).getByRole("link");
   assert.deepEqual(await mainLinks.evaluateAll(items => items.map(link => [link.textContent, link.getAttribute("href")])),
     [["Library", "/library"]], "A reader must not see administrator destinations");
