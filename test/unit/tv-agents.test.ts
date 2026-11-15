@@ -142,7 +142,7 @@ test("TV feed uses Decisions first and sends only unresolved offers to Responses
       { type: "choice", name: "release_0", choice: "t0", confidence: 0.98 },
       { type: "choice", name: "release_1", choice: "no_match", confidence: 0.99 },
     ] });
-  });
+  }, {});
   const candidate = { title: offer.title, provider: offer.provider, sizeBytes: offer.sizeBytes, seeders: offer.seeders, attributes: [] };
   const matches = await matcher({ targets: [{ targetId: 3, entry, episodes: [episode] }], offers: [
     { ...candidate, title: "An Aggregate Series 02x01 1080p WEB-DL DD+ H.264-GROUP https://fixture.invalid/fixture-secret" },
@@ -160,12 +160,33 @@ test("a failed Decisions request is not treated as an empty TV feed", async () =
   const fake = provider([{ matches: [{ targetId: 3, releaseIndexes: [0], reason: "Alternate numbering." }] }]);
   const settings = defaultSettings();
   settings.agents.apiKey = "fixture-key";
-  const matcher = createTvFeedMatcher(settings, fake.model, "reuse", async () => new Response(null, { status: 503 }));
+  const matcher = createTvFeedMatcher(settings, fake.model, "reuse", async () => new Response(null, { status: 503 }), {});
   const matches = await matcher({ targets: [{ targetId: 3, entry, episodes: [episode] }], offers: [
     { title: offer.title, provider: offer.provider, sizeBytes: offer.sizeBytes, seeders: offer.seeders, attributes: [] },
   ] });
   expect(matches[0]?.releaseIndexes).toEqual([0]);
   expect(fake.calls).toHaveLength(1);
+});
+
+test("batched Responses-only TV routing preserves release offsets and does not call Decisions", async () => {
+  const fake = provider([
+    { matches: [{ targetId: 3, releaseIndexes: [1], reason: "First cohort and page." }] },
+    { matches: [{ targetId: 3, releaseIndexes: [0], reason: "First cohort, second page." }] },
+    { matches: [] },
+    { matches: [{ targetId: 15, releaseIndexes: [1], reason: "Second cohort and page." }] },
+  ]);
+  const settings = defaultSettings({ agents: { apiKey: "fixture" } });
+  const matcher = createTvFeedMatcher(settings, fake.model, "acquire", async () => {
+    throw new Error("Responses-only must not call Decisions");
+  });
+  const targets = Array.from({ length: 13 }, (_, i) => ({ targetId: i + 3, entry, episodes: [episode] }));
+  const offers = Array.from({ length: 52 }, (_, i) => ({ title: `Offer ${i}`, provider: "Fixture", sizeBytes: 10,
+    seeders: 1, attributes: [] }));
+  const results = await matcher({ targets, offers });
+  expect(results.map(({ targetId, releaseIndexes }) => [targetId, releaseIndexes])).toEqual([[3, [1]], [3, [50]], [15, [51]]]);
+  expect(fake.calls).toHaveLength(4);
+  expect(JSON.stringify(fake.calls[0]!.input)).toContain("numbering");
+  expect(JSON.stringify(fake.calls[0]!.input)).not.toContain("Offer 50");
 });
 
 test("TV selector research cannot reintroduce excluded or oversized releases", async () => {
