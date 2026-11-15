@@ -20,6 +20,7 @@ export const tvSyncPayloadSchema = z.object({
 }).strict();
 const feedSchema = z.object({ baselineId: z.number().int().nonnegative(), cursor: z.string().datetime() });
 const legacyOriginSourceSchema = z.object({ episodeLimit: z.number() });
+const savedRequestVariantSchema = z.object({ request: z.object({ is4k: z.boolean() }) });
 export function tvSeerrFeedKey(instance: string) { return `tv-seerr-feed:${instance}`; }
 export function tvSeerrMappingKey(instance: string) { return `tv-seerr-season-mapping:${instance}`; }
 export const tvSeerrMappingIssueSchema = z.object({
@@ -259,7 +260,7 @@ export async function syncTvRequests(ctx: WorkerContext, job: JobRow,
         ?? ctx.repo.upsertUser({ provider: "local", providerUserId: principalId,
           username: `Seerr: ${actor.displayName ?? actor.username ?? actor.id}`, isAdmin: false });
       const base = settings.movies.qualityPolicy;
-      const policy = request.is4k ? { ...base, tiers: base.tiers.some((tier) => tier.resolution === 2160)
+      const defaultPolicy = request.is4k ? { ...base, tiers: base.tiers.some((tier) => tier.resolution === 2160)
         ? base.tiers.filter((tier) => tier.resolution === 2160)
         : [...new Map(base.tiers.map((tier) => [tier.source, { ...tier, resolution: 2160 as const }])).values()] } : base;
       const covered = new Set<string>();
@@ -268,6 +269,12 @@ export async function syncTvRequests(ctx: WorkerContext, job: JobRow,
         if (!episodeKeys.length) continue;
         for (const key of episodeKeys) { if (covered.has(key)) throw new Error("Anime projection assigned an episode to multiple works"); covered.add(key); }
         const oldOrigin = ctx.repo.tv.origins(instance, request.id).find((origin) => ctx.repo.tv.entry(origin.entryId)?.key === entry.key);
+        const savedVariant = savedRequestVariantSchema.safeParse(oldOrigin?.source);
+        if (savedVariant.success && savedVariant.data.request.is4k !== request.is4k)
+          throw new Error("Seerr changed the resolution variant of a saved TV request");
+        // A metadata refresh can expand a request, but changing defaults must not move it to another target.
+        const savedTarget = oldOrigin && ctx.repo.tv.target(ctx.repo.tv.requestById(oldOrigin.requestId)!.target_id);
+        const policy = savedTarget ? JSON.parse(savedTarget.policy_json) : defaultPolicy;
         const previouslyAired = new Set(oldOrigin ? ctx.repo.tv.requestedEpisodes(oldOrigin.requestId)
           .filter((episode) => episode.airDate && Date.parse(episode.airDate) <= Date.now()).map((episode) => episode.id) : []);
         const native = ctx.repo.tv.requestApproved({ userId: user.id, entry, policy, episodeKeys,

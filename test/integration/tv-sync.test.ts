@@ -131,6 +131,45 @@ test("TV sync activation never backfills history and future-only approved season
   } finally { await s.close(); }
 });
 
+test("TV sync keeps the policy of saved approvals when quality tiers change and still imports newer approvals", async () => {
+  const s = await setup();
+  try {
+    s.setCatalog(catalog(true));
+    await s.sync();
+    s.records.set(101, sourceRequest(101));
+    await s.sync();
+    const origin = s.repo.tv.origins(s.instance, 101)[0]!;
+    const request = s.repo.tv.requestById(origin.requestId)!;
+    const savedPolicy = s.repo.tv.target(request.target_id)!.policy_json;
+
+    const settings = s.repo.getSettings();
+    settings.movies.qualityPolicy.tiers = [{ source: "web", resolution: 1080 }];
+    s.repo.updateSettings(settings);
+    const updatedPolicy = s.repo.getSettings().movies.qualityPolicy;
+    expect(JSON.parse(savedPolicy).tiers).not.toEqual(updatedPolicy.tiers);
+
+    const expanded = catalog(true);
+    expanded.episodes.push({ ...expanded.episodes[0]!, key: "tvdb:103",
+      numbering: [{ ...expanded.episodes[0]!.numbering[0]!, episode: 3, absolute: 3 }] });
+    s.setCatalog(expanded);
+    s.records.set(102, sourceRequest(102));
+    await s.sync();
+
+    expect(s.repo.tv.origins(s.instance, 101).map(item => item.requestId)).toEqual([request.id]);
+    expect(s.repo.tv.requestById(request.id)).toEqual(request);
+    expect(s.repo.tv.target(request.target_id)!.policy_json).toBe(savedPolicy);
+    expect(s.repo.tv.requestedEpisodes(request.id).map(episode => episode.key)).toEqual(["tvdb:101", "tvdb:102", "tvdb:103"]);
+    const newer = s.repo.tv.requestById(s.repo.tv.origins(s.instance, 102)[0]!.requestId)!;
+    expect(newer.target_id).not.toBe(request.target_id);
+    expect(JSON.parse(s.repo.tv.target(newer.target_id)!.policy_json)).toEqual(updatedPolicy);
+    expect(s.repo.getJsonState<{ cursor: string }>(s.feedKey)!.cursor).toBe(s.records.get(102)!.updatedAt);
+
+    s.records.set(101, sourceRequest(101, { is4k: true }));
+    await expect(s.sync()).rejects.toThrow("Seerr changed the resolution variant");
+    expect(s.repo.tv.requestById(request.id)).toEqual(request);
+  } finally { await s.close(); }
+});
+
 test("Tom and Jerry year/ordinal mismatch is retained per-show while healthy requests and cursor progress; metadata retry survives restart", async () => {
   const s = await setup();
   try {
