@@ -126,7 +126,15 @@ Ordinary movie and TV workers can now queue a start even when their first
 snapshot is still `checking`. [Transmission 4.1.4](https://github.com/transmission/transmission/blob/4.1.4/libtransmission/torrent.cc#L1434)
 starts it after verification, as confirmed with the real daemon in the offline
 acceptance suite. This does not change how reused season packs are verified,
-and it does not address the separate missed Plex notification.
+and the start fix is separate from the missed Plex notification.
+
+Plex can end a section scan before sending the final item metadata updates.
+Podible now also listens for section-scoped video metadata updates and reruns
+the same exact verifier when they arrive. An update does not itself mark any
+item ready, and unrelated media analysis does not wake the verifier. On the
+isolated 12-episode replay, Plex first fetched full metadata at +30.34 s and
+the updated listener verified all 12 exact identities and paths at +30.60 s.
+Production latency with this listener still needs a fresh canary.
 
 ## November 14 Workflow Breakdown
 

@@ -1,19 +1,32 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
-/** Plex's SSE transport can disconnect without replaying events. On open,
- * verify pending publications once against Plex itself. */
-export function plexScanEnded(message: unknown): string | null {
-  const notification = (message as { ActivityNotification?: {
-    event?: string; Activity?: { type?: string; Context?: { librarySectionID?: number | string; key?: string } };
-  } } | null)?.ActivityNotification;
+function sectionId(value: unknown): string | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const section = String(value);
+  return /^\d+$/.test(section) ? section : null;
+}
+
+export function plexPublicationChanged(message: unknown): string | null {
+  const event = message as {
+    ActivityNotification?: { event?: string; Activity?: {
+      type?: string; Context?: { librarySectionID?: number | string; key?: string };
+    } };
+    TimelineEntry?: { sectionID?: unknown; type?: unknown; state?: unknown; mediaState?: unknown };
+  } | null;
+  const timeline = event?.TimelineEntry;
+  // Scan completion can precede the metadata updates that make exact verification possible.
+  // Ignore media-analysis updates; neither kind of event is itself proof of publication.
+  if (timeline && String(timeline.state) === "5" && /^[1-4]$/.test(String(timeline.type)) && timeline.mediaState === undefined)
+    return sectionId(timeline.sectionID);
+  const notification = event?.ActivityNotification;
   const activity = notification?.Activity;
   if (notification?.event !== "ended" || !activity?.type ||
       !["library.update.section", "library.refresh.items"].includes(activity.type)) return null;
-  const section = String(activity.Context?.librarySectionID ??
-    /^\/library\/sections\/(\d+)(?:\/|$)/.exec(activity.Context?.key ?? "")?.[1] ?? "");
-  return /^\d+$/.test(section) ? section : "";
+  return sectionId(activity.Context?.librarySectionID) ??
+    /^\/library\/sections\/(\d+)(?:\/|$)/.exec(activity.Context?.key ?? "")?.[1] ?? "";
 }
 
+/** Plex does not replay missed events, so verify pending publications once on connect. */
 export function watchPlexCompletions(
   signal: (source: string, prefix?: boolean) => Promise<void>,
   onDisconnect: () => void, fetcher: typeof fetch = fetch,
@@ -29,7 +42,7 @@ export function watchPlexCompletions(
       try {
         const url = new URL("/:/eventsource/notifications", settings.url);
         if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return;
-        url.searchParams.set("filters", "activity");
+        url.searchParams.set("filters", "activity,timeline");
         const response = await fetcher(url, {
           redirect: "error", signal: lifetime,
           headers: { Accept: "text/event-stream", "X-Plex-Token": settings.token },
@@ -55,7 +68,7 @@ export function watchPlexCompletions(
             if (line.startsWith("data:")) { fields.push(line.slice(5).trimStart()); length += line.length; }
             if (!line && fields.length) {
               let section: string | null = null;
-              try { section = plexScanEnded(JSON.parse(fields.join("\n"))); } catch { /* Not a JSON notification. */ }
+              try { section = plexPublicationChanged(JSON.parse(fields.join("\n"))); } catch { /* Not a JSON notification. */ }
               fields = [];
               length = 0;
               if (section !== null) await signal("plex:" + section, section === "");

@@ -98,11 +98,11 @@ if (analysisMode) {
 }
 
 const lab = await mkdtemp("/data/latency-");
-const endedAt = new Map<string, number>();
+let verifyOnWake: ((source: string, prefix: boolean) => Promise<void>) | undefined;
 let opened = false;
 const watcher = watchPlexCompletions(async (source, prefix) => {
   if (prefix) opened = true;
-  if (!prefix) endedAt.set(source.slice("plex:".length), performance.now());
+  await verifyOnWake?.(source, prefix === true);
 }, () => { opened = false; });
 
 type Item = { ratingKey: string; parentIndex?: number; index?: number; Media?: { Part?: { file: string }[] }[] };
@@ -119,7 +119,7 @@ async function listedPaths(section: Section, tv: boolean) {
 }
 type Probe = { media: "movie" | "tv"; scan: "section" | "directory"; files: number;
   indexedPaths: number; correctCoordinates: number; exactVerificationMs: number | null;
-  refreshMs: number; indexedMs: number | null; scanEventMs: number | null; refreshingWhenIndexed: boolean | null;
+  refreshMs: number; indexedMs: number | null; exactVerificationOnEventMs: number | null; refreshingWhenIndexed: boolean | null;
   firstMatchMs: number | null; firstMetadataMs: number | null };
 const probes: Probe[] = [];
 let metadata: Awaited<ReturnType<typeof startLatencyMetadata>> | undefined;
@@ -166,10 +166,16 @@ try {
       }
       const started = performance.now();
       const verify = exact ? exactLatencyFixture(tv, base, section.key, paths) : undefined;
+      let exactVerificationOnEventMs: number | null = null;
+      if (verify) verifyOnWake = async (source, prefix) => {
+        if (!prefix && source !== `plex:${section.key}`) return;
+        if (exactVerificationOnEventMs === null && await verify("correct"))
+          exactVerificationOnEventMs = performance.now() - started;
+      };
       const query = scan === "directory" ? `?${new URLSearchParams({ path: directory })}` : "";
       await (await request(`/library/sections/${section.key}/refresh${query}`)).body?.cancel();
       const refreshMs = performance.now() - started;
-      let indexedMs: number | null = null, scanEventMs: number | null = null, refreshingWhenIndexed: boolean | null = null;
+      let indexedMs: number | null = null, refreshingWhenIndexed: boolean | null = null;
       let exactVerificationMs: number | null = null;
       let indexedPaths = 0, correctCoordinates = 0;
       while (performance.now() - started < observationMs) {
@@ -187,14 +193,13 @@ try {
           if (await verify("wrong-identity")) throw new Error("The verifier accepted a wrong identity at the right path");
           if (await verify("wrong-path")) throw new Error("The verifier accepted a correct identity at the wrong path");
         }
-        const ended = endedAt.get(section.key);
-        if (ended !== undefined && ended - started >= (indexedMs ?? Infinity)) scanEventMs = ended - started;
         const ready = verify ? exactVerificationMs : indexedMs;
-        if (ready !== null && (scanEventMs !== null || performance.now() - started > ready + 4_000)) break;
+        if (ready !== null && (!verify || exactVerificationOnEventMs !== null || performance.now() - started > ready + 4_000)) break;
         await Bun.sleep(200);
       }
+      verifyOnWake = undefined;
       const sinceScan = (at: number | null | undefined) => at != null && at >= started ? at - started : null;
-      const probe: Probe = { media, scan, files: paths.length, indexedPaths, correctCoordinates, refreshMs, indexedMs, scanEventMs,
+      const probe: Probe = { media, scan, files: paths.length, indexedPaths, correctCoordinates, refreshMs, indexedMs, exactVerificationOnEventMs,
         refreshingWhenIndexed, exactVerificationMs, firstMatchMs: sinceScan(metadata?.firstMatchAt), firstMetadataMs: sinceScan(metadata?.firstMetadataAt) };
       probes.push(probe);
       console.log(JSON.stringify(probe));
@@ -202,6 +207,7 @@ try {
   console.log(JSON.stringify({ kind: "plex-lab-publication", analysisMode: analysisMode ?? "default", observationIntervalMs: 200,
     metadataRequests: metadata?.requests, probes }, null, 2));
   if (exact && probes.some(probe => probe.exactVerificationMs === null)) throw new Error("Plex did not verify the exact fixture identities");
+  if (exact && probes.some(probe => probe.exactVerificationOnEventMs === null)) throw new Error("No Plex event verified the exact fixture identities");
   if (probes.some(probe => probe.scan === "section" && probe.indexedMs === null))
     throw new Error("A full-section scan did not index all synthetic fixtures");
 } finally {

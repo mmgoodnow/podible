@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { AcquisitionEvents } from "../../src/runtime/acquisition-events";
 import { CompletionSignals } from "../../src/runtime/completion-signals";
-import { plexScanEnded } from "../../src/runtime/plex-completion";
+import { plexPublicationChanged, watchPlexCompletions } from "../../src/runtime/plex-completion";
 
 test("an unacknowledged completion remains deliverable after a dispatch error", async () => {
   const db = new Database(":memory:");
@@ -21,12 +21,64 @@ test("an unacknowledged completion remains deliverable after a dispatch error", 
   } finally { db.close(); }
 });
 
-test("Plex only wakes publications for scan completions, scoped where possible", () => {
+test("Plex wakes publications after scans and scoped video metadata updates, not media analysis", () => {
   const activity = { type: "library.update.section", Context: { librarySectionID: 16 } };
-  expect(plexScanEnded({ ActivityNotification: { event: "ended", Activity: activity } })).toBe("16");
-  expect(plexScanEnded({ ActivityNotification: { event: "updated", Activity: activity } })).toBeNull();
-  expect(plexScanEnded({ ActivityNotification: { event: "ended", Activity: { type: "butler" } } })).toBeNull();
-  expect(plexScanEnded({ ActivityNotification: { event: "ended", Activity: { type: "library.update.section" } } })).toBe("");
+  expect(plexPublicationChanged({ ActivityNotification: { event: "ended", Activity: activity } })).toBe("16");
+  expect(plexPublicationChanged({ ActivityNotification: { event: "updated", Activity: activity } })).toBeNull();
+  expect(plexPublicationChanged({ ActivityNotification: { event: "ended", Activity: { type: "butler" } } })).toBeNull();
+  expect(plexPublicationChanged({ ActivityNotification: { event: "ended", Activity: { type: "library.update.section" } } })).toBe("");
+  const update = { sectionID: "16", itemID: "5", type: 4, state: 5 };
+  expect(plexPublicationChanged({ TimelineEntry: update })).toBe("16");
+  expect(plexPublicationChanged({ TimelineEntry: { ...update, sectionID: 15, type: 1 } })).toBe("15");
+  expect(plexPublicationChanged({ TimelineEntry: { ...update, state: 0, metadataState: "created" } })).toBeNull();
+  expect(plexPublicationChanged({ TimelineEntry: { ...update, type: 8 } })).toBeNull();
+  expect(plexPublicationChanged({ TimelineEntry: { ...update, mediaState: "idle" } })).toBeNull();
+  expect(plexPublicationChanged({ TimelineEntry: { ...update, sectionID: undefined } })).toBeNull();
+});
+
+test("a Plex timeline event wakes a pending publication after the scan event has already been consumed", async () => {
+  const db = new Database(":memory:");
+  const sent: string[][] = [];
+  const ready = Promise.withResolvers<void>();
+  const inbox = new CompletionSignals(db, async (run, slot) => {
+    sent.push([run, slot]);
+    if (slot === "exact-recheck") ready.resolve();
+  });
+  const requestFilters: (string | null)[] = [];
+  const fetcher = (async (input: URL) => {
+    requestFilters.push(input.searchParams.get("filters"));
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode([
+          'event: activity\ndata: {"ActivityNotification":{"event":"ended","Activity":{"type":"library.update.section","Context":{"librarySectionID":16}}}}\n\n',
+          'event: timeline\ndata: {"TimelineEntry":{"sectionID":"15","type":4,"state":5}}\n\n',
+          'event: timeline\ndata: {"TimelineEntry":{"sectionID":"16","type":4,"state":5,"mediaState":"idle"}}\n\n',
+          'event: timeline\ndata: {"TimelineEntry":{"sectionID":"16","type":4,"state":5}}\n\n',
+        ].join("")));
+        controller.close();
+      },
+    }), { headers: { "Content-Type": "text/event-stream" } });
+  }) as typeof fetch;
+  // Re-arm as a publish attempt would: reconnect, scan ended, then exact metadata recheck.
+  const wakes: string[] = [];
+  const watcher = watchPlexCompletions(async (source, prefix) => {
+    wakes.push(source);
+    await inbox.signal(source, prefix);
+    if (prefix) inbox.arm("tv", "after-scan", "plex:16");
+    else if (source === "plex:16" && sent.length === 1) inbox.arm("tv", "exact-recheck", "plex:16");
+  }, () => {}, fetcher);
+  const timer = setTimeout(() => ready.reject(new Error("No scoped Plex metadata wake")), 1000);
+  try {
+    watcher.configure({ url: "http://plex", token: "test" });
+    await ready.promise;
+    expect(requestFilters).toEqual(["activity,timeline"]);
+    expect(wakes).toEqual(["plex:", "plex:16", "plex:15", "plex:16"]);
+    expect(sent).toEqual([["tv", "after-scan"], ["tv", "exact-recheck"]]);
+  } finally {
+    clearTimeout(timer);
+    await watcher.stop();
+    db.close();
+  }
 });
 
 test("browser gets an invalidation on every connection and after an update during backpressure", async () => {
