@@ -12,6 +12,7 @@ export const policies: Record<string, TvFeedRoutingPolicy> = {
   baseline: {}, compact95: { compact: true }, compact90: { compact: true, noMatchConfidence: 0.9 },
   compact85: { compact: true, noMatchConfidence: 0.85 }, binary90: { compact: true, negativeOnly: true, noMatchConfidence: 0.9 },
   responses: { responsesOnly: true }, compactResponses: { responsesOnly: true, compact: true },
+  tableResponses: { responsesOnly: true, tableResponses: true },
   gate95: { batchNegativeOnly: true }, gate90: { batchNegativeOnly: true, noMatchConfidence: 0.9 },
   gate85: { batchNegativeOnly: true, noMatchConfidence: 0.85 },
   workGate75: { batchNegativeOnly: true, workOnlyGate: true, noMatchConfidence: 0.75 },

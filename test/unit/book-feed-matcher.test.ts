@@ -7,6 +7,7 @@ import {
 } from "../../src/library/feed-matcher";
 import type { TorznabResult } from "../../src/library/torznab";
 import { defaultSettings } from "../../src/settings";
+import { readFeedEvidence } from "../support/agent-table";
 
 type Projection = {
   targets: { index: number; title: string; author: string; media: string }[];
@@ -41,7 +42,7 @@ function fixture(reply: (input: Projection) => unknown) {
                   ? content.find((item) => item.type === "input_text")?.text
                   : null;
           if (!text) throw new Error("Missing agent input");
-          const input: Projection = JSON.parse(text);
+          const input = readFeedEvidence<Projection>(text, request.systemInstructions);
           calls.push({
             input,
             bytes: Buffer.byteLength(text),
@@ -125,7 +126,8 @@ test("book RSS agent uses the shared model and broad evidence, without credentia
   expect(f.calls[0].input.releases).toHaveLength(1);
   const sent = f.calls[0].prompt;
   expect(sent).toContain("Isaac Asimov");
-  expect(sent).toContain("broad semantic identity routing");
+  expect(sent).toContain("Route plausible releases");
+  expect(sent).not.toContain("Read targets as");
   expect(sent).not.toContain("private-key");
   expect(sent).not.toContain("secret.invalid");
   expect(sent).not.toContain("UNTRUSTED-SECRET-DESCRIPTION");
@@ -178,6 +180,7 @@ test("book RSS batching bounds UTF-8 JSON bytes and remaps every target-release 
   }));
   const matches = await f.matcher({ targets, releases });
   expect(f.calls.length).toBeGreaterThan(1);
+  expect(f.calls.some(call => call.prompt.includes("Read targets as"))).toBe(true);
   expect(f.calls.every((call) => call.bytes <= 32 * 1024)).toBe(true);
   expect(matches.map((match) => match.bookId).sort()).toEqual(
     targets.map((row) => row.bookId).sort(),

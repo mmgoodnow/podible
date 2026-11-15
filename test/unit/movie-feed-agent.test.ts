@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { readFeedEvidence } from "../support/agent-table";
 import type { ModelProvider, ModelRequest } from "@openai/agents-core";
 import { Usage } from "@openai/agents-core";
 import { createMovieFeedMatcher } from "../../src/movies/agents";
@@ -47,7 +48,7 @@ function captureMatcher(reply: (input: Projection) => unknown) {
               text = content.text;
             }
           }
-          const input: Projection = JSON.parse(text);
+          const input = readFeedEvidence<Projection>(text, request.systemInstructions);
           calls.push({ input, bytes: Buffer.byteLength(text) });
           return {
             usage: new Usage(),
@@ -194,7 +195,7 @@ test("RSS agent broadly routes known identities without exposing download URLs o
   expect(sent).toContain("tt123");
   expect(sent).not.toContain("secret-key");
   expect(sent).not.toContain("secret-prompt-body");
-  expect(sent).toContain("Include plausible matches");
+  expect(sent).toContain("Keep plausible truncated or partial matches");
   for (const match of [
     { targetIndex: 5, releaseIndexes: [0], reason: "Unknown target" },
     { targetIndex: 0, releaseIndexes: [5], reason: "Unknown release" },
