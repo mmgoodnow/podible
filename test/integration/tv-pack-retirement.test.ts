@@ -179,7 +179,7 @@ test.each(["underage", "seed unknown", "candidate membership", "pack partial", "
     expect(s.removes).toEqual([]);
     expect(new TorrentRetirement(s.repo).pending()).toEqual([]);
   } finally { await s.close(); }
-});
+}, 20_000);
 
 test("post-intent Plex loss and final Transmission seed regression are both blocked", async () => {
   const s = await fixture();

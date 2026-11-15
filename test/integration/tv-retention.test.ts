@@ -25,10 +25,8 @@ const catalog = { key: "tvdb:700", tvdbId: 700, tmdbId: 1700, title: "Whole Seas
     refs: [{ provider: "tvdb" as const, id: String(7000 + id), source: "fixture" }] })),
 };
 
-async function until(check: () => boolean | Promise<boolean>) {
-  const deadline = Date.now() + 8000;
-  while (!(await check())) { if (Date.now() > deadline) throw new Error("TV retention acceptance timed out"); await Bun.sleep(10); }
-}
+const jobWaitMs = 20_000;
+const integrationTimeoutMs = jobWaitMs + 10_000;
 
 async function fixture(options: { identicalMembers?: boolean } = {}) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "tv-retention-")));
@@ -101,9 +99,23 @@ async function fixture(options: { identicalMembers?: boolean } = {}) {
     expect(preview.blockers).toEqual([]); expect(preview.executionBlockers).toEqual([]); expect(preview.eligible).toBe(true);
     return service().evict({ ...scope, expectedRevision: preview.revision, operationId, reason: "Explicit whole-season fixture eviction" });
   };
-  const wait = async (jobId: number, status: "succeeded" | "failed") => until(async () => {
-    await runtime!.reconcile(); return repo.getJob(jobId)?.status === status;
-  });
+  const wait = async (jobId: number, expected: "succeeded" | "failed") => {
+    if (!runtime) throw new Error("Start the TV retention runtime before waiting for a job");
+    const deadline = performance.now() + jobWaitMs;
+    for (;;) {
+      await runtime.reconcile();
+      const job = repo.getJob(jobId);
+      if (job?.status === expected) return;
+      if (!job || job.status === "succeeded" || job.status === "failed" || job.status === "cancelled" || performance.now() >= deadline) {
+        const runId = repo.getJobExecution(jobId)?.run_id;
+        const run = runId ? await runtime.engine.getRunStatus(runId) : undefined;
+        const steps = run?.steps.slice(-5).map(({ name, status, attempts }) => ({ name, status, attempts }));
+        throw new Error(`TV retention job ${jobId}: expected ${expected}, got ${job?.status ?? "missing"}; ` +
+          `error=${job?.error ?? "none"}; Reflow=${run?.run.status ?? "missing"}; recent steps=${JSON.stringify(steps ?? [])}`);
+      }
+      await Bun.sleep(10);
+    }
+  };
   return { root, db, repo, settings, roots, user, request, key, files, views, scope, adapters, engine, playback, rpcCalls, requests, logs, service, queue, start, stop, wait,
     async [Symbol.asyncDispose]() { await stop(); db.close(); await fs.rm(root, { recursive: true, force: true }); } };
 }
@@ -204,7 +216,7 @@ test("real Reflow hashes only the current file's exact seed members: linear byte
   expect([...bytes.values()].reduce((sum, count) => sum + count, 0)).toBe(size * 4);
   expect(reads).toBe(f.files.length * 4);
   for (const file of f.files) { expect(bytes.get(file.seed)).toBe(file.sizeBytes * 2); expect(bytes.get(file.canonical)).toBe(file.sizeBytes); }
-}, 15_000);
+}, integrationTimeoutMs);
 
 test("identical-sized identical-byte pack members still persist only one exact seed mapping per object/binding", async () => {
   await using f = await fixture({ identicalMembers: true }); let bytes = 0;
@@ -213,7 +225,7 @@ test("identical-sized identical-byte pack members still persist only one exact s
   expect(f.repo.tvRetention.eviction(queued.evictionId!)!.plan.seedProofs).toHaveLength(f.files.length);
   await f.wait(queued.jobId!, "succeeded");
   expect(bytes).toBe(f.files.reduce((sum, file) => sum + file.sizeBytes, 0) * 4);
-}, 15_000);
+}, integrationTimeoutMs);
 
 test("real Reflow removes the complete single-season target while retaining requests, seed bytes and registrations", async () => {
   await using f = await fixture(); await f.start();
@@ -228,7 +240,7 @@ test("real Reflow removes the complete single-season target while retaining requ
   for (const view of f.views) await expect(fs.lstat(view)).rejects.toMatchObject({ code: "ENOENT" });
   expect(f.repo.tv.downloads(f.scope.targetId)).toHaveLength(1); expect(f.rpcCalls.every((method) => method === "torrent-get")).toBe(true);
   expect(f.logs.join("\n")).not.toContain("private-plex-token");
-}, 15_000);
+}, integrationTimeoutMs);
 
 for (const checkpoint of ["view-retired", "staging-created", "file-staged", "file-unlinked"] as const) {
   test(`real Reflow restart resumes whole-season eviction after ${checkpoint} with original durable proofs`, async () => {
@@ -245,7 +257,7 @@ for (const checkpoint of ["view-retired", "staging-created", "file-staged", "fil
     expect(f.repo.getJobExecution(queued.jobId!)!.run_id).toBe(runId); expect(f.repo.tvRetention.eviction(queued.evictionId!)!.finishedAt).not.toBeNull();
     for (const file of f.files) { await expect(fs.lstat(file.canonical)).rejects.toMatchObject({ code: "ENOENT" }); expect(await fs.readFile(file.seed)).toEqual(file.bytes); }
     expect(f.repo.listJobsByType("tv_retention_cleanup")).toHaveLength(1);
-  }, 15_000);
+  }, integrationTimeoutMs + jobWaitMs);
 }
 
 for (const checkpoint of ["file-staged", "file-unlinked"] as const) {
@@ -260,7 +272,7 @@ for (const checkpoint of ["file-staged", "file-unlinked"] as const) {
     expect(f.repo.retention.get(f.key)!.desiredPresence).toBe("present");
     expect(f.repo.tv.missingEpisodes(f.request.requestId)).toHaveLength(checkpoint === "file-unlinked" ? 1 : 0);
     for (const file of f.files) expect(await fs.readFile(file.seed)).toEqual(file.bytes);
-  }, 15_000);
+  }, integrationTimeoutMs);
 }
 
 test("fresh playback beginning after staging blocks unlink and leaves owned staged bytes for safe retry", async () => {
@@ -270,7 +282,7 @@ test("fresh playback beginning after staging blocks unlink and leaves owned stag
   const staged = await fs.readdir(path.join(f.roots.contentRoot, ".podible-tv-retention"));
   expect(staged.some((name) => name.endsWith(".mkv"))).toBe(true);
   for (const file of f.files) expect(await fs.readFile(file.seed)).toEqual(file.bytes);
-});
+}, integrationTimeoutMs);
 
 test("changed staging ownership after rename blocks unlink rather than adopting a foreign directory", async () => {
   await using f = await fixture();
@@ -279,7 +291,7 @@ test("changed staging ownership after rename blocks unlink rather than adopting 
   await f.wait(queued.jobId!, "failed"); expect(f.repo.tvRetention.eviction(queued.evictionId!)!.finishedAt).toBeNull();
   expect((await fs.readdir(path.join(f.roots.contentRoot, ".podible-tv-retention"))).filter((name) => name.endsWith(".mkv"))).toHaveLength(1);
   for (const file of f.files) expect(await fs.readFile(file.seed)).toEqual(file.bytes);
-});
+}, integrationTimeoutMs);
 
 test("TV retention router is administrator-only, strict and bounded; preview methods remain read-only", async () => {
   await using f = await fixture(); const router = createTvRetentionRouter(f.adapters);

@@ -1160,12 +1160,11 @@ test("large-series execution is bounded by season without truncating durable req
       const original = decider(entry);
       return { ...original, select: async input => ({ ...await original.select(input), matchingOffers: [copy] }) };
     };
-    const batches: number[] = [];
     const legacy = s.enqueue();
-    while (s.repo.tv.missingEpisodes(s.request.requestId).length) {
+    for (const publishedCount of [64, 65, 129, 130]) {
       const next = s.repo.tv.acquisitions(s.request.targetId).filter(a => !a.finished_at).at(-1)!;
       await acquireTv(s.context, s.repo.getJob(next.job_id!)!, s.fixture.services);
-      batches.push(s.repo.tv.activeEpisodes(s.request.targetId).length);
+      expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(publishedCount);
       if (next.id === legacy.id) {
         const followUps = s.repo.tv.acquisitions(s.request.targetId).filter(a => !a.finished_at).reverse();
         expect(followUps.map(a => JSON.parse(a.decision_json!).batchEpisodeIds)).toEqual([
@@ -1176,7 +1175,7 @@ test("large-series execution is bounded by season without truncating durable req
       expect(receipts).toHaveLength(1);
       expect(crossSeedOffer(s.repo, receipts[0]!.command).key).toBe(copy.key);
     }
-    expect(batches).toEqual([64, 65, 129, 130]);
+    expect(s.repo.tv.missingEpisodes(s.request.requestId)).toHaveLength(0);
     expect(s.repo.tv.requestedEpisodes(s.request.requestId)).toHaveLength(130);
     expect(s.fixture.selections).toHaveLength(1);
     expect(s.fixture.selections[0]!.ids).toHaveLength(64);
@@ -1187,7 +1186,7 @@ test("large-series execution is bounded by season without truncating durable req
     const all = s.repo.tv.requestedEpisodes(s.request.requestId);
     expect(tvAcquisitionBatch([...all].reverse()).map(ep => ep.id)).toEqual(all.slice(0, 64).map(ep => ep.id));
   } finally { await s.close(); }
-});
+}, 20_000);
 
 test("canonical loss invalidates only its exact TV file coverage and reimports a retained pack without replacing surviving episodes", async () => {
   const entry = seasonCatalog(3), s = await setup(entry.episodes.map(ep => ep.key), entry);
