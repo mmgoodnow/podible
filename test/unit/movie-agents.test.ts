@@ -228,3 +228,23 @@ test("import agent checks real policy in its tool loop without escalating irrele
   expect(JSON.stringify(requests[1]?.input)).toContain("eligible");
   expect(JSON.stringify(requests[1]?.input)).toContain("import");
 });
+
+test("movie import supplies the sole complete probe up front without requiring a second model turn", async () => {
+  const result = { fileIndex: 4, facts: { identityVerified: true, cut: null, source: "web" as const, proper: null }, reason: "Full feature" };
+  const fake = selectionProvider([result]);
+  const file = { index: 4, name: "A Fixture Film.mkv", sizeBytes: 1234, probe: {
+    format: { duration: "5400" }, streams: [{ codec_type: "video" }, { codec_type: "audio" },
+      { codec_type: "subtitle" }, { codec_type: "subtitle" }, { codec_type: "audio", tags: { language: "jpn" } }],
+  } };
+  const inspect = (provider: ModelProvider, files: typeof file[]) => createMovieDecider(defaultSettings(), provider).inspect({
+    movie: fixtureMovie, policy: defaultMovieQualityPolicy, offer: selectionOffer,
+    selection: { offerKey: selectionOffer.key, facts: fixtureFacts(), reason: "Selected" }, files,
+  });
+  expect(await inspect(fake.model, [file])).toEqual(result);
+  expect(fake.requests).toHaveLength(1);
+  expect(fake.requests[0]!.systemInstructions).not.toContain("Call assessCandidate before your final decision");
+  expect(JSON.stringify(fake.requests[0]!.input)).toContain("jpn");
+  const ambiguous = selectionProvider([result]);
+  await inspect(ambiguous.model, [file, { ...file, index: 5 }]);
+  expect(ambiguous.requests[0]!.systemInstructions).toContain("Call assessCandidate before your final decision");
+});

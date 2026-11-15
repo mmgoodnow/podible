@@ -72,7 +72,7 @@ test("the read-only Plex timing report requires a completed download and its exa
     expect(result.exitCode).toBe(0);
     const { report } = JSON.parse(result.stdout.toString());
     expect(report).toMatchObject([
-      { media: "movie", candidatesExamined: 3, samples: [{ acquisitionId: 1, preparationMs: 4000, publicationMs: 10000, totalMs: 14000, underTarget: true }] },
+      { media: "movie", targetMs: 12000, candidatesExamined: 3, samples: [{ acquisitionId: 1, preparationMs: 4000, publicationMs: 10000, totalMs: 14000, underTarget: false }] },
       { media: "tv", candidatesExamined: 1, samples: [{ acquisitionId: 2, preparationMs: 4000, publicationMs: 26000, totalMs: 30000,
         underTarget: false, timeline: { truncated: false, segments: [
           { phase: "read_torrent_completion", fromMs: 0, toMs: 1000 },

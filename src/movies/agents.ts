@@ -175,6 +175,9 @@ ${releaseSelectionInstructions}`,
         if (decision?.kind === "selected") return { fileIndex: screened.file.index, facts: screened.claims,
           reason: "Decisions confirmed the independently screened feature file" };
       }
+      const onlyFile = input.files.length === 1 ? input.files[0] : undefined;
+      const inlineProbe = onlyFile && videoProbeEvidence(onlyFile);
+      const completeEvidence = inlineProbe && inlineProbe.nextOffset === null && Boolean(inlineProbe.format.duration);
       const assess = tool({
         name: "assessCandidate",
         description:
@@ -205,7 +208,10 @@ ${releaseSelectionInstructions}`,
         importSchema,
         "MovieImportVerifier",
         `Identify the main feature fileIndex, not a sample/trailer/extra. Read file names, sizes, actual probe streams and duration.
-Call assessCandidate before your final decision. Select the matching playable feature even if it fails a quality constraint: the application applies policy and automatically tries another release. Only use fileIndex:null when no file is the requested playable movie.
+${completeEvidence
+    ? "The sole candidate's complete probe is inline. Return your identity and edition assessment directly unless you need additional evidence. The application checks quality independently."
+    : "Call assessCandidate before your final decision."}
+Select the matching playable feature even if it fails a quality constraint: the application applies policy and automatically tries another release. Only use fileIndex:null when no file is the requested playable movie.
 Do not invent a theatrical-only or English-only requirement. Unknown cut/language/HDR is not a reason to withhold a matching feature unless that fact is actually constrained by policy.
 Runtime is corroborating evidence, not an exact identity test: edition, credits, frame-rate and catalog differences are common. Do not reject a matching film based solely on a modest runtime difference.
 Resolve ambiguity from available evidence and the policy tool; never ask for human approval. If a real requirement cannot be established, record what is missing so acquisition can try another release.
@@ -215,7 +221,7 @@ Identity must be supported by the release and file evidence. Do not claim certai
           movie: movieEvidence(input.movie),
           policy: videoPolicyEvidence(input.policy),
           release: { title: modelEvidenceText(input.offer.title) },
-          files: modelEvidencePage(input.files, 0, 10, file => ({ ...fileEvidence(file), probe: videoProbeEvidence(file, 0, 4) })),
+          files: modelEvidencePage(input.files, 0, 10, file => ({ ...fileEvidence(file), probe: completeEvidence ? inlineProbe : videoProbeEvidence(file, 0, 4) })),
         },
         [assess, tool({ name: "listFiles", description: "Page through downloaded playable file names and sizes.", parameters: z.object(page),
           execute: async ({ offset, limit }) => modelEvidencePage(input.files, offset, limit, fileEvidence) }),

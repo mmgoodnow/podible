@@ -28,7 +28,7 @@ import { completeTvSource, recordedLegacyTvSource, reusableTvSources, tvSourceFi
 import { recoverMissingTorrentSource } from "../media/recovery-source";
 import { withTorrentRegistration } from "../media/torrent-use";
 import type { DownloadLocation, TorrentRef, TorrentSnapshot } from "../media/torrent-client";
-import { prepareCanonicalDownload, readCanonicalDownload, resolveDownloadFile, sealCanonicalDownload } from "../media/canonical-download";
+import { finalizeCanonicalDownloadFile, prepareCanonicalDownload, readCanonicalDownload, resolveDownloadFile, sealCanonicalDownload } from "../media/canonical-download";
 import { configuredTvCatalog, TvCatalogError } from "./catalog";
 import { tvSeasonPackPromotionTargets } from "./season-promotion-pilot";
 import { hasVerifiedLocalSeasonPackPrefill, hasVerifiedSeasonPackReuse, planSeasonPackPrefill } from "./season-pack-reuse";
@@ -185,7 +185,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
     const retry = promotion ? [] : ctx.repo.contentLoss.retryDownloads({ namespace: "tv-target", id: String(target.id) });
     const rejected = repo.episodeRejections(target.id, episodeIds).filter(row => !retry.some(d => d.native_id === row.native_id));
     return { episodeIds, priorKeys: rejected.map(row => row.offer_key), policy: JSON.parse(target.policy_json),
-      priorHashes: rejected.map(row => row.native_id), sourceReuse: true, scopedRecovery: true,
+      priorHashes: rejected.map(row => row.native_id), sourceReuse: true, scopedRecovery: true, batchAdoption: true,
       lossRecoveryHashes: retry.map(d => d.native_id),
       reuseSources: reuse.sources.filter(item => !rejected.some(row => row.native_id === item.source.ref.nativeId)), consumedSources: reuse.consumed };
   });
@@ -838,19 +838,47 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
     const adoptionSource = await tvSourceFiles(source, services.client, settings.tv.managedRoot);
     const sourceByIndex = new Map(adoptionSource.files.map(file => [file.index, file]));
     const content: TvContentFile[] = [];
-    for (const mapping of eligible) {
+    const verifiedPath = async (fileIndex: number) => {
+      const selected = sourceByIndex.get(fileIndex);
+      const expectedFile = source.manifest.files[fileIndex]!;
+      if (!selected || path.resolve(selected.path) !== path.resolve(sourceRoot, expectedFile.path)) throw new Error("Selected TV file changed layout");
+      const resolved = await resolveDownloadFile(roots.contentRoot, sourceRoot, selected.path, expectedFile.size);
+      const stat = await fs.lstat(resolved.path), identity = expectedFile.identity!;
+      if (stat.size !== expectedFile.size || stat.mtimeMs !== identity.mtimeMs || stat.ctimeMs !== identity.ctimeMs || stat.dev !== identity.device || stat.ino !== identity.inode)
+        throw new Error("Selected TV file changed after verification");
+      return selected.path;
+    };
+    const batched = snapshot.batchAdoption && eligible.length > 1 && await durableStep(ctx, `${prefix}:adoption-mode`, async () => {
+      const reservation = await readCanonicalDownload(roots.contentRoot, sourceRoot);
+      if (!reservation?.sealed) return false;
+      const objects = new Set(reservation.files.filter(file => file.relativePath).map(file => file.path));
+      return eligible.every(mapping => objects.has(source.manifest.files[mapping.fileIndex]!.path));
+    });
+    if (batched) {
+      const size = 4;
+      for (let offset = 0; offset < eligible.length; offset += size) {
+        const results = await durableStep(ctx, `${prefix}:adopt-group:${offset}`, async () => {
+          active(); await assertMovieStorage(ctx.repo, roots.contentRoot);
+          // Siblings only finalize distinct reserved files. Drain writes before this effect exits, including on failure.
+          const settled = await Promise.allSettled(eligible.slice(offset, offset + size).map(async mapping => {
+            active();
+            const candidate = files.find(file => file.index === mapping.fileIndex)!;
+            const selected = await verifiedPath(mapping.fileIndex);
+            const stored = await finalizeCanonicalDownloadFile(roots.contentRoot, sourceRoot, selected, candidate.sizeBytes, active);
+            if (!stored) throw new Error("Sealed TV canonical reservation disappeared");
+            return { ...stored, probe: candidate.probe, episodeIds: mapping.episodeIds };
+          }));
+          return settled.map(result => { if (result.status === "rejected") throw result.reason; return result.value; });
+        });
+        content.push(...results);
+      }
+    } else for (const mapping of eligible) {
       const candidate = files.find((file) => file.index === mapping.fileIndex)!;
       const id = await durableStep(ctx, `${prefix}:file-id:${mapping.fileIndex}`, randomUUID);
       const stored = await durableStep(ctx, `${prefix}:adopt:${mapping.fileIndex}`, async () => {
         active(); await assertMovieStorage(ctx.repo, roots.contentRoot);
-        const selected = sourceByIndex.get(mapping.fileIndex);
-        const expectedFile = source.manifest.files[mapping.fileIndex]!;
-        if (!selected || path.resolve(selected.path) !== path.resolve(sourceRoot, expectedFile.path)) throw new Error("Selected TV file changed layout");
-        const resolved = await resolveDownloadFile(roots.contentRoot, sourceRoot, selected.path, expectedFile.size);
-        const stat = await fs.lstat(resolved.path), identity = expectedFile.identity!;
-        if (stat.size !== expectedFile.size || stat.mtimeMs !== identity.mtimeMs || stat.ctimeMs !== identity.ctimeMs || stat.dev !== identity.device || stat.ino !== identity.inode)
-          throw new Error("Selected TV file changed after verification");
-        return adoptContentFile({ contentRoot: roots.contentRoot, sourceRoot, sourcePath: selected.path, fileId: id, expectedSize: candidate.sizeBytes, assertActive: active });
+        return adoptContentFile({ contentRoot: roots.contentRoot, sourceRoot, sourcePath: await verifiedPath(mapping.fileIndex),
+          fileId: id, expectedSize: candidate.sizeBytes, assertActive: active });
       });
       if (!snapshot.sourceReuse) {
         // A cached adoption may point at an older copy even when the new source still looks playable.

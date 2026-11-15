@@ -515,6 +515,8 @@ test("TV pack probes run in bounded parallel batches and are not repeated on dur
   let runtime: Runtime | undefined;
   try {
     s.fixture.addPack("probe-pack", keys);
+    s.fixture.services.client.capabilities.canonicalDownloads = true;
+    s.fixture.services.client.sealDownload = async () => {};
     const inspectProbe = s.fixture.services.probe;
     const probes: string[] = [];
     let inFlight = 0, maximum = 0, interruptImport = true;
@@ -550,9 +552,75 @@ test("TV pack probes run in bounded parallel batches and are not repeated on dur
     await until(runtime, () => s.repo.getJobStatus(jobId) === "succeeded", () => JSON.stringify(s.repo.getJob(jobId)));
     expect(probes).toHaveLength(6);
     expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(6);
+    const runId = s.repo.getJobExecution(jobId)!.run_id;
+    const steps = (await runtime.engine.getRunStatus(runId))!.steps;
+    expect(steps.filter(step => step.name.startsWith("tv:attempt:0:adopt-group:")).map(step => step.name).sort())
+      .toEqual(["tv:attempt:0:adopt-group:0", "tv:attempt:0:adopt-group:4"]);
+    expect(steps.some(step => step.name.startsWith("tv:attempt:0:adopt:"))).toBe(false);
     await assertOwnedViews(s);
   } finally { await runtime?.stop(); await s.close(); }
 }, 15_000);
+
+test("a failed TV adoption group keeps sibling proofs reusable but does not publish partial results", async () => {
+  const entry = { ...seasonCatalog(3), key: "tvdb:307375", tmdbId: 4294 }, keys = entry.episodes.map(episode => episode.key);
+  const s = await setup(keys, entry, 2);
+  try {
+    const offer = s.fixture.addPack("partial-group", keys);
+    s.fixture.services.client.capabilities.canonicalDownloads = true;
+    s.fixture.services.client.sealDownload = async () => {};
+    const job = s.repo.getJob(s.enqueue().job_id!)!;
+    let failure: string | undefined;
+    let sibling: string | undefined;
+    const saved = new Map<string, unknown>();
+    const execution: NonNullable<WorkerContext["execution"]> = { key: "adoption-group-test", assertActive() {}, sleep: async () => {},
+      run: async <T>(name: string, action: () => T | Promise<T>) => {
+        if (saved.has(name)) return saved.get(name) as T;
+        if (!failure && name.endsWith(":adopt-group:0")) {
+          const files = await s.fixture.services.client.files({ clientId: s.fixture.services.client.id, nativeId: offer.infoHash! });
+          failure = await fs.realpath(files[1]!.path) + ".podible-finalized.json";
+          sibling = await fs.realpath(files[0]!.path) + ".podible-finalized.json";
+          await fs.mkdir(failure);
+        }
+        const value = await action(); saved.set(name, value); return value;
+      } };
+    const run = () => acquireTv({ ...s.context, execution }, job, s.fixture.services);
+    await expect(run()).rejects.toThrow("Invalid canonical download record");
+    expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(0);
+    expect(saved.has("tv:attempt:0:adopt-group:0")).toBe(false);
+    const before = await fs.lstat(sibling!, { bigint: true });
+    await fs.rmdir(failure!);
+    await run();
+    expect((await fs.lstat(sibling!, { bigint: true })).ino).toBe(before.ino);
+    expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(3);
+    await assertOwnedViews(s);
+  } finally { await s.close(); }
+});
+
+if (process.env.PODIBLE_BENCH_TV_ADOPTION === "1") test("benchmark serial and grouped adoption of a 12-file canonical TV pack", async () => {
+  for (let trial = 0; trial < 5; trial++) for (const batchAdoption of trial % 2 === 0 ? [false, true] : [true, false]) {
+    const entry = { ...seasonCatalog(12), key: "tvdb:307375", tmdbId: 4294 };
+    const keys = entry.episodes.map(episode => episode.key), s = await setup(keys, entry, 2);
+    try {
+      s.fixture.addPack("benchmark-pack", keys);
+      s.fixture.services.client.capabilities.canonicalDownloads = true;
+      s.fixture.services.client.sealDownload = async () => {};
+      const job = s.repo.getJob(s.enqueue().job_id!)!;
+      let time = 0, steps = 0;
+      const execution: NonNullable<WorkerContext["execution"]> = { key: "adoption-benchmark", assertActive() {}, sleep: async () => {},
+        run: async <T>(name: string, action: () => T | Promise<T>) => {
+          const start = performance.now(), result = await action();
+          if (name === "tv:target-snapshot") return { ...result as object, batchAdoption } as T;
+          if (/:(?:file-id|adopt|adopt-group):\d+$/.test(name) || name.endsWith(":adoption-mode")) {
+            time += performance.now() - start; steps++;
+          }
+          return result;
+        } };
+      await acquireTv({ ...s.context, execution }, job, s.fixture.services);
+      expect(s.repo.tv.activeEpisodes(s.request.targetId)).toHaveLength(12);
+      console.log(JSON.stringify({ trial, batchAdoption, steps, adoptMs: Math.round(time * 10) / 10 }));
+    } finally { await s.close(); }
+  }
+});
 
 for (const variant of ["default-off", "malformed-pilot", "revoked-before-snatch", "revoked-during-plex", "equivalent", "better",
   "lower-quality", "partial-coverage", "partial-reuse", "lost-resume-ack", "previously-downloaded", "unmatched-layout", "unmatched-content", "below-half-reuse", "unchecked-content", "roster-race"] as const) {

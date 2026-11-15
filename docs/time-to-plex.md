@@ -24,7 +24,7 @@ Plex may make visible at different times.
 For recorded end-to-end runs, use
 `bun run scripts/report-plex-latency.ts --db /path/to/podible.sqlite --limit 10`.
 The report reads a single SQLite snapshot and compares each trace to the
-20-second movie and 30-second TV targets. It reconstructs timings from saved
+current 12-second movie and 20-second TV targets. It reconstructs timings from saved
 torrent observations and publication receipts. It omits reuse, missing
 completion evidence, and ambiguous events, and does not recheck Plex live.
 Pass `--execution-db /path/to/execution.sqlite` to include a timeline from
@@ -156,6 +156,30 @@ separate GET-only Plex check, and an already-open Chrome page updated on
 one subscription without reloading. This is one sample just below the
 target, not a claim about tail latency. The early metadata wake was not yet
 in this production build.
+
+## Next latency targets
+
+The latest saved production receipts on November 14 still show 16.014 s for
+The Station Agent and 29.699 s for Detectorists. In Detectorists, six serial file
+adoptions took 5.162 s; TV import review took 10.088 s. On a movie with one
+complete probe, the import agent can now return its semantic verdict directly
+instead of being instructed to call the policy tool. The app still checks
+identity, actual stream facts and the quality policy before publication.
+
+New sealed TV runs finalize up to four distinct objects per durable effect.
+The effect drains sibling writes on failure. No partial group is recorded as
+complete; a file proof that did make it to disk is checked and reused on retry.
+In-flight workflows retain their previous checkpoint order. The selected
+source and individual file identities are still revalidated before publishing.
+
+```sh
+PODIBLE_BENCH_TV_ADOPTION=1 bun test test/integration/tv-acquisition.test.ts -t 'benchmark serial'
+```
+
+Five 12-file trials on macOS took 22.1-31.5 ms serially versus 9.1-13.2 ms
+grouped, and reduced the adoption step count from 24 to 4. This measures the
+actual filesystem code with a fixture client and no journal flush overhead;
+it does not predict how many seconds it will save on Cyprus.
 
 ## November 14 Workflow Breakdown
 

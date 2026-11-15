@@ -55,9 +55,10 @@ function readTimeline(job: number, complete: number, ready: number) {
       : /:plex-publication:\d+:event:\d+$/.test(name) && kind === "wait" ? "wait_for_plex_event"
       : /:completion:\d+:inspect$/.test(name) ? "read_torrent_completion"
       : /:seal-download$/.test(name) ? "seal_files"
-      : /:probe:\d+$/.test(name) ? "probe_file"
+      : /:probe(?::\d+)?$/.test(name) ? "probe_file"
       : /:inspect$/.test(name) ? "review_import"
-      : /:adopt:\d+$/.test(name) ? "adopt_file"
+      : /:adopt(?::\d+)?$/.test(name) ? "adopt_file"
+      : /:adopt-group:\d+$/.test(name) ? "adopt_file_group"
       : /:version$/.test(name) ? "record_version"
       : /:cross-seed-copies$/.test(name) ? "queue_cross_seed_copies"
       : null;
@@ -95,7 +96,7 @@ const report = db.transaction(() => (["movie", "tv"] as const).map(media => {
     WHERE (?3 IS NULL OR ready.created_at>=?3)
     ORDER BY ready.created_at DESC,ready.id DESC LIMIT ?4
   `).all(media, prefix, since === null ? null : new Date(since).toISOString(), limit * 10);
-  const targetMs = media === "movie" ? 20_000 : 30_000;
+  const targetMs = media === "movie" ? 12_000 : 20_000;
   const samples = rows.flatMap(({ observation, jobId, ...row }) => {
     const completeAt = savedCompletionTime(observation);
     const complete = Date.parse(completeAt ?? ""), publish = Date.parse(row.publishingAt ?? ""), ready = Date.parse(row.readyAt);
