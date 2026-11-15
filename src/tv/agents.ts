@@ -10,7 +10,7 @@ import { fetchMovieMetainfo, type MovieOffer, type MovieSearch } from "../movies
 import { movieFactsSchema, evaluateMovieQuality, type MovieQualityPolicy } from "../movies/quality";
 import { factsFromMovieProbe, type MovieProbe } from "../movies/probe";
 import type { TvEntry, TvEpisode } from "./types";
-import { evidencePage, inlineTvImportEvidence, tvEpisodeEvidence, tvFileEvidence, tvProbeEvidence, tvWorkEvidence } from "./agent-evidence";
+import { compactTvImportEvidence, compactTvImportLegend, evidencePage, inlineTvImportEvidence, tvEpisodeEvidence, tvFileEvidence, tvProbeEvidence, tvWorkEvidence } from "./agent-evidence";
 import { modelEvidenceText, tryAcquisitionDecision, type DecisionsTransport } from "../library/decisions";
 import { screenedVideoFile, screenedVideoOffers, tvDecisionIdentity, videoPolicyEvidence } from "../media/video-decisions";
 
@@ -60,7 +60,8 @@ export function validateTvImportPlan(raw: unknown, files: TvFileCandidate[], epi
 }
 
 export function createTvDecider(settings: AppSettings, modelProvider?: ModelProvider, search?: (query: string) => Promise<MovieSearch>,
-  fetchMetainfo = fetchMovieMetainfo, decisionsFetch: DecisionsTransport | undefined = modelProvider ? undefined : fetch): TvDecider {
+  fetchMetainfo = fetchMovieMetainfo, decisionsFetch: DecisionsTransport | undefined = modelProvider ? undefined : fetch,
+  inlineFormat: "compact" | "objects" = "compact"): TvDecider {
   async function run<T extends z.ZodObject>(name: string, outputType: T, extra: string, input: unknown,
     tools: ConstructorParameters<typeof Agent>[0]["tools"] = [],
     validate?: (output: z.output<T>) => string | null): Promise<z.output<T>> {
@@ -217,14 +218,17 @@ For this task, matchingIndexes should include only eligible copies; omit ones ma
           return {fileIndex,assessment:file?evaluateMovieQuality(input.policy,factsFromMovieProbe(file.probe,facts)):{error:"Unknown file"}};
         }) });
       const inline = inlineTvImportEvidence(input.files, input.episodes);
+      const packed = inline && inlineFormat === "compact" ? compactTvImportEvidence(inline) : undefined;
+      const compact = packed && Buffer.byteLength(JSON.stringify(packed)) + Buffer.byteLength(compactTvImportLegend) <
+        Buffer.byteLength(JSON.stringify(inline)) ? packed : undefined;
       const plan = await run("TvEpisodeImportVerifier", tvImportPlanSchema,
         `Map only requested episode IDs to complete playable files. Each episode may be assigned once. A file can contain several whole episodes; assign all of their IDs together. Partial packs may map only the episodes genuinely present.
 Do not assign season-pack names wholesale: identify each file's actual episodes. Consult provider aired/absolute and anime-local numbering, aliases, episode titles and runtimes. Ignore samples, extras, opening clips and unrequested episodes.
 If a combined file also contains an unrequested episode, reject the file rather than mislabeling it as only its requested subset.
 When inlineEvidence is provided, it contains every requested episode and probed candidate. Use its duration and stream facts directly; do not re-request evidence already present. If a file has nextOffset, request more streams only when needed to establish the policy or identity. Use the tools when evidence is missing, paginated, or ambiguous, and prefer the bulk tools for packs.
-Page through listFiles/getRequestedEpisodes when the initial input is an overview. getFileProbes/getFileProbe return actual streams, and assessCandidates/assessCandidate check quality claims against policy. Actual stream facts override release claims. Return files:[] if nothing can be established. Do not map a truncated episode or an unsupported collection of partial files as a complete episode.`,
+Page through listFiles/getRequestedEpisodes when the initial input is an overview. getFileProbes/getFileProbe return actual streams, and assessCandidates/assessCandidate check quality claims against policy. Actual stream facts override release claims. Return files:[] if nothing can be established. Do not map a truncated episode or an unsupported collection of partial files as a complete episode.${compact ? "\n" + compactTvImportLegend : ""}`,
         { entry: tvWorkEvidence(input.entry), episodeCount: input.episodes.length, policy: videoPolicyEvidence(input.policy),
-          release: { title: modelEvidenceText(input.offer.title) }, ...(inline ? { inlineEvidence: inline } : {
+          release: { title: modelEvidenceText(input.offer.title) }, ...(inline ? { inlineEvidence: compact ?? inline } : {
             episodes: input.episodes.slice(0,4).map(tvEpisodeEvidence), files: evidencePage(input.files,0,10,tvFileEvidence),
           }) },
         [fileList, probe, probes, episodeTool(input.episodes), assess, assessments]);

@@ -31,6 +31,45 @@ export function inlineTvImportEvidence(files: TvFileCandidate[], episodes: TvEpi
   if (Buffer.byteLength(JSON.stringify(evidence)) <= 16_000) return evidence;
 }
 
+type InlineTvImportEvidence = NonNullable<ReturnType<typeof inlineTvImportEvidence>>;
+
+export const compactTvImportLegend = `Inline evidence tables (columns in order):
+episodes: [id, key, title, runtimeMinutes, numbering, identityStability, moreNumbering].
+Each numbering row: [numberingSourceIndex, season, episode, absolute]. numberingSources rows: [scheme, source].
+files: [index, name, sizeBytes, durationSeconds, streamCount, nextOffset, streamProfileIndex].
+Each streamProfiles entry is an ordered list of [codec_type, codec_name, width, height, color_transfer, attached_pic, language].
+Indexes into numberingSources and streamProfiles are zero-based. Null duration or stream fields mean absent; other nulls keep their usual meaning. File and episode IDs are unchanged.`;
+
+/** Pack the already-sanitized inline evidence, not the raw probe or catalog. */
+export function compactTvImportEvidence(evidence: InlineTvImportEvidence) {
+  const numberingSources: (readonly [string, string])[] = [];
+  type StreamProfile = ReturnType<typeof packStreams>;
+  const streamProfiles: StreamProfile[] = [];
+  const sourceIndexes = new Map<string, number>();
+  const streamIndexes = new Map<string, number>();
+  const intern = <T>(row: T, rows: T[], indexes: Map<string, number>) => {
+    const key = JSON.stringify(row);
+    const previous = indexes.get(key);
+    if (previous !== undefined) return previous;
+    const index = rows.length;
+    rows.push(row);
+    indexes.set(key, index);
+    return index;
+  };
+  function packStreams(file: InlineTvImportEvidence["files"][number]) {
+    return file.streams.map(stream => [stream.codec_type ?? null, stream.codec_name ?? null, stream.width ?? null,
+      stream.height ?? null, stream.color_transfer ?? null, stream.disposition.attached_pic ?? null, stream.tags.language ?? null] as const);
+  }
+  return {
+    episodes: evidence.episodes.map(ep => [ep.id, ep.key, ep.title, ep.runtimeMinutes,
+      ep.numbering.map(n => [intern([n.scheme, n.source] as const, numberingSources, sourceIndexes), n.season, n.episode, n.absolute] as const),
+      ep.identity.stability, ep.moreNumbering] as const),
+    files: evidence.files.map(file => [file.index, file.name, file.sizeBytes, file.format.duration ?? null, file.streamCount,
+      file.nextOffset, intern(packStreams(file), streamProfiles, streamIndexes)] as const),
+    numberingSources, streamProfiles,
+  };
+}
+
 export function evidencePage<T>(values: T[], offset: number, limit: number, present: (value: T) => unknown) {
   return modelEvidencePage(values, offset, limit, present);
 }

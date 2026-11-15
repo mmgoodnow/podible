@@ -8,7 +8,7 @@ import { defaultMovieQualityPolicy } from "../../src/movies/quality";
 import type { TvEntry, TvEpisode } from "../../src/tv/types";
 import bencode from "bencode";
 import { createHash } from "node:crypto";
-import { evidencePage } from "../../src/tv/agent-evidence";
+import { compactTvImportEvidence, compactTvImportLegend, evidencePage, inlineTvImportEvidence } from "../../src/tv/agent-evidence";
 
 const episode: TvEpisode = { id: 12, key: "tvdb:1001", title: "First of a sequel", airDate: "2020-01-01", runtimeMinutes: 24,
   refs: [], identity: { stability: "provider", source: "fixture" },
@@ -86,6 +86,7 @@ test("a small TV pack has all requested episodes and sanitized stream evidence i
   expect(fake.calls).toHaveLength(1);
   const first = JSON.stringify(fake.calls[0]!.input);
   expect(first).toContain("inlineEvidence");
+  expect(first).toContain("streamProfiles");
   expect(first).toContain("Requested member 12");
   expect(first).toContain("Downloaded member 12.mkv");
   expect(first).toContain("1440");
@@ -93,6 +94,50 @@ test("a small TV pack has all requested episodes and sanitized stream evidence i
   expect(first).not.toContain("private-probe-tag");
   expect(first).not.toContain("passkey");
   expect(fake.calls[0]!.tools.map(tool => tool.name)).toContain("getFileProbes");
+});
+
+test("compact TV evidence round trips exactly, preserving stream order, paging and distinct profiles", () => {
+  const streams = [
+    ...files[0]!.probe.streams,
+    { codec_type: "video", codec_name: "mjpeg", disposition: { attached_pic: 1 } },
+    ...Array.from({ length: 10 }, () => ({ codec_type: "subtitle", tags: { language: "eng" } })),
+  ];
+  const probe = { format: { duration: "1440.001" }, streams };
+  const same = { format: { duration: "1452.002" }, streams };
+  const different = { format: {}, streams: [streams[1]!, streams[0]!, ...streams.slice(2)] };
+  const episodes = [episode, { ...episode, id: 13, runtimeMinutes: null, identity: { ...episode.identity, stability: "ephemeral" as const },
+    numbering: Array.from({ length: 31 }, (_, i) => ({ scheme: "anidb", source: "mapping", season: null, episode: null, absolute: i + 1 })) }];
+  const evidence = inlineTvImportEvidence([probe, same, different].map((probe, i) => ({ ...files[0]!, index: 4 + i, probe })), episodes)!;
+  const packed = compactTvImportEvidence(evidence);
+  expect(packed.streamProfiles).toHaveLength(2);
+  expect(packed.files.map(file => file[6])).toEqual([0, 0, 1]);
+  expect(packed.numberingSources).toHaveLength(3);
+  const absent = <T>(v: T | null) => v ?? undefined;
+  const decoded = {
+    files: packed.files.map(([index, name, sizeBytes, duration, streamCount, nextOffset, profile]) => ({
+      index, name, sizeBytes, format: { duration: absent(duration) }, streamCount, nextOffset,
+      streams: packed.streamProfiles[profile]!.map(([type, codec, width, height, transfer, picture, language]) => ({
+        codec_type: absent(type), codec_name: absent(codec), width: absent(width), height: absent(height),
+        color_transfer: absent(transfer), disposition: { attached_pic: absent(picture) }, tags: { language: absent(language) },
+      })),
+    })),
+    episodes: packed.episodes.map(([id, key, title, runtimeMinutes, numbering, stability, moreNumbering]) => ({
+      id, key, title, runtimeMinutes, numbering: numbering.map(([coordinate, season, episode, absolute]) => {
+        const [scheme, source] = packed.numberingSources[coordinate]!;
+        return { scheme, season, episode, absolute, source };
+      }), identity: { stability }, moreNumbering,
+    })),
+  };
+  expect(decoded).toStrictEqual(evidence);
+  expect(JSON.stringify(packed).length + compactTvImportLegend.length).toBeLessThan(JSON.stringify(evidence).length);
+});
+
+test("inline compaction does not change the overview and paging for large TV packs", async () => {
+  const fake = provider([plan]);
+  const candidates = Array.from({ length: 17 }, (_, index) => ({ ...files[0]!, index }));
+  await createTvDecider(defaultSettings(), fake.model).inspect({ entry, episodes: [episode], policy: defaultMovieQualityPolicy, offer, files: candidates });
+  expect(JSON.stringify(fake.calls[0]?.input)).not.toContain("inlineEvidence");
+  expect(fake.calls[0]!.tools.map(tool => tool.name)).toContain("listFiles");
 });
 
 test("TV import validation rejects invented files, ordinal IDs, and duplicate episode assignments", () => {
