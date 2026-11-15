@@ -126,11 +126,11 @@ test("movie selector executes distinct-tracker evidence tool and retains all sem
     sizeEvidence: { distinctCount: 1 }, hashEvidence: { distinctCount: 3 } });
   expect(assessmentOutputs(fake.requests[1]!)[0].offers[2].downloadVolumeFactor).toBe(0);
   expect(JSON.stringify(fake.requests)).not.toContain("hidden");
-  const instructions = JSON.stringify(fake.requests[0]!.systemInstructions);
-  expect(instructions).toContain("Hard constraints, quality tiers/preferences, identity and episode coverage always win");
-  expect(instructions).toContain("semantically");
-  expect(instructions).toContain("Do not perform extra searches solely");
-  expect(instructions).toContain("not proof of additional torrent registrations or new seeding coverage");
+  const instructions = fake.requests[0]!.systemInstructions;
+  expect(instructions).toContain("only to break ties among viable releases with equal quality and episode coverage");
+  expect(instructions).toContain("Group copies by same work, encode, cut");
+  expect(instructions).toContain("Don't search just to boost tracker count");
+  expect(instructions).toContain("shared hashes may not add a registration");
 });
 
 test("bad grouping tool indexes return feedback, while invalid final alternatives are rejected", async () => {

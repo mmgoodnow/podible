@@ -290,7 +290,7 @@ test("TV expanded research candidates participate in the shared evidence tool an
   expect(JSON.parse(output)).toMatchObject({ distinctTrackerCount: 2,
     offers: [{ index: 0 }, { index: 1 }, { index: 2, downloadVolumeFactor: 0.25 }] });
   expect(JSON.stringify(fake.calls)).not.toContain("hidden");
-  expect(JSON.stringify(fake.calls[0]!.systemInstructions)).toContain("episode coverage always win");
+  expect(fake.calls[0]!.systemInstructions).toContain("only to break ties among viable releases with equal quality and episode coverage");
 });
 
 test("ineligible optional copies cannot poison a valid TV primary selection", async () => {

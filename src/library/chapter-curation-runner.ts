@@ -779,20 +779,6 @@ function nodeBoundaryPrompt(ctx: ChapterCurationContext, span: ChapterCurationSp
     `targetBoundary: ${JSON.stringify(targetBoundary)}`,
     `targetBoundaryContext: ${JSON.stringify(targetBoundaryPromptContext(ctx, span, targetBoundary))}`,
     `audioOnlyIntervalsNearExpectedTime: ${JSON.stringify(nearbyAudioOnlyIntervals)}`,
-    "The EPUB list has already been filtered to narrated/audible nodes. Copyright, cover, TOC, and other non-narrated entries should not appear here unless the classifier was uncertain.",
-    "Your only goal is this one node. Do not switch to a different node.",
-    "Workflow:",
-    "1. Call researchEpubBoundary first. It searches this assigned node's opener phrases and reverse-checks transcript hits against the EPUB.",
-    "2. If researchEpubBoundary finds an opener/near_opener candidate, inspect it with getTranscriptWindow and submit that first opener word or the silence immediately before it.",
-    "3. If no candidate is good enough, call getEpubNodeText for a different target-node word window and search distinctive phrases with rgSearchTranscript or fuzzySearchTranscript.",
-    "4. If the transcript appears to be in a different language than the EPUB, translate distinctive target opener phrases yourself and search those translated phrases. Then use the previous/target/next node context to prove the hit belongs to this exact EPUB node.",
-    "5. If targetBoundaryContext.repeatedTitleContext says the title is repeated or structural-title-only, ignore the title as evidence. Search the assigned node's body opener and compare against previousNode.tailText and nextNode.firstWords.",
-    "6. Use searchEpubText to reject transcript hits that are interior prose rather than the target opener.",
-    "7. Do not submit EPUB ratio estimates without transcript evidence.",
-    "8. expectedStartTime is only a rough estimate. If transcriptWindowAroundExpectedTime looks like the previous node or another repeated heading, search wider instead of anchoring there.",
-    "9. For the first narrated node, do not assume 0s if audioOnlyIntervals indicate credits/preamble. Find where the target opener actually begins.",
-    "10. submitNodeBoundary is final; call it only when you can prove this exact EPUB node begins at or immediately after startTime.",
-    "All times are seconds.",
   ].join("\n");
 }
 
@@ -806,23 +792,13 @@ function createChapterBoundaryJudgeAgent(ctx: ChapterCurationContext, span: Chap
     }),
     resetToolChoice: false,
     instructions: [
-      "You review proposed audiobook chapter boundary timestamps. Your only job is to decide whether the proposed timestamp is actually where the assigned EPUB node begins in the audio.",
-      "Judge the claim directly: does node X begin at timestamp Y?",
-      "Start with audit.boundaryComparison. Compare previousEpub.tailText to transcriptBefore, and targetEpub.bodyHeadText or targetEpub.headText to transcriptAfter.",
-      "EPUB chapter headings are often printed but not read aloud. If targetEpub.optionalHeadingText is absent from the transcript but targetEpub.bodyHeadText begins right at the timestamp, that is strong opener evidence.",
-      "ASR sometimes drops the printed heading and the first few opener words. If the notes identify a near-opener fallback, accept when transcriptAfter starts with the earliest clear target body phrase and transcriptBefore plausibly matches the previous EPUB tail.",
-      "For high-confidence named embedded audio markers, ASR can have a transcript gap after the previous node tail. If notes identify an embedded audio marker, transcriptBefore matches previousEpub.tailText, boundaryWords.after starts tens of seconds later, and those after-words appear inside targetEpub.bodyHeadText/headText rather than previousEpub.tailText, accept the embedded marker as the best chapter boundary. Use finding=embedded_marker_transcript_gap.",
-      "Bad transcription is common at chapter boundaries: ASR may drop a heading, drop the first opener words, merge a cue into the previous sentence, or leave a transcript gap before the next clear words. When the immediate audit is thin, offset, or contains only a cue instead of target prose, call getTranscriptWindow with radiusSeconds around 120 before judging.",
-      "Judge the wider surrounding prose, not just the immediate words. Accept when the wider window shows previous EPUB tail before the proposed boundary and target EPUB prose after it, even if the local transcriptAfter is short, damaged, or delayed by ASR gaps. Use finding=surrounding_prose_confirms_boundary.",
-      "For the first EPUB node only, previousEpub is absent. If notes identify an opening interior-start candidate, accept when transcriptBefore is empty or only opening credits/boilerplate and transcriptAfter starts with distinctive prose from inside the target EPUB node. This means the audiobook/ASR omitted earlier printed opener text; it is still the first available narrated boundary.",
-      "Check transcriptPrecision. If it is word, the before/after split is exact and should be treated as precise. If it is utterance, a real boundary may fall inside a displayed utterance — accept the utterance start if it contains previous tail then target head.",
-      "If boundaryWords.containing is non-empty, the timestamp falls mid-word. Prefer a nearestCleanBoundaryTimes value unless the containing word is itself the first opener word.",
-      "Transcript before the timestamp matching the previous EPUB node is positive evidence — not a sign the target opener is interior.",
-      "Accept when transcriptBefore plausibly matches the previous EPUB tail and transcriptAfter begins with distinctive target body opener prose, even if the printed heading is absent.",
-      "Reject when target body opener evidence is absent, offset, generic, pre-target, or only an interior match.",
-      "Do not suggest alternate timestamps or nodes. Do not invent a chapter plan. Judge only this proposed boundary.",
-      "Describe problems using evidence terms — opener_evidence_at_timestamp, opener_evidence_offset_in_window, window_starts_before_opener_evidence, embedded_marker_transcript_gap, tool_classified_interior_match, generic_or_weak_overlap, submitted_evidence_insufficient — not narrative terms like 'mid-scene'.",
-      "You must call submitBoundaryJudgment.",
+      "Judge only whether the assigned EPUB node starts at the proposed audio timestamp. Don't propose other nodes or times. Call submitBoundaryJudgment; when uncertain, reject so the curator can search again.",
+      "Start with audit.boundaryComparison: previousEpub.tailText should plausibly match transcriptBefore and distinctive targetEpub.bodyHeadText/headText should start at transcriptAfter. Printed headings need not be spoken. For a noted near-opener fallback, the earliest clear target body phrase suffices if the previous tail supports it.",
+      "For a noted high-confidence named embedded marker, accept the marker if the previous tail matches and boundaryWords.after, delayed by tens of seconds, is inside the target head rather than the previous tail. Use finding=embedded_marker_transcript_gap.",
+      "ASR can omit headings/opener words, merge cues or leave gaps. When local evidence is thin, offset, damaged or cue-only, call getTranscriptWindow at proposed.startTime with radiusSeconds about 120. Accept if wider prose supports the previous tail before and target prose after the proposed boundary; use finding=surrounding_prose_confirms_boundary.",
+      "First node only: for a noted opening interior-start candidate, accept distinctive target-node interior prose if transcriptBefore is empty or only credits/boilerplate and no previousEpub exists.",
+      "Word precision is exact. If boundaryWords.containing is nonempty, prefer nearestCleanBoundaryTimes unless that word is the first opener. At utterance precision, the utterance start can be valid if it contains previous tail then target head.",
+      "Otherwise reject absent, offset, generic, pre-target or interior-only opener evidence. Classify evidence, not ground truth: use finding codes such as opener_evidence_at_timestamp, opener_evidence_offset_in_window, window_starts_before_opener_evidence, tool_classified_interior_match, generic_or_weak_overlap, or submitted_evidence_insufficient, not labels like mid-scene.",
     ].join("\n"),
     tools: [
       tool({
@@ -851,17 +827,6 @@ function createChapterBoundaryJudgeAgent(ctx: ChapterCurationContext, span: Chap
 function chapterBoundaryJudgePrompt(ctx: ChapterCurationContext, span: ChapterCurationSpan, proposal: ChapterBoundaryJudgeProposal): string {
   return [
     `Review this proposed chapter boundary for "${ctx.book.title}" by ${ctx.book.author}.`,
-    "Return accepted=false if the timestamp is not clearly where the EPUB node begins in the audio. When in doubt, reject — the curator will search again.",
-    "Primary evidence: audit.boundaryComparison. transcriptBefore matching previousEpub.tailText and transcriptAfter matching targetEpub.bodyHeadText or targetEpub.headText supports acceptance.",
-    "Printed EPUB headings are often absent from ASR. Do not reject merely because optionalHeadingText is missing when bodyHeadText begins at the proposed timestamp.",
-    "If notes identify a near-opener fallback, accept the first audible target body phrase when the heading is absent from ASR and transcriptBefore supports the previous EPUB tail.",
-    "If notes identify a high-confidence named embedded audio marker, handle transcript gaps differently: accept when transcriptBefore matches previousEpub.tailText, boundaryWords.after starts tens of seconds later due to an ASR/audio gap, and those after-words appear inside targetEpub.bodyHeadText/headText rather than previousEpub.tailText. This is not the same as a random interior title mention; use finding=embedded_marker_transcript_gap.",
-    "Bad transcription is common at chapter boundaries. If audit.boundaryComparison is thin, offset, cue-only, or appears to have dropped heading/opener words, call getTranscriptWindow around proposed.startTime with radiusSeconds around 120 before judging. Accept when the wider window shows previous-node prose before the boundary and target-node prose after it; use finding=surrounding_prose_confirms_boundary.",
-    "If this is the first EPUB node and notes identify an opening interior-start candidate, previousEpub will be absent. Accept when transcriptBefore is empty or only opening credits/boilerplate and transcriptAfter starts with distinctive prose from inside targetEpub, even if earlier printed opener words are missing from ASR/audio.",
-    "transcriptPrecision=word is exact; boundaryWords.containing non-empty means the timestamp is mid-word — prefer nearestCleanBoundaryTimes unless that word is the first opener. transcriptPrecision=utterance is lower precision; accepting an utterance start is valid when it contains previous tail followed by target head.",
-    "transcriptBefore matching the previous EPUB node is positive evidence, not a problem.",
-    "Treat finding as an evidence classification, not ground truth about where the boundary truly is.",
-    "",
     JSON.stringify(
       {
         span,
@@ -887,9 +852,7 @@ function chapterBoundaryJudgePrompt(ctx: ChapterCurationContext, span: ChapterCu
             quality: candidate.quality,
           })),
         },
-      },
-      null,
-      2
+      }
     ),
   ].join("\n");
 }
@@ -997,17 +960,10 @@ function createAudibleEpubNodeSelectionAgent(ctx: ChapterCurationContext): Agent
     }),
     resetToolChoice: false,
     instructions: [
-      "You classify which EPUB spine nodes are plausible audiobook chapter material before timestamp curation.",
-      "Your job is only to include or exclude EPUB nodes. Do not decide timestamps and do not create a chapter plan.",
-      "Exclude obvious non-audio front/back matter such as copyright pages, dedications, acknowledgments, tables of contents, cover/nav pages, ads, indexes, and about-the-author pages when they are not plausibly spoken in the audiobook.",
-      "Treat edition-specific prefaces, revised/expanded edition notes, bonus essays, and print-only update notes as exclude-by-default unless the transcript beginning/ending excerpts directly show that specific node is narrated.",
-      "Keep prologues, part headings, chapter nodes, epilogues, and any uncertain narrative node. False exclusions are worse than false inclusions.",
-      "Classify every supplied EPUB node exactly once: each id must appear in either audibleNodeIds or excludedNodes, never both. The submission tool will return an error listing omissions or conflicts so you can correct and resubmit.",
-      "Use the transcript beginning and ending excerpts to identify audiobook credits/preamble and whether EPUB front/back matter is likely represented.",
-      "For multi-asset audiobooks, classify audio-only intervals around asset starts, asset ends, and joins, such as publisher intros, end credits, recaps, and part bumpers that have no EPUB node.",
-      "Keep audio-only intervals narrow and evidence-based. They are annotations for later tools, not chapter timestamps.",
-      "If a provided audio excerpt visibly contains credits, publisher branding, part bumpers, previews, or promotional material that is not an EPUB node, include an audioOnlyIntervals entry with an approximate startTime/endTime from the excerpt range instead of only mentioning it in notes.",
-      "You must call submitAudibleEpubNodeSelection.",
+      "Classify EPUB nodes, not chapter timestamps. Call submitAudibleEpubNodeSelection with each id exactly once in audibleNodeIds or excludedNodes; correct any omissions or conflicts.",
+      "Keep prologues, parts, chapters, epilogues and uncertain narrative nodes; false exclusions are worse than inclusions. Keep prose-like Postscript, Afterword, Epilogue or Coda when the ending excerpt contains an opener/title or prose continues after the prior node.",
+      "Use transcript excerpts to exclude copyright, dedications, acknowledgments, TOC, cover/nav, ads, indexes and author bios when not plausibly narrated. Exclude edition-specific prefaces, revised/expanded notes, bonus essays and print updates unless an excerpt directly shows that node is narrated.",
+      "Record non-EPUB credits, preamble, branding, recaps, bumpers, previews and promos as narrow evidence-based audioOnlyIntervals with approximate start/end times from the excerpts, including asset starts, ends and joins. These are annotations, not chapter markers.",
     ].join("\n"),
     tools: [
       tool({
@@ -1079,11 +1035,6 @@ function audibleEpubNodeSelectionPrompt(ctx: ChapterCurationContext): string {
   const endExcerpt = getTranscriptWindowFromContext(ctx, endCenter, 150_000).text.slice(-4_000);
   return [
     `Classify EPUB nodes for "${ctx.book.title}" by ${ctx.book.author}.`,
-    "Return only nodes that are plausible audiobook chapter material for recursive timestamp curation.",
-    "Keep uncertain narrative nodes; exclude only nodes that look like non-audio front/back matter or navigation.",
-    "Do not exclude prose-like end matter solely because it is titled Postscript, Afterword, Epilogue, Coda, or similar. If the transcript ending contains its opener/title, or if the audio continues with book prose after the prior narrative node, keep it as audiobook chapter material.",
-    "It is better to keep a plausible narrated prose node and let boundary validation fail later than to exclude a genuinely narrated chapter-like node during this pre-pass.",
-    "",
     JSON.stringify(
       {
         audioTranscriptBeginning: startExcerpt,
@@ -1097,9 +1048,7 @@ function audibleEpubNodeSelectionPrompt(ctx: ChapterCurationContext): string {
           wordCount: entry.wordCount,
           firstWords: summarizeFirstWords(entry, 50),
         })),
-      },
-      null,
-      2
+      }
     ),
   ].join("\n");
 }
@@ -1296,18 +1245,11 @@ export function createNodeBoundaryCuratorAgent(
       : initialModelSettings,
     resetToolChoice: false,
     instructions: [
-      "You find the start timestamp of one assigned audible EPUB chapter node in an audiobook transcript.",
-      `Your only goal is to locate where ${targetBoundary.epubNodeId} (${targetBoundary.title}) begins in the audio. Do not switch to a different node.`,
-      "The EPUB nodes have already been filtered to narrated/audible nodes by a separate classifier.",
-      "Workflow:",
-      "1. Use targetBoundaryContext in the prompt. Do not ask for the full EPUB structure.",
-      "2. Call researchEpubBoundary first. It searches only the assigned node.",
-      "3. If it finds an opener/near_opener candidate, inspect with getTranscriptWindow and submit the earliest target opener time.",
-      "4. If it fails, call getEpubNodeText for a different target-node window and search distinctive phrases with rgSearchTranscript or fuzzySearchTranscript.",
-      "5. Use searchEpubText to reject interior transcript hits.",
-      "6. Do not submit estimates from EPUB position alone. A transcript search result is required before submitting.",
-      "7. submitNodeBoundary is final and must assert the assigned EPUB node begins at startTime.",
-      "All times are seconds.",
+      "Locate only targetBoundary, an EPUB node already classified as audible. Use targetBoundaryContext, not the full EPUB structure. Times are seconds.",
+      "Call researchEpubBoundary first for opener search and reverse EPUB checks. Inspect opener/near_opener hits with getTranscriptWindow; use the earliest opener word or silence immediately before it.",
+      "If inconclusive, get a different target window with getEpubNodeText and search distinctive phrases via rgSearchTranscript or fuzzySearchTranscript. Translate phrases if the transcript language differs, then prove the hit using previous/target/next context. Use searchEpubText to reject interior hits.",
+      "Ignore repeated or structural-only titles as evidence; compare target body opener with previousNode.tailText and nextNode.firstWords. expectedStartTime is approximate: search wider if its transcript is still in a previous node or repeated heading. Don't assume 0s when credits/preamble precede the first opener.",
+      "submitNodeBoundary is final. Only submit if transcript search proves this node begins at or immediately after startTime; never submit a ratio estimate alone.",
     ].join("\n"),
     tools: [
       tool({

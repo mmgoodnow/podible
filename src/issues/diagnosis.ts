@@ -10,19 +10,10 @@ import { screenIssueAssessmentSchema, screenIssueCheckForFocus, screenIssueDecis
 type Assess = (evidence: ScreenIssueEvidence) => Promise<unknown>;
 type DiagnosisResult = { status: "assessed"; assessment: ScreenIssueAssessment } | { status: "unavailable" | "failed" };
 
-const instructions = `Classify the focus for a reported movie or TV issue using only the supplied evidence.
-The filed and current findings are snapshots of local publication records, not tests of Plex or file presence.
-For tv-show, a publication record means at least one episode, not that the entire show is present.
-A historical loss does not establish current file loss. Do not claim to have verified the cause or run a repair.
-Base the focus on currentFinding; use filedFinding for context if the record changed.
-- recorded-content-loss: currentFinding is content-loss-recorded; the loss record is historical, not a current verification.
-- publication-gap: currentFinding is no-publication-recorded; the absence of a record is not proof of a missing file.
-- library-availability-unverified: publication is recorded but a missing/playback report warrants checking library links.
-- playback-unverified: publication is recorded but a missing/playback symptom should be reproduced in Plex.
-- tracks-unverified: publication is recorded and the report is about audio-subtitles.
-- identity-unverified: publication is recorded and the report is about wrong-content.
-- inconclusive: the evidence is insufficient for a more specific focus.
-Return only the focus code. Do not suggest commands or repairs.`;
+const instructions = `Choose a focus from currentFinding; use filedFinding for context if it changed. These are publication records, not live Plex/file checks. A show record covers at least one episode, not necessarily the whole show. Historical loss or absent records don't prove current loss. Don't claim a verified cause or repair.
+content-loss-recorded -> recorded-content-loss; no-publication-recorded -> publication-gap.
+If publication is recorded: missing/playback -> library-availability-unverified if links need checking, playback-unverified if reproduction in Plex is needed; audio-subtitles -> tracks-unverified; wrong-content -> identity-unverified.
+Use inconclusive if evidence is insufficient. Return focus only, no commands or repairs.`;
 
 export function createScreenIssueAssessor(
   settings: Pick<AppSettings["agents"], "apiKey" | "timeoutMs">, fetcher?: ClientOptions["fetch"],

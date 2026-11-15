@@ -69,10 +69,10 @@ const modelProvider: ModelProvider = {
           prompt += typeof item.content === "string" ? item.content : item.content
             .flatMap((content) => content.type === "input_text" ? [content.text] : []).join("\n");
         }
-        const filesJson = /```json\n([\s\S]*?)\n```/.exec(prompt)?.[1];
+        const filesJson = /^Files \[index, path, size\]:\n(.+)$/m.exec(prompt)?.[1];
         if (!filesJson) throw new Error("Missing fixture importable-file list");
-        const files = JSON.parse(filesJson) as { index: number }[];
-        selectedIndices = files.map((file) => file.index);
+        const files = JSON.parse(filesJson) as [index: number, path: string, size: number | string][];
+        selectedIndices = files.map(([index]) => index);
         if (!selectedIndices.length) throw new Error("Fixture has no importable files");
       }
       return {

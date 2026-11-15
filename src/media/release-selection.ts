@@ -6,12 +6,10 @@ import { modelEvidenceText } from "../library/decisions";
 const indexesSchema = z.array(z.number().int().nonnegative().safe()).max(2000);
 export const matchingIndexesSchema = indexesSchema.default([]);
 
-export const releaseSelectionInstructions = `Group likely matching copies semantically: the same work, encode, cut, release group, language tracks and (for TV) episode coverage. Similar titles, sizes or hashes alone do not establish a group; do not merge different encodes, editions, remakes, seasons or partial/complete packs.
-Call assessCrossSeedability with all known indexes in each likely group (including the candidate to download) before using tracker coverage to choose. It counts distinct normalized tracker names, not results. Sizes and hashes are diagnostics, not proof that files can be reused; private torrents may have different hashes for the same media.
-Tracker listings sharing an infoHash are not proof of additional torrent registrations or new seeding coverage; runtime may skip an already-owned identity. Do not promise coverage from the estimate.
-Prefer greater estimated tracker coverage only among viable choices with equal quality and requested coverage. Hard constraints, quality tiers/preferences, identity and episode coverage always win. Within the chosen semantic group, prefer a lower known downloadVolumeFactor (0 means freeleech) when source viability is otherwise equal. Unknown factors are unknown, not freeleech. Never pick a dead source merely for freeleech.
-Prefer proper/repack releases over otherwise comparable releases, but never override eligibility or a better quality tier for a correction label.
-Return matchingIndexes for ALL other known copies in the chosen semantic group, including genuinely distinct copies on the same tracker. Do not return merely similar or unrelated results. Return [] if no group is known or index:null. Do not perform extra searches solely to increase tracker counts. Estimates are not verified cross-seeds and must not justify an equal-quality upgrade.`;
+export const releaseSelectionInstructions = `Group copies by same work, encode, cut, release group, language tracks and TV episode coverage; don't merge editions, remakes or partial/full packs. Similar title, size or hash alone doesn't prove equivalence; private copies can have different hashes.
+Before using tracker coverage, call assessCrossSeedability with all known group indexes including the primary. It counts distinct normalized tracker names, not results. Reuse isn't verified and shared hashes may not add a registration.
+Use tracker coverage only to break ties among viable releases with equal quality and episode coverage, never to justify an equal-quality upgrade. Prefer proper/repack among otherwise comparable releases. Within a group, prefer a lower known downloadVolumeFactor (0 = freeleech) at equal viability; unknown isn't freeleech and a dead source doesn't win.
+Set matchingIndexes to all other known copies in the chosen group, including distinct ones on the same tracker, or [] for no group/index:null. Don't search just to boost tracker count.`;
 
 function knownIndexes(offers: readonly MovieOffer[], indexes: readonly number[]) {
   const parsed = indexesSchema.parse(indexes);
