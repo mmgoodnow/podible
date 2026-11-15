@@ -8,10 +8,17 @@
 .release-feed-heading h1 { font-size: 2rem; margin: 0; }
 .release-feed-heading p { color: var(--muted); margin: .35rem 0 0; }
 .release-feed-filters, .release-feed-pagination { display: flex; flex-wrap: wrap; gap: .5rem; margin-block: 1rem; }
-.release-feed-list { list-style: none; padding: 0; border-top: 1px solid var(--line); }
+.release-feed-filters { align-items: center; }
+.release-feed-picked-filter { display: flex; align-items: center; gap: .4rem; margin-inline-start: .6rem; cursor: pointer; }
+.release-feed-picked-heading { margin: 1.5rem 0 .5rem; font-size: 1.35rem; }
+.release-feed-picked-heading small, .release-feed-group summary span { color: var(--muted); font-size: .9rem; font-weight: normal; margin-inline-start: .35rem; }
+.release-feed-empty { color: var(--muted); }
+.release-feed-group { border-block-start: 1px solid var(--line); margin-block-start: .65rem; }
+.release-feed-group summary { padding: .65rem 0; cursor: pointer; font-weight: 600; }
+.release-feed-list { list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--line); }
 .release-feed-list li {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(10rem, 1fr) max-content;
+  grid-template-columns: minmax(0, 1fr) max-content;
   align-items: baseline;
   gap: .4rem 1.25rem;
   padding: .65rem 0;
@@ -19,10 +26,14 @@
 }
 .release-feed-title { display: grid; gap: .17rem; overflow-wrap: anywhere; }
 .release-feed-title small, .release-feed-route, .release-feed-list time { color: var(--muted); font-size: .9rem; }
-.release-feed-route { display: flex; flex-wrap: wrap; gap: .25rem .5rem; }
-.release-feed-match { padding: .06rem .45rem; border-radius: .3rem; background: var(--paper); border: 1px solid var(--line); }
+.release-feed-route { grid-column: 1 / -1; display: grid; gap: .35rem; }
+.release-feed-action { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .5rem; overflow-wrap: anywhere; }
+.release-feed-action a { text-decoration: underline; text-underline-offset: .18em; }
+.release-feed-match { padding: .06rem .45rem; border-radius: .3rem; border: 1px solid var(--line); }
+.release-feed-match.is-picked { background: var(--ink); border-color: var(--ink); color: var(--paper); }
 .release-feed-list time { text-align: right; font-variant-numeric: tabular-nums; }
 @media (max-width: 42rem) {
-  .release-feed-list li { grid-template-columns: minmax(0, 1fr) max-content; }
-  .release-feed-title { grid-column: 1 / -1; }
+  .release-feed-list li { grid-template-columns: minmax(0, 1fr); }
+  .release-feed-list time { text-align: left; }
+  .release-feed-picked-filter { margin-inline-start: 0; }
 }

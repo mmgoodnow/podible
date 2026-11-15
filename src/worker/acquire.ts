@@ -230,6 +230,7 @@ export async function processAcquireJob(ctx: WorkerContext, job: JobRow): Promis
               execution: ctx.execution,
               operationKey: `acquire:${audioEdition ? job.id : ctx.execution?.key ?? job.id}:${media}:${selectionIndex}`,
               stepPrefix: `${media}:selection:${selectionIndex}`,
+              feedReleaseIdsByPart: feedSelection?.partIds[selectionIndex],
               selectedCopiesByPart: audioEdition ? undefined : parts.map((part, index) => ({
                 selected: part,
                 alternatives: selection.matchingCopies?.[index] ?? [],

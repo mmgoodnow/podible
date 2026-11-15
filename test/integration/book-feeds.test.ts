@@ -738,6 +738,7 @@ test("later RSS parts reuse earlier incomplete candidates and preserve agent par
     await processAcquireJob(f.ctx, incomplete);
     f.finish(incomplete.id);
     expect(added).toHaveLength(0);
+    expect(f.repo.releaseInbox.releaseFeedPage({ pickedOnly: true, limit: 10 }).items).toEqual([]);
     const secondIds = f.ingest([offer(2)]);
     await matchBookFeed(f.ctx, f.job(secondIds));
     const acquisition = f.repo.listJobsByType("acquire")[0];
@@ -749,6 +750,10 @@ test("later RSS parts reuse earlier incomplete candidates and preserve agent par
     expect(added).toEqual(
       torrents.map((torrent) => inspectMetainfo(torrent).infoHash),
     );
+    const picks = f.repo.releaseInbox.releaseFeedPage({ pickedOnly: true, limit: 10 }).items;
+    expect(picks.map(item => item.id)).toEqual([secondIds[0], firstIds[0]]);
+    expect(picks.every(item => item.actions.some(action =>
+      action.status === "picked" && action.purpose === "initial" && action.href === `/book/${book.id}`))).toBe(true);
     const manifestations = f.repo.listManifestationsByBook(book.id);
     expect(manifestations).toHaveLength(1);
     expect(manifestations[0].label).toBe("Two-part narration");

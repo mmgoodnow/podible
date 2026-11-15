@@ -642,6 +642,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
             throw new Error("TV client returned another torrent identity");
           active(); repo.transaction(() => {
             const id = repo.bindDownload(acquisition.id, added, location, offer.key);
+            ctx.repo.releaseInbox.recordPick(offer.inboxId, "tv", target.id, acquisition.reason);
             const proof = tvSourceSchema.safeParse({ ref: added, location, offerKey: offer.key, title: offer.title, provider: offer.provider, manifest: metadata });
             if (proof.success) repo.recordPackEvidence(id, proof.data);
           });

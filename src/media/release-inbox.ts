@@ -11,11 +11,9 @@ import type {
 import type { IndexerFailure } from "./indexer-errors";
 import { feedGapDiagnosticsSchema, type FeedGapDiagnostics } from "./feed-gap";
 import { AUTOBRR_ID_PREFIX } from "./autobrr";
+import { crossSeedFeedReleaseId, releaseActions, type ReleasePurpose } from "./release-feed-history";
 
 export const releaseFeedMedia = ["movie", "tv", "audio", "ebook"] as const;
-const acquisitionKinds = new Map<string, IndexerMedia>([
-  ["movie", "movie"], ["tv", "tv"], ["book:audio", "audio"], ["book:ebook", "ebook"],
-]);
 
 function releaseDisplayText(text: string, maxLength: number) {
   return text
@@ -158,11 +156,40 @@ export class ReleaseInboxRepo {
   retainedHighWater(): number {
     return (this.db.query("SELECT COALESCE(MAX(id),0) AS id FROM release_inbox").get() as { id: number }).id;
   }
-  releaseFeedPage({ media, cursor, limit }: { media?: IndexerMedia; cursor?: number; limit: number }) {
+  recordPick(releaseId: number | undefined, media: IndexerMedia, targetId: number, purpose: Exclude<ReleasePurpose, "cross-seed">) {
+    if (releaseId === undefined) return;
+    this.beforeWrite();
+    const kind = media === "audio" || media === "ebook" ? `book:${media}` : media;
+    this.db.query(`INSERT OR IGNORE INTO release_feed_picks(release_id,target_kind,target_id,purpose)
+      SELECT i.id,?,?,? FROM release_inbox i JOIN indexer_feeds f ON f.id=i.feed_id WHERE i.id=? AND f.media_type=?`)
+      .run(kind,targetId,purpose,releaseId,media);
+  }
+
+  releaseFeedPage({ media, cursor, limit, pickedOnly }: { media?: IndexerMedia; cursor?: number; limit: number; pickedOnly?: boolean }) {
     const pageSize = limit + 1;
+    const seededReleaseId = sql.raw(crossSeedFeedReleaseId);
     const beforeCursor = cursor === undefined ? sql`` : sql`AND release_inbox.id < ${cursor}`;
+    const matchMedia = media === undefined ? sql`` : sql`AND feed.media_type = ${media}`;
     // For sparse media, seek each matching feed's (feed_id, id) index rather than walking unrelated releases.
-    const page = (media
+    const page = (pickedOnly ? sql<{ id: number }>`(
+        WITH acquired AS (
+          SELECT p.release_id AS id FROM release_feed_picks p
+          CROSS JOIN release_inbox inbox ON inbox.id=p.release_id
+          CROSS JOIN indexer_feeds feed ON feed.id=inbox.feed_id
+          WHERE 1=1 ${cursor === undefined ? sql`` : sql`AND p.release_id < ${cursor}`} ${matchMedia}
+          GROUP BY p.release_id ORDER BY p.release_id DESC LIMIT ${pageSize}
+        ), seeded AS (
+          SELECT ${seededReleaseId} AS id FROM app_state op
+          CROSS JOIN release_inbox inbox ON inbox.id=${seededReleaseId}
+          CROSS JOIN indexer_feeds feed ON feed.id=inbox.feed_id
+          WHERE op.key >= 'cross-seed:operation:' AND op.key < 'cross-seed:operation:~'
+            AND json_extract(op.value_json,'$.outcome.kind')='seeding'
+            AND ${seededReleaseId} > 0
+            ${cursor === undefined ? sql`` : sql`AND ${seededReleaseId} < ${cursor}`} ${matchMedia}
+          GROUP BY ${seededReleaseId} ORDER BY id DESC LIMIT ${pageSize}
+        )
+        SELECT id FROM acquired UNION SELECT id FROM seeded ORDER BY id DESC LIMIT ${pageSize}
+      )` : media
       ? sql<{ id: number }>`(
           SELECT candidate.value AS id
           FROM indexer_feeds AS feed
@@ -193,20 +220,7 @@ export class ReleaseInboxRepo {
     const pageRows = rows.slice(0, limit);
     if (!pageRows.length) return { items: [], nextCursor: null };
 
-    const routesByRelease = new Map<number, { targetKind: IndexerMedia; targetCount: number }[]>();
-    const routes = typedAll(this.db, dbSql.selectFrom("release_considerations")
-      .select(["release_id", "target_kind"])
-      .select(eb => eb.fn.count<number>("target_id").distinct().as("targetCount"))
-      .where("release_id", "in", pageRows.map(row => row.id))
-      .where("target_kind", "in", [...acquisitionKinds.keys()])
-      .groupBy(["release_id", "target_kind"])
-      .orderBy("release_id").orderBy("target_kind"));
-    for (const route of routes) {
-      const targetKind = acquisitionKinds.get(route.target_kind)!;
-      const list = routesByRelease.get(route.release_id) ?? [];
-      list.push({ targetKind, targetCount: route.targetCount });
-      routesByRelease.set(route.release_id, list);
-    }
+    const actions = releaseActions(this.db, pageRows.map(row => row.id));
     return {
       items: pageRows.map(row => ({
         id: row.id,
@@ -214,7 +228,9 @@ export class ReleaseInboxRepo {
         provider: releaseDisplayText(row.provider, 120),
         media: row.media,
         receivedAt: row.receivedAt,
-        acquisitionRoutes: routesByRelease.get(row.id) ?? [],
+        actions: (actions.get(row.id) ?? []).map(action => ({
+          ...action, title: action.title === null ? null : releaseDisplayText(action.title, 300),
+        })),
       })),
       nextCursor: rows.length > limit ? pageRows.at(-1)!.id : null,
     };

@@ -91,6 +91,8 @@ type SnatchRuntimeOptions = {
   /** Internal server search evidence only; never exposed on snatch RPC inputs. */
   selectedCopies?: { selected: TorznabResult; alternatives: TorznabResult[] };
   selectedCopiesByPart?: Array<{ selected: TorznabResult; alternatives: TorznabResult[] }>;
+  feedReleaseId?: number;
+  feedReleaseIdsByPart?: number[];
 };
 
 const bookSelectionKey = (releaseId: number) => `book-release-selection:${releaseId}`;
@@ -421,6 +423,8 @@ export async function runSnatch(
       status: "snatched"
     });
     repo.bookTorrents.attach(derivedHash, release.id);
+    repo.releaseInbox.recordPick(runtime.feedReleaseId, request.mediaType, request.bookId,
+      runtime.bookRepair ? "recovery" : runtime.bookUpgrade ? "upgrade" : "initial");
     for (const evidence of retainedEvidence) retainBookSelectedCopies(repo, release, evidence);
 
     const job = repo.createJob({
@@ -522,7 +526,8 @@ export async function runSnatchGroup(
             sequenceInManifestation: needsExplicitManifestation ? index : null,
             manifestationLanguage: language
           },
-          { ...runtime, selectedCopies: runtime.selectedCopiesByPart?.[index] ?? runtime.selectedCopies }
+          { ...runtime, selectedCopies: runtime.selectedCopiesByPart?.[index] ?? runtime.selectedCopies,
+            feedReleaseId: runtime.feedReleaseIdsByPart?.[index] }
         );
       results.push(await (runtime.execution ? runtime.execution.run(`${prefix}:part:${index}`, snatch) : snatch()));
     }

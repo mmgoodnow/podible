@@ -24,6 +24,7 @@ import { safeReturnPath } from "../../src/redirects";
 import { seedTransferMetricsFixture } from "./transfer-metrics";
 import { seedActivityHistory } from "./ops-scale";
 import { seedTvCrossSeed } from "./tv-cross-seed";
+import { makeReleaseFeedFixture } from "./release-feed";
 
 const root = await fs.realpath(
   await fs.mkdtemp(path.join(os.tmpdir(), "movie-spa-")),
@@ -112,6 +113,9 @@ if (process.env.ADMIN_FIXTURE) {
   const [inboxTv] = repo.releaseInbox.ingest("admin-fixture-tv", [{ ...fixtureReleases[0]!, title: "Fixture TV release", guid: "tv-release", mediaType: "tv" }], new Date().toISOString());
   repo.releaseInbox.consider(inboxTv!, "tv", 1, "fixture", failed.id, "Test consideration");
   repo.releaseInbox.ingest("admin-fixture-feed", fixtureReleases, new Date().toISOString());
+  const feed = makeReleaseFeedFixture(repo);
+  feed.recordSeed(feed.first, 51, ["fixture-file"], "2026-11-14T20:01:00.000Z");
+  feed.recordSeed(feed.second, 52, ["fixture-file"], "2026-11-14T20:02:00.000Z");
   repo.releaseInbox.ensureFeed("admin-fixture-gap", "History provider", "movie", new Date().toISOString());
   repo.releaseInbox.succeed("admin-fixture-gap", "fixture-head", "Earlier history could not be verified", new Date().toISOString());
   seedTransferMetricsFixture(repo, activeBook.id);

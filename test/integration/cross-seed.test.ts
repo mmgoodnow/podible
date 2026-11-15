@@ -110,6 +110,9 @@ test("optimistic seed-only symlinks avoid CoW and recover a lost layout checkpoi
     } }));
     expect(result.outcome?.kind).toBe("seeding");
     expect(result.outcome?.downloadedBytes).toBe(0);
+    const [pick] = f.repo.releaseInbox.releaseFeedPage({ pickedOnly: true, limit: 20 }).items;
+    expect(pick?.id).toBe(f.command.releaseId!);
+    expect(pick?.actions[0]).toMatchObject({ purpose: "cross-seed", status: "cross-seeded", seedOrdinal: { min: 1, max: 1 } });
     expect(cows).toBe(0);
     expect(links).toBeGreaterThan(1);
     const ref = { clientId: f.adapters.client!(f.command.scope).id, nativeId: f.metadata.infoHash };

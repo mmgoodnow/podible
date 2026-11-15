@@ -7,6 +7,11 @@ import { createPodibleFetchHandler } from "../../src/http";
 import { indexerFailure } from "../../src/media/indexer-errors";
 import type { IndexerMedia } from "../../src/media/indexer-gateway";
 import { indexerFeedsRouter } from "../../src/rpc/indexer-feeds-router";
+import { makeReleaseFeedFixture } from "../fixtures/release-feed";
+import { fixtureMovie } from "../fixtures/movie-services";
+import { releaseOfferFromResult } from "../../src/media/release-offer";
+import { rememberSelectedCopies } from "../../src/media/selected-copies";
+import { crossSeedStateKey } from "../../src/media/cross-seed-state";
 
 test("RSS controls and coverage are admin-only and never expose feed credentials or payloads", async () => {
   using db = new Database(":memory:");
@@ -82,7 +87,7 @@ test("RSS controls and coverage are admin-only and never expose feed credentials
   expect(forbidden.status).toBe(403);
 });
 
-test("release feed reads are admin-only and expose only safe display fields and recorded routing counts", async () => {
+test("release feed reads are admin-only and expose only safe display fields and linked titles", async () => {
   using db = new Database(":memory:");
   runMigrations(db);
   const repo = new BooksRepo(db);
@@ -130,20 +135,22 @@ test("release feed reads are admin-only and expose only safe display fields and 
       raw: { attr: [{ name: "private-attribute", value: "private-attribute-value" }] },
     },
   ], now);
-  for (const [targetId, revision] of [[801, "v1"], [801, "v2"], [802, "v1"]] as const) {
-    const job = repo.createJob({ type: "acquire", payload: { secret: "private-job-payload" } });
-    repo.releaseInbox.consider(routed!, "book:audio", targetId, revision, job.id, "private-matcher-note");
+  const book = repo.createBook({ title: "Fixture Book", author: "Author" });
+  for (const revision of ["v1", "v2"]) {
+    const job = repo.createJob({ type: "acquire", payload: { secret: "private-job-payload", considerUpgrade: true } });
+    repo.releaseInbox.consider(routed!, "book:audio", book.id, revision, job.id, "private-matcher-note");
   }
 
   const expected = {
     items: [
       {
         id: routed, title: "Fixture Audiobook [redacted] [redacted]", provider: "Fixture [redacted]",
-        media: "audio", receivedAt: now, acquisitionRoutes: [{ targetKind: "audio", targetCount: 2 }],
+        media: "audio", receivedAt: now, actions: [{ targetKind: "audio", targetId: book.id,
+          title: "Fixture Book", href: `/book/${book.id}`, purpose: "upgrade", status: "candidate", seedOrdinal: null }],
       },
       {
         id: unrouted, title: "Unrouted Audiobook", provider: "Fixture [redacted]",
-        media: "audio", receivedAt: now, acquisitionRoutes: [],
+        media: "audio", receivedAt: now, actions: [],
       },
     ],
     nextCursor: null,
@@ -155,8 +162,29 @@ test("release feed reads are admin-only and expose only safe display fields and 
   expect(await rpc("admin")).toEqual({ jsonrpc: "2.0", id: 1, result: expected });
   for (const input of [
     { media: "other" }, { cursor: 0 }, { cursor: Number.MAX_SAFE_INTEGER + 1 },
-    { cursor: 1.5 }, { limit: 0 }, { limit: 101 }, { url },
+    { cursor: 1.5 }, { limit: 0 }, { limit: 101 }, { url }, { pickedOnly: "yes" },
   ]) expect((await trpc("admin", input)).status).toBe(400);
+});
+
+test("picked-only feed seeks past skips, links the titles and counts completed cross-seeds per file", () => {
+  using db = new Database(":memory:");
+  runMigrations(db);
+  const repo = new BooksRepo(db);
+  const { first, second, pending, picked, ignored, recordSeed, book } = makeReleaseFeedFixture(repo);
+  recordSeed(first, 31, ["file-one"], "2026-11-14T20:01:00.000Z");
+  recordSeed(second, 32, ["file-one", "file-two", "file-two"], "2026-11-14T20:01:00.000Z");
+  recordSeed(pending, 33, []);
+  const rows = repo.releaseInbox.releaseFeedPage({ pickedOnly: true, limit: 2 });
+  expect(rows.items.map(item => item.id)).toEqual([picked, second]);
+  expect(rows.items[0]!.actions).toEqual([{ href: `/book/${book}`, purpose: "initial", seedOrdinal: null,
+    status: "picked", targetId: book, targetKind: "audio", title: "Picked Fixture Book" }]);
+  expect(rows.items[1]!.actions).toEqual([{ href: `/book/${book}`, purpose: "cross-seed", seedOrdinal: { min: 1, max: 2 },
+    status: "cross-seeded", targetId: book, targetKind: "audio", title: "Picked Fixture Book" }]);
+  const older = repo.releaseInbox.releaseFeedPage({ media: "audio", pickedOnly: true, cursor: rows.nextCursor!, limit: 2 });
+  expect(older.items.map(item => [item.id, item.actions[0]?.seedOrdinal])).toEqual([[first, { min: 1, max: 1 }]]);
+  expect(older.nextCursor).toBeNull();
+  expect(repo.releaseInbox.releaseFeedPage({ media: "tv", pickedOnly: true, limit: 50 }).items).toEqual([]);
+  expect(repo.releaseInbox.releaseFeedPage({ limit: 50 }).items.find(item => item.id === ignored)?.actions).toEqual([]);
 });
 
 test("release feed keysets seek across providers by inbox ID without duplicating concurrent arrivals", () => {
@@ -203,6 +231,44 @@ test("release feed keysets seek across providers by inbox ID without duplicating
     expect(filtered.nextCursor).toBeNull();
     expect(inbox.releaseFeedPage({ media, limit: 1, cursor: id })).toEqual({ items: [], nextCursor: null });
   }
+});
+
+test("release history migration recovers only bound older picks and cross-seeds with saved file IDs", () => {
+  using db = new Database(":memory:");
+  runMigrations(db);
+  const repo = new BooksRepo(db);
+  const now = "2026-11-14T20:00:00.000Z";
+  const { first, recordSeed } = makeReleaseFeedFixture(repo);
+  const receipt = recordSeed(first, 51, []);
+  repo.setJsonState(crossSeedStateKey(receipt.command.operationId), { ...receipt, outcome: { kind: "seeding", at: now, torrentId: 51 } });
+  repo.setJsonState(`cross-seed:optimistic:${receipt.command.operationId}`, {
+    torrentId: 51, plan: { files: [{ role: "content", source: { id: "known-file" } }, { role: "sidecar", source: { id: "sidecar" } }] },
+  });
+  const user = repo.upsertUser({ provider: "local", providerUserId: "release-feed", username: "release-feed", isAdmin: true });
+  const settings = repo.getSettings();
+  const target = repo.movies.request(user.id, fixtureMovie, settings.movies.qualityPolicy).targetId;
+  const acquired = repo.movies.startAcquisition(target, "upgrade", (id) =>
+    repo.createJob({ type: "movie_acquire", payload: { acquisitionId: id } }).id).acquisition;
+  const results = ["Bound movie", "Unbound movie"].map(title => ({
+    title, provider: "Fixture", mediaType: "movie" as const, url: "https://fixture.invalid/torrent", guid: title,
+    seeders: null, leechers: null, sizeBytes: null, infoHash: null, raw: {},
+  }));
+  repo.releaseInbox.ensureFeed("movie-fixture", "Fixture", "movie", now);
+  const [bound, unbound] = repo.releaseInbox.ingest("movie-fixture", results, now);
+  const [offer, other] = results.map((result, i) => ({ ...releaseOfferFromResult(result), inboxId: i ? unbound : bound }));
+  for (const candidate of [offer!, other!]) rememberSelectedCopies(repo, { media: "movie", targetId: target }, acquired.id, candidate);
+  repo.movies.bindDownload(acquired.id, { clientId: "fixture", nativeId: "aa".repeat(20) },
+    { rootId: "movies", relativePath: "fixture" }, offer!.key);
+
+  db.exec(`DROP TABLE release_feed_picks; DROP TABLE cross_seed_file_history;
+    DROP INDEX release_feed_seed_operations; DROP INDEX release_feed_picked_seeds;
+    DELETE FROM schema_migrations WHERE id=68;`);
+  runMigrations(db);
+  const page = repo.releaseInbox.releaseFeedPage({ pickedOnly: true, limit: 20 });
+  expect(page.items.map(item => item.id)).toEqual([bound, first]);
+  expect(page.items[0]?.actions[0]).toMatchObject({ purpose: "upgrade", status: "picked", href: `/movies/${fixtureMovie.tmdbId}` });
+  expect(page.items[1]?.actions[0]).toMatchObject({ status: "cross-seeded", seedOrdinal: { min: 1, max: 1 } });
+  expect(db.query("SELECT source_id FROM cross_seed_file_history").all()).toEqual([{ source_id: "known-file" }]);
 });
 
 test("migration removes the periodic movie search setting without changing customized policy", () => {

@@ -45,7 +45,7 @@ export const crossSeedOrigins = ["acquisition-search", "rss", "autobrr", "backfi
 export const crossSeedOriginSchema = z.enum(crossSeedOrigins);
 export type CrossSeedOrigin = z.infer<typeof crossSeedOriginSchema>;
 export type CrossSeedReceipt = { command: CrossSeedCommand; commandHash: string; jobId: number; createdAt: string;
-  origin?: CrossSeedOrigin; outcome?: CrossSeedOutcome };
+  origin?: CrossSeedOrigin; feedReleaseId?: number; outcome?: CrossSeedOutcome };
 export function crossSeedOrigin(receipt: CrossSeedReceipt): CrossSeedOrigin | "unknown" {
   const origin = crossSeedOriginSchema.safeParse(receipt.origin);
   return origin.success ? origin.data : receipt.command.selectionCopyId ? "acquisition-search" : "unknown";
@@ -74,6 +74,16 @@ export class CrossSeedRepo {
       ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`)
       .run(key, JSON.stringify(value), new Date().toISOString());
   }
+  recordOutcome(receipt: CrossSeedReceipt, outcome: CrossSeedOutcome, sourceIds: string[]) {
+    immediateTransaction(this.db, this.beforeWrite, () => {
+      if (outcome.kind === "seeding" && outcome.torrentId !== undefined && sourceIds.length) {
+        this.db.query(`INSERT OR IGNORE INTO cross_seed_file_history(source_id,torrent_id,operation_id,seeded_at)
+          SELECT value,?,?,? FROM json_each(?)`)
+          .run(outcome.torrentId, receipt.command.operationId, outcome.at, JSON.stringify(sourceIds));
+      }
+      this.save(crossSeedStateKey(receipt.command.operationId), { ...receipt, outcome });
+    });
+  }
   isIncompatible(candidateHash: string, planId: string): boolean {
     hashSchema.parse(candidateHash); planIdSchema.parse(planId);
     return !!this.db.query("SELECT 1 FROM app_state WHERE key=?")
@@ -90,6 +100,7 @@ export class CrossSeedRepo {
       for (const row of rows) {
         const registration = JSON.parse(row.value_json) as OptimisticRegistration;
         this.save(optimisticPrefix + registration.operationId, { ...registration, status: "removing" });
+        this.db.query("DELETE FROM cross_seed_file_history WHERE operation_id=?").run(registration.operationId);
         const receipt = this.receipt(registration.operationId);
         if (receipt) this.save(crossSeedStateKey(registration.operationId), { ...receipt, outcome: {
           ...receipt.outcome, kind: "incompatible", reason, at, planId, verification: "assumed",

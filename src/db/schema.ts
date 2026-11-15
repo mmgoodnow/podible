@@ -108,6 +108,13 @@ export interface DB {
     "updated_at": string;
   };
 
+  "cross_seed_file_history": {
+    "source_id": string;
+    "torrent_id": number;
+    "operation_id": string;
+    "seeded_at": string;
+  };
+
   "device_login_grants": {
     "id": string;
     "verifier_hash": string;
@@ -347,6 +354,13 @@ export interface DB {
     "source_job_id": number;
     "decision_note": string;
     "created_at": string;
+  };
+
+  "release_feed_picks": {
+    "release_id": number;
+    "target_kind": string;
+    "target_id": number;
+    "purpose": string;
   };
 
   "release_inbox": {

@@ -434,7 +434,10 @@ export async function acquireMovie(
           location: binding.location,
         });
         active();
-        repo.bindDownload(acquisition.id, added, binding.location, offer.key);
+        repo.transaction(() => {
+          repo.bindDownload(acquisition.id, added, binding.location, offer.key);
+          ctx.repo.releaseInbox.recordPick(offer.inboxId, "movie", target.id, acquisition.reason);
+        });
         return added;
       });
     });

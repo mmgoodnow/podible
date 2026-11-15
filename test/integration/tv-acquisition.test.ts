@@ -788,6 +788,9 @@ for (const variant of ["default-off", "malformed-pilot", "revoked-before-snatch"
       expect(metainfoReads).toBe(1);
       const noRegistration = variant === "revoked-before-snatch" || variant === "unmatched-layout";
       expect(s.fixture.sourceAdds).toBe(sourceAdds + (noRegistration ? 0 : 1));
+      const [pick] = s.repo.releaseInbox.releaseFeedPage({ media: "tv", pickedOnly: true, limit: 5 }).items;
+      if (noRegistration) expect(pick).toBeUndefined();
+      else expect(pick?.actions[0]).toMatchObject({ purpose: "upgrade", status: "picked", href: `/tv/library/${s.request.entryId}` });
       if (noRegistration || variant === "previously-downloaded") {
         expect([pilot.rechecks.length, pilot.resumes.length, pilot.writes.length]).toEqual([0, 0, 0]);
       } else {

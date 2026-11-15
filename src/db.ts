@@ -8,6 +8,7 @@ import { MOVIES_SCHEMA_SQL } from "./movies/schema";
 import { MOVIE_SHADOW_SCHEMA_SQL } from "./movies/shadow-repo";
 import { MOVIE_SEERR_SCHEMA_SQL } from "./movies/seerr-repo";
 import { RELEASE_INBOX_SCHEMA_SQL } from "./media/release-inbox-schema";
+import { RELEASE_FEED_HISTORY_SQL } from "./media/release-feed-history";
 import { BOOK_TORRENTS_SCHEMA_SQL } from "./media/book-torrents-schema";
 import { consolidateBookTorrentRecords } from "./media/torrent-records-schema";
 import { backfillStewardshipStatusIndex } from "./media/stewardship-status-index";
@@ -1270,6 +1271,7 @@ export function runMigrations(db: Database): void {
     `).run({ $footer: "\n\nOpen Podible to view your notification." });
   });
   apply(67, () => db.exec("ALTER TABLE device_login_grants ADD COLUMN approval_hash TEXT"));
+  apply(68, () => db.exec(RELEASE_FEED_HISTORY_SQL));
 }
 
 /** Only called after all old rows have a verified, durable journal copy. */

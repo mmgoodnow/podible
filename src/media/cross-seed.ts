@@ -79,10 +79,12 @@ export function queueCrossSeed(repo: BooksRepo, raw: z.input<typeof crossSeedCom
       if (previous.commandHash !== commandHash && !sameBudgets) throw new Error("Reuse operation UUID belongs to another command");
       return previous;
     }
-    assertCrossSeedDemand(repo, command.scope); crossSeedOffer(repo, command);
+    assertCrossSeedDemand(repo, command.scope);
+    const offer = crossSeedOffer(repo, command);
     const job = repo.createJob({ type: "torrent_reuse", payload: { operationId: command.operationId },
       idempotencyKey: `torrent-reuse:${command.operationId}`, maxAttempts: 3 });
     const receipt: CrossSeedReceipt = { command, commandHash, jobId: job.id, createdAt: new Date().toISOString(),
+      ...(offer.inboxId ? { feedReleaseId: offer.inboxId } : {}),
       origin: origin ?? (command.selectionCopyId ? "acquisition-search" : "manual") };
     repo.setJsonState(crossSeedStateKey(command.operationId), receipt);
     return receipt;
@@ -180,9 +182,10 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
   const expected = await durableStep(ctx, "reuse:configuration", () => configuration(settings, command.scope));
   const active = () => { ctx.execution!.assertActive(); assertCrossSeedDemand(ctx.repo, command.scope);
     if (configuration(ctx.getSettings(), command.scope) !== expected) throw new Error("Reuse configuration changed"); };
-  const finish = async (outcome: Omit<CrossSeedOutcome, "at">) => {
-    await durableStep(ctx, "reuse:outcome", () => { active(); ctx.repo.setJsonState(crossSeedStateKey(operationId),
-      { ...receipt, outcome: { ...outcome, at: new Date().toISOString() } }); });
+  const finish = async (outcome: Omit<CrossSeedOutcome, "at">, sourceIds: string[] = []) => {
+    await durableStep(ctx, "reuse:outcome", () => {
+      active(); ctx.repo.crossSeed.recordOutcome(receipt, { ...outcome, at: new Date().toISOString() }, sourceIds);
+    });
     return "done" as const;
   };
   active();
@@ -319,7 +322,8 @@ export async function processCrossSeed(ctx: WorkerContext, job: JobRow,
         if (observed.complete && observed.state === "seeding")
           return finish({ kind: "seeding", reason: "Seeding without a bulk hash scan; client checks requested pieces lazily",
             infoHash: metadata.infoHash, torrentId: torrent.id, planId: plan.id, verification: "assumed", totalBytes: metadata.size,
-            reusedBytes: metadata.size, downloadedBytes: 0 });
+            reusedBytes: metadata.size, downloadedBytes: 0 },
+            plan.files.flatMap(file => file.role === "content" && file.source ? [file.source.id] : []));
         if (observed.complete && observed.state === "inactive" && observed.errorKind !== "storage" && observed.errorKind !== "unknown") {
           await materializeOptimistic();
           await check(); await client.resumeSeedOnly(ref);

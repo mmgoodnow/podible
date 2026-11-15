@@ -6,6 +6,7 @@ import { RpcError } from "./shared";
 import { INDEXER_FEED_INTERVAL_MS } from "../worker/indexer-feeds";
 import { feedGapDiagnosticsSchema, readFeedGapDiagnostics } from "../media/feed-gap";
 import { releaseFeedMedia } from "../media/release-inbox";
+import { releasePurposes } from "../media/release-feed-history";
 
 const media = z.enum(releaseFeedMedia);
 const positiveInteger = z.number().int().positive();
@@ -17,6 +18,7 @@ export const indexerFeedsRouter = defineRouter({
     summary: "List retained releases and their recorded acquisition routing.",
     paramsSchema: z.object({
       media: media.optional(),
+      pickedOnly: z.boolean().optional(),
       cursor: positiveInteger.optional(),
       limit: positiveInteger.max(100).default(50),
     }).strict(),
@@ -27,9 +29,14 @@ export const indexerFeedsRouter = defineRouter({
         provider: z.string(),
         media,
         receivedAt: z.string(),
-        acquisitionRoutes: z.array(z.object({
+        actions: z.array(z.object({
           targetKind: media,
-          targetCount: positiveInteger,
+          targetId: positiveInteger,
+          title: z.string().nullable(),
+          href: z.string().nullable(),
+          purpose: z.enum(releasePurposes),
+          status: z.enum(["candidate", "picked", "cross-seeded", "not-seeded"]),
+          seedOrdinal: z.object({ min: positiveInteger, max: positiveInteger }).nullable(),
         })),
       })),
       nextCursor: positiveInteger.nullable(),
