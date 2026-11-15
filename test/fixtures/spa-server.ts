@@ -116,6 +116,7 @@ if (process.env.ADMIN_FIXTURE) {
   const feed = makeReleaseFeedFixture(repo);
   feed.recordSeed(feed.first, 51, ["fixture-file"], "2026-11-14T20:01:00.000Z");
   feed.recordSeed(feed.second, 52, ["fixture-file"], "2026-11-14T20:02:00.000Z");
+  feed.recordSeed(feed.pending, 53, []);
   repo.releaseInbox.ensureFeed("admin-fixture-gap", "History provider", "movie", new Date().toISOString());
   repo.releaseInbox.succeed("admin-fixture-gap", "fixture-head", "Earlier history could not be verified", new Date().toISOString());
   seedTransferMetricsFixture(repo, activeBook.id);

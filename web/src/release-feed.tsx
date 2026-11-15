@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "./router";
 import { useTRPC } from "./rpc";
@@ -16,12 +16,18 @@ function picked(action: { status: string }) {
   return action.status === "picked" || action.status === "cross-seeded";
 }
 
-function ReleaseGroup({ title, count, children }: { title: string; count: number; children: ReactNode }) {
-  if (!count) return null;
-  return <details className="release-feed-group">
-    <summary>{title} <span>{number.format(count)}</span></summary>
-    {children}
-  </details>;
+function noPickRecorded(release: { actions: { status: string }[] }) {
+  return release.actions.every(action => action.status === "not-seeded");
+}
+
+function groupConsecutiveSkips<T extends Parameters<typeof noPickRecorded>[0]>(items: T[]): T[][] {
+  const runs: T[][] = [];
+  for (const release of items) {
+    const last = runs.at(-1);
+    if (last && noPickRecorded(last[0]!) && noPickRecorded(release)) last.push(release);
+    else runs.push([release]);
+  }
+  return runs;
 }
 
 export function ReleaseFeedPage() {
@@ -33,15 +39,11 @@ export function ReleaseFeedPage() {
   const nextCursor = feed.data?.nextCursor;
   type Release = NonNullable<typeof feed.data>["items"][number];
   const items = feed.data?.items ?? [];
-  const picks = items.filter(release => release.actions.some(picked));
-  const candidates = items.filter(release => !release.actions.some(picked) && release.actions.some(action => action.status === "candidate"));
-  const skipped = items.filter(release => release.actions.every(action => action.status === "not-seeded"));
 
-  const list = (releases: Release[], label: string) => <ul className="release-feed-list" aria-label={label}>
-    {releases.map(release => <li key={release.id}>
+  const row = (release: Release) => <li className="release-feed-row" key={release.id}>
       <div className="release-feed-title"><strong>{release.title || "Untitled release"}</strong><small>{release.provider || "Unknown indexer"} · {mediaLabels[release.media]}</small></div>
       <time dateTime={release.receivedAt}>{date.format(new Date(release.receivedAt))}</time>
-      {release.actions.length > 0 && <div className="release-feed-route">
+      {release.actions.length === 0 ? <small className="release-feed-route">No pick recorded</small> : <div className="release-feed-route">
         {release.actions.map((action, i) => {
           const rank = action.seedOrdinal;
           const status = action.status === "candidate" ? "Candidate" : action.status === "picked" ? "Picked"
@@ -56,8 +58,7 @@ export function ReleaseFeedPage() {
           </div>;
         })}
       </div>}
-    </li>)}
-  </ul>;
+    </li>;
 
   return <section className="release-feed" aria-labelledby="release-feed-title">
     <div className="release-feed-heading">
@@ -74,12 +75,22 @@ export function ReleaseFeedPage() {
     </div>
     {feed.isPending ? <p role="status">Loading releases...</p> : feed.isError ? <p role="alert">Could not load the release feed. Try refreshing.</p>
       : !items.length ? <p>{pickedOnly ? "No picks recorded here yet." : "No releases recorded here yet."}</p>
-        : <>
-          <h2 className="release-feed-picked-heading">Picked <small>{picks.length}</small></h2>
-          {picks.length ? list(picks, "Picked releases") : <p className="release-feed-empty">No picks on this page.</p>}
-          <ReleaseGroup title="Candidates" count={candidates.length} key={`candidates-${pages.at(-1)}-${media}`}>{list(candidates, "Release candidates")}</ReleaseGroup>
-          <ReleaseGroup title="No pick recorded" count={skipped.length} key={`skipped-${pages.at(-1)}-${media}`}>{list(skipped, "Releases with no pick recorded")}</ReleaseGroup>
-        </>}
+        : <ul className="release-feed-list" aria-label="Incoming releases">
+          {groupConsecutiveSkips(items).map(run => {
+            const latest = run[0]!;
+            if (run.length === 1) return row(latest);
+            const times = run.map(release => Date.parse(release.receivedAt));
+            return <li className="release-feed-group" key={`skips:${latest.id}`}>
+              <details>
+                <summary>
+                  {`${number.format(run.length)} releases with no recorded pick`}
+                  <span>{date.formatRange(Math.min(...times), Math.max(...times))}</span>
+                </summary>
+                <ul className="release-feed-list" aria-label="Releases with no recorded pick">{run.map(row)}</ul>
+              </details>
+            </li>;
+          })}
+        </ul>}
     <div className="release-feed-pagination">
       {pages.length > 0 && <button className="secondary" onClick={() => setPages(pages.slice(0, -1))}>Newer releases</button>}
       {nextCursor != null && <button className="secondary" onClick={() => setPages([...pages, nextCursor])}>Older releases</button>}
