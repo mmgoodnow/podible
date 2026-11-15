@@ -527,7 +527,13 @@ async function verify() {
   assert.equal(await page.evaluate("document.documentElement.scrollWidth > innerWidth"), false, "Retention overflows mobile viewport");
   await page.screenshot({ path: path.join(artifacts, "admin-retention-mobile.png"), animations: "disabled" });
   await page.getByRole("link", { name: "Back to activity" }).click();
-  await page.getByRole("link", { name: "Release feed", exact: true }).click();
+  const releaseFeed = page.getByRole("navigation", { name: "Activity sections", exact: true })
+    .getByRole("link", { name: "Release feed", exact: true });
+  await releaseFeed.waitFor();
+  const releaseFeedBox = await releaseFeed.boundingBox();
+  assert.ok(releaseFeedBox && releaseFeedBox.y >= 0 && releaseFeedBox.y + releaseFeedBox.height <= 844,
+    "Release feed link must be visible without scrolling on mobile Activity");
+  await releaseFeed.click();
   await page.getByRole("heading", { name: "Release feed", exact: true }).waitFor();
   const releases = page.getByRole("list", { name: "Incoming releases" });
   await releases.getByText("Fixture movie release 50", { exact: true }).waitFor();

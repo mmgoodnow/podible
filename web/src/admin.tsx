@@ -137,6 +137,7 @@ export function OpsPage() {
   return <div className="activity-page">
     <div className="activity-heading"><h1>Activity</h1><button className="secondary" disabled={ops.isFetching} onClick={refreshOverview}>Refresh</button></div>
     <nav className="activity-jumps" aria-label="Activity sections">
+      <Link href="/ops/releases">Release feed</Link>
       <a href="#activity-library">Library</a><a href="#activity-sharing">Sharing</a><a href="#activity-work">Current work</a><a href="#activity-system">System</a>
       {attention.length > 0 ? <a className="activity-issues" href="#activity-attention">{attention.length}{incomplete ? "+" : ""} to review</a>
         : incomplete && <a className="activity-issues" href="#activity-work">Status incomplete</a>}
@@ -173,7 +174,7 @@ export function OpsPage() {
     <SharingHistory metrics={sharing} />
     <section className="activity-section activity-system" id="activity-system" aria-label="System">
       <div className="transfer-heading"><h2>System</h2><div className="activity-heading-meta">
-        <Link href="/ops/releases">Release feed</Link><Link href="/stewardship">Review torrent problems</Link>
+        <Link href="/stewardship">Review torrent problems</Link>
       </div></div>
       {ops.data && <>
       <section className="activity-section" id="activity-storage" aria-label="Storage and links">
