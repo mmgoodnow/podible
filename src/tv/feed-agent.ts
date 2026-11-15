@@ -11,7 +11,7 @@ const output = z.object({ matches: z.array(z.object({
   targetId: z.number().int().positive(), releaseIndexes: z.array(z.number().int().nonnegative()).min(1).max(100),
   reason: z.string().trim().min(1).max(2000),
 })) });
-export type TvFeedRoutingPolicy = FeedDecisionsPolicy & { compact?: boolean; responsesOnly?: boolean };
+export type TvFeedRoutingPolicy = FeedDecisionsPolicy & { compact?: boolean; responsesOnly?: boolean; workOnlyGate?: boolean };
 const defaultPolicy: TvFeedRoutingPolicy = { responsesOnly: true };
 
 const compactInstructions = "Episode rows are [episode title, [[scheme index, season, episode, absolute], ...]]. " +
@@ -23,11 +23,13 @@ export function createTvFeedMatcher(settings: AppSettings, modelProvider?: Model
   const scope = mode === "reuse"
     ? "Route releases for the same retained work, including completed episodes and season packs. This is work-level byte-reuse discovery, not episode selection."
     : "Only supplied episodes are wanted. For a target with promotionSeasons, route only plausible whole packs for one of those TVDB aired seasons.";
-  const targetEvidence = (target: Parameters<TvFeedMatcher>[0]["targets"][number]) => {
-    const { entry, episodes, promotionSeasons } = target;
-    const work = { title: modelEvidenceText(entry.title), year: entry.year, aliases: entry.aliases.map(title => modelEvidenceText(title)),
+  type Target = Parameters<TvFeedMatcher>[0]["targets"][number];
+  const workEvidence = ({ entry }: Target) => ({ title: modelEvidenceText(entry.title), year: entry.year, aliases: entry.aliases.map(title => modelEvidenceText(title)),
       refs: entry.refs.map(({ provider, id }) => ({ provider, id: modelEvidenceText(id, 80) })),
-      relations: entry.relations.map(({ title, relation }) => ({ title: modelEvidenceText(title), relation: modelEvidenceText(relation, 80) })) };
+      relations: entry.relations.map(({ title, relation }) => ({ title: modelEvidenceText(title), relation: modelEvidenceText(relation, 80) })) });
+  const targetEvidence = (target: Target) => {
+    const { episodes, promotionSeasons } = target;
+    const work = workEvidence(target);
     if (mode === "reuse") return work;
     const wanted = episodes.map(({ title, numbering }) => ({ title: modelEvidenceText(title),
       numbering: numbering.map(({ scheme, season, episode, absolute }) => ({ scheme: modelEvidenceText(scheme, 80), season, episode, absolute })) }));
@@ -44,6 +46,7 @@ export function createTvFeedMatcher(settings: AppSettings, modelProvider?: Model
     seeders: offer.seeders, sizeBytes: offer.sizeBytes, attributes: offer.attributes.map(({ name, value }) =>
       ({ name: modelEvidenceText(name, 80), value: modelEvidenceText(value, 120) })),
   });
+  const workGate = policy.batchNegativeOnly && policy.workOnlyGate;
   const fallback: TvFeedMatcher = async ({ targets, offers }) => {
     if (!modelProvider && !settings.agents.apiKey.trim()) throw new Error("TV RSS semantic matcher is not configured");
     const provider = modelProvider ? null : new OpenAIProvider({ apiKey: settings.agents.apiKey, useResponses: true });
@@ -84,9 +87,15 @@ Explain the matching evidence briefly. Do not ask for human approval, search ups
     }
     if (!decisionsFetch || !settings.agents.apiKey.trim()) return fallback({ targets, offers });
     return routeFeedWithDecisions({
-      settings, transport: decisionsFetch, question: "tv_feed", targets, offers, targetEvidence, offerEvidence,
+      settings, transport: decisionsFetch, question: "tv_feed", targets, offers,
+      targetEvidence: workGate ? workEvidence : targetEvidence,
+      offerEvidence: workGate ? offer => {
+        const { title, attributes } = offerEvidence(offer);
+        return { title, attributes };
+      } : offerEvidence,
       policy,
-      instructions: `${scope}${encoding} Keep plausible aliases and alternative numbering. Don't match unrelated works sharing a provider aggregate or franchise.`,
+      instructions: workGate ? "Screen only for possible work identity. Disregard episode scope. Keep ambiguous titles, translated aliases, and alternate numbering."
+        : `${scope}${encoding} Keep plausible aliases and alternative numbering. Don't match unrelated works sharing a provider aggregate or franchise.`,
       match: ({ targetId }, releaseIndexes): TvFeedMatch =>
         ({ targetId, releaseIndexes, reason: "Decisions identified a plausible TV release for this target." }),
       fallback: (targets, offers) => fallback({ targets, offers }),

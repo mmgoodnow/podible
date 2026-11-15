@@ -30,6 +30,22 @@ test("records feed escalation causes rather than just the fallback count", async
   expect(metrics).toContain('podible_agent_acquisition_decisions_total{question="tv_feed",outcome="escalated"} 22\n');
 });
 
+test("batch negative gate asks exactly one question and escalates incomplete or ambiguous answers", async () => {
+  const settings = defaultSettings({ agents: { apiKey: "fixture" } });
+  const evidence = { targets: [{ title: "Fixture" }], offers: [{ title: "Unrelated" }, { title: "Candidate" }] };
+  const answer = (choice: string, confidence: number) => ({ name: "batch", type: "choice", choice, confidence });
+  const route = (answers: unknown[]) => decideFeedRoutes(settings, async (_url, init) => {
+    const request = JSON.parse(String(init.body));
+    expect(request.questions.map((q: { name: string }) => q.name)).toEqual(["batch"]);
+    return Response.json({ model: "gpt-6-luna", answers });
+  }, evidence, "tv_feed", "Choose whether any offer could match.", { batchNegativeOnly: true });
+  expect(await route([answer("no_match", 0.98)])).toEqual(["no_match", "no_match"]);
+  expect(await route([answer("no_match", 0.94)])).toEqual([null, null]);
+  expect(await route([answer("review", 1)])).toEqual([null, null]);
+  expect(await route([answer("no_match", 1), answer("review", 1)])).toEqual([null, null]);
+  expect(await route([{ ...answer("no_match", 1), name: "release_0" }])).toEqual([null, null]);
+});
+
 test("prices Responses and Decisions separately without double-counting cached tokens", () => {
   const usage = { input: 100_000, cached: 20_000, cacheWrite: 10_000, output: 2_000 };
   expect(estimateAgentUsageUsd("gpt-6-luna", "responses", usage)).toBeCloseTo(0.00945, 8);

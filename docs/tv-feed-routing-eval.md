@@ -46,6 +46,42 @@ made 16 calls with 36,612 input tokens and 2,724 output tokens. One HTTP request
 to Decisions contains a choice question per offer, with repeated instructions
 and choices. This does not compare the APIs on a single question per batch.
 
+## Single-question Decisions follow-up
+
+```sh
+bun run test/lab/eval-tv-feed-routing.ts --split=sparse --repeats=3 --policies=responses,gate95,gate90,gate85
+bun run test/lab/eval-tv-feed-routing.ts --split=sparse --repeats=4 --policies=responses,workGate75,workGate60
+```
+
+The gate asks one question per page: can any release match any target? Only a
+confident no-match skips routing. Review, bad output and low scores all use the
+unchanged Responses matcher. The work-only version sends titles, aliases,
+relationships and IDs, but no episode tables; a fallback gets the full evidence.
+The five sparse cases include two empty pages (one with confusable remakes)
+and three pages with exactly one positive (including a translated title and
+absolute anime numbering). Repeats test stability, not additional distinct gold.
+
+| Policy | Runs | Skipped Responses | Gold misses | Estimated uncached cost |
+| --- | ---: | ---: | ---: | ---: |
+| Direct Responses (first comparison) | 15 | 0 | 0 | $0.00516 |
+| Full gate at 0.85-0.95 (per variant) | 15 | 0 | 0 | $0.00970-$0.00974 |
+| Direct Responses (work-only comparison) | 20 | 0 | 0 | $0.00689 |
+| Work-only gate at 0.60-0.75 (per variant) | 20 | 0 | 0 | $0.00850-$0.00853 |
+
+The cheaper gate still cost 23-24% more end to end because it never skipped
+Responses. It chose `no_match` on the easy empty page but repeated a reported
+confidence of 0.12 and choice probability of 0.56. On the confusable empty
+page it chose `review`. The gate retained recall by deferring, not by proving
+it could safely reject. We did not replace confidence with probability or lower
+the production floor based on this small sample. Direct Responses remains the
+TV default; the gate is available only through the replay policy.
+
+Next, test durable work-identity reuse across RSS/autobrr and acquisition/reuse
+consumers. That would avoid a call without depending on a model negative.
+Reuse positives only with matching evidence and catalog revision; re-evaluate
+when identity evidence changes, and never use a stale negative to rule out new
+demand. The sparse gate replay does not test that separate architecture.
+
 These are synthetic holdouts with repeated examples, not production recall or
 an SLA. Track both APIs' estimates under `workflow="tv-feed"` after rollout
 and account for feed volume, catalog mix and backfill activity. The production

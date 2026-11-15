@@ -5,7 +5,7 @@ type Work = { title: string; year: number; alias?: string; season?: number; abso
 type Offer = { title: string; targets: number[] };
 export type TvFeedCase = {
   id: string;
-  split: "dev" | "holdout";
+  split: "dev" | "holdout" | "sparse";
   mode: "acquire" | "reuse";
   input: Parameters<TvFeedMatcher>[0];
   expected: number[][];
@@ -90,4 +90,16 @@ export const tvFeedCases = [
   ], [...offer(3, "Parks and Recreation S04E06"), ...offer(12, "Fleabag S01E06"),
     ...offer(13, "Better.Call.Saul.S06.1080p"), ...offer(14, "Derry Girls Series 2 Complete")],
   [...noise, ...noise.map(title => `${title} English 1080p`), ...noise.map(title => `${title} 720p WEB`)]),
+];
+
+const stressWorks = [{ title: "The Office", year: 2005, season: 2, count: 22 },
+  { title: "Money Heist", alias: "La casa de papel", year: 2017 },
+  { title: "Attack on Titan", alias: "Shingeki no Kyojin", year: 2013, season: 4, absoluteStart: 60, count: 30 }];
+export const sparseTvFeedCases = [
+  fixture("sparse-no-match", "sparse", "acquire", stressWorks, [], noise),
+  fixture("sparse-only-confusable-titles", "sparse", "acquire", stressWorks, [],
+    [...noise, "The Office UK 2001 S02E04", "Money Heist Korea Joint Economic Area S01", "Titan A.E. 2000"]),
+  fixture("sparse-one-exact-title", "sparse", "acquire", stressWorks, offer(1, "The Office US S02E08"), noise),
+  fixture("sparse-one-translated-title", "sparse", "reuse", stressWorks, offer(2, "La.Casa.De.Papel.2017.S01E03"), noise),
+  fixture("sparse-one-absolute-episode", "sparse", "acquire", stressWorks, offer(3, "[Fixture] Shingeki no Kyojin - 63"), noise),
 ];

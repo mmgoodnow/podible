@@ -6,12 +6,16 @@ import { BooksRepo } from "../../src/repo";
 import { defaultSettings } from "../../src/settings";
 import { createTvFeedMatcher, type TvFeedRoutingPolicy } from "../../src/tv/feed-agent";
 import type { TvFeedMatch } from "../../src/tv/feed";
-import { tvFeedCases, type TvFeedCase } from "../fixtures/tv-feed-eval";
+import { sparseTvFeedCases, tvFeedCases, type TvFeedCase } from "../fixtures/tv-feed-eval";
 
 export const policies: Record<string, TvFeedRoutingPolicy> = {
   baseline: {}, compact95: { compact: true }, compact90: { compact: true, noMatchConfidence: 0.9 },
   compact85: { compact: true, noMatchConfidence: 0.85 }, binary90: { compact: true, negativeOnly: true, noMatchConfidence: 0.9 },
   responses: { responsesOnly: true }, compactResponses: { responsesOnly: true, compact: true },
+  gate95: { batchNegativeOnly: true }, gate90: { batchNegativeOnly: true, noMatchConfidence: 0.9 },
+  gate85: { batchNegativeOnly: true, noMatchConfidence: 0.85 },
+  workGate75: { batchNegativeOnly: true, workOnlyGate: true, noMatchConfidence: 0.75 },
+  workGate60: { batchNegativeOnly: true, workOnlyGate: true, noMatchConfidence: 0.6 },
 };
 
 export function scoreRoutes(fixture: TvFeedCase, matches: TvFeedMatch[]) {
@@ -38,7 +42,21 @@ async function replay(fixture: TvFeedCase, policy: TvFeedRoutingPolicy, apiKey: 
   using db = new Database(":memory:");
   runMigrations(db);
   const repo = new BooksRepo(db);
-  const matcher = createTvFeedMatcher(defaultSettings({ agents: { apiKey } }), undefined, fixture.mode, fetch, policy);
+  const gateScores: { choice: string; confidence: number | null; probability: number | null }[] = [];
+  const transport = async (url: string, init: RequestInit) => {
+    const response = await fetch(url, init);
+    if (!policy.batchNegativeOnly || !response.ok) return response;
+    const raw = await response.clone().json().catch(() => null) as { answers?: { name?: unknown; choice?: unknown;
+      confidence?: unknown; probabilities?: { value?: unknown; probability?: unknown }[] }[] } | null;
+    const answer = Array.isArray(raw?.answers) ? raw.answers[0] : undefined;
+    if (answer?.name === "batch" && (answer.choice === "no_match" || answer.choice === "review")) {
+      const score = Array.isArray(answer.probabilities) && answer.probabilities.find(row => row?.value === answer.choice);
+      gateScores.push({ choice: answer.choice, confidence: typeof answer.confidence === "number" ? answer.confidence : null,
+        probability: score && typeof score.probability === "number" ? score.probability : null });
+    }
+    return response;
+  };
+  const matcher = createTvFeedMatcher(defaultSettings({ agents: { apiKey } }), undefined, fixture.mode, transport, policy);
   const started = performance.now();
   const matches = await withAgentUsageAccounting(repo, () => matcher(fixture.input));
   const ms = Math.round(performance.now() - started);
@@ -59,22 +77,22 @@ async function replay(fixture: TvFeedCase, policy: TvFeedRoutingPolicy, apiKey: 
     const match = /^podible_agent_feed_decisions_total\{question="tv_feed",reason="([a-z_]+)"\} (\d+)$/.exec(line);
     return match && Number(match[2]) ? [[match[1], Number(match[2])]] : [];
   }));
-  return { ...scoreRoutes(fixture, matches), usage, reasons, ms };
+  return { ...scoreRoutes(fixture, matches), usage, reasons, ms, ...(policy.batchNegativeOnly ? { gateScores } : {}) };
 }
 
 async function main() {
   const args = new Map(process.argv.slice(2).map(arg => {
     const match = /^--(split|policies|repeats|case)=(.+)$/.exec(arg);
-    if (!match) throw new Error("Expected --split=dev|holdout|all --policies=baseline,compact95,... --repeats=1..5 --case=fixture-id");
+    if (!match) throw new Error("Expected --split=dev|holdout|sparse|all --policies=baseline,compact95,... --repeats=1..5 --case=fixture-id");
     return [match[1], match[2]];
   }));
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error("OPENAI_API_KEY is required for live replay");
   const split = args.get("split") ?? "dev", repeats = Number(args.get("repeats") ?? 1);
   const names = (args.get("policies") ?? "baseline,compact95").split(",");
-  if (!["all", "dev", "holdout"].includes(split) || !Number.isInteger(repeats) || repeats < 1 || repeats > 5 ||
+  if (!["all", "dev", "holdout", "sparse"].includes(split) || !Number.isInteger(repeats) || repeats < 1 || repeats > 5 ||
     names.some(name => !Object.hasOwn(policies, name))) throw new Error("Invalid split, policy, or repeat count");
-  const cases = tvFeedCases.filter(fixture => (split === "all" || fixture.split === split) && (!args.has("case") || fixture.id === args.get("case")));
+  const cases = [...tvFeedCases, ...sparseTvFeedCases].filter(fixture => (split === "all" || fixture.split === split) && (!args.has("case") || fixture.id === args.get("case")));
   if (!cases.length) throw new Error("No matching fixtures");
   const jobs = Array.from({ length: repeats }, (_, run) => cases.flatMap((fixture, i) => {
     const rotation = (run + i) % names.length;
