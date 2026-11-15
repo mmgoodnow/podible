@@ -140,7 +140,22 @@ A separate movie fixture was readable at +30.15 s, but its terminal event
 arrived at +60.03 s with thumbnailing still running. The exact verifier
 accepted the movie on that event; the lab uses its full observation budget
 instead of assuming the event immediately follows catalog visibility.
-Production latency with this listener still needs a fresh canary.
+The listener also makes one short, coalesced check on a metadata-loading
+event. With that early wake, a repeat movie fixture was readable at +30.16 s
+and event-verified at +30.29 s, while Plex still reported thumbnailing and
+before the terminal event. There is no recurring verification timer.
+
+The subsequent production TV canary, *Detectorists* season 1 (acquisition
+175, `3824bef`), finished at **29.699 seconds**. Transmission completion
+was 01:34:36 UTC on November 15, publish started at 01:34:56.964, and exact
+availability was recorded at 01:35:05.699. Preparation took 20.964 s:
+the completion wake took 1.53 s, sealing 2.39 s, import review 10.09 s,
+and file adoption about 5.19 s. Publishing took 8.735 s, including
+event-driven catalog rechecks. All six episode ID/path pairs verified on a
+separate GET-only Plex check, and an already-open Chrome page updated on
+one subscription without reloading. This is one sample just below the
+target, not a claim about tail latency. The early metadata wake was not yet
+in this production build.
 
 ## November 14 Workflow Breakdown
 

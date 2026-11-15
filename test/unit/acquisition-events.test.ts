@@ -23,18 +23,45 @@ test("an unacknowledged completion remains deliverable after a dispatch error", 
 
 test("Plex wakes publications after scans and scoped terminal video updates even during media analysis", () => {
   const activity = { type: "library.update.section", Context: { librarySectionID: 16 } };
-  expect(plexPublicationChanged({ ActivityNotification: { event: "ended", Activity: activity } })).toBe("16");
+  expect(plexPublicationChanged({ ActivityNotification: { event: "ended", Activity: activity } })).toEqual({ section: "16" });
   expect(plexPublicationChanged({ ActivityNotification: { event: "updated", Activity: activity } })).toBeNull();
   expect(plexPublicationChanged({ ActivityNotification: { event: "ended", Activity: { type: "butler" } } })).toBeNull();
-  expect(plexPublicationChanged({ ActivityNotification: { event: "ended", Activity: { type: "library.update.section" } } })).toBe("");
+  expect(plexPublicationChanged({ ActivityNotification: { event: "ended", Activity: { type: "library.update.section" } } })).toEqual({ section: "" });
   const update = { sectionID: "16", itemID: "5", type: 4, state: 5 };
-  expect(plexPublicationChanged({ TimelineEntry: update })).toBe("16");
-  expect(plexPublicationChanged({ TimelineEntry: { ...update, sectionID: 15, type: 1 } })).toBe("15");
+  expect(plexPublicationChanged({ TimelineEntry: update })).toEqual({ section: "16" });
+  expect(plexPublicationChanged({ TimelineEntry: { ...update, sectionID: 15, type: 1 } })).toEqual({ section: "15" });
   expect(plexPublicationChanged({ TimelineEntry: { ...update, state: 0, metadataState: "created" } })).toBeNull();
   expect(plexPublicationChanged({ TimelineEntry: { ...update, type: 8 } })).toBeNull();
-  expect(plexPublicationChanged({ TimelineEntry: { ...update, type: 1, mediaState: "thumbnailing" } })).toBe("16");
+  expect(plexPublicationChanged({ TimelineEntry: { ...update, type: 1, mediaState: "thumbnailing" } })).toEqual({ section: "16" });
   expect(plexPublicationChanged({ TimelineEntry: { ...update, type: 1, state: 4, mediaState: "thumbnailing" } })).toBeNull();
+  expect(plexPublicationChanged({ TimelineEntry: { ...update, type: 1, state: 4, metadataState: "loading", mediaState: "thumbnailing" } }))
+    .toEqual({ section: "16", settle: true });
   expect(plexPublicationChanged({ TimelineEntry: { ...update, sectionID: undefined } })).toBeNull();
+});
+
+test("a burst of Plex metadata loading events schedules one early wake without waiting for thumbnails or a terminal event", async () => {
+  const wake = Promise.withResolvers<void>();
+  const calls: string[] = [];
+  const event = 'event: timeline\ndata: {"TimelineEntry":{"sectionID":"15","type":1,"state":4,"metadataState":"loading","mediaState":"thumbnailing"}}\n\n';
+  const fetcher = (async (_input: URL, init: RequestInit) => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(event.repeat(5)));
+      init.signal!.addEventListener("abort", () => controller.close(), { once: true });
+    },
+  }), { headers: { "Content-Type": "text/event-stream" } })) as typeof fetch;
+  const watcher = watchPlexCompletions(async (source, prefix) => {
+    calls.push(source);
+    if (!prefix) wake.resolve();
+  }, () => {}, fetcher);
+  const timer = setTimeout(() => wake.reject(new Error("No early metadata wake")), 1500);
+  try {
+    watcher.configure({ url: "http://plex", token: "test" });
+    await wake.promise;
+    expect(calls).toEqual(["plex:", "plex:15"]);
+  } finally {
+    clearTimeout(timer);
+    await watcher.stop();
+  }
 });
 
 test("a Plex timeline event wakes a pending publication after the scan event has already been consumed", async () => {

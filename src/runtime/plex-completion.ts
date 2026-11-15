@@ -6,24 +6,27 @@ function sectionId(value: unknown): string | null {
   return /^\d+$/.test(section) ? section : null;
 }
 
-export function plexPublicationChanged(message: unknown): string | null {
+export function plexPublicationChanged(message: unknown): { section: string; settle?: true } | null {
   const event = message as {
     ActivityNotification?: { event?: string; Activity?: {
       type?: string; Context?: { librarySectionID?: number | string; key?: string };
     } };
-    TimelineEntry?: { sectionID?: unknown; type?: unknown; state?: unknown };
+    TimelineEntry?: { sectionID?: unknown; type?: unknown; state?: unknown; metadataState?: unknown };
   } | null;
   const timeline = event?.TimelineEntry;
-  // Scan completion can precede the metadata updates that make exact verification possible.
-  // Plex can send the terminal state with media analysis still running. Neither is proof of publication.
-  if (timeline && String(timeline.state) === "5" && /^[1-4]$/.test(String(timeline.type)))
-    return sectionId(timeline.sectionID);
+  if (timeline && /^[1-4]$/.test(String(timeline.type))) {
+    const section = sectionId(timeline.sectionID);
+    if (section === null) return null;
+    // Plex can finish metadata while media analysis is still running. Its catalog can be readable even earlier.
+    if (String(timeline.state) === "5") return { section };
+    if (String(timeline.state) === "4" && timeline.metadataState === "loading") return { section, settle: true };
+  }
   const notification = event?.ActivityNotification;
   const activity = notification?.Activity;
   if (notification?.event !== "ended" || !activity?.type ||
       !["library.update.section", "library.refresh.items"].includes(activity.type)) return null;
-  return sectionId(activity.Context?.librarySectionID) ??
-    /^\/library\/sections\/(\d+)(?:\/|$)/.exec(activity.Context?.key ?? "")?.[1] ?? "";
+  return { section: sectionId(activity.Context?.librarySectionID) ??
+    /^\/library\/sections\/(\d+)(?:\/|$)/.exec(activity.Context?.key ?? "")?.[1] ?? "" };
 }
 
 /** Plex does not replay missed events, so verify pending publications once on connect. */
@@ -39,6 +42,8 @@ export function watchPlexCompletions(
     let delay = 1000;
     while (!lifetime.aborted) {
       let reader: { read(): Promise<{ done: boolean; value?: string }>; cancel(): Promise<void> } | undefined;
+      const loading = new Map<string, ReturnType<typeof setTimeout>>();
+      const earlyWakes = new Set<Promise<unknown>>();
       try {
         const url = new URL("/:/eventsource/notifications", settings.url);
         if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return;
@@ -57,6 +62,25 @@ export function watchPlexCompletions(
         let buffer = "";
         let fields: string[] = [];
         let length = 0;
+        const wake = async ({ section, settle }: NonNullable<ReturnType<typeof plexPublicationChanged>>) => {
+          if (settle) {
+            // One early check per section burst, not a repeating probe. Let metadata commit and batch episode events.
+            if (loading.has(section) || loading.size >= 64) return;
+            const timer = setTimeout(() => {
+              loading.delete(section);
+              if (lifetime.aborted) return;
+              const delivery = signal("plex:" + section).catch(() => reader?.cancel().catch(() => {}));
+              earlyWakes.add(delivery);
+              void delivery.finally(() => earlyWakes.delete(delivery));
+            }, 250);
+            timer.unref();
+            loading.set(section, timer);
+            return;
+          }
+          // A terminal update supersedes any scheduled early check for this section.
+          if (section) { clearTimeout(loading.get(section)); loading.delete(section); }
+          await signal("plex:" + section, section === "");
+        };
         while (!lifetime.aborted) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -67,18 +91,22 @@ export function watchPlexCompletions(
             buffer = buffer.slice(boundary + 1);
             if (line.startsWith("data:")) { fields.push(line.slice(5).trimStart()); length += line.length; }
             if (!line && fields.length) {
-              let section: string | null = null;
-              try { section = plexPublicationChanged(JSON.parse(fields.join("\n"))); } catch { /* Not a JSON notification. */ }
+              let notification: ReturnType<typeof plexPublicationChanged> = null;
+              try { notification = plexPublicationChanged(JSON.parse(fields.join("\n"))); } catch { /* Not a JSON notification. */ }
               fields = [];
               length = 0;
-              if (section !== null) await signal("plex:" + section, section === "");
+              if (notification && !lifetime.aborted) await wake(notification);
             }
             if (length > 128_000) throw new Error("Plex event exceeds size limit");
           }
           if (buffer.length > 128_000) throw new Error("Plex event exceeds size limit");
         }
       } catch { /* No payloads or credentials in logs. */ }
-      finally { await reader?.cancel().catch(() => {}); }
+      finally {
+        for (const timer of loading.values()) clearTimeout(timer);
+        await reader?.cancel().catch(() => {});
+        await Promise.allSettled(earlyWakes);
+      }
       if (lifetime.aborted) return;
       onDisconnect();
       await sleep(delay, undefined, { signal: lifetime, ref: false }).catch(() => {});
