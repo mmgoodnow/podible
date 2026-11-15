@@ -17,8 +17,9 @@ For diagnosis, `podible_plex_publication_phase_seconds` breaks out each
 attempt's lock wait, scan request, catalog verification and TV upgrade roster
 check. These process-local histograms count unsuccessful operations too.
 The scan request measures Plex's acknowledgement, not its asynchronous indexing.
-Podible does not wait for intro detection or thumbnail generation; readiness
-requires the exact catalog identity and file paths.
+Podible does not ask Plex whether intro detection or thumbnail generation has
+finished. It does wait for the exact catalog identity and file paths, which
+Plex may make visible at different times.
 
 For recorded end-to-end runs, use
 `bun run scripts/report-plex-latency.ts --db /path/to/podible.sqlite --limit 10`.
@@ -68,6 +69,46 @@ The season-first verifier made three requests and took 97-109 ms. This measures
 already-indexed catalog verification, not time spent waiting for an index update.
 The season lookup is bounded and falls back to the full listing if it cannot
 prove an exact match, including when Plex uses a different season order.
+
+## Isolated Plex Benchmark
+
+With FFmpeg, the lab Plex image, and a local Podible runtime image available:
+
+```sh
+bun run test/lab/plex-latency.ts --media=movie --exact-identities
+bun run test/lab/plex-latency.ts --media=tv --exact-identities
+```
+
+Use `--podible-image=IMAGE` to select an existing local runtime image. Each
+trial starts an empty Plex server without network access or production mounts.
+The synthetic metadata provider uses loopback; it supplies TMDB/TVDB GUIDs
+without contacting the public catalog. The unmodified production verifier must
+accept the fixture and reject both a wrong GUID and a wrong path. The lab
+samples catalog visibility about every 200 ms; production remains event-driven.
+
+November 14 on Cyprus, measured from dispatching the scan (excluding Podible
+download completion, import and linking):
+
+| Fixture | Match requested | All paths visible | Full metadata requested | Exact verification |
+| --- | ---: | ---: | ---: | ---: |
+| Movie | 9 ms | 211 ms | 30.04 s | 30.11 s |
+| TV, 12 episodes | 15 ms | 215 ms | 30.31 s | 30.47 s |
+
+The initial match was fast, but in both offline trials Plex did not fetch the
+full metadata until the scan ended. This is not evidence of a 30-second floor
+on production Plex or proof that optional thumbnail or marker analysis caused
+the delay. The scheduled-only preference comparison did not apply in the
+unclaimed lab, so it gives no evidence for changing production preferences.
+
+## November 14 Production Canary
+
+On `5d19ced`, *The Station Agent* (acquisition 38) went from Transmission
+completion to exact availability in **16.01 seconds**. Preparation was 8.47 s
+(including 1.87 s to seal the download and 4.86 s to review the import); the
+publish-to-ready interval was 7.55 s, including 4.54 s waiting for Plex events.
+A separate GET-only check confirmed the TMDB identity and exact path in
+section 15. An already-open Chrome page changed to "Available in Plex" on its
+original connection without reloading. This is one real sample, not a p95.
 
 ## November 14 Workflow Breakdown
 
