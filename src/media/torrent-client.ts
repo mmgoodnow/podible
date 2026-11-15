@@ -44,6 +44,8 @@ export interface TorrentClient {
   quiesce(ref: TorrentRef): Promise<void>;
   recheck(ref: TorrentRef): Promise<void>;
   resume(ref: TorrentRef): Promise<void>;
+  /** Queue an ordinary download to start once the client's current check finishes. */
+  resumeWhenStable?(ref: TorrentRef): Promise<void>;
   removeRecord(ref: TorrentRef): Promise<void>;
   /** Retire only an exact seed-only intent after confirmed daemon absence. Caller serializes registration. */
   forgetSeedOnlyIntent?(ref: TorrentRef, location: DownloadLocation): Promise<void>;

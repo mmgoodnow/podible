@@ -42,7 +42,7 @@ export type WorkerContext = {
   };
 };
 
-export function durableStep<T>(ctx: WorkerContext, name: string, handler: () => T | Promise<T>): Promise<T> {
+export function durableStep<T>(ctx: Pick<WorkerContext, "execution">, name: string, handler: () => T | Promise<T>): Promise<T> {
   return ctx.execution ? ctx.execution.run(name, handler) : Promise.resolve().then(handler);
 }
 

@@ -464,7 +464,8 @@ export async function acquireMovie(
           repo.observeDownload(downloadId, observed);
           ctx.onAcquisitionChange?.();
           return observed;
-        }, downloadComplete, () => { active(); return services.client.resume(ref); });
+        }, downloadComplete, () => { active(); return services.client.resume(ref); },
+        services.client.resumeWhenStable && (() => { active(); return services.client.resumeWhenStable!(ref); }));
     } else for (let poll = 0; poll < 20_000; poll++) {
       active();
       const snapshot = await durableStep(

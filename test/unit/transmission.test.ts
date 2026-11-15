@@ -62,6 +62,28 @@ test("Transmission classifies tracker errors separately from local faults withou
     expect(JSON.stringify(snapshot)).not.toContain("secret-passkey");
   }
 });
+test("deferred start accepts a checking owned download but rejects seed-only or unmanaged torrents", async () => {
+  const hash = inspectMetainfo(metainfo).infoHash;
+  let labels = ["Podible TV"], starts = 0;
+  const rpc = new TransmissionRpc({ url: "http://127.0.0.1", username: "a", password: "b",
+    fetcher: (async (_url, init) => {
+      const input = JSON.parse(init!.body as string);
+      if (input.method === "torrent-start") starts++;
+      return Response.json({ result: "success", arguments: input.method === "torrent-get" ? { torrents: [{
+        hashString: hash, downloadDir: "/managed/case", labels, status: 2, leftUntilDone: 7, sizeWhenDone: 7,
+        rateDownload: 0, error: 0, errorString: "", files: [{ name: "film.mkv", length: 7 }],
+      }] } : {} });
+    }) as typeof fetch });
+  const client = new TransmissionAdapter({ clientId: "engine", roots: { tv: "/managed" }, ownershipTag: "Podible TV", rpc });
+  const ref = { clientId: "engine", nativeId: hash };
+  await expect(client.resume(ref)).rejects.toThrow("during recheck");
+  await client.resumeWhenStable(ref);
+  labels = ["Podible TV", "Podible Seed Only"];
+  await expect(client.resumeWhenStable(ref)).rejects.toThrow("ordinary download");
+  labels = ["unmanaged"];
+  await expect(client.resumeWhenStable(ref)).rejects.toThrow("unmanaged torrent");
+  expect(starts).toBe(1);
+});
 test("seed-only adds disable every file before start and completeness uses actual verified bytes", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "seed-only-adapter-")));
   await fs.mkdir(path.join(root, "case"));

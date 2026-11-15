@@ -313,6 +313,13 @@ export class TransmissionAdapter implements TorrentClient {
       throw new Error("Cannot resume a torrent during recheck");
     await this.options.rpc.call("torrent-start", { ids: [ref.nativeId] });
   }
+  async resumeWhenStable(ref: TorrentRef) {
+    const row = await this.owned(ref);
+    if (row.labels.includes(SEED_ONLY_LABEL) || this.seedIntent(ref))
+      throw new Error("Deferred start requires an ordinary download");
+    // Transmission records start intent while checking and starts after verification.
+    await this.options.rpc.call("torrent-start", { ids: [ref.nativeId] });
+  }
   private isSeedOnly(row: z.infer<typeof torrentSchema>): boolean {
     return row.labels.includes(SEED_ONLY_LABEL) && row.fileStats?.length === row.files.length &&
       row.fileStats.every(file => !file.wanted);

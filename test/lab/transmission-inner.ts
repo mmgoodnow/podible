@@ -124,6 +124,35 @@ try {
     if (!(await fs.readFile(paths[index]!.path)).equals(file.bytes))
       throw new Error("Transferred bytes differ");
   {
+    // Enough local sparse data to keep the verifier active across the RPC round trip.
+    const pieceLength = 16_384, verifiedPieces = 4096;
+    const piece = createHash("sha1").update(Buffer.alloc(pieceLength)).digest();
+    const bytes = bencode.encode({ announce: originalAnnounce, info: {
+      name: "check-before-start", "piece length": pieceLength,
+      pieces: Buffer.concat(Array.from({ length: verifiedPieces + 1 }, () => piece)),
+      files: [{ length: pieceLength * verifiedPieces, path: ["present.bin"] }, { length: pieceLength, path: ["missing.bin"] }],
+    } });
+    const client = managedTvTransmission(root, directory);
+    const location = { rootId: "tv", relativePath: "deferred-start" };
+    const payload = path.join(root, "downloads", location.relativePath, "check-before-start");
+    await fs.mkdir(payload, { recursive: true });
+    const local = await fs.open(path.join(payload, "present.bin"), "wx");
+    try { await local.truncate(pieceLength * verifiedPieces); } finally { await local.close(); }
+    const checking = await client.ensureAdded({ metainfo: bytes, location });
+    if ((await client.inspect(checking)).state !== "checking") await client.recheck(checking);
+    if ((await client.inspect(checking)).state !== "checking") throw new Error("Did not exercise deferred startup while checking");
+    await client.resumeWhenStable(checking);
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const seen = await client.inspect(checking);
+      if (seen.state === "downloading" && !seen.complete) break;
+      if (Date.now() >= deadline) throw new Error("Transmission did not start after verifying the paused torrent");
+      await Bun.sleep(50);
+    }
+    await client.removeRecord(checking);
+    console.log("verified deferred initial download start on the real daemon");
+  }
+  {
     using rotationDb = new Database(":memory:");
     runMigrations(rotationDb);
     const rotationRepo = new BooksRepo(rotationDb);

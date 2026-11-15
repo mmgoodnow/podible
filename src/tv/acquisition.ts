@@ -743,7 +743,9 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
           repo.observeDownload(downloadId, seen);
           ctx.onAcquisitionChange?.();
           return seen;
-        }, downloadComplete, shared ? undefined : resume);
+        }, downloadComplete, shared ? undefined : resume,
+        !shared && !promotion && services.client.resumeWhenStable
+          ? () => { active(); return services.client.resumeWhenStable!(ref); } : undefined);
       } else for (let poll = 0; poll < 20_000; poll++) {
         active();
         const observation = await durableStep(ctx, `${prefix}:poll:${poll}`, async () => {

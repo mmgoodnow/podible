@@ -110,6 +110,24 @@ A separate GET-only check confirmed the TMDB identity and exact path in
 section 15. An already-open Chrome page changed to "Available in Plex" on its
 original connection without reloading. This is one real sample, not a p95.
 
+*Over the Garden Wall* (acquisition 174, 10 episodes) exposed two distinct
+event-path stalls. Its initial torrent was paused while Transmission checked
+the layout, and Podible parked without queuing a start. The 10-minute stall
+deadline recovered by selecting a replacement. The replacement finished
+downloading at 00:45:19 UTC. Preparation took 14.40 s, of which 10.22 s was
+import review. The last live catalog check was at about +21.7 s, before exact
+IDs and paths were visible. A GET-only check later found all ten correctly
+matched while Podible was still parked. Normal CD restarted Podible; the
+reconnect check picked up those files and promoted the version at +329.10 s.
+It missed the 30-second target. The browser observation ended before that
+restart, so this does not prove a live TV UI transition.
+
+Ordinary movie and TV workers can now queue a start even when their first
+snapshot is still `checking`. [Transmission 4.1.4](https://github.com/transmission/transmission/blob/4.1.4/libtransmission/torrent.cc#L1434)
+starts it after verification, as confirmed with the real daemon in the offline
+acceptance suite. This does not change how reused season packs are verified,
+and it does not address the separate missed Plex notification.
+
 ## November 14 Workflow Breakdown
 
 Read-only Reflow timings for TV acquisitions 164, 166, 168 and 169 showed

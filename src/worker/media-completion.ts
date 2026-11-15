@@ -2,9 +2,9 @@ import type { TorrentRef, TorrentSnapshot } from "../media/torrent-client";
 import { durableStep, type WorkerContext } from "./context";
 import { effectPhase, effectPhaseReceipt } from "../runtime/execution-effects";
 
-export async function waitForTorrentCompletion(ctx: WorkerContext, name: string, ref: TorrentRef,
+export async function waitForTorrentCompletion(ctx: Pick<WorkerContext, "execution">, name: string, ref: TorrentRef,
   stallMs: number, observe: () => Promise<TorrentSnapshot | null>, isComplete: (seen: TorrentSnapshot) => boolean,
-  resume?: () => Promise<unknown>) {
+  resume?: () => Promise<unknown>, resumeWhenStable?: () => Promise<unknown>) {
   const execution = ctx.execution!;
   let started = 0, initialBytes: number | null = null, checkedStall = false, deadline = 0;
   for (let wake = 0; ; wake++) {
@@ -34,7 +34,8 @@ export async function waitForTorrentCompletion(ctx: WorkerContext, name: string,
       checkedStall = true;
       deadline = started + 86_400_000;
     }
-    if (resume && seen.state === "inactive") await durableStep(ctx, `${slot}:resume`, resume);
+    const start = seen.state === "inactive" ? resume : seen.state === "checking" ? resumeWhenStable : undefined;
+    if (start) await durableStep(ctx, `${slot}:resume`, start);
     await execution.waitForCompletion!(slot, Math.max(1, deadline - now));
   }
 }
