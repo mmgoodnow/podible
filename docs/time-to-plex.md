@@ -181,6 +181,32 @@ grouped, and reduced the adoption step count from 24 to 4. This measures the
 actual filesystem code with a fixture client and no journal flush overhead;
 it does not predict how many seconds it will save on Cyprus.
 
+### Production verification on `60ff93a`
+
+Normal CD deployed this build before both requests. On November 15 UTC, the
+saved Transmission completion and exact Plex availability receipts showed:
+
+| Canary | Acquisition / version | Completed (UTC) | Preparation | Publishing to ready | Total | Target |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| The Straight Story | 39 / 13 | 02:55:25 | 6.562 s | 1.902 s | **8.464 s** | <12 s |
+| This Country, season 1 | 176 / 145 | 02:57:10 | 13.876 s | 5.079 s | **18.955 s** | <20 s |
+
+The movie spent 1.600 s sealing, 0.388 s probing, and 3.314 s reviewing
+the import. TV spent 1.793 s sealing, 10.374 s reviewing, and 0.504 s
+adopting six files across two durable groups. Import review is still the
+largest measured phase for TV. These are different titles from the previous
+canaries, not a controlled before/after or a tail-latency estimate.
+
+An independent read-only check accepted the movie identity and path in Plex
+section 15, and all six TVDB episode identities and paths in section 16.
+All seven canonical files matched their saved sizes and view symlinks.
+The original Chrome tabs went from downloading to ready without reloads.
+Their observed readiness timestamps were 02:55:33.491 and 02:57:29.149 UTC,
+respectively. Publication waited for an exact Plex catalog match, not
+thumbnail generation or other optional analysis. Reflow integration tests
+also cover missed completion events on restart and retry after partial
+group adoption without publishing partial results.
+
 ## November 14 Workflow Breakdown
 
 Read-only Reflow timings for TV acquisitions 164, 166, 168 and 169 showed
