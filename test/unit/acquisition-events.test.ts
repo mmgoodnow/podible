@@ -21,7 +21,7 @@ test("an unacknowledged completion remains deliverable after a dispatch error", 
   } finally { db.close(); }
 });
 
-test("Plex wakes publications after scans and scoped video metadata updates, not media analysis", () => {
+test("Plex wakes publications after scans and scoped terminal video updates even during media analysis", () => {
   const activity = { type: "library.update.section", Context: { librarySectionID: 16 } };
   expect(plexPublicationChanged({ ActivityNotification: { event: "ended", Activity: activity } })).toBe("16");
   expect(plexPublicationChanged({ ActivityNotification: { event: "updated", Activity: activity } })).toBeNull();
@@ -32,7 +32,8 @@ test("Plex wakes publications after scans and scoped video metadata updates, not
   expect(plexPublicationChanged({ TimelineEntry: { ...update, sectionID: 15, type: 1 } })).toBe("15");
   expect(plexPublicationChanged({ TimelineEntry: { ...update, state: 0, metadataState: "created" } })).toBeNull();
   expect(plexPublicationChanged({ TimelineEntry: { ...update, type: 8 } })).toBeNull();
-  expect(plexPublicationChanged({ TimelineEntry: { ...update, mediaState: "idle" } })).toBeNull();
+  expect(plexPublicationChanged({ TimelineEntry: { ...update, type: 1, mediaState: "thumbnailing" } })).toBe("16");
+  expect(plexPublicationChanged({ TimelineEntry: { ...update, type: 1, state: 4, mediaState: "thumbnailing" } })).toBeNull();
   expect(plexPublicationChanged({ TimelineEntry: { ...update, sectionID: undefined } })).toBeNull();
 });
 
@@ -52,8 +53,8 @@ test("a Plex timeline event wakes a pending publication after the scan event has
         controller.enqueue(new TextEncoder().encode([
           'event: activity\ndata: {"ActivityNotification":{"event":"ended","Activity":{"type":"library.update.section","Context":{"librarySectionID":16}}}}\n\n',
           'event: timeline\ndata: {"TimelineEntry":{"sectionID":"15","type":4,"state":5}}\n\n',
-          'event: timeline\ndata: {"TimelineEntry":{"sectionID":"16","type":4,"state":5,"mediaState":"idle"}}\n\n',
-          'event: timeline\ndata: {"TimelineEntry":{"sectionID":"16","type":4,"state":5}}\n\n',
+          'event: timeline\ndata: {"TimelineEntry":{"sectionID":"16","type":4,"state":4,"mediaState":"analyzing"}}\n\n',
+          'event: timeline\ndata: {"TimelineEntry":{"sectionID":"16","type":4,"state":5,"mediaState":"thumbnailing"}}\n\n',
         ].join("")));
         controller.close();
       },

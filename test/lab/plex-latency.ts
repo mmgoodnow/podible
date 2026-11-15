@@ -194,7 +194,8 @@ try {
           if (await verify("wrong-path")) throw new Error("The verifier accepted a correct identity at the wrong path");
         }
         const ready = verify ? exactVerificationMs : indexedMs;
-        if (ready !== null && (!verify || exactVerificationOnEventMs !== null || performance.now() - started > ready + 4_000)) break;
+        // Metadata can be readable well before Plex emits the terminal timeline event.
+        if (ready !== null && (!verify || exactVerificationOnEventMs !== null)) break;
         await Bun.sleep(200);
       }
       verifyOnWake = undefined;

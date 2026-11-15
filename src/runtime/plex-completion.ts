@@ -11,12 +11,12 @@ export function plexPublicationChanged(message: unknown): string | null {
     ActivityNotification?: { event?: string; Activity?: {
       type?: string; Context?: { librarySectionID?: number | string; key?: string };
     } };
-    TimelineEntry?: { sectionID?: unknown; type?: unknown; state?: unknown; mediaState?: unknown };
+    TimelineEntry?: { sectionID?: unknown; type?: unknown; state?: unknown };
   } | null;
   const timeline = event?.TimelineEntry;
   // Scan completion can precede the metadata updates that make exact verification possible.
-  // Ignore media-analysis updates; neither kind of event is itself proof of publication.
-  if (timeline && String(timeline.state) === "5" && /^[1-4]$/.test(String(timeline.type)) && timeline.mediaState === undefined)
+  // Plex can send the terminal state with media analysis still running. Neither is proof of publication.
+  if (timeline && String(timeline.state) === "5" && /^[1-4]$/.test(String(timeline.type)))
     return sectionId(timeline.sectionID);
   const notification = event?.ActivityNotification;
   const activity = notification?.Activity;

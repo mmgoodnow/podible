@@ -84,7 +84,8 @@ trial starts an empty Plex server without network access or production mounts.
 The synthetic metadata provider uses loopback; it supplies TMDB/TVDB GUIDs
 without contacting the public catalog. The unmodified production verifier must
 accept the fixture and reject both a wrong GUID and a wrong path. The lab
-samples catalog visibility about every 200 ms; production remains event-driven.
+samples catalog visibility about every 200 ms and independently measures the
+exact verifier triggered by the live event stream. Production remains event-driven.
 
 November 14 on Cyprus, measured from dispatching the scan (excluding Podible
 download completion, import and linking):
@@ -131,9 +132,14 @@ and the start fix is separate from the missed Plex notification.
 Plex can end a section scan before sending the final item metadata updates.
 Podible now also listens for section-scoped video metadata updates and reruns
 the same exact verifier when they arrive. An update does not itself mark any
-item ready, and unrelated media analysis does not wake the verifier. On the
+item ready. A terminal metadata event may arrive while media analysis is
+still running, so it is a wakeup even if it also carries an analysis status. On the
 isolated 12-episode replay, Plex first fetched full metadata at +30.34 s and
 the updated listener verified all 12 exact identities and paths at +30.60 s.
+A separate movie fixture was readable at +30.15 s, but its terminal event
+arrived at +60.03 s with thumbnailing still running. The exact verifier
+accepted the movie on that event; the lab uses its full observation budget
+instead of assuming the event immediately follows catalog visibility.
 Production latency with this listener still needs a fresh canary.
 
 ## November 14 Workflow Breakdown
