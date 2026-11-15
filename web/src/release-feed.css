@@ -7,7 +7,8 @@
 }
 .release-feed-heading h1 { font-size: 2rem; margin: 0; }
 .release-feed-heading p { color: var(--muted); margin: .35rem 0 0; }
-.release-feed-filters, .release-feed-pagination { display: flex; flex-wrap: wrap; gap: .5rem; margin-block: 1rem; }
+.release-feed-filters, .release-feed-more { display: flex; flex-wrap: wrap; gap: .5rem; margin-block: 1rem; }
+.release-feed-more { align-items: center; justify-content: center; }
 .release-feed-filters { align-items: center; }
 .release-feed-picked-filter { display: flex; align-items: center; gap: .4rem; margin-inline-start: .6rem; cursor: pointer; }
 .release-feed-group { border-bottom: 1px solid var(--line); }

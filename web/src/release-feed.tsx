@@ -1,7 +1,7 @@
-import { useId, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useEffectEvent, useId, useRef, useState } from "react";
+import { infiniteQueryOptions, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "./router";
-import { useTRPC } from "./rpc";
+import { rpc, useTRPC } from "./rpc";
 import "./release-feed.css";
 
 const mediaLabels = { movie: "Movie", tv: "TV", audio: "Audiobook", ebook: "Ebook" } as const;
@@ -87,13 +87,35 @@ function groupConsecutiveSkips<T extends Parameters<typeof noPickRecorded>[0]>(i
 
 export function ReleaseFeedPage() {
   const trpc = useTRPC();
+  const queryClient = useQueryClient();
   const [media, setMedia] = useState<Media>();
   const [pickedOnly, setPickedOnly] = useState(false);
-  const [pages, setPages] = useState<number[]>([]);
-  const feed = useQuery(trpc.indexerFeeds.releases.queryOptions({ media, pickedOnly, cursor: pages.at(-1) }));
-  const nextCursor = feed.data?.nextCursor;
-  type Release = NonNullable<typeof feed.data>["items"][number];
-  const items = feed.data?.items ?? [];
+  const options = infiniteQueryOptions({
+    queryKey: trpc.indexerFeeds.releases.infiniteQueryKey({ media, pickedOnly }),
+    initialPageParam: undefined as number | undefined,
+    // The strict RPC schema accepts a cursor but not tRPC's auto-injected direction.
+    queryFn: ({ pageParam, signal }) => rpc.indexerFeeds.releases.query({ media, pickedOnly, cursor: pageParam }, { signal }),
+    getNextPageParam: last => last.nextCursor,
+    refetchOnWindowFocus: false,
+  });
+  const feed = useInfiniteQuery(options);
+  const items = feed.data?.pages.flatMap(page => page.items) ?? [];
+  type Release = typeof items[number];
+  const loadMore = useRef<HTMLDivElement>(null);
+  const requestOlder = () => void feed.fetchNextPage({ cancelRefetch: false });
+  const autoLoadOlder = useEffectEvent(() => {
+    if (feed.hasNextPage && !feed.isFetching && !feed.isFetchNextPageError) requestOlder();
+  });
+  useEffect(() => {
+    const element = loadMore.current;
+    if (!element || typeof IntersectionObserver === "undefined") return;
+    // Observe entry, not every fetch. A collapsed skip run can leave this in view after an append.
+    const observer = new IntersectionObserver(entries => {
+      if (entries.at(-1)?.isIntersecting) autoLoadOlder();
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [feed.hasNextPage, media, pickedOnly]);
 
   const row = (release: Release) => <li className="release-feed-row" key={release.id}>
       <div className="release-feed-title"><strong>{release.title || "Untitled release"}</strong><small>{release.provider || "Unknown indexer"} · {mediaLabels[release.media]}</small></div>
@@ -113,36 +135,42 @@ export function ReleaseFeedPage() {
     <div className="release-feed-heading">
       <div><h1 id="release-feed-title">Release feed</h1><p>See what arrived, what Podible picked, and which titles it was for.</p></div>
       <button className="secondary" disabled={feed.isFetching} onClick={() => {
-        if (pages.length) setPages([]);
-        else void feed.refetch();
-      }}>{pages.length ? "Back to latest" : "Refresh"}</button>
+        void queryClient.resetQueries({ queryKey: options.queryKey, exact: true });
+      }}>Refresh</button>
     </div>
     <div className="release-feed-filters" role="group" aria-label="Filter releases by media type">
-      <button className={media === undefined ? undefined : "secondary"} aria-pressed={media === undefined} onClick={() => { setMedia(undefined); setPages([]); }}>All</button>
-      {(Object.keys(mediaLabels) as Media[]).map(kind => <button key={kind} className={media === kind ? undefined : "secondary"} aria-pressed={media === kind} onClick={() => { setMedia(kind); setPages([]); }}>{mediaLabels[kind]}</button>)}
-      <label className="release-feed-picked-filter"><input type="checkbox" checked={pickedOnly} onChange={event => { setPickedOnly(event.target.checked); setPages([]); }} /> Picked only</label>
+      <button className={media === undefined ? undefined : "secondary"} aria-pressed={media === undefined} onClick={() => setMedia(undefined)}>All</button>
+      {(Object.keys(mediaLabels) as Media[]).map(kind => <button key={kind} className={media === kind ? undefined : "secondary"} aria-pressed={media === kind} onClick={() => setMedia(kind)}>{mediaLabels[kind]}</button>)}
+      <label className="release-feed-picked-filter"><input type="checkbox" checked={pickedOnly} onChange={event => setPickedOnly(event.target.checked)} /> Picked only</label>
     </div>
-    {feed.isPending ? <p role="status">Loading releases...</p> : feed.isError ? <p role="alert">Could not load the release feed. Try refreshing.</p>
+    {feed.isPending ? <p role="status">Loading releases...</p> : feed.isError && !feed.data ? <p role="alert">Could not load the release feed. Try refreshing.</p>
       : !items.length ? <p>{pickedOnly ? "No picks recorded here yet." : "No releases recorded here yet."}</p>
         : <ul className="release-feed-list" aria-label="Incoming releases">
           {groupConsecutiveSkips(items).map(run => {
             const latest = run[0]!;
             if (run.length === 1) return row(latest);
-            const times = run.map(release => Date.parse(release.receivedAt));
+            let earliest = Date.parse(latest.receivedAt), newest = earliest;
+            for (const release of run) {
+              const time = Date.parse(release.receivedAt);
+              earliest = Math.min(earliest, time);
+              newest = Math.max(newest, time);
+            }
             return <li className="release-feed-group" key={`skips:${latest.id}`}>
               <details>
                 <summary>
                   {`${number.format(run.length)} other releases`}
-                  <span>{date.formatRange(Math.min(...times), Math.max(...times))}</span>
+                  <span>{date.formatRange(earliest, newest)}</span>
                 </summary>
                 <ul className="release-feed-list" aria-label="Releases with no recorded pick">{run.map(row)}</ul>
               </details>
             </li>;
           })}
         </ul>}
-    <div className="release-feed-pagination">
-      {pages.length > 0 && <button className="secondary" onClick={() => setPages(pages.slice(0, -1))}>Newer releases</button>}
-      {nextCursor != null && <button className="secondary" onClick={() => setPages([...pages, nextCursor])}>Older releases</button>}
-    </div>
+    {feed.hasNextPage && <div className="release-feed-more" ref={loadMore}>
+      {feed.isFetchNextPageError && <span role="status">Could not load older releases.</span>}
+      <button type="button" className="secondary" disabled={feed.isFetching} onClick={requestOlder}>
+        {feed.isFetchingNextPage ? "Loading older releases..." : feed.isFetchNextPageError ? "Try again" : "Load older releases"}
+      </button>
+    </div>}
   </section>;
 }
