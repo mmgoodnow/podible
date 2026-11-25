@@ -5,7 +5,7 @@ import { pingPlexOwnerToken } from "./src/plex";
 import { BooksRepo } from "./src/repo";
 import { BackgroundWorker } from "./src/runtime/background-worker";
 import { AcquisitionEvents, acquisitionEventsPath, acquisitionTransferPath } from "./src/runtime/acquisition-events";
-import { readAutobrrConfig, reconcileAutobrrWebhook, type AutobrrConfig } from "./src/media/autobrr";
+import { readAutobrrConfig, reconcileAutobrrWebhook, refreshAutobrrDownloadOrigins, type AutobrrConfig } from "./src/media/autobrr";
 import type { HTMLBundle } from "bun";
 
 export async function startServer(frontend?: HTMLBundle) {
@@ -115,11 +115,14 @@ export async function startServer(frontend?: HTMLBundle) {
         let status: string;
         let delay: number;
         try {
-          await reconcileAutobrrWebhook(config, fetch, autobrrLifetime.signal);
+          await Promise.all([
+            reconcileAutobrrWebhook(config, fetch, autobrrLifetime.signal),
+            refreshAutobrrDownloadOrigins(config, repo.getSettings().prowlarr, fetch, autobrrLifetime.signal),
+          ]);
           status = "Release webhook registered";
           delay = 5 * 60_000;
         } catch (error) {
-          const detail = error instanceof Error && /^(Autobrr notification API returned HTTP \d{3}|Conflicting Podible notification in autobrr)$/.test(error.message)
+          const detail = error instanceof Error && /^(Autobrr notification API returned HTTP \d{3}|Conflicting Podible notification in autobrr|Autobrr Prowlarr download origin discovery is unavailable)$/.test(error.message)
             ? error.message : "Could not reconcile the release webhook";
           status = detail + "; retrying, RSS remains enabled";
           delay = 60_000;

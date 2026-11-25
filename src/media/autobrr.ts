@@ -1,6 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { z } from "zod";
 import type { IndexerMedia, SearchResult } from "./indexer-gateway";
+import { ProwlarrDiscovery, prowlarrProviderIdentity, type ProviderDownloadOrigins, type prowlarrSettingsSchema } from "./prowlarr";
 
 export const AUTOBRR_WEBHOOK_PATH = "/hooks/autobrr";
 export const AUTOBRR_ID_PREFIX = "autobrr:";
@@ -36,12 +37,72 @@ export function readAutobrrConfig(env: Record<string, string | undefined>): Auto
       throw new Error("AUTOBRR_DOWNLOAD_ORIGINS must contain only HTTP(S) origins");
     downloadOrigins.add(url.origin);
   }
-  if (!api || api.search || !callback || callback.search || !apiKey || !downloadOrigins.size)
-    throw new Error("Set AUTOBRR_URL, AUTOBRR_API_KEY, AUTOBRR_PODIBLE_URL and AUTOBRR_DOWNLOAD_ORIGINS");
+  if (!api || api.search || !callback || callback.search || !apiKey)
+    throw new Error("Set AUTOBRR_URL, AUTOBRR_API_KEY and AUTOBRR_PODIBLE_URL");
   api.pathname = api.pathname.replace(/\/+$/, "") + "/api/notification";
   callback.pathname = callback.pathname.replace(/\/+$/, "") + AUTOBRR_WEBHOOK_PATH;
   const token = createHmac("sha256", apiKey).update("podible/autobrr/webhook/v1\0" + callback.href).digest("hex");
   return { apiUrl: api.href, apiKey, callbackUrl: callback.href, authorization: "Bearer " + token, downloadOrigins };
+}
+
+type OriginDiscovery = {
+  key: string;
+  discovery: ProwlarrDiscovery;
+  origins?: ProviderDownloadOrigins;
+  validUntil: number;
+  refreshAt: number;
+  retryAt: number;
+  inflight?: Promise<void>;
+};
+const originDiscoveries = new WeakMap<AutobrrConfig, OriginDiscovery>();
+const originDiscoveryError = "Autobrr Prowlarr download origin discovery is unavailable";
+
+/** Refreshed by the server loop, never by a release-supplied URL or an ingress request. */
+export async function refreshAutobrrDownloadOrigins(
+  config: AutobrrConfig,
+  settings: z.infer<typeof prowlarrSettingsSchema>,
+  fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
+) {
+  if (signal?.aborted) {
+    originDiscoveries.delete(config);
+    throw new Error(originDiscoveryError);
+  }
+  if (!settings.url.trim() || !settings.apiKey.trim()) {
+    originDiscoveries.delete(config);
+    return;
+  }
+  const key = digest(JSON.stringify([settings.url, settings.apiKey]));
+  let entry = originDiscoveries.get(config);
+  if (!entry || entry.key !== key) {
+    entry = { key, discovery: new ProwlarrDiscovery(settings, fetcher, signal), validUntil: 0, refreshAt: 0, retryAt: 0 };
+    originDiscoveries.set(config, entry);
+  }
+  if (entry.inflight) return entry.inflight;
+  if (entry.retryAt > Date.now()) throw new Error(originDiscoveryError);
+  if (entry.refreshAt > Date.now()) return;
+  const current = entry;
+  current.inflight = (async () => {
+    try {
+      const origins = await current.discovery.downloadOrigins();
+      signal?.throwIfAborted();
+      current.origins = origins;
+      current.refreshAt = Date.now() + 60_000;
+      // The registration loop runs every five minutes; leave one bounded request window.
+      current.validUntil = Date.now() + 6 * 60_000;
+    } catch {
+      current.origins = undefined;
+      current.validUntil = 0;
+      current.refreshAt = 0;
+      current.retryAt = Date.now() + 60_000;
+      throw new Error(originDiscoveryError);
+    }
+  })();
+  try {
+    await current.inflight;
+  } finally {
+    current.inflight = undefined;
+  }
 }
 
 const notificationSchema = z.object({
@@ -132,7 +193,10 @@ export function parseAutobrrRelease(config: AutobrrConfig, body: unknown) {
   if (!parsed.success) return null;
   const { release, indexer } = parsed.data.data;
   const url = httpUrl(release.download_url);
-  if (!url || !config.downloadOrigins.has(url.origin)) return null;
+  const discovered = originDiscoveries.get(config);
+  const providerOrigins = discovered && discovered.validUntil > Date.now()
+    ? discovered.origins?.get(prowlarrProviderIdentity(indexer.name)) : undefined;
+  if (!url || (!config.downloadOrigins.has(url.origin) && !providerOrigins?.has(url.origin))) return null;
   const categories = new Set([release.category ?? "", ...release.categories ?? []].map(releaseMedia).filter(Boolean));
   if (categories.size > 1) return null;
   const mediaType = [...categories][0] ?? releaseMedia(release.type ?? "");

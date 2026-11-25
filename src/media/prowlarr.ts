@@ -13,6 +13,9 @@ const categorySchema: z.ZodType<Category> = z.lazy(() =>
 const indexerSchema = z.object({
   id: z.number().int().positive(),
   name: z.string(),
+  definitionName: z.string().nullish(),
+  fields: z.array(z.object({ name: z.string(), value: z.unknown().optional() })).max(128).nullish()
+    .transform(fields => (fields ?? []).filter(field => field.name === "baseUrl")),
   enable: z.boolean(),
   supportsSearch: z.boolean().optional(),
   supportsRss: z.boolean().optional(),
@@ -37,6 +40,33 @@ export type DiscoveredIndexer = TorznabSource & {
   searchParams?: { movie: string[]; tv: string[] };
   maximumSearchResults?: number;
 };
+export type ProviderDownloadOrigins = ReadonlyMap<string, ReadonlySet<string>>;
+export const prowlarrProviderIdentity = (name: string) => name.trim().toLowerCase();
+
+async function boundedJson(response: Response, signal: AbortSignal): Promise<unknown> {
+  if (!response.body) throw new Error("Missing Prowlarr discovery response");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const abort = () => { void reader.cancel().catch(() => {}); };
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    signal.throwIfAborted();
+    for (;;) {
+      const { done, value } = await reader.read();
+      signal.throwIfAborted();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 8 * 1024 * 1024) throw new Error("Prowlarr discovery response is too large");
+      chunks.push(value);
+    }
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } finally {
+    signal.removeEventListener("abort", abort);
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
 
 /** Configured categories and temporary health are separate: outages never remove a source. */
 export class ProwlarrDiscovery {
@@ -47,7 +77,14 @@ export class ProwlarrDiscovery {
     private fetcher: (
       ...args: Parameters<typeof fetch>
     ) => ReturnType<typeof fetch> = fetch,
-  ) {}
+    private signal?: AbortSignal,
+  ) {
+    this.settings = { ...settings };
+  }
+  private requestSignal() {
+    const timeout = AbortSignal.timeout(20_000);
+    return this.signal ? AbortSignal.any([this.signal, timeout]) : timeout;
+  }
   private base() {
     const base = new URL(this.settings.url.replace(/\/+$/, "") + "/");
     if (
@@ -67,38 +104,46 @@ export class ProwlarrDiscovery {
       return this.cached.indexers;
     if (this.inflight) return this.inflight;
     this.inflight = (async () => {
+      const signal = this.requestSignal();
       let response: Response;
       try {
+        signal.throwIfAborted();
         response = await this.fetcher(new URL("api/v1/indexer", this.base()), {
           headers: { "X-Api-Key": this.settings.apiKey },
           redirect: "manual",
-          signal: AbortSignal.timeout(20_000),
+          signal,
         });
       } catch {
         throw new Error("Prowlarr discovery is unavailable");
       }
-      if (!response.ok)
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
         throw new Error(
           `Prowlarr discovery returned HTTP ${response.status}; check its URL base and credentials`,
         );
-      const indexers = z.array(indexerSchema).parse(await response.json());
+      }
+      const indexers = z.array(indexerSchema).max(1024).parse(await boundedJson(response, signal));
+      const statusSignal = this.requestSignal();
       let statusResponse: Response;
       try {
+        statusSignal.throwIfAborted();
         statusResponse = await this.fetcher(
           new URL("api/v1/indexerstatus", this.base()),
           {
             headers: { "X-Api-Key": this.settings.apiKey },
             redirect: "manual",
-            signal: AbortSignal.timeout(20_000),
+            signal: statusSignal,
           },
         );
       } catch {
         throw new Error("Prowlarr health discovery is unavailable");
       }
-      if (!statusResponse.ok)
+      if (!statusResponse.ok) {
+        await statusResponse.body?.cancel().catch(() => {});
         throw new Error(
           `Prowlarr health discovery returned HTTP ${statusResponse.status}`,
         );
+      }
       const statuses = z
         .array(
           z.object({
@@ -106,7 +151,8 @@ export class ProwlarrDiscovery {
             disabledTill: z.string().nullable().optional(),
           }),
         )
-        .parse(await statusResponse.json());
+        .max(1024)
+        .parse(await boundedJson(statusResponse, statusSignal));
       for (const indexer of indexers)
         indexer.status =
           statuses.find((s) => s.indexerId === indexer.id) ?? indexer.status;
@@ -118,6 +164,27 @@ export class ProwlarrDiscovery {
     } finally {
       this.inflight = undefined;
     }
+  }
+  /** Only authenticated configuration grants trust, never announce URLs or suggested indexer URLs. */
+  async downloadOrigins(): Promise<ProviderDownloadOrigins> {
+    const providers = new Map<string, ReadonlySet<string> | null>();
+    for (const indexer of await this.indexers()) {
+      if (!indexer.enable || indexer.protocol !== "torrent") continue;
+      const origins = new Set<string>();
+      const value = indexer.fields.length === 1 ? indexer.fields[0]!.value : undefined;
+      if (typeof value === "string") {
+        try {
+          const url = new URL(value);
+          if (["https:", "http:"].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash)
+            origins.add(url.origin);
+        } catch { /* Invalid provider configuration grants no trust. */ }
+      }
+      for (const name of new Set([indexer.name, indexer.definitionName ?? ""].map(prowlarrProviderIdentity).filter(Boolean))) {
+        providers.set(name, providers.has(name) ? null : origins);
+      }
+    }
+    return new Map([...providers].flatMap(([name, provider]) =>
+      provider?.size ? [[name, provider] as const] : []));
   }
   async sources(
     kind: "movie" | "tv" | "audio" | "ebook",

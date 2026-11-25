@@ -20,7 +20,41 @@ configured notification in autobrr is needed):
 | `AUTOBRR_URL` | autobrr base URL, reachable from Podible; include its base path if set |
 | `AUTOBRR_API_KEY` | API key created in autobrr |
 | `AUTOBRR_PODIBLE_URL` | Podible base URL reachable from autobrr, ideally over a private network or HTTPS |
-| `AUTOBRR_DOWNLOAD_ORIGINS` | Comma-separated exact origins used for autobrr torrent downloads, e.g. `https://tracker.example` |
+| `AUTOBRR_DOWNLOAD_ORIGINS` | Optional comma-separated additional exact torrent download origins, e.g. `https://tracker.example` |
+
+Configure and enable autobrr's upstream indexers separately. IRC networks must
+authenticate and actually monitor their announce channels, including any
+tracker-required NickServ registration, nick grouping, or invitation. Podible
+does not create IRC accounts or grant channel access. A connected network is not
+proof that its announce channel is working; inspect channel monitoring and last
+announce in `Settings > IRC`. See autobrr's [indexer setup](https://autobrr.com/configuration/indexers)
+and [IRC setup](https://autobrr.com/configuration/irc).
+
+Podible also derives trusted download origins from enabled torrent indexers'
+configured `baseUrl` fields in the authenticated Prowlarr API. Each exact origin
+is bound to its unambiguous configured indexer name or definition name (ignoring
+case and surrounding whitespace), not shared with unrelated providers. Suggested
+URLs, webhook-supplied origins, and domain suffixes never grant trust. Discovery
+uses the existing server-side Prowlarr settings; no additional credential is needed.
+Discovery is cached for one minute, coalesces concurrent refreshes, and runs with
+webhook reconciliation, never on ingress. Derived trust expires six minutes after
+discovery; cache hits do not extend that deadline. Failed refreshes clear derived
+trust and retry after a one-minute cooldown. Rotating or removing Prowlarr settings
+discards old trust at the next reconciliation, even with discovery in flight.
+Explicit origins remain usable independently and apply across providers.
+
+Discovery only requests the configured Prowlarr API, never tracker URLs. Requests
+do not follow redirects, have a 20-second timeout each, and stop reading responses
+at 8 MiB. They are cancelled on server shutdown. Ambiguous provider aliases and
+duplicate or invalid `baseUrl` fields grant no automatic trust.
+
+The allowlist applies to the torrent download URL, not the autobrr API URL or
+the IRC server. A Torznab canary may download through Prowlarr, while IRC uses the
+tracker directly. When a direct origin matches that provider's configured
+Prowlarr `baseUrl`, it is authorized automatically. If it differs (for example,
+an API subdomain versus the torrent-download host), add the trusted exact origin
+explicitly, preserving any needed Prowlarr origin. Do not disable origin checks
+or follow redirects to work around this distinction.
 
 Podible registers a global New Release notification on startup and periodically
 reconciles it. It derives a separate callback token from the API key. API key
@@ -34,6 +68,28 @@ use different release IDs in the two transports, so the same offer can be
 evaluated again when it arrives via RSS. Unrecognized categories, unsupported
 protocols, unlisted download origins, and metainfo redirects are left to RSS.
 Registration failures are logged and retried without blocking RSS.
+
+When pushes appear silent, check each stage independently:
+
+1. In autobrr, verify the channel is monitoring and its last announce advances,
+   or that an intended feed is enabled and its last run advances. A disabled
+   manual canary is not a continuous announcement source. IRC numeric 473 means
+   the channel is invite-only; resolve tracker authorization rather than changing
+   the Podible webhook.
+2. Verify the enabled Podible notification has `RELEASE_NEW`, `POST`, the expected
+   callback URL, and the current derived authorization header. Compare tokens
+   inside the server process; never print credentials or raw release payloads.
+3. Compare the source's name and actual download origin with its enabled Prowlarr
+   indexer's name/definition and `baseUrl`, or with `AUTOBRR_DOWNLOAD_ORIGINS`.
+   Successful canary receipts do not establish that IRC's origins are allowed.
+   Prowlarr changes are picked up during reconciliation; explicit environment
+   changes require the normal coordinated app rollout.
+4. Verify new `release_inbox` rows with `feed_id LIKE 'autobrr:%'`, using counts
+   and `first_seen_at` timestamps rather than stored payloads. A webhook `204`
+   can also mean an ignored origin, category, protocol, or payload; registration
+   success and HTTP success alone do not establish ingestion. Autobrr does not
+   necessarily save releases without active filters, so its empty release
+   history alone is not evidence of absent announces.
 
 ### RSS polling and catch-up
 
