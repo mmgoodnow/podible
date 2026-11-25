@@ -44,6 +44,15 @@ The default observer uses Sonarr GET history/queue/catalog reads. It never sends
 Sonarr commands. The TV verifier uses the existing agent configuration and shared
 movie stream-facts/quality policy; no fictional movie identities are introduced.
 
+History pages are fetched and validated before per-series catalog reads. Equal
+timestamps are valid, regardless of record ID order. Missing dates, descending-sort
+violations within a page, and conflicting identities still fail closed. Offset
+pagination can move while Sonarr adds/removes history: changing totals, repeated
+IDs across pages, or an ascending page boundary discard that scan and restart at
+page one. After three unstable scans the observer throws a retryable upstream
+error without returning partial evidence. Each scan retains the ten-page bound;
+rows are never sorted locally to conceal an incomplete upstream read.
+
 ## Capture And Execution Authority
 
 Every pass observes fresh source state and inventories the currently mapped files.
@@ -56,6 +65,14 @@ inserts a deduplicated immutable case, creates the evaluation job/outbox intent,
 and attaches that job. A failure at catalog, case, job, or attachment insertion
 rolls the entire unit back. Every mutation uses the repository `beforeWrite`
 execution guard.
+
+Shadow write transactions use the shared synchronous `BEGIN IMMEDIATE` helper,
+reserving the WAL writer before the execution guard or catalog/deduplication reads
+establish a snapshot. A deferred read followed by another connection's commit
+could otherwise fail its write upgrade with `SQLITE_BUSY_SNAPSHOT`, even with a
+busy timeout. Nested units remain savepoints, and failures still roll back the
+catalog, immutable case, evaluation job, and outbox together. No filesystem or
+upstream I/O runs inside these transactions.
 
 The case table stores only evidence, its hash, the owning job reference, a
 write-once result, and capture time. It has no status, attempts, leases, retry
@@ -154,7 +171,7 @@ Queue receipts never claim successful download or publication.
 ## Acceptance
 
 ```sh
-bun test test/unit/tv-shadow.test.ts test/unit/tv-upstream.test.ts test/unit/tv-anime.test.ts test/integration/movie-shadow.test.ts
+bun test test/unit/tv-shadow.test.ts test/unit/tv-shadow-transactions.test.ts test/unit/tv-upstream.test.ts test/unit/tv-anime.test.ts test/integration/movie-shadow.test.ts
 bun run typecheck
 bun run validate:runtime-scripts
 bun run build

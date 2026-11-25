@@ -339,12 +339,74 @@ describe("Sonarr comparison observations", () => {
     for (const records of [
       [{ id: 1, eventType: "downloadFolderImported", date: now }],
       [{ id: 1, seriesId: 17, episodeId: 172, eventType: "downloadFolderImported" }],
+      [{ id: 1, eventType: "grabbed" }],
       [{ id: 1, date: "2000-01-01T00:00:00Z" }, { id: 2, date: now }],
+      [{ id: 1, date: now }, { id: 1, date: now }],
     ]) {
       const f = fixture((url) => url.pathname.endsWith("/queue")
         ? { totalRecords: 0, records: [] } : { totalRecords: records.length, records });
-      await failure(new SonarrObserver(connection, f.fetcher).observe());
+      expect((await failure(new SonarrObserver(connection, f.fetcher).observe())).retryable).toBe(false);
+      expect(f.calls.filter((c) => c.url.pathname.endsWith("/history"))).toHaveLength(1);
     }
+  });
+
+  test("a moving history page restarts the read before resolving exact catalog identities", async () => {
+    const now = Date.now();
+    const rows = Array.from({ length: 101 }, (_, i) => ({
+      id: 200 - i, seriesId: 17, episodeId: 172, eventType: "downloadFolderImported",
+      date: new Date(now - i * 1000).toISOString(),
+    }));
+    const inserted = { ...rows[0]!, id: 201, date: new Date(now + 1000).toISOString() };
+    let scans = 0;
+    const f = fixture((url) => {
+      if (url.pathname.endsWith("/queue")) return { totalRecords: 0, records: [] };
+      if (url.pathname.endsWith("/history")) {
+        const page = Number(url.searchParams.get("page"));
+        if (page === 1) scans++;
+        const current = scans === 1 && page === 1 ? rows : [inserted, ...rows];
+        return { page, pageSize: 100, totalRecords: current.length, records: current.slice((page - 1) * 100, page * 100) };
+      }
+      if (url.pathname.endsWith("/series/17")) return series;
+      if (url.pathname.endsWith("/episode")) return [episode];
+      throw new Error("Unexpected route");
+    });
+    const observer = new SonarrObserver(connection, f.fetcher);
+    const observations = await observer.observe();
+    expect(scans).toBe(2);
+    expect(observations.map((o) => o.key)).toEqual([inserted, ...rows].map((r) => `sonarr:${observer.instance}:history:${r.id}`));
+    expect(observations.every((o) => JSON.stringify(o.episodeKeys) === JSON.stringify(["tvdb:5704031"]))).toBe(true);
+    const historyCalls = f.calls.filter((c) => c.url.pathname.endsWith("/history"));
+    expect(historyCalls.map((c) => c.url.searchParams.get("page"))).toEqual(["1", "2", "1", "2"]);
+    expect(f.calls.indexOf(historyCalls.at(-1)!)).toBeLessThan(f.calls.findIndex((c) => c.url.pathname.endsWith("/series/17")));
+  });
+
+  test.each(["tied-overlap", "boundary-inversion", "count-change"])("persistently moving history (%s) fails closed after bounded restarts", async (kind) => {
+    const now = Date.now();
+    const rows = Array.from({ length: 100 }, (_, i) => ({ id: 200 - i,
+      date: new Date(now - (kind === "tied-overlap" ? 0 : i * 1000)).toISOString() }));
+    const f = fixture((url) => {
+      if (url.pathname.endsWith("/queue")) return { totalRecords: 0, records: [] };
+      const page = Number(url.searchParams.get("page"));
+      return { page, pageSize: 100, totalRecords: kind === "count-change" && page === 2 ? 102 : 101,
+        records: page === 1 ? rows : [{ id: kind === "tied-overlap" ? 101 : 99,
+          date: new Date(now - (kind === "tied-overlap" ? 0 : kind === "boundary-inversion" ? 98 : 100) * 1000).toISOString() }] };
+    });
+    const error = await failure(new SonarrObserver(connection, f.fetcher).observe());
+    expect(error.message).toContain("history changed during pagination");
+    expect(error.retryable).toBe(true);
+    expect(f.calls.filter((c) => c.url.pathname.endsWith("/history"))).toHaveLength(6);
+  });
+
+  test("equal history timestamps across pages are valid and never use IDs as chronological order", async () => {
+    const date = new Date().toISOString();
+    const rows = Array.from({ length: 101 }, (_, i) => ({ id: i + 1, date }));
+    const f = fixture((url) => {
+      if (url.pathname.endsWith("/queue")) return { totalRecords: 0, records: [] };
+      const page = Number(url.searchParams.get("page"));
+      return { page, pageSize: 100, totalRecords: rows.length, records: rows.slice((page - 1) * 100, page * 100) };
+    });
+    expect(await new SonarrObserver(connection, f.fetcher).observe()).toEqual([]);
+    expect(f.calls).toHaveLength(3);
   });
 
   test("truncation and misleading pagination are errors, not successful partial observations", async () => {

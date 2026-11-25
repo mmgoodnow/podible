@@ -255,12 +255,12 @@ export class SonarrObserver {
     this.#lookbackDays = tvWire("sonarr", z.number().min(1).max(365), settings.lookbackDays ?? 7);
   }
 
-  async observe(): Promise<SonarrObservation[]> {
-    const observations = new Map<string, SonarrObservation>();
-    const entries = new Map<number, TvCatalogEntry>();
-    const cutoff = Date.now() - this.#lookbackDays * 86_400_000;
-    for (const kind of ["queue", "history"] as const) {
+  async #rows(kind: "queue" | "history", cutoff: number): Promise<z.infer<typeof observationSchema>[]> {
+    scan: for (let attempt = 0; attempt < 3; attempt++) {
+      const rows: z.infer<typeof observationSchema>[] = [];
       const pages = new Set<string>();
+      const ids = new Set<number>();
+      let totalRecords: number | undefined;
       let previousDate = Infinity;
       for (let page = 1; page <= 10; page++) {
         const result = tvWire("sonarr", z.object({
@@ -269,67 +269,92 @@ export class SonarrObserver {
           records: z.array(observationSchema).max(100),
           totalRecords: z.number().int().nonnegative(),
         }), await this.#http.get(`${kind}?page=${page}&pageSize=100&includeSeries=true&includeEpisode=true&sortKey=${kind === "history" ? "date" : "added"}&sortDirection=descending`));
-        const signature = JSON.stringify(result.records.map((r) => r.id));
         if ((result.page != null && result.page !== page) ||
-            (result.pageSize != null && result.pageSize !== 100) ||
-            (result.records.length && pages.has(signature)) ||
+            (result.pageSize != null && result.pageSize !== 100))
+          throw new TvUpstreamError("sonarr", "incomplete or repeated observation page");
+        if (kind === "history") {
+          let pageDate = Infinity;
+          const pageIds = new Set<number>();
+          for (const row of result.records) {
+            if (!row.date || Date.parse(row.date) > pageDate)
+              throw new TvUpstreamError("sonarr", "history is missing a timestamp or not date-descending");
+            if (pageIds.has(row.id)) throw new TvUpstreamError("sonarr", "history contains a repeated record identity");
+            pageDate = Date.parse(row.date);
+            pageIds.add(row.id);
+          }
+          // Offset pages are not a snapshot. Restart on movement, never sort or accept a partial scan.
+          if ((totalRecords != null && totalRecords !== result.totalRecords) ||
+              (result.records[0]?.date && Date.parse(result.records[0].date) > previousDate) ||
+              result.records.some((row) => ids.has(row.id))) continue scan;
+          previousDate = pageDate;
+          for (const id of pageIds) ids.add(id);
+        }
+        const signature = JSON.stringify(result.records.map((r) => r.id));
+        if ((result.records.length && pages.has(signature)) ||
             result.records.length !== Math.min(100, Math.max(0, result.totalRecords - (page - 1) * 100)))
           throw new TvUpstreamError("sonarr", "incomplete or repeated observation page");
         pages.add(signature);
-        for (const row of result.records) {
-          if (kind === "history") {
-            if (!row.date || Date.parse(row.date) > previousDate)
-              throw new TvUpstreamError("sonarr", "history is missing a timestamp or not date-descending");
-            previousDate = Date.parse(row.date);
-          }
-          const imported = kind === "history" && row.eventType === "downloadFolderImported";
-          const blocked = kind === "queue" &&
-            ((row.sizeleft ?? row.sizeLeft) === 0 || ["importBlocked", "importPending"].includes(row.trackedDownloadState ?? ""));
-          if (!imported && !blocked) continue;
-          if (imported && !row.date) throw new TvUpstreamError("sonarr", "import observation is missing its timestamp");
-          if (imported && Date.parse(row.date!) < cutoff) continue;
-          const seriesId = row.seriesId ?? row.series?.id;
-          const episodeId = row.episodeId ?? row.episode?.id;
-          // An unassociated queue item/season pack is not evidence for any episode.
-          if (!seriesId || !episodeId) {
-            if (imported) throw new TvUpstreamError("sonarr", "import observation is missing its episode association");
-            continue;
-          }
-          if ((row.series && row.series.id !== seriesId) ||
-              (row.episode && (row.episode.id !== episodeId || row.episode.seriesId !== seriesId)))
-            throw new TvUpstreamError("sonarr", "conflicting observation identity");
-          let entry = entries.get(seriesId);
-          if (!entry) {
-            entry = await this.#catalog.get(`sonarr:${this.instance}:${seriesId}`);
-            entries.set(seriesId, entry);
-          }
-          if (row.series && (
-            (known(row.series.tvdbId) && row.series.tvdbId !== entry.tvdbId) ||
-            (known(row.series.tmdbId) && row.series.tmdbId !== entry.tmdbId)
-          )) throw new TvUpstreamError("sonarr", "observation series failed the external identity cross-check");
-          const episode = entry.episodes.find((e) => e.refs?.some((r) =>
-            r.provider === "sonarr" && r.instance === this.instance && r.id === String(episodeId)));
-          if (!episode || (row.episode && known(row.episode.tvdbId) && episode.key !== `tvdb:${row.episode.tvdbId}`))
-            throw new TvUpstreamError("sonarr", "observation episode not found in the catalog identity");
-          const paths = imported ? [row.data?.droppedPath, row.data?.importedPath] : [row.outputPath];
-          const key = `sonarr:${this.instance}:${kind}:${row.id}`;
-          observations.set(key, {
-            key, entry, episodeKeys: [episode.key],
-            releaseTitle: this.#http.clean(row.sourceTitle ?? row.title ?? entry.title),
-            sourcePaths: paths.filter((p): p is string => !!p).map((p) => this.#http.clean(p)),
-            libraryPath: imported && row.data?.importedPath ? this.#http.clean(row.data.importedPath) : null,
-            observedAt: new Date().toISOString(),
-            sonarr: {
-              outcome: imported ? "imported" : "blocked",
-              messages: [row.errorMessage ?? "", ...(row.statusMessages ?? []).flatMap((s) => [s.title ?? "", ...(s.messages ?? [])])]
-                .filter(Boolean).map((m) => this.#http.clean(m)),
-            },
-          });
-        }
+        totalRecords = result.totalRecords;
+        rows.push(...result.records);
         const done = page * 100 >= result.totalRecords ||
           (kind === "history" && result.records.every((r) => r.date && Date.parse(r.date) < cutoff));
-        if (done) break;
+        if (done) return rows;
         if (page === 10) throw new TvUpstreamError("sonarr", "observations exceeded the bounded scan");
+      }
+    }
+    throw new TvUpstreamError("sonarr", "history changed during pagination; no observations returned", null, true);
+  }
+
+  async observe(): Promise<SonarrObservation[]> {
+    const observations = new Map<string, SonarrObservation>();
+    const entries = new Map<number, TvCatalogEntry>();
+    const cutoff = Date.now() - this.#lookbackDays * 86_400_000;
+    for (const kind of ["queue", "history"] as const) {
+      // Fetch/validate all pages before slow per-series reads widen the pagination race.
+      for (const row of await this.#rows(kind, cutoff)) {
+        const imported = kind === "history" && row.eventType === "downloadFolderImported";
+        const blocked = kind === "queue" &&
+          ((row.sizeleft ?? row.sizeLeft) === 0 || ["importBlocked", "importPending"].includes(row.trackedDownloadState ?? ""));
+        if (!imported && !blocked) continue;
+        if (imported && !row.date) throw new TvUpstreamError("sonarr", "import observation is missing its timestamp");
+        if (imported && Date.parse(row.date!) < cutoff) continue;
+        const seriesId = row.seriesId ?? row.series?.id;
+        const episodeId = row.episodeId ?? row.episode?.id;
+        // An unassociated queue item/season pack is not evidence for any episode.
+        if (!seriesId || !episodeId) {
+          if (imported) throw new TvUpstreamError("sonarr", "import observation is missing its episode association");
+          continue;
+        }
+        if ((row.series && row.series.id !== seriesId) ||
+            (row.episode && (row.episode.id !== episodeId || row.episode.seriesId !== seriesId)))
+          throw new TvUpstreamError("sonarr", "conflicting observation identity");
+        let entry = entries.get(seriesId);
+        if (!entry) {
+          entry = await this.#catalog.get(`sonarr:${this.instance}:${seriesId}`);
+          entries.set(seriesId, entry);
+        }
+        if (row.series && (
+          (known(row.series.tvdbId) && row.series.tvdbId !== entry.tvdbId) ||
+          (known(row.series.tmdbId) && row.series.tmdbId !== entry.tmdbId)
+        )) throw new TvUpstreamError("sonarr", "observation series failed the external identity cross-check");
+        const episode = entry.episodes.find((e) => e.refs?.some((r) =>
+          r.provider === "sonarr" && r.instance === this.instance && r.id === String(episodeId)));
+        if (!episode || (row.episode && known(row.episode.tvdbId) && episode.key !== `tvdb:${row.episode.tvdbId}`))
+          throw new TvUpstreamError("sonarr", "observation episode not found in the catalog identity");
+        const paths = imported ? [row.data?.droppedPath, row.data?.importedPath] : [row.outputPath];
+        const key = `sonarr:${this.instance}:${kind}:${row.id}`;
+        observations.set(key, {
+          key, entry, episodeKeys: [episode.key],
+          releaseTitle: this.#http.clean(row.sourceTitle ?? row.title ?? entry.title),
+          sourcePaths: paths.filter((p): p is string => !!p).map((p) => this.#http.clean(p)),
+          libraryPath: imported && row.data?.importedPath ? this.#http.clean(row.data.importedPath) : null,
+          observedAt: new Date().toISOString(),
+          sonarr: {
+            outcome: imported ? "imported" : "blocked",
+            messages: [row.errorMessage ?? "", ...(row.statusMessages ?? []).flatMap((s) => [s.title ?? "", ...(s.messages ?? [])])]
+              .filter(Boolean).map((m) => this.#http.clean(m)),
+          },
+        });
       }
     }
     return [...observations.values()];

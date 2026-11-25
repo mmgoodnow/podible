@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import type { JobRow } from "../app-types";
+import { immediateTransaction, type SyncTransactionCallback } from "../db-transaction";
 import { tvShadowInputSchema, tvShadowResultSchema, type TvShadowInput, type TvShadowResult, type TvShadowCase } from "./shadow-types";
 
 export const TV_SHADOW_SCHEMA_SQL = `CREATE TABLE tv_shadow_cases (
@@ -21,8 +22,8 @@ function canonical(value: unknown): string {
 
 export class TvShadowRepo {
   constructor(private db: Database, private beforeWrite: () => void, private getJob: (id: number) => JobRow | null) {}
-  transaction<T>(fn: () => T): T {
-    return this.db.transaction(() => { this.beforeWrite(); return fn(); })();
+  transaction<T>(fn: SyncTransactionCallback<T>): T {
+    return immediateTransaction(this.db, this.beforeWrite, fn);
   }
   capture(raw: TvShadowInput) {
     const input = tvShadowInputSchema.parse(raw);
