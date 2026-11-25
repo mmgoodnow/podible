@@ -105,6 +105,22 @@ test("completed pre-publication pack can be found past 128 registrations and 32 
   } finally { await f.close(); }
 });
 
+test("legacy finalized members remain reusable after their reservation moves to a new storage root", async () => {
+  const f = await fixture();
+  try {
+    const file = f.plan.files[0]!;
+    const proofPath = path.join(f.contentRoot, file.relativePath!) + ".podible-finalized.json";
+    const { version: _version, contentOwner: _owner, ...identity } = JSON.parse(await fs.readFile(proofPath, "utf8"));
+    await fs.writeFile(proofPath, JSON.stringify({ ...identity, sourceRoot: path.join(f.root, "pre-move", "downloads", "pack") }));
+    const sources = await f.inventory();
+    expect(sources).toHaveLength(3);
+    expect(sources.some(source => source.id === file.id)).toBe(true);
+    const plan = await crossSeedPlan(f.repo, f.repo.getSettings(), f.command, f.metainfo);
+    expect(plan.summary.likelyReuseBytes).toBe(15);
+    expect(f.repo.tv.activeEpisodes(f.scope.targetId)).toHaveLength(1);
+  } finally { await f.close(); }
+});
+
 test("published movie WEB quality is not parsed as a torrent file proof", async () => {
   const f = await fixture();
   try {

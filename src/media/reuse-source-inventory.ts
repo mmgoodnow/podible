@@ -118,7 +118,7 @@ export async function completedCanonicalReuseSources(input: {
           const canonical = path.join(root.path, file.relativePath);
           const resolved = await resolve(path.join(sourceRoot, file.path), file.size);
           if (resolved.path !== canonical) throw new Error("Reuse source member left its canonical reservation");
-          const finalized = await finalizedCanonicalObject(root.path, canonical);
+          const finalized = await finalizedCanonicalObject(root.path, canonical, sourceRoot);
           const matchesProof = async () => {
             const current = await fs.lstat(canonical);
             return current.size === file.size && proofs.get(index)?.has(identityKey({
@@ -128,7 +128,7 @@ export async function completedCanonicalReuseSources(input: {
           if (!finalized && !await matchesProof()) continue;
           const source = await captureReuseFile({ root, sourceId: file.id, sourcePath: canonical, sourceTorrentId: String(record.id) });
           if (source.identity.device !== file.device || source.identity.inode !== file.inode || source.size !== file.size ||
-            (finalized ? !await finalizedCanonicalObject(root.path, canonical) : !await matchesProof()))
+            (finalized ? !await finalizedCanonicalObject(root.path, canonical, sourceRoot) : !await matchesProof()))
             throw new Error("Reuse canonical source changed while capturing identity");
           members.push(source);
         }

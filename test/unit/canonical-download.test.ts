@@ -176,7 +176,8 @@ test("old receipts remain reusable, but a same-size edit invalidates the recorde
     await sealCanonicalDownload(f.contentRoot, f.sourceRoot, f.client, f.ref);
     const fresh = (await finalizeCanonicalDownloadFile(f.contentRoot, f.sourceRoot, view, file.size))!;
     const sha256 = createHash("sha256").update(f.members[0]!.text).digest("hex");
-    const legacy = { ...JSON.parse(await fs.readFile(proof, "utf8")), sha256 };
+    const { version: _version, contentOwner: _owner, ...identity } = JSON.parse(await fs.readFile(proof, "utf8"));
+    const legacy = { ...identity, sourceRoot: f.sourceRoot, sha256 };
     await fs.writeFile(proof, JSON.stringify(legacy));
     expect(await finalizedCanonicalObject(f.contentRoot, canonical)).toEqual({ ...fresh, sha256 });
 
@@ -184,6 +185,69 @@ test("old receipts remain reusable, but a same-size edit invalidates the recorde
     await fs.writeFile(canonical, Buffer.alloc(file.size));
     expect((await fs.stat(canonical)).size).toBe(file.size);
     await expect(finalizedCanonicalObject(f.contentRoot, canonical)).rejects.toThrow("Finalized canonical object changed");
+  } finally { await f.close(); }
+});
+
+test("finalized objects survive storage relocation and removal of their original torrent view", async () => {
+  const f = await fixture();
+  const movedRoot = `${f.root}-moved`;
+  try {
+    await f.fill(); await sealCanonicalDownload(f.contentRoot, f.sourceRoot, f.client, f.ref);
+    const file = f.plan.files[0]!, canonical = path.join(f.contentRoot, file.relativePath!);
+    const result = await finalizeCanonicalDownloadFile(f.contentRoot, f.sourceRoot, path.join(f.sourceRoot, file.path), file.size);
+    const proof = JSON.parse(await fs.readFile(canonical + ".podible-finalized.json", "utf8"));
+    expect(proof).toMatchObject({ version: 2, contentOwner: f.plan.contentOwner });
+    expect(proof).not.toHaveProperty("sourceRoot");
+    await fs.rename(f.root, movedRoot);
+    const root = path.join(movedRoot, path.relative(f.root, f.contentRoot));
+    const moved = path.join(root, file.relativePath!);
+    expect(await finalizedCanonicalObject(root, moved)).toEqual(result);
+    await fs.rm(path.join(movedRoot, "downloads"), { recursive: true });
+    await fs.rm(path.join(root, ".podible-downloads"), { recursive: true });
+    expect(await finalizedCanonicalObject(root, moved)).toEqual(result);
+    expect(await fs.readFile(moved, "utf8")).toBe(f.members[0]!.text);
+  } finally { await f.close(); await fs.rm(movedRoot, { recursive: true, force: true }); }
+});
+
+test("legacy pre-move receipts require a matching sealed current reservation", async () => {
+  const f = await fixture();
+  try {
+    await f.fill(); await sealCanonicalDownload(f.contentRoot, f.sourceRoot, f.client, f.ref);
+    const file = f.plan.files[0]!, view = path.join(f.sourceRoot, file.path);
+    const canonical = path.join(f.contentRoot, file.relativePath!), proofPath = canonical + ".podible-finalized.json";
+    const result = await finalizeCanonicalDownloadFile(f.contentRoot, f.sourceRoot, view, file.size);
+    const { version: _version, contentOwner: _owner, ...identity } = JSON.parse(await fs.readFile(proofPath, "utf8"));
+    const legacy = { ...identity, sourceRoot: path.join(f.root, "old-storage", "downloads") };
+    await fs.writeFile(proofPath, JSON.stringify(legacy));
+    await expect(finalizedCanonicalObject(f.contentRoot, canonical)).rejects.toThrow("differs from its reservation");
+    expect(await finalizedCanonicalObject(f.contentRoot, canonical, f.sourceRoot)).toEqual(result);
+    expect(await finalizeCanonicalDownloadFile(f.contentRoot, f.sourceRoot, view, file.size)).toEqual(result);
+    const manifest = path.join(f.contentRoot, ".podible-downloads", createHash("sha256").update(f.sourceRoot).digest("hex") + ".json");
+    const plan = JSON.parse(await fs.readFile(manifest, "utf8"));
+    await fs.writeFile(manifest, JSON.stringify({ ...plan, sealed: false }));
+    await expect(finalizedCanonicalObject(f.contentRoot, canonical, f.sourceRoot)).rejects.toThrow("differs from its reservation");
+    await fs.writeFile(manifest, JSON.stringify(plan));
+    await fs.writeFile(proofPath, JSON.stringify({ ...legacy, sizeBytes: legacy.sizeBytes + 1 }));
+    await expect(finalizedCanonicalObject(f.contentRoot, canonical, f.sourceRoot)).rejects.toThrow("differs from its reservation");
+    await fs.writeFile(proofPath, JSON.stringify({ ...legacy, inode: "0" }));
+    await expect(finalizedCanonicalObject(f.contentRoot, canonical, f.sourceRoot)).rejects.toThrow("differs from its reservation");
+  } finally { await f.close(); }
+});
+
+test("portable finalization still rejects foreign ownership and mismatched object identity", async () => {
+  const f = await fixture();
+  try {
+    await f.fill(); await sealCanonicalDownload(f.contentRoot, f.sourceRoot, f.client, f.ref);
+    const file = f.plan.files[0]!, canonical = path.join(f.contentRoot, file.relativePath!);
+    const proofPath = canonical + ".podible-finalized.json";
+    await finalizeCanonicalDownloadFile(f.contentRoot, f.sourceRoot, path.join(f.sourceRoot, file.path), file.size);
+    const proof = JSON.parse(await fs.readFile(proofPath, "utf8"));
+    await fs.writeFile(proofPath, JSON.stringify({ ...proof, contentOwner: randomUUID() }));
+    await expect(finalizedCanonicalObject(f.contentRoot, canonical)).rejects.toThrow("owner changed");
+    await fs.writeFile(proofPath, JSON.stringify({ ...proof, id: randomUUID() }));
+    await expect(finalizedCanonicalObject(f.contentRoot, canonical)).rejects.toThrow("object identity");
+    await fs.writeFile(proofPath, JSON.stringify({ ...proof, relativePath: f.plan.files[1]!.relativePath }));
+    await expect(finalizedCanonicalObject(f.contentRoot, canonical)).rejects.toThrow("object identity");
   } finally { await f.close(); }
 });
 

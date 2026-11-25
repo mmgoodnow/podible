@@ -127,7 +127,7 @@ async function verifyLayout(repo: BooksRepo, source: Source, contentRoot: string
     const id = members.get(index);
     if (id) {
       const content = version.files.find(item => item.id === id)!;
-      const finalized = await finalizedCanonicalObject(contentRoot, resolved.path);
+      const finalized = await finalizedCanonicalObject(contentRoot, resolved.path, binding.directory);
       if (finalized?.id !== id || finalized.relativePath !== content.relativePath || finalized.sizeBytes !== content.sizeBytes)
         throw new Error("Selected or displaced canonical object identity changed");
     }

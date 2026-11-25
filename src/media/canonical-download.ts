@@ -240,18 +240,34 @@ async function seal(contentRoot: string, sourceRoot: string, client: TorrentClie
   plan.sealed = true; await writeJson(manifestPath(contentRoot, sourceRoot), plan);
 }
 
-const finalizedSchema = z.object({ sourceRoot: z.string(), relativePath: relative, id: z.string().uuid(), sizeBytes: count,
-  sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(), device: z.string(), inode: z.string(), mtimeNs: z.string(), ctimeNs: z.string() });
+const finalizedFields = { relativePath: relative, id: z.string().uuid(), sizeBytes: count,
+  sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(), device: z.string(), inode: z.string(), mtimeNs: z.string(), ctimeNs: z.string() };
+const finalizedSchema = z.union([
+  z.object({ ...finalizedFields, version: z.literal(2), contentOwner: z.string().uuid() }),
+  z.object({ ...finalizedFields, sourceRoot: z.string() }),
+]);
 type FinalizedObject = Pick<z.infer<typeof finalizedSchema>, "id" | "relativePath" | "sizeBytes" | "sha256">;
 const proofPath = (canonical: string) => canonical + ".podible-finalized.json";
-export async function finalizedCanonicalObject(contentRoot: string, canonical: string): Promise<FinalizedObject | null> {
+export async function finalizedCanonicalObject(contentRoot: string, canonical: string, currentSourceRoot?: string): Promise<FinalizedObject | null> {
   if (!canonical.startsWith(contentRoot + "/files/") || !await stat(proofPath(canonical))) return null;
   await directory(contentRoot, path.relative(contentRoot, path.dirname(canonical)));
   const proof = finalizedSchema.parse(await readJson(proofPath(canonical)));
-  const plan = await readCanonicalDownload(contentRoot, proof.sourceRoot);
-  const file = plan?.files.find(file => file.id === proof.id);
-  if (!plan?.sealed || !file?.relativePath || path.join(contentRoot, file.relativePath) !== canonical || proof.relativePath !== file.relativePath || proof.sizeBytes !== file.size)
-    throw new Error("Canonical finalization proof differs from its reservation");
+  if (path.join(contentRoot, proof.relativePath) !== canonical || proof.relativePath !==
+      `files/${proof.id.slice(0, 2)}/${proof.id}${path.extname(canonical).toLowerCase()}`)
+    throw new Error("Canonical finalization proof differs from its object identity");
+  if ("version" in proof) {
+    // A finalized object outlives its original torrent view and absolute storage path.
+    if (proof.contentOwner !== await owner(contentRoot)) throw new Error("Canonical finalization owner changed");
+  } else {
+    // Legacy receipts used absolute paths. Only an explicitly supplied, validated
+    // current reservation may replace a missing pre-move source; never guess paths.
+    const plan = await readCanonicalDownload(contentRoot, proof.sourceRoot) ??
+      (currentSourceRoot ? await readCanonicalDownload(contentRoot, currentSourceRoot) : null);
+    const file = plan?.files.find(file => file.id === proof.id);
+    if (!plan?.ready || !plan.sealed || !file?.relativePath || proof.relativePath !== file.relativePath ||
+        proof.sizeBytes !== file.size || file.device !== proof.device || file.inode !== proof.inode)
+      throw new Error("Canonical finalization proof differs from its reservation");
+  }
   const current = await fs.lstat(canonical, { bigint: true });
   if (!current.isFile() || current.isSymbolicLink() || String(current.dev) !== proof.device || String(current.ino) !== proof.inode ||
     String(current.mtimeNs) !== proof.mtimeNs || String(current.ctimeNs) !== proof.ctimeNs || current.size !== BigInt(proof.sizeBytes))
@@ -266,7 +282,7 @@ export async function finalizeCanonicalDownloadFile(contentRoot: string, sourceR
   const resolved = await resolveDownloadFile(contentRoot, sourceRoot, sourcePath, expectedSize);
   if (!resolved.file) return null;
   if (!resolved.plan?.sealed) throw new Error("Canonical download still has an active writer");
-  const previous = await finalizedCanonicalObject(contentRoot, resolved.path);
+  const previous = await finalizedCanonicalObject(contentRoot, resolved.path, sourceRoot);
   active();
   if (previous) return previous;
   effectPhase("canonical-revalidate");
@@ -282,7 +298,7 @@ export async function finalizeCanonicalDownloadFile(contentRoot: string, sourceR
   const result = { id: resolved.file.id, relativePath: resolved.file.relativePath!, sizeBytes: expectedSize };
   effectPhase("canonical-proof-persist");
   const proofStarted = performance.now();
-  await writeJson(proofPath(resolved.path), { ...result, sourceRoot,
+  await writeJson(proofPath(resolved.path), { ...result, version: 2, contentOwner: resolved.plan!.contentOwner,
     device: String(after.dev), inode: String(after.ino), mtimeNs: String(after.mtimeNs), ctimeNs: String(after.ctimeNs) });
   recordCanonicalFinalization(expectedSize, { revalidate, proof_persist: performance.now() - proofStarted });
   return result;
