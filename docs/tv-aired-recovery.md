@@ -27,6 +27,14 @@ deferred providers and selected no new candidate. Earlier provider deferrals
 had been retried. This is a policy/verified-match stop, not proof that no release
 exists, and not evidence for weakening quality or repeatedly searching the title.
 
+The existing quality profile can express the desired fallback: add DVD/480p
+below the HD tiers. The SD bucket also includes PAL DVD dimensions such as
+716x576. This admits DVD without making it preferable to HD; higher tiers still
+win and a lower tier cannot displace HD. No separate fallback selector or
+show-specific exception is necessary. The audited production default and saved
+request both omit DVD. Changing the default does not replace the policy copied
+into an existing target, and this audit did not change either profile.
+
 **Homeland:** acquisition 167 selected three season packs, each with 12 playable
 metainfo members. All three saved completion sequences went from `checking` to
 `inactive`, with zero bytes downloaded, and ended in retained-stalled receipts.

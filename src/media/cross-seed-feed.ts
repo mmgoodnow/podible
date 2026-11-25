@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { APIConnectionError, APIError, APIUserAbortError } from "openai";
+import { isRunControlError } from "reflow-ts";
 import type { JobRow } from "../app-types";
 import { durableStep, type WorkerContext } from "../worker/context";
 import { createMovieFeedMatcher } from "../movies/agents";
@@ -18,6 +20,33 @@ const operationId = (value: string) => {
   const hash = createHash("sha256").update(value).digest("hex");
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
 };
+
+function transientMatcherFailure(error: unknown): boolean {
+  return error instanceof APIConnectionError || error instanceof APIUserAbortError ||
+    error instanceof APIError && (error.status === 408 || error.status === 409 || error.status === 429 ||
+      error.status !== undefined && error.status >= 500) ||
+    error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError");
+}
+
+async function matchWithRetry<T>(ctx: WorkerContext, name: string, match: () => Promise<T[]>): Promise<T[]> {
+  for (let retry = 0; ; retry++) {
+    const result = await durableStep<T[] | { retry: true }>(ctx, retry ? `${name}:retry:${retry}` : name, async () => {
+      try {
+        return await match();
+      } catch (error) {
+        if (isRunControlError(error)) throw error;
+        ctx.execution?.assertActive();
+        if (!ctx.execution || !transientMatcherFailure(error)) throw error;
+        // A transient outage is not no-match. Persist only intent, never a provider error/body.
+        return { retry: true };
+      }
+    });
+    // Keep successful array checkpoints from before durable cooldowns replayable.
+    if (Array.isArray(result)) return result;
+    if (!ctx.execution) throw new Error("Reuse feed retry requires durable execution");
+    await ctx.execution.sleep(`${name}:retry-wait:${retry}`, Math.min(30 * 60_000, 60_000 * 2 ** Math.min(retry, 5)));
+  }
+}
 
 /** New feed events route to retained content too, independently of missing/upgrade requests. */
 export async function discoverCrossSeeds(ctx: WorkerContext, job: JobRow): Promise<"done"> {
@@ -38,7 +67,7 @@ export async function discoverCrossSeeds(ctx: WorkerContext, job: JobRow): Promi
     : ctx.repo.tv.targets().map(t => ({ media: "tv" as const, targetId: t.id })).filter(eligible));
   for (let offset = 0; offset < scopes.length; offset += 50) {
     const batch = scopes.slice(offset, offset + 50);
-    const matches = await durableStep(ctx, `reuse-feed:match:${offset}`, async () => {
+    const matches = await matchWithRetry(ctx, `reuse-feed:match:${offset}`, async () => {
       if (media === "movie") {
         const matcher = ctx.movieFeedMatcher ?? createMovieFeedMatcher(ctx.getSettings(), ctx.modelProvider);
         return matcher({ targets: batch.map(scope => {
@@ -79,7 +108,7 @@ async function discoverBookCrossSeeds(ctx: WorkerContext, entries: { id: number;
     .map(book => ({ bookId: book.id, media, title: book.title, author: book.author, language: book.language })));
   for (let offset = 0; offset < targets.length; offset += 50) {
     const batch = targets.slice(offset, offset + 50);
-    const matches = await durableStep(ctx, `reuse-feed:match:${offset}`, () =>
+    const matches = await matchWithRetry(ctx, `reuse-feed:match:${offset}`, () =>
       (ctx.bookFeedMatcher ?? createBookFeedMatcher(ctx.getSettings(), ctx.modelProvider))({ targets: batch, releases: entries.map(entry => entry.result) }));
     for (const match of matches) {
       if (match.media !== media || !batch.some(target => target.bookId === match.bookId) || !match.releaseIndexes.length ||

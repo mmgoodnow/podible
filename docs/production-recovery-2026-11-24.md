@@ -46,6 +46,20 @@ reservation as well; its seed-time, live Plex and deletion fences are unchanged.
 
 ## Provider and TV Findings
 
+Two historical reuse-feed jobs (126151 and 126147) exhausted their retry budgets
+during OpenAI 503/abort failures. Acquisition siblings finished, but none of the
+13 affected inbox entries had a later reuse job or dispatch receipt. Duplicate
+intake did not enqueue those entries again. This was stranded discovery, not a
+recorded no-match or a failed download.
+
+Reuse-feed matching now checkpoints recognized transient provider failures as
+retry intent, with durable backoff from one to thirty minutes. It does not
+persist provider error bodies, weaken matching validation, swallow cancellation
+or ownership controls, or turn permanent configuration errors into cooldowns.
+Regression tests cover movie, TV and book restart recovery, prior bare-array
+checkpoints, and exactly-once dispatch. The two failed jobs still require an
+explicit retry after this fix reaches the running production build.
+
 MAM's current Prowlarr warning masks an underlying 403 with an expired or invalid
 login cookie and a not-signed-in response. Replacing the cookie and passing the
 indexer test is required; a cooldown expiry cannot repair authentication. No
