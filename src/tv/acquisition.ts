@@ -32,6 +32,7 @@ import { finalizeCanonicalDownloadFile, prepareCanonicalDownload, readCanonicalD
 import { configuredTvCatalog, TvCatalogError } from "./catalog";
 import { tvSeasonPackPromotionTargets } from "./season-promotion-pilot";
 import { hasVerifiedLocalSeasonPackPrefill, hasVerifiedSeasonPackReuse, planSeasonPackPrefill } from "./season-pack-reuse";
+import { tvMetainfoBlockers } from "./metainfo";
 import { eligibleTvSeasonPlan, eligibleTvSeasonVersion, matchesTvSeasonRoster, playableTvMember,
   readTvSeasonPromotion, readTvSeasonSelection, tvSeasonPackHint, tvSeasonPromotionSchema, type TvSeasonSelection } from "./season-promotion";
 
@@ -185,7 +186,7 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
     const retry = promotion ? [] : ctx.repo.contentLoss.retryDownloads({ namespace: "tv-target", id: String(target.id) });
     const rejected = repo.episodeRejections(target.id, episodeIds).filter(row => !retry.some(d => d.native_id === row.native_id));
     return { episodeIds, priorKeys: rejected.map(row => row.offer_key), policy: JSON.parse(target.policy_json),
-      priorHashes: rejected.map(row => row.native_id), sourceReuse: true, scopedRecovery: true, batchAdoption: true,
+      priorHashes: rejected.map(row => row.native_id), sourceReuse: true, scopedRecovery: true, batchAdoption: true, metainfoAdmission: true,
       lossRecoveryHashes: retry.map(d => d.native_id),
       reuseSources: reuse.sources.filter(item => !rejected.some(row => row.native_id === item.source.ref.nativeId)), consumedSources: reuse.consumed };
   });
@@ -573,6 +574,12 @@ export async function acquireTv(ctx: WorkerContext, job: JobRow, services: TvSer
       }
       if (excludedHashes.has(metadata.infoHash)) {
         reject(offer.key); emit(`${attempt}:retained-source`, "replacing", "Torrent was rejected for these episodes; trying another release"); continue;
+      }
+      // Old executions retain their checkpoint sequence; new work rejects unsupported packaging before any client side effect.
+      if (snapshot.metainfoAdmission && tvMetainfoBlockers(metadata).length) {
+        reject(offer.key, metadata.infoHash);
+        emit(`${attempt}:unsupported-packaging`, "replacing", "Release has no directly playable video; archive extraction is unsupported, trying another release");
+        continue;
       }
       if (promotion) {
         if (offer.infoHash && offer.infoHash.toLowerCase() !== metadata.infoHash) {

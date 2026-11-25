@@ -7,6 +7,24 @@ import { BooksRepo } from "../../src/repo";
 import { decideFeedRoutes } from "../../src/library/decisions";
 import { defaultSettings } from "../../src/settings";
 
+test("current TV routing default stays separate from persisted historical Decisions outcomes", () => {
+  using db = new Database(":memory:"); runMigrations(db);
+  const repo = new BooksRepo(db);
+  const historical = { tv_feed: { accepted: 36, escalated: 537, low_no_match_confidence: 392 } };
+  repo.setJsonState("acquisition-decisions:v1", historical);
+  withAgentUsageAccounting(repo, () => recordAgentUsage("tv-feed", "responses", "gpt-6-luna", 10, { input: 100 }));
+  const metrics = agentUsagePrometheus(new BooksRepo(db));
+  expect(metrics).toContain('# TYPE podible_agent_feed_routing_default_info gauge\n');
+  expect(metrics).toContain('podible_agent_feed_routing_default_info{question="tv_feed",policy="responses_only"} 1\n');
+  expect(metrics).not.toContain('policy="decisions_then_responses"');
+  expect(metrics).toContain('podible_agent_acquisition_decisions_total{question="tv_feed",outcome="escalated"} 537\n');
+  expect(metrics).toContain('podible_agent_feed_decisions_total{question="tv_feed",reason="low_no_match_confidence"} 392\n');
+  expect(metrics).toContain('podible_agent_model_calls_total{workflow="tv-feed",api="responses",model="gpt-6-luna"} 1\n');
+  expect(metrics).toContain('podible_agent_model_calls_total{workflow="tv-feed",api="decisions",model="gpt-6-luna"} 0\n');
+  expect(metrics).toContain("excludes direct Responses. Escalated means fallback, not acquisition failure.");
+  expect(repo.getJsonState<typeof historical>("acquisition-decisions:v1")).toEqual(historical);
+});
+
 test("records feed escalation causes rather than just the fallback count", async () => {
   using db = new Database(":memory:"); runMigrations(db);
   const repo = new BooksRepo(db);

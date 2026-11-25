@@ -6,6 +6,9 @@ import { evaluateMovieQuality, movieQualityPolicySchema, type MovieQualityPolicy
 import { tvImportPlanSchema, type TvFileCandidate, type TvImportPlan } from "./agents";
 import { canonicalTvSeasons, type TvCatalog } from "./catalog";
 import type { TvActiveEpisode, TvEntry, TvEpisode, TvTarget, TvVersion } from "./types";
+import { playableTvMember } from "./metainfo";
+
+export { playableTvMember } from "./metainfo";
 
 const maxEpisodes = 64;
 const id = z.number().int().positive().safe();
@@ -26,7 +29,6 @@ const sorted = (ids: readonly number[]) => [...ids].sort((a, b) => a - b);
 const exact = (a: readonly number[], b: readonly number[]) => JSON.stringify(sorted(a)) === JSON.stringify(sorted(b));
 const aired = (episode: { airDate: string | null }) => Boolean(episode.airDate && Date.parse(episode.airDate) <= Date.now());
 const airedNumber = (episode: TvEpisode) => episode.numbering.find(number => number.scheme === "tvdb:aired");
-export const playableTvMember = (name: string) => /\.(mkv|mp4|m4v|avi|mov|ts)$/i.test(name);
 
 /** A feed-title hint limits speculative intake; it never proves pack coverage. */
 export function tvSeasonPackHint(title: string): number | null {

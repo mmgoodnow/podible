@@ -13,6 +13,7 @@ import type { TvEntry, TvEpisode } from "./types";
 import { compactTvImportEvidence, compactTvImportLegend, evidencePage, inlineTvImportEvidence, tvEpisodeEvidence, tvFileEvidence, tvProbeEvidence, tvWorkEvidence } from "./agent-evidence";
 import { modelEvidenceText, tryAcquisitionDecision, type DecisionsTransport } from "../library/decisions";
 import { screenedVideoFile, screenedVideoOffers, tvDecisionIdentity, videoPolicyEvidence } from "../media/video-decisions";
+import { tvMetainfoBlockers } from "./metainfo";
 
 const claimsSchema = movieFactsSchema.pick({ identityVerified: true, cut: true, source: true, proper: true });
 export const tvImportPlanSchema = z.object({
@@ -92,19 +93,25 @@ export function createTvDecider(settings: AppSettings, modelProvider?: ModelProv
         if (decision?.kind === "selected") return { offer: screened.offer, matchingOffers: [],
           reason: "Decisions confirmed the policy-preferred screened TV release; file and episode verification is still required" };
       }
-      const allowed = (offer: MovieOffer) => !excluded.has(offer.key) &&
-        (offer.sizeBytes === null || offer.sizeBytes <= (input.maximumReleaseBytes ?? Infinity));
+      const manifests = new Map<number, ReturnType<typeof inspectMetainfo>>();
       const offers = [...input.offers];
+      const blockers = (offer: MovieOffer) => {
+        const metadata = manifests.get(offers.indexOf(offer));
+        return [...(excluded.has(offer.key) ? ["previously-attempted"] : []),
+          ...(offer.sizeBytes !== null && offer.sizeBytes > (input.maximumReleaseBytes ?? Infinity) ||
+            metadata && metadata.size > (input.maximumReleaseBytes ?? Infinity) ? ["release-size-limit"] : []),
+          ...(metadata ? tvMetainfoBlockers(metadata) : [])];
+      };
+      const allowed = (offer: MovieOffer) => !blockers(offer).length;
       const deferred: NonNullable<MovieSearch["deferred"]> = [];
       const present = (offer: MovieOffer) => ({ index: offers.indexOf(offer), title: modelEvidenceText(offer.title, 320), provider: modelEvidenceText(offer.provider, 80), sizeBytes: offer.sizeBytes, seeders: offer.seeders,
-        blockers: [...(excluded.has(offer.key) ? ["previously-attempted"] : []), ...(offer.sizeBytes !== null && offer.sizeBytes > (input.maximumReleaseBytes ?? Infinity) ? ["release-size-limit"] : [])] });
+        blockers: blockers(offer) });
       const listing = (offset: number, limit: number, query: string | null = null) => evidencePage(offers.filter(offer =>
         !query || query.toLowerCase().split(/\s+/).every(word => offer.title.toLowerCase().includes(word))),offset,limit,present);
       const list = tool({ name: "listReleases", description: "Page/filter all known candidates, including policy-blocked ones with explicit reasons. Indexes stay stable. Query is an optional literal title-word filter, not a new indexer request.",
         parameters: z.object({ ...pageParams, query: z.string().max(200).nullable().default(null) }),
         execute: async ({ offset, limit, query }) => listing(offset,limit,query) });
       let inspections = 0, searches = 0;
-      const manifests = new Map<number, ReturnType<typeof inspectMetainfo>>();
       const inspect = tool({ name: "inspectRelease", description: "Inspect validated torrent filenames and sizes without starting a download.",
         parameters: z.object({ index: z.number().int().nonnegative(), ...pageParams }), async execute({ index, offset, limit }) {
           if (!offers[index]) return { error: "Unknown release" };
@@ -118,7 +125,7 @@ export function createTvDecider(settings: AppSettings, modelProvider?: ModelProv
           }
           const metadata = manifests.get(index)!;
           return { ...evidencePage(metadata.files,offset,limit,file => ({ name: modelEvidenceText(file.path, 240), sizeBytes: file.size })), sizeBytes: metadata.size,
-            blockers: metadata.size > (input.maximumReleaseBytes ?? Infinity) ? ["release-size-limit"] : [] };
+            blockers: blockers(offers[index]!) };
         } });
       const research = tool({ name: "searchReleases", errorFunction: null, description: "Search a better title/alias or provider numbering when initial results are empty or ambiguous. URLs remain server-side.",
         parameters: z.object({ query: z.string().trim().min(1).max(250) }), async execute({ query }) {
@@ -133,7 +140,7 @@ export function createTvDecider(settings: AppSettings, modelProvider?: ModelProv
       const result = await run("TvReleaseSelector", z.object({ index: z.number().int().nonnegative().nullable(), matchingIndexes: matchingIndexesSchema, reason: z.string().min(1).max(2000) }),
         `Choose one eligible release covering some or all requested episodes, or index:null. Packs and combined files are allowed; extra episodes won't be published.
 Initial evidence is an overview. Use listReleases, getRequestedEpisodes and paginated inspectRelease to compare candidates and filenames against titles/numbering. Manifest pages are cached. Before returning null, inspect plausible matches and try a useful alias/numbering query with searchReleases if available.
-Never invent an index or select a policy-blocked release. Distinguish size exclusions, prior attempts and uncertainty from no release found. Prefer viable complete coverage; weigh size against coverage, quality and availability.
+Never invent an index or select a policy-blocked release. Archive-only torrents have no directly playable video and cannot be imported; do not select a no-playable-video candidate. Distinguish unsupported packaging, size exclusions, prior attempts and uncertainty from no release found. Prefer viable complete coverage; weigh size against coverage, quality and availability.
 ${releaseSelectionInstructions}
 Omit previously-attempted or release-size-limit copies; optional copies can't justify a blocked primary.`,
         { entry: tvWorkEvidence(input.entry), episodeCount: input.episodes.length, episodes: input.episodes.slice(0,4).map(tvEpisodeEvidence),

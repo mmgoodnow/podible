@@ -173,7 +173,25 @@ test("production TV feed matcher uses the shared agent and receives no private o
   expect(JSON.stringify(fake.calls)).toContain("live-action");
 });
 
-test("TV feed uses Decisions first and sends only unresolved offers to Responses", async () => {
+for (const mode of ["acquire", "reuse"] as const) test(`TV feed ${mode} defaults to one Responses pass without Decisions`, async () => {
+  const fake = provider([{ matches: [{ targetId: 3, releaseIndexes: [0], reason: "Plausible work identity." }] }]);
+  let decisionsCalls = 0;
+  const matcher = createTvFeedMatcher(defaultSettings({ agents: { apiKey: "fixture" } }), fake.model, mode, async () => {
+    decisionsCalls++;
+    throw new Error("The production default must bypass Decisions");
+  });
+  const input = { targets: [{ targetId: 3, entry, episodes: [episode] }], offers: [
+    { title: offer.title, provider: offer.provider, sizeBytes: offer.sizeBytes, seeders: offer.seeders, attributes: [] },
+  ] };
+  expect((await matcher(input))[0]?.releaseIndexes).toEqual([0]);
+  expect(fake.calls).toHaveLength(1);
+  expect(decisionsCalls).toBe(0);
+  expect(await matcher({ ...input, offers: [] })).toEqual([]);
+  expect(await matcher({ ...input, targets: [] })).toEqual([]);
+  expect(fake.calls).toHaveLength(1);
+});
+
+test("explicit TV feed replay policy uses Decisions first and sends only unresolved offers to Responses", async () => {
   const fake = provider([{ matches: [{ targetId: 3, releaseIndexes: [0], reason: "Plausible alternate numbering." }] }]);
   const settings = defaultSettings();
   settings.agents.apiKey = "fixture-key";
@@ -331,6 +349,45 @@ test("TV invalid primary correction is bounded and cannot bypass policy", async 
   await expect(createTvDecider(defaultSettings(), fake.model).select({ entry, episodes: [episode],
     policy: defaultMovieQualityPolicy, offers: [offer], maximumReleaseBytes: 100 })).rejects.toThrow("policy-blocked");
   expect(fake.calls).toHaveLength(3);
+});
+
+test("TV selector exposes archive-only metainfo and corrects blocked primary and optional copies", async () => {
+  const bytes = Buffer.from("synthetic archive bytes");
+  const metainfo = bencode.encode({ info: { name: "scene.rar", length: bytes.length,
+    "piece length": 16384, pieces: createHash("sha1").update(bytes).digest() } });
+  const alternate = { ...offer, key: "playable-alternate" };
+  const fake = provider([
+    [{ type: "function_call", name: "inspectRelease", callId: "archive", arguments: '{"index":0}', status: "completed" }],
+    { index: 0, reason: "Attempted archive-only primary." },
+    [{ type: "function_call", name: "listReleases", callId: "blocked", arguments: '{}', status: "completed" }],
+    { index: 1, matchingIndexes: [0], reason: "Choose the playable alternate instead." },
+  ]);
+  let requests = 0;
+  const result = await createTvDecider(defaultSettings(), fake.model, undefined, async () => {
+    requests++; return metainfo;
+  }).select({ entry, episodes: [episode], policy: defaultMovieQualityPolicy, offers: [offer, alternate] });
+  expect(result.offer).toEqual(alternate);
+  expect(result.matchingOffers).toEqual([]);
+  expect(requests).toBe(1);
+  expect(JSON.stringify(fake.calls[1]!.input)).toContain("no-playable-video");
+  expect(JSON.stringify(fake.calls[2]!.input)).toContain("Selection rejected");
+  expect(JSON.stringify(fake.calls[3]!.input)).toContain("no-playable-video");
+  expect(JSON.stringify(fake.calls)).not.toContain("hidden");
+});
+
+test("TV selector keeps mixed playable packs eligible despite archive sidecars", async () => {
+  const bytes = Buffer.from("ab");
+  const metainfo = bencode.encode({ info: { name: "mixed", files: [
+    { length: 1, path: ["episode.MKV"] }, { length: 1, path: ["extras.rar"] },
+  ], "piece length": 16384, pieces: createHash("sha1").update(bytes).digest() } });
+  const fake = provider([
+    [{ type: "function_call", name: "inspectRelease", callId: "mixed", arguments: '{"index":0}', status: "completed" }],
+    { index: 0, reason: "The actual episode is a directly playable file." },
+  ]);
+  const result = await createTvDecider(defaultSettings(), fake.model, undefined, async () => metainfo)
+    .select({ entry, episodes: [episode], policy: defaultMovieQualityPolicy, offers: [offer] });
+  expect(result.offer).toEqual(offer);
+  expect(JSON.stringify(fake.calls[1]!.input)).not.toContain("no-playable-video");
 });
 
 test("TV no-match selection ignores optional copies rather than failing the search", async () => {

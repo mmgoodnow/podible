@@ -7,20 +7,20 @@ import { meterAgentProvider } from "../agent-usage";
 import { evidenceRow, smallerAgentEvidence } from "../media/agent-tables";
 import { DECISION_MAX_CANDIDATES, modelEvidenceText, routeFeedWithDecisions, type DecisionsTransport, type FeedDecisionsPolicy } from "../library/decisions";
 import type { TvFeedMatcher, TvFeedMatch } from "./feed";
+import { defaultTvFeedRoutingPolicy } from "./feed-routing-policy";
 
 const output = z.object({ matches: z.array(z.object({
   targetId: z.number().int().positive(), releaseIndexes: z.array(z.number().int().nonnegative()).min(1).max(100),
   reason: z.string().trim().min(1).max(2000),
 })) });
 export type TvFeedRoutingPolicy = FeedDecisionsPolicy & { compact?: boolean; responsesOnly?: boolean; workOnlyGate?: boolean; tableResponses?: boolean };
-const defaultPolicy: TvFeedRoutingPolicy = { responsesOnly: true, tableResponses: true };
 
 const compactInstructions = "Episode rows are [episode title, [[scheme index, season, episode, absolute], ...]]. " +
   "Scheme indexes refer to that target's numberingSchemes array. Null is unknown, not zero.";
 
 /** Broad, semantic RSS routing; the normal selector/importer still verifies every candidate. */
 export function createTvFeedMatcher(settings: AppSettings, modelProvider?: ModelProvider, mode: "acquire" | "reuse" = "acquire",
-  decisionsFetch: DecisionsTransport | undefined = modelProvider ? undefined : fetch, policy: TvFeedRoutingPolicy = defaultPolicy): TvFeedMatcher {
+  decisionsFetch: DecisionsTransport | undefined = modelProvider ? undefined : fetch, policy: TvFeedRoutingPolicy = defaultTvFeedRoutingPolicy): TvFeedMatcher {
   const scope = mode === "reuse"
     ? "Route releases for the same retained work, including completed episodes and season packs. This is work-level byte-reuse discovery, not episode selection."
     : "Only supplied episodes are wanted. For a target with promotionSeasons, route only plausible whole packs for one of those TVDB aired seasons.";

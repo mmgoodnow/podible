@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { ModelProvider, ModelResponse } from "@openai/agents-core";
 import { TEXT_AGENT_MODEL } from "./ai-models";
 import type { BooksRepo } from "./repo";
+import { defaultTvFeedRoutingPolicy } from "./tv/feed-routing-policy";
 
 const key = "agent-usage:v1";
 const decisionsKey = "acquisition-decisions:v1";
@@ -185,6 +186,8 @@ export function agentUsagePrometheus(repo: BooksRepo): string {
   const feedMetric = "podible_agent_feed_decisions_total";
   const feedSamples = feedQuestions.flatMap(question => feedDecisionReasons.map(reason =>
     `${feedMetric}{question="${question}",reason="${reason}"} ${count(decisions[question]?.[reason])}\n`));
+  const policyMetric = "podible_agent_feed_routing_default_info";
+  const tvPolicy = defaultTvFeedRoutingPolicy.responsesOnly ? "responses_only" : "decisions_then_responses";
   return metrics.map(([suffix, field, help]) => {
     const name = `podible_agent_${suffix}`;
     const samples = rows.flatMap(({ total, labels }) => {
@@ -192,6 +195,7 @@ export function agentUsagePrometheus(repo: BooksRepo): string {
       return value !== undefined && Number.isFinite(value) && value >= 0 ? [`${name}{${labels}} ${value}\n`] : [];
     });
     return `# HELP ${name} ${help}\n# TYPE ${name} counter\n${samples.join("")}`;
-  }).join("") + `# HELP ${decisionMetric} Screened acquisition Decisions outcomes; escalated means tool-agent fallback.\n# TYPE ${decisionMetric} counter\n${outcomeSamples.join("")}` +
-    `# HELP ${feedMetric} Release routing results and reasons for Responses fallback.\n# TYPE ${feedMetric} counter\n${feedSamples.join("")}`;
+  }).join("") + `# HELP ${decisionMetric} Persisted cumulative Decisions-only outcomes, including historical policies; excludes direct Responses. Escalated means fallback, not acquisition failure.\n# TYPE ${decisionMetric} counter\n${outcomeSamples.join("")}` +
+    `# HELP ${feedMetric} Persisted cumulative per-offer Decisions results and fallback reasons, including historical policies; excludes direct Responses.\n# TYPE ${feedMetric} counter\n${feedSamples.join("")}` +
+    `# HELP ${policyMetric} Default feed routing policy in this build, not observed traffic or success. Explicit replay overrides are excluded.\n# TYPE ${policyMetric} gauge\n${policyMetric}{question="tv_feed",policy="${tvPolicy}"} 1\n`;
 }

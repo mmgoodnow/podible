@@ -1548,6 +1548,64 @@ test("invalid TV import and stalled source are retained while a different comple
   } finally { await s.close(); }
 });
 
+test("archive-only TV metainfo is rejected before snatch and its durable exclusion survives a failed-job retry", async () => {
+  const s = await setup(["tvdb:201"]);
+  let runtime: Runtime | undefined;
+  try {
+    const archive = s.fixture.addRelease("archive-only", ["tvdb:201"]);
+    const alternate = s.fixture.addRelease("playable-alternate", ["tvdb:201"]);
+    const bytes = Buffer.from("synthetic archive bytes");
+    const metainfo = bencode.encode({ info: { name: "scene.rar", length: bytes.length,
+      "piece length": 16384, pieces: createHash("sha1").update(bytes).digest() } });
+    archive.infoHash = inspectMetainfo(metainfo).infoHash;
+    const fetchMetainfo = s.fixture.services.fetchMetainfo;
+    let archiveFetches = 0, interrupt = true;
+    s.fixture.services.fetchMetainfo = async (offer) => {
+      if (offer.key === archive.key) { archiveFetches++; return metainfo; }
+      expect(offer.key).toBe(alternate.key);
+      if (interrupt) { interrupt = false; throw new Error("Fixture interruption after archive rejection"); }
+      return fetchMetainfo(offer);
+    };
+    const acquisition = s.enqueue();
+    const executionPath = path.join(s.root, "execution.sqlite");
+    runtime = await createJobExecutionRuntime(s.context, executionPath, { retryDelayMs: 1 });
+    await until(runtime, () => s.repo.getJob(acquisition.job_id!)?.status === "failed", () => "archive admission interruption");
+    expect(s.fixture.sourceAdds).toBe(0);
+    expect(s.repo.tv.activeEpisodes(s.request.targetId)).toEqual([]);
+    expect(s.repo.tv.acquisitions(s.request.targetId)).toHaveLength(1);
+    await runtime.stop(); runtime = undefined;
+    s.reopen(); s.repo.retryJob(acquisition.job_id!);
+    runtime = await createJobExecutionRuntime(s.context, executionPath, { retryDelayMs: 1 });
+    await until(runtime, () => s.repo.getJob(acquisition.job_id!)?.status === "succeeded", () => "archive admission replay");
+    expect(archiveFetches).toBe(1);
+    expect(s.fixture.sourceAdds).toBe(1);
+    expect(s.repo.tv.missingEpisodes(s.request.requestId)).toEqual([]);
+    expect(s.repo.tv.acquisitions(s.request.targetId)).toHaveLength(1);
+    expect(s.repo.tv.acquisitionDownloads(acquisition.id).map(download => download.native_id)).toEqual([alternate.infoHash!]);
+    expect(s.repo.tv.events(s.request.targetId).some(event => event.message.includes("no directly playable video"))).toBe(true);
+  } finally { await runtime?.stop(); await s.close(); }
+}, 15_000);
+
+test("archive-only TV searches finish bounded without downloads or periodic recovery jobs", async () => {
+  const s = await setup(["tvdb:201"]);
+  try {
+    s.fixture.addRelease("archive-only", ["tvdb:201"]);
+    const bytes = Buffer.from("synthetic archive bytes");
+    const metainfo = bencode.encode({ info: { name: "scene.rar", length: bytes.length,
+      "piece length": 16384, pieces: createHash("sha1").update(bytes).digest() } });
+    s.fixture.services.fetchMetainfo = async () => metainfo;
+    const acquisition = s.enqueue();
+    await acquireTv(s.context, s.repo.getJob(acquisition.job_id!)!, s.fixture.services);
+    expect(s.fixture.sourceAdds).toBe(0);
+    expect(s.fixture.stats.probes).toBe(0);
+    expect(s.repo.tv.acquisition(acquisition.id)!.finished_at).not.toBeNull();
+    expect(s.repo.tv.missingEpisodes(s.request.requestId)).toHaveLength(1);
+    expect(s.repo.tv.acquisitions(s.request.targetId)).toHaveLength(1);
+    expect(s.fixture.selections).toHaveLength(2);
+    expect(JSON.parse(s.repo.tv.acquisition(acquisition.id)!.decision_json!).blockedCode).toBe("no-match");
+  } finally { await s.close(); }
+});
+
 test("exhausted stalled packs hand off once to smaller missing-only searches", async () => {
   const s = await setup();
   try {

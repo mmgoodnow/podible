@@ -175,6 +175,40 @@ or publication checks. Decisions usage feeds the same local rate-card estimate
 accepted and escalated Decisions attempts. This counter does not count jobs
 that went straight to Responses, so it is not a share of all acquisition work.
 
+TV **feed routing** defaults to direct Responses for acquisition, retained-work
+reuse, and backfill reuse. Decisions remains available for explicit replay
+policies, not the TV feed default. See the [routing eval](tv-feed-routing-eval.md).
+`podible_agent_feed_routing_default_info{question="tv_feed",policy="responses_only"}`
+reports the default wired into the running build, not observed traffic, success,
+or an explicit test/replay override. Older builds without this gauge require
+inspection of their matcher default and call sites; an absent gauge does not
+mean Decisions is active.
+
+Both Decisions counters above and `podible_agent_feed_decisions_total` are
+persisted cumulative history across policy changes and restarts. Feed outcomes
+count offer checks, not API calls or failed acquisitions. An escalation means
+the gate deferred to Responses, not that routing or acquisition failed. Reason
+instrumentation was added after outcome instrumentation, so legacy reason sums
+need not equal outcome totals. A lifetime escalation percentage cannot identify
+the current route or establish a current cost failure. Keep historical counts;
+do not reset them to hide the old policy.
+
+Use a time window to measure actual TV feed activity and cost, separating APIs:
+
+```promql
+sum by (api) (increase(podible_agent_model_calls_total{workflow="tv-feed"}[24h]))
+sum by (api) (increase(podible_agent_estimated_cost_usd_total{workflow="tv-feed"}[24h]))
+sum by (api) (increase(podible_agent_usage_missing_total{workflow="tv-feed"}[24h]))
+sum by (api) (increase(podible_agent_usage_unpriced_total{workflow="tv-feed"}[24h]))
+```
+
+Scope these to the intended Prometheus job/instance when monitoring multiple
+deployments. A window spanning a policy change includes both policies. If using
+an escalation rate, divide windowed escalations by windowed Decisions attempts
+only when that denominator is positive; no Decisions activity means no rate,
+not 0% escalation. A single SQLite counter snapshot has no recent cost/rate
+window and must be labeled cumulative, not current spend or routing share.
+
 | Panel | PromQL | Unit |
 | --- | --- | --- |
 | Logical seed size | `podible_seed_bytes` | bytes |

@@ -1,5 +1,37 @@
 # TV feed routing replay
 
+## Production default and counter interpretation
+
+TV candidate routing uses direct Responses, not Decisions followed by Responses,
+for acquisition, feed reuse, and backfill reuse. Each nonempty page has at most
+12 targets and 50 offers. "Single pass" means one Responses agent invocation per
+page, not necessarily one call for an entire feed. The default also uses compact
+table evidence when smaller; the separate [token-efficiency eval](agent-token-efficiency.md)
+kept all 30 labeled holdout routes with no extras and reduced estimated feed
+usage cost by about 22%. It did not reintroduce Decisions.
+
+At 2026-11-25 03:30:26 UTC (November 24 Pacific), a read-only production check of
+build `bcbc607` confirmed those defaults at all three call sites. Stored
+`tv_feed` Decisions outcomes were
+537 escalated and 36 accepted (93.7% escalation). These are cumulative historical
+gate checks, not current routing, acquisition failures, or evidence the current
+Responses-only route lost its cost advantage. The same snapshot had 9,525
+Responses calls (estimated $3.976706545) and 169 Decisions calls ($0.091368825)
+under `workflow="tv-feed"`. Those costs span policies and feed/reuse/backfill
+activity; they are not a current-window comparison or provider billing. Seven
+Responses calls lacked usage and no observed calls were unpriced. Legacy
+outcomes also predate reason instrumentation, so reason totals are incomplete.
+
+Use the build-default gauge and windowed API usage/cost counters described in
+[transfer metrics](transfer-metrics.md) to report current behavior. The gauge is
+new and was not present in the checked production build; until deployed, inspect
+the running build's matcher and call sites rather than inferring its default
+from old counters. Keep the Responses-only default unless a fresh, repeatable,
+matched end-to-end eval
+demonstrates a better policy; a historical escalation ratio is not such an eval.
+
+## Running a replay
+
 Run from a checkout with the approved OpenAI key available as `OPENAI_API_KEY`:
 
 ```sh
