@@ -54,5 +54,8 @@
     "jszip": "^3.10.1",
     "playwright": "1.60.0-alpha-1775237291000",
     "typescript": "^7.0.2"
+  },
+  "patchedDependencies": {
+    "reflow-ts@0.11.0": "patches/reflow-ts@0.11.0.patch"
   }
 }

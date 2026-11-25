@@ -36,6 +36,9 @@
       },
     },
   },
+  "patchedDependencies": {
+    "reflow-ts@0.11.0": "patches/reflow-ts@0.11.0.patch",
+  },
   "packages": {
     "@hono/node-server": ["@hono/node-server@1.19.14", "", { "peerDependencies": { "hono": "^4" } }, "sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw=="],
 

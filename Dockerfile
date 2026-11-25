@@ -2,6 +2,7 @@ FROM oven/bun:1.4.4 AS frontend
 
 WORKDIR /app
 COPY package.json bun.lock ./
+COPY patches ./patches
 RUN bun install --frozen-lockfile
 COPY web ./web
 COPY src ./src
@@ -51,6 +52,7 @@ COPY --from=transmission /opt/transmission/ /usr/local/
 RUN transmission-daemon --version
 
 COPY package.json bun.lock ./
+COPY patches ./patches
 RUN bun install --frozen-lockfile --production
 
 ARG GIT_SHA

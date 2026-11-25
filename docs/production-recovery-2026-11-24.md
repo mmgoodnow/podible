@@ -39,6 +39,15 @@ sealed state, object identity, size and inode/device agree; the actual file's
 timestamps must still agree. Readers do not guess old/new paths or rewrite
 receipts, and no payload is read or hashed.
 
+One retry (166577) also exposed a separate Reflow 0.11.0 replay deadlock. A
+changed inventory page produced a new completed step before old cached steps.
+Its result was held behind their replay-order stamps, but the engine did not
+schedule a progress check when the running step became ready for delivery.
+The pinned Bun patch schedules that check. It does not rewrite saved results
+or change the order of steps that are reached on replay. A SQLite regression
+reopens the failed run in a second engine and verifies that the old cached
+handler does not run again.
+
 Regression coverage moves a real test storage tree, removes the original view
 and reservation, exercises legacy pre-move inventory, and rejects changed
 ownership, object identity, sizes and inodes. Pack retirement passes the current
